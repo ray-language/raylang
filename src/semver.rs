@@ -175,7 +175,7 @@ pub(crate) fn parse_partial(s: &str) -> Result<(Version, u8), String> {
     }
     if pre.is_some() && prec != 3 {
         return Err(format!(
-            "requisito de versión inválido: '{s}' (una pre-release exige el triple completo X.Y.Z-pre)"
+            "requisito de versión inválido: '{s}' (one pre-release exige el triple complete X.Y.Z-pre)"
         ));
     }
     Ok((Version { major: nums[0], minor: nums[1], patch: nums[2], pre }, prec))
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn parsea_requisitos() {
+    fn parses_requisitos() {
         assert_eq!(VersionReq::parse("1.2.0").unwrap(), VersionReq::Exact(v(1, 2, 0)));
         assert_eq!(VersionReq::parse("=1.2.0").unwrap(), VersionReq::Exact(v(1, 2, 0)));
         assert_eq!(VersionReq::parse("1.2").unwrap(), VersionReq::Exact(v(1, 2, 0)));

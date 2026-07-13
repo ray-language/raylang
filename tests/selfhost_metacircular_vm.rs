@@ -22,16 +22,16 @@ fn repo_path(rel: &str) -> PathBuf {
 }
 
 /// Escribe `src` a un archivo temporal y devuelve su ruta absoluta.
-fn temp_input(nombre: &str, src: &str) -> String {
-    let mut ruta = std::env::temp_dir();
-    ruta.push(nombre);
-    let mut f = std::fs::File::create(&ruta).expect("crea el temporal");
+fn temp_input(name: &str, src: &str) -> String {
+    let mut path = std::env::temp_dir();
+    path.push(name);
+    let mut f = std::fs::File::create(&path).expect("crea el temporal");
     f.write_all(src.as_bytes()).expect("escribe el temporal");
-    ruta.to_str().expect("ruta utf-8").to_string()
+    path.to_str().expect("path utf-8").to_string()
 }
 
 /// Corre `args` con el binario de raylang; devuelve (stdout, código de salida).
-fn correr(args: &[&str]) -> (String, i32) {
+fn run(args: &[&str]) -> (String, i32) {
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(args)
         .output()
@@ -43,15 +43,15 @@ fn correr(args: &[&str]) -> (String, i32) {
 }
 
 /// Compara un driver del self-hosting corrido por Rust vs COMPILADO Y CORRIDO sobre la VM auto-alojada.
-fn comparar_driver_vm(driver_rel: &str, input_abs: &str, etiqueta: &str) {
+fn compare_driver_vm(driver_rel: &str, input_abs: &str, etiqueta: &str) {
     let driver = repo_path(driver_rel);
-    let driver = driver.to_str().expect("ruta utf-8");
+    let driver = driver.to_str().expect("path utf-8");
     let run_vm = repo_path("selfhost/run_vm.ray");
-    let run_vm = run_vm.to_str().expect("ruta utf-8");
-    let (so_r, code_r) = correr(&[driver, input_abs]);
-    let (so_v, code_v) = correr(&[run_vm, driver, input_abs]);
+    let run_vm = run_vm.to_str().expect("path utf-8");
+    let (so_r, code_r) = run(&[driver, input_abs]);
+    let (so_v, code_v) = run(&[run_vm, driver, input_abs]);
     assert_eq!(so_v, so_r, "stdout difiere ({etiqueta})");
-    assert_eq!(code_v, code_r, "código de salida difiere ({etiqueta})");
+    assert_eq!(code_v, code_r, "código de output difiere ({etiqueta})");
 }
 
 // Fuentes pequeñas (la VM auto-alojada corre sobre la VM del host → entradas chicas).
@@ -65,30 +65,30 @@ const DATOS: &str = "struct P { x: int, y: int }\nenum F { C(int), R(int, int) }
 fn lexer_metacircular_vm() {
     // El lexer auto-alojado, COMPILADO y corrido sobre la VM auto-alojada, lexea idéntico a Rust.
     let inp = temp_input("mcvm_lex_fib.ray", FIB);
-    comparar_driver_vm("selfhost/lex_dump.ray", &inp, "lex_dump/fib");
-    let inp = temp_input("mcvm_lex_datos.ray", DATOS);
-    comparar_driver_vm("selfhost/lex_dump.ray", &inp, "lex_dump/datos");
+    compare_driver_vm("selfhost/lex_dump.ray", &inp, "lex_dump/fib");
+    let inp = temp_input("mcvm_lex_data.ray", DATOS);
+    compare_driver_vm("selfhost/lex_dump.ray", &inp, "lex_dump/data");
 }
 
 #[test]
 fn parser_metacircular_vm() {
     // El parser auto-alojado, sobre la VM auto-alojada, produce el mismo AST que Rust.
     let inp = temp_input("mcvm_parse_fib.ray", FIB);
-    comparar_driver_vm("selfhost/parse_dump.ray", &inp, "parse_dump/fib");
-    let inp = temp_input("mcvm_parse_datos.ray", DATOS);
-    comparar_driver_vm("selfhost/parse_dump.ray", &inp, "parse_dump/datos");
+    compare_driver_vm("selfhost/parse_dump.ray", &inp, "parse_dump/fib");
+    let inp = temp_input("mcvm_parse_data.ray", DATOS);
+    compare_driver_vm("selfhost/parse_dump.ray", &inp, "parse_dump/data");
 }
 
 #[test]
 fn checker_metacircular_vm() {
     // El checker auto-alojado, sobre la VM auto-alojada, da el mismo veredicto que Rust.
     let inp = temp_input("mcvm_check_fib.ray", FIB);
-    comparar_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/fib");
-    let inp = temp_input("mcvm_check_datos.ray", DATOS);
-    comparar_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/datos");
+    compare_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/fib");
+    let inp = temp_input("mcvm_check_data.ray", DATOS);
+    compare_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/data");
     // Un programa con error de tipos: el veredicto (mensaje) también debe coincidir.
     let inp = temp_input("mcvm_check_err.ray", "fn main() -> int { let x: int = true; 0 }\n");
-    comparar_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/error");
+    compare_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/error");
 }
 
 // run-on-run de la VM corre TRES niveles (Rust → VM auto-alojada compilando+corriendo run_vm.ray → esa VM
@@ -101,5 +101,5 @@ fn run_on_run_metacircular_vm() {
     // programa con el mismo comportamiento que Rust → la VM auto-alojada ejecutándose a sí misma.
     let inp = temp_input("mcvm_ror_fib.ray", "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\n\
                                               fn main() -> int { var i = 0; while (i <= 4) { print(fib(i)); i = i + 1; } 0 }\n");
-    comparar_driver_vm("selfhost/run_vm.ray", &inp, "run-on-run-vm/fib");
+    compare_driver_vm("selfhost/run_vm.ray", &inp, "run-on-run-vm/fib");
 }

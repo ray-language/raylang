@@ -63,8 +63,8 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
     let enc = new_hpack();
     let reqhdrs = [header(":method", "GET"), header(":path", path), header(":scheme", "https"), header(":authority", host)];
     let block = encode(enc, reqhdrs);
-    let salida = preface() + settings_empty() + headers_frame(1, block, true);
-    match (net.socket_write_bytes(h, salida)) {
+    let output = preface() + settings_empty() + headers_frame(1, block, true);
+    match (net.socket_write_bytes(h, output)) {
         Result.Ok(n) => { },
         Result.Err(e) => {
             close(h);
@@ -127,7 +127,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                         // M73: tope de respuesta acumulada (anti-bomba de memoria).
                         if (body.len() + fr.payload.len() > max_response()) {
                             close(h);
-                            return Result.Err("respuesta HTTP/2 excede el límite (posible bomba de memoria)");
+                            return Result.Err("response HTTP/2 excede el límite (posible bomba de memoria)");
                         }
                         body = body + fr.payload;
                         // M58.3 — flow control: devolver la ventana consumida (conexión + stream);

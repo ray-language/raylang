@@ -244,7 +244,7 @@ pub fn add(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     // M70: el tipo debe cuadrar — antes `add` sobre un histograma creaba una serie espuria
     // (`nombre{}` mezclada con `nombre_bucket{…}`) que corrompía la exposición en silencio.
     if (reg.kinds[mi] == 2) {
-        panic("'" + name + "' es un histogram; usa observe_l/observe");
+        panic("'" + name + "' es un histogram; uses observe_l/observe");
     }
     let si = touch_series(reg, mi, name + render_labels(labels));
     reg.s_val[si] = reg.s_val[si] + v;
@@ -265,7 +265,7 @@ pub fn set(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     // M70: `set` es de gauges — sobre un counter viola la monotonía; sobre un histograma
     // crearía una serie espuria.
     if (reg.kinds[mi] != 1) {
-        panic("'" + name + "' no es un gauge; set solo aplica a gauges");
+        panic("'" + name + "' no es un gauge; set solo applies a gauges");
     }
     let si = touch_series(reg, mi, name + render_labels(labels));
     reg.s_val[si] = v;
@@ -284,7 +284,7 @@ pub fn observe_l(reg: Registry, name: string, labels: Map<string, string>, v: fl
     }
     // M70: observar un counter/gauge crearía series _bucket espurias.
     if (reg.kinds[mi] != 2) {
-        panic("'" + name + "' no es un histogram; usa inc/add/set");
+        panic("'" + name + "' no es un histogram; uses inc/add/set");
     }
     let bks = reg.bucketses[mi];
     ensure_hist_series(reg, mi, name, bks, labels);

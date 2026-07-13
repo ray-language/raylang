@@ -9,7 +9,7 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
-fn proyecto(base: &std::path::Path) -> std::path::PathBuf {
+fn project(base: &std::path::Path) -> std::path::PathBuf {
     let tz = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/tz");
     let fixtures = tz.join("fixtures");
     let app = base.join("app");
@@ -112,11 +112,11 @@ fn main() -> int {{
     // Errores como valores: archivo inexistente y nombre inválido.
     match (tz.load_file("{fixtures}/NoExiste.tzif")) {{
         Result.Ok(z) => print("FALLO: cargó"),
-        Result.Err(e) => print("err archivo ok"),
+        Result.Err(e) => print("err file ok"),
     }}
     match (tz.load("../etc/passwd")) {{
         Result.Ok(z) => print("FALLO: cargó"),
-        Result.Err(e) => print("err nombre ok"),
+        Result.Err(e) => print("err name ok"),
     }}
     0
 }}
@@ -145,10 +145,10 @@ utc off=0 UTC\n\
 2100-03-28T03:00:00Z CEST dst=true off_h=2\n\
 gap 2100\n\
 ambiguous 2100 delta_min=60\n\
-err archivo ok\n\
-err nombre ok\n";
+err file ok\n\
+err name ok\n";
 
-fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
+fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     let out = Command::new(BIN)
         .args(flags)
         .arg(app.join("src/main.ray"))
@@ -159,14 +159,14 @@ fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
 }
 
 #[test]
-fn tz_hora_local_ambos_motores() {
+fn tz_hora_local_ambos_engines() {
     let base = std::env::temp_dir().join("ray_tz_cli");
     let _ = std::fs::remove_dir_all(&base);
-    let app = proyecto(&base);
-    let (o_in, c_in) = correr(&app, &[]);
-    let (o_vm, c_vm) = correr(&app, &["--vm"]);
+    let app = project(&base);
+    let (o_in, c_in) = run(&app, &[]);
+    let (o_vm, c_vm) = run(&app, &["--vm"]);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    assert_eq!(o_in, ESPERADO, "salida esperada");
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    assert_eq!(o_in, ESPERADO, "output expected_val");
 }

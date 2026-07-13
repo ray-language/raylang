@@ -169,12 +169,12 @@ fn mime_of(file: string) -> string {
 /// directory's `index.html`. Sets `Content-Type` by extension; unknown files are octet-stream;
 /// missing/unreadable files are 404.
 pub fn static_response(dir: string, path: string) -> Response {
-    var ruta: string = path;
-    if (ruta.ends_with("/")) {
-        ruta = ruta + "index.html";
+    var path: string = path;
+    if (path.ends_with("/")) {
+        path = path + "index.html";
     }
-    let segs: [string] = ruta.split("/");
-    var limpio: [string] = [];
+    let segs: [string] = path.split("/");
+    var clean: [string] = [];
     var i: int = 0;
     while (i < segs.len()) {
         let s: string = segs[i];
@@ -182,19 +182,19 @@ pub fn static_response(dir: string, path: string) -> Response {
             return not_found();
         }
         if (s != "") {
-            limpio.push(s);
+            clean.push(s);
         }
         i = i + 1;
     }
     var file: string = dir;
     var j: int = 0;
-    while (j < limpio.len()) {
-        file = file + "/" + limpio[j];
+    while (j < clean.len()) {
+        file = file + "/" + clean[j];
         j = j + 1;
     }
     match (fs.read_file_bytes(file)) {
-        Result.Ok(datos) => {
-            let r: Response = bytes_response(200, datos);
+        Result.Ok(data) => {
+            let r: Response = bytes_response(200, data);
             r.headers.insert("Content-Type", mime_of(file));
             r
         },
@@ -239,8 +239,8 @@ fn status_text(code: int) -> string {
 // rompería from_utf8 del buffer entero. `desde` permite REANUDAR el escaneo donde quedó el trozo
 // anterior (M56.1): sin él, re-escanear todo el acumulado por trozo es O(n²) — un amplificador
 // del ataque de cabeceras gigantes.
-fn find_fin_cabeceras(b: bytes, desde: int) -> int {
-    var i: int = desde;
+fn find_fin_headers(b: bytes, from: int) -> int {
+    var i: int = from;
     if (i < 0) { i = 0; }
     while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
@@ -264,8 +264,8 @@ pub fn read_request(conn: int) -> Result<Request, string> {
 
 // --- Cuerpo chunked entrante (M56.8, Transfer-Encoding: chunked) ---
 // El índice del primer "\r\n" en `b` desde `desde`, o -1 (escaneo por octetos, como el fin de cabeceras).
-fn buscar_crlf(b: bytes, desde: int) -> int {
-    var i: int = desde;
+fn buscar_crlf(b: bytes, from: int) -> int {
+    var i: int = from;
     while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;
@@ -309,34 +309,34 @@ fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
 // terminado por el chunk 0 (los trailers, raros, no se soportan: tras el 0 se exige `\r\n`).
 // `inicial` son los octetos que llegaron pegados a las cabeceras; el tamaño DECODIFICADO acumulado
 // respeta `max` y toda la lectura el plazo total.
-fn leer_cuerpo_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Result<bytes, string> {
+fn leer_body_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Result<bytes, string> {
     var acc: bytes = inicial;
     var out: bytes = b"";
-    var seguir: bool = true;
-    while (seguir) {
+    var follow: bool = true;
+    while (follow) {
         let nl: int = buscar_crlf(acc, 0);
         if (nl < 0) {
             match (leer_con_plazo(conn, plazo_fin)) {
                 Result.Ok(t) => {
                     if (t.len() == 0) {
-                        return Result.Err("cuerpo chunked incompleto (la conexión se cerró)");
+                        return Result.Err("body chunked incompleto (la conexión se cerró)");
                     }
                     acc = acc + t;
                 },
                 Result.Err(e) => {
-                    return Result.Err("error al leer el cuerpo chunked: " + e);
+                    return Result.Err("error al leer el body chunked: " + e);
                 },
             }
         } else {
             let n: int = tam_chunk(acc, 0, nl);
             if (n < 0) {
-                return Result.Err("cuerpo chunked malformado (tamaño no hexadecimal)");
+                return Result.Err("body chunked malformado (tamaño no hexadecimal)");
             }
             if (n == 0) {
-                seguir = false;
+                follow = false;
             } else {
                 if (out.len() + n > max) {
-                    return Result.Err("cuerpo demasiado grande (chunked > " + to_string(max) + ")");
+                    return Result.Err("body demasiado grande (chunked > " + to_string(max) + ")");
                 }
                 // Asegurar el chunk completo + su \r\n final.
                 var falta: bool = acc.len() < nl + 2 + n + 2;
@@ -344,13 +344,13 @@ fn leer_cuerpo_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> R
                     match (leer_con_plazo(conn, plazo_fin)) {
                         Result.Ok(t) => {
                             if (t.len() == 0) {
-                                return Result.Err("cuerpo chunked incompleto (la conexión se cerró)");
+                                return Result.Err("body chunked incompleto (la conexión se cerró)");
                             }
                             acc = acc + t;
                             falta = acc.len() < nl + 2 + n + 2;
                         },
                         Result.Err(e) => {
-                            return Result.Err("error al leer el cuerpo chunked: " + e);
+                            return Result.Err("error al leer el body chunked: " + e);
                         },
                     }
                 }
@@ -390,23 +390,23 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
     let plazo_fin: int = if (limits.read_timeout_millis > 0) { time.monotonic() + limits.read_timeout_millis } else { 0 };
     var acc: bytes = b"";
     var sep: int = 0 - 1;
-    var desde: int = 0;
-    var seguir: bool = true;
-    while (seguir) {
-        let s: int = find_fin_cabeceras(acc, desde);
+    var from: int = 0;
+    var follow: bool = true;
+    while (follow) {
+        let s: int = find_fin_headers(acc, from);
         if (s >= 0) {
             sep = s;
-            seguir = false;
+            follow = false;
         } else {
             // Reanudar 3 octetos atrás: el "\r\n\r\n" puede quedar partido entre dos trozos.
-            desde = acc.len() - 3;
+            from = acc.len() - 3;
             if (acc.len() > limits.max_header_bytes) {
-                return Result.Err("cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
+                return Result.Err("headers demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
             }
             match (leer_con_plazo(conn, plazo_fin)) {
                 Result.Ok(trozo) => {
                     if (trozo.len() == 0) {
-                        seguir = false;
+                        follow = false;
                     } else {
                         acc = acc + trozo;
                     }
@@ -427,30 +427,30 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
         if (acc.len() == 0) {
             return Result.Err("conexión cerrada");
         }
-        return Result.Err("petición incompleta (sin fin de cabeceras)");
+        return Result.Err("petición incompleta (sin fin de headers)");
     }
     // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
     // solo trozo grande pasarían y el límite dependería del troceo de la red (no determinista).
     if (sep + 4 > limits.max_header_bytes) {
-        return Result.Err("cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
+        return Result.Err("headers demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
     }
 
     var body: bytes = acc.sub_bytes(sep + 4, acc.len());
     match (from_utf8(acc.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("cabeceras de la petición no son UTF-8: " + e),
-        Result.Ok(cabeceras_raw) => {
-            let lineas: [string] = cabeceras_raw.split("\r\n");
+        Result.Err(e) => Result.Err("headers de la petición no son UTF-8: " + e),
+        Result.Ok(headers_raw) => {
+            let lines: [string] = headers_raw.split("\r\n");
 
             // Línea de petición: "GET /ruta?query HTTP/1.1". M56.2: se parte en el PRIMER `?`
             // (la query cruda va aparte) y la ruta se decodifica (%XX; un escape inválido es 400,
             // no una ruta corrupta silenciosa).
-            let partes: [string] = lineas[0].split(" ");
-            if (partes.len() < 2) {
-                return Result.Err("línea de petición malformada: " + lineas[0]);
+            let parts: [string] = lines[0].split(" ");
+            if (parts.len() < 2) {
+                return Result.Err("línea de petición malformada: " + lines[0]);
             }
-            let method: string = partes[0];
-            let target: string = partes[1];
-            let version: string = if (partes.len() >= 3) { partes[2] } else { "" };
+            let method: string = parts[0];
+            let target: string = parts[1];
+            let version: string = if (parts.len() >= 3) { parts[2] } else { "" };
             var path_raw: string = target;
             var query: string = "";
             match (index_of(target, "?")) {
@@ -464,19 +464,19 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             match (url.percent_decode(path_raw)) {
                 Result.Ok(p) => { path = p; },
                 Result.Err(e) => {
-                    return Result.Err("ruta malformada (" + e + "): " + path_raw);
+                    return Result.Err("path malformada (" + e + "): " + path_raw);
                 },
             }
 
             // Cabeceras (nombre en minúsculas para lookup case-insensitive).
             var headers: Map<string, string> = Map.new();
             var i: int = 1;
-            while (i < lineas.len()) {
-                match (index_of(lineas[i], ":")) {
+            while (i < lines.len()) {
+                match (index_of(lines[i], ":")) {
                     Option.Some(c) => {
-                        let nombre: string = lineas[i].substring(0, c).trim().to_lower();
-                        let valor: string = lineas[i].substring(c + 1, lineas[i].len()).trim();
-                        headers.insert(nombre, valor);
+                        let name: string = lines[i].substring(0, c).trim().to_lower();
+                        let valor: string = lines[i].substring(c + 1, lines[i].len()).trim();
+                        headers.insert(name, valor);
                     },
                     Option.None => { },
                 }
@@ -493,7 +493,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                 Option.None => { },
             }
             if (chunked) {
-                match (leer_cuerpo_chunked(conn, body, plazo_fin, limits.max_body_bytes)) {
+                match (leer_body_chunked(conn, body, plazo_fin, limits.max_body_bytes)) {
                     Result.Ok(b2) => {
                         body = b2;
                     },
@@ -511,18 +511,18 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     match (parse_int(cl)) {
                         Option.Some(n) => {
                             if (n > limits.max_body_bytes) {
-                                return Result.Err("cuerpo demasiado grande (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
+                                return Result.Err("body demasiado grande (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
                             }
                             while (body.len() < n) {
                                 match (leer_con_plazo(conn, plazo_fin)) {
                                     Result.Ok(trozo) => {
                                         if (trozo.len() == 0) {
-                                            return Result.Err("cuerpo incompleto: la conexión se cerró con " + to_string(body.len()) + " de " + to_string(n) + " octetos");
+                                            return Result.Err("body incompleto: la conexión se cerró con " + to_string(body.len()) + " de " + to_string(n) + " octetos");
                                         }
                                         body = body + trozo;
                                     },
                                     Result.Err(e) => {
-                                        return Result.Err("error al leer el cuerpo: " + e);
+                                        return Result.Err("error al leer el body: " + e);
                                     },
                                 }
                             }
@@ -617,7 +617,7 @@ pub fn sse_event(conn: int, data: string) -> Result<int, string> {
 // M56.5: el handler corre en su PROPIA tarea y su fallo se observa con try_join (sin re-lanzar) →
 // un panic del handler ya no mata la fibra de la conexión: se loguea, se responde 500 best-effort
 // y SIEMPRE se cierra la conexión (antes: fd fugado + token del semáforo fugado + cliente colgado).
-fn atender(conn: int, handler: fn(Request, int), limits: Limits) {
+fn handle(conn: int, handler: fn(Request, int), limits: Limits) {
     match (read_request_limits(conn, limits)) {
         Result.Ok(req) => {
             let t = spawn(fn() { handler(req, conn) });
@@ -649,7 +649,7 @@ fn atender(conn: int, handler: fn(Request, int), limits: Limits) {
 
 // ¿La petición pide cerrar la conexión tras responder? Cerramos si no es HTTP/1.1 (el keep-alive
 // de 1.0 es opt-in y declinarlo siempre es válido) o si trae `Connection: close`.
-fn quiere_cerrar(req: Request) -> bool {
+fn quiere_close(req: Request) -> bool {
     if (req.version != "HTTP/1.1") {
         return true;
     }
@@ -665,22 +665,22 @@ fn quiere_cerrar(req: Request) -> bool {
 // Aquí sí podemos: la respuesta la escribe el servidor (el framing por Content-Length ya es
 // correcto), así que el header `Connection` siempre dice la verdad. Cada petición corre su handler
 // en su PROPIA tarea (M56.5): un panic responde 500 y cierra, sin fugar nada.
-fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
-    var seguir: bool = true;
-    while (seguir) {
+fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
+    var follow: bool = true;
+    while (follow) {
         match (read_request_limits(conn, limits)) {
             Result.Ok(req) => {
-                let cerrar: bool = quiere_cerrar(req);
+                let close: bool = quiere_close(req);
                 // M56.8: a un HEAD se le responden las cabeceras del GET equivalente SIN el cuerpo.
                 let es_head: bool = req.method == "HEAD";
                 let t = spawn(fn() -> Response { handler(req) });
                 match (try_join(t)) {
                     Result.Ok(resp) => {
-                        match (send_response_keep(conn, resp, !cerrar, es_head)) {
+                        match (send_response_keep(conn, resp, !close, es_head)) {
                             Result.Ok(_) => { },
                             Result.Err(e) => {
-                                eprint("respuesta: " + e);
-                                seguir = false;
+                                eprint("response: " + e);
+                                follow = false;
                             },
                         }
                     },
@@ -690,11 +690,11 @@ fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                             Result.Ok(_) => { },
                             Result.Err(_) => { },
                         }
-                        seguir = false;
+                        follow = false;
                     },
                 }
-                if (cerrar) {
-                    seguir = false;
+                if (close) {
+                    follow = false;
                 }
             },
             Result.Err(e) => {
@@ -705,7 +705,7 @@ fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                         Result.Err(_) => { },
                     }
                 }
-                seguir = false;
+                follow = false;
             },
         }
     }
@@ -734,8 +734,8 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 /// Transient accept errors are logged and retried; only persistent failure stops the server.
 pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
     // TCP plano: la conexión aceptada se atiende tal cual (preparar = identidad).
-    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
-        atender(c, handler, limits);
+    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        handle(c, handler, limits);
     })
 }
 
@@ -744,42 +744,42 @@ pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Req
 // DENTRO de la fibra de la conexión: un handshake TLS lento no frena el accept de las demás.
 // M56.6: `atender_conn` es quien atiende la conexión preparada (una petición y cerrar —crudo— o
 // el bucle keep-alive —ergonómico—); debe CERRAR la conexión al terminar.
-fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, atender_conn: fn(int)) -> Result<int, string> {
+fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
-            print("escuchando en el puerto " + to_string(net.local_port(srv)));
-            let acotado: bool = limits.max_conns > 0;
-            let sem: Channel<int> = if (acotado) { Channel.bounded(limits.max_conns) } else { Channel.new() };
-            var errores: int = 0;
-            var seguir: bool = true;
-            while (seguir) {
+            print("escuchando en el port " + to_string(net.local_port(srv)));
+            let bounded: bool = limits.max_conns > 0;
+            let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
+            var errors: int = 0;
+            var follow: bool = true;
+            while (follow) {
                 match (net.tcp_accept(srv)) {
                     Result.Ok(conn) => {
-                        errores = 0;
-                        if (acotado) {
+                        errors = 0;
+                        if (bounded) {
                             send(sem, 1);
                         }
                         spawn(fn() {
                             match (preparar(conn)) {
                                 Result.Ok(c) => {
-                                    atender_conn(c);
+                                    handle_conn(c);
                                 },
                                 Result.Err(e) => {
                                     eprint("conexión: " + e);
                                     close(conn);
                                 },
                             }
-                            if (acotado) {
+                            if (bounded) {
                                 recv(sem);
                             }
                         });
                     },
                     Result.Err(e) => {
                         eprint("aceptar: " + e);
-                        errores = errores + 1;
-                        if (errores >= 100) {
-                            seguir = false;
+                        errors = errors + 1;
+                        if (errors >= 100) {
+                            follow = false;
                         }
                     },
                 }
@@ -805,46 +805,46 @@ fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> 
 // Keep-alive: el drenaje espera a que las conexiones CIERREN; una ociosa muere por
 // `read_timeout_millis`, así que un `drain_ms` menor puede vencer con ociosas vivas (se cierran
 // al salir el proceso). Solo VM, como serve.
-fn bucle_servidor_drenable(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, preparar: fn(int) -> Result<int, string>, atender_conn: fn(int)) -> Result<int, string> {
+fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, preparar: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
-            print("escuchando en el puerto " + to_string(net.local_port(srv)));
-            let acotado: bool = limits.max_conns > 0;
-            let sem: Channel<int> = if (acotado) { Channel.bounded(limits.max_conns) } else { Channel.new() };
+            print("escuchando en el port " + to_string(net.local_port(srv)));
+            let bounded: bool = limits.max_conns > 0;
+            let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
             let conns: Channel<int> = Channel.new();
             let done: Channel<int> = Channel.new();
             // Se CIERRA al apagar: un canal cerrado queda "listo" para siempre (gotcha de M12.4,
             // aquí a favor) → despierta a la bomba sin estado compartido.
-            let apagado: Channel<int> = Channel.new();
+            let off: Channel<int> = Channel.new();
             // La bomba de accept. Tras un error (transitorio, o el del cierre del listener en el
             // apagado) espera 10 ms U observa `apagado`; cerrado gana el select → sale en
             // silencio en vez de spamear el log con los errores del listener ya cerrado.
             spawn(fn() {
-                var errores = 0;
-                var seguir = true;
-                while (seguir) {
+                var errors = 0;
+                var follow = true;
+                while (follow) {
                     match (net.tcp_accept(srv)) {
                         Result.Ok(c) => {
-                            errores = 0;
+                            errors = 0;
                             send(conns, c);
                         },
                         Result.Err(e) => {
-                            errores = errores + 1;
-                            if (errores >= 100) {
+                            errors = errors + 1;
+                            if (errors >= 100) {
                                 // Error persistente: rendir el servidor (cerrar `conns` se lo
                                 // comunica al bucle principal, que devuelve como bucle_servidor).
                                 eprint("aceptar: " + e);
                                 close(conns);
-                                seguir = false;
+                                follow = false;
                             } else {
                                 let pausa: Channel<int> = Channel.new();
                                 spawn(fn() {
                                     time.sleep(10);
                                     send(pausa, 1);
                                 });
-                                if (select([apagado, pausa]) == 0) {
-                                    seguir = false;
+                                if (select([off, pausa]) == 0) {
+                                    follow = false;
                                 } else {
                                     let _ = recv(pausa);
                                     eprint("aceptar: " + e);
@@ -858,28 +858,28 @@ fn bucle_servidor_drenable(host: string, port: int, limits: Limits, stop: Channe
             var conns_abierta = true;
             var sirviendo = true;
             while (sirviendo) {
-                let cual = select([stop, conns, done]);
-                if (cual == 0) {
+                let which = select([stop, conns, done]);
+                if (which == 0) {
                     let _ = recv(stop);
                     sirviendo = false;
-                } else if (cual == 1) {
+                } else if (which == 1) {
                     match (recv(conns)) {
                         Option.Some(conn) => {
-                            if (acotado) {
+                            if (bounded) {
                                 send(sem, 1);
                             }
                             activos = activos + 1;
                             spawn(fn() {
                                 match (preparar(conn)) {
                                     Result.Ok(c) => {
-                                        atender_conn(c);
+                                        handle_conn(c);
                                     },
                                     Result.Err(e) => {
                                         eprint("conexión: " + e);
                                         close(conn);
                                     },
                                 }
-                                if (acotado) {
+                                if (bounded) {
                                     recv(sem);
                                 }
                                 send(done, 1);
@@ -897,7 +897,7 @@ fn bucle_servidor_drenable(host: string, port: int, limits: Limits, stop: Channe
                 }
             }
             // Apagado: avisar a la bomba y dejar de aceptar (los clientes nuevos ven rechazo).
-            close(apagado);
+            close(off);
             close(srv);
             print("apagando: " + to_string(activos) + " conexión(es) en vuelo");
             // Drenar con plazo. Una conexión aceptada y aún no atendida (ventana mínima entre el
@@ -912,10 +912,10 @@ fn bucle_servidor_drenable(host: string, port: int, limits: Limits, stop: Channe
                 while (esperando && activos > 0) {
                     // Un canal CERRADO siempre está "listo" → si la bomba cerró `conns`, sacarlo
                     // de la lista del select (el gotcha de M12.4).
-                    let cual = if (conns_abierta) { select([plazo, done, conns]) } else { select([plazo, done]) };
-                    if (cual == 0) {
+                    let which = if (conns_abierta) { select([plazo, done, conns]) } else { select([plazo, done]) };
+                    if (which == 0) {
                         esperando = false;
-                    } else if (cual == 1) {
+                    } else if (which == 1) {
                         let _ = recv(done);
                         activos = activos - 1;
                     } else {
@@ -930,7 +930,7 @@ fn bucle_servidor_drenable(host: string, port: int, limits: Limits, stop: Channe
                     }
                 }
                 if (activos > 0) {
-                    eprint("apagado: " + to_string(activos) + " conexión(es) en vuelo al vencer el plazo");
+                    eprint("off: " + to_string(activos) + " conexión(es) en vuelo al vencer el plazo");
                 }
             }
             Result.Ok(0)
@@ -948,8 +948,8 @@ pub fn serve_shutdown(host: string, port: int, stop: Channel<int>, drain_ms: int
 
 /// Like `serve_shutdown`, with explicit safety limits (see `Limits`).
 pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
-    bucle_servidor_drenable(host, port, limits, stop, drain_ms, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
-        atender_http(c, handler, limits);
+    loop_iter_servidor_drenable(host, port, limits, stop, drain_ms, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        handle_http(c, handler, limits);
     })
 }
 
@@ -976,8 +976,8 @@ pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Resul
 
 /// Like `serve`, with explicit safety limits (see `Limits`/`serve_raw_limits`).
 pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
-        atender_http(c, handler, limits);
+    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        handle_http(c, handler, limits);
     })
 }
 
@@ -996,10 +996,10 @@ pub fn serve_tls(host: string, port: int, cert: string, key: string, handler: fn
 
 /// Like `serve_tls`, with explicit safety limits (see `Limits`).
 pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
+    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {
-        atender_http(c, handler, limits);
+        handle_http(c, handler, limits);
     })
 }
 
@@ -1011,9 +1011,9 @@ pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler
 
 /// Like `serve_raw_tls`, with explicit safety limits (see `Limits`).
 pub fn serve_raw_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
-    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
+    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {
-        atender(c, handler, limits);
+        handle(c, handler, limits);
     })
 }

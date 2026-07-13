@@ -37,14 +37,14 @@ fn verify_handshake(response: string, key: string) -> bool {
     if (!response.contains("101")) {
         return false;
     }
-    let esperado = accept_key(key);
-    let lineas = response.split("\r\n");
+    let expected = accept_key(key);
+    let lines = response.split("\r\n");
     var i = 0;
-    while (i < lineas.len()) {
-        if (lineas[i].to_lower().starts_with("sec-websocket-accept:")) {
-            match (index_of(lineas[i], ":")) {
+    while (i < lines.len()) {
+        if (lines[i].to_lower().starts_with("sec-websocket-accept:")) {
+            match (index_of(lines[i], ":")) {
                 Option.Some(idx) => {
-                    return lineas[i].substring(idx + 1, lineas[i].len()).trim() == esperado;
+                    return lines[i].substring(idx + 1, lines[i].len()).trim() == expected;
                 },
                 Option.None => { },
             }
@@ -58,11 +58,11 @@ fn verify_handshake(response: string, key: string) -> bool {
 // `\r\n\r\n` (un servidor puede mandar la primera trama pegada al 101 → van al buffer del WsConn).
 struct HandshakeRead {
     headers: string,
-    resto: bytes,
+    rest: bytes,
 }
 
 // El índice del primer "\r\n\r\n" en bytes, o -1 (escaneo por octetos: lo que sigue es binario).
-fn find_fin_cabeceras(b: bytes) -> int {
+fn find_fin_headers(b: bytes) -> int {
     var i = 0;
     while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
@@ -77,14 +77,14 @@ fn find_fin_cabeceras(b: bytes) -> int {
 fn read_handshake(h: int) -> Result<HandshakeRead, string> {
     var acc: bytes = b"";
     while (true) {
-        let sep = find_fin_cabeceras(acc);
+        let sep = find_fin_headers(acc);
         if (sep >= 0) {
             match (from_utf8(acc.sub_bytes(0, sep))) {
                 Result.Ok(s) => {
-                    return Result.Ok(HandshakeRead { headers: s, resto: acc.sub_bytes(sep + 4, acc.len()) });
+                    return Result.Ok(HandshakeRead { headers: s, rest: acc.sub_bytes(sep + 4, acc.len()) });
                 },
                 Result.Err(e) => {
-                    return Result.Err("cabeceras del handshake no son UTF-8: " + e);
+                    return Result.Err("headers del handshake no son UTF-8: " + e);
                 },
             }
         }
@@ -123,7 +123,7 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<WsConn,
                 Result.Ok(hs) => {
                     if (verify_handshake(hs.headers, key)) {
                         let ws = client_conn(h);
-                        ws.buf = hs.resto;
+                        ws.buf = hs.rest;
                         Result.Ok(ws)
                     } else {
                         close(h);

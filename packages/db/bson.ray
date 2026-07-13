@@ -154,7 +154,7 @@ fn enc_value(out: [int], v: Bson) {
         Bson.ObjectId(b) => {
             // 12 octetos exactos; menos/más es un error del programador, no un dato → panic.
             if (b.len() != 12) {
-                panic("ObjectId debe tener 12 octetos, tiene " + to_string(b.len()));
+                panic("ObjectId must tener 12 octetos, has " + to_string(b.len()));
             }
             enc_bytes(out, b);
         },
@@ -214,7 +214,7 @@ fn max_depth() -> int {
 
 fn rd_u8(d: Dec) -> Result<int, string> {
     if (d.pos >= d.b.len()) {
-        return Result.Err(dec_err("fin de datos inesperado", d.pos));
+        return Result.Err(dec_err("fin de data inesperado", d.pos));
     }
     let v = d.b[d.pos];
     d.pos = d.pos + 1;
@@ -223,7 +223,7 @@ fn rd_u8(d: Dec) -> Result<int, string> {
 
 fn rd_exact(d: Dec, n: int) -> Result<bytes, string> {
     if (d.pos + n > d.b.len()) {
-        return Result.Err(dec_err("fin de datos inesperado (faltan " + to_string(n) + " octetos)", d.pos));
+        return Result.Err(dec_err("fin de data inesperado (faltan " + to_string(n) + " octetos)", d.pos));
     }
     let out = d.b.sub_bytes(d.pos, d.pos + n);
     d.pos = d.pos + n;
@@ -273,7 +273,7 @@ fn rd_string(d: Dec) -> Result<string, string> {
     let start = d.pos;
     let n = rd_le32(d)?;
     if (n < 1) {
-        return Result.Err(dec_err("longitud de string inválida: " + to_string(n), start));
+        return Result.Err(dec_err("length de string inválida: " + to_string(n), start));
     }
     let raw = rd_exact(d, n)?;
     if (raw[n - 1] != 0) {
@@ -314,7 +314,7 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
         let start = d.pos;
         let n = rd_le32(d)?;
         if (n < 0) {
-            return Result.Err(dec_err("longitud de binario negativa", start));
+            return Result.Err(dec_err("length de binary negativa", start));
         }
         let _subtype = rd_u8(d)?;
         let raw = rd_exact(d, n)?;
@@ -347,17 +347,17 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
         let v = rd_le64(d)?;
         return Result.Ok(Bson.Timestamp(v));
     }
-    Result.Err(dec_err("tipo BSON no soportado: " + to_string(t), d.pos - 1))
+    Result.Err(dec_err("type BSON no soportado: " + to_string(t), d.pos - 1))
 }
 
 fn rd_doc(d: Dec, depth: int) -> Result<[Field], string> {
     if (depth > max_depth()) {
-        return Result.Err(dec_err("anidamiento demasiado profundo (posible DoS): más de " + to_string(max_depth()) + " niveles", d.pos));
+        return Result.Err(dec_err("nesting demasiado profundo (posible DoS): más de " + to_string(max_depth()) + " niveles", d.pos));
     }
     let start = d.pos;
     let total = rd_le32(d)?;
     if (total < 5 || start + total > d.b.len()) {
-        return Result.Err(dec_err("longitud de documento inválida: " + to_string(total), start));
+        return Result.Err(dec_err("length de documento inválida: " + to_string(total), start));
     }
     let end = start + total;
     var fields: [Field] = [];
@@ -380,7 +380,7 @@ pub fn decode(b: bytes) -> Result<[Field], string> {
     var d = Dec { b: b, pos: 0 };
     let fields = rd_doc(d, 0)?;
     if (d.pos != b.len()) {
-        return Result.Err(dec_err("datos sobrantes tras el documento", d.pos));
+        return Result.Err(dec_err("data sobrantes after el documento", d.pos));
     }
     Result.Ok(fields)
 }
@@ -432,7 +432,7 @@ pub fn doc_from_json(s: string) -> Result<[Field], string> {
     let j = parse(s)?;
     return match (from_json(j)) {
         Bson.Doc(fields) => Result.Ok(fields),
-        _ => Result.Err("el JSON de un documento debe ser un objeto"),
+        _ => Result.Err("el JSON de un documento must ser un objeto"),
     };
 }
 

@@ -47,7 +47,7 @@ pub fn send_to(h: int, host: string, port: int, data: bytes) -> Result<int, stri
 }
 
 // Texto de un campo `bytes` del primitivo, o "" si no es UTF-8 válido.
-fn texto(b: bytes) -> string {
+fn text(b: bytes) -> string {
     match (from_utf8(b)) {
         Result.Ok(s) => s,
         Result.Err(_) => "",
@@ -59,14 +59,14 @@ fn texto(b: bytes) -> string {
 /// no cooperative yield yet). Ok = Packet with sender address and payload; Err = OS error.
 pub fn recv_from(h: int) -> Result<Packet, string> {
     let r = __udp_recv_from(h);  // [b"ok", host, puerto, datos] o [b"err", msg], todo en bytes
-    if (texto(r[0]) == "ok") {
-        let host = texto(r[1]);
-        let port = match (parse_int(texto(r[2]))) {
+    if (text(r[0]) == "ok") {
+        let host = text(r[1]);
+        let port = match (parse_int(text(r[2]))) {
             Option.Some(n) => n,
             Option.None => 0,
         };
         Result.Ok(Packet { host: host, port: port, data: r[3] })
     } else {
-        Result.Err(texto(r[1]))
+        Result.Err(text(r[1]))
     }
 }

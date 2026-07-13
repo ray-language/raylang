@@ -46,11 +46,11 @@ fn main() -> int {
         close(ch);
     });
     var total = 0;
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         match (recv(ch)) {
             Option.Some(v) => { print(v); total = total + v; },
-            Option.None => { seguir = false; },
+            Option.None => { follow = false; },
         }
     }
     print(total);
@@ -63,7 +63,7 @@ fn main() -> int {
 }
 
 #[test]
-fn orden_determinista_dos_productores() {
+fn order_determinista_dos_productores() {
     // Dos productores + un consumidor: el scheduler determinista fija el orden de entrega.
     let src = r#"
 fn productor(ch: Channel<int>, base: int) {
@@ -82,13 +82,13 @@ fn main() -> int {
     0
 }
 "#;
-    let (out, _err, code) = run("conc_orden", src, true);
+    let (out, _err, code) = run("conc_order", src, true);
     assert_eq!(out, "100\n101\n102\n200\n201\n202\n");
     assert_eq!(code, 0);
 }
 
 #[test]
-fn closure_captura_en_fibra() {
+fn closure_capture_en_fiber() {
     // La función spawneada es una closure que captura una variable de main (por celda compartida).
     let src = r#"
 fn main() -> int {
@@ -99,9 +99,9 @@ fn main() -> int {
         while (i <= 3) { send(ch, i * factor); i = i + 1; }
         close(ch);
     });
-    var seguir = true;
-    while (seguir) {
-        match (recv(ch)) { Option.Some(v) => print(v), Option.None => { seguir = false; } }
+    var follow = true;
+    while (follow) {
+        match (recv(ch)) { Option.Some(v) => print(v), Option.None => { follow = false; } }
     }
     0
 }
@@ -120,13 +120,13 @@ fn main() -> int {
     close(ch);
     match (recv(ch)) {
         Option.Some(_) => print("algo"),
-        Option.None => print("cerrado"),
+        Option.None => print("closed"),
     }
     0
 }
 "#;
     let (out, _err, code) = run("conc_close", src, true);
-    assert_eq!(out, "cerrado\n");
+    assert_eq!(out, "closed\n");
     assert_eq!(code, 0);
 }
 
@@ -147,7 +147,7 @@ fn main() -> int {
 }
 
 #[test]
-fn send_a_canal_cerrado_es_error() {
+fn send_a_canal_closed_es_error() {
     let src = r#"
 fn main() -> int {
     let ch: Channel<int> = Channel.new();
@@ -156,13 +156,13 @@ fn main() -> int {
     0
 }
 "#;
-    let (_out, err, code) = run("conc_send_cerrado", src, true);
-    assert!(err.contains("canal cerrado"), "stderr no menciona canal cerrado: {err}");
+    let (_out, err, code) = run("conc_send_closed", src, true);
+    assert!(err.contains("canal closed"), "stderr no menciona canal closed: {err}");
     assert_eq!(code, 70);
 }
 
 #[test]
-fn interprete_da_error_limpio() {
+fn interpreter_da_error_clean() {
     // La concurrencia requiere la VM: el intérprete (sin --vm) da un error de ejecución claro, no un panic.
     let src = r#"
 fn main() -> int {
@@ -172,7 +172,7 @@ fn main() -> int {
 }
 "#;
     let (_out, err, code) = run("conc_interp", src, false);
-    assert!(err.contains("requiere la VM"), "stderr no pide la VM: {err}");
+    assert!(err.contains("requiere la VM"), "stderr no asks la VM: {err}");
     assert_eq!(code, 70);
 }
 
@@ -191,20 +191,20 @@ fn main() -> int {
     });
     // Cuadrador: nums -> sqrs
     spawn(fn() {
-        var seguir = true;
-        while (seguir) {
+        var follow = true;
+        while (follow) {
             match (recv(nums)) {
                 Option.Some(v) => send(sqrs, v * v),
-                Option.None => { close(sqrs); seguir = false; },
+                Option.None => { close(sqrs); follow = false; },
             }
         }
     });
     var total = 0;
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         match (recv(sqrs)) {
             Option.Some(v) => { print(v); total = total + v; },
-            Option.None => { seguir = false; },
+            Option.None => { follow = false; },
         }
     }
     total
@@ -218,7 +218,7 @@ fn main() -> int {
 // --- M12.2: canales acotados / backpressure ---
 
 #[test]
-fn backpressure_canal_acotado() {
+fn backpressure_canal_bounded() {
     // Canal acotado a 2: el productor genera 1..5 más rápido de lo que el consumidor lee. Con backpressure
     // el `send` se bloquea al llenarse la cola (no se desborda); el consumidor recibe todo en orden.
     let src = r#"
@@ -230,11 +230,11 @@ fn main() -> int {
         close(ch);
     });
     var total = 0;
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         match (recv(ch)) {
             Option.Some(v) => { print(v); total = total + v; },
-            Option.None => { seguir = false; },
+            Option.None => { follow = false; },
         }
     }
     print(total);
@@ -257,11 +257,11 @@ fn main() -> int {
         close(ch);
     });
     var total = 0;
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         match (recv(ch)) {
             Option.Some(v) => { print(v); total = total + v; },
-            Option.None => { seguir = false; },
+            Option.None => { follow = false; },
         }
     }
     total
@@ -309,14 +309,14 @@ fn main() -> int {
 // --- M12.3: structured concurrency (Task<T> + join + scope) ---
 
 #[test]
-fn scope_join_valor_de_retorno() {
+fn scope_join_valor_de_return_val() {
     // spawn devuelve Task<int>; join bloquea y da su valor; el scope devuelve el valor del cuerpo.
     let src = r#"
-fn cuadrado(n: int) -> int { n * n }
+fn square(n: int) -> int { n * n }
 fn main() -> int {
     let total = scope(fn() -> int {
-        let a: Task<int> = spawn(fn() -> int { cuadrado(3) });
-        let b: Task<int> = spawn(fn() -> int { cuadrado(4) });
+        let a: Task<int> = spawn(fn() -> int { square(3) });
+        let b: Task<int> = spawn(fn() -> int { square(4) });
         join(a) + join(b)
     });
     print(total);
@@ -329,7 +329,7 @@ fn main() -> int {
 }
 
 #[test]
-fn scope_une_tareas_no_unidas() {
+fn scope_une_tasks_no_unidas() {
     // El scope espera a una tarea aunque no se la una explícitamente: al salir, ya terminó.
     let src = r#"
 fn main() -> int {
@@ -350,7 +350,7 @@ fn main() -> int {
 }
 
 #[test]
-fn join_propaga_el_panic_de_la_tarea() {
+fn join_propagates_el_panic_de_la_tarea() {
     // Una tarea que hace panic: join re-lanza ese fallo en el sitio del join (propagación).
     let src = r#"
 fn main() -> int {
@@ -361,17 +361,17 @@ fn main() -> int {
 }
 "#;
     let (_out, err, code) = run("conc_join_panic", src, true);
-    assert!(err.contains("boom"), "stderr no propaga el panic: {err}");
+    assert!(err.contains("boom"), "stderr no propagates el panic: {err}");
     assert_eq!(code, 70);
 }
 
 #[test]
-fn scope_propaga_el_panic_de_una_hija() {
+fn scope_propagates_el_panic_de_one_hija() {
     // Una tarea lanzada dentro del scope hace panic: el scope lo propaga al unir al salir.
     let src = r#"
 fn main() -> int {
     scope(fn() -> int {
-        spawn(fn() -> int { panic("la hija fallo") });
+        spawn(fn() -> int { panic("la hija failure") });
         0
     });
     print(999);
@@ -380,36 +380,36 @@ fn main() -> int {
 "#;
     let (out, err, code) = run("conc_scope_panic", src, true);
     assert_eq!(out, "");
-    assert!(err.contains("la hija fallo"), "stderr no propaga el panic de la hija: {err}");
+    assert!(err.contains("la hija failure"), "stderr no propagates el panic de la hija: {err}");
     assert_eq!(code, 70);
 }
 
 #[test]
-fn scope_de_varias_tareas() {
+fn scope_de_various_tasks() {
     // Varias tareas en un scope, unidas en orden: ejercita el scheduler y el GC multi-raíz.
     let src = r#"
 fn main() -> int {
-    let suma = scope(fn() -> int {
-        var tareas: [Task<int>] = [];
+    let sum = scope(fn() -> int {
+        var tasks: [Task<int>] = [];
         var i = 1;
         while (i <= 5) {
             let n = i;
-            tareas.push(spawn(fn() -> int { n * n }));
+            tasks.push(spawn(fn() -> int { n * n }));
             i = i + 1;
         }
         var total = 0;
         var j = 0;
-        while (j < tareas.len()) {
-            total = total + join(tareas[j]);
+        while (j < tasks.len()) {
+            total = total + join(tasks[j]);
             j = j + 1;
         }
         total
     });
-    print(suma);
-    suma
+    print(sum);
+    sum
 }
 "#;
-    let (out, _err, code) = run("conc_scope_varias", src, true);
+    let (out, _err, code) = run("conc_scope_various", src, true);
     assert_eq!(out, "55\n"); // 1+4+9+16+25
     assert_eq!(code, 55);
 }
@@ -446,7 +446,7 @@ fn main() -> int {
 }
 
 #[test]
-fn select_detecta_canal_cerrado() {
+fn select_detecta_canal_closed() {
     // Un canal cerrado cuenta como "listo": select lo devuelve y el recv da None.
     let src = r#"
 fn main() -> int {
@@ -461,13 +461,13 @@ fn main() -> int {
     0
 }
 "#;
-    let (out, _err, code) = run("conc_select_cerrado", src, true);
+    let (out, _err, code) = run("conc_select_closed", src, true);
     assert_eq!(out, "-7\n");
     assert_eq!(code, 0);
 }
 
 #[test]
-fn select_bloquea_hasta_que_un_canal_este_listo() {
+fn select_bloquea_hasta_what_un_canal_este_listo() {
     // Un canal nunca recibe valor; select bloquea hasta que el otro lo tiene, y devuelve su índice.
     let src = r#"
 fn productor(ch: Channel<int>) {
@@ -492,7 +492,7 @@ fn main() -> int {
 }
 
 #[test]
-fn select_sin_fuente_es_deadlock() {
+fn select_sin_source_es_deadlock() {
     // select sobre un canal que nadie alimenta ni cierra → deadlock (error de ejecución limpio).
     let src = r#"
 fn main() -> int {
@@ -511,7 +511,7 @@ fn main() -> int {
 // --- M12.5: cancelación de hermanas ---
 
 #[test]
-fn scope_cancela_a_las_hermanas_cuando_una_falla() {
+fn scope_cancela_a_las_hermanas_cuando_one_fails() {
     // La hija 0 hace panic; la hija 1 se bloquearía para siempre e imprimiría al final. El scope cancela a
     // la hija 1 (no llega a imprimir) y propaga el panic ORIGINAL (no un deadlock por esperarla).
     let src = r#"
@@ -532,13 +532,13 @@ fn main() -> int {
 "#;
     let (out, err, code) = run("conc_cancel_hermana", src, true);
     assert_eq!(out, ""); // ni 777 (cancelada) ni 999 (el scope propagó)
-    assert!(err.contains("boom"), "stderr no propaga el fallo original: {err}");
+    assert!(err.contains("boom"), "stderr no propagates el failure original: {err}");
     assert!(!err.contains("deadlock"), "no debería haber deadlock: {err}");
     assert_eq!(code, 70);
 }
 
 #[test]
-fn fibra_que_falla_cancela_sus_propias_tareas() {
+fn fiber_what_fails_cancela_sus_propias_tasks() {
     // Una tarea externa abre su scope; su cuerpo hace panic con una sub-tarea en vuelo. Al fallar, esa
     // fibra cancela sus hijos (la sub-tarea no llega a imprimir), y join re-lanza el panic.
     let src = r#"
@@ -551,7 +551,7 @@ fn main() -> int {
                 print(555);
                 0
             });
-            panic("externa falla")
+            panic("externa fails")
         })
     });
     let v = join(t);
@@ -561,12 +561,12 @@ fn main() -> int {
 "#;
     let (out, err, code) = run("conc_cancel_subtareas", src, true);
     assert_eq!(out, ""); // ni 555 (sub-tarea cancelada) ni v
-    assert!(err.contains("externa falla"), "stderr no propaga el fallo: {err}");
+    assert!(err.contains("externa fails"), "stderr no propagates el failure: {err}");
     assert_eq!(code, 70);
 }
 
 #[test]
-fn try_join_observa_el_fallo_sin_relanzar() {
+fn try_join_observa_el_failure_sin_relanzar() {
     // M56.5: try_join une una tarea devolviendo su desenlace como VALOR — Ok(valor) si terminó,
     // Err(mensaje del panic) si falló — a diferencia de join, que re-lanza el fallo. El programa
     // sigue vivo tras observar un fallo (base del webserver: un handler que panica no tumba nada).
@@ -592,17 +592,17 @@ fn main() -> int {
         Result.Ok(_) => print("unit ok"),
         Result.Err(e) => print("unit err " + e),
     }
-    print("sigo vivo");
+    print("sigo live");
     0
 }
 "#;
-    let (stdout, stderr, code) = run("try_join_fallo", src, true);
+    let (stdout, stderr, code) = run("try_join_failure", src, true);
     assert_eq!(code, 0, "stderr: {stderr}");
-    assert_eq!(stdout, "ok 42\nerr kaboom\nefecto\nunit ok\nsigo vivo\n");
+    assert_eq!(stdout, "ok 42\nerr kaboom\nefecto\nunit ok\nsigo live\n");
 }
 
 #[test]
-fn sleep_cede_la_fibra() {
+fn sleep_cede_la_fiber() {
     // M57.2: `time.sleep` es cooperativo en la VM — aparca la fibra con deadline (sin fd) y las
     // demás siguen corriendo. Antes bloqueaba el worker entero (en M:1, TODAS las fibras): la
     // hija no habría corrido hasta el join. Márgenes anchos (20 vs 200 ms) → orden estable.

@@ -138,9 +138,9 @@ fn payload_str(fields: [bson.Field]) -> Result<string, string> {
                 Result.Ok(s) => Result.Ok(s),
                 Result.Err(_) => Result.Err("mongo: el payload SASL no es UTF-8"),
             },
-            _ => Result.Err("mongo: la respuesta SASL no trae payload binario"),
+            _ => Result.Err("mongo: la response SASL no trae payload binary"),
         },
-        Option.None => Result.Err("mongo: la respuesta SASL no trae payload"),
+        Option.None => Result.Err("mongo: la response SASL no trae payload"),
     };
 }
 
@@ -236,7 +236,7 @@ fn session(handle: int, user: string, password: string, database: string, nonce:
     };
     if (!scram_verify(sc, server_final)) {
         close(handle);
-        return Result.Err("mongo: la firma del servidor no verifica (autenticación fallida)");
+        return Result.Err("mongo: la signature del servidor no verifies (autenticación fallida)");
     }
     Result.Ok(c)
 }
@@ -271,9 +271,9 @@ fn cursor_of(fields: [bson.Field]) -> Result<[bson.Field], string> {
     return match (bson.get(fields, "cursor")) {
         Option.Some(v) => match (v) {
             bson.Bson.Doc(f) => Result.Ok(f),
-            _ => Result.Err("mongo: la respuesta no trae cursor"),
+            _ => Result.Err("mongo: la response no trae cursor"),
         },
-        Option.None => Result.Err("mongo: la respuesta no trae cursor"),
+        Option.None => Result.Err("mongo: la response no trae cursor"),
     };
 }
 
@@ -290,7 +290,7 @@ fn append_batch(out: [[bson.Field]], cursor: [bson.Field], key: string) -> Resul
     while (i < batch.len()) {
         match (batch[i]) {
             bson.Bson.Doc(f) => { out.push(f); },
-            _ => { return Result.Err("mongo: el batch trae un elemento que no es documento"); },
+            _ => { return Result.Err("mongo: el batch trae un elemento what no es documento"); },
         }
         i = i + 1;
     }

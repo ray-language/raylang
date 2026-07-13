@@ -10,7 +10,7 @@ use std::process::Command;
 const ESPERADO: &[&str] = &[
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSIsImFkbWluIjp0cnVlfQ.lbFHAPAyxfbCKv0qbJb1ukylm0ZOW_skQJhpnZkZLcM",
     "{\"sub\":\"1234567890\",\"name\":\"Ada\",\"admin\":true}",
-    "firma inválida",
+    "signature inválida",
     "tamper detectado",
     "mal formado detectado",
     "alg:none rechazado", // M74: la validación de `alg` rechaza el ataque de confusión de algoritmo
@@ -22,7 +22,7 @@ const ESPERADO: &[&str] = &[
     "true", // orden lexicográfico = orden temporal (ms consecutivos)
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/jwt_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -41,11 +41,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn jwt_y_uuid_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn jwt_y_uuid_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn jwt_y_uuid_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

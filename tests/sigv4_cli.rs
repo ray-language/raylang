@@ -13,7 +13,7 @@ const ESPERADO: &[&str] = &[
      Signature=9eb84a4204a201b2eee292a6fd7bd72b820d6580ec32367b8ad37f7be64f8aed",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/sigv4_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -32,11 +32,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn sigv4_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn sigv4_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn sigv4_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

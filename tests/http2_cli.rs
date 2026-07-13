@@ -21,7 +21,7 @@ const ESPERADO: &[&str] = &[
     "505249202a20485454502f322e300d0a0d0a534d0d0a0d0a",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/http2_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -40,11 +40,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn hpack_y_framing_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn hpack_y_framing_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn hpack_y_framing_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

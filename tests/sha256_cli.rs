@@ -14,7 +14,7 @@ const ESPERADO: &[&str] = &[
 ];
 
 /// Corre `examples/web/sha256_demo.ray` con los flags dados y devuelve sus líneas de stdout.
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/sha256_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -33,11 +33,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn vectores_sha256_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn vectors_sha256_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
-fn vectores_sha256_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+fn vectors_sha256_vm() {
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

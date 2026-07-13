@@ -27,7 +27,7 @@ const ESPERADO: &[&str] = &[
     "# TYPE raro_total counter",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/metrics_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -35,42 +35,42 @@ fn correr(flags: &[&str]) -> (Vec<String>, bool) {
         .output()
         .expect("ejecuta metrics_demo.ray");
     // `render` ya termina cada línea en \n y `print` añade otro → se recorta el \n final sobrante.
-    let lineas = String::from_utf8_lossy(&out.stdout)
+    let lines = String::from_utf8_lossy(&out.stdout)
         .trim_end()
         .lines()
         .map(|l| l.to_string())
         .collect();
-    (lineas, out.status.success())
+    (lines, out.status.success())
 }
 
 #[test]
-fn metrics_exposicion_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn metrics_exposure_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "metrics_demo falló");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
-fn metrics_exposicion_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+fn metrics_exposure_vm() {
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "metrics_demo falló");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 /// Validación estructural con Python plano (sin prometheus_client): cada línea de serie es
 /// `nombre[{labels}] valor`, HELP/TYPE preceden a las series, y los buckets del histograma son
 /// cumulativos (cuentas no decrecientes por `le` ascendente, y +Inf == _count).
 #[test]
-fn formato_de_exposicion_valido() {
+fn formato_de_exposure_valid() {
     if Command::new("python3").arg("--version").output().is_err() {
         eprintln!("python3 no disponible: se omite la validación de formato");
         return;
     }
-    let (lineas, ok) = correr(&[]);
+    let (lines, ok) = run(&[]);
     assert!(ok);
-    let texto = lineas.join("\n");
+    let text = lines.join("\n");
 
-    let validador = r#"
+    let validator = r#"
 import sys, re
 text = sys.stdin.read()
 types = {}
@@ -84,11 +84,11 @@ for line in text.splitlines():
         _, _, name, kind = line.split()
         types[name] = kind
         continue
-    # nombre[{labels}] valor
+    # name[{labels}] valor
     m = re.match(r'^([a-zA-Z_][a-zA-Z0-9_]*)(\{[^}]*\})?\s+(\S+)$', line)
     assert m, f'línea inválida: {line!r}'
     name, labels, val = m.group(1), m.group(2) or '', m.group(3)
-    float(val)  # el valor debe ser numérico
+    float(val)  # el valor must ser numérico
     samples.setdefault(name, []).append((labels, float(val)))
 
 assert types.get('http_requests_total') == 'counter'
@@ -113,19 +113,19 @@ prev = 0
 for le, v in buckets:
     assert v >= prev, f'bucket no cumulativo en le={le}'
     prev = v
-assert inf is not None and count is not None and inf == count, 'el bucket +Inf debe igualar a _count'
+assert inf is not None and count is not None and inf == count, 'el bucket +Inf must igualar a _count'
 print('FORMATO OK')
 "#;
 
     let py = Command::new("python3")
         .arg("-c")
-        .arg(validador)
+        .arg(validator)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
         .and_then(|mut child| {
             use std::io::Write;
-            child.stdin.take().unwrap().write_all(texto.as_bytes())?;
+            child.stdin.take().unwrap().write_all(text.as_bytes())?;
             child.wait_with_output()
         })
         .expect("ejecuta python3");
@@ -140,7 +140,7 @@ print('FORMATO OK')
 /// M70 — chequeo de tipo: `set` sobre un counter y `observe` sobre un counter panican con
 /// mensaje claro (antes creaban una serie espuria que corrompía la exposición en silencio).
 #[test]
-fn tipo_equivocado_panica() {
+fn ty_equivocado_panica() {
     let src = r#"
 from metrics import registry, register_counter, set, no_labels;
 fn main() {
@@ -152,11 +152,11 @@ fn main() {
     let dir = std::env::temp_dir().join("ray_metrics_m70");
     std::fs::create_dir_all(&dir).unwrap();
     // El import `from metrics` resuelve junto al archivo → escribir el demo al lado del módulo.
-    let path = format!("{}/examples/web/m70_tipo_tmp.ray", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/examples/web/m70_ty_tmp.ray", env!("CARGO_MANIFEST_DIR"));
     std::fs::write(&path, src).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg("--vm").arg(&path).output().unwrap();
     std::fs::remove_file(&path).ok();
-    assert!(!out.status.success(), "set sobre un counter debe panicar");
+    assert!(!out.status.success(), "set about un counter must panicar");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no es un gauge"), "mensaje claro de tipo equivocado\n{err}");
+    assert!(err.contains("no es un gauge"), "mensaje claro de type equivocado\n{err}");
 }

@@ -14,7 +14,7 @@ const ESPERADO: &[&str] = &[
     "roundtrip=true",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/protobuf_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -33,13 +33,13 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn protobuf_grpc_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn protobuf_grpc_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn protobuf_grpc_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }
 
 /// El protobuf que produce raylang debe decodificarlo un parser del wire format en Python (sin deps).
@@ -49,8 +49,8 @@ fn wire_format_compatible_con_python() {
         eprintln!("python3 no disponible: se omite la validación");
         return;
     }
-    let hex = &correr(&[])[0];
-    let validador = r#"
+    let hex = &run(&[])[0];
+    let validator = r#"
 import sys
 data = bytes.fromhex(sys.argv[1])
 def rv(d,p):
@@ -73,7 +73,7 @@ print('WIRE OK')
 "#;
     let py = Command::new("python3")
         .arg("-c")
-        .arg(validador)
+        .arg(validator)
         .arg(hex)
         .output()
         .expect("ejecuta python3");

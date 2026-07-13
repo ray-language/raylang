@@ -79,23 +79,23 @@ raylang {v} — lenguaje de programación
 
 Uso: ray <subcomando> [opciones]
 
-  new <nombre>      crea un proyecto nuevo (ray.toml + src/main.ray)
-  run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
-  dev [archivo]     como run, pero REINICIA ante cambios en .ray/.ray.html/ray.toml (modo desarrollo)
-  build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
-  test [archivo]    corre las funciones @test [filtro]
-  add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
-  remove <nombre>   elimina una dependencia de ray.toml (y su caché si nadie más la usa)
-  search [patrón]   lista los paquetes del índice (que contengan el patrón)
-  publish [--repo S] [--sign]  publica la versión de este paquete en el índice (--sign la firma)
+  new <name>      crea un project new (ray.toml + src/main.ray)
+  run [file]     ejecuta (por default src/main.ray) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
+  dev [file]     como run, pero REINICIA ante cambios en .ray/.ray.html/ray.toml (mode desarrollo)
+  build [file]   chequea y compila sin ejecutar (0 ok / 65 error)
+  test [file]    runs las functions @test [filtro]
+  add <name>[@req]  añade one dependency del índice a ray.toml y la descarga
+  remove <name>   elimina one dependency de ray.toml (y su caché si nadie más la uses)
+  search [patrón]   list los packages del índice (what contengan el patrón)
+  publish [--repo S] [--sign]  public la versión de este package en el índice (--sign la signature)
   keygen [--out F]  genera la clave Ed25519 de publicación (RAY_KEY o ~/.ray/publish.key)
   index-verify [dir]  audita las firmas de un índice (para el CI del repo del índice)
-  update            re-resuelve las dependencias del índice a las más nuevas compatibles
-  yank <nom>@<ver>  retira (o --undo restaura) una versión publicada en el índice
-  fetch             descarga las dependencias de ray.toml a .ray-deps/
-  fmt <archivo>     imprime la versión canónica por stdout
-  templ <ruta>...   compila templates .ray.html a módulos raylang tipados
-  doc <archivo>     genera la documentación Markdown de su superficie pública
+  update            re-resolves las dependencies del índice a las más nuevas compatibles
+  yank <nom>@<see>  retira (o --undo restaura) one versión publicada en el índice
+  fetch             descarga las dependencies de ray.toml a .ray-deps/
+  fmt <file>     imprime la versión canónica por stdout
+  templ <path>...   compila templates .ray.html a módulos raylang tipados
+  doc <file>     genera la documentación Markdown de su superficie pública
   lsp               arranca el Language Server
   repl              REPL interactivo
   version           versión del lenguaje
@@ -111,7 +111,7 @@ Uso: ray <subcomando> [opciones]
 /// leerá el gestor de paquetes, M39b) + `src/main.ray` con un hola-mundo + `.gitignore`.
 fn cmd_new(args: &[String]) {
     let Some(name) = args.first() else {
-        eprintln!("uso: ray new <nombre>");
+        eprintln!("use: ray new <name>");
         process::exit(64);
     };
     let root = Path::new(name);
@@ -122,8 +122,8 @@ fn cmd_new(args: &[String]) {
     let manifest = format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
     );
-    let main_ray = format!("fn main() -> int {{\n    print(\"hola desde {name}\");\n    0\n}}\n");
-    let gitignore = "# dependencias descargadas por el gestor de paquetes (M39c)\n.ray-deps/\n";
+    let main_ray = format!("fn main() -> int {{\n    print(\"hello from {name}\");\n    0\n}}\n");
+    let gitignore = "# dependencies descargadas por el gestor de packages (M39c)\n.ray-deps/\n";
     let write_file = |path: std::path::PathBuf, content: &str| {
         if let Some(parent) = path.parent()
             && let Err(e) = fs::create_dir_all(parent)
@@ -139,7 +139,7 @@ fn cmd_new(args: &[String]) {
     write_file(root.join("ray.toml"), &manifest);
     write_file(root.join("src/main.ray"), &main_ray);
     write_file(root.join(".gitignore"), gitignore);
-    println!("proyecto '{name}' creado. Para correrlo:\n  cd {name} && ray run");
+    println!("project '{name}' creado. Para correrlo:\n  cd {name} && ray run");
 }
 
 /// `ray run [--interp] [archivo] [args...]`: ejecuta el programa. Sin archivo usa
@@ -196,7 +196,7 @@ fn cmd_dev(args: &[String]) {
         let mut child = match process::Command::new(&exe).arg("run").args(args).spawn() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[dev] no se pudo lanzar el programa: {e}");
+                eprintln!("[dev] no se pudo launch el program: {e}");
                 process::exit(70);
             }
         };
@@ -212,7 +212,7 @@ fn cmd_dev(args: &[String]) {
             }
             if running && let Ok(Some(status)) = child.try_wait() {
                 running = false;
-                eprintln!("[dev] el programa terminó ({status}); esperando cambios…");
+                eprintln!("[dev] el program terminó ({status}); esperando cambios…");
             }
         };
         eprintln!("[dev] cambio en {change}: reiniciando…");
@@ -337,7 +337,7 @@ fn terminate_gracefully(child: &mut process::Child) {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        eprintln!("[dev] el programa no drenó a tiempo; terminación forzosa");
+        eprintln!("[dev] el program no drenó a tiempo; terminación forzosa");
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -400,7 +400,7 @@ fn cmd_test_sub(args: &[String]) {
 /// versión exista en el índice **antes** de tocar el manifiesto (fail-fast ante un typo).
 fn cmd_add(args: &[String]) {
     let Some(spec) = args.first().map(String::as_str) else {
-        eprintln!("uso: ray add <nombre>[@<versión>]");
+        eprintln!("use: ray add <name>[@<versión>]");
         process::exit(64);
     };
     let (name, req_opt) = match spec.split_once('@') {
@@ -408,16 +408,16 @@ fn cmd_add(args: &[String]) {
         None => (spec, None),
     };
     if name.is_empty() {
-        eprintln!("uso: ray add <nombre>[@<versión>]");
+        eprintln!("use: ray add <name>[@<versión>]");
         process::exit(64);
     }
     // M51d: el nombre construye rutas (caché, archivo del índice) — validarlo antes de nada.
     if !crate::deps::valid_package_name(name) {
-        eprintln!("nombre de paquete inválido '{name}': solo letras, dígitos, '-' y '_'");
+        eprintln!("name de package inválido '{name}': solo letras, dígitos, '-' y '_'");
         process::exit(64);
     }
     let Some(m) = load_manifest() else {
-        eprintln!("no hay proyecto: falta 'ray.toml' (crea uno con 'ray new')");
+        eprintln!("no hay project: falta 'ray.toml' (crea one con 'ray new')");
         process::exit(64);
     };
     // Localiza el índice (RAY_INDEX o [registry] index).
@@ -425,8 +425,8 @@ fn cmd_add(args: &[String]) {
         Ok(Some(dir)) => dir,
         Ok(None) => {
             eprintln!(
-                "no hay índice de paquetes configurado: declara '[registry] index = \"<dir>\"' en \
-                 ray.toml o exporta RAY_INDEX (para deps git usa 'nombre = \"git+URL@ref\"' a mano)"
+                "no hay índice de packages configurado: declara '[registry] index = \"<dir>\"' en \
+                 ray.toml o exporta RAY_INDEX (para deps git uses 'name = \"git+URL@ref\"' a mano)"
             );
             process::exit(65);
         }
@@ -465,11 +465,11 @@ fn cmd_add(args: &[String]) {
         eprintln!("no se pudo escribir '{}': {e}", toml_path.display());
         process::exit(73);
     }
-    println!("añadida la dependencia '{name} = \"{req}\"'");
+    println!("añadida la dependency '{name} = \"{req}\"'");
     // Descarga (recarga el manifiesto para que `ensure` vea la nueva dep).
     match crate::manifest::Manifest::load(&m.root) {
         Ok(Some(m2)) => match crate::deps::ensure(&m2) {
-            Ok(_) => println!("dependencias al día"),
+            Ok(_) => println!("dependencies al día"),
             Err(e) => {
                 eprintln!("error descargando: {e}");
                 process::exit(65);
@@ -485,15 +485,15 @@ fn cmd_add(args: &[String]) {
 /// el `ray.lock` recién escrito es quien lo sabe).
 fn cmd_remove(args: &[String]) {
     let Some(name) = args.first().map(String::as_str) else {
-        eprintln!("uso: ray remove <nombre>");
+        eprintln!("use: ray remove <name>");
         process::exit(64);
     };
     if !crate::deps::valid_package_name(name) {
-        eprintln!("nombre de paquete inválido '{name}': solo letras, dígitos, '-' y '_'");
+        eprintln!("name de package inválido '{name}': solo letras, dígitos, '-' y '_'");
         process::exit(64);
     }
     let Some(m) = load_manifest() else {
-        eprintln!("no hay proyecto: falta 'ray.toml'");
+        eprintln!("no hay project: falta 'ray.toml'");
         process::exit(64);
     };
     let toml_path = m.root.join("ray.toml");
@@ -505,20 +505,20 @@ fn cmd_remove(args: &[String]) {
         }
     };
     let Some(updated) = crate::manifest::remove_dependency(&src, name) else {
-        eprintln!("la dependencia '{name}' no está declarada en ray.toml");
+        eprintln!("la dependency '{name}' no está declarada en ray.toml");
         process::exit(65);
     };
     if let Err(e) = fs::write(&toml_path, &updated) {
         eprintln!("no se pudo escribir '{}': {e}", toml_path.display());
         process::exit(73);
     }
-    println!("dependencia '{name}' eliminada de ray.toml");
+    println!("dependency '{name}' eliminada de ray.toml");
     // Re-resolver con el manifiesto ya editado: reescribe `ray.lock` sin la dep (o con ella si
     // sigue siendo transitiva de otra). Después, la caché se borra solo si el lock ya no la lista.
     match crate::manifest::Manifest::load(&m.root) {
         Ok(Some(m2)) => {
             if let Err(e) = crate::deps::ensure(&m2) {
-                eprintln!("error re-resolviendo dependencias: {e}");
+                eprintln!("error re-resolviendo dependencies: {e}");
                 process::exit(65);
             }
             let cache = m.root.join(".ray-deps").join(name);
@@ -537,7 +537,7 @@ fn cmd_remove(args: &[String]) {
 fn cmd_search(args: &[String]) {
     let pattern = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
     let Some(m) = load_manifest() else {
-        eprintln!("no hay proyecto: falta 'ray.toml' (para localizar el índice)");
+        eprintln!("no hay project: falta 'ray.toml' (para localizar el índice)");
         process::exit(64);
     };
     let index = match crate::deps::index_dir(&m) {
@@ -581,7 +581,7 @@ fn cmd_search(args: &[String]) {
             Err(_) => println!("{name} (sin versión instalable)"),
         }
     }
-    println!("{} paquete(s)", names.len());
+    println!("{} package(s)", names.len());
 }
 
 /// `ray publish [--repo <git+URL@ref>]`: publica la versión de este paquete en el índice (M51b).
@@ -616,7 +616,7 @@ fn load_signing_seed() -> Result<Vec<u8>, String> {
     })?;
     let seed = crate::index::decode_ed25519(&format!("ed25519:{}", hex.trim()), "la clave")?;
     if seed.len() != 32 {
-        return Err(format!("la clave de '{}' no tiene 32 octetos", path.display()));
+        return Err(format!("la clave de '{}' no has 32 octetos", path.display()));
     }
     Ok(seed)
 }
@@ -633,18 +633,18 @@ fn cmd_keygen(args: &[String]) {
         Some((flag, rest)) if flag == "--out" => match rest.first() {
             Some(p) => PathBuf::from(p),
             None => {
-                eprintln!("--out requiere una ruta");
+                eprintln!("--out requiere one path");
                 process::exit(64);
             }
         },
         Some((other, _)) => {
-            eprintln!("argumento no reconocido: '{other}' (uso: ray keygen [--out F])");
+            eprintln!("argumento no reconocido: '{other}' (use: ray keygen [--out F])");
             process::exit(64);
         }
         None => key_path(),
     };
     if out.exists() {
-        eprintln!("'{}' ya existe (no se pisa una clave; bórrala tú si de verdad quieres otra)", out.display());
+        eprintln!("'{}' ya existe (no se pisa one clave; bórrala tú si de verdad quieres other)", out.display());
         process::exit(65);
     }
     let seed = crate::builtins::crypto_random_bytes(32);
@@ -668,7 +668,7 @@ fn cmd_keygen(args: &[String]) {
     }
     println!("clave de publicación generada en {}", out.display());
     println!("  pubkey: ed25519:{}", hex_of(&pk));
-    println!("guárdala bien: es tu identidad de publicador (la pública se fija en el índice al publicar --sign).");
+    println!("guárdala bien: es tu identity de publicador (la pública se fixes en el índice al publish --sign).");
 }
 
 /// M83c: firma una publicación y reclama (o verifica) el DUEÑO del nombre en el índice.
@@ -687,8 +687,8 @@ fn sign_publication(index: &Path, name: &str, version: &str, hash: &str) -> Resu
         Some(o) => {
             if o.pubkey != my_pub {
                 return Err(format!(
-                    "'{name}' ya tiene dueño registrado en el índice y tu clave NO coincide \
-                     ('{}.owners.toml'); si el nombre es tuyo, firma con la clave original",
+                    "'{name}' ya has dueño registrado en el índice y tu clave NO coincide \
+                     ('{}.owners.toml'); si el name es tuyo, signature con la clave original",
                     name
                 ));
             }
@@ -701,7 +701,7 @@ fn sign_publication(index: &Path, name: &str, version: &str, hash: &str) -> Resu
                 name,
                 &crate::index::Owners { owner: owner.trim().to_string(), pubkey: my_pub },
             )?;
-            println!("nombre '{name}' reclamado en el índice ('{name}.owners.toml') — commitéalo junto a la entrada");
+            println!("name '{name}' reclamado en el índice ('{name}.owners.toml') — commitéalo junto a la entry");
         }
     }
     let msg = crate::index::signing_message(name, version, hash);
@@ -725,7 +725,7 @@ fn cmd_index_verify(args: &[String]) {
         None => match load_manifest().and_then(|m| crate::deps::index_dir(&m).ok().flatten()) {
             Some(d) => d,
             None => {
-                eprintln!("uso: ray index-verify <dir> (o corre en un proyecto con índice configurado)");
+                eprintln!("use: ray index-verify <dir> (o runs en un project con índice configurado)");
                 process::exit(64);
             }
         },
@@ -764,7 +764,7 @@ fn cmd_index_verify(args: &[String]) {
     }
     if problemas.is_empty() {
         println!(
-            "índice OK: {packages} paquetes, {versions} versiones ({signed} firmadas y verificadas)"
+            "índice OK: {packages} packages, {versions} versiones ({signed} signed y verificadas)"
         );
     } else {
         for p in &problemas {
@@ -790,28 +790,28 @@ fn cmd_publish(args: &[String]) {
             "--repo" => match it.next() {
                 Some(spec) => repo_override = Some(spec.clone()),
                 None => {
-                    eprintln!("--repo requiere una spec 'git+<URL>@<ref>'");
+                    eprintln!("--repo requiere one spec 'git+<URL>@<ref>'");
                     process::exit(64);
                 }
             },
             "--sign" => sign = true, // M83c
             other => {
-                eprintln!("argumento no reconocido: '{other}' (uso: ray publish [--repo S] [--sign])");
+                eprintln!("argumento no reconocido: '{other}' (use: ray publish [--repo S] [--sign])");
                 process::exit(64);
             }
         }
     }
     let Some(m) = load_manifest() else {
-        eprintln!("no hay proyecto: falta 'ray.toml' (crea uno con 'ray new')");
+        eprintln!("no hay project: falta 'ray.toml' (crea one con 'ray new')");
         process::exit(64);
     };
     // Validación: nombre válido (construye rutas en índice/caché, M51d) + version semver.
     if !crate::deps::valid_package_name(&m.name) {
-        eprintln!("nombre de paquete inválido '{}': solo letras, dígitos, '-' y '_'", m.name);
+        eprintln!("name de package inválido '{}': solo letras, dígitos, '-' y '_'", m.name);
         process::exit(65);
     }
     if crate::semver::parse_version(&m.version).is_none() {
-        eprintln!("la versión del paquete '{}' no es semver válido: '{}'", m.name, m.version);
+        eprintln!("la versión del package '{}' no es semver válido: '{}'", m.name, m.version);
         process::exit(65);
     }
     // Spec git: la dada, o derivada de `origin` + tag `v<version>`.
@@ -867,7 +867,7 @@ fn cmd_publish(args: &[String]) {
             println!("  git:  {git_spec}");
             println!("  hash: {hash}");
             if sig.is_some() {
-                println!("  firma: ed25519 (dueño en '{}.owners.toml')", m.name);
+                println!("  signature: ed25519 (dueño en '{}.owners.toml')", m.name);
             }
             println!(
                 "nota: el índice es un repo git; haz commit y push de '{}.toml' para compartirlo.",
@@ -897,8 +897,8 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
     crate::deps::fetch(&m.name, &crate::deps::GitSpec { url: m.root.to_string_lossy().into_owned(), git_ref: spec.git_ref.clone() }, &tmp)
         .map_err(|e| {
             format!(
-                "no se pudo obtener el contenido de la ref '{}' desde el repo local (el contenido \
-                 publicado se valida y hashea desde un clon limpio): {e}",
+                "no se pudo obtener el contenido de la ref '{}' from el repo local (el contenido \
+                 publicado se validates y hashea from un clon clean): {e}",
                 spec.git_ref
             )
         })?;
@@ -907,7 +907,7 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
         let face = if tmp.join("mod.ray").is_file() { tmp.join("mod.ray") } else { tmp.join(&m.entry) };
         if !face.is_file() {
             return Err(format!(
-                "el contenido de '{}' no tiene cara de paquete: falta 'mod.ray' (o la entrada '{}'); \
+                "el contenido de '{}' no has cara de package: falta 'mod.ray' (o la entry '{}'); \
                  ¿olvidaste commitearla antes de taggear?",
                 spec.git_ref, m.entry
             ));
@@ -921,7 +921,7 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
             let tokens = crate::lexer::lex(&src)
                 .map_err(|e| format!("'{rel}' del contenido publicado no lexea: {e}"))?;
             crate::parser::parse(tokens)
-                .map_err(|e| format!("'{rel}' del contenido publicado no parsea: {e}"))?;
+                .map_err(|e| format!("'{rel}' del contenido publicado no parses: {e}"))?;
         }
         // El hash, ANTES del check: resolver deps escribe `.ray-deps/`/`ray.lock` dentro del clon.
         let hash = crate::deps::hash_package(&tmp)?;
@@ -944,7 +944,7 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
     {
         if mc.dependencies.iter().any(|(_, s)| crate::deps::path_of_path_dep(s).is_none()) {
             crate::deps::ensure(&mc).map_err(|e| {
-                format!("no se pudieron resolver las dependencias del paquete para el check: {e}")
+                format!("no se pudieron resolver las dependencies del package para el check: {e}")
             })?;
         }
         let cache = mc.root.join(".ray-deps");
@@ -965,12 +965,12 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
         }
     }
     let mut loaded = crate::loader::load_with_deps(face, &roots)
-        .map_err(|e| format!("el paquete no carga: {}", e.message))?;
+        .map_err(|e| format!("el package no carga: {}", e.message))?;
     let errors = crate::checker::check_all_modulo(&mut loaded.program);
     if let Some(e) = errors.first() {
-        let (modulo, _fuente, linea) = loaded.locate(e.line);
+        let (modulo, _source, linea) = loaded.locate(e.line);
         return Err(format!(
-            "el paquete no supera el check semántico ({modulo}.ray, línea {linea}): {}",
+            "el package no supera el check semántico ({modulo}.ray, línea {linea}): {}",
             e.msg
         ));
     }
@@ -981,18 +981,18 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
 /// `origin` del repo en `root` y exigiendo que el tag `v<version>` exista (se publica un commit fijado).
 fn derive_git_spec(root: &Path, version: &str) -> Result<String, String> {
     let origin = git_capture(root, &["remote", "get-url", "origin"]).map_err(|_| {
-        "el paquete no tiene remoto 'origin' (publica desde un repo git con remoto, o pasa \
+        "el package no has remoto 'origin' (public from un repo git con remoto, o pasa \
          --repo 'git+<URL>@<ref>')"
             .to_string()
     })?;
     let origin = origin.trim();
     if origin.is_empty() {
-        return Err("el remoto 'origin' está vacío; usa --repo 'git+<URL>@<ref>'".to_string());
+        return Err("el remoto 'origin' está vacío; uses --repo 'git+<URL>@<ref>'".to_string());
     }
     let tag = format!("v{version}");
     // El tag debe existir (se publica un punto fijo, no el working tree).
     git_capture(root, &["rev-parse", "--verify", "--quiet", &format!("refs/tags/{tag}")])
-        .map_err(|_| format!("no existe el tag '{tag}' en el repo; créalo (git tag {tag}) antes de publicar"))?;
+        .map_err(|_| format!("no existe el tag '{tag}' en el repo; créalo (git tag {tag}) antes de publish"))?;
     Ok(format!("git+{origin}@{tag}"))
 }
 
@@ -1015,17 +1015,17 @@ fn git_capture(cwd: &Path, args: &[&str]) -> Result<String, String> {
 /// más alta que satisface su requisito (ignora el lock previo), reescribiendo `ray.lock` (M51c).
 fn cmd_update(_args: &[String]) {
     let Some(m) = load_manifest() else {
-        eprintln!("no hay proyecto: falta 'ray.toml'");
+        eprintln!("no hay project: falta 'ray.toml'");
         process::exit(64);
     };
     if m.dependencies.is_empty() {
-        println!("'{}' no declara dependencias", m.name);
+        println!("'{}' no declara dependencies", m.name);
         return;
     }
     match crate::deps::update(&m) {
-        Ok(_) => println!("dependencias actualizadas a las versiones más nuevas compatibles"),
+        Ok(_) => println!("dependencies actualizadas a las versiones más nuevas compatibles"),
         Err(e) => {
-            eprintln!("error actualizando dependencias: {e}");
+            eprintln!("error actualizando dependencies: {e}");
             process::exit(65);
         }
     }
@@ -1038,15 +1038,15 @@ fn cmd_update(_args: &[String]) {
 fn cmd_yank(args: &[String]) {
     let (undo, rest) = take_flag_bool(args, "--undo");
     let Some(spec) = rest.first().map(String::as_str) else {
-        eprintln!("uso: ray yank <nombre>@<versión> [--undo]");
+        eprintln!("use: ray yank <name>@<versión> [--undo]");
         process::exit(64);
     };
-    let Some((name, ver)) = spec.split_once('@') else {
-        eprintln!("uso: ray yank <nombre>@<versión> (la versión es obligatoria)");
+    let Some((name, see)) = spec.split_once('@') else {
+        eprintln!("use: ray yank <name>@<versión> (la versión es obligatoria)");
         process::exit(64);
     };
     let Some(m) = load_manifest() else {
-        eprintln!("no hay proyecto: falta 'ray.toml' (para localizar el índice)");
+        eprintln!("no hay project: falta 'ray.toml' (para localizar el índice)");
         process::exit(64);
     };
     let index = match crate::deps::index_dir(&m) {
@@ -1060,10 +1060,10 @@ fn cmd_yank(args: &[String]) {
             process::exit(65);
         }
     };
-    match crate::index::set_yanked(&index, name, ver, !undo) {
+    match crate::index::set_yanked(&index, name, see, !undo) {
         Ok(()) => {
             let verb = if undo { "restaurada" } else { "retirada" };
-            println!("versión {name} {ver} {verb} en el índice");
+            println!("versión {name} {see} {verb} en el índice");
             println!("nota: haz commit y push de '{name}.toml' para compartir el cambio.");
         }
         Err(e) => {
@@ -1077,19 +1077,19 @@ fn cmd_yank(args: &[String]) {
 /// estén presentes (M39c-2a). Requiere estar en un proyecto (con manifiesto).
 fn cmd_fetch(_args: &[String]) {
     let Some(m) = load_manifest() else {
-        eprintln!("no hay proyecto: falta 'ray.toml' con las dependencias a descargar");
+        eprintln!("no hay project: falta 'ray.toml' con las dependencies a descargar");
         process::exit(64);
     };
     if m.dependencies.is_empty() {
-        println!("'{}' no declara dependencias", m.name);
+        println!("'{}' no declara dependencies", m.name);
         return;
     }
     // `asegurar` resuelve el grafo COMPLETO (directas + transitivas) y devuelve cuántas descargó.
     match crate::deps::ensure(&m) {
-        Ok(0) => println!("dependencias al día"),
-        Ok(n) => println!("{n} dependencia(s) descargada(s) (incluidas transitivas)"),
+        Ok(0) => println!("dependencies al día"),
+        Ok(n) => println!("{n} dependency(s) descargada(s) (incluidas transitivas)"),
         Err(e) => {
-            eprintln!("error descargando dependencias: {e}");
+            eprintln!("error descargando dependencies: {e}");
             process::exit(65);
         }
     }
@@ -1098,7 +1098,7 @@ fn cmd_fetch(_args: &[String]) {
 /// `ray fmt <archivo>`: imprime la versión canónica por stdout.
 fn cmd_fmt(args: &[String]) {
     let Some(path) = args.first() else {
-        eprintln!("uso: ray fmt <archivo>");
+        eprintln!("use: ray fmt <file>");
         process::exit(64);
     };
     format_file(path);
@@ -1109,7 +1109,7 @@ fn cmd_fmt(args: &[String]) {
 /// recursivo) a su módulo raylang generado (`.ray` al lado, commiteable). M55.
 fn cmd_templ(args: &[String]) {
     if args.is_empty() {
-        eprintln!("uso: ray templ <archivo.ray.html | directorio>...");
+        eprintln!("use: ray templ <file.ray.html | directory>...");
         process::exit(64);
     }
     let mut entries: Vec<PathBuf> = Vec::new();
@@ -1120,7 +1120,7 @@ fn cmd_templ(args: &[String]) {
         } else if a.ends_with(".ray.html") {
             entries.push(p.to_path_buf());
         } else {
-            eprintln!("'{a}' no es un .ray.html ni un directorio");
+            eprintln!("'{a}' no es un .ray.html ni un directory");
             process::exit(64);
         }
     }
@@ -1195,7 +1195,7 @@ fn regen_stale_templates(entry: &Path) {
 
 fn cmd_doc(args: &[String]) {
     let Some(path) = args.first() else {
-        eprintln!("uso: ray doc <archivo>");
+        eprintln!("use: ray doc <file>");
         process::exit(64);
     };
     let title = std::path::Path::new(path)
@@ -1251,7 +1251,7 @@ fn legacy(rest: &[String]) {
         _ => {}
     }
     if idx >= rest.len() {
-        eprintln!("uso: ray <subcomando>   (ray help para la lista)   |   ray run <archivo>");
+        eprintln!("use: ray <subcomando>   (ray help para la list)   |   ray run <file>");
         process::exit(64); // EX_USAGE
     }
     let path = rest[idx].clone();
@@ -1282,7 +1282,7 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
         if !m.dependencies.is_empty()
             && let Err(e) = crate::deps::ensure(m)
         {
-            eprintln!("error resolviendo dependencias: {e}");
+            eprintln!("error resolviendo dependencies: {e}");
             process::exit(65);
         }
     }
@@ -1292,7 +1292,7 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
     if let Some(m) = &manifest {
         let entry = m.entry_path();
         if !entry.is_file() {
-            eprintln!("el manifiesto '{}' apunta a una entrada inexistente: '{}'", m.name, entry.display());
+            eprintln!("el manifest '{}' apunta a one entry nonexistent: '{}'", m.name, entry.display());
             process::exit(66);
         }
         return entry.to_string_lossy().into_owned();
@@ -1301,7 +1301,7 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
     if Path::new(def).exists() {
         def.to_string()
     } else {
-        eprintln!("no se indicó archivo y no hay proyecto (falta 'ray.toml' o 'src/main.ray')");
+        eprintln!("no se indicó file y no hay project (falta 'ray.toml' o 'src/main.ray')");
         process::exit(64);
     }
 }
@@ -1373,7 +1373,7 @@ fn format_file(path: &str) {
         match crate::templ::format_template(&read_source(path), &unit) {
             Some(out) => print!("{}", out),
             None => {
-                eprintln!("error de formato: el template no tokeniza (delimitador sin cerrar)");
+                eprintln!("error de formato: el template no tokeniza (delimitador sin close)");
                 process::exit(65);
             }
         }
@@ -1556,7 +1556,7 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
             }
             continue;
         }
-        out.push(render_frame(if i == 0 { "en" } else { "desde" }, f));
+        out.push(render_frame(if i == 0 { "en" } else { "from" }, f));
     }
     out
 }

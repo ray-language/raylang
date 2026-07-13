@@ -408,7 +408,7 @@ impl<'a> Vm<'a> {
                             let mut w = Vm::worker(prog.0, shared);
                             w.run_worker();
                         })
-                        .expect("no se pudo lanzar el hilo worker"); // ice-ok: fallo del SO al crear hilo
+                        .expect("no se pudo launch el hilo worker"); // ice-ok: fallo del SO al crear hilo
                 }
             });
         }
@@ -475,7 +475,7 @@ impl<'a> Vm<'a> {
                     continue; // io_wait dejó fibras en `ready`; reintenta el pop
                 }
                 let msg = if !sh.parked.is_empty() {
-                    "deadlock: todas las fibras están bloqueadas esperando un canal o una tarea"
+                    "deadlock: todas las fibras están bloqueadas esperando un canal o one tarea"
                 } else {
                     "no hay fibras ejecutables"
                 };
@@ -656,7 +656,7 @@ impl<'a> Vm<'a> {
                             OpCode::BitXor => HeapValue::Int(a ^ b),
                             OpCode::Shl => HeapValue::Int(a.wrapping_shl(b as u32)),
                             OpCode::Shr => HeapValue::Int(a.wrapping_shr(b as u32)),
-                            _ => unreachable!("el grupo `bin` solo trae operadores binarios"),
+                            _ => unreachable!("el grupo `bin` solo trae operators binarios"),
                         };
                         self.push(r);
                     }
@@ -731,7 +731,7 @@ impl<'a> Vm<'a> {
                         };
                         match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
                             HeapValue::Bool(b) => b,
-                            _ => unreachable!("una comparación produce bool"),
+                            _ => unreachable!("one comparación produce bool"),
                         }
                     };
                     if !res {
@@ -834,7 +834,7 @@ impl<'a> Vm<'a> {
                                         match String::from_utf8(bytes) {
                                             Ok(s) => HeapValue::Str(s),
                                             Err(_) => return Err(runtime_error(pos!().0, pos!().1,
-                                                "la función C devolvió bytes que no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
+                                                "la función C devolvió bytes what no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
                                         }
                                     } else {
                                         HeapValue::Bytes(bytes)
@@ -843,7 +843,7 @@ impl<'a> Vm<'a> {
                                 }
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
-                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el retorno FFI"))?;
+                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el return_val FFI"))?;
                             let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
                             HeapValue::Obj(h)
                         }
@@ -855,7 +855,7 @@ impl<'a> Vm<'a> {
                                 Some(p) => ("Some", vec![HeapValue::Ptr(p)]),
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
-                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el retorno FFI"))?;
+                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el return_val FFI"))?;
                             let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
                             HeapValue::Obj(h)
                         }
@@ -898,7 +898,7 @@ impl<'a> Vm<'a> {
                                     Some(c) => c,
                                     None => {
                                         bounds_check(i, s.chars().count(), pos!().0, pos!().1)?;
-                                        unreachable!("nth falló ⇒ índice fuera de rango")
+                                        unreachable!("nth falló ⇒ índice outside de range")
                                     }
                                 }
                             };
@@ -909,7 +909,7 @@ impl<'a> Vm<'a> {
                             let idx = bounds_check(i, b.len(), pos!().0, pos!().1)?;
                             self.push(HeapValue::Int(b[idx] as i64));
                         }
-                        _ => unreachable!("el checker garantiza un arreglo, string o bytes"),
+                        _ => unreachable!("el checker garantiza un array, string o bytes"),
                     }
                 }
                 OpCode::SetIndex => {
@@ -931,9 +931,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Array(v) => v.len() as i64,
                             Obj::Map(m) => m.len() as i64,
-                            _ => unreachable!("el checker garantiza un arreglo o Map"),
+                            _ => unreachable!("el checker garantiza un array o Map"),
                         },
-                        _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
+                        _ => unreachable!("el checker garantiza un array, string, Map o bytes"),
                     };
                     self.push(HeapValue::Int(len));
                 }
@@ -1057,9 +1057,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
-                            _ => unreachable!("el checker garantiza una función"),
+                            _ => unreachable!("el checker garantiza one función"),
                         },
-                        _ => unreachable!("el checker garantiza una función"),
+                        _ => unreachable!("el checker garantiza one función"),
                     };
                     // M38.1b-2: la fibra hija tiene su PROPIO heap; las capturas (upvalues) del closure
                     // viven en el heap del spawner → se transfieren al heap nuevo (aislamiento por actores).
@@ -1125,7 +1125,7 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza un int"),
                     };
                     if n < 0 {
-                        return Err(runtime_error(pos!().0, pos!().1, "la capacidad de un canal no puede ser negativa"));
+                        return Err(runtime_error(pos!().0, pos!().1, "la capacidad de un canal no can ser negativa"));
                     }
                     let id = {
                         let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
@@ -1146,7 +1146,7 @@ impl<'a> Vm<'a> {
                     let c = &sh.channels[h];
                     let (closed, len, cap) = (c.closed, c.queue.len(), c.cap);
                     if closed {
-                        return Err(runtime_error(pos!().0, pos!().1, "send sobre un canal cerrado"));
+                        return Err(runtime_error(pos!().0, pos!().1, "send about un canal closed"));
                     }
                     // (1) ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y
                     // despiértalo (el primero, FIFO → determinista).
@@ -1356,7 +1356,7 @@ impl<'a> Vm<'a> {
                             HeapValue::Channel(id) => Some(*id),
                             _ => None,
                         }).collect(),
-                        _ => unreachable!("el checker garantiza un arreglo de canales"),
+                        _ => unreachable!("el checker garantiza un array de canales"),
                     };
                     // M38.3b paso 3: un ÚNICO guard sostenido a través del escaneo Y el park. Es reentrante-
                     // seguro (un solo lock, sin re-entrar `self.sched()`) y —clave bajo M:N real— atómico:
@@ -1691,7 +1691,7 @@ impl<'a> Vm<'a> {
                         (HeapValue::Obj(h), _) => {
                             self.as_array(*h).iter().any(|e| values_equal(&self.cur.heap, e, &x))
                         }
-                        _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
+                        _ => unreachable!("el checker garantiza string+string o array+elemento"),
                     };
                     self.push(HeapValue::Bool(res));
                 }
@@ -1754,7 +1754,7 @@ impl<'a> Vm<'a> {
                 // M19.3c: construye bytes a partir de un [int] (objeto del heap), truncando a octeto.
                 OpCode::BytesOf => {
                     let HeapValue::Obj(h) = self.pop() else {
-                        unreachable!("el checker garantiza un arreglo");
+                        unreachable!("el checker garantiza un array");
                     };
                     let octets: Vec<u8> = self.as_array(h).iter().map(|v| match v {
                         HeapValue::Int(n) => (*n & 0xff) as u8,
@@ -2412,7 +2412,7 @@ impl<'a> Vm<'a> {
                                 |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
                             {
                                 return Err(runtime_error(pos!().0, pos!().1,
-                                    "close sobre un canal con un emisor bloqueado"));
+                                    "close about un canal con un emisor bloqueado"));
                             }
                             sh.channels[ch].closed = true;
                             let mut i = 0;
@@ -2531,7 +2531,7 @@ impl<'a> Vm<'a> {
                     self.push(v);
                 }
                 OpCode::MatchFail => {
-                    return Err(runtime_error(pos!().0, pos!().1, "ningún brazo del match casó (no debería ocurrir)"));
+                    return Err(runtime_error(pos!().0, pos!().1, "ningún branch del match casó (no debería ocurrir)"));
                 }
                 OpCode::GetField(name) => {
                     let h = self.pop_obj();
@@ -2591,9 +2591,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
-                            _ => unreachable!("el checker garantiza una función"),
+                            _ => unreachable!("el checker garantiza one función"),
                         },
-                        _ => unreachable!("el checker garantiza una función"),
+                        _ => unreachable!("el checker garantiza one función"),
                     };
                     let mut locals = self.new_locals(fn_idx);
                     for (j, val) in args_rev.into_iter().enumerate() {
@@ -2613,9 +2613,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
-                            _ => unreachable!("el checker garantiza una función"),
+                            _ => unreachable!("el checker garantiza one función"),
                         },
-                        _ => unreachable!("el checker garantiza una función"),
+                        _ => unreachable!("el checker garantiza one función"),
                     };
                     let mut locals = self.new_locals(fn_idx);
                     for (j, val) in args_rev.into_iter().enumerate() {
@@ -2639,7 +2639,7 @@ impl<'a> Vm<'a> {
                         let cell = match d.source {
                             UpvalueSource::Local(slot) => match &self.cur.frames[fi].locals[slot] {
                                 Local::Boxed(h) => *h,
-                                Local::Plain(_) => unreachable!("un local capturado debe estar boxeado"),
+                                Local::Plain(_) => unreachable!("un local capturado must estar boxeado"),
                             },
                             UpvalueSource::Upvalue(u) => self.cur.frames[fi].upvalues[u],
                         };
@@ -2999,7 +2999,7 @@ impl<'a> Vm<'a> {
     fn cancel_task(shared: &mut Shared, task: usize) {
         match &mut shared.tasks[task].state {
             estado @ TaskState::Pending => {
-                *estado = TaskState::Failed("tarea cancelada (una hermana falló)".to_string());
+                *estado = TaskState::Failed("tarea cancelada (one hermana falló)".to_string());
             }
             _ => return, // ya terminó (Done/Failed) → nada que cancelar
         }
@@ -3045,8 +3045,8 @@ impl<'a> Vm<'a> {
     fn deliver_signals(shared: &mut Shared) {
         let Some(chan) = shared.signal_chan else { return };
         let fd = shared.signal_fd;
-        while let Some(signo) = crate::builtins::signals_read_one(fd) {
-            let v = HeapValue::Int(signo as i64);
+        while let Some(sign) = crate::builtins::signals_read_one(fd) {
+            let v = HeapValue::Int(sign as i64);
             if let Some(pos) = shared
                 .parked
                 .iter()
@@ -3213,14 +3213,14 @@ impl<'a> Vm<'a> {
     fn cell_get(&self, h: Handle) -> HeapValue {
         match self.cur.heap.get(h) {
             Obj::Cell(v) => v.clone(),
-            _ => unreachable!("se esperaba una celda"),
+            _ => unreachable!("se esperaba one celda"),
         }
     }
 
     fn cell_set(&mut self, h: Handle, v: HeapValue) {
         match self.cur.heap.get_mut(h) {
             Obj::Cell(slot) => *slot = v,
-            _ => unreachable!("se esperaba una celda"),
+            _ => unreachable!("se esperaba one celda"),
         }
     }
 
@@ -3229,14 +3229,14 @@ impl<'a> Vm<'a> {
     fn as_array(&self, h: Handle) -> &Vec<HeapValue> {
         match self.cur.heap.get(h) {
             Obj::Array(v) => v,
-            _ => unreachable!("el checker garantiza un arreglo"),
+            _ => unreachable!("el checker garantiza un array"),
         }
     }
 
     fn as_array_mut(&mut self, h: Handle) -> &mut Vec<HeapValue> {
         match self.cur.heap.get_mut(h) {
             Obj::Array(v) => v,
-            _ => unreachable!("el checker garantiza un arreglo"),
+            _ => unreachable!("el checker garantiza un array"),
         }
     }
 
@@ -3301,7 +3301,7 @@ impl<'a> Vm<'a> {
     fn pop_task(&mut self) -> usize {
         match self.pop() {
             HeapValue::Task(id) => id,
-            _ => unreachable!("el checker garantiza una tarea"),
+            _ => unreachable!("el checker garantiza one tarea"),
         }
     }
 
@@ -3386,7 +3386,7 @@ impl<'a> Vm<'a> {
             (BitXor, UInt(a, w), UInt(b, _)) => uint_heap(a ^ b, w),
             (Shl, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shl(b as u32), w),
             (Shr, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shr(b as u32), w),
-            _ => unreachable!("combinación operador/operandos que el checker debió rechazar"),
+            _ => unreachable!("combinación operador/operandos what el checker debió rechazar"),
         })
     }
 }
@@ -3548,8 +3548,8 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
         },
         // M38.1b: un canal/tarea (host) nunca es el resultado del programa ni cruza al intérprete
         // (main devuelve int/unit; no hay oráculo concurrente).
-        HeapValue::Channel(_) => unreachable!("un canal nunca es el resultado del programa"),
-        HeapValue::Task(_) => unreachable!("una tarea nunca es el resultado del programa"),
+        HeapValue::Channel(_) => unreachable!("un canal nunca es el resultado del program"),
+        HeapValue::Task(_) => unreachable!("one tarea nunca es el resultado del program"),
     }
 }
 
@@ -3693,7 +3693,7 @@ fn heap_to_key(v: &HeapValue) -> MapKey {
         HeapValue::Char(c) => MapKey::Char(*c),
         HeapValue::Bool(b) => MapKey::Bool(*b),
         HeapValue::Bytes(b) => MapKey::Bytes(b.clone()),
-        _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool/bytes)"),
+        _ => unreachable!("el checker garantiza one clave hashable (int/string/char/bool/bytes)"),
     }
 }
 
@@ -3711,7 +3711,7 @@ fn key_to_heap(k: &MapKey) -> HeapValue {
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
 fn bounds_check(i: i64, len: usize, line: usize, col: usize) -> Result<usize, RuntimeError> {
     if i < 0 || (i as usize) >= len {
-        return Err(runtime_error(line, col, &format!("índice {} fuera de rango (longitud {})", i, len)));
+        return Err(runtime_error(line, col, &format!("índice {} outside de range (length {})", i, len)));
     }
     Ok(i as usize)
 }
@@ -3769,23 +3769,23 @@ mod tests {
     /// desalineaban los argumentos de la siguiente llamada del llamador (aquí: `caso("b", …)` recibía
     /// basura como `etiqueta` → ICE "combinación operador/operandos" o divergencia con el intérprete).
     #[test]
-    fn try_err_con_operandos_pendientes_oraculo() {
+    fn try_err_con_operandos_pendientes_oracle() {
         oracle_program(
             r#"
-            fn falla() -> Result<int, string> { Result.Err("boom") }
+            fn fails() -> Result<int, string> { Result.Err("boom") }
             fn media(x: int) -> Result<int, string> {
-                let v = x + falla()? * 2; // el `?` retorna con `x` pendiente en la pila
+                let v = x + fails()? * 2; // el `?` retorna con `x` pendiente en la pila
                 Result.Ok(v)
             }
-            fn caso(etiqueta: string, r: Result<int, string>) -> string {
+            fn case(etiqueta: string, r: Result<int, string>) -> string {
                 match (r) {
                     Result.Ok(v) => etiqueta + ": ok",
                     Result.Err(e) => etiqueta + ": " + e,
                 }
             }
             fn main() -> int {
-                let a = caso("a", media(1)); // la etiqueta queda pendiente mientras `media` falla por `?`
-                let b = caso("b", media(2)); // sin el fix, esta segunda llamada leía la pila corrida
+                let a = case("a", media(1)); // la etiqueta queda pendiente mientras `media` falla por `?`
+                let b = case("b", media(2)); // sin el fix, esta segunda llamada leía la pila corrida
                 a.len() + b.len()
             }
             "#,
@@ -3796,7 +3796,7 @@ mod tests {
     /// (sqrt/pow/abs dan lo mismo siempre) → el oráculo VM↔intérprete vale: ambos motores llaman a la
     /// MISMA función C y deben coincidir. Cubre float→float, aridad 2, e int→int (libc `abs`).
     #[test]
-    fn ffi_libm_oraculo() {
+    fn ffi_libm_oracle() {
         oracle_program(
             "extern \"m\" {\n\
              \x20 fn sqrt(x: float) -> float;\n\
@@ -3815,7 +3815,7 @@ mod tests {
     /// NUL-terminada; un `bytes` se pasa por el puntero de su buffer. Determinista (strlen/atoi) →
     /// oráculo. Programas separados porque el nombre extern ES el símbolo (un `strlen` por programa).
     #[test]
-    fn ffi_strings_oraculo() {
+    fn ffi_strings_oracle() {
         // string → char*: strlen y atoi.
         oracle_program(
             "extern \"c\" {\n\
@@ -3823,7 +3823,7 @@ mod tests {
              \x20 fn atoi(s: string) -> int;\n\
              }\n\
              fn main() -> int {\n\
-             \x20 if (strlen(\"hola mundo\") == 10 && atoi(\"42\") == 42 && atoi(\"  -7x\") == 0 - 7) { 1 } else { 0 }\n\
+             \x20 if (strlen(\"hello mundo\") == 10 && atoi(\"42\") == 42 && atoi(\"  -7x\") == 0 - 7) { 1 } else { 0 }\n\
              }",
         );
         // bytes → puntero al buffer (NUL-terminado a mano con un literal de bytes).
@@ -3841,7 +3841,7 @@ mod tests {
     /// (devuelve un puntero DENTRO del argumento, o NULL si no encuentra) → oráculo. Some/None + el
     /// azúcar de string, en ambos motores.
     #[test]
-    fn ffi_char_ptr_return_oraculo() {
+    fn ffi_char_ptr_return_oracle() {
         // Option<string>: encontrado → Some("world"); no encontrado → None.
         oracle_program(
             "extern \"c\" { fn strstr(h: string, n: string) -> Option<string>; }\n\
@@ -3864,7 +3864,7 @@ mod tests {
     /// M40.1a: **guardas** en los brazos del match (`patrón if <cond> => …`). El brazo casa solo si
     /// el patrón liga Y la guarda es true; si no, se sigue al siguiente. Oráculo VM↔intérprete.
     #[test]
-    fn guardas_oraculo() {
+    fn guardas_oracle() {
         // clasificar por rango: 3=grande, 2=positivo, 1=neg/cero, 0=nada. Un dígito por caso.
         let prog = "\
             fn c(o: Option<int>) -> int {\n\
@@ -3893,7 +3893,7 @@ mod tests {
     /// M40.1b: `if let <patrón> = <expr> { … } else { … }` — azúcar del parser a un match de dos
     /// brazos. Oráculo VM↔intérprete: expresión (con else) y statement (sin else).
     #[test]
-    fn if_let_oraculo() {
+    fn if_let_oracle() {
         // Expresión: `if let Some(v) = o { v } else { def }`.
         oracle_program("\
             fn vo(o: Option<int>, def: int) -> int { if let Option.Some(v) = o { v } else { def } }\n\
@@ -3912,7 +3912,7 @@ mod tests {
     /// M40.1c: **patrones de variante anidados** (`Result.Ok(Option.Some(v))`). Exhaustividad
     /// conservadora → hace falta un fallback (`Ok(_)`). Oráculo VM↔intérprete (test + codegen).
     #[test]
-    fn patrones_anidados_oraculo() {
+    fn patterns_nested_vars_oracle() {
         // Result<Option<int>, string>: cada caso a un dígito.
         oracle_program("\
             fn d(r: Result<Option<int>, string>) -> int {\n\
@@ -3943,7 +3943,7 @@ mod tests {
     /// M40.1d: **patrón de struct** (`Some(Punto { x, y })`). El struct irrefutable cubre la variante
     /// sin fallback. Oráculo VM↔intérprete (destructuración + campo con sub-patrón/`_`).
     #[test]
-    fn patrones_struct_oraculo() {
+    fn patterns_struct_oracle() {
         oracle_program("\
             struct Punto { x: int, y: int }\n\
             fn f(o: Option<Punto>) -> int {\n\
@@ -3965,7 +3965,7 @@ mod tests {
     /// hasta `None`, ligando el elemento. Oráculo VM↔intérprete (el estado del iterador muta por
     /// referencia entre iteraciones).
     #[test]
-    fn iterator_for_oraculo() {
+    fn iterator_for_oracle() {
         oracle_program("\
             struct Rango { actual: int, fin: int }\n\
             impl Iterator<int> for Rango {\n\
@@ -3979,11 +3979,11 @@ mod tests {
             }\n\
             fn main() -> int {\n\
             \x20 let r = Rango { actual: 1, fin: 6 };\n\
-            \x20 var suma = 0;\n\
+            \x20 var sum = 0;\n\
             \x20 for n in r {\n\
-            \x20   suma = suma + n * n;\n\
+            \x20   sum = sum + n * n;\n\
             \x20 }\n\
-            \x20 suma\n\
+            \x20 sum\n\
             }"); // 1+4+9+16+25 = 55
     }
 
@@ -3991,7 +3991,7 @@ mod tests {
     /// (iterador `RangeIter`), como iteradores de primera clase. Oráculo VM↔intérprete: el impl
     /// genérico de `Iterator` y la sustitución del elemento (`[int].iter()` liga `int`, no `T`).
     #[test]
-    fn iter_range_oraculo() {
+    fn iter_range_oracle() {
         oracle_program("\
             fn main() -> int {\n\
             \x20 let xs = [10, 20, 30, 40];\n\
@@ -4011,7 +4011,7 @@ mod tests {
     /// map cambia de tipo de elemento, filter avanza el origen, y el encadenamiento se evalúa al
     /// recorrer. Ejercita métodos genéricos + captura mutable en closures + despacho por receptor.
     #[test]
-    fn adaptadores_perezosos_oraculo() {
+    fn adaptadores_perezosos_oracle() {
         oracle_program("\
             fn main() -> int {\n\
             \x20 var a = 0;\n\
@@ -4035,7 +4035,7 @@ mod tests {
     /// Oráculo VM↔intérprete: fold cambia de tipo, collect tras map/filter, y coexistencia con el
     /// `fold` EAGER de arreglos (el `[T].fold` cae en la función libre).
     #[test]
-    fn fold_collect_oraculo() {
+    fn fold_collect_oracle() {
         oracle_program("\
             fn main() -> int {\n\
             \x20 let a = range(1, 6).fold(0, fn(ac: int, x: int) -> int { ac + x });\n\
@@ -4053,7 +4053,7 @@ mod tests {
     /// último consumido con **patrón de tupla en el `for`** (`for (i, x) in it.enumerate()`). Oráculo
     /// VM↔intérprete. Ejercita también la inferencia genérica sobre tuplas (`Iter<(int, T)>`).
     #[test]
-    fn take_enumerate_oraculo() {
+    fn take_enumerate_oracle() {
         oracle_program("\
             fn main() -> int {\n\
             \x20 let ys = range(1, 1000).map(fn(n: int) -> int { n * n }).take(4).collect();\n\
@@ -4071,7 +4071,7 @@ mod tests {
     /// más corto; método genérico) y `.sum()` (terminal, función libre sobre `Iter<int>` vía UFCS).
     /// Oráculo VM↔intérprete: zip con tipos distintos + patrón de tupla, y sum encadenado.
     #[test]
-    fn skip_zip_sum_oraculo() {
+    fn skip_zip_sum_oracle() {
         oracle_program("\
             fn main() -> int {\n\
             \x20 let a = sum(range(0, 100).skip(5).take(3));\n\
@@ -4088,19 +4088,19 @@ mod tests {
     /// MISMO entero. Cubre el fix de colisión de posiciones (dos derivados con campos de tipos
     /// distintos que van a `int#hash` vs `string#hash`).
     #[test]
-    fn hash_derive_oraculo() {
+    fn hash_derive_oracle() {
         oracle_program("\
             @derive(Hash, Eq)\n\
             struct Punto { x: int, y: int }\n\
             @derive(Hash)\n\
-            struct Persona { nombre: string, edad: int }\n\
+            struct Persona { name: string, edad: int }\n\
             @derive(Hash)\n\
             enum Color { Rojo, Verde, RGB(int, int, int) }\n\
             fn main() -> int {\n\
             \x20 let p = Punto { x: 3, y: 4 };\n\
-            \x20 let a = Persona { nombre: \"Ada\", edad: 36 };\n\
-            \x20 let mismo = if (p.hash() == (Punto { x: 3, y: 4 }).hash()) { 1 } else { 0 };\n\
-            \x20 p.hash() + a.hash() * 7 + Color.RGB(1, 2, 3).hash() * 13 + char_code('Z') + mismo * 100000\n\
+            \x20 let a = Persona { name: \"Ada\", edad: 36 };\n\
+            \x20 let same = if (p.hash() == (Punto { x: 3, y: 4 }).hash()) { 1 } else { 0 };\n\
+            \x20 p.hash() + a.hash() * 7 + Color.RGB(1, 2, 3).hash() * 13 + char_code('Z') + same * 100000\n\
             }");
     }
 
@@ -4124,7 +4124,7 @@ mod tests {
     // ----- M2.1 / M2.2: expresiones -----
 
     #[test]
-    fn aritmetica_coincide_con_el_interprete() {
+    fn arithmetic_coincide_con_el_interpreter() {
         oracle_int("1 + 2 * 3");
         oracle_int("(1 + 2) * 3");
         oracle_int("10 - 2 - 3");
@@ -4154,7 +4154,7 @@ mod tests {
     }
 
     #[test]
-    fn if_como_expresion_coincide_con_el_interprete() {
+    fn if_como_expression_coincide_con_el_interpreter() {
         oracle_int("if (3 < 5) { 10 } else { 20 }");
         oracle_int("if (3 > 5) { 10 } else { 20 }");
         oracle_int("if (1 < 2) { if (2 < 3) { 1 } else { 2 } } else { 3 }");
@@ -4177,7 +4177,7 @@ mod tests {
     }
 
     #[test]
-    fn bloque_con_sentencias_y_valor_final() {
+    fn block_con_statements_y_valor_final() {
         assert_eq!(run_vm("{ 1; 2; 3 }"), Value::Int(3));
         assert_eq!(run_vm("{ 1; }"), Value::Unit);
     }
@@ -4193,7 +4193,7 @@ mod tests {
     }
 
     #[test]
-    fn factorial_con_while_y_mutacion() {
+    fn factorial_con_while_y_mutation() {
         oracle_program(
             "fn main() -> int {
                 var n: int = 5; var f: int = 1;
@@ -4204,15 +4204,15 @@ mod tests {
     }
 
     #[test]
-    fn retorno_temprano() {
+    fn return_val_early() {
         oracle_program(
-            "fn signo(x: int) -> int { if (x < 0) { return -1; } if (x > 0) { return 1; } 0 }
-             fn main() -> int { signo(-7) + signo(0) + signo(42) }",
+            "fn sign(x: int) -> int { if (x < 0) { return -1; } if (x > 0) { return 1; } 0 }
+             fn main() -> int { sign(-7) + sign(0) + sign(42) }",
         );
     }
 
     #[test]
-    fn gcd_recursivo() {
+    fn gcd_recursive() {
         oracle_program(
             "fn gcd(a: int, b: int) -> int { if (b == 0) { a } else { gcd(b, a % b) } }
              fn main() -> int { gcd(1071, 462) }",
@@ -4227,10 +4227,10 @@ mod tests {
     /// (`1 + bucle(...)`): la de cola, con el TCO de M13.3b, sería un bucle infinito
     /// legítimo (O(1) marcos) y nunca desbordaría —ese es justo el punto del TCO—.
     #[test]
-    fn overflow_aritmetico_oraculo() {
+    fn overflow_aritmetico_oracle() {
         // M34 (SPEC §8): el desbordamiento de int es ERROR de ejecución idéntico en ambos
         // motores (antes: panic en debug / wrap silencioso en release — dependía del build).
-        let casos = [
+        let cases = [
             "fn main() -> int { let m = 9223372036854775807; m + 1 }",       // Add
             "fn main() -> int { let m = -9223372036854775807 - 1; m - 1 }",  // Sub
             "fn main() -> int { let m = 9223372036854775807; m * 2 }",       // Mul
@@ -4238,15 +4238,15 @@ mod tests {
             "fn main() -> int { let m = -9223372036854775807 - 1; m % -1 }", // Rem (MIN%-1)
             "fn main() -> int { let m = -9223372036854775807 - 1; -m }",     // Neg (-MIN)
         ];
-        for src in casos {
+        for src in cases {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
             crate::checker::check(&mut prog).expect("check ok");
-            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete must errar");
             let compiled = compile_program(&prog).expect("compila");
-            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            let vm = run_program(&compiled).expect_err("la VM must errar");
             assert!(interp.msg.contains("desbordamiento aritmético en int"), "interp: {} ({src})", interp.msg);
-            assert_eq!(interp.msg, vm.msg, "ambos motores idénticos ({src})");
+            assert_eq!(interp.msg, vm.msg, "ambos engines idénticos ({src})");
         }
         // Y la aritmética al borde SIN desbordar sigue funcionando igual en ambos.
         let src = "fn main() -> int { let m = 9223372036854775806; print(m + 1); 0 }";
@@ -4261,7 +4261,7 @@ mod tests {
     /// M42.1: **fuel** — límite de instrucciones de la VM. Un bucle infinito aborta con fuel finito
     /// (no cuelga); un programa que termina dentro del presupuesto da su resultado normal.
     #[test]
-    fn fuel_limita_la_ejecucion() {
+    fn fuel_limita_la_execution() {
         fn compile(src: &str) -> CompiledProgram {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
@@ -4270,7 +4270,7 @@ mod tests {
         }
         // Bucle infinito: con fuel finito, aborta (sin fuel colgaría, así que no se prueba sin límite).
         let inf = compile("fn main() -> int { var i = 0; while (true) { i = i + 1; } 0 }");
-        let err = run_program_with_limit(&inf, Some(50_000), None).expect_err("debe agotar el fuel");
+        let err = run_program_with_limit(&inf, Some(50_000), None).expect_err("must agotar el fuel");
         assert!(err.msg.contains("fuel"), "mensaje de fuel: {}", err.msg);
         // Un programa que termina dentro del presupuesto da el mismo resultado que sin límite.
         let ok = compile("fn main() -> int { var s = 0; var i = 0; while (i < 100) { s = s + i; i = i + 1; } s }");
@@ -4282,7 +4282,7 @@ mod tests {
     /// Cubre lo estructural (arreglo con struct + string), el **sharing interno** (un objeto alcanzado
     /// por dos caminos se copia UNA vez) y los **ciclos** (que un deep-copy ingenuo colgaría).
     #[test]
-    fn transfer_value_entre_heaps() {
+    fn transfer_value_between_heaps() {
         use std::collections::HashMap;
         // (1) Estructural: [1, P{x:2}, "hi"] → estructuralmente igual, con handles del destino.
         {
@@ -4293,7 +4293,7 @@ mod tests {
             let mut remap = HashMap::new();
             let tv = transfer_value(&a, &mut b, &HeapValue::Obj(top), &mut remap);
             assert_eq!(to_value(&b, &[], &tv), to_value(&a, &[], &HeapValue::Obj(top)), "estructuralmente iguales");
-            assert_eq!(b.live(), 2, "se copiaron 2 objetos (arreglo + struct)");
+            assert_eq!(b.live(), 2, "se copiaron 2 objetos (array + struct)");
         }
         // (2) Sharing: [sub, sub] con el MISMO handle → tras transferir, ambos apuntan al mismo destino.
         {
@@ -4306,9 +4306,9 @@ mod tests {
             let nt = tv.handle().unwrap();
             let (h0, h1) = match b.get(nt) {
                 Obj::Array(e) => (e[0].handle().unwrap(), e[1].handle().unwrap()),
-                _ => panic!("esperaba arreglo"),
+                _ => panic!("esperaba array"),
             };
-            assert_eq!(h0, h1, "el sharing interno se preserva (un solo objeto copiado)");
+            assert_eq!(h0, h1, "el sharing internal se preserves (un solo objeto copiado)");
             assert_eq!(b.live(), 2, "sharing → 2 objetos (top + sub), no 3");
         }
         // (3) Ciclo: arr -> cell -> arr. Debe terminar y preservar el ciclo.
@@ -4323,8 +4323,8 @@ mod tests {
             let narr = tv.handle().unwrap();
             let ncell = match b.get(narr) { Obj::Array(e) => e[0].handle().unwrap(), _ => panic!() };
             let back = match b.get(ncell) { Obj::Cell(HeapValue::Obj(h)) => *h, _ => panic!() };
-            assert_eq!(back, narr, "el ciclo se preserva (la celda apunta de vuelta al arreglo)");
-            assert_eq!(b.live(), 2, "ciclo → 2 objetos (arreglo + celda)");
+            assert_eq!(back, narr, "el ciclo se preserves (la celda apunta de vuelta al array)");
+            assert_eq!(b.live(), 2, "ciclo → 2 objetos (array + celda)");
         }
     }
 
@@ -4343,7 +4343,7 @@ mod tests {
         let crece = compile(
             "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 100000) { xs.push([i]); i = i + 1; } 0 }",
         );
-        let err = run_program_with_limit(&crece, None, Some(1_000)).expect_err("debe rebasar el tope");
+        let err = run_program_with_limit(&crece, None, Some(1_000)).expect_err("must rebasar el tope");
         assert!(err.msg.contains("tope de heap"), "mensaje de tope: {}", err.msg);
         // Un programa frugal (no retiene) termina normal aun con tope bajo: el GC recicla la basura.
         let frugal = compile("fn main() -> int { var s = 0; var i = 0; while (i < 10000) { s = s + i; i = i + 1; } s }");
@@ -4351,27 +4351,27 @@ mod tests {
     }
 
     #[test]
-        fn overflow_recursion_oraculo() {
+        fn overflow_recursion_oracle() {
         let (interp_msg, vm_msg) = crate::with_big_stack(|| {
-            let src = "fn bucle(n: int) -> int { 1 + bucle(n + 1) }
-                       fn main() -> int { bucle(0) }";
+            let src = "fn loop(n: int) -> int { 1 + loop(n + 1) }
+                       fn main() -> int { loop(0) }";
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
             crate::checker::check(&mut prog).expect("check ok");
-            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete must errar");
             let compiled = compile_program(&prog).expect("compila");
-            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            let vm = run_program(&compiled).expect_err("la VM must errar");
             (interp.msg, vm.msg)
         });
         assert!(interp_msg.contains("desbordamiento de pila"), "intérprete: {interp_msg}");
         assert!(vm_msg.contains("desbordamiento de pila"), "vm: {vm_msg}");
         // Ambos motores reportan exactamente el mismo mensaje.
-        assert_eq!(interp_msg, vm_msg, "los dos motores difieren en el mensaje");
+        assert_eq!(interp_msg, vm_msg, "los dos engines difieren en el mensaje");
     }
 
     /// M13.2a: aserciones que pasan no alteran el resultado (oráculo normal).
     #[test]
-    fn assert_pasa_oraculo() {
+    fn assert_pasa_oracle() {
         oracle_program(
             "fn main() -> int {
                 assert(1 + 1 == 2);
@@ -4386,21 +4386,21 @@ mod tests {
     /// de bytes y arreglos. Los MISMOS nombres (`unwrap_or`/`expect`/`unwrap`) existen para
     /// Option y Result: el despacho por punto resuelve por el tipo del receptor.
     #[test]
-    fn option_result_ergonomia_oraculo() {
+    fn option_result_ergonomia_oracle() {
         oracle_program(
-            "fn mitad(x: int) -> Option<int> {\n\
+            "fn half(x: int) -> Option<int> {\n\
              \x20 if (x % 2 == 0) { Option.Some(x / 2) } else { Option.None }\n\
              }\n\
              fn main() -> int {\n\
              \x20 var n = 0;\n\
-             \x20 if (mitad(8).is_some() && mitad(3).is_none()) { n = n + 1; }\n\
-             \x20 n = n + mitad(8).unwrap_or(0);\n\
-             \x20 n = n + mitad(3).unwrap_or(100);\n\
-             \x20 n = n + mitad(8).map(fn(x: int) -> int { x * 10 }).unwrap_or(0);\n\
-             \x20 n = n + mitad(8).expect(\"par\");\n\
-             \x20 let r: Result<int, string> = mitad(8).ok_or(\"impar\");\n\
+             \x20 if (half(8).is_some() && half(3).is_none()) { n = n + 1; }\n\
+             \x20 n = n + half(8).unwrap_or(0);\n\
+             \x20 n = n + half(3).unwrap_or(100);\n\
+             \x20 n = n + half(8).map(fn(x: int) -> int { x * 10 }).unwrap_or(0);\n\
+             \x20 n = n + half(8).expect(\"par\");\n\
+             \x20 let r: Result<int, string> = half(8).ok_or(\"impar\");\n\
              \x20 if (r.is_ok()) { n = n + r.unwrap(); }\n\
-             \x20 let e: Result<int, string> = mitad(3).ok_or(\"impar\");\n\
+             \x20 let e: Result<int, string> = half(3).ok_or(\"impar\");\n\
              \x20 if (e.is_err() && e.ok().is_none()) { n = n + e.unwrap_or(1000); }\n\
              \x20 if (b\"ab\".eq(b\"ab\") && [1, 2].eq([1, 2]) && !([1].eq([2]))) { n = n + 1; }\n\
              \x20 if ([1, 2].show() == \"[1, 2]\" && b\"ab\".show() == \"6162\") { n = n + 1; }\n\
@@ -4413,15 +4413,15 @@ mod tests {
     /// M62.1: terminales `any`/`all`/`count` (lazy, en el trait) + `any`/`all` eager sobre
     /// arreglos (bucles directos; mismo nombre, despacho por receptor). Cortocircuito incluido.
     #[test]
-    fn any_all_count_oraculo() {
+    fn any_all_count_oracle() {
         oracle_program(
             "fn main() -> int {\n\
              \x20 var n = 0;\n\
              \x20 if ([1, 2, 3].any(fn(x: int) -> bool { x == 2 })) { n = n + 1; }\n\
              \x20 if ([1, 2, 3].all(fn(x: int) -> bool { x > 0 })) { n = n + 1; }\n\
              \x20 if (!([1, 2, 3].all(fn(x: int) -> bool { x < 3 }))) { n = n + 1; }\n\
-             \x20 let vacio: [int] = [];\n\
-             \x20 if (!vacio.any(fn(x: int) -> bool { true }) && vacio.all(fn(x: int) -> bool { false })) { n = n + 1; }\n\
+             \x20 let empty: [int] = [];\n\
+             \x20 if (!empty.any(fn(x: int) -> bool { true }) && empty.all(fn(x: int) -> bool { false })) { n = n + 1; }\n\
              \x20 if (range(1, 1000000).map(fn(x: int) -> int { x * 2 }).any(fn(x: int) -> bool { x > 10 })) { n = n + 1; }\n\
              \x20 n = n + range(0, 50).filter(fn(x: int) -> bool { x % 10 == 0 }).count();\n\
              \x20 if ([9, 9].iter().all(fn(x: int) -> bool { x == 9 })) { n = n + 1; }\n\
@@ -4434,7 +4434,7 @@ mod tests {
     /// con map), terminales `min`/`max` (genéricos `T: Ord`; None sobre vacío) y `Ord` para
     /// bool (false < true) y bytes (lexicográfico) vía `sort`/`less`.
     #[test]
-    fn find_chain_min_max_oraculo() {
+    fn find_chain_min_max_oracle() {
         oracle_program(
             "fn main() -> int {\n\
              \x20 var n = 0;\n\
@@ -4456,8 +4456,8 @@ mod tests {
              \x20   Option.Some(m) => { n = n + m * 100; },\n\
              \x20   Option.None => { },\n\
              \x20 }\n\
-             \x20 let vacio: [int] = [];\n\
-             \x20 match (min(vacio.iter())) {\n\
+             \x20 let empty: [int] = [];\n\
+             \x20 match (min(empty.iter())) {\n\
              \x20   Option.Some(m) => { n = n + m; },\n\
              \x20   Option.None => { n = n + 10000; },\n\
              \x20 }\n\
@@ -4471,7 +4471,7 @@ mod tests {
 
     /// M13.2a: `panic` / `assert_eq` que falla → ambos motores cortan con el MISMO mensaje.
     #[test]
-    fn panic_y_assert_falla_oraculo() {
+    fn panic_y_assert_fails_oracle() {
         for (src, expected) in [
             ("fn main() -> int { panic(\"boom\"); 0 }", "boom"),
             ("fn main() -> int { assert_eq(2 + 2, 5); 0 }", "assert_eq falló: 4 != 5"),
@@ -4480,9 +4480,9 @@ mod tests {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
             crate::checker::check(&mut prog).expect("check ok");
-            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete must errar");
             let compiled = compile_program(&prog).expect("compila");
-            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            let vm = run_program(&compiled).expect_err("la VM must errar");
             assert_eq!(interp.msg, expected, "intérprete: {}", src);
             assert_eq!(vm.msg, expected, "vm: {}", src);
         }
@@ -4506,8 +4506,8 @@ mod tests {
             .iter()
             .filter(|op| matches!(op, OpCode::Add | OpCode::Sub | OpCode::Mul | OpCode::Div))
             .count();
-        assert_eq!(arith, 0, "la expresión de literales debe plegarse: {:?}", main.chunk.code);
-        assert_eq!(run_program(&compiled).expect("corre"), Value::Int(5));
+        assert_eq!(arith, 0, "la expresión de literals must plegarse: {:?}", main.chunk.code);
+        assert_eq!(run_program(&compiled).expect("runs"), Value::Int(5));
 
         // Lo trapeante queda para el runtime, idéntico en ambos motores.
         for (src, msg) in [
@@ -4518,9 +4518,9 @@ mod tests {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
             crate::checker::check(&mut prog).expect("check ok");
-            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete must errar");
             let compiled = compile_program(&prog).expect("compila");
-            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            let vm = run_program(&compiled).expect_err("la VM must errar");
             assert_eq!(interp.msg, msg, "intérprete: {}", src);
             assert_eq!(vm.msg, msg, "vm: {}", src);
         }
@@ -4530,9 +4530,9 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         crate::checker::check(&mut prog).expect("check ok");
-        let interp = crate::interpreter::run(&prog).expect("interp corre");
+        let interp = crate::interpreter::run(&prog).expect("interp runs");
         let compiled = compile_program(&prog).expect("compila");
-        assert_eq!(run_program(&compiled).expect("vm corre"), interp);
+        assert_eq!(run_program(&compiled).expect("vm runs"), interp);
         assert_eq!(interp, Value::Int(42));
     }
 
@@ -4542,7 +4542,7 @@ mod tests {
     /// división por cero en un helper, error dentro de una closure, y llamada en cola
     /// (el marco reutilizado aparece UNA vez, con el nombre final).
     #[test]
-    fn stack_trace_oraculo() {
+    fn stack_trace_oracle() {
         for src in [
             // panic anidado con recursión NO-cola (el `+ 0` evita el TCO): main → middle → boom×3
             "fn boom(n: int) -> int { if (n == 0) { panic(\"boom\"); } boom(n - 1) + 0 }\n\
@@ -4553,22 +4553,22 @@ mod tests {
             // división por cero en un helper
             "fn div(a: int, b: int) -> int { a / b }\nfn main() -> int { div(1, 0) }",
             // error dentro de una función anónima (el nombre `<fn#0>` debe casar)
-            "fn aplica(f: fn(int) -> int, x: int) -> int { f(x) }\n\
-             fn main() -> int { aplica(fn(n: int) -> int { n / 0 }, 3) }",
+            "fn applies(f: fn(int) -> int, x: int) -> int { f(x) }\n\
+             fn main() -> int { applies(fn(n: int) -> int { n / 0 }, 3) }",
             // llamada en cola: el marco se reutiliza (la traza NO crece con la recursión)
-            "fn cuenta(n: int) -> int { if (n == 0) { panic(\"fin\"); } cuenta(n - 1) }\n\
-             fn main() -> int { cuenta(5) }",
+            "fn account(n: int) -> int { if (n == 0) { panic(\"fin\"); } account(n - 1) }\n\
+             fn main() -> int { account(5) }",
         ] {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
             crate::checker::check(&mut prog).expect("check ok");
-            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete must errar");
             let compiled = compile_program(&prog).expect("compila");
-            let vm = run_program(&compiled).expect_err("la VM debe errar");
-            assert!(!vm.trace.is_empty(), "la VM debe adjuntar traza: {}", src);
+            let vm = run_program(&compiled).expect_err("la VM must errar");
+            assert!(!vm.trace.is_empty(), "la VM must adjuntar traza: {}", src);
             assert_eq!(interp.trace, vm.trace, "trazas distintas en:\n{}", src);
             // La cabecera y la entrada 0 cuentan lo mismo (nombre del marco interno aparte).
-            assert_eq!((vm.trace[0].line, vm.trace[0].col), (vm.line, vm.col), "entrada 0 = posición del error: {}", src);
+            assert_eq!((vm.trace[0].line, vm.trace[0].col), (vm.line, vm.col), "entry 0 = posición del error: {}", src);
         }
 
         // Forma de la traza: los nombres, de dentro afuera. Los `+ 0` hacen NO-cola
@@ -4581,21 +4581,21 @@ mod tests {
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         crate::checker::check(&mut prog).expect("check ok");
         let compiled = compile_program(&prog).expect("compila");
-        let vm = run_program(&compiled).expect_err("la VM debe errar");
+        let vm = run_program(&compiled).expect_err("la VM must errar");
         let names: Vec<&str> = vm.trace.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["boom", "boom", "boom", "middle", "main"]);
 
         // Y con TCO el marco reutilizado aparece UNA vez: `main → cuenta` y toda la
         // recursión de `cuenta` son colas → UN solo marco, renombrado a `cuenta`.
-        let src = "fn cuenta(n: int) -> int { if (n == 0) { panic(\"fin\"); } cuenta(n - 1) }\n\
-                   fn main() -> int { cuenta(5) }";
+        let src = "fn account(n: int) -> int { if (n == 0) { panic(\"fin\"); } account(n - 1) }\n\
+                   fn main() -> int { account(5) }";
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         crate::checker::check(&mut prog).expect("check ok");
         let compiled = compile_program(&prog).expect("compila");
-        let vm = run_program(&compiled).expect_err("la VM debe errar");
+        let vm = run_program(&compiled).expect_err("la VM must errar");
         let names: Vec<&str> = vm.trace.iter().map(|f| f.name.as_str()).collect();
-        assert_eq!(names, ["cuenta"], "TCO: el marco en cola se reutiliza");
+        assert_eq!(names, ["account"], "TCO: el marco en cola se reutiliza");
     }
 
     /// M15.1a: la stdlib de matemáticas en el oráculo. Las funciones float se enrutan a `int` por la
@@ -4603,7 +4603,7 @@ mod tests {
     /// directamente); abs/min/max sobre `int` devuelven `int`. El último caso fija la semántica de
     /// **borde** de `f64`: `sqrt(-1.0)` da `NaN` en ambos motores → `NaN == NaN` es `false` → `0`.
     #[test]
-    fn matematicas_oraculo() {
+    fn matematicas_oracle() {
         // M49: abs/min/max/pi/e se movieron a `std/math` (funciones puras en raylang; las cubre la
         // integración `math_cli`, en ambos motores). El ORÁCULO prueba solo los primitivos internos `__x`
         // —el que computa, aún builtin, sin necesidad del loader—; el envoltorio `math.sqrt` lo cierra el
@@ -4637,7 +4637,7 @@ mod tests {
     /// M27.1: tuplas — retorno múltiple, acceso `.N`, desestructuración (`_`), heterogéneas. Erasure a
     /// arreglos → ambos motores coinciden.
     #[test]
-    fn tuplas_oraculo() {
+    fn tuplas_oracle() {
         oracle_program("fn dm(a: int, b: int) -> (int, int) { (a / b, a % b) } fn main() -> int { let t = dm(17, 5); t.0 + t.1 * 10 }"); // 3 + 20 = 23
         oracle_program("fn main() -> int { let (q, r) = (7, 3); q * r }"); // 21
         oracle_program("fn main() -> int { let (_, b, _) = (1, 42, 9); b }"); // 42 (descarta con _)
@@ -4651,7 +4651,7 @@ mod tests {
     /// M27.2: bucle `for` — rango, arreglo, string, Map `(k, v)`, `_`. Ambos motores coinciden.
     /// M27.5: constantes de nivel superior. Resueltas como `Ident` globales → ambos motores coinciden.
     #[test]
-    fn const_oraculo() {
+    fn const_oracle() {
         oracle_program("const MAX: int = 100; fn main() -> int { MAX - 42 }"); // 58
         oracle_program("const A: int = 7; const B: int = 3; fn main() -> int { A * B }"); // 21
         oracle_program("const NEG: int = -5; fn main() -> int { NEG + 10 }"); // 5
@@ -4662,7 +4662,7 @@ mod tests {
 
     /// M27.4: casts `as` — int↔float, char↔int. Cambian la representación → ambos motores coinciden.
     #[test]
-    fn cast_oraculo() {
+    fn cast_oracle() {
         oracle_int("(3.99 as int) + (2.1 as int)");        // 3 + 2 = 5
         oracle_int("('A' as int) + ('a' as int)");         // 65 + 97 = 162
         oracle_int("if ((7 as float) == 7.0) { 1 } else { 0 }"); // 1
@@ -4674,7 +4674,7 @@ mod tests {
     /// M27.3: interpolación de strings `"...${expr}..."`. Desazucara a `+ to_string(...)` → ambos
     /// motores coinciden. Se enruta a `int` comparando la longitud (print diferido en `oracle_int`).
     #[test]
-    fn interpolacion_oraculo() {
+    fn interpolation_oracle() {
         oracle_int("\"x=${1}\".len()");                     // "x=1" → 3
         oracle_int("\"${1}+${2}=${3}\".len()");             // "1+2=3" → 5
         oracle_int("if (\"a${1}b\" == \"a1b\") { 1 } else { 0 }");   // 1
@@ -4693,7 +4693,7 @@ mod tests {
     /// M28.3: enteros sin signo con tamaño (u8/u32/u64). Aritmética con wrapping dentro del ancho,
     /// bitops, comparación sin signo, conversión con `as`. Ambos motores comparten la máscara → iguales.
     #[test]
-    fn uint_oraculo() {
+    fn uint_oracle() {
         oracle_int("((200 as u8) + (100 as u8)) as int");   // 300 mod 256 = 44
         oracle_int("(511 as u8) as int");                    // 255 (enmascarado)
         oracle_int("((4294967295 as u32) + (1 as u32)) as int"); // wrap a 0
@@ -4712,7 +4712,7 @@ mod tests {
     /// M28.3b: coerción de literal entero polimórfico — un literal adopta el ancho uint del contexto
     /// (tipo esperado u operando). Baja a un `as` → ambos motores coinciden.
     #[test]
-    fn uint_literal_oraculo() {
+    fn uint_literal_oracle() {
         oracle_program("fn main() -> int { let x: u8 = 5; x as int }");            // 5
         oracle_program("fn main() -> int { let x: u8 = 200; let y: u8 = x + 100; y as int }"); // 44
         oracle_program("fn main() -> int { let z: u8 = 200 + 100; z as int }");    // 44 (ambos literales)
@@ -4728,9 +4728,9 @@ mod tests {
     /// M28.2: `?` con conversión de error vía `From<S>`. `expr?` (con `impl From<E1> for E2`) baja a
     /// un `match` que convierte en la rama de error → runtime intacto, ambos motores coinciden.
     #[test]
-    fn conversion_error_oraculo() {
+    fn conversion_error_oracle() {
         let base = "enum MiErr { Io(string) } \
-            impl From<string> for MiErr { fn desde(o: string) -> MiErr { MiErr.Io(o) } } \
+            impl From<string> for MiErr { fn from(o: string) -> MiErr { MiErr.Io(o) } } \
             fn leer(f: bool) -> Result<int, string> { if (f) { Result.Err(\"x\") } else { Result.Ok(7) } } \
             fn proc(f: bool) -> Result<int, MiErr> { let x = leer(f)?; Result.Ok(x + 1) } ";
         // Camino Ok: proc(false) = Ok(8); code = 8.
@@ -4744,14 +4744,14 @@ mod tests {
     /// Un `match` con TODOS los brazos divergentes (`return`) type-checkea (antes hacía panic el checker,
     /// "hay al menos un brazo"): el match diverge y vale unit; la función retorna por los `return`.
     #[test]
-    fn match_todos_divergentes_oraculo() {
+    fn match_all_divergentes_oracle() {
         oracle_program("fn f(o: Option<int>) -> int { match (o) { Option.Some(n) => { return n; }, Option.None => { return 0; } } } fn main() -> int { f(Option.Some(5)) + f(Option.None) }"); // 5
     }
 
     /// M28.1: sobrecarga de operadores vía traits (`Add`/`Sub`/`Mul`/`Div`/`Neg`). `a op b` sobre
     /// un tipo de usuario baja a `a.metodo(b)` (función manglada de M9) → ambos motores coinciden.
     #[test]
-    fn operadores_oraculo() {
+    fn operators_oracle() {
         let vec2 = "struct Vec2 { x: int, y: int } \
             impl Add for Vec2 { fn add(self, o: Vec2) -> Vec2 { Vec2 { x: self.x + o.x, y: self.y + o.y } } } \
             impl Sub for Vec2 { fn sub(self, o: Vec2) -> Vec2 { Vec2 { x: self.x - o.x, y: self.y - o.y } } } \
@@ -4767,10 +4767,10 @@ mod tests {
     }
 
     #[test]
-    fn for_oraculo() {
+    fn for_oracle() {
         oracle_program("fn main() -> int { var s = 0; for i in 0..5 { s = s + i; } s }"); // 10
         oracle_program("fn main() -> int { var t = 0; for x in [10, 20, 30] { t = t + x; } t }"); // 60
-        oracle_program("fn main() -> int { var n = 0; for c in \"hola\" { n = n + 1; } n }"); // 4
+        oracle_program("fn main() -> int { var n = 0; for c in \"hello\" { n = n + 1; } n }"); // 4
         oracle_program("fn main() -> int { var m: Map<string, int> = Map.new(); m.insert(\"a\", 1); m.insert(\"b\", 5); var s = 0; for (k, v) in m { s = s + v; } s }"); // 6
         oracle_program("fn main() -> int { var m: Map<int, int> = Map.new(); m.insert(1, 10); m.insert(2, 20); var c = 0; for (k, _) in m { c = c + k; } c }"); // 3
         // for anidado.
@@ -4780,7 +4780,7 @@ mod tests {
     }
 
     #[test]
-    fn bitops_oraculo() {
+    fn bitops_oracle() {
         // M19.3a: operadores bit a bit. Ambos motores comparten `wrapping_*` → idénticos.
         oracle_int("6 & 3");   // 0b110 & 0b011 = 0b010 = 2
         oracle_int("6 | 3");   // 0b111 = 7
@@ -4802,9 +4802,9 @@ mod tests {
     /// M16.1a: el tipo `bytes` en el oráculo. Literal `b"..."` (con `\xNN`), `len`, indexar (→int) e
     /// igualdad. Se enruta a `int` (el booleano de `==` vía `if`) porque `print(bytes)` está diferido.
     #[test]
-    fn bytes_oraculo() {
+    fn bytes_oracle() {
         oracle_int("b\"AB\".len()");                    // 2
-        oracle_int("b\"hola\".len()");                  // 4
+        oracle_int("b\"hello\".len()");                  // 4
         oracle_int("b\"\\x00\\xff\"[1]");              // 255
         oracle_int("b\"AB\\x00\"[0]");                 // 65
         oracle_int("b\"AB\\x00\"[2]");                 // 0
@@ -4816,7 +4816,7 @@ mod tests {
         // Los caracteres no-ASCII se codifican como UTF-8 (á = 2 octetos).
         oracle_int("b\"á\".len()");                     // 2
         // M16.1b: to_bytes (builtin) + concatenación (opcode Add).
-        oracle_int("\"hola, mundo\".to_bytes().len()");                   // 11
+        oracle_int("\"hello, mundo\".to_bytes().len()");                   // 11
         oracle_int("\"á\".to_bytes().len()");                            // 2 (UTF-8)
         oracle_int("(\"AB\".to_bytes() + \"CD\".to_bytes()).len()");        // 4
         oracle_int("if (\"AB\".to_bytes() == b\"AB\") { 1 } else { 0 }");
@@ -4824,7 +4824,7 @@ mod tests {
     }
 
     #[test]
-    fn bytes_a_hex_oraculo() {
+    fn bytes_a_hex_oracle() {
         // M16 (diferido): to_string(bytes) → hex en minúscula; idéntico en ambos motores.
         oracle_int("if (to_string(b\"Hi\\xff\") == \"4869ff\") { 1 } else { 0 }");   // H=48 i=69 ff
         oracle_int("if (to_string(b\"\\x00\\x01\\x02\") == \"000102\") { 1 } else { 0 }");
@@ -4836,9 +4836,9 @@ mod tests {
     /// M16.1b: `from_utf8` es un envoltorio del **prelude** (no un opcode), así que se prueba con el
     /// oráculo a nivel de programa completo (que inyecta el prelude), no con expresiones sueltas.
     #[test]
-    fn bytes_from_utf8_oraculo() {
+    fn bytes_from_utf8_oracle() {
         // Round-trip válido: decodifica y mide la longitud del string.
-        oracle_program("fn main() -> int { match (from_utf8(b\"hola\")) { Result.Ok(s) => s.len(), Result.Err(e) => -1, } }");
+        oracle_program("fn main() -> int { match (from_utf8(b\"hello\")) { Result.Ok(s) => s.len(), Result.Err(e) => -1, } }");
         // UTF-8 inválido → Err → 0.
         oracle_program("fn main() -> int { match (from_utf8(b\"\\xff\\xfe\")) { Result.Ok(s) => 1, Result.Err(e) => 0, } }");
         // to_bytes ∘ from_utf8 es identidad sobre texto válido.
@@ -4848,7 +4848,7 @@ mod tests {
     /// M19.2: `sub_bytes` (sub-secuencia por octeto, con clamp). Enrutado a int/bool (len/index/==),
     /// como el resto de oráculos de bytes (print de bytes diferido).
     #[test]
-    fn sub_bytes_oraculo() {
+    fn sub_bytes_oracle() {
         oracle_int("b\"hello\".sub_bytes(1, 4).len()");                       // 3 ("ell")
         oracle_int("b\"hello\".sub_bytes(1, 4)[0]");                          // 101 ('e')
         oracle_int("if (b\"ABCD\".sub_bytes(0, 2) == b\"AB\") { 1 } else { 0 }"); // 1
@@ -4863,7 +4863,7 @@ mod tests {
     }
 
     #[test]
-    fn bytes_of_oraculo() {
+    fn bytes_of_oracle() {
         // M19.3c: construir bytes desde [int]. Indexar de vuelta da el mismo octeto.
         oracle_int("bytes_of([72, 105]).len()");                               // 2
         oracle_int("bytes_of([72, 105, 33])[1]");                             // 105
@@ -4878,7 +4878,7 @@ mod tests {
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.
     #[test]
-    fn map_basico_oraculo() {
+    fn map_basico_oracle() {
         oracle_program(
             "fn main() -> int {
                 let m: Map<string, int> = Map.new();
@@ -4894,19 +4894,19 @@ mod tests {
     /// M48.4d: los métodos de `StrOps`/`BytesOps` (trim/split/replace/…/sub_bytes) despachan por trait
     /// y bajan a los builtins de string/bytes. Varios asignan heap → estrés del GC.
     #[test]
-    fn trait_strops_bytesops_oraculo() {
+    fn trait_strops_bytesops_oracle() {
         oracle_stress(
             "fn main() -> int {
                 let s = \"  Hola Mundo  \";
                 let t = s.trim();
                 let up = t.to_upper();
-                let partes = t.split(\" \");
+                let parts = t.split(\" \");
                 let r = t.replace(\"Mundo\", \"Ray\");
                 let cs = t.chars();
                 let rep = \"xy\".repeat(4);
                 let b = t.to_bytes();
                 let sb = b.sub_bytes(0, 4);
-                t.len() + up.len() + partes.len() + r.len() + cs.len() + rep.len()
+                t.len() + up.len() + parts.len() + r.len() + cs.len() + rep.len()
                     + b.len() + sb.len() + t.substring(0, 4).len()
                     + (if (t.starts_with(\"Hola\")) { 1 } else { 0 })
                     + (if (t.ends_with(\"Mundo\")) { 1 } else { 0 })
@@ -4917,20 +4917,20 @@ mod tests {
     /// M48.4c: `insert`/`contains_key`/`keys`/`values` como métodos del trait `MapOps` bajan a sus
     /// primitivos `__x`. `keys`/`values` asignan heap y son deterministas (orden de clave) → oráculo.
     #[test]
-    fn trait_mapops_oraculo() {
+    fn trait_mapops_oracle() {
         oracle_stress(
             "fn main() -> int {
                 let m: Map<int, [int]> = [:];
                 var i = 0;
                 while (i < 20) { m.insert(i, [i, i * 3]); i = i + 1; }
-                var suma = 0;
+                var sum = 0;
                 let ks = m.keys();      // ordenadas 0..19
                 let vs = m.values();    // en el mismo orden
                 var j = 0;
-                while (j < m.len()) { suma = suma + ks[j] + vs[j][1]; j = j + 1; }
-                if (m.contains_key(7)) { suma = suma + 10000; }
-                if (!m.contains_key(99)) { suma = suma + 100; }
-                suma
+                while (j < m.len()) { sum = sum + ks[j] + vs[j][1]; j = j + 1; }
+                if (m.contains_key(7)) { sum = sum + 10000; }
+                if (!m.contains_key(99)) { sum = sum + 100; }
+                sum
              }",
         );
     }
@@ -4938,7 +4938,7 @@ mod tests {
     /// M48.4b: `push`/`reverse`/`contains` como métodos de trait (`Push`/`Reverse`/`Contains`) bajan a
     /// sus primitivos `__x`. `push`/`reverse` asignan heap → estrés del GC.
     #[test]
-    fn trait_push_reverse_contains_oraculo() {
+    fn trait_push_reverse_contains_oracle() {
         oracle_stress(
             "struct Cola { items: [int] }
              impl Push<int> for Cola { fn push(self, x: int) { self.items.push(x) } }
@@ -4949,11 +4949,11 @@ mod tests {
                 let r = a.reverse();                            // Reverse: [58, 56, …]
                 let c = Cola { items: [7] };
                 c.push(9);                                      // Push sobre tipo de usuario
-                var suma = 0;
-                if (a.contains(58)) { suma = suma + 1000; }     // Contains en arreglo
-                if (\"abcdef\".contains(\"cde\")) { suma = suma + 100; } // Contains en string
-                if (!a.contains(999)) { suma = suma + 10; }
-                suma + a.len() + r[0] + c.items.len()           // 1110 + 30 + 58 + 2 = 1200
+                var sum = 0;
+                if (a.contains(58)) { sum = sum + 1000; }     // Contains en arreglo
+                if (\"abcdef\".contains(\"cde\")) { sum = sum + 100; } // Contains en string
+                if (!a.contains(999)) { sum = sum + 10; }
+                sum + a.len() + r[0] + c.items.len()           // 1110 + 30 + 58 + 2 = 1200
              }",
         );
     }
@@ -4961,7 +4961,7 @@ mod tests {
     /// M48.4a: `.len()` como método del trait `Len` (string/[T]/Map/bytes + tipo de usuario) baja al
     /// primitivo `__len` (mismo opcode `Len`) → ambos motores coinciden.
     #[test]
-    fn trait_len_oraculo() {
+    fn trait_len_oracle() {
         oracle_program(
             "struct Pila { d: [int] }
              impl Len for Pila { fn len(self) -> int { self.d.len() } }
@@ -4969,7 +4969,7 @@ mod tests {
              fn main() -> int {
                 let m: Map<int, int> = [1: 10, 2: 20, 3: 30];
                 let p = Pila { d: [7, 8, 9] };
-                \"hola\".len() + [1,2,3,4,5].len() + m.len() + \"ab\".to_bytes().len()
+                \"hello\".len() + [1,2,3,4,5].len() + m.len() + \"ab\".to_bytes().len()
                     + p.len() + describir([1,2]) + describir(p)
              }",
         );
@@ -4978,16 +4978,16 @@ mod tests {
     /// M48.2: el literal de Map `[k: v, …]` baja a `Map.new()` + `insert` por par → ambos motores
     /// coinciden. Cubre poblado, `[:]` vacío, clave repetida (gana la última) y un valor con UFCS.
     #[test]
-    fn map_literal_oraculo() {
+    fn map_literal_oracle() {
         oracle_program(
             "fn dup(x: int) -> int { x * 2 }
              fn main() -> int {
                 let m = [1: 10, 2: 20, 1: 30];
-                let vacio: Map<int, int> = [:];
-                vacio.insert(9, dup(5));
+                let empty: Map<int, int> = [:];
+                empty.insert(9, dup(5));
                 let a = match (m.get(1)) { Option.Some(v) => v, Option.None => 0 };
-                let b = match (vacio.get(9)) { Option.Some(v) => v, Option.None => 0 };
-                a + b + m.len() + vacio.len()
+                let b = match (empty.get(9)) { Option.Some(v) => v, Option.None => 0 };
+                a + b + m.len() + empty.len()
              }",
         );
     }
@@ -4995,20 +4995,20 @@ mod tests {
     /// M48.2: el literal de Map asigna en el heap (Map + valores) → estrés del GC. Un literal con
     /// varios pares dentro de un bucle debe mantener sus valores vivos en cada recolección.
     #[test]
-    fn map_literal_estres_gc_oraculo() {
+    fn map_literal_stress_gc_oracle() {
         oracle_stress(
             "fn main() -> int {
-                var suma = 0;
+                var sum = 0;
                 var i = 0;
                 while (i < 20) {
                     let m = [i: [i, i + 1], i + 100: [i + 2, i + 3]];
                     match (m.get(i)) {
-                        Option.Some(par) => { suma = suma + par[0] + par[1]; },
-                        Option.None => { suma = suma - 1; },
+                        Option.Some(par) => { sum = sum + par[0] + par[1]; },
+                        Option.None => { sum = sum - 1; },
                     }
                     i = i + 1;
                 }
-                suma
+                sum
              }",
         );
     }
@@ -5016,7 +5016,7 @@ mod tests {
     /// M48.1: `Map.new()` (función asociada) baja al mismo opcode `MapNew` que el antiguo `map_new()`
     /// → ambos motores coinciden. Mismo programa que `map_basico_oraculo` con la sintaxis nueva.
     #[test]
-    fn map_new_asociada_oraculo() {
+    fn map_new_associated_oracle() {
         oracle_program(
             "fn main() -> int {
                 let m: Map<string, int> = Map.new();
@@ -5032,30 +5032,30 @@ mod tests {
     /// M13.1: el Map asigna en el heap y guarda valores → estrés del GC (recolecta en cada paso).
     /// Si una raíz faltara, los valores guardados se liberarían y el resultado cambiaría.
     #[test]
-    fn map_estres_gc_oraculo() {
+    fn map_stress_gc_oracle() {
         oracle_stress(
             "fn celda(n: int) -> [int] { [n, n * 2] }
              fn main() -> int {
                 let m: Map<int, [int]> = Map.new();
                 var i = 0;
                 while (i < 30) { m.insert(i, celda(i)); i = i + 1; }
-                var suma = 0;
+                var sum = 0;
                 var j = 0;
                 while (j < 30) {
                     match (m.get(j)) {
-                        Option.Some(par) => { suma = suma + par[0] + par[1]; },
-                        Option.None => { suma = suma - 1; },
+                        Option.Some(par) => { sum = sum + par[0] + par[1]; },
+                        Option.None => { sum = sum - 1; },
                     }
                     j = j + 1;
                 }
-                suma + m.len()
+                sum + m.len()
              }",
         );
     }
 
     /// M13.1: claves de distintos tipos primitivos hashables.
     #[test]
-    fn map_claves_variadas_oraculo() {
+    fn map_keys_variadas_oracle() {
         oracle_program(
             "fn main() -> int {
                 let porInt: Map<int, int> = Map.new();
@@ -5074,15 +5074,15 @@ mod tests {
     }
 
     #[test]
-    fn map_clave_bytes_oraculo() {
+    fn map_clave_bytes_oracle() {
         // M16 (diferido): `bytes` como clave de Map. Incluye octetos crudos (\x00/\xff).
         oracle_program(
             "fn main() -> int {
                 let m: Map<bytes, int> = Map.new();
-                m.insert(b\"uno\", 10);
+                m.insert(b\"one\", 10);
                 m.insert(b\"\\x00\\xff\", 99);
                 m.insert(b\"dos\", 20);
-                let a = match (m.get(b\"uno\")) { Option.Some(v) => v, Option.None => 0 };
+                let a = match (m.get(b\"one\")) { Option.Some(v) => v, Option.None => 0 };
                 let b = match (m.get(b\"\\x00\\xff\")) { Option.Some(v) => v, Option.None => 0 };
                 let c = if (m.contains_key(b\"dos\")) { 1 } else { 0 };
                 a + b + c + m.len()
@@ -5091,7 +5091,7 @@ mod tests {
     }
 
     #[test]
-    fn map_clave_bytes_keys_oraculo() {
+    fn map_clave_bytes_keys_oracle() {
         // keys/values con clave bytes: orden determinista (MapKey::Bytes es Ord lexicográfico).
         oracle_program(
             "fn main() -> int {
@@ -5111,9 +5111,9 @@ mod tests {
 
     /// M13.1b: keys (ordenadas) + values (en orden de clave) + remove, en el oráculo.
     #[test]
-    fn map_keys_values_remove_oraculo() {
+    fn map_keys_values_remove_oracle() {
         oracle_program(
-            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < a.len()) { s = s + a[i]; i = i + 1; } s }
+            "fn sum(a: [int]) -> int { var s = 0; var i = 0; while (i < a.len()) { s = s + a[i]; i = i + 1; } s }
              fn main() -> int {
                 let m: Map<int, int> = Map.new();
                 m.insert(3, 30);
@@ -5122,21 +5122,21 @@ mod tests {
                 let ks = m.keys();              // [1, 2, 3]
                 let vs = m.values();            // [10, 20, 30]
                 let quitado = match (remove(m, 2)) { Option.Some(v) => v, Option.None => 0 };
-                ks[0] * 100 + ks[2] + suma(vs) + quitado + m.len()
+                ks[0] * 100 + ks[2] + sum(vs) + quitado + m.len()
              }",
         );
     }
 
     /// M13.1b: keys/values asignan arreglos en el heap → estrés del GC.
     #[test]
-    fn map_keys_values_estres_gc_oraculo() {
+    fn map_keys_values_stress_gc_oracle() {
         oracle_stress(
-            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < a.len()) { s = s + a[i]; i = i + 1; } s }
+            "fn sum(a: [int]) -> int { var s = 0; var i = 0; while (i < a.len()) { s = s + a[i]; i = i + 1; } s }
              fn main() -> int {
                 let m: Map<int, int> = Map.new();
                 var i = 0;
                 while (i < 25) { m.insert(i, i * i); i = i + 1; }
-                let total = suma(m.values()) + suma(m.keys());
+                let total = sum(m.values()) + sum(m.keys());
                 var quitados = 0;
                 var j = 0;
                 while (j < 25) {
@@ -5154,19 +5154,19 @@ mod tests {
     /// M13.3b: recursión de cola PROFUNDA (más allá de MAX_FRAMES) funciona en ambos motores
     /// gracias al TCO, y coinciden. Sin TCO, ambos cortarían en 1024 con desbordamiento.
     #[test]
-    fn tco_recursion_de_cola_profunda_oraculo() {
+    fn tco_recursion_de_cola_profunda_oracle() {
         // 5000 > MAX_FRAMES (1024): solo pasa si la llamada en cola reutiliza el marco.
         oracle_program(
-            "fn cuenta(n: int, acc: int) -> int {
-                if (n == 0) { acc } else { cuenta(n - 1, acc + 1) }
+            "fn account(n: int, acc: int) -> int {
+                if (n == 0) { acc } else { account(n - 1, acc + 1) }
              }
-             fn main() -> int { cuenta(5000, 0) }",
+             fn main() -> int { account(5000, 0) }",
         );
     }
 
     /// M13.3b: recursión mutua en cola + `return` en cola, también profunda.
     #[test]
-    fn tco_mutua_y_return_en_cola_oraculo() {
+    fn tco_mutua_y_return_en_cola_oracle() {
         oracle_program(
             "fn par(n: int) -> bool { if (n == 0) { true } else { return impar(n - 1); } }
              fn impar(n: int) -> bool { if (n == 0) { false } else { par(n - 1) } }
@@ -5180,15 +5180,15 @@ mod tests {
     /// binario real corre con pila grande, M13.3a). Que la recursión de cola SÍ se optimiza lo
     /// prueban `tco_recursion_de_cola_profunda_oraculo` (5000) y `tco_mutua_*` (4000).
     #[test]
-    fn tco_no_aplica_a_llamada_no_en_cola_oraculo() {
+    fn tco_no_applies_a_llamada_no_en_cola_oracle() {
         oracle_program(
-            "fn suma_hasta(n: int) -> int { if (n == 0) { 0 } else { n + suma_hasta(n - 1) } }
-             fn main() -> int { suma_hasta(30) }",
+            "fn sum_hasta(n: int) -> int { if (n == 0) { 0 } else { n + sum_hasta(n - 1) } }
+             fn main() -> int { sum_hasta(30) }",
         );
     }
 
     #[test]
-    fn variables_locales_y_shadowing() {
+    fn variables_locals_y_shadowing() {
         oracle_program("fn main() -> int { let x: int = 1; { let x: int = 99; } x }");
         oracle_program(
             "fn main() -> int { var s: int = 0; var i: int = 0; while (i < 5) { s = s + i; i = i + 1; } s }",
@@ -5196,20 +5196,20 @@ mod tests {
     }
 
     #[test]
-    fn programa_con_print() {
+    fn program_con_print() {
         oracle_program("fn main() -> int { print(42); print(true); 0 }");
     }
 
     // ----- M3.1: arreglos -----
 
     #[test]
-    fn arreglos_indexar_len_y_suma() {
+    fn arrays_index_len_y_sum() {
         oracle_program("fn main() -> int { let a: [int] = [10, 20, 30]; a[0] + a[2] }");
         oracle_program("fn main() -> int { let a: [int] = [1, 2, 3, 4]; a.len() }");
     }
 
     #[test]
-    fn arreglos_mutacion_y_push() {
+    fn arrays_mutation_y_push() {
         oracle_program("fn main() -> int { var a: [int] = [1, 2, 3]; a[1] = 99; a[1] }");
         oracle_program(
             "fn main() -> int { let a: [int] = []; a.push(5); a.push(7); a[0] + a[1] }",
@@ -5217,52 +5217,52 @@ mod tests {
     }
 
     #[test]
-    fn arreglos_son_por_referencia() {
+    fn arrays_son_por_reference() {
         oracle_program("fn main() -> int { let a: [int] = [1, 2, 3]; let b: [int] = a; b[0] = 9; a[0] }");
     }
 
     #[test]
-    fn suma_de_un_arreglo_con_while() {
+    fn sum_de_un_array_con_while() {
         oracle_program(
-            "fn suma(a: [int]) -> int {
+            "fn sum(a: [int]) -> int {
                 var s: int = 0; var i: int = 0;
                 while (i < a.len()) { s = s + a[i]; i = i + 1; }
                 s
              }
-             fn main() -> int { suma([5, 10, 15, 20]) }",
+             fn main() -> int { sum([5, 10, 15, 20]) }",
         );
     }
 
     #[test]
-    fn indice_fuera_de_rango_es_error() {
+    fn index_outside_de_range_es_error() {
         let prog_src = "fn main() -> int { let a: [int] = [1, 2]; a[5] }";
         let tokens = crate::lexer::lex(prog_src).unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         let compiled = compile_program(&prog).unwrap();
-        assert!(run_program(&compiled).unwrap_err().msg.contains("fuera de rango"));
+        assert!(run_program(&compiled).unwrap_err().msg.contains("outside de range"));
     }
 
     // ----- M3.2: structs -----
 
     #[test]
-    fn structs_acceso_y_orden_de_campos() {
+    fn structs_access_y_order_de_fields() {
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 3, y: 4 }; p.x + p.y }");
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { y: 4, x: 3 }; p.x - p.y }");
     }
 
     #[test]
-    fn structs_mutacion_de_campo() {
+    fn structs_mutation_de_campo() {
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1, y: 2 }; p.x = 9; p.x + p.y }");
     }
 
     #[test]
-    fn structs_son_por_referencia() {
+    fn structs_son_por_reference() {
         oracle_program("struct C { v: int } fn main() -> int { let a: C = C { v: 1 }; let b: C = a; b.v = 9; a.v }");
     }
 
     #[test]
-    fn structs_anidados_y_con_arreglos() {
+    fn structs_nested_vars_y_con_arrays() {
         oracle_program(
             "struct P { x: int, y: int }
              struct L { a: P, b: P }
@@ -5270,37 +5270,37 @@ mod tests {
              fn main() -> int { dx(L { a: P { x: 1, y: 0 }, b: P { x: 5, y: 0 } }) }",
         );
         oracle_program(
-            "struct Pila { datos: [int] }
-             fn main() -> int { let s: Pila = Pila { datos: [10, 20] }; s.datos.push(30); s.datos[2] }",
+            "struct Pila { data: [int] }
+             fn main() -> int { let s: Pila = Pila { data: [10, 20] }; s.data.push(30); s.data[2] }",
         );
     }
 
     // ----- M4.1: funciones de primera clase -----
 
     #[test]
-    fn funcion_anonima_en_variable() {
+    fn function_anonymous_en_variable() {
         oracle_program("fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x * x }; f(9) }");
     }
 
     #[test]
-    fn de_orden_superior_recibe_funcion() {
+    fn de_order_superior_recibe_function() {
         oracle_program(
-            "fn aplicar(f: fn(int) -> int, x: int) -> int { f(x) }
-             fn main() -> int { aplicar(fn(n: int) -> int { n + 1 }, 41) }",
+            "fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+             fn main() -> int { apply(fn(n: int) -> int { n + 1 }, 41) }",
         );
     }
 
     #[test]
-    fn nombre_de_funcion_como_valor() {
+    fn name_de_function_como_valor() {
         oracle_program(
             "fn inc(n: int) -> int { n + 1 }
-             fn aplicar(f: fn(int) -> int, x: int) -> int { f(x) }
-             fn main() -> int { aplicar(inc, 10) }",
+             fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+             fn main() -> int { apply(inc, 10) }",
         );
     }
 
     #[test]
-    fn devolver_una_funcion() {
+    fn devolver_one_function() {
         oracle_program(
             "fn elegir(b: bool) -> fn(int) -> int {
                  if (b) { fn(n: int) -> int { n + n } } else { fn(n: int) -> int { n * n } }
@@ -5310,12 +5310,12 @@ mod tests {
     }
 
     #[test]
-    fn llamar_un_literal_de_funcion_directo() {
+    fn llamar_un_literal_de_function_direct() {
         oracle_program("fn main() -> int { (fn(x: int) -> int { x + x })(21) }");
     }
 
     #[test]
-    fn variable_tapa_a_funcion_global() {
+    fn variable_tapa_a_function_global() {
         oracle_program(
             "fn f(x: int) -> int { x * 100 }
              fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x + 1 }; f(41) }",
@@ -5323,15 +5323,15 @@ mod tests {
     }
 
     #[test]
-    fn mapear_sobre_arreglo_con_funcion() {
+    fn map_over_about_array_con_function() {
         oracle_program(
-            "fn mapear(a: [int], f: fn(int) -> int) {
+            "fn map_over(a: [int], f: fn(int) -> int) {
                  var i: int = 0;
                  while (i < a.len()) { a[i] = f(a[i]); i = i + 1; }
              }
              fn main() -> int {
                  var xs: [int] = [1, 2, 3, 4];
-                 mapear(xs, fn(n: int) -> int { n * n });
+                 map_over(xs, fn(n: int) -> int { n * n });
                  xs[0] + xs[1] + xs[2] + xs[3]
              }",
         );
@@ -5340,7 +5340,7 @@ mod tests {
     // ----- M4.2: closures (captura de entorno) -----
 
     #[test]
-    fn closure_captura_un_let() {
+    fn closure_capture_un_let() {
         oracle_program(
             "fn main() -> int {
                  let base: int = 1000;
@@ -5351,20 +5351,20 @@ mod tests {
     }
 
     #[test]
-    fn contador_con_estado_mutable() {
+    fn counter_con_estado_mutable() {
         oracle_program(
-            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
-             fn main() -> int { let c: fn() -> int = contador(); c(); c(); c() }",
+            "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+             fn main() -> int { let c: fn() -> int = counter(); c(); c(); c() }",
         );
     }
 
     #[test]
     fn instancias_de_closure_son_independientes() {
         oracle_program(
-            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+            "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
              fn main() -> int {
-                 let a: fn() -> int = contador();
-                 let b: fn() -> int = contador();
+                 let a: fn() -> int = counter();
+                 let b: fn() -> int = counter();
                  a(); a(); a();   // n de a -> 3
                  b();             // n de b -> 1 (su propia celda, independiente)
                  a() + b()        // a()->4, b()->2 => 6
@@ -5373,10 +5373,10 @@ mod tests {
     }
 
     #[test]
-    fn captura_transitiva_dos_niveles() {
+    fn capture_transitiva_dos_niveles() {
         oracle_program(
-            "fn sumador(x: int) -> fn(int) -> int { fn(y: int) -> int { x + y } }
-             fn main() -> int { let add5: fn(int) -> int = sumador(5); add5(10) + add5(100) }",
+            "fn adder(x: int) -> fn(int) -> int { fn(y: int) -> int { x + y } }
+             fn main() -> int { let add5: fn(int) -> int = adder(5); add5(10) + add5(100) }",
         );
     }
 
@@ -5393,12 +5393,12 @@ mod tests {
     }
 
     #[test]
-    fn closure_en_arreglo_y_orden_superior() {
+    fn closure_en_array_y_order_superior() {
         oracle_program(
-            "fn aplica_dos(f: fn(int) -> int, x: int) -> int { f(f(x)) }
+            "fn applies_dos(f: fn(int) -> int, x: int) -> int { f(f(x)) }
              fn main() -> int {
                  let k: int = 3;
-                 aplica_dos(fn(n: int) -> int { n + k }, 10)
+                 applies_dos(fn(n: int) -> int { n + k }, 10)
              }",
         );
     }
@@ -5406,7 +5406,7 @@ mod tests {
     // ----- M5.1: enums (tipos suma) y construcción -----
 
     #[test]
-    fn enum_construccion_oraculo() {
+    fn enum_construccion_oracle() {
         // Ambos motores construyen variantes (con y sin payload) y coinciden en el
         // resultado. El payload se evalúa en orden antes de MakeEnum.
         oracle_program(
@@ -5416,7 +5416,7 @@ mod tests {
     }
 
     #[test]
-    fn enum_recursivo_oraculo() {
+    fn enum_recursive_oracle() {
         oracle_program(
             "enum Lista { Cons(int, Lista), Nil }
              fn main() -> int { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 0 }",
@@ -5424,7 +5424,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_show_oraculo() {
+    fn derive_show_oracle() {
         // `@derive(Show)` genera `mostrar` (front-end → impls normales): el intérprete y la VM
         // deben producir la **misma** cadena. Se compara vía `len` (el oráculo mira el retorno).
         oracle_program(
@@ -5442,15 +5442,15 @@ mod tests {
     }
 
     #[test]
-    fn enums_en_modo_estres() {
+    fn enums_en_mode_stress() {
         // Construir enums (incl. recursivos) con el GC recolectando en cada punto
         // seguro: si el trazado del payload faltara, un valor vivo se liberaría.
         oracle_stress(
             "enum Lista { Cons(int, Lista), Nil }
-             fn construir(n: int) -> Lista {
-                 if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) }
+             fn build(n: int) -> Lista {
+                 if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) }
              }
-             fn main() -> int { let xs: Lista = construir(20); print(xs); 0 }",
+             fn main() -> int { let xs: Lista = build(20); print(xs); 0 }",
         );
     }
 
@@ -5461,12 +5461,12 @@ mod tests {
         // queda acotado en vez de crecer sin parar.
         let src = r#"
             enum Lista { Cons(int, Lista), Nil }
-            fn construir(n: int) -> Lista {
-                if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) }
+            fn build(n: int) -> Lista {
+                if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) }
             }
             fn main() -> int {
                 var i: int = 0;
-                while (i < 50) { let xs: Lista = construir(10); i = i + 1; }
+                while (i < 50) { let xs: Lista = build(10); i = i + 1; }
                 0
             }
         "#;
@@ -5483,21 +5483,21 @@ mod tests {
     // ----- M5.3: match en la VM (oráculo VM<->intérprete) -----
 
     #[test]
-    fn match_recorrido_oraculo() {
+    fn match_recorrido_oracle() {
         // Recorrer un enum recursivo con match: longitud y suma, en ambos motores.
         oracle_program(
             "enum Lista { Cons(int, Lista), Nil }
-             fn longitud(xs: Lista) -> int { match (xs) { Lista.Cons(_, t) => 1 + longitud(t), Lista.Nil => 0 } }
-             fn suma(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 } }
+             fn length(xs: Lista) -> int { match (xs) { Lista.Cons(_, t) => 1 + length(t), Lista.Nil => 0 } }
+             fn sum(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 } }
              fn main() -> int {
                  let xs: Lista = Lista.Cons(10, Lista.Cons(20, Lista.Cons(30, Lista.Nil)));
-                 longitud(xs) * 100 + suma(xs)
+                 length(xs) * 100 + sum(xs)
              }",
         );
     }
 
     #[test]
-    fn match_selecciona_brazo_oraculo() {
+    fn match_selecciona_branch_oracle() {
         // Variantes con distinta aridad de payload; cada brazo liga lo suyo.
         oracle_program(
             "enum Figura { Circulo(int), Rect(int, int), Punto }
@@ -5509,36 +5509,36 @@ mod tests {
     }
 
     #[test]
-    fn match_comodin_y_binding_oraculo() {
+    fn match_comodin_y_binding_oracle() {
         // Comodín `_` (dentro de variante y suelto) y binding catch-all.
         oracle_program(
             "enum E { Uno, Dos, Otro }
-             fn n(e: E) -> int { match (e) { E.Uno => 1, otro => 99 } }
+             fn n(e: E) -> int { match (e) { E.Uno => 1, other => 99 } }
              fn main() -> int { n(E.Uno) * 100 + n(E.Dos) }",
         );
     }
 
     #[test]
-    fn match_en_modo_estres() {
+    fn match_en_mode_stress() {
         // La prueba clave de M5.3: con el GC recolectando en CADA punto seguro, el
         // escrutinio guardado en el local temporal y el payload extraído deben seguir
         // rooteados. Si faltara una raíz, recorrer la lista reventaría o cambiaría.
         oracle_stress(
             "enum Lista { Cons(int, Lista), Nil }
-             fn construir(n: int) -> Lista { if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) } }
-             fn suma(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 } }
-             fn main() -> int { suma(construir(15)) }",
+             fn build(n: int) -> Lista { if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) } }
+             fn sum(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 } }
+             fn main() -> int { sum(build(15)) }",
         );
     }
 
     #[test]
-    fn match_binding_capturado_por_closure_oraculo() {
+    fn match_binding_capturado_por_closure_oracle() {
         // Interacción fina: un binding de match capturado por una closure debe
         // BOXEARSE (vivir en una celda). InitLocal sobre el slot del binding lo
         // maneja, igual que con un `let`. Ambos motores deben coincidir.
         oracle_program(
             "enum E { A(int), B(int), C }
-             fn sumador(e: E) -> fn(int) -> int {
+             fn adder(e: E) -> fn(int) -> int {
                  match (e) {
                      E.A(n) => fn(x: int) -> int { x + n },
                      E.B(n) => fn(x: int) -> int { x * n },
@@ -5546,15 +5546,15 @@ mod tests {
                  }
              }
              fn main() -> int {
-                 let f: fn(int) -> int = sumador(E.A(10));
-                 let g: fn(int) -> int = sumador(E.B(3));
+                 let f: fn(int) -> int = adder(E.A(10));
+                 let g: fn(int) -> int = adder(E.B(3));
                  f(5) + g(5)
              }",
         );
     }
 
     #[test]
-    fn match_anidado_en_expresiones_oraculo() {
+    fn match_nested_en_expresiones_oracle() {
         // match como expresión: su valor alimenta otra operación, y el cuerpo de un
         // brazo construye otra variante (resolución dentro del brazo).
         oracle_program(
@@ -5568,26 +5568,26 @@ mod tests {
     // ----- M6.1: funciones genéricas (erasure: ambos motores coinciden) -----
 
     #[test]
-    fn generica_identidad_oraculo() {
+    fn generic_identity_oracle() {
         // Con borrado de tipos, una función genérica solo mueve valores: el resultado
         // debe coincidir en intérprete y VM sin que el runtime sepa nada de T.
         oracle_program(
-            "fn identidad<T>(x: T) -> T { x }
-             fn main() -> int { let b: bool = identidad(true); let n: int = identidad(7); if (b) { n } else { 0 } }",
+            "fn identity<T>(x: T) -> T { x }
+             fn main() -> int { let b: bool = identity(true); let n: int = identity(7); if (b) { n } else { 0 } }",
         );
     }
 
     #[test]
-    fn generica_de_orden_superior_oraculo() {
+    fn generic_de_order_superior_oracle() {
         oracle_program(
-            "fn aplicar<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
-             fn doble(n: int) -> int { n * 2 }
-             fn main() -> int { aplicar(doble, 21) }",
+            "fn apply<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
+             fn double(n: int) -> int { n * 2 }
+             fn main() -> int { apply(double, 21) }",
         );
     }
 
     #[test]
-    fn generica_sobre_arreglos_oraculo() {
+    fn generic_about_arrays_oracle() {
         oracle_program(
             "fn par<T>(a: T, b: T) -> [T] { [a, b] }
              fn main() -> int { let xs: [int] = par(10, 32); xs[0] + xs[1] }",
@@ -5597,7 +5597,7 @@ mod tests {
     // ----- M6.2: tipos genéricos del usuario (erasure: ambos motores coinciden) -----
 
     #[test]
-    fn enum_generico_oraculo() {
+    fn enum_generic_oracle() {
         oracle_program(
             "enum Caja<T> { Llena(T), Vacia }
              fn val(c: Caja<int>, def: int) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => def } }
@@ -5610,7 +5610,7 @@ mod tests {
     }
 
     #[test]
-    fn struct_generico_oraculo() {
+    fn struct_generic_oracle() {
         oracle_program(
             "struct Par<A, B> { primero: A, segundo: B }
              fn main() -> int {
@@ -5623,7 +5623,7 @@ mod tests {
     // ----- M6.3: Option/Result y el operador ? (oráculo) -----
 
     #[test]
-    fn try_result_oraculo() {
+    fn try_result_oracle() {
         oracle_program(
             "fn d(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } }
              fn calc(x: int, y: int, z: int) -> Result<int, string> { let q1: int = d(x, y)?; let q2: int = d(q1, z)?; Result.Ok(q1 + q2) }
@@ -5633,43 +5633,43 @@ mod tests {
     }
 
     #[test]
-    fn try_option_oraculo() {
+    fn try_option_oracle() {
         oracle_program(
             "fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
-             fn mas_uno(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
+             fn mas_one(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
              fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
-             fn main() -> int { desemp(mas_uno([41])) * 100 + desemp(mas_uno([])) }",
+             fn main() -> int { desemp(mas_one([41])) * 100 + desemp(mas_one([])) }",
         );
     }
 
     #[test]
-    fn try_en_modo_estres() {
+    fn try_en_mode_stress() {
         // El ? construye/propaga valores de enum (Result) bajo el GC en cada punto
         // seguro: el escrutinio del ? vive en su local temporal y queda rooteado.
         oracle_stress(
             "fn d(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } }
-             fn cadena(n: int) -> Result<int, string> { let a: int = d(n, 2)?; let b: int = d(a, 1)?; Result.Ok(a + b) }
+             fn string(n: int) -> Result<int, string> { let a: int = d(n, 2)?; let b: int = d(a, 1)?; Result.Ok(a + b) }
              fn desemp(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
-             fn main() -> int { desemp(cadena(40)) }",
+             fn main() -> int { desemp(string(40)) }",
         );
     }
 
     #[test]
-    fn enum_generico_recursivo_en_estres() {
+    fn enum_generic_recursive_en_stress() {
         // Lista genérica construida con un tipo concreto, recorrida con match, bajo el
         // GC en modo estrés: los valores de enum genérico se trazan como cualquier enum.
         oracle_stress(
             "enum Lista<T> { Cons(T, Lista<T>), Nil }
-             fn suma(xs: Lista<int>) -> int { match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 } }
-             fn construir(n: int) -> Lista<int> { if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) } }
-             fn main() -> int { suma(construir(15)) }",
+             fn sum(xs: Lista<int>) -> int { match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 } }
+             fn build(n: int) -> Lista<int> { if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) } }
+             fn main() -> int { sum(build(15)) }",
         );
     }
 
     // ----- M4.3: recolección de basura -----
 
     #[test]
-    fn el_gc_no_rompe_programas_en_modo_estres() {
+    fn el_gc_no_breaks_programas_en_mode_stress() {
         // Si el GC liberara algo vivo (raíz faltante), estos resultados cambiarían.
         oracle_stress("fn fib(n: int) -> int { if (n < 2) { n } else { fib(n-1) + fib(n-2) } } fn main() -> int { fib(12) }");
         oracle_stress(
@@ -5687,8 +5687,8 @@ mod tests {
              fn main() -> int { var p: P = P { x: 1, y: 2 }; p.x = 10; p.x + p.y }",
         );
         oracle_stress(
-            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
-             fn main() -> int { let c: fn() -> int = contador(); c(); c(); c(); c() }",
+            "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+             fn main() -> int { let c: fn() -> int = counter(); c(); c(); c(); c() }",
         );
     }
 
@@ -5721,33 +5721,33 @@ mod tests {
     // ----- M7.1: UFCS (azúcar de front-end; ambos motores ven la llamada ya bajada) -----
 
     #[test]
-    fn ufcs_oraculo() {
+    fn ufcs_oracle() {
         // Función del usuario y builtin (len) usados como métodos.
         oracle_program(r#"
-            fn suma(a: int, b: int) -> int { a + b }
+            fn sum(a: int, b: int) -> int { a + b }
             fn main() -> int {
                 let xs: [int] = [1, 2, 3, 4];
                 let n: int = xs.len();      // len(xs) = 4
                 let v: int = 10;
-                v.suma(n)                    // suma(10, 4) = 14
+                v.sum(n)                    // suma(10, 4) = 14
             }
         "#);
     }
 
     #[test]
-    fn ufcs_encadenado_oraculo() {
+    fn ufcs_chained_oracle() {
         oracle_program(r#"
-            fn doble(x: int) -> int { x * 2 }
+            fn double(x: int) -> int { x * 2 }
             fn inc(x: int) -> int { x + 1 }
             fn main() -> int {
                 let v: int = 5;
-                v.doble().inc().doble()      // doble(inc(doble(5))) = 22
+                v.double().inc().double()      // doble(inc(doble(5))) = 22
             }
         "#);
     }
 
     #[test]
-    fn ufcs_sobre_struct_oraculo() {
+    fn ufcs_about_struct_oracle() {
         // 'norma1' no es campo de Punto -> UFCS; 'p.x' sigue siendo acceso a campo.
         oracle_program(r#"
             struct Punto { x: int, y: int }
@@ -5760,7 +5760,7 @@ mod tests {
     }
 
     #[test]
-    fn ufcs_campo_funcion_oraculo() {
+    fn ufcs_campo_function_oracle() {
         // 'op' ES un campo de tipo función: c.op(x) llama al campo, no es UFCS.
         oracle_program(r#"
             struct Caja { op: fn(int) -> int }
@@ -5772,12 +5772,12 @@ mod tests {
     }
 
     #[test]
-    fn ufcs_en_modo_estres() {
+    fn ufcs_en_mode_stress() {
         // El receptor y los argumentos viven en el heap: el GC en estrés no debe
         // romper la llamada UFCS bajada.
         oracle_stress(r#"
-            fn cabeza(xs: [int]) -> int { xs[0] }
-            fn cola_suma(xs: [int]) -> int {
+            fn head(xs: [int]) -> int { xs[0] }
+            fn cola_sum(xs: [int]) -> int {
                 var s: int = 0;
                 var i: int = 1;
                 while (i < xs.len()) { s = s + xs[i]; i = i + 1; }
@@ -5785,7 +5785,7 @@ mod tests {
             }
             fn main() -> int {
                 let xs: [int] = [10, 20, 30, 40];
-                xs.cabeza() + xs.cola_suma()   // 10 + 90 = 100
+                xs.head() + xs.cola_sum()   // 10 + 90 = 100
             }
         "#);
     }
@@ -5793,38 +5793,38 @@ mod tests {
     // ----- M7.2: pipelines (azúcar de parser; ambos motores ven la llamada bajada) -----
 
     #[test]
-    fn pipeline_oraculo() {
+    fn pipeline_oracle() {
         oracle_program(r#"
-            fn doble(x: int) -> int { x * 2 }
+            fn double(x: int) -> int { x * 2 }
             fn inc(x: int) -> int { x + 1 }
-            fn suma(a: int, b: int) -> int { a + b }
+            fn sum(a: int, b: int) -> int { a + b }
             fn main() -> int {
                 let v: int = 5;
-                let a: int = v |> doble |> inc;   // inc(doble(5)) = 11
-                let b: int = v |> suma(100);       // suma(5, 100) = 105
+                let a: int = v |> double |> inc;   // inc(doble(5)) = 11
+                let b: int = v |> sum(100);       // suma(5, 100) = 105
                 a + b                               // 116
             }
         "#);
     }
 
     #[test]
-    fn pipeline_y_ufcs_oraculo() {
+    fn pipeline_y_ufcs_oracle() {
         // `.f()` (UFCS) y `|> f` (pipeline) componen sobre el mismo valor.
         oracle_program(r#"
-            fn doble(x: int) -> int { x * 2 }
+            fn double(x: int) -> int { x * 2 }
             fn inc(x: int) -> int { x + 1 }
             fn main() -> int {
                 let v: int = 5;
-                v.doble() |> inc |> doble           // doble(inc(doble(5))) = 22
+                v.double() |> inc |> double           // doble(inc(doble(5))) = 22
             }
         "#);
     }
 
     #[test]
-    fn pipeline_en_modo_estres() {
+    fn pipeline_en_mode_stress() {
         // El valor que fluye por el pipeline es un arreglo en el heap.
         oracle_stress(r#"
-            fn suma_todo(xs: [int]) -> int {
+            fn sum_todo(xs: [int]) -> int {
                 var s: int = 0;
                 var i: int = 0;
                 while (i < xs.len()) { s = s + xs[i]; i = i + 1; }
@@ -5833,7 +5833,7 @@ mod tests {
             fn con_extra(xs: [int], x: int) -> [int] { xs.push(x); xs }
             fn main() -> int {
                 let xs: [int] = [1, 2, 3];
-                xs |> con_extra(4) |> suma_todo     // suma_todo(con_extra(xs, 4)) = 10
+                xs |> con_extra(4) |> sum_todo     // suma_todo(con_extra(xs, 4)) = 10
             }
         "#);
     }
@@ -5841,35 +5841,35 @@ mod tests {
     // ----- M7.3: stdlib (prelude map/filter/fold escrito en raylang) -----
 
     #[test]
-    fn prelude_map_filter_fold_oraculo() {
+    fn prelude_map_filter_fold_oracle() {
         oracle_program(r#"
-            fn doble(x: int) -> int { x * 2 }
+            fn double(x: int) -> int { x * 2 }
             fn par(x: int) -> bool { x % 2 == 0 }
-            fn suma(a: int, b: int) -> int { a + b }
+            fn sum(a: int, b: int) -> int { a + b }
             fn main() -> int {
                 let xs: [int] = [1, 2, 3, 4, 5];
-                let ys: [int] = xs.map(doble).filter(par);  // [2,4,6,8,10]
-                ys.fold(0, suma)                             // 30
+                let ys: [int] = xs.map(double).filter(par);  // [2,4,6,8,10]
+                ys.fold(0, sum)                             // 30
             }
         "#);
     }
 
     #[test]
-    fn prelude_pipeline_oraculo() {
+    fn prelude_pipeline_oracle() {
         // El mismo cálculo, en estilo pipeline.
         oracle_program(r#"
-            fn doble(x: int) -> int { x * 2 }
+            fn double(x: int) -> int { x * 2 }
             fn par(x: int) -> bool { x % 2 == 0 }
-            fn suma(a: int, b: int) -> int { a + b }
+            fn sum(a: int, b: int) -> int { a + b }
             fn main() -> int {
                 let xs: [int] = [1, 2, 3, 4, 5];
-                xs |> filter(par) |> map(doble) |> fold(0, suma)  // [2,4]->[4,8]->12
+                xs |> filter(par) |> map(double) |> fold(0, sum)  // [2,4]->[4,8]->12
             }
         "#);
     }
 
     #[test]
-    fn prelude_con_closures_oraculo() {
+    fn prelude_con_closures_oracle() {
         // map/fold con funciones anónimas inline.
         oracle_program(r#"
             fn main() -> int {
@@ -5881,16 +5881,16 @@ mod tests {
     }
 
     #[test]
-    fn prelude_en_modo_estres() {
+    fn prelude_en_mode_stress() {
         // map y filter alojan arreglos nuevos en el heap: el GC en estrés debe
         // mantenerlos vivos durante toda la cadena.
         oracle_stress(r#"
             fn inc(x: int) -> int { x + 1 }
             fn pos(x: int) -> bool { x > 3 }
-            fn suma(a: int, b: int) -> int { a + b }
+            fn sum(a: int, b: int) -> int { a + b }
             fn main() -> int {
                 let xs: [int] = [1, 2, 3, 4, 5, 6];
-                xs.map(inc).filter(pos).fold(0, suma)   // [2..7]->[4,5,6,7]->22
+                xs.map(inc).filter(pos).fold(0, sum)   // [2..7]->[4,5,6,7]->22
             }
         "#);
     }
@@ -5898,22 +5898,22 @@ mod tests {
     // ----- M8.1: inferencia local (solo checker; el runtime no cambia) -----
 
     #[test]
-    fn inferencia_local_oraculo() {
+    fn inferencia_local_oracle() {
         // Variables inferidas (int, [int], struct, enum genérico) deben dar el mismo
         // resultado en ambos motores: la inferencia se borra antes de ejecutar.
         oracle_program(r#"
             struct Punto { x: int, y: int }
             enum Caja<T> { Llena(T), Vacia }
-            fn doble(x: int) -> int { x * 2 }
+            fn double(x: int) -> int { x * 2 }
             fn main() -> int {
                 let x = 3;
                 let xs = [10, 20, 30];
                 let p = Punto { x: 7, y: 6 };
                 let c = Caja.Llena(5);
                 var total = 0;
-                total = total + x.doble();
-                let dentro = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };
-                total + xs[0] + p.x + p.y + dentro   // 6 + 10 + 7 + 6 + 5 = 34
+                total = total + x.double();
+                let inside = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };
+                total + xs[0] + p.x + p.y + inside   // 6 + 10 + 7 + 6 + 5 = 34
             }
         "#);
     }
@@ -5921,7 +5921,7 @@ mod tests {
     // ----- M9.1: traits (erasure; ambos motores ven funciones y llamadas ordinarias) -----
 
     #[test]
-    fn traits_despacho_estatico_oraculo() {
+    fn traits_dispatch_estatico_oracle() {
         // Un trait implementado para un struct, un enum y un primitivo: los métodos se
         // bajan a funciones mangladas y las llamadas por punto a llamadas ordinarias,
         // así que la VM y el intérprete deben coincidir sin tocar el runtime.
@@ -5942,24 +5942,24 @@ mod tests {
     }
 
     #[test]
-    fn traits_self_y_metodos_internos_oraculo() {
+    fn traits_self_y_methods_internos_oracle() {
         // `Self` en el retorno, parámetros extra, y un método que llama a otro del mismo
         // impl (`self.sumar(self)`): bajo estrés del GC para validar las raíces.
         oracle_stress(r#"
             trait Punteable {
-                fn sumar(self, otro: Punto) -> Punto;
-                fn doble(self) -> Self;
+                fn add(self, other: Punto) -> Punto;
+                fn double(self) -> Self;
                 fn norma(self) -> int;
             }
             struct Punto { x: int, y: int }
             impl Punteable for Punto {
-                fn sumar(self, otro: Punto) -> Punto { Punto { x: self.x + otro.x, y: self.y + otro.y } }
-                fn doble(self) -> Self { self.sumar(self) }
+                fn add(self, other: Punto) -> Punto { Punto { x: self.x + other.x, y: self.y + other.y } }
+                fn double(self) -> Self { self.add(self) }
                 fn norma(self) -> int { self.x * self.x + self.y * self.y }
             }
             fn main() -> int {
                 let p = Punto { x: 3, y: 4 };
-                p.doble().norma()   // (6,8) -> 36 + 64 = 100
+                p.double().norma()   // (6,8) -> 36 + 64 = 100
             }
         "#);
     }
@@ -5967,7 +5967,7 @@ mod tests {
     // ----- M9.2: bounds vía paso de diccionarios -----
 
     #[test]
-    fn bounds_diccionarios_oraculo() {
+    fn bounds_diccionarios_oracle() {
         // Genérico acotado sobre struct y primitivo + reenvío entre genéricos. Los
         // diccionarios son valores función; ambos motores deben coincidir.
         oracle_program(r#"
@@ -5975,27 +5975,27 @@ mod tests {
             struct Punto { x: int, y: int }
             impl Valor for Punto { fn valor(self) -> int { self.x + self.y } }
             impl Valor for int { fn valor(self) -> int { self } }
-            fn doble_valor<T: Valor>(x: T) -> int { x.valor() + x.valor() }
-            fn suma_tres<T: Valor>(a: T, b: T, c: T) -> int {
-                doble_valor(a) + b.valor() + c.valor()   // reenvío del diccionario
+            fn double_valor<T: Valor>(x: T) -> int { x.valor() + x.valor() }
+            fn sum_tres<T: Valor>(a: T, b: T, c: T) -> int {
+                double_valor(a) + b.valor() + c.valor()   // reenvío del diccionario
             }
             fn main() -> int {
                 let p = Punto { x: 3, y: 4 };
-                doble_valor(p) + doble_valor(10) + suma_tres(p, p, p)   // 14 + 20 + 28 = 62
+                double_valor(p) + double_valor(10) + sum_tres(p, p, p)   // 14 + 20 + 28 = 62
             }
         "#);
     }
 
     #[test]
-    fn bounds_multiples_oraculo() {
+    fn bounds_multiples_oracle() {
         // T: A + B — dos diccionarios. Bajo estrés del GC.
         oracle_stress(r#"
             trait Nombre { fn largo(self) -> int; }
-            trait Doble { fn doble(self) -> int; }
+            trait Doble { fn double(self) -> int; }
             struct Cosa { n: int }
             impl Nombre for Cosa { fn largo(self) -> int { self.n } }
-            impl Doble for Cosa { fn doble(self) -> int { self.n + self.n } }
-            fn usar<T: Nombre + Doble>(x: T) -> int { x.largo() + x.doble() }
+            impl Doble for Cosa { fn double(self) -> int { self.n + self.n } }
+            fn usar<T: Nombre + Doble>(x: T) -> int { x.largo() + x.double() }
             fn main() -> int {
                 let c = Cosa { n: 5 };
                 usar(c)   // 5 + 10 = 15
@@ -6006,68 +6006,68 @@ mod tests {
     // ----- M9.2b: impls genéricos -----
 
     #[test]
-    fn impl_generico_sin_bounds_oraculo() {
+    fn impl_generic_sin_bounds_oracle() {
         // `impl<T> Trait for Caja<T>` cuyo método no usa T: el método manglado es genérico
         // pero sin diccionarios. Despacha igual para Caja<int> y Caja<string>.
         oracle_program(r#"
             struct Caja<T> { contenido: T }
-            trait Contar { fn contar(self) -> int; }
-            impl<T> Contar for Caja<T> { fn contar(self) -> int { 1 } }
+            trait Contar { fn count(self) -> int; }
+            impl<T> Contar for Caja<T> { fn count(self) -> int { 1 } }
             fn main() -> int {
                 let c = Caja { contenido: 42 };
-                let s = Caja { contenido: "hola" };
-                c.contar() + s.contar()   // 1 + 1 = 2
+                let s = Caja { contenido: "hello" };
+                c.count() + s.count()   // 1 + 1 = 2
             }
         "#);
     }
 
     #[test]
-    fn impl_generico_acotado_llamada_directa_oraculo() {
+    fn impl_generic_bounded_llamada_directa_oracle() {
         // `impl<T: Mostrable> Mostrable for Caja<T>`: el cuerpo usa T.show() (vía el
         // diccionario interno). Llamada directa sobre Caja<int> → el dict interno es el de
         // int (plano). Es M9.2b-1: el caso anidado (pasar Caja a otro genérico) es -2.
         oracle_stress(r#"
             struct Caja<T> { contenido: T }
-            trait Medir { fn medir(self) -> int; }
-            impl Medir for int { fn medir(self) -> int { self } }
-            impl<T: Medir> Medir for Caja<T> { fn medir(self) -> int { self.contenido.medir() + 1 } }
+            trait Medir { fn measure(self) -> int; }
+            impl Medir for int { fn measure(self) -> int { self } }
+            impl<T: Medir> Medir for Caja<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
             fn main() -> int {
                 let c = Caja { contenido: 41 };
-                c.medir()   // 41 + 1 = 42
+                c.measure()   // 41 + 1 = 42
             }
         "#);
     }
 
     #[test]
-    fn impl_generico_diccionario_anidado_oraculo() {
+    fn impl_generic_diccionario_nested_oracle() {
         // M9.2b-2: pasar un Caja<int> a otro genérico acotado. El diccionario de Caja<int> es
         // un **closure** que captura el de int. Ambos motores deben coincidir.
         oracle_program(r#"
             struct Caja<T> { contenido: T }
-            trait Medir { fn medir(self) -> int; }
-            impl Medir for int { fn medir(self) -> int { self } }
-            impl<T: Medir> Medir for Caja<T> { fn medir(self) -> int { self.contenido.medir() + 1 } }
-            fn medir_dos<X: Medir>(a: X, b: X) -> int { a.medir() + b.medir() }
+            trait Medir { fn measure(self) -> int; }
+            impl Medir for int { fn measure(self) -> int { self } }
+            impl<T: Medir> Medir for Caja<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
+            fn measure_dos<X: Medir>(a: X, b: X) -> int { a.measure() + b.measure() }
             fn main() -> int {
                 let c = Caja { contenido: 10 };
-                medir_dos(c, c)   // (10+1) * 2 = 22
+                measure_dos(c, c)   // (10+1) * 2 = 22
             }
         "#);
     }
 
     #[test]
-    fn impl_generico_anidado_profundo_estres() {
+    fn impl_generic_nested_profundo_stress() {
         // Caja<Caja<int>>: un diccionario anidado que contiene otro. Bajo estrés del GC,
         // porque los closures-diccionario son objetos del heap (sus raíces deben trazarse).
         oracle_stress(r#"
             struct Caja<T> { contenido: T }
-            trait Medir { fn medir(self) -> int; }
-            impl Medir for int { fn medir(self) -> int { self } }
-            impl<T: Medir> Medir for Caja<T> { fn medir(self) -> int { self.contenido.medir() + 1 } }
-            fn medir_uno<X: Medir>(x: X) -> int { x.medir() }
+            trait Medir { fn measure(self) -> int; }
+            impl Medir for int { fn measure(self) -> int { self } }
+            impl<T: Medir> Medir for Caja<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
+            fn measure_one<X: Medir>(x: X) -> int { x.measure() }
             fn main() -> int {
                 let c2 = Caja { contenido: Caja { contenido: 100 } };
-                c2.medir() + medir_uno(c2)   // 102 + 102 = 204
+                c2.measure() + measure_one(c2)   // 102 + 102 = 204
             }
         "#);
     }
@@ -6075,11 +6075,11 @@ mod tests {
     // ----- M11.1: stdlib de string -----
 
     #[test]
-    fn string_concat_len_oraculo() {
+    fn string_concat_len_oracle() {
         // Concatenación con `+`, len de string y to_string; el resultado es un int.
         oracle_program(r#"
             fn main() -> int {
-                let s = "hola, " + "mundo";       // concat
+                let s = "hello, " + "mundo";       // concat
                 let etiqueta = "n=" + to_string(s.len());
                 print(etiqueta);                   // n=11
                 s.len() + "123".len()               // 11 + 3 = 14
@@ -6088,7 +6088,7 @@ mod tests {
     }
 
     #[test]
-    fn string_to_string_de_varios_tipos_oraculo() {
+    fn string_to_string_de_various_types_oracle() {
         oracle_program(r#"
             fn main() -> int {
                 print(to_string(42));      // 42
@@ -6100,7 +6100,7 @@ mod tests {
     }
 
     #[test]
-    fn string_ufcs_oraculo() {
+    fn string_ufcs_oracle() {
         // UFCS sobre los builtins de string (s.len(), n.to_string()).
         oracle_program(r#"
             fn main() -> int {
@@ -6112,25 +6112,25 @@ mod tests {
     }
 
     #[test]
-    fn string_trim_split_oraculo() {
+    fn string_trim_split_oracle() {
         oracle_program(r#"
             fn main() -> int {
-                let limpio = "  hola  ".trim();
-                print("[" + limpio + "]");        // [hola]
-                let campos = "a,bb,ccc".split(",");
-                print(campos[1]);                  // bb
-                campos.len() + limpio.len()          // 3 + 4 = 7
+                let clean = "  hello  ".trim();
+                print("[" + clean + "]");        // [hola]
+                let fields = "a,bb,ccc".split(",");
+                print(fields[1]);                  // bb
+                fields.len() + clean.len()          // 3 + 4 = 7
             }
         "#);
     }
 
     #[test]
-    fn char_tipo_oraculo() {
+    fn char_ty_oracle() {
         // M11.4c-1: literal de char, anotación, ==, to_string, y @derive(Eq, Show) con campo char.
         oracle_program(r#"
             @derive(Eq, Show)
             struct Tecla { c: char, repetida: bool }
-            fn clase(c: char) -> int {
+            fn class(c: char) -> int {
                 if (c == 'a') { 1 } else { if (c == '\n') { 2 } else { 0 } }
             }
             fn main() -> int {
@@ -6141,16 +6141,16 @@ mod tests {
                 let t = Tecla { c: 'q', repetida: false };
                 print(t.show());                    // Tecla { c: q, repetida: false }
                 print(t.eq(Tecla { c: 'q', repetida: false }));  // true
-                clase('a') + clase('\n') + clase('z')  // 1 + 2 + 0 = 3
+                class('a') + class('\n') + class('z')  // 1 + 2 + 0 = 3
             }
         "#);
     }
 
     #[test]
-    fn char_indexar_y_chars_oraculo() {
+    fn char_index_y_chars_oracle() {
         // M11.4c-2: s[i] -> char, chars(s) -> [char] (asigna heap → estrés del GC).
         oracle_stress(r#"
-            fn cuenta(s: string, c: char) -> int {
+            fn account(s: string, c: char) -> int {
                 var n = 0;
                 var i = 0;
                 while (i < s.len()) {
@@ -6166,20 +6166,20 @@ mod tests {
                 let cs = s.chars();
                 print(cs[1]);                      // a
                 print(cs.len());                    // 7
-                cuenta(s, 'r') + cuenta(s, 'c') + "hola".chars().len()  // 2 + 2 + 4 = 8
+                account(s, 'r') + account(s, 'c') + "hello".chars().len()  // 2 + 2 + 4 = 8
             }
         "#);
     }
 
     #[test]
-    fn string_contains_replace_oraculo() {
+    fn string_contains_replace_oracle() {
         // contains -> bool; replace asigna un string nuevo (heap en la VM). Oráculo + estrés del GC.
         oracle_stress(r#"
             fn main() -> int {
-                let s = "hola mundo, hola raylang";
+                let s = "hello mundo, hello raylang";
                 print(s.contains("mundo"));            // true
                 print(s.contains("python"));           // false
-                let r = s.replace("hola", "HOLA");
+                let r = s.replace("hello", "HOLA");
                 print(r);                              // HOLA mundo, HOLA raylang
                 print("a.b.c".replace(".", "/"));      // a/b/c
                 if (s.contains("raylang")) { r.len() } else { 0 }  // 24
@@ -6193,8 +6193,8 @@ mod tests {
     /// así un error de corrección da 0 (que el oráculo por sí solo no detectaría si ambos motores fallaran
     /// igual). Cubre entrada vacía y las tres funciones.
     #[test]
-    fn sha_digests_oraculo() {
-        let casos = [
+    fn sha_digests_oracle() {
+        let cases = [
             ("__sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
             ("__sha256", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
             (
@@ -6204,7 +6204,7 @@ mod tests {
             ),
             ("__sha1", "abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
         ];
-        for (f, input, hex) in casos {
+        for (f, input, hex) in cases {
             let src = format!(
                 "fn main() -> int {{ if (to_string({f}(\"{input}\".to_bytes())) == \"{hex}\") {{ 1 }} else {{ 0 }} }}"
             );
@@ -6222,7 +6222,7 @@ mod tests {
         oracle_stress(
             r#"
             fn main() -> int {
-                var acc = "semilla".to_bytes();
+                var acc = "seed".to_bytes();
                 var i = 0;
                 while (i < 50) {
                     acc = __sha256(acc);       // 32 octetos, heap nuevo cada vuelta
@@ -6239,7 +6239,7 @@ mod tests {
     /// M43.2: **HMAC-SHA256** vía `ring`. Misma doble red: oráculo (interp==vm) + vector conocido
     /// (RFC 4231, Test Case 2: clave `"Jefe"`, mensaje `"what do ya want for nothing?"`).
     #[test]
-    fn hmac_sha256_oraculo() {
+    fn hmac_sha256_oracle() {
         let src = format!(
             "fn main() -> int {{ if (to_string(__hmac_sha256(\"Jefe\".to_bytes(), \"{}\".to_bytes())) == \"{}\") {{ 1 }} else {{ 0 }} }}",
             "what do ya want for nothing?",
@@ -6278,7 +6278,7 @@ mod tests {
     /// El programa devuelve 1 solo si TODO cuadra → un fallo de cableado da 0. La semilla son 32 octetos
     /// ASCII (`to_bytes` de 32 chars) para no depender de literales de byte largos.
     #[test]
-    fn ed25519_oraculo() {
+    fn ed25519_oracle() {
         // M49.3: la cripto pasó a `std/crypto`; el ORÁCULO (pre-loader) prueba los primitivos internos
         // `__ed25519_*` (arreglo etiquetado `[bytes]`: vacío = None), el envoltorio `crypto.ed25519_*`
         // (Option) lo cubren los tests de integración. Misma validación relacional con `ring`.
@@ -6294,8 +6294,8 @@ mod tests {
                         let sig = sig_arr[0];
                         let ok = __ed25519_verify(pk, msg, sig);                       // true
                         let alterado = __ed25519_verify(pk, "mensaje alterad".to_bytes(), sig); // false
-                        let otra = __ed25519_sign(seed, msg);                          // determinista
-                        let det = otra.len() > 0 && to_string(otra[0]) == to_string(sig);
+                        let other = __ed25519_sign(seed, msg);                          // determinista
+                        let det = other.len() > 0 && to_string(other[0]) == to_string(sig);
                         let corta = __ed25519_public_key("corta".to_bytes()).len() == 0; // no 32 → vacío
                         if (ok && !alterado && det && corta) { 1 } else { 0 }
                     }
@@ -6316,21 +6316,21 @@ mod tests {
     /// `seal` luego `open` recupera el texto, alterar el `aad` hace fallar la autenticación (`None`), y una
     /// clave de mal tamaño da `None` en `seal`. Devuelve 1 solo si todo cuadra.
     #[test]
-    fn chacha20poly1305_oraculo() {
+    fn chacha20poly1305_oracle() {
         // M49.3: primitivos internos `__chacha20poly1305_*` (arreglo etiquetado `[bytes]`: vacío = None);
         // el envoltorio `crypto.*` (Option) lo cubren los tests de integración. Validación relacional.
         let src = r#"
             fn main() -> int {
                 let key = "0123456789abcdef0123456789abcdef".to_bytes();   // 32 octetos
                 let nonce = "nonce-de-12b".to_bytes();                     // 12 octetos
-                let aad = "cabecera".to_bytes();
-                let pt = "texto secreto".to_bytes();
+                let aad = "header".to_bytes();
+                let pt = "text secreto".to_bytes();
                 let ct_arr = __chacha20poly1305_seal(key, nonce, aad, pt);
                 if (ct_arr.len() == 0) { 0 } else {
                     let ct = ct_arr[0];
                     let rec = __chacha20poly1305_open(key, nonce, aad, ct);
                     let recuperado = rec.len() > 0 && to_string(rec[0]) == to_string(pt);
-                    let manipulado = __chacha20poly1305_open(key, nonce, "otra cab".to_bytes(), ct).len() == 0;
+                    let manipulado = __chacha20poly1305_open(key, nonce, "other cab".to_bytes(), ct).len() == 0;
                     let corta = __chacha20poly1305_seal("corta".to_bytes(), nonce, aad, pt).len() == 0;
                     if (recuperado && manipulado && corta) { 1 } else { 0 }
                 }
@@ -6347,7 +6347,7 @@ mod tests {
     }
 
     #[test]
-    fn string_stdlib_m117_oraculo() {
+    fn string_stdlib_m117_oracle() {
         // M11.7a: starts_with/ends_with (bool); to_upper/to_lower/substring/repeat/join asignan
         // string nuevo (heap en la VM); index_of construye Option en el prelude. Oráculo + estrés GC.
         oracle_stress(r#"
@@ -6364,8 +6364,8 @@ mod tests {
                 print(s.substring(6, 100));        // Mundo (clamp)
                 print("ab".repeat(3));             // ababab
                 print("".repeat(5));               // (vacío)
-                let partes = ["a", "b", "c"];
-                print(join(partes, "-"));          // a-b-c
+                let parts = ["a", "b", "c"];
+                print(join(parts, "-"));          // a-b-c
                 print(pos(index_of(s, "Mundo"), 0 - 1));   // 6
                 print(pos(index_of(s, "zzz"), 0 - 1));      // -1
                 s.substring(6, 11).len() + pos(index_of(s, "Mundo"), 0)  // 5 + 6 = 11
@@ -6374,7 +6374,7 @@ mod tests {
     }
 
     #[test]
-    fn array_stdlib_m117b_oraculo() {
+    fn array_stdlib_m117b_oracle() {
         // M11.7b: concat (a+b), reverse, pop (muta + Option), contains, position. reverse/pop/concat
         // asignan en el heap → estrés del GC; pop construye Option en el prelude.
         oracle_stress(r#"
@@ -6404,13 +6404,13 @@ mod tests {
     }
 
     #[test]
-    fn sort_ord_oraculo() {
+    fn sort_ord_oracle() {
         // M11.7d: sort<T: Ord> (bound → diccionarios M9.2) sobre primitivos y un tipo de usuario
         // que implementa Ord. Asigna arreglos en el heap → estrés del GC.
         oracle_stress(r#"
             struct Caja { peso: int }
             impl Ord for Caja {
-                fn less(self, otro: Caja) -> bool { self.peso < otro.peso }
+                fn less(self, other: Caja) -> bool { self.peso < other.peso }
             }
             fn main() -> int {
                 let xs = sort([3, 1, 4, 1, 5, 9, 2, 6]);
@@ -6426,21 +6426,21 @@ mod tests {
     }
 
     #[test]
-    fn string_split_estres_gc() {
+    fn string_split_stress_gc() {
         // split asigna un arreglo (objeto del heap). Bajo estrés del GC: si una raíz faltara,
         // el arreglo recién creado se liberaría y el resultado cambiaría.
         oracle_stress(r#"
             fn main() -> int {
-                let partes = "uno:dos:tres:cuatro".trim().split(":");
-                let total = partes.len() + partes[0].len() + partes[3].len();
-                print(partes[2]);                  // tres
+                let parts = "one:dos:tres:cuatro".trim().split(":");
+                let total = parts.len() + parts[0].len() + parts[3].len();
+                print(parts[2]);                  // tres
                 total                              // 4 + 3 + 6 = 13
             }
         "#);
     }
 
     #[test]
-    fn parse_int_oraculo() {
+    fn parse_int_oracle() {
         // parse_int es determinista (no toca stdin) → oráculo VM↔intérprete. Construye Option
         // en el prelude (raylang); el resultado debe coincidir en ambos motores.
         oracle_program(r#"
@@ -6460,7 +6460,7 @@ mod tests {
     }
 
     #[test]
-    fn print_uint_oraculo() {
+    fn print_uint_oracle() {
         // jul 2026: print/eprint/to_string aceptan u8/u32/u64 (decimal sin signo, mismo Display en
         // ambos motores). Incluye la interpolación (desazucara a to_string) y el borde de u64 alto.
         oracle_program(r#"
@@ -6480,7 +6480,7 @@ mod tests {
     }
 
     #[test]
-    fn char_from_code_oraculo() {
+    fn char_from_code_oracle() {
         // Diferido JSON-1: char_from_code es el char::from_u32 de Rust en ambos motores. Válidos
         // (ASCII, multi-byte, astral) e inválidos (surrogate, fuera de rango, negativo, enorme —
         // este último caza un wrap del cast a u32).
@@ -6490,24 +6490,24 @@ mod tests {
                 let e: int = match (char_from_code(233)) { Option.Some(c) => if (to_string(c) == "é") { 10 } else { -1 }, Option.None => -1 };
                 let astral: int = match (char_from_code(128512)) { Option.Some(c) => if (char_code(c) == 128512) { 100 } else { -1 }, Option.None => -1 };
                 let sur: int = match (char_from_code(55296)) { Option.Some(_) => -1, Option.None => 1000 };
-                let fuera: int = match (char_from_code(1114112)) { Option.Some(_) => -1, Option.None => 10000 };
+                let outside: int = match (char_from_code(1114112)) { Option.Some(_) => -1, Option.None => 10000 };
                 let neg: int = match (char_from_code(0 - 1)) { Option.Some(_) => -1, Option.None => 100000 };
                 let wrap: int = match (char_from_code(4294967361)) { Option.Some(_) => -1, Option.None => 1000000 };
-                a + e + astral + sur + fuera + neg + wrap
+                a + e + astral + sur + outside + neg + wrap
             }
         "#);
     }
 
     #[test]
-    fn float_bits_oraculo() {
+    fn float_bits_oracle() {
         // M54.1: __float_bits/__float_from_bits son el f64 de Rust en ambos motores → oráculo.
         // Round-trip exacto (incl. negativos y el caso 5.05 del vector BSON) y bits conocidos:
         // 1.0 = 0x3FF0000000000000 = 4607182418800017408.
         oracle_program(r#"
             fn main() -> int {
-                let uno = __float_bits(1.0);
-                let a: int = if (uno == 4607182418800017408) { 1 } else { -1 };
-                let b: int = if (__float_from_bits(uno) == 1.0) { 10 } else { -1 };
+                let one = __float_bits(1.0);
+                let a: int = if (one == 4607182418800017408) { 1 } else { -1 };
+                let b: int = if (__float_from_bits(one) == 1.0) { 10 } else { -1 };
                 let c: int = if (__float_from_bits(__float_bits(5.05)) == 5.05) { 100 } else { -1 };
                 let d: int = if (__float_from_bits(__float_bits(0.0 - 2.5)) == 0.0 - 2.5) { 1000 } else { -1 };
                 a + b + c + d
@@ -6516,13 +6516,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_float_oraculo() {
+    fn parse_float_oracle() {
         // M14: parse_float, como parse_int, es determinista → oráculo. El formateo de float es
         // el mismo f64 de Rust en ambos motores, así que los valores coinciden.
         oracle_program(r#"
             fn main() -> int {
                 let ok = match (parse_float("3.14")) { Option.Some(f) => f, Option.None => 0.0 };
-                let no = match (parse_float("hola")) { Option.Some(_) => 1, Option.None => 0 };
+                let no = match (parse_float("hello")) { Option.Some(_) => 1, Option.None => 0 };
                 let ent = match (parse_float("42")) { Option.Some(f) => f, Option.None => 0.0 };
                 // 3.14*100 = 314, 42.0 → 42; no=0. Resultado 314 + 42 + 0 = 356.
                 let a: int = if (ok * 100.0 == 314.0) { 314 } else { -1 };
@@ -6533,7 +6533,7 @@ mod tests {
     }
 
     #[test]
-    fn args_y_env_oraculo() {
+    fn args_y_env_oracle() {
         // En el proceso de test no se fijan args (→ []) y la variable no existe (→ None): ambos
         // motores deben coincidir. (El comportamiento "real" se prueba por subproceso en io_cli.)
         oracle_program(r#"
@@ -6549,7 +6549,7 @@ mod tests {
     }
 
     #[test]
-    fn read_file_inexistente_es_err_oraculo() {
+    fn read_file_nonexistent_es_err_oracle() {
         // Leer un archivo inexistente es determinista (misma llamada a std::fs en ambos motores) →
         // oráculo. El oráculo es pre-loader (M50.1: read_file vive en std/fs), así que usa el
         // primitivo __read_file directamente (arreglo etiquetado ["ok",…]/["err",msg]); debe coincidir.
@@ -6562,22 +6562,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_int_option_construido_en_el_heap_estres_gc() {
+    fn parse_int_option_construido_en_el_heap_stress_gc() {
         // El [int] del primitivo y el Option que arma el prelude son objetos del heap. Bajo
         // estrés del GC: si una raíz faltara, el valor vivo se liberaría.
         oracle_stress(r#"
             fn main() -> int {
                 let xs = ["1", "2", "no", "4"];
-                var suma = 0;
+                var sum = 0;
                 var i = 0;
                 while (i < xs.len()) {
                     match (parse_int(xs[i])) {
-                        Option.Some(n) => { suma = suma + n; },
+                        Option.Some(n) => { sum = sum + n; },
                         Option.None => {},
                     }
                     i = i + 1;
                 }
-                suma                               // 1 + 2 + 4 = 7
+                sum                               // 1 + 2 + 4 = 7
             }
         "#);
     }
@@ -6585,13 +6585,13 @@ mod tests {
     // ----- M9.3a: métodos por defecto -----
 
     #[test]
-    fn metodos_por_defecto_oraculo() {
+    fn methods_por_default_oracle() {
         // Defecto heredado, defecto que llama a otro método, y redefinición. El método
         // sintetizado es una función ordinaria: ambos motores deben coincidir.
         oracle_program(r#"
             trait Valor {
                 fn base(self) -> int;
-                fn doble(self) -> int { self.base() + self.base() }   // defecto usa otro
+                fn double(self) -> int { self.base() + self.base() }   // defecto usa otro
                 fn diez(self) -> int { 10 }                            // defecto constante
             }
             struct A { n: int }
@@ -6599,27 +6599,27 @@ mod tests {
             struct B { n: int }
             impl Valor for B {
                 fn base(self) -> int { self.n }
-                fn doble(self) -> int { self.n * 100 }                 // redefine doble
+                fn double(self) -> int { self.n * 100 }                 // redefine doble
             }
             fn main() -> int {
                 let a = A { n: 3 };
                 let b = B { n: 4 };
-                a.doble() + a.diez() + b.doble() + b.diez()   // 6 + 10 + 400 + 10 = 426
+                a.double() + a.diez() + b.double() + b.diez()   // 6 + 10 + 400 + 10 = 426
             }
         "#);
     }
 
     #[test]
-    fn metodos_por_defecto_via_bound_oraculo() {
+    fn methods_por_default_via_bound_oracle() {
         // Un método por defecto invocado desde un genérico acotado (M9.2 + M9.3a).
         oracle_stress(r#"
             trait Saludo {
-                fn nombre(self) -> int;
-                fn doble_nombre(self) -> int { self.nombre() + self.nombre() }
+                fn name(self) -> int;
+                fn double_name(self) -> int { self.name() + self.name() }
             }
             struct P { v: int }
-            impl Saludo for P { fn nombre(self) -> int { self.v } }
-            fn usar<T: Saludo>(x: T) -> int { x.doble_nombre() }
+            impl Saludo for P { fn name(self) -> int { self.v } }
+            fn usar<T: Saludo>(x: T) -> int { x.double_name() }
             fn main() -> int { let p = P { v: 21 }; usar(p) }   // 42
         "#);
     }
@@ -6627,7 +6627,7 @@ mod tests {
     // ----- M9.3b: trait objects (despacho dinámico) -----
 
     #[test]
-    fn trait_objects_despacho_dinamico_oraculo() {
+    fn trait_objects_dispatch_dynamic_oracle() {
         // Arreglo heterogéneo de trait objects + despacho por valor. El trait object se
         // realiza como un struct sintetizado (la vtable); ambos motores deben coincidir.
         oracle_program(r#"
@@ -6649,19 +6649,19 @@ mod tests {
     }
 
     #[test]
-    fn dyn_multi_trait_oraculo() {
+    fn dyn_multi_trait_oracle() {
         // M9.5a: `dyn A + B` — un objeto que satisface dos traits; despacho a métodos de ambos.
         // El orden del conjunto es canónico (dyn Nombre + Area == dyn Area + Nombre).
         oracle_program(r#"
             trait Area { fn area(self) -> int; }
-            trait Nombre { fn nombre(self) -> string; }
+            trait Nombre { fn name(self) -> string; }
             struct Cuadrado { lado: int }
             impl Area for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
-            impl Nombre for Cuadrado { fn nombre(self) -> string { "cuad" } }
+            impl Nombre for Cuadrado { fn name(self) -> string { "cuad" } }
             struct Circ { r: int }
             impl Area for Circ { fn area(self) -> int { 3 * self.r * self.r } }
-            impl Nombre for Circ { fn nombre(self) -> string { "circ" } }
-            fn describe(x: dyn Nombre + Area) -> int { x.nombre().len() + x.area() }
+            impl Nombre for Circ { fn name(self) -> string { "circ" } }
+            fn describe(x: dyn Nombre + Area) -> int { x.name().len() + x.area() }
             fn main() -> int {
                 let xs: [dyn Area + Nombre] = [Cuadrado{lado:4}, Circ{r:2}];
                 var s = 0; var i = 0;
@@ -6673,15 +6673,15 @@ mod tests {
     }
 
     #[test]
-    fn dyn_upcasting_oraculo() {
+    fn dyn_upcasting_oracle() {
         // M9.5b: upcasting `dyn A + B` -> `dyn A` (olvidar traits, S2 ⊆ S1). Se reconstruye el
         // struct menor proyectando los campos del mayor.
         oracle_program(r#"
             trait Area { fn area(self) -> int; }
-            trait Nombre { fn nombre(self) -> string; }
+            trait Nombre { fn name(self) -> string; }
             struct Cuadrado { lado: int }
             impl Area for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
-            impl Nombre for Cuadrado { fn nombre(self) -> string { "cuad" } }
+            impl Nombre for Cuadrado { fn name(self) -> string { "cuad" } }
             fn solo_area(a: dyn Area) -> int { a.area() }
             fn main() -> int {
                 let ab: dyn Area + Nombre = Cuadrado { lado: 5 };
@@ -6693,7 +6693,7 @@ mod tests {
     }
 
     #[test]
-    fn dyn_sobre_impl_generico_oraculo() {
+    fn dyn_about_impl_generic_oracle() {
         // M9.4: coercionar a `dyn Trait` un tipo cuyo impl es genérico acotado (Caja<T>): la vtable
         // lleva un closure anidado (como un diccionario), no el método manglado plano. Incluye
         // anidamiento Caja<Caja<N>> y un impl concreto en el mismo arreglo heterogéneo.
@@ -6717,13 +6717,13 @@ mod tests {
     }
 
     #[test]
-    fn defecto_con_self_heredado_por_dos_impls() {
+    fn default_con_self_heredado_por_dos_impls() {
         // Regresión: un método por defecto que llama a `self.m()` y es heredado por DOS
         // impls. Cada cuerpo clonado debe resolver a SUS métodos (no compartir destino).
         oracle_program(r#"
             trait Animal {
                 fn sonido(self) -> int;
-                fn doble_sonido(self) -> int { self.sonido() + self.sonido() }   // defecto
+                fn double_sonido(self) -> int { self.sonido() + self.sonido() }   // defecto
             }
             struct Perro { v: int }
             impl Animal for Perro { fn sonido(self) -> int { self.v } }            // hereda
@@ -6732,23 +6732,23 @@ mod tests {
             fn main() -> int {
                 let p = Perro { v: 3 };
                 let g = Gato { v: 4 };
-                p.doble_sonido() + g.doble_sonido()   // (3+3) + (40+40) = 6 + 80 = 86
+                p.double_sonido() + g.double_sonido()   // (3+3) + (40+40) = 6 + 80 = 86
             }
         "#);
     }
 
     #[test]
-    fn trait_objects_estres_gc() {
+    fn trait_objects_stress_gc() {
         // El struct sintetizado (vtable) y el dato viven en el heap de la VM: el GC debe
         // trazar ambos. Bajo estrés (recolecta en cada punto seguro), un fallo de raíz
         // cambiaría el resultado o reventaría.
         oracle_stress(r#"
-            trait Valor { fn valor(self) -> int; fn doble(self) -> int { self.valor() + self.valor() } }
+            trait Valor { fn valor(self) -> int; fn double(self) -> int { self.valor() + self.valor() } }
             struct A { n: int }
             impl Valor for A { fn valor(self) -> int { self.n } }
             struct B { n: int }
-            impl Valor for B { fn valor(self) -> int { self.n + 1 } fn doble(self) -> int { self.n } }
-            fn usar(x: dyn Valor) -> int { x.valor() + x.doble() }
+            impl Valor for B { fn valor(self) -> int { self.n + 1 } fn double(self) -> int { self.n } }
+            fn usar(x: dyn Valor) -> int { x.valor() + x.double() }
             fn main() -> int {
                 let a: dyn Valor = A { n: 10 };
                 let b: dyn Valor = B { n: 20 };
@@ -6760,7 +6760,7 @@ mod tests {
     // ----- M10.1: @derive(Eq) -----
 
     #[test]
-    fn derive_eq_oraculo() {
+    fn derive_eq_oracle() {
         // El impl generado por @derive(Eq) baja a una función ordinaria (M9): ambos motores
         // deben coincidir, para struct, enum unit y enum con payload.
         oracle_program(r#"

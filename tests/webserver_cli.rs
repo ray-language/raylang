@@ -12,7 +12,7 @@ use std::time::Duration;
 
 /// Copia `webserver.ray` a un temporal único, escribe `driver` como `main.ray` a su lado, lanza con
 /// `--vm` y devuelve el proceso hijo + el puerto efímero que imprimió en su primera línea.
-fn lanzar_servidor(name: &str, driver: &str) -> (Child, u16) {
+fn launch_servidor(name: &str, driver: &str) -> (Child, u16) {
     let mut dir = std::env::temp_dir();
     dir.push(format!("ray_web_{name}"));
     std::fs::create_dir_all(&dir).expect("crea dir");
@@ -31,31 +31,31 @@ fn lanzar_servidor(name: &str, driver: &str) -> (Child, u16) {
 
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el puerto");
+    reader.read_line(&mut linea).expect("lee el port");
     // El último token de la línea: cubre tanto el puerto a secas (drivers manuales) como el
     // "escuchando en el puerto N" que imprime `serve` (M56.5: tests sobre el serve real).
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("puerto inválido: {linea:?}"));
+        .unwrap_or_else(|| panic!("port inválido: {linea:?}"));
     (child, port)
 }
 
 /// Conecta, envía `req` cruda y lee toda la respuesta hasta que el servidor cierra.
-fn pedir(port: u16, req: &str) -> String {
-    String::from_utf8_lossy(&pedir_bytes(port, req.as_bytes())).into_owned()
+fn ask(port: u16, req: &str) -> String {
+    String::from_utf8_lossy(&ask_bytes(port, req.as_bytes())).into_owned()
 }
 
 /// Igual que `pedir` pero envía/recibe **octetos crudos** (para verificar cuerpos binarios).
-fn pedir_bytes(port: u16, req: &[u8]) -> Vec<u8> {
+fn ask_bytes(port: u16, req: &[u8]) -> Vec<u8> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.write_all(req).expect("envía");
     let mut resp = Vec::new();
-    stream.read_to_end(&mut resp).expect("lee respuesta");
+    stream.read_to_end(&mut resp).expect("lee response");
     resp
 }
 
 /// El cuerpo de una respuesta HTTP cruda: lo que sigue al primer "\r\n\r\n".
-fn cuerpo(resp: &[u8]) -> &[u8] {
+fn body(resp: &[u8]) -> &[u8] {
     let sep = b"\r\n\r\n";
     resp.windows(4).position(|w| w == sep).map(|i| &resp[i + 4..]).unwrap_or(&[])
 }
@@ -65,11 +65,11 @@ fn cuerpo(resp: &[u8]) -> &[u8] {
 const SRV_HTTP: &str = r#"
 import webserver;
 import std/net;
-fn manejar(conn: int) {
+fn handle(conn: int) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
             var resp: webserver.Response = webserver.not_found();
-            if (req.path == "/hola") { resp = webserver.ok("hola " + req.method); }
+            if (req.path == "/hello") { resp = webserver.ok("hello " + req.method); }
             if (req.path == "/q") {
                 match (get(webserver.query_params(req), "x")) {
                     Option.Some(v) => { resp = webserver.ok("x=" + v + " cruda=" + req.query); },
@@ -92,7 +92,7 @@ fn main() -> int {
                 var i: int = 0;
                 while (i < 5) {
                     match (net.tcp_accept(srv)) {
-                        Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                        Result.Ok(conn) => { spawn(fn() { handle(conn) }); },
                         Result.Err(e) => { eprint(e); i = 5; },
                     }
                     i = i + 1;
@@ -108,38 +108,38 @@ fn main() -> int {
 
 #[test]
 fn servidor_http_responde_y_enruta() {
-    let (mut child, port) = lanzar_servidor("http", SRV_HTTP);
+    let (mut child, port) = launch_servidor("http", SRV_HTTP);
 
-    let ok = pedir(port, "GET /hola HTTP/1.1\r\nHost: x\r\n\r\n");
+    let ok = ask(port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(ok.contains("200 OK"), "esperaba 200 OK, got: {ok}");
-    assert!(ok.contains("hola GET"), "esperaba el cuerpo 'hola GET', got: {ok}");
-    assert!(ok.contains("Content-Length: 8"), "esperaba Content-Length del cuerpo, got: {ok}");
+    assert!(ok.contains("hello GET"), "esperaba el body 'hello GET', got: {ok}");
+    assert!(ok.contains("Content-Length: 8"), "esperaba Content-Length del body, got: {ok}");
     // M85a: la cabecera `Date:` (SHOULD RFC 7231) — presencia y FORMA RFC 1123
     // (`Wdy, DD Mon YYYY HH:MM:SS GMT`), no el valor (no determinista).
     let date = ok
         .lines()
         .find_map(|l| l.strip_prefix("Date: "))
-        .unwrap_or_else(|| panic!("esperaba la cabecera Date:, got: {ok}"));
+        .unwrap_or_else(|| panic!("esperaba la header Date:, got: {ok}"));
     assert!(
         date.len() == 29 && date.ends_with(" GMT") && &date[3..5] == ", ",
-        "Date: no tiene forma RFC 1123: {date}"
+        "Date: no has forma RFC 1123: {date}"
     );
 
-    let nf = pedir(port, "GET /otra HTTP/1.1\r\nHost: x\r\n\r\n");
+    let nf = ask(port, "GET /other HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(nf.contains("404 Not Found"), "esperaba 404, got: {nf}");
 
     // M56.2: la query NO forma parte del path → la ruta sigue casando.
-    let conq = pedir(port, "GET /hola?x=1 HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert!(conq.contains("200 OK") && conq.contains("hola GET"), "esperaba que /hola?x=1 casara /hola, got: {conq}");
+    let conq = ask(port, "GET /hello?x=1 HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(conq.contains("200 OK") && conq.contains("hello GET"), "esperaba what /hello?x=1 casara /hello, got: {conq}");
 
     // M56.2: query_params decodifica (+ = espacio, %XX) y req.query conserva la cruda.
-    let q = pedir(port, "GET /q?x=Ada+Lovelace%21&y=2 HTTP/1.1\r\nHost: x\r\n\r\n");
+    let q = ask(port, "GET /q?x=Ada+Lovelace%21&y=2 HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(q.contains("x=Ada Lovelace!"), "esperaba el valor decodificado, got: {q}");
     assert!(q.contains("cruda=x=Ada+Lovelace%21&y=2"), "esperaba la query cruda, got: {q}");
 
     // M56.2: el path llega percent-decodificado ("/ho%6Ca" = "/hola").
-    let dec = pedir(port, "GET /ho%6Ca HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert!(dec.contains("hola GET"), "esperaba /ho%6Ca decodificado a /hola, got: {dec}");
+    let dec = ask(port, "GET /ho%6Ca HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(dec.contains("hello GET"), "esperaba /ho%6Ca decodificado a /hello, got: {dec}");
 
     let _ = child.wait();
 }
@@ -148,7 +148,7 @@ fn servidor_http_responde_y_enruta() {
 const SRV_SSE: &str = r#"
 import webserver;
 import std/net;
-fn manejar(conn: int) {
+fn handle(conn: int) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
             match (webserver.sse_open(conn)) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
@@ -170,7 +170,7 @@ fn main() -> int {
             print(net.local_port(srv));
             scope(fn() {
                 match (net.tcp_accept(srv)) {
-                    Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                    Result.Ok(conn) => { spawn(fn() { handle(conn) }); },
                     Result.Err(e) => eprint(e),
                 }
             });
@@ -184,9 +184,9 @@ fn main() -> int {
 
 #[test]
 fn servidor_sse_emite_eventos() {
-    let (mut child, port) = lanzar_servidor("sse", SRV_SSE);
+    let (mut child, port) = launch_servidor("sse", SRV_SSE);
 
-    let resp = pedir(port, "GET /eventos HTTP/1.1\r\nHost: x\r\n\r\n");
+    let resp = ask(port, "GET /eventos HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(resp.contains("text/event-stream"), "esperaba Content-Type SSE, got: {resp}");
     assert!(resp.contains("data: tick 0"), "esperaba el evento 0, got: {resp}");
     assert!(resp.contains("data: tick 1"), "esperaba el evento 1, got: {resp}");
@@ -200,7 +200,7 @@ fn servidor_sse_emite_eventos() {
 const SRV_ECO_BIN: &str = r#"
 import webserver;
 import std/net;
-fn manejar(conn: int) {
+fn handle(conn: int) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
             match (webserver.send_response(conn, webserver.bytes_response(200, req.body))) {
@@ -217,7 +217,7 @@ fn main() -> int {
             print(net.local_port(srv));
             scope(fn() {
                 match (net.tcp_accept(srv)) {
-                    Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                    Result.Ok(conn) => { spawn(fn() { handle(conn) }); },
                     Result.Err(e) => eprint(e),
                 }
             });
@@ -230,13 +230,13 @@ fn main() -> int {
 "#;
 
 /// Como `pedir`, pero cierra el lado de escritura tras enviar (el servidor ve EOF) y lee la respuesta.
-fn pedir_con_eof(port: u16, req: &[u8]) -> String {
+fn ask_con_eof(port: u16, req: &[u8]) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.write_all(req).expect("envía");
     stream.shutdown(std::net::Shutdown::Write).expect("shutdown write");
     let mut resp = Vec::new();
-    stream.read_to_end(&mut resp).expect("lee respuesta");
+    stream.read_to_end(&mut resp).expect("lee response");
     String::from_utf8_lossy(&resp).into_owned()
 }
 
@@ -245,7 +245,7 @@ fn pedir_con_eof(port: u16, req: &[u8]) -> String {
 const SRV_LIMITES: &str = r#"
 import webserver;
 import std/net;
-fn manejar(conn: int) {
+fn handle(conn: int) {
     let lim: webserver.Limits = webserver.Limits { max_header_bytes: 256, max_body_bytes: 16, max_conns: 8, read_timeout_millis: 0 };
     match (webserver.read_request_limits(conn, lim)) {
         Result.Ok(req) => {
@@ -270,7 +270,7 @@ fn main() -> int {
                 var i: int = 0;
                 while (i < 4) {
                     match (net.tcp_accept(srv)) {
-                        Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                        Result.Ok(conn) => { spawn(fn() { handle(conn) }); },
                         Result.Err(e) => { eprint(e); i = 4; },
                     }
                     i = i + 1;
@@ -285,25 +285,25 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_aplica_limites_de_seguridad() {
-    let (mut child, port) = lanzar_servidor("limites", SRV_LIMITES);
+fn servidor_applies_limites_de_seguridad() {
+    let (mut child, port) = launch_servidor("limites", SRV_LIMITES);
 
     // (a) Una petición normal dentro de los límites responde 200.
-    let ok = pedir(port, "POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc");
+    let ok = ask(port, "POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc");
     assert!(ok.contains("200 OK") && ok.contains("ok 3"), "esperaba 200 'ok 3', got: {ok}");
 
     // (b) Cabeceras que exceden el tope (256) → 400, sin esperar a que el cliente termine.
     let gigante = format!("GET / HTTP/1.1\r\nX-Relleno: {}\r\n\r\n", "a".repeat(400));
-    let hd = pedir(port, &gigante);
-    assert!(hd.contains("400 Bad Request"), "esperaba 400 por cabeceras gigantes, got: {hd}");
+    let hd = ask(port, &gigante);
+    assert!(hd.contains("400 Bad Request"), "esperaba 400 por headers gigantes, got: {hd}");
 
     // (c) Content-Length declarado mayor que el tope (16) → 400 ANTES de leer el cuerpo.
-    let cl = pedir(port, "POST / HTTP/1.1\r\nContent-Length: 999\r\n\r\n");
-    assert!(cl.contains("400 Bad Request"), "esperaba 400 por cuerpo declarado gigante, got: {cl}");
+    let cl = ask(port, "POST / HTTP/1.1\r\nContent-Length: 999\r\n\r\n");
+    assert!(cl.contains("400 Bad Request"), "esperaba 400 por body declarado gigante, got: {cl}");
 
     // (d) Cuerpo truncado (declara 10, envía 3 y cierra) → 400, no un Ok silencioso a medias.
-    let tr = pedir_con_eof(port, b"POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc");
-    assert!(tr.contains("400 Bad Request"), "esperaba 400 por cuerpo incompleto, got: {tr}");
+    let tr = ask_con_eof(port, b"POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc");
+    assert!(tr.contains("400 Bad Request"), "esperaba 400 por body incompleto, got: {tr}");
 
     let _ = child.wait();
 }
@@ -313,11 +313,11 @@ fn servidor_aplica_limites_de_seguridad() {
 const SRV_TIMEOUT: &str = r#"
 import webserver;
 import std/net;
-fn manejar(conn: int) {
+fn handle(conn: int) {
     let lim: webserver.Limits = webserver.Limits { max_header_bytes: 65536, max_body_bytes: 1048576, max_conns: 8, read_timeout_millis: 300 };
     match (webserver.read_request_limits(conn, lim)) {
         Result.Ok(req) => {
-            match (webserver.send_response(conn, webserver.ok("hola " + req.path))) {
+            match (webserver.send_response(conn, webserver.ok("hello " + req.path))) {
                 Result.Ok(_) => {}, Result.Err(e) => eprint(e),
             }
         },
@@ -338,7 +338,7 @@ fn main() -> int {
                 var i: int = 0;
                 while (i < 2) {
                     match (net.tcp_accept(srv)) {
-                        Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                        Result.Ok(conn) => { spawn(fn() { handle(conn) }); },
                         Result.Err(e) => { eprint(e); i = 2; },
                     }
                     i = i + 1;
@@ -354,24 +354,24 @@ fn main() -> int {
 
 #[test]
 fn servidor_corta_lecturas_lentas_por_timeout() {
-    let (mut child, port) = lanzar_servidor("timeout", SRV_TIMEOUT);
+    let (mut child, port) = launch_servidor("timeout", SRV_TIMEOUT);
 
     // Slowloris: abre, envía media petición y se queda callado (sin cerrar). El timeout (300 ms)
     // debe vencer y responder 400; sin él, esta conexión retendría su fibra para siempre.
-    let inicio = std::time::Instant::now();
+    let start = std::time::Instant::now();
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
     stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
     stream.write_all(b"GET /lento HTTP/1.1\r\nX-Goteo: a").expect("envía parcial");
     let mut resp = Vec::new();
-    stream.read_to_end(&mut resp).expect("lee respuesta");
+    stream.read_to_end(&mut resp).expect("lee response");
     let resp = String::from_utf8_lossy(&resp);
     assert!(resp.contains("400 Bad Request"), "esperaba 400 por timeout, got: {resp}");
-    assert!(inicio.elapsed() >= Duration::from_millis(250), "respondió antes del plazo (¿timeout no aplicado?)");
-    assert!(inicio.elapsed() < Duration::from_secs(8), "tardó demasiado (¿esperó a EOF en vez del timeout?)");
+    assert!(start.elapsed() >= Duration::from_millis(250), "respondió antes del plazo (¿timeout no aplicado?)");
+    assert!(start.elapsed() < Duration::from_secs(8), "tardó demasiado (¿esperó a EOF en vez del timeout?)");
 
     // El servidor sigue vivo: una petición normal posterior responde 200 al instante.
-    let ok = pedir(port, "GET /hola HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert!(ok.contains("200 OK"), "el servidor debe seguir vivo tras el timeout, got: {ok}");
+    let ok = ask(port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(ok.contains("200 OK"), "el servidor must follow live after el timeout, got: {ok}");
 
     let _ = child.wait();
 }
@@ -386,7 +386,7 @@ fn pagina(req: webserver.Request) -> webserver.Response {
     if (req.path == "/boom") {
         panic("kaboom del handler");
     }
-    webserver.ok("vivo")
+    webserver.ok("live")
 }
 
 fn main() -> int {
@@ -399,20 +399,20 @@ fn main() -> int {
 "#;
 
 #[test]
-fn handler_que_panica_responde_500_y_no_fuga_recursos() {
-    let (mut child, port) = lanzar_servidor("panic", SRV_PANIC);
+fn handler_what_panica_responde_500_y_no_fuga_recursos() {
+    let (mut child, port) = launch_servidor("panic", SRV_PANIC);
 
     // Más peticiones que panican (4) que max_conns (2): si el panic fugara el fd o el token del
     // semáforo, el servidor dejaría de aceptar a la 3ª y esto colgaría (el timeout del cliente
     // haría fallar el test).
     for i in 0..4 {
-        let r = pedir(port, "GET /boom HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let r = ask(port, "GET /boom HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
         assert!(r.contains("500 Internal Server Error"), "petición {i}: esperaba 500, got: {r}");
     }
 
     // El servidor sigue vivo y sano. (Connection: close → serve cierra y read_to_end termina.)
-    let ok = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-    assert!(ok.contains("200 OK") && ok.contains("vivo"), "esperaba 200 tras los panics, got: {ok}");
+    let ok = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(ok.contains("200 OK") && ok.contains("live"), "esperaba 200 after los panics, got: {ok}");
 
     let _ = child.kill();
     let _ = child.wait();
@@ -420,7 +420,7 @@ fn handler_que_panica_responde_500_y_no_fuga_recursos() {
 
 /// Lee UNA respuesta HTTP completa (cabeceras + cuerpo delimitado por Content-Length) del stream.
 /// Necesaria con keep-alive (M56.6): el servidor NO cierra, así que read_to_end no termina.
-fn leer_una_respuesta(stream: &mut TcpStream) -> String {
+fn leer_one_response(stream: &mut TcpStream) -> String {
     let mut resp: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
     let mut fin_cab: Option<usize> = None;
@@ -437,14 +437,14 @@ fn leer_una_respuesta(stream: &mut TcpStream) -> String {
             let cl: usize = head
                 .lines()
                 .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().expect("CL numérico")))
-                .expect("respuesta sin Content-Length");
+                .expect("response sin Content-Length");
             total = Some(fc + 4 + cl);
             continue;
         } else if resp.len() >= total.unwrap() {
             break;
         }
-        let n = stream.read(&mut buf).expect("lee respuesta");
-        assert!(n > 0, "EOF a mitad de respuesta: {:?}", String::from_utf8_lossy(&resp));
+        let n = stream.read(&mut buf).expect("lee response");
+        assert!(n > 0, "EOF a half de response: {:?}", String::from_utf8_lossy(&resp));
         resp.extend_from_slice(&buf[..n]);
     }
     String::from_utf8_lossy(&resp).into_owned()
@@ -456,7 +456,7 @@ const SRV_KEEPALIVE: &str = r#"
 import webserver;
 
 fn pagina(req: webserver.Request) -> webserver.Response {
-    webserver.ok("hola " + req.path)
+    webserver.ok("hello " + req.path)
 }
 
 fn main() -> int {
@@ -469,39 +469,39 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_mantiene_la_conexion_viva_entre_peticiones() {
-    let (mut child, port) = lanzar_servidor("keepalive", SRV_KEEPALIVE);
+fn servidor_mantiene_la_conexion_viva_between_peticiones() {
+    let (mut child, port) = launch_servidor("keepalive", SRV_KEEPALIVE);
 
     // Dos peticiones por la MISMA conexión (keep-alive HTTP/1.1 por defecto).
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.write_all(b"GET /a HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía 1ª");
-    let r1 = leer_una_respuesta(&mut stream);
-    assert!(r1.contains("200 OK") && r1.contains("hola /a"), "1ª respuesta: {r1}");
+    let r1 = leer_one_response(&mut stream);
+    assert!(r1.contains("200 OK") && r1.contains("hello /a"), "1ª response: {r1}");
     assert!(r1.contains("Connection: keep-alive"), "esperaba keep-alive, got: {r1}");
 
     stream.write_all(b"GET /b HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía 2ª");
-    let r2 = leer_una_respuesta(&mut stream);
-    assert!(r2.contains("hola /b"), "2ª respuesta por la misma conexión: {r2}");
+    let r2 = leer_one_response(&mut stream);
+    assert!(r2.contains("hello /b"), "2ª response por la misma conexión: {r2}");
 
     // `Connection: close` se honra: responde y CIERRA (EOF).
     stream.write_all(b"GET /c HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").expect("envía 3ª");
-    let r3 = leer_una_respuesta(&mut stream);
-    assert!(r3.contains("hola /c") && r3.contains("Connection: close"), "3ª respuesta: {r3}");
+    let r3 = leer_one_response(&mut stream);
+    assert!(r3.contains("hello /c") && r3.contains("Connection: close"), "3ª response: {r3}");
     let mut extra = [0u8; 16];
-    let n = stream.read(&mut extra).expect("lee tras close");
-    assert_eq!(n, 0, "esperaba EOF tras Connection: close");
+    let n = stream.read(&mut extra).expect("lee after close");
+    assert_eq!(n, 0, "esperaba EOF after Connection: close");
 
     // Una conexión keep-alive OCIOSA se cierra sola al vencer el read timeout (500 ms), en
     // silencio (sin 400): el servidor no retiene la fibra para siempre.
     let mut ociosa = TcpStream::connect(("127.0.0.1", port)).expect("conecta ociosa");
     ociosa.set_read_timeout(Some(Duration::from_secs(5))).ok();
     ociosa.write_all(b"GET /d HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía");
-    let r4 = leer_una_respuesta(&mut ociosa);
-    assert!(r4.contains("hola /d"), "respuesta antes del ocio: {r4}");
+    let r4 = leer_one_response(&mut ociosa);
+    assert!(r4.contains("hello /d"), "response antes del ocio: {r4}");
     let mut fin = Vec::new();
     ociosa.read_to_end(&mut fin).expect("lee hasta el cierre por ocio");
-    assert!(fin.is_empty(), "esperaba cierre limpio sin datos extra, got: {:?}", String::from_utf8_lossy(&fin));
+    assert!(fin.is_empty(), "esperaba cierre clean sin data extra, got: {:?}", String::from_utf8_lossy(&fin));
 
     let _ = child.kill();
     let _ = child.wait();
@@ -513,7 +513,7 @@ const SRV_COOKIES: &str = r#"
 import webserver;
 from webserver import with_cookie;
 import std/net;
-fn manejar(conn: int) {
+fn handle(conn: int) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
             let r = webserver.ok("con cookies")
@@ -533,7 +533,7 @@ fn main() -> int {
             print(net.local_port(srv));
             scope(fn() {
                 match (net.tcp_accept(srv)) {
-                    Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                    Result.Ok(conn) => { spawn(fn() { handle(conn) }); },
                     Result.Err(e) => eprint(e),
                 }
             });
@@ -546,10 +546,10 @@ fn main() -> int {
 "#;
 
 #[test]
-fn respuesta_con_varias_cookies() {
-    let (mut child, port) = lanzar_servidor("cookies", SRV_COOKIES);
+fn response_con_various_cookies() {
+    let (mut child, port) = launch_servidor("cookies", SRV_COOKIES);
 
-    let r = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(r.contains("200 OK"), "esperaba 200, got: {r}");
     assert!(r.contains("Set-Cookie: sesion=abc123; Path=/; HttpOnly"), "falta la 1ª cookie: {r}");
     assert!(r.contains("Set-Cookie: flash=bienvenido"), "falta la 2ª cookie: {r}");
@@ -560,29 +560,29 @@ fn respuesta_con_varias_cookies() {
 }
 
 #[test]
-fn head_devuelve_cabeceras_sin_cuerpo() {
+fn head_returns_headers_sin_body() {
     // M56.8: a un HEAD, el camino `serve` responde las cabeceras del GET (incl. Content-Length)
     // pero SIN el cuerpo. Reusa el driver keep-alive (handler: "hola " + path).
-    let (mut child, port) = lanzar_servidor("head", SRV_KEEPALIVE);
+    let (mut child, port) = launch_servidor("head", SRV_KEEPALIVE);
 
-    let r = pedir(port, "HEAD /a HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let r = ask(port, "HEAD /a HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("200 OK"), "esperaba 200 a HEAD, got: {r}");
     assert!(r.contains("Content-Length: 7"), "esperaba el Content-Length del GET (7), got: {r}");
-    assert!(!r.contains("hola /a"), "un HEAD no debe llevar cuerpo, got: {r}");
+    assert!(!r.contains("hello /a"), "un HEAD no must llevar body, got: {r}");
 
     let _ = child.kill();
     let _ = child.wait();
 }
 
 #[test]
-fn cuerpo_chunked_se_decodifica() {
+fn body_chunked_se_decodifica() {
     // M56.8: Transfer-Encoding: chunked entrante → el eco devuelve el cuerpo DECODIFICADO
     // ("hola" + " mundo", con extensión de chunk ignorada). Antes llegaba vacío en silencio.
-    let (mut child, port) = lanzar_servidor("chunked", SRV_ECO_BIN);
+    let (mut child, port) = launch_servidor("chunked", SRV_ECO_BIN);
 
-    let req = b"POST /eco HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nhola\r\n6;ext=1\r\n mundo\r\n0\r\n\r\n";
-    let resp = pedir_bytes(port, req);
-    assert_eq!(cuerpo(&resp), b"hola mundo", "cuerpo chunked decodificado, got: {:?}", String::from_utf8_lossy(cuerpo(&resp)));
+    let req = b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nhola\r\n6;ext=1\r\n mundo\r\n0\r\n\r\n";
+    let resp = ask_bytes(port, req);
+    assert_eq!(body(&resp), b"hello mundo", "body chunked decodificado, got: {:?}", String::from_utf8_lossy(body(&resp)));
 
     let _ = child.wait();
 }
@@ -591,7 +591,7 @@ fn cuerpo_chunked_se_decodifica() {
 const SRV_STATIC: &str = r#"
 import webserver;
 import std/net;
-fn manejar(conn: int, dir: string) {
+fn handle(conn: int, dir: string) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
             match (webserver.send_response(conn, webserver.static_response(dir, req.path))) {
@@ -618,7 +618,7 @@ fn main() -> int {
                 var i: int = 0;
                 while (i < 3) {
                     match (net.tcp_accept(srv)) {
-                        Result.Ok(conn) => { spawn(fn() { manejar(conn, dir) }); },
+                        Result.Ok(conn) => { spawn(fn() { handle(conn, dir) }); },
                         Result.Err(e) => { eprint(e); i = 3; },
                     }
                     i = i + 1;
@@ -633,14 +633,14 @@ fn main() -> int {
 "#;
 
 #[test]
-fn archivos_estaticos_con_saneo() {
+fn files_estaticos_con_saneo() {
     // Prepara la raíz estática: pub/index.html público y secreto.txt FUERA de la raíz.
     let mut base = std::env::temp_dir();
     base.push("ray_web_static_root");
-    let publica = base.join("pub");
-    std::fs::create_dir_all(&publica).expect("crea pub");
-    std::fs::write(publica.join("index.html"), "<h1>hola estática</h1>").expect("escribe index");
-    std::fs::write(base.join("secreto.txt"), "no debe salir").expect("escribe secreto");
+    let public = base.join("pub");
+    std::fs::create_dir_all(&public).expect("crea pub");
+    std::fs::write(public.join("index.html"), "<h1>hello estática</h1>").expect("escribe index");
+    std::fs::write(base.join("secreto.txt"), "no must salir").expect("escribe secreto");
 
     // Lanza el driver con RAY_STATIC_DIR apuntando a la raíz pública.
     let mut dir = std::env::temp_dir();
@@ -653,48 +653,48 @@ fn archivos_estaticos_con_saneo() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .arg("--vm")
         .arg(&driver_path)
-        .env("RAY_STATIC_DIR", publica.to_str().unwrap())
+        .env("RAY_STATIC_DIR", public.to_str().unwrap())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("lanza servidor estático");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el puerto");
+    reader.read_line(&mut linea).expect("lee el port");
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("puerto inválido: {linea:?}"));
+        .unwrap_or_else(|| panic!("port inválido: {linea:?}"));
 
     // "/" sirve index.html con su Content-Type.
-    let r = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert!(r.contains("200 OK") && r.contains("hola estática"), "index: {r}");
+    let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(r.contains("200 OK") && r.contains("hello estática"), "index: {r}");
     assert!(r.contains("Content-Type: text/html"), "mime del html: {r}");
 
     // Path traversal → 404 (el secreto vive fuera de la raíz).
-    let tr = pedir(port, "GET /../secreto.txt HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert!(tr.contains("404 Not Found") && !tr.contains("no debe salir"), "traversal: {tr}");
+    let tr = ask(port, "GET /../secreto.txt HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(tr.contains("404 Not Found") && !tr.contains("no must salir"), "traversal: {tr}");
 
     // Un archivo que no existe → 404.
-    let nf = pedir(port, "GET /nada.css HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert!(nf.contains("404 Not Found"), "inexistente: {nf}");
+    let nf = ask(port, "GET /nada.css HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(nf.contains("404 Not Found"), "nonexistent: {nf}");
 
     let _ = child.wait();
 }
 
 #[test]
-fn servidor_eco_cuerpo_binario_intacto() {
-    let (mut child, port) = lanzar_servidor("ecobin", SRV_ECO_BIN);
+fn servidor_echo_body_binary_intacto() {
+    let (mut child, port) = launch_servidor("ecobin", SRV_ECO_BIN);
 
     // POST con un cuerpo binario de 7 octetos, incl. 0x00 y 0xFF (que UTF-8 lossy corrompería).
-    let body: [u8; 7] = [0, 255, 1, 2, b'b', b'i', b'n'];
+    let bin_body: [u8; 7] = [0, 255, 1, 2, b'b', b'i', b'n'];
     let mut req: Vec<u8> = format!(
-        "POST /eco HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n",
-        body.len()
+        "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n",
+        bin_body.len()
     )
     .into_bytes();
-    req.extend_from_slice(&body);
+    req.extend_from_slice(&bin_body);
 
-    let resp = pedir_bytes(port, &req);
-    assert_eq!(cuerpo(&resp), &body, "el cuerpo binario debe cruzar intacto, got: {:?}", cuerpo(&resp));
+    let resp = ask_bytes(port, &req);
+    assert_eq!(body(&resp), &bin_body, "el body binary must cruzar intacto, got: {:?}", body(&resp));
 
     let _ = child.wait();
 }

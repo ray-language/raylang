@@ -220,11 +220,11 @@ impl Heap {
     }
 
     pub fn get(&self, h: Handle) -> &Obj {
-        &self.slots[h].as_ref().expect("handle válido (objeto vivo)").obj
+        &self.slots[h].as_ref().expect("handle válido (objeto live)").obj
     }
 
     pub fn get_mut(&mut self, h: Handle) -> &mut Obj {
-        &mut self.slots[h].as_mut().expect("handle válido (objeto vivo)").obj
+        &mut self.slots[h].as_mut().expect("handle válido (objeto live)").obj
     }
 
     /// ¿Conviene recolectar? (En modo estrés, siempre.) M42.2: también al alcanzar el tope de

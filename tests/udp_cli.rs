@@ -28,7 +28,7 @@ fn toy_udp_server() -> u16 {
     port
 }
 
-fn correr(flags: &[&str], port: u16) -> Vec<String> {
+fn run(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/udp_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -50,13 +50,13 @@ fn correr(flags: &[&str], port: u16) -> Vec<String> {
 const ESPERADO: &[&str] = &["8", "HOLA UDP"];
 
 #[test]
-fn udp_echo_interprete() {
+fn udp_echo_interpreter() {
     let port = toy_udp_server();
-    assert_eq!(correr(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), ESPERADO);
 }
 
 #[test]
 fn udp_echo_vm() {
     let port = toy_udp_server();
-    assert_eq!(correr(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), ESPERADO);
 }

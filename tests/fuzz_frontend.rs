@@ -50,10 +50,10 @@ impl Rng {
 /// Recolecta recursivamente los `.ray` bajo `dir` (corpus de semillas para la mutación). Sin `walkdir`:
 /// un recorrido a mano con `std::fs`, como el resto del proyecto.
 fn recolectar_ray(dir: &Path, acc: &mut Vec<PathBuf>) {
-    let Ok(entradas) = std::fs::read_dir(dir) else {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    for e in entradas.flatten() {
+    for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
             recolectar_ray(&p, acc);
@@ -69,12 +69,12 @@ fn recolectar_ray(dir: &Path, acc: &mut Vec<PathBuf>) {
 /// (y con ella la recursión del parser: una entrada de N bytes anida a lo sumo ~N niveles).
 fn cargar_corpus() -> Vec<String> {
     const MAX_SEMILLA: usize = 4096;
-    let raiz = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut rutas = Vec::new();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut paths = Vec::new();
     for sub in ["examples", "selfhost", "std"] {
-        recolectar_ray(&raiz.join(sub), &mut rutas);
+        recolectar_ray(&root.join(sub), &mut paths);
     }
-    let mut corpus: Vec<String> = rutas
+    let mut corpus: Vec<String> = paths
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         // Truncar por CARACTERES, no por bytes: `String::truncate` en un byte a mitad de un carácter
@@ -150,11 +150,11 @@ fn generar(rng: &mut Rng, corpus: &[String]) -> Vec<u8> {
         }
         // (5) Duplicar-y-empalmar dos semillas (mezcla declaraciones de fuentes distintos).
         _ => {
-            let otra = corpus[rng.below(corpus.len())].as_bytes();
-            let corte_a = if base.is_empty() { 0 } else { rng.below(base.len()) };
-            let corte_b = if otra.is_empty() { 0 } else { rng.below(otra.len()) };
-            let mut v = base[..corte_a].to_vec();
-            v.extend_from_slice(&otra[corte_b..]);
+            let other = corpus[rng.below(corpus.len())].as_bytes();
+            let cut_a = if base.is_empty() { 0 } else { rng.below(base.len()) };
+            let cut_b = if other.is_empty() { 0 } else { rng.below(other.len()) };
+            let mut v = base[..cut_a].to_vec();
+            v.extend_from_slice(&other[cut_b..]);
             v.truncate(4096);
             v
         }
@@ -215,41 +215,41 @@ fn fuzz_el_frontend_no_panica() {
 
         // Modo reproducción: `RAYLANG_FUZZ_SEED=<n>` ejercita una sola entrada (la de esa semilla) y para.
         let iters = env_usize("RAYLANG_FUZZ_ITERS", 3000);
-        let semilla_fija = std::env::var("RAYLANG_FUZZ_SEED").ok().and_then(|s| s.parse::<u64>().ok());
+        let seed_fixes = std::env::var("RAYLANG_FUZZ_SEED").ok().and_then(|s| s.parse::<u64>().ok());
 
         // Silenciamos el hook de pánico durante el fuzzing y lo restauramos al terminar.
         let hook_previo = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
 
-        let mut fallo: Option<(u64, Vec<u8>, String)> = None;
-        let rango: Vec<u64> = match semilla_fija {
+        let mut failure: Option<(u64, Vec<u8>, String)> = None;
+        let range: Vec<u64> = match seed_fixes {
             Some(s) => vec![s],
             None => (0..iters as u64).map(|i| SEMILLA_BASE.wrapping_add(i.wrapping_mul(0x9E37_79B9))).collect(),
         };
 
-        for semilla in rango {
-            let mut rng = Rng(semilla);
+        for seed in range {
+            let mut rng = Rng(seed);
             let bytes = generar(&mut rng, &corpus);
             // Solo UTF-8 válido llega al compilador (el CLI lee el archivo como texto); el resto se descarta.
-            let Ok(texto) = std::str::from_utf8(&bytes) else {
+            let Ok(text) = std::str::from_utf8(&bytes) else {
                 continue;
             };
-            if let Err(msg) = ejercitar(texto) {
-                fallo = Some((semilla, bytes.clone(), msg));
+            if let Err(msg) = ejercitar(text) {
+                failure = Some((seed, bytes.clone(), msg));
                 break;
             }
         }
 
         panic::set_hook(hook_previo);
 
-        if let Some((semilla, bytes, msg)) = fallo {
+        if let Some((seed, bytes, msg)) = failure {
             // Escribe la entrada culpable para inspección/repro y falla con instrucciones claras.
-            let repro = std::env::temp_dir().join(format!("raylang_fuzz_repro_{semilla}.ray"));
+            let repro = std::env::temp_dir().join(format!("raylang_fuzz_repro_{seed}.ray"));
             let _ = std::fs::write(&repro, &bytes);
             panic!(
-                "el front-end PANICÓ ante una entrada de fuzz (esto es un ICE que input de usuario nunca debe \
-                 causar).\n  semilla: {semilla}\n  pánico: {msg}\n  entrada escrita en: {}\n  reproducir: \
-                 RAYLANG_FUZZ_SEED={semilla} cargo test --test fuzz_frontend",
+                "el front-end PANICÓ ante one entry de fuzz (esto es un ICE what input de user nunca must \
+                 causar).\n  seed: {seed}\n  pánico: {msg}\n  entry escrita en: {}\n  reproducir: \
+                 RAYLANG_FUZZ_SEED={seed} cargo test --test fuzz_frontend",
                 repro.display()
             );
         }

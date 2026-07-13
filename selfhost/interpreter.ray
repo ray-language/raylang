@@ -694,7 +694,7 @@ fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
     let v = eval_expr(c, e)?;
     match (v) {
         Value.VBool(b) => Result.Ok(b),
-        _ => panic("se esperaba una condición booleana"),
+        _ => panic("se esperaba one condición booleana"),
     }
 }
 
@@ -711,7 +711,7 @@ fn builtin_len(v: Value) -> int {
         Value.VArray(elems) => elems.len(),
         Value.VStr(s) => s.len(),
         Value.VMap(d) => d.keys.len(),
-        _ => panic("len: se esperaba un arreglo, string o Map"),
+        _ => panic("len: se esperaba un array, string o Map"),
     }
 }
 
@@ -787,21 +787,21 @@ pub fn value_lt(a: Value, b: Value) -> bool {
     match (a) {
         Value.VInt(x) => match (b) {
             Value.VInt(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("menor: types incompatibles"),
         },
         Value.VFloat(x) => match (b) {
             Value.VFloat(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("menor: types incompatibles"),
         },
         Value.VStr(x) => match (b) {
             Value.VStr(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("menor: types incompatibles"),
         },
         Value.VChar(x) => match (b) {
             Value.VChar(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("menor: types incompatibles"),
         },
-        _ => panic("menor: tipo no ordenable"),
+        _ => panic("menor: type no ordenable"),
     }
 }
 
@@ -863,7 +863,7 @@ fn builtin_join(arrv: Value, sep: string) -> string {
             }
             s
         },
-        _ => panic("join: se esperaba un arreglo"),
+        _ => panic("join: se esperaba un array"),
     }
 }
 
@@ -881,7 +881,7 @@ fn builtin_contains(x: Value, y: Value) -> bool {
             }
             false
         },
-        _ => panic("contains: se esperaba string o arreglo"),
+        _ => panic("contains: se esperaba string o array"),
     }
 }
 
@@ -931,7 +931,7 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
                 elems.push(vals[1]);
                 Result.Ok(Value.VUnit)
             },
-            _ => panic("push: se esperaba un arreglo"),
+            _ => panic("push: se esperaba un array"),
         };
     }
     // --- Builtins de string (M14.6a): delegan en los del host ---
@@ -1009,7 +1009,7 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
                     Option.None => Result.Ok(Value.VArray(no_vals())),
                 }
             },
-            _ => panic("__pop: se esperaba un arreglo"),
+            _ => panic("__pop: se esperaba un array"),
         };
     }
     // --- Builtins de Map (M14.6b) ---
@@ -1246,7 +1246,7 @@ fn dispatch_method(c: Interp, recv: Value, fname: string, args: [Expr], line: in
         let vals = eval_args(c, args)?;
         return dispatch_builtin(c.args, fname, prepend(recv, vals), line, col);
     }
-    panic("no se pudo resolver '" + fname + "' sobre el receptor")
+    panic("no se pudo resolver '" + fname + "' about el receptor")
 }
 
 // Una llamada. Camino directo por nombre (builtin o función global), construcción de enum
@@ -1358,7 +1358,7 @@ fn call_value(c: Interp, fv: Value, args: [Value]) -> Result<Value, Flow> {
     match (fv) {
         Value.VFunc(f) => call_body(c, f.params, f.body, args, no_captures()),
         Value.VClosure(fe, caps) => call_body(c, fe.params, fe.body, args, caps),
-        _ => panic("se intentó llamar a un valor que no es función"),
+        _ => panic("se intentó llamar a un valor what no es función"),
     }
 }
 
@@ -1491,7 +1491,7 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
 // =====================================================================
 // Error de índice fuera de rango (mensaje idéntico al de Rust).
 fn oob(idx_e: Expr, i: int, n: int) -> RuntimeError {
-    rt_error(idx_e.line, idx_e.col, "índice " + to_string(i) + " fuera de rango (longitud " + to_string(n) + ")")
+    rt_error(idx_e.line, idx_e.col, "índice " + to_string(i) + " outside de range (length " + to_string(n) + ")")
 }
 
 fn eval_array(c: Interp, elems: [Expr]) -> Result<Value, Flow> {
@@ -1523,7 +1523,7 @@ fn eval_index(c: Interp, arr_e: Expr, idx_e: Expr) -> Result<Value, Flow> {
             }
             Result.Ok(Value.VChar(cs[i]))
         },
-        _ => panic("indexar sobre un no-arreglo/string"),
+        _ => panic("index about un no-array/string"),
     }
 }
 
@@ -1550,7 +1550,7 @@ fn eval_field(c: Interp, obj: Expr, fname: string) -> Result<Value, Flow> {
     let v = eval_expr(c, obj)?;
     match (v) {
         Value.VStruct(_, fields) => Result.Ok(struct_get(fields, fname)),
-        _ => panic("acceso a campo sobre un no-struct"),
+        _ => panic("access a campo about un no-struct"),
     }
 }
 
@@ -1579,7 +1579,7 @@ fn assign_index(c: Interp, arr_e: Expr, idx_e: Expr, v: Value) -> Result<Value, 
             elems[i] = v;  // muta el arreglo compartido
             Result.Ok(Value.VUnit)
         },
-        _ => panic("asignar índice sobre un no-arreglo"),
+        _ => panic("asignar índice about un no-array"),
     }
 }
 
@@ -1590,7 +1590,7 @@ fn assign_field(c: Interp, obj_e: Expr, fname: string, v: Value) -> Result<Value
             struct_set(fields, fname, v);
             Result.Ok(Value.VUnit)
         },
-        _ => panic("asignar campo sobre un no-struct"),
+        _ => panic("asignar campo about un no-struct"),
     }
 }
 
@@ -1652,7 +1652,7 @@ fn eval_match(c: Interp, scr: Expr, arms: [MatchArm]) -> Result<Value, Flow> {
         }
         i = i + 1;
     }
-    Result.Err(Flow.FError(rt_error(scr.line, scr.col, "ningún brazo del match casó (no debería ocurrir)")))
+    Result.Err(Flow.FError(rt_error(scr.line, scr.col, "ningún branch del match casó (no debería ocurrir)")))
 }
 
 // `?`: desempaqueta `Ok(v)`/`Some(v)` a `v`, o propaga `Err(e)`/`None` como un `return` de la función
@@ -1667,7 +1667,7 @@ fn eval_try(c: Interp, inner: Expr) -> Result<Value, Flow> {
                 Result.Err(Flow.FReturn(v))
             }
         },
-        _ => panic("? sobre un valor que no es Result/Option"),
+        _ => panic("? about un valor what no es Result/Option"),
     }
 }
 

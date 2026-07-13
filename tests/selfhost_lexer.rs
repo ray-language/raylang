@@ -143,9 +143,9 @@ fn repo_path(rel: &str) -> PathBuf {
 
 /// Ejecuta el lexer auto-alojado sobre `src`: lo escribe a un temporal y corre
 /// `raylang selfhost/lex_dump.ray <temporal>`. Devuelve su stdout (sin el salto final).
-fn lex_dump(src: &str, nombre_tmp: &str) -> String {
+fn lex_dump(src: &str, name_tmp: &str) -> String {
     let mut tmp = std::env::temp_dir();
-    tmp.push(nombre_tmp);
+    tmp.push(name_tmp);
     let mut f = std::fs::File::create(&tmp).expect("crea el temporal");
     f.write_all(src.as_bytes()).expect("escribe el temporal");
     drop(f);
@@ -164,103 +164,103 @@ fn lex_dump(src: &str, nombre_tmp: &str) -> String {
 }
 
 /// Compara el lexer auto-alojado con el oráculo para una fuente concreta.
-fn comparar(src: &str, nombre_tmp: &str) {
-    let esperado = canonical(src);
-    let obtenido = lex_dump(src, nombre_tmp);
-    assert_eq!(obtenido, esperado, "el lexer auto-alojado difiere del oráculo para:\n{src}");
+fn compare(src: &str, name_tmp: &str) {
+    let expected = canonical(src);
+    let obtained = lex_dump(src, name_tmp);
+    assert_eq!(obtained, expected, "el lexer auto-alojado difiere del oráculo para:\n{src}");
 }
 
 #[test]
-fn casos_basicos() {
-    comparar("fn fib(n: int) -> int { fib(n - 1) }", "sh_basico.ray");
-    comparar("", "sh_vacio.ray");
-    comparar("let x = 42; var y = 3.14;", "sh_literales.ray");
+fn cases_basicos() {
+    compare("fn fib(n: int) -> int { fib(n - 1) }", "sh_basico.ray");
+    compare("", "sh_empty.ray");
+    compare("let x = 42; var y = 3.14;", "sh_literals.ray");
 }
 
 #[test]
 fn flotantes_con_exponente() {
     // M80: exponente con y sin punto/signo, y las degradaciones de la guarda
     // conservadora (`1eabc` = Int + Ident; `1e+` = Int + Ident + Plus).
-    comparar("let a = 1e21; let b = 1.5e-3; let c = 2E+10; let d = 7e0;", "sh_exp.ray");
-    comparar("let x = 1eabc; let y = 1e+; let z = 3.14e2;", "sh_exp_guarda.ray");
+    compare("let a = 1e21; let b = 1.5e-3; let c = 2E+10; let d = 7e0;", "sh_exp.ray");
+    compare("let x = 1eabc; let y = 1e+; let z = 3.14e2;", "sh_exp_keeps.ray");
 }
 
 #[test]
-fn todos_los_operadores_y_puntuacion() {
-    comparar(
+fn all_los_operators_y_puntuacion() {
+    compare(
         "+ - * / % == != < <= > >= && || ! = -> => ? |> @ ( ) { } [ ] , ; : .",
         "sh_ops.ray",
     );
 }
 
 #[test]
-fn palabras_clave_y_tipos() {
-    comparar(
+fn words_clave_y_types() {
+    compare(
         "let var fn return if else while true false struct enum match trait impl dyn pub import from as int float bool string char",
         "sh_keywords.ray",
     );
 }
 
 #[test]
-fn cadenas_caracteres_y_escapes() {
-    comparar(r#""hola\nmundo\t\\\"fin""#, "sh_str.ray");
-    comparar(r"'a' '\n' '\t' '\\' '\''", "sh_char.ray");
-    comparar("\"con\\rretorno\"", "sh_cr.ray");
+fn strings_caracteres_y_escapes() {
+    compare(r#""hello\nmundo\t\\\"fin""#, "sh_str.ray");
+    compare(r"'a' '\n' '\t' '\\' '\''", "sh_char.ray");
+    compare("\"con\\rretorno\"", "sh_cr.ray");
 }
 
 #[test]
 fn flotantes_y_punto() {
     // El '.' sin dígito detrás no es flotante: 1.x → Int(1) Dot Ident(x).
-    comparar("12.5 0.0 100.25 1.x 7", "sh_float.ray");
+    compare("12.5 0.0 100.25 1.x 7", "sh_float.ray");
 }
 
 #[test]
-fn comentarios_se_ignoran() {
-    comparar("let // comentario\n x // otro\n y", "sh_coment.ray");
+fn comments_se_ignoran() {
+    compare("let // comment\n x // other\n y", "sh_coment.ray");
 }
 
 #[test]
-fn posiciones_multilinea() {
-    comparar("let x\n  42\n    foo", "sh_pos.ray");
+fn positions_multilinea() {
+    compare("let x\n  42\n    foo", "sh_pos.ray");
 }
 
 /// M14.1b: errores como valores. Ante una entrada inválida, el lexer auto-alojado debe
 /// producir el MISMO mensaje y ubicación que el de Rust (no abortar con `panic`).
 #[test]
-fn errores_lexicos_igual_que_el_oraculo() {
-    comparar("#", "sh_err_inesperado.ray"); // carácter inesperado '#'
-    comparar("\"sin cerrar", "sh_err_str_abierta.ray"); // cadena sin cerrar
-    comparar("\"rota\nlinea\"", "sh_err_str_nl.ray"); // salto de línea en cadena
-    comparar("\"mal\\q\"", "sh_err_escape.ray"); // secuencia de escape inválida '\q'
+fn errors_lexicos_equal_what_el_oracle() {
+    compare("#", "sh_err_inesperado.ray"); // carácter inesperado '#'
+    compare("\"sin close", "sh_err_str_abierta.ray"); // cadena sin cerrar
+    compare("\"rota\nlinea\"", "sh_err_str_nl.ray"); // salto de línea en cadena
+    compare("\"mal\\q\"", "sh_err_escape.ray"); // secuencia de escape inválida '\q'
     // M19.3a: '&' y '|' sueltos dejaron de ser error en el lexer de Rust (son AND/OR bit a
     // bit). El lexer auto-alojado (`selfhost/lexer.ray`) aún NO tokeniza bitops —diferido,
     // como `bytes`—, así que estas entradas quedan fuera del corpus del oráculo.
-    comparar("''", "sh_err_char_vacio.ray"); // literal de carácter vacío
-    comparar("'ab'", "sh_err_char_multi.ray"); // más de un carácter
-    comparar("'a", "sh_err_char_abierto.ray"); // carácter sin cerrar
+    compare("''", "sh_err_char_empty.ray"); // literal de carácter vacío
+    compare("'ab'", "sh_err_char_multi.ray"); // más de un carácter
+    compare("'a", "sh_err_char_abierto.ray"); // carácter sin cerrar
     // El error apunta al INICIO del token, no al carácter ofensor: aquí, columna 5.
-    comparar("let x #", "sh_err_pos.ray");
+    compare("let x #", "sh_err_pos.ray");
 }
 
 /// El test más fuerte: lexar archivos REALES (los ejemplos y el propio lexer auto-alojado) y
 /// exigir que el lexer en raylang coincida con el de Rust en cada uno.
 #[test]
-fn lexa_archivos_reales_igual_que_el_oraculo() {
-    let archivos = [
+fn lexa_files_reales_equal_what_el_oracle() {
+    let files = [
         "examples/basics/fib.ray",
         "examples/basics/fizzbuzz.ray",
         "examples/data/enums.ray",
-        "examples/types/genericos.ray",
+        "examples/types/generics.ray",
         "examples/data/mapa.ray",
         "examples/data/match_figuras.ray",
         "selfhost/lexer.ray",
         "selfhost/lex_dump.ray",
     ];
-    for rel in archivos {
+    for rel in files {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
-        let esperado = canonical(&src);
-        let nombre_tmp = format!("sh_real_{}.ray", rel.replace('/', "_"));
-        let obtenido = lex_dump(&src, &nombre_tmp);
-        assert_eq!(obtenido, esperado, "el lexer auto-alojado difiere del oráculo en {rel}");
+        let expected = canonical(&src);
+        let name_tmp = format!("sh_real_{}.ray", rel.replace('/', "_"));
+        let obtained = lex_dump(&src, &name_tmp);
+        assert_eq!(obtained, expected, "el lexer auto-alojado difiere del oráculo en {rel}");
     }
 }

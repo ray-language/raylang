@@ -9,7 +9,7 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
 /// Arma un mini-proyecto con la dependencia por ruta al paquete `db` y el programa de la prueba.
-fn proyecto(base: &std::path::Path) -> std::path::PathBuf {
+fn project(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -29,13 +29,13 @@ fn main() -> int {
         Result.Err(e) => { print(e); return 1; },
     };
     let sin: [string] = [];
-    match (sqlite.exec(c, "CREATE TABLE alumnos (id INTEGER, nombre TEXT, nota REAL)", sin)) {
+    match (sqlite.exec(c, "CREATE TABLE alumnos (id INTEGER, name TEXT, nota REAL)", sin)) {
         Result.Ok(_) => {},
         Result.Err(e) => { print(e); return 1; },
     }
     // INSERT con parámetros posicionales; el segundo deja `nota` en NULL.
     let _ = sqlite.exec(c, "INSERT INTO alumnos VALUES (?1, ?2, ?3)", ["1", "ada", "36"]);
-    match (sqlite.exec(c, "INSERT INTO alumnos (id, nombre) VALUES (?1, ?2)", ["2", "grace"])) {
+    match (sqlite.exec(c, "INSERT INTO alumnos (id, name) VALUES (?1, ?2)", ["2", "grace"])) {
         Result.Ok(n) => { print("afectadas: " + to_string(n)); },
         Result.Err(e) => { print(e); return 1; },
     }
@@ -44,7 +44,7 @@ fn main() -> int {
         Result.Ok(id) => { print("rowid: " + to_string(id)); },
         Result.Err(e) => { print(e); return 1; },
     }
-    match (sqlite.query(c, "SELECT nombre, nota FROM alumnos ORDER BY id", sin)) {
+    match (sqlite.query(c, "SELECT name, nota FROM alumnos ORDER BY id", sin)) {
         Result.Ok(rows) => {
             var i = 0;
             while (i < rows.len()) {
@@ -55,16 +55,16 @@ fn main() -> int {
         Result.Err(e) => { print(e); return 1; },
     }
     // Consulta con parámetro.
-    match (sqlite.query(c, "SELECT nota FROM alumnos WHERE nombre = ?1", ["ada"])) {
+    match (sqlite.query(c, "SELECT nota FROM alumnos WHERE name = ?1", ["ada"])) {
         Result.Ok(rows) => { print("nota de ada: " + rows[0][0]); },
         Result.Err(e) => { print(e); return 1; },
     }
     // Transacción revertida: el INSERT dentro no debe sobrevivir al ROLLBACK.
     let _ = sqlite.exec(c, "BEGIN", sin);
-    let _ = sqlite.exec(c, "INSERT INTO alumnos (id, nombre) VALUES (?1, ?2)", ["3", "fantasma"]);
+    let _ = sqlite.exec(c, "INSERT INTO alumnos (id, name) VALUES (?1, ?2)", ["3", "fantasma"]);
     let _ = sqlite.exec(c, "ROLLBACK", sin);
     match (sqlite.query(c, "SELECT count(*) FROM alumnos", sin)) {
-        Result.Ok(rows) => { print("tras rollback: " + rows[0][0]); },
+        Result.Ok(rows) => { print("after rollback: " + rows[0][0]); },
         Result.Err(e) => { print(e); return 1; },
     }
     // Un error SQL vuelve como valor, no aborta.
@@ -85,37 +85,37 @@ fn main() -> int {
     app
 }
 
-fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
+fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
-    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binario");
+    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
 }
 
-const ESPERADO: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\ntras rollback: 2\nsqlite: no such table: no_existe\ncerrada: handle inválido o ya cerrado\n";
+const ESPERADO: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\ntras rollback: 2\nsqlite: no such table: no_existe\ncerrada: handle inválido o ya closed\n";
 
 #[test]
-fn sqlite_crud_transaccion_y_errores() {
+fn sqlite_crud_transaccion_y_errors() {
     let base = std::env::temp_dir().join("ray_sqlite_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = proyecto(&base);
+    let app = project(&base);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    let (out_vm, _) = correr(&app, &[]);
+    let (out_vm, _) = run(&app, &[]);
     assert_eq!(out_vm, ESPERADO, "VM");
-    let (out_interp, _) = correr(&app, &["--interp"]);
+    let (out_interp, _) = run(&app, &["--interp"]);
     assert_eq!(out_interp, ESPERADO, "intérprete");
 }
 
 #[test]
-fn sqlite_ruta_invalida_da_error_claro() {
+fn sqlite_path_invalida_da_error_claro() {
     let base = std::env::temp_dir().join("ray_sqlite_cli_badpath");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
@@ -144,6 +144,6 @@ fn main() -> int {{
         base.display()
     );
     std::fs::write(app.join("src/main.ray"), main).unwrap();
-    let (out, _) = correr(&app, &[]);
+    let (out, _) = run(&app, &[]);
     assert!(out.starts_with("error: "), "stdout: {out}");
 }

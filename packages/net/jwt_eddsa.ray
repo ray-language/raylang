@@ -44,7 +44,7 @@ fn header_alg(header_b64u: string) -> Result<string, string> {
         Json.JObject(m) => match (m.get("alg")) {
             Option.Some(v) => match (v) {
                 Json.JStr(a) => Result.Ok(a),
-                _ => Result.Err("'alg' no es una cadena"),
+                _ => Result.Err("'alg' no es one string"),
             },
             Option.None => Result.Err("falta 'alg'"),
         },
@@ -81,7 +81,7 @@ pub fn jwt_eddsa_verify(pubkey: bytes, token: string) -> Result<string, string> 
         },
     };
     if (!crypto.ed25519_verify(pubkey, signing_input.to_bytes(), sig)) {
-        return Result.Err("firma inválida");
+        return Result.Err("signature inválida");
     }
     // Firma válida: decodifica el payload (base64url → UTF-8).
     match (base64url_decode(parts[1])) {

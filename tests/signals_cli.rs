@@ -27,9 +27,9 @@ unsafe extern "C" {
 
 /// Lanza `src` con --vm, espera la línea "listo" (el handler ya instalado), manda la
 /// señal y devuelve (stdout completo, exit code).
-fn correr_y_senalar(src: &str, nombre: &str, signal: &str) -> (String, i32) {
+fn run_y_senalar(src: &str, name: &str, signal: &str) -> (String, i32) {
     let mut path = std::env::temp_dir();
-    path.push(nombre);
+    path.push(name);
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(src.as_bytes()).unwrap();
     drop(f);
@@ -38,42 +38,42 @@ fn correr_y_senalar(src: &str, nombre: &str, signal: &str) -> (String, i32) {
         .arg(&path)
         .stdout(Stdio::piped())
         .spawn()
-        .expect("lanza el binario");
+        .expect("lanza el binary");
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee 'listo'");
-    assert_eq!(linea.trim(), "listo", "el programa anuncia el handler instalado");
+    assert_eq!(linea.trim(), "listo", "el program anuncia el handler instalado");
     let st = Command::new("kill").arg(signal).arg(child.id().to_string()).status().unwrap();
     assert!(st.success(), "kill {signal}");
-    let mut resto = String::new();
+    let mut rest = String::new();
     let mut r = reader;
-    std::io::Read::read_to_string(&mut r, &mut resto).unwrap();
+    std::io::Read::read_to_string(&mut r, &mut rest).unwrap();
     let code = child.wait().unwrap().code().unwrap_or(-1);
-    (format!("{linea}{resto}"), code)
+    (format!("{linea}{rest}"), code)
 }
 
-const PROG: &str = "fn main() -> int {\n    let sig = signals();\n    print(\"listo\");\n    match (recv(sig)) {\n        Option.Some(n) => print(\"señal \" + to_string(n)),\n        Option.None => print(\"cerrado\"),\n    }\n    0\n}\n";
+const PROG: &str = "fn main() -> int {\n    let sig = signals();\n    print(\"listo\");\n    match (recv(sig)) {\n        Option.Some(n) => print(\"señal \" + to_string(n)),\n        Option.None => print(\"closed\"),\n    }\n    0\n}\n";
 
 /// SIGTERM llega como 15 por el canal; el programa drena y sale limpio (exit 0).
 #[test]
-fn sigterm_llega_al_canal_y_el_apagado_es_ordenado() {
-    let (out, code) = correr_y_senalar(PROG, "sig_term.ray", "-TERM");
-    assert_eq!(code, 0, "salida limpia\n{out}");
+fn sigterm_llega_al_canal_y_el_off_es_ordenado() {
+    let (out, code) = run_y_senalar(PROG, "sig_term.ray", "-TERM");
+    assert_eq!(code, 0, "output limpia\n{out}");
     assert!(out.contains("señal 15"), "{out}");
 }
 
 /// SIGINT llega como 2.
 #[test]
 fn sigint_llega_como_2() {
-    let (out, code) = correr_y_senalar(PROG, "sig_int.ray", "-INT");
-    assert_eq!(code, 0, "salida limpia\n{out}");
+    let (out, code) = run_y_senalar(PROG, "sig_int.ray", "-INT");
+    assert_eq!(code, 0, "output limpia\n{out}");
     assert!(out.contains("señal 2"), "{out}");
 }
 
 /// La composición NATIVA con select: el servicio drena su canal de trabajo O apaga —
 /// el patrón microservicio. La señal despierta el select aunque haya trabajo en vuelo.
 #[test]
-fn select_compone_trabajo_y_apagado() {
+fn select_compone_trabajo_y_off() {
     let src = "fn main() -> int {\n\
         let trabajo: Channel<int> = Channel.new();\n\
         let sig = signals();\n\
@@ -83,8 +83,8 @@ fn select_compone_trabajo_y_apagado() {
         });\n\
         var canales: [Channel<int>] = [trabajo, sig];\n\
         print(\"listo\");\n\
-        var vivo = true;\n\
-        while (vivo) {\n\
+        var live = true;\n\
+        while (live) {\n\
             let idx = select(canales);\n\
             if (idx == 0) {\n\
                 match (recv(trabajo)) {\n\
@@ -93,14 +93,14 @@ fn select_compone_trabajo_y_apagado() {
                 }\n\
             } else {\n\
                 match (recv(sig)) {\n\
-                    Option.Some(n) => { print(\"apagando por \" + to_string(n)); vivo = false; },\n\
-                    Option.None => { vivo = false; },\n\
+                    Option.Some(n) => { print(\"apagando por \" + to_string(n)); live = false; },\n\
+                    Option.None => { live = false; },\n\
                 }\n\
             }\n\
         }\n\
         0\n\
     }\n";
-    let (out, code) = correr_y_senalar(src, "sig_select.ray", "-TERM");
-    assert_eq!(code, 0, "salida limpia\n{out}");
+    let (out, code) = run_y_senalar(src, "sig_select.ray", "-TERM");
+    assert_eq!(code, 0, "output limpia\n{out}");
     assert!(out.contains("apagando por 15"), "{out}");
 }

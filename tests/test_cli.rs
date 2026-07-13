@@ -14,36 +14,36 @@ fn run_tests(src: &str, name: &str) -> (String, i32) {
 fn run_tests_filtro(src: &str, name: &str, filtro: Option<&str>) -> (String, i32) {
     let mut path = std::env::temp_dir();
     path.push(name);
-    let mut f = std::fs::File::create(&path).expect("crea el archivo temporal");
-    f.write_all(src.as_bytes()).expect("escribe la fuente");
+    let mut f = std::fs::File::create(&path).expect("crea el file temporal");
+    f.write_all(src.as_bytes()).expect("escribe la source");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
     cmd.arg("--test").arg(&path);
     if let Some(p) = filtro {
         cmd.arg(p);
     }
-    let out = cmd.output().expect("ejecuta el binario");
+    let out = cmd.output().expect("ejecuta el binary");
     let code = out.status.code().unwrap_or(-1);
     (String::from_utf8_lossy(&out.stdout).into_owned(), code)
 }
 
 #[test]
-fn corre_las_pruebas_e_informa_fallos() {
+fn runs_las_tests_e_informa_fallos() {
     let src = r#"
-fn cuadrado(x: int) -> int { x * x }
-@test fn cuadrado_ok() -> bool { cuadrado(3) == 9 }
-@test fn suma_ok() -> bool { 1 + 1 == 2 }
-@test fn falla() -> bool { 2 + 2 == 5 }
+fn square(x: int) -> int { x * x }
+@test fn square_ok() -> bool { square(3) == 9 }
+@test fn sum_ok() -> bool { 1 + 1 == 2 }
+@test fn fails() -> bool { 2 + 2 == 5 }
 fn main() -> int { 0 }
 "#;
     let (out, code) = run_tests(src, "ray_test_mix.ray");
-    assert!(out.contains("ok    cuadrado_ok"), "informa las que pasan\n{out}");
-    assert!(out.contains("ok    suma_ok"), "{out}");
-    assert!(out.contains("FALLO falla"), "informa la que falla\n{out}");
-    assert_eq!(code, 1, "el código de salida es el número de fallos");
+    assert!(out.contains("ok    square_ok"), "informa las what pasan\n{out}");
+    assert!(out.contains("ok    sum_ok"), "{out}");
+    assert!(out.contains("FALLO fails"), "informa la what fails\n{out}");
+    assert_eq!(code, 1, "el código de output es el número de fallos");
 }
 
 #[test]
-fn todas_pasan_codigo_cero() {
+fn todas_pasan_code_cero() {
     let src = "@test fn a() -> bool { true }\n@test fn b() -> bool { !false }\nfn main() -> int { 0 }\n";
     let (out, code) = run_tests(src, "ray_test_ok.ray");
     assert!(out.contains("todas pasaron"), "{out}");
@@ -51,52 +51,52 @@ fn todas_pasan_codigo_cero() {
 }
 
 #[test]
-fn sin_pruebas_lo_indica() {
+fn sin_tests_lo_indica() {
     let (out, code) = run_tests("fn main() -> int { 0 }\n", "ray_test_none.ray");
-    assert!(out.contains("no hay pruebas"), "{out}");
+    assert!(out.contains("no hay tests"), "{out}");
     assert_eq!(code, 0);
 }
 
 #[test]
-fn pruebas_unit_con_assert() {
+fn tests_unit_con_assert() {
     // M13.2b: una @test puede devolver unit; pasa si no dispara assert/panic.
     let src = r#"
 @test fn assert_ok() { assert_eq(2 + 2, 4); assert(true); }
-@test fn assert_falla() { assert_eq(2 + 2, 5); }
+@test fn assert_fails() { assert_eq(2 + 2, 5); }
 fn main() -> int { 0 }
 "#;
     let (out, code) = run_tests(src, "ray_test_unit.ray");
-    assert!(out.contains("ok    assert_ok"), "la unit que pasa\n{out}");
-    assert!(out.contains("FALLO assert_falla"), "la unit que falla\n{out}");
-    assert!(out.contains("assert_eq falló: 4 != 5"), "muestra el mensaje del assert\n{out}");
+    assert!(out.contains("ok    assert_ok"), "la unit what pasa\n{out}");
+    assert!(out.contains("FALLO assert_fails"), "la unit what fails\n{out}");
+    assert!(out.contains("assert_eq falló: 4 != 5"), "shows el mensaje del assert\n{out}");
     assert_eq!(code, 1);
 }
 
 #[test]
-fn panic_no_aborta_la_bateria() {
+fn panic_no_abort_la_bateria() {
     // M13.2b: cada prueba corre aislada; un panic en una no impide ejecutar las demás.
     let src = r#"
-@test fn primera() { panic("boom"); }
-@test fn segunda() -> bool { true }
+@test fn first() { panic("boom"); }
+@test fn second() -> bool { true }
 fn main() -> int { 0 }
 "#;
     let (out, code) = run_tests(src, "ray_test_panic.ray");
-    assert!(out.contains("FALLO primera"), "{out}");
-    assert!(out.contains("boom"), "muestra el mensaje del panic\n{out}");
-    assert!(out.contains("ok    segunda"), "la segunda corre pese al panic de la primera\n{out}");
+    assert!(out.contains("FALLO first"), "{out}");
+    assert!(out.contains("boom"), "shows el mensaje del panic\n{out}");
+    assert!(out.contains("ok    second"), "la second runs pese al panic de la first\n{out}");
     assert_eq!(code, 1);
 }
 
 #[test]
-fn filtro_por_nombre() {
+fn filtro_por_name() {
     // M13.2b: un argumento tras la ruta selecciona por subcadena del nombre.
     let src = r#"
-@test fn suma_ok() -> bool { 1 + 1 == 2 }
+@test fn sum_ok() -> bool { 1 + 1 == 2 }
 @test fn resta_ok() -> bool { 3 - 1 == 2 }
 fn main() -> int { 0 }
 "#;
-    let (out, code) = run_tests_filtro(src, "ray_test_filtro.ray", Some("suma"));
-    assert!(out.contains("ok    suma_ok"), "corre la que casa\n{out}");
-    assert!(!out.contains("resta_ok"), "no corre la que no casa\n{out}");
+    let (out, code) = run_tests_filtro(src, "ray_test_filtro.ray", Some("sum"));
+    assert!(out.contains("ok    sum_ok"), "runs la what casa\n{out}");
+    assert!(!out.contains("resta_ok"), "no runs la what no casa\n{out}");
     assert_eq!(code, 0);
 }

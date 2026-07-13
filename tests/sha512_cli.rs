@@ -14,27 +14,27 @@ const ESPERADO: &[&str] = &[
 2e93a252a954f23912547d1e8a3b5ed6e1bfd7097821233fa0538f3db854fee6",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/sha512_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta sha512_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 #[test]
-fn sha512_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn sha512_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "sha512_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn sha512_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "sha512_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }

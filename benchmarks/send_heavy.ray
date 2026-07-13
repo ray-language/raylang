@@ -22,14 +22,14 @@ fn main() -> int {
         productor(ch, big, 4000);  // 4000 envíos → 4000 send-copies + 4000 recv-copies
     });
     var total = 0;
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         match (recv(ch)) {
             Option.Some(a) => {
                 total = total + a[0];
             },
             Option.None => {
-                seguir = false;
+                follow = false;
             },
         }
     }

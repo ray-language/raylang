@@ -218,3 +218,44 @@ fn errores_del_template() {
         k += 1;
     }
 }
+
+// ── M91.6: "filtros" de template = las expresiones raylang que ya empalma `{{ }}` ────────
+// No hay sintaxis nueva (el `|` de Jinja colisionaría con el OR binario de raylang): un filtro
+// es una CADENA DE MÉTODOS (`{{ x.trim().to_upper() }}`, UFCS) o un PIPELINE a una función
+// libre (`{{ x |> text.capitalize() }}` con `{% import std/text %}`). Regresión de ambas formas.
+#[test]
+fn filtros_via_metodos_y_pipelines() {
+    let tpl = r#"{% params nombre: string, etiquetas: [string] %}
+{% import std/text %}
+<h1>{{ nombre.trim().to_upper() }}</h1>
+<p>{{ nombre.trim() |> text.capitalize() }}</p>
+{% for t in etiquetas %}<li>{{ t.to_upper().repeat(2) }}</li>{% endfor %}"#;
+    let main = "import vistas/lista;\n\nfn main() -> int {\n    print(lista.render_lista(\"  ada  \", [\"a\", \"b\"]));\n    0\n}\n";
+    let base = std::env::temp_dir().join("ray_templ_filtros");
+    let _ = std::fs::remove_dir_all(&base);
+    let app = proyecto(&base, tpl, main);
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n",
+    )
+    .unwrap();
+
+    let esperado = "\n\n<h1>ADA</h1>\n<p>Ada</p>\n<li>AA</li><li>BB</li>";
+    for flags in [&[][..], &["--interp"][..]] {
+        let mut args = vec!["run"];
+        args.extend_from_slice(flags);
+        let out = std::process::Command::new(BIN)
+            .args(&args)
+            .current_dir(&app)
+            .output()
+            .expect("lanza el binario");
+        assert!(
+            out.status.success(),
+            "corre sin error ({flags:?})\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(stdout.trim(), esperado.trim(), "filtros ({flags:?}): {stdout}");
+    }
+}

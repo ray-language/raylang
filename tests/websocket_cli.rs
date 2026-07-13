@@ -217,3 +217,84 @@ fn echo_server_robusto_ante_framing_real() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+// ── Envío fragmentado (M91.4): send_message trocea; read_message del servidor reensambla ──
+
+const DRIVER_FRAG: &str = r#"
+from websocket_client import connect, close_ws;
+from websocket import send_message, read_message, op_text, WsConn, Frame;
+
+fn main() -> int {
+    let port = match (parse_int(args()[0])) {
+        Option.Some(p) => p,
+        Option.None => 0,
+    };
+    match (connect("127.0.0.1", port, "/")) {
+        Result.Err(e) => {
+            print("err conexión: " + e);
+            1
+        },
+        Result.Ok(ws) => {
+            // Un mensaje de ~240 octetos con max_frame=16 → ~15 tramas (1.ª texto + continuaciones).
+            var msg = "";
+            var i = 0;
+            while (i < 20) {
+                msg = msg + "fragmento-" + to_string(i) + "|";
+                i = i + 1;
+            }
+            match (send_message(ws, op_text(), msg.to_bytes(), 16)) {
+                Result.Err(e) => {
+                    print("err envío: " + e);
+                    return 1;
+                },
+                Result.Ok(_) => { },
+            }
+            match (read_message(ws)) {
+                Result.Err(e) => {
+                    print("err eco: " + e);
+                    1
+                },
+                Result.Ok(fr) => {
+                    match (from_utf8(fr.payload)) {
+                        Result.Ok(t) => {
+                            print(if (t == msg) { "eco-ok " + to_string(t.len()) } else { "eco distinto: " + t });
+                            0
+                        },
+                        Result.Err(_) => {
+                            print("eco no utf8");
+                            1
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+"#;
+
+#[test]
+fn envio_fragmentado_reensamblado_por_el_servidor() {
+    let (mut child, port) = lanzar_echo();
+
+    let mut dir = std::env::temp_dir();
+    dir.push("ray_ws_frag");
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    for lib in ["websocket.ray", "websocket_client.ray", "sha1.ray", "base64.ray"] {
+        let src = format!("{}/examples/web/{lib}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::copy(&src, dir.join(lib)).unwrap_or_else(|_| panic!("copia {lib}"));
+    }
+    let driver = dir.join("main.ray");
+    std::fs::write(&driver, DRIVER_FRAG).expect("escribe driver");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("--vm")
+        .arg(&driver)
+        .arg(port.to_string())
+        .output()
+        .expect("lanza el cliente");
+    let _ = child.kill();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // 20 trozos "fragmento-N|" (12 chars con N de 1 dígito, 13 con 2) = 250 caracteres idénticos.
+    assert!(stdout.contains("eco-ok 250"), "el eco no reensambló el mensaje fragmentado: {stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr));
+}

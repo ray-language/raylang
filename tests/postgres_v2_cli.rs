@@ -420,3 +420,164 @@ fn postgres_tls_sslrequest_y_sesion_cifrada() {
     assert_eq!(correr_tls(&app, &[]), ESPERADO_TLS, "VM");
     assert_eq!(correr_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
 }
+
+// ── M91.5: sentencias preparadas CON NOMBRE cacheadas por conexión ──────────────────────
+
+/// Como `leer_ciclo` pero con MEMORIA de sentencias (nombre → query, como un servidor real):
+/// devuelve además si el ciclo trajo un Parse y el nombre de sentencia del Bind.
+fn leer_ciclo_stmt<S: Read + Write>(
+    s: &mut S,
+    stmts: &mut std::collections::HashMap<String, String>,
+) -> Option<(String, Vec<String>, bool, String)> {
+    let mut query = String::new();
+    let mut params: Vec<String> = Vec::new();
+    let mut hubo_parse = false;
+    let mut stmt = String::new();
+    loop {
+        let (t, p) = read_typed(s);
+        match t {
+            b'P' => {
+                hubo_parse = true;
+                let mut i = 0;
+                while p[i] != 0 {
+                    i += 1;
+                }
+                let nombre = String::from_utf8_lossy(&p[..i]).into_owned();
+                i += 1;
+                let start = i;
+                while p[i] != 0 {
+                    i += 1;
+                }
+                let q = String::from_utf8_lossy(&p[start..i]).into_owned();
+                stmts.insert(nombre, q);
+            }
+            b'B' => {
+                let mut i = 0;
+                while p[i] != 0 {
+                    i += 1;
+                }
+                i += 1;
+                let start = i;
+                while p[i] != 0 {
+                    i += 1;
+                }
+                stmt = String::from_utf8_lossy(&p[start..i]).into_owned();
+                // La query del Bind viene de la sentencia NOMBRADA (o anónima "" recién parseada).
+                query = stmts.get(&stmt).cloned().unwrap_or_default();
+                i += 1;
+                let nfmt = u16::from_be_bytes([p[i], p[i + 1]]) as usize;
+                i += 2 + nfmt * 2;
+                let nparams = u16::from_be_bytes([p[i], p[i + 1]]) as usize;
+                i += 2;
+                for _ in 0..nparams {
+                    let len = i32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+                    i += 4;
+                    if len >= 0 {
+                        let l = len as usize;
+                        params.push(String::from_utf8_lossy(&p[i..i + l]).into_owned());
+                        i += l;
+                    } else {
+                        params.push(String::new());
+                    }
+                }
+            }
+            b'S' => return Some((query, params, hubo_parse, stmt)),
+            b'X' => return None,
+            _ => {}
+        }
+    }
+}
+
+/// Servidor con memoria de sentencias: a cada SELECT responde una fila
+/// `[parse=si|no, <nombre de sentencia>]` — visibiliza la caché del cliente.
+fn lanzar_servidor_stmt() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for mut s in listener.incoming().flatten() {
+            read_startup(&mut s);
+            let mut sasl = vec![0u8, 0, 0, 10];
+            sasl.extend_from_slice(b"SCRAM-SHA-256\0");
+            sasl.push(0);
+            s.write_all(&msg(b'R', &sasl)).unwrap();
+            read_typed(&mut s);
+            let mut cont = vec![0u8, 0, 0, 11];
+            cont.extend_from_slice(SERVER_FIRST);
+            s.write_all(&msg(b'R', &cont)).unwrap();
+            read_typed(&mut s);
+            let mut fin = vec![0u8, 0, 0, 12];
+            fin.extend_from_slice(SERVER_FINAL);
+            s.write_all(&msg(b'R', &fin)).unwrap();
+            s.write_all(&msg(b'R', &[0, 0, 0, 0])).unwrap();
+            s.write_all(&msg(b'Z', b"I")).unwrap();
+
+            let mut stmts = std::collections::HashMap::new();
+            while let Some((query, _params, hubo_parse, stmt)) = leer_ciclo_stmt(&mut s, &mut stmts) {
+                if hubo_parse {
+                    s.write_all(&msg(b'1', &[])).unwrap();
+                }
+                s.write_all(&msg(b'2', &[])).unwrap();
+                assert!(query.starts_with("SELECT"), "query resuelta por nombre: {query:?}");
+                s.write_all(&msg(b'T', &row_description(2))).unwrap();
+                let fila = vec![
+                    if hubo_parse { "parse=si".to_string() } else { "parse=no".to_string() },
+                    format!("stmt={stmt}"),
+                ];
+                s.write_all(&msg(b'D', &data_row(&fila))).unwrap();
+                s.write_all(&msg(b'C', &command_complete("SELECT 1"))).unwrap();
+                s.write_all(&msg(b'Z', b"I")).unwrap();
+                let _ = s.flush();
+            }
+        }
+    });
+    port
+}
+
+#[test]
+fn sentencias_preparadas_cacheadas_por_conexion() {
+    let base = std::env::temp_dir().join("ray_pg_stmt_cli");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let port = lanzar_servidor_stmt();
+
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import db/postgres;
+
+fn fila(c: postgres.Conn, sql: string, p: [string]) {{
+    match (postgres.query(c, sql, p)) {{
+        Result.Ok(rows) => print(rows[0].join(" ")),
+        Result.Err(e) => print("err: " + e),
+    }}
+}}
+
+fn main() -> int {{
+    var c = match (postgres.connect("127.0.0.1", {port}, "raylang", "secret", "test", "clientnonce123456")) {{
+        Result.Ok(conn) => conn,
+        Result.Err(e) => {{ print(e); return 1; }},
+    }};
+    fila(c, "SELECT a FROM t WHERE x = $1", ["1"]);  // 1.ª vez: Parse s0
+    fila(c, "SELECT a FROM t WHERE x = $1", ["2"]);  // repetida: SIN Parse, Bind a s0
+    fila(c, "SELECT b FROM t", []);                  // distinta: Parse s1
+    fila(c, "SELECT a FROM t WHERE x = $1", ["3"]);  // la 1.ª otra vez: sigue en caché
+    postgres.disconnect(c);
+    0
+}}
+"#
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+
+    let esperado = "parse=si stmt=s0\nparse=no stmt=s0\nparse=si stmt=s1\nparse=no stmt=s0\n";
+    assert_eq!(correr(&app, &[]), esperado, "VM");
+    assert_eq!(correr(&app, &["--interp"]), esperado, "intérprete");
+}

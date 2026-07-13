@@ -3131,21 +3131,26 @@ impl Checker {
             rt,
             Type::Array(_) | Type::Map(_, _) | Type::Struct(_, _) | Type::Enum(_, _) | Type::Tuple(_)
         );
-        if pipeable || composite_receiver {
-            for (fname, sig) in &self.functions {
-                if fname.contains('#') || fname.contains("::") || fname.starts_with("__") {
+        // M91.7c: sobre un receptor PRIMITIVO en `recv.` sí se ofrecen las funciones UFCS del
+        // USUARIO (`fn doblar(n: int)` → `v.doblar()` es idiomático); se excluyen las del prelude
+        // (`read_file`/`env`/…, que tratan el primitivo como DATO, no como receptor).
+        let solo_usuario = !pipeable && !composite_receiver;
+        for (fname, sig) in &self.functions {
+            if fname.contains('#') || fname.contains("::") || fname.starts_with("__") {
+                continue;
+            }
+            if solo_usuario && crate::prelude::function_names().contains(fname) {
+                continue;
+            }
+            if let Some(p0) = sig.params.first() {
+                if matches!(p0, Type::Var(_)) {
                     continue;
                 }
-                if let Some(p0) = sig.params.first() {
-                    if matches!(p0, Type::Var(_)) {
-                        continue;
-                    }
-                    let mut sigma: HashMap<String, Type> = HashMap::new();
-                    if unify(p0, rt, &mut sigma).is_ok() {
-                        let has_args = sig.params.len() > 1; // > el receptor
-                        let def = self.fn_defs.get(fname).copied();
-                        add(&mut out, &mut seen, fname.clone(), 3, None, has_args, def);
-                    }
+                let mut sigma: HashMap<String, Type> = HashMap::new();
+                if unify(p0, rt, &mut sigma).is_ok() {
+                    let has_args = sig.params.len() > 1; // > el receptor
+                    let def = self.fn_defs.get(fname).copied();
+                    add(&mut out, &mut seen, fname.clone(), 3, None, has_args, def);
                 }
             }
         }

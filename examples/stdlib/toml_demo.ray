@@ -70,4 +70,25 @@ fn main() {
         Result.Ok(entries) => print("no debería parsear"),
         Result.Err(e) => print("err: " + e),
     }
+
+    // M91.3 — tablas en línea (aplanadas; dentro de arreglos como valor) y arreglos de tablas
+    // [[t]] (rutas indexadas t.0, t.1, …; las cabeceras posteriores resuelven por el último).
+    let doc = "point = { x = 1, meta = { tag = \"a\" } }\npuntos = [{ x = 1 }, { x = 2 }]\n[[fruit]]\nname = \"apple\"\n[fruit.physical]\ncolor = \"red\"\n[[fruit.variety]]\nvname = \"red delicious\"\n[[fruit]]\nname = \"banana\"\n[[fruit.variety]]\nvname = \"plantain\"\n";
+    match (parse_toml(doc)) {
+        Result.Ok(entries) => {
+            show_key(entries, "point.x");
+            show_key(entries, "point.meta.tag");
+            show_key(entries, "puntos");
+            show_key(entries, "fruit.0.name");
+            show_key(entries, "fruit.0.physical.color");
+            show_key(entries, "fruit.0.variety.0.vname");
+            show_key(entries, "fruit.1.name");
+            show_key(entries, "fruit.1.variety.0.vname");
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("p = { x = 1,\n y = 2 }")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
 }

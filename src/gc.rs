@@ -122,7 +122,10 @@ pub struct VmChannel {
 pub enum TaskState {
     Pending,
     Done(HeapValue),
-    Failed(String),
+    /// M91.1: el fallo viaja como `RuntimeError` COMPLETO (mensaje + posición original + traza de la
+    /// fibra hija), no solo el mensaje — así el `join`/`ScopeEnd` que lo observe puede encadenar la
+    /// traza de la hija con la suya (la traza cruza el borde de la tarea). Sin handles → el GC no lo traza.
+    Failed(crate::runtime::RuntimeError),
 }
 
 /// Una tarea `Task<T>` (M12.3): el handle a una fibra `spawn`eada, con su estado de terminación. El GC

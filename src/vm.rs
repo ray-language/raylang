@@ -1243,7 +1243,7 @@ impl<'a> Vm<'a> {
                     let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
                     let outcome = match &sh.tasks[t].state {
                         TaskState::Done(v) => Some(Ok(v.clone())),
-                        TaskState::Failed(msg) => Some(Err(msg.clone())),
+                        TaskState::Failed(e) => Some(Err(e.clone())),
                         TaskState::Pending => None,
                     };
                     match outcome {
@@ -1255,7 +1255,17 @@ impl<'a> Vm<'a> {
                             drop(sh);
                             self.push(v2);
                         }
-                        Some(Err(msg)) => return Err(runtime_error(pos!().0, pos!().1, &msg)),
+                        Some(Err(child)) => {
+                            // M91.1: el error re-lanzado conserva el mensaje y toma la posición del
+                            // join (como antes), pero su traza ENCADENA la de la fibra hija (con la
+                            // posición original del fallo) con la del que la une (el join como
+                            // llamada en vuelo) — la traza cruza el borde de la tarea.
+                            let (l, c) = pos!();
+                            let mut e = runtime_error(l, c, &child.msg);
+                            e.trace = child.trace;
+                            e.trace.extend(Self::build_trace(&self.cur.frames, program, l, c));
+                            return Err(e);
+                        }
                         None => {
                             // Bloquear: re-empuja el id (lo sacamos arriba) y rebobina el ip al
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
@@ -1279,7 +1289,8 @@ impl<'a> Vm<'a> {
                     let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
                     let outcome = match &sh.tasks[t].state {
                         TaskState::Done(_) => Some(None),
-                        TaskState::Failed(msg) => Some(Some(msg.clone())),
+                        // __task_failed expone el fallo como VALOR raylang → solo el mensaje.
+                        TaskState::Failed(e) => Some(Some(e.msg.clone())),
                         TaskState::Pending => None,
                     };
                     match outcome {
@@ -1319,16 +1330,21 @@ impl<'a> Vm<'a> {
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
                     let failure = children.iter().find_map(|&c| match &sh.tasks[c].state {
-                        TaskState::Failed(msg) => Some(msg.clone()),
+                        TaskState::Failed(e) => Some(e.clone()),
                         _ => None,
                     });
-                    if let Some(msg) = failure {
+                    if let Some(child) = failure {
                         for &c in &children {
                             Self::cancel_task(&mut sh, c); // ignora las no-pendientes (la que falló, las Done)
                         }
                         drop(sh);
                         self.cur.scopes.pop();
-                        return Err(runtime_error(pos!().0, pos!().1, &msg));
+                        // M91.1: como en el join — la traza de la hija encadenada con la del scope.
+                        let (l, c) = pos!();
+                        let mut e = runtime_error(l, c, &child.msg);
+                        e.trace = child.trace;
+                        e.trace.extend(Self::build_trace(&self.cur.frames, program, l, c));
+                        return Err(e);
                     }
                     // (2) ¿Alguna pendiente? Rebobina a ScopeEnd y bloquéate (al despertar re-escanea).
                     let pending = children.iter().copied().find(|&c|
@@ -2817,8 +2833,9 @@ impl<'a> Vm<'a> {
         {
             let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
             if let Some(task) = self.cur.task.take() {
-                let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
-                sh.tasks[task].state = TaskState::Failed(msg);
+                // M91.1: el error COMPLETO (mensaje + posición + traza de esta fibra); el join que lo
+                // observe le pone su propia posición y encadena su traza a la de aquí.
+                sh.tasks[task].state = TaskState::Failed(e.clone());
                 Self::wake_task_waiters(&mut sh, task);
             }
             // M12.5: si esta fibra poseía tareas (scopes activos cuyo cuerpo hizo panic), cancélalas en vez de
@@ -2999,7 +3016,9 @@ impl<'a> Vm<'a> {
     fn cancel_task(shared: &mut Shared, task: usize) {
         match &mut shared.tasks[task].state {
             estado @ TaskState::Pending => {
-                *estado = TaskState::Failed("tarea cancelada (una hermana falló)".to_string());
+                // Sin posición ni traza propias (la cancelación no nace de un sitio del programa);
+                // el join que la observe le pone su posición, como antes de M91.1.
+                *estado = TaskState::Failed(runtime_error(0, 0, "tarea cancelada (una hermana falló)"));
             }
             _ => return, // ya terminó (Done/Failed) → nada que cancelar
         }

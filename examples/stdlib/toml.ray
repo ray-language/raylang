@@ -5,17 +5,22 @@
 // Soporta: comentarios `#`, tablas `[a.b]`, claves desnudas, y valores string (`"..."` con los escapes
 // completos de la spec — \b \f \n \r \t \" \\ \uXXXX \UXXXXXXXX; escape desconocido = Err, M63.1),
 // string LITERAL `'...'` (sin escapes), entero, flotante, booleano (`true`/`false`) y arreglo
-// `[v, v, …]` (posiblemente multilínea). Diferido: tablas en línea `{…}`, arreglos de tablas `[[…]]`,
-// fechas, strings multilínea. (El manifiesto `ray.toml` NO usa este parser: el CLI trae su lector
-// mínimo propio en Rust, `src/manifest.rs`.)
-// Un valor TOML. Recursivo (los arreglos contienen valores).
-/// A TOML value: string, int, float, bool, or array (recursive).
+// `[v, v, …]` (posiblemente multilínea). M91.3: **tablas en línea** `{k = v, …}` (como valor de una
+// entrada se APLANAN a rutas con puntos — `point = {x = 1}` ≡ `point.x = 1`, la semántica de la spec;
+// dentro de un arreglo viven como valor `TTable`) y **arreglos de tablas** `[[t]]` (cada aparición
+// abre un elemento nuevo con ruta INDEXADA: `t.0`, `t.1`, …; una cabecera `[t.sub]` posterior resuelve
+// a través del último elemento: `t.1.sub`). Diferido: fechas, strings multilínea. (El manifiesto
+// `ray.toml` NO usa este parser: el CLI trae su lector mínimo propio en Rust, `src/manifest.rs`.)
+// Un valor TOML. Recursivo (los arreglos contienen valores; una tabla en línea, entradas).
+/// A TOML value: string, int, float, bool, array (recursive), or inline table (only as an
+/// array element — an inline table that is the value of an entry is flattened into dotted keys).
 pub enum TomlValue {
     TStr(string),
     TInt(int),
     TFloat(float),
     TBool(bool),
     TArray([TomlValue]),
+    TTable([TomlEntry]),
 }
 
 // Una entrada del documento: la ruta con puntos y su valor.
@@ -286,9 +291,84 @@ fn parse_value(t: TS) -> Result<TomlValue, string> {
         }
     } else if (c == '[') {
         parse_array(t)
+    } else if (c == '{') {
+        match (parse_inline_table(t)) {
+            Result.Ok(es) => Result.Ok(TomlValue.TTable(es)),
+            Result.Err(e) => Result.Err(e),
+        }
     } else {
         clasificar_escalar(read_scalar(t))
     }
+}
+
+// M91.3: una tabla en línea `{k = v, k2 = v2}` (spec: UNA línea, sin coma final). Devuelve sus
+// entradas con claves LOCALES; una tabla en línea anidada se aplana con su prefijo
+// (`a = {b = {c = 1}}` → `b.c = 1` local, que el llamador prefijará con `a`).
+fn parse_inline_table(t: TS) -> Result<[TomlEntry], string> {
+    ts_adv(t);  // '{'
+    var out: [TomlEntry] = [];
+    skip_spaces(t);
+    if (!ts_end(t) && ts_peek(t) == '}') {
+        ts_adv(t);
+        return Result.Ok(out);  // `{}` válido: tabla vacía (aplanada = cero entradas)
+    }
+    while (true) {
+        skip_spaces(t);
+        if (!ts_end(t) && ts_peek(t) == '\n') {
+            return Result.Err("salto de línea dentro de una tabla en línea {…}");
+        }
+        let key = parse_key(t);
+        if (key == "") {
+            return Result.Err("clave inválida en la tabla en línea");
+        }
+        skip_spaces(t);
+        if (ts_end(t) || ts_peek(t) != '=') {
+            return Result.Err("falta '=' tras la clave '" + key + "' en la tabla en línea");
+        }
+        ts_adv(t);
+        let val = parse_value(t)?;
+        push_aplanado(out, key, val)?;
+        skip_spaces(t);
+        if (ts_end(t)) {
+            return Result.Err("tabla en línea sin cerrar (falta '}')");
+        }
+        let c = ts_peek(t);
+        if (c == '}') {
+            ts_adv(t);
+            return Result.Ok(out);
+        }
+        if (c != ',') {
+            return Result.Err("se esperaba ',' o '}' en la tabla en línea");
+        }
+        ts_adv(t);  // ','
+    }
+    Result.Err("inalcanzable")
+}
+
+// Añade `key = val` a `out`, aplanando si `val` es una tabla en línea (sus entradas cuelgan de
+// `key.`); valida claves duplicadas dentro del grupo. Una tabla en línea VACÍA no aporta entradas.
+fn push_aplanado(out: [TomlEntry], key: string, val: TomlValue) -> Result<int, string> {
+    return match (val) {
+        TomlValue.TTable(sub) => {
+            var i = 0;
+            while (i < sub.len()) {
+                let full = key + "." + sub[i].key;
+                if (clave_repetida(out, full)) {
+                    return Result.Err("clave duplicada: '" + full + "'");
+                }
+                out.push(TomlEntry { key: full, value: sub[i].value });
+                i = i + 1;
+            }
+            Result.Ok(0)
+        },
+        _ => {
+            if (clave_repetida(out, key)) {
+                return Result.Err("clave duplicada: '" + key + "'");
+            }
+            out.push(TomlEntry { key: key, value: val });
+            Result.Ok(0)
+        },
+    };
 }
 
 fn parse_array(t: TS) -> Result<TomlValue, string> {
@@ -355,12 +435,20 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
     let t = TS { cs: src.chars(), pos: 0 };
     var entries: [TomlEntry] = [];
     var table = "";
+    // M91.3: nº de elementos abiertos por cada array-de-tablas (clave = su ruta RESUELTA).
+    var at_counts: Map<string, int> = Map.new();
     skip_trivia(t);
     while (!ts_end(t)) {
         if (ts_peek(t) == '[') {
             ts_adv(t);
-            table = parse_key(t);
-            if (table == "") {
+            // M91.3: `[[t]]` = arreglo de tablas (cada aparición abre un elemento nuevo).
+            var es_array = false;
+            if (!ts_end(t) && ts_peek(t) == '[') {
+                ts_adv(t);
+                es_array = true;
+            }
+            let ruta = parse_key(t);
+            if (ruta == "") {
                 // M63.3: `[]` reseteaba la tabla a la raíz en silencio.
                 return Result.Err("cabecera de tabla vacía");
             }
@@ -369,7 +457,14 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
                 return Result.Err("falta ']' en la cabecera de tabla");
             }
             ts_adv(t);
-            expect_eol(t, "la cabecera de tabla [" + table + "]")?;
+            if (es_array) {
+                if (ts_end(t) || ts_peek(t) != ']') {
+                    return Result.Err("falta ']]' en la cabecera de arreglo de tablas");
+                }
+                ts_adv(t);
+            }
+            table = resolver_tabla(at_counts, ruta, es_array);
+            expect_eol(t, "la cabecera de tabla [" + ruta + "]")?;
         } else {
             let key = parse_key(t);
             if (key == "") {
@@ -390,16 +485,65 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
             if (table != "") {
                 full = table + "." + key;
             }
-            if (clave_repetida(entries, full)) {
-                // M63.3: antes se aceptaban ambas y toml_get devolvía la PRIMERA.
-                return Result.Err("clave duplicada: '" + full + "'");
+            // M91.3: una tabla en línea como valor se APLANA a rutas con puntos (la semántica
+            // de la spec: `point = {x = 1}` ≡ `[point] x = 1`); el resto va tal cual.
+            let aplanadas: [TomlEntry] = match (val) {
+                TomlValue.TTable(sub) => {
+                    var xs: [TomlEntry] = [];
+                    var k = 0;
+                    while (k < sub.len()) {
+                        xs.push(TomlEntry { key: full + "." + sub[k].key, value: sub[k].value });
+                        k = k + 1;
+                    }
+                    xs
+                },
+                _ => [TomlEntry { key: full, value: val }],
+            };
+            var k = 0;
+            while (k < aplanadas.len()) {
+                if (clave_repetida(entries, aplanadas[k].key)) {
+                    // M63.3: antes se aceptaban ambas y toml_get devolvía la PRIMERA.
+                    return Result.Err("clave duplicada: '" + aplanadas[k].key + "'");
+                }
+                entries.push(aplanadas[k]);
+                k = k + 1;
             }
-            entries.push(TomlEntry { key: full, value: val });
             expect_eol(t, "el valor de '" + full + "'")?;
         }
         skip_trivia(t);
     }
     Result.Ok(entries)
+}
+
+// M91.3: resuelve la ruta de una cabecera contra los arreglos de tablas conocidos. Cada
+// segmento acumulado que sea un array-de-tablas se reescribe a su elemento ACTUAL (índice
+// n-1); el último segmento de un `[[t]]` ABRE un elemento nuevo (índice n, contador+1).
+// Así `[[fruit]] … [fruit.physical]` resuelve a `fruit.0` y `fruit.0.physical`, y un
+// `[[fruit.variety]]` anidado a `fruit.0.variety.0` (como la spec).
+fn resolver_tabla(at_counts: Map<string, int>, ruta: string, es_array: bool) -> string {
+    let segs = ruta.split(".");
+    var path = "";
+    var i = 0;
+    while (i < segs.len()) {
+        path = if (path == "") { segs[i] } else { path + "." + segs[i] };
+        if (es_array && i == segs.len() - 1) {
+            let n = match (at_counts.get(path)) {
+                Option.Some(k) => k,
+                Option.None => 0,
+            };
+            at_counts.insert(path, n + 1);
+            path = path + "." + to_string(n);
+        } else {
+            match (at_counts.get(path)) {
+                Option.Some(k) => {
+                    path = path + "." + to_string(k - 1);
+                },
+                Option.None => { },
+            }
+        }
+        i = i + 1;
+    }
+    path
 }
 
 // Busca el valor de una ruta con puntos.
@@ -435,6 +579,19 @@ pub fn toml_show(v: TomlValue) -> string {
                 i = i + 1;
             }
             s + "]"
+        },
+        // M91.3: una tabla en línea (solo aparece como elemento de arreglo).
+        TomlValue.TTable(es) => {
+            var s = "{";
+            var i = 0;
+            while (i < es.len()) {
+                if (i > 0) {
+                    s = s + ", ";
+                }
+                s = s + es[i].key + " = " + toml_show(es[i].value);
+                i = i + 1;
+            }
+            s + "}"
         },
     }
 }

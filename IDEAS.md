@@ -225,8 +225,14 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     símbolos `pub`; `import …` rutas de módulo con encapsulación, DESIGN §47.2). El de miembros: campos/métodos/builtins/UFCS del tipo del
     receptor; DESIGN §47). Repara la fuente con un centinela (`recv.__raycomplete__;`) y consulta
     `checker::member_completion`; incluye los **builtins de string/array/map** y el orden superior
-    del prelude (`map`/`filter`/`fold`/`sort`). Diferido: docs `///` de métodos de impl del usuario,
-    receptores que son expresiones (`f(x).`), UFCS del usuario sobre primitivos.
+    del prelude (`map`/`filter`/`fold`/`sort`). ~~Diferido: docs `///` de métodos de impl del
+    usuario, receptores que son expresiones (`f(x).`), UFCS del usuario sobre primitivos~~ →
+    ✅ **M91.7**: (a) las docs de métodos de impl YA funcionaban (vía `fn_defs` del manglado; fila
+    obsoleta — regresión añadida); (b) receptor-expresión (`f(x).`, `xs[0].`) arreglado — el bug
+    era que un `;` ya escrito tras el punto producía `;;` al reparar (el `;` entra en
+    `in_expression`, ambos caminos `recv.` y `|>`); (c) UFCS del usuario sobre primitivos SÍ se
+    ofrece (`v.doblar()`), excluyendo el prelude vía `prelude::function_names()` cacheado (las de
+    E/S siguen fuera: tratan el primitivo como dato).
   - **Completion type-aware tras `|>`** (pipeline) — el `|>` no tiene tratamiento propio en la
     completion: sin un `.` delante, cae al camino **de archivo** (ofrece TODAS las funciones, no
     filtradas). Idea: en `x |> ` filtrar a las funciones libres cuyo **primer parámetro** acepte el
@@ -598,8 +604,14 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   typo en una variable = error de compilación (probado); **0.6 ms por render** (2× sobre el motor
   runtime optimizado, 7.7× sobre el original). Diferido: include/layouts, regeneración en `ray
   build`, `{% let %}`.
-- Diferido de fase 1: `{% include %}`/parciales (pide diseño de resolución: mapa de parciales en
-  compile vs. filesystem), filtros. ~~`s[i]` O(1) en la VM~~ → ✅ **M90.6** (en AMBOS motores, sin
+- Diferido de fase 1: ~~`{% include %}`/parciales~~ (✅ cerrado en el arco M55: `{% include
+  ruta/al/template(args) %}` por ruta desde la raíz + herencia `{% extends %}`/`{% block %}`; esta
+  fila quedó desactualizada). ~~Filtros~~ → ✅ **M91.6, resuelto SIN sintaxis nueva** (decisión
+  estilo §46-ternario: el `|` de Jinja chocaría con el OR binario): un filtro ES una expresión
+  raylang que `{{ }}` ya empalma — cadena de métodos (`{{ x.trim().to_upper() }}`, UFCS) o pipeline
+  a función libre (`{{ x |> text.capitalize() }}` con `{% import std/text %}`). Documentado en
+  MANUAL; regresión `filtros_via_metodos_y_pipelines` en `templ_cli`, ambos motores.
+  ~~`s[i]` O(1) en la VM~~ → ✅ **M90.6** (en AMBOS motores, sin
   cachear ni tocar la representación —la Opt.3 `Rc<str>` ya se midió y revirtió—: se elimina el
   `Vec<char>` completo que se asignaba POR ACCESO; ASCII indexa el byte en O(1) —también `len`—,
   no-ASCII escanea hasta `i` sin asignar; bucle `s[i]` sobre 64k chars: 37,9 s → 1,16 s, ~33×).
@@ -640,9 +652,14 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
     siempre). Quedan: sentencias con estado (cachear stmt_id), tipos binarios en los parámetros
     (hoy texto), full-path de caching_sha2 **sin** TLS (RSA; con `connect_tls` pierde casi todo el
     sentido), BIGINT UNSIGNED ≥ 2^63 (se muestra envuelto).
-  - **Postgres**: parámetros binarios/tipados, sentencias preparadas con estado (hoy anónimas, una
-    por ronda), COPY, `sslmode` negociable estilo libpq (hoy: `connect` = nunca TLS /
-    `connect_tls` = obligatorio).
+  - **Postgres**: ~~sentencias preparadas con estado (hoy anónimas, una por ronda)~~ → ✅ **M91.5**:
+    sentencias CON NOMBRE cacheadas por conexión (`Conn.stmt_*`; hit = Bind directo sin re-Parse →
+    el servidor reusa el plan; nombre fresco `s<n>` por Parse y caché solo tras ronda exitosa —
+    un Parse fallido no envenena; tope 64, por encima cae a anónimas; test
+    `sentencias_preparadas_cacheadas_por_conexion` con toy-server con memoria de sentencias).
+    Quedan: parámetros binarios/tipados (⚠️ decisión de API pendiente con el usuario: `params`
+    dejaría de ser `[string]` — la v1 tipada-a-texto es deliberada), COPY, `sslmode` negociable
+    estilo libpq (hoy: `connect` = nunca TLS / `connect_tls` = obligatorio).
   - **SQLite**: `last_insert_rowid` ✅ (raylang puro, DESIGN §56.6) y WAL ✅ (ya posible:
     `query(c, "PRAGMA journal_mode=WAL", [])`). Queda: tipos nativos (celdas no-texto).
   - **MongoDB**: Date/Timestamp ✅ y `connect_tls` ✅ (DESIGN §56.6). Quedan: Decimal128 (error
@@ -760,8 +777,13 @@ explícita (`struct Conn` + `connect`/`conn_request`/`conn_request_bytes`/`conn_
 RPC): delimita cada respuesta por Content-Length/chunked incremental (sin EOF) guardando los sobrantes,
 honra `Connection: close`, reconecta perezoso y reintenta UNA vez transparente en la carrera del
 keep-alive ocioso (el servidor cerró sin entregar ningún octeto). La API one-shot (`fetch`/`request*`)
-sigue con `Connection: close`. Quedan a demanda: multiplexado h2 real, fragmentación WS de ENVÍO (la de
-recepción entra en 58.1), y un pool multi-conexión sobre `Conn` si aparece un consumidor concurrente.
+sigue con `Connection: close`. ~~Fragmentación WS de ENVÍO~~ → ✅ **M91.4**: `send_message(ws, opcode,
+payload, max_frame)` trocea en tramas de ≤ `max_frame` octetos (1.ª con el opcode y FIN=0,
+continuaciones opcode 0, la última FIN=1; control nunca se fragmenta, RFC 6455), enmascarando según
+el lado (`ws.mask`); `encode_frame[_masked]` delegan en variantes `_fin` internas. Test e2e
+`envio_fragmentado_reensamblado_por_el_servidor` (cliente raylang fragmenta con max_frame=16 →
+`read_message` del echo-server reensambla). Quedan a demanda: multiplexado h2 real y un pool
+multi-conexión sobre `Conn` si aparece un consumidor concurrente.
 
 ---
 
@@ -845,9 +867,14 @@ valores, subconjunto documentado); los huecos, verificados con sondas:
 | Laxitudes que la spec prohíbe: `a = 1 b = 2` en una línea (exige salto tras el valor); clave duplicada aceptada y **`toml_get` devuelve la PRIMERA** (se espera error o last-wins); `[]` cabecera vacía resetea a raíz en silencio | Sorpresas silenciosas | **63.3**: duplicada = Err, `[]` = Err, salto obligatorio tras el valor |
 | Menores: O(n²) por carácter (configs pequeños — impacto bajo); control chars crudos en strings; `toml_show` no escapa (debug, documentado) | — | dentro de su sub-fase o diferido |
 
-**Diferidos que siguen** (documentados en el propio módulo): inline tables `{…}`, arrays de
-tablas `[[…]]`, fechas, strings multilínea `"""…"""` — a demanda. Nota de raydoc pendiente: el
-manifiesto usa otro parser.
+**Diferidos que siguen** (documentados en el propio módulo): ~~inline tables `{…}`, arrays de
+tablas `[[…]]`~~ → ✅ **M91.3**: tablas en línea `{k = v, …}` (como valor de entrada se APLANAN a
+rutas con puntos — la semántica de la spec; dentro de un arreglo viven como variante nueva
+`TTable([TomlEntry])`; una línea, sin coma final) y `[[t]]` con rutas INDEXADAS (`t.0`, `t.1`, …;
+`resolver_tabla` reescribe cabeceras posteriores a través del último elemento — el ejemplo `fruit`
+de la spec con `[fruit.physical]` y `[[fruit.variety]]` anidado resuelve como manda). Golden en
+`toml_cli` ampliado. Quedan a demanda: fechas, strings multilínea `"""…"""`. Nota de raydoc
+pendiente: el manifiesto usa otro parser.
 
 ---
 
@@ -1121,8 +1148,15 @@ Fix: `dec_int` pasa a `Result`, chequea `p < len` en cada continuación y corta 
 llamadores de `dec_int` en `decode` propagan con `?`. Regresión: entero truncado, string
 sobredimensionado, size-update > 4096 y bomba de varint = `Err`, no crash (`cli_cli`,
 `paquete_net_hpack_decode_malformado`); el round-trip legítimo y el e2e HTTP/2 siguen verdes.
-Espejos `packages/net` ↔ `examples/web` juntos. El Huffman de decodificación sigue diferido
-(rechazado con error claro, como antes).
+Espejos `packages/net` ↔ `examples/web` juntos. ~~El Huffman de decodificación sigue diferido~~ →
+✅ **M91.2**: el decodificador entiende literales Huffman (cierra el bloqueo nº 1 de interop h2:
+casi todos los servidores reales comprimen sus cabeceras de respuesta). Truco de tamaño: el código
+del Apéndice B es **canónico** (códigos crecientes por longitud y, dentro de una longitud, por
+símbolo) → solo se transcribe la tabla de 257 LONGITUDES (extraída y verificada contra el RFC) y
+las bases (primer código/símbolo por longitud) se reconstruyen en runtime. Reglas §5.2: relleno
+final ≤ 7 bits todo unos (prefijo del EOS), EOS explícito = error. El codificador sigue emitiendo
+literales crudos (válidos). Vectores oficiales C.4 (tabla compartida) y C.6 (max 256, evicciones)
+en `hpack_huffman_vectores_c4_y_c6`, ambos motores. (El M31.1 de la tabla vieja queda cubierto.)
 
 ---
 
@@ -1282,11 +1316,17 @@ funciones anotadas y un nivel). Diseño completo en DESIGN §83.
 | Reposición de la cabecera (y el `^`) al **primer marco de usuario** cuando el error cae en prelude/std — la mitad "intrinsic", barata sobre la traza (DESIGN §83.3) | Solo cliente | ✅ **79c** |
 
 **M79 COMPLETO (a+b+c)** (546 lib + `stack_trace_oraculo` + 8 en `errors_cli`). Diferido:
-la traza no cruza `Task::Failed`; saltar también paquetes/deps en la reposición; nombres
-manglados tal cual.
+~~la traza no cruza `Task::Failed`~~ (✅ M91.1); saltar también paquetes/deps en la reposición;
+nombres manglados tal cual.
 
-Diferido: transportar la traza a través de `Task::Failed` (hoy solo cruza el mensaje); nombres
-"bonitos" para métodos manglados (`Tipo#metodo` se muestra tal cual, honesto).
+~~Diferido: transportar la traza a través de `Task::Failed`~~ → ✅ **M91.1**: `TaskState::Failed`
+lleva el `RuntimeError` COMPLETO (mensaje + posición original + traza de la fibra hija); el
+`join`/`ScopeEnd` que lo observa re-lanza con su posición (mensaje idéntico, compat) pero con la
+traza de la hija ENCADENADA con la suya — el stderr muestra dónde nació el panic dentro de la
+tarea y la cabecera se reposiciona al sitio real (79c compone gratis). `__task_failed` (valor
+raylang) sigue exponiendo solo el mensaje; una tarea cancelada no gana traza (como antes). Test
+`la_traza_cruza_el_join`. Sigue diferido: nombres "bonitos" para métodos manglados
+(`Tipo#metodo` se muestra tal cual, honesto).
 
 ## 45. Optimización de la VM ronda 2 — análisis post-M88 (jul 2026)
 

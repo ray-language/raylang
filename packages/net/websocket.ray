@@ -135,9 +135,18 @@ pub fn decode_frame(data: bytes) -> Frame {
 /// Encodes a server-to-client frame (unmasked, FIN=1) with the given opcode and payload,
 /// choosing the 7-bit, 16-bit or 64-bit length encoding as needed (RFC 6455 §5.2).
 pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
+    encode_frame_fin(opcode, payload, true)
+}
+
+// M91.4: como `encode_frame` pero con el bit FIN parametrizado (para fragmentar al enviar).
+fn encode_frame_fin(opcode: int, payload: bytes, fin: bool) -> bytes {
     let plen = payload.len();
     var cabecera: [int] = [];
-    cabecera.push(128 | opcode);  // FIN=1 + opcode
+    var b0 = opcode;
+    if (fin) {
+        b0 = b0 | 128;
+    }
+    cabecera.push(b0);  // FIN + opcode
     if (plen < 126) {
         cabecera.push(plen);
     } else {
@@ -168,9 +177,18 @@ pub fn encode_text(texto: string) -> bytes {
 /// Encodes a client-to-server frame (FIN=1, MASK bit set, random 4-byte masking key,
 /// masked payload — clients MUST mask, RFC 6455 §5.3).
 pub fn encode_frame_masked(opcode: int, payload: bytes) -> bytes {
+    encode_frame_masked_fin(opcode, payload, true)
+}
+
+// M91.4: como `encode_frame_masked` pero con el bit FIN parametrizado.
+fn encode_frame_masked_fin(opcode: int, payload: bytes, fin: bool) -> bytes {
     let plen = payload.len();
     var out: [int] = [];
-    out.push(128 | opcode);  // FIN=1 + opcode
+    var b0 = opcode;
+    if (fin) {
+        b0 = b0 | 128;
+    }
+    out.push(b0);  // FIN + opcode
     if (plen < 126) {
         out.push(128 | plen);  // bit MASK + longitud
     } else {
@@ -312,6 +330,48 @@ fn send_control(ws: WsConn, opcode: int, payload: bytes) {
     match (net.socket_write_bytes(ws.conn, trama)) {
         Result.Ok(_) => { },
         Result.Err(_) => { },
+    }
+}
+
+// M91.4: envío FRAGMENTADO — el simétrico de `read_message`. Trocea `payload` en tramas de a
+// lo sumo `max_frame` octetos: la primera lleva el opcode con FIN=0, las intermedias son
+// continuaciones (opcode 0, FIN=0) y la última cierra con FIN=1. Con carga <= `max_frame` (o
+// una trama de CONTROL, que la RFC prohíbe fragmentar y acota a 125 octetos) emite UNA trama.
+// Enmascara según el lado (`ws.mask`, como todo envío).
+/// Sends one message over the connection, fragmenting it into frames of at most `max_frame`
+/// payload octets (first frame carries the opcode with FIN=0, continuations follow, the last
+/// sets FIN=1). Control frames are never fragmented (RFC 6455). Ok = total octets written.
+pub fn send_message(ws: WsConn, opcode: int, payload: bytes, max_frame: int) -> Result<int, string> {
+    if (max_frame <= 0) {
+        return Result.Err("max_frame debe ser positivo");
+    }
+    let n = payload.len();
+    if (n <= max_frame || opcode >= 8) {
+        return net.socket_write_bytes(ws.conn, encodear(ws, opcode, payload, true));
+    }
+    var enviados = 0;
+    var pos = 0;
+    var primero = true;
+    while (pos < n) {
+        var hasta = pos + max_frame;
+        if (hasta > n) {
+            hasta = n;
+        }
+        let op = if (primero) { opcode } else { 0 };  // 0 = continuación
+        let k = net.socket_write_bytes(ws.conn, encodear(ws, op, payload.sub_bytes(pos, hasta), hasta == n))?;
+        enviados = enviados + k;
+        primero = false;
+        pos = hasta;
+    }
+    Result.Ok(enviados)
+}
+
+// Codifica una trama con el enmascarado del lado que somos y el FIN dado.
+fn encodear(ws: WsConn, opcode: int, payload: bytes, fin: bool) -> bytes {
+    if (ws.mask) {
+        encode_frame_masked_fin(opcode, payload, fin)
+    } else {
+        encode_frame_fin(opcode, payload, fin)
     }
 }
 

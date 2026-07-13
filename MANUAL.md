@@ -1117,7 +1117,10 @@ let html = lista.render_lista("Informe", filas);
 
 Los `{{ expr }}` admiten expresiones raylang (`{{ p.nombre }}`, `{{ n + 1 }}`) con autoescape HTML
 (`{{& expr }}` crudo); `{% if/elif/else %}`, `{% for %}` y `{% let nombre = expr %}` (local
-inmutable) son los de raylang. Los templates **componen**: `{% include vistas/tarjeta(n) %}`
+inmutable) son los de raylang. Los **filtros** también: no hay sintaxis aparte (el `|` de Jinja
+chocaría con el OR binario) porque un filtro ES una expresión raylang — cadena de métodos
+(`{{ nombre.trim().to_upper() }}`) o pipeline a una función libre
+(`{{ nombre |> text.capitalize() }}`, con `{% import std/text %}`). Los templates **componen**: `{% include vistas/tarjeta(n) %}`
 incluye otro template **por su ruta** — sin conocer el nombre de la función generada ni importar
 nada (el generador importa y llama al `render_<x>` él) — y empalma su HTML **sin re-escapar** (el
 partial ya escapó sus datos). Un `{% include expr %}` sin la forma `ruta(args)` empalma la

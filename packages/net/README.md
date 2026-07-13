@@ -62,7 +62,8 @@ fn main() -> int {
   Content-Length/chunked, reconexión y reintento transparente).
 - **`net/http2`** — framing HTTP/2 (preface, SETTINGS, frames). Hoja.
 - **`net/hpack`** — compresión de cabeceras HPACK (RFC 7541): `header`, `encode`, `decode` + tabla
-  dinámica. Determinista. Hoja.
+  dinámica. El decodificador entiende literales **Huffman** (Apéndice B, M91.2); el codificador
+  emite crudos (válido). Determinista. Hoja.
 - **`net/http2_client`** — cliente HTTP/2 sobre `net/http2` + `net/hpack`.
 - **`net/grpc_client`** — cliente gRPC sobre `net/http2` + `net/hpack` + `std/protobuf`.
 
@@ -75,7 +76,9 @@ fn main() -> int {
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
 - **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `net/crypto` + `std/base64`.
   Lectura robusta (M58.1): `WsConn` + `read_frame`/`read_message` (tramas partidas/pegadas, ping→pong
-  automático, fragmentación reensamblada, límite de payload validado antes de leer).
+  automático, fragmentación reensamblada, límite de payload validado antes de leer). Envío
+  fragmentado (M91.4): `send_message(ws, opcode, payload, max_frame)` trocea mensajes grandes en
+  tramas de continuación (control nunca se fragmenta).
 - **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/base64`. `connect`/
   `connect_tls` devuelven un `WsConn` con estado (M58.1).
 - **`net/redis`** — cliente Redis (protocolo RESP). Hoja.

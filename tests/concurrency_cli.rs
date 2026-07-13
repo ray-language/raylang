@@ -366,6 +366,34 @@ fn main() -> int {
 }
 
 #[test]
+fn la_traza_cruza_el_join() {
+    // M91.1: el fallo de una tarea viaja con su TRAZA completa — el stderr muestra la cadena de
+    // llamadas DE LA HIJA (dónde nació el panic) encadenada con el sitio del join en el padre.
+    let src = r#"
+fn profunda(n: int) -> int {
+    if (n == 0) {
+        panic("boom profundo");
+    }
+    profunda(n - 1) + 1
+}
+
+fn main() -> int {
+    let t: Task<int> = spawn(fn() -> int { profunda(2) });
+    join(t)
+}
+"#;
+    let (_out, err, code) = run("conc_join_trace", src, true);
+    assert!(err.contains("boom profundo"), "stderr no propaga el panic: {err}");
+    // La cabecera se reposiciona al sitio real del panic (dentro de la hija), no al join.
+    assert!(err.contains("panic(\"boom profundo\")"), "la cabecera no señala el panic de la hija: {err}");
+    // La traza trae los marcos de la hija Y el join del padre.
+    assert!(err.contains("en profunda"), "falta el marco interno de la hija: {err}");
+    assert!(err.contains("desde profunda"), "falta la cadena recursiva de la hija: {err}");
+    assert!(err.contains("desde main"), "falta el sitio del join en el padre: {err}");
+    assert_eq!(code, 70);
+}
+
+#[test]
 fn scope_propaga_el_panic_de_una_hija() {
     // Una tarea lanzada dentro del scope hace panic: el scope lo propaga al unir al salir.
     let src = r#"

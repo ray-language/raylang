@@ -1282,11 +1282,17 @@ funciones anotadas y un nivel). Diseño completo en DESIGN §83.
 | Reposición de la cabecera (y el `^`) al **primer marco de usuario** cuando el error cae en prelude/std — la mitad "intrinsic", barata sobre la traza (DESIGN §83.3) | Solo cliente | ✅ **79c** |
 
 **M79 COMPLETO (a+b+c)** (546 lib + `stack_trace_oraculo` + 8 en `errors_cli`). Diferido:
-la traza no cruza `Task::Failed`; saltar también paquetes/deps en la reposición; nombres
-manglados tal cual.
+~~la traza no cruza `Task::Failed`~~ (✅ M91.1); saltar también paquetes/deps en la reposición;
+nombres manglados tal cual.
 
-Diferido: transportar la traza a través de `Task::Failed` (hoy solo cruza el mensaje); nombres
-"bonitos" para métodos manglados (`Tipo#metodo` se muestra tal cual, honesto).
+~~Diferido: transportar la traza a través de `Task::Failed`~~ → ✅ **M91.1**: `TaskState::Failed`
+lleva el `RuntimeError` COMPLETO (mensaje + posición original + traza de la fibra hija); el
+`join`/`ScopeEnd` que lo observa re-lanza con su posición (mensaje idéntico, compat) pero con la
+traza de la hija ENCADENADA con la suya — el stderr muestra dónde nació el panic dentro de la
+tarea y la cabecera se reposiciona al sitio real (79c compone gratis). `__task_failed` (valor
+raylang) sigue exponiendo solo el mensaje; una tarea cancelada no gana traza (como antes). Test
+`la_traza_cruza_el_join`. Sigue diferido: nombres "bonitos" para métodos manglados
+(`Tipo#metodo` se muestra tal cual, honesto).
 
 ## 45. Optimización de la VM ronda 2 — análisis post-M88 (jul 2026)
 

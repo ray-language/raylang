@@ -34,6 +34,8 @@ tipado, orientado a expresiones, sintaxis de llaves.
   (`--vm`/`--interp`/`--test`/`--fmt`/`--lsp`/`--repl`/`<archivo>`) se conserva (los tests la usan).
 - REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl` (sobre la VM).
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`
+- **Guía de builds** (features slim M89, PGO, flags de adelgazamiento): `docs/build.md`.
+  Release PGO: `sh tools/pgo.sh [--slim | --features "a,b,c"]`.
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).
 
 ## Arquitectura (pipeline)

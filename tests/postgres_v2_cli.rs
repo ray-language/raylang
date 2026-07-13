@@ -330,7 +330,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO: &str = "ada|36\nfija0|fija1\nbegin: 0\ninsert: 5\nnull: [hello|]\npostgres: relacion nonexistent\n";
+const ESPERADO: &str = "ada|36\nfixes0|fixes1\nbegin: 0\ninsert: 5\nnull: [hello|]\npostgres: relacion nonexistent\n";
 
 #[test]
 fn postgres_v2_extendido_params_y_transaccion() {
@@ -407,7 +407,7 @@ fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO_TLS: &str = "segura\nfija0\n";
+const ESPERADO_TLS: &str = "segura\nfixes0\n";
 
 #[test]
 fn postgres_tls_sslrequest_y_sesion_cifrada() {

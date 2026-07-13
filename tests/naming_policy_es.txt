@@ -89,7 +89,6 @@ entrada
 entradas
 entre
 errores
-escapes
 esperado
 esperada
 estres

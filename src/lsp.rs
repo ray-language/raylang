@@ -370,7 +370,7 @@ fn doc_in_prelude(name: &str) -> Option<String> {
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
     for (i, l) in lines.iter().enumerate() {
         let l = l.trim_start();
-        // Declaraciones de nivel superior y métodos de trait/impl: `fn nombre(`/`fn nombre<`,
+        // Declaraciones de nivel superior y métodos de trait/impl: `fn name(`/`fn name<`,
         // `enum/struct/trait Nombre`.
         let is_decl = ["fn ", "enum ", "struct ", "trait "].iter().any(|kw| {
             l.strip_prefix(kw).is_some_and(|rest| {
@@ -2368,7 +2368,7 @@ fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
     let Some((name, active, receiver)) = enclosing_call(src, line0, char0) else { return Json::Null };
     // 2. Resolver la firma con el resolutor unificado (M46b): buffer + módulos importados + prelude +
     //    builtins. Textual → robusto ante el documento a medio escribir (solo exige que la
-    //    *declaración* `fn nombre(...) -> ...` esté bien formada). Así el signature help funciona
+    //    *declaración* `fn name(...) -> ...` esté bien formada). Así el signature help funciona
     //    también para funciones importadas (`u.cuadrado(`) y del prelude, no solo las del archivo.
     let ctx = SigCtx::new(src, uri_to_path(uri).as_deref());
     // M48.1: función asociada de un tipo incorporado (`Map.new(`/`Channel.bounded(`): la firma sale del
@@ -2412,7 +2412,7 @@ fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
     if is_method && !params.is_empty() {
         params.remove(0);
     }
-    // 3. Construir el label `fn nombre(p: T, …) -> R` y la lista de parámetros (para resaltar).
+    // 3. Construir el label `fn name(p: T, …) -> R` y la lista de parámetros (para resaltar).
     let label = format!("fn {}({}) -> {}", name, params.join(", "), ret);
     let parameters: Vec<Json> = params.iter().map(|p| obj(vec![("label", Json::Str(p.clone()))])).collect();
     let active = active.min(params.len().saturating_sub(1));
@@ -3757,8 +3757,8 @@ mod tests {
 
         // Hover DENTRO del submódulo (sin `main`): antes no daba nada porque el chequeo de main
         // cortaba antes de recorrer los cuerpos. `circulo_src` línea 3 (0-based 2):
-        //   `pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }`  — uso de `c` en col 51.
-        let (t, _, _) = hover_at(Some(&uri), circle_src, 2, 51).expect("hover about use de 'c'");
+        //   `pub fn area(c: Circulo) -> int { 3 * util.square(c.radio) }`  — uso de `c` en col 49.
+        let (t, _, _) = hover_at(Some(&uri), circle_src, 2, 49).expect("hover about use de 'c'");
         assert_eq!(t, "c: Circulo", "hover de un use inside de un submódulo sin main");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -3959,7 +3959,7 @@ mod tests {
         let src = "from geo import duplicate;\nfn main() -> int {\n  let y = 5;\n  duplicate(y)\n}\n";
 
         // Variable LOCAL: hover funciona pese al import (índice sobre el programa fusionado).
-        let (t, _, _) = hover_at(Some(&uri), src, 3, 11).expect("hover about 'y'");
+        let (t, _, _) = hover_at(Some(&uri), src, 3, 12).expect("hover about 'y'");
         assert_eq!(t, "y: int");
         // Función IMPORTADA de otro módulo: muestra su tipo en forma de fachada (`geo.duplicar`,
         // no el `geo::duplicar` interno).
@@ -3967,7 +3967,7 @@ mod tests {
         assert_eq!(t, "geo.duplicate: fn(int) -> int", "forma de fachada, sin '::'");
 
         // Rename de una variable local en un archivo multi-módulo: seguro (vive entera aquí).
-        let (_, _, _, is_local) = symbol_occurrences(Some(&uri), src, 3, 11).expect("símbolo");
+        let (_, _, _, is_local) = symbol_occurrences(Some(&uri), src, 3, 12).expect("símbolo");
         assert!(is_local, "'y' es local → renombrable");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -4129,10 +4129,10 @@ mod tests {
     fn references_de_function() {
         // Una función llamada dos veces: declaración + 2 usos.
         let src = "fn double(n: int) -> int { n + n }\nfn main() -> int {\n  double(1) + double(2)\n}\n";
-        // Cursor sobre la primera llamada `doble` (línea 3 → 0-based 2, col 2).
+        // Cursor sobre la primera llamada `double` (línea 3 → 0-based 2, col 2).
         let (name, decl, uses, _) = symbol_occurrences(None, src, 2, 2).expect("hay símbolo");
         assert_eq!(name, "double");
-        assert_eq!(decl, Some((0, 3, 5)), "la declaración apunta al name 'double' after 'fn '");
+        assert_eq!(decl, Some((0, 3, 6)), "la declaración apunta al name 'double' tras 'fn '");
         assert_eq!(uses.len(), 2);
     }
 
@@ -4826,7 +4826,7 @@ mod tests {
         // Hover: sobre `ti` de `{{ ti }}`... no hay símbolo; sobre `filas` del for (línea 3,
         // "{% for fila in filas %}" → `filas` empieza en col 15) → `filas: [string]`; sobre la
         // variable de bucle usada dentro (no cubierta aquí: `f` no es `fila`); y sobre HTML, nada.
-        assert_eq!(template_hover_at(tpl, 2, 16), Some(("filas: [string]".into(), 15, 20)));
+        assert_eq!(template_hover_at(tpl, 2, 16), Some(("filas: [string]".into(), 14, 19)));
         assert_eq!(template_hover_at(tpl, 3, 7), Some(("total: int".into(), 6, 11))); // {% if total
         assert!(template_hover_at(tpl, 4, 4).is_none(), "about el HTML no hay hover");
         // Y el enrutado por hover_result con URI .ray.html.
@@ -4853,13 +4853,13 @@ mod tests {
                    <h1>{{ titulo }}</h1>\n\
                    {% for row in filas %}<li>{{ row.trim() }}</li>{% endfor %}\n";
 
-        // Hover semántico: sobre `fila` dentro de `{{ fila.trim() }}` → su tipo REAL (string,
+        // Hover semántico: sobre `row` dentro de `{{ row.trim() }}` → su tipo REAL (string,
         // inferido por el checker del `for` sobre `[string]`); el rango es el del template.
         let l2 = tpl.lines().nth(2).unwrap();
-        let col_row = l2.rfind("row.trim").unwrap() + 1; // dentro de `fila` (ASCII: byte == char)
+        let col_row = l2.rfind("row.trim").unwrap() + 1; // dentro de `row` (ASCII: byte == char)
         let (info, start, end) = template_semantic_hover(&uri, tpl, 2, col_row).expect("hover de row");
         assert!(info.contains("string"), "{info}");
-        assert_eq!((start, end), (l2.rfind("row.trim").unwrap(), l2.rfind("row.trim").unwrap() + 4));
+        assert_eq!((start, end), (l2.rfind("row.trim").unwrap(), l2.rfind("row.trim").unwrap() + 3));
 
         // Ir-a-definición: sobre `titulo` en `{{ titulo }}` → la línea del `{% params %}` del
         // PROPIO template (la declaración vive en la firma del generado, que mapea a la línea 1).

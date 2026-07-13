@@ -672,17 +672,19 @@ fn parses_files_reales_equal_what_el_oracle() {
     // M19.3a: tampoco soporta los **operadores bit a bit** (`& | ^ ~ << >>`), también diferidos →
     // se excluyen las librerías cripto de M19.3b (`sha1.ray`/`base64.ray`/`crypto_demo.ray`).
     const DIFERIDOS_SELFHOST: &[&str] = &[
-        "binary.ray", "http.ray", "webserver.ray",
+        "binario.ray", "http.ray", "webserver.ray",
         "tuplas.ray", // M27.1: tuplas (el toolchain auto-alojado aún no las soporta)
         "for_bucles.ray", // M27.2: bucle `for` (el toolchain auto-alojado aún no lo soporta)
-        "interpolation.ray", // M27.3: interpolación de strings (idem)
+        "interpolacion.ray", // M27.3: interpolación de strings (idem)
         "casts.ray", // M27.4: casts `as` (idem; usa `for`/interpolación también)
         "constantes.ray", // M27.5: const de nivel superior (idem)
-        "operators.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
+        "operadores.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
         "conversion_error.ray", // M28.2: `?` con From<S> / traits con params de tipo (idem)
         "enteros.ray", // M28.3: enteros con tamaño u8/u32/u64 + `for` (idem)
         "regex.ray", // M29.1c: el motor de regex usa tuplas `Option<(int,int)>` (M27.1, idem)
         "regex_demo.ray", // M29.1: demo del motor de regex; usa interpolación f"..." (idem)
+        "regex_captures_demo.ray", // M81: capturas; usa tuplas `p.0` (M27.1, idem) — rojo pre-existente
+                                   // descubierto en la limpieza ES→EN (nunca estuvo en la lista)
         "chacha20.ray", // M30.1a: ChaCha20 usa enteros con tamaño u32 (M28.3, idem)
         "chacha20_demo.ray", // M30.1a: demo usa `for`/u32 (idem)
         "poly1305.ray", // M30.1b: Poly1305 usa enteros con tamaño u64 (M28.3, idem)

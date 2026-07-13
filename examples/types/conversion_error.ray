@@ -4,8 +4,8 @@
 // convierte el error automáticamente si existe `impl From<E1> for E2`. Así una librería expone
 // su propio enum de error y compone `?` sobre operaciones que fallan con otro tipo (aquí, string).
 //
-// `From<S>` es un trait con parámetro de tipo (M28.2); su método `desde` no tiene `self` (es
-// asociado; se llama `desde` porque `from` es palabra clave del import). El usuario nunca lo
+// `From<S>` es un trait con parámetro de tipo (M28.2); su método `convert` no tiene `self` (es
+// asociado; se llama `convert` porque `from` es palabra clave del import). El usuario nunca lo
 // invoca directamente: solo el `?` lo usa al convertir.
 enum AppError {
     Lectura(string),
@@ -15,7 +15,7 @@ enum AppError {
 // Conversión string -> AppError: cualquier `?` sobre un Result con error string, dentro de una
 // función que devuelva Result<_, AppError>, envuelve el string en AppError.Lectura.
 impl From<string> for AppError {
-    fn desde(origen: string) -> AppError { AppError.Lectura(origen) }
+    fn convert(origen: string) -> AppError { AppError.Lectura(origen) }
 }
 
 // Operación de bajo nivel que falla con un `string`.

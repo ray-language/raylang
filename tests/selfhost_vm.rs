@@ -207,7 +207,7 @@ fn arrays_snippets() {
 fn corpus_first_class() {
     for rel in [
         "examples/stdlib/closures.ray",
-        "examples/types/errors.ray",
+        "examples/types/errores.ray",
         "examples/types/opcional.ray",
     ] {
         compare_file(rel);
@@ -264,10 +264,10 @@ fn corpus_dispatch_dynamic() {
         "examples/stdlib/ufcs.ray",
         "examples/types/traits.ray",
         "examples/types/bounds.ray",
-        "examples/types/methods_por_default.ray",
-        "examples/types/impls_generics.ray",
+        "examples/types/metodos_por_defecto.ray",
+        "examples/types/impls_genericos.ray",
         "examples/types/trait_objects.ray",
-        "examples/types/annotations.ray",
+        "examples/types/anotaciones.ray",
     ] {
         compare_file(rel);
     }

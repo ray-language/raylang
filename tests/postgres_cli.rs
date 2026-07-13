@@ -72,8 +72,8 @@ fn launch_servidor_pg() -> u16 {
             td.extend_from_slice(b"greeting\0");
             td.extend_from_slice(&[0u8; 18]);
             s.write_all(&msg(b'T', &td)).unwrap();
-            // DataRow ('D'): 1 columna, valor "hola-postgres" (13 octetos).
-            let mut dr = vec![0u8, 1, 0, 0, 0, 13];
+            // DataRow ('D'): 1 columna, valor "hello-postgres" (14 octetos).
+            let mut dr = vec![0u8, 1, 0, 0, 0, 14];
             dr.extend_from_slice(b"hello-postgres");
             s.write_all(&msg(b'D', &dr)).unwrap();
             s.write_all(&msg(b'C', b"SELECT 1\0")).unwrap();   // CommandComplete

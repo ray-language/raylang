@@ -63,7 +63,7 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
 }
 
 const ESPERADO: &[&str] = &[
-    "https://auth.example.com/authorize?response_type=code&client_id=mi-client&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=read%20write&state=xyz123",
+    "https://auth.example.com/authorize?response_type=code&client_id=mi-cliente&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=read%20write&state=xyz123",
     "access_token=tok-abc-123",
     "token_type=Bearer",
     "expires_in=3600",

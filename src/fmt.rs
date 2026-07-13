@@ -590,7 +590,7 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     }
     // Preserva un bloque **inline**: un cuerpo de solo un tail (sin sentencias) que en la FUENTE cabía
     // ENTERO en una línea (`{`, tail y `}` en `b.line`) y no es una forma con bloque se mantiene inline
-    // (`{ expr }`). raylang tiene muchas funciones de una línea (`fn cuadrado(n) { n * n }`); expandirlas
+    // (`{ expr }`). raylang tiene muchas funciones de una línea (`fn square(n) { n * n }`); expandirlas
     // todas sería anti-idiomático. Al ser de una sola línea, no hay comentarios dentro.
     if b.statements.is_empty()
         && let Some(tail) = &b.tail

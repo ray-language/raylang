@@ -222,7 +222,7 @@ pub struct EnumDef {
     col: int,
 }
 
-// La firma de un método de trait: `fn nombre(self, p: T) -> R` con `;` o un cuerpo por defecto.
+// La firma de un método de trait: `fn name(self, p: T) -> R` con `;` o un cuerpo por defecto.
 pub struct MethodSig {
     name: string,
     params: [Param],

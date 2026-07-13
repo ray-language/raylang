@@ -202,7 +202,7 @@ fn words_clave_y_types() {
 }
 
 #[test]
-fn strings_caracteres_y_escapes() {
+fn strings_chars_and_escapes() {
     compare(r#""hello\nmundo\t\\\"fin""#, "sh_str.ray");
     compare(r"'a' '\n' '\t' '\\' '\''", "sh_char.ray");
     compare("\"con\\rretorno\"", "sh_cr.ray");
@@ -250,7 +250,7 @@ fn lexa_files_reales_equal_what_el_oracle() {
         "examples/basics/fib.ray",
         "examples/basics/fizzbuzz.ray",
         "examples/data/enums.ray",
-        "examples/types/generics.ray",
+        "examples/types/genericos.ray",
         "examples/data/mapa.ray",
         "examples/data/match_figuras.ray",
         "selfhost/lexer.ray",

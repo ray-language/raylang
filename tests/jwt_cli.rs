@@ -10,7 +10,7 @@ use std::process::Command;
 const ESPERADO: &[&str] = &[
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSIsImFkbWluIjp0cnVlfQ.lbFHAPAyxfbCKv0qbJb1ukylm0ZOW_skQJhpnZkZLcM",
     "{\"sub\":\"1234567890\",\"name\":\"Ada\",\"admin\":true}",
-    "signature inválida",
+    "firma inválida",
     "tamper detectado",
     "mal formado detectado",
     "alg:none rechazado", // M74: la validación de `alg` rechaza el ataque de confusión de algoritmo

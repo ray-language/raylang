@@ -8,7 +8,7 @@ const ESPERADO: &[&str] = &[
     r#"{"ts":"2026-06-30T12:00:00Z","level":"INFO","service":"api","msg":"servidor iniciado"}"#,
     r#"{"ts":"2026-06-30T12:00:00Z","level":"INFO","service":"api","msg":"peticion","method":"GET","path":"/users/42","status":200}"#,
     r#"{"ts":"2026-06-30T12:00:00Z","level":"WARN","service":"api","msg":"latencia alta","ms":1500,"retry":true}"#,
-    r#"{"ts":"2026-06-30T12:00:00Z","level":"ERROR","service":"api","msg":"failure \"db\" en\nla conexion","code":"E_CONN"}"#,
+    r#"{"ts":"2026-06-30T12:00:00Z","level":"ERROR","service":"api","msg":"fallo \"db\" en\nla conexion","code":"E_CONN"}"#,
     "(filtrado)",
     r#"{"ts":"2026-06-30T12:00:00Z","level":"ERROR","service":"worker","msg":"esto pasa"}"#,
     // M70 — controles < 0x20 escapados (RFC 8259): antes BEL/ESC/\x01 salían crudos = JSON inválido.

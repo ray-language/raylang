@@ -426,7 +426,7 @@ mod tests {
     fn strlen_marshala_string_a_char_ptr() {
         let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int };
         match call(&d, &[FfiVal::Str("hello mundo")]).unwrap() {
-            FfiRet::Int(n) => assert_eq!(n, 10),
+            FfiRet::Int(n) => assert_eq!(n, 11),
             other => panic!("se esperaba int, {other:?}"),
         }
     }

@@ -156,7 +156,7 @@ fn read_write_file_ida_y_vuelta_en_ambos_engines() {
         let out = cmd.arg(&prog).arg(&data).output().expect("ejecuta raylang");
         let stdout = String::from_utf8_lossy(&out.stdout);
 
-        assert!(stdout.contains("escritos:10"), "write_file returns nº de caracteres (vm={vm})\n{stdout}");
+        assert!(stdout.contains("escritos:11"), "write_file returns nº de caracteres (vm={vm})\n{stdout}");
         assert!(stdout.contains("hello\nmundo"), "read_file recupera el contenido escrito (vm={vm})\n{stdout}");
         assert!(stdout.contains("err-al-leer-nonexistent"), "leer nonexistent es Err (vm={vm})\n{stdout}");
         // Y el archivo existe de verdad en disco con el contenido correcto.
@@ -367,8 +367,8 @@ fn main() -> int {
   0
 }
 "#;
-    let expected = "mkdir: ok 0\nis_dir: true is_file: false\nsize: ok 4\nsize de dir: err\n\
-        append_bytes: ok 2\nsize after append: ok 6\ncopy: ok 0\nrename: ok 0\n\
+    let expected = "mkdir: ok 0\nis_dir: true is_file: false\nsize: ok 5\nsize de dir: err\n\
+        append_bytes: ok 2\nsize after append: ok 7\ncopy: ok 0\nrename: ok 0\n\
         old: false new: true\nrmdir no empty: err\nrmdir: ok 0\nrmdir base: ok 0\n\
         base existe: false\n";
     for vm in [false, true] {

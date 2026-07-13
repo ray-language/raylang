@@ -252,5 +252,5 @@ fn main() -> int {
     .replace("__PORT__", &port.to_string());
     let (out, code) = run_with_libs("truncada", &driver, true);
     assert_eq!(code, 0, "esperaba Err por truncada: {out}");
-    assert!(out.contains("response truncada"), "esperaba el error de truncada: {out}");
+    assert!(out.contains("respuesta truncada"), "esperaba el error de truncada: {out}");
 }

@@ -55,9 +55,9 @@ fn launch_servidor_grpc_cfg(con_grpc_status: bool) -> u16 {
             let mut buf = [0u8; 4096];
             let _ = tls.read(&mut buf);
 
-            // Mensaje protobuf de respuesta: campo 1 (string) = "hola, raylang" (13 octetos).
-            //   tag = (1<<3)|2 = 0x0a ; longitud = 0x0d ; luego los octetos.
-            let mut pb = vec![0x0a, 0x0d];
+            // Mensaje protobuf de respuesta: campo 1 (string) = "hello, raylang" (14 octetos).
+            //   tag = (1<<3)|2 = 0x0a ; longitud = 0x0e ; luego los octetos.
+            let mut pb = vec![0x0a, 0x0e];
             pb.extend_from_slice(b"hello, raylang");
             // gRPC frame: [flag=0 (sin comprimir)] [longitud u32 BE] [mensaje].
             let mut grpc = vec![0u8, (pb.len() >> 24) as u8, (pb.len() >> 16) as u8, (pb.len() >> 8) as u8, pb.len() as u8];

@@ -5,9 +5,9 @@
 use std::process::Command;
 
 const ESPERADO: &[&str] = &[
-    "hello%20mundo%20%26%20m%C3%A1s%3Dcosas%2F%C3%B1", // url_encode con UTF-8
+    "hola%20mundo%20%26%20m%C3%A1s%3Dcosas%2F%C3%B1", // url_encode con UTF-8
     "a-b_c.d~e",                                       // unreserved intactos
-    "hello mundo & más",                                // url_decode
+    "hola mundo & más",                                // url_decode
     "a b",                                              // '+' → espacio
     "Ada Lovelace",                                    // query: '+' en valor
     "admin",

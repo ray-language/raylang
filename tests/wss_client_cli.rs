@@ -56,7 +56,7 @@ fn run_client(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &["hello", "mundo", "raylang ☃ unicode"];
+const ESPERADO: &[&str] = &["hola", "mundo", "raylang ☃ unicode"];
 
 fn case(flags: &[&str]) {
     let (mut servidor, port) = launch_servidor();

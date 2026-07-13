@@ -204,7 +204,7 @@ fn errors_del_template() {
     let cases: &[(&str, &str)] = &[
         ("<h1>hello</h1>", "params"),                                    // sin firma
         ("{% params x: int %}{% if x > 0 %}abierto", "endif"),          // sin cerrar
-        ("{% params x: int %}{% block %}", "desconocida"),             // etiqueta inválida
+        ("{% params x: int %}{% zzz %}", "desconocida"),             // etiqueta inválida
         ("{% params x %}hello", "mal formado"),                          // params sin tipo
     ];
     let mut k = 0;

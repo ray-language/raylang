@@ -53,7 +53,7 @@ fn main() -> int {
 }
 
 #[test]
-fn numeros_y_escapes() {
+fn numbers_and_escapes() {
     let driver = r#"
 from json import parse, stringify;
 fn main() -> int {
@@ -69,7 +69,7 @@ fn main() -> int {
 }
 
 #[test]
-fn escapes_unicode() {
+fn unicode_escapes() {
     // Diferido JSON-1: \uXXXX — BMP de 1 y 2 octetos UTF-8, par surrogate (astral), y los
     // errores como valores: surrogate suelto, par incompleto, dígito no hex.
     let driver = r#"
@@ -95,7 +95,7 @@ fn main() -> int {
 }
 
 #[test]
-fn escapes_de_control_rfc8259() {
+fn control_escapes_rfc8259() {
     // M59.1 — conformidad con la RFC 8259 §7: (1) \b y \f son escapes LEGALES y el parse los
     // acepta (antes: "secuencia de escape no soportada"); (2) quote los re-emite cortos; (3) un
     // control < 0x20 sin escape corto sale como \u00XX (antes: crudo → JSON inválido).
@@ -151,7 +151,7 @@ fn main() -> int {
     0
 }
 "#;
-    let expected = "err: text sobrante after el JSON\nerr: array sin close\nerr: string sin close";
+    let expected = "err: texto sobrante tras el JSON\nerr: arreglo sin cerrar\nerr: string sin cerrar";
     check("errors", driver, expected);
 }
 
@@ -236,6 +236,6 @@ fn main() -> int {
     }
 }
 "#;
-    let expected = "{\n  \"a\": \"x\",\n  \"b\": [\n    1,\n    2\n  ],\n  \"list_empty\": [],\n  \"empty\": {}\n}";
+    let expected = "{\n  \"a\": \"x\",\n  \"b\": [\n    1,\n    2\n  ],\n  \"empty\": {},\n  \"list_empty\": []\n}";
     check("pretty", driver, expected);
 }

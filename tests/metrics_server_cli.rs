@@ -61,7 +61,7 @@ fn endpoint_metrics_expone_counters_e_histograma() {
     let (mut child, port) = launch();
 
     // Genera tráfico: dos GET / y un GET /foo (404).
-    assert!(get(port, "/").contains("hello from raylang"), "GET /");
+    assert!(get(port, "/").contains("hola desde raylang"), "GET /");
     let _ = get(port, "/");
     assert!(get(port, "/foo").contains("404"), "GET /foo must ser 404");
 

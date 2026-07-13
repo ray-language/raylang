@@ -345,7 +345,7 @@ fn mysql_password_incorrect_da_error_claro() {
     std::fs::write(app.join("src/main.ray"), main.replace("\"secret\"", "\"mala\"")).unwrap();
     let out = Command::new(BIN).args(["run"]).current_dir(&app).output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("access denegado"), "ERR del servidor visible:\n{stdout}");
+    assert!(stdout.contains("acceso denegado"), "ERR del servidor visible:\n{stdout}");
     assert_eq!(out.status.code(), Some(1), "el program sale con 1");
 }
 
@@ -476,7 +476,7 @@ fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO_TLS: &str = "conectado seguro\nada|36\ngrace|\nmysql: access denegado\n";
+const ESPERADO_TLS: &str = "conectado seguro\nada|36\ngrace|\nmysql: acceso denegado\n";
 
 #[test]
 fn mysql_tls_full_path_de_caching_sha2() {

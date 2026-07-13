@@ -478,7 +478,7 @@ fn ufcs_resolves_function_importada() {
     ];
     for vm in [false, true] {
         let (out, code) = run_modules("ray_ufcs_import", "main", files, vm);
-        assert_eq!(out.trim(), "HOLA MUNDO", "UFCS cross-module (vm={vm}): {out}");
+        assert_eq!(out.trim(), "HELLO MUNDO", "UFCS cross-module (vm={vm}): {out}");
         assert_eq!(code, 0);
     }
 }

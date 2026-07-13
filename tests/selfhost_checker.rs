@@ -428,10 +428,10 @@ fn panic_y_parse() {
 fn ejemplos_reales_valid_vals() {
     let files = ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray", "examples/basics/primes.ray",
         "examples/data/structs.ray", "examples/data/match_figuras.ray", "examples/data/enums.ray", "examples/data/arrays.ray",
-        "examples/data/matriz.ray", "examples/types/generics.ray", "examples/types/types_generics.ray", "examples/types/opcional.ray",
-        "examples/types/errors.ray", "examples/stdlib/ufcs.ray", "examples/stdlib/closures.ray", "examples/types/traits.ray",
-        "examples/types/bounds.ray", "examples/types/methods_por_default.ray", "examples/types/impls_generics.ray",
-        "examples/types/trait_objects.ray", "examples/stdlib/stdlib.ray", "examples/types/annotations.ray"];
+        "examples/data/matriz.ray", "examples/types/genericos.ray", "examples/types/tipos_genericos.ray", "examples/types/opcional.ray",
+        "examples/types/errores.ray", "examples/stdlib/ufcs.ray", "examples/stdlib/closures.ray", "examples/types/traits.ray",
+        "examples/types/bounds.ray", "examples/types/metodos_por_defecto.ray", "examples/types/impls_genericos.ray",
+        "examples/types/trait_objects.ray", "examples/stdlib/stdlib.ray", "examples/types/anotaciones.ray"];
     for rel in files {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let expected = canonical(&src);

@@ -191,8 +191,8 @@ fn find_fin_headers(b: bytes) -> int {
 }
 
 // El índice del primer "\r\n" en bytes desde `from`, o -1. (Para el framing de transfer-encoding chunked.)
-fn find_crlf(b: bytes, from: int) -> int {
-    var i: int = from;
+fn find_crlf(b: bytes, start: int) -> int {
+    var i: int = start;
     while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;
@@ -803,8 +803,8 @@ fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, 
 // Delimita un cuerpo chunked leyendo del socket lo que falte: recorre chunk a chunk desde
 // `desde` hasta el chunk 0 y su línea vacía final (tolerando trailers). Devuelve la
 // respuesta cruda (cabeceras + cuerpo chunked intacto; `parse_response` lo decodifica).
-fn conn_leer_chunked(c: Conn, from: int, plazo_fin: int) -> Result<bytes, string> {
-    var pos: int = from;
+fn conn_leer_chunked(c: Conn, start: int, plazo_fin: int) -> Result<bytes, string> {
+    var pos: int = start;
     while (true) {
         // La línea hex de tamaño del chunk.
         var line_end: int = find_crlf(c.buf, pos);

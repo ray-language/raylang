@@ -56,7 +56,7 @@ fn genera_el_sitio_y_ambos_engines_matches() {
     assert!(portada.contains("<input id=\"q\""), "búsqueda client-side\n{portada}");
     let mate = std::fs::read_to_string(vm.join("p/mate.html")).unwrap();
     assert!(mate.contains("dueño: roberto"), "{mate}");
-    assert!(mate.contains("name reclamado"), "{mate}");
+    assert!(mate.contains("nombre reclamado"), "{mate}");
     assert!(mate.contains(">retirada<") && mate.contains(">firmada<"), "insignias\n{mate}");
     assert!(mate.contains("ray add mate"), "{mate}");
     // La 1.1.0 (más nueva) se lista antes que la 1.0.0.

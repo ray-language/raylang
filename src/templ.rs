@@ -13,8 +13,8 @@
 //!   - `{% for x in expr %} … {% endfor %}` — cualquier iterable del `for` de raylang
 //!     (arreglos, rangos `a..b`, `Map` con `(k, v)`, iteradores).
 //!
-//! `vistas/lista.ray.html` genera `vistas/lista.ray` con `pub fn render_lista(…) -> string`, que se
-//! importa como cualquier módulo (`import vistas/lista;` → `lista.render_lista(…)`). El archivo
+//! `views/list.ray.html` genera `views/list.ray` con `pub fn render_list(…) -> string`, que se
+//! importa como cualquier módulo (`import views/list;` → `list.render_list(…)`). El archivo
 //! generado se commitea (inspeccionable, cero magia); el escape reusa el `escape_html` de
 //! `std/template` (pub). Es un cliente del front-end (como `ray fmt`/`ray doc`): el `.ray` generado
 //! lo valida el pipeline entero al compilarse; aquí solo se comprueba que **parsea** para dar el
@@ -85,7 +85,7 @@ pub fn generate_file(input: &Path) -> Result<PathBuf, String> {
     Ok(out_path)
 }
 
-// `vistas/lista.ray.html` → `vistas/lista.ray`.
+// `views/list.ray.html` → `views/list.ray`.
 fn output_path(input: &Path) -> Result<PathBuf, String> {
     let s = input.to_string_lossy();
     let Some(base) = s.strip_suffix(".ray.html") else {
@@ -752,7 +752,7 @@ fn generate_body(
                         depth -= 1;
                         linea(&mut body, depth, l, "}".to_string());
                     }
-                    // `{% let nombre = expr %}`: una local inmutable del template. Alcance = el
+                    // `{% let name = expr %}`: una local inmutable del template. Alcance = el
                     // bloque raylang generado (dentro de un for/if vive hasta su endfor/endif).
                     "let" => {
                         let bien = rest.split_once('=').is_some_and(|(lhs, rhs)| {
@@ -888,7 +888,8 @@ mod tests {
         assert!(e.msg.contains("endif"));
         assert_eq!(e.line, 3, "el error señala la línea del if sin close");
         assert!(generate("{% params x: int %}{% endfor %}", "t").unwrap_err().msg.contains("endfor"));
-        assert!(generate("{% params x: int %}{% block %}", "t").unwrap_err().msg.contains("desconocida"));
+        // Etiqueta INVENTADA (no `block`, que es real desde M55): debe dar "etiqueta desconocida".
+        assert!(generate("{% params x: int %}{% zzz %}", "t").unwrap_err().msg.contains("desconocida"));
         assert!(generate("{% params x %}hello", "t").unwrap_err().msg.contains("mal formado"));
     }
 

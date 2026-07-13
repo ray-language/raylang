@@ -4432,11 +4432,11 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
   `From<E1> for E2` el `?` convierte automáticamente → librerías con un enum de error propio en vez de
   arrastrar `string`.
   - **COMPLETO**. Habilitador: **parámetros de tipo en traits** (`trait From<S>`, primer trait con
-    `<...>`; `TraitDef.type_params`, `ImplBlock.trait_args`). El trait `From<S> { fn desde(origen: S) ->
-    Self; }` vive en el prelude; su método `desde` **no tiene `self`** (asociado; `from` es palabra clave
-    del import). El usuario escribe `impl From<string> for MiError { fn desde(o: string) -> MiError {…} }`.
+    `<...>`; `TraitDef.type_params`, `ImplBlock.trait_args`). El trait `From<S> { fn convert(origen: S) ->
+    Self; }` vive en el prelude; su método `convert` **no tiene `self`** (asociado; `from` es palabra clave
+    del import). El usuario escribe `impl From<string> for MiError { fn convert(o: string) -> MiError {…} }`.
     **Front-end puro / erasure**: en el paso 0c el método se inyecta como función libre con nombre manglado
-    **por origen** (`MiError#desde#string`, para que varios `impl From<…> for MiError` no colisionen);
+    **por origen** (`MiError#from#string`, para que varios `impl From<…> for MiError` no colisionen);
     `register_typed_trait_impl` valida la firma y puebla `from_impls: (origen, destino) → manglado`.
     `check_try`, si el error del `Result` (E1) difiere del retorno (E2) pero hay `impl From<E1> for E2`,
     registra el sitio; `lower_try_conversions` reescribe ese `expr?` a un `match (expr) { Result.Ok($to)

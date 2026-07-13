@@ -11,9 +11,9 @@ const ESPERADO: &[&str] = &[
     "ok: 102",
     "ok: 102 111",
     "ok:",
-    "err: base64: data after el relleno '='",
-    "err: base64: length inválida (no es múltiplo de 4)",
-    "err: base64: length inválida (no es múltiplo de 4)",
+    "err: base64: datos tras el relleno '='",
+    "err: base64: longitud inválida (no es múltiplo de 4)",
+    "err: base64: longitud inválida (no es múltiplo de 4)",
     "err: base64: bits sobrantes no nulos (codificación no canónica)",
     "err: base64: relleno '=' inválido",
     "err: carácter base64 inválido",
@@ -21,7 +21,7 @@ const ESPERADO: &[&str] = &[
     "ok: 102",
     "ok: 102 111",
     "err: base64url: bits sobrantes no nulos (codificación no canónica)",
-    "err: base64url: length inválida",
+    "err: base64url: longitud inválida",
     "err: carácter base64url inválido",
 ];
 

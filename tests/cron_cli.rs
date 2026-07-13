@@ -25,10 +25,10 @@ fn project(base: &std::path::Path) -> std::path::PathBuf {
 import std/time;
 
 // Imprime los `n` siguientes disparos de `expr` tras `desde` (epoch-ms), en ISO.
-fn secuencia(expr: string, from: int, n: int) {
+fn secuencia(expr: string, start: int, n: int) {
     match (cron.parse(expr)) {
         Result.Ok(s) => {
-            var t = from;
+            var t = start;
             var i = 0;
             var line = expr + " →";
             var ok = true;
@@ -140,10 +140,10 @@ import cron/local;
 import tz/tz;
 import std/time;
 
-fn secuencia(z: tz.Zone, expr: string, from: int, n: int) {{
+fn secuencia(z: tz.Zone, expr: string, start: int, n: int) {{
     match (cron.parse(expr)) {{
         Result.Ok(s) => {{
-            var t = from;
+            var t = start;
             var i = 0;
             var line = expr + " →";
             while (i < n) {{

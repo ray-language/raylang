@@ -239,8 +239,8 @@ fn status_text(code: int) -> string {
 // rompería from_utf8 del buffer entero. `desde` permite REANUDAR el escaneo donde quedó el trozo
 // anterior (M56.1): sin él, re-escanear todo el acumulado por trozo es O(n²) — un amplificador
 // del ataque de cabeceras gigantes.
-fn find_fin_headers(b: bytes, from: int) -> int {
-    var i: int = from;
+fn find_fin_headers(b: bytes, start: int) -> int {
+    var i: int = start;
     if (i < 0) { i = 0; }
     while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
@@ -264,8 +264,8 @@ pub fn read_request(conn: int) -> Result<Request, string> {
 
 // --- Cuerpo chunked entrante (M56.8, Transfer-Encoding: chunked) ---
 // El índice del primer "\r\n" en `b` desde `desde`, o -1 (escaneo por octetos, como el fin de cabeceras).
-fn buscar_crlf(b: bytes, from: int) -> int {
-    var i: int = from;
+fn buscar_crlf(b: bytes, start: int) -> int {
+    var i: int = start;
     while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;
@@ -390,16 +390,16 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
     let plazo_fin: int = if (limits.read_timeout_millis > 0) { time.monotonic() + limits.read_timeout_millis } else { 0 };
     var acc: bytes = b"";
     var sep: int = 0 - 1;
-    var from: int = 0;
+    var start: int = 0;
     var follow: bool = true;
     while (follow) {
-        let s: int = find_fin_headers(acc, from);
+        let s: int = find_fin_headers(acc, start);
         if (s >= 0) {
             sep = s;
             follow = false;
         } else {
             // Reanudar 3 octetos atrás: el "\r\n\r\n" puede quedar partido entre dos trozos.
-            from = acc.len() - 3;
+            start = acc.len() - 3;
             if (acc.len() > limits.max_header_bytes) {
                 return Result.Err("headers demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
             }

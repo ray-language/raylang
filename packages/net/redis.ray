@@ -88,8 +88,8 @@ fn pull(c: Conn) -> bool {
 }
 
 // Posición del primer \r\n en `b` desde `desde`, o -1 (como find_crlf del cliente HTTP).
-fn find_crlf(b: bytes, from: int) -> int {
-    var i = from;
+fn find_crlf(b: bytes, start: int) -> int {
+    var i = start;
     while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;

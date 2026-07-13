@@ -321,7 +321,7 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
             // M28.2: un método de un impl `From<S>` se inyecta con nombre manglado **por origen**
             // (`E#from#string`) para no colisionar con otros `impl From<...> for E`. El resto
             // (impls de M9) usa el manglado ordinario `Tipo#metodo`.
-            let name = if is_typed_trait_impl(imp) && m.name == "from" {
+            let name = if is_typed_trait_impl(imp) && m.name == "convert" {
                 let src_key = imp.trait_args.first().and_then(type_key_of).unwrap_or_default();
                 mangle_from(&key, &src_key)
             } else {
@@ -1117,7 +1117,7 @@ impl Checker {
     }
 
     /// M28.2: registra un `impl` de un trait con parámetros de tipo. Hoy solo `From<S>` tiene
-    /// semántica (la consume el operador `?`): valida la firma `fn from(origen: S) -> Self` y
+    /// semántica (la consume el operador `?`): valida la firma `fn convert(origen: S) -> Self` y
     /// guarda la conversión `(origen, destino) → función manglada`. Otros traits con parámetros
     /// de tipo se aceptan sintácticamente pero aún no hacen nada (diferido).
     fn register_typed_trait_impl(&mut self, imp: &ImplBlock, target: &Type, key: &str) -> Result<(), TypeError> {
@@ -1131,31 +1131,31 @@ impl Checker {
         if imp.trait_name != "From" {
             return Ok(()); // otros traits con parámetros de tipo: sin semántica todavía
         }
-        // `From<S> for E` exige `fn from(origen: S) -> E` (sin `self`).
+        // `From<S> for E` exige `fn convert(origen: S) -> E` (sin `self`).
         let src = self.resolve_type(&imp.trait_args[0]);
         let src_key = match type_key_of(&src) {
             Some(k) => k,
             None => return Err(self.err(imp.line, imp.col,
                 "el type de origen de 'From' no admite conversión".into())),
         };
-        let m = match imp.methods.iter().find(|m| m.name == "from") {
+        let m = match imp.methods.iter().find(|m| m.name == "convert") {
             Some(m) => m,
             None => return Err(self.err(imp.line, imp.col, format!(
-                "el impl de 'From' para {} no implementa el método 'from'", target))),
+                "el impl de 'From' para {} no implementa el método 'convert'", target))),
         };
         if m.params.len() != 1 {
             return Err(self.err(m.line, m.col,
-                "'from' toma exactamente un parámetro (el valor de origen), sin 'self'".into()));
+                "'convert' toma exactamente un parámetro (el valor de origen), sin 'self'".into()));
         }
         let got_param = self.resolve_type(&m.params[0].ty);
         if got_param != src {
             return Err(self.err(m.params[0].line, m.params[0].col, format!(
-                "el parámetro de 'from' es {}, pero 'From<{}>' asks {}", got_param, src, src)));
+                "el parámetro de 'convert' es {}, pero 'From<{}>' asks {}", got_param, src, src)));
         }
         let got_ret = self.resolve_type(&subst_self(&m.return_type, target));
         if &got_ret != target {
             return Err(self.err(m.line, m.col, format!(
-                "'from' must devolver {} (el type target), no {}", target, got_ret)));
+                "'convert' must devolver {} (el type target), no {}", target, got_ret)));
         }
         self.from_impls.insert((src_key.clone(), key.to_string()), mangle_from(key, &src_key));
         Ok(())

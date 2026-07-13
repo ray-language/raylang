@@ -92,7 +92,7 @@ fn rename_returns_un_workspace_edit() {
 
 #[test]
 fn completion_offers_symbols() {
-    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn doble(n: int) -> int { n + n }\nfn main() -> int { 0 }"}}}"#;
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn double(n: int) -> int { n + n }\nfn main() -> int { 0 }"}}}"#;
     let comp = r#"{"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":19}}}"#;
     let entry = frame(open) + &frame(comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
     let out = lsp(&entry);
@@ -181,9 +181,9 @@ fn program_valid_public_list_empty() {
 #[test]
 fn signature_help_shows_la_signature() {
     // M10.2f: al escribir los argumentos de `suma(`, signatureHelp da su firma y el param activo.
-    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn suma(a: int, b: int) -> int { a + b }\nfn main() -> int { suma(1, ) }"}}}"#;
-    // Cursor tras la coma (línea 1, carácter 26, 0-basado): segundo argumento.
-    let sh = r#"{"jsonrpc":"2.0","id":7,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":26}}}"#;
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn sum(a: int, b: int) -> int { a + b }\nfn main() -> int { sum(1, ) }"}}}"#;
+    // Cursor tras la coma (línea 1, carácter 25, 0-basado): segundo argumento.
+    let sh = r#"{"jsonrpc":"2.0","id":7,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":25}}}"#;
     let entry = frame(open) + &frame(sh) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
     let out = lsp(&entry);
     assert!(out.contains("\"id\":7"), "responde a signatureHelp\n{out}");

@@ -6,7 +6,7 @@
 use std::process::Command;
 
 const ESPERADO: &[&str] = &[
-    "# HELP rpc_duracion_segundos Duracion de RPC por method",
+    "# HELP rpc_duracion_segundos Duracion de RPC por metodo",
     "# TYPE rpc_duracion_segundos histogram",
     r#"rpc_duracion_segundos_bucket{le="0.1",method="get"} 1"#,
     r#"rpc_duracion_segundos_bucket{le="0.5",method="get"} 2"#,

@@ -113,7 +113,7 @@ fn servidor_http_responde_y_enruta() {
     let ok = ask(port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(ok.contains("200 OK"), "esperaba 200 OK, got: {ok}");
     assert!(ok.contains("hello GET"), "esperaba el body 'hello GET', got: {ok}");
-    assert!(ok.contains("Content-Length: 8"), "esperaba Content-Length del body, got: {ok}");
+    assert!(ok.contains("Content-Length: 9"), "esperaba Content-Length del body, got: {ok}");
     // M85a: la cabecera `Date:` (SHOULD RFC 7231) — presencia y FORMA RFC 1123
     // (`Wdy, DD Mon YYYY HH:MM:SS GMT`), no el valor (no determinista).
     let date = ok
@@ -137,9 +137,9 @@ fn servidor_http_responde_y_enruta() {
     assert!(q.contains("x=Ada Lovelace!"), "esperaba el valor decodificado, got: {q}");
     assert!(q.contains("cruda=x=Ada+Lovelace%21&y=2"), "esperaba la query cruda, got: {q}");
 
-    // M56.2: el path llega percent-decodificado ("/ho%6Ca" = "/hola").
-    let dec = ask(port, "GET /ho%6Ca HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert!(dec.contains("hello GET"), "esperaba /ho%6Ca decodificado a /hello, got: {dec}");
+    // M56.2: el path llega percent-decodificado ("/he%6Clo" = "/hello").
+    let dec = ask(port, "GET /he%6Clo HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(dec.contains("hello GET"), "esperaba /he%6Clo decodificado a /hello, got: {dec}");
 
     let _ = child.wait();
 }
@@ -562,12 +562,12 @@ fn response_con_various_cookies() {
 #[test]
 fn head_returns_headers_sin_body() {
     // M56.8: a un HEAD, el camino `serve` responde las cabeceras del GET (incl. Content-Length)
-    // pero SIN el cuerpo. Reusa el driver keep-alive (handler: "hola " + path).
+    // pero SIN el cuerpo. Reusa el driver keep-alive (handler: "hello " + path).
     let (mut child, port) = launch_servidor("head", SRV_KEEPALIVE);
 
     let r = ask(port, "HEAD /a HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("200 OK"), "esperaba 200 a HEAD, got: {r}");
-    assert!(r.contains("Content-Length: 7"), "esperaba el Content-Length del GET (7), got: {r}");
+    assert!(r.contains("Content-Length: 8"), "esperaba el Content-Length del GET (8), got: {r}");
     assert!(!r.contains("hello /a"), "un HEAD no must llevar body, got: {r}");
 
     let _ = child.kill();
@@ -582,7 +582,7 @@ fn body_chunked_se_decodifica() {
 
     let req = b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nhola\r\n6;ext=1\r\n mundo\r\n0\r\n\r\n";
     let resp = ask_bytes(port, req);
-    assert_eq!(body(&resp), b"hello mundo", "body chunked decodificado, got: {:?}", String::from_utf8_lossy(body(&resp)));
+    assert_eq!(body(&resp), b"hola mundo", "body chunked decodificado, got: {:?}", String::from_utf8_lossy(body(&resp)));
 
     let _ = child.wait();
 }

@@ -4730,7 +4730,7 @@ mod tests {
     #[test]
     fn conversion_error_oracle() {
         let base = "enum MiErr { Io(string) } \
-            impl From<string> for MiErr { fn from(o: string) -> MiErr { MiErr.Io(o) } } \
+            impl From<string> for MiErr { fn convert(o: string) -> MiErr { MiErr.Io(o) } } \
             fn leer(f: bool) -> Result<int, string> { if (f) { Result.Err(\"x\") } else { Result.Ok(7) } } \
             fn proc(f: bool) -> Result<int, MiErr> { let x = leer(f)?; Result.Ok(x + 1) } ";
         // Camino Ok: proc(false) = Ok(8); code = 8.
@@ -5648,9 +5648,9 @@ mod tests {
         // seguro: el escrutinio del ? vive en su local temporal y queda rooteado.
         oracle_stress(
             "fn d(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } }
-             fn string(n: int) -> Result<int, string> { let a: int = d(n, 2)?; let b: int = d(a, 1)?; Result.Ok(a + b) }
+             fn chain(n: int) -> Result<int, string> { let a: int = d(n, 2)?; let b: int = d(a, 1)?; Result.Ok(a + b) }
              fn desemp(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
-             fn main() -> int { desemp(string(40)) }",
+             fn main() -> int { desemp(chain(40)) }",
         );
     }
 

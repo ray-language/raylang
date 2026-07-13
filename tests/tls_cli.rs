@@ -77,7 +77,7 @@ fn client_https_contra_servidor_local_interpreter() {
     let port = launch_servidor_tls();
     let out = run_demo(&[], &format!("https://localhost:{port}/"));
     assert!(out.contains("status=200"), "esperaba 200, got: {out}");
-    assert!(out.contains("body=hello-tls"), "body incorrect, got: {out}");
+    assert!(out.contains("body=hola-tls"), "body incorrect, got: {out}");
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn client_https_contra_servidor_local_vm() {
     let port = launch_servidor_tls();
     let out = run_demo(&["--vm"], &format!("https://localhost:{port}/"));
     assert!(out.contains("status=200"), "esperaba 200, got: {out}");
-    assert!(out.contains("body=hello-tls"), "body incorrect, got: {out}");
+    assert!(out.contains("body=hola-tls"), "body incorrect, got: {out}");
 }
 
 // --- M19.4b: servidor TLS (`wss://`) — `examples/web/wss_echo.ray` ---
@@ -256,10 +256,10 @@ fn servidor_https_sirve_about_tls() {
     // Petición HTTPS normal (con query: compone con M56.2 — la ruta casa igual).
     let (mut conn, mut sock) = client_tls(port);
     let mut tls = rustls::Stream::new(&mut conn, &mut sock);
-    tls.write_all(b"GET /hello?x=1 HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía petición");
-    let resp = leer_response_tls(&mut tls, "hello https");
+    tls.write_all(b"GET /hola?x=1 HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía petición");
+    let resp = leer_response_tls(&mut tls, "hola https");
     assert!(resp.contains("200 OK"), "esperaba 200 OK, got: {resp}");
-    assert!(resp.contains("hello https"), "esperaba el body, got: {resp}");
+    assert!(resp.contains("hola https"), "esperaba el body, got: {resp}");
 
     // Segunda conexión: 404 (el servidor sigue vivo tras la primera).
     let (mut conn2, mut sock2) = client_tls(port);
@@ -278,8 +278,8 @@ fn servidor_https_sirve_about_tls() {
     }
     let (mut conn3, mut sock3) = client_tls(port);
     let mut tls3 = rustls::Stream::new(&mut conn3, &mut sock3);
-    tls3.write_all(b"GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía 3ª");
-    let resp3 = leer_response_tls(&mut tls3, "hello https");
+    tls3.write_all(b"GET /hola HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía 3ª");
+    let resp3 = leer_response_tls(&mut tls3, "hola https");
     assert!(resp3.contains("200 OK"), "el servidor must follow live after un client no-TLS, got: {resp3}");
 
     let _ = child.kill();

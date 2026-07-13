@@ -15,8 +15,8 @@ const ESPERADO: &[&str] = &[
     // M63.1 — strings conformes: \uXXXX/\UXXXXXXXX (incl. astral), literal '...' sin escapes,
     // y escape desconocido/incompleto = Err (antes: corrupción silenciosa, "cafu00E9").
     "s = \"café 😀\"",
-    "p = \"C:\\path\\ne\"",
-    "err: escape unknown '\\q' en el string",
+    "p = \"C:\\ruta\\ne\"",
+    "err: escape desconocido '\\q' en el string",
     "err: escape \\u con dígito no hexadecimal",
     // M63.2 — números conformes: separadores `_` (entre dígitos) e inf/nan.
     "n = 1000000",
@@ -27,8 +27,8 @@ const ESPERADO: &[&str] = &[
     "err: separador '_' mal colocado en el número: 1__0",
     // M63.3 — rigor del documento: lo que la spec prohíbe ya no pasa en silencio.
     "err: clave duplicada: 'a'",
-    "err: header de tabla vacía",
-    "err: se esperaba fin de línea after el valor de 'a'",
+    "err: cabecera de tabla vacía",
+    "err: se esperaba fin de línea tras el valor de 'a'",
 ];
 
 fn run(flags: &[&str]) -> (Vec<String>, bool) {

@@ -191,7 +191,7 @@ fn corpus_first_class() {
     // M14.4c: closures (captura por celda), funciones como valor, ?, Option/Result.
     for rel in [
         "examples/stdlib/closures.ray",
-        "examples/types/errors.ray",
+        "examples/types/errores.ray",
         "examples/types/opcional.ray",
     ] {
         compare_file(rel);
@@ -238,10 +238,10 @@ fn corpus_dispatch_dynamic() {
         "examples/stdlib/ufcs.ray",
         "examples/types/traits.ray",
         "examples/types/bounds.ray",
-        "examples/types/methods_por_default.ray",
-        "examples/types/impls_generics.ray",
+        "examples/types/metodos_por_defecto.ray",
+        "examples/types/impls_genericos.ray",
         "examples/types/trait_objects.ray",
-        "examples/types/annotations.ray",
+        "examples/types/anotaciones.ray",
     ] {
         compare_file(rel);
     }
@@ -298,8 +298,8 @@ fn corpus_prelude_y_generics() {
     // M14.4d-2: map/filter/fold del prelude (UFCS + pipelines + closures) y genéricos (no-op en runtime).
     for rel in [
         "examples/stdlib/stdlib.ray",
-        "examples/types/generics.ray",
-        "examples/types/types_generics.ray",
+        "examples/types/genericos.ray",
+        "examples/types/tipos_genericos.ray",
     ] {
         compare_file(rel);
     }

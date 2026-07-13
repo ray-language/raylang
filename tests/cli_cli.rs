@@ -314,7 +314,7 @@ fn stdlib_text_capitaliza_e_invierte() {
     .unwrap();
     let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
     assert_eq!(code, 0, "run con import std/text must salir 0\n{err}");
-    assert!(out.contains("Hola"), "capitalize\n{out}");
+    assert!(out.contains("Hello"), "capitalize\n{out}");
     assert!(out.contains("cba"), "reverse\n{out}");
     assert!(out.contains("2"), "count no solapado\n{out}");
 }
@@ -616,7 +616,7 @@ fn ffi_marshala_strings_a_char_ptr() {
     .unwrap();
     let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
     assert_eq!(code, 0, "run con string FFI must salir 0\n{err}");
-    assert!(out.contains("10"), "strlen(\"hello mundo\")\n{out}");
+    assert!(out.contains("11"), "strlen(\"hello mundo\")\n{out}");
     assert!(out.contains("42"), "atoi(\"42\")\n{out}");
 }
 
@@ -679,7 +679,7 @@ fn ffi_anchura_int_y_puntero_opaco_como_u64() {
     .unwrap();
     let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
     assert_eq!(code, 0, "run con u64/int FFI must salir 0\n{err}");
-    assert!(out.contains("10"), "strlen size_t (u64)\n{out}");
+    assert!(out.contains("11"), "strlen size_t (u64)\n{out}");
     assert!(out.contains("3"), "fgetc leyó 3 bytes y EOF (-1) cortó el loop\n{out}");
 }
 

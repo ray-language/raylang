@@ -664,7 +664,7 @@ mod tests {
         // M33a: "cadena sin cerrar" subraya desde la comilla hasta donde se rompió.
         let e = lex("let s = \"hello").unwrap_err();
         assert_eq!((e.line, e.col), (1, 9));
-        assert_eq!(e.len, 5, "from la comilla hasta el final: \"hello son 5 chars");
+        assert_eq!(e.len, 6, "desde la comilla hasta el final: \"hello son 6 chars");
         // Un carácter inesperado mide 1.
         let e = lex("let # = 1").unwrap_err();
         assert_eq!(e.len, 1);
@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn escapes_en_string() {
+    fn escapes_in_string() {
         assert_eq!(
             kinds(r#""a\nb\t\\\"""#),
             vec![TokenKind::Str("a\nb\t\\\"".into()), TokenKind::Eof]
@@ -709,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_de_caracter_con_escapes() {
+    fn char_literal_with_escapes() {
         // M11.4c: 'a', escapes, y la keyword de tipo `char`.
         assert_eq!(kinds("'a'"), vec![TokenKind::Char('a'), TokenKind::Eof]);
         assert_eq!(

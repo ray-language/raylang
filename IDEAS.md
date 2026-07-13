@@ -1256,6 +1256,23 @@ excluye ring/rustls/rusqlite por target).
 Fuera del arco: multi-binario `ray-run` (solo si un deploy real lo pide; las features ya dan el
 80%), workspace de crates (ver disparadores arriba).
 
+## 48. Desarrollo con hot reload (`ray dev`) — arco M92 (jul 2026, diseño fijado con el usuario)
+
+**Premisa medida que ordena todo el diseño**: el pipeline completo compila en MILISEGUNDOS y el
+binario arranca en ~3 ms (M55) → *el hot reload no es un problema de runtime, es un problema de
+no perder el listener*. Y los handles de I/O ya viven en el **host** (registro de proceso), no en
+el heap del invitado → una instancia nueva del programa en el MISMO proceso puede heredar el
+socket de escucha. Tres caminos analizados:
+
+| Camino | Qué | Veredicto |
+|---|---|---|
+| **A. `ray dev` = watcher + restart** (fase 1) | Supervisor con polling de mtimes (~200 ms; portable, cero deps — mismo mecanismo que la regen de templates) sobre `.ray`/`.ray.html`/`ray.toml`; ante un cambio, SIGTERM al hijo (compone con `serve_graceful`: drena) y re-run. Reload percibido ~20–50 ms. Templates gratis (la regen de `ray run` ya existe) | ✅ **M92.1** |
+| **B. Hot swap DENTRO de la VM** (estilo Erlang/Dart: generaciones de código, safepoints, solo-cuerpos) | Única opción que preserva el heap del invitado, pero: marcos vivos con ips viejos, formas de struct cambiadas rompen el heap, VM-only sin oráculo, y el restart ya cuesta ms → máximo coste para mínimo delta | 💤 aparcado (como §5); solo si aparece estado en memoria caro de reconstruir |
+| **C. Swap de programa in-process conservando el listener** (fase 2) | Modo dev del webserver: el proceso retiene el handle de escucha (host-side), y ante un cambio recompila (ms) y despacha las peticiones siguientes contra el programa NUEVO — cero conexiones caídas, cero re-bind, downtime ≈ una compilación. Estado del invitado se RESETEA por reload (decisión: limpio y documentado). Es un **cliente externo** más (REPL/runner/LSP), cero cambios en la VM. Bonus: live-reload del navegador vía SSE (el webserver ya lo habla) + snippet inyectado en dev | **M92.2** (siguiente) |
+
+Fases: **92.1** `ray dev` (watcher+restart+drenado) · **92.2** modo dev del webserver (listener
+retenido + swap in-process + SSE al navegador) · 92.3 = camino B, aparcado.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

@@ -23,6 +23,12 @@ import std/net;
 pub struct Conn {
     handle: int,
     buf: bytes,
+    // M91.5: caché de sentencias preparadas CON NOMBRE (arreglos paralelos sql→nombre): una
+    // consulta repetida se enlaza a su sentencia ya parseada en el servidor (que así reusa el
+    // plan) en vez de re-parsearse anónima en cada ronda.
+    stmt_sqls: [string],
+    stmt_names: [string],
+    stmt_seq: int,
 }
 
 // Un mensaje del servidor: su octeto de tipo y la carga (sin el tipo ni la longitud).
@@ -205,7 +211,7 @@ pub fn connect_tls(host: string, port: int, user: string, password: string, data
 // El StartupMessage + handshake SCRAM hasta ReadyForQuery, sobre un handle ya conectado
 // (plano o TLS — el I/O se desvía solo por el tipo del handle).
 fn startup_and_auth(handle: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
-    let c = Conn { handle: handle, buf: b"" };
+    let c = Conn { handle: handle, buf: b"", stmt_sqls: [], stmt_names: [], stmt_seq: 0 };
 
     // StartupMessage (sin octeto de tipo): [longitud][versión 3.0 = 196608][params NUL][0].
     var body = be32_bytes(196608) + cstr("user") + cstr(user) + cstr("database") + cstr(database);
@@ -271,16 +277,43 @@ fn startup_and_auth(handle: int, user: string, password: string, database: strin
 
 // ── Protocolo extendido: Parse / Bind / Describe / Execute / Sync ───────────────────────────
 
-// Manda la secuencia extendida para `sql` con `params` (formato texto). El nombre de sentencia y
-// portal quedan vacíos (anónimos): una consulta por ronda, sin estado de sentencia preparada.
-fn send_extended(c: Conn, sql: string, params: [string]) -> Result<int, string> {
-    // Parse ('P'): [nombre NUL][query NUL][nº tipos param:2 = 0].
-    let parse_pl = cstr("") + cstr(sql) + be16_bytes(0);
-    let _ = send(c, 80, parse_pl)?;
+// M91.5: nombre de sentencia preparada para `sql`: el cacheado si ya se preparó en esta
+// conexión, o "" (hay que parsear). La caché se acota a 64 entradas; por encima se cae al
+// comportamiento anónimo de siempre (una consulta por ronda, sin estado).
+fn stmt_cached(c: Conn, sql: string) -> string {
+    var i = 0;
+    while (i < c.stmt_sqls.len()) {
+        if (c.stmt_sqls[i] == sql) {
+            return c.stmt_names[i];
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+// Manda la secuencia extendida para `sql` con `params` (formato texto). M91.5: la sentencia va
+// CON NOMBRE y se cachea por conexión (`stmt_cached`): en un hit se salta el Parse (el servidor
+// reusa el plan); en un miss se parsea con un nombre FRESCO ("s0", "s1", …) que `query`/`exec`
+// cachean solo si la ronda termina bien (un Parse fallido no envenena la caché, y un nombre
+// nunca se re-parsea: re-Parse de un nombre existente es error de protocolo). Devuelve el
+// nombre parseado en esta ronda ("" si fue un hit o se agotó la caché).
+fn send_extended(c: Conn, sql: string, params: [string]) -> Result<string, string> {
+    var name = stmt_cached(c, sql);
+    var parsed = "";
+    if (name == "") {
+        if (c.stmt_sqls.len() < 64) {
+            name = "s" + to_string(c.stmt_seq);
+            c.stmt_seq = c.stmt_seq + 1;
+            parsed = name;
+        }
+        // Parse ('P'): [nombre NUL][query NUL][nº tipos param:2 = 0].
+        let parse_pl = cstr(name) + cstr(sql) + be16_bytes(0);
+        let _ = send(c, 80, parse_pl)?;
+    }
 
     // Bind ('B'): [portal NUL][sentencia NUL][nº formatos:2 = 0 (todos texto)]
     //             [nº params:2][por param: longitud:4 + valor][nº formatos de resultado:2 = 0].
-    var bind_pl = cstr("") + cstr("") + be16_bytes(0) + be16_bytes(params.len());
+    var bind_pl = cstr("") + cstr(name) + be16_bytes(0) + be16_bytes(params.len());
     var i = 0;
     while (i < params.len()) {
         let pb = params[i].to_bytes();
@@ -295,7 +328,8 @@ fn send_extended(c: Conn, sql: string, params: [string]) -> Result<int, string> 
     // Execute ('E'): [portal NUL][máx filas:4 = 0 (todas)].
     let _ = send(c, 69, cstr("") + be32_bytes(0))?;
     // Sync ('S').
-    send(c, 83, [])
+    let _ = send(c, 83, [])?;
+    Result.Ok(parsed)
 }
 
 // El nº de filas afectadas del tag de CommandComplete: "INSERT 0 3" / "UPDATE 5" / "SELECT 2" → el
@@ -368,16 +402,27 @@ fn drain_until_ready(c: Conn) -> Result<int, string> {
 /// Ejecuta una consulta con filas (SELECT…) y parámetros (`$1`, `$2`, … enlazados aparte, en
 /// formato texto → anti-inyección). Devuelve **todas** las filas; un NULL llega como "".
 pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
-    let _ = send_extended(c, sql, params)?;
+    let parsed = send_extended(c, sql, params)?;
     let r = collect_response(c)?;
+    cache_stmt(c, sql, parsed);
     Result.Ok(r.0)
+}
+
+// M91.5: cachea la sentencia parseada en esta ronda, SOLO tras una ronda exitosa (si la ronda
+// erró, el nombre queda huérfano en el servidor y la siguiente re-parsea con nombre fresco).
+fn cache_stmt(c: Conn, sql: string, parsed: string) {
+    if (parsed != "") {
+        c.stmt_sqls.push(sql);
+        c.stmt_names.push(parsed);
+    }
 }
 
 /// Ejecuta una sentencia sin filas (INSERT/UPDATE/DELETE/DDL, o BEGIN/COMMIT/ROLLBACK) con
 /// parámetros, y devuelve las filas afectadas (0 para DDL/transacciones).
 pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
-    let _ = send_extended(c, sql, params)?;
+    let parsed = send_extended(c, sql, params)?;
     let r = collect_response(c)?;
+    cache_stmt(c, sql, parsed);
     Result.Ok(r.1)
 }
 

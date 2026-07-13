@@ -640,9 +640,14 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
     siempre). Quedan: sentencias con estado (cachear stmt_id), tipos binarios en los parámetros
     (hoy texto), full-path de caching_sha2 **sin** TLS (RSA; con `connect_tls` pierde casi todo el
     sentido), BIGINT UNSIGNED ≥ 2^63 (se muestra envuelto).
-  - **Postgres**: parámetros binarios/tipados, sentencias preparadas con estado (hoy anónimas, una
-    por ronda), COPY, `sslmode` negociable estilo libpq (hoy: `connect` = nunca TLS /
-    `connect_tls` = obligatorio).
+  - **Postgres**: ~~sentencias preparadas con estado (hoy anónimas, una por ronda)~~ → ✅ **M91.5**:
+    sentencias CON NOMBRE cacheadas por conexión (`Conn.stmt_*`; hit = Bind directo sin re-Parse →
+    el servidor reusa el plan; nombre fresco `s<n>` por Parse y caché solo tras ronda exitosa —
+    un Parse fallido no envenena; tope 64, por encima cae a anónimas; test
+    `sentencias_preparadas_cacheadas_por_conexion` con toy-server con memoria de sentencias).
+    Quedan: parámetros binarios/tipados (⚠️ decisión de API pendiente con el usuario: `params`
+    dejaría de ser `[string]` — la v1 tipada-a-texto es deliberada), COPY, `sslmode` negociable
+    estilo libpq (hoy: `connect` = nunca TLS / `connect_tls` = obligatorio).
   - **SQLite**: `last_insert_rowid` ✅ (raylang puro, DESIGN §56.6) y WAL ✅ (ya posible:
     `query(c, "PRAGMA journal_mode=WAL", [])`). Queda: tipos nativos (celdas no-texto).
   - **MongoDB**: Date/Timestamp ✅ y `connect_tls` ✅ (DESIGN §56.6). Quedan: Decimal128 (error

@@ -62,7 +62,8 @@ fn main() -> int {
 Cliente del protocolo wire v3 de PostgreSQL con **conexión persistente**, autenticación
 **SCRAM-SHA-256** (reusa `net/scram`) y el **protocolo extendido** (Parse/Bind/Describe/Execute/
 Sync) — que trae **parámetros** (`$1`, `$2`, … enlazados aparte del SQL → anti-inyección) y devuelve
-**todas** las filas:
+**todas** las filas. M91.5: las sentencias se preparan **con nombre y se cachean por conexión** —
+repetir un SQL enlaza a la sentencia ya parseada (el servidor reusa el plan) sin re-Parse:
 
 ```raylang
 import db/postgres;

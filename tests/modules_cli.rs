@@ -511,3 +511,22 @@ fn ufcs_importado_no_rompe_acceso_a_campo() {
         assert_eq!(code, 0);
     }
 }
+
+#[test]
+fn auto_referencia_por_nombre_de_paquete() {
+    // M91.8: los fuentes de un paquete se importan entre sí por el NOMBRE del paquete
+    // (`import net/trace;` desde packages/net/http.ray) — si el primer segmento del import
+    // coincide con el nombre del directorio raíz, el loader prueba contra el padre (la misma
+    // vista que tiene un consumidor del paquete). Editar/correr el paquete no exige proyecto.
+    let files = &[
+        ("paq/util", "pub fn doble(n: int) -> int { n + n }\n"),
+        // `intermedio` importa a su hermano por el nombre del paquete, como los paquetes reales.
+        ("paq/intermedio", "from paq/util import doble;\npub fn cuadruple(n: int) -> int { doble(doble(n)) }\n"),
+        ("paq/app", "from paq/intermedio import cuadruple;\nfn main() -> int { print(cuadruple(10)); cuadruple(10) - 39 }\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("m91_autoref", "paq/app", files, vm);
+        assert!(out.contains("40"), "cuadruple(10)=40 (vm={vm})\n{out}");
+        assert_eq!(code, 1, "exit 40-39=1 (vm={vm})");
+    }
+}

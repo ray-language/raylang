@@ -711,10 +711,15 @@ impl<'a> Interpreter<'a> {
                         Ok(rc.borrow()[idx].clone())
                     }
                     // M11.4c-2: indexar un string → el carácter en esa posición.
+                    // Opt.16 (espejo de la VM): nth(i) sin collect(); longitud solo al fallar.
                     Value::Str(s) => {
-                        let chars: Vec<char> = s.chars().collect();
-                        let idx = check_bounds(i, chars.len(), index.line, index.col)?;
-                        Ok(Value::Char(chars[idx]))
+                        match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
+                            Some(c) => Ok(Value::Char(c)),
+                            None => {
+                                check_bounds(i, s.chars().count(), index.line, index.col)?;
+                                unreachable!("check_bounds falla siempre en este camino");
+                            }
+                        }
                     }
                     // M16.1a: indexar bytes → el octeto como int.
                     Value::Bytes(b) => {

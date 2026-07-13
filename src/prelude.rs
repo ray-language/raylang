@@ -758,7 +758,7 @@ impl<T> OptionOps<T> for Option<T> {
         }
     }
 
-    fn unwrap(self) -> T { self.expect("unwrap de un Option.None") }
+    fn unwrap(self) -> T { self.expect("unwrap de un Option.None") } // ice-ok: expect de RAYLANG (método OptionOps del prelude), no el de Rust
 
     fn ok_or<E>(self, err: E) -> Result<T, E> {
         match (self) {
@@ -816,7 +816,7 @@ impl<T, E> ResultOps<T, E> for Result<T, E> {
         }
     }
 
-    fn unwrap(self) -> T { self.expect("unwrap de un Result.Err") }
+    fn unwrap(self) -> T { self.expect("unwrap de un Result.Err") } // ice-ok: expect de RAYLANG (método ResultOps del prelude), no el de Rust
 
     fn ok(self) -> Option<T> {
         match (self) {

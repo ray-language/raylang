@@ -101,6 +101,13 @@ fn main() -> int {
   deja de aceptar, drena las conexiones en vuelo con plazo y devuelve 0 (cero peticiones perdidas
   al desplegar); la forma general `serve_shutdown[_limits]` apaga con cualquier canal `stop`
   (testeable sin señales).
+  **Gotcha del puerto "ocupado" (macOS/BSD)**: un puerto tomado en la MISMA dirección sí falla
+  claro (`serve` devuelve `Err("Address already in use")` — decide el llamador). Pero atarse a
+  `127.0.0.1:P` con otra app escuchando en `0.0.0.0:P` **no es error para el SO**: ambos listeners
+  coexisten (semántica BSD + `SO_REUSEADDR`, que Rust pone en todo listener) y la dirección más
+  específica gana el tráfico de loopback — tu servidor SÍ atiende `localhost:P` mientras la otra
+  app sigue en el resto de interfaces. No hay error que reportar ni forma portable de detectarlo;
+  si quieres exclusividad del puerto, escucha tú también en `0.0.0.0`.
 
 ### Observabilidad
 

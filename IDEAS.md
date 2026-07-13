@@ -52,7 +52,7 @@
 | **Backend nativo** (bootstrap sin Rust) | codegen a máquina/asm/C/Rust | **M18** | 💤 **aparcado** (decisión del usuario, 2026-06): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va a la optimización de la VM. Opciones barajadas: asm (as+ld), máquina directa, C, transpilar a Rust→rustc. Se retoma más adelante |
 | **Asperezas de M3** | Parser + checker | hecho | ✅ `[]` en campo de struct (M6.2) y coma final en arreglos (limpieza) resueltos |
 | **Ergonomía del lenguaje I** (tuplas · `for`/iteradores · interpolación · casts · `const`) | Lexer + parser + checker + ambos motores + self-hosting | **M27** | 🚧 DESIGN §36. La deuda ergonómica que destaparon las librerías M15–M26. ✅ **M27.1** tuplas (`Type::Tuple`, `t.0`, `let (a,b)=…`; erasure a arreglos) · ✅ **M27.2** `for`/iteradores (rango `a..b`, arreglo, string→char, `Map`→tupla `(k,v)`; `StmtKind::For` ejecutado directamente en ambos motores); **M27.3** interpolación `"…{expr}…"` (desugar a `+ to_string`, puro léxico); **M27.4** casts `x as int`/`as float` (reusa `as`); **M27.5** `const` de nivel superior |
-| **Ergonomía del lenguaje II** (operadores · `?`+From/Into · enteros con tamaño) | Sistema de tipos / traits + modelo numérico | **M28** | 🚧 DESIGN §36. **M28.1** sobrecarga de operadores vía traits (`Add`/`Ord`/`PartialEq`…; hoy *special-cased*; puede unificar `@derive(Eq)`); **M28.2** `?` con conversión de error (`From`/`Into` → enums de error propios en vez de `string`); **M28.3** enteros con tamaño/unsigned (`u8`/`u32`/`u64`; el más invasivo; mata el `& 0xFFFFFFFF` de la cripto; puede quedar acotado sin promoción implícita) |
+| **Ergonomía del lenguaje II** (operadores · `?`+From/Into · enteros con tamaño) | Sistema de tipos / traits + modelo numérico | **M28** | ✅ **COMPLETO** (DESIGN §36: 28.1 traits `Add`/`Sub`/`Mul`/`Div`/`Neg` en el prelude, el checker baja `a + b` a `a.add(b)`; 28.2 `?` convierte el error vía `impl From<E1> for E2` —método `desde`—; 28.3 `u8`/`u32`/`u64` con wrapping, casts `as` y literal polimórfico, oráculo `uint_literal_oraculo`). Esta fila decía 🚧 por desactualización, detectada en la auditoría de diferidos de jul 2026. **M28.1** sobrecarga de operadores vía traits (`Add`/`Ord`/`PartialEq`…; hoy *special-cased*; puede unificar `@derive(Eq)`); **M28.2** `?` con conversión de error (`From`/`Into` → enums de error propios en vez de `string`); **M28.3** enteros con tamaño/unsigned (`u8`/`u32`/`u64`; el más invasivo; mata el `& 0xFFFFFFFF` de la cripto; puede quedar acotado sin promoción implícita) |
 | **Tooling** (regex · formateador · optimización VM) | Motor propio / cliente externo (reusa parser) / VM | **M29** | 🚧 DESIGN §36. **M29.1** regex (ausencia más llamativa de la stdlib; motor Thompson NFA, librería raylang o builtin-asistido); **M29.2** formateador `rayfmt` (pretty-printer canónico del AST, idempotente, sin config); **M29.3** retomar optimización VM (§27: dedup constantes, peephole, `HeapValue` 32→16 B) |
 | **Cripto avanzada** (cifrado + firma asimétrica) | Librería raylang (cómputo) | **M30** | 🚧 DESIGN §36. Hoy hay hashing/HMAC pero **no cifrado**. **M30.1** simétrica ChaCha20-Poly1305/AES-GCM (vectores RFC 8439); **M30.2** asimétrica Ed25519 (RFC 8032; ejercita bignum/`u64`); **M30.3** JWT RS256/ES256 sobre lo anterior |
 | **Cerrar gRPC** (transporte HTTP/2 vivo) | Librería raylang sobre TLS+ALPN | **M31** | 🚧 DESIGN §36. Los diferidos grandes de M26. **M31.1** HPACK-Huffman (tabla 257 del RFC 7541 Ap. B; vectores C.4/C.6); **M31.2** transporte vivo (preface + SETTINGS + streams sobre TLS con ALPN `h2` — requiere exponer ALPN en `tls_connect`); **M31.3** cliente gRPC e2e |
@@ -233,7 +233,8 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     tipo del operando izquierdo (`x`), igual que `member_completion_items` hace para el `.`. Reusa la
     inferencia del checker sobre el operando. Impacto **bajo** (cliente LSP, front-end puro; cero
     runtime). Ergonomía, no corrección.
-  - Diferido: hover/def de **métodos** (comparten `(línea,col)` con el receptor, sin spans).
+  - ~~Diferido: hover/def de **métodos**~~ → ✅ **M10.2g/h** (DESIGN: hover de campos y métodos vía
+    `field_name_pos` del parser + ir-a-definición cruzando archivos); esta fila quedó desactualizada.
 
 ## 9. Anotaciones (`@test`, `@derive`, …)
 
@@ -598,8 +599,10 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   runtime optimizado, 7.7× sobre el original). Diferido: include/layouts, regeneración en `ray
   build`, `{% let %}`.
 - Diferido de fase 1: `{% include %}`/parciales (pide diseño de resolución: mapa de parciales en
-  compile vs. filesystem), filtros, `s[i]` O(1) en la VM (cachear los chars del string — optimización
-  del runtime que beneficiaría a todo el ecosistema, no solo templates).
+  compile vs. filesystem), filtros. ~~`s[i]` O(1) en la VM~~ → ✅ **M90.6** (en AMBOS motores, sin
+  cachear ni tocar la representación —la Opt.3 `Rc<str>` ya se midió y revirtió—: se elimina el
+  `Vec<char>` completo que se asignaba POR ACCESO; ASCII indexa el byte en O(1) —también `len`—,
+  no-ASCII escanea hasta `i` sin asignar; bucle `s[i]` sobre 64k chars: 37,9 s → 1,16 s, ~33×).
 
 ## 15. Cliente MongoDB — M54, PLAN
 
@@ -662,7 +665,12 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
 - **`JNum` es solo `float`**: fiel a JSON, pero un int64 > 2^53 pierde precisión. Irrelevante para
   APIs web; importa para un puente con BSON (abajo). Cambiarlo rompería a los usuarios del enum →
   decidir solo si el puente lo exige.
-- **Menores**: sin pretty-print (solo compacto); sin helpers de acceso (navegar es a `match` puro).
+- ✅ **Pretty-print + helpers de acceso** — CERRADO (**M90.3**): `stringify_pretty(j, indent)`
+  (multilínea con sangría, claves ordenadas como `stringify`, hojas compactas) y navegación sin
+  `match` anidado: `member`/`at` (bajan un nivel → `Option<Json>`), `as_string`/`as_float`/`as_int`
+  (integral, `3.5 → None`)/`as_bool`/`as_array`/`as_object`/`is_null` (extraen el payload), y los
+  combinados `get_string`/`get_float`/`get_int`/`get_bool`/`get_array`/`get_object` (campo tipado
+  de un objeto). UFCS: `j.get_string("nombre")`. Tests golden en `json_cli.rs`.
 - ✅ **Puente `Json ↔ Bson`** — CERRADO (jul 2026): `bson.from_json` (número JSON → `Double`; las
   claves salen ordenadas, el objeto es Map), `bson.to_json` (degradación documentada: `Int` →
   número con pérdida > 2^53, `ObjectId`/`Bin` → hex, orden de campos perdido) y **`doc_from_json(s)
@@ -747,8 +755,13 @@ control) que el SERVIDOR ya recibió en M56. Todo librería pura, cero runtime.
 | HTTP/2: **sin WINDOW_UPDATE** → respuesta > ~64 KiB (ventana inicial 65535) CUELGA para siempre; PING sin ACK (el servidor corta en transferencias largas); RST_STREAM ignorado (lee hasta EOF en vez de fallar) | Límite duro real de `http2_get`/`grpc_call` | **58.3** |
 | Menores: WS `extract_key` case-sensitive; `recv_text` ignora el opcode; HTTP `absolutizar` con Location relativa sin `/`; cabeceras de respuesta pierden Set-Cookie múltiples; h2 sin CONTINUATION/END_HEADERS; `Http2Response` sin headers | — | dentro de su sub-fase o diferido |
 
-**Diferidos** (a demanda): keep-alive/pool del cliente HTTP (la delimitación por Content-Length lo
-habilita), multiplexado h2 real, fragmentación WS de ENVÍO (la de recepción entra en 58.1).
+**Diferidos** (a demanda): ~~keep-alive/pool del cliente HTTP~~ → ✅ **M90.2**: conexión persistente
+explícita (`struct Conn` + `connect`/`conn_request`/`conn_request_bytes`/`conn_close`, patrón `Rd` del
+RPC): delimita cada respuesta por Content-Length/chunked incremental (sin EOF) guardando los sobrantes,
+honra `Connection: close`, reconecta perezoso y reintenta UNA vez transparente en la carrera del
+keep-alive ocioso (el servidor cerró sin entregar ningún octeto). La API one-shot (`fetch`/`request*`)
+sigue con `Connection: close`. Quedan a demanda: multiplexado h2 real, fragmentación WS de ENVÍO (la de
+recepción entra en 58.1), y un pool multi-conexión sobre `Conn` si aparece un consumidor concurrente.
 
 ---
 
@@ -788,7 +801,7 @@ hallazgos son dos defectos verificados con el binario y ergonomía faltante.
 | **`sort` es insertion sort O(n²)**: 20k ints = **23 s** (medido, release) | El json-O(n²) de M59.5 pero en sort | **61.2**: merge sort en raylang puro (estable; `std/sort.merge` ya existe), midiendo |
 | **Option/Result sin ergonomía**: no hay `unwrap_or`/`is_some`/`is_none`/`expect`/`ok_or` — todo es `match` (los packages están llenos de `match … Some(x) => x`); `bytes` sin `Eq`/`Show` (`assert_eq` sobre bytes no tipa, aunque `==` ya funciona); `[T]` sin `Eq` | La mejora de ergonomía más rentable pendiente | **61.3** (funciones libres genéricas + impls de una línea) |
 | **DX de assert**: un `assert` fallido reporta la posición DEL PRELUDE (579:9), no el sitio del usuario — con varios asserts no sabes cuál falló | Inherente a "prelude = funciones ordinarias"; el fix real es posición-del-llamador o mini stack trace (toca runtime) | **idea aparte** (diseño de runtime; no entra en M61) → **M79** (stack trace, §39) |
-| Menores: `sum` solo `Iter<int>` (sin float); `Ord` para `bool`/`bytes` ausente | — | dentro de 61.3 o diferido |
+| Menores: ~~`sum` solo `Iter<int>` (sin float)~~ (cerrado: `sum_float` ya existía en el prelude); ~~`Ord` para `bool`/`bytes` ausente~~ → ✅ **M90.5** (`false < true`; bytes lexicográfico) | — | ✅ |
 
 **Verificados sin hallazgo**: envoltorios de I/O/Map correctos; `try_join` sin carrera; iteradores
 (map/filter/take/skip/zip/enumerate/fold/collect) con semántica correcta y one-shot como Rust
@@ -808,7 +821,7 @@ motores idénticos); el problema es de RENDIMIENTO y está medido (1M elementos,
 | **M40.6 hizo lento el camino ergonómico**: las funciones libres eager `map`/`filter`/`fold` delegan en la maquinaria perezosa → `xs.map(f).fold(…)` = **36 441 ms** vs 107 ms del while (340×); como bucles directos: **317 ms** (115× de mejora disponible, semántica idéntica) | El código real usa `xs.map(f)`, no cadenas lazy | **62.1**: revertir las libres a bucles directos; lo lazy queda para `iter().…` |
 | Semántica sutil sin documentar: `for x in xs` CONGELA `len` pero `for x in xs.iter()` es vista VIVA (mutar durante la iteración diverge entre formas); aliasing one-shot; `zip` pierde el elemento ya consumido del lado largo | Sorpresas evitables | **62.2** (libro m40 + gotcha en DESIGN; cero código) |
 | **El `next()` cuesta ~6 µs/elemento** (medido: `for x in xs.iter()` pelado = 6 191 ms/1M): llamada a closure + ALOCACIÓN de un `Option` en el heap del GC + match por paso; cada adaptador apila otro tanto | Techo estructural del throughput lazy | ✅ **RESUELTO en Opt.13** (§11): el diagnóstico real era el **pacing del GC** (umbral por conteo re-escaneando el arreglo grande cada ~50 asignaciones), no el closure/Option (~0.31 µs/paso). Umbral amortizado por trabajo trazado → **6.8 → 0.4 s (17×)** |
-| Faltan terminales comunes: `any`/`all`/`count` (3 líneas c/u sobre `next`/`fold`); `find`/`chain`/`min`/`max` a demanda | Ergonomía menor | opcional en 62.1 o diferido |
+| Faltan terminales comunes: `any`/`all`/`count` (3 líneas c/u sobre `next`/`fold`); ~~`find`/`chain`/`min`/`max` a demanda~~ → ✅ **M90.5**: `find` (terminal, corta en el primero) y `chain` (perezoso, `other: Iter<T>` como `zip`) como métodos por defecto del trait; `min<T: Ord>`/`max<T: Ord>` funciones libres (como `sum`/`sort`) → UFCS `it.min()`; y `impl Ord for bool` (false < true) y `bytes` (lexicográfico). Oráculo `find_chain_min_max_oraculo` | Ergonomía menor | opcional en 62.1 o diferido |
 
 **Verificados sin hallazgo**: pereza con orden intercalado; `take` corta el consumo del origen;
 `skip`/`take` con bordes (negativo, más allá del final); `enumerate` + `for` con tupla; iterador
@@ -848,7 +861,7 @@ que decodifica datos EXTERNOS (el gzip transparente del cliente HTTP, activado e
 |---|---|---|
 | **Input corrupto/truncado = CRASH, no Err**: `read_bit` indexa sin límites ("asume datos suficientes"); ídem `stored_block`, el bucle FNAME de gunzip (`while (data[pos] != 0)` sin tope) y el salto FEXTRA (xlen del atacante). Verificado: `inflate_raw(b"")` → "índice fuera de rango", muere el programa | Una respuesta gzip corrupta tumba la fibra (misma clase que WS pre-M58.1) | **64.1**: bounds → `Err`; + NLEN verificado, FDICT rechazado, hlit/hdist acotados, repeticiones 16/17/18 sin rebasar |
 | **Bomba de descompresión sin tope**: gzip diminuto → expansión sin cota (LZ77 sobre sí mismo); ISIZE no sirve (atacante); el cliente HTTP descomprime automático | Agotamiento de memoria remoto | **64.2**: `gunzip_limit`/`inflate_raw_limit` (patrón `read_message_limit` del WS) + el cliente HTTP los usa |
-| Menores: árboles sobre-suscritos aceptados (puff valida Kraft; aquí basura en vez de Err, sin OOB); `huffman_decode` reconstruye el trie (~5k nodos) POR string de cabecera h2; crc32 bit a bit (8 it/octeto; con tabla ~8×); huffman/hpack hablan `[int]` entre sí (par interno); `prev` de deflate O(n) vs anillo 32K | — | **64.3** o diferido |
+| Menores: árboles sobre-suscritos aceptados (puff valida Kraft; aquí basura en vez de Err, sin OOB); `huffman_decode` reconstruye el trie (~5k nodos) POR string de cabecera h2; ~~crc32 bit a bit~~ (✅ M90.4: tabla de 256 entradas construida por llamada —sin estado de módulo—, umbral < 256 octetos sigue bit a bit; ~4,5× medido en la VM); huffman/hpack hablan `[int]` entre sí (par interno); `prev` de deflate O(n) vs anillo 32K | — | **64.3** o diferido |
 
 ---
 
@@ -1141,7 +1154,7 @@ pero **erraría con claves a nivel de archivo** → los metadatos de paquete van
 | **Namespaces con dueño** — la propiedad cabalga sobre git hosting (sin cuentas propias): publicar para terceros = **PR al repo del índice**; sidecar `<nombre>.owners.toml` (dueños + claves públicas; la PRIMERA publicación reclama el nombre); enforcement = check de CI del repo del índice (`ray index-verify`: el PR solo toca paquetes cuyo owners incluye al autor) + branch protection. Descartado: scopes sintácticos `@user/pkg` (tocan gramática/imports/manifiesto; el owners-file da lo mismo) | abrir el índice a terceros | ✅ **M83b** (`read/write_owners` en index.rs — reclamación TOFU en la primera publicación firmada, pisar = Err; `ray index-verify` audita; la mitad PR-autor queda en el hosting) |
 | **Firmas de publicación** — Ed25519 sobre `(nombre, versión, hash)` (`ring` ya enlazado M43; verificable incluso en raylang puro M30.2), NO sigstore (servicios externos, contra la filosofía). `ray publish --sign` añade `sig = "ed25519:…"` en `[versión]` (los clientes viejos la ignoran); la pubkey vive en el owners.toml de M83b, fijada por **TOFU** en la primera publicación (patrón del hash del índice M51d); el log de transparencia es el historial git. Firmas y namespaces son la MISMA feature de confianza → un solo hito | junto con M83b (paquete "confianza multi-publicador") | ✅ **M83c** (`ray keygen` + `publish --sign` — Ed25519 sobre `nombre@versión:hash` reusando builtins::ed25519_* de M43; verificación en `resolve_pinned` ANTES de descargar: firma inválida corta, sin-firma-con-dueño avisa, firma-sin-dueño = Err; 3 tests en registry_cli 23/23; PUBLICAR.md §6bis) |
 | **UI/búsqueda web** — sitio ESTÁTICO generado desde el índice (TOMLs + READMEs → HTML + búsqueda client-side), publicado por una Action del repo del índice en Pages; sin servidor ni BD. Oportunidad de dogfooding: el generador EN raylang (templates M55 + std/toml + std/fs + json) | la ola de hosting de M44 (libro+playground+SPEC; la UI es el 4º inquilino) | ✅ **M84** (`tools/registry_site.ray` — raylang puro sobre std/fs+StringBuilder, mini-parser propio del formato del índice —std/toml anidaría `[1.2.0]` por los puntos—, insignias retirada/firmada + dueño de M83, búsqueda client-side; salida determinista, golden byte-idéntico ambos motores en `tests/registry_site_cli.rs`; snippet de Pages en PUBLICAR.md. Fuera de examples/ para no entrar al corpus selfhost) |
-| **Mirrors de paquetes** — el hash ya hace los mirrors *trustless* (solo hace falta disponibilidad). Mirror del ÍNDICE ya existe (`RAY_INDEX` a cualquier clon). Falta solo la regla de reescritura `[registry] mirror = "prefijo"` (~30 líneas en `deps::ensure`; el hash verifica igual). OJO: un mirror NO es otro índice (mismo índice, otra URL) — mantener la distinción evita reabrir la dependency-confusion mitigada en M51e | a demanda (CI tras firewall / caída del hosting) | 💤 (especificado, sin construir) |
+| **Mirrors de paquetes** — el hash ya hace los mirrors *trustless* (solo hace falta disponibilidad). Mirror del ÍNDICE ya existe (`RAY_INDEX` a cualquier clon). Falta solo la regla de reescritura `[registry] mirror = "prefijo"` (~30 líneas en `deps::ensure`; el hash verifica igual). OJO: un mirror NO es otro índice (mismo índice, otra URL) — mantener la distinción evita reabrir la dependency-confusion mitigada en M51e | a demanda (CI tras firewall / caída del hosting) | ✅ **M90.1**: `[registry] mirror = "prefijo"` / `RAY_MIRROR` reescribe la descarga a `prefijo/<url-sin-esquema>` (estilo proxy de Go), con fallback a la URL original si el mirror falla; el lock/MVS siguen viendo la URL original (el mirror es transporte, no identidad). Tests offline en `registry_cli` |
 
 **Nada de esto es pre-1.0** salvo M83a (documentación de lo existente). Único "hazlo ya"
 negativo: NO poner metadatos a nivel de archivo en los TOML del índice (romperían clientes
@@ -1159,7 +1172,7 @@ Análisis de los candidatos diferidos de M57 (§18). Base: `std/time` UTC (Hinna
 | **`Date:` del webserver** (SHOULD RFC 7231) | `time.to_rfc1123(time.now_utc())` en `send_response_keep`, ambos espejos; los tests usan `contains` → solo se añade la aserción de presencia+formato | ya | ✅ **M85a** |
 | **`packages/tz`** — hora local IANA | Parser **TZif v2** en raylang puro leyendo `/usr/share/zoneinfo` vía std/fs (cero deps; formato binario tamaño-DNS). Decisiones: (1) **la ambigüedad DST es API**: `to_utc(civil)` devuelve `enum LocalResult { Single(int), Ambiguous(int,int), Gap }` (estilo chrono; errores como valores); (2) zona del sistema sin primitivo: `env("TZ")` y fallback leer `/etc/localtime` POR CONTENIDO (es un TZif válido); (3) Windows honesto: `load` → Err claro, UTC sigue. Fixtures TZif commiteados + goldens de transiciones DST (determinista, ambos motores). Tier 2 (política §53). Embeber tzdata = decisión estilo ring, solo a demanda | siguiente | ✅ **M85** (`packages/tz/tz.ray`, ~370 líneas; `tests/tz_cli.rs` golden con fixtures Madrid/NY/UTC: invierno/verano, gap, solape con abreviaturas, round-trip, errores; ✅ **M85b**: footer TZ-string —parser POSIX `STD off DST[off],Mm.w.d[/t],Mm.w.d[/t]` + resolución por reglas perpetuas tras la última transición; golden 2100 incl. gap/solape en territorio del footer) |
 | **`cron`** | dos mitades: `next_after(expr, civil) -> civil` PURO (goldens) + runner sobre spawn+sleep cooperativo. v1 **solo UTC** (la trampa: cron local correcto necesita tz — gap → siguiente hora válida, solape → solo la primera); tz-aware tras M85 | tras tz (o antes, UTC-only) | ✅ **M86** (`packages/cron/cron.ray`; next_after salta por campos —mes→día→hora→minuto—, quirk vixie DOM/DOW=OR, alias `@…`, imposible=Err a ~5 años; golden `tests/cron_cli.rs` ambos motores. Diferido M86b: cron en hora local sobre tz) |
-| **`ntp`** (SNTP v4 sobre net/udp, ~150 líneas, toy-server como DNS) | especificado | a demanda | 💤 |
+| **`ntp`** (SNTP v4 sobre net/udp, ~150 líneas, toy-server como DNS) | especificado | a demanda | ✅ **M90.7** (`packages/net/ntp.ray`: `query(host, port) -> Result<NtpResult, string>` con hora del servidor + offset + delay en ms Unix y stratum; cálculo clásico de 4 marcas t1–t4; rechaza kiss-of-death, modo foráneo, transmit a cero, respuesta corta; bloqueante como `udp.recv_from`. Toy-server determinista en `tests/ntp_cli.rs`, ambos motores) |
 | **`dist`** (HLC ~40 líneas sobre now()) | especificado | multi-nodo real | 💤 |
 
 ---

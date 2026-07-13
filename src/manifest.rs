@@ -38,6 +38,11 @@ pub struct Manifest {
     /// raíz del proyecto si no es absoluto. `None` = sin índice (solo deps git/`path:`). Lo puede
     /// sobrescribir la variable de entorno `RAY_INDEX`.
     pub registry_index: Option<String>,
+    /// `[registry] mirror` — **mirror de paquetes** (M90.1): un prefijo de URL que reescribe la URL
+    /// git de cada paquete al descargarlo (`prefijo/<url-sin-esquema>`). NO es otro índice (mismo
+    /// índice, otra URL de descarga); el hash publicado verifica igual. Si el mirror falla, se cae a
+    /// la URL original. Lo puede sobrescribir la variable de entorno `RAY_MIRROR`.
+    pub registry_mirror: Option<String>,
 }
 
 impl Manifest {
@@ -83,6 +88,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut indent_style = None;
     let mut indent_size = None;
     let mut registry_index = None;
+    let mut registry_mirror = None;
 
     for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
@@ -131,7 +137,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
             },
             "registry" => match key {
                 "index" => registry_index = Some(as_string()?),
-                _ => {} // otras claves del registro (M51c: mirrors, etc.) se ignoran por ahora
+                "mirror" => registry_mirror = Some(as_string()?),
+                _ => {} // otras claves del registro se ignoran por ahora (extensibilidad)
             },
             "" => return Err(err(num, "clave fuera de toda sección (falta '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
@@ -147,6 +154,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         indent_style,
         indent_size,
         registry_index,
+        registry_mirror,
     })
 }
 

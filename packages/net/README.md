@@ -57,7 +57,9 @@ fn main() -> int {
 ### HTTP y HTTP/2
 
 - **`net/http`** — cliente/servidor HTTP/1.1 en `bytes` (habla `https://` vía el TLS del runtime). Sobre
-  `std/inflate` (gunzip).
+  `std/inflate` (gunzip). M90.2: conexiones persistentes (keep-alive) con `connect`/`conn_request`/
+  `conn_close` — reusa el socket entre peticiones al mismo servidor (delimitación por
+  Content-Length/chunked, reconexión y reintento transparente).
 - **`net/http2`** — framing HTTP/2 (preface, SETTINGS, frames). Hoja.
 - **`net/hpack`** — compresión de cabeceras HPACK (RFC 7541): `header`, `encode`, `decode` + tabla
   dinámica. Determinista. Hoja.
@@ -68,6 +70,8 @@ fn main() -> int {
 
 - **`net/udp`** — sockets UDP: `bind`/`send_to`/`recv_from`. Hoja.
 - **`net/dns`** — resolución DNS (7 tipos de registro). Sobre `net/udp`.
+- **`net/ntp`** — cliente SNTP v4 (RFC 4330): `query(host, port)` → hora del servidor + offset/delay
+  del reloj local (ms Unix) + stratum. Sobre `net/udp` (M90.7).
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
 - **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `net/crypto` + `std/base64`.
   Lectura robusta (M58.1): `WsConn` + `read_frame`/`read_message` (tramas partidas/pegadas, ping→pong

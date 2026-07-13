@@ -1,0 +1,94 @@
+// M90.7 — cliente SNTP v4 (RFC 4330) sobre net/udp, escrito EN raylang. Cero runtime nuevo.
+//
+// Pregunta la hora a un servidor NTP y devuelve la hora del servidor + la deriva estimada del
+// reloj local (offset) + el RTT (delay), todo en milisegundos Unix. El cálculo clásico de
+// 4 marcas: t1 (cliente envía), t2 (servidor recibe), t3 (servidor envía), t4 (cliente recibe);
+// offset = ((t2-t1) + (t3-t4))/2, delay = (t4-t1) - (t3-t2).
+//
+// Un timestamp NTP son 64 bits en punto fijo 32.32: segundos desde 1900-01-01 + fracción. La
+// época NTP precede a la Unix en 2 208 988 800 s. Aquí todo se convierte a ms Unix (i64 de
+// sobra). `recv_from` es BLOQUEANTE (como en net/udp; sin timeout aún) — usa un servidor que
+// responda o una fibra aparte. Errores como valores (Result), nunca panic.
+from net/udp import bind, send_to, recv_from, Packet;
+import std/time;
+
+/// The result of an SNTP query: the server time (`unix_millis`, its Transmit Timestamp),
+/// the estimated local-clock offset and round-trip delay (both in ms), and the stratum.
+pub struct NtpResult {
+    unix_millis: int,
+    offset_millis: int,
+    delay_millis: int,
+    stratum: int,
+}
+
+// La época NTP (1900-01-01) precede a la Unix (1970-01-01) en 2 208 988 800 segundos.
+// Un timestamp 32.32 pasa a ms Unix: segundos re-anclados * 1000 + la fracción escalada.
+fn ntp_to_unix_ms(sec: int, frac: int) -> int {
+    (sec - 2208988800) * 1000 + ((frac * 1000) >> 32)
+}
+
+// Lee un u32 big-endian de `b` en el offset `i` (cabe de sobra en el int de 64 bits).
+fn read_u32(b: bytes, i: int) -> int {
+    (b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]
+}
+
+// Interpreta los 48 octetos de la respuesta contra las marcas locales t1/t4.
+fn parse_response(b: bytes, t1: int, t4: int) -> Result<NtpResult, string> {
+    if (b.len() < 48) {
+        return Result.Err("ntp: respuesta corta (" + to_string(b.len()) + " octetos)");
+    }
+    // Byte 0 = LI(2) VN(3) Modo(3); la respuesta ha de venir en modo 4 (server) o 5 (broadcast).
+    let modo = b[0] & 7;
+    if (modo != 4 && modo != 5) {
+        return Result.Err("ntp: modo inesperado " + to_string(modo));
+    }
+    // Stratum 0 = "kiss-of-death" (RFC 4330 §8): el servidor pide parar; no trae hora válida.
+    let stratum = b[1];
+    if (stratum == 0) {
+        return Result.Err("ntp: kiss-of-death del servidor");
+    }
+    // Transmit Timestamp a cero = el servidor no está sincronizado (RFC 4330 §5).
+    if (read_u32(b, 40) == 0 && read_u32(b, 44) == 0) {
+        return Result.Err("ntp: el servidor no está sincronizado (transmit timestamp a cero)");
+    }
+    let t2 = ntp_to_unix_ms(read_u32(b, 32), read_u32(b, 36));  // Receive Timestamp
+    let t3 = ntp_to_unix_ms(read_u32(b, 40), read_u32(b, 44));  // Transmit Timestamp
+    Result.Ok(NtpResult {
+        unix_millis: t3,
+        offset_millis: ((t2 - t1) + (t3 - t4)) / 2,
+        delay_millis: (t4 - t1) - (t3 - t2),
+        stratum: stratum,
+    })
+}
+
+/// Queries an SNTP v4 server (RFC 4330) at `host:port` (the standard port is 123) and
+/// returns the server time plus the estimated local-clock offset and round-trip delay.
+/// BLOCKS until the server replies (no timeout yet, like `udp.recv_from`).
+/// Err on socket errors, a short/foreign reply, a kiss-of-death, or an unsynchronized server.
+pub fn query(host: string, port: int) -> Result<NtpResult, string> {
+    let h = bind("0.0.0.0", 0)?;
+    // Petición de 48 octetos: LI=0 VN=4 Modo=3 (cliente) → 0x23; el resto a cero (un cliente
+    // SNTP no necesita rellenar más; el Transmit Timestamp local se guarda como t1 aquí).
+    var req: [int] = [35];
+    var i = 1;
+    while (i < 48) {
+        req.push(0);
+        i = i + 1;
+    }
+    let t1 = time.now();
+    match (send_to(h, host, port, bytes_of(req))) {
+        Result.Err(e) => {
+            close(h);
+            Result.Err("ntp: " + e)
+        },
+        Result.Ok(_) => {
+            let r = recv_from(h);
+            let t4 = time.now();
+            close(h);
+            match (r) {
+                Result.Err(e) => Result.Err("ntp: " + e),
+                Result.Ok(p) => parse_response(p.data, t1, t4),
+            }
+        },
+    }
+}

@@ -390,9 +390,34 @@ pub fn inflate_raw_limit(data: bytes, max_out: int) -> Result<bytes, string> {
 }
 
 // --- CRC-32 (RFC 1952, polinomio reflejado 0xEDB88320) para verificar gzip. ---
-/// Computes the CRC-32 checksum (RFC 1952, reflected polynomial 0xEDB88320) of the bytes,
-/// as used in the gzip trailer.
-pub fn crc32(data: bytes) -> int {
+// M90.4: por TABLA de 256 entradas (un octeto por paso, ~8× menos trabajo que bit a bit).
+// raylang no tiene estado de módulo → la tabla se construye en cada llamada (2048 pasos,
+// el equivalente a ~256 octetos bit a bit); por debajo de ese umbral no se amortiza y se
+// usa la forma bit a bit original.
+
+// La tabla del CRC-32: tabla[b] = el resto de procesar el octeto `b` bit a bit.
+fn crc32_tabla() -> [int] {
+    var tabla: [int] = [];
+    var b = 0;
+    while (b < 256) {
+        var v = b;
+        var j = 0;
+        while (j < 8) {
+            if ((v & 1) != 0) {
+                v = v >> 1 ^ 3988292384;  // 0xEDB88320
+            } else {
+                v = v >> 1;
+            }
+            j = j + 1;
+        }
+        tabla.push(v);
+        b = b + 1;
+    }
+    tabla
+}
+
+// La forma bit a bit original (para entradas cortas, donde construir la tabla cuesta más).
+fn crc32_bits(data: bytes) -> int {
     var crc = 4294967295;  // 0xFFFFFFFF
     var i = 0;
     while (i < data.len()) {
@@ -406,6 +431,23 @@ pub fn crc32(data: bytes) -> int {
             }
             j = j + 1;
         }
+        i = i + 1;
+    }
+    crc ^ 4294967295
+}
+
+/// Computes the CRC-32 checksum (RFC 1952, reflected polynomial 0xEDB88320) of the bytes,
+/// as used in the gzip trailer. Table-driven (one byte per step) for inputs >= 256 bytes.
+pub fn crc32(data: bytes) -> int {
+    let n = data.len();
+    if (n < 256) {
+        return crc32_bits(data);
+    }
+    let tabla: [int] = crc32_tabla();
+    var crc = 4294967295;  // 0xFFFFFFFF
+    var i = 0;
+    while (i < n) {
+        crc = tabla[(crc ^ data[i]) & 255] ^ (crc >> 8);
         i = i + 1;
     }
     crc ^ 4294967295

@@ -65,7 +65,9 @@ la fuente del módulo `std/`.
 - **`std/hex`** — `hex_encode(data: [int]) -> string`, `hex_decode(s) -> Result<[int], string>`.
 - **`std/base64`** — `base64`/`base64url` (encode) y `base64_decode`/`base64url_decode` (`Result`).
 - **`std/url`** — `url_encode`/`url_decode`, `parse_query`/`build_query` (sobre `Map<string, string>`).
-- **`std/json`** — `enum Json`, `parse(s) -> Result<Json, string>`, `stringify(j) -> string`.
+- **`std/json`** — `enum Json`, `parse(s) -> Result<Json, string>`, `stringify(j) -> string`,
+  `stringify_pretty(j, indent)`; helpers de acceso `member`/`at`, `as_*` y `get_*`
+  (`j.get_string("nombre") -> Option<string>`, M90.3).
 
 ### Hashing (M40.7b)
 

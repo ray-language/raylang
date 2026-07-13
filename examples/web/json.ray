@@ -11,6 +11,8 @@
 // < 0x20 en la salida (\b \f \n \r \t o \u00XX) — nunca emite JSON inválido.
 // M59.5: los strings se construyen con StringBuilder + rachas (`substring`) en vez de `s = s + c`
 // por carácter (cada `+` copia lo acumulado → O(n²); con payloads de cientos de KB muerde de verdad).
+// M90.3: pretty-print (`stringify_pretty`) + helpers de acceso (`member`/`at`, `as_*`, `get_*`) —
+// navegar un Json sin `match` anidado, con UFCS: `j.get_string("nombre")`.
 import std/collections/stringbuilder as sb;
 
 /// A JSON value: null, bool, number (float), string, array, or object (`Map<string, Json>`).
@@ -501,5 +503,200 @@ pub fn stringify(j: Json) -> string {
         Json.JStr(s) => quote(s),
         Json.JArray(items) => stringify_array(items),
         Json.JObject(obj) => stringify_object(obj),
+    }
+}
+
+// ── Helpers de acceso (M90.3) ────────────────────────────────────────────────────────
+//
+// Navegar un Json sin `match` anidado: `member`/`at` bajan un nivel (Option), los `as_*`
+// extraen el payload si el valor es del tipo pedido, y los `get_*` combinan ambos para el
+// caso común (campo tipado de un objeto). Componen con UFCS: `j.get_string("nombre")`.
+
+/// The member `key` of a JSON object, or None (not an object / key absent).
+pub fn member(j: Json, key: string) -> Option<Json> {
+    match (j) {
+        Json.JObject(obj) => get(obj, key),
+        _ => Option.None,
+    }
+}
+
+/// The element `i` of a JSON array, or None (not an array / index out of bounds).
+pub fn at(j: Json, i: int) -> Option<Json> {
+    match (j) {
+        Json.JArray(items) => {
+            if (i >= 0 && i < items.len()) { Option.Some(items[i]) } else { Option.None }
+        },
+        _ => Option.None,
+    }
+}
+
+/// The string payload, or None if the value is not a JSON string.
+pub fn as_string(j: Json) -> Option<string> {
+    match (j) {
+        Json.JStr(s) => Option.Some(s),
+        _ => Option.None,
+    }
+}
+
+/// The number payload, or None if the value is not a JSON number.
+pub fn as_float(j: Json) -> Option<float> {
+    match (j) {
+        Json.JNum(f) => Option.Some(f),
+        _ => Option.None,
+    }
+}
+
+/// The number as an int, or None if the value is not a number or not integral (3.5 → None).
+pub fn as_int(j: Json) -> Option<int> {
+    match (j) {
+        // Un float integral se muestra sin decimales ("3") → parse_int lo acepta; "3.5" no.
+        Json.JNum(f) => parse_int(to_string(f)),
+        _ => Option.None,
+    }
+}
+
+/// The bool payload, or None if the value is not a JSON bool.
+pub fn as_bool(j: Json) -> Option<bool> {
+    match (j) {
+        Json.JBool(b) => Option.Some(b),
+        _ => Option.None,
+    }
+}
+
+/// The elements of a JSON array, or None if the value is not an array.
+pub fn as_array(j: Json) -> Option<[Json]> {
+    match (j) {
+        Json.JArray(items) => Option.Some(items),
+        _ => Option.None,
+    }
+}
+
+/// The members of a JSON object, or None if the value is not an object.
+pub fn as_object(j: Json) -> Option<Map<string, Json>> {
+    match (j) {
+        Json.JObject(obj) => Option.Some(obj),
+        _ => Option.None,
+    }
+}
+
+/// True if the value is JSON null.
+pub fn is_null(j: Json) -> bool {
+    match (j) {
+        Json.JNull => true,
+        _ => false,
+    }
+}
+
+/// The member `key` as a string: `member` + `as_string`.
+pub fn get_string(j: Json, key: string) -> Option<string> {
+    match (member(j, key)) {
+        Option.Some(v) => as_string(v),
+        Option.None => Option.None,
+    }
+}
+
+/// The member `key` as a float: `member` + `as_float`.
+pub fn get_float(j: Json, key: string) -> Option<float> {
+    match (member(j, key)) {
+        Option.Some(v) => as_float(v),
+        Option.None => Option.None,
+    }
+}
+
+/// The member `key` as an int: `member` + `as_int`.
+pub fn get_int(j: Json, key: string) -> Option<int> {
+    match (member(j, key)) {
+        Option.Some(v) => as_int(v),
+        Option.None => Option.None,
+    }
+}
+
+/// The member `key` as a bool: `member` + `as_bool`.
+pub fn get_bool(j: Json, key: string) -> Option<bool> {
+    match (member(j, key)) {
+        Option.Some(v) => as_bool(v),
+        Option.None => Option.None,
+    }
+}
+
+/// The member `key` as an array: `member` + `as_array`.
+pub fn get_array(j: Json, key: string) -> Option<[Json]> {
+    match (member(j, key)) {
+        Option.Some(v) => as_array(v),
+        Option.None => Option.None,
+    }
+}
+
+/// The member `key` as an object: `member` + `as_object`.
+pub fn get_object(j: Json, key: string) -> Option<Map<string, Json>> {
+    match (member(j, key)) {
+        Option.Some(v) => as_object(v),
+        Option.None => Option.None,
+    }
+}
+
+// ── Pretty-print (M90.3) ─────────────────────────────────────────────────────────────
+
+/// Serializes a `Json` value to indented multi-line JSON, `indent` spaces per level
+/// (canonical sorted keys, like `stringify` — which remains the compact form).
+pub fn stringify_pretty(j: Json, indent: int) -> string {
+    let b = sb.new();
+    pretty_into(b, j, indent, 0);
+    sb.build(b)
+}
+
+// Emite `j` en el builder al nivel `depth`. Las hojas salen en su forma compacta; arreglos
+// y objetos no vacíos abren bloque multilínea con una entrada por línea.
+fn pretty_into(b: sb.StringBuilder, j: Json, indent: int, depth: int) {
+    match (j) {
+        Json.JArray(items) => {
+            if (items.len() == 0) {
+                sb.push(b, "[]");
+            } else {
+                sb.push(b, "[\n");
+                var i: int = 0;
+                while (i < items.len()) {
+                    sb.push(b, " ".repeat(indent * (depth + 1)));
+                    pretty_into(b, items[i], indent, depth + 1);
+                    if (i + 1 < items.len()) {
+                        sb.push(b, ",");
+                    }
+                    sb.push(b, "\n");
+                    i = i + 1;
+                }
+                sb.push(b, " ".repeat(indent * depth));
+                sb.push(b, "]");
+            }
+        },
+        Json.JObject(obj) => {
+            let ks: [string] = obj.keys();
+            if (ks.len() == 0) {
+                sb.push(b, "{}");
+            } else {
+                sb.push(b, "{\n");
+                var i: int = 0;
+                while (i < ks.len()) {
+                    sb.push(b, " ".repeat(indent * (depth + 1)));
+                    sb.push(b, quote(ks[i]));
+                    sb.push(b, ": ");
+                    match (get(obj, ks[i])) {
+                        Option.Some(v) => {
+                            pretty_into(b, v, indent, depth + 1);
+                        },
+                        Option.None => { },
+                    }
+                    if (i + 1 < ks.len()) {
+                        sb.push(b, ",");
+                    }
+                    sb.push(b, "\n");
+                    i = i + 1;
+                }
+                sb.push(b, " ".repeat(indent * depth));
+                sb.push(b, "}");
+            }
+        },
+        _ => {
+            sb.push(b, stringify(j));
+        },
     }
 }

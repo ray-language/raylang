@@ -885,17 +885,24 @@ impl<'a> Vm<'a> {
                             self.push(v);
                         }
                         // M11.4c-2: indexar un string → el carácter en esa posición.
-                        // Opt.16: `nth(i)` en el camino feliz (O(i), sin asignar) — antes se
-                        // hacía collect() de TODOS los chars (asignación O(n)) para leer uno.
-                        // La longitud (O(n)) solo se calcula en el camino de error.
+                        // M90.6 (superset de Opt.16): sin materializar los chars (antes un
+                        // `Vec<char>` COMPLETO por acceso): un string ASCII indexa el byte en
+                        // O(1); uno no-ASCII escanea hasta `i` sin asignar. El conteo total
+                        // solo se paga al errar.
                         HeapValue::Str(s) => {
-                            match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
-                                Some(c) => self.push(HeapValue::Char(c)),
-                                None => {
-                                    bounds_check(i, s.chars().count(), pos!().0, pos!().1)?;
-                                    unreachable!("bounds_check falla siempre en este camino");
+                            let c = if s.is_ascii() {
+                                let idx = bounds_check(i, s.len(), pos!().0, pos!().1)?;
+                                s.as_bytes()[idx] as char
+                            } else {
+                                match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
+                                    Some(c) => c,
+                                    None => {
+                                        bounds_check(i, s.chars().count(), pos!().0, pos!().1)?;
+                                        unreachable!("nth falló ⇒ índice fuera de rango")
+                                    }
                                 }
-                            }
+                            };
+                            self.push(HeapValue::Char(c));
                         }
                         // M16.1a: indexar bytes → el octeto como int.
                         HeapValue::Bytes(b) => {
@@ -915,7 +922,10 @@ impl<'a> Vm<'a> {
                 OpCode::Len => {
                     // M11.1a: len de arreglo o string; M13.1: len de Map (nº de entradas).
                     let len = match self.pop() {
-                        HeapValue::Str(s) => s.chars().count() as i64,
+                        // M90.6: ASCII → nº de chars == nº de bytes (O(1) tras el is_ascii vectorizado).
+                        HeapValue::Str(s) => {
+                            if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 }
+                        }
                         // M16.1a: len de bytes = nº de octetos.
                         HeapValue::Bytes(b) => b.len() as i64,
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
@@ -4418,6 +4428,45 @@ mod tests {
              \x20 n\n\
              }",
         );
+    }
+
+    /// M90.5: terminal `find` (corta en el primero), adaptador `chain` (secuencia, compone
+    /// con map), terminales `min`/`max` (genéricos `T: Ord`; None sobre vacío) y `Ord` para
+    /// bool (false < true) y bytes (lexicográfico) vía `sort`/`less`.
+    #[test]
+    fn find_chain_min_max_oraculo() {
+        oracle_program(
+            "fn main() -> int {\n\
+             \x20 var n = 0;\n\
+             \x20 match (range(1, 1000000).find(fn(x: int) -> bool { x * x > 10 })) {\n\
+             \x20   Option.Some(v) => { n = n + v; },\n\
+             \x20   Option.None => { },\n\
+             \x20 }\n\
+             \x20 match ([1, 2].iter().find(fn(x: int) -> bool { x > 5 })) {\n\
+             \x20   Option.Some(v) => { n = n + v; },\n\
+             \x20   Option.None => { n = n + 1000; },\n\
+             \x20 }\n\
+             \x20 n = n + sum(range(1, 4).chain([10, 20].iter()));\n\
+             \x20 n = n + range(0, 3).chain(range(10, 12)).map(fn(x: int) -> int { x * 2 }).count();\n\
+             \x20 match (min([3, 1, 2].iter())) {\n\
+             \x20   Option.Some(m) => { n = n + m * 10; },\n\
+             \x20   Option.None => { },\n\
+             \x20 }\n\
+             \x20 match ([5, 9, 7].iter().max()) {\n\
+             \x20   Option.Some(m) => { n = n + m * 100; },\n\
+             \x20   Option.None => { },\n\
+             \x20 }\n\
+             \x20 let vacio: [int] = [];\n\
+             \x20 match (min(vacio.iter())) {\n\
+             \x20   Option.Some(m) => { n = n + m; },\n\
+             \x20   Option.None => { n = n + 10000; },\n\
+             \x20 }\n\
+             \x20 let bs = sort([true, false, true]);\n\
+             \x20 if (!bs[0] && bs[2]) { n = n + 100000; }\n\
+             \x20 if (b\"ab\".less(b\"abc\") && b\"abc\".less(b\"abd\") && !b\"b\".less(b\"abc\")) { n = n + 1000000; }\n\
+             \x20 n\n\
+             }",
+        ); // 4 + 1000 + 36 + 5 + 10 + 900 + 10000 + 100000 + 1000000
     }
 
     /// M13.2a: `panic` / `assert_eq` que falla → ambos motores cortan con el MISMO mensaje.

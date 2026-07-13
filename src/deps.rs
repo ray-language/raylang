@@ -140,6 +140,45 @@ fn index_raw(manifest: &Manifest) -> Option<String> {
         .or_else(|| manifest.registry_index.clone())
 }
 
+/// El **mirror de paquetes** configurado (M90.1): `RAY_MIRROR`, o `[registry] mirror` del `ray.toml`.
+/// Un mirror NO es otro índice (mismo índice, otra URL de descarga): la identidad del paquete —la URL
+/// que ven el lock y el MVS— sigue siendo la original; el mirror es solo transporte.
+fn mirror_raw(manifest: &Manifest) -> Option<String> {
+    std::env::var("RAY_MIRROR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| manifest.registry_mirror.clone())
+}
+
+/// Reescribe la URL de un paquete al mirror: `prefijo/<url-sin-esquema>` (estilo proxy de Go: el
+/// mirror sirve los mismos repos bajo su prefijo, direccionados por host+ruta originales).
+pub(crate) fn mirror_url(url: &str, prefix: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    format!("{}/{}", prefix.trim_end_matches('/'), rest.trim_start_matches('/'))
+}
+
+/// Descarga `spec` intentando primero el mirror (si hay) y cayendo a la URL original si falla —
+/// el hash del lock/índice verifica el contenido venga de donde venga (mirror *trustless*).
+fn fetch_mirrored(
+    name: &str,
+    spec: &GitSpec,
+    dest: &Path,
+    mirror: Option<&str>,
+) -> Result<String, String> {
+    if let Some(prefix) = mirror {
+        let mirrored =
+            GitSpec { url: mirror_url(&spec.url, prefix), git_ref: spec.git_ref.clone() };
+        match fetch(name, &mirrored, dest) {
+            Ok(commit) => return Ok(commit),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(dest); // deja la caché limpia para el reintento
+                eprintln!("  aviso: el mirror no sirvió '{name}' ({e}); se usa la URL original");
+            }
+        }
+    }
+    fetch(name, spec, dest)
+}
+
 /// Parte una spec de índice remoto `git+URL[@ref]` en `(url, ref)`. La ref es opcional y no debe
 /// confundirse con un `/` de la ruta (por eso el filtro `!r.contains('/')`).
 fn parse_index_spec(raw: &str) -> (&str, Option<&str>) {
@@ -259,6 +298,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     let cache = manifest.root.join(".ray-deps");
     let locked = read_lock(&manifest.root)?;
     let index = index_dir(manifest)?;
+    let mirror = mirror_raw(manifest);
     // El `GitSpec` bloqueado por nombre (para `resolve_pinned`): reproducibilidad de los requisitos.
     let locked_spec = |name: &str| -> Option<GitSpec> {
         locked.get(name).map(|e| GitSpec { url: e.url.clone(), git_ref: e.git_ref.clone() })
@@ -323,7 +363,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
             }
             if !dest.exists() {
                 eprintln!("  descargando {name} ({}@{})", chosen_spec.url, chosen_spec.git_ref);
-                fetch(&name, &chosen_spec, &dest)?;
+                fetch_mirrored(&name, &chosen_spec, &dest, mirror.as_deref())?;
                 downloaded += 1;
             }
             cached.insert(name.clone(), chosen_spec.clone());
@@ -642,6 +682,24 @@ mod tests {
         assert!(!valid_package_name("a.b"));
         assert!(!valid_package_name("-a")); // no empieza por alfanumérico
         assert!(!valid_package_name("con espacios"));
+    }
+
+    #[test]
+    fn reescribe_url_al_mirror() {
+        // M90.1: `prefijo/<url-sin-esquema>`; el prefijo puede llevar `/` final y la URL puede no
+        // tener esquema (se usa tal cual).
+        assert_eq!(
+            mirror_url("https://github.com/u/geo", "https://mirror.corp/git"),
+            "https://mirror.corp/git/github.com/u/geo"
+        );
+        assert_eq!(
+            mirror_url("ssh://git@host/geo", "https://mirror.corp/git/"),
+            "https://mirror.corp/git/git@host/geo"
+        );
+        assert_eq!(
+            mirror_url("file:///tmp/repos/geo", "file:///tmp/mirror"),
+            "file:///tmp/mirror/tmp/repos/geo"
+        );
     }
 
     #[test]

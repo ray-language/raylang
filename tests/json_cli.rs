@@ -154,3 +154,88 @@ fn main() -> int {
     let esperado = "err: texto sobrante tras el JSON\nerr: arreglo sin cerrar\nerr: string sin cerrar";
     check("errores", driver, esperado);
 }
+
+// ── Helpers de acceso + pretty-print (M90.3) ─────────────────────────────────────────
+
+#[test]
+fn helpers_de_acceso() {
+    let driver = r#"
+from json import parse, get_string, get_int, get_float, get_bool, get_array, member, at, as_int, as_string, is_null;
+
+fn muestra(o: Option<string>) -> string {
+    match (o) {
+        Option.Some(s) => s,
+        Option.None => "None",
+    }
+}
+
+fn main() -> int {
+    let s = "{\"nombre\": \"ada\", \"edad\": 36, \"pi\": 3.5, \"viva\": false, \"nums\": [10, 20], \"nada\": null}";
+    match (parse(s)) {
+        Result.Err(e) => { eprint(e); 1 },
+        Result.Ok(j) => {
+            print(muestra(j.get_string("nombre")));           // ada
+            print(muestra(j.get_string("edad")));             // None (no es string)
+            match (j.get_int("edad")) {
+                Option.Some(n) => print(to_string(n)),        // 36
+                Option.None => print("None"),
+            };
+            match (j.get_int("pi")) {
+                Option.Some(n) => print(to_string(n)),
+                Option.None => print("None"),                 // None (3.5 no es integral)
+            };
+            match (j.get_float("pi")) {
+                Option.Some(f) => print(to_string(f)),        // 3.5
+                Option.None => print("None"),
+            };
+            match (j.get_bool("viva")) {
+                Option.Some(b) => print(to_string(b)),        // false
+                Option.None => print("None"),
+            };
+            // member + at + as_int componen para navegar anidado.
+            match (member(j, "nums")) {
+                Option.Some(arr) => {
+                    match (at(arr, 1)) {
+                        Option.Some(v) => {
+                            match (as_int(v)) {
+                                Option.Some(n) => print(to_string(n)),   // 20
+                                Option.None => print("None"),
+                            }
+                        },
+                        Option.None => print("None"),
+                    }
+                },
+                Option.None => print("None"),
+            };
+            match (member(j, "nada")) {
+                Option.Some(v) => print(to_string(is_null(v))),          // true
+                Option.None => print("None"),
+            };
+            print(muestra(j.get_string("no_existe")));        // None
+            match (at(j, 0)) {
+                Option.Some(_) => print("algo"),
+                Option.None => print("None"),                 // None (un objeto no se indexa)
+            };
+            0
+        },
+    }
+}
+"#;
+    check("helpers", driver, "ada\nNone\n36\nNone\n3.5\nfalse\n20\ntrue\nNone\nNone");
+}
+
+#[test]
+fn pretty_print_con_sangria() {
+    let driver = r#"
+from json import parse, stringify_pretty;
+fn main() -> int {
+    let s = "{\"b\": [1, 2], \"a\": \"x\", \"vacio\": {}, \"lista_vacia\": []}";
+    match (parse(s)) {
+        Result.Ok(j) => { print(stringify_pretty(j, 2)); 0 },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+    let esperado = "{\n  \"a\": \"x\",\n  \"b\": [\n    1,\n    2\n  ],\n  \"lista_vacia\": [],\n  \"vacio\": {}\n}";
+    check("pretty", driver, esperado);
+}

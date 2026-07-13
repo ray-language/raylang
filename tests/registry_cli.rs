@@ -825,3 +825,73 @@ fn otra_clave_no_puede_publicar_un_nombre_reclamado() {
     assert_ne!(code, 0, "otra clave no publica un nombre ajeno");
     assert!(err.contains("tu clave NO coincide"), "{err}");
 }
+
+// ── Mirrors de paquetes (M90.1) ──────────────────────────────────────────────────────
+
+/// Crea el clon-mirror de `repo` bajo `mirror_root` respetando la regla de reescritura
+/// `prefijo/<url-sin-esquema>`: el repo `file:///a/b/geo` vive en `<mirror_root>/a/b/geo`.
+fn clonar_en_mirror(mirror_root: &Path, repo: &Path) {
+    let rel = repo.to_string_lossy();
+    let dest = mirror_root.join(rel.trim_start_matches('/'));
+    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    let out = Command::new("git")
+        .args(["clone", "--quiet", &format!("file://{rel}"), &dest.to_string_lossy()])
+        .output()
+        .expect("git disponible");
+    assert!(out.status.success(), "clona el mirror: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// El mirror sirve el paquete aunque el origen haya DESAPARECIDO (disponibilidad); el hash
+/// del índice verifica el contenido igual (mirror trustless).
+#[test]
+fn mirror_sirve_el_paquete_si_el_origen_cae() {
+    let base = tmp("mirror");
+    let index = base.join("index");
+    let repo = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    indexar(&index, "geo", &[("1.2.0", &repo)]);
+    let mirror_root = base.join("mirror");
+    clonar_en_mirror(&mirror_root, &repo);
+    // El origen cae: el índice sigue apuntando a él, pero ya no existe.
+    std::fs::remove_dir_all(&repo).unwrap();
+
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nmirror = \"file://{}\"\n\n\
+             [dependencies]\ngeo = \"1.2.0\"\n",
+            mirror_root.display()
+        ),
+    )
+    .unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "run OK vía mirror\n{err}");
+    assert!(out.contains("120"), "usa el paquete servido por el mirror\n{out}");
+    // El lock registra la URL ORIGINAL (el mirror es transporte, no identidad).
+    let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
+    assert!(!lock.contains("/mirror/"), "el lock no debe apuntar al mirror:\n{lock}");
+}
+
+/// Un mirror que no tiene el paquete NO rompe la resolución: se avisa y se cae al origen.
+#[test]
+fn mirror_caido_cae_a_la_url_original() {
+    let base = tmp("mirrorfall");
+    let index = base.join("index");
+    let repo = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    indexar(&index, "geo", &[("1.2.0", &repo)]);
+
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nmirror = \"file://{}\"\n\n\
+             [dependencies]\ngeo = \"1.2.0\"\n",
+            base.join("mirror-vacio").display() // no existe
+        ),
+    )
+    .unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "run OK cayendo al origen\n{err}");
+    assert!(out.contains("120"), "{out}");
+    assert!(err.contains("aviso: el mirror no sirvió 'geo'"), "avisa del fallback:\n{err}");
+}

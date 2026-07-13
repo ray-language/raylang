@@ -711,13 +711,19 @@ impl<'a> Interpreter<'a> {
                         Ok(rc.borrow()[idx].clone())
                     }
                     // M11.4c-2: indexar un string → el carácter en esa posición.
-                    // Opt.16 (espejo de la VM): nth(i) sin collect(); longitud solo al fallar.
+                    // M90.6 (superset de Opt.16): sin materializar los chars (como en la VM):
+                    // ASCII indexa el byte en O(1); no-ASCII escanea hasta `i` sin asignar.
                     Value::Str(s) => {
-                        match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
-                            Some(c) => Ok(Value::Char(c)),
-                            None => {
-                                check_bounds(i, s.chars().count(), index.line, index.col)?;
-                                unreachable!("check_bounds falla siempre en este camino");
+                        if s.is_ascii() {
+                            let idx = check_bounds(i, s.len(), index.line, index.col)?;
+                            Ok(Value::Char(s.as_bytes()[idx] as char))
+                        } else {
+                            match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
+                                Some(c) => Ok(Value::Char(c)),
+                                None => {
+                                    check_bounds(i, s.chars().count(), index.line, index.col)?;
+                                    unreachable!("nth falló ⇒ índice fuera de rango")
+                                }
                             }
                         }
                     }
@@ -999,7 +1005,12 @@ impl<'a> Interpreter<'a> {
             "__len" => match &values[0] {
                 Value::Array(rc) => Value::Int(rc.borrow().len() as i64),
                 // M11.1a: len de string = nº de caracteres (Unicode scalar values).
-                Value::Str(s) => Value::Int(s.chars().count() as i64),
+                // M90.6: ASCII → nº de chars == nº de bytes (como en la VM).
+                Value::Str(s) => Value::Int(if s.is_ascii() {
+                    s.len() as i64
+                } else {
+                    s.chars().count() as i64
+                }),
                 // M13.1: len de un Map = nº de entradas.
                 Value::Map(rc) => Value::Int(rc.borrow().len() as i64),
                 // M16.1a: len de bytes = nº de octetos.

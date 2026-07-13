@@ -371,7 +371,7 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
         [F, F, I] => dispatch!((f64, f64, i64), (f(0), f(1), i(2))),
         [F, F, F] => dispatch!((f64, f64, f64), (f(0), f(1), f(2))),
         _ => return Err(format!(
-            "la firma de '{}' no está en el catálogo FFI soportado (int/u64/float/bool/puntero, aridad 0..=3)",
+            "la signature de '{}' no está en el catálogo FFI soportado (int/u64/float/bool/puntero, arity 0..=3)",
             desc.name
         )),
     })
@@ -386,7 +386,7 @@ pub fn call(desc: &ExternDesc, _args: &[FfiVal]) -> Result<FfiRet, String> {
     if cfg!(target_arch = "wasm32") {
         Err(format!("FFI no disponible en el playground web (wasm): '{}'", desc.name))
     } else {
-        Err(format!("este binario se compiló sin soporte de FFI (recompila con la feature 'ffi'): '{}'", desc.name))
+        Err(format!("este binary se compiló sin soporte de FFI (recompila con la feature 'ffi'): '{}'", desc.name))
     }
 }
 
@@ -408,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn llama_a_pow_aridad_2() {
+    fn llama_a_pow_arity_2() {
         let d = desc("pow", vec![CKind::Float, CKind::Float], CKind::Float);
         match call(&d, &[FfiVal::Float(2.0), FfiVal::Float(10.0)]).unwrap() {
             FfiRet::Float(v) => assert!((v - 1024.0).abs() < 1e-9),
@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn simbolo_inexistente_es_error() {
+    fn simbolo_nonexistent_es_error() {
         let d = desc("no_existe_este_simbolo_xyz", vec![], CKind::Int);
         assert!(call(&d, &[]).is_err());
     }
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn strlen_marshala_string_a_char_ptr() {
         let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int };
-        match call(&d, &[FfiVal::Str("hola mundo")]).unwrap() {
+        match call(&d, &[FfiVal::Str("hello mundo")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 10),
             other => panic!("se esperaba int, {other:?}"),
         }
@@ -441,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn strstr_devuelve_char_ptr_como_optbytes() {
+    fn strstr_returns_char_ptr_como_optbytes() {
         let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes };
         // Encontrado → Some(bytes desde la coincidencia).
         match call(&d, &[FfiVal::Str("hello world"), FfiVal::Str("world")]).unwrap() {
@@ -456,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn strstr_devuelve_option_ptr() {
+    fn strstr_returns_option_ptr() {
         // M41.4b: el mismo char* como puntero OPACO. No se desreferencia: solo Some(dirección≠0)/None.
         let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptPtr };
         match call(&d, &[FfiVal::Str("hello"), FfiVal::Str("ll")]).unwrap() {

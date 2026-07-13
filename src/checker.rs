@@ -45,7 +45,7 @@ pub struct TypeError {
 
 impl std::fmt::Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "error de tipos en {}:{}: {}", self.line, self.col, self.msg)
+        write!(f, "error de types en {}:{}: {}", self.line, self.col, self.msg)
     }
 }
 
@@ -141,7 +141,7 @@ fn check_builtin_redefinition(program: &Program) -> Result<(), TypeError> {
             && crate::builtins::is_builtin(&f.name)
         {
             return Err(TypeError {
-                msg: format!("'{}' es un builtin del lenguaje y no puede redefinirse", f.name),
+                msg: format!("'{}' es un builtin del lenguaje y no can redefinirse", f.name),
                 line: f.line,
                 col: f.col,
                 len: f.name.chars().count(),
@@ -231,10 +231,10 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
     // Paso 0a (M40.2b): inyectar los structs del prelude (`ArrayIter`/`RangeIter` para `.iter()`/
     // `range`) que el usuario no haya redefinido. Como los enums, quedan en el AST que también ven
     // el intérprete y la VM. Idempotente (si se re-verifica, no duplica).
-    let structs_usuario: HashSet<String> = program.structs.iter().map(|s| s.name.clone()).collect();
+    let structs_user: HashSet<String> = program.structs.iter().map(|s| s.name.clone()).collect();
     let mut prelude_structs: Vec<StructDef> = crate::prelude::structs()
         .into_iter()
-        .filter(|s| !structs_usuario.contains(&s.name))
+        .filter(|s| !structs_user.contains(&s.name))
         .collect();
     if !prelude_structs.is_empty() {
         prelude_structs.append(&mut program.structs);
@@ -255,10 +255,10 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
     }
     // Paso 0b2 (M10.1, L2): inyectar los traits del prelude (`Eq`, `Show`) que el usuario no
     // haya redefinido (homónimos), uno a uno. Necesario antes de generar las derivaciones.
-    let traits_usuario: HashSet<String> = program.traits.iter().map(|t| t.name.clone()).collect();
+    let traits_user: HashSet<String> = program.traits.iter().map(|t| t.name.clone()).collect();
     let mut prelude_traits: Vec<TraitDef> = crate::prelude::traits()
         .into_iter()
-        .filter(|t| !traits_usuario.contains(&t.name))
+        .filter(|t| !traits_user.contains(&t.name))
         .collect();
     if !prelude_traits.is_empty() {
         prelude_traits.append(&mut program.traits);
@@ -321,7 +321,7 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
             // M28.2: un método de un impl `From<S>` se inyecta con nombre manglado **por origen**
             // (`E#from#string`) para no colisionar con otros `impl From<...> for E`. El resto
             // (impls de M9) usa el manglado ordinario `Tipo#metodo`.
-            let name = if is_typed_trait_impl(imp) && m.name == "desde" {
+            let name = if is_typed_trait_impl(imp) && m.name == "from" {
                 let src_key = imp.trait_args.first().and_then(type_key_of).unwrap_or_default();
                 mangle_from(&key, &src_key)
             } else {
@@ -659,7 +659,7 @@ impl Checker {
             let declared = self.resolve_type(&c.ty);
             if !is_const_literal(&c.value) {
                 return Err(self.err(c.value.line, c.value.col,
-                    format!("el valor de la constante '{}' debe ser un literal", c.name)));
+                    format!("el valor de la constante '{}' must ser un literal", c.name)));
             }
             let vt = self.check_expr(&c.value)?;
             if vt != declared {
@@ -696,7 +696,7 @@ impl Checker {
         }
         for s in &program.structs {
             if self.enum_names.contains(&s.name) {
-                return Err(self.err(s.line, s.col, format!("'{}' ya es un enum; no puede ser también un struct", s.name)));
+                return Err(self.err(s.line, s.col, format!("'{}' ya es un enum; no can ser también un struct", s.name)));
             }
         }
 
@@ -720,7 +720,7 @@ impl Checker {
             let mut variants = Vec::new();
             for v in &e.variants {
                 if !seen.insert(v.name.clone()) {
-                    return Err(self.err(v.line, v.col, format!("variante '{}' repetida en el enum '{}'", v.name, e.name)));
+                    return Err(self.err(v.line, v.col, format!("variant '{}' repetida en el enum '{}'", v.name, e.name)));
                 }
                 let payload: Vec<Type> = v.payload.iter().map(|t| self.resolve_type(t)).collect();
                 variants.push((v.name.clone(), payload));
@@ -806,21 +806,21 @@ impl Checker {
         for e in &program.externs {
             if self.functions.contains_key(&e.name) {
                 return Err(self.err(e.line, e.col, format!(
-                    "'{}' ya está declarada (colisión entre una función y una 'extern fn')", e.name)));
+                    "'{}' ya está declarada (colisión between one función y one 'extern fn')", e.name)));
             }
             for p in &e.params {
                 self.ensure_type(&p.ty, p.line, p.col)?;
                 let pt = self.resolve_type(&p.ty);
                 if crate::ffi::ckind(&pt).is_none() || matches!(pt, Type::Unit) {
                     return Err(self.err(p.line, p.col, format!(
-                        "el tipo {} del parámetro '{}' de la 'extern fn {}' no es marshalable por FFI (int, float, bool, string, bytes)",
+                        "el type {} del parámetro '{}' de la 'extern fn {}' no es marshalable por FFI (int, float, bool, string, bytes)",
                         pt, p.name, e.name)));
                 }
             }
             let ret = self.resolve_type(&e.return_type);
             if crate::ffi::ret_ckind(&ret).is_none() {
                 return Err(self.err(e.line, e.col, format!(
-                    "el tipo de retorno {} de la 'extern fn {}' no es marshalable por FFI (int, float, bool, unit; un char* de retorno se declara Option<bytes> u Option<string>)",
+                    "el type de return_val {} de la 'extern fn {}' no es marshalable por FFI (int, float, bool, unit; un char* de return_val se declara Option<bytes> u Option<string>)",
                     ret, e.name)));
             }
             let sig = FnSig {
@@ -836,15 +836,15 @@ impl Checker {
         // desactiva `require_main` al analizar un archivo de módulo (submódulo sin `main`).
         match self.functions.get("main") {
             None if self.require_main => {
-                return Err(self.err(1, 1, "falta la función de entrada 'main'".into()));
+                return Err(self.err(1, 1, "falta la función de entry 'main'".into()));
             }
             None => {}
             Some(sig) => {
                 if !sig.params.is_empty() {
-                    return Err(self.err(1, 1, "'main' no debe recibir parámetros".into()));
+                    return Err(self.err(1, 1, "'main' no must recibir parámetros".into()));
                 }
                 if sig.ret != Type::Int && sig.ret != Type::Unit {
-                    return Err(self.err(1, 1, format!("'main' debe devolver int o unit, no {}", sig.ret)));
+                    return Err(self.err(1, 1, format!("'main' must devolver int o unit, no {}", sig.ret)));
                 }
             }
         }
@@ -884,7 +884,7 @@ impl Checker {
                         }
                         if !f.params.is_empty() {
                             return Err(self.err(a.line, a.col, format!(
-                                "la función de prueba '@test' '{}' no debe recibir parámetros", f.name
+                                "la función de prueba '@test' '{}' no must recibir parámetros", f.name
                             )));
                         }
                         // M13.2b: una prueba puede devolver `bool` (pasa si es `true`) o `unit`
@@ -892,12 +892,12 @@ impl Checker {
                         let ret = self.resolve_type(&f.return_type);
                         if ret != Type::Bool && ret != Type::Unit {
                             return Err(self.err(a.line, a.col, format!(
-                                "una función '@test' debe devolver bool o unit, no {}", f.return_type
+                                "one función '@test' must devolver bool o unit, no {}", f.return_type
                             )));
                         }
                     }
                     // `@derive` solo tiene sentido sobre tipos (genera su `impl`).
-                    "derive" => return Err(self.err(a.line, a.col, "'@derive' solo se permite sobre struct o enum".into())),
+                    "derive" => return Err(self.err(a.line, a.col, "'@derive' solo se permite about struct o enum".into())),
                     other => return Err(self.err(a.line, a.col, format!("anotación desconocida: '@{}'", other))),
                 }
             }
@@ -910,7 +910,7 @@ impl Checker {
                     // `@derive` ya se validó y generó en `generate_eq_derives` (antes de
                     // `check_program`); aquí solo se acepta como conocida.
                     "derive" => {}
-                    "test" => return Err(self.err(a.line, a.col, "'@test' solo se permite sobre funciones".into())),
+                    "test" => return Err(self.err(a.line, a.col, "'@test' solo se permite about functions".into())),
                     other => return Err(self.err(a.line, a.col, format!("anotación desconocida: '@{}'", other))),
                 }
             }
@@ -924,7 +924,7 @@ impl Checker {
         let mut seen = HashSet::new();
         for tp in &f.type_params {
             if !seen.insert(tp.clone()) {
-                return Err(self.err(f.line, f.col, format!("parámetro de tipo '{}' repetido en '{}'", tp, f.name)));
+                return Err(self.err(f.line, f.col, format!("parámetro de type '{}' repetido en '{}'", tp, f.name)));
             }
         }
         self.type_params = seen;
@@ -951,7 +951,7 @@ impl Checker {
         for (tp, tr) in &f.bounds {
             if !f.type_params.contains(tp) {
                 return Err(self.err(f.line, f.col, format!(
-                    "el bound '{}: {}' no acota a ningún parámetro de tipo de '{}'", tp, tr, f.name
+                    "el bound '{}: {}' no acota a ningún parámetro de type de '{}'", tp, tr, f.name
                 )));
             }
             if !self.traits.contains_key(tr) {
@@ -971,7 +971,7 @@ impl Checker {
         for (tp, tr) in bounds {
             if !type_params.contains(tp) {
                 return Err(self.err(line, col, format!(
-                    "el bound '{}: {}' no acota a ningún parámetro de tipo del {} '{}'", tp, tr, kind, name
+                    "el bound '{}: {}' no acota a ningún parámetro de type del {} '{}'", tp, tr, kind, name
                 )));
             }
             if !self.traits.contains_key(tr) {
@@ -1003,7 +1003,7 @@ impl Checker {
         // 1) Traits: nombres únicos (no chocan con tipos ni funciones) y métodos únicos.
         for t in &program.traits {
             if self.structs.contains_key(&t.name) || self.enum_names.contains(&t.name) {
-                return Err(self.err(t.line, t.col, format!("'{}' ya es un tipo; no puede ser también un trait", t.name)));
+                return Err(self.err(t.line, t.col, format!("'{}' ya es un type; no can ser también un trait", t.name)));
             }
             if self.traits.contains_key(&t.name) {
                 return Err(self.err(t.line, t.col, format!("trait '{}' declarado dos veces", t.name)));
@@ -1036,7 +1036,7 @@ impl Checker {
             self.check_impl_bounds(imp)?;
             let target = self.resolve_type(&imp.target);
             self.ensure_impl_target(&target, &imp.type_params, imp.line, imp.col)?;
-            let key = type_key_of(&target).unwrap_or_else(|| crate::ice!("el objetivo de impl validado no tiene clave de tipo"));
+            let key = type_key_of(&target).unwrap_or_else(|| crate::ice!("el objetivo de impl validado no has clave de type"));
 
             // M28.2: impl de un trait con parámetros de tipo (`impl From<S> for E`). Se registra
             // como una **conversión** —no en la tabla de despacho por punto (el método `from` no
@@ -1089,7 +1089,7 @@ impl Checker {
                 let mangled = mangle(&key, &m.name);
                 if self.methods.contains_key(&(key.clone(), m.name.clone())) {
                     return Err(self.err(m.line, m.col, format!(
-                        "método '{}' ambiguo para {}: ya hay un impl que lo provee", m.name, target
+                        "método '{}' ambiguo para {}: ya hay un impl what lo provee", m.name, target
                     )));
                 }
                 self.methods.insert((key.clone(), m.name.clone()), mangled.clone());
@@ -1102,7 +1102,7 @@ impl Checker {
                     let mangled = mangle(&key, &tm.name);
                     if self.methods.contains_key(&(key.clone(), tm.name.clone())) {
                         return Err(self.err(imp.line, imp.col, format!(
-                            "método '{}' ambiguo para {}: ya hay un impl que lo provee", tm.name, target
+                            "método '{}' ambiguo para {}: ya hay un impl what lo provee", tm.name, target
                         )));
                     }
                     self.methods.insert((key.clone(), tm.name.clone()), mangled.clone());
@@ -1124,7 +1124,7 @@ impl Checker {
         let tparams = self.trait_tparams.get(&imp.trait_name).cloned().unwrap_or_default();
         if imp.trait_args.len() != tparams.len() {
             return Err(self.err(imp.line, imp.col, format!(
-                "el trait '{}' toma {} parámetro(s) de tipo, pero el impl pasa {}",
+                "el trait '{}' toma {} parámetro(s) de type, pero el impl pasa {}",
                 imp.trait_name, tparams.len(), imp.trait_args.len()
             )));
         }
@@ -1136,26 +1136,26 @@ impl Checker {
         let src_key = match type_key_of(&src) {
             Some(k) => k,
             None => return Err(self.err(imp.line, imp.col,
-                "el tipo de origen de 'From' no admite conversión".into())),
+                "el type de origen de 'From' no admite conversión".into())),
         };
-        let m = match imp.methods.iter().find(|m| m.name == "desde") {
+        let m = match imp.methods.iter().find(|m| m.name == "from") {
             Some(m) => m,
             None => return Err(self.err(imp.line, imp.col, format!(
-                "el impl de 'From' para {} no implementa el método 'desde'", target))),
+                "el impl de 'From' para {} no implementa el método 'from'", target))),
         };
         if m.params.len() != 1 {
             return Err(self.err(m.line, m.col,
-                "'desde' toma exactamente un parámetro (el valor de origen), sin 'self'".into()));
+                "'from' toma exactamente un parámetro (el valor de origen), sin 'self'".into()));
         }
         let got_param = self.resolve_type(&m.params[0].ty);
         if got_param != src {
             return Err(self.err(m.params[0].line, m.params[0].col, format!(
-                "el parámetro de 'desde' es {}, pero 'From<{}>' pide {}", got_param, src, src)));
+                "el parámetro de 'from' es {}, pero 'From<{}>' asks {}", got_param, src, src)));
         }
         let got_ret = self.resolve_type(&subst_self(&m.return_type, target));
         if &got_ret != target {
             return Err(self.err(m.line, m.col, format!(
-                "'desde' debe devolver {} (el tipo destino), no {}", target, got_ret)));
+                "'from' must devolver {} (el type target), no {}", target, got_ret)));
         }
         self.from_impls.insert((src_key.clone(), key.to_string()), mangle_from(key, &src_key));
         Ok(())
@@ -1168,12 +1168,12 @@ impl Checker {
         for (tp, trait_name) in &imp.bounds {
             if !imp.type_params.contains(tp) {
                 return Err(self.err(imp.line, imp.col, format!(
-                    "el bound '{}: {}' menciona un parámetro de tipo que el impl no declara", tp, trait_name
+                    "el bound '{}: {}' menciona un parámetro de type what el impl no declara", tp, trait_name
                 )));
             }
             if !self.traits.contains_key(trait_name) {
                 return Err(self.err(imp.line, imp.col, format!(
-                    "el bound '{}: {}' usa un trait no declarado", tp, trait_name
+                    "el bound '{}: {}' uses un trait no declarado", tp, trait_name
                 )));
             }
         }
@@ -1191,7 +1191,7 @@ impl Checker {
             if type_params.is_empty() {
                 return Ok(());
             }
-            return Err(self.err(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl".into()));
+            return Err(self.err(line, col, "un type primitivo no es genérico: no admite parámetros de type en el impl".into()));
         }
         // M48.4: constructores incorporados `[T]` (aridad 1) y `Map<K,V>` (aridad 2). Siempre genéricos,
         // como `Caja<T>` (M9.2b): solo impls PLENAMENTE genéricos (`impl<T> ... for [T]`, no `[int]`),
@@ -1204,25 +1204,25 @@ impl Checker {
         if let Some((name, args)) = builtin_ctor {
             if type_params.len() != args.len() {
                 return Err(self.err(line, col, format!(
-                    "'{}' espera {} parámetro(s) de tipo, el impl declara {}", name, args.len(), type_params.len())));
+                    "'{}' espera {} parámetro(s) de type, el impl declara {}", name, args.len(), type_params.len())));
             }
             let mut seen = HashSet::new();
             let valid = args.iter().all(|a|
                 matches!(a, Type::Var(n) if type_params.contains(n) && seen.insert(n.clone())));
             if !valid {
                 return Err(self.err(line, col, format!(
-                    "el impl de un tipo incorporado debe aplicarse a sus propios parámetros de tipo distintos, p. ej. 'impl<T> ... for [T]' o 'impl<K, V> ... for Map<K, V>'")));
+                    "el impl de un type incorporado must aplicarse a sus propios parámetros de type distintos, p. ej. 'impl<T> ... for [T]' o 'impl<K, V> ... for Map<K, V>'")));
             }
             return Ok(());
         }
         let (name, args) = match target {
             Type::Struct(n, a) | Type::Enum(n, a) => (n, a),
-            _ => return Err(self.err(line, col, "solo se puede implementar un trait para un struct, enum o primitivo".into())),
+            _ => return Err(self.err(line, col, "solo se can implementar un trait para un struct, enum o primitivo".into())),
         };
         // Un struct desconocido sigue siendo `Struct` tras resolver (un enum conocido ya sería
         // `Enum`); rechazarlo aquí.
         if matches!(target, Type::Struct(_, _)) && !self.structs.contains_key(name) {
-            return Err(self.err(line, col, format!("no se puede implementar para un tipo desconocido: '{}'", name)));
+            return Err(self.err(line, col, format!("no se can implementar para un type unknown: '{}'", name)));
         }
         let arity = self.struct_tparams.get(name).or_else(|| self.enum_tparams.get(name)).map_or(0, Vec::len);
         if type_params.is_empty() {
@@ -1237,7 +1237,7 @@ impl Checker {
         // Impl genérico (M9.2b): aridad y forma del objetivo.
         if arity != type_params.len() {
             return Err(self.err(line, col, format!(
-                "'{}' espera {} parámetro(s) de tipo, el impl declara {}", name, arity, type_params.len()
+                "'{}' espera {} parámetro(s) de type, el impl declara {}", name, arity, type_params.len()
             )));
         }
         let mut seen = HashSet::new();
@@ -1245,7 +1245,7 @@ impl Checker {
             && args.iter().all(|a| matches!(a, Type::Var(n) if type_params.contains(n) && seen.insert(n.clone())));
         if !valid {
             return Err(self.err(line, col, format!(
-                "el impl genérico debe aplicarse a '{}<{}>' (sus propios parámetros de tipo, distintos)",
+                "el impl genérico must aplicarse a '{}<{}>' (sus propios parámetros de type, distintos)",
                 name, type_params.join(", ")
             )));
         }
@@ -1257,7 +1257,7 @@ impl Checker {
     fn check_method_sig(&self, tm: &MethodSig, m: &Function, target: &Type, trait_sigma: &HashMap<String, Type>) -> Result<(), TypeError> {
         if tm.params.len() != m.params.len() {
             return Err(self.err(m.line, m.col, format!(
-                "el método '{}' toma {} parámetro(s) (incluido self), pero el trait pide {}",
+                "el método '{}' toma {} parámetro(s) (incluido self), pero el trait asks {}",
                 m.name, m.params.len(), tm.params.len()
             )));
         }
@@ -1270,7 +1270,7 @@ impl Checker {
             let got = self.resolve_type(&subst_self(&ip.ty, target));
             if want != got {
                 return Err(self.err(ip.line, ip.col, format!(
-                    "el parámetro {} del método '{}' es {}, pero el trait pide {}",
+                    "el parámetro {} del método '{}' es {}, pero el trait asks {}",
                     i + 1, m.name, got, want
                 )));
             }
@@ -1279,7 +1279,7 @@ impl Checker {
         let got_ret = self.resolve_type(&subst_self(&m.return_type, target));
         if want_ret != got_ret {
             return Err(self.err(m.line, m.col, format!(
-                "el método '{}' devuelve {}, pero el trait pide {}", m.name, got_ret, want_ret
+                "el método '{}' returns {}, pero el trait asks {}", m.name, got_ret, want_ret
             )));
         }
         Ok(())
@@ -1327,7 +1327,7 @@ impl Checker {
             // Una función unit no debe terminar produciendo un valor.
             if body_ty != Type::Unit && !diverges {
                 Err(self.err(eline, ecol, format!(
-                    "{} no declara retorno (unit), pero su cuerpo produce {}",
+                    "{} no declara return_val (unit), pero su body produce {}",
                     label, body_ty
                 )))
             } else {
@@ -1337,7 +1337,7 @@ impl Checker {
             Ok(())
         } else {
             Err(self.err(eline, ecol, format!(
-                "{} declara devolver {}, pero su cuerpo produce {}",
+                "{} declara devolver {}, pero su body produce {}",
                 label, return_type, body_ty
             )))
         };
@@ -1384,7 +1384,7 @@ impl Checker {
                     Type::Tuple(elems) => {
                         if elems.len() != names.len() {
                             return Err(self.err(value.line, value.col, format!(
-                                "la desestructuración tiene {} nombres pero la tupla tiene {} elementos",
+                                "la desestructuración has {} names pero la tupla has {} elementos",
                                 names.len(), elems.len()
                             )));
                         }
@@ -1396,7 +1396,7 @@ impl Checker {
                         Ok(())
                     }
                     other => Err(self.err(value.line, value.col, format!(
-                        "no se puede desestructurar un {} (se esperaba una tupla)", other
+                        "no se can desestructurar un {} (se esperaba one tupla)", other
                     ))),
                 }
             }
@@ -1409,12 +1409,12 @@ impl Checker {
                         let et = self.check_expr(end)?;
                         if st != Type::Int || et != Type::Int {
                             return Err(self.err(stmt.line, stmt.col, format!(
-                                "el rango de un for debe ser int..int, no {}..{}", st, et)));
+                                "el range de un for must ser int..int, no {}..{}", st, et)));
                         }
                         match pat {
                             ForPat::Single(n) => vec![(n.clone(), Type::Int)],
                             ForPat::Tuple(_) => return Err(self.err(stmt.line, stmt.col,
-                                "un rango liga una sola variable (no una tupla)".into())),
+                                "un range liga one sola variable (no one tupla)".into())),
                         }
                     }
                     ForIter::In(e) => {
@@ -1433,7 +1433,7 @@ impl Checker {
                                 b
                             }
                             (Type::Map(_, _), ForPat::Single(_)) => return Err(self.err(stmt.line, stmt.col,
-                                "iterar un Map requiere una tupla `(clave, valor)`".into())),
+                                "iterar un Map requiere one tupla `(clave, valor)`".into())),
                             // M40.2: un tipo que implementa `Iterator<T>` → se itera llamando a `next`.
                             (other, ForPat::Single(n)) => match self.iterator_of(other) {
                                 Some((elem, next_fn)) => {
@@ -1441,7 +1441,7 @@ impl Checker {
                                     vec![(n.clone(), elem)]
                                 }
                                 None => return Err(self.err(stmt.line, stmt.col, format!(
-                                    "no se puede iterar sobre {} (se esperaba un arreglo, string, Map o un Iterator)", other))),
+                                    "no se can iterar about {} (se esperaba un array, string, Map o un Iterator)", other))),
                             },
                             // M40.2e: `for (a, b) in it` sobre un iterador cuyo elemento es una tupla
                             // (p. ej. `enumerate()` → `(int, T)`). Cada nombre liga una posición.
@@ -1459,7 +1459,7 @@ impl Checker {
                                         .collect()
                                 }
                                 None => return Err(self.err(stmt.line, stmt.col, format!(
-                                    "no se puede iterar sobre {} (se esperaba un arreglo, string, Map o un Iterator)", other))),
+                                    "no se can iterar about {} (se esperaba un array, string, Map o un Iterator)", other))),
                             },
                         }
                     }
@@ -1486,7 +1486,7 @@ impl Checker {
                 };
                 if vt != self.current_return {
                     return Err(self.err(stmt.line, stmt.col, format!(
-                        "se devuelve {} pero la función declara retorno {}",
+                        "se returns {} pero la función declara return_val {}",
                         vt, self.current_return
                     )));
                 }
@@ -1512,7 +1512,7 @@ impl Checker {
                 };
                 if !mutable {
                     return Err(self.err(line, col, format!(
-                        "no se puede asignar a '{}': es inmutable (declarada con 'let'; usa 'var')",
+                        "no se can asignar a '{}': es inmutable (declarada con 'let'; uses 'var')",
                         name
                     )));
                 }
@@ -1530,7 +1530,7 @@ impl Checker {
                 // M11.4c-2: los strings son inmutables; `s[i] = c` no se permite (sí se lee `s[i]`).
                 if self.check_expr(array)? == Type::String {
                     return Err(self.err(target.line, target.col,
-                        "no se puede asignar a un carácter de un string (los strings son inmutables)".into()));
+                        "no se can asignar a un carácter de un string (los strings son inmutables)".into()));
                 }
                 let elem = self.check_index(array, index)?;
                 let vt = self.check_expr_expected(value, &elem)?;
@@ -1548,7 +1548,7 @@ impl Checker {
                     let ot = self.check_expr(object)?;
                     if matches!(ot, Type::Tuple(_)) {
                         return Err(self.err(line, col, format!(
-                            "una posición de tupla no es asignable ('.{name}'); desestructura la tupla o usa un arreglo"
+                            "one posición de tupla no es asignable ('.{name}'); desestructura la tupla o uses un array"
                         )));
                     }
                 }
@@ -1569,7 +1569,7 @@ impl Checker {
         let at = self.check_expr(array)?;
         let it = self.check_expr(index)?;
         if it != Type::Int {
-            return Err(self.err(index.line, index.col, format!("el índice debe ser int, no {}", it)));
+            return Err(self.err(index.line, index.col, format!("el índice must ser int, no {}", it)));
         }
         match at {
             Type::Array(elem) => Ok(*elem),
@@ -1578,11 +1578,11 @@ impl Checker {
             // M16.1a: indexar bytes da el octeto (0–255) como int.
             Type::Bytes => Ok(Type::Int),
             other => {
-                let mut msg = format!("no se puede indexar un {} (no es un arreglo, string ni bytes)", other);
+                let mut msg = format!("no se can index un {} (no es un array, string ni bytes)", other);
                 if Self::block_like(array) {
                     msg.push_str(
-                        "; ojo: una cola que empieza con '[' tras un if/while/match/bloque \
-                         se parsea como indexación de su valor — sepárala con 'return' o 'let'",
+                        "; ojo: one cola what empieza con '[' after un if/while/match/block \
+                         se parses como indexación de su valor — sepárala con 'return' o 'let'",
                     );
                 }
                 Err(self.err(array.line, array.col, msg))
@@ -1595,7 +1595,7 @@ impl Checker {
         let mut seen = HashSet::new();
         for tp in params {
             if !seen.insert(tp) {
-                return Err(self.err(line, col, format!("parámetro de tipo '{}' repetido en '{}'", tp, owner)));
+                return Err(self.err(line, col, format!("parámetro de type '{}' repetido en '{}'", tp, owner)));
             }
         }
         Ok(())
@@ -1613,7 +1613,7 @@ impl Checker {
             Type::Map(k, v) => {
                 if !is_hashable_key(k) {
                     return Err(self.err(line, col, format!(
-                        "la clave de un Map debe ser int/string/char/bool/bytes, no {}", k
+                        "la clave de un Map must ser int/string/char/bool/bytes, no {}", k
                     )));
                 }
                 self.ensure_type(k, line, col)?;
@@ -1622,7 +1622,7 @@ impl Checker {
             Type::Struct(name, args) if name == "Map" => {
                 if args.len() != 2 {
                     return Err(self.err(line, col, format!(
-                        "Map espera 2 argumentos de tipo (clave y valor), no {}", args.len()
+                        "Map espera 2 argumentos de type (clave y valor), no {}", args.len()
                     )));
                 }
                 self.ensure_type(&Type::Map(Box::new(self.resolve_type(&args[0])), Box::new(self.resolve_type(&args[1]))), line, col)
@@ -1633,7 +1633,7 @@ impl Checker {
             Type::Struct(name, args) if name == "Channel" => {
                 if args.len() != 1 {
                     return Err(self.err(line, col, format!(
-                        "Channel espera 1 argumento de tipo, no {}", args.len()
+                        "Channel espera 1 argumento de type, no {}", args.len()
                     )));
                 }
                 self.ensure_type(&Type::Channel(Box::new(self.resolve_type(&args[0]))), line, col)
@@ -1643,7 +1643,7 @@ impl Checker {
             Type::Struct(name, args) if name == "Task" => {
                 if args.len() != 1 {
                     return Err(self.err(line, col, format!(
-                        "Task espera 1 argumento de tipo, no {}", args.len()
+                        "Task espera 1 argumento de type, no {}", args.len()
                     )));
                 }
                 self.ensure_type(&Type::Task(Box::new(self.resolve_type(&args[0]))), line, col)
@@ -1651,7 +1651,7 @@ impl Checker {
             // `Self` (M9) llega como `Struct("Self")` sin resolver; fuera de un impl no
             // tiene un tipo implementador al que referirse.
             Type::Struct(name, _) if name == "Self" => {
-                Err(self.err(line, col, "'Self' solo es válido dentro de un trait o impl".into()))
+                Err(self.err(line, col, "'Self' solo es válido inside de un trait o impl".into()))
             }
             // Un identificador en posición de tipo llega como `Struct(name, args)`
             // desde el parser; aquí puede ser un struct, un enum o un parámetro de
@@ -1659,7 +1659,7 @@ impl Checker {
             Type::Struct(name, args) => {
                 if self.type_params.contains(name) {
                     if !args.is_empty() {
-                        return Err(self.err(line, col, format!("el parámetro de tipo '{}' no recibe argumentos", name)));
+                        return Err(self.err(line, col, format!("el parámetro de type '{}' no recibe argumentos", name)));
                     }
                     return Ok(());
                 }
@@ -1667,32 +1667,32 @@ impl Checker {
                     .or_else(|| self.enum_tparams.get(name));
                 match arity {
                     Some(tparams) => self.ensure_type_args(name, tparams.len(), args, line, col),
-                    None => Err(self.err(line, col, format!("tipo desconocido: '{}' no declarado", name))),
+                    None => Err(self.err(line, col, format!("type unknown: '{}' no declarado", name))),
                 }
             }
             Type::Enum(name, args) => match self.enum_tparams.get(name) {
                 Some(tparams) => self.ensure_type_args(name, tparams.len(), args, line, col),
-                None => Err(self.err(line, col, format!("tipo desconocido: enum '{}' no declarado", name))),
+                None => Err(self.err(line, col, format!("type unknown: enum '{}' no declarado", name))),
             },
             // Un parámetro de tipo (M6) es válido si está en ámbito.
             Type::Var(name) if !self.type_params.contains(name) => {
-                Err(self.err(line, col, format!("parámetro de tipo '{}' fuera de ámbito", name)))
+                Err(self.err(line, col, format!("parámetro de type '{}' outside de ámbito", name)))
             }
             // `Self` solo tiene sentido dentro de un trait/impl; aquí ya se habría
             // reclasificado al tipo implementador. Si llega `SelfType`, es un uso fuera
             // de lugar (M9).
-            Type::SelfType => Err(self.err(line, col, "'Self' solo es válido dentro de un trait o impl".into())),
+            Type::SelfType => Err(self.err(line, col, "'Self' solo es válido inside de un trait o impl".into())),
             // `dyn Trait` (M9.3b): el trait debe existir.
             Type::Dyn(traits) => {
                 // Cada trait del conjunto debe existir, y ningún nombre de método puede repetirse
                 // entre los traits (no se sabría a cuál despachar `obj.m()`).
-                let mut metodos: HashSet<String> = HashSet::new();
+                let mut methods: HashSet<String> = HashSet::new();
                 for tr in traits {
                     let Some(ms) = self.traits.get(tr) else {
                         return Err(self.err(line, col, format!("trait '{}' no declarado (en 'dyn {}')", tr, traits.join(" + "))));
                     };
                     for m in ms {
-                        if !metodos.insert(m.name.clone()) {
+                        if !methods.insert(m.name.clone()) {
                             return Err(self.err(line, col, format!(
                                 "el método '{}' aparece en más de un trait de 'dyn {}': es ambiguo", m.name, traits.join(" + ")
                             )));
@@ -1715,7 +1715,7 @@ impl Checker {
     fn ensure_type_args(&self, name: &str, arity: usize, args: &[Type], line: usize, col: usize) -> Result<(), TypeError> {
         if args.len() != arity {
             return Err(self.err(line, col, format!(
-                "'{}' espera {} argumento(s) de tipo, se le dieron {}", name, arity, args.len()
+                "'{}' espera {} argumento(s) de type, se le dieron {}", name, arity, args.len()
             )));
         }
         for a in args {
@@ -1801,7 +1801,7 @@ impl Checker {
         // No debe haber campos desconocidos.
         for (fname, fexpr) in fields {
             if !declared.iter().any(|(dname, _)| dname == fname) {
-                return Err(self.err(fexpr.line, fexpr.col, format!("'{}' no tiene un campo '{}'", name, fname)));
+                return Err(self.err(fexpr.line, fexpr.col, format!("'{}' no has un campo '{}'", name, fname)));
             }
         }
         // M40.2e: renombrar los params del struct a nombres frescos para la inferencia (higiene: que un
@@ -1845,7 +1845,7 @@ impl Checker {
             let concrete = &targs[pos];
             if !self.satisfies_bound(concrete, trait_name) {
                 return Err(self.err(line, col, format!(
-                    "'{}' requiere que '{}' sea '{}', pero {} no lo implementa", name, tp, trait_name, concrete
+                    "'{}' requiere what '{}' sea '{}', pero {} no lo implementa", name, tp, trait_name, concrete
                 )));
             }
         }
@@ -1859,7 +1859,7 @@ impl Checker {
         let payload = match self.enums.get(enum_name) {
             Some(variants) => match variants.iter().find(|(vname, _)| vname == variant) {
                 Some((_, payload)) => payload.clone(), // clonar para soltar el préstamo de self
-                None => return Err(self.err(line, col, format!("el enum '{}' no tiene la variante '{}'", enum_name, variant))),
+                None => return Err(self.err(line, col, format!("el enum '{}' no has la variant '{}'", enum_name, variant))),
             },
             None => return Err(self.err(line, col, format!("enum '{}' no declarado", enum_name))),
         };
@@ -1881,7 +1881,7 @@ impl Checker {
         let orig_tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
         if args.len() != payload.len() {
             return Err(self.err(line, col, format!(
-                "la variante '{}.{}' espera {} argumento(s), se dieron {}",
+                "la variant '{}.{}' espera {} argumento(s), se dieron {}",
                 enum_name, variant, payload.len(), args.len()
             )));
         }
@@ -1899,7 +1899,7 @@ impl Checker {
                 "'{}.{}': {}", enum_name, variant, reason
             )))?;
         }
-        let targs = self.finalize_type_args(&tparams, &sigma, &format!("la variante '{}.{}'", enum_name, variant), line, col)?;
+        let targs = self.finalize_type_args(&tparams, &sigma, &format!("la variant '{}.{}'", enum_name, variant), line, col)?;
         // M9.4: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
         let bounds = self.enum_bounds.get(enum_name).cloned().unwrap_or_default();
         self.check_construction_bounds(enum_name, &orig_tparams, &targs, &bounds, line, col)?;
@@ -1926,7 +1926,7 @@ impl Checker {
             match sigma.get(tp) {
                 Some(t) => targs.push(t.clone()),
                 None => return Err(self.err(line, col, format!(
-                    "no se pudo inferir el parámetro de tipo '{}' de {}; anota el tipo", tp, label
+                    "no se pudo inferir el parámetro de type '{}' de {}; anota el type", tp, label
                 ))),
             }
         }
@@ -1947,7 +1947,7 @@ impl Checker {
             ))),
         };
         if arms.is_empty() {
-            return Err(self.err(line, col, "un match no puede estar vacío".into()));
+            return Err(self.err(line, col, "un match no can estar vacío".into()));
         }
         // Variantes del enum (para la exhaustividad). La σ de tipos ya no hace falta aquí:
         // `check_subpattern` la resuelve del tipo de cada sub-valor (M40.1c).
@@ -1961,7 +1961,7 @@ impl Checker {
             // Un brazo tras un catch-all nunca se alcanza.
             if catchall {
                 return Err(self.err(arm.line, arm.col,
-                    "brazo inalcanzable: un brazo anterior ya cubre todos los casos".into()));
+                    "branch inalcanzable: un branch anterior ya cubre all los cases".into()));
             }
             // Comprueba el patrón (recursivo, M40.1c) y obtiene las variables a ligar. La cobertura
             // (exhaustividad) se registra aparte y SOLO para brazos sin guarda: un brazo con **guarda**
@@ -1986,7 +1986,7 @@ impl Checker {
                 && gt? != Type::Bool
             {
                 return Err(self.err(g.line, g.col,
-                    "la guarda de un brazo del match debe ser de tipo bool".into()));
+                    "la keeps de un branch del match must ser de type bool".into()));
             }
             let body_ty = body_ty?;
             // M13.2b/M14: un brazo que diverge (termina en `panic`/`return`) no fija el tipo del
@@ -2000,7 +2000,7 @@ impl Checker {
                 None => result_ty = Some(body_ty),
                 Some(prev) if *prev != body_ty => {
                     return Err(self.err(arm.body.line, arm.body.col, format!(
-                        "los brazos del match producen tipos distintos: {} y {}", prev, body_ty
+                        "los brazos del match producen types distintos: {} y {}", prev, body_ty
                     )));
                 }
                 _ => {}
@@ -2016,7 +2016,7 @@ impl Checker {
                 .collect();
             if !missing.is_empty() {
                 return Err(self.err(line, col, format!(
-                    "match no exhaustivo en '{}': faltan las variantes: {}",
+                    "match no exhaustive en '{}': faltan las variantes: {}",
                     enum_name, missing.join(", ")
                 )));
             }
@@ -2051,13 +2051,13 @@ impl Checker {
                                 Ok(ok_ty)
                             }
                             _ => Err(self.err(line, col, format!(
-                                "'?' sobre {} requiere que la función devuelva Result<_, {}>, pero devuelve {}",
+                                "'?' about {} requiere what la función devuelva Result<_, {}>, pero returns {}",
                                 it, err_ty, self.current_return
                             ))),
                         }
                     }
                     other => Err(self.err(line, col, format!(
-                        "'?' sobre {} requiere que la función devuelva Result<_, {}>, pero devuelve {}",
+                        "'?' about {} requiere what la función devuelva Result<_, {}>, pero returns {}",
                         it, err_ty, other
                     ))),
                 }
@@ -2067,7 +2067,7 @@ impl Checker {
                 match &self.current_return {
                     Type::Enum(rn, rargs) if rn == "Option" && rargs.len() == 1 => Ok(some_ty),
                     other => Err(self.err(line, col, format!(
-                        "'?' sobre {} requiere que la función devuelva Option<_>, pero devuelve {}",
+                        "'?' about {} requiere what la función devuelva Option<_>, pero returns {}",
                         it, other
                     ))),
                 }
@@ -2141,12 +2141,12 @@ impl Checker {
                 let payload = match variants.iter().find(|(v, _)| v == variant) {
                     Some((_, p)) => p.clone(),
                     None => return Err(self.err(pat.line, pat.col, format!(
-                        "el enum '{}' no tiene la variante '{}'", ty_enum, variant
+                        "el enum '{}' no has la variant '{}'", ty_enum, variant
                     ))),
                 };
                 if subpatterns.len() != payload.len() {
                     return Err(self.err(pat.line, pat.col, format!(
-                        "el patrón '{}.{}' liga {} valor(es), pero la variante tiene {}",
+                        "el patrón '{}.{}' liga {} valor(es), pero la variant has {}",
                         ty_enum, variant, subpatterns.len(), payload.len()
                     )));
                 }
@@ -2196,7 +2196,7 @@ impl Checker {
                     let fty = match struct_fields.iter().find(|(f, _)| f == fname) {
                         Some((_, t)) => subst(t, &sigma),
                         None => return Err(self.err(fpat.line, fpat.col, format!(
-                            "el struct '{}' no tiene un campo '{}'", sname, fname
+                            "el struct '{}' no has un campo '{}'", sname, fname
                         ))),
                     };
                     binds.extend(self.check_subpattern(fpat, &fty)?); // recursivo
@@ -2226,7 +2226,7 @@ impl Checker {
                 if cubre_todo {
                     if !covered.insert(variant.clone()) {
                         return Err(self.err(pat.line, pat.col, format!(
-                            "la variante '{}' ya está cubierta por un brazo anterior", variant
+                            "la variant '{}' ya está cubierta por un branch anterior", variant
                         )));
                     }
                 }
@@ -2254,10 +2254,10 @@ impl Checker {
         // Acceso a **tupla** `t.0` (M27.1): un nombre de campo numérico solo es válido sobre una tupla.
         if let Type::Tuple(elems) = &ot {
             let idx: usize = name.parse().map_err(|_| self.err(object.line, object.col,
-                format!("no se puede acceder a '.{}' en una tupla (usa un índice como .0)", name)))?;
+                format!("no se can acceder a '.{}' en one tupla (uses un índice como .0)", name)))?;
             if idx >= elems.len() {
                 return Err(self.err(object.line, object.col, format!(
-                    "la tupla tiene {} elementos; el índice .{} está fuera de rango", elems.len(), idx)));
+                    "la tupla has {} elementos; el índice .{} está outside de range", elems.len(), idx)));
             }
             return Ok(elems[idx].clone());
         }
@@ -2266,7 +2266,7 @@ impl Checker {
                 let fields = self.structs.get(&sname).unwrap_or_else(|| crate::ice!("el struct '{}' no está en la tabla del checker", sname));
                 let fty = match fields.iter().find(|(fname, _)| fname == name) {
                     Some((_, fty)) => fty.clone(),
-                    None => return Err(self.err(object.line, object.col, format!("el struct '{}' no tiene un campo '{}'", sname, name))),
+                    None => return Err(self.err(object.line, object.col, format!("el struct '{}' no has un campo '{}'", sname, name))),
                 };
                 let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
                 let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
@@ -2276,7 +2276,7 @@ impl Checker {
                 self.record_field_hover(object.line, object.col, name, &result, None);
                 Ok(result)
             }
-            other => Err(self.err(object.line, object.col, format!("no se puede acceder a '.{}' en un {} (no es un struct)", name, other))),
+            other => Err(self.err(object.line, object.col, format!("no se can acceder a '.{}' en un {} (no es un struct)", name, other))),
         }
     }
 
@@ -2293,8 +2293,8 @@ impl Checker {
         // (`if`/`match`/`bloque`) NO se interceptan aquí: dejan que la coerción ocurra en
         // sus hojas (cada rama por separado), igual que el resto del chequeo bidireccional.
         if let Type::Dyn(traits) = expected {
-            let propaga = matches!(expr.kind, ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_));
-            if !propaga {
+            let propagates = matches!(expr.kind, ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_));
+            if !propagates {
                 return self.coerce_to_dyn(expr, &traits.clone(), expr.line, expr.col);
             }
         }
@@ -2335,7 +2335,7 @@ impl Checker {
                        && self.lookup(n).is_none()
                        && self.functions.get(n).is_some_and(|s| !s.type_params.is_empty())) =>
             {
-                let name = match &callee.kind { ExprKind::Ident(n) => n.clone(), _ => crate::ice!("callee garantizado Ident por la guarda del match") };
+                let name = match &callee.kind { ExprKind::Ident(n) => n.clone(), _ => crate::ice!("callee garantizado Ident por la keeps del match") };
                 if let Some(sig) = self.functions.get(&name).filter(|_| self.gather) {
                     let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
                     let def = self.fn_defs.get(&name).copied();
@@ -2361,7 +2361,7 @@ impl Checker {
                         let t = self.check_expr_expected(e, elem_exp)?;
                         if t != **elem_exp {
                             return Err(self.err(e.line, e.col, format!(
-                                "los elementos del arreglo deben ser {}, no {}", elem_exp, t
+                                "los elementos del array deben ser {}, no {}", elem_exp, t
                             )));
                         }
                     }
@@ -2379,12 +2379,12 @@ impl Checker {
                         let kt = self.check_expr_expected(k, kexp)?;
                         if kt != **kexp {
                             return Err(self.err(k.line, k.col, format!(
-                                "las claves del Map deben ser {}, no {}", kexp, kt)));
+                                "las keys del Map deben ser {}, no {}", kexp, kt)));
                         }
                         let vt = self.check_expr_expected(v, vexp)?;
                         if vt != **vexp {
                             return Err(self.err(v.line, v.col, format!(
-                                "los valores del Map deben ser {}, no {}", vexp, vt)));
+                                "los values del Map deben ser {}, no {}", vexp, vt)));
                         }
                     }
                     Ok(expected.clone())
@@ -2394,14 +2394,14 @@ impl Checker {
             ExprKind::If { cond, then_branch, else_branch } => {
                 let ct = self.check_expr(cond)?;
                 if ct != Type::Bool {
-                    return Err(self.err(cond.line, cond.col, format!("la condición del if debe ser bool, no {}", ct)));
+                    return Err(self.err(cond.line, cond.col, format!("la condición del if must ser bool, no {}", ct)));
                 }
                 let then_ty = self.check_block_expected(then_branch, expected)?;
                 match else_branch {
                     None => {
                         if then_ty != Type::Unit {
                             return Err(self.err(expr.line, expr.col, format!(
-                                "un if sin else tiene tipo unit, pero su rama produce {} (añade un else)", then_ty
+                                "un if sin else has type unit, pero su rama produce {} (añade un else)", then_ty
                             )));
                         }
                         Ok(Type::Unit)
@@ -2417,7 +2417,7 @@ impl Checker {
                         }
                         if then_ty != else_ty {
                             return Err(self.err(expr.line, expr.col, format!(
-                                "las ramas del if tienen tipos distintos: {} y {}", then_ty, else_ty
+                                "las ramas del if tienen types distintos: {} y {}", then_ty, else_ty
                             )));
                         }
                         Ok(then_ty)
@@ -2446,18 +2446,18 @@ impl Checker {
                 return Ok(Type::Dyn(traits.to_vec()));
             }
             return Err(self.err(line, col, format!(
-                "no se puede convertir 'dyn {}' en 'dyn {}': solo se puede upcastear a un subconjunto de traits",
+                "no se can convertir 'dyn {}' en 'dyn {}': solo se can upcastear a un subconjunto de traits",
                 source.join(" + "), traits.join(" + ")
             )));
         }
         let key = type_key_of(&actual).ok_or_else(|| self.err(line, col, format!(
-            "no se puede convertir {} en 'dyn {}'", actual, traits.join(" + ")
+            "no se can convertir {} en 'dyn {}'", actual, traits.join(" + ")
         )))?;
         // El tipo concreto debe implementar **todos** los traits del conjunto.
         for tr in traits {
             if !self.impl_traits.contains(&(key.clone(), tr.clone())) {
                 return Err(self.err(line, col, format!(
-                    "{} no implementa '{}': no puede usarse como 'dyn {}'", actual, tr, traits.join(" + ")
+                    "{} no implementa '{}': no can usarse como 'dyn {}'", actual, tr, traits.join(" + ")
                 )));
             }
         }
@@ -2528,7 +2528,7 @@ impl Checker {
                 if let Some(sig) = self.functions.get(name) {
                     if !sig.type_params.is_empty() {
                         return Err(self.err(expr.line, expr.col, format!(
-                            "no se puede usar la función genérica '{}' como valor; llámala directamente", name
+                            "no se can usar la función genérica '{}' como valor; llámala directamente", name
                         )));
                     }
                     let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
@@ -2536,7 +2536,7 @@ impl Checker {
                     self.record_ident(expr.line, expr.col, name, &ty, def); // M10.2b
                     return Ok(ty);
                 }
-                Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name)))
+                Err(self.err(expr.line, expr.col, format!("name '{}' no declarado", name)))
             }
 
             ExprKind::Unary { op, expr: inner } => {
@@ -2550,7 +2550,7 @@ impl Checker {
                             self.op_sites.insert((expr.line, expr.col, "Neg".to_string()), mangle(&key, "neg"));
                             Ok(t)
                         }
-                        _ => Err(self.err(expr.line, expr.col, format!("no se puede negar (-) un {}", t))),
+                        _ => Err(self.err(expr.line, expr.col, format!("no se can negar (-) un {}", t))),
                     },
                     UnaryOp::Not if t == Type::Bool => Ok(Type::Bool),
                     UnaryOp::Not => Err(self.err(expr.line, expr.col, format!("el '!' requiere bool, no {}", t))),
@@ -2568,14 +2568,14 @@ impl Checker {
             ExprKind::ArrayLit(elems) => {
                 if elems.is_empty() {
                     return Err(self.err(expr.line, expr.col,
-                        "no se puede inferir el tipo de [] aquí; anótalo (p. ej. let xs: [int] = [];)".into()));
+                        "no se can inferir el type de [] aquí; anótalo (p. ej. let xs: [int] = [];)".into()));
                 }
                 let first = self.check_expr(&elems[0])?;
                 for e in &elems[1..] {
                     let t = self.check_expr(e)?;
                     if t != first {
                         return Err(self.err(e.line, e.col, format!(
-                            "los elementos del arreglo deben ser del mismo tipo: {} y {}", first, t
+                            "los elementos del array deben ser del same type: {} y {}", first, t
                         )));
                     }
                 }
@@ -2588,7 +2588,7 @@ impl Checker {
             ExprKind::MapLit(pares) => {
                 if pares.is_empty() {
                     return Err(self.err(expr.line, expr.col,
-                        "no se puede inferir el tipo de [:] aquí; anótalo (p. ej. let m: Map<string, int> = [:];)".into()));
+                        "no se can inferir el type de [:] aquí; anótalo (p. ej. let m: Map<string, int> = [:];)".into()));
                 }
                 let kty = self.check_expr(&pares[0].0)?;
                 let vty = self.check_expr(&pares[0].1)?;
@@ -2596,12 +2596,12 @@ impl Checker {
                     let kt = self.check_expr(k)?;
                     if kt != kty {
                         return Err(self.err(k.line, k.col, format!(
-                            "las claves del Map deben ser del mismo tipo: {} y {}", kty, kt)));
+                            "las keys del Map deben ser del same type: {} y {}", kty, kt)));
                     }
                     let vt = self.check_expr(v)?;
                     if vt != vty {
                         return Err(self.err(v.line, v.col, format!(
-                            "los valores del Map deben ser del mismo tipo: {} y {}", vty, vt)));
+                            "los values del Map deben ser del same type: {} y {}", vty, vt)));
                     }
                 }
                 let mty = Type::Map(Box::new(kty), Box::new(vty));
@@ -2639,7 +2639,7 @@ impl Checker {
                 );
                 if !ok {
                     return Err(self.err(expr.line, expr.col, format!(
-                        "no se puede convertir {} a {} con 'as' (solo int↔float, char↔int y de/hacia u8/u32/u64)", from, to)));
+                        "no se can convertir {} a {} con 'as' (solo int↔float, char↔int y de/hacia u8/u32/u64)", from, to)));
                 }
                 Ok(to)
             }
@@ -2682,7 +2682,7 @@ impl Checker {
             ExprKind::If { cond, then_branch, else_branch } => {
                 let ct = self.check_expr(cond)?;
                 if ct != Type::Bool {
-                    return Err(self.err(cond.line, cond.col, format!("la condición del if debe ser bool, no {}", ct)));
+                    return Err(self.err(cond.line, cond.col, format!("la condición del if must ser bool, no {}", ct)));
                 }
                 let then_ty = self.check_block(then_branch)?;
                 match else_branch {
@@ -2691,7 +2691,7 @@ impl Checker {
                         // tampoco puede producir un valor útil.
                         if then_ty != Type::Unit {
                             return Err(self.err(expr.line, expr.col, format!(
-                                "un if sin else tiene tipo unit, pero su rama produce {} (añade un else)",
+                                "un if sin else has type unit, pero su rama produce {} (añade un else)",
                                 then_ty
                             )));
                         }
@@ -2709,7 +2709,7 @@ impl Checker {
                         }
                         if then_ty != else_ty {
                             return Err(self.err(expr.line, expr.col, format!(
-                                "las ramas del if tienen tipos distintos: {} y {}",
+                                "las ramas del if tienen types distintos: {} y {}",
                                 then_ty, else_ty
                             )));
                         }
@@ -2721,7 +2721,7 @@ impl Checker {
             ExprKind::While { cond, body } => {
                 let ct = self.check_expr(cond)?;
                 if ct != Type::Bool {
-                    return Err(self.err(cond.line, cond.col, format!("la condición del while debe ser bool, no {}", ct)));
+                    return Err(self.err(cond.line, cond.col, format!("la condición del while must ser bool, no {}", ct)));
                 }
                 // El valor del cuerpo se descarta en cada iteración; el while es unit.
                 self.check_block(body)?;
@@ -2793,7 +2793,7 @@ impl Checker {
                 // M28.3: enteros sin signo del mismo ancho se ordenan (comparación sin signo).
                 (Type::UInt(a), Type::UInt(b)) if a == b => Ok(Type::Bool),
                 _ => Err(self.err(line, col, format!(
-                    "el operador '{}' compara int/float/string/char del mismo tipo, no {} y {}",
+                    "el operador '{}' compara int/float/string/char del same type, no {} y {}",
                     bin_op_str(op), lt, rt
                 ))),
             },
@@ -2803,7 +2803,7 @@ impl Checker {
                     Ok(Type::Bool)
                 } else {
                     Err(self.err(line, col, format!(
-                        "el operador '{}' requiere ambos operandos del mismo tipo comparable, no {} y {}",
+                        "el operador '{}' requiere ambos operandos del same type comparable, no {} y {}",
                         bin_op_str(op), lt, rt
                     )))
                 }
@@ -2916,7 +2916,7 @@ impl Checker {
                 let at = self.check_expr(a)?;
                 if !matches!(at, Type::Int) {
                     return Err(self.err(a.line, a.col, format!(
-                        "el argumento de '{}.{}' debe ser int, no {}", tn, name, at)));
+                        "el argumento de '{}.{}' must ser int, no {}", tn, name, at)));
                 }
             }
             // El tipo del resultado lo fija el contexto esperado (indeterminado, como `map_new()`).
@@ -2932,7 +2932,7 @@ impl Checker {
                         "let c: Channel<int> = Channel.new()"
                     };
                     Err(self.err(line, col, format!(
-                        "no se puede inferir el tipo de '{}.{}'; anótalo, p. ej. '{}'", tn, name, ejemplo)))
+                        "no se can inferir el type de '{}.{}'; anótalo, p. ej. '{}'", tn, name, ejemplo)))
                 }
             }
         })())
@@ -3219,7 +3219,7 @@ impl Checker {
     /// Como [`check_named_call`], pero `hover_directo` indica que `(line, col)` es la posición del
     /// **nombre** llamado (llamada directa `f(...)`), no una reescritura (UFCS/método). Solo entonces
     /// se registra el hover del builtin ahí (M10.2i): así `print`/`pow`/`abs`… muestran su firma.
-    fn check_named_call_impl(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>, hover_directo: bool) -> Result<Type, TypeError> {
+    fn check_named_call_impl(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>, hover_direct: bool) -> Result<Type, TypeError> {
         // Builtins (DESIGN.md §7): su firma vive en el **registro único** (`src/builtins.rs`), no
         // dispersa aquí. Se comprueban antes que una local/función homónima (un builtin no se tapa).
         // Se tipan los argumentos por el camino normal y la regla del builtin valida y da el tipo.
@@ -3238,7 +3238,7 @@ impl Checker {
                     // `(el, ec)`); su hover solaparía —y taparía por menor `len`— al del propio `e`. Una
                     // llamada escrita a mano nunca tiene el argumento en la misma columna que el callee.
                     let wrapper_sintetico = args.len() == 1 && args[0].line == line && args[0].col == col;
-                    if hover_directo && self.gather && !name.starts_with("__") && !wrapper_sintetico {
+                    if hover_direct && self.gather && !name.starts_with("__") && !wrapper_sintetico {
                         let fn_ty = Type::Fn(arg_types.clone(), Box::new(t.clone()));
                         self.record_ident(line, col, name, &fn_ty, None);
                     }
@@ -3289,13 +3289,13 @@ impl Checker {
             Type::Fn(params, ret) => self.check_args(&params, *ret, args, "la función", line, col),
             other => {
                 let mut msg = format!(
-                    "no se puede llamar un valor de tipo {} (no es una función)",
+                    "no se can llamar un valor de type {} (no es one función)",
                     other
                 );
                 if pista {
                     msg.push_str(
-                        "; ojo: una cola que empieza con '(' tras un if/while/match/bloque \
-                         se parsea como llamada a su valor — sepárala con 'return' o 'let'",
+                        "; ojo: one cola what empieza con '(' after un if/while/match/block \
+                         se parses como llamada a su valor — sepárala con 'return' o 'let'",
                     );
                 }
                 Err(self.err(line, col, msg))
@@ -3382,7 +3382,7 @@ impl Checker {
         for tp in type_params {
             if !sigma.contains_key(tp) {
                 return Err(self.err(line, col, format!(
-                    "no se pudo inferir el parámetro de tipo '{}' de {} (no aparece en los argumentos)",
+                    "no se pudo inferir el parámetro de type '{}' de {} (no aparece en los argumentos)",
                     tp, label
                 )));
             }
@@ -3409,7 +3409,7 @@ impl Checker {
         }
         if hits.len() > 1 {
             return Err(self.err(line, col, format!(
-                "método '{}' ambiguo para '{}': lo declaran varios traits acotados ({})",
+                "método '{}' ambiguo para '{}': lo declaran various traits acotados ({})",
                 method, tp, hits.join(", ")
             )));
         }
@@ -3429,7 +3429,7 @@ impl Checker {
             .collect();
         if args.len() != expected.len() {
             return Err(self.err(line, col, format!(
-                "el método '{}' espera {} argumento(s) (sin contar el receptor), se le pasaron {}",
+                "el método '{}' espera {} argumento(s) (sin count el receptor), se le pasaron {}",
                 method, expected.len(), args.len()
             )));
         }
@@ -3465,17 +3465,17 @@ impl Checker {
         // *Object safety*: la vtable no puede llevar métodos que dependan del tipo concreto
         // borrado. Si `Self` aparece fuera del receptor (en un parámetro o en el retorno),
         // el método no es invocable sobre un trait object.
-        let usa_self = sig.params.iter().skip(1).any(|p| type_uses_self(&p.ty)) || type_uses_self(&sig.return_type);
-        if usa_self {
+        let uses_self = sig.params.iter().skip(1).any(|p| type_uses_self(&p.ty)) || type_uses_self(&sig.return_type);
+        if uses_self {
             return Err(self.err(line, col, format!(
-                "el método '{}' usa 'Self': no es invocable sobre 'dyn {}'", method, traits.join(" + ")
+                "el método '{}' uses 'Self': no es invocable about 'dyn {}'", method, traits.join(" + ")
             )));
         }
         // Argumentos (sin el receptor, que es el propio objeto).
         let expected: Vec<Type> = sig.params.iter().skip(1).map(|p| self.resolve_type(&p.ty)).collect();
         if args.len() != expected.len() {
             return Err(self.err(line, col, format!(
-                "el método '{}' espera {} argumento(s) (sin contar el receptor), se le pasaron {}",
+                "el método '{}' espera {} argumento(s) (sin count el receptor), se le pasaron {}",
                 method, expected.len(), args.len()
             )));
         }
@@ -3527,12 +3527,12 @@ impl Checker {
                 return Ok(ident_expr(&dict_param_name(u, trait_name, method), line, col));
             }
             return Err(self.err(line, col, format!(
-                "el parámetro de tipo '{}' no está acotado por '{}' (requerido por la llamada)", u, trait_name
+                "el parámetro de type '{}' no está bounded por '{}' (requerido por la llamada)", u, trait_name
             )));
         }
         // Tipo concreto: debe implementar el trait → usar el método manglado del impl.
         let key = type_key_of(concrete).ok_or_else(|| self.err(line, col, format!(
-            "{} no puede implementar el trait '{}'", concrete, trait_name
+            "{} no can implementar el trait '{}'", concrete, trait_name
         )))?;
         if !self.impl_traits.contains(&(key.clone(), trait_name.to_string())) {
             return Err(self.err(line, col, format!(
@@ -3624,7 +3624,7 @@ impl Checker {
     fn declare(&mut self, name: &str, ty: Type, mutable: bool, def: (usize, usize)) {
         self.scopes
             .last_mut()
-            .unwrap_or_else(|| crate::ice!("no hay ámbito activo al declarar una variable"))
+            .unwrap_or_else(|| crate::ice!("no hay ámbito activo al declarar one variable"))
             .insert(name.to_string(), VarInfo { ty, mutable, def });
     }
 
@@ -3835,7 +3835,7 @@ fn unify(param: &Type, arg: &Type, sigma: &mut HashMap<String, Type>) -> Result<
     if let Type::Var(n) = param {
         if let Some(prev) = sigma.get(n) {
             if prev != arg {
-                return Err(format!("'{}' no puede ser {} y {} a la vez", n, prev, arg));
+                return Err(format!("'{}' no can ser {} y {} a la vez", n, prev, arg));
             }
         } else {
             sigma.insert(n.clone(), arg.clone());
@@ -4288,7 +4288,7 @@ fn validate_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result
         }
     }
     if !type_params.is_empty() {
-        return Err(TypeError { msg: format!("no se puede derivar para el tipo genérico '{}'", name), line: a.line, col: a.col, len: 1 });
+        return Err(TypeError { msg: format!("no se can derivar para el type genérico '{}'", name), line: a.line, col: a.col, len: 1 });
     }
     Ok(())
 }
@@ -4303,7 +4303,7 @@ fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<String, Typ
         // `Enum`); ambos se imprimen con su propio `mostrar` (deben implementar Show).
         Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.show()")),
         other => Err(TypeError {
-            msg: format!("no se puede derivar Show para un campo de tipo {} (por ahora primitivos, struct y enum)", other),
+            msg: format!("no se can derivar Show para un campo de type {} (por ahora primitivos, struct y enum)", other),
             line: a.line,
             col: a.col,
             len: 1,
@@ -4316,12 +4316,12 @@ fn struct_show_body(a: &Annotation, name: &str, fields: &[(String, Type)]) -> Re
     if fields.is_empty() {
         return Ok(format!("        \"{name}\""));
     }
-    let mut partes: Vec<String> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
     for (n, ty) in fields {
-        partes.push(format!("\"{n}: \" + {}", render_to_string(a, &format!("self.{n}"), ty)?));
+        parts.push(format!("\"{n}: \" + {}", render_to_string(a, &format!("self.{n}"), ty)?));
     }
     // El string generado usa llaves literales `{`/`}` (siempre lo son; solo `${` interpola, M27.3).
-    Ok(format!("        \"{name} {{ \" + {} + \" }}\"", partes.join(" + \", \" + ")))
+    Ok(format!("        \"{name} {{ \" + {} + \" }}\"", parts.join(" + \", \" + ")))
 }
 
 /// Cuerpo de `mostrar` para un enum: `match` sobre `self`; por variante, `"Nombre.Variante"`
@@ -4353,7 +4353,7 @@ fn parse_derived_impl(trait_name: &str, name: &str, signature: &str, body: &str)
         "impl {trait_name} for {name} {{\n    {signature} {{\n{body}\n    }}\n}}"
     );
     let toks = crate::lexer::lex(&src).unwrap_or_else(|e| crate::ice!("el impl derivado no lexea: {e}"));
-    let mut prog = crate::parser::parse(toks).unwrap_or_else(|e| crate::ice!("el impl derivado no parsea: {e}"));
+    let mut prog = crate::parser::parse(toks).unwrap_or_else(|e| crate::ice!("el impl derivado no parses: {e}"));
     prog.impls.remove(0)
 }
 
@@ -4684,12 +4684,12 @@ fn inline_forwarders(program: &mut Program) {
         if crate::builtins::lookup(b).is_none() || user_fns.contains(b.as_str()) {
             continue;
         }
-        let en_orden = args.len() == f.params.len()
+        let en_order = args.len() == f.params.len()
             && args
                 .iter()
                 .zip(&f.params)
                 .all(|(a, p)| matches!(&a.kind, ExprKind::Ident(n) if *n == p.name));
-        if en_orden {
+        if en_order {
             fwd.insert(f.name.clone(), b.clone());
         }
     }
@@ -4981,8 +4981,8 @@ fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, usize), Stri
         match &mut stmt.kind {
             StmtKind::For { iter, body, .. } => {
                 if let (Some(next_fn), ForIter::In(_)) = (sites.get(&pos), &*iter) {
-                    let viejo = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0), line: 0, col: 0 }));
-                    if let ForIter::In(e) = viejo {
+                    let old = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0), line: 0, col: 0 }));
+                    if let ForIter::In(e) = old {
                         *iter = ForIter::Iter { expr: e, next_fn: next_fn.clone() };
                     }
                 }
@@ -5990,8 +5990,8 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
     };
     if dispatch_method.is_some() {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
-        let ExprKind::Call { callee, mut args } = taken else { crate::ice!("sitio de despacho es un Call") };
-        let ExprKind::Field { object, name } = callee.kind else { crate::ice!("el callee de un despacho es un Field") };
+        let ExprKind::Call { callee, mut args } = taken else { crate::ice!("sitio de dispatch es un Call") };
+        let ExprKind::Field { object, name } = callee.kind else { crate::ice!("el callee de un dispatch es un Field") };
         let tmp = format!("__dynrecv#{}", *counter);
         *counter += 1;
         let let_stmt = Stmt {
@@ -6145,11 +6145,11 @@ mod tests {
         assert!(targets.iter().any(|t| t == "__push"), "push inlineado: {targets:?}");
         assert!(targets.iter().any(|t| t == "__len"), "len inlineado: {targets:?}");
         assert!(!targets.iter().any(|t| t.ends_with("#push") || t.ends_with("#len")),
-            "sin llamadas al forwarder: {targets:?}");
+            "sin calls al forwarder: {targets:?}");
     }
 
     #[test]
-    fn inline_forwarders_respeta_un_local_homonimo() {
+    fn inline_forwarders_respects_un_local_homonimo() {
         // M52 (guarda de sonoridad): si el programa liga una variable `__push`, el inlining hacia
         // ese nombre se desactiva (el compilador resuelve local antes que builtin) y la llamada
         // sigue yendo al método manglado. `__len` no está ligado → sí se inlinea.
@@ -6162,7 +6162,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_de_funcion_asociada() {
+    fn hover_de_function_associated() {
         // M48.1/LSP: hover sobre el nombre asociado (`new`/`bounded`) → su firma del registro.
         let src = "fn main() -> int {\n  let m: Map<string, int> = Map.new();\n  m.len()\n}";
         let tokens = crate::lexer::lex(src).expect("lex ok");
@@ -6173,10 +6173,10 @@ mod tests {
     }
 
     #[test]
-    fn trait_len_para_tipos_incorporados() {
+    fn trait_len_para_types_incorporados() {
         // M48.4a: el trait `Len` (prelude) se implementa para string/[T]/Map/bytes → `.len()` despacha
         // por trait; funciona con un bound `T: Len` y con un tipo de usuario que lo implemente.
-        assert!(check_src("fn main() -> int { \"hola\".len() + [1,2,3].len() + \"a\".to_bytes().len() }").is_ok());
+        assert!(check_src("fn main() -> int { \"hello\".len() + [1,2,3].len() + \"a\".to_bytes().len() }").is_ok());
         assert!(check_src("fn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f([1,2]) + f(\"ab\") }").is_ok());
         assert!(check_src("fn main() -> int { let m: Map<int, int> = [1: 2]; m.len() }").is_ok());
         // Un tipo del usuario puede implementar Len y usarse con el bound.
@@ -6192,12 +6192,12 @@ mod tests {
     fn traits_strops_bytesops() {
         // M48.4d: los métodos de string/bytes despachan por trait (StrOps/BytesOps).
         assert!(check_src(
-            "fn main() -> int { let s = \"hola\"; \
+            "fn main() -> int { let s = \"hello\"; \
              s.trim().split(\",\").len() + s.to_upper().len() + s.substring(0, 2).len() \
              + s.to_bytes().sub_bytes(0, 1).len() + s.chars().len() }").is_ok());
         // to_upper sobre un no-string → error.
         let e = check_src("fn main() -> int { (42).to_upper().len() }").unwrap_err();
-        assert!(!format!("{e}").is_empty(), "int no tiene to_upper: {e}");
+        assert!(!format!("{e}").is_empty(), "int no has to_upper: {e}");
     }
 
     #[test]
@@ -6215,7 +6215,7 @@ mod tests {
     fn traits_push_reverse_contains() {
         // M48.4b: los tres traits despachan como método; extensibles a tipos de usuario.
         assert!(check_src("fn main() -> int { var a = [1,2]; a.push(3); a.reverse().len() }").is_ok());
-        assert!(check_src("fn ok(b: bool) -> int { if (b) { 1 } else { 0 } }\nfn main() -> int { ok([1,2,3].contains(2)) + ok(\"hola\".contains(\"la\")) }").is_ok());
+        assert!(check_src("fn ok(b: bool) -> int { if (b) { 1 } else { 0 } }\nfn main() -> int { ok([1,2,3].contains(2)) + ok(\"hello\".contains(\"la\")) }").is_ok());
         // Un tipo del usuario implementa Push<int>/Contains<int>.
         assert!(check_src(
             "struct C { d: [int] }\nimpl Push<int> for C { fn push(self, x: int) { self.d.push(x) } }\n\
@@ -6226,32 +6226,32 @@ mod tests {
     }
 
     #[test]
-    fn impl_para_tipo_incorporado_debe_ser_generico() {
+    fn impl_para_ty_incorporado_must_ser_generic() {
         // M48.4a: `impl X for [int]` (no plenamente genérico) se rechaza, como `impl X for Caja<int>`.
         let e = check_src("trait X { fn m(self) -> int; }\nimpl X for [int] { fn m(self) -> int { 0 } }\nfn main() -> int { 0 }").unwrap_err();
-        assert!(format!("{e}").contains("parámetros de tipo distintos") || format!("{e}").contains("espera 1 parámetro"), "{e}");
+        assert!(format!("{e}").contains("parámetros de type distintos") || format!("{e}").contains("espera 1 parámetro"), "{e}");
     }
 
     #[test]
-    fn redefinir_builtin_es_error() {
+    fn redefine_builtin_es_error() {
         // M48.3: un builtin del núcleo (print/to_string/panic…) no puede redefinirse como función libre.
         for name in ["print", "to_string", "panic"] {
             let src = format!("fn {name}(x: int) -> int {{ x }}\nfn main() -> int {{ 0 }}");
             let e = check_src(&src).unwrap_err();
             assert!(format!("{e}").contains(&format!("'{name}' es un builtin del lenguaje")),
-                "redefinir {name}: {e}");
+                "redefine {name}: {e}");
         }
         // M48.4e: los builtins de contenedor RETIRADOS (len/push/… → ahora métodos de trait) dejaron el
         // namespace libre → una función libre con ese nombre YA es legal (el footgun no dispara).
         for name in ["len", "push", "insert", "keys", "reverse", "contains", "split", "chars"] {
             let src = format!("fn {name}(x: int) -> int {{ x }}\nfn main() -> int {{ {name}(1) }}");
-            assert!(check_src(&src).is_ok(), "'{name}' como función libre ahora debe compilar");
+            assert!(check_src(&src).is_ok(), "'{name}' como función libre ahora must compilar");
         }
         // Una función del PRELUDE (map/filter/fold/sort) SÍ puede redefinirse (override).
         assert!(check_src("fn map(x: int) -> int { x + 1 }\nfn main() -> int { map(5) }").is_ok());
         assert!(check_src("fn sort(x: int) -> int { x }\nfn main() -> int { sort(3) }").is_ok());
         // Y un nombre normal, obviamente, es válido.
-        assert!(check_src("fn doblar(x: int) -> int { x * 2 }\nfn main() -> int { doblar(2) }").is_ok());
+        assert!(check_src("fn fold(x: int) -> int { x * 2 }\nfn main() -> int { fold(2) }").is_ok());
     }
 
     #[test]
@@ -6262,12 +6262,12 @@ mod tests {
         assert!(check_src("fn main() { let m: Map<int, string> = [1: \"a\"]; }").is_ok());
         // `[:]` sin anotar → error de "anota el tipo".
         let e = check_src("fn main() -> int { let m = [:]; 0 }").unwrap_err();
-        assert!(format!("{e}").contains("no se puede inferir el tipo de [:]"), "{e}");
+        assert!(format!("{e}").contains("no se can inferir el type de [:]"), "{e}");
         // Claves/valores heterogéneos → error.
         let k = check_src("fn main() -> int { let m = [1: \"a\", \"b\": \"c\"]; 0 }").unwrap_err();
-        assert!(format!("{k}").contains("las claves del Map deben ser del mismo tipo"), "{k}");
+        assert!(format!("{k}").contains("las keys del Map deben ser del same type"), "{k}");
         let v = check_src("fn main() -> int { let m = [1: \"a\", 2: 3]; 0 }").unwrap_err();
-        assert!(format!("{v}").contains("los valores del Map deben ser del mismo tipo"), "{v}");
+        assert!(format!("{v}").contains("los values del Map deben ser del same type"), "{v}");
         // Clave no hashable (float) → error.
         let f = check_src("fn main() -> int { let m = [1.5: \"a\"]; 0 }").unwrap_err();
         assert!(format!("{f}").contains("clave de un Map"), "{f}");
@@ -6276,44 +6276,44 @@ mod tests {
     }
 
     #[test]
-    fn funciones_asociadas_de_tipo() {
+    fn functions_asociadas_de_ty() {
         // M48.1: `Map.new()`/`Channel.new()`/`Channel.bounded(n)` — el tipo lo fija el esperado.
         assert!(check_src("fn main() -> int { let m: Map<string, int> = Map.new(); m.len() }").is_ok());
         assert!(check_src("fn main() { let c: Channel<int> = Channel.new(); }").is_ok());
         assert!(check_src("fn main() { let c: Channel<int> = Channel.bounded(2); }").is_ok());
         // Sin tipo esperado → error de "anota el tipo".
         let e = check_src("fn main() -> int { let m = Map.new(); 0 }").unwrap_err();
-        assert!(format!("{e}").contains("no se puede inferir el tipo de 'Map.new'"), "{e}");
+        assert!(format!("{e}").contains("no se can inferir el type de 'Map.new'"), "{e}");
         // Aridad: `Map.new` no recibe argumentos; `Channel.bounded` exige uno.
         let a = check_src("fn main() { let m: Map<int, int> = Map.new(1); }").unwrap_err();
         assert!(format!("{a}").contains("espera 0 argumento(s)"), "{a}");
         // El argumento de `bounded` debe ser int.
         let b = check_src("fn main() { let c: Channel<int> = Channel.bounded(\"x\"); }").unwrap_err();
-        assert!(format!("{b}").contains("debe ser int"), "{b}");
+        assert!(format!("{b}").contains("must ser int"), "{b}");
         // El tipo esperado debe casar la familia (Map.new no produce un Channel).
         let f = check_src("fn main() { let c: Channel<int> = Map.new(); }").unwrap_err();
         assert!(format!("{f}").contains("produce un Map"), "{f}");
     }
 
     #[test]
-    fn member_completion_campos_metodos_y_builtins() {
+    fn member_completion_fields_methods_y_builtins() {
         // Struct: campos + método de trait + UFCS del usuario; kinds correctos.
-        let src = "struct P { x: int, y: int }\ntrait Ver { fn ver(self) -> int; }\nimpl Ver for P { fn ver(self) -> int { self.x } }\nfn doblar(p: P) -> int { p.x }\nfn main() -> int { let p = P { x: 1, y: 2 }; p.__raycomplete__; 0 }\n";
+        let src = "struct P { x: int, y: int }\ntrait Ver { fn see(self) -> int; }\nimpl Ver for P { fn see(self) -> int { self.x } }\nfn fold(p: P) -> int { p.x }\nfn main() -> int { let p = P { x: 1, y: 2 }; p.__raycomplete__; 0 }\n";
         let m = members(src);
-        for expected in ["x", "y", "ver", "doblar"] {
+        for expected in ["x", "y", "see", "fold"] {
             assert!(m.contains(&expected.to_string()), "falta '{expected}': {m:?}");
         }
         // string: builtins de string, sin funciones de E/S sobre una ruta string.
         let s = members("fn main() -> int { let s = \"h\"; s.__raycomplete__; 0 }");
         assert!(s.contains(&"trim".to_string()) && s.contains(&"split".to_string()), "{s:?}");
-        assert!(!s.contains(&"read_file".to_string()), "sin E/S sobre string: {s:?}");
+        assert!(!s.contains(&"read_file".to_string()), "sin E/S about string: {s:?}");
         // array: builtins + orden superior del prelude.
         let a = members("fn main() -> int { let xs = [1,2,3]; xs.__raycomplete__; 0 }");
         for expected in ["len", "push", "map", "filter", "fold", "sort"] {
             assert!(a.contains(&expected.to_string()), "array falta '{expected}': {a:?}");
         }
         // receptor sin tipo conocido → sin miembros (sin pánico).
-        assert!(members("fn main() -> int { desconocido.__raycomplete__; 0 }").is_empty());
+        assert!(members("fn main() -> int { unknown.__raycomplete__; 0 }").is_empty());
     }
 
     /// Atajo: ¿el mensaje de error contiene esta subcadena?
@@ -6333,7 +6333,7 @@ mod tests {
         // un ICE (pasaba el checker sin bajarse y reventaba ambos motores).
         err_contains(
             "fn main() -> int { var t = (1, 2); t.0 = 9; t.0 }",
-            "una posición de tupla no es asignable",
+            "one posición de tupla no es asignable",
         );
         // La lectura y la desestructuración siguen funcionando.
         check_src("fn main() -> int { let t = (1, 2); let (a, b) = t; a + b + t.0 }")
@@ -6341,7 +6341,7 @@ mod tests {
     }
 
         #[test]
-    fn check_all_acumula_por_funcion() {
+    fn check_all_acumula_por_function() {
         // M33c: un error por cuerpo, todos reportados; el primero idéntico al fail-fast.
         let src = "fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { f() + g() }";
         let toks = crate::lexer::lex(src).expect("lex ok");
@@ -6352,7 +6352,7 @@ mod tests {
         assert!(errs[0].msg.contains("int y bool"), "{}", errs[0].msg);
         assert!(errs[1].msg.contains("string y int"), "{}", errs[1].msg);
         let solo = check(&mut prog).unwrap_err();
-        assert_eq!(errs[0], solo, "el primer error debe ser byte-idéntico (oráculos)");
+        assert_eq!(errs[0], solo, "el primer error must ser byte-idéntico (oráculos)");
     }
 
     #[test]
@@ -6375,11 +6375,11 @@ mod tests {
     }
 
         #[test]
-    fn el_error_de_tipos_subraya_la_expresion_completa() {
+    fn el_error_de_types_underscores_la_expression_complete() {
         // M33a-2: la extensión del error sale de la tabla de spans del parser.
         let e = check_src("fn main() -> int { let x = 1 + true; x }").unwrap_err();
         assert!(e.msg.contains("requiere ambos operandos"), "{}", e.msg);
-        assert_eq!(e.len, "1 + true".chars().count(), "subraya la expresión entera");
+        assert_eq!(e.len, "1 + true".chars().count(), "underscores la expresión entera");
         // Un argumento de tipo equivocado subraya el argumento (pasa por expression()).
         let e = check_src("fn f(a: int) -> int { a }\nfn main() -> int { f(\"dos\") }").unwrap_err();
         assert!(e.msg.contains("se esperaba int"), "{}", e.msg);
@@ -6388,46 +6388,46 @@ mod tests {
 
     // M9.4: bounds en parámetros de tipo de struct/enum (verificados en la construcción).
     const BOUND_PRELUDE: &str = r#"
-trait Show2 { fn ver(self) -> string; }
+trait Show2 { fn see(self) -> string; }
 struct P { n: int }
-impl Show2 for P { fn ver(self) -> string { "P" } }
+impl Show2 for P { fn see(self) -> string { "P" } }
 struct Q { n: int }
 "#;
 
     #[test]
     fn bound_struct_ok_con_impl() {
-        let src = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Caja {{ v: P {{ n: 1 }} }}; c.v.ver(); 0 }}\n", BOUND_PRELUDE);
+        let src = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Caja {{ v: P {{ n: 1 }} }}; c.v.see(); 0 }}\n", BOUND_PRELUDE);
         check_src(&src).expect("P implementa Show2");
     }
 
     #[test]
-    fn bound_struct_falla_sin_impl() {
+    fn bound_struct_fails_sin_impl() {
         let src = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Caja {{ v: Q {{ n: 1 }} }}; 0 }}\n", BOUND_PRELUDE);
-        err_contains(&src, "requiere que 'T' sea 'Show2'");
+        err_contains(&src, "requiere what 'T' sea 'Show2'");
     }
 
     #[test]
-    fn bound_struct_propaga_a_funcion_generica() {
+    fn bound_struct_propagates_a_function_generic() {
         // Construir Caja<U> exige que U lleve el bound: sin él, error; con él, OK.
         let bad = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
-        err_contains(&bad, "requiere que 'T' sea 'Show2'");
+        err_contains(&bad, "requiere what 'T' sea 'Show2'");
         let good = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U: Show2>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
         check_src(&good).expect("con U: Show2 la propagación se satisface");
     }
 
     #[test]
-    fn bound_enum_falla_sin_impl() {
+    fn bound_enum_fails_sin_impl() {
         let src = format!("{}enum Opt<T: Show2> {{ Nada, Algo(T) }}\nfn main() -> int {{ let x = Opt.Algo(Q {{ n: 1 }}); 0 }}\n", BOUND_PRELUDE);
-        err_contains(&src, "requiere que 'T' sea 'Show2'");
+        err_contains(&src, "requiere what 'T' sea 'Show2'");
     }
 
     #[test]
-    fn bound_struct_trait_inexistente_es_error() {
+    fn bound_struct_trait_nonexistent_es_error() {
         err_contains("struct Caja<T: NoExiste> { v: T }\nfn main() -> int { 0 }\n", "trait 'NoExiste' no declarado");
     }
 
     #[test]
-    fn fib_es_valido() {
+    fn fib_es_valid() {
         let src = r#"
 fn fib(n: int) -> int {
     if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
@@ -6445,32 +6445,32 @@ fn main() -> int {
     }
 
     #[test]
-    fn aritmetica_mezclada_falla() {
+    fn arithmetic_mezclada_fails() {
         err_contains("fn main() -> int { 1 + true }", "requiere ambos operandos");
         err_contains("fn main() { let x: float = 1 + 2.0; }", "requiere ambos operandos");
     }
 
     #[test]
-    fn condicion_debe_ser_bool() {
-        err_contains("fn main() { if (1) { } }", "condición del if debe ser bool");
-        err_contains("fn main() { while (1) { } }", "condición del while debe ser bool");
+    fn condicion_must_ser_bool() {
+        err_contains("fn main() { if (1) { } }", "condición del if must ser bool");
+        err_contains("fn main() { while (1) { } }", "condición del while must ser bool");
     }
 
     #[test]
-    fn ramas_del_if_mismo_tipo() {
+    fn ramas_del_if_same_ty() {
         err_contains(
             "fn main() -> int { if (true) { 1 } else { true } }",
-            "ramas del if tienen tipos distintos",
+            "ramas del if tienen types distintos",
         );
     }
 
     #[test]
-    fn if_sin_else_debe_ser_unit() {
-        err_contains("fn main() { if (true) { 5 } }", "sin else tiene tipo unit");
+    fn if_sin_else_must_ser_unit() {
+        err_contains("fn main() { if (true) { 5 } }", "sin else has type unit");
     }
 
     #[test]
-    fn asignar_a_let_falla_pero_a_var_ok() {
+    fn asignar_a_let_fails_pero_a_var_ok() {
         err_contains(
             "fn main() { let x: int = 0; x = 1; }",
             "es inmutable",
@@ -6485,31 +6485,31 @@ fn main() -> int {
     }
 
     #[test]
-    fn tipo_de_declaracion_debe_coincidir() {
+    fn ty_de_declaracion_must_coincidir() {
         err_contains("fn main() { let x: int = true; }", "se inicializa con bool");
     }
 
     #[test]
-    fn retorno_incorrecto() {
+    fn return_val_incorrect() {
         err_contains("fn f() -> int { true } fn main() {}", "produce bool");
-        err_contains("fn g() -> int { return true; } fn main() {}", "se devuelve bool");
+        err_contains("fn g() -> int { return true; } fn main() {}", "se returns bool");
     }
 
     #[test]
-    fn retorno_temprano_sin_valor_final_es_valido() {
+    fn return_val_early_sin_valor_final_es_valid() {
         // Gracias al análisis de divergencia, esto es válido aunque no tenga
         // expresión final: todos los caminos retornan.
         let src = r#"
-fn signo(x: int) -> int {
+fn sign(x: int) -> int {
     if (x < 0) { return -1; } else { return 1; }
 }
-fn main() -> int { signo(3) }
+fn main() -> int { sign(3) }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn llamadas_validan_aridad_y_tipos() {
+    fn calls_validan_arity_y_types() {
         err_contains(
             "fn add(a: int, b: int) -> int { a + b } fn main() -> int { add(1) }",
             "espera 2 argumento",
@@ -6523,20 +6523,20 @@ fn main() -> int { signo(3) }
 
     #[test]
     fn print_builtin() {
-        assert!(check_src("fn main() { print(42); print(\"hola\"); print(true); }").is_ok());
+        assert!(check_src("fn main() { print(42); print(\"hello\"); print(true); }").is_ok());
         err_contains("fn main() { print(); }", "espera 1 argumento");
         err_contains("fn main() { print(1, 2); }", "espera 1 argumento");
     }
 
     #[test]
     fn main_obligatoria_y_bien_formada() {
-        err_contains("fn otra() -> int { 0 }", "falta la función de entrada 'main'");
-        err_contains("fn main(x: int) -> int { x }", "no debe recibir parámetros");
-        err_contains("fn main() -> bool { true }", "debe devolver int o unit");
+        err_contains("fn other() -> int { 0 }", "falta la función de entry 'main'");
+        err_contains("fn main(x: int) -> int { x }", "no must recibir parámetros");
+        err_contains("fn main() -> bool { true }", "must devolver int o unit");
     }
 
     #[test]
-    fn shadowing_en_bloque_interno() {
+    fn shadowing_en_block_internal() {
         // Una variable interior puede tapar a una exterior con otro tipo.
         let src = r#"
 fn main() -> int {
@@ -6549,14 +6549,14 @@ fn main() -> int {
     }
 
     #[test]
-    fn funcion_no_declarada_dos_veces() {
+    fn function_no_declarada_dos_veces() {
         err_contains("fn f() {} fn f() {} fn main() {}", "declarada dos veces");
     }
 
     // ----- M3.1: arreglos -----
 
     #[test]
-    fn arreglos_validos() {
+    fn arrays_valid_vals() {
         assert!(check_src("fn main() -> int { let a: [int] = [1, 2, 3]; a[0] }").is_ok());
         assert!(check_src("fn main() -> int { let a: [int] = []; a.push(1); a.len() }").is_ok());
         assert!(check_src("fn main() { var a: [int] = [1]; a[0] = 9; }").is_ok());
@@ -6565,20 +6565,20 @@ fn main() -> int {
     }
 
     #[test]
-    fn arreglos_errores_de_tipo() {
+    fn arrays_errors_de_ty() {
         err_contains("fn main() -> int { let a: [int] = [1, true]; a[0] }", "deben ser int");
-        err_contains("fn main() -> int { let a: [int] = [1]; a[true] }", "índice debe ser int");
-        err_contains("fn main() -> int { let x: int = 5; x[0] }", "no es un arreglo");
-        err_contains("fn main() { let x: int = []; }", "no se puede inferir");
+        err_contains("fn main() -> int { let a: [int] = [1]; a[true] }", "índice must ser int");
+        err_contains("fn main() -> int { let x: int = 5; x[0] }", "no es un array");
+        err_contains("fn main() { let x: int = []; }", "no se can inferir");
         err_contains("fn main() -> int { let a: [int] = [1]; a[0] = true; a[0] }", "se le asigna bool");
         err_contains("fn main() -> int { 5.len() }", "no existe campo ni función 'len' aplicable a int");
-        err_contains("fn main() { let a: [int] = [1]; a.push(true); }", "'T' no puede ser int y bool a la vez");
+        err_contains("fn main() { let a: [int] = [1]; a.push(true); }", "'T' no can ser int y bool a la vez");
     }
 
     // ----- M3.2: structs -----
 
     #[test]
-    fn structs_validos() {
+    fn structs_valid_vals() {
         assert!(check_src("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1, y: 2 }; p.x + p.y }").is_ok());
         assert!(check_src("struct P { x: int } fn main() { var p: P = P { x: 1 }; p.x = 9; }").is_ok());
         // Campos en otro orden: válido.
@@ -6591,12 +6591,12 @@ fn main() -> int {
     }
 
     #[test]
-    fn structs_errores() {
+    fn structs_errors() {
         err_contains("fn main() { let p: Foo = Foo { x: 1 }; }", "no declarado");
         err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: true }; p.x }", "se esperaba int");
         err_contains("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1 }; p.x }", "falta el campo");
-        err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: 1, z: 2 }; p.x }", "no tiene un campo");
-        err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: 1 }; p.y }", "no tiene un campo");
+        err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: 1, z: 2 }; p.x }", "no has un campo");
+        err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: 1 }; p.y }", "no has un campo");
         err_contains("struct P { x: int } fn main() -> int { let n: int = 5; n.x }", "no es un struct");
         err_contains("struct P {} struct P {} fn main() {}", "declarado dos veces");
     }
@@ -6604,13 +6604,13 @@ fn main() -> int {
     // ----- M4.1: funciones de primera clase -----
 
     #[test]
-    fn funciones_primera_clase_validas() {
+    fn functions_first_class_validas() {
         // Anónima en variable, con su tipo función.
         assert!(check_src("fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x + 1 }; f(2) }").is_ok());
         // De orden superior: recibe y aplica una función.
         assert!(check_src(
-            "fn aplicar(f: fn(int) -> int, x: int) -> int { f(x) }
-             fn main() -> int { aplicar(fn(n: int) -> int { n * n }, 3) }"
+            "fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+             fn main() -> int { apply(fn(n: int) -> int { n * n }, 3) }"
         ).is_ok());
         // Un nombre de función es un valor de tipo función.
         assert!(check_src(
@@ -6627,7 +6627,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn funciones_primera_clase_errores() {
+    fn functions_first_class_errors() {
         // Tipo de la anónima no coincide con la anotación.
         err_contains(
             "fn main() { let f: fn(int) -> int = fn(x: bool) -> int { 0 }; }",
@@ -6644,7 +6644,7 @@ fn main() -> int {
             "se esperaba int, se pasó bool",
         );
         // Llamar a algo que no es función.
-        err_contains("fn main() -> int { let x: int = 3; x(1) }", "no es una función");
+        err_contains("fn main() -> int { let x: int = 3; x(1) }", "no es one función");
         // El cuerpo de la anónima no respeta su tipo de retorno.
         err_contains(
             "fn main() { let f: fn() -> int = fn() -> int { true }; }",
@@ -6662,18 +6662,18 @@ fn main() -> int {
         ).is_ok());
         // Captura de un `var` externo y su mutación.
         assert!(check_src(
-            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
-             fn main() -> int { let c: fn() -> int = contador(); c() }"
+            "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+             fn main() -> int { let c: fn() -> int = counter(); c() }"
         ).is_ok());
         // Captura transitiva (dos niveles).
         assert!(check_src(
-            "fn sumador(x: int) -> fn(int) -> int { fn(y: int) -> int { x + y } }
-             fn main() -> int { let add5: fn(int) -> int = sumador(5); add5(10) }"
+            "fn adder(x: int) -> fn(int) -> int { fn(y: int) -> int { x + y } }
+             fn main() -> int { let add5: fn(int) -> int = adder(5); add5(10) }"
         ).is_ok());
     }
 
     #[test]
-    fn closure_no_puede_reasignar_un_let_capturado() {
+    fn closure_no_can_reasignar_un_let_capturado() {
         // Capturar no reata: asignar a un `let` externo sigue siendo error.
         err_contains(
             "fn main() { let b: int = 1; let f: fn() = fn() { b = 2; }; f() }",
@@ -6682,17 +6682,17 @@ fn main() -> int {
     }
 
     #[test]
-    fn funciones_no_son_comparables() {
+    fn functions_no_son_comparables() {
         err_contains(
             "fn inc(n: int) -> int { n } fn main() -> int { if (inc == inc) { 1 } else { 0 } }",
-            "mismo tipo comparable",
+            "same type comparable",
         );
     }
 
     // ----- M5.1: enums (tipos suma) y construcción -----
 
     #[test]
-    fn enum_construccion_valida() {
+    fn enum_construccion_validates() {
         let src = r#"
 enum Figura { Circulo(float), Rect(float, float), Punto }
 fn area(f: Figura) -> Figura { f }
@@ -6707,7 +6707,7 @@ fn main() {
     }
 
     #[test]
-    fn enum_recursivo_es_valido() {
+    fn enum_recursive_es_valid() {
         // Un enum puede portar su propio tipo: el norte de M5 (listas, árboles).
         let src = r#"
 enum Lista { Cons(int, Lista), Nil }
@@ -6717,17 +6717,17 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
     }
 
     #[test]
-    fn enum_variante_inexistente() {
-        err_contains("enum E { A, B } fn main() { let x: E = E.C; print(x); }", "no tiene la variante 'C'");
+    fn enum_variant_nonexistent() {
+        err_contains("enum E { A, B } fn main() { let x: E = E.C; print(x); }", "no has la variant 'C'");
     }
 
     #[test]
-    fn enum_aridad_incorrecta() {
+    fn enum_arity_incorrect() {
         err_contains("enum E { A(int) } fn main() { let x: E = E.A(1, 2); print(x); }", "espera 1 argumento");
     }
 
     #[test]
-    fn enum_tipo_de_payload_incorrecto() {
+    fn enum_ty_de_payload_incorrect() {
         err_contains("enum E { A(int) } fn main() { let x: E = E.A(true); print(x); }", "se esperaba int, se pasó bool");
     }
 
@@ -6735,18 +6735,18 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
     fn enum_no_es_comparable() {
         err_contains(
             "enum E { A, B } fn main() -> int { let x: E = E.A; if (x == E.B) { 1 } else { 0 } }",
-            "mismo tipo comparable",
+            "same type comparable",
         );
     }
 
     #[test]
-    fn enum_y_struct_no_comparten_nombre() {
-        err_contains("enum E { A } struct E { x: int } fn main() {}", "no puede ser también un struct");
+    fn enum_y_struct_no_comparten_name() {
+        err_contains("enum E { A } struct E { x: int } fn main() {}", "no can ser también un struct");
     }
 
     #[test]
-    fn enum_variante_repetida() {
-        err_contains("enum E { A, A } fn main() {}", "variante 'A' repetida");
+    fn enum_variant_repetida() {
+        err_contains("enum E { A, A } fn main() {}", "variant 'A' repetida");
     }
 
     #[test]
@@ -6755,7 +6755,7 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
     }
 
     #[test]
-    fn enum_como_tipo_desconocido() {
+    fn enum_como_ty_unknown() {
         // Anotar con un nombre que no es ni struct ni enum.
         err_contains("fn main() { let x: NoExiste = 1; print(x); }", "no declarado");
     }
@@ -6763,44 +6763,44 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
     // ----- M5.2: match y exhaustividad -----
 
     #[test]
-    fn match_exhaustivo_es_valido() {
+    fn match_exhaustive_es_valid() {
         let src = r#"
 enum Lista { Cons(int, Lista), Nil }
-fn suma(xs: Lista) -> int {
+fn sum(xs: Lista) -> int {
     match (xs) {
-        Lista.Cons(h, t) => h + suma(t),
+        Lista.Cons(h, t) => h + sum(t),
         Lista.Nil => 0,
     }
 }
-fn main() -> int { suma(Lista.Cons(1, Lista.Nil)) }
+fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn match_con_comodin_es_exhaustivo() {
+    fn match_con_comodin_es_exhaustive() {
         let src = "enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, _ => 0 } } fn main() {}";
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn match_no_exhaustivo() {
+    fn match_no_exhaustive() {
         err_contains(
             "enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, E.B => 2 } } fn main() {}",
-            "no exhaustivo",
+            "no exhaustive",
         );
     }
 
     #[test]
-    fn match_brazos_de_tipos_distintos() {
+    fn match_brazos_de_types_distintos() {
         err_contains(
             "enum E { A, B } fn f(e: E) -> int { match (e) { E.A => 1, E.B => true } } fn main() {}",
-            "tipos distintos",
+            "types distintos",
         );
     }
 
     #[test]
-    fn match_variante_repetida() {
+    fn match_variant_repetida() {
         err_contains(
             "enum E { A, B } fn f(e: E) -> int { match (e) { E.A => 1, E.A => 2, E.B => 3 } } fn main() {}",
             "ya está cubierta",
@@ -6808,23 +6808,23 @@ fn main() -> int { suma(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_brazo_inalcanzable_tras_catchall() {
+    fn match_branch_inalcanzable_after_catchall() {
         err_contains(
-            "enum E { A, B } fn f(e: E) -> int { match (e) { otra => 0, E.A => 1 } } fn main() {}",
+            "enum E { A, B } fn f(e: E) -> int { match (e) { other => 0, E.A => 1 } } fn main() {}",
             "inalcanzable",
         );
     }
 
     #[test]
-    fn match_aridad_de_binding_incorrecta() {
+    fn match_arity_de_binding_incorrect() {
         err_contains(
             "enum E { A(int) } fn f(e: E) -> int { match (e) { E.A => 1 } } fn main() {}",
-            "liga 0 valor(es), pero la variante tiene 1",
+            "liga 0 valor(es), pero la variant has 1",
         );
     }
 
     #[test]
-    fn match_sobre_no_enum() {
+    fn match_about_no_enum() {
         err_contains(
             "fn f(n: int) -> int { match (n) { _ => 0 } } fn main() {}",
             "match requiere un enum",
@@ -6832,7 +6832,7 @@ fn main() -> int { suma(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_patron_de_otro_enum() {
+    fn match_patron_de_other_enum() {
         err_contains(
             "enum E { A } enum F { B } fn f(e: E) -> int { match (e) { F.B => 1, _ => 0 } } fn main() {}",
             "es del enum 'F'",
@@ -6840,7 +6840,7 @@ fn main() -> int { suma(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_liga_payload_para_el_cuerpo() {
+    fn match_liga_payload_para_el_body() {
         // El binding del payload debe estar disponible (y bien tipado) en el cuerpo.
         let src = "enum Caja { Con(int), Vacia } fn val(c: Caja) -> int { match (c) { Caja.Con(n) => n + 1, Caja.Vacia => 0 } } fn main() {}";
         assert!(check_src(src).is_ok());
@@ -6849,12 +6849,12 @@ fn main() -> int { suma(Lista.Cons(1, Lista.Nil)) }
     // ----- M6.1: funciones genéricas e inferencia -----
 
     #[test]
-    fn generica_identidad_y_uso() {
+    fn generic_identity_y_usage() {
         let src = r#"
-fn identidad<T>(x: T) -> T { x }
+fn identity<T>(x: T) -> T { x }
 fn main() -> int {
-    let a: int = identidad(5);
-    let b: bool = identidad(true);
+    let a: int = identity(5);
+    let b: bool = identity(true);
     if (b) { a } else { 0 }
 }
 "#;
@@ -6862,34 +6862,34 @@ fn main() -> int {
     }
 
     #[test]
-    fn generica_infiere_de_varios_argumentos() {
+    fn generic_infers_de_various_argumentos() {
         // [T] y fn(T)->U determinan T y U a la vez.
         let src = r#"
-fn aplicar<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
-fn doble(n: int) -> int { n * 2 }
-fn main() -> int { aplicar(doble, 21) }
+fn apply<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
+fn double(n: int) -> int { n * 2 }
+fn main() -> int { apply(double, 21) }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn generica_T_inconsistente() {
+    fn generic_t_inconsistente() {
         err_contains(
             "fn par<T>(a: T, b: T) -> T { a } fn main() -> int { par(1, true) }",
-            "no puede ser int y bool",
+            "no can ser int y bool",
         );
     }
 
     #[test]
-    fn generica_T_no_inferible() {
+    fn generic_t_no_inferible() {
         err_contains(
-            "fn vacio<T>() -> int { 0 } fn main() -> int { vacio() }",
-            "no se pudo inferir el parámetro de tipo 'T'",
+            "fn empty<T>() -> int { 0 } fn main() -> int { empty() }",
+            "no se pudo inferir el parámetro de type 'T'",
         );
     }
 
     #[test]
-    fn generica_como_valor_es_error() {
+    fn generic_como_valor_es_error() {
         err_contains(
             "fn id<T>(x: T) -> T { x } fn main() -> int { let f: fn(int) -> int = id; f(3) }",
             "función genérica 'id' como valor",
@@ -6897,27 +6897,27 @@ fn main() -> int { aplicar(doble, 21) }
     }
 
     #[test]
-    fn generica_no_se_puede_comparar_un_parametro_de_tipo() {
+    fn generic_no_se_can_compare_un_parameter_de_ty() {
         err_contains(
             "fn ig<T>(a: T, b: T) -> bool { a == b } fn main() {}",
-            "mismo tipo comparable",
+            "same type comparable",
         );
     }
 
     #[test]
-    fn parametro_de_tipo_repetido() {
-        err_contains("fn f<T, T>(x: T) -> T { x } fn main() {}", "parámetro de tipo 'T' repetido");
+    fn parameter_de_ty_repetido() {
+        err_contains("fn f<T, T>(x: T) -> T { x } fn main() {}", "parámetro de type 'T' repetido");
     }
 
     #[test]
-    fn tipo_desconocido_no_es_parametro() {
+    fn ty_unknown_no_es_parameter() {
         err_contains("fn f(x: Desconocido) -> int { 0 } fn main() {}", "'Desconocido' no declarado");
     }
 
     // ----- M6.2: tipos genéricos del usuario y chequeo bidireccional -----
 
     #[test]
-    fn enum_generico_construccion_y_match() {
+    fn enum_generic_construccion_y_match() {
         let src = r#"
 enum Caja<T> { Llena(T), Vacia }
 fn val(c: Caja<int>, def: int) -> int {
@@ -6933,7 +6933,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn struct_generico_campo_sustituido() {
+    fn struct_generic_campo_sustituido() {
         let src = r#"
 struct Par<A, B> { primero: A, segundo: B }
 fn main() -> int {
@@ -6945,23 +6945,23 @@ fn main() -> int {
     }
 
     #[test]
-    fn generico_mismatch_de_argumento_de_tipo() {
+    fn generic_mismatch_de_argumento_de_ty() {
         err_contains(
             "enum Caja<T> { Llena(T), Vacia } fn main() { let b: Caja<bool> = Caja.Llena(7); print(b); }",
-            "no puede ser bool y int",
+            "no can ser bool y int",
         );
     }
 
     #[test]
-    fn generico_aridad_de_args_de_tipo() {
+    fn generic_arity_de_args_de_ty() {
         err_contains(
             "enum Caja<T> { Llena(T), Vacia } fn main() { let b: Caja<int, bool> = Caja.Vacia; print(b); }",
-            "espera 1 argumento(s) de tipo",
+            "espera 1 argumento(s) de type",
         );
     }
 
     #[test]
-    fn generico_vacio_no_inferible_sin_contexto() {
+    fn generic_empty_no_inferible_sin_context() {
         // Sin tipo esperado ni argumentos, T queda sin determinar.
         err_contains(
             "enum Caja<T> { Llena(T), Vacia } fn main() { print(Caja.Vacia); }",
@@ -6970,12 +6970,12 @@ fn main() -> int {
     }
 
     #[test]
-    fn parametro_de_tipo_de_enum_repetido() {
-        err_contains("enum E<T, T> { A(T) } fn main() {}", "parámetro de tipo 'T' repetido");
+    fn parameter_de_ty_de_enum_repetido() {
+        err_contains("enum E<T, T> { A(T) } fn main() {}", "parámetro de type 'T' repetido");
     }
 
     #[test]
-    fn arreglo_vacio_adopta_el_tipo_esperado() {
+    fn array_empty_adopta_el_ty_expected() {
         // El chequeo bidireccional arregla la aspereza histórica del [] vacío.
         assert!(check_src("fn main() -> int { let xs: [int] = []; xs.len() }").is_ok());
     }
@@ -6994,7 +6994,7 @@ fn main() {}
     }
 
     #[test]
-    fn try_result_y_option_validos() {
+    fn try_result_y_option_valid_vals() {
         let src = r#"
 fn d(a: int, b: int) -> Result<int, string> {
     if (b == 0) { Result.Err("cero") } else { Result.Ok(a / b) }
@@ -7022,15 +7022,15 @@ fn main() {}
     }
 
     #[test]
-    fn try_funcion_debe_devolver_compatible() {
+    fn try_function_must_devolver_compatible() {
         err_contains(
             "fn d() -> Result<int, string> { Result.Ok(1) } fn g() -> int { let x: int = d()?; x } fn main() {}",
-            "requiere que la función devuelva Result",
+            "requiere what la función devuelva Result",
         );
     }
 
     #[test]
-    fn try_result_con_E_distinto() {
+    fn try_result_con_e_distinto() {
         err_contains(
             "fn d() -> Result<int, string> { Result.Ok(1) } fn f() -> Result<int, bool> { let x: int = d()?; Result.Ok(x) } fn main() {}",
             "Result<_, string>",
@@ -7040,36 +7040,36 @@ fn main() {}
     // ----- UFCS (M7.1) -----
 
     #[test]
-    fn ufcs_funcion_libre_como_metodo() {
+    fn ufcs_function_libre_como_method() {
         // recv.f(args) ≡ f(recv, args). Builtin (len) y función del usuario (suma).
         let src = r#"
-fn suma(a: int, b: int) -> int { a + b }
+fn sum(a: int, b: int) -> int { a + b }
 fn main() -> int {
     let xs: [int] = [1, 2, 3];
     let n: int = xs.len();      // len(xs)
     let v: int = 10;
-    v.suma(n)                    // suma(10, 3)
+    v.sum(n)                    // suma(10, 3)
 }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn ufcs_no_es_campo_usa_funcion() {
+    fn ufcs_no_es_campo_uses_function() {
         // 'doble' no es campo de Punto: se resuelve como UFCS doble(p).
         let src = r#"
 struct Punto { x: int, y: int }
-fn doble(p: Punto) -> int { (p.x + p.y) * 2 }
+fn double(p: Punto) -> int { (p.x + p.y) * 2 }
 fn main() -> int {
     let p: Punto = Punto { x: 3, y: 4 };
-    p.doble()
+    p.double()
 }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn ufcs_campo_funcion_gana_sobre_libre() {
+    fn ufcs_campo_function_gana_about_libre() {
         // 'op' ES un campo (de tipo función): c.op(x) llama al campo, no es UFCS, aunque
         // exista una función libre 'op' homónima con otra firma.
         let src = r#"
@@ -7084,20 +7084,20 @@ fn main() -> int {
     }
 
     #[test]
-    fn ufcs_encadenado() {
+    fn ufcs_chained() {
         let src = r#"
-fn doble(x: int) -> int { x * 2 }
+fn double(x: int) -> int { x * 2 }
 fn inc(x: int) -> int { x + 1 }
 fn main() -> int {
     let v: int = 5;
-    v.doble().inc().doble()      // doble(inc(doble(5)))
+    v.double().inc().double()      // doble(inc(doble(5)))
 }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn ufcs_metodo_inexistente() {
+    fn ufcs_method_nonexistent() {
         err_contains(
             "fn main() -> int { let v: int = 5; v.frobnicate() }",
             "no existe campo ni función 'frobnicate' aplicable a int",
@@ -7105,16 +7105,16 @@ fn main() -> int {
     }
 
     #[test]
-    fn ufcs_receptor_de_tipo_incorrecto() {
+    fn ufcs_receptor_de_ty_incorrect() {
         // El receptor se inserta como primer argumento: si su tipo no encaja, error.
         err_contains(
-            "fn doble(x: int) -> int { x * 2 } fn main() -> int { let b: bool = true; b.doble() }",
+            "fn double(x: int) -> int { x * 2 } fn main() -> int { let b: bool = true; b.double() }",
             "se esperaba int, se pasó bool",
         );
     }
 
     #[test]
-    fn ufcs_generico_infiere_desde_receptor() {
+    fn ufcs_generic_infers_from_receptor() {
         // El receptor cuenta para la inferencia de genéricos (M6) como cualquier arg.
         let src = r#"
 fn primero<T>(xs: [T]) -> T { xs[0] }
@@ -7132,43 +7132,43 @@ fn main() -> int {
     fn prelude_map_filter_fold_tipan() {
         // Disponibles sin declararlas; se infieren los genéricos en cada uso.
         let src = r#"
-fn doble(x: int) -> int { x * 2 }
+fn double(x: int) -> int { x * 2 }
 fn par(x: int) -> bool { x % 2 == 0 }
-fn suma(a: int, b: int) -> int { a + b }
+fn sum(a: int, b: int) -> int { a + b }
 fn main() -> int {
     let xs: [int] = [1, 2, 3, 4];
-    let ys: [int] = xs.map(doble).filter(par);
-    ys.fold(0, suma)
+    let ys: [int] = xs.map(double).filter(par);
+    ys.fold(0, sum)
 }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn prelude_fold_a_tipo_distinto() {
+    fn prelude_fold_a_ty_distinto() {
         // fold<T, A>: el acumulador A puede diferir del elemento T (aquí bool).
         let src = r#"
 fn main() -> int {
     let xs: [int] = [2, 4, 6];
-    let todos: bool = xs.fold(true, fn(acc: bool, x: int) -> bool { acc && (x % 2 == 0) });
-    if (todos) { 1 } else { 0 }
+    let all: bool = xs.fold(true, fn(acc: bool, x: int) -> bool { acc && (x % 2 == 0) });
+    if (all) { 1 } else { 0 }
 }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn prelude_map_exige_funcion_compatible() {
+    fn prelude_map_exige_function_compatible() {
         // map<T,U>(xs:[T], f:fn(T)->U): una f con dominio incompatible hace que el
         // parámetro de tipo T se exija int (por xs) y bool (por f) a la vez: error.
         err_contains(
             "fn f(b: bool) -> int { 1 } fn main() -> int { let xs: [int] = [1]; let ys: [int] = xs.map(f); ys[0] }",
-            "no puede ser int y bool",
+            "no can ser int y bool",
         );
     }
 
     #[test]
-    fn prelude_usuario_puede_redefinir() {
+    fn prelude_user_can_redefine() {
         // Si el usuario define 'map', el del prelude se omite (override).
         let src = r#"
 fn map(x: int) -> int { x + 1 }
@@ -7180,7 +7180,7 @@ fn main() -> int { map(41) }
     // ----- M8.1: inferencia local (let/var sin anotación) -----
 
     #[test]
-    fn infiere_primitivos_y_compuestos() {
+    fn infers_primitivos_y_compuestos() {
         let src = r#"
 struct Punto { x: int, y: int }
 enum Caja<T> { Llena(T), Vacia }
@@ -7188,29 +7188,29 @@ fn main() -> int {
     let x = 3;                      // int
     let f = 2.5;                    // float
     let b = x > 1;                  // bool
-    let s = "hola";                 // string
+    let s = "hello";                 // string
     let xs = [10, 20, 30];          // [int]
     let p = Punto { x: 7, y: 6 };   // Punto
     let c = Caja.Llena(5);          // Caja<int> (genéricos M6)
     let cv = p.x + p.y;             // int, del campo inferido
-    let dentro = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };  // int
-    x + xs[0] + cv + dentro
+    let inside = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };  // int
+    x + xs[0] + cv + inside
 }
 "#;
         assert!(check_src(src).is_ok());
     }
 
     #[test]
-    fn variable_inferida_conserva_su_tipo() {
+    fn variable_inferred_conserva_su_ty() {
         // Una inferida como int no puede luego usarse como bool.
         err_contains(
             "fn main() -> int { let x = 3; if (x) { 0 } else { 1 } }",
-            "condición del if debe ser bool",
+            "condición del if must ser bool",
         );
     }
 
     #[test]
-    fn var_inferida_es_mutable_y_tipada() {
+    fn var_inferred_es_mutable_y_tipada() {
         // 'var t = 0' infiere int y es mutable; asignarle bool falla.
         assert!(check_src("fn main() -> int { var t = 0; t = t + 1; t }").is_ok());
         err_contains(
@@ -7220,7 +7220,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn let_inferida_sigue_siendo_inmutable() {
+    fn let_inferred_follows_siendo_inmutable() {
         // La inferencia no cambia la mutabilidad: un 'let' inferido no se puede reasignar.
         err_contains(
             "fn main() -> int { let x = 3; x = 4; x }",
@@ -7229,16 +7229,16 @@ fn main() -> int {
     }
 
     #[test]
-    fn inferencia_no_aplica_a_lo_indeterminado() {
+    fn inferencia_no_applies_a_lo_indeterminado() {
         // Sin anotación, '[]' no se puede inferir: pide la anotación.
         err_contains(
             "fn main() -> int { let xs = []; xs.len() }",
-            "no se puede inferir el tipo de []",
+            "no se can inferir el type de []",
         );
     }
 
     #[test]
-    fn anotacion_sigue_validandose() {
+    fn annotation_follows_validandose() {
         // Con anotación, un inicializador incompatible sigue siendo error.
         err_contains(
             "fn main() -> int { let x: int = true; x }",
@@ -7249,7 +7249,7 @@ fn main() -> int {
     // ----- M9.1: traits -----
 
     #[test]
-    fn trait_e_impl_validos() {
+    fn trait_e_impl_valid_vals() {
         check_src(r#"
             trait Mostrable { fn show(self) -> string; }
             struct Punto { x: int, y: int }
@@ -7270,20 +7270,20 @@ fn main() -> int {
     }
 
     #[test]
-    fn self_en_retorno_y_metodo_interno() {
+    fn self_en_return_val_y_method_internal() {
         check_src(r#"
-            trait P { fn sumar(self, o: Punto) -> Punto; fn doble(self) -> Self; }
+            trait P { fn add(self, o: Punto) -> Punto; fn double(self) -> Self; }
             struct Punto { x: int, y: int }
             impl P for Punto {
-                fn sumar(self, o: Punto) -> Punto { Punto { x: self.x + o.x, y: self.y + o.y } }
-                fn doble(self) -> Self { self.sumar(self) }
+                fn add(self, o: Punto) -> Punto { Punto { x: self.x + o.x, y: self.y + o.y } }
+                fn double(self) -> Self { self.add(self) }
             }
-            fn main() -> int { let p = Punto { x: 1, y: 2 }; let q = p.doble(); q.x }
-        "#).expect("Self en retorno y self.metodo() interno");
+            fn main() -> int { let p = Punto { x: 1, y: 2 }; let q = p.double(); q.x }
+        "#).expect("Self en return_val y self.method() internal");
     }
 
     #[test]
-    fn campo_gana_sobre_metodo_de_trait() {
+    fn campo_gana_about_method_de_trait() {
         // Un campo función del struct tiene prioridad sobre un método de trait homónimo.
         check_src(r#"
             trait T { fn f(self) -> int; }
@@ -7295,7 +7295,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_no_cubre_todos_los_metodos() {
+    fn impl_no_cubre_all_los_methods() {
         err_contains(
             r#"trait T { fn a(self) -> int; fn b(self) -> int; }
                struct S { x: int }
@@ -7306,18 +7306,18 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_con_firma_distinta() {
+    fn impl_con_signature_distinta() {
         err_contains(
             r#"trait T { fn a(self) -> int; }
                struct S { x: int }
                impl T for S { fn a(self) -> bool { true } }
                fn main() -> int { 0 }"#,
-            "devuelve bool, pero el trait pide int",
+            "returns bool, pero el trait asks int",
         );
     }
 
     #[test]
-    fn metodo_ambiguo_entre_dos_traits() {
+    fn method_ambiguo_between_dos_traits() {
         err_contains(
             r#"trait A { fn f(self) -> int; }
                trait B { fn f(self) -> int; }
@@ -7330,7 +7330,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_de_trait_inexistente() {
+    fn impl_de_trait_nonexistent() {
         err_contains(
             r#"struct S { x: int }
                impl NoExiste for S { fn f(self) -> int { 1 } }
@@ -7340,7 +7340,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_concreto_sobre_tipo_generico_es_error() {
+    fn impl_concreto_about_ty_generic_es_error() {
         // `impl T for Caja` sin declarar los parámetros de tipo: M9.2b pide `impl<A> T for
         // Caja<A>`. El error guía hacia esa forma.
         err_contains(
@@ -7353,7 +7353,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn indice_semantico_hover_de_variable() {
+    fn index_semantico_hover_de_variable() {
         // M10.2b: el índice registra el tipo de un uso de identificador.
         let src = "fn main() -> int {\n  let x = 5;\n  x\n}";
         let tokens = crate::lexer::lex(src).expect("lex ok");
@@ -7368,7 +7368,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn indice_semantico_hover_de_tipo() {
+    fn index_semantico_hover_de_ty() {
         // M10.2f: el índice registra el uso de un nombre de tipo en un literal de struct y la
         // construcción de un enum, con su posición de declaración (ir-a-definición).
         let src = "struct Punto { x: int }\nenum Color { Rojo }\nfn main() -> int {\n  let p = Punto { x: 1 };\n  let c = Color.Rojo;\n  p.x\n}";
@@ -7386,11 +7386,11 @@ fn main() -> int {
         assert_eq!(he.line, 5);
         // Hover de la **variante** `Rojo` (tras el `.`): su firma. `Color.Rojo` no tiene payload.
         let hv = idx.hovers.iter().find(|h| h.line == 5 && h.text == "Color.Rojo").expect("hover de Rojo");
-        assert!(hv.col > he.col, "la variante va tras el enum: {} vs {}", hv.col, he.col);
+        assert!(hv.col > he.col, "la variant va after el enum: {} vs {}", hv.col, he.col);
     }
 
     #[test]
-    fn indice_semantico_hover_en_interpolacion() {
+    fn index_semantico_hover_en_interpolation() {
         // El `to_string(e)` sintético de `${e}` comparte posición con `e`; su hover NO debe taparlo.
         // Hover sobre `area` dentro de `${area(3.0)}` → la función, nunca `to_string`.
         let src = "fn area(r: float) -> float { r * r }\nfn main() {\n  print(\"x: ${area(3.0)}\");\n}";
@@ -7406,23 +7406,23 @@ fn main() -> int {
     }
 
     #[test]
-    fn indice_semantico_hover_en_cadena_ufcs() {
+    fn index_semantico_hover_en_string_ufcs() {
         // En una cadena `v.doble().inc().doble()` todos los eslabones comparten la posición del
         // receptor: las dos `.doble()` colisionaban en `field_name_pos` y la primera perdía su hover.
         // Ahora se registran ambas posiciones.
-        let src = "fn doble(x: int) -> int { x * 2 }\nfn inc(x: int) -> int { x + 1 }\nfn main() -> int {\n  let v: int = 5;\n  v.doble().inc().doble()\n}";
+        let src = "fn double(x: int) -> int { x * 2 }\nfn inc(x: int) -> int { x + 1 }\nfn main() -> int {\n  let v: int = 5;\n  v.double().inc().double()\n}";
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         let idx = semantic_index(&mut prog);
         // Los dos `doble` de la línea 5 tienen hover en posiciones distintas.
         let cols: Vec<usize> = idx.hovers.iter()
-            .filter(|h| h.line == 5 && h.text == "doble: fn(int) -> int").map(|h| h.col).collect();
-        assert!(cols.len() >= 2, "ambas `.doble()` con hover: {cols:?}");
+            .filter(|h| h.line == 5 && h.text == "double: fn(int) -> int").map(|h| h.col).collect();
+        assert!(cols.len() >= 2, "ambas `.double()` con hover: {cols:?}");
         assert!(cols[0] != cols[1], "en columnas distintas: {cols:?}");
     }
 
     #[test]
-    fn indice_semantico_hover_en_match() {
+    fn index_semantico_hover_en_match() {
         // M10.2f: dentro de un `match` el índice registra el escrutinio, el enum y la variante del
         // patrón, y los bindings que liga (tanto en el patrón como en el cuerpo).
         let src = "enum Figura { Circulo(float), Punto }\nfn area(f: Figura) -> float {\n  match (f) {\n    Figura.Circulo(r) => r,\n    Figura.Punto => 0.0,\n  }\n}\nfn main() -> int { 0 }";
@@ -7431,13 +7431,13 @@ fn main() -> int {
         let idx = semantic_index(&mut prog);
         // Enum y variante en el patrón (línea 4).
         assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "enum Figura"), "hover enum en patrón");
-        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "Figura.Circulo(float)"), "hover variante en patrón");
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "Figura.Circulo(float)"), "hover variant en patrón");
         // Binding `r` del patrón → su tipo.
         assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "r: float"), "hover binding en patrón");
     }
 
     #[test]
-    fn impl_generico_valido() {
+    fn impl_generic_valid() {
         // M9.2b-1: `impl<A> T for Caja<A>` con un método que no usa A.
         assert!(check_src(
             r#"trait T { fn f(self) -> int; }
@@ -7448,27 +7448,27 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_generico_objetivo_mal_formado_es_error() {
+    fn impl_generic_objetivo_mal_formado_es_error() {
         // El objetivo de un impl genérico debe ser `Caja<A>` con sus propios parámetros.
         err_contains(
             r#"trait T { fn f(self) -> int; }
                struct Caja<A> { v: A }
                impl<A> T for Caja<int> { fn f(self) -> int { 1 } }
                fn main() -> int { 0 }"#,
-            "debe aplicarse a 'Caja<A>'",
+            "must aplicarse a 'Caja<A>'",
         );
     }
 
     #[test]
-    fn self_fuera_de_impl_es_error() {
+    fn self_outside_de_impl_es_error() {
         err_contains(
             "fn f(x: Self) -> int { 1 } fn main() -> int { 0 }",
-            "'Self' solo es válido dentro de un trait o impl",
+            "'Self' solo es válido inside de un trait o impl",
         );
     }
 
     #[test]
-    fn metodo_inexistente_no_es_campo_ni_funcion() {
+    fn method_nonexistent_no_es_campo_ni_function() {
         err_contains(
             r#"struct S { x: int }
                fn main() -> int { let s = S { x: 1 }; s.noexiste() }"#,
@@ -7485,11 +7485,11 @@ fn main() -> int {
             struct Punto { x: int }
             impl Valor for Punto { fn valor(self) -> int { self.x } }
             impl Valor for int { fn valor(self) -> int { self } }
-            fn doble<T: Valor>(x: T) -> int { x.valor() + x.valor() }
-            fn pasar<T: Valor>(x: T) -> int { doble(x) }
+            fn double<T: Valor>(x: T) -> int { x.valor() + x.valor() }
+            fn pasar<T: Valor>(x: T) -> int { double(x) }
             fn main() -> int {
                 let p = Punto { x: 5 };
-                doble(p) + doble(9) + pasar(p)
+                double(p) + double(9) + pasar(p)
             }
         "#).expect("bound concreto + reenvío");
     }
@@ -7508,7 +7508,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn bound_tipo_no_implementa() {
+    fn bound_ty_no_implementa() {
         err_contains(
             r#"trait Valor { fn valor(self) -> int; }
                struct Punto { x: int }
@@ -7519,7 +7519,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn bound_metodo_fuera_del_trait() {
+    fn bound_method_outside_del_trait() {
         err_contains(
             r#"trait Valor { fn valor(self) -> int; }
                fn usar<T: Valor>(x: T) -> int { x.other() }
@@ -7535,12 +7535,12 @@ fn main() -> int {
                fn usar<T: Valor>(x: T) -> int { x.valor() }
                fn intermediario<U>(y: U) -> int { usar(y) }
                fn main() -> int { 0 }"#,
-            "no está acotado por 'Valor'",
+            "no está bounded por 'Valor'",
         );
     }
 
     #[test]
-    fn bound_a_trait_inexistente() {
+    fn bound_a_trait_nonexistent() {
         err_contains(
             "fn usar<T: NoExiste>(x: T) -> int { 0 } fn main() -> int { 0 }",
             "trait 'NoExiste' no declarado",
@@ -7550,26 +7550,26 @@ fn main() -> int {
     // ----- M9.3a: métodos por defecto -----
 
     #[test]
-    fn metodo_por_defecto_heredado_y_redefinido() {
+    fn method_por_default_heredado_y_redefinido() {
         check_src(r#"
             trait Valor {
                 fn base(self) -> int;
-                fn doble(self) -> int { self.base() + self.base() }
+                fn double(self) -> int { self.base() + self.base() }
             }
             struct A { n: int }
             impl Valor for A { fn base(self) -> int { self.n } }
             struct B { n: int }
-            impl Valor for B { fn base(self) -> int { self.n } fn doble(self) -> int { 0 } }
+            impl Valor for B { fn base(self) -> int { self.n } fn double(self) -> int { 0 } }
             fn main() -> int {
                 let a = A { n: 1 };
                 let b = B { n: 2 };
-                a.doble() + b.doble()
+                a.double() + b.double()
             }
-        "#).expect("defecto heredado por A, redefinido por B");
+        "#).expect("default heredado por A, redefinido por B");
     }
 
     #[test]
-    fn metodo_requerido_sin_defecto_sigue_obligatorio() {
+    fn method_requerido_sin_default_follows_obligatorio() {
         err_contains(
             r#"trait T { fn req(self) -> int; fn opt(self) -> int { 0 } }
                struct S { x: int }
@@ -7580,23 +7580,23 @@ fn main() -> int {
     }
 
     #[test]
-    fn metodo_por_defecto_via_bound() {
+    fn method_por_default_via_bound() {
         check_src(r#"
             trait Saludo {
-                fn nombre(self) -> int;
-                fn doble(self) -> int { self.nombre() + self.nombre() }
+                fn name(self) -> int;
+                fn double(self) -> int { self.name() + self.name() }
             }
             struct P { v: int }
-            impl Saludo for P { fn nombre(self) -> int { self.v } }
-            fn usar<T: Saludo>(x: T) -> int { x.doble() }
+            impl Saludo for P { fn name(self) -> int { self.v } }
+            fn usar<T: Saludo>(x: T) -> int { x.double() }
             fn main() -> int { let p = P { v: 1 }; usar(p) }
-        "#).expect("defecto invocado vía bound");
+        "#).expect("default invocado vía bound");
     }
 
     // ----- M9.3b: trait objects -----
 
     #[test]
-    fn trait_object_coercion_y_despacho() {
+    fn trait_object_coercion_y_dispatch() {
         check_src(r#"
             trait Figura { fn area(self) -> int; }
             struct Cuadrado { lado: int }
@@ -7612,11 +7612,11 @@ fn main() -> int {
                 let fs: [dyn Figura] = [Cuadrado { lado: 2 }, Rect { ancho: 3, alto: 4 }];
                 total(fs)
             }
-        "#).expect("arreglo heterogéneo de trait objects + despacho");
+        "#).expect("array heterogéneo de trait objects + dispatch");
     }
 
     #[test]
-    fn trait_object_tipo_no_implementa() {
+    fn trait_object_ty_no_implementa() {
         err_contains(
             r#"trait Figura { fn area(self) -> int; }
                struct P { x: int }
@@ -7633,12 +7633,12 @@ fn main() -> int {
                impl Clon for P { fn copia(self) -> Self { P { x: self.x } } }
                fn usar(p: dyn Clon) -> int { let q = p.copia(); 0 }
                fn main() -> int { 0 }"#,
-            "usa 'Self': no es invocable sobre 'dyn Clon'",
+            "uses 'Self': no es invocable about 'dyn Clon'",
         );
     }
 
     #[test]
-    fn dyn_de_trait_inexistente() {
+    fn dyn_de_trait_nonexistent() {
         err_contains(
             "fn f(x: dyn NoExiste) -> int { 0 } fn main() -> int { 0 }",
             "trait 'NoExiste' no declarado",
@@ -7648,19 +7648,19 @@ fn main() -> int {
     // ----- M10.1: anotaciones -----
 
     #[test]
-    fn test_valido() {
+    fn test_valid() {
         check_src(r#"
             @test
             fn ok() -> bool { 1 + 1 == 2 }
             fn main() -> int { 0 }
-        "#).expect("@test con firma () -> bool");
+        "#).expect("@test con signature () -> bool");
     }
 
     #[test]
-    fn test_firma_incorrecta() {
+    fn test_signature_incorrect() {
         err_contains(
             "@test fn malo() -> int { 1 } fn main() -> int { 0 }",
-            "debe devolver bool",
+            "must devolver bool",
         );
     }
 
@@ -7668,12 +7668,12 @@ fn main() -> int {
     fn test_con_parametros() {
         err_contains(
             "@test fn malo(x: int) -> bool { true } fn main() -> int { 0 }",
-            "no debe recibir parámetros",
+            "no must recibir parámetros",
         );
     }
 
     #[test]
-    fn anotacion_desconocida() {
+    fn annotation_desconocida() {
         err_contains(
             "@magia fn f() -> bool { true } fn main() -> int { 0 }",
             "anotación desconocida: '@magia'",
@@ -7681,10 +7681,10 @@ fn main() -> int {
     }
 
     #[test]
-    fn test_sobre_struct_es_error() {
+    fn test_about_struct_es_error() {
         err_contains(
             "@test struct S { x: int } fn main() -> int { 0 }",
-            "'@test' solo se permite sobre funciones",
+            "'@test' solo se permite about functions",
         );
     }
 
@@ -7713,7 +7713,7 @@ fn main() -> int {
             enum Color { Rojo, Verde }
             fn iguales<T: Eq>(a: T, b: T) -> bool { a.eq(b) }
             fn main() -> int { if (iguales(Color.Rojo, Color.Rojo)) { 0 } else { 1 } }
-        "#).expect("un tipo derivado satisface el bound T: Eq");
+        "#).expect("un type derivado satisface el bound T: Eq");
     }
 
     #[test]
@@ -7725,10 +7725,10 @@ fn main() -> int {
     }
 
     #[test]
-    fn derive_en_tipo_generico_es_error() {
+    fn derive_en_ty_generic_es_error() {
         err_contains(
             "@derive(Eq) struct Caja<T> { v: T } fn main() -> int { 0 }",
-            "tipo genérico",
+            "type genérico",
         );
     }
 
@@ -7740,13 +7740,13 @@ fn main() -> int {
             @derive(Show)
             enum Color { Rojo, RGB(int, int, int) }
             @derive(Show)
-            struct Etiqueta { nombre: string, donde: Punto, color: Color }
+            struct Etiqueta { name: string, donde: Punto, color: Color }
             fn main() -> int {
-                let e = Etiqueta { nombre: "o", donde: Punto { x: 1, y: 2 }, color: Color.Rojo };
+                let e = Etiqueta { name: "o", donde: Punto { x: 1, y: 2 }, color: Color.Rojo };
                 print(e.show());
                 0
             }
-        "#).expect("@derive(Show) para struct, enum y struct anidado");
+        "#).expect("@derive(Show) para struct, enum y struct nested");
     }
 
     #[test]
@@ -7762,7 +7762,7 @@ fn main() -> int {
     fn derive_show_campo_no_soportado_es_error() {
         err_contains(
             "@derive(Show) struct S { xs: [int] } fn main() -> int { 0 }",
-            "no se puede derivar Show para un campo de tipo [int]",
+            "no se can derivar Show para un campo de type [int]",
         );
     }
 }

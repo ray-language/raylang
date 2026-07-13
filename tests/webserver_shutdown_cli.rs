@@ -14,8 +14,8 @@ const BIN: &str = env!("CARGO_BIN_EXE_ray");
 
 /// Crea el proyecto temporal (ray.toml → packages/net) y lanza `ray run`; devuelve el hijo y el
 /// puerto que anunció por stdout.
-fn lanzar(nombre: &str, main: &str) -> (Child, u16) {
-    let base = std::env::temp_dir().join(format!("ray_shutdown_{nombre}"));
+fn launch(name: &str, main: &str) -> (Child, u16) {
+    let base = std::env::temp_dir().join(format!("ray_shutdown_{name}"));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("src")).expect("crea el dir temporal");
     let repo = env!("CARGO_MANIFEST_DIR");
@@ -34,15 +34,15 @@ fn lanzar(nombre: &str, main: &str) -> (Child, u16) {
         .expect("lanza ray run");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el puerto");
+    reader.read_line(&mut linea).expect("lee el port");
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("puerto inválido: {linea:?}"));
+        .unwrap_or_else(|| panic!("port inválido: {linea:?}"));
     child.stdout = Some(reader.into_inner());
     (child, port)
 }
 
 /// GET crudo con `Connection: close`; devuelve la respuesta completa (hasta EOF).
-fn pedir(port: u16, path: &str) -> std::io::Result<String> {
+fn ask(port: u16, path: &str) -> std::io::Result<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port))?;
     s.set_read_timeout(Some(Duration::from_secs(10))).ok();
     write!(s, "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")?;
@@ -52,8 +52,8 @@ fn pedir(port: u16, path: &str) -> std::io::Result<String> {
 }
 
 /// Espera al hijo y devuelve (stdout restante, stderr, código).
-fn esperar(mut child: Child) -> (String, String, i32) {
-    let out = child.wait_with_output().expect("espera al hijo");
+fn esperar(child: Child) -> (String, String, i32) {
+    let out = child.wait_with_output().expect("espera al child");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -65,8 +65,8 @@ fn esperar(mut child: Child) -> (String, String, i32) {
 /// handler de `/stop`) apaga: la petición en curso SE RESPONDE, el servidor deja de aceptar,
 /// `serve_shutdown` devuelve y main sigue (imprime "servidor apagado" y sale 0).
 #[test]
-fn stop_por_canal_apaga_y_devuelve() {
-    let (child, port) = lanzar(
+fn stop_por_canal_apaga_y_returns() {
+    let (child, port) = launch(
         "canal",
         r#"import net/webserver;
 
@@ -77,31 +77,31 @@ fn main() -> int {
             send(stop, 1);
             webserver.ok("bye")
         } else {
-            webserver.ok("hola")
+            webserver.ok("hello")
         }
     });
-    print("servidor apagado");
+    print("servidor off");
     0
 }
 "#,
     );
-    let r1 = pedir(port, "/").expect("primera petición");
-    assert!(r1.contains("hola"), "sirve con normalidad: {r1}");
-    let r2 = pedir(port, "/stop").expect("petición de stop");
-    assert!(r2.contains("bye"), "la petición que apaga se responde: {r2}");
+    let r1 = ask(port, "/").expect("first petición");
+    assert!(r1.contains("hello"), "sirve con normalidad: {r1}");
+    let r2 = ask(port, "/stop").expect("petición de stop");
+    assert!(r2.contains("bye"), "la petición what apaga se responde: {r2}");
     let (out, err, code) = esperar(child);
-    assert_eq!(code, 0, "sale limpio\n{out}\n{err}");
-    assert!(out.contains("apagando"), "anuncia el apagado: {out}");
-    assert!(out.contains("servidor apagado"), "serve_shutdown devolvió a main: {out}");
+    assert_eq!(code, 0, "sale clean\n{out}\n{err}");
+    assert!(out.contains("apagando"), "anuncia el off: {out}");
+    assert!(out.contains("servidor off"), "serve_shutdown devolvió a main: {out}");
     // Ya apagado: un cliente nuevo no conecta (el listener está cerrado).
-    assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "el puerto quedó cerrado");
+    assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "el port quedó closed");
 }
 
 /// `serve_graceful` + SIGTERM: la petición EN VUELO (handler lento) se drena —el cliente recibe
 /// su respuesta completa aunque la señal llegue a mitad— y el proceso sale 0.
 #[test]
 fn sigterm_drena_la_peticion_en_vuelo() {
-    let (child, port) = lanzar(
+    let (child, port) = launch(
         "sigterm",
         r#"import net/webserver;
 import std/time;
@@ -111,20 +111,20 @@ fn main() -> int {
         time.sleep(500);
         webserver.ok("lento ok")
     });
-    print("servidor apagado");
+    print("servidor off");
     0
 }
 "#,
     );
     // La petición lenta, en un hilo; la señal la mandamos con el handler a mitad del sleep.
-    let cliente = std::thread::spawn(move || pedir(port, "/lento"));
+    let client = std::thread::spawn(move || ask(port, "/lento"));
     std::thread::sleep(Duration::from_millis(150));
     let st = Command::new("kill").arg("-TERM").arg(child.id().to_string()).status().unwrap();
     assert!(st.success(), "kill -TERM");
-    let resp = cliente.join().expect("hilo cliente").expect("respuesta");
+    let resp = client.join().expect("hilo client").expect("response");
     assert!(resp.contains("lento ok"), "la petición en vuelo se drenó: {resp}");
     let (out, _err, code) = esperar(child);
-    assert_eq!(code, 0, "sale limpio tras drenar\n{out}");
+    assert_eq!(code, 0, "sale clean after drenar\n{out}");
     assert!(out.contains("apagando: 1 conexión(es) en vuelo"), "drenó exactamente la en vuelo: {out}");
 }
 
@@ -132,7 +132,7 @@ fn main() -> int {
 /// servidor se rinde (lo anuncia por stderr) y sale 0 igualmente.
 #[test]
 fn el_plazo_del_drenaje_no_espera_para_siempre() {
-    let (child, port) = lanzar(
+    let (child, port) = launch(
         "plazo",
         r#"import net/webserver;
 import std/time;
@@ -148,20 +148,20 @@ fn main() -> int {
             webserver.ok("tarde")
         }
     });
-    print("servidor apagado");
+    print("servidor off");
     0
 }
 "#,
     );
     // La petición eterna en un hilo (no esperamos su respuesta: el proceso saldrá antes).
-    let _lenta = std::thread::spawn(move || pedir(port, "/eterna"));
+    let _lenta = std::thread::spawn(move || ask(port, "/eterna"));
     std::thread::sleep(Duration::from_millis(100));
-    let r2 = pedir(port, "/stop").expect("petición de stop");
+    let r2 = ask(port, "/stop").expect("petición de stop");
     assert!(r2.contains("bye"), "el stop se responde: {r2}");
-    let inicio = std::time::Instant::now();
+    let start = std::time::Instant::now();
     let (out, err, code) = esperar(child);
-    assert_eq!(code, 0, "sale limpio pese a la conexión eterna\n{out}\n{err}");
-    assert!(inicio.elapsed() < Duration::from_secs(2), "no esperó los 3 s del handler");
+    assert_eq!(code, 0, "sale clean pese a la conexión eterna\n{out}\n{err}");
+    assert!(start.elapsed() < Duration::from_secs(2), "no esperó los 3 s del handler");
     assert!(err.contains("al vencer el plazo"), "anuncia la rendición del plazo: {err}");
-    assert!(out.contains("servidor apagado"), "{out}");
+    assert!(out.contains("servidor off"), "{out}");
 }

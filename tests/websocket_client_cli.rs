@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 
 /// Lanza `websocket_echo.ray` con `--vm`; devuelve el proceso + el puerto efímero (1.ª línea de stdout).
-fn lanzar_servidor() -> (Child, u16) {
+fn launch_servidor() -> (Child, u16) {
     let echo = format!("{}/examples/web/websocket_echo.ray", env!("CARGO_MANIFEST_DIR"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .arg("--vm")
@@ -19,17 +19,17 @@ fn lanzar_servidor() -> (Child, u16) {
 
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee puerto");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("puerto inválido: {linea:?}"));
+    reader.read_line(&mut linea).expect("lee port");
+    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("port inválido: {linea:?}"));
     // Drena el resto del stdout del servidor.
     std::thread::spawn(move || {
-        let mut sumidero = Vec::new();
-        let _ = reader.read_to_end(&mut sumidero);
+        let mut sink = Vec::new();
+        let _ = reader.read_to_end(&mut sink);
     });
     (child, port)
 }
 
-fn correr_cliente(flags: &[&str], port: u16) -> Vec<String> {
+fn run_client(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/websocket_client_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -39,7 +39,7 @@ fn correr_cliente(flags: &[&str], port: u16) -> Vec<String> {
         .expect("ejecuta websocket_client_demo.ray");
     assert!(
         out.status.success(),
-        "cliente WS falló: {}",
+        "client WS falló: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout)
@@ -48,22 +48,22 @@ fn correr_cliente(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &["hola", "mundo", "raylang ☃ unicode"];
+const ESPERADO: &[&str] = &["hello", "mundo", "raylang ☃ unicode"];
 
-fn caso(flags: &[&str]) {
-    let (mut servidor, port) = lanzar_servidor();
-    let salida = correr_cliente(flags, port);
+fn case(flags: &[&str]) {
+    let (mut servidor, port) = launch_servidor();
+    let output = run_client(flags, port);
     let _ = servidor.kill();
     let _ = servidor.wait();
-    assert_eq!(salida, ESPERADO);
+    assert_eq!(output, ESPERADO);
 }
 
 #[test]
-fn cliente_ws_eco_interprete() {
-    caso(&[]);
+fn client_ws_echo_interpreter() {
+    case(&[]);
 }
 
 #[test]
-fn cliente_ws_eco_vm() {
-    caso(&["--vm"]);
+fn client_ws_echo_vm() {
+    case(&["--vm"]);
 }

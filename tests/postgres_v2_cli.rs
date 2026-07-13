@@ -148,12 +148,12 @@ fn command_complete(tag: &str) -> Vec<u8> {
 }
 
 /// Atiende una sesión: startup, SCRAM (precomputado), y el protocolo extendido por ciclo.
-fn atender(mut s: TcpStream) {
-    atender_stream(&mut s);
+fn handle(mut s: TcpStream) {
+    handle_stream(&mut s);
 }
 
 /// La sesión en sí, genérica sobre el flujo (TCP plano o rustls::Stream → sirve para el test TLS).
-fn atender_stream<S: Read + Write>(s: &mut S) {
+fn handle_stream<S: Read + Write>(s: &mut S) {
     read_startup(s);
     let mut sasl = vec![0u8, 0, 0, 10];
     sasl.extend_from_slice(b"SCRAM-SHA-256\0");
@@ -182,19 +182,19 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
                 fila1.push("sin-params".to_string());
             }
             s.write_all(&msg(b'D', &data_row(&fila1))).unwrap();
-            let fija: Vec<String> = (0..ncols).map(|k| format!("fija{k}")).collect();
-            s.write_all(&msg(b'D', &data_row(&fija))).unwrap();
+            let fixes: Vec<String> = (0..ncols).map(|k| format!("fixes{k}")).collect();
+            s.write_all(&msg(b'D', &data_row(&fixes))).unwrap();
             s.write_all(&msg(b'C', &command_complete("SELECT 2"))).unwrap();
         } else if query.starts_with("NULLTEST") {
             // Fila con una columna NULL (longitud -1): antes reventaba el cliente (be32 sin signo).
             s.write_all(&msg(b'T', &row_description(2))).unwrap();
-            s.write_all(&msg(b'D', &data_row_opt(&[Some("hola".to_string()), None]))).unwrap();
+            s.write_all(&msg(b'D', &data_row_opt(&[Some("hello".to_string()), None]))).unwrap();
             s.write_all(&msg(b'C', &command_complete("SELECT 1"))).unwrap();
         } else if query.starts_with("BOOM") {
             // ErrorResponse: campos [tipo][valor NUL]… 'M' = mensaje.
             let mut e = Vec::new();
             e.push(b'M');
-            e.extend_from_slice(b"relacion inexistente\0");
+            e.extend_from_slice(b"relacion nonexistent\0");
             e.push(0);
             s.write_all(&msg(b'E', &e)).unwrap();
         } else if query.starts_with("INSERT") {
@@ -208,12 +208,12 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
     }
 }
 
-fn lanzar_servidor() -> u16 {
+fn launch_servidor() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
         for s in listener.incoming().flatten() {
-            atender(s);
+            handle(s);
         }
     });
     port
@@ -222,7 +222,7 @@ fn lanzar_servidor() -> u16 {
 /// Variante TLS: espera el **SSLRequest** del protocolo (8 octetos, código 80877103), responde
 /// 'S', hace el handshake TLS (cert autofirmado de `tests/fixtures/`) y atiende LA MISMA sesión
 /// (startup + SCRAM + extendido) sobre el canal cifrado.
-fn lanzar_servidor_tls() -> u16 {
+fn launch_servidor_tls() -> u16 {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
@@ -244,13 +244,13 @@ fn lanzar_servidor_tls() -> u16 {
             // Fase en claro: el SSLRequest exacto.
             let mut req = [0u8; 8];
             s.read_exact(&mut req).expect("lee SSLRequest");
-            assert_eq!(u32::from_be_bytes([req[0], req[1], req[2], req[3]]), 8, "longitud del SSLRequest");
+            assert_eq!(u32::from_be_bytes([req[0], req[1], req[2], req[3]]), 8, "length del SSLRequest");
             assert_eq!(u32::from_be_bytes([req[4], req[5], req[6], req[7]]), 80877103, "código del SSLRequest");
             s.write_all(b"S").expect("responde S");
             // Fase TLS: la misma sesión de siempre, sobre el canal cifrado.
             let mut conn = rustls::ServerConnection::new(config.clone()).expect("server conn");
             let mut tls = rustls::Stream::new(&mut conn, &mut s);
-            atender_stream(&mut tls);
+            handle_stream(&mut tls);
             conn.send_close_notify();
             let _ = conn.complete_io(&mut s);
         }
@@ -258,7 +258,7 @@ fn lanzar_servidor_tls() -> u16 {
     port
 }
 
-fn proyecto(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -317,38 +317,38 @@ fn main() -> int {{
     app
 }
 
-fn correr(app: &std::path::Path, flags: &[&str]) -> String {
+fn run(app: &std::path::Path, flags: &[&str]) -> String {
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
-    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binario");
+    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO: &str = "ada|36\nfija0|fija1\nbegin: 0\ninsert: 5\nnull: [hola|]\npostgres: relacion inexistente\n";
+const ESPERADO: &str = "ada|36\nfija0|fija1\nbegin: 0\ninsert: 5\nnull: [hello|]\npostgres: relacion nonexistent\n";
 
 #[test]
 fn postgres_v2_extendido_params_y_transaccion() {
     let base = std::env::temp_dir().join("ray_pg_v2_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor();
-    let app = proyecto(&base, port);
+    let port = launch_servidor();
+    let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    assert_eq!(correr(&app, &[]), ESPERADO, "VM");
-    assert_eq!(correr(&app, &["--interp"]), ESPERADO, "intérprete");
+    assert_eq!(run(&app, &[]), ESPERADO, "VM");
+    assert_eq!(run(&app, &["--interp"]), ESPERADO, "intérprete");
 }
 
 // --- TLS: connect_tls (sslRequest → 'S' → tls_upgrade → misma sesión cifrada) ---
 
 /// El mismo programa de prueba pero con `connect_tls` contra "localhost" (el nombre del cert).
-fn proyecto_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -388,7 +388,7 @@ fn main() -> int {{
 }
 
 /// Como `correr` pero confiando en la CA de prueba (que firmó el cert de "localhost").
-fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
+fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
@@ -397,10 +397,10 @@ fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
         .current_dir(app)
         .env("SSL_CERT_FILE", &ca)
         .output()
-        .expect("lanza el binario");
+        .expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -414,9 +414,9 @@ fn postgres_tls_sslrequest_y_sesion_cifrada() {
     let base = std::env::temp_dir().join("ray_pg_v2_cli_tls");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor_tls();
-    let app = proyecto_tls(&base, port);
+    let port = launch_servidor_tls();
+    let app = project_tls(&base, port);
 
-    assert_eq!(correr_tls(&app, &[]), ESPERADO_TLS, "VM");
-    assert_eq!(correr_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
+    assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");
+    assert_eq!(run_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
 }

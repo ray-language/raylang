@@ -99,11 +99,11 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
                 a = parse_int_or(r[0])?;
                 b = parse_int_or(r[1])?;
             } else {
-                return Result.Err("cron: rango malformado en '" + name + "' ('" + base + "')");
+                return Result.Err("cron: range malformado en '" + name + "' ('" + base + "')");
             }
         }
         if (a < lo || b > hi || a > b) {
-            return Result.Err("cron: '" + name + "' fuera de rango [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')");
+            return Result.Err("cron: '" + name + "' outside de range [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')");
         }
         var v = a;
         while (v <= b) {
@@ -143,7 +143,7 @@ pub fn parse(expr: string) -> Result<Schedule, string> {
     if (e == "@yearly" || e == "@annually") { e = "0 0 1 1 *"; }
     let fs = fields_of(e);
     if (fs.len() != 5) {
-        return Result.Err("cron: se esperaban 5 campos (min hora dom mes dow), hay " + to_string(fs.len()));
+        return Result.Err("cron: se esperaban 5 fields (min hora dom mes dow), hay " + to_string(fs.len()));
     }
     let mins = parse_field(fs[0], 0, 59, "minuto")?;
     let hours = parse_field(fs[1], 0, 23, "hora")?;

@@ -22,27 +22,27 @@ const ESPERADO: &[&str] = &[
     "raw: ",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/stdlib/template_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta template_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 #[test]
-fn template_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn template_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "template_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn template_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "template_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }

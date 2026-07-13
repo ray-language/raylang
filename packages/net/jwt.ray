@@ -61,7 +61,7 @@ fn header_alg(header_b64u: string) -> Result<string, string> {
         Json.JObject(m) => match (m.get("alg")) {
             Option.Some(v) => match (v) {
                 Json.JStr(a) => Result.Ok(a),
-                _ => Result.Err("'alg' no es una cadena"),
+                _ => Result.Err("'alg' no es one string"),
             },
             Option.None => Result.Err("falta 'alg'"),
         },
@@ -82,7 +82,7 @@ pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
     }
     let h = parts[0];
     let p = parts[1];
-    let firma = parts[2];
+    let signature = parts[2];
     // Defensa en profundidad: el header debe declarar HS256 (rechaza alg:none / confusión de algoritmo).
     match (header_alg(h)) {
         Result.Ok(a) => {
@@ -94,9 +94,9 @@ pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
             return Result.Err("header JWT inválido: " + e);
         },
     }
-    let esperada = sign_input(secret, h + "." + p);
-    if (!const_eq(firma, esperada)) {
-        return Result.Err("firma inválida");
+    let expected_val = sign_input(secret, h + "." + p);
+    if (!const_eq(signature, expected_val)) {
+        return Result.Err("signature inválida");
     }
     // Firma válida: decodifica el payload (base64url → octetos → UTF-8).
     match (base64url_decode(p)) {

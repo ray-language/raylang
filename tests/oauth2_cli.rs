@@ -25,7 +25,7 @@ fn toy_token_endpoint() -> u16 {
             // El cuerpo va tras la línea en blanco.
             let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
             let ok = body.contains("grant_type=client_credentials")
-                && body.contains("client_id=mi-cliente")
+                && body.contains("client_id=mi-client")
                 && body.contains("client_secret=secreto");
             let json = if ok {
                 r#"{"access_token":"tok-abc-123","token_type":"Bearer","expires_in":3600,"scope":"read"}"#
@@ -43,7 +43,7 @@ fn toy_token_endpoint() -> u16 {
     port
 }
 
-fn correr(flags: &[&str], port: u16) -> Vec<String> {
+fn run(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/oauth2_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -63,7 +63,7 @@ fn correr(flags: &[&str], port: u16) -> Vec<String> {
 }
 
 const ESPERADO: &[&str] = &[
-    "https://auth.example.com/authorize?response_type=code&client_id=mi-cliente&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=read%20write&state=xyz123",
+    "https://auth.example.com/authorize?response_type=code&client_id=mi-client&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=read%20write&state=xyz123",
     "access_token=tok-abc-123",
     "token_type=Bearer",
     "expires_in=3600",
@@ -71,13 +71,13 @@ const ESPERADO: &[&str] = &[
 ];
 
 #[test]
-fn oauth2_client_credentials_interprete() {
+fn oauth2_client_credentials_interpreter() {
     let port = toy_token_endpoint();
-    assert_eq!(correr(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), ESPERADO);
 }
 
 #[test]
 fn oauth2_client_credentials_vm() {
     let port = toy_token_endpoint();
-    assert_eq!(correr(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), ESPERADO);
 }

@@ -169,7 +169,7 @@ impl<'a> Interpreter<'a> {
             // Un 'return' nunca debería escapar de call_function, pero por si acaso.
             Err(Flow::Return(v)) => Ok(v),
             // Una llamada en cola siempre la consume el trampolín de call_body; no escapa.
-            Err(Flow::TailCall { .. }) => unreachable!("una llamada en cola no escapa de call_body"),
+            Err(Flow::TailCall { .. }) => unreachable!("one llamada en cola no escapa de call_body"),
         }
     }
 
@@ -390,7 +390,7 @@ impl<'a> Interpreter<'a> {
                 match callee_val {
                     Value::Function(idx) => Err(Flow::TailCall { index: idx, args: values, captured: Vec::new() }),
                     Value::Closure(c) => Err(Flow::TailCall { index: c.index, args: values, captured: c.upvalues.clone() }),
-                    _ => unreachable!("el checker garantiza una función"),
+                    _ => unreachable!("el checker garantiza one función"),
                 }
             }
             ExprKind::If { cond, then_branch, else_branch } => {
@@ -426,7 +426,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Err(Flow::Error(RuntimeError {
-                    msg: "ningún brazo del match casó (no debería ocurrir)".into(),
+                    msg: "ningún branch del match casó (no debería ocurrir)".into(),
                     line: scrutinee.line,
                     col: scrutinee.col,
                     trace: Vec::new(),
@@ -475,7 +475,7 @@ impl<'a> Interpreter<'a> {
                 let v = self.eval_expr(value)?;
                 let rc = match v {
                     Value::Array(rc) => rc,
-                    _ => unreachable!("el checker garantiza una tupla (arreglo)"),
+                    _ => unreachable!("el checker garantiza one tupla (array)"),
                 };
                 let elems = rc.borrow();
                 for (i, n) in names.iter().enumerate() {
@@ -492,7 +492,7 @@ impl<'a> Interpreter<'a> {
                     ForIter::Range { start, end } => {
                         let s = self.eval_int(start)?;
                         let e = self.eval_int(end)?;
-                        let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
+                        let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un name") };
                         let mut i = s;
                         while i < e {
                             self.scopes.push(HashMap::new());
@@ -507,7 +507,7 @@ impl<'a> Interpreter<'a> {
                         let v = self.eval_expr(e)?;
                         match v {
                             Value::Array(rc) => {
-                                let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
+                                let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un name") };
                                 let len = rc.borrow().len();
                                 for idx in 0..len {
                                     let item = rc.borrow()[idx].clone();
@@ -519,7 +519,7 @@ impl<'a> Interpreter<'a> {
                                 }
                             }
                             Value::Str(s) => {
-                                let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
+                                let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un name") };
                                 for c in s.chars() {
                                     self.scopes.push(HashMap::new());
                                     self.define(name, Value::Char(c));
@@ -531,7 +531,7 @@ impl<'a> Interpreter<'a> {
                             Value::Map(rc) => {
                                 let (kn, vn) = match pat {
                                     ForPat::Tuple(names) => (names[0].clone(), names[1].clone()),
-                                    _ => unreachable!("checker: una tupla (k, v)"),
+                                    _ => unreachable!("checker: one tupla (k, v)"),
                                 };
                                 // Clave ordenada (determinista, como el builtin `keys`) → casa con la VM.
                                 let mut ks: Vec<MapKey> = rc.borrow().keys().cloned().collect();
@@ -546,7 +546,7 @@ impl<'a> Interpreter<'a> {
                                     r?;
                                 }
                             }
-                            _ => unreachable!("el checker garantiza arreglo/string/Map"),
+                            _ => unreachable!("el checker garantiza array/string/Map"),
                         }
                     }
                     // M40.2: iterador de usuario. Evaluamos el iterable una vez (semántica de referencia
@@ -560,7 +560,7 @@ impl<'a> Interpreter<'a> {
                             let r = self.call_function(func, vec![it.clone()], stmt.line, stmt.col)?;
                             let inst = match r {
                                 Value::Enum(rc) => rc,
-                                _ => unreachable!("next devuelve Option"),
+                                _ => unreachable!("next returns Option"),
                             };
                             if inst.variant == "None" {
                                 break;
@@ -648,7 +648,7 @@ impl<'a> Interpreter<'a> {
                         return Ok(v.clone());
                     }
                     // No es una variable ni constante: un nombre de función usado como valor.
-                    let idx = *self.named_index.get(name).expect("el checker garantiza el nombre");
+                    let idx = *self.named_index.get(name).expect("el checker garantiza el name");
                     Ok(Value::Function(idx))
                 }
             },
@@ -722,7 +722,7 @@ impl<'a> Interpreter<'a> {
                                 Some(c) => Ok(Value::Char(c)),
                                 None => {
                                     check_bounds(i, s.chars().count(), index.line, index.col)?;
-                                    unreachable!("nth falló ⇒ índice fuera de rango")
+                                    unreachable!("nth falló ⇒ índice outside de range")
                                 }
                             }
                         }
@@ -732,7 +732,7 @@ impl<'a> Interpreter<'a> {
                         let idx = check_bounds(i, b.len(), index.line, index.col)?;
                         Ok(Value::Int(b[idx] as i64))
                     }
-                    _ => unreachable!("el checker garantiza un arreglo, un string o bytes"),
+                    _ => unreachable!("el checker garantiza un array, un string o bytes"),
                 }
             }
 
@@ -753,7 +753,7 @@ impl<'a> Interpreter<'a> {
                         .iter()
                         .find(|(n, _)| n == fname)
                         .map(|(_, e)| e)
-                        .expect("el checker garantiza que el campo está presente");
+                        .expect("el checker garantiza what el campo está presente");
                     let v = self.eval_expr(value_expr)?;
                     built.push((fname.clone(), v));
                 }
@@ -782,7 +782,7 @@ impl<'a> Interpreter<'a> {
                     if let Value::Array(rc) = v {
                         return Ok(rc.borrow()[idx].clone());
                     }
-                    unreachable!("el checker garantiza una tupla para el acceso .N");
+                    unreachable!("el checker garantiza one tupla para el access .N");
                 }
                 let rc = self.eval_struct(object)?;
                 let v = rc
@@ -858,7 +858,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Err(Flow::Error(RuntimeError {
-                    msg: "ningún brazo del match casó (no debería ocurrir)".into(),
+                    msg: "ningún branch del match casó (no debería ocurrir)".into(),
                     line: scrutinee.line,
                     col: scrutinee.col,
                     trace: Vec::new(),
@@ -990,7 +990,7 @@ impl<'a> Interpreter<'a> {
                 let captured = c.upvalues.clone();
                 self.call_index(c.index, values, &captured, callee.line, callee.col)
             }
-            _ => unreachable!("el checker garantiza una función"),
+            _ => unreachable!("el checker garantiza one función"),
         }
     }
 
@@ -1015,7 +1015,7 @@ impl<'a> Interpreter<'a> {
                 Value::Map(rc) => Value::Int(rc.borrow().len() as i64),
                 // M16.1a: len de bytes = nº de octetos.
                 Value::Bytes(b) => Value::Int(b.len() as i64),
-                _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
+                _ => unreachable!("el checker garantiza un array, string, Map o bytes"),
             },
             // --- Mapas (M13.1) --- (`Map.new()` es una función asociada, M48.1: se evalúa en `eval_call`)
             // M48.4c: los `__*` son los primitivos internos a los que baja el trait `MapOps`.
@@ -1080,7 +1080,7 @@ impl<'a> Interpreter<'a> {
             "__push" => {
                 match &values[0] {
                     Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
-                    _ => unreachable!("el checker garantiza un arreglo"),
+                    _ => unreachable!("el checker garantiza un array"),
                 }
                 Value::Unit
             }
@@ -1285,7 +1285,7 @@ impl<'a> Interpreter<'a> {
             "__contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
                 (Value::Array(rc), x) => Value::Bool(rc.borrow().iter().any(|e| e == x)),
-                _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
+                _ => unreachable!("el checker garantiza string+string o array+elemento"),
             },
             // M11.4a: reemplaza todas las ocurrencias de `de` por `a`.
             "__replace" => match (&values[0], &values[1], &values[2]) {
@@ -1335,7 +1335,7 @@ impl<'a> Interpreter<'a> {
                     }).collect();
                     Value::Bytes(Rc::new(octets))
                 }
-                _ => unreachable!("el checker garantiza un arreglo"),
+                _ => unreachable!("el checker garantiza un array"),
             },
             "__repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
@@ -1370,7 +1370,7 @@ impl<'a> Interpreter<'a> {
                     v.reverse();
                     Value::Array(Rc::new(RefCell::new(v)))
                 }
-                _ => unreachable!("el checker garantiza un arreglo"),
+                _ => unreachable!("el checker garantiza un array"),
             },
             // M11.7b: primitivo que muta el arreglo quitando el último → [] o [x]. Prelude → Option<T>.
             "__pop" => match &values[0] {
@@ -1379,7 +1379,7 @@ impl<'a> Interpreter<'a> {
                     let elems = popped.map(|v| vec![v]).unwrap_or_default();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza un arreglo"),
+                _ => unreachable!("el checker garantiza un array"),
             },
             // M11.7b: primitivo de búsqueda en arreglo → [] o [i]. Prelude → Option<int>.
             "__position" => match (&values[0], &values[1]) {
@@ -1388,7 +1388,7 @@ impl<'a> Interpreter<'a> {
                     let elems = idx.map(|i| vec![Value::Int(i as i64)]).unwrap_or_default();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza arreglo+elemento"),
+                _ => unreachable!("el checker garantiza array+elemento"),
             },
             // M11.2a: como print, pero a stderr.
             "eprint" => {
@@ -1814,7 +1814,7 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un int"),
             },
-            _ => unreachable!("builtin desconocido"),
+            _ => unreachable!("builtin unknown"),
         }
     }
 
@@ -1942,7 +1942,7 @@ impl<'a> Interpreter<'a> {
             (BitXor, UInt(a, w), UInt(b, _)) => make_uint(a ^ b, w),
             (Shl, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shl(b as u32), w),
             (Shr, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shr(b as u32), w),
-            _ => unreachable!("combinación de operador/operandos que el checker debió rechazar"),
+            _ => unreachable!("combinación de operador/operandos what el checker debió rechazar"),
         })
     }
 
@@ -1952,7 +1952,7 @@ impl<'a> Interpreter<'a> {
     fn eval_bool(&mut self, expr: &'a Expr) -> Result<bool, Flow> {
         match self.eval_expr(expr)? {
             Value::Bool(b) => Ok(b),
-            _ => unreachable!("el checker garantiza una condición booleana"),
+            _ => unreachable!("el checker garantiza one condición booleana"),
         }
     }
 
@@ -1969,7 +1969,7 @@ impl<'a> Interpreter<'a> {
     fn eval_array(&mut self, expr: &'a Expr) -> Result<Rc<RefCell<Vec<Value>>>, Flow> {
         match self.eval_expr(expr)? {
             Value::Array(rc) => Ok(rc),
-            _ => unreachable!("el checker garantiza un arreglo"),
+            _ => unreachable!("el checker garantiza un array"),
         }
     }
 
@@ -2011,7 +2011,7 @@ impl<'a> Interpreter<'a> {
                 return;
             }
         }
-        unreachable!("el checker garantiza que '{}' está declarada", name)
+        unreachable!("el checker garantiza what '{}' está declarada", name)
     }
 }
 
@@ -2030,7 +2030,7 @@ fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal<'_> {
         Value::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),      // M41.2: → char* (NUL-terminado en ffi::call)
         Value::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()), // M41.2: → puntero al buffer crudo
         Value::Ptr(p) => crate::ffi::FfiVal::Int(*p),              // M41.4b: la dirección opaca por registro
-        _ => unreachable!("el checker garantiza un tipo marshalable en la frontera FFI"),
+        _ => unreachable!("el checker garantiza un type marshalable en la frontera FFI"),
     }
 }
 
@@ -2062,7 +2062,7 @@ fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind, line: usize, col:
                 match String::from_utf8(bytes) {
                     Ok(s) => Value::Str(s),
                     Err(_) => return Err(runtime_error(line, col,
-                        "la función C devolvió bytes que no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
+                        "la función C devolvió bytes what no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
                 }
             } else {
                 Value::Bytes(Rc::new(bytes))
@@ -2078,7 +2078,7 @@ fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind, line: usize, col:
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
 fn check_bounds(i: i64, len: usize, line: usize, col: usize) -> Result<usize, Flow> {
     if i < 0 || (i as usize) >= len {
-        return Err(runtime_error(line, col, &format!("índice {} fuera de rango (longitud {})", i, len)));
+        return Err(runtime_error(line, col, &format!("índice {} outside de range (length {})", i, len)));
     }
     Ok(i as usize)
 }
@@ -2175,12 +2175,12 @@ mod tests {
             Ok(v) => v,
             Err(Flow::Return(v)) => v,
             Err(Flow::Error(e)) => panic!("error de ejecución inesperado: {}", e),
-            Err(Flow::TailCall { .. }) => unreachable!("una llamada en cola no escapa de call_body"),
+            Err(Flow::TailCall { .. }) => unreachable!("one llamada en cola no escapa de call_body"),
         }
     }
 
     #[test]
-    fn aritmetica_y_precedencia() {
+    fn arithmetic_y_precedence() {
         assert_eq!(run_ok("fn main() -> int { 1 + 2 * 3 }"), Value::Int(7));
         assert_eq!(run_ok("fn main() -> int { (1 + 2) * 3 }"), Value::Int(9));
         assert_eq!(run_ok("fn main() -> int { 10 - 2 - 3 }"), Value::Int(5));
@@ -2218,7 +2218,7 @@ mod tests {
     }
 
     #[test]
-    fn if_como_expresion() {
+    fn if_como_expression() {
         assert_eq!(run_ok("fn main() -> int { if (true) { 1 } else { 2 } }"), Value::Int(1));
         assert_eq!(
             run_ok("fn main() -> int { let x: int = -4; if (x < 0) { -x } else { x } }"),
@@ -2227,7 +2227,7 @@ mod tests {
     }
 
     #[test]
-    fn variables_mutacion_y_while() {
+    fn variables_mutation_y_while() {
         // Suma 0+1+2+3+4 = 10.
         let src = r#"
 fn main() -> int {
@@ -2271,21 +2271,21 @@ fn main() -> int { fib(10) }
     }
 
     #[test]
-    fn retorno_temprano() {
+    fn return_val_early() {
         let src = r#"
-fn signo(x: int) -> int {
+fn sign(x: int) -> int {
     if (x < 0) { return -1; }
     if (x > 0) { return 1; }
     0
 }
-fn main() -> int { signo(-7) + signo(0) + signo(42) }
+fn main() -> int { sign(-7) + sign(0) + sign(42) }
 "#;
         // -1 + 0 + 1 = 0
         assert_eq!(run_ok(src), Value::Int(0));
     }
 
     #[test]
-    fn scoping_lexico_la_funcion_no_ve_al_llamador() {
+    fn scoping_lexico_la_function_no_ve_al_llamador() {
         // 'g' usa su propio parámetro 'x'; no ve el 'x' de 'main'. Si hubiera
         // scoping dinámico, esto daría otro resultado.
         let src = r#"
@@ -2311,7 +2311,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn division_por_cero_es_error_de_ejecucion() {
+    fn division_por_cero_es_error_de_execution() {
         let e = run_err("fn main() -> int { 10 / 0 }");
         assert!(e.msg.contains("división"));
         let e = run_err("fn main() -> int { 10 % 0 }");
@@ -2321,25 +2321,25 @@ fn main() -> int {
     // ----- M5.2: match (ejecución en el intérprete) -----
 
     #[test]
-    fn match_recorre_lista_recursiva() {
+    fn match_recorre_list_recursiva() {
         let src = r#"
 enum Lista { Cons(int, Lista), Nil }
-fn longitud(xs: Lista) -> int {
-    match (xs) { Lista.Cons(_, t) => 1 + longitud(t), Lista.Nil => 0 }
+fn length(xs: Lista) -> int {
+    match (xs) { Lista.Cons(_, t) => 1 + length(t), Lista.Nil => 0 }
 }
-fn suma(xs: Lista) -> int {
-    match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 }
+fn sum(xs: Lista) -> int {
+    match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 }
 }
 fn main() -> int {
     let xs: Lista = Lista.Cons(10, Lista.Cons(20, Lista.Cons(30, Lista.Nil)));
-    longitud(xs) * 100 + suma(xs)
+    length(xs) * 100 + sum(xs)
 }
 "#;
         assert_eq!(run_ok(src), Value::Int(360)); // 3*100 + 60
     }
 
     #[test]
-    fn match_selecciona_el_brazo_correcto() {
+    fn match_selecciona_el_branch_correcto() {
         let src = r#"
 enum Figura { Circulo(int), Rect(int, int), Punto }
 fn area(f: Figura) -> int {
@@ -2359,14 +2359,14 @@ fn main() -> int { area(Figura.Rect(4, 5)) + area(Figura.Circulo(2)) + area(Figu
         // El binding suelto liga el valor completo del escrutinio.
         let src = r#"
 enum E { Uno, Dos, Otro }
-fn n(e: E) -> int { match (e) { E.Uno => 1, E.Dos => 2, otro => 99 } }
+fn n(e: E) -> int { match (e) { E.Uno => 1, E.Dos => 2, other => 99 } }
 fn main() -> int { n(E.Dos) * 100 + n(E.Otro) }
 "#;
         assert_eq!(run_ok(src), Value::Int(299)); // 2*100 + 99
     }
 
     #[test]
-    fn try_propaga_y_desempaqueta() {
+    fn try_propagates_y_desempaqueta() {
         let src = r#"
 fn d(a: int, b: int) -> Result<int, string> {
     if (b == 0) { Result.Err("cero") } else { Result.Ok(a / b) }
@@ -2385,18 +2385,18 @@ fn main() -> int {
     }
 
     #[test]
-    fn try_option_none_propaga() {
+    fn try_option_none_propagates() {
         let src = r#"
 fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
-fn mas_uno(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
+fn mas_one(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
 fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
-fn main() -> int { desemp(mas_uno([41])) * 100 + desemp(mas_uno([])) }
+fn main() -> int { desemp(mas_one([41])) * 100 + desemp(mas_one([])) }
 "#;
         assert_eq!(run_ok(src), Value::Int(4101)); // 42*100 + (-99)
     }
 
     #[test]
-    fn match_cuerpo_construye_enum() {
+    fn match_body_construye_enum() {
         // El cuerpo de un brazo puede construir otra variante (resolución dentro del
         // brazo): comprobamos la cadena completa devolviendo un int derivado.
         let src = r#"

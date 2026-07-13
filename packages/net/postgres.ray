@@ -79,7 +79,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
         if (c.buf.len() >= 5) {
             let mlen = be32(c.buf, 1);  // longitud (incluye sus 4 octetos)
             if (mlen < 4) {
-                return Result.Err("longitud de mensaje inválida (" + to_string(mlen) + ")");
+                return Result.Err("length de mensaje inválida (" + to_string(mlen) + ")");
             }
             if (mlen > max_message()) {
                 return Result.Err("mensaje excede el límite (" + to_string(mlen) + " octetos, posible bomba de memoria)");
@@ -112,7 +112,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
 // Falla como valor ante un payload truncado o una longitud fuera de rango (datos del servidor).
 fn parse_datarow(payload: bytes) -> Result<[string], string> {
     if (payload.len() < 2) {
-        return Result.Err("DataRow truncado (sin cuenta de columnas)");
+        return Result.Err("DataRow truncado (sin account de columnas)");
     }
     var cols: [string] = [];
     let ncol = payload[0] << 8 | payload[1];
@@ -120,7 +120,7 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
     var i = 0;
     while (i < ncol) {
         if (pos + 4 > payload.len()) {
-            return Result.Err("DataRow truncado (longitud de columna)");
+            return Result.Err("DataRow truncado (length de columna)");
         }
         // La longitud es int32 CON SIGNO: -1 (0xFFFFFFFF) marca NULL. `be32` no extiende el signo,
         // así que hay que reinterpretarlo — sin esto, el NULL se leía como 4294967295 y `sub_bytes`
@@ -134,7 +134,7 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
             cols.push("");
         } else {
             if (pos + vlen > payload.len()) {
-                return Result.Err("DataRow con longitud de columna fuera de rango");
+                return Result.Err("DataRow con length de columna outside de range");
             }
             let v = payload.sub_bytes(pos, pos + vlen);
             match (from_utf8(v)) {
@@ -204,8 +204,8 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
 
     let sc = scram_first(user, nonce);
     var query_sent = false;
-    var fila: [string] = [];
-    var tengo_fila = false;
+    var row: [string] = [];
+    var tengo_row = false;
     var done = false;
     while (!done) {
         let msg = match (pg_read(c)) {
@@ -284,7 +284,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
                 };
                 if (!scram_verify(sc, sfin)) {
                     close(handle);
-                    return Result.Err("la firma del servidor no verifica (autenticación fallida)");
+                    return Result.Err("la signature del servidor no verifies (autenticación fallida)");
                 }
             }
             // code 0 = AuthenticationOk: nada que hacer.
@@ -305,9 +305,9 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
             }
         } else if (msg.mtype == 68) {
             // 'D' DataRow
-            if (!tengo_fila) {
-                fila = parse_datarow(msg.payload)?;
-                tengo_fila = true;
+            if (!tengo_row) {
+                row = parse_datarow(msg.payload)?;
+                tengo_row = true;
             }
         } else if (msg.mtype == 69) {
             // 'E' ErrorResponse
@@ -317,5 +317,5 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
         // 'S' ParameterStatus, 'K' BackendKeyData, 'T' RowDescription, 'C' CommandComplete: se ignoran.
     }
     close(handle);
-    Result.Ok(fila)
+    Result.Ok(row)
 }

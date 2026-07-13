@@ -21,33 +21,33 @@ fn run(name: &str, src: &str, vm: bool) -> (String, i32) {
 }
 
 #[test]
-fn archivo_binario_round_trip() {
+fn file_binary_round_trip() {
     for vm in [false, true] {
         let dat = std::env::temp_dir().join(format!("ray_bin_{}.dat", if vm { "vm" } else { "in" }));
         let src = format!(
             r#"
 import std/fs;
 fn main() -> int {{
-    let datos: bytes = b"RAY\x00\xff\x01\x02bin";
-    match (fs.write_file_bytes("{ruta}", datos)) {{
+    let data: bytes = b"RAY\x00\xff\x01\x02bin";
+    match (fs.write_file_bytes("{path}", data)) {{
         Result.Ok(n) => print(to_string(n)),
         Result.Err(e) => {{ eprint(e); return 1; }},
     }};
-    match (fs.read_file_bytes("{ruta}")) {{
+    match (fs.read_file_bytes("{path}")) {{
         Result.Ok(leido) => {{
             print(to_string(leido.len()));
-            if (leido == datos) {{ print("identico") }} else {{ print("CORRUPTO") }}
+            if (leido == data) {{ print("identico") }} else {{ print("CORRUPTO") }}
         }},
         Result.Err(e) => print("err: " + e),
     }};
     0
 }}
 "#,
-            ruta = dat.to_string_lossy()
+            path = dat.to_string_lossy()
         );
         let (out, code) = run("ray_bin_file", &src, vm);
         // 10 octetos: R A Y \x00 \xff \x01 \x02 b i n
-        assert_eq!(out, "10\n10\nidentico\n", "round-trip binario (vm={vm}): {out}");
+        assert_eq!(out, "10\n10\nidentico\n", "round-trip binary (vm={vm}): {out}");
         assert_eq!(code, 0);
     }
 }
@@ -67,7 +67,7 @@ fn toy_bin_server() -> u16 {
 }
 
 #[test]
-fn socket_binario_lee_octetos_crudos() {
+fn socket_binary_lee_octetos_crudos() {
     const CLIENTE: &str = r#"
 import std/net;
 fn main() -> int {

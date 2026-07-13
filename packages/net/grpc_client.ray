@@ -149,7 +149,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                         // M73: tope de respuesta acumulada (anti-bomba de memoria).
                         if (body.len() + fr.payload.len() > max_response()) {
                             close(h);
-                            return Result.Err("respuesta gRPC excede el límite (posible bomba de memoria)");
+                            return Result.Err("response gRPC excede el límite (posible bomba de memoria)");
                         }
                         body = body + fr.payload;
                         // M58.3 — flow control: devolver la ventana consumida (conexión + stream).
@@ -200,7 +200,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
     // (protocolo violado, trailers truncados) era indistinguible de un OK (`tuvo_grpc_status`
     // se computaba pero no se leía) → ahora es un error explícito.
     if (!tuvo_grpc_status) {
-        return Result.Err("respuesta gRPC sin grpc-status en los trailers");
+        return Result.Err("response gRPC sin grpc-status en los trailers");
     }
     // Desenmarca el mensaje gRPC de la respuesta.
     match (grpc_unframe(body)) {

@@ -63,8 +63,8 @@ pub fn run(src: &str, filter: Option<&str>) -> i32 {
 
     if tests.is_empty() {
         match filter {
-            Some(p) => println!("no hay pruebas (@test) que contengan '{}'", p),
-            None => println!("no hay pruebas (@test) en el archivo"),
+            Some(p) => println!("no hay tests (@test) what contengan '{}'", p),
+            None => println!("no hay tests (@test) en el file"),
         }
         return 0;
     }
@@ -134,7 +134,7 @@ fn run_one(pristine: &crate::ast::Program, name: &str, kind: &Kind) -> Result<()
 fn swap_main(mut program: crate::ast::Program, main_src: &str) -> crate::ast::Program {
     let main_fn = {
         let toks = lexer::lex(main_src).unwrap_or_else(|e| crate::ice!("el main sintetizado no lexea: {e}"));
-        let mut prog = parser::parse(toks).unwrap_or_else(|e| crate::ice!("el main sintetizado no parsea: {e}"));
+        let mut prog = parser::parse(toks).unwrap_or_else(|e| crate::ice!("el main sintetizado no parses: {e}"));
         prog.functions.remove(0)
     };
     program.functions.retain(|f| f.name != "main");

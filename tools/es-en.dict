@@ -21,7 +21,7 @@ atender	handle
 binario	binary
 bloque	block
 brazo	branch
-bucle	loop
+bucle	loop_iter
 cabecera	header
 cabeceras	headers
 cabeza	head
@@ -42,7 +42,7 @@ clase	class
 claves	keys
 cliente	client
 codigo	code
-coinciden	match
+coinciden	matches
 colision	collision
 comentario	comment
 comentarios	comments
@@ -222,7 +222,7 @@ tareas	tasks
 temprano	early
 texto	text
 tiene	has
-tipo	type
+tipo	ty
 tipos	types
 todos	all
 tras	after
@@ -230,7 +230,7 @@ una	one
 uno	one
 usa	uses
 usuario	user
-uso	use
+uso	usage
 vacia	empty
 vacio	empty
 valida	validates

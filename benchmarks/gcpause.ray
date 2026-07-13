@@ -5,12 +5,12 @@
 // (imprime a stderr recolecciones + pausa máx/media). El objetivo de M37 es pausa máx < 1 ms.
 fn main() -> int {
     // Heap grande vivo: 300k arreglos conservados en `vivo` (~300k objetos vivos + el arreglo raíz).
-    var vivo: [[int]] = [];
+    var live: [[int]] = [];
     var i = 0;
     while (i < 300000) {
         var a: [int] = [];
         a.push(i);
-        vivo.push(a);
+        live.push(a);
         i = i + 1;
     }
     // Churn: mucha basura efímera para forzar GCs mientras el heap vivo es grande.
@@ -23,5 +23,5 @@ fn main() -> int {
         j = j + 1;
     }
     // Usa `vivo` al final para que no lo recolecten antes (mantiene el heap grande durante el churn).
-    s % 1000 + vivo.len() - vivo.len()
+    s % 1000 + live.len() - live.len()
 }

@@ -11,9 +11,9 @@ const ESPERADO: &[&str] = &[
     "ok: 102",
     "ok: 102 111",
     "ok:",
-    "err: base64: datos tras el relleno '='",
-    "err: base64: longitud inválida (no es múltiplo de 4)",
-    "err: base64: longitud inválida (no es múltiplo de 4)",
+    "err: base64: data after el relleno '='",
+    "err: base64: length inválida (no es múltiplo de 4)",
+    "err: base64: length inválida (no es múltiplo de 4)",
     "err: base64: bits sobrantes no nulos (codificación no canónica)",
     "err: base64: relleno '=' inválido",
     "err: carácter base64 inválido",
@@ -21,11 +21,11 @@ const ESPERADO: &[&str] = &[
     "ok: 102",
     "ok: 102 111",
     "err: base64url: bits sobrantes no nulos (codificación no canónica)",
-    "err: base64url: longitud inválida",
+    "err: base64url: length inválida",
     "err: carácter base64url inválido",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/base64_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -44,11 +44,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn base64_estricto_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn base64_estricto_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn base64_estricto_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

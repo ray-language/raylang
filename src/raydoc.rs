@@ -175,25 +175,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn doc_lineas_arriba_no_desborda_con_linea_fuera_de_rango() {
+    fn doc_lines_arriba_no_desborda_con_linea_outside_de_range() {
         // Regresión (crash del LSP): `linea` puede caer fuera de `lineas` (símbolo cuya declaración
         // vive en otra fuente —prelude/wrapper inyectado—). No debe desbordar; devuelve `None`.
         let lines = vec!["/// doc", "fn f() {}"];
         assert_eq!(doc_lines_above(&lines, 726), None, "línea >> nº de líneas → None, sin panic");
-        assert_eq!(doc_lines_above(&lines, 3), None, "una más allá del final → None");
+        assert_eq!(doc_lines_above(&lines, 3), None, "one más allá del final → None");
         // El caso normal sigue funcionando.
         assert_eq!(doc_lines_above(&lines, 2), Some(vec!["doc".to_string()]), "doc encima de la línea 2");
     }
 
     #[test]
-    fn documenta_superficie_publica() {
+    fn documenta_superficie_public() {
         let src = "\
 /// Un punto.
 /// En 2D.
 pub struct Punto { x: int, y: int }
 
 /// Suma dos.
-pub fn suma(a: int, b: int) -> int { a + b }
+pub fn sum(a: int, b: int) -> int { a + b }
 
 // no-doc
 fn privada() -> int { 0 }
@@ -202,21 +202,21 @@ fn privada() -> int { 0 }
         assert!(md.contains("# m.ray"));
         assert!(md.contains("### `struct Punto { x: int, y: int }`"));
         assert!(md.contains("Un punto. En 2D.")); // multi-línea unida
-        assert!(md.contains("### `fn suma(a: int, b: int) -> int`"));
+        assert!(md.contains("### `fn sum(a: int, b: int) -> int`"));
         assert!(md.contains("Suma dos."));
         // Con ítems pub, los privados no aparecen.
         assert!(!md.contains("privada"));
     }
 
     #[test]
-    fn genericos_y_bounds_y_self() {
+    fn generics_y_bounds_y_self() {
         let src = "\
-pub trait Med { fn medir(self) -> int; }
+pub trait Med { fn measure(self) -> int; }
 pub fn maxi<T: Ord>(xs: [T]) -> T { xs[0] }
 pub enum Caja<T> { Llena(T), Vacia }
 ";
         let md = generate(src, "g.ray").unwrap();
-        assert!(md.contains("`fn medir(self) -> int`"), "self sin tipo:\n{md}");
+        assert!(md.contains("`fn measure(self) -> int`"), "self sin type:\n{md}");
         assert!(md.contains("`fn maxi<T: Ord>(xs: [T]) -> T`"), "generics+bound:\n{md}");
         assert!(md.contains("`enum Caja<T> { Llena(T), Vacia }`"), "enum:\n{md}");
     }
@@ -224,9 +224,9 @@ pub enum Caja<T> { Llena(T), Vacia }
     #[test]
     fn sin_pub_documenta_todo() {
         // Un programa suelto (sin `pub`) documenta todos sus ítems.
-        let src = "/// La entrada.\nfn main() -> int { 0 }\n";
+        let src = "/// La entry.\nfn main() -> int { 0 }\n";
         let md = generate(src, "p.ray").unwrap();
         assert!(md.contains("`fn main() -> int`"));
-        assert!(md.contains("La entrada."));
+        assert!(md.contains("La entry."));
     }
 }

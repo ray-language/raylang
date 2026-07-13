@@ -67,12 +67,12 @@ fn hmac_bytes(key: bytes, msg: string) -> bytes {
 /// (`YYYYMMDDTHHMMSSZ`) and must match the request's `x-amz-date`.
 pub fn authorization_header(cred: Credentials, method: string, path: string, query: string, headers: Map<string, string>, payload: bytes, amz_date: string) -> string {
     // --- Cabeceras canónicas + signed-headers (claves ya en minúscula; `keys` las da ordenadas). ---
-    let nombres: [string] = headers.keys();
+    let names: [string] = headers.keys();
     var canonical_headers: string = "";
     var signed_headers: string = "";
     var i: int = 0;
-    while (i < nombres.len()) {
-        let n: string = nombres[i];
+    while (i < names.len()) {
+        let n: string = names[i];
         let v: string = match (get(headers, n)) {
             Option.Some(x) => x.trim(),
             Option.None => "",

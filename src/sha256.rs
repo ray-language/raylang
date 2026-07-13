@@ -102,7 +102,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vectores_nist() {
+    fn vectors_nist() {
         // Vectores conocidos (FIPS 180-4 / prácticas estándar).
         assert_eq!(
             sha256_hex(b""),
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn cruza_los_bloques() {
+    fn cross_los_bloques() {
         // Una entrada > 55 bytes fuerza un segundo bloque (el padding no cabe en el primero).
         let a_million_a = vec![b'a'; 1_000_000];
         assert_eq!(

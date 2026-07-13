@@ -38,11 +38,11 @@ fn leer_comando(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<Vec<String>
         Some(s)
     }
 
-    let cabecera = leer_linea(buf, stream)?;
-    if !cabecera.starts_with('*') {
+    let header = leer_linea(buf, stream)?;
+    if !header.starts_with('*') {
         return None;
     }
-    let n: usize = cabecera[1..].parse().ok()?;
+    let n: usize = header[1..].parse().ok()?;
     let mut args = Vec::with_capacity(n);
     for _ in 0..n {
         let largo_linea = leer_linea(buf, stream)?; // $<len>
@@ -53,7 +53,7 @@ fn leer_comando(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<Vec<String>
 }
 
 /// Atiende una conexión: un mini-Redis en memoria. Soporta lo que la demo ejercita.
-fn atender(mut stream: TcpStream) {
+fn handle(mut stream: TcpStream) {
     let mut kv: HashMap<String, String> = HashMap::new();
     let mut listas: HashMap<String, Vec<String>> = HashMap::new();
     let mut buf: Vec<u8> = Vec::new();
@@ -82,8 +82,8 @@ fn atender(mut stream: TcpStream) {
                 format!(":{}\r\n", l.len())
             }
             "LRANGE" => {
-                let vacia = Vec::new();
-                let l = listas.get(&args[1]).unwrap_or(&vacia);
+                let empty = Vec::new();
+                let l = listas.get(&args[1]).unwrap_or(&empty);
                 let mut s = format!("*{}\r\n", l.len());
                 for v in l {
                     s.push_str(&format!("${}\r\n{}\r\n", v.len(), v));
@@ -109,13 +109,13 @@ const ESPERADO: &[&str] = &[
     "OK", "añejo ñandú",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     // Atiende una conexión en un hilo (la demo abre una sola).
     std::thread::spawn(move || {
         if let Ok((stream, _)) = listener.accept() {
-            atender(stream);
+            handle(stream);
         }
     });
 
@@ -138,11 +138,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn redis_resp_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn redis_resp_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn redis_resp_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

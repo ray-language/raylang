@@ -73,7 +73,7 @@ fn rest_args(argv: [string]) -> [string] {
 fn main() -> int {
     let argv = args();
     if (argv.len() == 0) {
-        eprint("uso: raylang selfhost/run.ray <archivo> [args...]");
+        eprint("use: raylang selfhost/run.ray <file> [args...]");
         return 1;
     }
     // M14.7: el loader aplana el programa (entrada + sus `import`/`from` transitivos) en un Program plano.
@@ -91,7 +91,7 @@ fn main() -> int {
                     }
                 },
                 Result.Err(te) => {
-                    eprint("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                    eprint("error de types en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
                     65
                 },
             }

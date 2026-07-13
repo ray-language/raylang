@@ -100,7 +100,7 @@ impl MapKey {
             Value::Char(c) => MapKey::Char(*c),
             Value::Bool(b) => MapKey::Bool(*b),
             Value::Bytes(b) => MapKey::Bytes((**b).clone()),
-            _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool/bytes)"),
+            _ => unreachable!("el checker garantiza one clave hashable (int/string/char/bool/bytes)"),
         }
     }
 

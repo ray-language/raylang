@@ -15,7 +15,7 @@ fn ray_idx(cwd: &Path, index: &Path, args: &[&str]) -> (String, String, i32) {
         .current_dir(cwd)
         .env("RAY_INDEX", index)
         .output()
-        .expect("lanza el binario");
+        .expect("lanza el binary");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -30,7 +30,7 @@ fn ray_plain(cwd: &Path, args: &[&str]) -> (String, String, i32) {
         .current_dir(cwd)
         .env_remove("RAY_INDEX")
         .output()
-        .expect("lanza el binario");
+        .expect("lanza el binary");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -43,8 +43,8 @@ fn git(cwd: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
 }
 
-fn tmp(nombre: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ray_registry_{nombre}"));
+fn tmp(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("ray_registry_{name}"));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).expect("crea el dir temporal");
     d
@@ -52,33 +52,33 @@ fn tmp(nombre: &str) -> std::path::PathBuf {
 
 /// "Publica" un paquete: un repo git en `<base>/<nombre>-repo` con `mod.ray` + `ray.toml` (nombre y
 /// versión) y un tag `v<ver>`. Devuelve la ruta absoluta del repo.
-fn publicar(base: &Path, nombre: &str, ver: &str, mod_ray: &str) -> std::path::PathBuf {
-    let repo = base.join(format!("{nombre}-{ver}-repo"));
+fn publish(base: &Path, name: &str, see: &str, mod_ray: &str) -> std::path::PathBuf {
+    let repo = base.join(format!("{name}-{see}-repo"));
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);
     std::fs::write(repo.join("mod.ray"), mod_ray).unwrap();
     std::fs::write(
         repo.join("ray.toml"),
-        format!("[package]\nname = \"{nombre}\"\nversion = \"{ver}\"\n"),
+        format!("[package]\nname = \"{name}\"\nversion = \"{see}\"\n"),
     )
     .unwrap();
     git(&repo, &["add", "-A"]);
     git(&repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "pub"]);
-    git(&repo, &["tag", &format!("v{ver}")]);
+    git(&repo, &["tag", &format!("v{see}")]);
     repo
 }
 
 /// Escribe el archivo de índice `<index>/<nombre>.toml` con las versiones dadas `(ver, repo)`.
-fn indexar(index: &Path, nombre: &str, versiones: &[(&str, &Path)]) {
+fn write_index(index: &Path, name: &str, versiones: &[(&str, &Path)]) {
     std::fs::create_dir_all(index).unwrap();
-    let mut s = format!("# índice de {nombre}\n");
-    for (ver, repo) in versiones {
+    let mut s = format!("# índice de {name}\n");
+    for (see, repo) in versiones {
         s.push_str(&format!(
-            "\n[{ver}]\ngit = \"git+file://{}@v{ver}\"\n",
+            "\n[{see}]\ngit = \"git+file://{}@v{see}\"\n",
             repo.display()
         ));
     }
-    std::fs::write(index.join(format!("{nombre}.toml")), s).unwrap();
+    std::fs::write(index.join(format!("{name}.toml")), s).unwrap();
 }
 
 /// Crea un proyecto vacío (sin dependencias) en `<base>/app`.
@@ -91,14 +91,14 @@ fn app(base: &Path, main_ray: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn dependencia_por_nombre_desde_el_indice() {
+fn dependency_por_name_from_el_index() {
     let base = tmp("byname");
     let index = base.join("index");
-    let repo = publicar(&base, "geo", "1.2.0", "pub fn duplicar(x: int) -> int { x * 2 }\n");
-    indexar(&index, "geo", &[("1.2.0", &repo)]);
+    let repo = publish(&base, "geo", "1.2.0", "pub fn duplicate(x: int) -> int { x * 2 }\n");
+    write_index(&index, "geo", &[("1.2.0", &repo)]);
 
     // El proyecto declara la dep POR NOMBRE (sin URL git).
-    let app = app(&base, "from geo import duplicar;\nfn main() -> int { print(duplicar(21)); 0 }\n");
+    let app = app(&base, "from geo import duplicate;\nfn main() -> int { print(duplicate(21)); 0 }\n");
     std::fs::write(
         app.join("ray.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"1.2.0\"\n",
@@ -108,42 +108,42 @@ fn dependencia_por_nombre_desde_el_indice() {
     // `ray run` resuelve `geo = "1.2.0"` por el índice, descarga el repo y lo usa.
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
     assert_eq!(code, 0, "run OK\n{err}");
-    assert!(out.contains("42"), "usa la dep resuelta por el índice\n{out}\n{err}");
-    assert!(app.join(".ray-deps/geo/mod.ray").is_file(), "el paquete quedó en la caché");
+    assert!(out.contains("42"), "uses la dep resuelta por el índice\n{out}\n{err}");
+    assert!(app.join(".ray-deps/geo/mod.ray").is_file(), "el package quedó en la caché");
     // Se generó el lock con la versión resuelta.
     let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
     assert!(lock.contains("[geo]") && lock.contains("v1.2.0"), "lock con la versión resuelta:\n{lock}");
 }
 
 #[test]
-fn ray_add_escribe_el_manifiesto_y_descarga() {
+fn ray_add_escribe_el_manifest_y_descarga() {
     let base = tmp("add");
     let index = base.join("index");
-    let repo = publicar(&base, "util", "0.3.1", "pub fn saludo() -> string { \"hola\" }\n");
-    indexar(&index, "util", &[("0.3.1", &repo)]);
-    let app = app(&base, "from util import saludo;\nfn main() -> int { print(saludo()); 0 }\n");
+    let repo = publish(&base, "util", "0.3.1", "pub fn greeting() -> string { \"hello\" }\n");
+    write_index(&index, "util", &[("0.3.1", &repo)]);
+    let app = app(&base, "from util import greeting;\nfn main() -> int { print(greeting()); 0 }\n");
 
     // `ray add util` (sin versión) → escribe `util = "^0.3.1"` y descarga.
     let (out, err, code) = ray_idx(&app, &index, &["add", "util"]);
     assert_eq!(code, 0, "add OK\n{err}");
     assert!(out.contains("añadida"), "{out}");
     let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
-    assert!(toml.contains("util = \"^0.3.1\""), "el manifiesto quedó actualizado:\n{toml}");
-    assert!(app.join(".ray-deps/util/mod.ray").is_file(), "descargó el paquete");
+    assert!(toml.contains("util = \"^0.3.1\""), "el manifest quedó actualizado:\n{toml}");
+    assert!(app.join(".ray-deps/util/mod.ray").is_file(), "descargó el package");
 
     // Y el programa corre con la dep recién añadida.
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert!(out.contains("hola"), "run tras add\n{out}\n{err}");
+    assert!(out.contains("hello"), "run after add\n{out}\n{err}");
     assert_eq!(code, 0);
 }
 
 #[test]
-fn ray_add_con_version_exacta_respeta_el_requisito() {
+fn ray_add_con_version_exacta_respects_el_requisito() {
     let base = tmp("addexact");
     let index = base.join("index");
-    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
-    let r130 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
-    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
+    let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    let r130 = publish(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
+    write_index(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
 
     // `ray add geo@1.2.0` → requisito EXACTO, aunque exista 1.3.0.
@@ -159,10 +159,10 @@ fn ray_add_con_version_exacta_respeta_el_requisito() {
 fn caret_elige_la_mas_alta_compatible() {
     let base = tmp("caret");
     let index = base.join("index");
-    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
-    let r130 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
-    let r200 = publicar(&base, "geo", "2.0.0", "pub fn v() -> int { 200 }\n");
-    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130), ("2.0.0", &r200)]);
+    let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    let r130 = publish(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
+    let r200 = publish(&base, "geo", "2.0.0", "pub fn v() -> int { 200 }\n");
+    write_index(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130), ("2.0.0", &r200)]);
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
     std::fs::write(
         app.join("ray.toml"),
@@ -175,13 +175,13 @@ fn caret_elige_la_mas_alta_compatible() {
 }
 
 #[test]
-fn paquete_inexistente_da_error_claro() {
+fn package_nonexistent_da_error_claro() {
     let base = tmp("missing");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap(); // índice vacío
     let app = app(&base, "fn main() -> int { 0 }\n");
     let (_o, err, code) = ray_idx(&app, &index, &["add", "noexiste"]);
-    assert_eq!(code, 65, "falla al añadir un paquete que no está en el índice");
+    assert_eq!(code, 65, "fails al añadir un package what no está en el índice");
     assert!(err.contains("no está en el índice"), "mensaje claro:\n{err}");
     // Y no tocó el manifiesto.
     let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
@@ -190,30 +190,30 @@ fn paquete_inexistente_da_error_claro() {
 
 /// Un repo git "publicable" con remoto `origin` (un bare local): crea el bare, clona a un working
 /// dir con `ray.toml`+`mod.ray`, commitea, taggea `v<ver>` y empuja rama + tags. Devuelve el working dir.
-fn repo_con_origin(base: &Path, nombre: &str, ver: &str, mod_ray: &str) -> std::path::PathBuf {
-    let bare = base.join(format!("{nombre}.git"));
+fn repo_con_origin(base: &Path, name: &str, see: &str, mod_ray: &str) -> std::path::PathBuf {
+    let bare = base.join(format!("{name}.git"));
     std::fs::create_dir_all(&bare).unwrap();
     git(&bare, &["init", "--bare", "-q"]);
-    let work = base.join(format!("{nombre}-work"));
+    let work = base.join(format!("{name}-work"));
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q"]);
     git(&work, &["remote", "add", "origin", &bare.to_string_lossy()]);
     std::fs::write(work.join("mod.ray"), mod_ray).unwrap();
     std::fs::write(
         work.join("ray.toml"),
-        format!("[package]\nname = \"{nombre}\"\nversion = \"{ver}\"\n"),
+        format!("[package]\nname = \"{name}\"\nversion = \"{see}\"\n"),
     )
     .unwrap();
     git(&work, &["add", "-A"]);
     git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "pub"]);
-    git(&work, &["tag", &format!("v{ver}")]);
+    git(&work, &["tag", &format!("v{see}")]);
     git(&work, &["push", "-q", "origin", "HEAD"]);
     git(&work, &["push", "-q", "origin", "--tags"]);
     work
 }
 
 #[test]
-fn ray_publish_añade_al_indice_y_un_consumidor_lo_resuelve() {
+fn ray_publish_añade_al_index_y_un_consumidor_lo_resolves() {
     let base = tmp("publish");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -225,11 +225,11 @@ fn ray_publish_añade_al_indice_y_un_consumidor_lo_resuelve() {
     assert_eq!(code, 0, "publish OK\n{err}");
     assert!(out.contains("publicado mate 1.0.0"), "{out}");
     let entry = std::fs::read_to_string(index.join("mate.toml")).unwrap();
-    assert!(entry.contains("[1.0.0]") && entry.contains("@v1.0.0") && entry.contains("hash ="), "entrada en el índice:\n{entry}");
+    assert!(entry.contains("[1.0.0]") && entry.contains("@v1.0.0") && entry.contains("hash ="), "entry en el índice:\n{entry}");
 
     // Republicar la MISMA versión → error de inmutabilidad, sin duplicar en el índice.
     let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
-    assert_eq!(code, 65, "republicar la misma versión falla");
+    assert_eq!(code, 65, "republicar la misma versión fails");
     assert!(err.contains("ya está publicada"), "{err}");
 
     // Un consumidor la resuelve por nombre desde el índice y la ejecuta (clona del origin al tag).
@@ -240,12 +240,12 @@ fn ray_publish_añade_al_indice_y_un_consumidor_lo_resuelve() {
     )
     .unwrap();
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_eq!(code, 0, "el consumidor corre\n{err}");
-    assert!(out.contains("42"), "usó el paquete publicado\n{out}\n{err}");
+    assert_eq!(code, 0, "el consumidor runs\n{err}");
+    assert!(out.contains("42"), "usó el package publicado\n{out}\n{err}");
 }
 
 #[test]
-fn ray_publish_sin_tag_falla_claro() {
+fn ray_publish_sin_tag_fails_claro() {
     let base = tmp("publishnotag");
     let index = base.join("index");
     // Repo con origin pero SIN el tag v2.0.0 que declara su versión.
@@ -261,7 +261,7 @@ fn ray_publish_sin_tag_falla_claro() {
     git(&work, &["add", "-A"]);
     git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c"]);
     let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
-    assert_eq!(code, 65, "sin tag falla");
+    assert_eq!(code, 65, "sin tag fails");
     assert!(err.contains("no existe el tag 'v2.0.0'"), "mensaje claro:\n{err}");
 }
 
@@ -269,9 +269,9 @@ fn ray_publish_sin_tag_falla_claro() {
 fn yank_excluye_la_version_de_nuevas_resoluciones() {
     let base = tmp("yank");
     let index = base.join("index");
-    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
-    let r130 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
-    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
+    let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    let r130 = publish(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
+    write_index(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
     std::fs::write(
         app.join("ray.toml"),
@@ -286,23 +286,23 @@ fn yank_excluye_la_version_de_nuevas_resoluciones() {
 
     // Una resolución NUEVA (sin lock previo) elige la 1.2.0 (la 1.3.0 está retirada).
     let (out, err, _c) = ray_idx(&app, &index, &["run"]);
-    assert!(out.contains("120"), "yank excluye la 1.3.0 en nueva resolución\n{out}\n{err}");
+    assert!(out.contains("120"), "yank excluye la 1.3.0 en new resolución\n{out}\n{err}");
 
     // --undo la restaura; `ray update` re-resuelve a la 1.3.0 (el lock estaba fijado en 1.2.0).
     let (_o, _e, code) = ray_idx(&app, &index, &["yank", "geo@1.3.0", "--undo"]);
     assert_eq!(code, 0);
     let (_o, err, code) = ray_idx(&app, &index, &["update"]);
-    assert_eq!(code, 0, "update tras --undo\n{err}");
+    assert_eq!(code, 0, "update after --undo\n{err}");
     let (out, _e, _c) = ray_idx(&app, &index, &["run"]);
     assert!(out.contains("130"), "--undo + update restaura la 1.3.0\n{out}");
 }
 
 #[test]
-fn el_lock_fija_la_version_y_update_la_sube() {
+fn el_lock_fixes_la_version_y_update_la_sube() {
     let base = tmp("update");
     let index = base.join("index");
-    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
-    indexar(&index, "geo", &[("1.2.0", &r120)]);
+    let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    write_index(&index, "geo", &[("1.2.0", &r120)]);
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
     std::fs::write(
         app.join("ray.toml"),
@@ -312,15 +312,15 @@ fn el_lock_fija_la_version_y_update_la_sube() {
 
     // Primera resolución: 1.2.0 (la única). Queda fijada en el lock.
     let (out, _e, _c) = ray_idx(&app, &index, &["run"]);
-    assert!(out.contains("120"), "resuelve 1.2.0\n{out}");
+    assert!(out.contains("120"), "resolves 1.2.0\n{out}");
 
     // Ahora aparece la 1.3.0 en el índice.
-    let r130 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
-    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
+    let r130 = publish(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
+    write_index(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
 
     // `ray run` (sin update) RESPETA el lock → sigue en 1.2.0 (reproducible).
     let (out, _e, _c) = ray_idx(&app, &index, &["run"]);
-    assert!(out.contains("120"), "el lock fija la versión pese a la nueva del índice\n{out}");
+    assert!(out.contains("120"), "el lock fixes la versión pese a la new del índice\n{out}");
 
     // `ray update` sube a la 1.3.0 (la más alta que satisface ^1.2).
     let (_o, err, code) = ray_idx(&app, &index, &["update"]);
@@ -330,12 +330,12 @@ fn el_lock_fija_la_version_y_update_la_sube() {
 }
 
 #[test]
-fn indice_remoto_por_git_se_clona_y_resuelve() {
+fn index_remoto_por_git_se_clona_y_resolves() {
     let base = tmp("remoteidx");
     // El índice es un REPO git (no un dir suelto): se crea, se escriben sus archivos y se commitea.
     let index_repo = base.join("index-repo");
-    let repo = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 99 }\n");
-    indexar(&index_repo, "geo", &[("1.0.0", &repo)]);
+    let repo = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 99 }\n");
+    write_index(&index_repo, "geo", &[("1.0.0", &repo)]);
     git(&index_repo, &["init", "-q"]);
     git(&index_repo, &["add", "-A"]);
     git(&index_repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "idx"]);
@@ -359,7 +359,7 @@ fn indice_remoto_por_git_se_clona_y_resuelve() {
 }
 
 #[test]
-fn spec_por_nombre_sin_indice_configurado_avisa() {
+fn spec_por_name_sin_index_configurado_avisa() {
     let base = tmp("noindex");
     let app = app(&base, "fn main() -> int { 0 }\n");
     std::fs::write(
@@ -377,7 +377,7 @@ fn spec_por_nombre_sin_indice_configurado_avisa() {
 // ── M51d: endurecimiento (nombres, hash del índice, publish del tag, índice re-cacheado) ──
 
 #[test]
-fn nombre_de_paquete_invalido_se_rechaza() {
+fn name_de_package_invalido_se_rejects() {
     let base = tmp("badname");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -385,8 +385,8 @@ fn nombre_de_paquete_invalido_se_rechaza() {
 
     // `ray add` con un nombre que escaparía de la caché → rechazado antes de tocar nada.
     let (_o, err, code) = ray_idx(&app, &index, &["add", "../evil"]);
-    assert_eq!(code, 64, "add con nombre inválido falla\n{err}");
-    assert!(err.contains("nombre de paquete inválido"), "mensaje claro:\n{err}");
+    assert_eq!(code, 64, "add con name inválido fails\n{err}");
+    assert!(err.contains("name de package inválido"), "mensaje claro:\n{err}");
 
     // Una dep DIRECTA con nombre inválido en ray.toml → error al resolver (no se usa como ruta).
     std::fs::write(
@@ -395,12 +395,12 @@ fn nombre_de_paquete_invalido_se_rechaza() {
     )
     .unwrap();
     let (_o, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_ne!(code, 0, "dep directa con nombre inválido falla");
-    assert!(err.contains("nombre de paquete inválido"), "mensaje claro:\n{err}");
+    assert_ne!(code, 0, "dep directa con name inválido fails");
+    assert!(err.contains("name de package inválido"), "mensaje claro:\n{err}");
 
     // La valla importante: una dep TRANSITIVA (el ray.toml de un paquete descargado, NO confiable)
     // con nombre malicioso → error, sin clonar ni borrar fuera de `.ray-deps/`.
-    let malicioso = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 1 }\n");
+    let malicioso = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 1 }\n");
     std::fs::write(
         malicioso.join("ray.toml"),
         "[package]\nname = \"geo\"\nversion = \"1.0.0\"\n\n[dependencies]\n../../pwn = \"git+file:///nada@v1\"\n",
@@ -409,16 +409,16 @@ fn nombre_de_paquete_invalido_se_rechaza() {
     git(&malicioso, &["add", "-A"]);
     git(&malicioso, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "mal"]);
     git(&malicioso, &["tag", "-f", "v1.0.0"]);
-    indexar(&index, "geo", &[("1.0.0", &malicioso)]);
+    write_index(&index, "geo", &[("1.0.0", &malicioso)]);
     std::fs::write(
         app.join("ray.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"1.0.0\"\n",
     )
     .unwrap();
     let (_o, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_ne!(code, 0, "transitiva con nombre inválido falla");
+    assert_ne!(code, 0, "transitiva con name inválido fails");
     assert!(
-        err.contains("nombre de paquete inválido") && err.contains("declarado por la dependencia 'geo'"),
+        err.contains("name de package inválido") && err.contains("declarado por la dependency 'geo'"),
         "señala al culpable:\n{err}"
     );
 }
@@ -447,12 +447,12 @@ fn publish_hashea_el_tag_no_el_working_tree() {
     )
     .unwrap();
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_eq!(code, 0, "el consumidor corre y el hash del índice casa\n{err}");
-    assert!(out.contains("42"), "usa el contenido del tag (x*3), no el árbol sucio (x*999)\n{out}");
+    assert_eq!(code, 0, "el consumidor runs y el hash del índice casa\n{err}");
+    assert!(out.contains("42"), "uses el contenido del tag (x*3), no el árbol sucio (x*999)\n{out}");
 }
 
 #[test]
-fn el_hash_del_indice_se_verifica() {
+fn el_hash_del_index_se_verifies() {
     let base = tmp("idxhash");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -483,18 +483,18 @@ fn el_hash_del_indice_se_verifica() {
 }
 
 #[test]
-fn indice_remoto_recacheado_si_cambia_la_spec() {
+fn index_remoto_recacheado_si_cambia_la_spec() {
     let base = tmp("reidx");
     // Dos índices-repo git distintos: el 1º publica geo 1.0.0 (imprime 100), el 2º geo 2.0.0 (200).
-    let r100 = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 100 }\n");
-    let r200 = publicar(&base, "geo", "2.0.0", "pub fn v() -> int { 200 }\n");
+    let r100 = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 100 }\n");
+    let r200 = publish(&base, "geo", "2.0.0", "pub fn v() -> int { 200 }\n");
     let idx1 = base.join("idx1");
-    indexar(&idx1, "geo", &[("1.0.0", &r100)]);
+    write_index(&idx1, "geo", &[("1.0.0", &r100)]);
     git(&idx1, &["init", "-q"]);
     git(&idx1, &["add", "-A"]);
     git(&idx1, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i1"]);
     let idx2 = base.join("idx2");
-    indexar(&idx2, "geo", &[("2.0.0", &r200)]);
+    write_index(&idx2, "geo", &[("2.0.0", &r200)]);
     git(&idx2, &["init", "-q"]);
     git(&idx2, &["add", "-A"]);
     git(&idx2, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i2"]);
@@ -508,7 +508,7 @@ fn indice_remoto_recacheado_si_cambia_la_spec() {
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
     std::fs::write(app.join("ray.toml"), manifest(&idx1)).unwrap();
     let (out, err, code) = ray_plain(&app, &["run"]);
-    assert_eq!(code, 0, "resuelve del índice 1\n{err}");
+    assert_eq!(code, 0, "resolves del índice 1\n{err}");
     assert!(out.contains("100"), "geo 1.0.0 del índice 1\n{out}");
 
     // Cambiar la spec del índice en ray.toml → la caché `.ray-deps/.index` debe descartarse y
@@ -517,33 +517,33 @@ fn indice_remoto_recacheado_si_cambia_la_spec() {
     let (_o, err, code) = ray_plain(&app, &["update"]);
     assert_eq!(code, 0, "update con el índice cambiado\n{err}");
     let (out, err, code) = ray_plain(&app, &["run"]);
-    assert_eq!(code, 0, "corre tras el cambio de índice\n{err}");
+    assert_eq!(code, 0, "runs after el cambio de índice\n{err}");
     assert!(out.contains("200"), "resolvió geo 2.0.0 del índice 2 (re-clonado)\n{out}\n{err}");
 }
 
 // ── M51e: H5 check semántico en publish · H6 pre-releases · H7 aviso de índice propio ──
 
 #[test]
-fn publish_corre_el_check_semantico() {
+fn publish_runs_el_check_semantico() {
     let base = tmp("publishcheck");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
 
     // (a) Un paquete que lexea y parsea pero NO chequea (tipo de retorno mal) → publish falla.
-    let roto = publicar(&base, "roto", "1.0.0", "pub fn v() -> int { true }\n");
+    let roto = publish(&base, "roto", "1.0.0", "pub fn v() -> int { true }\n");
     let repo_spec = format!("git+file://{}@v1.0.0", roto.display());
     let (_o, err, code) = ray_idx(&roto, &index, &["publish", "--repo", &repo_spec]);
-    assert_eq!(code, 65, "publish de un paquete que no chequea falla\n{err}");
+    assert_eq!(code, 65, "publish de un package what no chequea fails\n{err}");
     assert!(err.contains("no supera el check semántico"), "mensaje claro:\n{err}");
     assert!(!index.join("roto.toml").exists(), "no se publicó nada");
 
     // (b) Un paquete CON dependencia por nombre: el check la resuelve (índice) y pasa.
-    let geo = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 21 }\n");
-    indexar(&index, "geo", &[("1.0.0", &geo)]);
+    let geo = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 21 }\n");
+    write_index(&index, "geo", &[("1.0.0", &geo)]);
     let calc = base.join("calc-work");
     std::fs::create_dir_all(&calc).unwrap();
     git(&calc, &["init", "-q"]);
-    std::fs::write(calc.join("mod.ray"), "from geo import v;\npub fn doble() -> int { v() * 2 }\n").unwrap();
+    std::fs::write(calc.join("mod.ray"), "from geo import v;\npub fn double() -> int { v() * 2 }\n").unwrap();
     std::fs::write(
         calc.join("ray.toml"),
         "[package]\nname = \"calc\"\nversion = \"1.0.0\"\n\n[dependencies]\ngeo = \"1.0.0\"\n",
@@ -554,7 +554,7 @@ fn publish_corre_el_check_semantico() {
     git(&calc, &["tag", "v1.0.0"]);
     let repo_spec = format!("git+file://{}@v1.0.0", calc.display());
     let (out, err, code) = ray_idx(&calc, &index, &["publish", "--repo", &repo_spec]);
-    assert_eq!(code, 0, "publish con dep por nombre chequea y pasa\n{err}");
+    assert_eq!(code, 0, "publish con dep por name chequea y pasa\n{err}");
     assert!(out.contains("publicado calc 1.0.0"), "{out}");
 }
 
@@ -562,9 +562,9 @@ fn publish_corre_el_check_semantico() {
 fn pre_releases_son_opt_in() {
     let base = tmp("prerel");
     let index = base.join("index");
-    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
-    let rrc = publicar(&base, "geo", "1.3.0-rc1", "pub fn v() -> int { 131 }\n");
-    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0-rc1", &rrc)]);
+    let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    let rrc = publish(&base, "geo", "1.3.0-rc1", "pub fn v() -> int { 131 }\n");
+    write_index(&index, "geo", &[("1.2.0", &r120), ("1.3.0-rc1", &rrc)]);
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
 
     // Un rango (^1.2) NUNCA elige la pre-release por sorpresa.
@@ -588,16 +588,16 @@ fn pre_releases_son_opt_in() {
     )
     .unwrap();
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_eq!(code, 0, "la pre-release explícita corre\n{err}");
+    assert_eq!(code, 0, "la pre-release explícita runs\n{err}");
     assert!(out.contains("131"), "instaló la 1.3.0-rc1 pedida\n{out}");
 }
 
 #[test]
-fn transitiva_con_indice_propio_avisa() {
+fn transitiva_con_index_propio_avisa() {
     let base = tmp("ownidx");
     let index = base.join("index");
-    let util = publicar(&base, "util", "1.0.0", "pub fn u() -> int { 5 }\n");
-    indexar(&index, "util", &[("1.0.0", &util)]);
+    let util = publish(&base, "util", "1.0.0", "pub fn u() -> int { 5 }\n");
+    write_index(&index, "util", &[("1.0.0", &util)]);
     // `geo` declara su PROPIO índice y una dep por nombre → al consumirla, aviso de confusion.
     let geo = base.join("geo-repo");
     std::fs::create_dir_all(&geo).unwrap();
@@ -605,13 +605,13 @@ fn transitiva_con_indice_propio_avisa() {
     std::fs::write(geo.join("mod.ray"), "pub fn v() -> int { 7 }\n").unwrap();
     std::fs::write(
         geo.join("ray.toml"),
-        "[package]\nname = \"geo\"\nversion = \"1.0.0\"\n\n[registry]\nindex = \"git+https://otro.ejemplo/indice\"\n\n[dependencies]\nutil = \"1.0.0\"\n",
+        "[package]\nname = \"geo\"\nversion = \"1.0.0\"\n\n[registry]\nindex = \"git+https://other.ejemplo/index\"\n\n[dependencies]\nutil = \"1.0.0\"\n",
     )
     .unwrap();
     git(&geo, &["add", "-A"]);
     git(&geo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "geo"]);
     git(&geo, &["tag", "v1.0.0"]);
-    indexar(&index, "geo", &[("1.0.0", &geo)]);
+    write_index(&index, "geo", &[("1.0.0", &geo)]);
 
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
     std::fs::write(
@@ -621,7 +621,7 @@ fn transitiva_con_indice_propio_avisa() {
     .unwrap();
     // Corre (util se resuelve contra NUESTRO índice) pero avisa del índice propio de geo.
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_eq!(code, 0, "corre pese al aviso\n{err}");
+    assert_eq!(code, 0, "runs pese al aviso\n{err}");
     assert!(out.contains("7"), "{out}");
     assert!(err.contains("declara su propio índice"), "aviso de dependency confusion:\n{err}");
 }
@@ -632,10 +632,10 @@ fn transitiva_con_indice_propio_avisa() {
 fn ray_remove_elimina_dep_lock_y_cache() {
     let base = tmp("remove");
     let index = base.join("index");
-    let geo = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 9 }\n");
-    let util = publicar(&base, "util", "1.0.0", "pub fn u() -> int { 1 }\n");
-    indexar(&index, "geo", &[("1.0.0", &geo)]);
-    indexar(&index, "util", &[("1.0.0", &util)]);
+    let geo = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 9 }\n");
+    let util = publish(&base, "util", "1.0.0", "pub fn u() -> int { 1 }\n");
+    write_index(&index, "geo", &[("1.0.0", &geo)]);
+    write_index(&index, "util", &[("1.0.0", &util)]);
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
     std::fs::write(
         app.join("ray.toml"),
@@ -651,7 +651,7 @@ fn ray_remove_elimina_dep_lock_y_cache() {
     assert_eq!(code, 0, "remove OK\n{err}");
     assert!(out.contains("eliminada"), "{out}");
     let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
-    assert!(!toml.contains("util"), "fuera del manifiesto:\n{toml}");
+    assert!(!toml.contains("util"), "outside del manifest:\n{toml}");
     let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
     assert!(!lock.contains("[util]") && lock.contains("[geo]"), "lock re-resuelto:\n{lock}");
     assert!(!app.join(".ray-deps/util").exists(), "caché de util borrada");
@@ -662,19 +662,19 @@ fn ray_remove_elimina_dep_lock_y_cache() {
 
     // remove de algo no declarado → error claro.
     let (_o, err, code) = ray_idx(&app, &index, &["remove", "util"]);
-    assert_eq!(code, 65, "remove de una dep inexistente falla");
+    assert_eq!(code, 65, "remove de one dep nonexistent fails");
     assert!(err.contains("no está declarada"), "{err}");
 }
 
 #[test]
-fn ray_search_lista_el_indice() {
+fn ray_search_list_el_index() {
     let base = tmp("search");
     let index = base.join("index");
-    let r12 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 1 }\n");
-    let r13 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 2 }\n");
-    let net = publicar(&base, "net-extra", "0.1.0", "pub fn n() -> int { 3 }\n");
-    indexar(&index, "geo", &[("1.2.0", &r12), ("1.3.0", &r13)]);
-    indexar(&index, "net-extra", &[("0.1.0", &net)]);
+    let r12 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 1 }\n");
+    let r13 = publish(&base, "geo", "1.3.0", "pub fn v() -> int { 2 }\n");
+    let net = publish(&base, "net-extra", "0.1.0", "pub fn n() -> int { 3 }\n");
+    write_index(&index, "geo", &[("1.2.0", &r12), ("1.3.0", &r13)]);
+    write_index(&index, "net-extra", &[("0.1.0", &net)]);
     let app = app(&base, "fn main() -> int { 0 }\n");
 
     // Con patrón: solo los que casan, con su última versión instalable.
@@ -686,8 +686,8 @@ fn ray_search_lista_el_indice() {
     // Sin patrón: todos, ordenados.
     let (out, _e, code) = ray_idx(&app, &index, &["search"]);
     assert_eq!(code, 0);
-    assert!(out.contains("geo 1.3.0") && out.contains("net-extra 0.1.0"), "lista completa:\n{out}");
-    assert!(out.contains("2 paquete(s)"), "{out}");
+    assert!(out.contains("geo 1.3.0") && out.contains("net-extra 0.1.0"), "list complete:\n{out}");
+    assert!(out.contains("2 package(s)"), "{out}");
 
     // Sin resultados → mensaje, código 0 (no es un error).
     let (out, _e, code) = ray_idx(&app, &index, &["search", "zzz"]);
@@ -707,7 +707,7 @@ fn ray_signed(cwd: &Path, index: &Path, key: &Path, args: &[&str]) -> (String, S
         .env("RAY_INDEX", index)
         .env("RAY_KEY", key)
         .output()
-        .expect("lanza el binario");
+        .expect("lanza el binary");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -718,7 +718,7 @@ fn ray_signed(cwd: &Path, index: &Path, key: &Path, args: &[&str]) -> (String, S
 /// keygen → publish --sign: reclama el nombre (owners.toml + TOFU de la pubkey), firma la
 /// entrada, y un consumidor resuelve con la firma VERIFICADA. index-verify da OK.
 #[test]
-fn publish_firmado_reclama_verifica_y_audita() {
+fn publish_firmado_reclama_verifies_y_audita() {
     let base = tmp("sign");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -731,10 +731,10 @@ fn publish_firmado_reclama_verifica_y_audita() {
 
     let (out, err, code) = ray_signed(&work, &index, &key, &["publish", "--sign"]);
     assert_eq!(code, 0, "publish --sign OK\n{err}");
-    assert!(out.contains("reclamado en el índice"), "primera publicación reclama\n{out}");
-    assert!(out.contains("firma: ed25519"), "{out}");
+    assert!(out.contains("reclamado en el índice"), "first publicación reclama\n{out}");
+    assert!(out.contains("signature: ed25519"), "{out}");
     let entry = std::fs::read_to_string(index.join("mate.toml")).unwrap();
-    assert!(entry.contains("sig = \"ed25519:"), "la entrada lleva la firma\n{entry}");
+    assert!(entry.contains("sig = \"ed25519:"), "la entry lleva la signature\n{entry}");
     let owners = std::fs::read_to_string(index.join("mate.owners.toml")).unwrap();
     assert!(owners.contains("pubkey = \"ed25519:"), "el sidecar registra la pubkey\n{owners}");
 
@@ -746,18 +746,18 @@ fn publish_firmado_reclama_verifica_y_audita() {
     )
     .unwrap();
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_eq!(code, 0, "el consumidor corre con la firma verificada\n{err}");
+    assert_eq!(code, 0, "el consumidor runs con la signature verificada\n{err}");
     assert!(out.contains("42"), "{out}");
 
     // La auditoría del índice (para el CI del repo del índice) está verde.
     let (out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
     assert_eq!(code, 0, "index-verify OK\n{err}");
-    assert!(out.contains("1 firmadas y verificadas"), "{out}");
+    assert!(out.contains("1 signed y verificadas"), "{out}");
 }
 
 /// Una firma MANIPULADA (o que no casa con el dueño) rompe la resolución y la auditoría.
 #[test]
-fn firma_manipulada_rompe_resolucion_y_auditoria() {
+fn signature_manipulada_breaks_resolucion_y_auditoria() {
     let base = tmp("signtamper");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -790,17 +790,17 @@ fn firma_manipulada_rompe_resolucion_y_auditoria() {
     )
     .unwrap();
     let (_out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_ne!(code, 0, "la firma inválida debe romper la resolución");
-    assert!(err.contains("FIRMA") && err.contains("no verifica"), "{err}");
+    assert_ne!(code, 0, "la signature inválida must romper la resolución");
+    assert!(err.contains("FIRMA") && err.contains("no verifies"), "{err}");
 
     let (_out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
-    assert_ne!(code, 0, "index-verify debe fallar\n{err}");
+    assert_ne!(code, 0, "index-verify must fallar\n{err}");
     assert!(err.contains("FALLO"), "{err}");
 }
 
 /// El nombre reclamado PROTEGE: otra clave no puede publicar --sign sobre él.
 #[test]
-fn otra_clave_no_puede_publicar_un_nombre_reclamado() {
+fn other_clave_no_can_publish_un_name_reclamado() {
     let base = tmp("signowner");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -810,7 +810,7 @@ fn otra_clave_no_puede_publicar_un_nombre_reclamado() {
     ray_signed(&work, &index, &key1, &["keygen"]);
     ray_signed(&work, &index, &key2, &["keygen", "--out", key2.to_str().unwrap()]);
     let (_o, err, code) = ray_signed(&work, &index, &key1, &["publish", "--sign"]);
-    assert_eq!(code, 0, "el dueño publica\n{err}");
+    assert_eq!(code, 0, "el dueño public\n{err}");
 
     // v1.1.0 con OTRA clave → rechazado por el dueño registrado.
     std::fs::write(
@@ -822,7 +822,7 @@ fn otra_clave_no_puede_publicar_un_nombre_reclamado() {
     git(&work, &["commit", "-m", "v1.1.0"]);
     git(&work, &["tag", "v1.1.0"]);
     let (_out, err, code) = ray_signed(&work, &index, &key2, &["publish", "--sign"]);
-    assert_ne!(code, 0, "otra clave no publica un nombre ajeno");
+    assert_ne!(code, 0, "other clave no public un name ajeno");
     assert!(err.contains("tu clave NO coincide"), "{err}");
 }
 
@@ -844,11 +844,11 @@ fn clonar_en_mirror(mirror_root: &Path, repo: &Path) {
 /// El mirror sirve el paquete aunque el origen haya DESAPARECIDO (disponibilidad); el hash
 /// del índice verifica el contenido igual (mirror trustless).
 #[test]
-fn mirror_sirve_el_paquete_si_el_origen_cae() {
+fn mirror_sirve_el_package_si_el_origen_cae() {
     let base = tmp("mirror");
     let index = base.join("index");
-    let repo = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
-    indexar(&index, "geo", &[("1.2.0", &repo)]);
+    let repo = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    write_index(&index, "geo", &[("1.2.0", &repo)]);
     let mirror_root = base.join("mirror");
     clonar_en_mirror(&mirror_root, &repo);
     // El origen cae: el índice sigue apuntando a él, pero ya no existe.
@@ -866,10 +866,10 @@ fn mirror_sirve_el_paquete_si_el_origen_cae() {
     .unwrap();
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
     assert_eq!(code, 0, "run OK vía mirror\n{err}");
-    assert!(out.contains("120"), "usa el paquete servido por el mirror\n{out}");
+    assert!(out.contains("120"), "uses el package servido por el mirror\n{out}");
     // El lock registra la URL ORIGINAL (el mirror es transporte, no identidad).
     let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
-    assert!(!lock.contains("/mirror/"), "el lock no debe apuntar al mirror:\n{lock}");
+    assert!(!lock.contains("/mirror/"), "el lock no must apuntar al mirror:\n{lock}");
 }
 
 /// Un mirror que no tiene el paquete NO rompe la resolución: se avisa y se cae al origen.
@@ -877,8 +877,8 @@ fn mirror_sirve_el_paquete_si_el_origen_cae() {
 fn mirror_caido_cae_a_la_url_original() {
     let base = tmp("mirrorfall");
     let index = base.join("index");
-    let repo = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
-    indexar(&index, "geo", &[("1.2.0", &repo)]);
+    let repo = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    write_index(&index, "geo", &[("1.2.0", &repo)]);
 
     let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
     std::fs::write(
@@ -886,7 +886,7 @@ fn mirror_caido_cae_a_la_url_original() {
         format!(
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nmirror = \"file://{}\"\n\n\
              [dependencies]\ngeo = \"1.2.0\"\n",
-            base.join("mirror-vacio").display() // no existe
+            base.join("mirror-empty").display() // no existe
         ),
     )
     .unwrap();

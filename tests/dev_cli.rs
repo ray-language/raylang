@@ -18,7 +18,7 @@ fn esperar_contenido(path: &std::path::Path, needle: &str, secs: u64) -> String 
                 return s;
             }
         }
-        assert!(Instant::now() < deadline, "'{needle}' no apareció en {secs}s; salida:\n{s}");
+        assert!(Instant::now() < deadline, "'{needle}' no apareció en {secs}s; output:\n{s}");
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -31,7 +31,7 @@ fn dev_reinicia_ante_cambios() {
     std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
     std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v1\"); 0 }\n").unwrap();
 
-    let out_path = base.join("salida.txt");
+    let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
     let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -49,8 +49,8 @@ fn dev_reinicia_ante_cambios() {
     // 2) Editar el fuente → el watcher lo ve y relanza con el código NUEVO.
     std::thread::sleep(Duration::from_millis(50)); // mtime estrictamente posterior
     std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
-    let salida = esperar_contenido(&out_path, "v2", 10);
-    assert!(salida.contains("reiniciando"), "anuncia el reinicio:\n{salida}");
+    let output = esperar_contenido(&out_path, "v2", 10);
+    assert!(output.contains("reiniciando"), "anuncia el reinicio:\n{output}");
 
     let _ = dev.kill();
     let _ = dev.wait();

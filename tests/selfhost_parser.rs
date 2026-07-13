@@ -62,7 +62,7 @@ fn dump_type(t: &Type) -> String {
         }
         Type::SelfType => "Self".into(),
         Type::Dyn(traits) => format!("dyn {}", traits.join(" + ")),
-        other => panic!("el parser no debería producir el tipo {:?}", other),
+        other => panic!("el parser no debería producir el type {:?}", other),
     }
 }
 
@@ -451,9 +451,9 @@ fn repo_path(rel: &str) -> PathBuf {
 
 /// Ejecuta el parser auto-alojado sobre `src`: lo escribe a un temporal y corre
 /// `raylang selfhost/parse_dump.ray <temporal>`. Devuelve su stdout (sin el salto final).
-fn parse_dump(src: &str, nombre_tmp: &str) -> String {
+fn parse_dump(src: &str, name_tmp: &str) -> String {
     let mut tmp = std::env::temp_dir();
-    tmp.push(nombre_tmp);
+    tmp.push(name_tmp);
     let mut f = std::fs::File::create(&tmp).expect("crea el temporal");
     f.write_all(src.as_bytes()).expect("escribe el temporal");
     drop(f);
@@ -472,72 +472,72 @@ fn parse_dump(src: &str, nombre_tmp: &str) -> String {
 }
 
 /// Compara el parser auto-alojado con el oráculo para una fuente concreta.
-fn comparar(src: &str, nombre_tmp: &str) {
-    let esperado = canonical(src);
-    let obtenido = parse_dump(src, nombre_tmp);
-    assert_eq!(obtenido, esperado, "el parser auto-alojado difiere del oráculo para:\n{src}");
+fn compare(src: &str, name_tmp: &str) {
+    let expected = canonical(src);
+    let obtained = parse_dump(src, name_tmp);
+    assert_eq!(obtained, expected, "el parser auto-alojado difiere del oráculo para:\n{src}");
 }
 
 #[test]
-fn funcion_minima() {
-    comparar("fn main() -> int { 0 }", "sp_min.ray");
-    comparar("fn nada() { }", "sp_unit.ray");
+fn function_minima() {
+    compare("fn main() -> int { 0 }", "sp_min.ray");
+    compare("fn nada() { }", "sp_unit.ray");
 }
 
 #[test]
-fn precedencia_y_asociatividad() {
+fn precedence_y_asociatividad() {
     // `1 + 2 * 3` → `1 + (2 * 3)`;  `1 - 2 - 3` → `(1 - 2) - 3`.
-    comparar("fn f() -> int { 1 + 2 * 3 }", "sp_prec.ray");
-    comparar("fn f() -> int { 1 - 2 - 3 }", "sp_asoc.ray");
-    comparar("fn f() -> bool { !a && b || c == d }", "sp_logic.ray");
-    comparar("fn f() -> int { -(-x) }", "sp_unary.ray");
+    compare("fn f() -> int { 1 + 2 * 3 }", "sp_prec.ray");
+    compare("fn f() -> int { 1 - 2 - 3 }", "sp_asoc.ray");
+    compare("fn f() -> bool { !a && b || c == d }", "sp_logic.ray");
+    compare("fn f() -> int { -(-x) }", "sp_unary.ray");
 }
 
 #[test]
-fn llamadas_indexacion_y_campos() {
-    comparar("fn f() -> int { g(1, 2) }", "sp_call.ray");
-    comparar("fn f() -> int { a[i][j] }", "sp_index.ray");
-    comparar("fn f() -> int { p.x.y }", "sp_field.ray");
-    comparar("fn f() -> int { obj.metodo(1).campo }", "sp_chain.ray");
-    comparar("fn f() -> int { g() }", "sp_call0.ray");
+fn calls_indexacion_y_fields() {
+    compare("fn f() -> int { g(1, 2) }", "sp_call.ray");
+    compare("fn f() -> int { a[i][j] }", "sp_index.ray");
+    compare("fn f() -> int { p.x.y }", "sp_field.ray");
+    compare("fn f() -> int { obj.method(1).campo }", "sp_chain.ray");
+    compare("fn f() -> int { g() }", "sp_call0.ray");
 }
 
 #[test]
-fn sentencias() {
-    comparar("fn f() -> int { let x = 1; let y: int = 2; x + y }", "sp_let.ray");
-    comparar("fn f() { var i = 0; i = i + 1; }", "sp_assign.ray");
-    comparar("fn f() -> int { return 7; }", "sp_ret.ray");
-    comparar("fn f() { return; }", "sp_ret0.ray");
-    comparar("fn f() -> int { a[0] = 9; p.x = 1; 0 }", "sp_assign_lvalue.ray");
+fn statements() {
+    compare("fn f() -> int { let x = 1; let y: int = 2; x + y }", "sp_let.ray");
+    compare("fn f() { var i = 0; i = i + 1; }", "sp_assign.ray");
+    compare("fn f() -> int { return 7; }", "sp_ret.ray");
+    compare("fn f() { return; }", "sp_ret0.ray");
+    compare("fn f() -> int { a[0] = 9; p.x = 1; 0 }", "sp_assign_lvalue.ray");
 }
 
 #[test]
 fn control_de_flujo() {
-    comparar("fn f() -> int { if (c) { 1 } else { 2 } }", "sp_if.ray");
-    comparar("fn f() -> int { if (a) { 1 } else if (b) { 2 } else { 3 } }", "sp_elseif.ray");
-    comparar("fn f() { while (i < 10) { i = i + 1; } }", "sp_while.ray");
-    comparar("fn f() -> int { { let x = 1; x } }", "sp_block.ray");
+    compare("fn f() -> int { if (c) { 1 } else { 2 } }", "sp_if.ray");
+    compare("fn f() -> int { if (a) { 1 } else if (b) { 2 } else { 3 } }", "sp_elseif.ray");
+    compare("fn f() { while (i < 10) { i = i + 1; } }", "sp_while.ray");
+    compare("fn f() -> int { { let x = 1; x } }", "sp_block.ray");
 }
 
 #[test]
-fn literales() {
-    comparar("fn f() -> [int] { [1, 2, 3] }", "sp_array.ray");
-    comparar("fn f() -> [int] { [] }", "sp_array0.ray");
-    comparar("fn f() -> float { 3.14 }", "sp_float.ray");
-    comparar("fn f() -> string { \"hola\\nmundo\" }", "sp_str.ray");
-    comparar("fn f() -> char { 'a' }", "sp_char.ray");
-    comparar("fn f() -> bool { true }", "sp_bool.ray");
+fn literals() {
+    compare("fn f() -> [int] { [1, 2, 3] }", "sp_array.ray");
+    compare("fn f() -> [int] { [] }", "sp_array0.ray");
+    compare("fn f() -> float { 3.14 }", "sp_float.ray");
+    compare("fn f() -> string { \"hello\\nmundo\" }", "sp_str.ray");
+    compare("fn f() -> char { 'a' }", "sp_char.ray");
+    compare("fn f() -> bool { true }", "sp_bool.ray");
 }
 
 #[test]
-fn tipos() {
-    comparar("fn f(g: fn(int, bool) -> int, xs: [string]) -> [bool] { [] }", "sp_types.ray");
-    comparar("fn f(c: Color) -> Punto { p }", "sp_named.ray");
+fn types() {
+    compare("fn f(g: fn(int, bool) -> int, xs: [string]) -> [bool] { [] }", "sp_types.ray");
+    compare("fn f(c: Color) -> Punto { p }", "sp_named.ray");
 }
 
 #[test]
-fn varias_funciones() {
-    comparar(
+fn various_functions() {
+    compare(
         "fn a() -> int { 1 }\nfn b(x: int) -> int { x }\nfn main() -> int { a() + b(2) }",
         "sp_multi.ray",
     );
@@ -545,140 +545,140 @@ fn varias_funciones() {
 
 #[test]
 fn structs_y_enums() {
-    comparar("struct Punto { x: int, y: int }", "sp_struct.ray");
-    comparar("struct Vacio { }", "sp_struct0.ray");
-    comparar("enum Color { Rojo, Verde, Azul }", "sp_enum_unit.ray");
-    comparar("enum Figura { Circulo(float), Rect(float, float), Nada }", "sp_enum_payload.ray");
+    compare("struct Punto { x: int, y: int }", "sp_struct.ray");
+    compare("struct Vacio { }", "sp_struct0.ray");
+    compare("enum Color { Rojo, Verde, Azul }", "sp_enum_unit.ray");
+    compare("enum Figura { Circulo(float), Rect(float, float), Nada }", "sp_enum_payload.ray");
 }
 
 #[test]
 fn literal_de_struct() {
-    comparar("fn f() -> Punto { Punto { x: 1, y: 2 } }", "sp_structlit.ray");
-    comparar("fn f() -> Vacio { Vacio { } }", "sp_structlit0.ray");
-    comparar("fn f() -> Caja { Caja { v: g(1) + 2 } }", "sp_structlit_expr.ray");
+    compare("fn f() -> Punto { Punto { x: 1, y: 2 } }", "sp_structlit.ray");
+    compare("fn f() -> Vacio { Vacio { } }", "sp_structlit0.ray");
+    compare("fn f() -> Caja { Caja { v: g(1) + 2 } }", "sp_structlit_expr.ray");
 }
 
 #[test]
-fn funciones_anonimas() {
-    comparar("fn f() -> int { let g = fn(x: int) -> int { x + 1 }; g(2) }", "sp_fnexpr.ray");
+fn functions_anonimas() {
+    compare("fn f() -> int { let g = fn(x: int) -> int { x + 1 }; g(2) }", "sp_fnexpr.ray");
     // Anidadas: los ids son densos en pre-orden (exterior < interior).
-    comparar("fn f() { let h = fn() { let k = fn() { 0 }; k() }; }", "sp_fnexpr_nested.ray");
-    comparar("fn f() { let g = fn() { }; }", "sp_fnexpr_unit.ray");
+    compare("fn f() { let h = fn() { let k = fn() { 0 }; k() }; }", "sp_fnexpr_nested.ray");
+    compare("fn f() { let g = fn() { }; }", "sp_fnexpr_unit.ray");
 }
 
 #[test]
-fn match_y_patrones() {
-    comparar(
+fn match_y_patterns() {
+    compare(
         "fn f(o: Figura) -> float { match (o) { Figura.Circulo(r) => r, Figura.Nada => 0.0, _ => 1.0 } }",
         "sp_match.ray",
     );
-    comparar(
+    compare(
         "fn f(o: Par) -> int { match (o) { Par.Dos(a, _) => a, x => 0 } }",
         "sp_match_bind.ray",
     );
 }
 
 #[test]
-fn genericos_en_declaraciones() {
-    comparar("fn id<T>(x: T) -> T { x }", "sp_gen_fn.ray");
-    comparar("fn dos<A, B>(a: A, b: B) -> A { a }", "sp_gen_fn2.ray");
-    comparar("fn f<T: Show + Eq>(x: T) -> T { x }", "sp_gen_bounds.ray");
-    comparar("struct Caja<T: Show> { v: T }", "sp_gen_struct.ray");
-    comparar("enum Lista<T> { Vacia, Cons(T, Lista<T>) }", "sp_gen_enum.ray");
+fn generics_en_declaraciones() {
+    compare("fn id<T>(x: T) -> T { x }", "sp_gen_fn.ray");
+    compare("fn dos<A, B>(a: A, b: B) -> A { a }", "sp_gen_fn2.ray");
+    compare("fn f<T: Show + Eq>(x: T) -> T { x }", "sp_gen_bounds.ray");
+    compare("struct Caja<T: Show> { v: T }", "sp_gen_struct.ray");
+    compare("enum Lista<T> { Vacia, Cons(T, Lista<T>) }", "sp_gen_enum.ray");
 }
 
 #[test]
-fn tipos_genericos_dyn_y_map() {
-    comparar("fn f(c: Caja<int>, p: Par<A, [bool]>) -> Map<string, int> { m }", "sp_targs.ray");
+fn types_generics_dyn_y_map() {
+    compare("fn f(c: Caja<int>, p: Par<A, [bool]>) -> Map<string, int> { m }", "sp_targs.ray");
     // dyn: el conjunto es canónico (ordenado, sin duplicados): `dyn Show + Eq` → `dyn Eq + Show`.
-    comparar("fn f(x: dyn Show + Eq) -> int { 0 }", "sp_dyn.ray");
-    comparar("fn f(x: dyn Show) -> int { 0 }", "sp_dyn1.ray");
+    compare("fn f(x: dyn Show + Eq) -> int { 0 }", "sp_dyn.ray");
+    compare("fn f(x: dyn Show) -> int { 0 }", "sp_dyn1.ray");
 }
 
 #[test]
 fn traits_e_impls() {
-    comparar("trait Show { fn show(self) -> string; }", "sp_trait.ray");
-    comparar(
-        "trait Saludo { fn hola(self) -> string { \"hola\" } fn chau(self) -> string; }",
+    compare("trait Show { fn show(self) -> string; }", "sp_trait.ray");
+    compare(
+        "trait Saludo { fn hello(self) -> string { \"hello\" } fn chau(self) -> string; }",
         "sp_trait_default.ray",
     );
-    comparar("impl Show for int { fn show(self) -> string { \"i\" } }", "sp_impl.ray");
-    comparar(
+    compare("impl Show for int { fn show(self) -> string { \"i\" } }", "sp_impl.ray");
+    compare(
         "impl<T: Show> Show for Caja<T> { fn show(self) -> string { self.v.show() } }",
         "sp_impl_gen.ray",
     );
 }
 
 #[test]
-fn imports_y_modulos() {
-    comparar("import geo;\nfn main() -> int { 0 }", "sp_import.ray");
-    comparar("import geo/formas/circulo as c;\nfn main() -> int { 0 }", "sp_import_path.ray");
-    comparar("from mates import doble, triple as tri;\nfn main() -> int { 0 }", "sp_from.ray");
-    comparar("pub from util import area, Punto;\nfn main() -> int { 0 }", "sp_pubfrom.ray");
+fn imports_y_modules() {
+    compare("import geo;\nfn main() -> int { 0 }", "sp_import.ray");
+    compare("import geo/formas/circle as c;\nfn main() -> int { 0 }", "sp_import_path.ray");
+    compare("from mates import double, triple as tri;\nfn main() -> int { 0 }", "sp_from.ray");
+    compare("pub from util import area, Punto;\nfn main() -> int { 0 }", "sp_pubfrom.ray");
 }
 
 #[test]
-fn anotaciones_y_pub() {
-    comparar("@test\nfn prueba() -> bool { true }", "sp_ann.ray");
-    comparar("@derive(Eq, Show)\nstruct Punto { x: int, y: int }", "sp_derive.ray");
-    comparar("pub fn expuesta() -> int { 0 }", "sp_pub_fn.ray");
-    comparar("pub struct S { x: int }", "sp_pub_struct.ray");
-    comparar("pub enum E { A, B }", "sp_pub_enum.ray");
-    comparar("pub trait T { fn m(self) -> int; }", "sp_pub_trait.ray");
+fn annotations_y_pub() {
+    compare("@test\nfn prueba() -> bool { true }", "sp_ann.ray");
+    compare("@derive(Eq, Show)\nstruct Punto { x: int, y: int }", "sp_derive.ray");
+    compare("pub fn expuesta() -> int { 0 }", "sp_pub_fn.ray");
+    compare("pub struct S { x: int }", "sp_pub_struct.ray");
+    compare("pub enum E { A, B }", "sp_pub_enum.ray");
+    compare("pub trait T { fn m(self) -> int; }", "sp_pub_trait.ray");
 }
 
 #[test]
 fn azucar_try_y_pipeline() {
-    comparar("fn f() -> int { g()? }", "sp_try.ray");
-    comparar("fn f() -> int { a()?.b()? }", "sp_try_chain.ray");
+    compare("fn f() -> int { g()? }", "sp_try.ray");
+    compare("fn f() -> int { a()?.b()? }", "sp_try_chain.ray");
     // pipeline desazucara: `x |> g() |> h(1)` ≡ `h(g(x), 1)`.
-    comparar("fn f() -> int { x |> g() |> h(1) }", "sp_pipe.ray");
-    comparar("fn f() -> int { x |> g }", "sp_pipe_noargs.ray");
+    compare("fn f() -> int { x |> g() |> h(1) }", "sp_pipe.ray");
+    compare("fn f() -> int { x |> g }", "sp_pipe_noargs.ray");
 }
 
 #[test]
-fn referencias_calificadas_por_modulo() {
-    comparar("fn f(p: M.Punto) -> M.Color { p }", "sp_qual_type.ray");
-    comparar("fn f() -> M.Punto { M.Punto { x: 1 } }", "sp_qual_lit.ray");
-    comparar("fn f(c: M.Color) -> int { match (c) { M.Color.Rojo => 0, _ => 1 } }", "sp_qual_pat.ray");
+fn references_calificadas_por_modulo() {
+    compare("fn f(p: M.Punto) -> M.Color { p }", "sp_qual_type.ray");
+    compare("fn f() -> M.Punto { M.Punto { x: 1 } }", "sp_qual_lit.ray");
+    compare("fn f(c: M.Color) -> int { match (c) { M.Color.Rojo => 0, _ => 1 } }", "sp_qual_pat.ray");
 }
 
 /// M14.2d: errores como valores. Ante una entrada inválida, el parser auto-alojado debe producir el
 /// MISMO mensaje y ubicación que el de Rust (no abortar con `panic`).
 #[test]
-fn errores_de_sintaxis_igual_que_el_oraculo() {
-    comparar("fn f() -> int { let x = ; }", "spe_expr.ray"); // se esperaba una expresión, … Semicolon
-    comparar("1 + 2", "spe_toplevel.ray"); // se esperaba 'fn'
-    comparar("fn f( {", "spe_param.ray"); // se esperaba el nombre de un parámetro
-    comparar("fn f()", "spe_body.ray"); // se esperaba '{'
-    comparar("struct S { x }", "spe_field.ray"); // se esperaba ':' tras el nombre del campo
-    comparar("fn f() -> { 0 }", "spe_type.ray"); // se esperaba un tipo (...)
-    comparar("fn f() { 1 ", "spe_unclosed.ray"); // se esperaba '}' para cerrar el bloque
-    comparar("impl Foo bar Tipo { }", "spe_for.ray"); // se esperaba 'for', no 'bar'
-    comparar("@derive(Eq)\ntrait T { }", "spe_ann_trait.ray"); // no se permiten anotaciones sobre un trait
-    comparar("pub impl T for X { }", "spe_pub_impl.ray"); // 'pub' no se admite en un impl …
-    comparar("fn f() -> int { a b }", "spe_semi.ray"); // se esperaba ';' después de la expresión
+fn errors_de_syntax_equal_what_el_oracle() {
+    compare("fn f() -> int { let x = ; }", "spe_expr.ray"); // se esperaba una expresión, … Semicolon
+    compare("1 + 2", "spe_toplevel.ray"); // se esperaba 'fn'
+    compare("fn f( {", "spe_param.ray"); // se esperaba el nombre de un parámetro
+    compare("fn f()", "spe_body.ray"); // se esperaba '{'
+    compare("struct S { x }", "spe_field.ray"); // se esperaba ':' tras el nombre del campo
+    compare("fn f() -> { 0 }", "spe_type.ray"); // se esperaba un tipo (...)
+    compare("fn f() { 1 ", "spe_unclosed.ray"); // se esperaba '}' para cerrar el bloque
+    compare("impl Foo bar Tipo { }", "spe_for.ray"); // se esperaba 'for', no 'bar'
+    compare("@derive(Eq)\ntrait T { }", "spe_ann_trait.ray"); // no se permiten anotaciones sobre un trait
+    compare("pub impl T for X { }", "spe_pub_impl.ray"); // 'pub' no se admite en un impl …
+    compare("fn f() -> int { a b }", "spe_semi.ray"); // se esperaba ';' después de la expresión
 }
 
 /// El test fuerte de fidelidad: parsear TODOS los ejemplos reales y los PROPIOS fuentes del
 /// self-hosting (el parser se parsea a sí mismo, como el lexer se lexea a sí mismo), exigiendo que
 /// el parser en raylang coincida con el de Rust nodo a nodo (posiciones incluidas).
 #[test]
-fn parsea_archivos_reales_igual_que_el_oraculo() {
-    let mut archivos: Vec<String> = Vec::new();
+fn parses_files_reales_equal_what_el_oracle() {
+    let mut files: Vec<String> = Vec::new();
     // El toolchain auto-alojado (lexer/parser/checker/intérprete en raylang) **no soporta `bytes`**
     // (M16 fue solo del lado de Rust; `bytes` en self-hosting es un diferido). Los ejemplos que usan
     // `bytes`/`b"..."` quedan fuera de este corpus, como en su día quedó `mapa.ray` hasta M14.6.
     // M19.3a: tampoco soporta los **operadores bit a bit** (`& | ^ ~ << >>`), también diferidos →
     // se excluyen las librerías cripto de M19.3b (`sha1.ray`/`base64.ray`/`crypto_demo.ray`).
     const DIFERIDOS_SELFHOST: &[&str] = &[
-        "binario.ray", "http.ray", "webserver.ray",
+        "binary.ray", "http.ray", "webserver.ray",
         "tuplas.ray", // M27.1: tuplas (el toolchain auto-alojado aún no las soporta)
         "for_bucles.ray", // M27.2: bucle `for` (el toolchain auto-alojado aún no lo soporta)
-        "interpolacion.ray", // M27.3: interpolación de strings (idem)
+        "interpolation.ray", // M27.3: interpolación de strings (idem)
         "casts.ray", // M27.4: casts `as` (idem; usa `for`/interpolación también)
         "constantes.ray", // M27.5: const de nivel superior (idem)
-        "operadores.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
+        "operators.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
         "conversion_error.ray", // M28.2: `?` con From<S> / traits con params de tipo (idem)
         "enteros.ray", // M28.3: enteros con tamaño u8/u32/u64 + `for` (idem)
         "regex.ray", // M29.1c: el motor de regex usa tuplas `Option<(int,int)>` (M27.1, idem)
@@ -740,38 +740,38 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,
     // con fragmentos `mod.ray` no parseables sueltos), que prueba `modules_cli`.
-    const DIRS_EXCLUIDOS: &[&str] = &["capsula", "modulos", "proyecto", "ssr"];
-    fn recolectar(dir: &std::path::Path, fuera: &[&str], difer: &[&str], out: &mut Vec<String>) {
-        let mut entradas: Vec<_> = std::fs::read_dir(dir).expect("lee dir").filter_map(|e| e.ok()).map(|e| e.path()).collect();
-        entradas.sort();
-        for p in entradas {
+    const DIRS_EXCLUIDOS: &[&str] = &["capsule", "modules", "project", "ssr"];
+    fn recolectar(dir: &std::path::Path, outside: &[&str], difer: &[&str], out: &mut Vec<String>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir).expect("lee dir").filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries {
             if p.is_dir() {
-                let nombre = p.file_name().unwrap().to_string_lossy().to_string();
-                if !fuera.contains(&nombre.as_str()) {
-                    recolectar(&p, fuera, difer, out);
+                let name = p.file_name().unwrap().to_string_lossy().to_string();
+                if !outside.contains(&name.as_str()) {
+                    recolectar(&p, outside, difer, out);
                 }
             } else if p.extension().map(|x| x == "ray").unwrap_or(false) {
-                let nombre = p.file_name().unwrap().to_string_lossy().to_string();
-                if !difer.contains(&nombre.as_str()) {
+                let name = p.file_name().unwrap().to_string_lossy().to_string();
+                if !difer.contains(&name.as_str()) {
                     // Ruta relativa a la raíz del repo (p. ej. "examples/basics/fib.ray").
-                    let raiz = repo_path("");
-                    out.push(p.strip_prefix(&raiz).unwrap().to_string_lossy().to_string());
+                    let root = repo_path("");
+                    out.push(p.strip_prefix(&root).unwrap().to_string_lossy().to_string());
                 }
             }
         }
     }
-    recolectar(&repo_path("examples"), DIRS_EXCLUIDOS, DIFERIDOS_SELFHOST, &mut archivos);
+    recolectar(&repo_path("examples"), DIRS_EXCLUIDOS, DIFERIDOS_SELFHOST, &mut files);
     // Los propios fuentes del self-hosting: el parser se parsea a sí mismo.
-    archivos.push("selfhost/lexer.ray".into());
-    archivos.push("selfhost/lex_dump.ray".into());
-    archivos.push("selfhost/parser.ray".into());
-    archivos.push("selfhost/parse_dump.ray".into());
+    files.push("selfhost/lexer.ray".into());
+    files.push("selfhost/lex_dump.ray".into());
+    files.push("selfhost/parser.ray".into());
+    files.push("selfhost/parse_dump.ray".into());
 
-    for rel in &archivos {
+    for rel in &files {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
-        let esperado = canonical(&src);
-        let nombre_tmp = format!("sp_real_{}.ray", rel.replace('/', "_"));
-        let obtenido = parse_dump(&src, &nombre_tmp);
-        assert_eq!(obtenido, esperado, "el parser auto-alojado difiere del oráculo en {rel}");
+        let expected = canonical(&src);
+        let name_tmp = format!("sp_real_{}.ray", rel.replace('/', "_"));
+        let obtained = parse_dump(&src, &name_tmp);
+        assert_eq!(obtained, expected, "el parser auto-alojado difiere del oráculo en {rel}");
     }
 }

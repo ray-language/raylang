@@ -5,9 +5,9 @@
 use std::process::Command;
 
 const ESPERADO: &[&str] = &[
-    "hola%20mundo%20%26%20m%C3%A1s%3Dcosas%2F%C3%B1", // url_encode con UTF-8
+    "hello%20mundo%20%26%20m%C3%A1s%3Dcosas%2F%C3%B1", // url_encode con UTF-8
     "a-b_c.d~e",                                       // unreserved intactos
-    "hola mundo & más",                                // url_decode
+    "hello mundo & más",                                // url_decode
     "a b",                                              // '+' → espacio
     "Ada Lovelace",                                    // query: '+' en valor
     "admin",
@@ -24,7 +24,7 @@ const ESPERADO: &[&str] = &[
     "aSet-Cookie: evil=v",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/url_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -43,11 +43,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn url_query_cookies_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn url_query_cookies_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn url_query_cookies_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

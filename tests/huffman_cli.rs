@@ -16,27 +16,27 @@ const ESPERADO: &[&str] = &[
     "9d29ad171863c78f0b97c8e9ae82ae43d3", "roundtrip ok",           // C.6.1  location
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/huffman_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta huffman_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 #[test]
-fn huffman_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn huffman_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "huffman_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn huffman_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "huffman_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }

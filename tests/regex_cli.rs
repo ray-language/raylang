@@ -33,14 +33,14 @@ const ESPERADO: &[&str] = &[
     "search// ~ \"abc\" = si",
     "full  /[abc]+/ ~ \"cabba\" = si",
     "full  /[abc]+/ ~ \"cabxa\" = no",
-    "full  /[a-z]+/ ~ \"hola\" = si",
+    "full  /[a-z]+/ ~ \"hello\" = si",
     "full  /[a-z]+/ ~ \"Hola\" = no",
     "full  /[^0-9]+/ ~ \"abc\" = si",
     "full  /[^0-9]+/ ~ \"ab3\" = no",
     "full  /[A-Za-z0-9_]+/ ~ \"var_9\" = si",
     "full  /\\d+/ ~ \"2024\" = si",
     "full  /\\d+/ ~ \"20a4\" = no",
-    "full  /\\w+/ ~ \"hola_99\" = si",
+    "full  /\\w+/ ~ \"hello_99\" = si",
     "full  /a\\sb/ ~ \"a b\" = si",
     "full  /a\\sb/ ~ \"a_b\" = no",
     "full  /\\D+/ ~ \"abc\" = si",
@@ -59,11 +59,11 @@ const ESPERADO: &[&str] = &[
     "all   /\\d+/ ~ \"a12b345c6\" = [12,345,6]",
     "all   /[a-z]+/ ~ \"Hola Mundo 42\" = [ola,undo]",
     "repl  /\\d+/ \"quedan 3 de 10\" -> \"quedan N de N\"",
-    "repl  /\\s+/ \"hola   mundo  ya\" -> \"hola_mundo_ya\"",
+    "repl  /\\s+/ \"hello   mundo  ya\" -> \"hello_mundo_ya\"",
     "repl  /a/ \"banana\" -> \"b-n-n-\"",
     // M59.2 — errores como valores (compile) + la API compilada (métodos de Matcher).
     "comp  /gr(a|e/ = err: regex: falta ')'",
-    "comp  /[a-z/ = err: regex: falta ']' para cerrar la clase",
+    "comp  /[a-z/ = err: regex: falta ']' para close la class",
     "comp  /abc\\/ = err: regex: '\\' al final del patrón",
     "comp  /ab)c/ = err: regex: carácter inesperado en el patrón (¿')' de más?)",
     "re    full 2024 = si",
@@ -74,39 +74,39 @@ const ESPERADO: &[&str] = &[
     "re    repl = \"quedan N de N\"",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/stdlib/regex_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta regex_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout)
+    let lines = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|l| l.to_string())
         .collect();
-    (lineas, out.status.success())
+    (lines, out.status.success())
 }
 
 #[test]
-fn regex_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn regex_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "regex_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn regex_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "regex_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 /// Oráculo conductual: intérprete y VM deben producir EXACTAMENTE la misma salida.
 #[test]
-fn regex_ambos_motores_coinciden() {
-    let (interp, ok1) = correr(&[]);
-    let (vm, ok2) = correr(&["--vm"]);
+fn regex_ambos_engines_matches() {
+    let (interp, ok1) = run(&[]);
+    let (vm, ok2) = run(&["--vm"]);
     assert!(ok1 && ok2, "regex_demo falló");
     assert_eq!(interp, vm, "el intérprete y la VM difieren en regex_demo");
 }
@@ -133,29 +133,29 @@ const ESPERADO_M81: &[&str] = &[
     "find  /<.+>/ ~ \"<a><b>\" = (0,6)",
     "find  /<.+?>/ ~ \"<a><b>\" = (0,3)",
     "find  /a+?/ ~ \"aaa\" = (0,1)",
-    "caps /\"(.*?)\"/ ~ \"dice \"hola\" y \"adios\"\" → [0]=\"hola\" [1]=hola",
+    "caps /\"(.*?)\"/ ~ \"dice \"hello\" y \"adios\"\" → [0]=\"hello\" [1]=hello",
     "1,22,333",
     "a_b_c",
 ];
 
-fn correr_m81(flags: &[&str]) -> (Vec<String>, bool) {
+fn run_m81(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/stdlib/regex_captures_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta regex_captures_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout)
+    let lines = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|l| l.to_string())
         .collect();
-    (lineas, out.status.success())
+    (lines, out.status.success())
 }
 
 #[test]
-fn regex_capturas_ambos_motores() {
-    let (interp, ok1) = correr_m81(&[]);
-    let (vm, ok2) = correr_m81(&["--vm"]);
+fn regex_capturas_ambos_engines() {
+    let (interp, ok1) = run_m81(&[]);
+    let (vm, ok2) = run_m81(&["--vm"]);
     assert!(ok1 && ok2, "regex_captures_demo falló");
     assert_eq!(interp, ESPERADO_M81, "intérprete vs golden");
     assert_eq!(vm, ESPERADO_M81, "VM vs golden");

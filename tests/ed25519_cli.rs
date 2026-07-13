@@ -26,15 +26,15 @@ const ESPERADO: &[&str] = &[
     "si", "no",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/ed25519_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta ed25519_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 /// El intérprete (tree-walking) es lento para Ed25519 (~110 s: millones de multiplicaciones de campo),
@@ -43,15 +43,15 @@ fn correr(flags: &[&str]) -> (Vec<String>, bool) {
 /// ambos motores producen salida idéntica (verificado).
 #[test]
 #[ignore]
-fn ed25519_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn ed25519_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "ed25519_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn ed25519_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "ed25519_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }

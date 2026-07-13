@@ -39,28 +39,28 @@ struct Url {
 
 // Parsea "http://host[:port]/path" o "https://…" (puertos 80/443 por defecto). M19.4a: `https` usa TLS.
 fn parse_url(url: string) -> Result<Url, string> {
-    var resto: string = "";
+    var rest: string = "";
     var port: int = 80;
     var tls: bool = false;
     if (url.starts_with("https://")) {
-        resto = url.substring(8, url.len());
+        rest = url.substring(8, url.len());
         port = 443;
         tls = true;
     } else {
         if (url.starts_with("http://")) {
-            resto = url.substring(7, url.len());
+            rest = url.substring(7, url.len());
         } else {
             return Result.Err("solo se soporta http:// o https://");
         }
     }
 
     // Separar host[:port] de /path.
-    var hostport: string = resto;
+    var hostport: string = rest;
     var path: string = "/";
-    match (index_of(resto, "/")) {
+    match (index_of(rest, "/")) {
         Option.Some(idx) => {
-            hostport = resto.substring(0, idx);
-            path = resto.substring(idx, resto.len());
+            hostport = rest.substring(0, idx);
+            path = rest.substring(idx, rest.len());
         },
         Option.None => { },
     }
@@ -76,7 +76,7 @@ fn parse_url(url: string) -> Result<Url, string> {
                     port = n;
                 },
                 Option.None => {
-                    return Result.Err("puerto inválido: " + ps);
+                    return Result.Err("port inválido: " + ps);
                 },
             }
         },
@@ -88,16 +88,16 @@ fn parse_url(url: string) -> Result<Url, string> {
 // El valor de la cabecera `Host`: con el puerto cuando no es el default del esquema (RFC 9112;
 // un vhost en :8080 puede servir otra cosa sin él). M58.2 — el cliente WebSocket ya lo hacía.
 fn host_header(u: Url) -> string {
-    let defecto: int = if (u.tls) { 443 } else { 80 };
-    if (u.port == defecto) { u.host } else { u.host + ":" + to_string(u.port) }
+    let default: int = if (u.tls) { 443 } else { 80 };
+    if (u.port == default) { u.host } else { u.host + ":" + to_string(u.port) }
 }
 
 // ¿Las cabeceras extra ya traen `nombre` (case-insensitive)? Para no pisar las del llamador.
-fn tiene_cabecera(extra: Map<string, string>, nombre: string) -> bool {
+fn has_header(extra: Map<string, string>, name: string) -> bool {
     let ks: [string] = extra.keys();
     var i: int = 0;
     while (i < ks.len()) {
-        if (ks[i].to_lower() == nombre) {
+        if (ks[i].to_lower() == name) {
             return true;
         }
         i = i + 1;
@@ -119,19 +119,19 @@ fn build_request_conn(method: string, u: Url, body: bytes, extra: Map<string, st
     req = req + "Host: " + host_header(u) + "\r\n";
     req = req + "Connection: " + conn_val + "\r\n";
     // M58.2: anuncia gzip (el gunzip transparente existía desde M20.10b pero nunca se pedía).
-    if (!tiene_cabecera(extra, "accept-encoding")) {
+    if (!has_header(extra, "accept-encoding")) {
         req = req + "Accept-Encoding: gzip\r\n";
     }
     if (body.len() > 0) {
         req = req + "Content-Length: " + to_string(body.len()) + "\r\n";
     }
-    let nombres: [string] = extra.keys();
+    let names: [string] = extra.keys();
     var i: int = 0;
-    while (i < nombres.len()) {
-        let nombre: string = nombres[i];
-        match (get(extra, nombre)) {
+    while (i < names.len()) {
+        let name: string = names[i];
+        match (get(extra, name)) {
             Option.Some(valor) => {
-                req = req + nombre + ": " + valor + "\r\n";
+                req = req + name + ": " + valor + "\r\n";
             },
             Option.None => { },
         }
@@ -157,20 +157,20 @@ fn leer_con_plazo(h: int, plazo_fin: int) -> Result<bytes, string> {
 // Lee del socket hasta que el servidor cierra (o vence el plazo), acumulando bytes (binario intacto).
 fn leer_todo(h: int, plazo_fin: int) -> Result<bytes, string> {
     var acc: bytes = b"";
-    var seguir: bool = true;
+    var follow: bool = true;
     var err: string = "";
-    while (seguir) {
+    while (follow) {
         match (leer_con_plazo(h, plazo_fin)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
-                    seguir = false;
+                    follow = false;
                 } else {
                     acc = acc + trozo;
                 }
             },
             Result.Err(e) => {
                 err = e;
-                seguir = false;
+                follow = false;
             },
         }
     }
@@ -179,7 +179,7 @@ fn leer_todo(h: int, plazo_fin: int) -> Result<bytes, string> {
 
 // El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10);
 // no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
-fn find_fin_cabeceras(b: bytes) -> int {
+fn find_fin_headers(b: bytes) -> int {
     var i: int = 0;
     while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
@@ -191,8 +191,8 @@ fn find_fin_cabeceras(b: bytes) -> int {
 }
 
 // El índice del primer "\r\n" en bytes desde `from`, o -1. (Para el framing de transfer-encoding chunked.)
-fn find_crlf(b: bytes, desde: int) -> int {
-    var i: int = desde;
+fn find_crlf(b: bytes, from: int) -> int {
+    var i: int = from;
     while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;
@@ -246,8 +246,8 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
     var out: bytes = b"";
     var pos: int = 0;
     let n: int = body.len();
-    var seguir: bool = true;
-    while (seguir && pos < n) {
+    var follow: bool = true;
+    while (follow && pos < n) {
         let line_end: int = find_crlf(body, pos);
         if (line_end < 0) {
             return Result.Err("chunk sin CRLF de tamaño");
@@ -255,7 +255,7 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
         let size: int = parse_chunk_size(body, pos, line_end);
         pos = line_end + 2;
         if (size <= 0) {
-            seguir = false;  // chunk final (0)
+            follow = false;  // chunk final (0)
         } else {
             if (pos + size > n) {
                 return Result.Err("chunk truncado");
@@ -268,42 +268,42 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
 }
 
 fn parse_response(raw: bytes) -> Result<Response, string> {
-    let sep: int = find_fin_cabeceras(raw);
+    let sep: int = find_fin_headers(raw);
     if (sep < 0) {
-        return Result.Err("respuesta HTTP malformada (sin separador de cabeceras)");
+        return Result.Err("response HTTP malformada (sin separador de headers)");
     }
     // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
-    let cuerpo: bytes = raw.sub_bytes(sep + 4, raw.len());
+    let body: bytes = raw.sub_bytes(sep + 4, raw.len());
     match (from_utf8(raw.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("cabeceras HTTP no son UTF-8: " + e),
-        Result.Ok(cabeceras_raw) => {
-            let lineas: [string] = cabeceras_raw.split("\r\n");
+        Result.Err(e) => Result.Err("headers HTTP no son UTF-8: " + e),
+        Result.Ok(headers_raw) => {
+            let lines: [string] = headers_raw.split("\r\n");
 
             // Línea de estado: "HTTP/1.1 200 OK".
-            let partes: [string] = lineas[0].split(" ");
-            if (partes.len() < 2) {
-                return Result.Err("línea de estado malformada: " + lineas[0]);
+            let parts: [string] = lines[0].split(" ");
+            if (parts.len() < 2) {
+                return Result.Err("línea de estado malformada: " + lines[0]);
             }
             var status: int = 0;
-            match (parse_int(partes[1])) {
+            match (parse_int(parts[1])) {
                 Option.Some(n) => {
                     status = n;
                 },
                 Option.None => {
-                    return Result.Err("código de estado inválido: " + partes[1]);
+                    return Result.Err("código de estado inválido: " + parts[1]);
                 },
             }
 
             // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
             var headers: Map<string, string> = Map.new();
             var i: int = 1;
-            while (i < lineas.len()) {
-                let linea: string = lineas[i];
+            while (i < lines.len()) {
+                let linea: string = lines[i];
                 match (index_of(linea, ":")) {
                     Option.Some(c) => {
-                        let nombre: string = linea.substring(0, c).trim().to_lower();
+                        let name: string = linea.substring(0, c).trim().to_lower();
                         let valor: string = linea.substring(c + 1, linea.len()).trim();
-                        headers.insert(nombre, valor);
+                        headers.insert(name, valor);
                     },
                     Option.None => { },
                 }
@@ -311,13 +311,13 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             }
             // Transfer-Encoding: chunked → decodificar el cuerpo (un cliente robusto lo soporta;
             // algunos servidores siempre chunked aunque pidamos Connection: close).
-            var cuerpo_final: bytes = cuerpo;
+            var body_final: bytes = body;
             match (get(headers, "transfer-encoding")) {
                 Option.Some(te) => {
                     if (te.to_lower().contains("chunked")) {
-                        match (decode_chunked(cuerpo)) {
+                        match (decode_chunked(body)) {
                             Result.Ok(d) => {
-                                cuerpo_final = d;
+                                body_final = d;
                             },
                             Result.Err(e) => {
                                 return Result.Err(e);
@@ -342,11 +342,11 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                     Option.Some(cl) => {
                         match (parse_int(cl)) {
                             Option.Some(n) => {
-                                if (cuerpo_final.len() < n) {
-                                    return Result.Err("respuesta truncada: llegaron " + to_string(cuerpo_final.len()) + " de " + to_string(n) + " octetos");
+                                if (body_final.len() < n) {
+                                    return Result.Err("response truncada: llegaron " + to_string(body_final.len()) + " de " + to_string(n) + " octetos");
                                 }
-                                if (cuerpo_final.len() > n) {
-                                    cuerpo_final = cuerpo_final.sub_bytes(0, n);
+                                if (body_final.len() > n) {
+                                    body_final = body_final.sub_bytes(0, n);
                                 }
                             },
                             Option.None => { },
@@ -359,9 +359,9 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             match (get(headers, "content-encoding")) {
                 Option.Some(ce) => {
                     if (ce.to_lower().contains("gzip")) {
-                        match (gunzip_limit(cuerpo_final, 67108864)) {
+                        match (gunzip_limit(body_final, 67108864)) {
                             Result.Ok(d) => {
-                                cuerpo_final = d;
+                                body_final = d;
                             },
                             Result.Err(e) => {
                                 return Result.Err("gzip: " + e);
@@ -371,7 +371,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 },
                 Option.None => { },
             }
-            Result.Ok(Response { status: status, headers: headers, body: cuerpo_final })
+            Result.Ok(Response { status: status, headers: headers, body: body_final })
         },
     }
 }
@@ -523,9 +523,9 @@ fn absolutizar(base: string, loc: string) -> string {
         match (parse_url(base)) {
             Result.Ok(u) => {
                 let esquema: string = if (u.tls) { "https://" } else { "http://" };
-                let puerto: string = ":" + to_string(u.port);
-                let ruta: string = if (loc.starts_with("/")) { loc } else { "/" + loc };
-                esquema + u.host + puerto + ruta
+                let port: string = ":" + to_string(u.port);
+                let path: string = if (loc.starts_with("/")) { loc } else { "/" + loc };
+                esquema + u.host + port + path
             },
             Result.Err(_) => loc,
         }
@@ -648,19 +648,19 @@ fn conn_intento(c: Conn, method: string, path: string, body: bytes, headers: Map
             Result.Err(err_caida())
         },
         Result.Ok(_) => {
-            match (conn_leer_respuesta(c, method, plazo_fin)) {
+            match (conn_leer_response(c, method, plazo_fin)) {
                 Result.Err(e) => Result.Err(e),
                 Result.Ok(raw) => {
                     match (parse_response(raw)) {
                         Result.Err(e) => Result.Err(e),
                         Result.Ok(r) => {
                             // El servidor puede pedir cerrar tras esta respuesta.
-                            var cerrar: bool = false;
+                            var close: bool = false;
                             match (header(r, "connection")) {
-                                Option.Some(v) => { cerrar = v.to_lower().contains("close"); },
+                                Option.Some(v) => { close = v.to_lower().contains("close"); },
                                 Option.None => { },
                             }
-                            if (cerrar) {
+                            if (close) {
                                 conn_close(c);
                             }
                             Result.Ok(r)
@@ -700,7 +700,7 @@ fn conn_asegurar(c: Conn, n: int, plazo_fin: int) -> Result<int, string> {
             Result.Ok(mas) => {
                 if (!mas) {
                     conn_close(c);
-                    return Result.Err("error al leer: respuesta incompleta");
+                    return Result.Err("error al leer: response incompleta");
                 }
             },
         }
@@ -719,9 +719,9 @@ fn tomar(c: Conn, n: int) -> bytes {
 // Lee UNA respuesta completa y delimitada: cabeceras enteras y cuerpo por Content-Length /
 // chunked / sin-cuerpo (HEAD, 1xx, 204, 304, RFC 9112). Sin longitud declarada, cae a leer
 // hasta EOF (delimitación de una petición suelta) y la conexión deja de ser reutilizable.
-fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes, string> {
+fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, string> {
     // 1. Cabeceras completas ("\r\n\r\n").
-    var sep: int = find_fin_cabeceras(c.buf);
+    var sep: int = find_fin_headers(c.buf);
     while (sep < 0) {
         let habia: int = c.buf.len();
         match (conn_leer_mas(c, plazo_fin)) {
@@ -733,23 +733,23 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
                     // EOF antes de completar las cabeceras. Si no había llegado NADA, es la
                     // carrera del keep-alive ocioso → reintentable; si llegó algo, truncada.
                     conn_close(c);
-                    return if (habia == 0) { Result.Err(err_caida()) } else { Result.Err("error al leer: respuesta incompleta") };
+                    return if (habia == 0) { Result.Err(err_caida()) } else { Result.Err("error al leer: response incompleta") };
                 }
             },
         }
-        sep = find_fin_cabeceras(c.buf);
+        sep = find_fin_headers(c.buf);
     }
     let fin_cab: int = sep + 4;
 
     // 2. Decidir la delimitación del cuerpo con las cabeceras ya recibidas.
     match (from_utf8(c.buf.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("cabeceras HTTP no son UTF-8: " + e),
+        Result.Err(e) => Result.Err("headers HTTP no son UTF-8: " + e),
         Result.Ok(cab) => {
-            let lineas: [string] = cab.split("\r\n");
+            let lines: [string] = cab.split("\r\n");
             var status: int = 0;
-            let partes: [string] = lineas[0].split(" ");
-            if (partes.len() >= 2) {
-                match (parse_int(partes[1])) {
+            let parts: [string] = lines[0].split(" ");
+            if (parts.len() >= 2) {
+                match (parse_int(parts[1])) {
                     Option.Some(n) => { status = n; },
                     Option.None => { },
                 }
@@ -757,13 +757,13 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
             var chunked: bool = false;
             var content_len: int = 0 - 1;
             var i: int = 1;
-            while (i < lineas.len()) {
-                let lin: string = lineas[i].to_lower();
+            while (i < lines.len()) {
+                let lin: string = lines[i].to_lower();
                 if (lin.starts_with("transfer-encoding:")) {
                     chunked = lin.contains("chunked");
                 }
                 if (lin.starts_with("content-length:")) {
-                    match (parse_int(lineas[i].substring(15, lineas[i].len()).trim())) {
+                    match (parse_int(lines[i].substring(15, lines[i].len()).trim())) {
                         Option.Some(n) => { content_len = n; },
                         Option.None => { },
                     }
@@ -782,14 +782,14 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
                 return Result.Ok(tomar(c, fin_cab + content_len));
             }
             // Sin longitud declarada: el EOF delimita, y la conexión no se puede reusar.
-            var seguir: bool = true;
-            while (seguir) {
+            var follow: bool = true;
+            while (follow) {
                 match (conn_leer_mas(c, plazo_fin)) {
                     Result.Err(e) => {
                         return Result.Err(e);
                     },
                     Result.Ok(mas) => {
-                        seguir = mas;
+                        follow = mas;
                     },
                 }
             }
@@ -803,8 +803,8 @@ fn conn_leer_respuesta(c: Conn, method: string, plazo_fin: int) -> Result<bytes,
 // Delimita un cuerpo chunked leyendo del socket lo que falte: recorre chunk a chunk desde
 // `desde` hasta el chunk 0 y su línea vacía final (tolerando trailers). Devuelve la
 // respuesta cruda (cabeceras + cuerpo chunked intacto; `parse_response` lo decodifica).
-fn conn_leer_chunked(c: Conn, desde: int, plazo_fin: int) -> Result<bytes, string> {
-    var pos: int = desde;
+fn conn_leer_chunked(c: Conn, from: int, plazo_fin: int) -> Result<bytes, string> {
+    var pos: int = from;
     while (true) {
         // La línea hex de tamaño del chunk.
         var line_end: int = find_crlf(c.buf, pos);

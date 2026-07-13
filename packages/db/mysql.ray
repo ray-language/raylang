@@ -72,7 +72,7 @@ fn read_packet(c: Conn) -> Result<[int], string> {
     // Un paquete de carga vacía no aparece en los flujos de este cliente (todo paquete lleva al
     // menos su octeto de tipo/estado). Rechazarlo evita un trap por `p[0]` en cada consumidor.
     if (len == 0) {
-        return Result.Err("mysql: paquete de carga vacía del servidor");
+        return Result.Err("mysql: package de carga vacía del servidor");
     }
     take(c, len)
 }
@@ -92,7 +92,7 @@ fn write_packet(c: Conn, payload: [int]) -> Result<int, string> {
 // cliente. Toda la decodificación de filas y del handshake pasa por aquí.
 fn at(p: [int], i: int) -> Result<int, string> {
     if (i < 0 || i >= p.len()) {
-        return Result.Err("mysql: paquete truncado (se pidió el octeto " + to_string(i) + " de " + to_string(p.len()) + ")");
+        return Result.Err("mysql: package truncado (se pidió el octeto " + to_string(i) + " de " + to_string(p.len()) + ")");
     }
     Result.Ok(p[i])
 }
@@ -121,7 +121,7 @@ fn lenc_int(p: [int], i: int) -> Result<(int, int), string> {
     while (k < 4) { hi = hi | (p[i + 5 + k] << (8 * k)); k = k + 1; }
     // Una longitud >= 2^32 es imposible en un paquete de <= 16 MiB → paquete corrupto/malicioso.
     if (hi != 0) {
-        return Result.Err("mysql: longitud length-encoded absurda");
+        return Result.Err("mysql: length length-encoded absurda");
     }
     return Result.Ok((lo, 9));
 }
@@ -136,7 +136,7 @@ fn nul_str(p: [int], i: int) -> Result<(string, int), string> {
         j = j + 1;
     }
     if (j >= p.len()) {
-        return Result.Err("mysql: cadena sin terminador NUL (paquete truncado)");
+        return Result.Err("mysql: string sin terminador NUL (package truncado)");
     }
     let s = match (from_utf8(bytes_of(out))) {
         Result.Ok(t) => t,
@@ -357,13 +357,13 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
                         // sigue el OK/ERR en el bucle
                     } else {
                         return Result.Err(
-                            "mysql: caching_sha2_password exige el full-path; usa connect_tls (la "
-                                + "contraseña viaja cifrada), un usuario con mysql_native_password, o "
-                                + "calienta la caché del servidor con otro cliente");
+                            "mysql: caching_sha2_password exige el full-path; uses connect_tls (la "
+                                + "contraseña viaja cifrada), un user con mysql_native_password, o "
+                                + "calienta la caché del servidor con other client");
                     }
                 }
             } else {
-                return Result.Err("mysql: respuesta de autenticación inesperada");
+                return Result.Err("mysql: response de autenticación inesperada");
             }
         }
         vueltas = vueltas + 1;
@@ -412,7 +412,7 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
         return Result.Err(err_msg(first));
     }
     if (first[0] == 0) {
-        return Result.Err("mysql: la consulta no devuelve filas; usa exec");
+        return Result.Err("mysql: la query no returns filas; uses exec");
     }
     let nc = lenc_int(first, 0)?;
     let ncols = nc.0;
@@ -424,15 +424,15 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
     }
     let eof1 = read_packet(c)?;
     if (!is_eof(eof1)) {
-        return Result.Err("mysql: se esperaba EOF tras las columnas");
+        return Result.Err("mysql: se esperaba EOF after las columnas");
     }
     // Filas hasta el EOF final.
     var rows: [[string]] = [];
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         let p = read_packet(c)?;
         if (is_eof(p)) {
-            seguir = false;
+            follow = false;
         } else {
             if (p[0] == 255) {
                 return Result.Err(err_msg(p));
@@ -475,7 +475,7 @@ fn exec_text(c: Conn, sql: string) -> Result<int, string> {
         return Result.Err(err_msg(first));
     }
     if (first[0] != 0) {
-        return Result.Err("mysql: la sentencia devuelve filas; usa query");
+        return Result.Err("mysql: la sentencia returns filas; uses query");
     }
     let af = lenc_int(first, 1)?; // OK: [0x00][afectadas lenc][last_insert_id lenc]…
     Result.Ok(af.0)
@@ -511,12 +511,12 @@ fn stmt_prepare(c: Conn, sql: string) -> Result<(int, int), string> {
         return Result.Err(err_msg(ok));
     }
     if (ok[0] != 0) {
-        return Result.Err("mysql: respuesta de prepare inesperada");
+        return Result.Err("mysql: response de prepare inesperada");
     }
     // El OK de COM_STMT_PREPARE son 12 octetos fijos: [0x00][stmt_id:4][ncols:2][nparams:2]
     // [filler:1][warnings:2]. Se valida antes de leerlos (paquete truncado = Err, no trap).
     if (ok.len() < 12) {
-        return Result.Err("mysql: respuesta de prepare truncada");
+        return Result.Err("mysql: response de prepare truncada");
     }
     let stmt_id = ok[1] | (ok[2] << 8) | (ok[3] << 16) | (ok[4] << 24);
     let ncols = ok[5] | (ok[6] << 8);
@@ -779,7 +779,7 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
     }
     if (first[0] == 0) {
         stmt_close(c, pr.0);
-        return Result.Err("mysql: la consulta no devuelve filas; usa exec");
+        return Result.Err("mysql: la query no returns filas; uses exec");
     }
     let nc = lenc_int(first, 0)?;
     let ncols = nc.0;
@@ -796,14 +796,14 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
     let eof1 = read_packet(c)?;
     if (!is_eof(eof1)) {
         stmt_close(c, pr.0);
-        return Result.Err("mysql: se esperaba EOF tras las columnas");
+        return Result.Err("mysql: se esperaba EOF after las columnas");
     }
     var rows: [[string]] = [];
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         let p = read_packet(c)?;
         if (is_eof(p)) {
-            seguir = false;
+            follow = false;
         } else {
             if (p[0] == 255) {
                 stmt_close(c, pr.0);
@@ -840,7 +840,7 @@ fn exec_prepared(c: Conn, sql: string, params: [string]) -> Result<int, string> 
         return Result.Err(err_msg(first));
     }
     if (first[0] != 0) {
-        return Result.Err("mysql: la sentencia devuelve filas; usa query");
+        return Result.Err("mysql: la sentencia returns filas; uses query");
     }
     let af = lenc_int(first, 1)?;
     Result.Ok(af.0)

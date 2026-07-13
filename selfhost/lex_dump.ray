@@ -129,7 +129,7 @@ fn read_file(path: string) -> Result<string, string> {
 fn main() -> int {
     let argv = args();
     if (argv.len() == 0) {
-        eprint("uso: raylang selfhost/lex_dump.ray <archivo>");
+        eprint("use: raylang selfhost/lex_dump.ray <file>");
         return 1;
     }
     match (read_file(argv[0])) {

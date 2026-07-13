@@ -7,7 +7,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
 /// Ejecuta el binario con `args` y `cwd`, devuelve (stdout, stderr, código).
 fn ray(cwd: &std::path::Path, args: &[&str]) -> (String, String, i32) {
-    let out = Command::new(BIN).args(args).current_dir(cwd).output().expect("lanza el binario");
+    let out = Command::new(BIN).args(args).current_dir(cwd).output().expect("lanza el binary");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -16,8 +16,8 @@ fn ray(cwd: &std::path::Path, args: &[&str]) -> (String, String, i32) {
 }
 
 /// Un directorio temporal único por prueba (evita choques entre tests paralelos).
-fn tmp(nombre: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ray_cli_{nombre}"));
+fn tmp(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("ray_cli_{name}"));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).expect("crea el dir temporal");
     d
@@ -28,31 +28,31 @@ fn new_crea_el_esqueleto_y_run_lo_ejecuta() {
     let base = tmp("new");
     // `ray new proj` crea ray.toml + src/main.ray + .gitignore.
     let (out, _err, code) = ray(&base, &["new", "proj"]);
-    assert_eq!(code, 0, "new debe salir 0\n{out}");
+    assert_eq!(code, 0, "new must salir 0\n{out}");
     let proj = base.join("proj");
     assert!(proj.join("ray.toml").is_file(), "falta ray.toml");
     assert!(proj.join("src/main.ray").is_file(), "falta src/main.ray");
     assert!(proj.join(".gitignore").is_file(), "falta .gitignore");
-    let manifiesto = std::fs::read_to_string(proj.join("ray.toml")).unwrap();
-    assert!(manifiesto.contains("name = \"proj\""), "el manifiesto nombra el proyecto\n{manifiesto}");
+    let manifest = std::fs::read_to_string(proj.join("ray.toml")).unwrap();
+    assert!(manifest.contains("name = \"proj\""), "el manifest nombra el project\n{manifest}");
 
     // `ray run` sin archivo usa src/main.ray (convención de proyecto).
     let (out, _err, code) = ray(&proj, &["run"]);
-    assert!(out.contains("hola desde proj"), "run ejecuta el hola-mundo\n{out}");
+    assert!(out.contains("hello from proj"), "run ejecuta el hello-mundo\n{out}");
     assert_eq!(code, 0);
 }
 
 #[test]
-fn new_falla_si_el_destino_existe() {
+fn new_fails_si_el_target_existe() {
     let base = tmp("new_dup");
     assert_eq!(ray(&base, &["new", "dup"]).2, 0);
     let (_o, err, code) = ray(&base, &["new", "dup"]);
-    assert_ne!(code, 0, "no debe sobrescribir un directorio existente");
+    assert_ne!(code, 0, "no must sobrescribir un directory existente");
     assert!(err.contains("ya existe"), "{err}");
 }
 
 #[test]
-fn run_pasa_los_args_del_programa() {
+fn run_pasa_los_args_del_program() {
     let base = tmp("run_args");
     std::fs::write(
         base.join("prog.ray"),
@@ -60,39 +60,39 @@ fn run_pasa_los_args_del_programa() {
     )
     .unwrap();
     // Los argumentos tras el archivo llegan a `args()`.
-    let (out, _err, _code) = ray(&base, &["run", "prog.ray", "uno", "dos", "tres"]);
+    let (out, _err, _code) = ray(&base, &["run", "prog.ray", "one", "dos", "tres"]);
     assert!(out.contains("3"), "args() ve los 3 argumentos\n{out}");
 }
 
 #[test]
-fn build_compila_ok_y_reporta_errores() {
+fn build_compila_ok_y_reports_errors() {
     let base = tmp("build");
     // Programa válido: build sale 0.
     std::fs::write(base.join("ok.ray"), "fn main() -> int { 1 + 2 }\n").unwrap();
     let (out, _err, code) = ray(&base, &["build", "ok.ray"]);
-    assert_eq!(code, 0, "build de un programa válido sale 0\n{out}");
+    assert_eq!(code, 0, "build de un program válido sale 0\n{out}");
     assert!(out.contains("compila"), "{out}");
     // build NO ejecuta: un programa que devolvería 42 igual sale 0 (solo compiló).
     std::fs::write(base.join("cuarenta.ray"), "fn main() -> int { 42 }\n").unwrap();
-    assert_eq!(ray(&base, &["build", "cuarenta.ray"]).2, 0, "build no corre el programa");
+    assert_eq!(ray(&base, &["build", "cuarenta.ray"]).2, 0, "build no runs el program");
     // Programa con error de tipos: build sale 65 y no dice 'compila'.
     std::fs::write(base.join("mal.ray"), "fn main() -> int { 1 + true }\n").unwrap();
     let (_o, err, code) = ray(&base, &["build", "mal.ray"]);
-    assert_eq!(code, 65, "build de un programa con error sale 65\n{err}");
-    assert!(err.contains("error de tipos"), "{err}");
+    assert_eq!(code, 65, "build de un program con error sale 65\n{err}");
+    assert!(err.contains("error de types"), "{err}");
 }
 
 #[test]
-fn test_subcomando_corre_las_pruebas() {
+fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(
         base.join("suite.ray"),
-        "@test\nfn pasa() -> bool { true }\n@test\nfn falla() -> bool { false }\nfn main() -> int { 0 }\n",
+        "@test\nfn pasa() -> bool { true }\n@test\nfn fails() -> bool { false }\nfn main() -> int { 0 }\n",
     )
     .unwrap();
     let (out, _err, code) = ray(&base, &["test", "suite.ray"]);
-    assert!(out.contains("pasa") && out.contains("falla"), "informa ambas pruebas\n{out}");
-    assert_eq!(code, 1, "el código de salida es el número de fallos (1)");
+    assert!(out.contains("pasa") && out.contains("fails"), "informa ambas tests\n{out}");
+    assert_eq!(code, 1, "el código de output es el número de fallos (1)");
     // Filtro por subcadena: solo la que pasa.
     let (out, _err, code) = ray(&base, &["test", "suite.ray", "pasa"]);
     assert!(out.contains("pasa") && !out.contains("FALLO"), "el filtro deja solo 'pasa'\n{out}");
@@ -115,77 +115,77 @@ fn compat_flags_legadas() {
     let base = tmp("legacy");
     std::fs::write(base.join("p.ray"), "fn main() -> int { 7 }\n").unwrap();
     // La interfaz previa por flags sigue funcionando (un `<archivo>` directo, y --vm).
-    assert_eq!(ray(&base, &["p.ray"]).2, 7, "raylang <archivo> directo");
-    assert_eq!(ray(&base, &["--vm", "p.ray"]).2, 7, "raylang --vm <archivo>");
+    assert_eq!(ray(&base, &["p.ray"]).2, 7, "raylang <file> direct");
+    assert_eq!(ray(&base, &["--vm", "p.ray"]).2, 7, "raylang --vm <file>");
 }
 
 // ── M39b: el manifiesto ray.toml dirige build/run/test ───────────────────────────────
 
 /// Crea un proyecto con un `ray.toml` a medida y un archivo de entrada.
-fn proyecto(nombre: &str, manifiesto: &str, entry_rel: &str, entry_src: &str) -> std::path::PathBuf {
-    let raiz = tmp(nombre);
-    std::fs::write(raiz.join("ray.toml"), manifiesto).unwrap();
-    let entry = raiz.join(entry_rel);
+fn project(name: &str, manifest: &str, entry_rel: &str, entry_src: &str) -> std::path::PathBuf {
+    let root = tmp(name);
+    std::fs::write(root.join("ray.toml"), manifest).unwrap();
+    let entry = root.join(entry_rel);
     std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
     std::fs::write(entry, entry_src).unwrap();
-    raiz
+    root
 }
 
 #[test]
-fn build_y_run_usan_la_entry_del_manifiesto() {
-    let raiz = proyecto(
+fn build_y_run_usan_la_entry_del_manifest() {
+    let root = project(
         "manifest_entry",
         "[package]\nname = \"miapp\"\nversion = \"2.0.0\"\nentry = \"src/arranque.ray\"\n",
         "src/arranque.ray",
         "fn main() -> int { print(\"arranque\"); 5 }\n",
     );
     // build: banner con nombre+versión (a stderr) y compila la entry del manifiesto.
-    let (out, err, code) = ray(&raiz, &["build"]);
+    let (out, err, code) = ray(&root, &["build"]);
     assert_eq!(code, 0, "{err}");
-    assert!(err.contains("compilando miapp v2.0.0"), "banner del proyecto\n{err}");
+    assert!(err.contains("compilando miapp v2.0.0"), "banner del project\n{err}");
     assert!(out.contains("arranque.ray") && out.contains("compila"), "{out}");
     // run: ejecuta la entry del manifiesto (sin pasar archivo).
-    let (out, _err, code) = ray(&raiz, &["run"]);
+    let (out, _err, code) = ray(&root, &["run"]);
     assert!(out.contains("arranque"), "{out}");
     assert_eq!(code, 5, "el exit es el int de main");
 }
 
 #[test]
-fn run_sube_a_la_raiz_desde_un_subdirectorio() {
-    let raiz = proyecto(
+fn run_sube_a_la_root_from_un_subdirectorio() {
+    let root = project(
         "manifest_subdir",
         "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
         "src/main.ray",
-        "fn main() -> int { print(\"raiz\"); 0 }\n",
+        "fn main() -> int { print(\"root\"); 0 }\n",
     );
     // Ejecutar desde src/: el CLI sube buscando ray.toml (como cargo/git).
-    let (out, _err, code) = ray(&raiz.join("src"), &["run"]);
-    assert!(out.contains("raiz"), "encuentra el proyecto subiendo\n{out}");
+    let (out, _err, code) = ray(&root.join("src"), &["run"]);
+    assert!(out.contains("root"), "encuentra el project subiendo\n{out}");
     assert_eq!(code, 0);
 }
 
 #[test]
-fn dependencia_inalcanzable_falla_al_descargar() {
+fn dependency_inalcanzable_fails_al_descargar() {
     // M39c-2a: una dependencia declarada se descarga en `run`/`build`; si no se puede clonar
     // (aquí, una ruta local inexistente → fallo rápido y offline), es error de compilación.
-    let raiz = proyecto(
+    let root = project(
         "manifest_deps",
         "[package]\nname = \"condeps\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"git+file:///no/existe/geo@v1\"\n",
         "src/main.ray",
         "fn main() -> int { 0 }\n",
     );
-    let (_out, err, code) = ray(&raiz, &["run"]);
-    assert_eq!(code, 65, "una dependencia inalcanzable aborta\n{err}");
+    let (_out, err, code) = ray(&root, &["run"]);
+    assert_eq!(code, 65, "one dependency inalcanzable abort\n{err}");
     assert!(err.contains("geo") && err.contains("clonar"), "error claro de descarga\n{err}");
 }
 
 #[test]
-fn manifiesto_mal_formado_falla_claro() {
-    let raiz = tmp("manifest_bad");
-    std::fs::write(raiz.join("ray.toml"), "[package]\nname = sinComillas\n").unwrap();
-    std::fs::create_dir_all(raiz.join("src")).unwrap();
-    std::fs::write(raiz.join("src/main.ray"), "fn main() -> int { 0 }\n").unwrap();
-    let (_out, err, code) = ray(&raiz, &["build"]);
+fn manifest_mal_formado_fails_claro() {
+    let root = tmp("manifest_bad");
+    std::fs::write(root.join("ray.toml"), "[package]\nname = sinComillas\n").unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.ray"), "fn main() -> int { 0 }\n").unwrap();
+    let (_out, err, code) = ray(&root, &["build"]);
     assert_eq!(code, 65, "un ray.toml mal formado es error de compilación\n{err}");
     assert!(err.contains("ray.toml:2"), "el error trae la línea\n{err}");
 }
@@ -193,96 +193,96 @@ fn manifiesto_mal_formado_falla_claro() {
 // ── M39c-1: la caché `.ray-deps/` es raíz de módulos (un paquete = una cápsula) ──────
 
 /// Escribe un paquete `nombre` en la caché `.ray-deps/` del proyecto `raiz`, con su `mod.ray`.
-fn dep(raiz: &std::path::Path, nombre: &str, mod_ray: &str) {
-    let d = raiz.join(".ray-deps").join(nombre);
+fn dep(root: &std::path::Path, name: &str, mod_ray: &str) {
+    let d = root.join(".ray-deps").join(name);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join("mod.ray"), mod_ray).unwrap();
 }
 
 #[test]
-fn dependencia_de_ray_deps_es_importable() {
-    let raiz = proyecto(
+fn dependency_de_ray_deps_es_importable() {
+    let root = project(
         "dep_import",
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"git+https://x/geo@v1\"\n",
         "src/main.ray",
-        "from geo import duplicar;\nfn main() -> int { print(duplicar(21)); 0 }\n",
+        "from geo import duplicate;\nfn main() -> int { print(duplicate(21)); 0 }\n",
     );
-    dep(&raiz, "geo", "pub fn duplicar(x: int) -> int { x * 2 }\n");
+    dep(&root, "geo", "pub fn duplicate(x: int) -> int { x * 2 }\n");
     // La dependencia está en la caché → el loader la encuentra y `from geo import` funciona.
-    let (out, err, code) = ray(&raiz, &["run"]);
-    assert!(out.contains("42"), "usa la función de la dependencia\n{out}\n{err}");
+    let (out, err, code) = ray(&root, &["run"]);
+    assert!(out.contains("42"), "uses la función de la dependency\n{out}\n{err}");
     assert_eq!(code, 0);
     // Y como está presente, NO se avisa de dependencia sin descargar.
-    assert!(!err.contains("sin descargar"), "no debe avisar de una dep presente\n{err}");
+    assert!(!err.contains("sin descargar"), "no must avisar de one dep presente\n{err}");
 }
 
 #[test]
-fn dependencia_calificada_y_capsula_protege_internos() {
-    let raiz = proyecto(
-        "dep_capsula",
+fn dependency_qualified_y_capsule_protege_internos() {
+    let root = project(
+        "dep_capsule",
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
         "src/main.ray",
         "import geo;\nfn main() -> int { print(geo.triplicar(10)); 0 }\n",
     );
     // El paquete geo es una cápsula que usa su propio submódulo interno.
     dep(
-        &raiz,
+        &root,
         "geo",
-        "from geo/interno import triple;\npub fn triplicar(x: int) -> int { triple(x) }\n",
+        "from geo/internal import triple;\npub fn triplicar(x: int) -> int { triple(x) }\n",
     );
     std::fs::write(
-        raiz.join(".ray-deps/geo/interno.ray"),
+        root.join(".ray-deps/geo/internal.ray"),
         "pub fn triple(x: int) -> int { x * 3 }\n",
     )
     .unwrap();
     // Acceso calificado a la cara pública del paquete.
-    let (out, err, code) = ray(&raiz, &["run"]);
-    assert!(out.contains("30"), "geo.triplicar via su interno\n{out}\n{err}");
+    let (out, err, code) = ray(&root, &["run"]);
+    assert!(out.contains("30"), "geo.triplicar via su internal\n{out}\n{err}");
     assert_eq!(code, 0);
 
     // La app NO puede alcanzar el submódulo interno del paquete (enforcement de cápsula, M11.6b).
     std::fs::write(
-        raiz.join("src/main.ray"),
-        "import geo/interno;\nfn main() -> int { print(geo.interno.triple(5)); 0 }\n",
+        root.join("src/main.ray"),
+        "import geo/internal;\nfn main() -> int { print(geo.internal.triple(5)); 0 }\n",
     )
     .unwrap();
-    let (_o, err, code) = ray(&raiz, &["run"]);
-    assert_eq!(code, 65, "alcanzar el interno de una dependencia es error\n{err}");
-    assert!(err.contains("interno a la cápsula 'geo'"), "{err}");
+    let (_o, err, code) = ray(&root, &["run"]);
+    assert_eq!(code, 65, "alcanzar el internal de one dependency es error\n{err}");
+    assert!(err.contains("internal a la cápsula 'geo'"), "{err}");
 }
 
 #[test]
-fn lo_local_tapa_a_la_dependencia_del_mismo_nombre() {
-    let raiz = proyecto(
+fn lo_local_tapa_a_la_dependency_del_same_name() {
+    let root = project(
         "dep_shadow",
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
         "src/main.ray",
-        "from util import saludo;\nfn main() -> int { print(saludo()); 0 }\n",
+        "from util import greeting;\nfn main() -> int { print(greeting()); 0 }\n",
     );
     // Módulo local `util` en el proyecto...
-    std::fs::write(raiz.join("src/util.ray"), "pub fn saludo() -> int { 1 }\n").unwrap();
+    std::fs::write(root.join("src/util.ray"), "pub fn greeting() -> int { 1 }\n").unwrap();
     // ...y una dependencia `util` homónima en la caché.
-    dep(&raiz, "util", "pub fn saludo() -> int { 999 }\n");
+    dep(&root, "util", "pub fn greeting() -> int { 999 }\n");
     // El proyecto se busca antes que la caché: gana el módulo local.
-    let (out, err, code) = ray(&raiz, &["run"]);
-    assert!(out.contains("1") && !out.contains("999"), "lo local tapa a la dependencia\n{out}\n{err}");
+    let (out, err, code) = ray(&root, &["run"]);
+    assert!(out.contains("1") && !out.contains("999"), "lo local tapa a la dependency\n{out}\n{err}");
     assert_eq!(code, 0);
 }
 
 #[test]
-fn doc_genera_markdown_de_la_superficie_publica() {
+fn doc_genera_markdown_de_la_superficie_public() {
     let base = tmp("doc");
-    let archivo = base.join("lib.ray");
+    let file = base.join("lib.ray");
     std::fs::write(
-        &archivo,
-        "/// Suma dos enteros.\npub fn suma(a: int, b: int) -> int { a + b }\n\nfn interna() -> int { 0 }\n",
+        &file,
+        "/// Suma dos enteros.\npub fn sum(a: int, b: int) -> int { a + b }\n\nfn interna() -> int { 0 }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["doc", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "doc debe salir 0\n{err}");
-    assert!(out.contains("# lib.ray"), "encabezado con el nombre\n{out}");
-    assert!(out.contains("### `fn suma(a: int, b: int) -> int`"), "firma\n{out}");
-    assert!(out.contains("Suma dos enteros."), "el comentario /// se documenta\n{out}");
+    let (out, err, code) = ray(&base, &["doc", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "doc must salir 0\n{err}");
+    assert!(out.contains("# lib.ray"), "encabezado con el name\n{out}");
+    assert!(out.contains("### `fn sum(a: int, b: int) -> int`"), "signature\n{out}");
+    assert!(out.contains("Suma dos enteros."), "el comment /// se documenta\n{out}");
     assert!(!out.contains("interna"), "los ítems privados no se documentan\n{out}");
 }
 
@@ -291,14 +291,14 @@ fn importa_la_stdlib_del_sistema() {
     // Un programa fuera del repo (dir temporal) puede `import std/math;` — la stdlib va EMBEBIDA en el
     // binario (M40.5), así que resuelve sin que `std/` exista en disco junto al programa.
     let base = tmp("std_import");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/math;\nfn main() -> int { print(math.gcd(48, 36)); print(math.is_prime(13)); 0 }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con import std/math debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con import std/math must salir 0\n{err}");
     assert!(out.contains("12"), "gcd(48,36)=12\n{out}");
     assert!(out.contains("true"), "is_prime(13)\n{out}");
 }
@@ -306,14 +306,14 @@ fn importa_la_stdlib_del_sistema() {
 #[test]
 fn stdlib_text_capitaliza_e_invierte() {
     let base = tmp("std_text");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
-        "import std/text;\nfn main() -> int { print(text.capitalize(\"hola\")); print(text.reverse(\"abc\")); print(text.count(\"aaaa\", \"aa\")); 0 }\n",
+        &file,
+        "import std/text;\nfn main() -> int { print(text.capitalize(\"hello\")); print(text.reverse(\"abc\")); print(text.count(\"aaaa\", \"aa\")); 0 }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con import std/text debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con import std/text must salir 0\n{err}");
     assert!(out.contains("Hola"), "capitalize\n{out}");
     assert!(out.contains("cba"), "reverse\n{out}");
     assert!(out.contains("2"), "count no solapado\n{out}");
@@ -325,14 +325,14 @@ fn stdlib_text_capitaliza_e_invierte() {
 #[test]
 fn stdlib_text_words_y_lines() {
     let base = tmp("std_text_m66");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/text;\n\
          fn main() -> int {\n\
            let ws = text.words(\" a\\tb\\r\\nc \");\n\
            print(to_string(ws.len()) + \":\" + join(ws, \",\"));\n\
-           let ls = text.lines(\"uno\\r\\ndos\\ntres\\n\");\n\
+           let ls = text.lines(\"one\\r\\ndos\\ntres\\n\");\n\
            print(to_string(ls.len()) + \":\" + join(ls, \"|\"));\n\
            print(to_string(text.lines(\"\").len()));\n\
            print(to_string(text.lines(\"a\\n\\nb\").len()));\n\
@@ -342,10 +342,10 @@ fn stdlib_text_words_y_lines() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con std/text M66 debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con std/text M66 must salir 0\n{err}");
     assert!(out.contains("3:a,b,c"), "words por whitespace\n{out}");
-    assert!(out.contains("3:uno|dos|tres"), "lines con \\r\\n y salto final\n{out}");
+    assert!(out.contains("3:one|dos|tres"), "lines con \\r\\n y salto final\n{out}");
     assert!(out.contains("éfac"), "reverse UTF-8 multibyte\n{out}");
     assert!(out.contains("\n2\n"), "count multibyte no solapado\n{out}");
 }
@@ -353,9 +353,9 @@ fn stdlib_text_words_y_lines() {
 #[test]
 fn stdlib_sort_busca_y_deduplica() {
     let base = tmp("std_sort");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/sort;\n\
          fn main() -> int {\n\
              print(sort.dedup([5, 2, 8, 2, 1, 8]));\n\
@@ -365,8 +365,8 @@ fn stdlib_sort_busca_y_deduplica() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con import std/sort debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con import std/sort must salir 0\n{err}");
     assert!(out.contains("[1, 2, 5, 8]"), "dedup ordena y quita repetidos\n{out}");
     assert!(out.contains("Option.Some(3)"), "binary_search halla el índice\n{out}");
     assert!(out.contains("[1, 2, 3, 4, 5]"), "merge fusiona ordenado\n{out}");
@@ -376,9 +376,9 @@ fn stdlib_sort_busca_y_deduplica() {
 fn stdlib_encoding_hex_base64_url_json() {
     // M40.7a: librerías de encoding promovidas de examples/web/ a std/ (embebidas, fuente única).
     let base = tmp("std_enc");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/hex;\n\
          import std/base64;\n\
          import std/url;\n\
@@ -395,8 +395,8 @@ fn stdlib_encoding_hex_base64_url_json() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con imports de std encoding debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std encoding must salir 0\n{err}");
     assert!(out.contains("ff00ab"), "hex_encode\n{out}");
     assert!(out.contains("aGk="), "base64 de \"hi\"\n{out}");
     assert!(out.contains("a%20b%26c"), "url_encode\n{out}");
@@ -409,9 +409,9 @@ fn stdlib_encoding_hex_base64_url_json() {
 #[test]
 fn crypto_random_bytes_propiedades() {
     let base = tmp("crypto_rand");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/crypto;\n\
          fn main() -> int {\n\
              let a = crypto.random_bytes(32);\n\
@@ -424,20 +424,20 @@ fn crypto_random_bytes_propiedades() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con crypto.random_bytes debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con crypto.random_bytes must salir 0\n{err}");
     assert_eq!(out, "32\n0\n0\ntrue\n", "longitudes y no-repetición\n{out}");
 }
 
 #[test]
-fn crypto_builtins_hashing_vectores() {
+fn crypto_builtins_hashing_vectors() {
     // M43.5b: la cripto de producción (builtins vía ring) a nivel CLI. sha256/sha512/sha1/hmac_sha256
     // (bytes -> bytes; `to_string` de un bytes da su hex). Vectores NIST/RFC. (Antes esto probaba la std
     // cripto pura embebida, ahora des-embebida → solo ejemplos; los builtins la sustituyen.)
     let base = tmp("crypto_hash");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/crypto;\n\
          fn main() -> int {\n\
              print(to_string(crypto.sha256(\"abc\".to_bytes())));\n\
@@ -448,8 +448,8 @@ fn crypto_builtins_hashing_vectores() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con los builtins cripto debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con los builtins cripto must salir 0\n{err}");
     assert!(out.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256(abc)\n{out}");
     assert!(out.contains("cf83e1357eefb8bd"), "sha512(\"\")\n{out}");
     assert!(out.contains("b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"), "hmac_sha256(\"\",\"\")\n{out}");
@@ -460,9 +460,9 @@ fn crypto_builtins_hashing_vectores() {
 fn stdlib_compresion_roundtrip() {
     // M40.7c: compresión promovida a std/. deflate → std/inflate (namespacado en el ejemplo).
     let base = tmp("std_comp");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/inflate;\n\
          import std/deflate;\n\
          import std/huffman;\n\
@@ -480,19 +480,19 @@ fn stdlib_compresion_roundtrip() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con imports de std compresión debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std compresión must salir 0\n{err}");
     assert!(out.contains("raylang raylang raylang comprime"), "deflate→inflate roundtrip\n{out}");
     assert!(out.contains("[65, 65, 66, 67]"), "huffman roundtrip\n{out}");
 }
 
 #[test]
-fn stdlib_texto_regex_csv_toml() {
+fn stdlib_text_regex_csv_toml() {
     // M40.7d: procesamiento de texto/datos (librerías puras de examples/stdlib/, hojas).
     let base = tmp("std_txt");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/regex;\n\
          import std/csv;\n\
          import std/toml;\n\
@@ -510,8 +510,8 @@ fn stdlib_texto_regex_csv_toml() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con imports de std texto debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std text must salir 0\n{err}");
     assert!(out.contains("[12, 345]"), "regex find_all\n{out}");
     assert!(out.contains("[[a, b], [1, 2]]"), "csv parse\n{out}");
     assert!(out.contains("8080"), "toml get\n{out}");
@@ -523,9 +523,9 @@ fn stdlib_cripto_aead_y_protobuf() {
     // seal → ct||tag (Option<bytes>), open verifica y descifra. Antes esto usaba la std cripto pura
     // embebida (des-embebida en M43.5b); el builtin la sustituye. Protobuf sigue siendo std embebida.
     let base = tmp("std_crypto");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/protobuf;\n\
          import std/crypto;\n\
          fn main() -> int {\n\
@@ -547,19 +547,19 @@ fn stdlib_cripto_aead_y_protobuf() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con el builtin AEAD + std/protobuf debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con el builtin AEAD + std/protobuf must salir 0\n{err}");
     assert!(out.contains("4869"), "aead seal→open roundtrip (hex de \"Hi\")\n{out}");
     assert!(out.contains("089601"), "protobuf varint field1=150\n{out}");
 }
 
 #[test]
-fn stdlib_uuid_genera_y_valida() {
+fn stdlib_uuid_genera_y_validates() {
     // M40.7f: uuid_v4 usa random_int (no determinista); se valida el ROUNDTRIP (is_uuid_v4 es determinista).
     let base = tmp("std_uuid");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "import std/uuid;\n\
          fn main() -> int {\n\
              print(uuid.is_uuid_v4(uuid.uuid_v4()));\n\
@@ -569,10 +569,10 @@ fn stdlib_uuid_genera_y_valida() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con import std/uuid debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con import std/uuid must salir 0\n{err}");
     assert!(out.contains("true"), "is_uuid_v4(uuid_v4()) roundtrip\n{out}");
-    assert!(out.contains("false"), "is_uuid_v4 rechaza basura\n{out}");
+    assert!(out.contains("false"), "is_uuid_v4 rejects basura\n{out}");
     assert!(out.contains("36"), "un uuid mide 36 chars\n{out}");
 }
 
@@ -581,9 +581,9 @@ fn ffi_llama_a_libm() {
     // M41.1: FFI. Un `extern "m" { … }` declara funciones de libm y se llaman como cualquier función.
     // Determinista (libm) → end-to-end por subproceso, motor de producto (VM).
     let base = tmp("ffi_libm");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "extern \"m\" {\n\
          \x20 fn sqrt(x: float) -> float;\n\
          \x20 fn pow(base: float, exp: float) -> float;\n\
@@ -594,8 +594,8 @@ fn ffi_llama_a_libm() {
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con extern debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con extern must salir 0\n{err}");
     assert!(out.contains("ffi ok"), "sqrt/pow de libm por FFI\n{out}");
 }
 
@@ -603,44 +603,44 @@ fn ffi_llama_a_libm() {
 fn ffi_marshala_strings_a_char_ptr() {
     // M41.2: un `string` de raylang se pasa como `char*` (NUL-terminado) a una función C.
     let base = tmp("ffi_str");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "extern \"c\" { fn strlen(s: string) -> int; fn atoi(s: string) -> int; }\n\
          fn main() -> int {\n\
-         \x20 print(strlen(\"hola mundo\"));\n\
+         \x20 print(strlen(\"hello mundo\"));\n\
          \x20 print(atoi(\"42\"));\n\
          \x20 0\n\
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con string FFI debe salir 0\n{err}");
-    assert!(out.contains("10"), "strlen(\"hola mundo\")\n{out}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con string FFI must salir 0\n{err}");
+    assert!(out.contains("10"), "strlen(\"hello mundo\")\n{out}");
     assert!(out.contains("42"), "atoi(\"42\")\n{out}");
 }
 
 #[test]
-fn ffi_retorno_char_ptr_como_option() {
+fn ffi_return_val_char_ptr_como_option() {
     // M41.3: un char* de retorno → Option<string> (None si NULL). strstr es determinista.
     let base = tmp("ffi_ret");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "extern \"c\" { fn strstr(h: string, n: string) -> Option<string>; }\n\
          fn main() -> int {\n\
-         \x20 match (strstr(\"hola mundo\", \"mundo\")) {\n\
+         \x20 match (strstr(\"hello mundo\", \"mundo\")) {\n\
          \x20   Option.Some(s) => { print(s); }, Option.None => { print(\"none\"); },\n\
          \x20 }\n\
-         \x20 match (strstr(\"hola\", \"zzz\")) {\n\
+         \x20 match (strstr(\"hello\", \"zzz\")) {\n\
          \x20   Option.Some(s) => { print(s); }, Option.None => { print(\"none\"); },\n\
          \x20 }\n\
          \x20 0\n\
          }\n",
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con retorno char* debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con return_val char* must salir 0\n{err}");
     assert!(out.contains("mundo"), "strstr encontró 'mundo'\n{out}");
     assert!(out.contains("none"), "strstr no encontrado → None\n{out}");
 }
@@ -651,10 +651,10 @@ fn ffi_anchura_int_y_puntero_opaco_como_u64() {
     // (puntero) se pasa como u64 (opaco). fopen/fgetc/fclose sobre un archivo con contenido conocido.
     let base = tmp("ffi_width");
     std::fs::write(base.join("data.txt"), "Hi!").unwrap();
-    let datos = base.join("data.txt");
-    let archivo = base.join("main.ray");
+    let data = base.join("data.txt");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         format!(
             "extern \"c\" {{\n\
              \x20 fn fopen(path: string, mode: string) -> u64;\n\
@@ -663,7 +663,7 @@ fn ffi_anchura_int_y_puntero_opaco_como_u64() {
              \x20 fn strlen(s: string) -> u64;\n\
              }}\n\
              fn main() -> int {{\n\
-             \x20 print(strlen(\"hola mundo\") as int);\n\
+             \x20 print(strlen(\"hello mundo\") as int);\n\
              \x20 let h = fopen(\"{}\", \"r\");\n\
              \x20 if (h == 0) {{ print(\"no abrió\"); return 1; }}\n\
              \x20 var n = 0;\n\
@@ -673,14 +673,14 @@ fn ffi_anchura_int_y_puntero_opaco_como_u64() {
              \x20 print(n);\n\
              \x20 0\n\
              }}\n",
-            datos.to_str().unwrap()
+            data.to_str().unwrap()
         ),
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con u64/int FFI debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con u64/int FFI must salir 0\n{err}");
     assert!(out.contains("10"), "strlen size_t (u64)\n{out}");
-    assert!(out.contains("3"), "fgetc leyó 3 bytes y EOF (-1) cortó el bucle\n{out}");
+    assert!(out.contains("3"), "fgetc leyó 3 bytes y EOF (-1) cortó el loop\n{out}");
 }
 
 #[test]
@@ -688,10 +688,10 @@ fn ffi_ptr_opaco_y_option_ptr() {
     // M41.4b: tipo `ptr` opaco + Option<ptr> fallible. fopen(existe)→Some, fopen(no existe)→None.
     let base = tmp("ffi_ptr");
     std::fs::write(base.join("data.txt"), "Hi!").unwrap();
-    let datos = base.join("data.txt");
-    let archivo = base.join("main.ray");
+    let data = base.join("data.txt");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         format!(
             "extern \"c\" {{\n\
              \x20 fn fopen(path: string, mode: string) -> Option<ptr>;\n\
@@ -712,50 +712,50 @@ fn ffi_ptr_opaco_y_option_ptr() {
              \x20 }}\n\
              \x20 0\n\
              }}\n",
-            datos.to_str().unwrap(),
+            data.to_str().unwrap(),
             base.to_str().unwrap()
         ),
     )
     .unwrap();
-    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con ptr/Option<ptr> debe salir 0\n{err}");
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con ptr/Option<ptr> must salir 0\n{err}");
     assert!(out.contains("3"), "leyó 3 bytes por el handle ptr\n{out}");
-    assert!(out.contains("None ok"), "fopen de archivo inexistente → None\n{out}");
+    assert!(out.contains("None ok"), "fopen de file nonexistent → None\n{out}");
 }
 
 #[test]
-fn dependencia_por_ruta_local() {
+fn dependency_por_path_local() {
     // M40.8a: `nombre = "path:<dir>"` consume un paquete-cápsula LOCAL sin git ni descarga (un paquete
     // adicional que no va en el binario). El paquete vive fuera del proyecto que lo importa.
     let base = tmp("pathdep");
     // El paquete-cápsula `saludo` (con mod.ray).
-    std::fs::create_dir_all(base.join("pkgs/saludo")).unwrap();
+    std::fs::create_dir_all(base.join("pkgs/greeting")).unwrap();
     std::fs::write(
-        base.join("pkgs/saludo/mod.ray"),
-        "pub fn hola(n: string) -> string { \"hola, \" + n + \"!\" }\n",
+        base.join("pkgs/greeting/mod.ray"),
+        "pub fn hello(n: string) -> string { \"hello, \" + n + \"!\" }\n",
     )
     .unwrap();
     // El proyecto que lo consume por ruta.
     std::fs::create_dir_all(base.join("app/src")).unwrap();
     std::fs::write(
         base.join("app/ray.toml"),
-        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nsaludo = \"path:../pkgs/saludo\"\n",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nsaludo = \"path:../pkgs/greeting\"\n",
     )
     .unwrap();
     std::fs::write(
         base.join("app/src/main.ray"),
-        "import saludo;\nfn main() -> int { print(saludo.hola(\"mundo\")); 0 }\n",
+        "import greeting;\nfn main() -> int { print(greeting.hello(\"mundo\")); 0 }\n",
     )
     .unwrap();
     let (out, err, code) = ray(&base.join("app"), &["run"]);
-    assert_eq!(code, 0, "run con path-dep debe salir 0\n{err}");
-    assert!(out.contains("hola, mundo!"), "usó la función del paquete local\n{out}");
+    assert_eq!(code, 0, "run con path-dep must salir 0\n{err}");
+    assert!(out.contains("hello, mundo!"), "usó la función del package local\n{out}");
     // La path-dep NO se descarga: no debe crear `.ray-deps`.
-    assert!(!base.join("app/.ray-deps").exists(), "una path-dep no se clona");
+    assert!(!base.join("app/.ray-deps").exists(), "one path-dep no se clona");
 }
 
 #[test]
-fn paquete_net_jwt_via_path_dep() {
+fn package_net_jwt_via_path_dep() {
     // M40.8b: el paquete `net` (adicional, no embebido) consumido por path-dep. jwt es determinista
     // (firma+verifica) y se apoya en net/crypto (HMAC de producción vía ring, M43.5) + std/base64.
     let repo = env!("CARGO_MANIFEST_DIR");
@@ -782,13 +782,13 @@ fn paquete_net_jwt_via_path_dep() {
     )
     .unwrap();
     let (out, err, code) = ray(&base, &["run"]);
-    assert_eq!(code, 0, "run con el paquete net debe salir 0\n{err}");
+    assert_eq!(code, 0, "run con el package net must salir 0\n{err}");
     assert!(out.contains("{\"sub\":\"ada\"}"), "jwt_verify con la clave correcta → Ok(payload)\n{out}");
     assert!(out.contains("rechazado"), "jwt_verify con clave mala → Err\n{out}");
 }
 
 #[test]
-fn paquete_net_hpack_roundtrip() {
+fn package_net_hpack_roundtrip() {
     // M40.8c: el grupo HTTP del paquete net. hpack (HPACK) es determinista: codifica cabeceras y las
     // decodifica de vuelta. Con deps INTERNAS del paquete (http2_client → net/http2 + net/hpack).
     let repo = env!("CARGO_MANIFEST_DIR");
@@ -815,12 +815,12 @@ fn paquete_net_hpack_roundtrip() {
     )
     .unwrap();
     let (out, err, code) = ray(&base, &["run"]);
-    assert_eq!(code, 0, "run con net/hpack debe salir 0\n{err}");
-    assert!(out.contains("2"), "hpack encode+decode roundtrip de 2 cabeceras\n{out}");
+    assert_eq!(code, 0, "run con net/hpack must salir 0\n{err}");
+    assert!(out.contains("2"), "hpack encode+decode roundtrip de 2 headers\n{out}");
 }
 
 #[test]
-fn paquete_net_hpack_decode_malformado() {
+fn package_net_hpack_decode_malformado() {
     // M78: HPACK decodifica bloques del PEER (no confiables). Un entero truncado, un string
     // sobredimensionado, un size-update > 4096 y una bomba de varint deben dar Err como VALOR,
     // no un trap que tumbe al cliente. El índice estático legítimo (0x82 = :method GET) sí decodifica.
@@ -852,12 +852,12 @@ fn paquete_net_hpack_decode_malformado() {
     )
     .unwrap();
     let (out, err, code) = ray(&base, &["run"]);
-    assert_eq!(code, 0, "el cliente sobrevive a HPACK malformado (Err, sin crash)\n{err}");
+    assert_eq!(code, 0, "el client sobrevive a HPACK malformado (Err, sin crash)\n{err}");
     assert_eq!(out, "err\nerr\nerr\nerr\nok\n", "4 rechazos + 1 decodificación válida\n{out}");
 }
 
 #[test]
-fn paquete_net_websocket_accept_key() {
+fn package_net_websocket_accept_key() {
     // M40.8d: transporte/servicios. websocket.accept_key es determinista (RFC 6455) y se apoya en
     // net/crypto (SHA-1 de producción vía ring, M43.5) + std/base64. Deps internas (dns → net/udp) validadas.
     let repo = env!("CARGO_MANIFEST_DIR");
@@ -878,12 +878,12 @@ fn paquete_net_websocket_accept_key() {
     )
     .unwrap();
     let (out, err, code) = ray(&base, &["run"]);
-    assert_eq!(code, 0, "run con net/websocket debe salir 0\n{err}");
+    assert_eq!(code, 0, "run con net/websocket must salir 0\n{err}");
     assert!(out.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), "handshake WebSocket RFC 6455\n{out}");
 }
 
 #[test]
-fn paquete_net_observabilidad() {
+fn package_net_observabilidad() {
     // M40.8e: time (formateo determinista) + metrics (Prometheus). log → net/time (dep interna).
     let repo = env!("CARGO_MANIFEST_DIR");
     let base = tmp("net_obs");
@@ -909,39 +909,39 @@ fn paquete_net_observabilidad() {
     )
     .unwrap();
     let (out, err, code) = ray(&base, &["run"]);
-    assert_eq!(code, 0, "run con net/time+metrics debe salir 0\n{err}");
+    assert_eq!(code, 0, "run con net/time+metrics must salir 0\n{err}");
     assert!(out.contains("2021-01-01T00:00:00Z"), "time formatea el epoch\n{out}");
-    assert!(out.contains("hits 2"), "metrics cuenta y renderiza Prometheus\n{out}");
+    assert!(out.contains("hits 2"), "metrics account y renderiza Prometheus\n{out}");
 }
 
 #[test]
-fn fuel_aborta_un_bucle_infinito() {
+fn fuel_abort_un_loop_iter_infinito() {
     // M42.1: `ray run --fuel N` limita las instrucciones de la VM (para embeber raylang confinado).
     // Un bucle infinito aborta en vez de colgar; el error lo dice y el código de salida es 70.
     let base = tmp("fuel");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "fn main() -> int { var i = 0; while (true) { i = i + 1; } 0 }\n",
     )
     .unwrap();
-    let (_out, err, code) = ray(&base, &["run", "--fuel", "200000", archivo.to_str().unwrap()]);
-    assert_eq!(code, 70, "un bucle infinito con fuel finito aborta (EX_SOFTWARE)\n{err}");
+    let (_out, err, code) = ray(&base, &["run", "--fuel", "200000", file.to_str().unwrap()]);
+    assert_eq!(code, 70, "un loop infinito con fuel finito abort (EX_SOFTWARE)\n{err}");
     assert!(err.contains("fuel"), "el error menciona el límite de instrucciones\n{err}");
 }
 
 #[test]
-fn tope_de_heap_aborta_un_programa_glotón() {
+fn tope_de_heap_abort_un_program_glotón() {
     // M42.2: `ray run --heap N` limita los objetos vivos de la VM (el otro recurso, junto al fuel).
     // Un programa que retiene objetos sin cesar aborta al rebasar el tope; el error lo dice, exit 70.
     let base = tmp("heap");
-    let archivo = base.join("main.ray");
+    let file = base.join("main.ray");
     std::fs::write(
-        &archivo,
+        &file,
         "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 1000000) { xs.push([i]); i = i + 1; } 0 }\n",
     )
     .unwrap();
-    let (_out, err, code) = ray(&base, &["run", "--heap", "5000", archivo.to_str().unwrap()]);
-    assert_eq!(code, 70, "un programa glotón con tope de heap aborta (EX_SOFTWARE)\n{err}");
+    let (_out, err, code) = ray(&base, &["run", "--heap", "5000", file.to_str().unwrap()]);
+    assert_eq!(code, 70, "un program glotón con tope de heap abort (EX_SOFTWARE)\n{err}");
     assert!(err.contains("tope de heap"), "el error menciona el tope de heap\n{err}");
 }

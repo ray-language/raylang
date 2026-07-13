@@ -218,7 +218,7 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
     } else {
         match (parse_int(text)) {
             Option.Some(n) => Result.Ok(TokKind.Int(n)),
-            Option.None => Result.Err(lex_error(lx, "entero fuera de rango '" + text + "'")),
+            Option.None => Result.Err(lex_error(lx, "entero outside de range '" + text + "'")),
         }
     }
 }
@@ -259,18 +259,18 @@ fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
     var value = "";
     while (true) {
         if (at_end(lx)) {
-            return Result.Err(lex_error(lx, "cadena sin cerrar"));
+            return Result.Err(lex_error(lx, "string sin close"));
         }
         let c = cur(lx);
         if (c == '"') {
             advance(lx);
             return Result.Ok(TokKind.Str(value));
         } else if (c == '\n') {
-            return Result.Err(lex_error(lx, "salto de línea dentro de una cadena sin cerrar"));
+            return Result.Err(lex_error(lx, "salto de línea inside de one string sin close"));
         } else if (c == '\\') {
             advance(lx);  // la barra invertida
             if (at_end(lx)) {
-                return Result.Err(lex_error(lx, "cadena sin cerrar tras '\\'"));
+                return Result.Err(lex_error(lx, "string sin close after '\\'"));
             }
             let e = cur(lx);
             if (e == 'n') {
@@ -299,18 +299,18 @@ fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
 // que la cadena más \'. Exactamente un carácter.
 fn char_lit(lx: Lexer) -> Result<TokKind, LexError> {
     if (at_end(lx)) {
-        return Result.Err(lex_error(lx, "carácter sin cerrar"));
+        return Result.Err(lex_error(lx, "carácter sin close"));
     }
     let first = cur(lx);
     var c = ' ';
     if (first == '\'') {
-        return Result.Err(lex_error(lx, "un literal de carácter no puede estar vacío ('')"));
+        return Result.Err(lex_error(lx, "un literal de carácter no can estar vacío ('')"));
     } else if (first == '\n') {
-        return Result.Err(lex_error(lx, "salto de línea dentro de un literal de carácter"));
+        return Result.Err(lex_error(lx, "salto de línea inside de un literal de carácter"));
     } else if (first == '\\') {
         advance(lx);  // la barra invertida
         if (at_end(lx)) {
-            return Result.Err(lex_error(lx, "carácter sin cerrar tras '\\'"));
+            return Result.Err(lex_error(lx, "carácter sin close after '\\'"));
         }
         let e = cur(lx);
         if (e == 'n') {
@@ -335,7 +335,7 @@ fn char_lit(lx: Lexer) -> Result<TokKind, LexError> {
         advance(lx);  // comilla de cierre
         Result.Ok(TokKind.Char(c))
     } else {
-        Result.Err(lex_error(lx, "se esperaba ''' para cerrar el literal de carácter (¿más de un carácter?)"))
+        Result.Err(lex_error(lx, "se esperaba ''' para close el literal de carácter (¿más de un carácter?)"))
     }
 }
 

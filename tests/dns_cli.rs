@@ -21,14 +21,14 @@ fn toy_dns_server() -> u16 {
                 Ok(x) => x,
                 Err(_) => return,
             };
-            let consulta = &buf[..n];
+            let query = &buf[..n];
             // QTYPE = los 2 octetos antes del QCLASS final (pregunta = QNAME + QTYPE(2) + QCLASS(2)).
-            let qtype = ((consulta[n - 4] as u16) << 8) | consulta[n - 3] as u16;
+            let qtype = ((query[n - 4] as u16) << 8) | query[n - 3] as u16;
             // La pregunta va de offset 12 al final (un solo QNAME + QTYPE + QCLASS).
-            let pregunta = &consulta[12..n];
+            let pregunta = &query[12..n];
 
             let mut resp: Vec<u8> = Vec::new();
-            resp.extend_from_slice(&consulta[0..2]); // ID (eco)
+            resp.extend_from_slice(&query[0..2]); // ID (eco)
             resp.extend_from_slice(&[0x81, 0x80]);   // flags: QR=1, RD=1, RA=1, RCODE=0
             resp.extend_from_slice(&[0, 1]);         // QDCOUNT = 1
             resp.extend_from_slice(&[0, 1]);         // ANCOUNT = 1
@@ -114,7 +114,7 @@ fn toy_dns_server() -> u16 {
     port
 }
 
-fn correr(flags: &[&str], port: u16) -> Vec<String> {
+fn run(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/dns_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -144,15 +144,15 @@ const ESPERADO: &[&str] = &[
 ];
 
 #[test]
-fn dns_resuelve_todos_los_tipos_interprete() {
+fn dns_resolves_all_los_types_interpreter() {
     let port = toy_dns_server();
-    assert_eq!(correr(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), ESPERADO);
 }
 
 #[test]
-fn dns_resuelve_todos_los_tipos_vm() {
+fn dns_resolves_all_los_types_vm() {
     let port = toy_dns_server();
-    assert_eq!(correr(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), ESPERADO);
 }
 
 /// M72.1 — robustez: el parser procesa datos EXTERNOS, así que toda respuesta corrupta/truncada
@@ -160,7 +160,7 @@ fn dns_resuelve_todos_los_tipos_vm() {
 /// cíclico (ambos verificados antes del fix). Se corre un `.ray` que llama a `parse_full` con
 /// vectores maliciosos, por ambos motores; debe salir 0 tras manejarlos todos.
 #[test]
-fn parse_robusto_ante_respuestas_corruptas() {
+fn parse_robust_ante_respuestas_corruptas() {
     let src = r#"
 from dns import parse_full;
 fn es_err(data: bytes) -> bool {
@@ -176,18 +176,18 @@ fn main() -> int {
     if (!es_err(b"")) { ok = false; }
     // RDLENGTH gigante que rebasa el mensaje.
     if (!es_err(bytes_of([0,0, 129,128, 0,0, 0,1, 0,0, 0,0,  192,12, 0,1, 0,1, 0,0,0,60, 255,255, 1,2]))) { ok = false; }
-    if (ok) { print("robusto"); 0 } else { print("FALLO"); 1 }
+    if (ok) { print("robust"); 0 } else { print("FALLO"); 1 }
 }
 "#;
-    let path = format!("{}/examples/web/dns_robusto_tmp.ray", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/examples/web/dns_robust_tmp.ray", env!("CARGO_MANIFEST_DIR"));
     std::fs::write(&path, src).unwrap();
     for vm in [false, true] {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
         if vm { cmd.arg("--vm"); }
-        let out = cmd.arg(&path).output().expect("ejecuta dns_robusto");
+        let out = cmd.arg(&path).output().expect("ejecuta dns_robust");
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(out.status.success(), "sale 0 (vm={vm})\n{stdout}{}", String::from_utf8_lossy(&out.stderr));
-        assert!(stdout.contains("robusto"), "todas corruptas = Err (vm={vm})\n{stdout}");
+        assert!(stdout.contains("robust"), "todas corruptas = Err (vm={vm})\n{stdout}");
     }
     std::fs::remove_file(&path).ok();
 }

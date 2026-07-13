@@ -8,27 +8,27 @@ use std::process::Command;
 /// El tag oficial del RFC 8439 §2.5.2 (16 octetos en hex).
 const ESPERADO: &[&str] = &["a8061dc1305136c6c22b8baf0c0127a9"];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/poly1305_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta poly1305_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 #[test]
-fn poly1305_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn poly1305_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "poly1305_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn poly1305_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "poly1305_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }

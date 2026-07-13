@@ -282,7 +282,7 @@ fn patch_jump(comp: Comp, at: int) {
     s.code[at] = match (s.code[at]) {
         Op.OJump(_) => Op.OJump(target),
         Op.OJumpIfFalse(_) => Op.OJumpIfFalse(target),
-        _ => panic("patch_jump sobre una instrucción que no es salto"),
+        _ => panic("patch_jump about one instrucción what no es salto"),
     };
 }
 
@@ -443,7 +443,7 @@ fn emit_ident(comp: Comp, name: string) {
         Option.Some(idx) => {
             emit(comp, Op.OFunc(idx));
         },
-        Option.None => panic("compilador: nombre no resuelto: " + name),
+        Option.None => panic("compilador: name no resuelto: " + name),
     }
 }
 
@@ -577,7 +577,7 @@ fn emit_stmt(comp: Comp, s: Stmt) {
                         if (up >= 0) {
                             emit(comp, Op.OSetUpvalue(up));
                         } else {
-                            panic("compilador: asignación a nombre no resuelto: " + name);
+                            panic("compilador: asignación a name no resuelto: " + name);
                         }
                     }
                 },
@@ -594,7 +594,7 @@ fn emit_stmt(comp: Comp, s: Stmt) {
                     emit_expr(comp, value);
                     emit(comp, Op.OSetField(fname));
                 },
-                _ => panic("compilador: destino de asignación no soportado"),
+                _ => panic("compilador: target de asignación no soportado"),
             }
         },
         SKind.SReturn(opt) => {

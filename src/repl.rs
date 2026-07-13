@@ -33,7 +33,7 @@ use crate::{checker, diagnostic, lexer, parser};
 
 /// Arranca el bucle interactivo leyendo de la entrada estándar.
 pub fn run() {
-    println!("raylang REPL — escribe una expresión, un let/var, o una definición (fn/struct/enum).");
+    println!("raylang REPL — escribe one expresión, un let/var, o one definición (fn/struct/enum).");
     println!("  :help  ayuda     :quit  salir");
     let mut session = Session::new();
     let stdin = io::stdin();
@@ -49,7 +49,7 @@ pub fn run() {
             } // EOF (Ctrl-D)
             Ok(_) => {}
             Err(e) => {
-                eprintln!("error de entrada: {}", e);
+                eprintln!("error de entry: {}", e);
                 break;
             }
         }
@@ -76,11 +76,11 @@ pub fn run() {
 
 fn print_help() {
     println!("Entradas posibles:");
-    println!("  - una expresión:        1 + 2          -> imprime  3");
+    println!("  - one expresión:        1 + 2          -> imprime  3");
     println!("  - un let/var:           let x = 3      -> imprime  3");
-    println!("  - una asignación:       x = 4          (requiere 'var')");
-    println!("  - una definición:       fn f(n: int) -> int {{ n + 1 }}");
-    println!("El estado persiste entre líneas. ':quit' para salir.");
+    println!("  - one asignación:       x = 4          (requiere 'var')");
+    println!("  - one definición:       fn f(n: int) -> int {{ n + 1 }}");
+    println!("El estado persiste between líneas. ':quit' para salir.");
 }
 
 /// Una definición de nivel superior acumulada (fn/struct/enum), por nombre y fuente.
@@ -248,7 +248,7 @@ impl Session {
                     Ok(Entry::Assign { show, src: ensure_semi(line) })
                 }
                 StmtKind::Expr(_) => Ok(Entry::Expr { src: strip_semi(line) }),
-                StmtKind::Return { .. } => Err("'return' no tiene sentido en el REPL".to_string()),
+                StmtKind::Return { .. } => Err("'return' no has sentido en el REPL".to_string()),
             }
         } else {
             Ok(Entry::Expr { src: strip_semi(line) })
@@ -317,14 +317,14 @@ mod tests {
     // texto exacto impreso se prueba por subproceso en `tests/repl_cli.rs`.
 
     #[test]
-    fn expresion_imprime() {
+    fn expression_imprime() {
         let mut s = Session::new();
         assert_eq!(s.eval("1 + 2").unwrap(), Outcome::Printed);
         assert_eq!(s.eval("[1, 2, 3]").unwrap(), Outcome::Printed);
     }
 
     #[test]
-    fn let_persiste_entre_lineas() {
+    fn let_persiste_between_lines() {
         let mut s = Session::new();
         assert_eq!(s.eval("let x = 3").unwrap(), Outcome::Printed);
         assert_eq!(s.eval("x + 1").unwrap(), Outcome::Printed);
@@ -343,13 +343,13 @@ mod tests {
     }
 
     #[test]
-    fn definiciones_y_su_uso() {
+    fn definiciones_y_su_usage() {
         let mut s = Session::new();
-        assert_eq!(s.eval("fn doble(n: int) -> int { n * 2 }").unwrap(), Outcome::Defined("doble".into()));
+        assert_eq!(s.eval("fn double(n: int) -> int { n * 2 }").unwrap(), Outcome::Defined("double".into()));
         assert!(s.eval("let x = 21").is_ok());
-        assert!(s.eval("doble(x)").is_ok()); // llamada normal
-        assert!(s.eval("x.doble()").is_ok()); // UFCS
-        assert!(s.eval("x |> doble").is_ok()); // pipeline
+        assert!(s.eval("double(x)").is_ok()); // llamada normal
+        assert!(s.eval("x.double()").is_ok()); // UFCS
+        assert!(s.eval("x |> double").is_ok()); // pipeline
     }
 
     #[test]
@@ -363,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn expresion_unit_no_falla() {
+    fn expression_unit_no_fails() {
         // `print(x)` es de tipo unit: `print(print(x))` no tiparía, pero el REPL lo
         // reintenta como sentencia y lo ejecuta (Quiet).
         let mut s = Session::new();
@@ -372,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn redefinir_una_variable() {
+    fn redefine_one_variable() {
         let mut s = Session::new();
         s.eval("let x = 3").unwrap();
         assert!(s.eval("let x = true").is_ok()); // la última gana (shadowing al re-ejecutar)
@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn una_entrada_con_error_no_contamina_el_estado() {
+    fn one_entry_con_error_no_contamina_el_estado() {
         let mut s = Session::new();
         s.eval("let x = 3").unwrap();
         assert!(s.eval("let y = x + true").is_err()); // error de tipos
@@ -389,9 +389,9 @@ mod tests {
     }
 
     #[test]
-    fn lo_indeterminado_pide_anotacion() {
+    fn lo_indeterminado_asks_annotation() {
         let mut s = Session::new();
         let e = s.eval("let xs = []").unwrap_err();
-        assert!(e.contains("no se puede inferir"), "mensaje: {}", e);
+        assert!(e.contains("no se can inferir"), "mensaje: {}", e);
     }
 }

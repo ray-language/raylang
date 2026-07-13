@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::thread;
 
 /// Servidor DNS de juguete que responde A=93.184.216.34 (TTL 300) e incrementa `contador` por consulta.
-fn toy_dns_server(contador: Arc<AtomicUsize>) -> u16 {
+fn toy_dns_server(counter: Arc<AtomicUsize>) -> u16 {
     let sock = UdpSocket::bind("127.0.0.1:0").expect("bind dns");
     let port = sock.local_addr().expect("addr").port();
     thread::spawn(move || {
@@ -20,11 +20,11 @@ fn toy_dns_server(contador: Arc<AtomicUsize>) -> u16 {
                 Ok(x) => x,
                 Err(_) => return,
             };
-            contador.fetch_add(1, Ordering::SeqCst);
-            let consulta = &buf[..n];
-            let pregunta = &consulta[12..n];
+            counter.fetch_add(1, Ordering::SeqCst);
+            let query = &buf[..n];
+            let pregunta = &query[12..n];
             let mut resp: Vec<u8> = Vec::new();
-            resp.extend_from_slice(&consulta[0..2]);  // ID
+            resp.extend_from_slice(&query[0..2]);  // ID
             resp.extend_from_slice(&[0x81, 0x80]);    // flags
             resp.extend_from_slice(&[0, 1]);          // QDCOUNT
             resp.extend_from_slice(&[0, 1]);          // ANCOUNT
@@ -42,7 +42,7 @@ fn toy_dns_server(contador: Arc<AtomicUsize>) -> u16 {
     port
 }
 
-fn correr(flags: &[&str], port: u16) -> Vec<String> {
+fn run(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/dns_cache_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -68,20 +68,20 @@ const ESPERADO: &[&str] = &[
     "hits=1 misses=2",
 ];
 
-fn caso(flags: &[&str]) {
-    let contador = Arc::new(AtomicUsize::new(0));
-    let port = toy_dns_server(contador.clone());
-    assert_eq!(correr(flags, port), ESPERADO);
+fn case(flags: &[&str]) {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let port = toy_dns_server(counter.clone());
+    assert_eq!(run(flags, port), ESPERADO);
     // 3 resoluciones, 2 claves → el servidor recibe solo 2 consultas (la repetida se cachea).
-    assert_eq!(contador.load(Ordering::SeqCst), 2, "el servidor debió recibir 2 consultas");
+    assert_eq!(counter.load(Ordering::SeqCst), 2, "el servidor debió recibir 2 consultas");
 }
 
 #[test]
-fn cache_evita_la_segunda_consulta_interprete() {
-    caso(&[]);
+fn cache_evita_la_second_query_interpreter() {
+    case(&[]);
 }
 
 #[test]
-fn cache_evita_la_segunda_consulta_vm() {
-    caso(&["--vm"]);
+fn cache_evita_la_second_query_vm() {
+    case(&["--vm"]);
 }

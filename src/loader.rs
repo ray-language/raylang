@@ -181,7 +181,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
             // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
             if let Some(c) = capsule_violated(&roots, &name, dep) {
                 return Err(render(&source, line, col, 1, &name, &format!(
-                    "el módulo '{}' es interno a la cápsula '{}'; impórtalo con 'import {};'",
+                    "el módulo '{}' es internal a la cápsula '{}'; impórtalo con 'import {};'",
                     dep, c, c
                 )));
             }
@@ -620,7 +620,7 @@ pub fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBu
         let as_dir = root.join(dep).join("mod.ray");
         match (as_file.exists(), as_dir.exists()) {
             (true, true) => return Err(format!(
-                "el módulo '{}' es ambiguo: existen '{}' y '{}'; deja solo uno",
+                "el módulo '{}' es ambiguo: existen '{}' y '{}'; deja solo one",
                 dep, as_file.display(), as_dir.display()
             )),
             (true, false) => return Ok(Some(as_file)),
@@ -711,7 +711,7 @@ fn check_unique_types(modules: &[Module]) -> Result<(), LoadError> {
         for (name, line, col) in names {
             if !seen.insert(name.clone()) {
                 return Err(render(&m.source, line, col, 1, &m.name, &format!(
-                    "el tipo '{}' ya está definido en este módulo", name
+                    "el type '{}' ya está definido en este módulo", name
                 )));
             }
         }
@@ -844,7 +844,7 @@ fn build_import_map(m: &Module) -> Result<ImportMap, LoadError> {
             && other != i.module
         {
             return Err(render(&m.source, i.line, i.col, 1, &m.name, &format!(
-                "el nombre de módulo '{}' ya nombra a '{}'; usa 'as' para renombrar esta importación",
+                "el name de módulo '{}' ya nombra a '{}'; uses 'as' para renombrar esta importación",
                 leaf, other
             )));
         }
@@ -883,7 +883,7 @@ fn classify_from_imports(
             let local = n.local().to_string();
             if !locals.insert(local.clone()) {
                 return Err(render(&m.source, n.line, n.col, 1, &m.name, &format!(
-                    "el nombre '{}' ya está definido o importado en este módulo; usa 'as' para renombrarlo",
+                    "el name '{}' ya está definido o importado en este módulo; uses 'as' para renombrarlo",
                     local
                 )));
             }
@@ -928,7 +928,7 @@ fn classify_from_name(
     // No exporta el nombre: ¿existe como tipo privado? (mensaje más preciso que "no existe").
     if all_types.get(from).is_some_and(|s| s.contains(&name.name)) {
         return Err(render(src, name.line, name.col, 1, module, &format!(
-            "'{}' es un tipo privado del módulo '{}' (¿falta 'pub'?)", name.name, from
+            "'{}' es un type private del módulo '{}' (¿falta 'pub'?)", name.name, from
         )));
     }
     Err(render(src, name.line, name.col, 1, module, &format!(

@@ -31,7 +31,7 @@ const ESPERADO: &[&str] = &[
     "500ms",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/time_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -50,11 +50,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn fechas_utc_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn fechas_utc_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn fechas_utc_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

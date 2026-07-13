@@ -17,7 +17,7 @@ const ESPERADO: &[&str] = &[
     "deadbeef",             // round-trip hex
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/hmac_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -36,11 +36,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn vectores_hmac_base64url_hex_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn vectors_hmac_base64url_hex_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
-fn vectores_hmac_base64url_hex_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+fn vectors_hmac_base64url_hex_vm() {
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

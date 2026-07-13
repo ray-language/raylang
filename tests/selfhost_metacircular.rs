@@ -21,16 +21,16 @@ fn repo_path(rel: &str) -> PathBuf {
 }
 
 /// Escribe `src` a un archivo temporal y devuelve su ruta absoluta.
-fn temp_input(nombre: &str, src: &str) -> String {
-    let mut ruta = std::env::temp_dir();
-    ruta.push(nombre);
-    let mut f = std::fs::File::create(&ruta).expect("crea el temporal");
+fn temp_input(name: &str, src: &str) -> String {
+    let mut path = std::env::temp_dir();
+    path.push(name);
+    let mut f = std::fs::File::create(&path).expect("crea el temporal");
     f.write_all(src.as_bytes()).expect("escribe el temporal");
-    ruta.to_str().expect("ruta utf-8").to_string()
+    path.to_str().expect("path utf-8").to_string()
 }
 
 /// Corre `args` con el binario de raylang; devuelve (stdout, código de salida).
-fn correr(args: &[&str]) -> (String, i32) {
+fn run(args: &[&str]) -> (String, i32) {
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(args)
         .output()
@@ -42,15 +42,15 @@ fn correr(args: &[&str]) -> (String, i32) {
 }
 
 /// Compara un driver del self-hosting corrido por Rust vs corrido SOBRE el intérprete auto-alojado.
-fn comparar_driver(driver_rel: &str, input_abs: &str, etiqueta: &str) {
+fn compare_driver(driver_rel: &str, input_abs: &str, etiqueta: &str) {
     let driver = repo_path(driver_rel);
-    let driver = driver.to_str().expect("ruta utf-8");
-    let run = repo_path("selfhost/run.ray");
-    let run = run.to_str().expect("ruta utf-8");
-    let (so_r, code_r) = correr(&[driver, input_abs]);
-    let (so_s, code_s) = correr(&[run, driver, input_abs]);
+    let driver = driver.to_str().expect("path utf-8");
+    let run_path = repo_path("selfhost/run.ray");
+    let run_path = run_path.to_str().expect("path utf-8");
+    let (so_r, code_r) = run(&[driver, input_abs]);
+    let (so_s, code_s) = run(&[run_path, driver, input_abs]);
     assert_eq!(so_s, so_r, "stdout difiere ({etiqueta})");
-    assert_eq!(code_s, code_r, "código de salida difiere ({etiqueta})");
+    assert_eq!(code_s, code_r, "código de output difiere ({etiqueta})");
 }
 
 // Fuentes pequeñas (los drivers grandes corren un intérprete sobre un intérprete → entradas chicas).
@@ -64,30 +64,30 @@ const DATOS: &str = "struct P { x: int, y: int }\nenum F { C(int), R(int, int) }
 fn lexer_metacircular() {
     // El lexer auto-alojado, sobre el intérprete auto-alojado, lexea idéntico a Rust.
     let inp = temp_input("mc_lex_fib.ray", FIB);
-    comparar_driver("selfhost/lex_dump.ray", &inp, "lex_dump/fib");
-    let inp = temp_input("mc_lex_datos.ray", DATOS);
-    comparar_driver("selfhost/lex_dump.ray", &inp, "lex_dump/datos");
+    compare_driver("selfhost/lex_dump.ray", &inp, "lex_dump/fib");
+    let inp = temp_input("mc_lex_data.ray", DATOS);
+    compare_driver("selfhost/lex_dump.ray", &inp, "lex_dump/data");
 }
 
 #[test]
 fn parser_metacircular() {
     // El parser auto-alojado, sobre el intérprete auto-alojado, produce el mismo AST que Rust.
     let inp = temp_input("mc_parse_fib.ray", FIB);
-    comparar_driver("selfhost/parse_dump.ray", &inp, "parse_dump/fib");
-    let inp = temp_input("mc_parse_datos.ray", DATOS);
-    comparar_driver("selfhost/parse_dump.ray", &inp, "parse_dump/datos");
+    compare_driver("selfhost/parse_dump.ray", &inp, "parse_dump/fib");
+    let inp = temp_input("mc_parse_data.ray", DATOS);
+    compare_driver("selfhost/parse_dump.ray", &inp, "parse_dump/data");
 }
 
 #[test]
 fn checker_metacircular() {
     // El checker auto-alojado, sobre el intérprete auto-alojado, da el mismo veredicto que Rust.
     let inp = temp_input("mc_check_fib.ray", FIB);
-    comparar_driver("selfhost/check_dump.ray", &inp, "check_dump/fib");
-    let inp = temp_input("mc_check_datos.ray", DATOS);
-    comparar_driver("selfhost/check_dump.ray", &inp, "check_dump/datos");
+    compare_driver("selfhost/check_dump.ray", &inp, "check_dump/fib");
+    let inp = temp_input("mc_check_data.ray", DATOS);
+    compare_driver("selfhost/check_dump.ray", &inp, "check_dump/data");
     // Un programa con error de tipos: el veredicto (mensaje) también debe coincidir.
     let inp = temp_input("mc_check_err.ray", "fn main() -> int { let x: int = true; 0 }\n");
-    comparar_driver("selfhost/check_dump.ray", &inp, "check_dump/error");
+    compare_driver("selfhost/check_dump.ray", &inp, "check_dump/error");
 }
 
 // run-on-run corre DOS niveles de tree-walking (el intérprete auto-alojado ejecutando el compilador
@@ -99,7 +99,7 @@ fn run_on_run_metacircular() {
     // run-on-run: `run.ray` corriendo SOBRE el intérprete auto-alojado ejecuta el programa con el mismo
     // comportamiento que Rust ejecutándolo directamente → el compilador entero corre sobre sí mismo.
     let inp = temp_input("mc_ror_fib.ray", FIB);
-    comparar_driver("selfhost/run.ray", &inp, "run-on-run/fib");
-    let inp = temp_input("mc_ror_datos.ray", DATOS);
-    comparar_driver("selfhost/run.ray", &inp, "run-on-run/datos");
+    compare_driver("selfhost/run.ray", &inp, "run-on-run/fib");
+    let inp = temp_input("mc_ror_data.ray", DATOS);
+    compare_driver("selfhost/run.ray", &inp, "run-on-run/data");
 }

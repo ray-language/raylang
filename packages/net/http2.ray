@@ -76,7 +76,7 @@ pub fn encode_frame(ftype: int, flags: int, stream_id: int, payload: bytes) -> b
 /// use `frame_size` to check completeness and to advance past the frame.
 pub fn parse_frame(data: bytes) -> Result<Http2Frame, string> {
     if (data.len() < 9) {
-        return Result.Err("frame HTTP/2 incompleto (cabecera < 9 octetos)");
+        return Result.Err("frame HTTP/2 incompleto (header < 9 octetos)");
     }
     let plen = data[0] << 16 | data[1] << 8 | data[2];
     let ftype = data[3];

@@ -13,7 +13,7 @@ const ESPERADO: &[&str] = &[
     "true", // zlib_compress → zlib_inflate
 ];
 
-fn correr(flags: &[&str], extra_arg: Option<&str>) -> (Vec<String>, bool) {
+fn run(flags: &[&str], extra_arg: Option<&str>) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/deflate_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
     cmd.args(flags).arg(&demo);
@@ -21,25 +21,25 @@ fn correr(flags: &[&str], extra_arg: Option<&str>) -> (Vec<String>, bool) {
         cmd.arg(a);
     }
     let out = cmd.output().expect("ejecuta deflate_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout)
+    let lines = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|l| l.to_string())
         .collect();
-    (lineas, out.status.success())
+    (lines, out.status.success())
 }
 
 #[test]
-fn deflate_round_trip_interprete() {
-    let (lineas, ok) = correr(&[], None);
+fn deflate_round_trip_interpreter() {
+    let (lines, ok) = run(&[], None);
     assert!(ok, "deflate_demo falló");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn deflate_round_trip_vm() {
-    let (lineas, ok) = correr(&["--vm"], None);
+    let (lines, ok) = run(&["--vm"], None);
     assert!(ok, "deflate_demo falló");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 /// El gzip que produce raylang debe poder descomprimirlo Python (compatibilidad estándar). Se escribe
@@ -53,8 +53,8 @@ fn gzip_de_raylang_lo_descomprime_python() {
     }
     let tmp = std::env::temp_dir().join(format!("ray_deflate_{}.gz", std::process::id()));
     let tmp_str = tmp.to_str().unwrap();
-    let (_, ok) = correr(&["--vm"], Some(tmp_str));
-    assert!(ok, "deflate_demo (con ruta) falló");
+    let (_, ok) = run(&["--vm"], Some(tmp_str));
+    assert!(ok, "deflate_demo (con path) falló");
 
     let py = Command::new("python3")
         .arg("-c")
@@ -65,7 +65,7 @@ fn gzip_de_raylang_lo_descomprime_python() {
         .expect("ejecuta python3");
     let _ = std::fs::remove_file(&tmp);
     assert!(py.status.success(), "python gzip.decompress falló: {}", String::from_utf8_lossy(&py.stderr));
-    let texto = String::from_utf8_lossy(&py.stdout);
-    assert!(texto.starts_with("raylang raylang raylang"), "descompresión Python inesperada: {texto}");
-    assert!(texto.contains("comprimir y descomprimir"), "contenido incompleto: {texto}");
+    let text = String::from_utf8_lossy(&py.stdout);
+    assert!(text.starts_with("raylang raylang raylang"), "descompresión Python inesperada: {text}");
+    assert!(text.contains("comprimir y descomprimir"), "contenido incompleto: {text}");
 }

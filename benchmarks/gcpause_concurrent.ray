@@ -6,12 +6,12 @@
 // Espera-se pausa_max << los ~10 ms de gcpause.ray (el objetivo <1 ms de M37, por construcción).
 fn worker() -> int {
     // Heap moderado vivo por fibra + churn para forzar GCs sobre ese heap pequeño.
-    var vivo: [[int]] = [];
+    var live: [[int]] = [];
     var i = 0;
     while (i < 5000) {
         var a: [int] = [];
         a.push(i);
-        vivo.push(a);
+        live.push(a);
         i = i + 1;
     }
     var j = 0;
@@ -22,7 +22,7 @@ fn worker() -> int {
         s = s + t[0];
         j = j + 1;
     }
-    s % 100 + vivo.len() - vivo.len()
+    s % 100 + live.len() - live.len()
 }
 
 fn main() -> int {

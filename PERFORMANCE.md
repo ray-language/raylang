@@ -77,10 +77,17 @@ esto toca la semántica; oráculo intacto.
 | P1.1 | **NaN-boxing / `HeapValue` en 8 bytes** | hoy 16 B; empaquetar int/float/bool/handle en un u64 NaN-boxed → mitad de tráfico de pila y de memoria, mejor caché | 10–20 % general |
 | P1.2 | **Arreglos unboxed tipados** | el checker SABE que `[int]` es de ints → `Obj::IntArray(Vec<i64>)` sin etiqueta por elemento (ídem float). Indexar/sumar sin desempaquetar | grande en datos |
 | P1.3 | **Structs por índice (B2)** | `GetField(String)` → `GetFieldIdx(u16)` anotado por el checker pre-erasure; instancia = `Vec<HeapValue>` sin nombres | el ROI del nicho |
-| P1.4 | **Strings `Arc<str>` compartidas** | revivir Opt.3 como Arc (traba M38 resuelta); mover/clonar strings deja de copiar | string-heavy |
+| P1.4 | **SSO de strings (`compact_str`)** ❌ **EVALUADO y DESCARTADO** (14 jul, medido) | Se implementó entero: `HeapValue::Str(CompactString)` (VM), inline ≤24 B, `Send` (sortea la traba 4 de Opt.3). **Medido (A/B vs no-SSO, best-of-15)**: wordcount **+2.7%**, split-aislado +5.9%, pero **jsonserialize −9%**. Neto negativo. **Causa**: **mimalloc (P0.4) ya se comió el almuerzo** — el malloc ya es barato (~30 ns), así que evitarlo apenas gana; y el branching inline-vs-heap de `CompactString` penaliza los strings **medianos** (los registros JSON de ~40 B van al heap igual y se construyen más lento). Espeja el rechazo de Opt.3 (`Rc<str>`). Revertido (churn de 119 sitios + dep, sin premio). |
 | P1.5 | **Monomorfización selectiva** | para funciones genéricas calientes (sort, map/filter/fold), emitir la versión especializada por σ en vez de despachar diccionarios | HOF + sort |
 
 **Meta P1**: servicios a **~2× del líder** (liga php/lua); fib/loop ~2× mejor que hoy.
+
+**Lección de P1.4 (SSO)**: con mimalloc ya puesto, el residuo de `split`/`to_string` **no** es la
+llamada al allocador (ya barata) sino el **trabajo inherente** (copiar bytes, construir el arreglo, el
+tráfico de la pila de `HeapValue`). Eso apunta a que el siguiente lever real NO es "menos allocs" sino
+**menos trabajo por valor / menos tráfico**: P1.1 (NaN-boxing → `HeapValue` de 16→8 B, menos tráfico de
+pila y caché) y P1.2 (arreglos unboxed) — o directamente **P2** (nativo/JIT), que elimina el bucle de
+despacho entero. Medir P1.1 antes de invertir en el resto de P1.
 
 ### Arco P2 — codegen nativo: la apuesta grande (la liga de Node/Go de verdad)
 

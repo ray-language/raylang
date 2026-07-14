@@ -53,6 +53,12 @@ ffi = ["dep:libloading"]
 ahash = "0.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# P0.4 (perf, jul 2026): allocador global mimalloc. El malloc del sistema (macOS libmalloc en
+# particular) es lento para el CHURN de objetos pequeños del intérprete —`split`/`to_string`/arrays
+# alocan millones de `String` pequeños (en `wordcount`, `split` es el 82% del tiempo, todo malloc)—.
+# mimalloc es 2–4× más rápido en ese patrón; acelera todos los benchmarks con CERO cambio semántico
+# (oráculo intacto). No en wasm (no hay allocador de sistema que reemplazar y necesita C).
+mimalloc = { version = "0.1", default-features = false }
 # M19.4 — TLS. ÚNICA excepción a la invariante cero-deps (decisión §28.4): la criptografía no se
 # implementa a mano. `rustls` con el proveedor `ring` (Rust+C portable, sin cmake/OpenSSL) + las raíces
 # de confianza de Mozilla (`webpki-roots`) para verificar certificados de servidor.

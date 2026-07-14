@@ -64,7 +64,7 @@ esto toca la semántica; oráculo intacto.
 | P0.1 | **aHash en `Obj::Map`** ✅ **HECHA** (14 jul) | alias `MapStore` con `ahash::RandomState` en ambos motores (dep `ahash`, ya transitiva; runtime-rng → resistencia a hash-flooding intacta). **Medido**: neutra sobre el camino con-allocs (el hashing NO dominaba), pero **−4.5% aislada** sobre el camino sin allocs (get_or) — enmascarada por las allocs, aflora al quitarlas (crecerá con P0.3+). Se conserva | −4.5% (crece) |
 | P0.2 | **`get_or` sin alocar** ✅ **HECHA** (14 jul) | opcode `MapGetOr` + primitivo `__get_or` + método de prelude `get_or(m,k,d) -> V`: lookup único, **cero allocs** (vs `get(k).unwrap_or(d)`, que aloca el `[V]` + el `Option`). Es la forma idiomática justa (= `dict.get(k,0)` de Python / `Hash.new(0)` de Ruby). **Medido**: wordcount 1011→618 ms SipHash, **590 ms con aHash (−42% del baseline)** | mata 2 allocs/acceso |
 | P0.3 | **Upsert en 1 lookup** ✅ **HECHA** (14 jul) | opcode `MapAdd` + builtin público `add_to(m, k, delta)` (ad-hoc int/float, entry-API): `m[k] += delta` en UN lookup, frente a `get_or(k,0)+insert(k,...)` que hashea/busca/clona-la-clave dos veces. Es la acumulación de servicios (contar/sumar), = `h[k]+=1` de Ruby / `$h{k}++` de Perl. **Medido**: wordcount 572→338 ms (**−41%**), logparse 214→169 ms (−21%). Oráculo `map_add_to_oracle` | 2× en agregación |
-| P0.4 | **Interning de strings del split** | `split` produce las mismas palabras millones de veces; internarlas (tabla global `Rc<str>`/símbolos) → comparación por puntero, hash memoizado en la string | grande en parse+map |
+| P0.4 | **Allocador mimalloc** ✅ **HECHA** (14 jul) — *el interning se descartó por medición* | Atribución tras P0.3: en `wordcount` el **`split` es el 82%** (279 de 340 ms) y el Map solo 30 ms → el interning (que ayuda a comparar/almacenar en el Map, no a trocear) **no** era el lever. El `split` es puro **malloc churn** (1.8M `String` pequeños; el libmalloc de macOS es lento). `#[global_allocator] mimalloc` (cfg no-wasm) lo ataca de raíz, **sin cambio semántico** (oráculo intacto). **Medido**: wordcount −18%, logparse −17%, **jsonserialize −21%** (todos), arranque intacto (3.8 ms) | −17 a −21% global |
 | P0.5 | **Hash memoizado** | guardar el hash junto a la string del heap (se calcula 1 vez) | compone con P0.1-4 |
 | P0.6 | **Superinstrucciones ronda 3** | histograma dinámico sobre corpus **call-heavy** (fib/selfhost) y **map-heavy** (wordcount); fusionar los pares de `Call`/`Return` y de map. El patrón A4 ya dio −19/−28 % | 5–15 % general |
 
@@ -164,7 +164,8 @@ editar-correr nativo importara — que para servicios no.
 | hoy | 12.5× | 8.3× | 9.7× | 2.9× | 4.9× |
 | **P0.1+P0.2 (medido 14 jul)** | — | — | **5.4×** | 2.8× | **3.5×** |
 | **P0.1+P0.2+P0.3 (medido 14 jul)** | — | — | **3.2×** | 2.7× | **2.7×** |
-| post-P0 (con P0.4 interning + P0.6) | ~11× | ~8× | **~2.5×** | ~2.5× | **~2.3×** |
+| **+P0.4 mimalloc (medido 14 jul)** | — | — | **2.7×** | **2.1×** | **2.0×** |
+| post-P0 (con P0.6 superinstr.) | ~11× | ~8× | **~2.4×** | ~1.9× | **~1.8×** |
 | post-P1 | ~6× | ~4× | ~2.5× | ~2× | ~2× |
 | post-P2.b (nativo) | **<1× (bate a node)** | **<1×** | **~1×** | **~1×** | **~1×** |
 

@@ -218,10 +218,28 @@ peor-de-la-clase a mejor-de-la-clase, con salida idéntica a la VM y tests verde
 
 **Cobertura del transpilador tras 4 fases**: escalares · control (`if`/`while`/`for`) · recursión ·
 strings (`Rc<str>`, concat aplanado) · arreglos (`Rc<RefCell<Vec>>`) · Map (`Rc<RefCell<HashMap>>`) ·
-UFCS/métodos manglados · entorno de tipos propio. **Falta para el lenguaje completo**: structs/enums
-(tipos de usuario), `match`, closures, genéricos de usuario (monomorfizar), GC de ciclos (hoy `Rc` los
-fuga; los benchmarks no crean ciclos), y concurrencia (M12/M38, o "spawn cae a la VM en v1"). El camino
-está trazado y probado fase a fase; lo que resta es ingeniería de cobertura, no incógnitas.
+UFCS/métodos manglados · entorno de tipos propio.
+
+#### Fase 5 — structs + enums + match (14 jul)
+
+Tipos de usuario: **struct** → `Rc<RefCell<S>>` (referencia + mutación); **enum** → `Rc<E>` (inmutable,
+permite recursión). Cubre: definiciones (Rust `struct`/`enum`), literal de struct, acceso/asignación de
+campo (`p.x` / `p.x = v` → `borrow`/`borrow_mut`), construcción de variante (`Rc::new(E::V(..))`),
+**`match`** (sobre `&*scrutinee`, bindings clonados a valores propios al inicio del brazo, patrones
+variante anidados, `_`, binding-total), y **`impl Display`** por tipo (= el `Show` de raylang: `Name {
+f: v }` / `Name.Variant(payload)`) para `print`. Gotcha: el parser deja el tipo enum como `Struct(n)` →
+`declare` lo reclasifica a `Enum(n)`. Diferido: `@derive(Eq/Ord)`, patrones struct, guardas de `match`.
+
+**Verificado — 9 ejemplos reales transpilan y dan salida byte-idéntica a la VM**: `structs` (campos,
+mutación, **aliasing** por referencia, structs anidados), `inventario` (structs en arreglos), **`enums`**,
+**`match_figuras`** (match con payload), **`lista_enlazada`/`lista_recorrido` (enums RECURSIVOS = listas
+enlazadas)** + fib/gcd/primes/fizzbuzz. Los ejemplos que aún fallan son de OTRAS features (print de
+arreglos, `const` de nivel superior, indexar strings), no de structs/enums.
+
+**Cobertura tras 5 fases**: escalares · control · recursión · strings · arreglos · Map · **structs/enums/
+match** · UFCS. **Falta**: closures, genéricos de usuario (monomorfizar), print de colecciones, `const`,
+indexar strings/`char`, GC de ciclos (hoy `Rc` los fuga; el corpus no crea ciclos), traits/`@derive`,
+concurrencia (M12/M38, o "spawn cae a la VM en v1"). Ingeniería de cobertura, sin incógnitas.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

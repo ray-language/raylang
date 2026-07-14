@@ -15,7 +15,8 @@
 //! overflow-checks), NO checked como la VM. Fiel para programas sin desbordamiento.
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, ForIter, ForPat, Function, Program, Stmt, StmtKind, Type, UnaryOp,
+    BinaryOp, Block, Expr, ExprKind, ForIter, ForPat, Function, MatchArm, Pattern, PatternKind, Program,
+    Stmt, StmtKind, Type, UnaryOp,
 };
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -47,6 +48,14 @@ struct Transpiler {
     funcs: HashMap<String, FnSig>,
     /// Pila de ámbitos: nombre de variable → su tipo (para decidir clonado y para la inferencia de `let`).
     scopes: Vec<HashMap<String, Type>>,
+    /// Nombres de enum del usuario (para clasificar un `Type::Struct(n)` como struct vs enum).
+    enums: std::collections::HashSet<String>,
+    /// Campos de cada struct (nombre → tipo), en orden, para inferir el tipo de `p.campo`.
+    struct_fields: HashMap<String, Vec<(String, Type)>>,
+    /// Payload de cada variante de enum (`Enum` → `Variante` → tipos), para los bindings de `match`.
+    enum_variants: HashMap<String, HashMap<String, Vec<Type>>>,
+    /// Contador para nombres de temporales de escrutinio de `match` (evita colisiones al anidar).
+    match_temp: usize,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -59,7 +68,28 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         }
         funcs.insert(f.name.clone(), FnSig { ret: f.return_type.clone() });
     }
-    let mut t = Transpiler { funcs, scopes: Vec::new() };
+    let enums: std::collections::HashSet<String> =
+        prog.enums.iter().filter(|e| e.type_params.is_empty()).map(|e| e.name.clone()).collect();
+    let struct_fields = prog
+        .structs
+        .iter()
+        .map(|s| (s.name.clone(), s.fields.clone()))
+        .collect();
+    let enum_variants = prog
+        .enums
+        .iter()
+        .map(|e| {
+            (e.name.clone(), e.variants.iter().map(|v| (v.name.clone(), v.payload.clone())).collect())
+        })
+        .collect();
+    let mut t = Transpiler {
+        funcs,
+        scopes: Vec::new(),
+        enums,
+        struct_fields,
+        enum_variants,
+        match_temp: 0,
+    };
 
     let mut out = String::new();
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
@@ -82,6 +112,38 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     out.push_str("fn __ray_values<K: Ord + Clone + std::hash::Hash + Eq, V: Clone>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<V>>> {\n");
     out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");
     out.push_str("    let vs: Vec<V> = ks.iter().map(|k| b[k].clone()).collect(); Rc::new(std::cell::RefCell::new(vs))\n}\n\n");
+
+    // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
+    // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
+    for s in &prog.structs {
+        if !s.type_params.is_empty() {
+            continue;
+        }
+        writeln!(out, "#[derive(Clone)]\nstruct {} {{", s.name).unwrap();
+        for (fname, fty) in &s.fields {
+            writeln!(out, "    {}: {},", fname, rust_ty(fty, &t.enums)?).unwrap();
+        }
+        out.push_str("}\n");
+    }
+    for e in &prog.enums {
+        if !e.type_params.is_empty() {
+            continue;
+        }
+        writeln!(out, "#[derive(Clone)]\nenum {} {{", e.name).unwrap();
+        for v in &e.variants {
+            if v.payload.is_empty() {
+                writeln!(out, "    {},", v.name).unwrap();
+            } else {
+                let tys: Vec<String> =
+                    v.payload.iter().map(|t2| rust_ty(t2, &t.enums)).collect::<Result<_, _>>()?;
+                writeln!(out, "    {}({}),", v.name, tys.join(", ")).unwrap();
+            }
+        }
+        out.push_str("}\n");
+    }
+    // impls de Display (= el Show de raylang): struct `Name { f: v, … }`, enum `Name.Variant(payload)`.
+    t.emit_display_impls(&mut out, prog)?;
+    out.push('\n');
 
     let mut main_ret_int = false;
     let mut main_seen = false;
@@ -126,10 +188,11 @@ impl Transpiler {
         self.scopes.push(HashMap::new());
         let mut params = Vec::new();
         for p in &f.params {
-            params.push(format!("mut {}: {}", p.name, rust_ty(&p.ty)?));
+            params.push(format!("mut {}: {}", p.name, rust_ty(&p.ty, &self.enums)?));
             self.declare(&p.name, p.ty.clone());
         }
-        write!(out, "fn {}({}) -> {} ", rust_name, params.join(", "), rust_ty(&f.return_type)?).unwrap();
+        write!(out, "fn {}({}) -> {} ", rust_name, params.join(", "), rust_ty(&f.return_type, &self.enums)?)
+            .unwrap();
         self.emit_block(out, &f.body)?;
         out.push('\n');
         self.scopes.pop();
@@ -137,7 +200,14 @@ impl Transpiler {
     }
 
     fn declare(&mut self, name: &str, ty: Type) {
-        self.scopes.last_mut().unwrap().insert(name.to_string(), normalize_type(&ty));
+        let t = normalize_type(&ty);
+        // Un `Struct(n)` cuyo `n` es un enum del usuario → `Enum(n)` (el parser no distingue; el checker
+        // lo hace en su tabla). Así el entorno lleva el tipo correcto para el dispatch de `match`/campos.
+        let t = match &t {
+            Type::Struct(n, a) if a.is_empty() && self.enums.contains(n) => Type::Enum(n.clone(), vec![]),
+            _ => t,
+        };
+        self.scopes.last_mut().unwrap().insert(name.to_string(), t);
     }
 
     fn lookup(&self, name: &str) -> Option<&Type> {
@@ -186,6 +256,11 @@ impl Transpiler {
                         out.push_str(".borrow_mut()[");
                         self.emit_expr(out, index)?;
                         out.push_str(" as usize]");
+                    }
+                    // p.x = v → p.borrow_mut().x = v
+                    ExprKind::Field { object, name } => {
+                        self.emit_expr(out, object)?;
+                        write!(out, ".borrow_mut().{}", name).unwrap();
                     }
                     _ => return Err("spike: lvalue no soportado".into()),
                 }
@@ -329,7 +404,195 @@ impl Transpiler {
                 self.emit_expr(out, index)?;
                 out.push_str(" as usize].clone()");
             }
+            // Literal de struct: Punto { x: 1, y: 2 } → Rc::new(RefCell::new(Punto { x: 1, y: 2 })).
+            ExprKind::StructLit { name, fields } => {
+                write!(out, "Rc::new(std::cell::RefCell::new({} {{ ", name).unwrap();
+                for (i, (fname, val)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    write!(out, "{}: ", fname).unwrap();
+                    self.emit_expr(out, val)?;
+                }
+                out.push_str(" }))");
+            }
+            // Acceso a campo (lectura): p.x → p.borrow().x.clone(). (El `Field` de un método/UFCS lo
+            // consume `emit_call`; aquí solo llega un acceso a campo de struct.)
+            ExprKind::Field { object, name } => {
+                self.emit_expr(out, object)?;
+                write!(out, ".borrow().{}.clone()", name).unwrap();
+            }
+            // Construcción de variante de enum: Figura.Circulo(2.0) → Rc::new(Figura::Circulo(2.0)).
+            ExprKind::EnumLit { enum_name, variant, args } => {
+                write!(out, "Rc::new({}::{}", enum_name, variant).unwrap();
+                if !args.is_empty() {
+                    out.push('(');
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        self.emit_expr(out, a)?;
+                    }
+                    out.push(')');
+                }
+                out.push(')');
+            }
+            ExprKind::Match { scrutinee, arms } => self.emit_match(out, scrutinee, arms)?,
             other => return Err(format!("spike: expresión no soportada {:?}", other)),
+        }
+        Ok(())
+    }
+
+    /// Emite `impl Display` para cada struct/enum (= el `Show` de raylang): struct → `Name { f: v, … }`,
+    /// enum → `Name.Variant(payload)` / `Name.Variant`. Recursivo (un campo/payload struct se `borrow`ea).
+    fn emit_display_impls(&self, out: &mut String, prog: &Program) -> Result<(), String> {
+        for s in &prog.structs {
+            if !s.type_params.is_empty() {
+                continue;
+            }
+            let mut fmt = format!("{} {{{{ ", s.name); // "Name { "
+            let mut args = String::new();
+            for (i, (fname, fty)) in s.fields.iter().enumerate() {
+                if i > 0 {
+                    fmt.push_str(", ");
+                }
+                write!(fmt, "{}: {{}}", fname).unwrap();
+                write!(args, ", {}", self.display_of(fty, &format!("self.{}", fname))).unwrap();
+            }
+            fmt.push_str(" }}"); // " }"
+            writeln!(
+                out,
+                "impl std::fmt::Display for {} {{ fn fmt(&self, __f: &mut std::fmt::Formatter) -> std::fmt::Result {{ write!(__f, \"{}\"{}) }} }}",
+                s.name, fmt, args
+            )
+            .unwrap();
+        }
+        for e in &prog.enums {
+            if !e.type_params.is_empty() {
+                continue;
+            }
+            writeln!(out, "impl std::fmt::Display for {} {{ fn fmt(&self, __f: &mut std::fmt::Formatter) -> std::fmt::Result {{ match self {{", e.name).unwrap();
+            for v in &e.variants {
+                if v.payload.is_empty() {
+                    writeln!(out, "{}::{} => write!(__f, \"{}.{}\"),", e.name, v.name, e.name, v.name).unwrap();
+                } else {
+                    let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__p{}", i)).collect();
+                    let mut fmt = format!("{}.{}(", e.name, v.name);
+                    let mut args = String::new();
+                    for (i, pty) in v.payload.iter().enumerate() {
+                        if i > 0 {
+                            fmt.push_str(", ");
+                        }
+                        fmt.push_str("{}");
+                        write!(args, ", {}", self.display_of(pty, &binds[i])).unwrap();
+                    }
+                    fmt.push(')');
+                    writeln!(out, "{}::{}({}) => write!(__f, \"{}\"{}),", e.name, v.name, binds.join(", "), fmt, args).unwrap();
+                }
+            }
+            out.push_str("} } }\n");
+        }
+        Ok(())
+    }
+
+    /// Expresión Rust para mostrar un valor de tipo `ty` accedido por `access`. Un struct necesita
+    /// `&*x.borrow()` (RefCell no es Display); el resto (escalar/string/enum) se muestra directo.
+    fn display_of(&self, ty: &Type, access: &str) -> String {
+        match normalize_type(ty) {
+            Type::Struct(n, _) if !self.enums.contains(&n) => format!("&*{}.borrow()", access),
+            _ => access.to_string(),
+        }
+    }
+
+    /// Baja un `match` sobre un enum. El escrutinio (`Rc<E>`) se liga a un temporal y se matchea sobre
+    /// `&*temp` (matchea `&E`). Los bindings del patrón quedan como `&campo`; al inicio de cada brazo se
+    /// **clonan a valores propios** (`let b = b.clone();`) → el cuerpo los usa como cualquier variable.
+    fn emit_match(&mut self, out: &mut String, scrutinee: &Expr, arms: &[MatchArm]) -> Result<(), String> {
+        let ename = match self.type_of(scrutinee)? {
+            Type::Enum(n, _) => n,
+            other => return Err(format!("spike: match sobre {:?} (se esperaba un enum)", other)),
+        };
+        let temp = format!("__scrut{}", self.match_temp);
+        self.match_temp += 1;
+        out.push_str("{ let ");
+        out.push_str(&temp);
+        out.push_str(" = ");
+        self.emit_expr(out, scrutinee)?;
+        out.push_str("; match &*");
+        out.push_str(&temp);
+        out.push_str(" {\n");
+        for arm in arms {
+            if arm.guard.is_some() {
+                return Err("spike: guardas de match (`if`) no soportadas".into());
+            }
+            self.scopes.push(HashMap::new());
+            let mut binds: Vec<(String, Type)> = Vec::new();
+            // El binding de TODO el escrutinio (`x => …`) es un caso especial: liga el `Rc<E>` (temp),
+            // no un `&campo`. Se emite `_` y se clona desde el temporal.
+            let whole_binding = match &arm.pattern.kind {
+                PatternKind::Binding(x) => Some(x.clone()),
+                _ => None,
+            };
+            if let Some(x) = &whole_binding {
+                out.push('_');
+                self.declare(x, Type::Enum(ename.clone(), vec![]));
+            } else {
+                self.emit_pattern(out, &arm.pattern, &Type::Enum(ename.clone(), vec![]), &mut binds)?;
+            }
+            out.push_str(" => {\n");
+            if let Some(x) = &whole_binding {
+                writeln!(out, "let {} = {}.clone();", x, temp).unwrap();
+            }
+            for (b, bt) in &binds {
+                writeln!(out, "let {} = {}.clone();", b, b).unwrap();
+                self.declare(b, bt.clone());
+            }
+            self.emit_expr(out, &arm.body)?;
+            out.push_str("\n}\n");
+            self.scopes.pop();
+        }
+        out.push_str("} }");
+        Ok(())
+    }
+
+    /// Emite un patrón como patrón de Rust y recolecta sus bindings (nombre, tipo). `expected` es el tipo
+    /// del valor que el patrón matchea (para el tipo de un `Binding`). Un nombre de binding se emite tal
+    /// cual (Rust lo liga a `&campo`); `_` a comodín; una variante anidada recursivamente.
+    fn emit_pattern(
+        &self,
+        out: &mut String,
+        pat: &Pattern,
+        expected: &Type,
+        binds: &mut Vec<(String, Type)>,
+    ) -> Result<(), String> {
+        match &pat.kind {
+            PatternKind::Wildcard => out.push('_'),
+            PatternKind::Binding(x) => {
+                out.push_str(x);
+                binds.push((x.clone(), expected.clone()));
+            }
+            PatternKind::Variant { enum_name, variant, subpatterns } => {
+                write!(out, "{}::{}", enum_name, variant).unwrap();
+                if !subpatterns.is_empty() {
+                    let payload = self
+                        .enum_variants
+                        .get(enum_name)
+                        .and_then(|m| m.get(variant))
+                        .ok_or_else(|| format!("spike: variante desconocida {}.{}", enum_name, variant))?
+                        .clone();
+                    out.push('(');
+                    for (i, sp) in subpatterns.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        self.emit_pattern(out, sp, &payload[i], binds)?;
+                    }
+                    out.push(')');
+                }
+            }
+            PatternKind::Struct { .. } => {
+                return Err("spike: patrón de destructuración de struct no soportado".into())
+            }
         }
         Ok(())
     }
@@ -401,7 +664,15 @@ impl Transpiler {
         match method {
             "print" => {
                 out.push_str("println!(\"{}\", ");
-                self.emit_expr(out, eff[0])?;
+                // Un struct se imprime con `&*x.borrow()` (RefCell no es Display); el resto directo.
+                let disp = matches!(self.type_of(eff[0])?, Type::Struct(n, _) if !self.enums.contains(&n));
+                if disp {
+                    out.push_str("&*(");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(").borrow()");
+                } else {
+                    self.emit_expr(out, eff[0])?;
+                }
                 out.push(')');
             }
             // to_string(x) → Rc<str> (int/float/bool/char/string; usa el Display de Rust).
@@ -608,6 +879,24 @@ impl Transpiler {
                 Type::String => Type::Char, // s[i] → char
                 other => return Err(format!("spike: indexar {:?} no soportado", other)),
             },
+            ExprKind::StructLit { name, .. } => Type::Struct(name.clone(), vec![]),
+            ExprKind::EnumLit { enum_name, .. } => Type::Enum(enum_name.clone(), vec![]),
+            ExprKind::Field { object, name } => {
+                let sn = match self.type_of(object)? {
+                    Type::Struct(n, _) => n,
+                    other => return Err(format!("spike: acceso a campo sobre {:?}", other)),
+                };
+                let fty = self
+                    .struct_fields
+                    .get(&sn)
+                    .and_then(|fs| fs.iter().find(|(f, _)| f == name))
+                    .ok_or_else(|| format!("spike: campo '{}' desconocido en {}", name, sn))?;
+                normalize_type(&fty.1)
+            }
+            ExprKind::Match { arms, .. } => {
+                let a = arms.first().ok_or("spike: match sin brazos")?;
+                self.type_of(&a.body)?
+            }
             other => return Err(format!("spike: no sé inferir el tipo de {:?}", other)),
         })
     }
@@ -627,7 +916,7 @@ fn normalize_type(t: &Type) -> Type {
 }
 
 /// Un tipo de raylang → su equivalente Rust (subconjunto actual: escalares + string + arreglo + Map).
-fn rust_ty(raw: &Type) -> Result<String, String> {
+fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>) -> Result<String, String> {
     let t = normalize_type(raw);
     Ok(match &t {
         Type::Int => "i64",
@@ -637,11 +926,24 @@ fn rust_ty(raw: &Type) -> Result<String, String> {
         Type::Unit => "()",
         Type::String => "Rc<str>",
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
-        Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t)?)),
+        Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums)?)),
         // Map: igual, sobre un HashMap.
         Type::Map(k, v) => {
-            return Ok(format!("Rc<std::cell::RefCell<std::collections::HashMap<{}, {}>>>", rust_ty(k)?, rust_ty(v)?))
+            return Ok(format!(
+                "Rc<std::cell::RefCell<std::collections::HashMap<{}, {}>>>",
+                rust_ty(k, enums)?,
+                rust_ty(v, enums)?
+            ))
         }
+        // Tipo de usuario: enum → Rc<E> (inmutable, permite recursión); struct → Rc<RefCell<S>> (mutable).
+        Type::Struct(n, args) if args.is_empty() => {
+            return Ok(if enums.contains(n) {
+                format!("Rc<{}>", n)
+            } else {
+                format!("Rc<std::cell::RefCell<{}>>", n)
+            })
+        }
+        Type::Enum(n, args) if args.is_empty() => return Ok(format!("Rc<{}>", n)),
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
@@ -763,10 +1065,26 @@ mod tests {
     }
 
     #[test]
+    fn transpila_struct_y_enum_match() {
+        let rust = transpile_src(
+            "struct P { x: int, y: int }\n\
+             enum Shape { Circle(float), Dot }\n\
+             fn area(s: Shape) -> float { match (s) { Shape.Circle(r) => r * r, Shape.Dot => 0.0 } }\n\
+             fn main() -> int { let p = P { x: 1, y: 2 }; print(area(Shape.Circle(2.0))); p.x }",
+        );
+        assert!(rust.contains("struct P {"), "{}", rust);
+        assert!(rust.contains("enum Shape {"), "{}", rust);
+        assert!(rust.contains("Rc::new(std::cell::RefCell::new(P {"), "{}", rust);
+        assert!(rust.contains("Rc::new(Shape::Circle(2.0f64))"), "{}", rust);
+        assert!(rust.contains("match &*") && rust.contains("Shape::Circle(r)"), "{}", rust);
+        assert!(rust.contains("impl std::fmt::Display for P"), "{}", rust);
+    }
+
+    #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con struct (aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens = crate::lexer::lex("struct P { x: int }\nfn main() { let p = P { x: 1 }; print(p.x); }")
-            .unwrap();
+        // un `main` con función anónima/closure (aún fuera del subconjunto) → sin `main` transpilable.
+        let tokens =
+            crate::lexer::lex("fn main() { let f = fn(x: int) -> int { x + 1 }; print(f(2)); }").unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());

@@ -342,12 +342,28 @@ métodos desde `prog.traits`. Cubre métodos por defecto sobre el objeto y `[dyn
 
 **30/37 ejemplos** (añade `trait_objects`) — nativo ≡ VM byte a byte.
 
-**Cobertura tras 12 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+#### Fase 13 — `std::math` (14 jul)
+
+El módulo `std/math` (`import std/math; math.sqrt(x)`, `math.PI`) mapea 1:1 a `f64` de Rust — **la VM ya
+usa la impl de Rust** (`__sqrt`→`f64::sqrt`), así que emitir el método nativo da el MISMO resultado por
+construcción. Las funciones float (`sqrt`/`pow`/`floor`/`sin`/`ln`/…) son wrappers `pub fn` sobre
+primitivos `__*`; abs/min/max son **genéricas** (`T: Signed`/`Ord`, con diccionarios). Solución:
+**interceptar `std::math::*` en el sitio de llamada** (`emit_math`) → método de `f64`
+(`(x).sqrt()`, `(b).powf(e)`, `(x).abs()`, `(a).min(b)`; abs/min/max preservan int|float, ambos con esos
+métodos en Rust), y las constantes `PI`/`E` → `std::f64::consts::{PI,E}`. Se **saltan** las funciones/
+consts del módulo (`is_handled_builtin`/la emisión de const-fns) — sus wrappers llamarían al primitivo
+`__sqrt` inexistente y las genéricas arrastrarían params-diccionario. `type_of` también mapea
+`std::math::*` **antes** de la ruta genérica (su FnSig lleva el arg-diccionario `int#less`, que no
+tiparíamos). `matematicas.ray` transpila y da salida byte-idéntica a la VM.
+
+**31/37 ejemplos** (añade `matematicas`) — nativo ≡ VM byte a byte.
+
+**Cobertura tras 13 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
 match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (estático +
-defaults + bounds) · tuplas · **trait objects (`dyn`)** · const/char/cast · UFCS. **El transpilador cubre
-CASI TODO el lenguaje** con salida byte-idéntica a la VM (30/37 ejemplos). Restan solo 7, cada una una
-extensión acotada: `@derive(Eq)` con diccionarios, operator-overloading, `From`-conversion, `std::math`,
-`args()`, enteros con tamaño, captura mutable/concurrencia. Sin incógnitas de viabilidad.
+defaults + bounds) · tuplas · **trait objects (`dyn`)** · **`std::math`** · const/char/cast · UFCS. **El
+transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM (31/37 ejemplos). Restan solo 6,
+cada una una extensión acotada: `@derive(Eq)` con diccionarios, operator-overloading, `From`-conversion,
+`args()`, enteros con tamaño, `for` sobre Map. Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

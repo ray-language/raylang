@@ -85,6 +85,11 @@ fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
 /// inyectadas por el checker se SALTAN (el transpilador las mapea a Rust nativo, o no las soporta y su
 /// cuerpo referiría builtins ausentes). Lista extraída de `src/prelude.ray` + los builtins públicos.
 fn is_handled_builtin(name: &str) -> bool {
+    // `std::math::*` se intercepta en emit_call/type_of (→ métodos de `f64` de Rust); no emitimos sus
+    // wrappers (`sqrt` llama al primitivo `__sqrt`) ni las genéricas abs/min/max (usan diccionarios).
+    if name.starts_with("std::math::") {
+        return true;
+    }
     matches!(
         name,
         // --- funciones del prelude (src/prelude.ray) ---
@@ -270,6 +275,10 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     t.emit_rayshow_impls(&mut out, prog)?;
     // Constantes de nivel superior → funciones `fn NAME() -> T { <literal> }`.
     for c in &prog.consts {
+        // `std::math::PI`/`E` se emiten como constantes de `std::f64::consts` en el sitio de uso.
+        if c.name.starts_with("std::math::") {
+            continue;
+        }
         write!(out, "fn {}() -> {} {{ ", c.name, rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
         t.emit_expr(&mut out, &c.value)?;
         out.push_str(" }\n");
@@ -551,6 +560,8 @@ impl Transpiler {
                     _ => return Err(format!("spike: cast {:?}→{:?} no soportado", src, target)),
                 }
             }
+            ExprKind::Ident(name) if name == "std::math::PI" => out.push_str("std::f64::consts::PI"),
+            ExprKind::Ident(name) if name == "std::math::E" => out.push_str("std::f64::consts::E"),
             ExprKind::Ident(name) => {
                 if let Some(ty) = self.lookup(name) {
                     // Variable local: clonar al leer los valores de heap (Rc → bump barato); escalares Copy.
@@ -1016,6 +1027,44 @@ impl Transpiler {
         Ok(())
     }
 
+    /// `std::math::<fn>(args)` → el método de `f64` de Rust equivalente. Unarias float→float directas;
+    /// pow→powf; abs/min/max preservan el tipo (int|float, ambos con esos métodos en Rust).
+    fn emit_math(&mut self, out: &mut String, mfn: &str, eff: &[&Expr]) -> Result<(), String> {
+        const UNARY: &[&str] = &[
+            "sqrt", "sin", "cos", "tan", "ln", "log10", "log2", "exp", "floor", "ceil", "round", "trunc",
+            "asin", "acos", "atan",
+        ];
+        if UNARY.contains(&mfn) {
+            out.push('(');
+            self.emit_expr(out, eff[0])?;
+            write!(out, ").{}()", mfn).unwrap();
+            return Ok(());
+        }
+        let bin = |m: &str| -> &'static str {
+            match m {
+                "pow" => "powf",
+                _ => "",
+            }
+        };
+        match mfn {
+            "pow" | "min" | "max" => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                let m = if mfn == "pow" { bin("pow") } else { mfn };
+                write!(out, ").{}(", m).unwrap();
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "abs" => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").abs()");
+            }
+            _ => return Err(format!("spike: std::math::{} no soportada", mfn)),
+        }
+        Ok(())
+    }
+
     fn emit_call(&mut self, out: &mut String, callee: &Expr, args: &[Expr]) -> Result<(), String> {
         let (name, recv) = resolve_callee(callee)?;
         // Despacho dinámico (M9.3b): el checker baja `obj.m(a)` a `(r.m)(r.data, a)` con `r: dyn`. Aquí el
@@ -1038,6 +1087,11 @@ impl Transpiler {
         }
         // Argumentos efectivos: el receptor de UFCS (si lo hay) va primero.
         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+        // `std::math::*` (módulo std/math) → los métodos de `f64` de Rust (misma impl que la VM → mismo
+        // resultado). abs/min/max son ad-hoc int|float (ambos tienen esos métodos en Rust).
+        if let Some(mfn) = name.strip_prefix("std::math::") {
+            return self.emit_math(out, mfn, &eff);
+        }
         // Métodos de la stdlib manglados por el checker (`string#len`, `Len` trait…): el método real es
         // lo que va tras el último `#`. Los nombres de usuario no llevan `#` (ilegal) → quedan intactos.
         let method = name.rsplit('#').next().unwrap_or(name).trim_start_matches("__");
@@ -1281,6 +1335,7 @@ impl Transpiler {
             ExprKind::Bool(_) => Type::Bool,
             ExprKind::Str(_) => Type::String,
             ExprKind::Char(_) => Type::Char,
+            ExprKind::Ident(n) if n == "std::math::PI" || n == "std::math::E" => Type::Float,
             ExprKind::Ident(n) => {
                 if let Some(t) = self.lookup(n).or_else(|| self.consts.get(n)) {
                     t.clone()
@@ -1309,6 +1364,15 @@ impl Transpiler {
                         return Ok(self.trait_method_sigs.get(n).map(|(_, ret)| ret.clone())
                             .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", n))?);
                     }
+                }
+                // `std::math::*`: abs/min/max preservan el tipo del primer arg (int|float); el resto
+                // (sqrt/pow/sin/…) → float. Antes de la ruta genérica (su FnSig lleva params-diccionario
+                // que no sabríamos tipar: el arg es `int#less`, un impl del prelude que no emitimos).
+                if let Some(mfn) = n.strip_prefix("std::math::") {
+                    return Ok(match mfn {
+                        "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("spike: math sin arg")?)?,
+                        _ => Type::Float,
+                    });
                 }
                 let _ = &args;
                 let method = n.rsplit('#').next().unwrap_or(n).trim_start_matches("__");
@@ -1903,6 +1967,28 @@ mod tests {
         assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
         assert!(rust.contains("let __c = "), "{}", rust); // captura del concreto en la coerción
         assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
+    }
+
+    #[test]
+    fn transpila_std_math() {
+        // `import std/math` necesita el loader; cargamos el ejemplo real y comprobamos el mapeo a los
+        // métodos de `f64` de Rust (misma impl que la VM → mismo resultado; verificado byte a byte aparte).
+        let loaded = match crate::loader::load(std::path::Path::new("examples/basics/matematicas.ray")) {
+            Ok(l) => l,
+            Err(_) => panic!("no se pudo cargar matematicas.ray"),
+        };
+        let mut prog = loaded.program;
+        crate::checker::check(&mut prog).expect("check");
+        let rust = transpile(&prog).expect("transpile");
+        assert!(rust.contains(").sqrt()"), "{}", rust);
+        assert!(rust.contains(").powf("), "{}", rust);
+        assert!(rust.contains(").floor()"), "{}", rust);
+        assert!(rust.contains(").abs()"), "{}", rust); // ad-hoc int|float
+        assert!(rust.contains(").min("), "{}", rust);
+        assert!(rust.contains("std::f64::consts::PI"), "{}", rust);
+        assert!(rust.contains("std::f64::consts::E"), "{}", rust);
+        // No debe emitir los wrappers del módulo (`fn ...sqrt`) ni el primitivo `__sqrt`.
+        assert!(!rust.contains("__sqrt"), "{}", rust);
     }
 
     #[test]

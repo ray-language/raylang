@@ -272,10 +272,23 @@ anotación del `let`** (`let x: T = …`) para pinar la inferencia de Rust.
 end-to-end (mismo exit que la VM). Los 7 restantes necesitan **fases grandes**: genéricos de usuario
 (`Caja<T>`), closures, tuplas, interpolación de strings, `std::math`, `args()`, `for (k,v)` sobre Map.
 
-**Cobertura tras 7 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · **Option/Result/`?`** · const/char/cast · UFCS. **Falta**: closures, genéricos (monomorfizar),
-tuplas, traits/`@derive`, interpolación, `std::math`, GC de ciclos (hoy `Rc` los fuga; el corpus no crea
-ciclos), concurrencia (M12/M38, o "spawn cae a la VM en v1"). Ingeniería de cobertura, sin incógnitas.
+#### Fase 8 — closures + map/filter/fold (14 jul)
+
+Estilo funcional en nativo: función-valor `fn(int)->int` → **`Rc<dyn Fn(i64)->i64>`** (invocable directo,
+clon barato); función anónima → **closure `move` de Rust** (captura por valor: para los `Rc<RefCell>`
+comparte el estado como las celdas del intérprete; los escalares se copian). Llamar a un closure en ámbito
+→ `f(args)`. **`map`/`filter`/`fold`** (prelude) → **iteradores de Rust** (`iter().map/filter/fold`, la
+closure ligada una vez a `__f`). `print` de una función → `<fn>` (como la VM).
+
+**18/24 ejemplos** (añade `funciones`) + `stdlib` (map/filter/fold) — nativo ≡ VM byte a byte. **Diferido**:
+la captura MUTABLE de un escalar (`contador()` que muta `n` capturado, `closures.ray`) diverge — necesita
+el análisis de celdas (boxear en `Rc<RefCell>` los locales capturados-y-mutados), como el `captured_slots`
+de la VM.
+
+**Cobertura tras 8 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · Option/Result/`?` · **closures/map/filter/fold** · const/char/cast · UFCS. **Falta**: genéricos de
+usuario (monomorfizar `Caja<T>`), tuplas, interpolación, `std::math`, `args()`, captura mutable, traits/
+`@derive`, GC de ciclos, concurrencia (M12/M38). Ingeniería de cobertura, sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

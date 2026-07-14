@@ -534,6 +534,26 @@ impl Transpiler {
                     out.push(')');
                 }
             }
+            // Función anónima → closure `move` de Rust envuelto en Rc (captura por valor: para los
+            // `Rc<RefCell>` comparte el estado, como las celdas del intérprete; los escalares se copian —
+            // la captura MUTABLE de un escalar diverge, diferida).
+            ExprKind::Func(fnexpr) => {
+                out.push_str("Rc::new(move |");
+                for (i, p) in fnexpr.params.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    write!(out, "{}: {}", p.name, rust_ty(&p.ty, &self.enums)?).unwrap();
+                }
+                write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums)?).unwrap();
+                self.scopes.push(HashMap::new());
+                for p in &fnexpr.params {
+                    self.declare(&p.name, p.ty.clone());
+                }
+                self.emit_block(out, &fnexpr.body)?;
+                self.scopes.pop();
+                out.push(')');
+            }
             ExprKind::Match { scrutinee, arms } => self.emit_match(out, scrutinee, arms)?,
             // Operador `?`: sobre Option/Result nativos de Rust → el `?` de Rust (la fn envolvente
             // devuelve un Option/Result compatible, garantizado por el checker).
@@ -825,6 +845,8 @@ impl Transpiler {
                         self.emit_expr(out, eff[0])?;
                         out.push_str(").borrow())");
                     }
+                    // Función como valor: raylang la muestra como `<fn>` (no printa el closure).
+                    Type::Fn(_, _) => out.push_str("println!(\"<fn>\")"),
                     // Escalar/string/enum: Display directo.
                     _ => {
                         out.push_str("println!(\"{}\", ");
@@ -978,8 +1000,35 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // Orden superior (prelude map/filter/fold) → iteradores de Rust. `__f` liga la closure una
+            // vez; `__x`/`__acc` son los elementos/acumulador. (Anidados: cada uno en su propio bloque.)
+            "map" => {
+                out.push_str("{ let __f = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; Rc::new(std::cell::RefCell::new(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().iter().map(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
+            }
+            "filter" => {
+                out.push_str("{ let __f = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; Rc::new(std::cell::RefCell::new(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().iter().cloned().filter(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
+            }
+            "fold" => {
+                out.push_str("{ let __f = ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str("; ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().iter().fold(");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", |__acc, __x| __f(__acc, __x.clone())) }");
+            }
             _ => {
-                if !self.funcs.contains_key(name) {
+                // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
+                let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));
+                if !self.funcs.contains_key(name) && !is_closure {
                     return Err(format!("spike: builtin/función '{}' no soportada", name));
                 }
                 out.push_str(name);
@@ -1056,11 +1105,26 @@ impl Transpiler {
                     "unwrap_or" | "unwrap" => {
                         unwrapped(&self.type_of(recv0.ok_or("spike: unwrap sin receptor")?)?)
                     }
-                    _ => self
-                        .funcs
-                        .get(n)
-                        .map(|s| s.ret.clone())
-                        .ok_or_else(|| format!("spike: no sé el tipo de retorno de '{}'", n))?,
+                    // Orden superior: map(xs,f) → [ret(f)]; filter(xs,f) → [elem(xs)]; fold(xs,init,f) → ret(f).
+                    "map" => match self.type_of(effargs(recv, args, 1)?)? {
+                        Type::Fn(_, r) => Type::Array(r),
+                        other => return Err(format!("spike: map con f no-función {:?}", other)),
+                    },
+                    "filter" => self.type_of(effargs(recv, args, 0)?)?,
+                    "fold" => match self.type_of(effargs(recv, args, 2)?)? {
+                        Type::Fn(_, r) => *r,
+                        other => return Err(format!("spike: fold con f no-función {:?}", other)),
+                    },
+                    _ => {
+                        // Función de usuario, o llamada a un closure en ámbito → su tipo de retorno.
+                        if let Some(s) = self.funcs.get(n) {
+                            s.ret.clone()
+                        } else if let Some(Type::Fn(_, r)) = self.lookup(n) {
+                            (**r).clone()
+                        } else {
+                            return Err(format!("spike: no sé el tipo de retorno de '{}'", n));
+                        }
+                    }
                 }
             }
             ExprKind::If { then_branch, .. } => match &then_branch.tail {
@@ -1101,6 +1165,10 @@ impl Transpiler {
                 }
             }
             ExprKind::Try(inner) => unwrapped(&self.type_of(inner)?),
+            ExprKind::Func(fnexpr) => Type::Fn(
+                fnexpr.params.iter().map(|p| p.ty.clone()).collect(),
+                Box::new(fnexpr.return_type.clone()),
+            ),
             ExprKind::Field { object, name } => {
                 let sn = match self.type_of(object)? {
                     Type::Struct(n, _) => n,
@@ -1185,9 +1253,19 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>) -> Result<Stri
             return Ok(format!("Result<{}, {}>", rust_ty(&args[0], enums)?, rust_ty(&args[1], enums)?))
         }
         Type::Enum(n, args) if args.is_empty() => return Ok(format!("Rc<{}>", n)),
+        // Función como valor → Rc<dyn Fn(...)->R> (clon barato + compartible; captura por `move`).
+        Type::Fn(params, ret) => {
+            let ps: Vec<String> = params.iter().map(|p| rust_ty(p, enums)).collect::<Result<_, _>>()?;
+            return Ok(format!("Rc<dyn Fn({}) -> {}>", ps.join(", "), rust_ty(ret, enums)?));
+        }
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
+}
+
+/// El i-ésimo argumento EFECTIVO de una llamada (el receptor de UFCS va primero, luego los args).
+fn effargs<'a>(recv: Option<&'a Expr>, args: &'a [Expr], i: usize) -> Result<&'a Expr, String> {
+    recv.into_iter().chain(args.iter()).nth(i).ok_or_else(|| "spike: falta un argumento".to_string())
 }
 
 /// `Option<t>` (usando el Option nativo de Rust).
@@ -1207,7 +1285,8 @@ fn unwrapped(t: &Type) -> Type {
 fn is_heap(t: &Type) -> bool {
     matches!(
         t,
-        Type::String | Type::Bytes | Type::Array(_) | Type::Tuple(_) | Type::Map(_, _) | Type::Struct(_, _) | Type::Enum(_, _)
+        Type::String | Type::Bytes | Type::Array(_) | Type::Tuple(_) | Type::Map(_, _)
+            | Type::Struct(_, _) | Type::Enum(_, _) | Type::Fn(_, _)
     )
 }
 
@@ -1348,10 +1427,23 @@ mod tests {
     }
 
     #[test]
+    fn transpila_closures_y_map() {
+        let rust = transpile_src(
+            "fn apply(f: fn(int) -> int, x: int) -> int { f(x) }\n\
+             fn main() -> int { \
+               let sq: fn(int) -> int = fn(n: int) -> int { n * n }; \
+               let xs = [1, 2, 3]; let ys = xs.map(fn(x: int) -> int { x + 1 }); \
+               apply(sq, 4) + ys.len() }",
+        );
+        assert!(rust.contains("Rc<dyn Fn(i64) -> i64>"), "{}", rust); // función-valor
+        assert!(rust.contains("Rc::new(move |n: i64| -> i64"), "{}", rust); // anónima → closure move
+        assert!(rust.contains(".iter().map(|__x| __f(__x.clone()))"), "{}", rust); // map → iterador
+    }
+
+    #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con función anónima/closure (aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens =
-            crate::lexer::lex("fn main() { let f = fn(x: int) -> int { x + 1 }; print(f(2)); }").unwrap();
+        // un `main` con tupla (aún fuera del subconjunto) → sin `main` transpilable.
+        let tokens = crate::lexer::lex("fn main() { let t = (1, 2); print(t.0); }").unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());

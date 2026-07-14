@@ -35,6 +35,12 @@
 #       (`selfhost/lex_dump.ray`) y marca las líneas donde discrepan (casos límite
 #       del tokenizador, p. ej. una cadena dentro de `${ f("x") }`). Verificador,
 #       no motor: para Rust no hay lexer CLI; requiere `cargo build` previo.
+#   python3 tools/spanglish.py suspects [ruta | subdir]
+#     · cola de revisión: palabras de strings que aspell cree ESPAÑOLAS y NO
+#       inglesas (es ∧ ¬en). Complementa a `scan`, que solo ve acentos + palabras
+#       función → esto caza las palabras-contenido SIN acento (`minuto`/`octetos`/
+#       `inalcanzable`…). Descubrimiento, no gate (los homógrafos quedan al humano);
+#       requiere `aspell` con dicts es/en.
 #
 # Tras cada lote: `make test-one T=<suite afectada>` (los tests que aseveran
 # mensajes van en el mismo lote que el mensaje).
@@ -386,11 +392,83 @@ def cmd_audit(objetivo=None):
     return 1 if discrepantes else 0
 
 
+# ---------- suspects: cola de revisión de spanglish vía aspell (es ∧ ¬en) ----------
+
+RE_PALABRA_LARGA = re.compile(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]{4,}")
+
+
+def _aspell_tiene(dic):
+    """¿Está `aspell` con el diccionario `dic` instalado?"""
+    try:
+        r = subprocess.run(["aspell", "dump", "dicts"], capture_output=True, text=True)
+    except (FileNotFoundError, OSError):
+        return False
+    return dic in set(r.stdout.split())
+
+
+def _aspell_batch(dic, words):
+    """{palabra: ¿es una palabra correcta en `dic`?} en UNA invocación de aspell.
+
+    `aspell -a` (modo pipe) imprime un banner `@…` y, por cada palabra, una línea:
+    `*`/`+`/`-` = correcta; `&`/`#` = desconocida. Una palabra por línea de entrada.
+    """
+    r = subprocess.run(["aspell", "-d", dic, "-a"], input="\n".join(words),
+                       capture_output=True, text=True)
+    ok, it = {}, iter(words)
+    for line in r.stdout.splitlines():
+        if not line or line[0] == "@":  # línea en blanco o banner
+            continue
+        w = next(it, None)
+        if w is None:
+            break
+        ok[w] = line[0] in "*+-"
+    return ok
+
+
+def cmd_suspects(objetivo=None):
+    """Emite la cola de revisión de spanglish: palabras de string literals que
+    aspell cree ESPAÑOLAS y NO inglesas (es ∧ ¬en). Descubrimiento, NO gate.
+
+    Complementa a `scan`: caza las palabras-contenido SIN acento que `parece_espanol`
+    no ve (`minuto`/`campo`/`octetos`/`inalcanzable`…). Deja fuera los homógrafos
+    (`error`/`total`/`base`, correctos en ambos idiomas) a propósito → los revisa el
+    humano. Salida `palabra<TAB>nº_archivos<TAB>archivos`, ordenada por frecuencia.
+    `objetivo` opcional = archivo o subdirectorio (por foco). Requiere `aspell` + es/en.
+    """
+    if not (_aspell_tiene("es") and _aspell_tiene("en")):
+        print("[suspects] necesita `aspell` con los diccionarios 'es' y 'en' "
+              "(macOS: brew install aspell — trae ambos; Debian: aspell-es aspell-en)",
+              file=sys.stderr)
+        return 2
+    palabra_files = {}
+    for ruta in archivos(DIRS_SCAN):
+        if objetivo and not (ruta == objetivo or ruta.startswith(objetivo.rstrip("/") + "/")):
+            continue
+        for _, t in literales_de(ruta)[1]:
+            for w in RE_PALABRA_LARGA.findall(t):
+                palabra_files.setdefault(w.lower(), set()).add(ruta)
+    palabras = sorted(palabra_files)
+    if not palabras:
+        print("[suspects] sin palabras que revisar", file=sys.stderr)
+        return 0
+    es = _aspell_batch("es", palabras)
+    en = _aspell_batch("en", palabras)
+    sus = sorted((w for w in palabras if es.get(w) and not en.get(w)),
+                 key=lambda w: (-len(palabra_files[w]), w))
+    for w in sus:
+        fs = sorted(palabra_files[w])
+        print(f"{w}\t{len(fs)}\t{','.join(fs)}")
+    print(f"[suspects] {len(sus)} sospechosa(s) de {len(palabras)} palabras; traduce las "
+          f"reales (los homógrafos como error/total/base quedan al criterio humano)",
+          file=sys.stderr)
+    return 0
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("scan", "apply", "check", "audit"):
-        print(__doc__ or "uso: spanglish.py scan|apply|check|audit", file=sys.stderr)
+    if len(sys.argv) < 2 or sys.argv[1] not in ("scan", "apply", "check", "audit", "suspects"):
+        print(__doc__ or "uso: spanglish.py scan|apply|check|audit|suspects", file=sys.stderr)
         print("uso: spanglish.py scan | apply <catalogo> [--write] | check <catalogo> "
-              "| audit [ruta.ray | subdir]", file=sys.stderr)
+              "| audit [ruta.ray | subdir] | suspects [ruta | subdir]", file=sys.stderr)
         return 2
     if sys.argv[1] == "scan":
         cmd_scan()
@@ -398,6 +476,9 @@ def main():
     if sys.argv[1] == "audit":
         objetivo = next((a for a in sys.argv[2:] if not a.startswith("--")), None)
         return cmd_audit(objetivo)
+    if sys.argv[1] == "suspects":
+        objetivo = next((a for a in sys.argv[2:] if not a.startswith("--")), None)
+        return cmd_suspects(objetivo)
     if len(sys.argv) < 3:
         print("falta la ruta del catálogo", file=sys.stderr)
         return 2

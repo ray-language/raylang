@@ -285,10 +285,26 @@ la captura MUTABLE de un escalar (`contador()` que muta `n` capturado, `closures
 el análisis de celdas (boxear en `Rc<RefCell>` los locales capturados-y-mutados), como el `captured_slots`
 de la VM.
 
-**Cobertura tras 8 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · Option/Result/`?` · **closures/map/filter/fold** · const/char/cast · UFCS. **Falta**: genéricos de
-usuario (monomorfizar `Caja<T>`), tuplas, interpolación, `std::math`, `args()`, captura mutable, traits/
-`@derive`, GC de ciclos, concurrencia (M12/M38). Ingeniería de cobertura, sin incógnitas de viabilidad.
+#### Fase 9 — genéricos (funciones + tipos) (14 jul)
+
+**Genéricos vía los genéricos de Rust** (rustc monomorfiza → nativo, sin erasure): `fn id<T>(x: T) -> T`
+→ `fn id<T: Clone + Display>(mut x: T) -> T`; `struct Par<A,B>`/`enum Caja<T>`/`enum Lista<T>` (recursivo)
+→ structs/enums genéricos de Rust; `Struct(T)` con `T` en ámbito → el genérico `T` (no Rc-envuelto).
+**Inferencia de llamadas genéricas por unificación** (`unify`/`subst_type`: liga los params de tipo de la
+firma con los tipos de los args, sustituye en el retorno) — para los sitios sin anotación. **Función como
+valor** (`aplicar(negar, …)`) → `Rc::new(fn)` (coerciona a `Rc<dyn Fn>`). Sustitución de los params de
+tipo del enum/struct en los bindings de `match` y en el acceso a campos (`Caja<int>` → T=int). Bounds de
+raylang (`T: Show`) → se emiten `Clone + Display`; los bounds de usuario (traits) → fase futura.
+
+**23/37 ejemplos** (añade `genericos`, `tipos_genericos`, `inferencia`, `errores`, `opcional`) — nativo ≡
+VM byte a byte. Los restantes necesitan el **sistema de traits** (`bounds`, `impls_genericos`, `traits`,
+`trait_objects`, `metodos_por_defecto`, `operadores`, `anotaciones`/`@derive`) o misc (tuplas,
+interpolación, `std::math`, `args()`, enteros con tamaño).
+
+**Cobertura tras 9 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · Option/Result/`?` · closures/map/filter/fold · **genéricos (funciones + tipos)** · const/char/cast
+· UFCS. **Falta**: traits/`@derive`/bounds-de-usuario (la fase grande que queda), tuplas, interpolación,
+`std::math`, `args()`, captura mutable, GC de ciclos, concurrencia (M12/M38). Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

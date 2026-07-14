@@ -21,9 +21,12 @@ use crate::ast::{
 use std::collections::HashMap;
 use std::fmt::Write;
 
-/// Firma de una función del usuario: (por ahora) su tipo de retorno.
+/// Firma de una función del usuario: params, retorno y sus parámetros de tipo (para inferir las
+/// llamadas genéricas por unificación).
 struct FnSig {
+    params: Vec<Type>,
     ret: Type,
+    tparams: Vec<String>,
 }
 
 /// Resuelve el `callee` de una llamada a `(nombre, receptor)`. UFCS `obj.m(args)` llega como callee
@@ -70,6 +73,9 @@ struct Transpiler {
     enums: std::collections::HashSet<String>,
     /// Campos de cada struct (nombre → tipo), en orden, para inferir el tipo de `p.campo`.
     struct_fields: HashMap<String, Vec<(String, Type)>>,
+    /// Parámetros de tipo de cada struct/enum (para sustituir en `Caja<int>`).
+    struct_tparams: HashMap<String, Vec<String>>,
+    enum_tparams: HashMap<String, Vec<String>>,
     /// Payload de cada variante de enum (`Enum` → `Variante` → tipos), para los bindings de `match`.
     enum_variants: HashMap<String, HashMap<String, Vec<Type>>>,
     /// Contador para nombres de temporales de escrutinio de `match` (evita colisiones al anidar).
@@ -77,6 +83,9 @@ struct Transpiler {
     /// Constantes de nivel superior (nombre → tipo). Se bajan a funciones `NAME()` (uniforme para
     /// escalares y strings, que no pueden ser `const` en Rust por el `Rc`); una referencia `NAME` → `NAME()`.
     consts: HashMap<String, Type>,
+    /// Parámetros de tipo de la función genérica en curso (p. ej. `{T, U}`): un `Struct(n)` con `n` aquí
+    /// es un tipo VARIABLE → se emite como el genérico `n` de Rust (no como un struct de usuario).
+    tparams: std::collections::HashSet<String>,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -84,18 +93,16 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
-        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || !f.type_params.is_empty() || is_handled_builtin(&f.name) {
+        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || is_handled_builtin(&f.name) {
             continue;
         }
-        funcs.insert(f.name.clone(), FnSig { ret: f.return_type.clone() });
+        funcs.insert(f.name.clone(), FnSig { params: f.params.iter().map(|p| p.ty.clone()).collect(), ret: f.return_type.clone(), tparams: f.type_params.clone() });
     }
+    // Enums de USUARIO (incl. genéricos). Option/Result se excluyen: son los nativos de Rust, no se emiten.
     let enums: std::collections::HashSet<String> =
-        prog.enums.iter().filter(|e| e.type_params.is_empty()).map(|e| e.name.clone()).collect();
-    let struct_fields = prog
-        .structs
-        .iter()
-        .map(|s| (s.name.clone(), s.fields.clone()))
-        .collect();
+        prog.enums.iter().filter(|e| e.name != "Option" && e.name != "Result").map(|e| e.name.clone()).collect();
+    let struct_fields = prog.structs.iter().map(|s| (s.name.clone(), s.fields.clone())).collect();
+    let struct_tparams = prog.structs.iter().map(|s| (s.name.clone(), s.type_params.clone())).collect();
     let enum_variants = prog
         .enums
         .iter()
@@ -103,15 +110,19 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             (e.name.clone(), e.variants.iter().map(|v| (v.name.clone(), v.payload.clone())).collect())
         })
         .collect();
+    let enum_tparams = prog.enums.iter().map(|e| (e.name.clone(), e.type_params.clone())).collect();
     let consts = prog.consts.iter().map(|c| (c.name.clone(), c.ty.clone())).collect();
     let mut t = Transpiler {
         funcs,
         scopes: Vec::new(),
         enums,
         struct_fields,
+        struct_tparams,
         enum_variants,
+        enum_tparams,
         match_temp: 0,
         consts,
+        tparams: std::collections::HashSet::new(),
     };
 
     let mut out = String::new();
@@ -139,36 +150,36 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
     for s in &prog.structs {
-        if !s.type_params.is_empty() {
-            continue;
-        }
-        writeln!(out, "#[derive(Clone)]\nstruct {} {{", s.name).unwrap();
+        t.tparams = s.type_params.iter().cloned().collect();
+        writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", s.name, generic_decl(&s.type_params)).unwrap();
         for (fname, fty) in &s.fields {
-            writeln!(out, "    {}: {},", fname, rust_ty(fty, &t.enums)?).unwrap();
+            writeln!(out, "    {}: {},", fname, rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
         }
         out.push_str("}\n");
     }
     for e in &prog.enums {
-        if !e.type_params.is_empty() {
-            continue;
+        if e.name == "Option" || e.name == "Result" {
+            continue; // nativos de Rust
         }
-        writeln!(out, "#[derive(Clone)]\nenum {} {{", e.name).unwrap();
+        t.tparams = e.type_params.iter().cloned().collect();
+        writeln!(out, "#[derive(Clone)]\nenum {}{} {{", e.name, generic_decl(&e.type_params)).unwrap();
         for v in &e.variants {
             if v.payload.is_empty() {
                 writeln!(out, "    {},", v.name).unwrap();
             } else {
                 let tys: Vec<String> =
-                    v.payload.iter().map(|t2| rust_ty(t2, &t.enums)).collect::<Result<_, _>>()?;
+                    v.payload.iter().map(|t2| rust_ty(t2, &t.enums, &t.tparams)).collect::<Result<_, _>>()?;
                 writeln!(out, "    {}({}),", v.name, tys.join(", ")).unwrap();
             }
         }
         out.push_str("}\n");
     }
+    t.tparams.clear();
     // impls de Display (= el Show de raylang): struct `Name { f: v, … }`, enum `Name.Variant(payload)`.
     t.emit_display_impls(&mut out, prog)?;
     // Constantes de nivel superior → funciones `fn NAME() -> T { <literal> }`.
     for c in &prog.consts {
-        write!(out, "fn {}() -> {} {{ ", c.name, rust_ty(&c.ty, &t.enums)?).unwrap();
+        write!(out, "fn {}() -> {} {{ ", c.name, rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
         t.emit_expr(&mut out, &c.value)?;
         out.push_str(" }\n");
     }
@@ -177,7 +188,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     let mut main_ret_int = false;
     let mut main_seen = false;
     for f in &prog.functions {
-        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || !f.type_params.is_empty() || is_handled_builtin(&f.name) {
+        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || is_handled_builtin(&f.name) {
             continue;
         }
         let rust_name = if f.name == "main" { "ray_main".to_string() } else { f.name.clone() };
@@ -214,17 +225,36 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
 
 impl Transpiler {
     fn emit_function(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
+        // Params de tipo en ámbito (para `rust_ty` y la clasificación de `Struct(T)`→genérico).
+        self.tparams = f.type_params.iter().cloned().collect();
+        // Genéricos de Rust con bound `Clone` (todo valor genérico se clona al leer) + `Display` (por si
+        // se imprime/`to_string`). rustc los monomorfiza → nativo. (Los bounds de raylang → fase futura.)
+        let generics = if f.type_params.is_empty() {
+            String::new()
+        } else {
+            let ps: Vec<String> =
+                f.type_params.iter().map(|tp| format!("{}: Clone + std::fmt::Display", tp)).collect();
+            format!("<{}>", ps.join(", "))
+        };
         self.scopes.push(HashMap::new());
         let mut params = Vec::new();
         for p in &f.params {
-            params.push(format!("mut {}: {}", p.name, rust_ty(&p.ty, &self.enums)?));
+            params.push(format!("mut {}: {}", p.name, rust_ty(&p.ty, &self.enums, &self.tparams)?));
             self.declare(&p.name, p.ty.clone());
         }
-        write!(out, "fn {}({}) -> {} ", rust_name, params.join(", "), rust_ty(&f.return_type, &self.enums)?)
-            .unwrap();
+        write!(
+            out,
+            "fn {}{}({}) -> {} ",
+            rust_name,
+            generics,
+            params.join(", "),
+            rust_ty(&f.return_type, &self.enums, &self.tparams)?
+        )
+        .unwrap();
         self.emit_block(out, &f.body)?;
         out.push('\n');
         self.scopes.pop();
+        self.tparams.clear();
         Ok(())
     }
 
@@ -233,7 +263,7 @@ impl Transpiler {
         // Un `Struct(n)` cuyo `n` es un enum del usuario → `Enum(n)` (el parser no distingue; el checker
         // lo hace en su tabla). Así el entorno lleva el tipo correcto para el dispatch de `match`/campos.
         let t = match &t {
-            Type::Struct(n, a) if a.is_empty() && self.enums.contains(n) => Type::Enum(n.clone(), vec![]),
+            Type::Struct(n, a) if self.enums.contains(n) => Type::Enum(n.clone(), a.clone()),
             _ => t,
         };
         self.scopes.last_mut().unwrap().insert(name.to_string(), t);
@@ -271,7 +301,7 @@ impl Transpiler {
                     None => self.type_of(value)?,
                 };
                 let ann = match ty {
-                    Some(t) => Some(rust_ty(t, &self.enums)?),
+                    Some(t) => Some(rust_ty(t, &self.enums, &self.tparams)?),
                     None => None,
                 };
                 out.push_str(if *mutable { "let mut " } else { "let " });
@@ -408,17 +438,20 @@ impl Transpiler {
                 }
             }
             ExprKind::Ident(name) => {
-                // Una constante de nivel superior → llamada `NAME()`.
-                if self.consts.contains_key(name) {
-                    write!(out, "{}()", name).unwrap();
-                } else {
-                    // Clonar al leer los valores de heap (Rc → bump barato); los escalares son Copy.
+                if let Some(ty) = self.lookup(name) {
+                    // Variable local: clonar al leer los valores de heap (Rc → bump barato); escalares Copy.
+                    let heap = is_heap(ty);
                     out.push_str(name);
-                    if let Some(ty) = self.lookup(name) {
-                        if is_heap(ty) {
-                            out.push_str(".clone()");
-                        }
+                    if heap {
+                        out.push_str(".clone()");
                     }
+                } else if self.consts.contains_key(name) {
+                    write!(out, "{}()", name).unwrap(); // constante → llamada NAME()
+                } else if self.funcs.contains_key(name) {
+                    // Función usada como VALOR → Rc::new(fn) (coerciona a Rc<dyn Fn> por el contexto).
+                    write!(out, "Rc::new({})", name).unwrap();
+                } else {
+                    out.push_str(name);
                 }
             }
             ExprKind::Unary { op, expr } => {
@@ -543,9 +576,9 @@ impl Transpiler {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    write!(out, "{}: {}", p.name, rust_ty(&p.ty, &self.enums)?).unwrap();
+                    write!(out, "{}: {}", p.name, rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
                 }
-                write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums)?).unwrap();
+                write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?).unwrap();
                 self.scopes.push(HashMap::new());
                 for p in &fnexpr.params {
                     self.declare(&p.name, p.ty.clone());
@@ -590,6 +623,7 @@ impl Transpiler {
     /// Emite `impl Display` para cada struct/enum (= el `Show` de raylang): struct → `Name { f: v, … }`,
     /// enum → `Name.Variant(payload)` / `Name.Variant`. Recursivo (un campo/payload struct se `borrow`ea).
     fn emit_display_impls(&self, out: &mut String, prog: &Program) -> Result<(), String> {
+        // Display de tipos genéricos → diferido (necesita `where T: Display`); se salta.
         for s in &prog.structs {
             if !s.type_params.is_empty() {
                 continue;
@@ -742,11 +776,16 @@ impl Transpiler {
                             _ => return Err("spike: patrón Option/Result sin tipo esperado".into()),
                         }
                     } else {
-                        self.enum_variants
+                        let raw = self
+                            .enum_variants
                             .get(enum_name)
                             .and_then(|m| m.get(variant))
                             .ok_or_else(|| format!("spike: variante desconocida {}.{}", enum_name, variant))?
-                            .clone()
+                            .clone();
+                        // Sustituir los params de tipo del enum por los args del tipo esperado
+                        // (`Caja<int>` → T=int), para el tipo de cada binding del payload.
+                        let subst = enum_subst(&self.enum_tparams, enum_name, expected);
+                        raw.iter().map(|p| subst_type(p, &subst)).collect()
                     };
                     out.push('(');
                     for (i, sp) in subpatterns.iter().enumerate() {
@@ -1054,11 +1093,16 @@ impl Transpiler {
             ExprKind::Bool(_) => Type::Bool,
             ExprKind::Str(_) => Type::String,
             ExprKind::Char(_) => Type::Char,
-            ExprKind::Ident(n) => self
-                .lookup(n)
-                .or_else(|| self.consts.get(n))
-                .cloned()
-                .ok_or_else(|| format!("spike: variable '{}' sin tipo conocido", n))?,
+            ExprKind::Ident(n) => {
+                if let Some(t) = self.lookup(n).or_else(|| self.consts.get(n)) {
+                    t.clone()
+                } else if let Some(s) = self.funcs.get(n) {
+                    // Función como valor → su tipo Fn.
+                    Type::Fn(s.params.clone(), Box::new(s.ret.clone()))
+                } else {
+                    return Err(format!("spike: variable '{}' sin tipo conocido", n));
+                }
+            }
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Type::Bool,
                 UnaryOp::BitNot => Type::Int,
@@ -1116,9 +1160,23 @@ impl Transpiler {
                         other => return Err(format!("spike: fold con f no-función {:?}", other)),
                     },
                     _ => {
-                        // Función de usuario, o llamada a un closure en ámbito → su tipo de retorno.
+                        // Función de usuario (quizá genérica), o llamada a un closure en ámbito.
                         if let Some(s) = self.funcs.get(n) {
-                            s.ret.clone()
+                            if s.tparams.is_empty() {
+                                s.ret.clone()
+                            } else {
+                                // Genérica: unifica los params con los tipos de los args → sustituye el retorno.
+                                let (params, ret, tps) = (s.params.clone(), s.ret.clone(), s.tparams.clone());
+                                let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+                                let mut subst = HashMap::new();
+                                for (i, pt) in params.iter().enumerate() {
+                                    if let Some(a) = eff.get(i) {
+                                        let at = self.type_of(a)?;
+                                        unify(pt, &at, &tps, &mut subst);
+                                    }
+                                }
+                                subst_type(&ret, &subst)
+                            }
                         } else if let Some(Type::Fn(_, r)) = self.lookup(n) {
                             (**r).clone()
                         } else {
@@ -1170,16 +1228,21 @@ impl Transpiler {
                 Box::new(fnexpr.return_type.clone()),
             ),
             ExprKind::Field { object, name } => {
-                let sn = match self.type_of(object)? {
-                    Type::Struct(n, _) => n,
+                let obj_ty = self.type_of(object)?;
+                let sn = match &obj_ty {
+                    Type::Struct(n, _) => n.clone(),
                     other => return Err(format!("spike: acceso a campo sobre {:?}", other)),
                 };
                 let fty = self
                     .struct_fields
                     .get(&sn)
                     .and_then(|fs| fs.iter().find(|(f, _)| f == name))
-                    .ok_or_else(|| format!("spike: campo '{}' desconocido en {}", name, sn))?;
-                normalize_type(&fty.1)
+                    .ok_or_else(|| format!("spike: campo '{}' desconocido en {}", name, sn))?
+                    .1
+                    .clone();
+                // Sustituir los params de tipo del struct por los args (`Par<int,bool>` → A=int, B=bool).
+                let subst = enum_subst(&self.struct_tparams, &sn, &obj_ty);
+                subst_type(&normalize_type(&fty), &subst)
             }
             ExprKind::Match { arms, .. } => {
                 // El tipo del match = el de cualquier brazo. Se prueba hasta que uno resuelva: el cuerpo
@@ -1218,7 +1281,7 @@ fn normalize_type(t: &Type) -> Type {
 }
 
 /// Un tipo de raylang → su equivalente Rust (subconjunto actual: escalares + string + arreglo + Map).
-fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>) -> Result<String, String> {
+fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std::collections::HashSet<String>) -> Result<String, String> {
     let t = normalize_type(raw);
     Ok(match &t {
         Type::Int => "i64",
@@ -1228,39 +1291,136 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>) -> Result<Stri
         Type::Unit => "()",
         Type::String => "Rc<str>",
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
-        Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums)?)),
+        Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),
         // Map: igual, sobre un HashMap.
         Type::Map(k, v) => {
             return Ok(format!(
                 "Rc<std::cell::RefCell<std::collections::HashMap<{}, {}>>>",
-                rust_ty(k, enums)?,
-                rust_ty(v, enums)?
+                rust_ty(k, enums, tparams)?,
+                rust_ty(v, enums, tparams)?
             ))
         }
-        // Tipo de usuario: enum → Rc<E> (inmutable, permite recursión); struct → Rc<RefCell<S>> (mutable).
-        Type::Struct(n, args) if args.is_empty() => {
-            return Ok(if enums.contains(n) {
-                format!("Rc<{}>", n)
+        // Parámetro de tipo en ámbito → el genérico de Rust (rustc lo monomorfiza; NO Rc-envuelto).
+        Type::Var(n) => return Ok(n.clone()),
+        Type::Struct(n, args) if args.is_empty() && tparams.contains(n) => return Ok(n.clone()),
+        // Tipo de usuario, con o sin args de tipo (`Caja<int>`): enum → Rc<E<..>>; struct → Rc<RefCell<S<..>>>.
+        Type::Struct(n, args) => {
+            let sfx = if args.is_empty() {
+                String::new()
             } else {
-                format!("Rc<std::cell::RefCell<{}>>", n)
-            })
+                let ra: Vec<String> = args.iter().map(|a| rust_ty(a, enums, tparams)).collect::<Result<_, _>>()?;
+                format!("<{}>", ra.join(", "))
+            };
+            return Ok(if enums.contains(n) {
+                format!("Rc<{}{}>", n, sfx)
+            } else {
+                format!("Rc<std::cell::RefCell<{}{}>>", n, sfx)
+            });
         }
         // Option/Result → los nativos de Rust (genéricos gestionados por rustc, sin monomorfizar).
         Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
-            return Ok(format!("Option<{}>", rust_ty(&args[0], enums)?))
+            return Ok(format!("Option<{}>", rust_ty(&args[0], enums, tparams)?))
         }
         Type::Enum(n, args) if n == "Result" && args.len() == 2 => {
-            return Ok(format!("Result<{}, {}>", rust_ty(&args[0], enums)?, rust_ty(&args[1], enums)?))
+            return Ok(format!("Result<{}, {}>", rust_ty(&args[0], enums, tparams)?, rust_ty(&args[1], enums, tparams)?))
         }
-        Type::Enum(n, args) if args.is_empty() => return Ok(format!("Rc<{}>", n)),
+        // Enum de usuario (con o sin args de tipo, `Caja<int>`): Rc<E<..>> (inmutable, permite recursión).
+        Type::Enum(n, args) => {
+            let sfx = if args.is_empty() {
+                String::new()
+            } else {
+                let ra: Vec<String> = args.iter().map(|a| rust_ty(a, enums, tparams)).collect::<Result<_, _>>()?;
+                format!("<{}>", ra.join(", "))
+            };
+            return Ok(format!("Rc<{}{}>", n, sfx));
+        }
         // Función como valor → Rc<dyn Fn(...)->R> (clon barato + compartible; captura por `move`).
         Type::Fn(params, ret) => {
-            let ps: Vec<String> = params.iter().map(|p| rust_ty(p, enums)).collect::<Result<_, _>>()?;
-            return Ok(format!("Rc<dyn Fn({}) -> {}>", ps.join(", "), rust_ty(ret, enums)?));
+            let ps: Vec<String> = params.iter().map(|p| rust_ty(p, enums, tparams)).collect::<Result<_, _>>()?;
+            return Ok(format!("Rc<dyn Fn({}) -> {}>", ps.join(", "), rust_ty(ret, enums, tparams)?));
         }
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
+}
+
+/// Sustitución `param_de_tipo → arg` para un tipo nominal aplicado: los `tparams` del enum/struct `name`
+/// ligados a los args del tipo esperado (`Caja<int>` con tparams `[T]` → `{T: int}`).
+fn enum_subst(
+    tparams_map: &HashMap<String, Vec<String>>,
+    name: &str,
+    expected: &Type,
+) -> HashMap<String, Type> {
+    let args = match normalize_type(expected) {
+        Type::Enum(_, a) | Type::Struct(_, a) => a,
+        _ => return HashMap::new(),
+    };
+    match tparams_map.get(name) {
+        Some(tps) => tps.iter().cloned().zip(args).collect(),
+        None => HashMap::new(),
+    }
+}
+
+/// Declaración de genéricos de Rust `<A: Clone + Display, …>` para una lista de params de tipo (o "").
+fn generic_decl(tparams: &[String]) -> String {
+    if tparams.is_empty() {
+        String::new()
+    } else {
+        let ps: Vec<String> =
+            tparams.iter().map(|t| format!("{}: Clone + std::fmt::Display", t)).collect();
+        format!("<{}>", ps.join(", "))
+    }
+}
+
+/// Unifica un tipo de parámetro (que puede llevar variables de tipo) con el tipo real de un argumento,
+/// ligando cada variable en `subst`. Asimétrico: las variables son las de la firma llamada (`tparams`).
+fn unify(param: &Type, arg: &Type, tparams: &[String], subst: &mut HashMap<String, Type>) {
+    let is_var = |n: &str| tparams.iter().any(|t| t == n);
+    match param {
+        Type::Var(n) if is_var(n) => {
+            subst.entry(n.clone()).or_insert_with(|| arg.clone());
+        }
+        Type::Struct(n, a) if a.is_empty() && is_var(n) => {
+            subst.entry(n.clone()).or_insert_with(|| arg.clone());
+        }
+        Type::Array(p) => {
+            if let Type::Array(a2) = normalize_type(arg) {
+                unify(p, &a2, tparams, subst);
+            }
+        }
+        Type::Map(pk, pv) => {
+            if let Type::Map(ak, av) = normalize_type(arg) {
+                unify(pk, &ak, tparams, subst);
+                unify(pv, &av, tparams, subst);
+            }
+        }
+        Type::Fn(ps, r) => {
+            if let Type::Fn(as2, ar) = normalize_type(arg) {
+                for (pp, aa) in ps.iter().zip(&as2) {
+                    unify(pp, aa, tparams, subst);
+                }
+                unify(r, &ar, tparams, subst);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Sustituye las variables de tipo de `t` por sus ligaduras en `subst` (las no ligadas se dejan igual).
+fn subst_type(t: &Type, subst: &HashMap<String, Type>) -> Type {
+    match t {
+        Type::Var(n) => subst.get(n).cloned().unwrap_or_else(|| t.clone()),
+        Type::Struct(n, a) if a.is_empty() => subst.get(n).cloned().unwrap_or_else(|| t.clone()),
+        Type::Array(e) => Type::Array(Box::new(subst_type(e, subst))),
+        Type::Map(k, v) => {
+            Type::Map(Box::new(subst_type(k, subst)), Box::new(subst_type(v, subst)))
+        }
+        Type::Fn(ps, r) => Type::Fn(
+            ps.iter().map(|p| subst_type(p, subst)).collect(),
+            Box::new(subst_type(r, subst)),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// El i-ésimo argumento EFECTIVO de una llamada (el receptor de UFCS va primero, luego los args).
@@ -1286,7 +1446,7 @@ fn is_heap(t: &Type) -> bool {
     matches!(
         t,
         Type::String | Type::Bytes | Type::Array(_) | Type::Tuple(_) | Type::Map(_, _)
-            | Type::Struct(_, _) | Type::Enum(_, _) | Type::Fn(_, _)
+            | Type::Struct(_, _) | Type::Enum(_, _) | Type::Fn(_, _) | Type::Var(_)
     )
 }
 
@@ -1438,6 +1598,33 @@ mod tests {
         assert!(rust.contains("Rc<dyn Fn(i64) -> i64>"), "{}", rust); // función-valor
         assert!(rust.contains("Rc::new(move |n: i64| -> i64"), "{}", rust); // anónima → closure move
         assert!(rust.contains(".iter().map(|__x| __f(__x.clone()))"), "{}", rust); // map → iterador
+    }
+
+    #[test]
+    fn transpila_funciones_genericas() {
+        let rust = transpile_src(
+            "fn id<T>(x: T) -> T { x }\n\
+             fn apply<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }\n\
+             fn neg(b: bool) -> bool { !b }\n\
+             fn main() -> int { let a: int = id(5); print(apply(neg, false)); a }",
+        );
+        assert!(rust.contains("fn id<T: Clone + std::fmt::Display>(mut x: T) -> T"), "{}", rust);
+        assert!(rust.contains("fn apply<T:") && rust.contains("U:"), "{}", rust);
+        assert!(rust.contains("apply(Rc::new(neg)"), "{}", rust); // función como valor → Rc::new(fn)
+    }
+
+    #[test]
+    fn transpila_tipos_genericos() {
+        let rust = transpile_src(
+            "struct Par<A, B> { a: A, b: B }\n\
+             enum Caja<T> { Llena(T), Vacia }\n\
+             fn saca(c: Caja<int>) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 } }\n\
+             fn main() -> int { let p = Par { a: 1, b: true }; saca(Caja.Llena(9)) }",
+        );
+        assert!(rust.contains("struct Par<A: Clone"), "{}", rust);
+        assert!(rust.contains("enum Caja<T: Clone"), "{}", rust);
+        assert!(rust.contains("Caja::Llena(v)"), "{}", rust); // match de enum genérico
+        assert!(rust.contains("Rc::new(Caja::Llena(9i64))"), "{}", rust);
     }
 
     #[test]

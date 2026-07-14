@@ -226,6 +226,7 @@ impl<'a> Compiler<'a> {
         // M36.1: superinstrucciones (tras el TCO → no fusiona a través de una llamada).
         fuse_superinstructions(&mut self.cur().chunk);
         fuse_round2(&mut self.cur().chunk); // A4: guardas y aritmética local-const
+        fuse_guard_round3(&mut self.cur().chunk); // P0.6: GetLocalConst;CmpJump → guarda en 1 opcode
 
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
@@ -1342,6 +1343,63 @@ fn fuse_round2(chunk: &mut Chunk) {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => {
                 *t = old_a_new[*t]
             }
+            _ => {}
+        }
+    }
+    chunk.code = code;
+    chunk.lines = lines;
+}
+
+/// **Superinstrucciones — ronda 3** (P0.6, elegida por histograma dinámico de pares ejecutados). Corre
+/// DESPUÉS de `fuse_round2` (que es quien crea `CmpJump`) y fusiona la guarda entera de `if`/`while`
+/// sobre `local op const`:
+///
+///   - `[GetLocalConst(s, c), CmpJump(op, t)]` → `GetLocalConstCmpJump(s, c, op, t)`.
+///
+/// Es el par MÁS ejecutado en fib/bucles (`n < 2`, `i < N`): en fib(34), 18.5M veces. El `GetLocalConst`
+/// SÍ puede ser destino de salto (la vuelta de un `while` apunta al inicio de la condición) → un salto a
+/// él remapea a la fusión; solo se exige que el `CmpJump` (i+1) NO sea destino (nada salta a mitad de
+/// guarda). Mismo esquema de remapeo que los pases 1 y 2.
+fn fuse_guard_round3(chunk: &mut Chunk) {
+    let n = chunk.code.len();
+    if n == 0 {
+        return;
+    }
+    let mut es_target = vec![false; n];
+    for op in &chunk.code {
+        match op {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => es_target[*t] = true,
+            _ => {}
+        }
+    }
+    let mut old_a_new = vec![0usize; n + 1];
+    let mut code = Vec::with_capacity(n);
+    let mut lines = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        old_a_new[i] = code.len();
+        // [GetLocalConst(s, c), CmpJump(op, t)] → GetLocalConstCmpJump(s, c, op, t)
+        if i + 1 < n && !es_target[i + 1] {
+            if let OpCode::GetLocalConst(s, c) = &chunk.code[i] {
+                if let OpCode::CmpJump(op, t) = &chunk.code[i + 1] {
+                    code.push(OpCode::GetLocalConstCmpJump(*s, *c, *op, *t)); // t en coords viejas
+                    lines.push(chunk.lines[i + 1]); // posición del CmpJump
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        code.push(chunk.code[i].clone());
+        lines.push(chunk.lines[i]);
+        i += 1;
+    }
+    old_a_new[n] = code.len();
+    for op in &mut code {
+        match op {
+            OpCode::Jump(t)
+            | OpCode::JumpIfFalse(t)
+            | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t) => *t = old_a_new[*t],
             _ => {}
         }
     }

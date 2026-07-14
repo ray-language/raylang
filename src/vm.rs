@@ -704,6 +704,39 @@ impl<'a> Vm<'a> {
                     let v = self.pop();
                     self.set_local(fi, *slot, v);
                 }
+                // P0.6 (ronda 3): la guarda entera `local op const` de if/while en UNA instrucción.
+                // Semántica idéntica a [GetLocalConst(s,c), CmpJump(op,t)]: compara local[s] con
+                // const[c] y, si es falso, salta a t — sin apilar/sacar los operandos.
+                OpCode::GetLocalConstCmpJump(s, c, op, target) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        match op {
+                            CmpOp::Less => a < b,
+                            CmpOp::LessEqual => a <= b,
+                            CmpOp::Greater => a > b,
+                            CmpOp::GreaterEqual => a >= b,
+                            CmpOp::Equal => a == b,
+                            CmpOp::NotEqual => a != b,
+                        }
+                    } else {
+                        let legacy = match op {
+                            CmpOp::Less => &OpCode::Less,
+                            CmpOp::LessEqual => &OpCode::LessEqual,
+                            CmpOp::Greater => &OpCode::Greater,
+                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
+                            CmpOp::Equal => &OpCode::Equal,
+                            CmpOp::NotEqual => &OpCode::NotEqual,
+                        };
+                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
+                            HeapValue::Bool(b) => b,
+                            _ => unreachable!("a comparison produces bool"),
+                        }
+                    };
+                    if !res {
+                        self.cur.frames[fi].ip = *target;
+                    }
+                }
                 // A4 (ronda 2): la guarda de if/while en UNA instrucción. Semántica idéntica a
                 // [Cmp, JumpIfFalse(t), Pop]: saca ambos operandos, compara, y si es falso salta
                 // (el destino ya viene ajustado tras el Pop del lado else). El bool nunca se apila.
@@ -4943,6 +4976,24 @@ mod tests {
                 f.add_to(\"x\", 2.25);
                 m.get_or(\"a\", 0) + m.get_or(\"b\", 0) + m.get_or(\"z\", 0) + m.len()
                     + (if (f.get_or(\"x\", 0.0) > 3.7) { 100 } else { 0 })
+             }",
+        );
+    }
+
+    /// P0.6: la fusión `GetLocalConst;CmpJump` (guarda `local op const`) preserva la semántica de
+    /// `if`/`while` — incluida la **vuelta del bucle** (su `Jump` apunta al inicio de la condición, que
+    /// tras la fusión es la instrucción fusionada). Cubre guardas `<` (while) y `>` (if). Oráculo.
+    #[test]
+    fn guard_fusion_round3_oracle() {
+        oracle_program(
+            "fn main() -> int {
+                var i = 0;
+                var acc = 0;
+                while (i < 100) {
+                    if (i > 50) { acc = acc + i; } else { acc = acc + 1; }
+                    i = i + 1;
+                }
+                acc
              }",
         );
     }

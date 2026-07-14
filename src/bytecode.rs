@@ -139,6 +139,11 @@ pub enum OpCode {
     /// saca los dos operandos, compara, y si es falso salta a `t+1` (tras el Pop del lado else,
     /// que la fusión ya consumió conceptualmente — el bool nunca llega a la pila).
     CmpJump(CmpOp, usize),
+    /// P0.6 (ronda 3): la guarda ENTERA de `if`/`while` sobre `local op const` en una instrucción
+    /// (`[GetLocalConst(slot, const), CmpJump(op, target)]`): lee `local[slot]` y `const[const]`,
+    /// compara, y si es falso salta a `target` — sin apilar ni sacar los operandos. Es el par de
+    /// opcodes más ejecutado en fib/bucles (la guarda `n < 2`, `i < N`). Campos: `(slot, const, op, target)`.
+    GetLocalConstCmpJump(usize, usize, CmpOp, usize),
     /// A4 (ronda 2): `local[slot] + const` en una instrucción (`[GetLocalConst, Add]`).
     AddLocalConst(usize, usize),
     /// A4 (ronda 2): `local[slot] - const` en una instrucción (`[GetLocalConst, Sub]`).

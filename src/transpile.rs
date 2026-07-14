@@ -64,7 +64,14 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     let mut out = String::new();
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
     out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables)]\n");
-    out.push_str("use std::rc::Rc;\n\n");
+    out.push_str("use std::rc::Rc;\n");
+    // Preámbulo: helpers de runtime para operaciones de arreglo/string que no son 1:1 con Rust.
+    out.push_str("fn __ray_split(s: &str, sep: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
+    out.push_str("    Rc::new(std::cell::RefCell::new(s.split(sep).map(Rc::<str>::from).collect()))\n}\n");
+    out.push_str("fn __ray_join(a: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, sep: &str) -> Rc<str> {\n");
+    out.push_str("    let v = a.borrow();\n");
+    out.push_str("    let parts: Vec<&str> = v.iter().map(|s| &**s).collect();\n");
+    out.push_str("    Rc::<str>::from(parts.join(sep))\n}\n\n");
 
     let mut main_ret_int = false;
     let mut main_seen = false;
@@ -160,7 +167,18 @@ impl Transpiler {
                 self.declare(name, vty);
             }
             StmtKind::Assign { target, value } => {
-                self.emit_expr(out, target)?;
+                // El TARGET es un lvalue: NO se clona (a diferencia de una lectura). `x` → `x`;
+                // `a[i]` → `a.borrow_mut()[i as usize]`. (Campos de struct: fase futura.)
+                match &target.kind {
+                    ExprKind::Ident(name) => out.push_str(name),
+                    ExprKind::Index { array, index } => {
+                        self.emit_expr(out, array)?;
+                        out.push_str(".borrow_mut()[");
+                        self.emit_expr(out, index)?;
+                        out.push_str(" as usize]");
+                    }
+                    _ => return Err("spike: lvalue no soportado".into()),
+                }
                 out.push_str(" = ");
                 self.emit_expr(out, value)?;
                 out.push_str(";\n");
@@ -195,7 +213,26 @@ impl Transpiler {
                         self.scopes.pop();
                         out.push('\n');
                     }
-                    _ => return Err("spike: for sobre colección/iterador no soportado".into()),
+                    // `for x in <arreglo>` → itera una copia del Vec (los elementos son Rc → bump barato)
+                    // para NO retener el borrow durante el cuerpo (que podría mutar el arreglo).
+                    // `for c in <string>` → `.chars()` (char por char).
+                    ForIter::In(expr) => {
+                        let ety = match self.type_of(expr)? {
+                            Type::Array(t) => (*t).clone(),
+                            Type::String => Type::Char,
+                            other => return Err(format!("spike: for sobre {:?} no soportado", other)),
+                        };
+                        write!(out, "for {} in ", var).unwrap();
+                        self.emit_expr(out, expr)?;
+                        out.push_str(if matches!(ety, Type::Char) { ".chars()" } else { ".borrow().clone()" });
+                        out.push(' ');
+                        self.scopes.push(HashMap::new());
+                        self.declare(&var, ety);
+                        self.emit_block(out, body)?;
+                        self.scopes.pop();
+                        out.push('\n');
+                    }
+                    _ => return Err("spike: for sobre iterador (Iterator<T>) no soportado".into()),
                 }
             }
             other => return Err(format!("spike: sentencia no soportada {:?}", other)),
@@ -258,6 +295,30 @@ impl Transpiler {
                 self.emit_block(out, body)?;
             }
             ExprKind::Block(b) => self.emit_block(out, b)?,
+            // Literal de arreglo → Rc<RefCell<Vec>>. Vacío: Vec::new() (Rust infiere el elemento del uso).
+            ExprKind::ArrayLit(elems) => {
+                out.push_str("Rc::new(std::cell::RefCell::new(");
+                if elems.is_empty() {
+                    out.push_str("Vec::new()");
+                } else {
+                    out.push_str("vec![");
+                    for (i, el) in elems.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        self.emit_expr(out, el)?;
+                    }
+                    out.push(']');
+                }
+                out.push_str("))");
+            }
+            // Indexación de LECTURA: a[i] → a.borrow()[i as usize].clone() (clona el elemento).
+            ExprKind::Index { array, index } => {
+                self.emit_expr(out, array)?;
+                out.push_str(".borrow()[");
+                self.emit_expr(out, index)?;
+                out.push_str(" as usize].clone()");
+            }
             other => return Err(format!("spike: expresión no soportada {:?}", other)),
         }
         Ok(())
@@ -285,15 +346,9 @@ impl Transpiler {
         let mut args: Vec<&Expr> = Vec::new();
         for op in operands {
             match &op.kind {
-                ExprKind::Str(s) => {
-                    // texto literal: escapamos `{` y `}` para el format!
-                    for c in s.chars() {
-                        if c == '{' || c == '}' {
-                            fmt.push(c);
-                        }
-                        fmt.push(c);
-                    }
-                }
+                // texto literal: escapado completo para un literal de plantilla `format!` de Rust
+                // (`{`/`}` se duplican; `"`, `\`, saltos de línea… se escapan como en un string de Rust).
+                ExprKind::Str(s) => push_fmt_literal(&mut fmt, s),
                 // to_string(x) / x.to_string() → inlina x como `{}` (su Display), sin Rc intermedio.
                 ExprKind::Call { callee, args: cargs } if is_to_string(callee) => {
                     fmt.push_str("{}");
@@ -336,11 +391,36 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str("))");
             }
-            // len(s) sobre string → nº de octetos como i64. (UTF-8-por-carácter / arreglos: futuro.)
+            // len(x) → i64. String: nº de octetos; arreglo: nº de elementos (vía borrow()).
             "len" => {
                 out.push('(');
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".len() as i64)");
+                match self.type_of(eff[0])? {
+                    Type::Array(_) => out.push_str(".borrow().len() as i64)"),
+                    _ => out.push_str(".len() as i64)"),
+                }
+            }
+            // push(a, v) → a.borrow_mut().push(v) (muta en el sitio, devuelve unit).
+            "push" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow_mut().push(");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            // split(s, sep) → [string]; join(a, sep) → string (helpers del preámbulo generado).
+            "split" => {
+                out.push_str("__ray_split(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "join" => {
+                out.push_str("__ray_join(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
             }
             _ => {
                 if !self.funcs.contains_key(name) {
@@ -389,7 +469,9 @@ impl Transpiler {
                 match method {
                     "to_string" => Type::String,
                     "len" => Type::Int,
-                    "print" => Type::Unit,
+                    "print" | "push" => Type::Unit,
+                    "split" => Type::Array(Box::new(Type::String)),
+                    "join" => Type::String,
                     _ => self
                         .funcs
                         .get(n)
@@ -406,6 +488,18 @@ impl Transpiler {
                 None => Type::Unit,
             },
             ExprKind::While { .. } => Type::Unit,
+            ExprKind::ArrayLit(elems) => {
+                let elem = match elems.first() {
+                    Some(e) => self.type_of(e)?,
+                    None => return Err("spike: literal de arreglo vacío sin anotación".into()),
+                };
+                Type::Array(Box::new(elem))
+            }
+            ExprKind::Index { array, .. } => match self.type_of(array)? {
+                Type::Array(t) => *t,
+                Type::String => Type::Char, // s[i] → char
+                other => return Err(format!("spike: indexar {:?} no soportado", other)),
+            },
             other => return Err(format!("spike: no sé inferir el tipo de {:?}", other)),
         })
     }
@@ -420,6 +514,8 @@ fn rust_ty(t: &Type) -> Result<String, String> {
         Type::Char => "char",
         Type::Unit => "()",
         Type::String => "Rc<str>",
+        // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
+        Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t)?)),
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
@@ -431,6 +527,23 @@ fn is_heap(t: &Type) -> bool {
         t,
         Type::String | Type::Bytes | Type::Array(_) | Type::Tuple(_) | Type::Map(_, _) | Type::Struct(_, _) | Type::Enum(_, _)
     )
+}
+
+/// Empuja `s` a un literal de plantilla `format!` de Rust, escapando lo necesario: `{`/`}` se duplican
+/// (son metacaracteres de format!), y `"`/`\`/saltos se escapan como en cualquier string de Rust.
+fn push_fmt_literal(fmt: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '{' => fmt.push_str("{{"),
+            '}' => fmt.push_str("}}"),
+            '"' => fmt.push_str("\\\""),
+            '\\' => fmt.push_str("\\\\"),
+            '\n' => fmt.push_str("\\n"),
+            '\t' => fmt.push_str("\\t"),
+            '\r' => fmt.push_str("\\r"),
+            _ => fmt.push(c),
+        }
+    }
 }
 
 fn binop(op: BinaryOp) -> &'static str {
@@ -500,9 +613,22 @@ mod tests {
     }
 
     #[test]
+    fn transpila_arreglos_split_join() {
+        let rust = transpile_src(
+            "fn main() -> int { var xs: [string] = []; xs.push(\"a\"); \
+             let parts = \"a,b,c\".split(\",\"); parts.join(\"-\").len() }",
+        );
+        assert!(rust.contains("Rc<std::cell::RefCell<Vec<Rc<str>>>>"), "{}", rust);
+        assert!(rust.contains(".borrow_mut().push("), "{}", rust);
+        assert!(rust.contains("__ray_split(&"), "{}", rust);
+        assert!(rust.contains("__ray_join(&"), "{}", rust);
+    }
+
+    #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con arreglos (aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens = crate::lexer::lex("fn main() { let a = [1, 2, 3]; print(a[0]); }").unwrap();
+        // un `main` con struct (aún fuera del subconjunto) → sin `main` transpilable.
+        let tokens = crate::lexer::lex("struct P { x: int }\nfn main() { let p = P { x: 1 }; print(p.x); }")
+            .unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());

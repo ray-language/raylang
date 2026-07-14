@@ -176,7 +176,27 @@ eficientes). El fix decisivo: **aplanar la cadena de concat en UN solo `format!`
 Un giro de 3.4× por el codegen. **Los strings van nativos y más rápidos que la VM** → P2.b sirve también
 al nicho de servicios, no solo al cómputo — PERO requiere lowering LISTO (folding, y a futuro move-analysis
 para evitar clones, SSO). El coste de P2.b completo está en esa optimización de codegen, no en la viabilidad.
-Siguiente: arreglos (`Rc<RefCell<Vec>>`) + `split`/`join` → transpilar `wordcount`/`jsonserialize` enteros.
+
+#### Fase 3 — arreglos → `jsonserialize` ENTERO en nativo (14 jul)
+
+`Type::Array(T)` → `Rc<RefCell<Vec<T>>>` (semántica de referencia + mutación, como el intérprete). Cubre:
+literal `[…]`/`[]`, índice lectura/escritura (`a[i]` / `a[i]=v` → `borrow`/`borrow_mut`), `push`, `len`
+(rama por tipo), `split`/`join` (helpers del preámbulo generado), `for x in <arreglo>` (itera una copia
+del Vec para no retener el borrow) y `for c in <string>` (chars). Bug latente cazado: los *lvalues* ident
+no deben clonarse (el `Assign` ahora los emite crudos). Escapado correcto de `format!` (`{`/`}`/`"`/`\`).
+
+**Con esto se transpila `jsonserialize` ENTERO** (arreglos + strings + `to_string` + `join` + for-rango,
+sin Map). Salida byte-idéntica a la VM. **Medido — un workload de SERVICIO real (serializar respuestas):**
+
+| `jsonserialize` | ray-native | perl | node | ray-VM | ruby |
+|---|---|---|---|---|---|
+| tiempo | **41 ms 🥇** | 65 ms | 118 ms | 139 ms | 611 ms |
+| vs líder | **1.0× (#1 de 8)** | 1.6× | 2.9× | 3.4× | 14.7× |
+
+**El nativo transpilado es #1 de los 8 lenguajes** —bate a perl/node/php— y **3.4× la propia VM**. Es la
+prueba definitiva: P2.b lleva el nicho de servicios a la liga de Go, no solo el cómputo. Siguiente fase:
+**`Map`** (`Rc<RefCell<HashMap>>` + `add_to`/`get_or`) → desbloquea `wordcount`/`logparse`. Luego structs/
+enums, genéricos (monomorfizar), y el GC/aliasing + concurrencia para el lenguaje completo.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

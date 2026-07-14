@@ -74,7 +74,7 @@ esto toca la semántica; oráculo intacto.
 
 | # | Propuesta | Detalle | Gana |
 |---|---|---|---|
-| P1.1 | **NaN-boxing / `HeapValue` en 8 bytes** | hoy 16 B; empaquetar int/float/bool/handle en un u64 NaN-boxed → mitad de tráfico de pila y de memoria, mejor caché | 10–20 % general |
+| P1.1 | **NaN-boxing / `HeapValue` más pequeño** ❌ **EVALUADO y DESCARTADO** (14 jul, medido) | Dos hallazgos: (1) **inviable** — `HeapValue` mide **32 B** (no 16; lo domina el `String`/`Vec` inline de `Str`/`Bytes`), y raylang tiene **`int` de 64 bits** → un `i64` NO cabe en los ~48 b del payload NaN (habría que romper la semántica a 63 b o mover `Str` al heap, que *sube* el GC en el nicho string-heavy). (2) **no ayudaría** — experimento de sensibilidad (variante de padding, `HeapValue` 32→40 B): **agrandarlo NO ralentizó** (fib incluso −4%, resto ±ruido). El tamaño del valor NO es el cuello: mover 32 B por push/pop es gratis en el M3 (L1 caliente), la misma verdad de HW que refutó Opt.17. |
 | P1.2 | **Arreglos unboxed tipados** | el checker SABE que `[int]` es de ints → `Obj::IntArray(Vec<i64>)` sin etiqueta por elemento (ídem float). Indexar/sumar sin desempaquetar | grande en datos |
 | P1.3 | **Structs por índice (B2)** | `GetField(String)` → `GetFieldIdx(u16)` anotado por el checker pre-erasure; instancia = `Vec<HeapValue>` sin nombres | el ROI del nicho |
 | P1.4 | **SSO de strings (`compact_str`)** ❌ **EVALUADO y DESCARTADO** (14 jul, medido) | Se implementó entero: `HeapValue::Str(CompactString)` (VM), inline ≤24 B, `Send` (sortea la traba 4 de Opt.3). **Medido (A/B vs no-SSO, best-of-15)**: wordcount **+2.7%**, split-aislado +5.9%, pero **jsonserialize −9%**. Neto negativo. **Causa**: **mimalloc (P0.4) ya se comió el almuerzo** — el malloc ya es barato (~30 ns), así que evitarlo apenas gana; y el branching inline-vs-heap de `CompactString` penaliza los strings **medianos** (los registros JSON de ~40 B van al heap igual y se construyen más lento). Espeja el rechazo de Opt.3 (`Rc<str>`). Revertido (churn de 119 sitios + dep, sin premio). |
@@ -82,12 +82,21 @@ esto toca la semántica; oráculo intacto.
 
 **Meta P1**: servicios a **~2× del líder** (liga php/lua); fib/loop ~2× mejor que hoy.
 
-**Lección de P1.4 (SSO)**: con mimalloc ya puesto, el residuo de `split`/`to_string` **no** es la
-llamada al allocador (ya barata) sino el **trabajo inherente** (copiar bytes, construir el arreglo, el
-tráfico de la pila de `HeapValue`). Eso apunta a que el siguiente lever real NO es "menos allocs" sino
-**menos trabajo por valor / menos tráfico**: P1.1 (NaN-boxing → `HeapValue` de 16→8 B, menos tráfico de
-pila y caché) y P1.2 (arreglos unboxed) — o directamente **P2** (nativo/JIT), que elimina el bucle de
-despacho entero. Medir P1.1 antes de invertir en el resto de P1.
+**VEREDICTO DEL ARCO P1 (14 jul, medido)**: la **representación de datos es un callejón sin salida en
+este hardware**. P1.4 (SSO) salió neto-negativo (mimalloc ya comió la asignación) y P1.1 (encoger
+`HeapValue`) no ayuda (el tamaño del valor no es el cuello; mover 32 B es gratis en el M3) además de
+ser inviable con `i64`. Confirmado tres veces (Opt.17, P1.4, P1.1): **en Apple Silicon los accesos a
+memoria caliente y el tráfico de valores son gratis**; lo único que mueve la aguja es ejecutar **MENOS
+instrucciones** (superinstrucciones — P0.6 dio fib +11%, el único win real de este tier) o cambiar el
+**modelo de ejecución** entero. Quedan como *quizá* solo los que cambian el MECANISMO, no el tamaño:
+- **P1.2 arreglos unboxed** (`Obj::IntArray(Vec<i64>)`): evita construir/destruir un `HeapValue` por
+  elemento en bucles numéricos sobre `[int]`/`[float]` — pero eso es cómputo, no el nicho de servicios.
+- **P1.3 structs por índice** (`GetFieldIdx`): cambia el acceso a campo de buscar-por-nombre a
+  indexar — mecanismo distinto, no tamaño; el único P1 con ROI plausible para servicios.
+
+Pero el salto real de aquí en adelante es **P2** (nativo/JIT): borra el bucle de despacho entero, que
+es lo único que el hardware SÍ cobra. **Recomendación**: no invertir más en P1 salvo P1.3 puntual;
+evaluar P2 (transpile-a-Rust primero, menor I+D que el JIT).
 
 ### Arco P2 — codegen nativo: la apuesta grande (la liga de Node/Go de verdad)
 

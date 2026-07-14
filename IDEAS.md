@@ -1364,3 +1364,43 @@ gratis y las ramas fijas del lazo son el impuesto — solo paga ejecutar MENOS i
 alguna vez hacen falta: más fusiones del histograma (Call/Return-heavy), B1/B2 estructurales. **Secuencia**: → Opt.17
 (registerizar ip) → PGO → superinstrucciones con histograma → reevaluar B/C. Branch:
 `feature/opt-vm-ronda2`.
+
+### 45.1 Ronda 3 — diagnóstico ante benchmark externo multi-lenguaje (14 jul 2026)
+
+**Detonante**: benchmark del usuario contra 7 lenguajes (node/php/lua/python/ruby/perl) en
+`fibrec` (fib recursivo) y `loopsum` (bucle 10M con `*`/`%`). Perfil de ray: **arranque
+excelente** (~3 ms, top-3, casi como lua — binario nativo, sin warm-up de VM) pero **cómputo
+lento** (fibrec 12,5× tras node; loopsum 8,3× tras php). Importante: esos números son el estado
+**post-A4+PGO+Opt.16** (las palancas baratas YA aterrizadas), no código sin optimizar.
+
+**Baseline fresco** (`measure.py` best-of-15, release plano sin PGO, M3): fib35 **1,67 s** ·
+loop10M **0,755 s** · arrays2000x **0,134 s** · gcnested **0,211 s**. Consistente con el CIERRE
+de la ronda 2 (fib ~1,59 s con PGO encima).
+
+**Lectura estratégica** (honesta):
+- El benchmark mide justo lo que raylang hace PEOR (aritmética/llamada puras) y lo que MENOS
+  importa a su nicho (traba 7: servicios I/O-bound). Node gana fibrec por **JIT** — inalcanzable
+  sin JIT (C2, 💤 no recomendado). El objetivo realista NO es alcanzar a node, sino **cerrar el
+  hueco con lua/php/ruby en cómputo** (2-4× → ~1,5-2×).
+- Las micro del preámbulo están EXPRIMIDAS y su ataque directo está REFUTADO (Opt.17). No
+  reabrir ese tier.
+
+**Palancas restantes, priorizadas** (todas oráculo-safe salvo C1):
+1. **A4' — fusiones de histograma Call/Return-heavy** (la indicada por el propio cierre de r2).
+   fibrec es call-heavy y las fusiones de r2 apuntaron a guardas if/while + asignación, NO a
+   `Call`/`Return`. Instrumentar el histograma de pares sobre fib/gcd/selfhost (call-heavy),
+   fusionar los pares calientes de llamada/retorno. **Mismo patrón probado** (−19 a −28% en r2),
+   bajo riesgo, revalidación por oráculo+goldens. → **primer candidato**.
+2. **B1 — locales en pila estilo clox** (10-20% call-heavy). Ataca el ~8% de `new_locals`/
+   `put_arg`/`recycle` + framing de llamada que domina fibrec. Híbrido: solo fn sin capturas
+   (`captured` ya existe). Más invasivo que A4' pero el ROI estructural más directo para fib.
+3. **B2 — structs por índice** (`GetFieldIdx`). NO ayuda a fib/loop, pero es el estructural con
+   mejor ROI para el **nicho real** (servicios que manosean structs). Si el objetivo es el
+   producto y no el benchmark, sube de prioridad sobre B1.
+4. **C1 — bytecode de registros** (20-40%): la palanca grande, pero reescritura de
+   compiler+peepholes + revalidación total. Solo si raylang ha de competir en CPU de verdad.
+
+**Recomendación**: si el objetivo es responder al benchmark → **A4' (Call/Return) primero**,
+luego **B1**. Si el objetivo es el producto → **B2** antes que nada (el benchmark es un mal
+proxy del nicho). Secuencia r3 sugerida: A4' → medir → B1 → medir → decidir B2/C1. Branch
+propuesta: `feature/opt-vm-ronda3`.

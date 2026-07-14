@@ -201,6 +201,18 @@ front-end, y **conductual** (stdout + código de salida) para el back-end.
 - **Resto de I/O** en el self-hosting: stdin (`input`/`read_line`), `env`, handles de
   archivo —no los usa el compilador, y `args()`/`read_file` ya bastan—.
 - **Claves de `Map` genéricas** (vía un trait `Hash` con diccionarios): hoy solo primitivos.
+- **Operadores bitwise (`& | ^ ~ << >>`) + `bytes` en el toolchain auto-alojado**: el
+  lexer/parser de `selfhost/` quedaron **congelados en M14.1**, antes de que M19.3a añadiera
+  los operadores bit a bit al lexer de Rust (para WebSockets/cripto) y de que M16 añadiera el
+  tipo `bytes`. Confirmado empíricamente por el modo **`audit`** de `tools/spanglish.py`
+  (cruza el tokenizador Python contra el lexer REAL auto-alojado vía `selfhost/lex_dump.ray`):
+  **15 de 34 `packages/*.ray` no lexean** con el lexer auto-alojado —`lex error … expected
+  '&&'/'||' (did you forget a '&'/'|'?)`, `unexpected character '^'`—, justo los de red/cripto
+  que usan bitops (hpack, scram, hashing, mongo, mysql, postgres, http2, …). **No bloquea la
+  meta-circularidad** (el compilador de raylang no usa bitops), pero el lexer/parser
+  auto-alojado va **por detrás** del de Rust en paridad de lenguaje. Cerrarlo = port mecánico
+  de esos tokens + su precedencia (como M19.3a en Rust) al lexer/parser de `selfhost/`, y el
+  tipo `bytes` en el pipeline auto-alojado. (Nota ya entrevista en la fila de M17.)
 
 ## 8. Tooling de editor (coloreado y validación)
 

@@ -213,7 +213,7 @@ struct IntResult {
 // desbordar el i64 al desplazar (un bloque de octetos de continuación 0xFF llevaría `shift` a millones).
 fn dec_int(data: bytes, pos: int, prefix_bits: int) -> Result<IntResult, string> {
     if (pos >= data.len()) {
-        return Result.Err("HPACK: entero truncado");
+        return Result.Err("HPACK: truncated integer");
     }
     let max = (1 << prefix_bits) - 1;
     let first = data[pos] & max;

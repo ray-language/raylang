@@ -121,7 +121,7 @@ fn read_line(c: Conn) -> Result<string, string> {
             return Result.Err("connection closed while reading a line");
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 // Lee exactamente `n` OCTETOS, rellenando desde el socket si hace falta.
@@ -200,7 +200,7 @@ fn read_bulk(c: Conn, rest: string) -> Result<Reply, string> {
         return Result.Ok(Reply.Nil);
     }
     if (n > max_bulk()) {
-        return Result.Err("RESP bulk exceeds the limit (" + to_string(n) + " octetos)");
+        return Result.Err("RESP bulk exceeds the limit (" + to_string(n) + " bytes)");
     }
     let data = read_n(c, n)?;
     // Consume el \r\n que cierra el bulk string.

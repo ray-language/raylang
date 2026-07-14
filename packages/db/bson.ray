@@ -154,7 +154,7 @@ fn enc_value(out: [int], v: Bson) {
         Bson.ObjectId(b) => {
             // 12 octetos exactos; menos/más es un error del programador, no un dato → panic.
             if (b.len() != 12) {
-                panic("ObjectId must tener 12 octetos, has " + to_string(b.len()));
+                panic("ObjectId must have 12 bytes, has " + to_string(b.len()));
             }
             enc_bytes(out, b);
         },
@@ -223,7 +223,7 @@ fn rd_u8(d: Dec) -> Result<int, string> {
 
 fn rd_exact(d: Dec, n: int) -> Result<bytes, string> {
     if (d.pos + n > d.b.len()) {
-        return Result.Err(dec_err("unexpected end of data (missing " + to_string(n) + " octetos)", d.pos));
+        return Result.Err(dec_err("unexpected end of data (missing " + to_string(n) + " bytes)", d.pos));
     }
     let out = d.b.sub_bytes(d.pos, d.pos + n);
     d.pos = d.pos + n;
@@ -352,7 +352,7 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
 
 fn rd_doc(d: Dec, depth: int) -> Result<[Field], string> {
     if (depth > max_depth()) {
-        return Result.Err(dec_err("nesting too deep (possible DoS): more than " + to_string(max_depth()) + " niveles", d.pos));
+        return Result.Err(dec_err("nesting too deep (possible DoS): more than " + to_string(max_depth()) + " levels", d.pos));
     }
     let start = d.pos;
     let total = rd_le32(d)?;

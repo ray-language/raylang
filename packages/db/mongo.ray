@@ -71,7 +71,7 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
         if (c.buf.len() >= 4) {
             let total = le32_at(c.buf, 0);
             if (total < 21) {
-                return Result.Err("mongo: message too short (" + to_string(total) + " octetos)");
+                return Result.Err("mongo: message too short (" + to_string(total) + " bytes)");
             }
             if (total > max_message()) {
                 return Result.Err("mongo: message exceeds the limit (" + to_string(total) + " bytes, possible memory bomb)");
@@ -79,7 +79,7 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
             if (c.buf.len() >= total) {
                 let op = le32_at(c.buf, 12);
                 if (op != 2013) {
-                    return Result.Err("mongo: opCode inesperado: " + to_string(op));
+                    return Result.Err("mongo: unexpected opCode: " + to_string(op));
                 }
                 if (c.buf[20] != 0) {
                     return Result.Err("mongo: unsupported OP_MSG section: " + to_string(c.buf[20]));
@@ -95,7 +95,7 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
         }
         c.buf = c.buf + chunk;
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 /// Sends a raw command document and returns the reply document. The building block of every

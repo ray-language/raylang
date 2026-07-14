@@ -91,7 +91,7 @@ fn main() -> int {
     assert!(r2.contains("bye"), "la petición what apaga se responde: {r2}");
     let (out, err, code) = esperar(child);
     assert_eq!(code, 0, "sale clean\n{out}\n{err}");
-    assert!(out.contains("apagando"), "anuncia el off: {out}");
+    assert!(out.contains("shutting down"), "anuncia el off: {out}");
     assert!(out.contains("servidor off"), "serve_shutdown devolvió a main: {out}");
     // Ya apagado: un cliente nuevo no conecta (el listener está cerrado).
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "el port quedó closed");
@@ -125,7 +125,7 @@ fn main() -> int {
     assert!(resp.contains("lento ok"), "la petición en vuelo se drenó: {resp}");
     let (out, _err, code) = esperar(child);
     assert_eq!(code, 0, "sale clean after drenar\n{out}");
-    assert!(out.contains("apagando: 1 connection(s) in flight"), "drenó exactamente la en vuelo: {out}");
+    assert!(out.contains("shutting down: 1 connection(s) in flight"), "drenó exactamente la en vuelo: {out}");
 }
 
 /// El plazo del drenaje: un handler que tarda MÁS que `drain_ms` no retiene el apagado — el

@@ -172,7 +172,7 @@ struct Header {
 
 fn read_header(b: bytes, at: int) -> Result<Header, string> {
     if (at + 44 > b.len()) {
-        return Result.Err("tz: TZif truncado (header)");
+        return Result.Err("tz: truncated TZif (header)");
     }
     if (b[at] != 84 || b[at + 1] != 90 || b[at + 2] != 105 || b[at + 3] != 102) {
         return Result.Err("tz: not a TZif file (magic)");
@@ -210,7 +210,7 @@ fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {
         return Result.Err("tz: TZif without offset types");
     }
     if (at + block_size(h, tsize) > b.len()) {
-        return Result.Err("tz: TZif truncado (data)");
+        return Result.Err("tz: truncated TZif (data)");
     }
     // Transiciones (epoch-segundos, ascendentes) y su índice de tipo.
     var trans: [int] = [];

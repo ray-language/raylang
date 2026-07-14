@@ -263,7 +263,7 @@ fn frame_total(b: bytes, max_payload: int) -> Result<int, string> {
         }
     }
     if (plen > max_payload || plen < 0) {
-        return Result.Err("frame too large (" + to_string(plen) + " > " + to_string(max_payload) + " octetos)");
+        return Result.Err("frame too large (" + to_string(plen) + " > " + to_string(max_payload) + " bytes)");
     }
     if (masked) {
         off = off + 4;
@@ -303,7 +303,7 @@ pub fn read_frame_limit(ws: WsConn, max_payload: int) -> Result<Frame, string> {
             },
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 // Emite una trama de control con el enmascarado del lado que somos (best effort).
@@ -346,7 +346,7 @@ pub fn read_message_limit(ws: WsConn, max_payload: int) -> Result<Frame, string>
                 return Result.Err("continuation frame without a fragmented message in progress");
             }
             if (acc.len() + f.payload.len() > max_payload) {
-                return Result.Err("fragmented message too large (> " + to_string(max_payload) + " octetos)");
+                return Result.Err("fragmented message too large (> " + to_string(max_payload) + " bytes)");
             }
             acc = acc + f.payload;
             if (f.fin) {
@@ -365,5 +365,5 @@ pub fn read_message_limit(ws: WsConn, max_payload: int) -> Result<Frame, string>
             acc = f.payload;
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }

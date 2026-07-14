@@ -494,7 +494,7 @@ fn cmp_int(op: BinOp, a: int, b: int) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_int: operador inesperado"),
+        _ => panic("cmp_int: unexpected operator"),
     }
 }
 
@@ -504,7 +504,7 @@ fn cmp_float(op: BinOp, a: float, b: float) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_float: operador inesperado"),
+        _ => panic("cmp_float: unexpected operator"),
     }
 }
 
@@ -514,7 +514,7 @@ fn cmp_str(op: BinOp, a: string, b: string) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_str: operador inesperado"),
+        _ => panic("cmp_str: unexpected operator"),
     }
 }
 
@@ -524,7 +524,7 @@ fn cmp_char(op: BinOp, a: char, b: char) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_char: operador inesperado"),
+        _ => panic("cmp_char: unexpected operator"),
     }
 }
 
@@ -584,7 +584,7 @@ fn arith_int(op: BinOp, a: int, b: int, line: int, col: int) -> Result<Value, Fl
             }
             Result.Ok(Value.VInt(a % b))
         },
-        _ => panic("arith_int: operador inesperado"),
+        _ => panic("arith_int: unexpected operator"),
     }
 }
 
@@ -594,7 +594,7 @@ fn arith_float(op: BinOp, a: float, b: float) -> Result<Value, Flow> {
         BinOp.Mul => Result.Ok(Value.VFloat(a * b)),
         BinOp.Div => Result.Ok(Value.VFloat(a / b)),
         BinOp.Rem => Result.Ok(Value.VFloat(a % b)),
-        _ => panic("arith_float: operador inesperado"),
+        _ => panic("arith_float: unexpected operator"),
     }
 }
 
@@ -787,19 +787,19 @@ pub fn value_lt(a: Value, b: Value) -> bool {
     match (a) {
         Value.VInt(x) => match (b) {
             Value.VInt(y) => x < y,
-            _ => panic("menor: types incompatibles"),
+            _ => panic("less: incompatible types"),
         },
         Value.VFloat(x) => match (b) {
             Value.VFloat(y) => x < y,
-            _ => panic("menor: types incompatibles"),
+            _ => panic("less: incompatible types"),
         },
         Value.VStr(x) => match (b) {
             Value.VStr(y) => x < y,
-            _ => panic("menor: types incompatibles"),
+            _ => panic("less: incompatible types"),
         },
         Value.VChar(x) => match (b) {
             Value.VChar(y) => x < y,
-            _ => panic("menor: types incompatibles"),
+            _ => panic("less: incompatible types"),
         },
         _ => panic("less: non-orderable type"),
     }

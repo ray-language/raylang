@@ -292,7 +292,7 @@ fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
             advance(lx);
         }
     }
-    panic("inalcanzable")  // el while(true) solo sale por return; diverge, cede el tipo
+    panic("unreachable")  // el while(true) solo sale por return; diverge, cede el tipo
 }
 
 // Lee un literal de carácter 'a' (la comilla de apertura ya fue consumida). Mismos escapes

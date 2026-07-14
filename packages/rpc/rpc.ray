@@ -78,7 +78,7 @@ fn read_frame(r: Rd, max: int) -> Result<Option<bytes>, string> {
     let h = read_exact(r, 4)?;
     let n = (h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3];
     if (n > max) {
-        return Result.Err("frame too large (" + to_string(n) + " > " + to_string(max) + " octetos)");
+        return Result.Err("frame too large (" + to_string(n) + " > " + to_string(max) + " bytes)");
     }
     let body = read_exact(r, n)?;
     Result.Ok(Option.Some(body))
@@ -297,7 +297,7 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
                         Result.Err(e) => {
                             errors = errors + 1;
                             if (errors >= 100) {
-                                eprint("rpc aceptar: " + e);
+                                eprint("rpc accept: " + e);
                                 close(conns);
                                 follow = false;
                             } else {
@@ -310,7 +310,7 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
                                     follow = false;
                                 } else {
                                     let _ = recv(pausa);
-                                    eprint("rpc aceptar: " + e);
+                                    eprint("rpc accept: " + e);
                                 }
                             }
                         },
@@ -346,7 +346,7 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
             }
             close(off);
             close(srv);
-            print("rpc apagando: " + to_string(activos) + " connection(s) in flight");
+            print("rpc shutting down: " + to_string(activos) + " connection(s) in flight");
             if (activos > 0 && drain_ms > 0) {
                 let plazo: Channel<int> = Channel.new();
                 spawn(fn() {

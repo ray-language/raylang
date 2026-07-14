@@ -121,7 +121,7 @@ fn lenc_int(p: [int], i: int) -> Result<(int, int), string> {
     while (k < 4) { hi = hi | (p[i + 5 + k] << (8 * k)); k = k + 1; }
     // Una longitud >= 2^32 es imposible en un paquete de <= 16 MiB → paquete corrupto/malicioso.
     if (hi != 0) {
-        return Result.Err("mysql: length length-encoded absurda");
+        return Result.Err("mysql: nonsensical length-encoded length");
     }
     return Result.Ok((lo, 9));
 }

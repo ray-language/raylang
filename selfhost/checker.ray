@@ -1457,14 +1457,14 @@ fn resolve_bound_method(c: Checker, tp: string, method: string, cargs: [Expr], l
         return Result.Ok(Option.None);
     }
     if (hits.len() > 1) {
-        return Result.Err(terr(line, col, "method '" + method + "' ambiguous for '" + tp + "': lo declaran various traits acotados (" + join_comma(hits) + ")"));
+        return Result.Err(terr(line, col, "method '" + method + "' ambiguous for '" + tp + "': several bounded traits declare it (" + join_comma(hits) + ")"));
     }
     let trait_name = hits[0];
     let self_ty = Type.TNamed(tp, []);
     let sig = match (find_method_sig(trait_methods_of(c, trait_name), method)) {
         Option.Some(m) => m,
         Option.None => {
-            return Result.Err(terr(line, col, "method '" + method + "' no encontrado"));
+            return Result.Err(terr(line, col, "the method '" + method + "' is not in trait '" + trait_name + "'"));
         },
     };
     // Argumentos esperados: los del método sin el receptor (self), con Self→T.
@@ -2048,7 +2048,7 @@ fn check_read_file(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Typ
 
 // __write_file(ruta: string, contenido: string) -> [string] (M14.6d): ["ok"] / ["err", msg].
 fn check_write_file(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("__write_file", 2, " (path, contenido)", cargs.len(), line, col)?;
+    b_arity("__write_file", 2, " (path, content)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "__write_file expects a string (the path), not ")?;
     want_string(a, cargs, 1, "__write_file expects a string (the contents), not ")?;
@@ -2110,7 +2110,7 @@ fn check_chars(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, T
 }
 
 fn check_split(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("split", 2, " (string, separador)", cargs.len(), line, col)?;
+    b_arity("split", 2, " (string, separator)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "split expects a string as first argument, not ")?;
     want_string(a, cargs, 1, "split expects a string as separator, not ")?;
@@ -2127,7 +2127,7 @@ fn check_replace(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type,
 }
 
 fn check_starts_with(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("starts_with", 2, " (string, prefijo)", cargs.len(), line, col)?;
+    b_arity("starts_with", 2, " (string, prefix)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "starts_with expects a string as first argument, not ")?;
     want_string(a, cargs, 1, "starts_with expects a string as prefix, not ")?;
@@ -2135,7 +2135,7 @@ fn check_starts_with(c: Checker, cargs: [Expr], line: int, col: int) -> Result<T
 }
 
 fn check_ends_with(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("ends_with", 2, " (string, sufijo)", cargs.len(), line, col)?;
+    b_arity("ends_with", 2, " (string, suffix)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "ends_with expects a string as first argument, not ")?;
     want_string(a, cargs, 1, "ends_with expects a string as suffix, not ")?;
@@ -2152,7 +2152,7 @@ fn check_substring(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Typ
 }
 
 fn check_repeat(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("repeat", 2, " (string, veces)", cargs.len(), line, col)?;
+    b_arity("repeat", 2, " (string, times)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "repeat expects a string as first argument, not ")?;
     want_int(a, cargs, 1, "repeat expects an int as the repeat count, not ")?;
@@ -2275,7 +2275,7 @@ fn check_remove(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, 
 }
 
 fn check_keys(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("keys", 1, " (mapa)", cargs.len(), line, col)?;
+    b_arity("keys", 1, " (map)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => Result.Ok(Type.TArray(kv[0])),
@@ -2284,7 +2284,7 @@ fn check_keys(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
 }
 
 fn check_values(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("values", 1, " (mapa)", cargs.len(), line, col)?;
+    b_arity("values", 1, " (map)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => Result.Ok(Type.TArray(kv[1])),
@@ -3022,7 +3022,7 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     while (mi < imp.methods.len()) {
         let m = imp.methods[mi];
         if (contains_str(impl_names, m.name)) {
-            return Result.Err(terr(m.line, m.col, "method '" + m.name + "' implementado dos veces"));
+            return Result.Err(terr(m.line, m.col, "method '" + m.name + "' implemented twice"));
         }
         impl_names.push(m.name);
         mi = mi + 1;

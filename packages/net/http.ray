@@ -258,7 +258,7 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
             follow = false;  // chunk final (0)
         } else {
             if (pos + size > n) {
-                return Result.Err("chunk truncado");
+                return Result.Err("truncated chunk");
             }
             out = out + body.sub_bytes(pos, pos + size);
             pos = pos + size + 2;  // salta el \r\n tras los datos
@@ -343,7 +343,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                         match (parse_int(cl)) {
                             Option.Some(n) => {
                                 if (body_final.len() < n) {
-                                    return Result.Err("response truncada: llegaron " + to_string(body_final.len()) + " de " + to_string(n) + " octetos");
+                                    return Result.Err("truncated response: got " + to_string(body_final.len()) + " de " + to_string(n) + " bytes");
                                 }
                                 if (body_final.len() > n) {
                                     body_final = body_final.sub_bytes(0, n);
@@ -510,7 +510,7 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
             },
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 // Resuelve una Location que puede ser absoluta (`http://…`) o relativa al host actual (`/otra`).
@@ -831,5 +831,5 @@ fn conn_leer_chunked(c: Conn, start: int, plazo_fin: int) -> Result<bytes, strin
         let _ = conn_asegurar(c, pos + size + 2, plazo_fin)?;
         pos = pos + size + 2;  // datos + su \r\n
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }

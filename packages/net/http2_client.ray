@@ -94,7 +94,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
         // M73: un frame que declara más que el tope se rechaza antes de acumular sus octetos.
         if (frame_size(buf) > max_frame()) {
             close(h);
-            return Result.Err("HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " octetos)");
+            return Result.Err("HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " bytes)");
         }
         while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);

@@ -52,7 +52,7 @@ fn add_prelude(prelude: Program, user: Program) {
 fn load_prelude() -> Program {
     match (load("selfhost/prelude.ray")) {
         Result.Ok(p) => p,
-        Result.Err(e) => panic("no se pudo cargar selfhost/prelude.ray: " + e.msg),
+        Result.Err(e) => panic("could not load selfhost/prelude.ray: " + e.msg),
     }
 }
 
@@ -85,7 +85,7 @@ fn main() -> int {
                     match (run(prog, rest_args(argv))) {
                         Result.Ok(v) => exit_code(v),
                         Result.Err(re) => {
-                            eprint("error en ejecución en " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg);
+                            eprint("runtime error at " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg);
                             70
                         },
                     }
@@ -97,7 +97,7 @@ fn main() -> int {
             }
         },
         Result.Err(le) => {
-            eprint("[" + le.module + "] error de carga en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+            eprint("[" + le.module + "] load error at " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
             65
         },
     }

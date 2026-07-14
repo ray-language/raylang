@@ -104,7 +104,7 @@ fn read_msg(c: Conn) -> Result<PgMsg, string> {
         }
         c.buf = c.buf + chunk;
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 // El texto de un ErrorResponse ('E'): campos [tipo:1][valor NUL]…, hasta un tipo 0. El campo 'M'
@@ -266,7 +266,7 @@ fn startup_and_auth(handle: int, user: string, password: string, database: strin
             }
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 // ── Protocolo extendido: Parse / Bind / Describe / Execute / Sync ───────────────────────────
@@ -350,7 +350,7 @@ fn collect_response(c: Conn) -> Result<([[string]], int), string> {
             }
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 fn drain_until_ready(c: Conn) -> Result<int, string> {

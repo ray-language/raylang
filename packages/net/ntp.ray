@@ -35,12 +35,12 @@ fn read_u32(b: bytes, i: int) -> int {
 // Interpreta los 48 octetos de la respuesta contra las marcas locales t1/t4.
 fn parse_response(b: bytes, t1: int, t4: int) -> Result<NtpResult, string> {
     if (b.len() < 48) {
-        return Result.Err("ntp: response corta (" + to_string(b.len()) + " octetos)");
+        return Result.Err("ntp: short response (" + to_string(b.len()) + " bytes)");
     }
     // Byte 0 = LI(2) VN(3) Modo(3); la respuesta ha de venir en modo 4 (server) o 5 (broadcast).
     let mode = b[0] & 7;
     if (mode != 4 && mode != 5) {
-        return Result.Err("ntp: mode inesperado " + to_string(mode));
+        return Result.Err("ntp: unexpected mode " + to_string(mode));
     }
     // Stratum 0 = "kiss-of-death" (RFC 4330 §8): el servidor pide parar; no trae hora válida.
     let stratum = b[1];

@@ -13,7 +13,7 @@ import std/crypto;
 // mensaje es `Err`, nunca un crash por índice fuera de rango (clase inflate pre-M64).
 fn byte_at(data: bytes, i: int) -> Result<int, string> {
     if (i < 0 || i >= data.len()) {
-        return Result.Err("response DNS truncada");
+        return Result.Err("truncated DNS response");
     }
     Result.Ok(data[i])
 }

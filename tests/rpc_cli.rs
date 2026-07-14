@@ -174,7 +174,7 @@ apagar=\"bye\"\n";
     let sout = server.wait_with_output().expect("espera al servidor");
     let s_stdout = String::from_utf8_lossy(&sout.stdout);
     assert_eq!(sout.status.code(), Some(0), "el servidor sale 0 after el off\n{s_stdout}");
-    assert!(s_stdout.contains("rpc apagando"), "anuncia el off: {s_stdout}");
+    assert!(s_stdout.contains("rpc shutting down"), "anuncia el off: {s_stdout}");
     assert!(s_stdout.contains("rpc servidor off"), "serve_shutdown devolvió a main: {s_stdout}");
 }
 

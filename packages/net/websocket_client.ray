@@ -100,7 +100,7 @@ fn read_handshake(h: int) -> Result<HandshakeRead, string> {
             },
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 // Hace el handshake de WebSocket sobre un handle ya conectado (TCP o TLS). El I/O usa

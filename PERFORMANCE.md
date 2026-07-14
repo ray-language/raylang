@@ -380,11 +380,27 @@ byte-idéntica a la VM (kiwis/manzanas/peras en orden alfabético).
 
 **33/37 ejemplos** (añade `for_bucles`) — nativo ≡ VM byte a byte.
 
-**Cobertura tras 15 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+#### Fase 16 — `@derive(Eq)` (14 jul)
+
+Igualdad derivada + bound `T: Eq`. **Decisión clave**: el checker ya baja los bounds de traits de USUARIO
+(`T: Valor`) por **paso de diccionarios** —params ocultos `T#Trait#m` (valores función) + el impl manglado
+`Tipo#m` como función ordinaria—, y el transpilador **ya lo emite tal cual** (así funcionan bounds.ray/
+impls_genericos.ray). Eq es un trait más: en vez de un trait `RayEq` a la medida (que obligaría a DESCARTAR
+los diccionarios y rompería los traits de usuario), se **reusa esa misma maquinaria**. Solo hacía falta
+**dejar de saltar la emisión de `eq`**: el impl derivado `Punto#eq`/`Color#eq` (que genera `@derive`) y el
+`int#eq` del prelude (`self == other`) se emiten como funciones ordinarias; `x.eq(y)` deja de mapearse a
+`==` (que fallaba sobre `Rc<Struct>`) y fluye como llamada normal/al diccionario. Se sigue saltando `eq`
+sobre contenedores (`[]`/Map/Channel/Task/…: clave no-identificador o `impl` no transpilable). `show`/`less`
+siguen directos (RayShow / `<`). `anotaciones.ray` (`@derive(Eq, Show)` sobre Color/Punto/Forma +
+`cuenta_iguales<T: Eq>`) transpila y da salida byte-idéntica a la VM.
+
+**34/37 ejemplos** (añade `anotaciones`) — nativo ≡ VM byte a byte.
+
+**Cobertura tras 16 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
 match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (estático +
-defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · `args()` · **`for` sobre Map** ·
-const/char/cast · UFCS. **El transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM
-(33/37 ejemplos). Restan solo 4, cada una una extensión acotada: `@derive(Eq)` con diccionarios,
+defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · `args()` · `for` sobre Map ·
+**`@derive(Eq)`** · const/char/cast · UFCS. **El transpilador cubre CASI TODO el lenguaje** con salida
+byte-idéntica a la VM (34/37 ejemplos). Restan solo 3, cada una una extensión acotada:
 operator-overloading, `From`-conversion, enteros con tamaño. Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,

@@ -48,13 +48,23 @@ fn is_prelude_impl(name: &str) -> bool {
     }
     let key = name.split('#').next().unwrap_or("");
     let method = name.rsplit('#').next().unwrap_or("");
-    // Eq/Show/Ord (eq/show/less) → manejados directo (==, ray_show, <): saltar en CUALQUIER tipo.
-    if matches!(method, "eq" | "show" | "less") {
+    // Show/Ord (show/less) → manejados directo (ray_show, <): saltar en CUALQUIER tipo. `eq` NO se salta:
+    // se emite (impl derivado `Tipo#eq` + prelude `int#eq`), realizando el bound `T: Eq` por diccionarios.
+    if matches!(method, "show" | "less") {
         return true;
     }
     // `Iter` (struct del protocolo de iterador del prelude) → saltar sus métodos.
     if key == "Iter" {
         return true;
+    }
+    // `eq` se EMITE (realiza el bound `T: Eq` por diccionarios) para tipos de usuario y primitivos
+    // ESCALARES (`int#eq` = `self == other`); para contenedores ([], Map, Channel, Task, bytes, unit…)
+    // se salta: su clave no es un identificador Rust válido o su `impl Eq` no transpila.
+    if method == "eq" {
+        return matches!(
+            key,
+            "bytes" | "uint" | "u8" | "u32" | "u64" | "unit" | "[]" | "Map" | "Channel" | "Task"
+        );
     }
     let builtin_key = matches!(
         key,
@@ -66,7 +76,7 @@ fn is_prelude_impl(name: &str) -> bool {
         "len" | "push" | "reverse" | "contains" | "trim" | "split" | "replace" | "chars" | "starts_with"
             | "ends_with" | "to_upper" | "to_lower" | "substring" | "repeat" | "join" | "to_bytes"
             | "sub_bytes" | "char_code" | "to_string" | "insert" | "contains_key" | "keys" | "values"
-            | "get" | "get_or" | "remove" | "add_to" | "eq" | "show" | "less" | "index_of" | "position" | "pop"
+            | "get" | "get_or" | "remove" | "add_to" | "show" | "less" | "index_of" | "position" | "pop"
     );
     builtin_key && prelude_method
 }
@@ -332,8 +342,10 @@ impl Transpiler {
     fn emit_function(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
         // Params de tipo en ámbito (para `rust_ty` y la clasificación de `Struct(T)`→genérico).
         self.tparams = f.type_params.iter().cloned().collect();
-        // Genéricos de Rust con bound `Clone` (todo valor genérico se clona al leer) + `Display` (por si
-        // se imprime/`to_string`). rustc los monomorfiza → nativo. (Los bounds de raylang → fase futura.)
+        // Genéricos de Rust con bound `Clone` (todo valor genérico se clona al leer) + `RayShow` (por si
+        // se imprime/`to_string`). rustc los monomorfiza → nativo. Los bounds de raylang (Eq/Ord/traits de
+        // usuario) los realiza el **paso de diccionarios** del checker: sus params ocultos (`T#Trait#m`,
+        // valores función) y el impl manglado (`Tipo#m`) se emiten tal cual (como funciones ordinarias).
         let generics = generic_decl(&f.type_params);
         self.scopes.push(HashMap::new());
         let mut params = Vec::new();
@@ -893,7 +905,6 @@ impl Transpiler {
         Ok(())
     }
 
-
     /// Baja un `match` sobre un enum. El escrutinio (`Rc<E>`) se liga a un temporal y se matchea sobre
     /// `&*temp` (matchea `&E`). Los bindings del patrón quedan como `&campo`; al inicio de cada brazo se
     /// **clonan a valores propios** (`let b = b.clone();`) → el cuerpo los usa como cualquier variable.
@@ -1288,13 +1299,6 @@ impl Transpiler {
                 out.push_str("Rc::<str>::from(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".ray_show())");
-            }
-            "eq" if name.contains('#') => {
-                out.push('(');
-                self.emit_expr(out, eff[0])?;
-                out.push_str(" == ");
-                self.emit_expr(out, eff[1])?;
-                out.push(')');
             }
             "less" if name.contains('#') => {
                 out.push('(');
@@ -2043,6 +2047,22 @@ mod tests {
         assert!(rust.contains("Rc::<str>::from(__a)"), "{}", rust);
         // el arreglo se indexa/mide como cualquier `[string]` (borrow).
         assert!(rust.contains(".borrow().len() as i64"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_derive_eq() {
+        // @derive(Eq) + bound T: Eq → paso de diccionarios (como los traits de usuario): el impl derivado
+        // `Tipo#eq` se emite como función ordinaria, y `x.eq(y)` con x: T acotado llama al dict param.
+        let rust = transpile_src(
+            "@derive(Eq)\nstruct Punto { x: int, y: int }\n\
+             fn iguales<T: Eq>(a: T, b: T) -> bool { a.eq(b) }\n\
+             fn main() -> int { if (iguales(Punto { x: 1, y: 2 }, Punto { x: 1, y: 2 })) { 1 } else { 0 } }",
+        );
+        // el impl derivado se emite manglado (Punto#eq → Punto_HH_eq), no se salta.
+        assert!(rust.contains("Punto_HH_eq"), "{}", rust);
+        // la función acotada conserva el param-diccionario y NO se mapea a `==`.
+        assert!(rust.contains("T_HH_Eq_HH_eq"), "{}", rust);
+        assert!(!rust.contains("a.clone() == b.clone()"), "no debe mapear .eq() a ==: {}", rust);
     }
 
     #[test]

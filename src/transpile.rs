@@ -205,6 +205,11 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     out.push_str("fn __ray_values<K: Ord + Clone + std::hash::Hash + Eq, V: Clone>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<V>>> {\n");
     out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");
     out.push_str("    let vs: Vec<V> = ks.iter().map(|k| b[k].clone()).collect(); Rc::new(std::cell::RefCell::new(vs))\n}\n");
+    // for (k, v) in Map: pares ORDENADOS por clave (como la VM). Materializa un Vec (suelta el borrow)
+    // antes del cuerpo, que podría mutar el Map.
+    out.push_str("fn __ray_pairs<K: Ord + Clone + std::hash::Hash + Eq, V: Clone>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Vec<(K, V)> {\n");
+    out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");
+    out.push_str("    ks.into_iter().map(|k| { let v = b[&k].clone(); (k, v) }).collect()\n}\n");
     // RayShow: el `Show` de raylang como trait propio (Display no sirve: los structs son Rc<RefCell<..>>,
     // y RefCell no es Display; además un bound genérico `T: Display` fallaría). Impl para todo tipo; los
     // structs/enums de usuario reciben su impl generado (recursivo).
@@ -481,9 +486,36 @@ impl Transpiler {
                 out.push_str(";\n");
             }
             StmtKind::For { pat, iter, body } => {
+                // `for (k, v) in <Map>`: itera pares ordenados por clave (helper `__ray_pairs`).
+                if let ForPat::Tuple(names) = pat {
+                    let expr = match iter {
+                        ForIter::In(e) => e,
+                        _ => return Err("spike: for de tupla solo sobre Map".into()),
+                    };
+                    let (kt, vt) = match self.type_of(expr)? {
+                        Type::Map(k, v) => ((*k).clone(), (*v).clone()),
+                        other => return Err(format!("spike: for (k,v) sobre {:?}", other)),
+                    };
+                    let binder = |n: &Option<String>| n.clone().unwrap_or_else(|| "_".into());
+                    let (kn, vn) = (binder(&names[0]), binder(&names[1]));
+                    write!(out, "for ({}, {}) in __ray_pairs(&", kn, vn).unwrap();
+                    self.emit_expr(out, expr)?;
+                    out.push_str(") ");
+                    self.scopes.push(HashMap::new());
+                    if let Some(n) = &names[0] {
+                        self.declare(n, kt);
+                    }
+                    if let Some(n) = &names[1] {
+                        self.declare(n, vt);
+                    }
+                    self.emit_block(out, body)?;
+                    self.scopes.pop();
+                    out.push('\n');
+                    return Ok(());
+                }
                 let var = match pat {
                     ForPat::Single(n) => n.clone(),
-                    ForPat::Tuple(_) => return Err("spike: for sobre tupla (Map) no soportado".into()),
+                    ForPat::Tuple(_) => unreachable!("tupla ya manejada arriba"),
                 };
                 match iter {
                     ForIter::Range { start, end } => {
@@ -2011,6 +2043,17 @@ mod tests {
         assert!(rust.contains("Rc::<str>::from(__a)"), "{}", rust);
         // el arreglo se indexa/mide como cualquier `[string]` (borrow).
         assert!(rust.contains(".borrow().len() as i64"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_for_sobre_map() {
+        // for (k, v) in map → pares ordenados por clave (helper __ray_pairs), determinista como la VM.
+        let rust = transpile_src(
+            "fn main() { var m: Map<string, int> = Map.new(); m.insert(\"a\", 1); \
+             for (k, v) in m { print(k + \": \" + to_string(v)); } }",
+        );
+        assert!(rust.contains("fn __ray_pairs<"), "{}", rust);
+        assert!(rust.contains("for (k, v) in __ray_pairs(&"), "{}", rust);
     }
 
     #[test]

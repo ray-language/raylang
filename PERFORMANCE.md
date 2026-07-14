@@ -369,12 +369,23 @@ salta el nombre del binario; la VM salta el binario **y** el `.ray` (`argv` tras
 
 **32/37 ejemplos** (añade `fib`) — nativo ≡ VM byte a byte.
 
-**Cobertura tras 14 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+#### Fase 15 — `for` sobre Map (14 jul)
+
+`for (k, v) in map` (destructuring de pares). El reto es el **orden**: la VM itera un Map por **clave
+ordenada** (determinista, como keys()/values()), así que el nativo debe hacer lo mismo. Helper de
+preámbulo **`__ray_pairs`** que materializa un `Vec<(K, V)>` ordenado por clave (suelta el `borrow` antes
+del cuerpo, que podría mutar el Map — como el `for` sobre arreglo). El patrón tupla baja a `for (k, v) in
+__ray_pairs(&map)`; un binder `_` (wildcard) → `_` de Rust. `for_bucles.ray` transpila y da salida
+byte-idéntica a la VM (kiwis/manzanas/peras en orden alfabético).
+
+**33/37 ejemplos** (añade `for_bucles`) — nativo ≡ VM byte a byte.
+
+**Cobertura tras 15 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
 match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (estático +
-defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · **`args()`** · const/char/cast ·
-UFCS. **El transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM (32/37 ejemplos).
-Restan solo 5, cada una una extensión acotada: `@derive(Eq)` con diccionarios, operator-overloading,
-`From`-conversion, enteros con tamaño, `for` sobre Map. Sin incógnitas de viabilidad.
+defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · `args()` · **`for` sobre Map** ·
+const/char/cast · UFCS. **El transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM
+(33/37 ejemplos). Restan solo 4, cada una una extensión acotada: `@derive(Eq)` con diccionarios,
+operator-overloading, `From`-conversion, enteros con tamaño. Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

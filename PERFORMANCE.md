@@ -136,6 +136,37 @@ rutas complementarias — y la (b) es la idea fuera-de-la-caja con mejor razón 
 reusa un optimizador de clase mundial, y deja el JIT (P2.a) solo si el ciclo
 editar-correr nativo importara — que para servicios no.
 
+#### ✅ SPIKE de P2.b COMPLETO (14 jul 2026) — tesis PROBADA
+
+Prueba de concepto en `src/transpile.rs` (+ flag `ray --emit-rust <archivo>`, + 3 tests): transpila el
+**subconjunto escalar** de raylang (funciones, `int`/`float`/`bool`, aritmética, `if`/`while`/`for`-rango,
+recursión, `print`) a Rust, se compila con `rustc -O` y se ejecuta. Salida byte-idéntica a la VM.
+
+**Medido** (best-of-7, M3; ray-native = transpilado+`rustc -O`):
+
+| | ray-native | node | php | ray-VM |
+|---|---|---|---|---|
+| **fibrec** | **16 ms 🥇** | 89 ms (5.4×) | 272 ms (17×) | 1000 ms (**61×**) |
+| **loopsum** | **33 ms 🥇** | 324 ms (9.8×) | 93 ms (2.8×) | 808 ms (**24×**) |
+
+El nativo es **24–61× más rápido que la propia VM** y en fib **le gana a node (V8 JIT) por 5.4×**. raylang
+pasa de peor-de-la-clase (fib 12.5× tras node) a **mejor-de-la-clase** — un giro de ~68×. `rustc -O` de
+un programa pequeño: **0.03 s** (el modelo dev=VM / deploy=nativo, como Rust). Es código máquina real.
+
+**Conclusión**: P2.b es EL camino, validado. La tesis "raylang mapea a Rust → velocidad nativa" es cierta
+y espectacular para el núcleo de cómputo. Confirma el veredicto de P0/P1: lo único que el HW cobra es el
+bucle de despacho, y P2.b lo **borra**.
+
+**Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
+closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
+Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural
+(struct→struct, enum→enum, `?`→`?`, genéricos→genéricos); lo duro es el GC/aliasing y el runtime de
+fibras. Estimación: es un arco grande (comparable a la VM o al self-hosting), pero **sin incógnitas de
+viabilidad** tras el spike — es ingeniería, no investigación. Orden sugerido del arco completo: escalares
+(hecho) → datos con `Rc` → control (match/closures/`?`) → genéricos (monomorfizar) → GC/aliasing →
+concurrencia (o "spawn cae a la VM en v1"). Validación gratis: oráculo conductual + 33 ejemplos +
+self-hosting por el tercer backend.
+
 ### Arco P3 — runtime (cuando asome en el perfil)
 
 - **GC**: nursery/bump-allocation para la basura joven (los `Option`/arrays temporales).

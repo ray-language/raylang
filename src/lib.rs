@@ -38,6 +38,7 @@ pub mod lsp;
 pub mod raydoc;
 pub mod manifest;
 pub mod parser;
+pub mod transpile;
 pub mod poll;
 pub mod prelude;
 pub mod repl;

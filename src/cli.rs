@@ -1235,6 +1235,11 @@ fn legacy(rest: &[String]) {
         format_file(&rest[1]);
         return;
     }
+    // SPIKE P2.b: emite el código Rust del subconjunto soportado a stdout (evaluación de rendimiento).
+    if rest.len() == 2 && rest[0] == "--emit-rust" {
+        emit_rust(&rest[1]);
+        return;
+    }
     // [--vm | --interp | --test] <archivo> [args...].
     let mut idx = 0;
     let (mut use_interp, mut test_mode) = (false, false);
@@ -1365,6 +1370,19 @@ fn run_tests(path: &str, filter: Option<&str>) {
 }
 
 /// Formateador (M29.2): imprime la versión canónica o aborta con el error.
+/// SPIKE P2.b: carga + chequea + transpila a Rust e imprime el resultado (o el error del spike).
+fn emit_rust(path: &str) {
+    let (mut program, locate, multi) = load_and_locate(path);
+    check_or_exit(&mut program, &locate, multi);
+    match crate::transpile::transpile(&program) {
+        Ok(src) => print!("{}", src),
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(65);
+        }
+    }
+}
+
 fn format_file(path: &str) {
     let unit = resolve_indent(std::path::Path::new(path));
     // M55: un template `.ray.html` se formatea con SU formateador (etiquetas en su línea +

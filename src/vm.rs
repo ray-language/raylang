@@ -966,7 +966,7 @@ impl<'a> Vm<'a> {
                 }
                 // --- Mapas Map<K,V> (M13.1) ---
                 OpCode::MapNew => {
-                    let h = self.cur.heap.allocate(Obj::Map(HashMap::new()));
+                    let h = self.cur.heap.allocate(Obj::Map(Default::default()));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::MapInsert => {
@@ -1001,6 +1001,17 @@ impl<'a> Vm<'a> {
                     };
                     let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
+                }
+                OpCode::MapGetOr => {
+                    // P0.2: get-or-default SIN alocar. Args apilados (map, key, default) → cima = default.
+                    let d = self.pop();
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    let v = match self.cur.heap.get(h) {
+                        Obj::Map(m) => m.get(&k).cloned().unwrap_or(d),
+                        _ => unreachable!("the checker guarantees a Map"),
+                    };
+                    self.push(v);
                 }
                 OpCode::MapRemove => {
                     // M13.1b: quita la clave; [] o [v]. El prelude → Option<V>.
@@ -3539,7 +3550,7 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
             Obj::Cell(inner) => to_value(heap, enums, inner),
             // M13.1: reconstruye el Map del intérprete (igual igualdad estructural → oráculo).
             Obj::Map(m) => {
-                let mut hm: HashMap<MapKey, Value> = HashMap::with_capacity(m.len());
+                let mut hm = crate::runtime::MapStore::with_capacity_and_hasher(m.len(), Default::default());
                 for (k, val) in m {
                     hm.insert(k.clone(), to_value(heap, enums, val));
                 }
@@ -3632,7 +3643,7 @@ fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handl
         }
         Obj::Map(m) => {
             let pairs: Vec<(MapKey, HeapValue)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let mut nm: HashMap<MapKey, HeapValue> = HashMap::with_capacity(pairs.len());
+            let mut nm = crate::gc::MapStore::with_capacity_and_hasher(pairs.len(), Default::default());
             for (k, val) in pairs {
                 let nv = transfer_value(src, dst, &val, remap);
                 nm.insert(k, nv); // las claves son primitivos (sin handles)

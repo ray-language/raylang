@@ -686,7 +686,7 @@ impl<'a> Interpreter<'a> {
             // M48.2: literal de Map `[k: v, …]` (`[:]` vacío) → un Map con los pares insertados. Las
             // claves y valores se evalúan en orden; una clave repetida gana la última (como `insert`).
             ExprKind::MapLit(pairs) => {
-                let mut m = HashMap::new();
+                let mut m = crate::runtime::MapStore::default();
                 for (k, v) in pairs {
                     let kv = self.eval_expr(k)?;
                     let vv = self.eval_expr(v)?;
@@ -890,7 +890,7 @@ impl<'a> Interpreter<'a> {
             if let ExprKind::Ident(tn) = &object.kind {
                 if crate::builtins::assoc_lookup(tn, name).is_some() {
                     if tn == "Map" && name == "new" {
-                        return Ok(Value::Map(Rc::new(RefCell::new(HashMap::new()))));
+                        return Ok(Value::Map(Rc::new(RefCell::new(crate::runtime::MapStore::default()))));
                     }
                     return Err(runtime_error(callee.line, callee.col,
                         "concurrency (spawn/channel/send/recv/join/scope/select) requires the VM; the interpreter is only the sequential oracle (do not use --interp)"));
@@ -1041,6 +1041,14 @@ impl<'a> Interpreter<'a> {
                     };
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
+                _ => unreachable!("the checker guarantees a Map"),
+            },
+            // P0.2: get-or-default SIN alocar (a diferencia de __map_get, que aloca [V]).
+            "__get_or" => match &values[0] {
+                Value::Map(rc) => match rc.borrow().get(&MapKey::from_value(&values[1])) {
+                    Some(v) => v.clone(),
+                    None => values[2].clone(),
+                },
                 _ => unreachable!("the checker guarantees a Map"),
             },
             // M13.1b: quita y devuelve [] o [v]; el prelude → Option<V>.

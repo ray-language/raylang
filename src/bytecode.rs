@@ -334,6 +334,10 @@ pub enum OpCode {
     /// Saca clave y mapa; empuja un arreglo `[V]` con **0 o 1** elementos (el valor asociado,
     /// o vacío). Primitivo `__map_get`; el prelude lo envuelve en `Option<V>`.
     MapGet,
+    /// Saca `default`, clave y mapa; empuja el valor asociado a la clave, o `default` si no está —
+    /// **sin alocar** (a diferencia de `MapGet`+`Option`+`unwrap_or`, que aloca el arreglo y el enum).
+    /// Primitivo `__get_or`; el prelude expone `get_or(m, k, default) -> V` (P0.2, perf).
+    MapGetOr,
     /// Saca clave y mapa; empuja un `bool`: si la clave está presente. Builtin `contains_key`.
     MapContainsKey,
     /// Saca clave y mapa; **quita** la clave (mutando el mapa) y empuja un arreglo `[V]` con **0 o

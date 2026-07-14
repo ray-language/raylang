@@ -2002,6 +2002,18 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != kt { return Err((Some(1), format!("__map_get: the Map key is {} but got {}", kt, a[1]))); }
         Ok(Type::Array(Box::new(vt)))
     } },
+    // __get_or(m, k, default) -> V (P0.2, perf): valor asociado a k, o `default` si no está. SIN alocar
+    // (opcode `MapGetOr`), a diferencia de `get(m, k).unwrap_or(d)`. El prelude expone `get_or`.
+    Builtin { name: "__get_or", opcode: OpCode::MapGetOr, check: |a| {
+        arity(a, 3, "__get_or", " (map, key, default)")?;
+        let (kt, vt) = match &a[0] {
+            Type::Map(k, v) => ((**k).clone(), (**v).clone()),
+            other => return Err((Some(0), format!("__get_or expects a Map as first argument, not {}", other))),
+        };
+        if a[1] != kt { return Err((Some(1), format!("__get_or: the Map key is {} but got {}", kt, a[1]))); }
+        if a[2] != vt { return Err((Some(2), format!("__get_or: the Map value is {} but got {}", vt, a[2]))); }
+        Ok(vt)
+    } },
     // __map_remove(m, k) -> [V] (M13.1b): quita k del mapa; [] si no estaba, [v] si sí. Prelude → Option.
     Builtin { name: "__map_remove", opcode: OpCode::MapRemove, check: |a| {
         arity(a, 2, "__map_remove", " (map, key)")?;

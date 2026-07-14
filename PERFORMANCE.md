@@ -61,8 +61,8 @@ esto toca la semántica; oráculo intacto.
 
 | # | Propuesta | Detalle | Gana |
 |---|---|---|---|
-| P0.1 | **aHash/FxHash en `Obj::Map`** | cambiar el hasher del `HashMap` interno (una línea + dep `ahash`). El oráculo no ve el orden (keys() ya ordena) | 2–5× el hashing |
-| P0.2 | **`get` sin alocar** | fusión en el checker (patrón-peephole, como UFCS): `m.get(k).unwrap_or(d)` → opcode `MapGetOr` (empuja `d` si no está; **cero allocs**). Ídem `m.contains_key` ya existe | mata 2 allocs/acceso |
+| P0.1 | **aHash en `Obj::Map`** ✅ **HECHA** (14 jul) | alias `MapStore` con `ahash::RandomState` en ambos motores (dep `ahash`, ya transitiva; runtime-rng → resistencia a hash-flooding intacta). **Medido**: neutra sobre el camino con-allocs (el hashing NO dominaba), pero **−4.5% aislada** sobre el camino sin allocs (get_or) — enmascarada por las allocs, aflora al quitarlas (crecerá con P0.3+). Se conserva | −4.5% (crece) |
+| P0.2 | **`get_or` sin alocar** ✅ **HECHA** (14 jul) | opcode `MapGetOr` + primitivo `__get_or` + método de prelude `get_or(m,k,d) -> V`: lookup único, **cero allocs** (vs `get(k).unwrap_or(d)`, que aloca el `[V]` + el `Option`). Es la forma idiomática justa (= `dict.get(k,0)` de Python / `Hash.new(0)` de Ruby). **Medido**: wordcount 1011→618 ms SipHash, **590 ms con aHash (−42% del baseline)** | mata 2 allocs/acceso |
 | P0.3 | **Upsert en 1 lookup** | el patrón contador `m.insert(k, m.get(k).unwrap_or(0)+1)` hace 2 lookups + 3 hashes → builtin `map_update`/entry-API (u opcode fusionado que detecte el patrón) | 2× en agregación |
 | P0.4 | **Interning de strings del split** | `split` produce las mismas palabras millones de veces; internarlas (tabla global `Rc<str>`/símbolos) → comparación por puntero, hash memoizado en la string | grande en parse+map |
 | P0.5 | **Hash memoizado** | guardar el hash junto a la string del heap (se calcula 1 vez) | compone con P0.1-4 |
@@ -162,7 +162,8 @@ editar-correr nativo importara — que para servicios no.
 | Hito | fibrec | loopsum | wordcount | jsonserialize | logparse |
 |---|---|---|---|---|---|
 | hoy | 12.5× | 8.3× | 9.7× | 2.9× | 4.9× |
-| post-P0 | ~11× | ~8× | **~3.5×** | ~2.5× | **~3×** |
+| **P0.1+P0.2 (medido 14 jul)** | — | — | **5.4×** | 2.8× | **3.5×** |
+| post-P0 (con P0.3+ interning) | ~11× | ~8× | **~3.5×** | ~2.5× | **~3×** |
 | post-P1 | ~6× | ~4× | ~2.5× | ~2× | ~2× |
 | post-P2.b (nativo) | **<1× (bate a node)** | **<1×** | **~1×** | **~1×** | **~1×** |
 

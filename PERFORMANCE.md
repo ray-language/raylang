@@ -409,12 +409,28 @@ y da salida byte-idéntica a la VM.
 
 **35/37 ejemplos** (añade `conversion_error`) — nativo ≡ VM byte a byte.
 
-**Cobertura tras 17 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · Option/Result/`?` (+ **From-conversion**) · closures/map/filter/fold · genéricos (fns + tipos) ·
+#### Fase 18 — operator-overloading + `impl Show` custom (14 jul)
+
+`a + b`/`a - b`/`a * b`/`-a` con `impl Add/Sub/Mul/Neg for Vec2`. Los **valores** ya salían bien: el
+checker baja el operador sobrecargado a una llamada al método (`Vec2#add`), que el transpilador ya emite
+(como cualquier impl de usuario). El bug real era el **`impl Show` CUSTOM**: `.show()` se mapeaba a
+`.ray_show()` (el render default auto-generado `Vec2 { x, y }`), ignorando el `impl Show for Vec2` del
+usuario (`(x, y)`). Fix (espejo de Eq): dejar de saltar la emisión de `show` (impl custom/derivado
+`Tipo#show` + prelude `int#show` = `to_string(self)`) y dejar de interceptar `.show()` EXPLÍCITO → fluye
+como llamada al impl / al diccionario del bound. **Sutileza semántica clave** (verificada contra la VM):
+`print(x)`/`to_string(x)` usan el **render default** (RayShow), NO el `impl Show`; solo `.show()`
+explícito usa el impl — así que `print`/`to_string` se dejan en `.ray_show()` y solo se cambia `.show()`.
+Los tipos `@derive(Show)` (cuyo `Tipo#show` derivado produce el mismo formato) siguen intactos; el impl
+custom de `Vec2` ahora se respeta. `operadores.ray` transpila y da salida byte-idéntica a la VM.
+
+**36/37 ejemplos** (añade `operadores`) — nativo ≡ VM byte a byte.
+
+**Cobertura tras 18 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · Option/Result/`?` (+ From-conversion) · closures/map/filter/fold · genéricos (fns + tipos) ·
 traits (estático + defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · `args()` ·
-`for` sobre Map · `@derive(Eq)` · const/char/cast · UFCS. **El transpilador cubre CASI TODO el lenguaje**
-con salida byte-idéntica a la VM (35/37 ejemplos). Restan solo 2, cada una una extensión acotada:
-operator-overloading, enteros con tamaño. Sin incógnitas de viabilidad.
+`for` sobre Map · `@derive(Eq)` · **operator-overloading + `impl Show` custom** · const/char/cast · UFCS.
+**El transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM (36/37 ejemplos). Resta
+solo 1: enteros con tamaño (`u8`/`u32`/`u64`). Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

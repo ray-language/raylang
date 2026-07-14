@@ -50,19 +50,21 @@ fn is_prelude_impl(name: &str) -> bool {
     }
     let key = name.split('#').next().unwrap_or("");
     let method = name.rsplit('#').next().unwrap_or("");
-    // Show/Ord (show/less) → manejados directo (ray_show, <): saltar en CUALQUIER tipo. `eq` NO se salta:
-    // se emite (impl derivado `Tipo#eq` + prelude `int#eq`), realizando el bound `T: Eq` por diccionarios.
-    if matches!(method, "show" | "less") {
+    // Ord (less) → manejado directo (`<`): saltar en CUALQUIER tipo. `eq`/`show` NO se saltan aquí: se
+    // emiten (impl derivado/custom `Tipo#eq`/`Tipo#show` + prelude `int#eq`/`int#show`), realizando el
+    // bound `T: Eq`/`T: Show` por diccionarios. `print`/`to_string` siguen usando RayShow (render default);
+    // solo `.eq()`/`.show()` EXPLÍCITOS llaman al impl (que puede ser custom, p. ej. `impl Show for Vec2`).
+    if method == "less" {
         return true;
     }
     // `Iter` (struct del protocolo de iterador del prelude) → saltar sus métodos.
     if key == "Iter" {
         return true;
     }
-    // `eq` se EMITE (realiza el bound `T: Eq` por diccionarios) para tipos de usuario y primitivos
-    // ESCALARES (`int#eq` = `self == other`); para contenedores ([], Map, Channel, Task, bytes, unit…)
-    // se salta: su clave no es un identificador Rust válido o su `impl Eq` no transpila.
-    if method == "eq" {
+    // `eq`/`show` se EMITEN (realizan el bound `T: Eq`/`T: Show` por diccionarios) para tipos de usuario y
+    // primitivos ESCALARES (`int#eq` = `self == other`, `int#show` = `to_string(self)`); para contenedores
+    // ([], Map, Channel, Task, bytes, unit…) se salta: clave no-identificador o impl no transpilable.
+    if matches!(method, "eq" | "show") {
         return matches!(
             key,
             "bytes" | "uint" | "u8" | "u32" | "u64" | "unit" | "[]" | "Map" | "Channel" | "Task"
@@ -78,7 +80,7 @@ fn is_prelude_impl(name: &str) -> bool {
         "len" | "push" | "reverse" | "contains" | "trim" | "split" | "replace" | "chars" | "starts_with"
             | "ends_with" | "to_upper" | "to_lower" | "substring" | "repeat" | "join" | "to_bytes"
             | "sub_bytes" | "char_code" | "to_string" | "insert" | "contains_key" | "keys" | "values"
-            | "get" | "get_or" | "remove" | "add_to" | "show" | "less" | "index_of" | "position" | "pop"
+            | "get" | "get_or" | "remove" | "add_to" | "less" | "index_of" | "position" | "pop"
     );
     builtin_key && prelude_method
 }
@@ -1297,13 +1299,9 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".unwrap()");
             }
-            // Métodos de Eq/Show/Ord del prelude (manglados `Type#show`) → operadores/RayShow nativos.
-            // El guard `name.contains('#')` evita capturar una función de USUARIO llamada `show`/`eq`/`less`.
-            "show" if name.contains('#') => {
-                out.push_str("Rc::<str>::from(");
-                self.emit_expr(out, eff[0])?;
-                out.push_str(".ray_show())");
-            }
+            // `.less()` (Ord) → `<` nativo. `.eq()`/`.show()` NO se interceptan: fluyen como llamada normal
+            // al impl (`Tipo#eq`/`Tipo#show`, que se emiten) o al diccionario del bound — así un `impl Show`
+            // CUSTOM (p. ej. `Vec2`) se respeta, mientras `print`/`to_string` siguen con el render default.
             "less" if name.contains('#') => {
                 out.push('(');
                 self.emit_expr(out, eff[0])?;
@@ -2051,6 +2049,22 @@ mod tests {
         assert!(rust.contains("Rc::<str>::from(__a)"), "{}", rust);
         // el arreglo se indexa/mide como cualquier `[string]` (borrow).
         assert!(rust.contains(".borrow().len() as i64"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_operator_overloading_y_show_custom() {
+        // `a + b` con `impl Add for Vec2` → llamada al método (`Vec2#add`); un `impl Show` CUSTOM se
+        // respeta en `.show()` (llama a `Vec2#show`), mientras `print(x)` usaría el render default (RayShow).
+        let rust = transpile_src(
+            "struct Vec2 { x: int, y: int }\n\
+             impl Add for Vec2 { fn add(self, o: Vec2) -> Vec2 { Vec2 { x: self.x + o.x, y: self.y + o.y } } }\n\
+             impl Show for Vec2 { fn show(self) -> string { \"(${self.x}, ${self.y})\" } }\n\
+             fn main() { let a = Vec2 { x: 1, y: 2 }; let b = Vec2 { x: 3, y: 4 }; print((a + b).show()); }",
+        );
+        assert!(rust.contains("Vec2_HH_add"), "operator+ → método: {}", rust); // suma vía impl Add
+        assert!(rust.contains("Vec2_HH_show"), "impl Show custom emitido y llamado: {}", rust);
+        // `.show()` NO debe mapearse a `.ray_show()` (eso daría el render default `Vec2 { x, y }`).
+        assert!(rust.contains("fn Vec2_HH_show"), "el impl Show se emite: {}", rust);
     }
 
     #[test]

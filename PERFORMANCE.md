@@ -157,6 +157,27 @@ un programa pequeño: **0.03 s** (el modelo dev=VM / deploy=nativo, como Rust). 
 y espectacular para el núcleo de cómputo. Confirma el veredicto de P0/P1: lo único que el HW cobra es el
 bucle de despacho, y P2.b lo **borra**.
 
+#### Fase 2 — strings (14 jul, arco P2.b en marcha)
+
+Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/
+retorno). El modelo de valores: escalares *unboxed*, heap en `Rc` (clon-al-leer = bump O(1), *sound* para
+la semántica de valor de raylang sobre la de movimiento de Rust). Entorno de tipos propio (params + `let`
+inferido) decide qué clonar. UFCS/métodos manglados (`__len`, `string#…`) se normalizan al método real.
+
+**Lección de codegen (medir-primero también aquí)**: la bajada NAÍF de strings (`Rc::from(format!())` por
+cada `+`, ~2N allocs por cadena) salió **0.7× — más LENTA que la VM** (mimalloc + opcodes de string son
+eficientes). El fix decisivo: **aplanar la cadena de concat en UN solo `format!`** (`"user"+to_string(i)+
+"-" → format!("user{}-", i)`, inlineando `to_string`) → 2 allocs por cadena en vez de ~2N. Resultado:
+
+| `strbuild` (300k cadenas) | naíf | **aplanado** |
+|---|---|---|
+| ray-native vs VM | 0.7× (más lento) | **2.4× más rápido** (32 vs 76 ms) |
+
+Un giro de 3.4× por el codegen. **Los strings van nativos y más rápidos que la VM** → P2.b sirve también
+al nicho de servicios, no solo al cómputo — PERO requiere lowering LISTO (folding, y a futuro move-analysis
+para evitar clones, SSO). El coste de P2.b completo está en esa optimización de codegen, no en la viabilidad.
+Siguiente: arreglos (`Rc<RefCell<Vec>>`) + `split`/`join` → transpilar `wordcount`/`jsonserialize` enteros.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

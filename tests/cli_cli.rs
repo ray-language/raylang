@@ -48,7 +48,7 @@ fn new_fails_si_el_target_existe() {
     assert_eq!(ray(&base, &["new", "dup"]).2, 0);
     let (_o, err, code) = ray(&base, &["new", "dup"]);
     assert_ne!(code, 0, "no must sobrescribir un directory existente");
-    assert!(err.contains("ya existe"), "{err}");
+    assert!(err.contains("already exists"), "{err}");
 }
 
 #[test]
@@ -104,7 +104,7 @@ fn help_y_version() {
     let cwd = std::env::temp_dir();
     let (out, _err, code) = ray(&cwd, &["help"]);
     assert_eq!(code, 0);
-    assert!(out.contains("Uso: ray") && out.contains("new") && out.contains("build"), "{out}");
+    assert!(out.contains("Usage: ray") && out.contains("new") && out.contains("build"), "{out}");
     let (out, _err, code) = ray(&cwd, &["version"]);
     assert_eq!(code, 0);
     assert!(out.contains("raylang 1."), "la versión del lenguaje\n{out}");
@@ -176,7 +176,7 @@ fn dependency_inalcanzable_fails_al_descargar() {
     );
     let (_out, err, code) = ray(&root, &["run"]);
     assert_eq!(code, 65, "one dependency inalcanzable abort\n{err}");
-    assert!(err.contains("geo") && err.contains("clonar"), "error claro de descarga\n{err}");
+    assert!(err.contains("geo") && err.contains("clone"), "error claro de descarga\n{err}");
 }
 
 #[test]

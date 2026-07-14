@@ -56,11 +56,11 @@ pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, Str
     // M51d: el nombre construye una ruta dentro del índice — validarlo (defensa en profundidad;
     // `deps::ensure` ya validó las deps, pero esta API también la llaman los comandos directamente).
     if !deps::valid_package_name(name) {
-        return Err(format!("name de package inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+        return Err(format!("invalid package name '{name}' (only letters, digits, '-' and '_')"));
     }
     let path = index_dir.join(format!("{name}.toml"));
     let source = std::fs::read_to_string(&path).map_err(|_| {
-        format!("el package '{name}' no está en el índice ({})", index_dir.display())
+        format!("package '{name}' is not in the index ({})", index_dir.display())
     })?;
     let mut entries: Vec<IndexEntry> = Vec::new();
     // Sección actual: (num, versión, git, hash, yanked, sig).
@@ -68,7 +68,7 @@ pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, Str
     let mut cur: Option<Cur> = None;
     let close = |cur: &mut Option<Cur>, out: &mut Vec<IndexEntry>| -> Result<(), String> {
         if let Some((num, version, git, hash, yanked, sig)) = cur.take() {
-            let git = git.ok_or_else(|| format!("versión '{num}' de '{name}' sin 'git' en el índice"))?;
+            let git = git.ok_or_else(|| format!("version '{num}' of '{name}' without 'git' in the index"))?;
             out.push(IndexEntry { version, num, git, hash, yanked, sig });
         }
         Ok(())
@@ -82,7 +82,7 @@ pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, Str
             close(&mut cur, &mut entries)?;
             let num = rest
                 .strip_suffix(']')
-                .ok_or_else(|| format!("{}:{}: header de versión sin ']'", path.display(), i + 1))?
+                .ok_or_else(|| format!("{}:{}: version header without ']'", path.display(), i + 1))?
                 .trim();
             let (version, _) = parse_partial(num)
                 .map_err(|e| format!("{}:{}: {e}", path.display(), i + 1))?;
@@ -91,14 +91,14 @@ pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, Str
         }
         let (key, value) = line
             .split_once('=')
-            .ok_or_else(|| format!("{}:{}: se esperaba 'clave = valor'", path.display(), i + 1))?;
+            .ok_or_else(|| format!("{}:{}: expected 'key = value'", path.display(), i + 1))?;
         let value = value
             .trim()
             .strip_prefix('"')
             .and_then(|v| v.strip_suffix('"'))
-            .ok_or_else(|| format!("{}:{}: el valor must ir between comillas", path.display(), i + 1))?;
+            .ok_or_else(|| format!("{}:{}: the value must be in quotes", path.display(), i + 1))?;
         let Some((_, _, git, hash, yanked, sig)) = cur.as_mut() else {
-            return Err(format!("{}:{}: clave outside de one sección [versión]", path.display(), i + 1));
+            return Err(format!("{}:{}: key outside a [version] section", path.display(), i + 1));
         };
         match key.trim() {
             "git" => *git = Some(value.to_string()),
@@ -110,7 +110,7 @@ pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, Str
     }
     close(&mut cur, &mut entries)?;
     if entries.is_empty() {
-        return Err(format!("el package '{name}' no has versiones en el índice"));
+        return Err(format!("package '{name}' has no versions in the index"));
     }
     Ok(entries)
 }
@@ -126,11 +126,11 @@ pub fn latest(index_dir: &Path, name: &str) -> Result<String, String> {
     versions.last().map(|e| e.num.clone()).ok_or_else(|| {
         if had_pre {
             format!(
-                "el package '{name}' solo has pre-releases publicadas; asks one explícita \
-                 (p. ej. 'ray add {name}@<X.Y.Z-pre>')"
+                "package '{name}' has only pre-releases published; request an explicit one \
+                 (e.g. 'ray add {name}@<X.Y.Z-pre>')"
             )
         } else {
-            format!("el package '{name}' no has versiones publicadas (todas retiradas)")
+            format!("package '{name}' has no published versions (all yanked)")
         }
     })
 }
@@ -167,10 +167,10 @@ pub fn resolve_pinned(
     versions.retain(|e| !e.yanked && req_parsed.matches(&e.version));
     versions.sort_by(|a, b| a.version.cmp(&b.version));
     let chosen = versions.last().ok_or_else(|| {
-        format!("ninguna versión de '{name}' satisface '{req}' en el índice")
+        format!("no version of '{name}' satisfies '{req}' in the index")
     })?;
     let spec = deps::parse_spec(&chosen.git).map_err(|e| {
-        format!("la versión '{}' de '{name}' has one spec git inválida en el índice: {e}", chosen.num)
+        format!("version '{}' of '{name}' has an invalid git spec in the index: {e}", chosen.num)
     })?;
     // M83c: si el paquete tiene dueño/firma, la entrada elegida debe verificar ANTES de
     // descargar nada (el atajo del lock de arriba ya se verificó en su primera resolución).
@@ -198,7 +198,7 @@ pub struct Owners {
 /// Lee el sidecar de dueños de `name`, si existe. `Ok(None)` = nombre sin reclamar.
 pub fn read_owners(index_dir: &Path, name: &str) -> Result<Option<Owners>, String> {
     if !deps::valid_package_name(name) {
-        return Err(format!("name de package inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+        return Err(format!("invalid package name '{name}' (only letters, digits, '-' and '_')"));
     }
     let path = index_dir.join(format!("{name}.owners.toml"));
     let Ok(source) = std::fs::read_to_string(&path) else {
@@ -213,7 +213,7 @@ pub fn read_owners(index_dir: &Path, name: &str) -> Result<Option<Owners>, Strin
         }
         let Some((key, value)) = line.split_once('=') else { continue };
         let Some(value) = value.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
-            return Err(format!("{}: el valor must ir between comillas", path.display()));
+            return Err(format!("{}: the value must be in quotes", path.display()));
         };
         match key.trim() {
             "owner" => owner = Some(value.to_string()),
@@ -222,7 +222,7 @@ pub fn read_owners(index_dir: &Path, name: &str) -> Result<Option<Owners>, Strin
         }
     }
     let pubkey = pubkey
-        .ok_or_else(|| format!("{}: falta 'pubkey' (sidecar de dueños malformado)", path.display()))?;
+        .ok_or_else(|| format!("{}: missing 'pubkey' (malformed owners sidecar)", path.display()))?;
     Ok(Some(Owners { owner: owner.unwrap_or_default(), pubkey }))
 }
 
@@ -230,16 +230,16 @@ pub fn read_owners(index_dir: &Path, name: &str) -> Result<Option<Owners>, Strin
 /// publicación firmada). Rechaza pisar una reclamación existente.
 pub fn write_owners(index_dir: &Path, name: &str, owners: &Owners) -> Result<(), String> {
     if read_owners(index_dir, name)?.is_some() {
-        return Err(format!("'{name}' ya has dueño registrado en el índice"));
+        return Err(format!("'{name}' already has a registered owner in the index"));
     }
     let path = index_dir.join(format!("{name}.owners.toml"));
     std::fs::create_dir_all(index_dir)
-        .map_err(|e| format!("no se pudo crear el índice '{}': {e}", index_dir.display()))?;
+        .map_err(|e| format!("could not create the index '{}': {e}", index_dir.display()))?;
     let s = format!(
-        "# dueño de '{name}' (M83b): reclamado en la first publicación firmada\nowner = \"{}\"\npubkey = \"{}\"\n",
+        "# owner of '{name}' (M83b): claimed on the first signed publication\nowner = \"{}\"\npubkey = \"{}\"\n",
         owners.owner, owners.pubkey
     );
-    std::fs::write(&path, s).map_err(|e| format!("no se pudo escribir '{}': {e}", path.display()))
+    std::fs::write(&path, s).map_err(|e| format!("could not write '{}': {e}", path.display()))
 }
 
 /// El MENSAJE que firma una publicación (M83c): liga nombre, versión y hash de contenido.
@@ -251,9 +251,9 @@ pub fn signing_message(name: &str, num: &str, hash: &str) -> String {
 pub fn decode_ed25519(s: &str, what: &str) -> Result<Vec<u8>, String> {
     let hex = s
         .strip_prefix("ed25519:")
-        .ok_or_else(|| format!("{what} no has el formato 'ed25519:<hex>'"))?;
+        .ok_or_else(|| format!("{what} does not have the format 'ed25519:<hex>'"))?;
     if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(format!("{what} no es hex válido"));
+        return Err(format!("{what} is not valid hex"));
     }
     Ok(hex
         .as_bytes()
@@ -272,37 +272,37 @@ pub fn check_signature(index_dir: &Path, name: &str, entry: &IndexEntry) -> Resu
     match (&entry.sig, owners) {
         (None, None) => Ok(()),
         (Some(_), None) => Err(format!(
-            "la versión '{}' de '{name}' está firmada pero el índice no registra dueño \
-             ('{name}.owners.toml'); índice inconsistente",
+            "version '{}' of '{name}' is signed but the index registers no owner \
+             ('{name}.owners.toml'); inconsistent index",
             entry.num
         )),
         (None, Some(_)) => {
             eprintln!(
-                "aviso: '{name}@{}' no está firmada pese a what '{name}' has dueño registrado",
+                "warning: '{name}@{}' is not signed even though '{name}' has a registered owner",
                 entry.num
             );
             Ok(())
         }
         (Some(sig), Some(o)) => {
             let hash = entry.hash.as_deref().ok_or_else(|| {
-                format!("la versión '{}' de '{name}' está firmada pero no public hash", entry.num)
+                format!("version '{}' of '{name}' is signed but publishes no hash", entry.num)
             })?;
             // M89.2: fail-closed HONESTO — un binario sin 'net-tls' no puede verificar la
             // firma; el error lo dice (en vez del engañoso "no verifica: ¿índice manipulado?").
             if !crate::builtins::net_tls_available() {
                 return Err(format!(
-                    "'{name}@{}' está firmado y este binary no can verificar firmas: {}",
+                    "'{name}@{}' is signed and this binary cannot verify signatures: {}",
                     entry.num,
                     crate::builtins::NET_TLS_UNAVAILABLE
                 ));
             }
-            let pk = decode_ed25519(&o.pubkey, &format!("la pubkey de '{name}'"))?;
-            let sg = decode_ed25519(sig, &format!("la signature de '{name}@{}'", entry.num))?;
+            let pk = decode_ed25519(&o.pubkey, &format!("the pubkey of '{name}'"))?;
+            let sg = decode_ed25519(sig, &format!("the signature of '{name}@{}'", entry.num))?;
             let msg = signing_message(name, &entry.num, hash);
             if !crate::builtins::ed25519_verify(&pk, msg.as_bytes(), &sg) {
                 return Err(format!(
-                    "la FIRMA de '{name}@{}' no verifies contra el dueño registrado \
-                     (¿índice manipulado?)",
+                    "the SIGNATURE of '{name}@{}' does not verify against the registered owner \
+                     (tampered index?)",
                     entry.num
                 ));
             }
@@ -316,12 +316,12 @@ pub fn check_signature(index_dir: &Path, name: &str, entry: &IndexEntry) -> Resu
 /// la sigue usando (no rompe builds existentes). Edición mínima línea a línea (preserva el resto).
 pub fn set_yanked(index_dir: &Path, name: &str, num: &str, yanked: bool) -> Result<(), String> {
     if !deps::valid_package_name(name) {
-        return Err(format!("name de package inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+        return Err(format!("invalid package name '{name}' (only letters, digits, '-' and '_')"));
     }
-    let (target, _) = parse_partial(num).map_err(|e| format!("versión inválida: {e}"))?;
+    let (target, _) = parse_partial(num).map_err(|e| format!("invalid version: {e}"))?;
     let path = index_dir.join(format!("{name}.toml"));
     let source = std::fs::read_to_string(&path)
-        .map_err(|_| format!("el package '{name}' no está en el índice ({})", index_dir.display()))?;
+        .map_err(|_| format!("package '{name}' is not in the index ({})", index_dir.display()))?;
     let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
     // Localiza la sección `[<versión>]` cuyo número parsea a `target`.
     let sec = lines.iter().position(|l| {
@@ -332,7 +332,7 @@ pub fn set_yanked(index_dir: &Path, name: &str, num: &str, yanked: bool) -> Resu
             .is_some_and(|(v, _)| v == target)
     });
     let Some(start) = sec else {
-        return Err(format!("la versión '{num}' de '{name}' no está en el índice"));
+        return Err(format!("version '{num}' of '{name}' is not in the index"));
     };
     let end = lines[start + 1..]
         .iter()
@@ -348,7 +348,7 @@ pub fn set_yanked(index_dir: &Path, name: &str, num: &str, yanked: bool) -> Resu
     if source.ends_with('\n') && !out.ends_with('\n') {
         out.push('\n');
     }
-    std::fs::write(&path, out).map_err(|e| format!("no se pudo escribir el índice de '{name}': {e}"))
+    std::fs::write(&path, out).map_err(|e| format!("could not write the index of '{name}': {e}"))
 }
 
 /// Añade una versión al archivo de índice de `name` (`<index_dir>/<name>.toml`), creándolo si no
@@ -364,27 +364,27 @@ pub fn append_version(
     sig: Option<&str>,
 ) -> Result<(), String> {
     if !deps::valid_package_name(name) {
-        return Err(format!("name de package inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+        return Err(format!("invalid package name '{name}' (only letters, digits, '-' and '_')"));
     }
-    let (target, _) = parse_partial(num).map_err(|e| format!("versión a publish inválida: {e}"))?;
+    let (target, _) = parse_partial(num).map_err(|e| format!("invalid version to publish: {e}"))?;
     let path = index_dir.join(format!("{name}.toml"));
     if path.exists() {
         // Inmutabilidad: comparar por versión parseada (`1.2` y `1.2.0` son la misma).
         if read_package(index_dir, name)?.iter().any(|e| e.version == target) {
             return Err(format!(
-                "la versión '{num}' de '{name}' ya está publicada (las versiones son inmutables); \
-                 sube el número de versión"
+                "version '{num}' of '{name}' is already published (versions are immutable); \
+                 bump the version number"
             ));
         }
     } else {
         std::fs::create_dir_all(index_dir)
-            .map_err(|e| format!("no se pudo crear el índice '{}': {e}", index_dir.display()))?;
+            .map_err(|e| format!("could not create the index '{}': {e}", index_dir.display()))?;
     }
     let mut s = if path.exists() {
         std::fs::read_to_string(&path)
-            .map_err(|e| format!("no se pudo leer el índice de '{name}': {e}"))?
+            .map_err(|e| format!("could not read the index of '{name}': {e}"))?
     } else {
-        format!("# índice de {name}\n")
+        format!("# index of {name}\n")
     };
     if !s.ends_with('\n') {
         s.push('\n');
@@ -396,7 +396,7 @@ pub fn append_version(
     if let Some(sg) = sig {
         s.push_str(&format!("sig = \"{sg}\"\n")); // M83c
     }
-    std::fs::write(&path, s).map_err(|e| format!("no se pudo escribir el índice de '{name}': {e}"))
+    std::fs::write(&path, s).map_err(|e| format!("could not write the index of '{name}': {e}"))
 }
 
 #[cfg(test)]
@@ -432,9 +432,9 @@ mod tests {
         // latest ignora la yanked 2.0.0.
         assert_eq!(latest(&dir, "foo").unwrap(), "1.3.0");
         // paquete inexistente.
-        assert!(resolve(&dir, "bar", "*").unwrap_err().contains("no está en el índice"));
+        assert!(resolve(&dir, "bar", "*").unwrap_err().contains("is not in the index"));
         // ninguna casa.
-        assert!(resolve(&dir, "foo", "^3.0").unwrap_err().contains("ninguna versión"));
+        assert!(resolve(&dir, "foo", "^3.0").unwrap_err().contains("no version"));
     }
 
     #[test]
@@ -449,6 +449,6 @@ mod tests {
         assert_eq!(latest(&dir, "foo").unwrap(), "1.1.0");
         // Re-publicar la misma versión (incluso escrita distinto) → error de inmutabilidad.
         let e = append_version(&dir, "foo", "1.0.0", "git+https://ej/foo@other", None, None).unwrap_err();
-        assert!(e.contains("ya está publicada"), "{e}");
+        assert!(e.contains("is already published"), "{e}");
     }
 }

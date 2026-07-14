@@ -44,13 +44,13 @@ fn dev_reinicia_ante_cambios() {
 
     // 1) El programa corre al arrancar y, al terminar solo, el supervisor queda a la espera.
     esperar_contenido(&out_path, "v1", 10);
-    esperar_contenido(&out_path, "esperando cambios", 10);
+    esperar_contenido(&out_path, "waiting for changes", 10);
 
     // 2) Editar el fuente → el watcher lo ve y relanza con el código NUEVO.
     std::thread::sleep(Duration::from_millis(50)); // mtime estrictamente posterior
     std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
     let output = esperar_contenido(&out_path, "v2", 10);
-    assert!(output.contains("reiniciando"), "anuncia el reinicio:\n{output}");
+    assert!(output.contains("restarting"), "anuncia el reinicio:\n{output}");
 
     let _ = dev.kill();
     let _ = dev.wait();

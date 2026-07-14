@@ -33,8 +33,8 @@ use crate::{checker, diagnostic, lexer, parser};
 
 /// Arranca el bucle interactivo leyendo de la entrada estándar.
 pub fn run() {
-    println!("raylang REPL — escribe one expresión, un let/var, o one definición (fn/struct/enum).");
-    println!("  :help  ayuda     :quit  salir");
+    println!("raylang REPL — type an expression, a let/var, or a definition (fn/struct/enum).");
+    println!("  :help  help      :quit  quit");
     let mut session = Session::new();
     let stdin = io::stdin();
     let mut handle = stdin.lock();
@@ -49,7 +49,7 @@ pub fn run() {
             } // EOF (Ctrl-D)
             Ok(_) => {}
             Err(e) => {
-                eprintln!("error de entry: {}", e);
+                eprintln!("input error: {}", e);
                 break;
             }
         }
@@ -66,7 +66,7 @@ pub fn run() {
             _ => {}
         }
         match session.eval(line) {
-            Ok(Outcome::Defined(name)) => println!("definida '{}'", name),
+            Ok(Outcome::Defined(name)) => println!("defined '{}'", name),
             // El valor (si lo hubo) ya lo imprimió el intérprete vía `print`.
             Ok(_) => {}
             Err(e) => eprintln!("{}", e),
@@ -75,12 +75,12 @@ pub fn run() {
 }
 
 fn print_help() {
-    println!("Entradas posibles:");
-    println!("  - one expresión:        1 + 2          -> imprime  3");
-    println!("  - un let/var:           let x = 3      -> imprime  3");
-    println!("  - one asignación:       x = 4          (requiere 'var')");
-    println!("  - one definición:       fn f(n: int) -> int {{ n + 1 }}");
-    println!("El estado persiste between líneas. ':quit' para salir.");
+    println!("Possible inputs:");
+    println!("  - an expression:         1 + 2          -> prints  3");
+    println!("  - a let/var:             let x = 3      -> prints  3");
+    println!("  - an assignment:         x = 4          (requires 'var')");
+    println!("  - a definition:          fn f(n: int) -> int {{ n + 1 }}");
+    println!("State persists between lines. ':quit' to exit.");
 }
 
 /// Una definición de nivel superior acumulada (fn/struct/enum), por nombre y fuente.
@@ -220,7 +220,7 @@ impl Session {
     fn classify(&self, line: &str) -> Result<Entry, String> {
         if starts_with_word(line, "fn") || starts_with_word(line, "struct") || starts_with_word(line, "enum") {
             let prog = parse_src(line)?;
-            let name = def_name(&prog).ok_or_else(|| "no se reconoció la definición".to_string())?;
+            let name = def_name(&prog).ok_or_else(|| "the definition was not recognized".to_string())?;
             return Ok(Entry::Def { name, src: line.to_string() });
         }
         // Resto: envolver en una función y mirar el cuerpo. Se intenta tal cual y, si no
@@ -248,7 +248,7 @@ impl Session {
                     Ok(Entry::Assign { show, src: ensure_semi(line) })
                 }
                 StmtKind::Expr(_) => Ok(Entry::Expr { src: strip_semi(line) }),
-                StmtKind::Return { .. } => Err("'return' no has sentido en el REPL".to_string()),
+                StmtKind::Return { .. } => Err("'return' makes no sense in the REPL".to_string()),
             }
         } else {
             Ok(Entry::Expr { src: strip_semi(line) })

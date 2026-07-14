@@ -71,7 +71,7 @@ fn publish(base: &Path, name: &str, see: &str, mod_ray: &str) -> std::path::Path
 /// Escribe el archivo de índice `<index>/<nombre>.toml` con las versiones dadas `(ver, repo)`.
 fn write_index(index: &Path, name: &str, versiones: &[(&str, &Path)]) {
     std::fs::create_dir_all(index).unwrap();
-    let mut s = format!("# índice de {name}\n");
+    let mut s = format!("# index of {name}\n");
     for (see, repo) in versiones {
         s.push_str(&format!(
             "\n[{see}]\ngit = \"git+file://{}@v{see}\"\n",
@@ -126,7 +126,7 @@ fn ray_add_escribe_el_manifest_y_descarga() {
     // `ray add util` (sin versión) → escribe `util = "^0.3.1"` y descarga.
     let (out, err, code) = ray_idx(&app, &index, &["add", "util"]);
     assert_eq!(code, 0, "add OK\n{err}");
-    assert!(out.contains("añadida"), "{out}");
+    assert!(out.contains("added"), "{out}");
     let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
     assert!(toml.contains("util = \"^0.3.1\""), "el manifest quedó actualizado:\n{toml}");
     assert!(app.join(".ray-deps/util/mod.ray").is_file(), "descargó el package");
@@ -182,7 +182,7 @@ fn package_nonexistent_da_error_claro() {
     let app = app(&base, "fn main() -> int { 0 }\n");
     let (_o, err, code) = ray_idx(&app, &index, &["add", "noexiste"]);
     assert_eq!(code, 65, "fails al añadir un package what no está en el índice");
-    assert!(err.contains("no está en el índice"), "mensaje claro:\n{err}");
+    assert!(err.contains("is not in the index"), "mensaje claro:\n{err}");
     // Y no tocó el manifiesto.
     let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
     assert!(!toml.contains("noexiste"), "no escribió la dep fallida:\n{toml}");
@@ -223,14 +223,14 @@ fn ray_publish_añade_al_index_y_un_consumidor_lo_resolves() {
     // `ray publish` desde el paquete: deriva git+<origin>@v1.0.0, hashea y añade la entrada al índice.
     let (out, err, code) = ray_idx(&work, &index, &["publish"]);
     assert_eq!(code, 0, "publish OK\n{err}");
-    assert!(out.contains("publicado mate 1.0.0"), "{out}");
+    assert!(out.contains("published mate 1.0.0"), "{out}");
     let entry = std::fs::read_to_string(index.join("mate.toml")).unwrap();
     assert!(entry.contains("[1.0.0]") && entry.contains("@v1.0.0") && entry.contains("hash ="), "entry en el índice:\n{entry}");
 
     // Republicar la MISMA versión → error de inmutabilidad, sin duplicar en el índice.
     let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
     assert_eq!(code, 65, "republicar la misma versión fails");
-    assert!(err.contains("ya está publicada"), "{err}");
+    assert!(err.contains("is already published"), "{err}");
 
     // Un consumidor la resuelve por nombre desde el índice y la ejecuta (clona del origin al tag).
     let app = app(&base, "from mate import triple;\nfn main() -> int { print(triple(14)); 0 }\n");
@@ -262,7 +262,7 @@ fn ray_publish_sin_tag_fails_claro() {
     git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c"]);
     let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
     assert_eq!(code, 65, "sin tag fails");
-    assert!(err.contains("no existe el tag 'v2.0.0'"), "mensaje claro:\n{err}");
+    assert!(err.contains("the tag 'v2.0.0' does not exist"), "mensaje claro:\n{err}");
 }
 
 #[test]
@@ -371,7 +371,7 @@ fn spec_por_name_sin_index_configurado_avisa() {
     let out = Command::new(BIN).args(["run"]).current_dir(&app).env_remove("RAY_INDEX").output().unwrap();
     assert_eq!(out.status.code().unwrap_or(-1), 65);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no hay índice") || err.contains("índice"), "avisa de la falta de índice:\n{err}");
+    assert!(err.contains("no index") || err.contains("index"), "avisa de la falta de índice:\n{err}");
 }
 
 // ── M51d: endurecimiento (nombres, hash del índice, publish del tag, índice re-cacheado) ──
@@ -386,7 +386,7 @@ fn name_de_package_invalido_se_rejects() {
     // `ray add` con un nombre que escaparía de la caché → rechazado antes de tocar nada.
     let (_o, err, code) = ray_idx(&app, &index, &["add", "../evil"]);
     assert_eq!(code, 64, "add con name inválido fails\n{err}");
-    assert!(err.contains("name de package inválido"), "mensaje claro:\n{err}");
+    assert!(err.contains("invalid package name"), "mensaje claro:\n{err}");
 
     // Una dep DIRECTA con nombre inválido en ray.toml → error al resolver (no se usa como ruta).
     std::fs::write(
@@ -396,7 +396,7 @@ fn name_de_package_invalido_se_rejects() {
     .unwrap();
     let (_o, err, code) = ray_idx(&app, &index, &["run"]);
     assert_ne!(code, 0, "dep directa con name inválido fails");
-    assert!(err.contains("name de package inválido"), "mensaje claro:\n{err}");
+    assert!(err.contains("invalid package name"), "mensaje claro:\n{err}");
 
     // La valla importante: una dep TRANSITIVA (el ray.toml de un paquete descargado, NO confiable)
     // con nombre malicioso → error, sin clonar ni borrar fuera de `.ray-deps/`.
@@ -418,7 +418,7 @@ fn name_de_package_invalido_se_rejects() {
     let (_o, err, code) = ray_idx(&app, &index, &["run"]);
     assert_ne!(code, 0, "transitiva con name inválido fails");
     assert!(
-        err.contains("name de package inválido") && err.contains("declarado por la dependency 'geo'"),
+        err.contains("invalid package name") && err.contains("declared by dependency 'geo'"),
         "señala al culpable:\n{err}"
     );
 }
@@ -436,7 +436,7 @@ fn publish_hashea_el_tag_no_el_working_tree() {
     std::fs::write(work.join("borrador.txt"), "no publicado").unwrap();
     let (out, err, code) = ray_idx(&work, &index, &["publish"]);
     assert_eq!(code, 0, "publish con working tree sucio OK (hashea el tag)\n{err}");
-    assert!(out.contains("publicado mate 1.0.0"), "{out}");
+    assert!(out.contains("published mate 1.0.0"), "{out}");
 
     // El consumidor resuelve, descarga el tag y la verificación del hash del índice PASA
     // (con el hash del working tree sucio, fallaría).
@@ -479,7 +479,7 @@ fn el_hash_del_index_se_verifies() {
     .unwrap();
     let (_o, err, code) = ray_idx(&app, &index, &["run"]);
     assert_ne!(code, 0, "el hash del índice manipulado corta la resolución");
-    assert!(err.contains("hash publicado en el índice"), "mensaje claro:\n{err}");
+    assert!(err.contains("hash published in the index"), "mensaje claro:\n{err}");
 }
 
 #[test]
@@ -534,7 +534,7 @@ fn publish_runs_el_check_semantico() {
     let repo_spec = format!("git+file://{}@v1.0.0", roto.display());
     let (_o, err, code) = ray_idx(&roto, &index, &["publish", "--repo", &repo_spec]);
     assert_eq!(code, 65, "publish de un package what no chequea fails\n{err}");
-    assert!(err.contains("no supera el check semántico"), "mensaje claro:\n{err}");
+    assert!(err.contains("does not pass the semantic check"), "mensaje claro:\n{err}");
     assert!(!index.join("roto.toml").exists(), "no se publicó nada");
 
     // (b) Un paquete CON dependencia por nombre: el check la resuelve (índice) y pasa.
@@ -555,7 +555,7 @@ fn publish_runs_el_check_semantico() {
     let repo_spec = format!("git+file://{}@v1.0.0", calc.display());
     let (out, err, code) = ray_idx(&calc, &index, &["publish", "--repo", &repo_spec]);
     assert_eq!(code, 0, "publish con dep por name chequea y pasa\n{err}");
-    assert!(out.contains("publicado calc 1.0.0"), "{out}");
+    assert!(out.contains("published calc 1.0.0"), "{out}");
 }
 
 #[test]
@@ -623,7 +623,7 @@ fn transitiva_con_index_propio_avisa() {
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
     assert_eq!(code, 0, "runs pese al aviso\n{err}");
     assert!(out.contains("7"), "{out}");
-    assert!(err.contains("declara su propio índice"), "aviso de dependency confusion:\n{err}");
+    assert!(err.contains("declares its own index"), "aviso de dependency confusion:\n{err}");
 }
 
 // ── M51f: ray remove + ray search ──
@@ -649,7 +649,7 @@ fn ray_remove_elimina_dep_lock_y_cache() {
     // remove: quita del manifiesto, reescribe el lock y borra la caché (nadie más usa util).
     let (out, err, code) = ray_idx(&app, &index, &["remove", "util"]);
     assert_eq!(code, 0, "remove OK\n{err}");
-    assert!(out.contains("eliminada"), "{out}");
+    assert!(out.contains("removed"), "{out}");
     let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
     assert!(!toml.contains("util"), "outside del manifest:\n{toml}");
     let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
@@ -663,7 +663,7 @@ fn ray_remove_elimina_dep_lock_y_cache() {
     // remove de algo no declarado → error claro.
     let (_o, err, code) = ray_idx(&app, &index, &["remove", "util"]);
     assert_eq!(code, 65, "remove de one dep nonexistent fails");
-    assert!(err.contains("no está declarada"), "{err}");
+    assert!(err.contains("is not declared"), "{err}");
 }
 
 #[test]
@@ -692,7 +692,7 @@ fn ray_search_list_el_index() {
     // Sin resultados → mensaje, código 0 (no es un error).
     let (out, _e, code) = ray_idx(&app, &index, &["search", "zzz"]);
     assert_eq!(code, 0);
-    assert!(out.contains("sin resultados"), "{out}");
+    assert!(out.contains("no results"), "{out}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -731,7 +731,7 @@ fn publish_firmado_reclama_verifies_y_audita() {
 
     let (out, err, code) = ray_signed(&work, &index, &key, &["publish", "--sign"]);
     assert_eq!(code, 0, "publish --sign OK\n{err}");
-    assert!(out.contains("reclamado en el índice"), "first publicación reclama\n{out}");
+    assert!(out.contains("claimed in the index"), "first publicación reclama\n{out}");
     assert!(out.contains("signature: ed25519"), "{out}");
     let entry = std::fs::read_to_string(index.join("mate.toml")).unwrap();
     assert!(entry.contains("sig = \"ed25519:"), "la entry lleva la signature\n{entry}");
@@ -752,7 +752,7 @@ fn publish_firmado_reclama_verifies_y_audita() {
     // La auditoría del índice (para el CI del repo del índice) está verde.
     let (out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
     assert_eq!(code, 0, "index-verify OK\n{err}");
-    assert!(out.contains("1 signed y verificadas"), "{out}");
+    assert!(out.contains("1 signed and verified"), "{out}");
 }
 
 /// Una firma MANIPULADA (o que no casa con el dueño) rompe la resolución y la auditoría.
@@ -791,7 +791,7 @@ fn signature_manipulada_breaks_resolucion_y_auditoria() {
     .unwrap();
     let (_out, err, code) = ray_idx(&app, &index, &["run"]);
     assert_ne!(code, 0, "la signature inválida must romper la resolución");
-    assert!(err.contains("FIRMA") && err.contains("no verifies"), "{err}");
+    assert!(err.contains("SIGNATURE") && err.contains("does not verify"), "{err}");
 
     let (_out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
     assert_ne!(code, 0, "index-verify must fallar\n{err}");
@@ -823,7 +823,7 @@ fn other_clave_no_can_publish_un_name_reclamado() {
     git(&work, &["tag", "v1.1.0"]);
     let (_out, err, code) = ray_signed(&work, &index, &key2, &["publish", "--sign"]);
     assert_ne!(code, 0, "other clave no public un name ajeno");
-    assert!(err.contains("tu clave NO coincide"), "{err}");
+    assert!(err.contains("your key does NOT match"), "{err}");
 }
 
 // ── Mirrors de paquetes (M90.1) ──────────────────────────────────────────────────────
@@ -893,5 +893,5 @@ fn mirror_caido_cae_a_la_url_original() {
     let (out, err, code) = ray_idx(&app, &index, &["run"]);
     assert_eq!(code, 0, "run OK cayendo al origen\n{err}");
     assert!(out.contains("120"), "{out}");
-    assert!(err.contains("aviso: el mirror no sirvió 'geo'"), "avisa del fallback:\n{err}");
+    assert!(err.contains("warning: the mirror did not serve 'geo'"), "avisa del fallback:\n{err}");
 }

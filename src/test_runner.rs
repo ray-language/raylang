@@ -63,8 +63,8 @@ pub fn run(src: &str, filter: Option<&str>) -> i32 {
 
     if tests.is_empty() {
         match filter {
-            Some(p) => println!("no hay tests (@test) what contengan '{}'", p),
-            None => println!("no hay tests (@test) en el file"),
+            Some(p) => println!("no tests (@test) containing '{}'", p),
+            None => println!("no tests (@test) in the file"),
         }
         return 0;
     }
@@ -80,13 +80,13 @@ pub fn run(src: &str, filter: Option<&str>) -> i32 {
         }
     }
 
-    println!("corriendo {} prueba(s)\n", tests.len());
+    println!("running {} test(s)\n", tests.len());
     let mut failures = 0;
     for (name, kind) in &tests {
         match run_one(&pristine, name, kind) {
             Ok(()) => println!("ok    {}", name),
             Err(reason) => {
-                println!("FALLO {}", name);
+                println!("FAIL  {}", name);
                 println!("        {}", reason);
                 failures += 1;
             }
@@ -95,9 +95,9 @@ pub fn run(src: &str, filter: Option<&str>) -> i32 {
 
     println!();
     if failures == 0 {
-        println!("resultado: {} prueba(s), todas pasaron ✓", tests.len());
+        println!("result: {} test(s), all passed ✓", tests.len());
     } else {
-        println!("resultado: {} de {} prueba(s) fallaron ✗", failures, tests.len());
+        println!("result: {} of {} test(s) failed ✗", failures, tests.len());
     }
     failures & 0xFF
 }
@@ -116,13 +116,13 @@ fn run_one(pristine: &crate::ast::Program, name: &str, kind: &Kind) -> Result<()
     // El chequeo no debería fallar (el chequeo global ya pasó), pero también **baja** el programa
     // (resuelve enums, UFCS, dicts…) antes de ejecutar, así que es obligatorio.
     if let Err(e) = checker::check(&mut prog) {
-        return Err(format!("error de compilación: {}", e));
+        return Err(format!("compilation error: {}", e));
     }
     // M35: las pruebas corren sobre la VM (el motor de producto) — mismo veredicto que el
     // intérprete, y ahora una prueba puede usar concurrencia (spawn/canales).
     match crate::run_on_vm(&prog) {
         Ok(Value::Int(0)) => Ok(()),
-        Ok(Value::Int(_)) => Err("la prueba devolvió false".into()),
+        Ok(Value::Int(_)) => Err("the test returned false".into()),
         Ok(_) => Ok(()),
         Err(e) => Err(e.msg),
     }
@@ -133,8 +133,8 @@ fn run_one(pristine: &crate::ast::Program, name: &str, kind: &Kind) -> Result<()
 /// vivan en el otro programa.
 fn swap_main(mut program: crate::ast::Program, main_src: &str) -> crate::ast::Program {
     let main_fn = {
-        let toks = lexer::lex(main_src).unwrap_or_else(|e| crate::ice!("el main sintetizado no lexea: {e}"));
-        let mut prog = parser::parse(toks).unwrap_or_else(|e| crate::ice!("el main sintetizado no parses: {e}"));
+        let toks = lexer::lex(main_src).unwrap_or_else(|e| crate::ice!("the synthesized main does not lex: {e}"));
+        let mut prog = parser::parse(toks).unwrap_or_else(|e| crate::ice!("the synthesized main does not parse: {e}"));
         prog.functions.remove(0)
     };
     program.functions.retain(|f| f.name != "main");

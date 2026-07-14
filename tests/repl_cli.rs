@@ -39,7 +39,7 @@ fn imprime_values_y_persiste_estado() {
     assert!(out.contains("> 10"), "let x = 10 imprime 10\n{out}");
     assert!(out.contains("> 100"), "x*x -> 100\n{out}");
     assert!(out.contains("[1, 2, 3]"), "literal de array\n{out}");
-    assert!(out.contains("definida 'double'"), "definición\n{out}");
+    assert!(out.contains("defined 'double'"), "definición\n{out}");
     assert!(out.contains("> 20"), "double(x) -> 20\n{out}");
 }
 
@@ -54,7 +54,7 @@ fn ufcs_pipelines_y_structs_en_el_repl() {
          5 |> double |> double\n\
          :quit\n",
     );
-    assert!(out.contains("definida 'Punto'"), "{out}");
+    assert!(out.contains("defined 'Punto'"), "{out}");
     assert!(out.contains("> 13"), "p.x + p.y -> 13\n{out}");
     assert!(out.contains("> 10"), "UFCS 5.double() -> 10\n{out}");
     assert!(out.contains("> 20"), "pipeline 5|>double|>double -> 20\n{out}");

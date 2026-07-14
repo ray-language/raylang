@@ -38,7 +38,7 @@ fn main() -> int { 0 }
     let (out, code) = run_tests(src, "ray_test_mix.ray");
     assert!(out.contains("ok    square_ok"), "informa las what pasan\n{out}");
     assert!(out.contains("ok    sum_ok"), "{out}");
-    assert!(out.contains("FALLO fails"), "informa la what fails\n{out}");
+    assert!(out.contains("FAIL  fails"), "informa la what fails\n{out}");
     assert_eq!(code, 1, "el código de output es el número de fallos");
 }
 
@@ -46,14 +46,14 @@ fn main() -> int { 0 }
 fn todas_pasan_code_cero() {
     let src = "@test fn a() -> bool { true }\n@test fn b() -> bool { !false }\nfn main() -> int { 0 }\n";
     let (out, code) = run_tests(src, "ray_test_ok.ray");
-    assert!(out.contains("todas pasaron"), "{out}");
+    assert!(out.contains("all passed"), "{out}");
     assert_eq!(code, 0);
 }
 
 #[test]
 fn sin_tests_lo_indica() {
     let (out, code) = run_tests("fn main() -> int { 0 }\n", "ray_test_none.ray");
-    assert!(out.contains("no hay tests"), "{out}");
+    assert!(out.contains("no tests"), "{out}");
     assert_eq!(code, 0);
 }
 
@@ -67,7 +67,7 @@ fn main() -> int { 0 }
 "#;
     let (out, code) = run_tests(src, "ray_test_unit.ray");
     assert!(out.contains("ok    assert_ok"), "la unit what pasa\n{out}");
-    assert!(out.contains("FALLO assert_fails"), "la unit what fails\n{out}");
+    assert!(out.contains("FAIL  assert_fails"), "la unit what fails\n{out}");
     assert!(out.contains("assert_eq falló: 4 != 5"), "shows el mensaje del assert\n{out}");
     assert_eq!(code, 1);
 }
@@ -81,7 +81,7 @@ fn panic_no_abort_la_bateria() {
 fn main() -> int { 0 }
 "#;
     let (out, code) = run_tests(src, "ray_test_panic.ray");
-    assert!(out.contains("FALLO first"), "{out}");
+    assert!(out.contains("FAIL  first"), "{out}");
     assert!(out.contains("boom"), "shows el mensaje del panic\n{out}");
     assert!(out.contains("ok    second"), "la second runs pese al panic de la first\n{out}");
     assert_eq!(code, 1);

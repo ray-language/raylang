@@ -3041,7 +3041,7 @@ fn result_message(id: Json, result: Json) -> Json {
 fn method_error(id: Json, method: &str) -> Json {
     let error = obj(vec![
         ("code", num(-32601)),
-        ("message", Json::Str(format!("método no soportado: {method}"))),
+        ("message", Json::Str(format!("unsupported method: {method}"))),
     ]);
     obj(vec![("jsonrpc", text("2.0")), ("id", id), ("error", error)])
 }
@@ -3440,12 +3440,12 @@ mod json {
             loop {
                 self.skip_ws();
                 if self.peek() != Some('"') {
-                    return Err("se esperaba one clave de objeto".into());
+                    return Err("expected an object key".into());
                 }
                 let key = self.string()?;
                 self.skip_ws();
                 if self.bump() != Some(':') {
-                    return Err("se esperaba ':' en un objeto".into());
+                    return Err("expected ':' in an object".into());
                 }
                 let val = self.value()?;
                 pairs.push((key, val));
@@ -3453,7 +3453,7 @@ mod json {
                 match self.bump() {
                     Some(',') => continue,
                     Some('}') => break,
-                    other => return Err(format!("se esperaba ',' o '}}', vino {other:?}")),
+                    other => return Err(format!("expected ',' or '}}', got {other:?}")),
                 }
             }
             Ok(Json::Obj(pairs))
@@ -3473,7 +3473,7 @@ mod json {
                 match self.bump() {
                     Some(',') => continue,
                     Some(']') => break,
-                    other => return Err(format!("se esperaba ',' o ']', vino {other:?}")),
+                    other => return Err(format!("expected ',' or ']', got {other:?}")),
                 }
             }
             Ok(Json::Arr(items))
@@ -3484,7 +3484,7 @@ mod json {
             let mut s = String::new();
             loop {
                 match self.bump() {
-                    None => return Err("string sin terminar".into()),
+                    None => return Err("unterminated string".into()),
                     Some('"') => break,
                     Some('\\') => self.escape(&mut s)?,
                     Some(c) => s.push(c),
@@ -3520,7 +3520,7 @@ mod json {
                         s.push(ch);
                     }
                 }
-                other => return Err(format!("escape inválido: \\{other:?}")),
+                other => return Err(format!("invalid escape: \\{other:?}")),
             }
             Ok(())
         }
@@ -3530,7 +3530,7 @@ mod json {
             let mut v = 0u32;
             for _ in 0..4 {
                 let c = self.bump().ok_or("escape \\u incompleto")?;
-                let d = c.to_digit(16).ok_or("dígito hexadecimal inválido")?;
+                let d = c.to_digit(16).ok_or("invalid hex digit")?;
                 v = v * 16 + d;
             }
             Ok(v)
@@ -3550,7 +3550,7 @@ mod json {
             let s: String = self.chars[start..self.i].iter().collect();
             s.parse::<f64>()
                 .map(Json::Num)
-                .map_err(|_| format!("número inválido: {s}"))
+                .map_err(|_| format!("invalid number: {s}"))
         }
 
         fn boolean(&mut self) -> Result<Json, String> {
@@ -3559,7 +3559,7 @@ mod json {
             } else if self.lit("false") {
                 Ok(Json::Bool(false))
             } else {
-                Err("literal booleano inválido".into())
+                Err("invalid boolean literal".into())
             }
         }
 
@@ -3567,7 +3567,7 @@ mod json {
             if self.lit("null") {
                 Ok(Json::Null)
             } else {
-                Err("literal null inválido".into())
+                Err("invalid null literal".into())
             }
         }
 

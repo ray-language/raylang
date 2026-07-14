@@ -72,7 +72,7 @@ fn fetch_clona_la_dependency_y_run_la_uses() {
     // `ray fetch` clona el repo al tag v1.0 dentro de .ray-deps/geo/.
     let (out, err, code) = ray(&app, &["fetch"]);
     assert_eq!(code, 0, "fetch OK\n{err}");
-    assert!(out.contains("descargada") || out.contains("al día"), "{out}");
+    assert!(out.contains("downloaded") || out.contains("up to date"), "{out}");
     assert!(app.join(".ray-deps/geo/mod.ray").is_file(), "la cápsula del package quedó en la caché");
 
     // `ray run` la usa (sin re-clonar, ya está cacheada).
@@ -82,7 +82,7 @@ fn fetch_clona_la_dependency_y_run_la_uses() {
 
     // fetch de nuevo: ya está al día (idempotente).
     let (out, _e, _c) = ray(&app, &["fetch"]);
-    assert!(out.contains("al día"), "segundo fetch no re-descarga\n{out}");
+    assert!(out.contains("up to date"), "segundo fetch no re-descarga\n{out}");
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn run_auto_descarga_las_dependencies_faltantes() {
     );
     // Sin `fetch` previo: `run` descarga lo que falta (estilo cargo) y luego ejecuta.
     let (out, err, code) = ray(&app, &["run"]);
-    assert!(err.contains("descargando geo"), "avisa de la descarga automática\n{err}");
+    assert!(err.contains("downloading geo"), "avisa de la descarga automática\n{err}");
     assert!(out.contains("42"), "y ejecuta con la dependency\n{out}");
     assert_eq!(code, 0);
 }
@@ -118,7 +118,7 @@ fn ref_nonexistent_fails_y_deja_la_cache_limpia() {
 
     let (_o, err, code) = ray(&app, &["fetch"]);
     assert_eq!(code, 65, "one ref nonexistent abort\n{err}");
-    assert!(err.contains("checkout") && err.contains("v9.9"), "{err}");
+    assert!(err.contains("check out") && err.contains("v9.9"), "{err}");
     // El clon a medio hacer no se queda en la caché.
     assert!(!app.join(".ray-deps/geo").exists(), "la caché queda limpia after el failure");
 }
@@ -166,7 +166,7 @@ fn la_verificacion_detecta_manipulacion() {
     // La próxima resolución detecta que el hash no coincide con el lock → aborta (supply-chain).
     let (_o, err, code) = ray(&app, &["run"]);
     assert_eq!(code, 65, "one dependency manipulada abort\n{err}");
-    assert!(err.contains("ray.lock") && err.contains("contenido cambió"), "{err}");
+    assert!(err.contains("ray.lock") && err.contains("content changed"), "{err}");
 }
 
 // ── M39c-3: dependencias transitivas ──────────────────────────────────────────────────
@@ -210,7 +210,7 @@ fn resolves_dependencies_transitivas() {
     // fetch trae geo Y su transitiva mathx.
     let (out, err, code) = ray(&app, &["fetch"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains("descargada"), "{out}");
+    assert!(out.contains("downloaded"), "{out}");
     assert!(app.join(".ray-deps/geo/mod.ray").is_file(), "geo en la caché");
     assert!(app.join(".ray-deps/mathx/mod.ray").is_file(), "la transitiva mathx también");
 

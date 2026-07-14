@@ -150,7 +150,7 @@ fn tilde_upper(v: &Version, prec: u8) -> Version {
 pub(crate) fn parse_partial(s: &str) -> Result<(Version, u8), String> {
     let (core, pre) = match s.split_once('-') {
         Some((c, p)) if !p.trim().is_empty() => (c, Some(p.trim().to_string())),
-        Some(_) => return Err(format!("requisito de versión inválido: '{s}' (pre-release vacía)")),
+        Some(_) => return Err(format!("invalid version requirement: '{s}' (empty pre-release)")),
         None => (s, None),
     };
     let mut it = core.split('.');
@@ -160,7 +160,7 @@ pub(crate) fn parse_partial(s: &str) -> Result<(Version, u8), String> {
         match it.next() {
             Some(part) => {
                 *slot = part.trim().parse::<u64>().map_err(|_| {
-                    format!("requisito de versión inválido: '{s}' (se esperaba X.Y.Z)")
+                    format!("invalid version requirement: '{s}' (expected X.Y.Z)")
                 })?;
                 prec += 1;
             }
@@ -168,14 +168,14 @@ pub(crate) fn parse_partial(s: &str) -> Result<(Version, u8), String> {
         }
     }
     if prec == 0 {
-        return Err(format!("requisito de versión vacío: '{s}'"));
+        return Err(format!("empty version requirement: '{s}'"));
     }
     if it.next().is_some() {
-        return Err(format!("requisito de versión con demasiados componentes: '{s}'"));
+        return Err(format!("version requirement with too many components: '{s}'"));
     }
     if pre.is_some() && prec != 3 {
         return Err(format!(
-            "requisito de versión inválido: '{s}' (one pre-release exige el triple complete X.Y.Z-pre)"
+            "invalid version requirement: '{s}' (a pre-release requires the full triple X.Y.Z-pre)"
         ));
     }
     Ok((Version { major: nums[0], minor: nums[1], patch: nums[2], pre }, prec))

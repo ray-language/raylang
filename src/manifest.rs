@@ -68,7 +68,7 @@ impl Manifest {
         };
         let root = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let source = std::fs::read_to_string(&path)
-            .map_err(|e| format!("no se pudo leer '{}': {e}", path.display()))?;
+            .map_err(|e| format!("could not read '{}': {e}", path.display()))?;
         parse(&source, root).map(Some)
     }
 
@@ -105,19 +105,19 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         if let Some(rest) = line.strip_prefix('[') {
             let name = rest
                 .strip_suffix(']')
-                .ok_or_else(|| err(num, "header de sección sin ']'"))?;
+                .ok_or_else(|| err(num, "section header without ']'"))?;
             section = name.trim().to_string();
             continue;
         }
         // Par `clave = valor`.
         let (key, value) = line
             .split_once('=')
-            .ok_or_else(|| err(num, "se esperaba 'clave = valor' o '[seccion]'"))?;
+            .ok_or_else(|| err(num, "expected 'key = value' or '[section]'"))?;
         let key = key.trim();
         let value_raw = value.trim();
         // La mayoría de valores son cadenas `"..."`; `[fmt] indent_size` admite un entero sin comillas.
         let as_string = || unquote_string(value_raw)
-            .ok_or_else(|| err(num, "el valor must ir between comillas dobles"));
+            .ok_or_else(|| err(num, "the value must be in double quotes"));
         match section.as_str() {
             "package" => match key {
                 "name" => name = Some(as_string()?),
@@ -140,14 +140,14 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "mirror" => registry_mirror = Some(as_string()?),
                 _ => {} // otras claves del registro se ignoran por ahora (extensibilidad)
             },
-            "" => return Err(err(num, "clave outside de toda sección (falta '[package]')")),
+            "" => return Err(err(num, "key outside any section (missing '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
     }
 
     Ok(Manifest {
-        name: name.ok_or("ray.toml: falta 'name' en [package]")?,
-        version: version.ok_or("ray.toml: falta 'version' en [package]")?,
+        name: name.ok_or("ray.toml: missing 'name' in [package]")?,
+        version: version.ok_or("ray.toml: missing 'version' in [package]")?,
         entry: entry.unwrap_or_else(|| "src/main.ray".to_string()),
         dependencies,
         root,
@@ -308,9 +308,9 @@ util = \"git+https://ejemplo/util@v2.1\"
 
     #[test]
     fn errors_claros() {
-        assert!(parse_src("name = \"x\"\n").unwrap_err().contains("outside de toda sección"));
-        assert!(parse_src("[package]\nname = x\n").unwrap_err().contains("comillas"));
-        assert!(parse_src("[package]\nname = \"x\"\n").unwrap_err().contains("falta 'version'"));
-        assert!(parse_src("[package\n").unwrap_err().contains("sin ']'"));
+        assert!(parse_src("name = \"x\"\n").unwrap_err().contains("outside any section"));
+        assert!(parse_src("[package]\nname = x\n").unwrap_err().contains("quotes"));
+        assert!(parse_src("[package]\nname = \"x\"\n").unwrap_err().contains("missing 'version'"));
+        assert!(parse_src("[package\n").unwrap_err().contains("without ']'"));
     }
 }

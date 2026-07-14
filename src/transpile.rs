@@ -36,7 +36,9 @@ fn mangle(name: &str) -> String {
     if name == "self" {
         return "__self".to_string(); // `self` es palabra reservada de Rust fuera de un método
     }
-    name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_")
+    // `$` lo usan los temporales sintéticos del checker (p. ej. el bind del `?` con From-conversion,
+    // `$to`/`$te`) → no es identificador Rust válido.
+    name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_").replace('$', "_D_")
 }
 
 /// ¿Es un método de un impl del PRELUDE sobre un tipo builtin (`[]#len`, `string#trim`, `int#show`)?
@@ -943,11 +945,13 @@ impl Transpiler {
                 self.emit_pattern(out, &arm.pattern, &scrut_ty, &mut binds)?;
             }
             out.push_str(" => {\n");
+            // Los bindings se emiten manglados (pueden ser temps `$…` del checker); `declare` usa el nombre
+            // crudo (el que llevan los `Ident` del AST) → los usos, que también manglan, casan.
             if let Some(x) = &whole_binding {
-                writeln!(out, "let {} = {}.clone();", x, temp).unwrap();
+                writeln!(out, "let {} = {}.clone();", mangle(x), temp).unwrap();
             }
             for (b, bt) in &binds {
-                writeln!(out, "let {} = {}.clone();", b, b).unwrap();
+                writeln!(out, "let {} = {}.clone();", mangle(b), mangle(b)).unwrap();
                 self.declare(b, bt.clone());
             }
             self.emit_expr(out, &arm.body)?;
@@ -971,7 +975,7 @@ impl Transpiler {
         match &pat.kind {
             PatternKind::Wildcard => out.push('_'),
             PatternKind::Binding(x) => {
-                out.push_str(x);
+                out.push_str(&mangle(x)); // el bind puede ser un temp `$…` del checker (`?` From-conv)
                 binds.push((x.clone(), expected.clone()));
             }
             PatternKind::Variant { enum_name, variant, subpatterns } => {
@@ -2047,6 +2051,21 @@ mod tests {
         assert!(rust.contains("Rc::<str>::from(__a)"), "{}", rust);
         // el arreglo se indexa/mide como cualquier `[string]` (borrow).
         assert!(rust.contains(".borrow().len() as i64"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_from_conversion() {
+        // `?` con From-conversion: el checker baja a un match con temps `$to`/`$te` y una llamada a la
+        // conversión `AppError#from#string`. Verificamos que los `$` se manglan y la conversión se emite.
+        let rust = transpile_src(
+            "enum AppError { Lectura(string), Vacio }\n\
+             impl From<string> for AppError { fn convert(o: string) -> AppError { AppError.Lectura(o) } }\n\
+             fn leer(ok: bool) -> Result<int, string> { if (ok) { Result.Ok(1) } else { Result.Err(\"x\") } }\n\
+             fn cargar(ok: bool) -> Result<int, AppError> { let v = leer(ok)?; Result.Ok(v) }\n\
+             fn main() -> int { match (cargar(true)) { Result.Ok(v) => v, Result.Err(_) => 0 } }",
+        );
+        assert!(rust.contains("AppError_HH_from_HH_string"), "{}", rust); // la conversión se emite
+        assert!(!rust.contains('$'), "los temps $ deben manglarse: {}", rust);
     }
 
     #[test]

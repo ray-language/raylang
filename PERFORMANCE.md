@@ -396,12 +396,25 @@ siguen directos (RayShow / `<`). `anotaciones.ray` (`@derive(Eq, Show)` sobre Co
 
 **34/37 ejemplos** (añade `anotaciones`) — nativo ≡ VM byte a byte.
 
-**Cobertura tras 16 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (estático +
-defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · `args()` · `for` sobre Map ·
-**`@derive(Eq)`** · const/char/cast · UFCS. **El transpilador cubre CASI TODO el lenguaje** con salida
-byte-idéntica a la VM (34/37 ejemplos). Restan solo 3, cada una una extensión acotada:
-operator-overloading, `From`-conversion, enteros con tamaño. Sin incógnitas de viabilidad.
+#### Fase 17 — `From`-conversion en `?` (14 jul)
+
+El `?` que **convierte el error** vía `impl From<E1> for E2` (`fn convert`). El checker ya baja `leer()?`
+—cuando el error de la función difiere del devuelto— a un `match` que en el brazo `Err` llama a la
+conversión manglada `AppError#from#string`, con **temporales sintéticos `$to`/`$te`** como bindings. El
+transpilador ya emite la función de conversión (es un `impl` de usuario, no se salta) y baja el `match`;
+solo faltaba que el `$` (que el checker usa para temps y no es identificador Rust válido) se **manglara**
+a `_D_`. Dos ajustes: `mangle` reemplaza `$`→`_D_`, y `emit_match`/`emit_pattern` aplican `mangle` en los
+**sitios de binding** (antes crudos; los usos ya manglaban → ahora casan). `conversion_error.ray` transpila
+y da salida byte-idéntica a la VM.
+
+**35/37 ejemplos** (añade `conversion_error`) — nativo ≡ VM byte a byte.
+
+**Cobertura tras 17 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · Option/Result/`?` (+ **From-conversion**) · closures/map/filter/fold · genéricos (fns + tipos) ·
+traits (estático + defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · `args()` ·
+`for` sobre Map · `@derive(Eq)` · const/char/cast · UFCS. **El transpilador cubre CASI TODO el lenguaje**
+con salida byte-idéntica a la VM (35/37 ejemplos). Restan solo 2, cada una una extensión acotada:
+operator-overloading, enteros con tamaño. Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

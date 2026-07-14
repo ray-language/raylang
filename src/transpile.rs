@@ -29,6 +29,48 @@ struct FnSig {
     tparams: Vec<String>,
 }
 
+/// Convierte un nombre de raylang en un identificador Rust válido: los métodos de trait bajados por el
+/// checker llevan `#` (`Punto#show`) y los módulos `::` (`m::f`), ilegales en Rust. Identidad para los
+/// nombres normales. Los traits son ERASURE (M9): los métodos son funciones ordinarias tras el bajado.
+fn mangle(name: &str) -> String {
+    if name == "self" {
+        return "__self".to_string(); // `self` es palabra reservada de Rust fuera de un método
+    }
+    name.replace('#', "_HH_").replace("::", "_CC_")
+}
+
+/// ¿Es un método de un impl del PRELUDE sobre un tipo builtin (`[]#len`, `string#trim`, `int#show`)?
+/// = clave de tipo builtin Y método del prelude. Su método lo maneja el transpilador directamente → se
+/// salta. Un impl de USUARIO sobre un builtin (`int#valor`) NO se salta (método no-prelude → se emite).
+fn is_prelude_impl(name: &str) -> bool {
+    if !name.contains('#') {
+        return false;
+    }
+    let key = name.split('#').next().unwrap_or("");
+    let method = name.rsplit('#').next().unwrap_or("");
+    // Eq/Show/Ord (eq/show/less) → manejados directo (==, ray_show, <): saltar en CUALQUIER tipo.
+    if matches!(method, "eq" | "show" | "less") {
+        return true;
+    }
+    // `Iter` (struct del protocolo de iterador del prelude) → saltar sus métodos.
+    if key == "Iter" {
+        return true;
+    }
+    let builtin_key = matches!(
+        key,
+        "int" | "float" | "bool" | "char" | "string" | "bytes" | "uint" | "u8" | "u32" | "u64"
+            | "unit" | "[]" | "Map" | "Channel" | "Task"
+    );
+    let prelude_method = matches!(
+        method,
+        "len" | "push" | "reverse" | "contains" | "trim" | "split" | "replace" | "chars" | "starts_with"
+            | "ends_with" | "to_upper" | "to_lower" | "substring" | "repeat" | "join" | "to_bytes"
+            | "sub_bytes" | "char_code" | "to_string" | "insert" | "contains_key" | "keys" | "values"
+            | "get" | "get_or" | "remove" | "add_to" | "eq" | "show" | "less" | "index_of" | "position" | "pop"
+    );
+    builtin_key && prelude_method
+}
+
 /// Resuelve el `callee` de una llamada a `(nombre, receptor)`. UFCS `obj.m(args)` llega como callee
 /// `Field{object, name}` (el checker no lo baja para builtins) ≡ `m(obj, args)`: el receptor va primero.
 fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
@@ -93,7 +135,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
-        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || is_handled_builtin(&f.name) {
+        if f.name.starts_with("__") || is_handled_builtin(&f.name) || is_prelude_impl(&f.name) {
             continue;
         }
         funcs.insert(f.name.clone(), FnSig { params: f.params.iter().map(|p| p.ty.clone()).collect(), ret: f.return_type.clone(), tparams: f.type_params.clone() });
@@ -145,11 +187,29 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     out.push_str("    Rc::new(std::cell::RefCell::new(ks))\n}\n");
     out.push_str("fn __ray_values<K: Ord + Clone + std::hash::Hash + Eq, V: Clone>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<V>>> {\n");
     out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");
-    out.push_str("    let vs: Vec<V> = ks.iter().map(|k| b[k].clone()).collect(); Rc::new(std::cell::RefCell::new(vs))\n}\n\n");
+    out.push_str("    let vs: Vec<V> = ks.iter().map(|k| b[k].clone()).collect(); Rc::new(std::cell::RefCell::new(vs))\n}\n");
+    // RayShow: el `Show` de raylang como trait propio (Display no sirve: los structs son Rc<RefCell<..>>,
+    // y RefCell no es Display; además un bound genérico `T: Display` fallaría). Impl para todo tipo; los
+    // structs/enums de usuario reciben su impl generado (recursivo).
+    out.push_str("trait RayShow { fn ray_show(&self) -> String; }\n");
+    for (ty, body) in [
+        ("i64", "self.to_string()"),
+        ("f64", "self.to_string()"),
+        ("bool", "self.to_string()"),
+        ("char", "self.to_string()"),
+        ("()", "\"()\".to_string()"),
+        ("Rc<str>", "self.to_string()"),
+    ] {
+        writeln!(out, "impl RayShow for {} {{ fn ray_show(&self) -> String {{ {} }} }}", ty, body).unwrap();
+    }
+    out.push_str("impl<T: RayShow> RayShow for Rc<std::cell::RefCell<Vec<T>>> { fn ray_show(&self) -> String { format!(\"[{}]\", self.borrow().iter().map(|__e| __e.ray_show()).collect::<Vec<_>>().join(\", \")) } }\n");
+    out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__v) => format!(\"Option.Some({})\", __v.ray_show()), None => \"Option.None\".to_string() } } }\n");
+    out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__v) => format!(\"Result.Ok({})\", __v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n\n");
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
     for s in &prog.structs {
+        if s.name == "Iter" { continue; } // struct del protocolo de iterador del prelude
         t.tparams = s.type_params.iter().cloned().collect();
         writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", s.name, generic_decl(&s.type_params)).unwrap();
         for (fname, fty) in &s.fields {
@@ -176,7 +236,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     }
     t.tparams.clear();
     // impls de Display (= el Show de raylang): struct `Name { f: v, … }`, enum `Name.Variant(payload)`.
-    t.emit_display_impls(&mut out, prog)?;
+    t.emit_rayshow_impls(&mut out, prog)?;
     // Constantes de nivel superior → funciones `fn NAME() -> T { <literal> }`.
     for c in &prog.consts {
         write!(out, "fn {}() -> {} {{ ", c.name, rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
@@ -188,10 +248,10 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     let mut main_ret_int = false;
     let mut main_seen = false;
     for f in &prog.functions {
-        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || is_handled_builtin(&f.name) {
+        if f.name.starts_with("__") || is_handled_builtin(&f.name) || is_prelude_impl(&f.name) {
             continue;
         }
-        let rust_name = if f.name == "main" { "ray_main".to_string() } else { f.name.clone() };
+        let rust_name = if f.name == "main" { "ray_main".to_string() } else { mangle(&f.name) };
         let mut fbuf = String::new();
         match t.emit_function(&mut fbuf, &rust_name, f) {
             Ok(()) => {
@@ -229,17 +289,11 @@ impl Transpiler {
         self.tparams = f.type_params.iter().cloned().collect();
         // Genéricos de Rust con bound `Clone` (todo valor genérico se clona al leer) + `Display` (por si
         // se imprime/`to_string`). rustc los monomorfiza → nativo. (Los bounds de raylang → fase futura.)
-        let generics = if f.type_params.is_empty() {
-            String::new()
-        } else {
-            let ps: Vec<String> =
-                f.type_params.iter().map(|tp| format!("{}: Clone + std::fmt::Display", tp)).collect();
-            format!("<{}>", ps.join(", "))
-        };
+        let generics = generic_decl(&f.type_params);
         self.scopes.push(HashMap::new());
         let mut params = Vec::new();
         for p in &f.params {
-            params.push(format!("mut {}: {}", p.name, rust_ty(&p.ty, &self.enums, &self.tparams)?));
+            params.push(format!("mut {}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?));
             self.declare(&p.name, p.ty.clone());
         }
         write!(
@@ -441,17 +495,17 @@ impl Transpiler {
                 if let Some(ty) = self.lookup(name) {
                     // Variable local: clonar al leer los valores de heap (Rc → bump barato); escalares Copy.
                     let heap = is_heap(ty);
-                    out.push_str(name);
+                    out.push_str(&mangle(name));
                     if heap {
                         out.push_str(".clone()");
                     }
                 } else if self.consts.contains_key(name) {
-                    write!(out, "{}()", name).unwrap(); // constante → llamada NAME()
+                    write!(out, "{}()", mangle(name)).unwrap(); // constante → llamada NAME()
                 } else if self.funcs.contains_key(name) {
                     // Función usada como VALOR → Rc::new(fn) (coerciona a Rc<dyn Fn> por el contexto).
-                    write!(out, "Rc::new({})", name).unwrap();
+                    write!(out, "Rc::new({})", mangle(name)).unwrap();
                 } else {
-                    out.push_str(name);
+                    out.push_str(&mangle(name));
                 }
             }
             ExprKind::Unary { op, expr } => {
@@ -622,50 +676,48 @@ impl Transpiler {
 
     /// Emite `impl Display` para cada struct/enum (= el `Show` de raylang): struct → `Name { f: v, … }`,
     /// enum → `Name.Variant(payload)` / `Name.Variant`. Recursivo (un campo/payload struct se `borrow`ea).
-    fn emit_display_impls(&self, out: &mut String, prog: &Program) -> Result<(), String> {
-        // Display de tipos genéricos → diferido (necesita `where T: Display`); se salta.
+    /// Genera `impl RayShow` para cada struct/enum de usuario (recursivo; genérico-consciente con
+    /// `where` `A: RayShow`). struct → `Name { f: v, … }`; enum → `Name.Variant(payload)` / `Name.Variant`.
+    fn emit_rayshow_impls(&self, out: &mut String, prog: &Program) -> Result<(), String> {
         for s in &prog.structs {
-            if !s.type_params.is_empty() {
-                continue;
-            }
-            let mut fmt = format!("{} {{{{ ", s.name); // "Name { "
+            if s.name == "Iter" { continue; }
+            let gens = generic_decl(&s.type_params);
+            let sfx = type_args(&s.type_params);
+            let mut fmt = format!("{} {{{{ ", s.name);
             let mut args = String::new();
-            for (i, (fname, fty)) in s.fields.iter().enumerate() {
+            for (i, (fname, _)) in s.fields.iter().enumerate() {
                 if i > 0 {
                     fmt.push_str(", ");
                 }
                 write!(fmt, "{}: {{}}", fname).unwrap();
-                write!(args, ", {}", self.show_expr(fty, &format!("self.{}", fname))).unwrap();
+                write!(args, ", __b.{}.ray_show()", fname).unwrap();
             }
-            fmt.push_str(" }}"); // " }"
-            writeln!(
-                out,
-                "impl std::fmt::Display for {} {{ fn fmt(&self, __f: &mut std::fmt::Formatter) -> std::fmt::Result {{ write!(__f, \"{}\"{}) }} }}",
-                s.name, fmt, args
-            )
-            .unwrap();
+            fmt.push_str(" }}");
+            writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __b = self.borrow(); format!(\"{}\"{}) }} }}", gens, s.name, sfx, fmt, args).unwrap();
         }
         for e in &prog.enums {
-            if !e.type_params.is_empty() {
+            if e.name == "Option" || e.name == "Result" {
                 continue;
             }
-            writeln!(out, "impl std::fmt::Display for {} {{ fn fmt(&self, __f: &mut std::fmt::Formatter) -> std::fmt::Result {{ match self {{", e.name).unwrap();
+            let gens = generic_decl(&e.type_params);
+            let sfx = type_args(&e.type_params);
+            writeln!(out, "impl{} RayShow for Rc<{}{}> {{ fn ray_show(&self) -> String {{ match &**self {{", gens, e.name, sfx).unwrap();
             for v in &e.variants {
                 if v.payload.is_empty() {
-                    writeln!(out, "{}::{} => write!(__f, \"{}.{}\"),", e.name, v.name, e.name, v.name).unwrap();
+                    writeln!(out, "{}::{} => \"{}.{}\".to_string(),", e.name, v.name, e.name, v.name).unwrap();
                 } else {
                     let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__p{}", i)).collect();
                     let mut fmt = format!("{}.{}(", e.name, v.name);
                     let mut args = String::new();
-                    for (i, pty) in v.payload.iter().enumerate() {
+                    for (i, _) in v.payload.iter().enumerate() {
                         if i > 0 {
                             fmt.push_str(", ");
                         }
                         fmt.push_str("{}");
-                        write!(args, ", {}", self.show_expr(pty, &binds[i])).unwrap();
+                        write!(args, ", {}.ray_show()", binds[i]).unwrap();
                     }
                     fmt.push(')');
-                    writeln!(out, "{}::{}({}) => write!(__f, \"{}\"{}),", e.name, v.name, binds.join(", "), fmt, args).unwrap();
+                    writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", e.name, v.name, binds.join(", "), fmt, args).unwrap();
                 }
             }
             out.push_str("} } }\n");
@@ -673,19 +725,6 @@ impl Transpiler {
         Ok(())
     }
 
-    /// Expresión Rust que produce el `String` de mostrar un valor (= el `Show` de raylang). Recursiva
-    /// para arreglos: `[e0, e1, …]` con cada elemento mostrado según su tipo estático (soporta anidados).
-    fn show_expr(&self, ty: &Type, access: &str) -> String {
-        match normalize_type(ty) {
-            Type::Array(elem) => format!(
-                "format!(\"[{{}}]\", {}.borrow().iter().map(|__e| {}).collect::<Vec<_>>().join(\", \"))",
-                access,
-                self.show_expr(&elem, "__e")
-            ),
-            Type::Struct(n, _) if !self.enums.contains(&n) => format!("(&*{}.borrow()).to_string()", access),
-            _ => format!("{}.to_string()", access), // escalar / string / enum (Display)
-        }
-    }
 
     /// Baja un `match` sobre un enum. El escrutinio (`Rc<E>`) se liga a un temporal y se matchea sobre
     /// `&*temp` (matchea `&E`). Los bindings del patrón quedan como `&campo`; al inicio de cada brazo se
@@ -870,35 +909,20 @@ impl Transpiler {
         }
         match method {
             "print" => {
-                let ty = normalize_type(&self.type_of(eff[0])?);
-                match &ty {
-                    // Arreglo: `[e0, e1, …]` (recursivo para anidados) vía show_expr.
-                    Type::Array(_) => {
-                        let mut xb = String::new();
-                        self.emit_expr(&mut xb, eff[0])?;
-                        write!(out, "println!(\"{{}}\", {})", self.show_expr(&ty, &xb)).unwrap();
-                    }
-                    // Struct: `&*x.borrow()` (RefCell no es Display).
-                    Type::Struct(n, _) if !self.enums.contains(n) => {
-                        out.push_str("println!(\"{}\", &*(");
-                        self.emit_expr(out, eff[0])?;
-                        out.push_str(").borrow())");
-                    }
-                    // Función como valor: raylang la muestra como `<fn>` (no printa el closure).
-                    Type::Fn(_, _) => out.push_str("println!(\"<fn>\")"),
-                    // Escalar/string/enum: Display directo.
-                    _ => {
-                        out.push_str("println!(\"{}\", ");
-                        self.emit_expr(out, eff[0])?;
-                        out.push(')');
-                    }
+                // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos).
+                if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
+                    out.push_str("println!(\"<fn>\")"); // una función se muestra como <fn>
+                } else {
+                    out.push_str("println!(\"{}\", ");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(".ray_show())");
                 }
             }
-            // to_string(x) → Rc<str> (int/float/bool/char/string; usa el Display de Rust).
+            // to_string(x) → Rc<str>. Vía show_expr (maneja struct→borrow, arreglo→[…], escalar/enum).
             "to_string" => {
-                out.push_str("Rc::<str>::from(format!(\"{}\", ");
+                out.push_str("Rc::<str>::from(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str("))");
+                out.push_str(".ray_show())");
             }
             // len(x) → i64. String: nº de octetos; arreglo: nº de elementos (vía borrow()).
             "len" => {
@@ -1021,6 +1045,27 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".unwrap()");
             }
+            // Métodos de Eq/Show/Ord del prelude (manglados `Type#show`) → operadores/RayShow nativos.
+            // El guard `name.contains('#')` evita capturar una función de USUARIO llamada `show`/`eq`/`less`.
+            "show" if name.contains('#') => {
+                out.push_str("Rc::<str>::from(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".ray_show())");
+            }
+            "eq" if name.contains('#') => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(" == ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "less" if name.contains('#') => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(" < ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             "panic" => {
                 out.push_str("panic!(\"{}\", ");
                 self.emit_expr(out, eff[0])?;
@@ -1070,7 +1115,7 @@ impl Transpiler {
                 if !self.funcs.contains_key(name) && !is_closure {
                     return Err(format!("spike: builtin/función '{}' no soportada", name));
                 }
-                out.push_str(name);
+                out.push_str(&mangle(name));
                 out.push('(');
                 for (i, a) in eff.iter().enumerate() {
                     if i > 0 {
@@ -1120,6 +1165,8 @@ impl Transpiler {
                 let recv0 = recv.or_else(|| args.first());
                 match method {
                     "to_string" | "join" => Type::String,
+                    "show" if n.contains('#') => Type::String,
+                    "eq" | "less" if n.contains('#') => Type::Bool,
                     "len" => Type::Int,
                     "parse_int" => opt_of(Type::Int),
                     "parse_float" => opt_of(Type::Float),
@@ -1361,14 +1408,28 @@ fn enum_subst(
     }
 }
 
-/// Declaración de genéricos de Rust `<A: Clone + Display, …>` para una lista de params de tipo (o "").
+/// Declaración de genéricos de Rust `<A: Clone + RayShow, …>` (fn/struct/enum: `Clone` para el clon-al-
+/// leer, `RayShow` para mostrar/`to_string`). rustc los monomorfiza → nativo.
 fn generic_decl(tparams: &[String]) -> String {
+    generic_bound(tparams, "Clone + RayShow")
+}
+
+/// `<A: bound, B: bound>` para una lista de params de tipo (o "" si vacía).
+fn generic_bound(tparams: &[String], bound: &str) -> String {
     if tparams.is_empty() {
         String::new()
     } else {
-        let ps: Vec<String> =
-            tparams.iter().map(|t| format!("{}: Clone + std::fmt::Display", t)).collect();
+        let ps: Vec<String> = tparams.iter().map(|t| format!("{}: {}", t, bound)).collect();
         format!("<{}>", ps.join(", "))
+    }
+}
+
+/// Los args de tipo `<A, B>` (sin bounds) para instanciar un tipo genérico (o "" si vacía).
+fn type_args(tparams: &[String]) -> String {
+    if tparams.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", tparams.join(", "))
     }
 }
 
@@ -1509,7 +1570,7 @@ mod tests {
         );
         assert!(rust.contains("fn fib(mut n: i64) -> i64"), "{}", rust);
         assert!(rust.contains("fib((n - 1i64))"), "{}", rust);
-        assert!(rust.contains("println!(\"{}\", fib(10i64))"), "{}", rust);
+        assert!(rust.contains("fib(10i64).ray_show()"), "{}", rust);
     }
 
     #[test]
@@ -1570,7 +1631,7 @@ mod tests {
         assert!(rust.contains("Rc::new(std::cell::RefCell::new(P {"), "{}", rust);
         assert!(rust.contains("Rc::new(Shape::Circle(2.0f64))"), "{}", rust);
         assert!(rust.contains("match &*") && rust.contains("Shape::Circle(r)"), "{}", rust);
-        assert!(rust.contains("impl std::fmt::Display for P"), "{}", rust);
+        assert!(rust.contains("RayShow for Rc<std::cell::RefCell<P>>"), "{}", rust);
     }
 
     #[test]
@@ -1608,7 +1669,7 @@ mod tests {
              fn neg(b: bool) -> bool { !b }\n\
              fn main() -> int { let a: int = id(5); print(apply(neg, false)); a }",
         );
-        assert!(rust.contains("fn id<T: Clone + std::fmt::Display>(mut x: T) -> T"), "{}", rust);
+        assert!(rust.contains("fn id<T: Clone + RayShow>(mut x: T) -> T"), "{}", rust);
         assert!(rust.contains("fn apply<T:") && rust.contains("U:"), "{}", rust);
         assert!(rust.contains("apply(Rc::new(neg)"), "{}", rust); // función como valor → Rc::new(fn)
     }
@@ -1625,6 +1686,21 @@ mod tests {
         assert!(rust.contains("enum Caja<T: Clone"), "{}", rust);
         assert!(rust.contains("Caja::Llena(v)"), "{}", rust); // match de enum genérico
         assert!(rust.contains("Rc::new(Caja::Llena(9i64))"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_traits_despacho_estatico() {
+        let rust = transpile_src(
+            "trait Valor { fn valor(self) -> int; }\n\
+             struct P { x: int }\n\
+             impl Valor for P { fn valor(self) -> int { self.x } }\n\
+             fn main() -> int { let p = P { x: 7 }; p.valor() }",
+        );
+        // El método de trait se baja a una función manglada `P#valor` → `P_HH_valor` (erasure, M9).
+        assert!(rust.contains("fn P_HH_valor(mut __self: Rc<std::cell::RefCell<P>>) -> i64"), "{}", rust);
+        assert!(rust.contains("P_HH_valor("), "{}", rust);
+        // Trait propio RayShow para el `Show` de raylang (Display no sirve con Rc<RefCell>).
+        assert!(rust.contains("trait RayShow"), "{}", rust);
     }
 
     #[test]

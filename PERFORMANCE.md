@@ -301,10 +301,30 @@ VM byte a byte. Los restantes necesitan el **sistema de traits** (`bounds`, `imp
 `trait_objects`, `metodos_por_defecto`, `operadores`, `anotaciones`/`@derive`) o misc (tuplas,
 interpolación, `std::math`, `args()`, enteros con tamaño).
 
-**Cobertura tras 9 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · Option/Result/`?` · closures/map/filter/fold · **genéricos (funciones + tipos)** · const/char/cast
-· UFCS. **Falta**: traits/`@derive`/bounds-de-usuario (la fase grande que queda), tuplas, interpolación,
-`std::math`, `args()`, captura mutable, GC de ciclos, concurrencia (M12/M38). Sin incógnitas de viabilidad.
+#### Fase 10 — traits (despacho estático + RayShow) (14 jul)
+
+**Traits vía la ERASURE de M9**: el checker ya baja los métodos de trait a funciones mangladas
+(`Punto#valor`) + paso de diccionarios (params función-valor); el runtime no sabe de traits. El
+transpilador **emite el programa bajado** renombrando `#`/`::` a idents Rust (`mangle`) — los métodos son
+funciones, los diccionarios son closures (`Rc<dyn Fn>`, ya soportados). Cubre: traits de usuario, impls
+(sobre structs/enums Y builtins como `int`), **despacho estático**, **métodos por defecto**, **bounds**
+(dictionary-passing), **impls genéricos**. Se saltan los impls del PRELUDE (Len/StrOps/MapOps sobre
+builtins, el struct `Iter`); `eq`/`show`/`less` (Eq/Show/Ord) → `==`/`ray_show`/`<` nativos (guard
+`name.contains('#')` para no chocar con una función de usuario homónima). Pieza clave: **`RayShow`** —
+un trait propio (Display no vale: los structs son `Rc<RefCell<..>>` y `RefCell` no es Display, y un bound
+`T: Display` fallaría) impl'd para todo tipo (builtins + structs/enums generados, recursivo, genérico-
+consciente); `print`/`to_string` lo usan y los genéricos lo llevan como bound.
+
+**27/37 ejemplos** (añade `traits`, `bounds`, `metodos_por_defecto`, `impls_genericos`) — nativo ≡ VM byte
+a byte. Diferido (features avanzadas): `@derive(Eq)` con diccionarios, operator-overloading (`operadores`),
+trait objects (`dyn`, `trait_objects`), `From`-conversion (`?`); + misc (tuplas, interpolación,
+`std::math`, `args()`, enteros con tamaño, captura mutable, concurrencia).
+
+**Cobertura tras 10 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · **traits (despacho
+estático + defaults + bounds)** · const/char/cast · UFCS. **El transpilador cubre el LENGUAJE IDIOMÁTICO
+CENTRAL** con salida byte-idéntica a la VM (27/37 ejemplos, todos los de datos/tipos/genéricos/traits/
+funcional/errores). Lo que resta son extensiones acotadas, sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

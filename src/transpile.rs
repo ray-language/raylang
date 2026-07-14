@@ -71,7 +71,17 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     out.push_str("fn __ray_join(a: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, sep: &str) -> Rc<str> {\n");
     out.push_str("    let v = a.borrow();\n");
     out.push_str("    let parts: Vec<&str> = v.iter().map(|s| &**s).collect();\n");
-    out.push_str("    Rc::<str>::from(parts.join(sep))\n}\n\n");
+    out.push_str("    Rc::<str>::from(parts.join(sep))\n}\n");
+    out.push_str("use std::collections::HashMap as __RayMap;\n");
+    out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
+    out.push_str("    let mut v = a.borrow().clone(); v.sort(); Rc::new(std::cell::RefCell::new(v))\n}\n");
+    // keys()/values() ORDENADAS por clave (determinista, como la VM). values() en el orden de keys().
+    out.push_str("fn __ray_keys<K: Ord + Clone, V>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<K>>> {\n");
+    out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");
+    out.push_str("    Rc::new(std::cell::RefCell::new(ks))\n}\n");
+    out.push_str("fn __ray_values<K: Ord + Clone + std::hash::Hash + Eq, V: Clone>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<V>>> {\n");
+    out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");
+    out.push_str("    let vs: Vec<V> = ks.iter().map(|k| b[k].clone()).collect(); Rc::new(std::cell::RefCell::new(vs))\n}\n\n");
 
     let mut main_ret_int = false;
     let mut main_seen = false;
@@ -127,7 +137,7 @@ impl Transpiler {
     }
 
     fn declare(&mut self, name: &str, ty: Type) {
-        self.scopes.last_mut().unwrap().insert(name.to_string(), ty);
+        self.scopes.last_mut().unwrap().insert(name.to_string(), normalize_type(&ty));
     }
 
     fn lookup(&self, name: &str) -> Option<&Type> {
@@ -379,6 +389,15 @@ impl Transpiler {
         // Métodos de la stdlib manglados por el checker (`string#len`, `Len` trait…): el método real es
         // lo que va tras el último `#`. Los nombres de usuario no llevan `#` (ilegal) → quedan intactos.
         let method = name.rsplit('#').next().unwrap_or(name).trim_start_matches("__");
+        // `Map.new()` (función asociada): un HashMap vacío. El elemento lo infiere Rust del uso/anotación.
+        if method == "new" {
+            if let Some(o) = recv {
+                if matches!(&o.kind, ExprKind::Ident(n) if n == "Map") {
+                    out.push_str("Rc::new(std::cell::RefCell::new(__RayMap::new()))");
+                    return Ok(());
+                }
+            }
+        }
         match method {
             "print" => {
                 out.push_str("println!(\"{}\", ");
@@ -396,7 +415,7 @@ impl Transpiler {
                 out.push('(');
                 self.emit_expr(out, eff[0])?;
                 match self.type_of(eff[0])? {
-                    Type::Array(_) => out.push_str(".borrow().len() as i64)"),
+                    Type::Array(_) | Type::Map(_, _) => out.push_str(".borrow().len() as i64)"),
                     _ => out.push_str(".len() as i64)"),
                 }
             }
@@ -419,6 +438,79 @@ impl Transpiler {
                 out.push_str("__ray_join(&");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            // --- Map ---
+            "insert" => {
+                // devuelve unit → bloque con `;` (HashMap::insert de Rust devuelve Option).
+                out.push('{');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow_mut().insert(");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(");}");
+            }
+            // add_to(m, k, delta): `*m.entry(k).or_insert(0) += delta` (upsert acumulativo, como la VM).
+            "add_to" => {
+                let zero = match self.type_of(eff[0])? {
+                    Type::Map(_, v) if matches!(*v, Type::Float) => "0.0",
+                    _ => "0i64",
+                };
+                out.push_str("(*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow_mut().entry(");
+                self.emit_expr(out, eff[1])?;
+                write!(out, ").or_insert({}) += ", zero).unwrap();
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            "get_or" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().get(&");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(").cloned().unwrap_or(");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            // get(m, k) → Option<V> (Rust). Se usa fusionado con `.unwrap_or(d)` (nativo de Option).
+            "get" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().get(&");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(").cloned()");
+            }
+            "contains_key" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().contains_key(&");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "keys" => {
+                out.push_str("__ray_keys(&");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "values" => {
+                out.push_str("__ray_values(&");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "sort" => {
+                out.push_str("__ray_sort(&");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            // parse_int(s) → Rust Option<i64>; se usa fusionado con `.unwrap_or(d)` (nativo de Option).
+            "parse_int" => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".parse::<i64>().ok())");
+            }
+            "unwrap_or" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".unwrap_or(");
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
@@ -463,15 +555,31 @@ impl Transpiler {
                 | BinaryOp::And | BinaryOp::Or => Type::Bool,
                 _ => self.type_of(left)?, // aritmética/bitwise/concat: el tipo del operando izquierdo
             },
-            ExprKind::Call { callee, .. } => {
-                let (n, _) = resolve_callee(callee)?;
+            ExprKind::Call { callee, args } => {
+                let (n, recv) = resolve_callee(callee)?;
                 let method = n.rsplit('#').next().unwrap_or(n).trim_start_matches("__");
+                // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
+                let recv0 = recv.or_else(|| args.first());
                 match method {
-                    "to_string" => Type::String,
-                    "len" => Type::Int,
-                    "print" | "push" => Type::Unit,
+                    "to_string" | "join" => Type::String,
+                    "len" | "parse_int" => Type::Int,
+                    "print" | "push" | "insert" | "add_to" => Type::Unit,
                     "split" => Type::Array(Box::new(Type::String)),
-                    "join" => Type::String,
+                    "contains_key" => Type::Bool,
+                    // get_or(m,…) → V del Map; keys → [K]; values → [V]; sort → el tipo del arreglo.
+                    "get_or" | "get" => match self.type_of(recv0.ok_or("spike: get sin receptor")?)? {
+                        Type::Map(_, v) => *v,
+                        other => return Err(format!("spike: get/get_or sobre {:?}", other)),
+                    },
+                    "keys" => match self.type_of(recv0.ok_or("spike: keys sin receptor")?)? {
+                        Type::Map(k, _) => Type::Array(k),
+                        other => return Err(format!("spike: keys sobre {:?}", other)),
+                    },
+                    "values" => match self.type_of(recv0.ok_or("spike: values sin receptor")?)? {
+                        Type::Map(_, v) => Type::Array(v),
+                        other => return Err(format!("spike: values sobre {:?}", other)),
+                    },
+                    "sort" | "unwrap_or" => self.type_of(recv0.ok_or("spike: sin receptor")?)?,
                     _ => self
                         .funcs
                         .get(n)
@@ -505,9 +613,23 @@ impl Transpiler {
     }
 }
 
-/// Un tipo de raylang → su equivalente Rust (subconjunto actual: escalares + string).
-fn rust_ty(t: &Type) -> Result<String, String> {
-    Ok(match t {
+/// Normaliza los tipos que el parser deja como `Struct` genérico: `Map<K,V>` llega como
+/// `Struct("Map",[K,V])` (el checker lo reclasifica en su tabla, no en la anotación del AST). Recursivo.
+fn normalize_type(t: &Type) -> Type {
+    match t {
+        Type::Struct(n, args) if n == "Map" && args.len() == 2 => {
+            Type::Map(Box::new(normalize_type(&args[0])), Box::new(normalize_type(&args[1])))
+        }
+        Type::Array(e) => Type::Array(Box::new(normalize_type(e))),
+        Type::Map(k, v) => Type::Map(Box::new(normalize_type(k)), Box::new(normalize_type(v))),
+        other => other.clone(),
+    }
+}
+
+/// Un tipo de raylang → su equivalente Rust (subconjunto actual: escalares + string + arreglo + Map).
+fn rust_ty(raw: &Type) -> Result<String, String> {
+    let t = normalize_type(raw);
+    Ok(match &t {
         Type::Int => "i64",
         Type::Float => "f64",
         Type::Bool => "bool",
@@ -516,6 +638,10 @@ fn rust_ty(t: &Type) -> Result<String, String> {
         Type::String => "Rc<str>",
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t)?)),
+        // Map: igual, sobre un HashMap.
+        Type::Map(k, v) => {
+            return Ok(format!("Rc<std::cell::RefCell<std::collections::HashMap<{}, {}>>>", rust_ty(k)?, rust_ty(v)?))
+        }
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
@@ -622,6 +748,18 @@ mod tests {
         assert!(rust.contains(".borrow_mut().push("), "{}", rust);
         assert!(rust.contains("__ray_split(&"), "{}", rust);
         assert!(rust.contains("__ray_join(&"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_map_add_to_get() {
+        let rust = transpile_src(
+            "fn main() -> int { var m: Map<string, int> = Map.new(); m.add_to(\"a\", 1); \
+             m.add_to(\"a\", 2); m.get(\"a\").unwrap_or(0) }",
+        );
+        assert!(rust.contains("HashMap"), "{}", rust);
+        assert!(rust.contains(".entry("), "{}", rust);
+        assert!(rust.contains(".or_insert(0i64) += "), "{}", rust);
+        assert!(rust.contains(".get(&") && rust.contains(".unwrap_or("), "{}", rust);
     }
 
     #[test]

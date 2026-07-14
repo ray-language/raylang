@@ -193,10 +193,35 @@ sin Map). Salida byte-idéntica a la VM. **Medido — un workload de SERVICIO re
 | tiempo | **41 ms 🥇** | 65 ms | 118 ms | 139 ms | 611 ms |
 | vs líder | **1.0× (#1 de 8)** | 1.6× | 2.9× | 3.4× | 14.7× |
 
-**El nativo transpilado es #1 de los 8 lenguajes** —bate a perl/node/php— y **3.4× la propia VM**. Es la
-prueba definitiva: P2.b lleva el nicho de servicios a la liga de Go, no solo el cómputo. Siguiente fase:
-**`Map`** (`Rc<RefCell<HashMap>>` + `add_to`/`get_or`) → desbloquea `wordcount`/`logparse`. Luego structs/
-enums, genéricos (monomorfizar), y el GC/aliasing + concurrencia para el lenguaje completo.
+**El nativo transpilado es #1 de los 8 lenguajes** —bate a perl/node/php— y **3.4× la propia VM**.
+
+#### Fase 4 — Map → LOS TRES benchmarks de servicio en nativo, #1 de 8 (14 jul)
+
+`Map<K,V>` → `Rc<RefCell<HashMap<K,V>>>`. Cubre: `Map.new`, `insert`, **`add_to`** (`*entry(k).or_insert(0)
++= d`, el upsert de la VM), `get`/`get_or` (→ `Option` nativo, fusionado con `unwrap_or`), `contains_key`,
+`keys`/`values` (ordenadas por clave → deterministas, helpers del preámbulo), `sort`, `len`, y
+`parse_int(x).unwrap_or(d)` (→ `x.parse::<i64>().ok().unwrap_or(d)`). Gotcha: el parser deja `Map<K,V>`
+como `Struct("Map",[K,V])` (el checker lo reclasifica en su tabla, no en la anotación) → `normalize_type`.
+
+**Con esto se transpilan `wordcount` y `logparse` ENTEROS.** Salida byte-idéntica a la VM. **Medición
+final del nicho de servicios completo (best-of-7, ray-native = transpilado + `rustc -O`):**
+
+| Benchmark | ray-native | mejor rival | ray-VM | inicio (VM) |
+|---|---|---|---|---|
+| **jsonserialize** | **41 ms 🥇 #1** | perl 65 | 139 (3.4×) | 2.9× |
+| **wordcount** | **93 ms 🥇 #1** | php 108 | 291 (3.1×) | **9.7×** |
+| **logparse** | **53 ms 🥇 #1** | perl 63 | 145 (2.7×) | 4.9× |
+
+**LOS TRES benchmarks de servicio: ray-native es #1 de los 8 lenguajes.** `wordcount` —el PEOR al empezar
+(9.7× tras php)— ahora **le gana a php**: un giro de ~9×. P2.b lleva el nicho de servicios **entero** de
+peor-de-la-clase a mejor-de-la-clase, con salida idéntica a la VM y tests verdes.
+
+**Cobertura del transpilador tras 4 fases**: escalares · control (`if`/`while`/`for`) · recursión ·
+strings (`Rc<str>`, concat aplanado) · arreglos (`Rc<RefCell<Vec>>`) · Map (`Rc<RefCell<HashMap>>`) ·
+UFCS/métodos manglados · entorno de tipos propio. **Falta para el lenguaje completo**: structs/enums
+(tipos de usuario), `match`, closures, genéricos de usuario (monomorfizar), GC de ciclos (hoy `Rc` los
+fuga; los benchmarks no crean ciclos), y concurrencia (M12/M38, o "spawn cae a la VM en v1"). El camino
+está trazado y probado fase a fase; lo que resta es ingeniería de cobertura, no incógnitas.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

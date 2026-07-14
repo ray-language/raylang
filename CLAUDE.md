@@ -85,10 +85,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 - **Mensajes de diagnóstico de cara al usuario: en INGLÉS** (decisión 13 jul 2026;
   cabeceras `type error at L:C:`, `syntax error at`, `lex error at`). Los mensajes
   `expect()`/descripciones de asserts en tests son internos → siguen en español.
-  La migración va por lotes con `tools/spanglish.py` (lote 1 compilador COMPLETO;
-  pendientes: runtime, tooling, stdlib/paquetes). ⚠️ El espejo selfhost
-  (`selfhost/checker.ray` etc.) debe emitir mensajes byte-idénticos a Rust: todo
-  cambio de mensaje va en tándem con su espejo y con los tests que lo aseveran.
+  La migración se hizo por lotes con `tools/spanglish.py` y está **COMPLETA**
+  (lote 1 compilador + lote 2 runtime + lote 3 tooling + lote 4 stdlib/paquetes;
+  se conservan en español las descripciones de asserts de test, los fixtures
+  raylang embebidos, los comentarios, y `tools/registry_site.ray` —fuera de la
+  política—). ⚠️ El espejo selfhost (`selfhost/checker.ray` etc.) debe emitir
+  mensajes byte-idénticos a Rust: todo cambio de mensaje va en tándem con su
+  espejo y con los tests que lo aseveran.
 - Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo).
 - **Todo token/nodo lleva `(línea, columna)`**; los errores siempre reportan
   ubicación. Es un principio, no un extra.

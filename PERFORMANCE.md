@@ -256,11 +256,26 @@ enlazadas**) y básicos (casts, constantes, fizzbuzz, gcd, palíndromo, primes).
 genéricos de usuario (monomorfizar `Caja<T>`), tuplas, interpolación de strings, builtins de `std::math`,
 `args()`, y el `for (k,v)` sobre Map.
 
-**Cobertura tras 6 fases**: el subconjunto NO-genérico, NO-closure, NO-concurrente del lenguaje corre en
-nativo con salida idéntica a la VM. **Falta para el lenguaje completo**: closures, genéricos
-(monomorfizar), Option/Result-match, tuplas, traits/`@derive`, interpolación, GC de ciclos (hoy `Rc` los
-fuga; el corpus no crea ciclos), concurrencia (M12/M38, o "spawn cae a la VM en v1"). Ingeniería de
-cobertura, sin incógnitas de viabilidad.
+#### Fase 7 — Option/Result + `?` (14 jul)
+
+Estilo idiomático de errores en nativo, **mapeando `Option<T>`/`Result<T,E>` a los NATIVOS de Rust**
+(genéricos gestionados por rustc, sin monomorfizar): `Option.Some(x)`→`Some(x)`, `Option.None`→`None`,
+`Result.Ok/Err`→`Ok/Err`; `match` sobre Option/Result (patrones `Some`/`None`/`Ok`/`Err`, sobre `&opt`
+sin `Rc`); operador **`?`** → el `?` de Rust; `get`/`remove`/`parse_int` devuelven el `Option` nativo;
+`unwrap`/`unwrap_or` nativos. Gotcha clave: el checker inyecta las funciones del prelude (`parse_int`,
+`read_int`, `get`, …) en `program.functions`; con `?` ya soportado, `read_int` transpilaba y referenciaba
+`input()` (no soportado) → **`is_handled_builtin`** salta TODA función del prelude (lista extraída de
+`src/prelude.ray`). Y las colecciones vacías (`[:]`/`[]`/`Map.new()`) no infieren K/V → se **emite la
+anotación del `let`** (`let x: T = …`) para pinar la inferencia de Rust.
+
+**17 de 24 ejemplos** transpilan y coinciden con la VM (añade `mapa`, `mapa_literal`). `?` verificado
+end-to-end (mismo exit que la VM). Los 7 restantes necesitan **fases grandes**: genéricos de usuario
+(`Caja<T>`), closures, tuplas, interpolación de strings, `std::math`, `args()`, `for (k,v)` sobre Map.
+
+**Cobertura tras 7 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · **Option/Result/`?`** · const/char/cast · UFCS. **Falta**: closures, genéricos (monomorfizar),
+tuplas, traits/`@derive`, interpolación, `std::math`, GC de ciclos (hoy `Rc` los fuga; el corpus no crea
+ciclos), concurrencia (M12/M38, o "spawn cae a la VM en v1"). Ingeniería de cobertura, sin incógnitas.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

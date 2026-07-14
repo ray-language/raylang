@@ -36,6 +36,24 @@ fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
     }
 }
 
+/// ¿Es una función del PRELUDE o un builtin que el transpilador maneja directamente? Sus definiciones
+/// inyectadas por el checker se SALTAN (el transpilador las mapea a Rust nativo, o no las soporta y su
+/// cuerpo referiría builtins ausentes). Lista extraída de `src/prelude.ray` + los builtins públicos.
+fn is_handled_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        // --- funciones del prelude (src/prelude.ray) ---
+        "all" | "any" | "assert" | "assert_eq" | "char_from_code" | "env" | "filter" | "fold"
+            | "from_utf" | "get" | "get_or" | "index_of" | "input" | "iter" | "map" | "max" | "min"
+            | "parse_float" | "parse_int" | "pop" | "position" | "range" | "read_int" | "recv"
+            | "remove" | "sort" | "sum" | "sum_float" | "try_join"
+        // --- builtins públicos manejados en emit_call ---
+            | "len" | "push" | "split" | "join" | "chars" | "to_string" | "print" | "eprint"
+            | "contains_key" | "keys" | "values" | "insert" | "add_to" | "unwrap" | "unwrap_or"
+            | "panic"
+    )
+}
+
 /// ¿La callee es una llamada a `to_string` (libre o método `x.to_string()`, posiblemente manglada)?
 fn is_to_string(callee: &Expr) -> bool {
     match resolve_callee(callee) {
@@ -66,7 +84,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
-        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || !f.type_params.is_empty() {
+        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || !f.type_params.is_empty() || is_handled_builtin(&f.name) {
             continue;
         }
         funcs.insert(f.name.clone(), FnSig { ret: f.return_type.clone() });
@@ -159,7 +177,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     let mut main_ret_int = false;
     let mut main_seen = false;
     for f in &prog.functions {
-        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || !f.type_params.is_empty() {
+        if f.name.contains('#') || f.name.contains("::") || f.name.starts_with("__") || !f.type_params.is_empty() || is_handled_builtin(&f.name) {
             continue;
         }
         let rust_name = if f.name == "main" { "ray_main".to_string() } else { f.name.clone() };
@@ -245,13 +263,22 @@ impl Transpiler {
         out.push_str("    ");
         match &s.kind {
             StmtKind::Let { name, ty, value, mutable } => {
-                // Tipo de la variable: la anotación si está, si no se infiere del inicializador.
+                // Tipo de la variable: la anotación si está, si no se infiere del inicializador. Si hay
+                // anotación, se EMITE (`let x: T = …`) para pinar la inferencia de Rust — necesario para
+                // colecciones vacías (`[:]`/`[]`/`Map.new()`), cuyos K/V no se deducen del literal.
                 let vty = match ty {
-                    Some(t) => t.clone(),
+                    Some(t) => normalize_type(t),
                     None => self.type_of(value)?,
+                };
+                let ann = match ty {
+                    Some(t) => Some(rust_ty(t, &self.enums)?),
+                    None => None,
                 };
                 out.push_str(if *mutable { "let mut " } else { "let " });
                 out.push_str(name);
+                if let Some(a) = ann {
+                    write!(out, ": {}", a).unwrap();
+                }
                 out.push_str(" = ");
                 self.emit_expr(out, value)?;
                 out.push_str(";\n");
@@ -484,9 +511,15 @@ impl Transpiler {
                 self.emit_expr(out, object)?;
                 write!(out, ".borrow().{}.clone()", name).unwrap();
             }
-            // Construcción de variante de enum: Figura.Circulo(2.0) → Rc::new(Figura::Circulo(2.0)).
+            // Construcción de variante de enum. Option/Result → Some/None/Ok/Err NATIVOS de Rust (sin Rc);
+            // un enum de usuario → Rc::new(EnumName::Variant(args)).
             ExprKind::EnumLit { enum_name, variant, args } => {
-                write!(out, "Rc::new({}::{}", enum_name, variant).unwrap();
+                let native = enum_name == "Option" || enum_name == "Result";
+                if native {
+                    out.push_str(variant); // Some / None / Ok / Err
+                } else {
+                    write!(out, "Rc::new({}::{}", enum_name, variant).unwrap();
+                }
                 if !args.is_empty() {
                     out.push('(');
                     for (i, a) in args.iter().enumerate() {
@@ -497,9 +530,17 @@ impl Transpiler {
                     }
                     out.push(')');
                 }
-                out.push(')');
+                if !native {
+                    out.push(')');
+                }
             }
             ExprKind::Match { scrutinee, arms } => self.emit_match(out, scrutinee, arms)?,
+            // Operador `?`: sobre Option/Result nativos de Rust → el `?` de Rust (la fn envolvente
+            // devuelve un Option/Result compatible, garantizado por el checker).
+            ExprKind::Try(inner) => {
+                self.emit_expr(out, inner)?;
+                out.push('?');
+            }
             // Literal de Map: [k1: v1, k2: v2] → HashMap::from([(k1,v1), …]); [:] vacío → HashMap::new().
             ExprKind::MapLit(pairs) => {
                 out.push_str("Rc::new(std::cell::RefCell::new(");
@@ -596,8 +637,10 @@ impl Transpiler {
     /// `&*temp` (matchea `&E`). Los bindings del patrón quedan como `&campo`; al inicio de cada brazo se
     /// **clonan a valores propios** (`let b = b.clone();`) → el cuerpo los usa como cualquier variable.
     fn emit_match(&mut self, out: &mut String, scrutinee: &Expr, arms: &[MatchArm]) -> Result<(), String> {
-        let ename = match self.type_of(scrutinee)? {
-            Type::Enum(n, _) => n,
+        let scrut_ty = normalize_type(&self.type_of(scrutinee)?);
+        // Option/Result son NATIVOS de Rust (no `Rc<E>`): se matchea sobre `&opt`, no `&*Rc`.
+        let native = match &scrut_ty {
+            Type::Enum(n, _) => n == "Option" || n == "Result",
             other => return Err(format!("spike: match sobre {:?} (se esperaba un enum)", other)),
         };
         let temp = format!("__scrut{}", self.match_temp);
@@ -606,7 +649,7 @@ impl Transpiler {
         out.push_str(&temp);
         out.push_str(" = ");
         self.emit_expr(out, scrutinee)?;
-        out.push_str("; match &*");
+        out.push_str(if native { "; match &" } else { "; match &*" });
         out.push_str(&temp);
         out.push_str(" {\n");
         for arm in arms {
@@ -623,9 +666,9 @@ impl Transpiler {
             };
             if let Some(x) = &whole_binding {
                 out.push('_');
-                self.declare(x, Type::Enum(ename.clone(), vec![]));
+                self.declare(x, scrut_ty.clone());
             } else {
-                self.emit_pattern(out, &arm.pattern, &Type::Enum(ename.clone(), vec![]), &mut binds)?;
+                self.emit_pattern(out, &arm.pattern, &scrut_ty, &mut binds)?;
             }
             out.push_str(" => {\n");
             if let Some(x) = &whole_binding {
@@ -660,14 +703,31 @@ impl Transpiler {
                 binds.push((x.clone(), expected.clone()));
             }
             PatternKind::Variant { enum_name, variant, subpatterns } => {
-                write!(out, "{}::{}", enum_name, variant).unwrap();
+                let native = enum_name == "Option" || enum_name == "Result";
+                if native {
+                    out.push_str(variant); // Some / None / Ok / Err (nativos, sin `EnumName::`)
+                } else {
+                    write!(out, "{}::{}", enum_name, variant).unwrap();
+                }
                 if !subpatterns.is_empty() {
-                    let payload = self
-                        .enum_variants
-                        .get(enum_name)
-                        .and_then(|m| m.get(variant))
-                        .ok_or_else(|| format!("spike: variante desconocida {}.{}", enum_name, variant))?
-                        .clone();
+                    // Payload: user enum → tabla de variantes; Option/Result → los args del tipo esperado
+                    // (`Some(T)`/`Ok(T)` = args[0], `Err(E)` = args[1]).
+                    let payload: Vec<Type> = if native {
+                        match normalize_type(expected) {
+                            Type::Enum(_, args) => match variant.as_str() {
+                                "Some" | "Ok" => vec![args[0].clone()],
+                                "Err" => vec![args[1].clone()],
+                                _ => vec![],
+                            },
+                            _ => return Err("spike: patrón Option/Result sin tipo esperado".into()),
+                        }
+                    } else {
+                        self.enum_variants
+                            .get(enum_name)
+                            .and_then(|m| m.get(variant))
+                            .ok_or_else(|| format!("spike: variante desconocida {}.{}", enum_name, variant))?
+                            .clone()
+                    };
                     out.push('(');
                     for (i, sp) in subpatterns.iter().enumerate() {
                         if i > 0 {
@@ -896,6 +956,15 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            "unwrap" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".unwrap()");
+            }
+            "panic" => {
+                out.push_str("panic!(\"{}\", ");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // Aserciones (prelude): assert(c) → assert!(c); assert_eq(a, b) → assert_eq!(a, b).
             "assert" => {
                 out.push_str("assert!(");
@@ -958,15 +1027,21 @@ impl Transpiler {
                 let recv0 = recv.or_else(|| args.first());
                 match method {
                     "to_string" | "join" => Type::String,
-                    "len" | "parse_int" => Type::Int,
-                    "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" => Type::Unit,
+                    "len" => Type::Int,
+                    "parse_int" => opt_of(Type::Int),
+                    "parse_float" => opt_of(Type::Float),
+                    "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
                     "split" => Type::Array(Box::new(Type::String)),
                     "chars" => Type::Array(Box::new(Type::Char)),
                     "contains_key" => Type::Bool,
-                    // get_or(m,…) → V del Map; keys → [K]; values → [V]; sort → el tipo del arreglo.
-                    "get_or" | "get" | "remove" => match self.type_of(recv0.ok_or("spike: get sin receptor")?)? {
+                    // get_or → V (desenvuelto); get/remove → Option<V> (para match/`?`); keys→[K]; values→[V].
+                    "get_or" => match self.type_of(recv0.ok_or("spike: get_or sin receptor")?)? {
                         Type::Map(_, v) => *v,
-                        other => return Err(format!("spike: get/get_or sobre {:?}", other)),
+                        other => return Err(format!("spike: get_or sobre {:?}", other)),
+                    },
+                    "get" | "remove" => match self.type_of(recv0.ok_or("spike: get sin receptor")?)? {
+                        Type::Map(_, v) => opt_of(*v),
+                        other => return Err(format!("spike: get sobre {:?}", other)),
                     },
                     "keys" => match self.type_of(recv0.ok_or("spike: keys sin receptor")?)? {
                         Type::Map(k, _) => Type::Array(k),
@@ -976,7 +1051,11 @@ impl Transpiler {
                         Type::Map(_, v) => Type::Array(v),
                         other => return Err(format!("spike: values sobre {:?}", other)),
                     },
-                    "sort" | "unwrap_or" => self.type_of(recv0.ok_or("spike: sin receptor")?)?,
+                    "sort" => self.type_of(recv0.ok_or("spike: sort sin receptor")?)?,
+                    // unwrap_or/unwrap desenvuelven un Option<T>/Result<T,E> → T.
+                    "unwrap_or" | "unwrap" => {
+                        unwrapped(&self.type_of(recv0.ok_or("spike: unwrap sin receptor")?)?)
+                    }
                     _ => self
                         .funcs
                         .get(n)
@@ -1006,7 +1085,22 @@ impl Transpiler {
                 other => return Err(format!("spike: indexar {:?} no soportado", other)),
             },
             ExprKind::StructLit { name, .. } => Type::Struct(name.clone(), vec![]),
-            ExprKind::EnumLit { enum_name, .. } => Type::Enum(enum_name.clone(), vec![]),
+            ExprKind::EnumLit { enum_name, variant, args } => {
+                if enum_name == "Option" {
+                    // Some(x) → Option<tipo(x)>; None → Option<Unit> (placeholder; lo fija el contexto).
+                    let t = args.first().map(|a| self.type_of(a)).transpose()?.unwrap_or(Type::Unit);
+                    opt_of(t)
+                } else if enum_name == "Result" {
+                    match variant.as_str() {
+                        "Ok" => Type::Enum("Result".into(), vec![self.type_of(&args[0])?, Type::Unit]),
+                        "Err" => Type::Enum("Result".into(), vec![Type::Unit, self.type_of(&args[0])?]),
+                        _ => Type::Enum("Result".into(), vec![Type::Unit, Type::Unit]),
+                    }
+                } else {
+                    Type::Enum(enum_name.clone(), vec![])
+                }
+            }
+            ExprKind::Try(inner) => unwrapped(&self.type_of(inner)?),
             ExprKind::Field { object, name } => {
                 let sn = match self.type_of(object)? {
                     Type::Struct(n, _) => n,
@@ -1043,8 +1137,14 @@ fn normalize_type(t: &Type) -> Type {
         Type::Struct(n, args) if n == "Map" && args.len() == 2 => {
             Type::Map(Box::new(normalize_type(&args[0])), Box::new(normalize_type(&args[1])))
         }
+        // Option/Result (enums genéricos del prelude) → se mapean a los NATIVOS de Rust. El parser los
+        // deja como `Struct`; los tratamos como `Enum` con sus args para bajarlos a `Option`/`Result`.
+        Type::Struct(n, args) if (n == "Option" && args.len() == 1) || (n == "Result" && args.len() == 2) => {
+            Type::Enum(n.clone(), args.iter().map(normalize_type).collect())
+        }
         Type::Array(e) => Type::Array(Box::new(normalize_type(e))),
         Type::Map(k, v) => Type::Map(Box::new(normalize_type(k)), Box::new(normalize_type(v))),
+        Type::Enum(n, args) => Type::Enum(n.clone(), args.iter().map(normalize_type).collect()),
         other => other.clone(),
     }
 }
@@ -1077,10 +1177,30 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>) -> Result<Stri
                 format!("Rc<std::cell::RefCell<{}>>", n)
             })
         }
+        // Option/Result → los nativos de Rust (genéricos gestionados por rustc, sin monomorfizar).
+        Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
+            return Ok(format!("Option<{}>", rust_ty(&args[0], enums)?))
+        }
+        Type::Enum(n, args) if n == "Result" && args.len() == 2 => {
+            return Ok(format!("Result<{}, {}>", rust_ty(&args[0], enums)?, rust_ty(&args[1], enums)?))
+        }
         Type::Enum(n, args) if args.is_empty() => return Ok(format!("Rc<{}>", n)),
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
+}
+
+/// `Option<t>` (usando el Option nativo de Rust).
+fn opt_of(t: Type) -> Type {
+    Type::Enum("Option".to_string(), vec![t])
+}
+
+/// Desenvuelve `Option<T>`/`Result<T,E>` → `T` (para `unwrap_or`/`unwrap`/`?`); otro tipo se deja igual.
+fn unwrapped(t: &Type) -> Type {
+    match normalize_type(t) {
+        Type::Enum(n, args) if (n == "Option" || n == "Result") && !args.is_empty() => args[0].clone(),
+        other => other,
+    }
 }
 
 /// ¿Es un tipo de heap (semántica de referencia / no `Copy`) → hay que clonar al leer?
@@ -1159,7 +1279,7 @@ mod tests {
             "fn main() { var acc: int = 0; for i in 0..100 { acc = acc + i; } print(acc); }",
         );
         assert!(rust.contains("for i in 0i64..100i64"), "{}", rust);
-        assert!(rust.contains("let mut acc = 0i64"), "{}", rust);
+        assert!(rust.contains("let mut acc: i64 = 0i64"), "{}", rust); // anotación emitida (pina inferencia)
     }
 
     #[test]
@@ -1212,6 +1332,19 @@ mod tests {
         assert!(rust.contains("Rc::new(Shape::Circle(2.0f64))"), "{}", rust);
         assert!(rust.contains("match &*") && rust.contains("Shape::Circle(r)"), "{}", rust);
         assert!(rust.contains("impl std::fmt::Display for P"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_option_match_y_try() {
+        let rust = transpile_src(
+            "fn f(s: string) -> Option<int> { let n = parse_int(s)?; Option.Some(n + 1) }\n\
+             fn main() -> int { match (f(\"7\")) { Option.Some(v) => v, Option.None => 0 } }",
+        );
+        // Option → nativo de Rust: firma Option<i64>, Some(...), `?`, y match con Some/None (sin Rc).
+        assert!(rust.contains("-> Option<i64>"), "{}", rust);
+        assert!(rust.contains(".parse::<i64>().ok())?"), "{}", rust);
+        assert!(rust.contains("Some(") && rust.contains("None"), "{}", rust);
+        assert!(rust.contains("match &") && !rust.contains("Option::"), "{}", rust);
     }
 
     #[test]

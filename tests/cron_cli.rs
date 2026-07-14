@@ -84,7 +84,7 @@ const ESPERADO: &str = "*/15 * * * * → 2026-07-11T10:45:00Z 2026-07-11T11:00:0
 5,20 8-10/2 * * * → 2026-07-12T08:05:00Z 2026-07-12T08:20:00Z 2026-07-12T10:05:00Z 2026-07-12T10:20:00Z\n\
 0 0 30 2 * → ERR:cron: the expression matches no date (impossible day?)\n\
 * * * * → parse ERR: cron: expected 5 fields (min hour dom mon dow), got 4\n\
-61 * * * * → parse ERR: cron: 'minuto' out of range [0-59] ('61')\n\
+61 * * * * → parse ERR: cron: 'minute' out of range [0-59] ('61')\n\
 * * * * 8-9 → parse ERR: cron: 'day of week' out of range [0-7] ('8-9')\n";
 
 fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {

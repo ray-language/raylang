@@ -68,7 +68,7 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
     while (p < parts.len()) {
         let part = parts[p];
         if (part.len() == 0) {
-            return Result.Err("cron: campo '" + name + "' with an empty element");
+            return Result.Err("cron: field '" + name + "' with an empty element");
         }
         // paso: `X/n` (X = `*` o `a-b`)
         var base = part;
@@ -81,7 +81,7 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
                 return Result.Err("cron: invalid step in '" + name + "'");
             }
         } else if (sp.len() > 2) {
-            return Result.Err("cron: campo '" + name + "' malformado ('" + part + "')");
+            return Result.Err("cron: field '" + name + "' malformed ('" + part + "')");
         }
         // base: `*`, `a` o `a-b`
         var a = lo;
@@ -145,10 +145,10 @@ pub fn parse(expr: string) -> Result<Schedule, string> {
     if (fs.len() != 5) {
         return Result.Err("cron: expected 5 fields (min hour dom mon dow), got " + to_string(fs.len()));
     }
-    let mins = parse_field(fs[0], 0, 59, "minuto")?;
-    let hours = parse_field(fs[1], 0, 23, "hora")?;
+    let mins = parse_field(fs[0], 0, 59, "minute")?;
+    let hours = parse_field(fs[1], 0, 23, "hour")?;
     let dom = parse_field(fs[2], 1, 31, "day of month")?;
-    let months = parse_field(fs[3], 1, 12, "mes")?;
+    let months = parse_field(fs[3], 1, 12, "month")?;
     var dow = parse_field(fs[4], 0, 7, "day of week")?;
     if (dow[7]) {
         dow[0] = true;  // 7 = domingo, como el 0

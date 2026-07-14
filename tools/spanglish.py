@@ -30,6 +30,11 @@
 #     · con --write: aplica archivo por archivo y reporta ocurrencias.
 #   python3 tools/spanglish.py check tools/spanglish-catalog.jsonl
 #     · busca textos viejos que sigan vivos (espejos selfhost / tests / goldens).
+#   python3 tools/spanglish.py audit [ruta.ray | subdir]
+#     · SOLO .ray: cruza el tokenizador Python contra el LEXER REAL auto-alojado
+#       (`selfhost/lex_dump.ray`) y marca las líneas donde discrepan (casos límite
+#       del tokenizador, p. ej. una cadena dentro de `${ f("x") }`). Verificador,
+#       no motor: para Rust no hay lexer CLI; requiere `cargo build` previo.
 #
 # Tras cada lote: `make test-one T=<suite afectada>` (los tests que aseveran
 # mensajes van en el mismo lote que el mensaje).
@@ -37,6 +42,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -298,15 +304,100 @@ def cmd_check(ruta_catalogo):
     return 1 if vivos else 0
 
 
-def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("scan", "apply", "check"):
-        print(__doc__ or "uso: spanglish.py scan|apply|check", file=sys.stderr)
-        print("uso: spanglish.py scan | apply <catalogo> [--write] | check <catalogo>",
+# ---------- audit: el tokenizador Python vs el LEXER REAL (solo .ray) ----------
+
+def _ray_binario():
+    """Ruta al binario ray/raylang ya compilado (debug o release), o None."""
+    for nombre in ("raylang", "ray"):
+        for perfil in ("debug", "release"):
+            p = os.path.join(RAIZ, "target", perfil, nombre)
+            if os.path.exists(p):
+                return p
+    return None
+
+
+def _strs_del_lexer(binario, ruta_rel):
+    """Corre `lex_dump.ray` (lexer auto-alojado) sobre un .ray y devuelve
+    ({línea: [contenido, …]}, error). `error` != None si el archivo no lexea
+    (o el driver falla): en ese caso los tokens no son fiables y se reporta."""
+    res = subprocess.run(
+        [binario, os.path.join(RAIZ, "selfhost/lex_dump.ray"), os.path.join(RAIZ, ruta_rel)],
+        capture_output=True, text=True, cwd=RAIZ,
+    )
+    por_linea = {}
+    for linea in res.stdout.splitlines():
+        if linea.startswith("lex error at "):
+            return {}, linea
+        m = re.match(r'Str\("(.*)"\)@(\d+):\d+$', linea)
+        if m:
+            por_linea.setdefault(int(m.group(2)), []).append(m.group(1))
+    if res.returncode != 0 and not por_linea:
+        ultimo = (res.stderr.strip().splitlines() or ["(sin stderr)"])[-1]
+        return {}, ultimo
+    return por_linea, None
+
+
+def cmd_audit(objetivo=None):
+    """Verifica el tokenizador Python de .ray contra el LEXER REAL auto-alojado.
+
+    Para cada .ray, corre `lex_dump.ray` y compara, línea a línea, cuántos
+    tokens de cadena ve el lexer real vs cuántos literales extrae `literales_ray`.
+    Un desacuerdo delata un caso límite del tokenizador Python (p. ej. una cadena
+    dentro de una interpolación `${ f("x") }`). Solo .ray: no hay lexer CLI para
+    Rust. `objetivo` opcional = archivo o subdirectorio a auditar (por velocidad).
+    """
+    binario = _ray_binario()
+    if binario is None:
+        print("[audit] no encuentro el binario ray/raylang; compila con 'cargo build'",
               file=sys.stderr)
+        return 2
+    total = discrepantes = no_lexean = 0
+    for ruta in archivos(DIRS_SCAN):
+        if not ruta.endswith(".ray"):
+            continue
+        if objetivo and not (ruta == objetivo or ruta.startswith(objetivo.rstrip("/") + "/")):
+            continue
+        total += 1
+        py = {}
+        for ln, txt in literales_de(ruta)[1]:
+            py.setdefault(ln, []).append(txt)
+        lex, error = _strs_del_lexer(binario, ruta)
+        if error:
+            no_lexean += 1
+            print(f"[audit] {ruta}: NO LEXEA con el lexer real → {error}")
+            continue
+        difs = [ln for ln in sorted(set(py) | set(lex))
+                if len(py.get(ln, [])) != len(lex.get(ln, []))]
+        if difs:
+            discrepantes += 1
+            print(f"[audit] {ruta}: {len(difs)} línea(s) en desacuerdo")
+            for ln in difs:
+                p, l = py.get(ln, []), lex.get(ln, [])
+                print(f"    L{ln}: python={len(p)} lexer={len(l)}")
+                for s in p:
+                    print(f"        py : {s}")
+                for s in l:
+                    print(f'        lex: "{s}"')
+    print(f"[audit] {total} .ray auditados; {discrepantes} con desacuerdos; "
+          f"{no_lexean} no lexean (límite del lexer auto-alojado, informativo)",
+          file=sys.stderr)
+    # Solo gatea la DISCREPANCIA real (bug del tokenizador Python). El 'no lexea'
+    # es un límite del lexer auto-alojado (p. ej. sin bitwise) → informativo.
+    return 1 if discrepantes else 0
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("scan", "apply", "check", "audit"):
+        print(__doc__ or "uso: spanglish.py scan|apply|check|audit", file=sys.stderr)
+        print("uso: spanglish.py scan | apply <catalogo> [--write] | check <catalogo> "
+              "| audit [ruta.ray | subdir]", file=sys.stderr)
         return 2
     if sys.argv[1] == "scan":
         cmd_scan()
         return 0
+    if sys.argv[1] == "audit":
+        objetivo = next((a for a in sys.argv[2:] if not a.startswith("--")), None)
+        return cmd_audit(objetivo)
     if len(sys.argv) < 3:
         print("falta la ruta del catálogo", file=sys.stderr)
         return 2

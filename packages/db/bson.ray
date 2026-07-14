@@ -200,7 +200,7 @@ struct Dec {
 }
 
 fn dec_err(msg: string, pos: int) -> string {
-    "BSON inválido (octeto " + to_string(pos) + "): " + msg
+    "invalid BSON (byte " + to_string(pos) + "): " + msg
 }
 
 // Tope de anidamiento al decodificar. Un documento con documentos/arreglos anidados sin fin
@@ -214,7 +214,7 @@ fn max_depth() -> int {
 
 fn rd_u8(d: Dec) -> Result<int, string> {
     if (d.pos >= d.b.len()) {
-        return Result.Err(dec_err("fin de data inesperado", d.pos));
+        return Result.Err(dec_err("unexpected end of data", d.pos));
     }
     let v = d.b[d.pos];
     d.pos = d.pos + 1;
@@ -223,7 +223,7 @@ fn rd_u8(d: Dec) -> Result<int, string> {
 
 fn rd_exact(d: Dec, n: int) -> Result<bytes, string> {
     if (d.pos + n > d.b.len()) {
-        return Result.Err(dec_err("fin de data inesperado (faltan " + to_string(n) + " octetos)", d.pos));
+        return Result.Err(dec_err("unexpected end of data (missing " + to_string(n) + " octetos)", d.pos));
     }
     let out = d.b.sub_bytes(d.pos, d.pos + n);
     d.pos = d.pos + n;
@@ -259,13 +259,13 @@ fn rd_cstring(d: Dec) -> Result<string, string> {
         end = end + 1;
     }
     if (end >= d.b.len()) {
-        return Result.Err(dec_err("cstring sin terminador", d.pos));
+        return Result.Err(dec_err("cstring without terminator", d.pos));
     }
     let raw = d.b.sub_bytes(d.pos, end);
     d.pos = end + 1;
     return match (from_utf8(raw)) {
         Result.Ok(s) => Result.Ok(s),
-        Result.Err(_) => Result.Err(dec_err("cstring no es UTF-8 válido", d.pos)),
+        Result.Err(_) => Result.Err(dec_err("cstring is not valid UTF-8", d.pos)),
     };
 }
 
@@ -273,15 +273,15 @@ fn rd_string(d: Dec) -> Result<string, string> {
     let start = d.pos;
     let n = rd_le32(d)?;
     if (n < 1) {
-        return Result.Err(dec_err("length de string inválida: " + to_string(n), start));
+        return Result.Err(dec_err("invalid string length: " + to_string(n), start));
     }
     let raw = rd_exact(d, n)?;
     if (raw[n - 1] != 0) {
-        return Result.Err(dec_err("string sin terminador 0x00", start));
+        return Result.Err(dec_err("string without 0x00 terminator", start));
     }
     return match (from_utf8(raw.sub_bytes(0, n - 1))) {
         Result.Ok(s) => Result.Ok(s),
-        Result.Err(_) => Result.Err(dec_err("string no es UTF-8 válido", start)),
+        Result.Err(_) => Result.Err(dec_err("string is not valid UTF-8", start)),
     };
 }
 
@@ -314,7 +314,7 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
         let start = d.pos;
         let n = rd_le32(d)?;
         if (n < 0) {
-            return Result.Err(dec_err("length de binary negativa", start));
+            return Result.Err(dec_err("negative binary length", start));
         }
         let _subtype = rd_u8(d)?;
         let raw = rd_exact(d, n)?;
@@ -347,17 +347,17 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
         let v = rd_le64(d)?;
         return Result.Ok(Bson.Timestamp(v));
     }
-    Result.Err(dec_err("type BSON no soportado: " + to_string(t), d.pos - 1))
+    Result.Err(dec_err("unsupported BSON type: " + to_string(t), d.pos - 1))
 }
 
 fn rd_doc(d: Dec, depth: int) -> Result<[Field], string> {
     if (depth > max_depth()) {
-        return Result.Err(dec_err("nesting demasiado profundo (posible DoS): más de " + to_string(max_depth()) + " niveles", d.pos));
+        return Result.Err(dec_err("nesting too deep (possible DoS): more than " + to_string(max_depth()) + " niveles", d.pos));
     }
     let start = d.pos;
     let total = rd_le32(d)?;
     if (total < 5 || start + total > d.b.len()) {
-        return Result.Err(dec_err("length de documento inválida: " + to_string(total), start));
+        return Result.Err(dec_err("invalid document length: " + to_string(total), start));
     }
     let end = start + total;
     var fields: [Field] = [];
@@ -369,7 +369,7 @@ fn rd_doc(d: Dec, depth: int) -> Result<[Field], string> {
     }
     let term = rd_u8(d)?;
     if (term != 0) {
-        return Result.Err(dec_err("documento sin el 0x00 final", end - 1));
+        return Result.Err(dec_err("document without the final 0x00", end - 1));
     }
     Result.Ok(fields)
 }
@@ -380,7 +380,7 @@ pub fn decode(b: bytes) -> Result<[Field], string> {
     var d = Dec { b: b, pos: 0 };
     let fields = rd_doc(d, 0)?;
     if (d.pos != b.len()) {
-        return Result.Err(dec_err("data sobrantes after el documento", d.pos));
+        return Result.Err(dec_err("leftover data after the document", d.pos));
     }
     Result.Ok(fields)
 }
@@ -432,7 +432,7 @@ pub fn doc_from_json(s: string) -> Result<[Field], string> {
     let j = parse(s)?;
     return match (from_json(j)) {
         Bson.Doc(fields) => Result.Ok(fields),
-        _ => Result.Err("el JSON de un documento must ser un objeto"),
+        _ => Result.Err("a document's JSON must be an object"),
     };
 }
 

@@ -17,7 +17,7 @@ fn atender(conn: int) {
                 Result.Err(e) => eprint("error al escribir: " + e),
             }
         },
-        Result.Err(e) => eprint("error al leer: " + e),
+        Result.Err(e) => eprint("error reading: " + e),
     }
     close(conn);
 }
@@ -29,7 +29,7 @@ fn main() -> int {
             var seguir: bool = true;
             while (seguir) {
                 match (net.tcp_accept(srv)) {
-                    // Una fibra por conexión: el bucle vuelve a `accept` de inmediato (cede mientras
+                    // Una fibra por connection: el bucle vuelve a `accept` de inmediato (cede mientras
                     // no haya conexión nueva), y cada `atender` cede mientras espera datos.
                     Result.Ok(conn) => {
                         spawn(fn() { atender(conn) });

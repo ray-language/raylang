@@ -24,7 +24,7 @@ pub fn bind(host: string, port: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle UDP inválido"),
+            Option.None => Result.Err("invalid UDP handle"),
         }
     } else {
         Result.Err(r[1])

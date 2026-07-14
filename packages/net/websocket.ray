@@ -263,7 +263,7 @@ fn frame_total(b: bytes, max_payload: int) -> Result<int, string> {
         }
     }
     if (plen > max_payload || plen < 0) {
-        return Result.Err("trama demasiado grande (" + to_string(plen) + " > " + to_string(max_payload) + " octetos)");
+        return Result.Err("frame too large (" + to_string(plen) + " > " + to_string(max_payload) + " octetos)");
     }
     if (masked) {
         off = off + 4;
@@ -292,14 +292,14 @@ pub fn read_frame_limit(ws: WsConn, max_payload: int) -> Result<Frame, string> {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
                     if (ws.buf.len() == 0) {
-                        return Result.Err("conexión cerrada");
+                        return Result.Err("connection closed");
                     }
-                    return Result.Err("conexión cerrada a half de one trama");
+                    return Result.Err("connection closed mid-frame");
                 }
                 ws.buf = ws.buf + trozo;
             },
             Result.Err(e) => {
-                return Result.Err("error al leer la trama: " + e);
+                return Result.Err("error reading the frame: " + e);
             },
         }
     }
@@ -343,10 +343,10 @@ pub fn read_message_limit(ws: WsConn, max_payload: int) -> Result<Frame, string>
         } else if (f.opcode == 0) {
             // Continuación de un mensaje fragmentado.
             if (!fragmentado) {
-                return Result.Err("trama de continuación sin mensaje fragmentado en curso");
+                return Result.Err("continuation frame without a fragmented message in progress");
             }
             if (acc.len() + f.payload.len() > max_payload) {
-                return Result.Err("mensaje fragmentado demasiado grande (> " + to_string(max_payload) + " octetos)");
+                return Result.Err("fragmented message too large (> " + to_string(max_payload) + " octetos)");
             }
             acc = acc + f.payload;
             if (f.fin) {
@@ -355,7 +355,7 @@ pub fn read_message_limit(ws: WsConn, max_payload: int) -> Result<Frame, string>
         } else {
             // Trama de datos (texto/binario).
             if (fragmentado) {
-                return Result.Err("trama de data en medio de un mensaje fragmentado");
+                return Result.Err("data frame in the middle of a fragmented message");
             }
             if (f.fin) {
                 return Result.Ok(f);

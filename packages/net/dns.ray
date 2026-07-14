@@ -123,13 +123,13 @@ fn read_name(data: bytes, pos: int) -> Result<NameResult, string> {
             }
             jumps = jumps + 1;
             if (jumps > max_jumps) {
-                return Result.Err("loop de punteros de compresión en el name DNS");
+                return Result.Err("loop of compression pointers in the DNS name");
             }
             p = (lenb & 63) << 8 | lo;
         } else {
             // label: `lenb` octetos a partir de p+1 (debe caber en el mensaje).
             if (p + 1 + lenb > data.len()) {
-                return Result.Err("etiqueta de name DNS truncada");
+                return Result.Err("truncated DNS name label");
             }
             let etiqueta = match (from_utf8(data.sub_bytes(p + 1, p + 1 + lenb))) {
                 Result.Ok(s) => s,
@@ -246,7 +246,7 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> Result<string, string> 
         let slen = byte_at(data, p)?;
         p = p + 1;
         if (p + slen > fin) {
-            return Result.Err("character-string de TXT rebasa el RDATA");
+            return Result.Err("TXT character-string overruns the RDATA");
         }
         s = s + match (from_utf8(data.sub_bytes(p, p + slen))) {
             Result.Ok(t) => t,
@@ -273,7 +273,7 @@ pub struct DnsResult {
 /// Returns Err if the message is shorter than a header or the response RCODE signals an error (e.g. NXDOMAIN).
 pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
     if (data.len() < 12) {
-        return Result.Err("response DNS demasiado corta");
+        return Result.Err("DNS response too short");
     }
     let flags = be16(data, 2)?;
     let rcode = flags & 15;
@@ -306,7 +306,7 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
         let rdstart = pos + 10;
         // M72.1: el RDATA completo debe caber en el mensaje antes de interpretarlo.
         if (rdstart + rdlength > data.len()) {
-            return Result.Err("RDATA de la response DNS truncado");
+            return Result.Err("DNS response RDATA truncated");
         }
         if (atype == 1 && rdlength == 4) {
             recs.push(Record.A(format_ipv4(data, rdstart)?));
@@ -395,8 +395,8 @@ pub fn format_records(recs: [Record]) -> [string] {
 }
 
 fn name_rcode(rcode: int) -> string {
-    if (rcode == 1) { " (error de formato)" } else {
-        if (rcode == 2) { " (failure del servidor)" } else {
+    if (rcode == 1) { " (format error)" } else {
+        if (rcode == 2) { " (server failure)" } else {
             if (rcode == 3) { " (name nonexistent)" } else { "" }
         }
     }
@@ -438,7 +438,7 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
                             // M72.2: la respuesta debe llevar el ID de la consulta (anti-spoofing).
                             let rid = be16(pkt.data, 0)?;
                             if (rid != id) {
-                                Result.Err("ID de la response DNS no coincide con la query (posible spoofing)")
+                                Result.Err("DNS response ID does not match the query (possible spoofing)")
                             } else {
                                 parse_full(pkt.data)
                             }

@@ -68,7 +68,7 @@ fn main() -> int { 0 }
     let (out, code) = run_tests(src, "ray_test_unit.ray");
     assert!(out.contains("ok    assert_ok"), "la unit what pasa\n{out}");
     assert!(out.contains("FAIL  assert_fails"), "la unit what fails\n{out}");
-    assert!(out.contains("assert_eq falló: 4 != 5"), "shows el mensaje del assert\n{out}");
+    assert!(out.contains("assert_eq failed: 4 != 5"), "shows el mensaje del assert\n{out}");
     assert_eq!(code, 1);
 }
 

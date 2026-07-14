@@ -319,24 +319,24 @@ fn leer_body_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Res
             match (leer_con_plazo(conn, plazo_fin)) {
                 Result.Ok(t) => {
                     if (t.len() == 0) {
-                        return Result.Err("body chunked incompleto (la conexión se cerró)");
+                        return Result.Err("incomplete chunked body (the connection closed)");
                     }
                     acc = acc + t;
                 },
                 Result.Err(e) => {
-                    return Result.Err("error al leer el body chunked: " + e);
+                    return Result.Err("error reading the chunked body: " + e);
                 },
             }
         } else {
             let n: int = tam_chunk(acc, 0, nl);
             if (n < 0) {
-                return Result.Err("body chunked malformado (tamaño no hexadecimal)");
+                return Result.Err("malformed chunked body (non-hex size)");
             }
             if (n == 0) {
                 follow = false;
             } else {
                 if (out.len() + n > max) {
-                    return Result.Err("body demasiado grande (chunked > " + to_string(max) + ")");
+                    return Result.Err("body too large (chunked > " + to_string(max) + ")");
                 }
                 // Asegurar el chunk completo + su \r\n final.
                 var falta: bool = acc.len() < nl + 2 + n + 2;
@@ -344,13 +344,13 @@ fn leer_body_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Res
                     match (leer_con_plazo(conn, plazo_fin)) {
                         Result.Ok(t) => {
                             if (t.len() == 0) {
-                                return Result.Err("body chunked incompleto (la conexión se cerró)");
+                                return Result.Err("incomplete chunked body (the connection closed)");
                             }
                             acc = acc + t;
                             falta = acc.len() < nl + 2 + n + 2;
                         },
                         Result.Err(e) => {
-                            return Result.Err("error al leer el body chunked: " + e);
+                            return Result.Err("error reading the chunked body: " + e);
                         },
                     }
                 }
@@ -369,7 +369,7 @@ fn leer_con_plazo(conn: int, plazo_fin: int) -> Result<bytes, string> {
     if (plazo_fin > 0) {
         let restante: int = plazo_fin - time.monotonic();
         if (restante <= 0) {
-            return Result.Err("tiempo de espera de lectura agotado");
+            return Result.Err("read timeout");
         }
         net.set_read_timeout(conn, restante);
     }
@@ -401,7 +401,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             // Reanudar 3 octetos atrás: el "\r\n\r\n" puede quedar partido entre dos trozos.
             start = acc.len() - 3;
             if (acc.len() > limits.max_header_bytes) {
-                return Result.Err("headers demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
+                return Result.Err("headers too large (more than " + to_string(limits.max_header_bytes) + " octetos)");
             }
             match (leer_con_plazo(conn, plazo_fin)) {
                 Result.Ok(trozo) => {
@@ -416,28 +416,28 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     // caso normal de una conexión keep-alive que se cierra u ociosa) — error
                     // distinguible para que el servidor cierre en silencio, sin 400 ni ruido.
                     if (acc.len() == 0) {
-                        return Result.Err("conexión cerrada");
+                        return Result.Err("connection closed");
                     }
-                    return Result.Err("error al leer: " + e);
+                    return Result.Err("error reading: " + e);
                 },
             }
         }
     }
     if (sep < 0) {
         if (acc.len() == 0) {
-            return Result.Err("conexión cerrada");
+            return Result.Err("connection closed");
         }
-        return Result.Err("petición incompleta (sin fin de headers)");
+        return Result.Err("incomplete request (no end of headers)");
     }
     // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
     // solo trozo grande pasarían y el límite dependería del troceo de la red (no determinista).
     if (sep + 4 > limits.max_header_bytes) {
-        return Result.Err("headers demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
+        return Result.Err("headers too large (more than " + to_string(limits.max_header_bytes) + " octetos)");
     }
 
     var body: bytes = acc.sub_bytes(sep + 4, acc.len());
     match (from_utf8(acc.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("headers de la petición no son UTF-8: " + e),
+        Result.Err(e) => Result.Err("request headers are not UTF-8: " + e),
         Result.Ok(headers_raw) => {
             let lines: [string] = headers_raw.split("\r\n");
 
@@ -446,7 +446,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             // no una ruta corrupta silenciosa).
             let parts: [string] = lines[0].split(" ");
             if (parts.len() < 2) {
-                return Result.Err("línea de petición malformada: " + lines[0]);
+                return Result.Err("malformed request line: " + lines[0]);
             }
             let method: string = parts[0];
             let target: string = parts[1];
@@ -511,18 +511,18 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     match (parse_int(cl)) {
                         Option.Some(n) => {
                             if (n > limits.max_body_bytes) {
-                                return Result.Err("body demasiado grande (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
+                                return Result.Err("body too large (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
                             }
                             while (body.len() < n) {
                                 match (leer_con_plazo(conn, plazo_fin)) {
                                     Result.Ok(trozo) => {
                                         if (trozo.len() == 0) {
-                                            return Result.Err("body incompleto: la conexión se cerró con " + to_string(body.len()) + " de " + to_string(n) + " octetos");
+                                            return Result.Err("incomplete body: the connection closed with " + to_string(body.len()) + " de " + to_string(n) + " octetos");
                                         }
                                         body = body + trozo;
                                     },
                                     Result.Err(e) => {
-                                        return Result.Err("error al leer el body: " + e);
+                                        return Result.Err("error reading the body: " + e);
                                     },
                                 }
                             }
@@ -634,9 +634,9 @@ fn handle(conn: int, handler: fn(Request, int), limits: Limits) {
             }
         },
         Result.Err(e) => {
-            // "conexión cerrada" = el peer cerró sin pedir nada (o quedó ocioso): silencio.
-            if (e != "conexión cerrada") {
-                eprint("petición: " + e);
+            // "connection closed" = el peer cerró sin pedir nada (o quedó ocioso): silencio.
+            if (e != "connection closed") {
+                eprint("request: " + e);
                 match (send_response(conn, text(400, "Bad Request"))) {
                     Result.Ok(_) => { },
                     Result.Err(_) => { },
@@ -698,8 +698,8 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                 }
             },
             Result.Err(e) => {
-                if (e != "conexión cerrada") {
-                    eprint("petición: " + e);
+                if (e != "connection closed") {
+                    eprint("request: " + e);
                     match (send_response(conn, text(400, "Bad Request"))) {
                         Result.Ok(_) => { },
                         Result.Err(_) => { },
@@ -748,7 +748,7 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
-            print("escuchando en el port " + to_string(net.local_port(srv)));
+            print("listening on port " + to_string(net.local_port(srv)));
             let bounded: bool = limits.max_conns > 0;
             let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
             var errors: int = 0;
@@ -766,7 +766,7 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
                                     handle_conn(c);
                                 },
                                 Result.Err(e) => {
-                                    eprint("conexión: " + e);
+                                    eprint("connection: " + e);
                                     close(conn);
                                 },
                             }
@@ -809,7 +809,7 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
-            print("escuchando en el port " + to_string(net.local_port(srv)));
+            print("listening on port " + to_string(net.local_port(srv)));
             let bounded: bool = limits.max_conns > 0;
             let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
             let conns: Channel<int> = Channel.new();
@@ -875,7 +875,7 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
                                         handle_conn(c);
                                     },
                                     Result.Err(e) => {
-                                        eprint("conexión: " + e);
+                                        eprint("connection: " + e);
                                         close(conn);
                                     },
                                 }
@@ -899,7 +899,7 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
             // Apagado: avisar a la bomba y dejar de aceptar (los clientes nuevos ven rechazo).
             close(off);
             close(srv);
-            print("apagando: " + to_string(activos) + " conexión(es) en vuelo");
+            print("apagando: " + to_string(activos) + " connection(s) in flight");
             // Drenar con plazo. Una conexión aceptada y aún no atendida (ventana mínima entre el
             // accept de la bomba y este select) se cierra sin respuesta según asoma por `conns`.
             if (activos > 0 && drain_ms > 0) {
@@ -930,7 +930,7 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
                     }
                 }
                 if (activos > 0) {
-                    eprint("off: " + to_string(activos) + " conexión(es) en vuelo al vencer el plazo");
+                    eprint("off: " + to_string(activos) + " connection(s) in flight when the deadline expired");
                 }
             }
             Result.Ok(0)

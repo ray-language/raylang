@@ -35,7 +35,7 @@ fn launch_servidor(name: &str, driver: &str) -> (Child, u16) {
     // El último token de la línea: cubre tanto el puerto a secas (drivers manuales) como el
     // "escuchando en el puerto N" que imprime `serve` (M56.5: tests sobre el serve real).
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("port inválido: {linea:?}"));
+        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
     (child, port)
 }
 
@@ -482,7 +482,7 @@ fn servidor_mantiene_la_conexion_viva_between_peticiones() {
 
     stream.write_all(b"GET /b HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía 2ª");
     let r2 = leer_one_response(&mut stream);
-    assert!(r2.contains("hello /b"), "2ª response por la misma conexión: {r2}");
+    assert!(r2.contains("hello /b"), "2ª response por la misma connection: {r2}");
 
     // `Connection: close` se honra: responde y CIERRA (EOF).
     stream.write_all(b"GET /c HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").expect("envía 3ª");
@@ -662,7 +662,7 @@ fn files_estaticos_con_saneo() {
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee el port");
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("port inválido: {linea:?}"));
+        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
 
     // "/" sirve index.html con su Content-Type.
     let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");

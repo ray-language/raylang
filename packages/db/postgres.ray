@@ -86,10 +86,10 @@ fn read_msg(c: Conn) -> Result<PgMsg, string> {
             // La longitud incluye sus propios 4 octetos → un valor < 4 es inválido (evita un `total`
             // que deje `sub_bytes` con fin < inicio). Y un valor enorme = bomba de memoria.
             if (mlen < 4) {
-                return Result.Err("postgres: length de mensaje inválida (" + to_string(mlen) + ")");
+                return Result.Err("postgres: invalid message length (" + to_string(mlen) + ")");
             }
             if (mlen > max_message()) {
-                return Result.Err("postgres: mensaje excede el límite (" + to_string(mlen) + " octetos, posible bomba de memoria)");
+                return Result.Err("postgres: message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)");
             }
             let total = 1 + mlen;
             if (c.buf.len() >= total) {
@@ -100,7 +100,7 @@ fn read_msg(c: Conn) -> Result<PgMsg, string> {
         }
         let chunk = net.socket_read_bytes(c.handle)?;
         if (chunk.len() == 0) {
-            return Result.Err("postgres: el servidor cerró la conexión");
+            return Result.Err("postgres: the server closed the connection");
         }
         c.buf = c.buf + chunk;
     }
@@ -124,11 +124,11 @@ fn error_text(payload: bytes) -> string {
             // 'M'
             return match (from_utf8(bytes_of(val))) {
                 Result.Ok(s) => "postgres: " + s,
-                Result.Err(_) => "postgres: error del servidor",
+                Result.Err(_) => "postgres: server error",
             };
         }
     }
-    "postgres: error del servidor"
+    "postgres: server error"
 }
 
 // ── DataRow ────────────────────────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ fn error_text(payload: bytes) -> string {
 // Falla como valor ante un payload truncado o una longitud fuera de rango (datos del servidor).
 fn parse_datarow(payload: bytes) -> Result<[string], string> {
     if (payload.len() < 2) {
-        return Result.Err("postgres: DataRow truncado (sin account de columnas)");
+        return Result.Err("postgres: truncated DataRow (no column count)");
     }
     var cols: [string] = [];
     let ncol = payload[0] << 8 | payload[1];
@@ -145,7 +145,7 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
     var i = 0;
     while (i < ncol) {
         if (pos + 4 > payload.len()) {
-            return Result.Err("postgres: DataRow truncado (length de columna)");
+            return Result.Err("postgres: truncated DataRow (column length)");
         }
         // La longitud es int32 CON SIGNO: -1 (0xFFFFFFFF) marca NULL. `be32` no extiende el signo,
         // así que hay que reinterpretarlo — sin esto, el NULL se leía como 4294967295 y `sub_bytes`
@@ -159,7 +159,7 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
             cols.push(""); // NULL
         } else {
             if (pos + vlen > payload.len()) {
-                return Result.Err("postgres: DataRow con length de columna outside de range");
+                return Result.Err("postgres: DataRow with column length out of range");
             }
             let v = payload.sub_bytes(pos, pos + vlen);
             cols.push(match (from_utf8(v)) {
@@ -193,7 +193,7 @@ pub fn connect_tls(host: string, port: int, user: string, password: string, data
     let resp = net.socket_read_bytes(handle)?;
     if (resp.len() < 1 || resp[0] != 83) {
         close(handle);
-        return Result.Err("postgres: el servidor no acepta TLS (sslRequest rechazado)");
+        return Result.Err("postgres: the server does not accept TLS (sslRequest rejected)");
     }
     let _ = match (net.tls_upgrade(handle, host)) {
         Result.Ok(h) => h,
@@ -230,7 +230,7 @@ fn startup_and_auth(handle: int, user: string, password: string, database: strin
                     // AuthenticationSASLContinue (server-first) → SASLResponse
                     let sf = match (from_utf8(msg.payload.sub_bytes(4, msg.payload.len()))) {
                         Result.Ok(s) => s,
-                        Result.Err(_) => { close(handle); return Result.Err("postgres: server-first no es UTF-8"); },
+                        Result.Err(_) => { close(handle); return Result.Err("postgres: server-first is not UTF-8"); },
                     };
                     let final_msg = match (scram_final(sc, password, sf)) {
                         Result.Ok(f) => f,
@@ -242,11 +242,11 @@ fn startup_and_auth(handle: int, user: string, password: string, database: strin
                         // AuthenticationSASLFinal (server-final): verificar la firma del servidor.
                         let sfin = match (from_utf8(msg.payload.sub_bytes(4, msg.payload.len()))) {
                             Result.Ok(s) => s,
-                            Result.Err(_) => { close(handle); return Result.Err("postgres: server-final no es UTF-8"); },
+                            Result.Err(_) => { close(handle); return Result.Err("postgres: server-final is not UTF-8"); },
                         };
                         if (!scram_verify(sc, sfin)) {
                             close(handle);
-                            return Result.Err("postgres: la signature del servidor no verifies (autenticación fallida)");
+                            return Result.Err("postgres: the server signature does not verify (authentication failed)");
                         }
                     }
                     // code 0 = AuthenticationOk: nada que hacer.

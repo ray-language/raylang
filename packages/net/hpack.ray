@@ -97,7 +97,7 @@ fn table_lookup(h: Hpack, idx: int) -> Result<HEntry, string> {
         if (d >= 0 && d < h.dyn_names.len()) {
             Result.Ok(header(h.dyn_names[d], h.dyn_values[d]))
         } else {
-            Result.Err("índice HPACK outside de range: " + to_string(idx))
+            Result.Err("HPACK index out of range: " + to_string(idx))
         }
     }
 }
@@ -226,12 +226,12 @@ fn dec_int(data: bytes, pos: int, prefix_bits: int) -> Result<IntResult, string>
     var follow = true;
     while (follow) {
         if (p >= data.len()) {
-            return Result.Err("HPACK: entero truncado (continuación sin fin)");
+            return Result.Err("HPACK: truncated integer (continuation without end)");
         }
         // Más de ~5 octetos de continuación = entero fuera de cualquier uso legítimo (índice,
         // longitud acotada por el bloque, tamaño de tabla ≤ 4096) → corta antes de desbordar.
         if (shift > 28) {
-            return Result.Err("HPACK: entero demasiado grande");
+            return Result.Err("HPACK: integer too large");
         }
         let b = data[p];
         p = p + 1;
@@ -251,20 +251,20 @@ struct StrResult {
 
 fn dec_str(data: bytes, pos: int) -> Result<StrResult, string> {
     if (pos >= data.len()) {
-        return Result.Err("HPACK: literal de string truncado");
+        return Result.Err("HPACK: truncated string literal");
     }
     let huff = data[pos] >> 7 & 1;
     let lr = dec_int(data, pos, 7)?;
     if (huff == 1) {
-        return Result.Err("HPACK: literal Huffman no soportado en la decodificación");
+        return Result.Err("HPACK: Huffman literal not supported in decoding");
     }
     // La longitud viene del peer: validar el rango antes de `sub_bytes` (evita el OOB).
     if (lr.value < 0 || lr.next + lr.value > data.len()) {
-        return Result.Err("HPACK: length de string outside de range");
+        return Result.Err("HPACK: string length out of range");
     }
     match (from_utf8(data.sub_bytes(lr.next, lr.next + lr.value))) {
         Result.Ok(s) => Result.Ok(StrResult { value: s, next: lr.next + lr.value }),
-        Result.Err(e) => Result.Err("HPACK: string no es UTF-8: " + e),
+        Result.Err(e) => Result.Err("HPACK: string is not UTF-8: " + e),
     }
 }
 
@@ -331,7 +331,7 @@ pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
                     // anunció por SETTINGS (por defecto 4096). Sin este tope, un peer sube el máximo y
                     // la tabla dinámica crece sin evicción a lo largo de la conexión (bomba de memoria).
                     if (ir.value > 4096) {
-                        return Result.Err("HPACK: actualización de tamaño de tabla excede el máximo (4096)");
+                        return Result.Err("HPACK: table size update exceeds the maximum (4096)");
                     }
                     set_max_size(h, ir.value);
                     pos = ir.next;

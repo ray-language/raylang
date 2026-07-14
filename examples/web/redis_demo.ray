@@ -9,7 +9,7 @@ fn main() -> int {
     let puerto = puerto_de_args();
     match (connect("127.0.0.1", puerto)) {
         Result.Err(e) => {
-            eprint("no se pudo conectar: " + e);
+            eprint("could not connect: " + e);
             1
         },
         Result.Ok(c) => {

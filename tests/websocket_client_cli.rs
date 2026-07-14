@@ -20,7 +20,7 @@ fn launch_servidor() -> (Child, u16) {
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("port inválido: {linea:?}"));
+    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
     // Drena el resto del stdout del servidor.
     std::thread::spawn(move || {
         let mut sink = Vec::new();

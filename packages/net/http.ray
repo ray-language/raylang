@@ -50,7 +50,7 @@ fn parse_url(url: string) -> Result<Url, string> {
         if (url.starts_with("http://")) {
             rest = url.substring(7, url.len());
         } else {
-            return Result.Err("solo se soporta http:// o https://");
+            return Result.Err("only http:// or https:// is supported");
         }
     }
 
@@ -76,7 +76,7 @@ fn parse_url(url: string) -> Result<Url, string> {
                     port = n;
                 },
                 Option.None => {
-                    return Result.Err("port inválido: " + ps);
+                    return Result.Err("invalid port: " + ps);
                 },
             }
         },
@@ -147,7 +147,7 @@ fn leer_con_plazo(h: int, plazo_fin: int) -> Result<bytes, string> {
     if (plazo_fin > 0) {
         let restante: int = plazo_fin - time.monotonic();
         if (restante <= 0) {
-            return Result.Err("tiempo de espera de lectura agotado");
+            return Result.Err("read timeout");
         }
         net.set_read_timeout(h, restante);
     }
@@ -250,7 +250,7 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
     while (follow && pos < n) {
         let line_end: int = find_crlf(body, pos);
         if (line_end < 0) {
-            return Result.Err("chunk sin CRLF de tamaño");
+            return Result.Err("chunk without size CRLF");
         }
         let size: int = parse_chunk_size(body, pos, line_end);
         pos = line_end + 2;
@@ -270,19 +270,19 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
 fn parse_response(raw: bytes) -> Result<Response, string> {
     let sep: int = find_fin_headers(raw);
     if (sep < 0) {
-        return Result.Err("response HTTP malformada (sin separador de headers)");
+        return Result.Err("malformed HTTP response (no header separator)");
     }
     // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
     let body: bytes = raw.sub_bytes(sep + 4, raw.len());
     match (from_utf8(raw.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("headers HTTP no son UTF-8: " + e),
+        Result.Err(e) => Result.Err("HTTP headers are not UTF-8: " + e),
         Result.Ok(headers_raw) => {
             let lines: [string] = headers_raw.split("\r\n");
 
             // Línea de estado: "HTTP/1.1 200 OK".
             let parts: [string] = lines[0].split(" ");
             if (parts.len() < 2) {
-                return Result.Err("línea de estado malformada: " + lines[0]);
+                return Result.Err("malformed status line: " + lines[0]);
             }
             var status: int = 0;
             match (parse_int(parts[1])) {
@@ -290,7 +290,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                     status = n;
                 },
                 Option.None => {
-                    return Result.Err("código de estado inválido: " + parts[1]);
+                    return Result.Err("invalid status code: " + parts[1]);
                 },
             }
 
@@ -450,19 +450,19 @@ pub fn request_bytes(method: string, url: string, body: bytes, headers: Map<stri
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
             match (conectar(u)) {
-                Result.Err(e) => Result.Err("no se pudo conectar: " + e),
+                Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
                     let plazo_fin: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
                     match (net.socket_write_bytes(h, build_request_h(method, u, body, headers))) {
                         Result.Err(e) => {
                             close(h);
-                            Result.Err("error al enviar: " + e)
+                            Result.Err("error sending: " + e)
                         },
                         Result.Ok(_) => {
                             let r = leer_todo(h, plazo_fin);
                             close(h);
                             match (r) {
-                                Result.Err(e) => Result.Err("error al leer: " + e),
+                                Result.Err(e) => Result.Err("error reading: " + e),
                                 Result.Ok(raw) => parse_response(raw),
                             }
                         },
@@ -496,7 +496,7 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
                     return Result.Ok(resp);
                 }
                 if (restantes <= 0) {
-                    return Result.Err("demasiadas redirecciones");
+                    return Result.Err("too many redirects");
                 }
                 match (header(resp, "location")) {
                     Option.Some(loc) => {
@@ -572,7 +572,7 @@ pub fn connect(base_url: string) -> Result<Conn, string> {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
             match (conectar(u)) {
-                Result.Err(e) => Result.Err("no se pudo conectar: " + e),
+                Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => Result.Ok(Conn { h: h, buf: b"", host: u.host, port: u.port, tls: u.tls, open: true }),
             }
         },
@@ -592,7 +592,7 @@ pub fn conn_close(c: Conn) {
 // Reabre el socket de una Conn cerrada (reconexión perezosa).
 fn conn_reabrir(c: Conn) -> Result<int, string> {
     match (conectar(Url { host: c.host, port: c.port, path: "/", tls: c.tls })) {
-        Result.Err(e) => Result.Err("no se pudo conectar: " + e),
+        Result.Err(e) => Result.Err("could not connect: " + e),
         Result.Ok(h) => {
             c.h = h;
             c.buf = b"";
@@ -611,7 +611,7 @@ pub fn conn_request(c: Conn, method: string, path: string, body: string, headers
 // El marcador de "la conexión reutilizada estaba caída" (el servidor la cerró en el ocio,
 // sin entregar ningún octeto): dispara el reintento transparente sobre una conexión fresca.
 fn err_caida() -> string {
-    "la conexión persistente se cerró"
+    "the persistent connection closed"
 }
 
 /// The base form over a persistent connection: raw bytes body and an explicit total
@@ -677,7 +677,7 @@ fn conn_leer_mas(c: Conn, plazo_fin: int) -> Result<bool, string> {
     match (leer_con_plazo(c.h, plazo_fin)) {
         Result.Err(e) => {
             conn_close(c);
-            Result.Err("error al leer: " + e)
+            Result.Err("error reading: " + e)
         },
         Result.Ok(trozo) => {
             if (trozo.len() == 0) {
@@ -700,7 +700,7 @@ fn conn_asegurar(c: Conn, n: int, plazo_fin: int) -> Result<int, string> {
             Result.Ok(mas) => {
                 if (!mas) {
                     conn_close(c);
-                    return Result.Err("error al leer: response incompleta");
+                    return Result.Err("error reading: incomplete response");
                 }
             },
         }
@@ -733,7 +733,7 @@ fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, 
                     // EOF antes de completar las cabeceras. Si no había llegado NADA, es la
                     // carrera del keep-alive ocioso → reintentable; si llegó algo, truncada.
                     conn_close(c);
-                    return if (habia == 0) { Result.Err(err_caida()) } else { Result.Err("error al leer: response incompleta") };
+                    return if (habia == 0) { Result.Err(err_caida()) } else { Result.Err("error reading: incomplete response") };
                 }
             },
         }
@@ -743,7 +743,7 @@ fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, 
 
     // 2. Decidir la delimitación del cuerpo con las cabeceras ya recibidas.
     match (from_utf8(c.buf.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("headers HTTP no son UTF-8: " + e),
+        Result.Err(e) => Result.Err("HTTP headers are not UTF-8: " + e),
         Result.Ok(cab) => {
             let lines: [string] = cab.split("\r\n");
             var status: int = 0;

@@ -73,7 +73,7 @@ fn main() -> int {
         Result.Err(e) => { print("sqlite: " + e); },
     }
     sqlite.disconnect(c);
-    // Usar la conexión cerrada falla limpio (error como valor).
+    // Usar la connection closed falla limpio (error como valor).
     match (sqlite.exec(c, "SELECT 1", sin)) {
         Result.Ok(_) => { print("no debería"); },
         Result.Err(e) => { print("cerrada: " + e); },

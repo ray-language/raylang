@@ -84,19 +84,19 @@ fn read_handshake(h: int) -> Result<HandshakeRead, string> {
                     return Result.Ok(HandshakeRead { headers: s, rest: acc.sub_bytes(sep + 4, acc.len()) });
                 },
                 Result.Err(e) => {
-                    return Result.Err("headers del handshake no son UTF-8: " + e);
+                    return Result.Err("handshake headers are not UTF-8: " + e);
                 },
             }
         }
         match (net.socket_read_bytes(h)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
-                    return Result.Err("la conexión se cerró durante el handshake");
+                    return Result.Err("the connection closed during the handshake");
                 }
                 acc = acc + trozo;
             },
             Result.Err(e) => {
-                return Result.Err("error al leer el handshake: " + e);
+                return Result.Err("error reading the handshake: " + e);
             },
         }
     }
@@ -127,7 +127,7 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<WsConn,
                         Result.Ok(ws)
                     } else {
                         close(h);
-                        Result.Err("handshake de WebSocket inválido")
+                        Result.Err("invalid WebSocket handshake")
                     }
                 },
             }
@@ -167,16 +167,16 @@ pub fn send_text(ws: WsConn, message: string) -> Result<int, string> {
 
 // Recibe el siguiente mensaje de texto. Sobre `read_message` (M58.1): tramas partidas/pegadas,
 // ping→pong automático (enmascarado, somos cliente), fragmentación reensamblada; un close del
-// servidor (ya contestado de cortesía) es `Err("conexión cerrada por el peer")`.
+// servidor (ya contestado de cortesía) es `Err("connection closed by the peer")`.
 /// Receives the next text (or binary-decoded-as-UTF-8) message. Robust framing: buffers across
 /// reads, auto-answers pings, reassembles fragmented messages. A close from the server (already
-/// answered) yields `Err("conexión cerrada por el peer")`; non-UTF-8 payloads are an `Err` too.
+/// answered) yields `Err("connection closed by the peer")`; non-UTF-8 payloads are an `Err` too.
 pub fn recv_text(ws: WsConn) -> Result<string, string> {
     match (read_message(ws)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(f) => {
             if (f.opcode == op_close()) {
-                Result.Err("conexión cerrada por el peer")
+                Result.Err("connection closed by the peer")
             } else {
                 from_utf8(f.payload)
             }

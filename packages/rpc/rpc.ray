@@ -49,7 +49,7 @@ fn read_exact(r: Rd, n: int) -> Result<bytes, string> {
     while (r.buf.len() < n) {
         let chunk = net.socket_read_bytes(r.conn)?;
         if (chunk.len() == 0) {
-            return Result.Err("conexión cerrada a half de un frame");
+            return Result.Err("connection closed mid-frame");
         }
         r.buf = r.buf + chunk;
     }
@@ -78,7 +78,7 @@ fn read_frame(r: Rd, max: int) -> Result<Option<bytes>, string> {
     let h = read_exact(r, 4)?;
     let n = (h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3];
     if (n > max) {
-        return Result.Err("frame demasiado grande (" + to_string(n) + " > " + to_string(max) + " octetos)");
+        return Result.Err("frame too large (" + to_string(n) + " > " + to_string(max) + " octetos)");
     }
     let body = read_exact(r, n)?;
     Result.Ok(Option.Some(body))
@@ -140,7 +140,7 @@ fn decode_request(b: bytes) -> Result<(int, Req), string> {
             let id = field_int(m, "id", 0 - 1);
             let method = field_str(m, "method", "");
             if (id < 0 || method == "") {
-                return Result.Err("petición sin id o sin method");
+                return Result.Err("request without id or without method");
             }
             Result.Ok((id, Req {
                 method: method,
@@ -149,7 +149,7 @@ fn decode_request(b: bytes) -> Result<(int, Req), string> {
                 traceparent: field_str(m, "traceparent", ""),
             }))
         },
-        _ => Result.Err("la petición no es un objeto JSON"),
+        _ => Result.Err("the request is not a JSON object"),
     }
 }
 
@@ -174,7 +174,7 @@ fn decode_response(b: bytes) -> Result<(int, Result<Json, string>), string> {
         Json.JObject(m) => {
             let id = field_int(m, "id", 0 - 1);
             if (id < 0) {
-                return Result.Err("response sin id");
+                return Result.Err("response without id");
             }
             // "err" presente gana; si no, "ok" (JNull si el handler devolvió null).
             match (m.get("err")) {
@@ -185,7 +185,7 @@ fn decode_response(b: bytes) -> Result<(int, Result<Json, string>), string> {
                             let failure: Result<Json, string> = Result.Err(msg);
                             Result.Ok((id, failure))
                         },
-                        _ => Result.Err("el campo err no es string"),
+                        _ => Result.Err("the err field is not a string"),
                     }
                 },
                 Option.None => {
@@ -194,7 +194,7 @@ fn decode_response(b: bytes) -> Result<(int, Result<Json, string>), string> {
                 },
             }
         },
-        _ => Result.Err("la response no es un objeto JSON"),
+        _ => Result.Err("the response is not a JSON object"),
     }
 }
 
@@ -229,7 +229,7 @@ fn handle_rpc(conn: int, handler: fn(Req) -> Result<Json, string>, limits: Limit
                             },
                             Result.Err(e) => {
                                 // Framing/JSON corrupto: no hay id al que responder → cerrar.
-                                eprint("rpc petición: " + e);
+                                eprint("rpc request: " + e);
                                 follow = false;
                             },
                         }
@@ -281,7 +281,7 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
-            print("rpc escuchando en el port " + to_string(net.local_port(srv)));
+            print("rpc listening on port " + to_string(net.local_port(srv)));
             let conns: Channel<int> = Channel.new();
             let done: Channel<int> = Channel.new();
             let off: Channel<int> = Channel.new();
@@ -346,7 +346,7 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
             }
             close(off);
             close(srv);
-            print("rpc apagando: " + to_string(activos) + " conexión(es) en vuelo");
+            print("rpc apagando: " + to_string(activos) + " connection(s) in flight");
             if (activos > 0 && drain_ms > 0) {
                 let plazo: Channel<int> = Channel.new();
                 spawn(fn() {
@@ -373,7 +373,7 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
                     }
                 }
                 if (activos > 0) {
-                    eprint("rpc off: " + to_string(activos) + " conexión(es) en vuelo al vencer el plazo");
+                    eprint("rpc off: " + to_string(activos) + " connection(s) in flight when the deadline expired");
                 }
             }
             Result.Ok(0)
@@ -431,11 +431,11 @@ pub fn call_full(c: Client, method: string, params: Json, deadline_ms: int, trac
         net.set_read_timeout(c.rd.conn, 0);
     }
     match (response?) {
-        Option.None => Result.Err("el servidor cerró la conexión"),
+        Option.None => Result.Err("the server closed the connection"),
         Option.Some(fr) => {
             let par = decode_response(fr)?;
             if (par.0 != id) {
-                return Result.Err("response con id inesperado (" + to_string(par.0) + " != " + to_string(id) + "); reconecta");
+                return Result.Err("response with unexpected id (" + to_string(par.0) + " != " + to_string(id) + "); reconecta");
             }
             par.1
         },

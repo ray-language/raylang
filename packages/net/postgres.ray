@@ -79,10 +79,10 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
         if (c.buf.len() >= 5) {
             let mlen = be32(c.buf, 1);  // longitud (incluye sus 4 octetos)
             if (mlen < 4) {
-                return Result.Err("length de mensaje inválida (" + to_string(mlen) + ")");
+                return Result.Err("invalid message length (" + to_string(mlen) + ")");
             }
             if (mlen > max_message()) {
-                return Result.Err("mensaje excede el límite (" + to_string(mlen) + " octetos, posible bomba de memoria)");
+                return Result.Err("message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)");
             }
             let total = 1 + mlen;
             if (c.buf.len() >= total) {
@@ -95,7 +95,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
             match (net.socket_read_bytes(c.handle)) {
                 Result.Ok(chunk) => {
                     if (chunk.len() == 0) {
-                        return Result.Err("conexión cerrada por el servidor");
+                        return Result.Err("connection closed by the server");
                     }
                     c.buf = c.buf + chunk;
                 },
@@ -112,7 +112,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
 // Falla como valor ante un payload truncado o una longitud fuera de rango (datos del servidor).
 fn parse_datarow(payload: bytes) -> Result<[string], string> {
     if (payload.len() < 2) {
-        return Result.Err("DataRow truncado (sin account de columnas)");
+        return Result.Err("truncated DataRow (no column count)");
     }
     var cols: [string] = [];
     let ncol = payload[0] << 8 | payload[1];
@@ -120,7 +120,7 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
     var i = 0;
     while (i < ncol) {
         if (pos + 4 > payload.len()) {
-            return Result.Err("DataRow truncado (length de columna)");
+            return Result.Err("truncated DataRow (column length)");
         }
         // La longitud es int32 CON SIGNO: -1 (0xFFFFFFFF) marca NULL. `be32` no extiende el signo,
         // así que hay que reinterpretarlo — sin esto, el NULL se leía como 4294967295 y `sub_bytes`
@@ -134,7 +134,7 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
             cols.push("");
         } else {
             if (pos + vlen > payload.len()) {
-                return Result.Err("DataRow con length de columna outside de range");
+                return Result.Err("DataRow with column length out of range");
             }
             let v = payload.sub_bytes(pos, pos + vlen);
             match (from_utf8(v)) {
@@ -248,7 +248,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
                     Result.Ok(s) => s,
                     Result.Err(e) => {
                         close(handle);
-                        return Result.Err("server-first no utf8");
+                        return Result.Err("server-first not utf8");
                     },
                 };
                 let final_msg = match (scram_final(sc, password, sf)) {
@@ -279,12 +279,12 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
                     Result.Ok(s) => s,
                     Result.Err(e) => {
                         close(handle);
-                        return Result.Err("server-final no utf8");
+                        return Result.Err("server-final not utf8");
                     },
                 };
                 if (!scram_verify(sc, sfin)) {
                     close(handle);
-                    return Result.Err("la signature del servidor no verifies (autenticación fallida)");
+                    return Result.Err("the server signature does not verify (authentication failed)");
                 }
             }
             // code 0 = AuthenticationOk: nada que hacer.
@@ -312,7 +312,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
         } else if (msg.mtype == 69) {
             // 'E' ErrorResponse
             close(handle);
-            return Result.Err("error del servidor PostgreSQL");
+            return Result.Err("PostgreSQL server error");
         }
         // 'S' ParameterStatus, 'K' BackendKeyData, 'T' RowDescription, 'C' CommandComplete: se ignoran.
     }

@@ -110,7 +110,7 @@ fn launch_wss_server() -> (Child, u16) {
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("port inválido: {linea:?}"));
+    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
     (child, port)
 }
 
@@ -261,7 +261,7 @@ fn servidor_https_sirve_about_tls() {
     assert!(resp.contains("200 OK"), "esperaba 200 OK, got: {resp}");
     assert!(resp.contains("hola https"), "esperaba el body, got: {resp}");
 
-    // Segunda conexión: 404 (el servidor sigue vivo tras la primera).
+    // Segunda connection: 404 (el servidor sigue vivo tras la primera).
     let (mut conn2, mut sock2) = client_tls(port);
     let mut tls2 = rustls::Stream::new(&mut conn2, &mut sock2);
     tls2.write_all(b"GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía 2ª");

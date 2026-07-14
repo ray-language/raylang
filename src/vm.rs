@@ -4474,8 +4474,8 @@ mod tests {
     fn panic_y_assert_fails_oracle() {
         for (src, expected) in [
             ("fn main() -> int { panic(\"boom\"); 0 }", "boom"),
-            ("fn main() -> int { assert_eq(2 + 2, 5); 0 }", "assert_eq falló: 4 != 5"),
-            ("fn main() -> int { assert(false); 0 }", "aserción falló"),
+            ("fn main() -> int { assert_eq(2 + 2, 5); 0 }", "assert_eq failed: 4 != 5"),
+            ("fn main() -> int { assert(false); 0 }", "assertion failed"),
         ] {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");

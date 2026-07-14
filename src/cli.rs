@@ -1062,7 +1062,7 @@ fn cmd_yank(args: &[String]) {
     };
     match crate::index::set_yanked(&index, name, see, !undo) {
         Ok(()) => {
-            let verb = if undo { "restaurada" } else { "retirada" };
+            let verb = if undo { "restored" } else { "yanked" };
             println!("version {name} {see} {verb} in the index");
             println!("note: commit and push '{name}.toml' to share the change.");
         }

@@ -26,7 +26,7 @@ fn main() -> int {
     // 1. Conectar (startup + SCRAM-SHA-256). El nonce sería aleatorio en producción.
     var c = match (postgres.connect(host, port, a[2], a[3], a[4], "clientnonce123456")) {
         Result.Ok(conn) => conn,
-        Result.Err(e) => { print("no se pudo conectar: " + e); return 1; },
+        Result.Err(e) => { print("could not connect: " + e); return 1; },
     };
     print("conectado a PostgreSQL en " + host + ":" + to_string(port));
 

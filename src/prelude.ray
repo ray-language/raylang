@@ -738,7 +738,7 @@ impl<T> OptionOps<T> for Option<T> {
         }
     }
 
-    fn unwrap(self) -> T { self.expect("unwrap de un Option.None") }
+    fn unwrap(self) -> T { self.expect("unwrap of an Option.None") }
 
     // ice-ok: expect de RAYLANG (método OptionOps del prelude), no el de Rust
     fn ok_or<E>(self, err: E) -> Result<T, E> {
@@ -797,7 +797,7 @@ impl<T, E> ResultOps<T, E> for Result<T, E> {
         }
     }
 
-    fn unwrap(self) -> T { self.expect("unwrap de un Result.Err") }
+    fn unwrap(self) -> T { self.expect("unwrap of a Result.Err") }
 
     // ice-ok: expect de RAYLANG (método ResultOps del prelude), no el de Rust
     fn ok(self) -> Option<T> {
@@ -939,7 +939,7 @@ fn remove<K, V>(m: Map<K, V>, k: K) -> Option<V> {
 /// For a custom message, call `panic("...")` directly.
 fn assert(cond: bool) {
     if (!cond) {
-        panic("aserción falló");
+        panic("assertion failed");
     }
 }
 
@@ -949,7 +949,7 @@ fn assert(cond: bool) {
 /// `T` must implement `Eq` (to compare) and `Show` (to display the values).
 fn assert_eq<T: Eq + Show>(a: T, b: T) {
     if (!a.eq(b)) {
-        panic("assert_eq falló: " + a.show() + " != " + b.show());
+        panic("assert_eq failed: " + a.show() + " != " + b.show());
     }
 }
 

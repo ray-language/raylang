@@ -1235,7 +1235,7 @@ pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
 // renueva el deadline): degradación documentada, macOS/Linux tienen poller real.
 
 /// El mensaje del timeout de lectura (idéntico en ambos motores).
-pub const READ_TIMEOUT_MSG: &str = "tiempo de espera de lectura agotado";
+pub const READ_TIMEOUT_MSG: &str = "read timeout";
 
 /// handle → timeout de lectura en ms (los sockets sin entrada no tienen timeout).
 fn read_timeouts() -> &'static std::sync::Mutex<std::collections::HashMap<i64, u64>> {

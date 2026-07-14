@@ -106,7 +106,7 @@ fn main() -> int {
 "#;
     for vm in [false, true] {
         let (out, code) = run_with_libs("noproto", driver, vm);
-        assert_eq!(out.trim(), "solo se soporta http:// o https://", "rejects no-http (vm={vm}): {out}");
+        assert_eq!(out.trim(), "only http:// or https:// is supported", "rejects no-http (vm={vm}): {out}");
         assert_eq!(code, 1);
     }
 }
@@ -217,7 +217,7 @@ fn main() -> int {
     let start = std::time::Instant::now();
     let (out, code) = run_with_libs("timeout", &driver, true);
     assert_eq!(code, 0, "esperaba Err por timeout: {out}");
-    assert!(out.contains("tiempo de espera"), "esperaba el error de timeout: {out}");
+    assert!(out.contains("read timeout"), "esperaba el error de timeout: {out}");
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "tardó demasiado (¿sin timeout?)");
 }
 

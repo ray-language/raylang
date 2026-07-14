@@ -89,7 +89,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
         // M73: un frame que declara más que el tope se rechaza antes de acumular sus octetos.
         if (frame_size(buf) > max_frame()) {
             close(h);
-            return Result.Err("frame HTTP/2 excede el límite (" + to_string(frame_size(buf)) + " octetos)");
+            return Result.Err("HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " octetos)");
         }
         while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
@@ -148,11 +148,11 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                         // M58.3: un stream reseteado es un error con causa (antes: leer hasta EOF).
                         if (fr.stream_id == 1) {
                             close(h);
-                            return Result.Err("el servidor reseteó el stream (RST_STREAM, código " + to_string(rst_error_code(fr.payload)) + ")");
+                            return Result.Err("the server reset the stream (RST_STREAM, code " + to_string(rst_error_code(fr.payload)) + ")");
                         }
                     } else if (fr.ftype == ft_goaway()) {
                         close(h);
-                        return Result.Err("el servidor envió GOAWAY");
+                        return Result.Err("the server sent GOAWAY");
                     }
                     if (fr.stream_id == 1 && (fr.flags & fl_end_stream()) != 0) {
                         done = true;

@@ -311,7 +311,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> String {
 }
 
 const ESPERADO: &str = "conectado\n\
-mala clave: mongo: la signature del servidor no verifies (autenticación fallida)\n\
+mala clave: mongo: the server signature does not verify (authentication failed)\n\
 mal user: mongo: Authentication failed.\n";
 
 #[test]

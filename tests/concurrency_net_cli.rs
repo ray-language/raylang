@@ -65,7 +65,7 @@ fn servidor_concurrente_atiende_outside_de_order() {
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("port inválido: {linea:?}"));
+    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
 
     // Dos clientes; el SEGUNDO en conectarse pide su eco PRIMERO. Un servidor secuencial bloqueado
     // leyendo al primero nunca respondería → el read del segundo daría timeout y el test fallaría.

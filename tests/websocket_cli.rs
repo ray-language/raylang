@@ -74,7 +74,7 @@ fn launch_echo() -> (Child, u16) {
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("port inválido: {linea:?}"));
+    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
     (child, port)
 }
 

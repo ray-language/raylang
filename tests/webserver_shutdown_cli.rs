@@ -36,7 +36,7 @@ fn launch(name: &str, main: &str) -> (Child, u16) {
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee el port");
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("port inválido: {linea:?}"));
+        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
     child.stdout = Some(reader.into_inner());
     (child, port)
 }
@@ -125,7 +125,7 @@ fn main() -> int {
     assert!(resp.contains("lento ok"), "la petición en vuelo se drenó: {resp}");
     let (out, _err, code) = esperar(child);
     assert_eq!(code, 0, "sale clean after drenar\n{out}");
-    assert!(out.contains("apagando: 1 conexión(es) en vuelo"), "drenó exactamente la en vuelo: {out}");
+    assert!(out.contains("apagando: 1 connection(s) in flight"), "drenó exactamente la en vuelo: {out}");
 }
 
 /// El plazo del drenaje: un handler que tarda MÁS que `drain_ms` no retiene el apagado — el
@@ -162,6 +162,6 @@ fn main() -> int {
     let (out, err, code) = esperar(child);
     assert_eq!(code, 0, "sale clean pese a la conexión eterna\n{out}\n{err}");
     assert!(start.elapsed() < Duration::from_secs(2), "no esperó los 3 s del handler");
-    assert!(err.contains("al vencer el plazo"), "anuncia la rendición del plazo: {err}");
+    assert!(err.contains("when the deadline expired"), "anuncia la rendición del plazo: {err}");
     assert!(out.contains("servidor off"), "{out}");
 }

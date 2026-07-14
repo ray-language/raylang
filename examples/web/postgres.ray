@@ -83,7 +83,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
             match (net.socket_read_bytes(c.handle)) {
                 Result.Ok(chunk) => {
                     if (chunk.len() == 0) {
-                        return Result.Err("conexión cerrada por el servidor");
+                        return Result.Err("connection closed by the server");
                     }
                     c.buf = c.buf + chunk;
                 },
@@ -216,7 +216,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
                     Result.Ok(s) => s,
                     Result.Err(e) => {
                         close(handle);
-                        return Result.Err("server-first no utf8");
+                        return Result.Err("server-first not utf8");
                     },
                 };
                 let final_msg = match (scram_final(sc, password, sf)) {
@@ -247,7 +247,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
                     Result.Ok(s) => s,
                     Result.Err(e) => {
                         close(handle);
-                        return Result.Err("server-final no utf8");
+                        return Result.Err("server-final not utf8");
                     },
                 };
                 if (!scram_verify(sc, sfin)) {
@@ -280,7 +280,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
         } else if (msg.mtype == 69) {
             // 'E' ErrorResponse
             close(handle);
-            return Result.Err("error del servidor PostgreSQL");
+            return Result.Err("PostgreSQL server error");
         }
         // 'S' ParameterStatus, 'K' BackendKeyData, 'T' RowDescription, 'C' CommandComplete: se ignoran.
     }

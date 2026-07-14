@@ -68,7 +68,7 @@ pub fn next_after_in(s: cron.Schedule, z: tz.Zone, ms: int) -> Result<int, strin
         naive = cand;
         guard = guard + 1;
     }
-    Result.Err("cron: no se encontró un disparo en hora local (¿expresión imposible?)")
+    Result.Err("cron: no trigger found in local time (impossible expression?)")
 }
 
 // Corre `job` en cada disparo LOCAL de `s` en la zona `z`, para siempre (cede la fibra

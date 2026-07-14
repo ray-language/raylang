@@ -94,7 +94,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
         // M73: un frame que declara más que el tope se rechaza ANTES de acumular sus octetos.
         if (frame_size(buf) > max_frame()) {
             close(h);
-            return Result.Err("frame HTTP/2 excede el límite (" + to_string(frame_size(buf)) + " octetos)");
+            return Result.Err("HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " octetos)");
         }
         while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
@@ -149,7 +149,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                         // M73: tope de respuesta acumulada (anti-bomba de memoria).
                         if (body.len() + fr.payload.len() > max_response()) {
                             close(h);
-                            return Result.Err("response gRPC excede el límite (posible bomba de memoria)");
+                            return Result.Err("gRPC response exceeds the limit (possible memory bomb)");
                         }
                         body = body + fr.payload;
                         // M58.3 — flow control: devolver la ventana consumida (conexión + stream).
@@ -174,11 +174,11 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                         // M58.3: stream reseteado = error con causa (antes: leer hasta EOF).
                         if (fr.stream_id == 1) {
                             close(h);
-                            return Result.Err("el servidor reseteó el stream (RST_STREAM, código " + to_string(rst_error_code(fr.payload)) + ")");
+                            return Result.Err("the server reset the stream (RST_STREAM, code " + to_string(rst_error_code(fr.payload)) + ")");
                         }
                     } else if (fr.ftype == ft_goaway()) {
                         close(h);
-                        return Result.Err("el servidor envió GOAWAY");
+                        return Result.Err("the server sent GOAWAY");
                     }
                     if (fr.stream_id == 1 && (fr.flags & fl_end_stream()) != 0) {
                         done = true;
@@ -200,7 +200,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
     // (protocolo violado, trailers truncados) era indistinguible de un OK (`tuvo_grpc_status`
     // se computaba pero no se leía) → ahora es un error explícito.
     if (!tuvo_grpc_status) {
-        return Result.Err("response gRPC sin grpc-status en los trailers");
+        return Result.Err("gRPC response without grpc-status in the trailers");
     }
     // Desenmarca el mensaje gRPC de la respuesta.
     match (grpc_unframe(body)) {

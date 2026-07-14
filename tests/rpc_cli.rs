@@ -59,7 +59,7 @@ from std/json import Json, stringify;
 fn conectar(port: int) -> rpc.Client {
     match (rpc.connect("127.0.0.1", port)) {
         Result.Ok(c) => c,
-        Result.Err(e) => panic("conexión: " + e),
+        Result.Err(e) => panic("connection: " + e),
     }
 }
 
@@ -136,7 +136,7 @@ fn launch_servidor(base: &std::path::Path) -> (Child, u16) {
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee el port");
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("port inválido: {linea:?}"));
+        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
     child.stdout = Some(reader.into_inner());
     (child, port)
 }

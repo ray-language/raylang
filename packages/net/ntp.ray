@@ -45,11 +45,11 @@ fn parse_response(b: bytes, t1: int, t4: int) -> Result<NtpResult, string> {
     // Stratum 0 = "kiss-of-death" (RFC 4330 §8): el servidor pide parar; no trae hora válida.
     let stratum = b[1];
     if (stratum == 0) {
-        return Result.Err("ntp: kiss-of-death del servidor");
+        return Result.Err("ntp: kiss-of-death from the server");
     }
     // Transmit Timestamp a cero = el servidor no está sincronizado (RFC 4330 §5).
     if (read_u32(b, 40) == 0 && read_u32(b, 44) == 0) {
-        return Result.Err("ntp: el servidor no está sincronizado (transmit timestamp a cero)");
+        return Result.Err("ntp: the server is not synchronized (transmit timestamp is zero)");
     }
     let t2 = ntp_to_unix_ms(read_u32(b, 32), read_u32(b, 36));  // Receive Timestamp
     let t3 = ntp_to_unix_ms(read_u32(b, 40), read_u32(b, 44));  // Transmit Timestamp

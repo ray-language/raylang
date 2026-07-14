@@ -129,8 +129,8 @@ const ESPERADO: &str = "enc1: 160000000268656c6c6f0006000000776f726c640000\n\
 dec2: {BSON: [\"awesome\", 5.05, 1986]}\n\
 dec3: {d: -2.5, s: \"café\", sub: {ok: 1}, a: [-42, null], bin: bin(0102ff), id: oid(000102030405060708090a0b), t: true, n: null, big: 9007199254740993, dt: date(2026-07-09T12:34:56.789Z), ts: timestamp(1783600000,7)}\n\
 rt: true\n\
-trunc: BSON inválido (octeto 0): length de documento inválida: 49\n\
-type: BSON inválido (octeto 6): type BSON no soportado: 14\n";
+trunc: invalid BSON (byte 0): invalid document length: 49\n\
+type: invalid BSON (byte 6): unsupported BSON type: 14\n";
 
 fn project_puente(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
@@ -179,7 +179,7 @@ fn main() -> int {
 
 const ESPERADO_PUENTE: &str = "from: {name: \"ada\", nota: 36, tags: [\"a\", null, true]}\n\
 uni: {s: \"café\"}\n\
-tope: el JSON de un documento must ser un objeto\n\
+tope: a document's JSON must be an object\n\
 to: {\"id\":\"000102030405060708090a0b\",\"n\":42,\"sub\":{\"ok\":1}}\n";
 
 #[test]

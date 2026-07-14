@@ -61,9 +61,9 @@ fn header_alg(header_b64u: string) -> Result<string, string> {
                 Json.JStr(a) => Result.Ok(a),
                 _ => Result.Err("'alg' no es una cadena"),
             },
-            Option.None => Result.Err("falta 'alg'"),
+            Option.None => Result.Err("missing 'alg'"),
         },
-        _ => Result.Err("el header no es un objeto JSON"),
+        _ => Result.Err("the header is not a JSON object"),
     }
 }
 
@@ -73,7 +73,7 @@ fn header_alg(header_b64u: string) -> Result<string, string> {
 pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
     let parts = token.split(".");
     if (parts.len() != 3) {
-        return Result.Err("JWT mal formado: se esperaban 3 segmentos");
+        return Result.Err("malformed JWT: expected 3 segments");
     }
     let h = parts[0];
     let p = parts[1];
@@ -82,11 +82,11 @@ pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
     match (header_alg(h)) {
         Result.Ok(a) => {
             if (a != "HS256") {
-                return Result.Err("algoritmo no soportado: se esperaba HS256, el token declara " + a);
+                return Result.Err("unsupported algorithm: expected HS256, the token declares " + a);
             }
         },
         Result.Err(e) => {
-            return Result.Err("header JWT inválido: " + e);
+            return Result.Err("invalid JWT header: " + e);
         },
     }
     let esperada = sign_input(secret, h + "." + p);

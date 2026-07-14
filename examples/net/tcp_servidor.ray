@@ -6,7 +6,7 @@
 //
 // Pruébalo: `cargo run -- --vm examples/net/tcp_servidor.ray` y, en otra terminal,
 // `nc 127.0.0.1 <puerto>` (escribe algo y verás el eco). Necesita red → no entra al oráculo.
-// Atiende una conexión: lee un mensaje y responde con eco.
+// Atiende una connection: lee un mensaje y responde con eco.
 import std/net;
 
 fn atender(conn: int) {
@@ -17,7 +17,7 @@ fn atender(conn: int) {
                 Result.Err(e) => eprint("error al escribir: " + e),
             }
         },
-        Result.Err(e) => eprint("error al leer: " + e),
+        Result.Err(e) => eprint("error reading: " + e),
     }
     close(conn);
 }

@@ -96,7 +96,7 @@ fn valid_name(name: string) -> bool {
 /// missing (e.g. on Windows) or the file is not a valid TZif.
 pub fn load(name: string) -> Result<Zone, string> {
     if (!valid_name(name)) {
-        return Result.Err("tz: name de zona inválido '" + name + "'");
+        return Result.Err("tz: invalid zone name '" + name + "'");
     }
     load_named("/usr/share/zoneinfo/" + name, name)
 }
@@ -110,7 +110,7 @@ pub fn load_file(path: string) -> Result<Zone, string> {
 fn load_named(path: string, name: string) -> Result<Zone, string> {
     match (fs.read_file_bytes(path)) {
         Result.Ok(data) => parse_tzif(data, name),
-        Result.Err(e) => Result.Err("tz: no se pudo leer '" + path + "': " + e),
+        Result.Err(e) => Result.Err("tz: could not read '" + path + "': " + e),
     }
 }
 
@@ -175,7 +175,7 @@ fn read_header(b: bytes, at: int) -> Result<Header, string> {
         return Result.Err("tz: TZif truncado (header)");
     }
     if (b[at] != 84 || b[at + 1] != 90 || b[at + 2] != 105 || b[at + 3] != 102) {
-        return Result.Err("tz: no es un file TZif (magic)");
+        return Result.Err("tz: not a TZif file (magic)");
     }
     Result.Ok(Header {
         isutcnt: be_uint(b, at + 20, 4),
@@ -207,7 +207,7 @@ fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {
         tsize = 8;
     }
     if (h.typecnt == 0) {
-        return Result.Err("tz: TZif sin types de offset");
+        return Result.Err("tz: TZif without offset types");
     }
     if (at + block_size(h, tsize) > b.len()) {
         return Result.Err("tz: TZif truncado (data)");
@@ -225,7 +225,7 @@ fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {
     while (i < h.timecnt) {
         let ti = b[at + i];
         if (ti >= h.typecnt) {
-            return Result.Err("tz: índice de type outside de range");
+            return Result.Err("tz: type index out of range");
         }
         trans_type.push(ti);
         i = i + 1;

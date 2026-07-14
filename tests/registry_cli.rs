@@ -282,7 +282,7 @@ fn yank_excluye_la_version_de_nuevas_resoluciones() {
     // Retira la 1.3.0 (usa el proyecto solo para localizar el índice vía RAY_INDEX).
     let (out, err, code) = ray_idx(&app, &index, &["yank", "geo@1.3.0"]);
     assert_eq!(code, 0, "yank OK\n{err}");
-    assert!(out.contains("retirada"), "{out}");
+    assert!(out.contains("yanked"), "{out}");
 
     // Una resolución NUEVA (sin lock previo) elige la 1.2.0 (la 1.3.0 está retirada).
     let (out, err, _c) = ray_idx(&app, &index, &["run"]);
@@ -790,7 +790,7 @@ fn signature_manipulada_breaks_resolucion_y_auditoria() {
     )
     .unwrap();
     let (_out, err, code) = ray_idx(&app, &index, &["run"]);
-    assert_ne!(code, 0, "la signature inválida must romper la resolución");
+    assert_ne!(code, 0, "la invalid signature must romper la resolución");
     assert!(err.contains("SIGNATURE") && err.contains("does not verify"), "{err}");
 
     let (_out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);

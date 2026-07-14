@@ -118,7 +118,7 @@ fn read_line(c: Conn) -> Result<string, string> {
             return Result.Ok(line);
         }
         if (!pull(c)) {
-            return Result.Err("conexión cerrada al leer one línea");
+            return Result.Err("connection closed while reading a line");
         }
     }
     Result.Err("inalcanzable")
@@ -128,7 +128,7 @@ fn read_line(c: Conn) -> Result<string, string> {
 fn read_n(c: Conn, n: int) -> Result<bytes, string> {
     while (c.buf.len() < n) {
         if (!pull(c)) {
-            return Result.Err("conexión cerrada al leer el body");
+            return Result.Err("connection closed while reading the body");
         }
     }
     let b = c.buf.sub_bytes(0, n);
@@ -141,7 +141,7 @@ fn read_n(c: Conn, n: int) -> Result<bytes, string> {
 fn parse_len(s: string) -> Result<int, string> {
     match (parse_int(s)) {
         Option.Some(n) => Result.Ok(n),
-        Option.None => Result.Err("length RESP inválida: '" + s + "'"),
+        Option.None => Result.Err("invalid RESP length: '" + s + "'"),
     }
 }
 
@@ -151,7 +151,7 @@ fn read_reply(c: Conn) -> Result<Reply, string> {
         Result.Err(e) => Result.Err(e),
         Result.Ok(line) => {
             if (line.len() == 0) {
-                return Result.Err("response RESP vacía");
+                return Result.Err("empty RESP response");
             }
             let t = line[0];
             let rest = line.substring(1, line.len());
@@ -200,7 +200,7 @@ fn read_bulk(c: Conn, rest: string) -> Result<Reply, string> {
         return Result.Ok(Reply.Nil);
     }
     if (n > max_bulk()) {
-        return Result.Err("bulk RESP excede el límite (" + to_string(n) + " octetos)");
+        return Result.Err("RESP bulk exceeds the limit (" + to_string(n) + " octetos)");
     }
     let data = read_n(c, n)?;
     // Consume el \r\n que cierra el bulk string.
@@ -237,7 +237,7 @@ fn read_array(c: Conn, n: int) -> Result<Reply, string> {
 /// a server-side error arrives as `Ok(Reply.Err(msg))`, not as Err.
 pub fn command(c: Conn, args: [string]) -> Result<Reply, string> {
     match (net.socket_write_bytes(c.h, encode_command(args))) {
-        Result.Err(e) => Result.Err("error al enviar: " + e),
+        Result.Err(e) => Result.Err("error sending: " + e),
         Result.Ok(_) => read_reply(c),
     }
 }

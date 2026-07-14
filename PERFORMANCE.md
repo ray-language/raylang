@@ -358,12 +358,23 @@ tiparíamos). `matematicas.ray` transpila y da salida byte-idéntica a la VM.
 
 **31/37 ejemplos** (añade `matematicas`) — nativo ≡ VM byte a byte.
 
-**Cobertura tras 13 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+#### Fase 14 — `args()` (14 jul)
+
+Argumentos de línea de comandos: `args() -> [string]`. Mapea a
+`std::env::args().skip(1)` → `Vec<Rc<str>>` en la repr de arreglo (`Rc<RefCell<…>>`). El `skip(1)`
+salta el nombre del binario; la VM salta el binario **y** el `.ray` (`argv` tras el archivo) → **equivalen**
+(el usuario pasa los mismos argumentos posicionales en ambos). Verificado con `fib.ray` (que lee
+`args()[0]` como nº de pasos vía `parse_int`): idéntico a la VM **sin** args (default 10) y **con** arg
+(`fib 5`). El resto (`a.len()`, `a[0]`, `parse_int`, `match`) ya estaba soportado.
+
+**32/37 ejemplos** (añade `fib`) — nativo ≡ VM byte a byte.
+
+**Cobertura tras 14 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
 match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (estático +
-defaults + bounds) · tuplas · **trait objects (`dyn`)** · **`std::math`** · const/char/cast · UFCS. **El
-transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM (31/37 ejemplos). Restan solo 6,
-cada una una extensión acotada: `@derive(Eq)` con diccionarios, operator-overloading, `From`-conversion,
-`args()`, enteros con tamaño, `for` sobre Map. Sin incógnitas de viabilidad.
+defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · **`args()`** · const/char/cast ·
+UFCS. **El transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM (32/37 ejemplos).
+Restan solo 5, cada una una extensión acotada: `@derive(Eq)` con diccionarios, operator-overloading,
+`From`-conversion, enteros con tamaño, `for` sobre Map. Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

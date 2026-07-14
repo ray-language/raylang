@@ -1105,6 +1105,14 @@ impl Transpiler {
             }
         }
         match method {
+            // args() → [string]: los argumentos de línea de comandos tras el binario. La VM devuelve
+            // argv tras el `.ray`; el nativo, tras el binario (`skip(1)`) → equivalen. Repr = arreglo.
+            "args" => {
+                out.push_str(
+                    "Rc::new(std::cell::RefCell::new(std::env::args().skip(1)\
+                     .map(|__a| Rc::<str>::from(__a)).collect::<Vec<Rc<str>>>()))",
+                );
+            }
             "print" => {
                 // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos).
                 if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
@@ -1387,6 +1395,7 @@ impl Transpiler {
                     "parse_float" => opt_of(Type::Float),
                     "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
                     "split" => Type::Array(Box::new(Type::String)),
+                    "args" => Type::Array(Box::new(Type::String)),
                     "chars" => Type::Array(Box::new(Type::Char)),
                     "contains_key" => Type::Bool,
                     // get_or → V (desenvuelto); get/remove → Option<V> (para match/`?`); keys→[K]; values→[V].
@@ -1992,9 +2001,22 @@ mod tests {
     }
 
     #[test]
+    fn transpila_args() {
+        // args() → arreglo de string (argv tras el binario); a[i] indexa, a.len() cuenta.
+        let rust = transpile_src(
+            "fn main() -> int { let a = args(); \
+             if (a.len() > 0) { a[0].len() } else { 0 } }",
+        );
+        assert!(rust.contains("std::env::args().skip(1)"), "{}", rust);
+        assert!(rust.contains("Rc::<str>::from(__a)"), "{}", rust);
+        // el arreglo se indexa/mide como cualquier `[string]` (borrow).
+        assert!(rust.contains(".borrow().len() as i64"), "{}", rust);
+    }
+
+    #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `args()` (I/O, aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens = crate::lexer::lex("fn main() { let a = args(); print(a.len()); }").unwrap();
+        // un `main` con `input()` (stdin, aún fuera del subconjunto) → sin `main` transpilable.
+        let tokens = crate::lexer::lex("fn main() { let s = input(); print(s); }").unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());

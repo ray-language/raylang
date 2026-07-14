@@ -368,6 +368,36 @@ impl Transpiler {
                 out.push_str(";\n");
                 self.declare(name, vty);
             }
+            // Desestructuración de tupla: `let (a, b) = e;` → `let (a, b) = e;` (`_` descarta; `var`→mut).
+            StmtKind::LetTuple { names, value, mutable } => {
+                let elems = match self.type_of(value)? {
+                    Type::Tuple(ts) => ts,
+                    other => return Err(format!("spike: let-tupla sobre {:?}", other)),
+                };
+                out.push_str("let (");
+                for (i, nm) in names.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    match nm {
+                        Some(n) => {
+                            if *mutable {
+                                out.push_str("mut ");
+                            }
+                            out.push_str(&mangle(n));
+                        }
+                        None => out.push('_'),
+                    }
+                }
+                out.push_str(") = ");
+                self.emit_expr(out, value)?;
+                out.push_str(";\n");
+                for (nm, et) in names.iter().zip(&elems) {
+                    if let Some(n) = nm {
+                        self.declare(n, et.clone());
+                    }
+                }
+            }
             StmtKind::Assign { target, value } => {
                 // El TARGET es un lvalue: NO se clona (a diferencia de una lectura). Para `a[i]`/`p.x` el
                 // RHS se evalúa a un temporal ANTES del `borrow_mut()` del target: si el RHS lee el MISMO
@@ -450,7 +480,6 @@ impl Transpiler {
                     _ => return Err("spike: for sobre iterador (Iterator<T>) no soportado".into()),
                 }
             }
-            other => return Err(format!("spike: sentencia no soportada {:?}", other)),
         }
         Ok(())
     }
@@ -565,8 +594,24 @@ impl Transpiler {
                 }
                 out.push_str("))");
             }
-            // Indexación de LECTURA. Arreglo: a[i] → a.borrow()[i as usize].clone(). String: s[i] → char
-            // por índice (chars().nth); out-of-bounds → panic (como el error de runtime de la VM).
+            // Literal de tupla `(a, b, …)` → tupla nativa de Rust `(a, b,)`.
+            ExprKind::TupleLit(elems) => {
+                out.push('(');
+                for e in elems {
+                    self.emit_expr(out, e)?;
+                    out.push_str(", ");
+                }
+                out.push(')');
+            }
+            // Indexación de LECTURA. Tupla: `t.0` → `t.0` (campo nativo). Arreglo: `a[i]` →
+            // `a.borrow()[i].clone()`. String: `s[i]` → char por índice (chars().nth; OOB → panic).
+            ExprKind::Index { array, index } if matches!(self.type_of(array)?, Type::Tuple(_)) => {
+                self.emit_expr(out, array)?;
+                match &index.kind {
+                    ExprKind::Int(n) => write!(out, ".{}", n).unwrap(),
+                    _ => return Err("spike: índice de tupla no literal".into()),
+                }
+            }
             ExprKind::Index { array, index } => {
                 if matches!(self.type_of(array)?, Type::String) {
                     self.emit_expr(out, array)?;
@@ -592,11 +637,16 @@ impl Transpiler {
                 }
                 out.push_str(" }))");
             }
-            // Acceso a campo (lectura): p.x → p.borrow().x.clone(). (El `Field` de un método/UFCS lo
-            // consume `emit_call`; aquí solo llega un acceso a campo de struct.)
+            // Acceso a campo (lectura). Tupla: `t.0` → `t.0` (campo nativo, sin borrow). Struct: `p.x` →
+            // `p.borrow().x.clone()`. (El `Field` de un método/UFCS lo consume `emit_call`.)
             ExprKind::Field { object, name } => {
-                self.emit_expr(out, object)?;
-                write!(out, ".borrow().{}.clone()", name).unwrap();
+                if matches!(self.type_of(object)?, Type::Tuple(_)) {
+                    self.emit_expr(out, object)?;
+                    write!(out, ".{}", name).unwrap();
+                } else {
+                    self.emit_expr(out, object)?;
+                    write!(out, ".borrow().{}.clone()", name).unwrap();
+                }
             }
             // Construcción de variante de enum. Option/Result → Some/None/Ok/Err NATIVOS de Rust (sin Rc);
             // un enum de usuario → Rc::new(EnumName::Variant(args)).
@@ -1248,11 +1298,21 @@ impl Transpiler {
                 };
                 Type::Array(Box::new(elem))
             }
-            ExprKind::Index { array, .. } => match self.type_of(array)? {
+            ExprKind::Index { array, index } => match self.type_of(array)? {
                 Type::Array(t) => *t,
                 Type::String => Type::Char, // s[i] → char
+                Type::Tuple(ts) => {
+                    let i = match &index.kind {
+                        ExprKind::Int(n) => *n as usize,
+                        _ => return Err("spike: índice de tupla no literal".into()),
+                    };
+                    ts.get(i).cloned().ok_or("spike: índice de tupla fuera de rango")?
+                }
                 other => return Err(format!("spike: indexar {:?} no soportado", other)),
             },
+            ExprKind::TupleLit(elems) => {
+                Type::Tuple(elems.iter().map(|e| self.type_of(e)).collect::<Result<_, _>>()?)
+            }
             ExprKind::StructLit { name, .. } => Type::Struct(name.clone(), vec![]),
             ExprKind::EnumLit { enum_name, variant, args } => {
                 if enum_name == "Option" {
@@ -1276,6 +1336,11 @@ impl Transpiler {
             ),
             ExprKind::Field { object, name } => {
                 let obj_ty = self.type_of(object)?;
+                // Tupla: `t.0` → el tipo del i-ésimo elemento.
+                if let Type::Tuple(ts) = &obj_ty {
+                    let i: usize = name.parse().map_err(|_| "spike: campo de tupla no numérico")?;
+                    return ts.get(i).cloned().ok_or_else(|| "spike: campo de tupla fuera de rango".into());
+                }
                 let sn = match &obj_ty {
                     Type::Struct(n, _) => n.clone(),
                     other => return Err(format!("spike: acceso a campo sobre {:?}", other)),
@@ -1380,6 +1445,11 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
                 format!("<{}>", ra.join(", "))
             };
             return Ok(format!("Rc<{}{}>", n, sfx));
+        }
+        // Tupla → tupla NATIVA de Rust (heterogénea, inmutable; sin Rc — valor, como en raylang).
+        Type::Tuple(ts) => {
+            let rs: Vec<String> = ts.iter().map(|t| rust_ty(t, enums, tparams)).collect::<Result<_, _>>()?;
+            return Ok(format!("({},)", rs.join(", ")));
         }
         // Función como valor → Rc<dyn Fn(...)->R> (clon barato + compartible; captura por `move`).
         Type::Fn(params, ret) => {
@@ -1704,9 +1774,20 @@ mod tests {
     }
 
     #[test]
+    fn transpila_tuplas() {
+        let rust = transpile_src(
+            "fn divmod(a: int, b: int) -> (int, int) { (a / b, a % b) }\n\
+             fn main() -> int { let d = divmod(17, 5); let (q, r) = divmod(23, 4); d.0 + q + r }",
+        );
+        assert!(rust.contains("-> (i64, i64,)"), "{}", rust); // tupla nativa de Rust
+        assert!(rust.contains("let (q, r) = "), "{}", rust); // desestructuración
+        assert!(rust.contains(".0"), "{}", rust); // acceso por índice de tupla
+    }
+
+    #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con tupla (aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens = crate::lexer::lex("fn main() { let t = (1, 2); print(t.0); }").unwrap();
+        // un `main` con `args()` (I/O, aún fuera del subconjunto) → sin `main` transpilable.
+        let tokens = crate::lexer::lex("fn main() { let a = args(); print(a.len()); }").unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());

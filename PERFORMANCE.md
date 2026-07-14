@@ -320,11 +320,20 @@ a byte. Diferido (features avanzadas): `@derive(Eq)` con diccionarios, operator-
 trait objects (`dyn`, `trait_objects`), `From`-conversion (`?`); + misc (tuplas, interpolación,
 `std::math`, `args()`, enteros con tamaño, captura mutable, concurrencia).
 
-**Cobertura tras 10 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · **traits (despacho
-estático + defaults + bounds)** · const/char/cast · UFCS. **El transpilador cubre el LENGUAJE IDIOMÁTICO
-CENTRAL** con salida byte-idéntica a la VM (27/37 ejemplos, todos los de datos/tipos/genéricos/traits/
-funcional/errores). Lo que resta son extensiones acotadas, sin incógnitas de viabilidad.
+#### Fase 11 — tuplas (14 jul)
+
+`(a, b, …)` → **tuplas NATIVAS de Rust** (`(A, B,)`, heterogéneas, por valor — a diferencia del `Vec<T>`
+homogéneo; el checker las borra a arreglos en runtime, pero el AST conserva `TupleLit`/`LetTuple`/
+`Type::Tuple`, que bajo directo). Cubre: retorno de tupla, literal, acceso `t.0`/`t.1` (llega como `Field`
+con nombre numérico → campo nativo, sin borrow), y **desestructuración** `let (q, r) = e;` (`_` descarta,
+`var`→`mut`). **29/37 ejemplos** (añade `tuplas`, `interpolacion`).
+
+**Cobertura tras 11 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (despacho estático
++ defaults + bounds) · **tuplas** · const/char/cast · UFCS. **El transpilador cubre el LENGUAJE IDIOMÁTICO
+CENTRAL** con salida byte-idéntica a la VM (29/37 ejemplos). Restan (acotadas, sin incógnitas): `@derive`
+con diccionarios, operator-overloading, trait objects (`dyn`), `From`-conversion, `std::math`, `args()`,
+enteros con tamaño, captura mutable, concurrencia.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

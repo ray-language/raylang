@@ -165,7 +165,14 @@ editar-correr nativo importara — que para servicios no.
 | **P0.1+P0.2 (medido 14 jul)** | — | — | **5.4×** | 2.8× | **3.5×** |
 | **P0.1+P0.2+P0.3 (medido 14 jul)** | — | — | **3.2×** | 2.7× | **2.7×** |
 | **+P0.4 mimalloc (medido 14 jul)** | — | — | **2.7×** | **2.1×** | **2.0×** |
-| post-P0 (con P0.6 superinstr.) | ~11× | ~8× | **~2.4×** | ~1.9× | **~1.8×** |
+| **+P0.6 guarda + PGO release (medido 14 jul)** | **10.1×** | **8.0×** | **2.5×** | **1.9×** | **2.0×** |
+
+**Arco P0 CERRADO** (release/PGO, cada lenguaje con su acumulador idiomático): en la niche de
+servicios ray va **1.9–2.5×** y **bate a Ruby en los tres**, a Python/Lua en dos (puestos 5–6 de 7).
+Los micro-CPU (fibrec 10.1×, loopsum 8.0×) mejoraron pero siguen capados: solo los mueve **P2**
+(nativo/JIT). Seis pasos, todos medidos, oráculo intacto: aHash · get_or · add_to · mimalloc ·
+superinstrucción de guarda (P0.5 no llegó a existir). El método medir-primero redirigió dos de ellos
+(aHash no era el cuello; el interning de P0.4 se descartó por `split`=malloc).
 | post-P1 | ~6× | ~4× | ~2.5× | ~2× | ~2× |
 | post-P2.b (nativo) | **<1× (bate a node)** | **<1×** | **~1×** | **~1×** | **~1×** |
 

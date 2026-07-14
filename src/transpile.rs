@@ -36,7 +36,7 @@ fn mangle(name: &str) -> String {
     if name == "self" {
         return "__self".to_string(); // `self` es palabra reservada de Rust fuera de un método
     }
-    name.replace('#', "_HH_").replace("::", "_CC_")
+    name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_")
 }
 
 /// ¿Es un método de un impl del PRELUDE sobre un tipo builtin (`[]#len`, `string#trim`, `int#show`)?
@@ -125,6 +125,9 @@ struct Transpiler {
     /// Constantes de nivel superior (nombre → tipo). Se bajan a funciones `NAME()` (uniforme para
     /// escalares y strings, que no pueden ser `const` en Rust por el `Rc`); una referencia `NAME` → `NAME()`.
     consts: HashMap<String, Type>,
+    /// Firma de cada método de trait (nombre → (tipos de args SIN `self`, tipo de retorno)). Para bajar
+    /// `dyn Trait`: el struct sintetizado `__dyn_T` lleva un campo-closure por método (`Rc<dyn Fn(..)->R>`).
+    trait_method_sigs: HashMap<String, (Vec<Type>, Type)>,
     /// Parámetros de tipo de la función genérica en curso (p. ej. `{T, U}`): un `Struct(n)` con `n` aquí
     /// es un tipo VARIABLE → se emite como el genérico `n` de Rust (no como un struct de usuario).
     tparams: std::collections::HashSet<String>,
@@ -154,6 +157,14 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         .collect();
     let enum_tparams = prog.enums.iter().map(|e| (e.name.clone(), e.type_params.clone())).collect();
     let consts = prog.consts.iter().map(|c| (c.name.clone(), c.ty.clone())).collect();
+    // Firmas de los métodos de trait (self excluido) para bajar `dyn Trait`.
+    let mut trait_method_sigs = HashMap::new();
+    for tr in &prog.traits {
+        for m in &tr.methods {
+            let args: Vec<Type> = m.params.iter().skip(1).map(|p| p.ty.clone()).collect(); // skip self
+            trait_method_sigs.insert(m.name.clone(), (args, m.return_type.clone()));
+        }
+    }
     let mut t = Transpiler {
         funcs,
         scopes: Vec::new(),
@@ -164,6 +175,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         enum_tparams,
         match_temp: 0,
         consts,
+        trait_method_sigs,
         tparams: std::collections::HashSet::new(),
     };
 
@@ -211,6 +223,25 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     for s in &prog.structs {
         if s.name == "Iter" { continue; } // struct del protocolo de iterador del prelude
         t.tparams = s.type_params.iter().cloned().collect();
+        // `dyn Trait` (M9.3b): struct sintetizado `__dyn_T { data, métodos… }`. Aquí, un juego de closures
+        // que CAPTURAN el valor concreto (sin `data`, sin Box<dyn Any>): cada campo `Rc<dyn Fn(args)->ret>`.
+        if s.name.starts_with("__dyn_") {
+            writeln!(out, "#[derive(Clone)]\nstruct {} {{", mangle(&s.name)).unwrap();
+            for (fname, _) in &s.fields {
+                if fname == "data" {
+                    continue; // el valor concreto lo capturan las closures, no se guarda aparte
+                }
+                let (args, ret) = t
+                    .trait_method_sigs
+                    .get(fname)
+                    .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", fname))?;
+                let atys: Vec<String> =
+                    args.iter().map(|a| rust_ty(a, &t.enums, &t.tparams)).collect::<Result<_, _>>()?;
+                writeln!(out, "    {}: Rc<dyn Fn({}) -> {}>,", fname, atys.join(", "), rust_ty(ret, &t.enums, &t.tparams)?).unwrap();
+            }
+            out.push_str("}\n");
+            continue;
+        }
         writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", s.name, generic_decl(&s.type_params)).unwrap();
         for (fname, fty) in &s.fields {
             writeln!(out, "    {}: {},", fname, rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
@@ -359,7 +390,7 @@ impl Transpiler {
                     None => None,
                 };
                 out.push_str(if *mutable { "let mut " } else { "let " });
-                out.push_str(name);
+                out.push_str(&mangle(name));
                 if let Some(a) = ann {
                     write!(out, ": {}", a).unwrap();
                 }
@@ -404,7 +435,7 @@ impl Transpiler {
                 // objeto (`p.x = p.x + 1`), evita el doble borrow del RefCell (leer + mutar a la vez).
                 match &target.kind {
                     ExprKind::Ident(name) => {
-                        out.push_str(name);
+                        out.push_str(&mangle(name));
                         out.push_str(" = ");
                         self.emit_expr(out, value)?;
                         out.push_str(";\n");
@@ -625,6 +656,50 @@ impl Transpiler {
                     out.push_str(" as usize].clone()");
                 }
             }
+            // Coerción concreto→`dyn Trait` (M9.3b): el checker la baja a `__dyn_T { data: <concreto>,
+            // m: <método>, … }`. Aquí → un struct de closures que CAPTURAN el concreto: cada método
+            // `m: { let __c = <concreto>; move |args| m_concreto(__c.clone(), args) }` (sin `data`).
+            ExprKind::StructLit { name, fields } if name.starts_with("__dyn_") => {
+                // fields[0] = ("data", <concreto>); el resto = (método, <valor-vtable>).
+                let concrete = &fields[0].1;
+                out.push_str("{ let __c = ");
+                self.emit_expr(out, concrete)?;
+                write!(out, "; Rc::new(std::cell::RefCell::new({} {{ ", mangle(name)).unwrap();
+                for (i, (mname, mval)) in fields.iter().enumerate().skip(1) {
+                    if i > 1 {
+                        out.push_str(", ");
+                    }
+                    let (args, _) = self
+                        .trait_method_sigs
+                        .get(mname)
+                        .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", mname))?
+                        .clone();
+                    // params de la closure: __a0: T0, __a1: T1, …
+                    let mut params = String::new();
+                    for (j, aty) in args.iter().enumerate() {
+                        if j > 0 {
+                            params.push_str(", ");
+                        }
+                        write!(params, "__a{}: {}", j, rust_ty(aty, &self.enums, &self.tparams)?).unwrap();
+                    }
+                    write!(out, "{}: {{ let __c = __c.clone(); Rc::new(move |{}| ", mname, params).unwrap();
+                    // llamada al método concreto: m_concreto(__c.clone(), __a0, …).
+                    match &mval.kind {
+                        ExprKind::Ident(fname) => write!(out, "{}(", mangle(fname)).unwrap(),
+                        _ => {
+                            out.push('(');
+                            self.emit_expr(out, mval)?;
+                            out.push_str(")(");
+                        }
+                    }
+                    out.push_str("__c.clone()");
+                    for j in 0..args.len() {
+                        write!(out, ", __a{}", j).unwrap();
+                    }
+                    out.push_str(")) }");
+                }
+                out.push_str(" })) }");
+            }
             // Literal de struct: Punto { x: 1, y: 2 } → Rc::new(RefCell::new(Punto { x: 1, y: 2 })).
             ExprKind::StructLit { name, fields } => {
                 write!(out, "Rc::new(std::cell::RefCell::new({} {{ ", name).unwrap();
@@ -730,7 +805,7 @@ impl Transpiler {
     /// `where` `A: RayShow`). struct → `Name { f: v, … }`; enum → `Name.Variant(payload)` / `Name.Variant`.
     fn emit_rayshow_impls(&self, out: &mut String, prog: &Program) -> Result<(), String> {
         for s in &prog.structs {
-            if s.name == "Iter" { continue; }
+            if s.name == "Iter" || s.name.starts_with("__dyn_") { continue; }
             let gens = generic_decl(&s.type_params);
             let sfx = type_args(&s.type_params);
             let mut fmt = format!("{} {{{{ ", s.name);
@@ -943,6 +1018,24 @@ impl Transpiler {
 
     fn emit_call(&mut self, out: &mut String, callee: &Expr, args: &[Expr]) -> Result<(), String> {
         let (name, recv) = resolve_callee(callee)?;
+        // Despacho dinámico (M9.3b): el checker baja `obj.m(a)` a `(r.m)(r.data, a)` con `r: dyn`. Aquí el
+        // campo `m` es una closure que capturó el concreto → `(r.borrow().m.clone())(a)` (se descarta el
+        // arg `r.data` que añadió el checker: es `args[0]`).
+        if let Some(r) = recv {
+            if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
+                out.push('(');
+                self.emit_expr(out, r)?;
+                write!(out, ".borrow().{}.clone())(", name).unwrap();
+                for (i, a) in args.iter().skip(1).enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    self.emit_expr(out, a)?;
+                }
+                out.push(')');
+                return Ok(());
+            }
+        }
         // Argumentos efectivos: el receptor de UFCS (si lo hay) va primero.
         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
         // Métodos de la stdlib manglados por el checker (`string#len`, `Len` trait…): el método real es
@@ -1210,6 +1303,14 @@ impl Transpiler {
             },
             ExprKind::Call { callee, args } => {
                 let (n, recv) = resolve_callee(callee)?;
+                // Despacho dinámico: el tipo es el retorno del método del trait.
+                if let Some(r) = recv {
+                    if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
+                        return Ok(self.trait_method_sigs.get(n).map(|(_, ret)| ret.clone())
+                            .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", n))?);
+                    }
+                }
+                let _ = &args;
                 let method = n.rsplit('#').next().unwrap_or(n).trim_start_matches("__");
                 // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
                 let recv0 = recv.or_else(|| args.first());
@@ -1451,6 +1552,10 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
             let rs: Vec<String> = ts.iter().map(|t| rust_ty(t, enums, tparams)).collect::<Result<_, _>>()?;
             return Ok(format!("({},)", rs.join(", ")));
         }
+        // Trait object `dyn A + B` → el struct sintetizado por el checker (__dyn_A+B), un juego de closures.
+        Type::Dyn(traits) => {
+            return Ok(format!("Rc<std::cell::RefCell<{}>>", mangle(&format!("__dyn_{}", traits.join("+")))));
+        }
         // Función como valor → Rc<dyn Fn(...)->R> (clon barato + compartible; captura por `move`).
         Type::Fn(params, ret) => {
             let ps: Vec<String> = params.iter().map(|p| rust_ty(p, enums, tparams)).collect::<Result<_, _>>()?;
@@ -1577,7 +1682,7 @@ fn is_heap(t: &Type) -> bool {
     matches!(
         t,
         Type::String | Type::Bytes | Type::Array(_) | Type::Tuple(_) | Type::Map(_, _)
-            | Type::Struct(_, _) | Type::Enum(_, _) | Type::Fn(_, _) | Type::Var(_)
+            | Type::Struct(_, _) | Type::Enum(_, _) | Type::Fn(_, _) | Type::Var(_) | Type::Dyn(_)
     )
 }
 
@@ -1782,6 +1887,22 @@ mod tests {
         assert!(rust.contains("-> (i64, i64,)"), "{}", rust); // tupla nativa de Rust
         assert!(rust.contains("let (q, r) = "), "{}", rust); // desestructuración
         assert!(rust.contains(".0"), "{}", rust); // acceso por índice de tupla
+    }
+
+    #[test]
+    fn transpila_trait_objects_dyn() {
+        let rust = transpile_src(
+            "trait Figura { fn area(self) -> int; }\n\
+             struct Cuad { lado: int }\n\
+             impl Figura for Cuad { fn area(self) -> int { self.lado * self.lado } }\n\
+             fn total(f: dyn Figura) -> int { f.area() }\n\
+             fn main() -> int { total(Cuad { lado: 3 }) }",
+        );
+        // dyn → struct de closures que capturan el concreto (sin Box<dyn Any>, sin data).
+        assert!(rust.contains("struct __dyn_Figura"), "{}", rust);
+        assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
+        assert!(rust.contains("let __c = "), "{}", rust); // captura del concreto en la coerción
+        assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
     }
 
     #[test]

@@ -328,12 +328,26 @@ homogéneo; el checker las borra a arreglos en runtime, pero el AST conserva `Tu
 con nombre numérico → campo nativo, sin borrow), y **desestructuración** `let (q, r) = e;` (`_` descarta,
 `var`→`mut`). **29/37 ejemplos** (añade `tuplas`, `interpolacion`).
 
-**Cobertura tras 11 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (despacho estático
-+ defaults + bounds) · **tuplas** · const/char/cast · UFCS. **El transpilador cubre el LENGUAJE IDIOMÁTICO
-CENTRAL** con salida byte-idéntica a la VM (29/37 ejemplos). Restan (acotadas, sin incógnitas): `@derive`
-con diccionarios, operator-overloading, trait objects (`dyn`), `From`-conversion, `std::math`, `args()`,
-enteros con tamaño, captura mutable, concurrencia.
+#### Fase 12 — trait objects (`dyn`) (14 jul)
+
+**El reto arquitectónico del arco**: el checker baja `dyn Trait` a un struct sintetizado `__dyn_T { data,
+métodos… }` donde **`data` está tipado `Unit`** (placeholder; en runtime guarda el valor concreto — la VM
+lo maneja con su `Value` universal). Ese **borrado de tipos por runtime choca de frente con los tipos
+estáticos de Rust** (`data: ()` no puede guardar un `Cuadrado`). Es el ÚNICO sitio donde "emitir el
+programa bajado" no basta. **Solución limpia (sin `Box<dyn Any>` ni downcast)**: el objeto dinámico se baja
+a un **struct de CLOSURES que capturan el concreto** — un campo `Rc<dyn Fn(args)->ret>` por método (sin
+`data`); la coerción envuelve cada método `m: { let __c=<concreto>; move |a| m_concreto(__c.clone(), a) }`,
+y el despacho `(r.m)(r.data, a)` → `(r.borrow().m.clone())(a)` (se descarta el arg `data`). Firmas de los
+métodos desde `prog.traits`. Cubre métodos por defecto sobre el objeto y `[dyn Trait]`.
+
+**30/37 ejemplos** (añade `trait_objects`) — nativo ≡ VM byte a byte.
+
+**Cobertura tras 12 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · Option/Result/`?` · closures/map/filter/fold · genéricos (fns + tipos) · traits (estático +
+defaults + bounds) · tuplas · **trait objects (`dyn`)** · const/char/cast · UFCS. **El transpilador cubre
+CASI TODO el lenguaje** con salida byte-idéntica a la VM (30/37 ejemplos). Restan solo 7, cada una una
+extensión acotada: `@derive(Eq)` con diccionarios, operator-overloading, `From`-conversion, `std::math`,
+`args()`, enteros con tamaño, captura mutable/concurrencia. Sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

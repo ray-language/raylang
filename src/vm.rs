@@ -1013,6 +1013,31 @@ impl<'a> Vm<'a> {
                     };
                     self.push(v);
                 }
+                OpCode::MapAdd => {
+                    // P0.3: upsert acumulativo en UN lookup (entry-API). Args (map, key, delta) → cima = delta.
+                    use std::collections::hash_map::Entry;
+                    let delta = self.pop();
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    let (l, c) = pos!();
+                    let ovf = || runtime_error(l, c, "arithmetic overflow on int");
+                    match self.cur.heap.get_mut(h) {
+                        Obj::Map(m) => match m.entry(k) {
+                            Entry::Occupied(mut e) => {
+                                let nv = match (e.get(), &delta) {
+                                    (HeapValue::Int(a), HeapValue::Int(b)) => HeapValue::Int(a.checked_add(*b).ok_or_else(ovf)?),
+                                    (HeapValue::Float(a), HeapValue::Float(b)) => HeapValue::Float(a + b),
+                                    _ => unreachable!("the checker guarantees int/float map value + matching delta"),
+                                };
+                                e.insert(nv);
+                            }
+                            // Ausente: m[k] = delta (0 + delta).
+                            Entry::Vacant(e) => { e.insert(delta); }
+                        },
+                        _ => unreachable!("the checker guarantees a Map"),
+                    }
+                    self.push(HeapValue::Unit);
+                }
                 OpCode::MapRemove => {
                     // M13.1b: quita la clave; [] o [v]. El prelude → Option<V>.
                     let k = heap_to_key(&self.pop());
@@ -4898,6 +4923,26 @@ mod tests {
                 m.insert(\"a\", 10);
                 let total = match (m.get(\"a\")) { Option.Some(v) => v, Option.None => 0 };
                 total + m.len()
+             }",
+        );
+    }
+
+    /// P0.3: `add_to(m, k, delta)` — upsert acumulativo en 1 lookup (opcode `MapAdd`). Cubre conteo
+    /// (int), clave ausente (`m[k] = delta`), acumulación repetida y valores float. Oráculo VM↔intérprete.
+    #[test]
+    fn map_add_to_oracle() {
+        oracle_program(
+            "fn main() -> int {
+                let m: Map<string, int> = Map.new();
+                m.add_to(\"a\", 1);
+                m.add_to(\"a\", 1);
+                m.add_to(\"b\", 5);
+                m.add_to(\"a\", 10);
+                let f: Map<string, float> = Map.new();
+                f.add_to(\"x\", 1.5);
+                f.add_to(\"x\", 2.25);
+                m.get_or(\"a\", 0) + m.get_or(\"b\", 0) + m.get_or(\"z\", 0) + m.len()
+                    + (if (f.get_or(\"x\", 0.0) > 3.7) { 100 } else { 0 })
              }",
         );
     }

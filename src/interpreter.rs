@@ -920,6 +920,31 @@ impl<'a> Interpreter<'a> {
                         };
                         return Err(runtime_error(callee.line, callee.col, &msg));
                     }
+                    // P0.3: `add_to(m, k, delta)` — upsert acumulativo en 1 lookup (entry-API). Se
+                    // intercepta aquí (no en `eval_builtin`) porque el overflow int es un `Flow::Error`
+                    // (como `+`), y aquí tenemos la posición del callee. Espejo del opcode `MapAdd`.
+                    if name == "add_to" {
+                        use std::collections::hash_map::Entry;
+                        let k = MapKey::from_value(&values[1]);
+                        let delta = values[2].clone();
+                        match &values[0] {
+                            Value::Map(rc) => match rc.borrow_mut().entry(k) {
+                                Entry::Occupied(mut e) => {
+                                    let nv = match (e.get(), &delta) {
+                                        (Value::Int(a), Value::Int(b)) => Value::Int(
+                                            a.checked_add(*b).ok_or_else(|| runtime_error(
+                                                callee.line, callee.col, "arithmetic overflow on int"))?),
+                                        (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                                        _ => unreachable!("the checker guarantees int/float map value + matching delta"),
+                                    };
+                                    e.insert(nv);
+                                }
+                                Entry::Vacant(e) => { e.insert(delta); }
+                            },
+                            _ => unreachable!("the checker guarantees a Map"),
+                        }
+                        return Ok(Value::Unit);
+                    }
                     // M12.1: la concurrencia (CSP) vive SOLO en la VM (necesita el scheduler de fibras y
                     // continuaciones que el intérprete tree-walking no tiene). Error limpio en vez de panic.
                     // `close` NO va aquí: es ad-hoc polimórfico y su forma de handle de archivo (M11.8) sí

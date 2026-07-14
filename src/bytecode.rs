@@ -338,6 +338,11 @@ pub enum OpCode {
     /// **sin alocar** (a diferencia de `MapGet`+`Option`+`unwrap_or`, que aloca el arreglo y el enum).
     /// Primitivo `__get_or`; el prelude expone `get_or(m, k, default) -> V` (P0.2, perf).
     MapGetOr,
+    /// Saca `delta`, clave y mapa; hace `m[k] += delta` (o `m[k] = delta` si la clave no está) en un
+    /// **único lookup** vía la *entry-API* — a diferencia de `get_or(k,0)+insert(k,...)`, que hashea y
+    /// busca dos veces y clona la clave dos veces. Valor int o float (checked como `+`). Builtin
+    /// `add_to(m, k, delta) -> unit`; el idioma de conteo/acumulación de servicios (P0.3, perf).
+    MapAdd,
     /// Saca clave y mapa; empuja un `bool`: si la clave está presente. Builtin `contains_key`.
     MapContainsKey,
     /// Saca clave y mapa; **quita** la clave (mutando el mapa) y empuja un arreglo `[V]` con **0 o

@@ -225,7 +225,7 @@ pub fn methods_for(category: &str) -> &'static [&'static str] {
         "char" => &["char_code", "to_string"],
         "int" | "float" | "bool" => &["to_string"],
         "array" => &["len", "push", "reverse", "contains", "join"],
-        "map" => &["len", "insert", "contains_key", "keys", "values"],
+        "map" => &["len", "insert", "add_to", "contains_key", "keys", "values"],
         _ => &[],
     }
 }
@@ -270,6 +270,7 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "push" => (vec!["arr: [T]", "value: T"], "unit"),
         "reverse" => (vec!["arr: [T]"], "[T]"),
         "insert" => (vec!["m: Map<K, V>", "key: K", "value: V"], "unit"),
+        "add_to" => (vec!["m: Map<K, V>", "key: K", "delta: V"], "unit"),
         "contains_key" => (vec!["m: Map<K, V>", "key: K"], "bool"),
         "keys" => (vec!["m: Map<K, V>"], "[K]"),
         "values" => (vec!["m: Map<K, V>"], "[V]"),
@@ -318,6 +319,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "ed25519_verify" => "Verifies an Ed25519 signature: `ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool`.",
         // --- Map ---
         "insert" => "Inserts or updates a key/value pair in a Map, in place.",
+        "add_to" => "Adds `delta` to the value at `key` (or sets it to `delta` if absent), in place — one lookup. For int/float value maps: the counting/accumulation idiom `m.add_to(k, 1)`.",
         "contains_key" => "Whether the Map contains the given key.",
         "keys" => "Returns the keys of a Map as a sorted array (deterministic order).",
         "values" => "Returns the values of a Map, in the same order as `keys()`.",
@@ -2013,6 +2015,23 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != kt { return Err((Some(1), format!("__get_or: the Map key is {} but got {}", kt, a[1]))); }
         if a[2] != vt { return Err((Some(2), format!("__get_or: the Map value is {} but got {}", vt, a[2]))); }
         Ok(vt)
+    } },
+    // add_to(m, k, delta) -> unit (P0.3, perf): `m[k] += delta` (o `= delta` si no está) en UN lookup
+    // (opcode `MapAdd`, entry-API), frente a `insert(k, get_or(k,0)+delta)` que busca dos veces. Ad-hoc
+    // sobre valores numéricos (int|float), como `+`; público (UFCS `m.add_to(k, d)`), sin envoltorio de
+    // prelude (el constraint int|float no se expresa en una firma genérica).
+    Builtin { name: "add_to", opcode: OpCode::MapAdd, check: |a| {
+        arity(a, 3, "add_to", " (map, key, delta)")?;
+        let (kt, vt) = match &a[0] {
+            Type::Map(k, v) => ((**k).clone(), (**v).clone()),
+            other => return Err((Some(0), format!("add_to expects a Map as first argument, not {}", other))),
+        };
+        if vt != Type::Int && vt != Type::Float {
+            return Err((Some(0), format!("add_to requires a Map with int or float values, not {}", vt)));
+        }
+        if a[1] != kt { return Err((Some(1), format!("add_to: the Map key is {} but got {}", kt, a[1]))); }
+        if a[2] != vt { return Err((Some(2), format!("add_to: the delta is {} but the Map value is {}", a[2], vt))); }
+        Ok(Type::Unit)
     } },
     // __map_remove(m, k) -> [V] (M13.1b): quita k del mapa; [] si no estaba, [v] si sí. Prelude → Option.
     Builtin { name: "__map_remove", opcode: OpCode::MapRemove, check: |a| {

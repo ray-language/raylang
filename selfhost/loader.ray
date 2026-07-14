@@ -153,7 +153,7 @@ fn load_one(name: string, path: string) -> Result<Program, LoadError> {
                 Result.Err(le) => Result.Err(LoadError { msg: le.msg, line: le.line, col: le.col, module: name }),
             }
         },
-        Result.Err(_) => Result.Err(LoadError { msg: "no se pudo leer el módulo '" + name + "' (" + path + ")", line: 0, col: 0, module: name }),
+        Result.Err(_) => Result.Err(LoadError { msg: "could not read module '" + name + "' (" + path + ")", line: 0, col: 0, module: name }),
     }
 }
 
@@ -229,14 +229,14 @@ fn classify_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps, 
                                     types.insert(local, g);
                                 },
                                 Option.None => {
-                                    return Result.Err(LoadError { msg: "el módulo '" + fi.module + "' no exporta '" + n.name + "' (¿falta 'pub'?)", line: n.line, col: n.col, module: m.name });
+                                    return Result.Err(LoadError { msg: "module '" + fi.module + "' does not export '" + n.name + "' (missing 'pub'?)", line: n.line, col: n.col, module: m.name });
                                 },
                             }
                         },
                     }
                 },
                 Option.None => {
-                    return Result.Err(LoadError { msg: "módulo no encontrado: '" + fi.module + "'", line: n.line, col: n.col, module: m.name });
+                    return Result.Err(LoadError { msg: "module not found: '" + fi.module + "'", line: n.line, col: n.col, module: m.name });
                 },
             }
             j = j + 1;

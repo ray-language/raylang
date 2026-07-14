@@ -260,7 +260,7 @@ fn http2_get_rst_stream_es_error_con_causa() {
     let lines = run_len(port);
     assert_eq!(lines.len(), 1, "esperaba solo la línea de error: {lines:?}");
     assert!(
-        lines[0].contains("RST_STREAM") && lines[0].contains("código 8"),
+        lines[0].contains("RST_STREAM") && lines[0].contains("code 8"),
         "esperaba el error de RST con su código, got: {lines:?}"
     );
 }

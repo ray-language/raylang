@@ -248,7 +248,7 @@ fn dependency_qualified_y_capsule_protege_internos() {
     .unwrap();
     let (_o, err, code) = ray(&root, &["run"]);
     assert_eq!(code, 65, "alcanzar el internal de one dependency es error\n{err}");
-    assert!(err.contains("internal a la cápsula 'geo'"), "{err}");
+    assert!(err.contains("internal to capsule 'geo'"), "{err}");
 }
 
 #[test]

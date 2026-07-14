@@ -168,7 +168,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
             _ => match crate::stdlib::embedded(&name) {
                 Some(s) => s.to_string(),
                 None => std::fs::read_to_string(&path).map_err(|e| LoadError {
-                    message: format!("no se pudo leer el módulo '{}' ({}): {}", name, path.display(), e),
+                    message: format!("could not read module '{}' ({}): {}", name, path.display(), e),
                 })?,
             },
         };
@@ -181,7 +181,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
             // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
             if let Some(c) = capsule_violated(&roots, &name, dep) {
                 return Err(render(&source, line, col, 1, &name, &format!(
-                    "el módulo '{}' es internal a la cápsula '{}'; impórtalo con 'import {};'",
+                    "module '{}' is internal to capsule '{}'; import it with 'import {};'",
                     dep, c, c
                 )));
             }
@@ -215,7 +215,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                 match resolved {
                     Some(mp) => pending.push((dep.clone(), mp, false)),
                     None => return Err(render(&source, line, col, 1, &name, &format!(
-                        "no se encuentra el módulo '{}' (se esperaba '{}.ray' o '{}/mod.ray' en: {})",
+                        "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {})",
                         dep, dep, dep,
                         roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
                     ))),
@@ -620,7 +620,7 @@ pub fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBu
         let as_dir = root.join(dep).join("mod.ray");
         match (as_file.exists(), as_dir.exists()) {
             (true, true) => return Err(format!(
-                "el módulo '{}' es ambiguo: existen '{}' y '{}'; deja solo one",
+                "module '{}' is ambiguous: both '{}' and '{}' exist; leave only one",
                 dep, as_file.display(), as_dir.display()
             )),
             (true, false) => return Ok(Some(as_file)),
@@ -711,7 +711,7 @@ fn check_unique_types(modules: &[Module]) -> Result<(), LoadError> {
         for (name, line, col) in names {
             if !seen.insert(name.clone()) {
                 return Err(render(&m.source, line, col, 1, &m.name, &format!(
-                    "el type '{}' ya está definido en este módulo", name
+                    "type '{}' is already defined in this module", name
                 )));
             }
         }
@@ -844,7 +844,7 @@ fn build_import_map(m: &Module) -> Result<ImportMap, LoadError> {
             && other != i.module
         {
             return Err(render(&m.source, i.line, i.col, 1, &m.name, &format!(
-                "el name de módulo '{}' ya nombra a '{}'; uses 'as' para renombrar esta importación",
+                "module name '{}' already names '{}'; use 'as' to rename this import",
                 leaf, other
             )));
         }
@@ -883,7 +883,7 @@ fn classify_from_imports(
             let local = n.local().to_string();
             if !locals.insert(local.clone()) {
                 return Err(render(&m.source, n.line, n.col, 1, &m.name, &format!(
-                    "el name '{}' ya está definido o importado en este módulo; uses 'as' para renombrarlo",
+                    "name '{}' is already defined or imported in this module; use 'as' to rename it",
                     local
                 )));
             }
@@ -928,11 +928,11 @@ fn classify_from_name(
     // No exporta el nombre: ¿existe como tipo privado? (mensaje más preciso que "no existe").
     if all_types.get(from).is_some_and(|s| s.contains(&name.name)) {
         return Err(render(src, name.line, name.col, 1, module, &format!(
-            "'{}' es un type private del módulo '{}' (¿falta 'pub'?)", name.name, from
+            "'{}' is a private type of module '{}' (missing 'pub'?)", name.name, from
         )));
     }
     Err(render(src, name.line, name.col, 1, module, &format!(
-        "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", from, name.name
+        "module '{}' does not export '{}' (missing 'pub'?)", from, name.name
     )))
 }
 
@@ -1192,7 +1192,7 @@ impl<'a> Resolver<'a> {
         match global {
             Some(g) => Ok(Some(g.clone())),
             None => Err(render(src, object.line, object.col, 1, module, &format!(
-                "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", path, name
+                "module '{}' does not export '{}' (missing 'pub'?)", path, name
             ))),
         }
     }

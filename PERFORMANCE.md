@@ -236,10 +236,31 @@ mutación, **aliasing** por referencia, structs anidados), `inventario` (structs
 enlazadas)** + fib/gcd/primes/fizzbuzz. Los ejemplos que aún fallan son de OTRAS features (print de
 arreglos, `const` de nivel superior, indexar strings), no de structs/enums.
 
-**Cobertura tras 5 fases**: escalares · control · recursión · strings · arreglos · Map · **structs/enums/
-match** · UFCS. **Falta**: closures, genéricos de usuario (monomorfizar), print de colecciones, `const`,
-indexar strings/`char`, GC de ciclos (hoy `Rc` los fuga; el corpus no crea ciclos), traits/`@derive`,
-concurrencia (M12/M38, o "spawn cae a la VM en v1"). Ingeniería de cobertura, sin incógnitas.
+**Cobertura tras 5 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
+match · UFCS.
+
+#### Fase 6 — cierre de flecos (14 jul)
+
+Barrido de huecos pequeños para que **casi todos los ejemplos** transpilen y den salida byte-idéntica a
+la VM: literales `char` (`{:?}` de char), casts `as` (int↔float, char↔int), `const` de nivel superior
+(→ funciones `NAME()`), **print de arreglos** (`[e0, e1, …]` recursivo para anidados, vía `show_expr`),
+indexar strings `s[i]`→char, `chars()`, `assert`/`assert_eq`, literal de Map `[k: v]`, `remove`. Y **dos
+bugs reales de aliasing/inferencia**: (1) `p.x = p.x + 1` generaba `borrow_mut()… = …borrow()…` sobre el
+MISMO RefCell → doble borrow en runtime; fix: el RHS a un temporal antes del `borrow_mut`. (2)
+`type_of(match)` fallaba si el primer brazo usaba un binding del patrón; fix: primer brazo que resuelva.
+
+**Resultado: 15 de 24 ejemplos** (`examples/data` + `examples/basics`) transpilan y coinciden con la VM
+byte a byte — TODOS los de estructuras de datos (arreglos, matrices, structs, enums, pilas, **listas
+enlazadas**) y básicos (casts, constantes, fizzbuzz, gcd, palíndromo, primes). Los 9 restantes necesitan
+**fases de features grandes, no flecos**: Option/Result como enums reales (match sobre `get()`), closures,
+genéricos de usuario (monomorfizar `Caja<T>`), tuplas, interpolación de strings, builtins de `std::math`,
+`args()`, y el `for (k,v)` sobre Map.
+
+**Cobertura tras 6 fases**: el subconjunto NO-genérico, NO-closure, NO-concurrente del lenguaje corre en
+nativo con salida idéntica a la VM. **Falta para el lenguaje completo**: closures, genéricos
+(monomorfizar), Option/Result-match, tuplas, traits/`@derive`, interpolación, GC de ciclos (hoy `Rc` los
+fuga; el corpus no crea ciclos), concurrencia (M12/M38, o "spawn cae a la VM en v1"). Ingeniería de
+cobertura, sin incógnitas de viabilidad.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

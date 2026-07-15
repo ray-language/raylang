@@ -256,6 +256,20 @@ hacía `panic` por `eff[2]` inexistente → ahora el arm se guarda con `eff.len(
 cae al fallback (error limpio, no crash). Test de regresión. Librería rustc OK: 32 → 33 (los que usan
 `contains` suelen usar además TLS/crypto). Corpus 37/37 intacto.
 
+#### Fase 40 — UDP (`std::net::UdpSocket`)
+
+Sockets UDP: los primitivos `__udp_bind`/`__udp_send_to`/`__udp_recv_from` (que envuelven los wrappers de
+raylang de `udp.ray`) → `std::net::UdpSocket`. Se extiende `__RayHandle` con `Udp(UdpSocket)` (5.ª variante)
+y `local_port` cubre las tres (Tcp/Listener/Udp). Los primitivos devuelven **arreglos etiquetados** (como
+`__read_file`): `bind`/`send_to` → `["ok", n]`/`["err", msg]` (strings); `recv_from` → `[b"ok", host, port,
+data]`/`[b"err", msg]` (bytes, que los wrappers decodifican a un `Packet`). `recv_from` es **BLOQUEANTE**
+(con hilos de SO reales, un hilo bloqueado en `recv_from` es gratis; la VM usa no-bloqueante + scheduler
+para no atascar su M:1 → mismo efecto observable). Clonan el socket (`try_clone`) para no retener el lock.
+**Verificado end-to-end**: un servidor UDP transpilado (bind puerto 0 → imprime el puerto → recv → eco al
+remitente) y un cliente `UdpSocket` — datagrama de ida y vuelta `hola udp`. Test de integración
+`build_native_udp_hace_eco` (el test es el cliente). Librería rustc OK: 33 → 34. Corpus 37/37 intacto.
+Diferido en red: TLS (rustls), crypto (`ring`) — deps externas, techo estructural de los ejemplos web.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

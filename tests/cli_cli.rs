@@ -449,6 +449,51 @@ fn build_native_servidor_tcp_hace_eco() {
 }
 
 #[test]
+fn build_native_udp_hace_eco() {
+    // `ray build --native` de un servidor UDP: bind en un puerto libre (imprime el puerto vía
+    // net.local_port), recibe un datagrama y responde al remitente. El TEST hace de cliente (UdpSocket).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native UDP: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_udp");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/net;\n\
+         fn main() -> int {\n\
+           let b = __udp_bind(\"127.0.0.1\", 0);\n\
+           let h = match (parse_int(b[1])) { Option.Some(x) => x, Option.None => 0 - 1 };\n\
+           print(to_string(net.local_port(h)));\n\
+           let r = __udp_recv_from(h);\n\
+           let host = match (from_utf8(r[1])) { Result.Ok(s) => s, Result.Err(e) => \"\" };\n\
+           let port = match (parse_int(match (from_utf8(r[2])) { Result.Ok(s) => s, Result.Err(e) => \"0\" })) { Option.Some(n) => n, Option.None => 0 };\n\
+           let _ = __udp_send_to(h, host, port, r[3]);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("srv");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native UDP ok\n{err}");
+
+    use std::io::{BufRead, BufReader};
+    let mut srv = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el servidor UDP");
+    let mut sout = BufReader::new(srv.stdout.take().unwrap());
+    let mut port_line = String::new();
+    sout.read_line(&mut port_line).expect("lee el puerto");
+    let port: u16 = port_line.trim().parse().expect("puerto numérico");
+
+    // El TEST es el cliente UDP: envía un datagrama y espera el eco.
+    let cli = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind cliente");
+    cli.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+    cli.send_to(b"hola udp", ("127.0.0.1", port)).expect("envía");
+    let mut buf = [0u8; 64];
+    let (n, _) = cli.recv_from(&mut buf).expect("recibe el eco");
+    assert_eq!(&buf[..n], b"hola udp", "el servidor hace eco del datagrama");
+    let _ = srv.wait();
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

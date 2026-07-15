@@ -403,7 +403,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     // Registro de handles (M11.8): compartido por archivos y sockets. Se emite si el programa usa cualquiera.
     if t.needs_handles || t.needs_net {
         out.push_str(concat!(
-            "enum __RayHandle { Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener) }\n",
+            "enum __RayHandle { Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener), Udp(std::net::UdpSocket) }\n",
             "struct __RayReg { next: i64, open: __RayMap<i64, __RayHandle> }\n",
             "fn __ray_reg() -> &'static std::sync::Mutex<__RayReg> {\n",
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
@@ -464,11 +464,28 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "    Ok(bytes.len() as i64) }\n",
             "fn __ray_local_port(h: i64) -> i64 {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Udp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
             "fn __ray_set_read_timeout(h: i64, ms: i64) {\n",
             "    let d = if ms <= 0 { None } else { Some(std::time::Duration::from_millis(ms as u64)) };\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let _ = s.set_read_timeout(d); } }\n",
+            // UDP: los primitivos devuelven ARREGLOS ETIQUETADOS (bind/send → [\"ok\"/\"err\", ...]; recv →
+            // [b\"ok\"/b\"err\", host, port, data]) que los wrappers de raylang (udp.ray) parsean. recv es
+            // BLOQUEANTE (con hilos de SO reales; la VM usa no-bloqueante + scheduler → mismo efecto).
+            "fn __ray_udp_bind(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    match std::net::UdpSocket::bind((host, port as u16)) {\n",
+            "        Ok(s) => { let id = __ray_reg_insert(__RayHandle::Udp(s)); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
+            "        Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.to_string())])) } }\n",
+            "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok(), _ => None } }\n",
+            "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let r = match __ray_udp_clone(h) { Some(s) => s.send_to(data, (host, port as u16)).map_err(|e| e.to_string()), None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
+            "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",
+            "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    match __ray_udp_clone(h) {\n",
+            "        Some(s) => { let mut buf = vec![0u8; 65536]; match s.recv_from(&mut buf) {\n",
+            "            Ok((n, addr)) => { buf.truncate(n); Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(addr.ip().to_string().as_bytes()), Rc::<[u8]>::from(addr.port().to_string().as_bytes()), Rc::<[u8]>::from(&buf[..])])) }\n",
+            "            Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.to_string().as_bytes())])) } }\n",
+            "        None => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"handle {} is not a UDP socket\", h).as_bytes())])) } }\n",
         ));
     }
     // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
@@ -1850,6 +1867,34 @@ impl Transpiler {
                     out.push_str(".ray_show())");
                 }
             }
+            // UDP: primitivos `__udp_*` (los llaman los wrappers de raylang de udp.ray). Devuelven arreglos
+            // etiquetados; recv_from es un arreglo de bytes. Activan `needs_net` (registro de handles).
+            "udp_bind" => {
+                self.needs_net = true;
+                out.push_str("__ray_udp_bind(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "udp_send_to" => {
+                self.needs_net = true;
+                out.push_str("__ray_udp_send_to(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[3])?;
+                out.push(')');
+            }
+            "udp_recv_from" => {
+                self.needs_net = true;
+                out.push_str("__ray_udp_recv_from(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // char_code(c) -> int: el code point Unicode del char (paréntesis por el `as`, como bytes[i]).
             "char_code" => {
                 out.push('(');
@@ -2438,6 +2483,9 @@ impl Transpiler {
                     "bytes_of" => Type::Bytes,
                     "char_code" => Type::Int,
                     "char_from_code" => opt_of(Type::Char),
+                    // UDP primitivos: bind/send → [string] etiquetado; recv → [bytes] etiquetado.
+                    "udp_bind" | "udp_send_to" => Type::Array(Box::new(Type::String)),
+                    "udp_recv_from" => Type::Array(Box::new(Type::Bytes)),
                     // Más string builtins: trim/to_upper/to_lower/repeat/replace/substring → string;
                     // starts_with/ends_with → bool.
                     "trim" | "to_upper" | "to_lower" | "repeat" | "replace" | "substring" => Type::String,
@@ -3183,6 +3231,21 @@ mod tests {
         );
         assert!(rust.contains("as u32 as i64)"), "char_code → code point: {}", rust);
         assert!(rust.contains("char::from_u32("), "char_from_code → Option<char>: {}", rust);
+    }
+
+    #[test]
+    fn transpila_udp() {
+        // Primitivos __udp_* (los llaman los wrappers de udp.ray): bind/send → [string]; recv → [bytes].
+        let rust = transpile_src(
+            "fn main() -> int { let b = __udp_bind(\"127.0.0.1\", 0); \
+             let h = match (parse_int(b[1])) { Option.Some(x) => x, Option.None => 0 }; \
+             let s = __udp_send_to(h, \"127.0.0.1\", 9999, \"x\".to_bytes()); \
+             let r = __udp_recv_from(h); print(to_string(r.len())); 0 }",
+        );
+        assert!(rust.contains("Udp(std::net::UdpSocket)"), "handle Udp: {}", rust);
+        assert!(rust.contains("__ray_udp_bind(&*") && rust.contains("__ray_udp_send_to("), "bind/send: {}", rust);
+        assert!(rust.contains("__ray_udp_recv_from("), "recv: {}", rust);
+        assert!(rust.contains(".recv_from(&mut buf)"), "recv bloqueante: {}", rust);
     }
 
     #[test]

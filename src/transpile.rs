@@ -167,6 +167,169 @@ fn is_to_string(callee: &Expr) -> bool {
     }
 }
 
+// =====================================================================
+// Análisis de captura mutable (B1): qué `var` locales van en una celda
+// =====================================================================
+//
+// En raylang una closure captura POR REFERENCIA y puede MUTAR la variable capturada (patrón contador:
+// `var n` que la closure incrementa entre llamadas). En Rust, un `move ||` es `Fn` inmutable → mutar
+// una captura no compila. Solución (espejo de la semántica M4 de raylang): una `var` que sea
+// CAPTURADA por una closure vive en una celda `Rc<RefCell<T>>` compartida — se lee con `.borrow()`,
+// se escribe con `.borrow_mut()`, y la closure captura un clon del `Rc` (mutación compartida).
+//
+// `cell_vars(body)` = { `var` declaradas en `body` } ∩ { idents referenciados dentro de alguna closure
+// de `body` }. No desciende a los cuerpos de closures anidadas (esos son ámbitos propios, con su
+// propio análisis al emitirlos).
+
+/// Recoge TODOS los nombres de identificador que aparecen en `e` (descendiendo también a los cuerpos
+/// de closures) → lo que una closure "referencia" (candidatos a captura).
+fn idents_of_expr(e: &Expr, out: &mut std::collections::HashSet<String>) {
+    match &e.kind {
+        ExprKind::Ident(n) => { out.insert(n.clone()); }
+        ExprKind::Unary { expr, .. } => idents_of_expr(expr, out),
+        ExprKind::Binary { left, right, .. } => { idents_of_expr(left, out); idents_of_expr(right, out); }
+        ExprKind::Call { callee, args } => { idents_of_expr(callee, out); args.iter().for_each(|a| idents_of_expr(a, out)); }
+        ExprKind::ArrayLit(es) | ExprKind::TupleLit(es) => es.iter().for_each(|x| idents_of_expr(x, out)),
+        ExprKind::MapLit(ps) => ps.iter().for_each(|(k, v)| { idents_of_expr(k, out); idents_of_expr(v, out); }),
+        ExprKind::Index { array, index } => { idents_of_expr(array, out); idents_of_expr(index, out); }
+        ExprKind::Cast { expr, .. } => idents_of_expr(expr, out),
+        ExprKind::StructLit { fields, .. } => fields.iter().for_each(|(_, v)| idents_of_expr(v, out)),
+        ExprKind::Field { object, .. } => idents_of_expr(object, out),
+        ExprKind::EnumLit { args, .. } => args.iter().for_each(|a| idents_of_expr(a, out)),
+        ExprKind::Func(f) => idents_of_block(&f.body, out),
+        ExprKind::Match { scrutinee, arms } => {
+            idents_of_expr(scrutinee, out);
+            arms.iter().for_each(|a| idents_of_expr(&a.body, out));
+        }
+        ExprKind::Try(inner) => idents_of_expr(inner, out),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            idents_of_expr(cond, out);
+            idents_of_block(then_branch, out);
+            if let Some(eb) = else_branch { idents_of_expr(eb, out); }
+        }
+        ExprKind::While { cond, body } => { idents_of_expr(cond, out); idents_of_block(body, out); }
+        ExprKind::Block(b) => idents_of_block(b, out),
+        _ => {}
+    }
+}
+
+fn idents_of_block(b: &Block, out: &mut std::collections::HashSet<String>) {
+    for s in &b.statements {
+        match &s.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => idents_of_expr(value, out),
+            StmtKind::Assign { target, value } => { idents_of_expr(target, out); idents_of_expr(value, out); }
+            StmtKind::Return { value } => { if let Some(e) = value { idents_of_expr(e, out); } }
+            StmtKind::Expr(e) => idents_of_expr(e, out),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { idents_of_expr(start, out); idents_of_expr(end, out); }
+                    ForIter::In(e) => idents_of_expr(e, out),
+                    ForIter::Iter { expr, .. } => idents_of_expr(expr, out),
+                }
+                idents_of_block(body, out);
+            }
+        }
+    }
+    if let Some(t) = &b.tail { idents_of_expr(t, out); }
+}
+
+/// Recoge en `out` los idents referenciados dentro de ALGUNA closure de `e` (sin contar los usos fuera
+/// de closures). Para cada `Func` encontrado, todos los idents de su cuerpo son "capturados".
+fn captured_idents_expr(e: &Expr, out: &mut std::collections::HashSet<String>) {
+    match &e.kind {
+        ExprKind::Func(f) => idents_of_block(&f.body, out),
+        ExprKind::Unary { expr, .. } => captured_idents_expr(expr, out),
+        ExprKind::Binary { left, right, .. } => { captured_idents_expr(left, out); captured_idents_expr(right, out); }
+        ExprKind::Call { callee, args } => { captured_idents_expr(callee, out); args.iter().for_each(|a| captured_idents_expr(a, out)); }
+        ExprKind::ArrayLit(es) | ExprKind::TupleLit(es) => es.iter().for_each(|x| captured_idents_expr(x, out)),
+        ExprKind::MapLit(ps) => ps.iter().for_each(|(k, v)| { captured_idents_expr(k, out); captured_idents_expr(v, out); }),
+        ExprKind::Index { array, index } => { captured_idents_expr(array, out); captured_idents_expr(index, out); }
+        ExprKind::Cast { expr, .. } => captured_idents_expr(expr, out),
+        ExprKind::StructLit { fields, .. } => fields.iter().for_each(|(_, v)| captured_idents_expr(v, out)),
+        ExprKind::Field { object, .. } => captured_idents_expr(object, out),
+        ExprKind::EnumLit { args, .. } => args.iter().for_each(|a| captured_idents_expr(a, out)),
+        ExprKind::Match { scrutinee, arms } => {
+            captured_idents_expr(scrutinee, out);
+            arms.iter().for_each(|a| captured_idents_expr(&a.body, out));
+        }
+        ExprKind::Try(inner) => captured_idents_expr(inner, out),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            captured_idents_expr(cond, out);
+            captured_idents_block(then_branch, out);
+            if let Some(eb) = else_branch { captured_idents_expr(eb, out); }
+        }
+        ExprKind::While { cond, body } => { captured_idents_expr(cond, out); captured_idents_block(body, out); }
+        ExprKind::Block(b) => captured_idents_block(b, out),
+        _ => {}
+    }
+}
+
+fn captured_idents_block(b: &Block, out: &mut std::collections::HashSet<String>) {
+    for s in &b.statements {
+        match &s.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => captured_idents_expr(value, out),
+            StmtKind::Assign { target, value } => { captured_idents_expr(target, out); captured_idents_expr(value, out); }
+            StmtKind::Return { value } => { if let Some(e) = value { captured_idents_expr(e, out); } }
+            StmtKind::Expr(e) => captured_idents_expr(e, out),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { captured_idents_expr(start, out); captured_idents_expr(end, out); }
+                    ForIter::In(e) => captured_idents_expr(e, out),
+                    ForIter::Iter { expr, .. } => captured_idents_expr(expr, out),
+                }
+                captured_idents_block(body, out);
+            }
+        }
+    }
+    if let Some(t) = &b.tail { captured_idents_expr(t, out); }
+}
+
+/// Nombres declarados como `var` (mutable) en `body`, descendiendo por los bloques de control (if/while/
+/// for/match/block) pero NO por los cuerpos de closures (ámbitos propios).
+fn mut_var_decls_block(b: &Block, out: &mut std::collections::HashSet<String>) {
+    for s in &b.statements {
+        match &s.kind {
+            StmtKind::Let { name, mutable: true, value, .. } => {
+                out.insert(name.clone());
+                mut_var_decls_expr(value, out);
+            }
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => mut_var_decls_expr(value, out),
+            StmtKind::Assign { value, .. } => mut_var_decls_expr(value, out),
+            StmtKind::Return { value } => { if let Some(e) = value { mut_var_decls_expr(e, out); } }
+            StmtKind::Expr(e) => mut_var_decls_expr(e, out),
+            StmtKind::For { body, .. } => mut_var_decls_block(body, out),
+        }
+    }
+    if let Some(t) = &b.tail { mut_var_decls_expr(t, out); }
+}
+
+/// Desciende por los bloques de control de `e` buscando `var` declaradas (sin entrar en closures).
+fn mut_var_decls_expr(e: &Expr, out: &mut std::collections::HashSet<String>) {
+    match &e.kind {
+        ExprKind::If { then_branch, else_branch, .. } => {
+            mut_var_decls_block(then_branch, out);
+            if let Some(eb) = else_branch { mut_var_decls_expr(eb, out); }
+        }
+        ExprKind::While { body, .. } => mut_var_decls_block(body, out),
+        ExprKind::Block(b) => mut_var_decls_block(b, out),
+        ExprKind::Match { arms, .. } => arms.iter().for_each(|a| mut_var_decls_expr(&a.body, out)),
+        _ => {}
+    }
+}
+
+/// Las `var` de `body` que una closure de `body` captura → deben ir en una celda `Rc<RefCell<T>>`.
+fn cell_vars(body: &Block) -> std::collections::HashSet<String> {
+    let mut decls = std::collections::HashSet::new();
+    mut_var_decls_block(body, &mut decls);
+    if decls.is_empty() {
+        return decls; // atajo: sin `var`, no hay celdas
+    }
+    let mut captured = std::collections::HashSet::new();
+    captured_idents_block(body, &mut captured);
+    decls.retain(|n| captured.contains(n));
+    decls
+}
+
 struct Transpiler {
     funcs: HashMap<String, FnSig>,
     /// Pila de ámbitos: nombre de variable → su tipo (para decidir clonado y para la inferencia de `let`).
@@ -204,6 +367,11 @@ struct Transpiler {
     /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
     /// de socket (`std::net::TcpStream`/`TcpListener`).
     needs_net: bool,
+    /// Nombres de `var` locales que van en una **celda** `Rc<RefCell<T>>` (B1): capturadas y mutadas por
+    /// una closure. Se leen con `.borrow().clone()` y se escriben con `.borrow_mut()`; la closure captura
+    /// un clon del `Rc`. Se pueblan al entrar en cada función/closure (con su `cell_vars`) y se quitan al
+    /// salir (set plano; el shadowing de una var-celda es una limitación conocida, raro en la práctica).
+    cells: std::collections::HashSet<String>,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -262,6 +430,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         needs_signals: false,
         needs_time_rng: false,
         needs_net: false,
+        cells: std::collections::HashSet::new(),
     };
 
     let mut out = String::new();
@@ -649,6 +818,25 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
 }
 
 impl Transpiler {
+    /// Registra las celdas de `body` (var capturadas por closures) en `self.cells`, devolviendo las que
+    /// AÑADIÓ (para quitarlas al salir del ámbito). Un nombre ya presente por un ámbito externo no se
+    /// duplica ni se quita aquí.
+    fn enter_cells(&mut self, body: &Block) -> Vec<String> {
+        let mut added = Vec::new();
+        for n in cell_vars(body) {
+            if self.cells.insert(n.clone()) {
+                added.push(n);
+            }
+        }
+        added
+    }
+
+    fn exit_cells(&mut self, added: Vec<String>) {
+        for n in added {
+            self.cells.remove(&n);
+        }
+    }
+
     fn emit_function(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
         // Params de tipo en ámbito (para `rust_ty` y la clasificación de `Struct(T)`→genérico).
         self.tparams = f.type_params.iter().cloned().collect();
@@ -672,7 +860,9 @@ impl Transpiler {
             rust_ty(&f.return_type, &self.enums, &self.tparams)?
         )
         .unwrap();
+        let added = self.enter_cells(&f.body);
         self.emit_block(out, &f.body)?;
+        self.exit_cells(added);
         out.push('\n');
         self.scopes.pop();
         self.tparams.clear();
@@ -766,6 +956,15 @@ impl Transpiler {
                     Some(t) => Some(rust_ty(t, &self.enums, &self.tparams)?),
                     None => None,
                 };
+                // Var-celda (B1): capturada+mutada por una closure → `let n = Rc::new(RefCell::new(init))`
+                // (el Rc es inmutable; la mutación va por el RefCell). Las lecturas/escrituras la desenvuelven.
+                if self.cells.contains(name) {
+                    write!(out, "let {} = Rc::new(std::cell::RefCell::new(", mangle(name)).unwrap();
+                    self.emit_typed(out, value, &vty)?;
+                    out.push_str("));\n");
+                    self.declare(name, vty);
+                    return Ok(());
+                }
                 out.push_str(if *mutable { "let mut " } else { "let " });
                 out.push_str(&mangle(name));
                 if let Some(a) = ann {
@@ -813,10 +1012,18 @@ impl Transpiler {
                 match &target.kind {
                     ExprKind::Ident(name) => {
                         let tty = self.type_of(target)?;
-                        out.push_str(&mangle(name));
-                        out.push_str(" = ");
-                        self.emit_typed(out, value, &tty)?; // sized: pina el tipo del literal en el RHS
-                        out.push_str(";\n");
+                        if self.cells.contains(name) {
+                            // Var-celda (B1): `n = e` → `*n.borrow_mut() = e`. El RHS va a un temp ANTES del
+                            // borrow_mut: si lee la MISMA celda (`n = n + 1`), evita el doble borrow.
+                            out.push_str("{ let __v = ");
+                            self.emit_typed(out, value, &tty)?;
+                            write!(out, "; *{}.borrow_mut() = __v; }}\n", mangle(name)).unwrap();
+                        } else {
+                            out.push_str(&mangle(name));
+                            out.push_str(" = ");
+                            self.emit_typed(out, value, &tty)?; // sized: pina el tipo del literal en el RHS
+                            out.push_str(";\n");
+                        }
                     }
                     ExprKind::Index { array, index } => {
                         out.push_str("{ let __rhs = ");
@@ -1035,7 +1242,11 @@ impl Transpiler {
             ExprKind::Ident(name) if name == "std::math::PI" => out.push_str("std::f64::consts::PI"),
             ExprKind::Ident(name) if name == "std::math::E" => out.push_str("std::f64::consts::E"),
             ExprKind::Ident(name) => {
-                if let Some(ty) = self.lookup(name) {
+                if self.cells.contains(name) {
+                    // Var-celda (B1): leer = desenvolver la celda con un clon del valor (`n.borrow().clone()`).
+                    // clone() vale para todo tipo (para int es copia); mantiene la semántica de "leer clona".
+                    write!(out, "{}.borrow().clone()", mangle(name)).unwrap();
+                } else if let Some(ty) = self.lookup(name) {
                     // Variable local: clonar al leer los valores de heap (Rc → bump barato); escalares Copy.
                     let heap = is_heap(ty);
                     out.push_str(&mangle(name));
@@ -1277,6 +1488,19 @@ impl Transpiler {
             // `Rc<RefCell>` comparte el estado, como las celdas del intérprete; los escalares se copian —
             // la captura MUTABLE de un escalar diverge, diferida).
             ExprKind::Func(fnexpr) => {
+                // Celdas que ESTA closure captura (var-celda en ámbito referenciadas en su cuerpo): se
+                // PRE-CLONAN antes del `move` (`{ let c = c.clone(); Rc::new(move || …) }`), para que el
+                // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
+                let mut refd = std::collections::HashSet::new();
+                idents_of_block(&fnexpr.body, &mut refd);
+                let captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
+                let wrap = !captured.is_empty();
+                if wrap {
+                    out.push_str("{ ");
+                    for c in &captured {
+                        write!(out, "let {} = {}.clone(); ", mangle(c), mangle(c)).unwrap();
+                    }
+                }
                 out.push_str("Rc::new(move |");
                 for (i, p) in fnexpr.params.iter().enumerate() {
                     if i > 0 {
@@ -1289,9 +1513,15 @@ impl Transpiler {
                 for p in &fnexpr.params {
                     self.declare(&p.name, p.ty.clone());
                 }
+                // Las celdas propias de esta closure (una var suya capturada por una closure aún más interna).
+                let added = self.enter_cells(&fnexpr.body);
                 self.emit_block(out, &fnexpr.body)?;
+                self.exit_cells(added);
                 self.scopes.pop();
                 out.push(')');
+                if wrap {
+                    out.push_str(" }");
+                }
             }
             ExprKind::Match { scrutinee, arms } => self.emit_match(out, scrutinee, arms)?,
             // Operador `?`: sobre Option/Result nativos de Rust → el `?` de Rust (la fn envolvente
@@ -3237,6 +3467,28 @@ mod tests {
         assert!(rust.contains("Rc::<[u8]>::from(vec!["), "literal de bytes: {}", rust);
         assert!(rust.contains("impl RayShow for Rc<[u8]>"), "render hex: {}", rust);
         assert!(rust.contains("{:02x}"), "hex minúsculas: {}", rust);
+    }
+
+    #[test]
+    fn var_capturada_y_mutada_por_closure_va_en_una_celda() {
+        // B1: una `var` capturada+mutada por una closure (patrón contador) vive en `Rc<RefCell<T>>`; se
+        // lee con `.borrow()`, se escribe con `.borrow_mut()`, y la closure captura un clon del Rc.
+        let rust = transpile_src(
+            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }\n\
+             fn main() { let c = contador(); print(c()); }",
+        );
+        assert!(rust.contains("let n = Rc::new(std::cell::RefCell::new("), "n es una celda: {}", rust);
+        assert!(rust.contains("*n.borrow_mut() ="), "escritura por borrow_mut: {}", rust);
+        assert!(rust.contains("n.borrow().clone()"), "lectura por borrow: {}", rust);
+        assert!(rust.contains("let n = n.clone();"), "pre-clon al capturar: {}", rust);
+    }
+
+    #[test]
+    fn var_mutable_no_capturada_sigue_siendo_local_normal() {
+        // Una `var` mutada pero NO capturada por ninguna closure NO va en celda (sin coste): `let mut`.
+        let rust = transpile_src("fn main() { var x: int = 0; x = x + 1; print(x); }");
+        assert!(rust.contains("let mut x: i64 = 0i64;"), "x es local normal: {}", rust);
+        assert!(!rust.contains("RefCell::new(0i64)"), "x NO va en celda: {}", rust);
     }
 
     #[test]

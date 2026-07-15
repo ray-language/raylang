@@ -517,6 +517,30 @@ fn build_native_http_con_tls_no_alcanzado_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_closures_con_estado_mutable_coincide_con_la_vm() {
+    // `ray build --native` de closures con ESTADO mutable (patrón contador: `var n` que la closure
+    // incrementa entre llamadas, y contadores independientes). Antes rustc fallaba (`cannot assign to
+    // captured variable in a Fn closure`); ahora la var capturada+mutada vive en Rc<RefCell> (B1) →
+    // la salida (contadores, captura transitiva) coincide con la VM byte a byte.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native closures: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/stdlib/closures.ray");
+    let base = tmp("build_native_closures");
+    let bin = base.join("cl_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de closures sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "closures con estado nativo ≡ VM");
+    // Contadores independientes: c1 llega a 4 mientras c2 arranca en 1.
+    assert!(native_out.contains("4"), "el contador llega a 4\n{native_out}");
+}
+
+#[test]
 fn build_native_servidor_tcp_hace_eco() {
     // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
     // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.

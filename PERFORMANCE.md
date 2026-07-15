@@ -373,6 +373,24 @@ intacto. Restan fuera del subconjunto en su **`main`** (el stub no aplica): `met
 struct no-Send), `udp_yield_demo` (`spawn` de fn nombrada), y por rustc: `framework`/`webserver`/
 `https_server` (bug de captura `t` en spawn + `ray_show` de un `[fn]`; + techo TLS de `webserver`/`https`).
 
+#### Fase 46 — closures que MUTAN su captura (celdas `Rc<RefCell>`, B1)
+
+En raylang una closure captura POR REFERENCIA y puede **mutar** la variable capturada (patrón contador:
+`var n` que la closure incrementa entre llamadas; `contador()` da contadores independientes). En Rust un
+`move ||` es `Fn` inmutable → mutar una captura no compila (`cannot assign to captured variable`). **Fix**
+(espejo de la semántica M4): una `var` **capturada por una closure** vive en una celda `Rc<RefCell<T>>` —
+se lee con `.borrow().clone()`, se escribe con `.borrow_mut()` (el RHS a un temp antes, para no doble-
+borrar en `n = n + 1`), y la closure **pre-clona** el `Rc` antes del `move` (`{ let n = n.clone(); Rc::new(
+move || …) }`) → mutación **compartida bidireccional** (el enclosing ve la mutación de la closure y
+viceversa). Análisis: `cell_vars(body)` = { `var` declaradas } ∩ { idents referenciados dentro de alguna
+closure } (recorre `statements` **y el `tail`** del bloque; no desciende a cuerpos de closures anidadas,
+que tienen su propio análisis). Una `var` **no capturada** sigue como `let mut` normal (cero coste).
+Desbloquea `examples/stdlib/closures.ray` (contadores + captura transitiva) → byte-idéntico a la VM.
+Verificado además: mutación compartida bidireccional + contadores independientes + var no-capturada
+plana. Tests: `var_capturada_y_mutada_por_closure_va_en_una_celda`, `var_mutable_no_capturada_sigue_
+siendo_local_normal` (unit) + `build_native_closures_con_estado_mutable_coincide_con_la_vm` (integración).
+598 tests lib + corpus 37/37 + 38 web-demos idénticos, 0 regresiones.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

@@ -558,6 +558,24 @@ namespacado (`geo::Punto { … }`), mientras que el `.show()` de `@derive(Show)`
 (sin `import`) intacto (`mangle` es la identidad sin `::`). Tests: unitario (los tipos se manglan, Display
 completo) + integración (`build_native_de_un_proyecto_multi_modulo_es_un_solo_binario`, `tests/cli_cli.rs`).
 
+#### Fase 26 — I/O binaria (el tipo `bytes`)
+
+Primer tipo nuevo del transpilador desde los enteros con tamaño: **`bytes`** (secuencia INMUTABLE de
+octetos) → **`Rc<[u8]>`** (clon barato/compartible, como `Rc<str>`). Piezas: (1) literal `b"..."` →
+`Rc::<[u8]>::from(vec![…u8])`; (2) `impl RayShow for Rc<[u8]>` → **hex** minúsculas sin separador
+(`{:02x}` por octeto, como `bytes_to_hex` de la VM) → `print`/`to_string` dan lo mismo; (3) `==` gratis
+(`Rc<[u8]>` compara contenido); (4) builtins: `to_bytes` (UFCS, `s.as_bytes()`), `from_utf8`
+(`std::str::from_utf8` → `Result<string,string>`), `sub_bytes` (corte `[i,j)` con clamp, nunca falla),
+`len`; (5) **I/O**: `read_file_bytes` (`std::fs::read`) / `write_file_bytes` (`std::fs::write`, Ok(len)) /
+`append_file_bytes` (`OpenOptions::append`) → abre parsear/generar formatos binarios en nativo. **Bug de
+concatenación cazado y arreglado**: `"x: " + to_string(b)` inlinaba `b` como `{}` (Display), pero `[u8]`
+(y struct/enum/array) NO son Display → ahora el inline solo aplica a primitivos Display; el resto pasa por
+`ray_show`. Al cubrir `bytes` el `match` de `emit_expr`/`type_of` pasó a ser **exhaustivo sobre `ExprKind`**
+(se quitaron los `_ =>` muertos → una variante nueva del AST rompe la compilación, mejor que un error en
+runtime). Verificado nativo ≡ VM (hex, sub_bytes, from_utf8, round-trip de archivo) por subproceso en
+`tests/io_cli.rs::native_io_binaria_coincide_con_la_vm`. Corpus 37/37 + multi-módulo intactos. Diferido:
+`env`/`args`-de-entorno, sockets/TLS.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

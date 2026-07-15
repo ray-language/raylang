@@ -564,3 +564,47 @@ fn native_directorios_coinciden_con_la_vm() {
         rename: ok 0\nrmdir full: err\nrmdir: ok 0\nrmdir base: ok 0\n";
     assert_eq!(nat, expected, "ciclo de directorios");
 }
+
+/// P2.b: I/O binaria transpilable (bytes + read_file_bytes/write_file_bytes). Escribe bytes a un archivo
+/// y los relee; comprueba nativo ≡ VM (incl. el render en hex). Requiere rustc.
+#[test]
+fn native_io_binaria_coincide_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_io_binaria: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_bytes");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let f = dir.join("b.bin");
+    let src = format!(
+        "import std/fs;\n\
+         fn tag_i(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok \" + to_string(n), Result.Err(e) => \"err\" }} }}\n\
+         fn tag_s(r: Result<string, string>) -> string {{ match (r) {{ Result.Ok(s) => \"ok \" + s, Result.Err(e) => \"err\" }} }}\n\
+         fn main() -> int {{\n\
+           let b = \"Hola\".to_bytes();\n\
+           print(\"hex: \" + to_string(b));\n\
+           print(\"sub: \" + to_string(b.sub_bytes(1, 3)));\n\
+           print(\"dec: \" + tag_s(from_utf8(b)));\n\
+           print(\"w: \" + tag_i(fs.write_file_bytes(\"{p}\", b)));\n\
+           match (fs.read_file_bytes(\"{p}\")) {{ Result.Ok(rb) => print(\"r: \" + to_string(rb)), Result.Err(e) => print(\"err\") }}\n\
+           0\n\
+         }}\n",
+        p = f.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let _ = std::fs::remove_file(&f);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    let _ = std::fs::remove_file(&f);
+    let (vm, _e, _c) = run_io("native_bytes_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    // "Hola" = 486f6c61; sub[1,3) = 6f6c; write = 4 bytes; readback = 486f6c61.
+    assert_eq!(nat, "hex: 486f6c61\nsub: 6f6c\ndec: ok Hola\nw: ok 4\nr: 486f6c61\n", "salida esperada");
+}

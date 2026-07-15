@@ -108,13 +108,22 @@ fn is_handled_builtin(name: &str) -> bool {
         name,
         // --- funciones del prelude (src/prelude.ray) ---
         "all" | "any" | "assert" | "assert_eq" | "char_from_code" | "env" | "filter" | "fold"
-            | "from_utf" | "get" | "get_or" | "index_of" | "input" | "iter" | "map" | "max" | "min"
+            | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "input" | "iter" | "map" | "max" | "min"
             | "parse_float" | "parse_int" | "pop" | "position" | "range" | "read_int" | "recv"
             | "remove" | "sort" | "sum" | "sum_float" | "try_join"
         // --- builtins públicos manejados en emit_call ---
             | "len" | "push" | "split" | "join" | "chars" | "to_string" | "print" | "eprint"
             | "contains_key" | "keys" | "values" | "insert" | "add_to" | "unwrap" | "unwrap_or"
             | "panic"
+    )
+}
+
+/// ¿Es un tipo primitivo que implementa `Display` en Rust (i64/f64/bool/char/Rc<str>)? Los demás
+/// (bytes, struct, enum, array, Map, tupla, función) no → su `to_string` debe pasar por `ray_show`.
+fn is_display_primitive(t: &Type) -> bool {
+    matches!(
+        normalize_type(t),
+        Type::Int | Type::Float | Type::Bool | Type::Char | Type::String
     )
 }
 
@@ -244,7 +253,9 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     }
     out.push_str("impl<T: RayShow> RayShow for Rc<std::cell::RefCell<Vec<T>>> { fn ray_show(&self) -> String { format!(\"[{}]\", self.borrow().iter().map(|__e| __e.ray_show()).collect::<Vec<_>>().join(\", \")) } }\n");
     out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__v) => format!(\"Option.Some({})\", __v.ray_show()), None => \"Option.None\".to_string() } } }\n");
-    out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__v) => format!(\"Result.Ok({})\", __v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n\n");
+    out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__v) => format!(\"Result.Ok({})\", __v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
+    // bytes → hex minúsculas sin separador ({:02x} por octeto), como la VM (bytes_to_hex).
+    out.push_str("impl RayShow for Rc<[u8]> { fn ray_show(&self) -> String { let mut __s = String::with_capacity(self.len() * 2); for __b in self.iter() { __s.push_str(&format!(\"{:02x}\", __b)); } __s } }\n\n");
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
@@ -656,6 +667,17 @@ impl Transpiler {
             ExprKind::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             ExprKind::Char(c) => write!(out, "{:?}", c).unwrap(), // `{:?}` de char → literal Rust escapado
             ExprKind::Str(s) => write!(out, "Rc::<str>::from({:?})", s).unwrap(),
+            // Literal de bytes `b"..."` → Rc<[u8]> desde un Vec de octetos.
+            ExprKind::Bytes(b) => {
+                out.push_str("Rc::<[u8]>::from(vec![");
+                for (i, byte) in b.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    write!(out, "{}u8", byte).unwrap();
+                }
+                out.push_str("])");
+            }
             // Conversión `expr as T` (M27.4): int↔float, char↔int. Rust `as` cubre los numéricos;
             // char→int pasa por u32; int→char usa char::from_u32.
             ExprKind::Cast { expr, ty } => {
@@ -952,7 +974,8 @@ impl Transpiler {
                 }
                 out.push_str("))");
             }
-            other => return Err(format!("spike: expresión no soportada {:?}", other)),
+            // (Match exhaustivo sobre ExprKind: toda variante tiene su arm. Una variante nueva del AST
+            // hará fallar la compilación aquí → obliga a decidir su bajada, mejor que un error en runtime.)
         }
         Ok(())
     }
@@ -1157,11 +1180,18 @@ impl Transpiler {
                 // texto literal: escapado completo para un literal de plantilla `format!` de Rust
                 // (`{`/`}` se duplican; `"`, `\`, saltos de línea… se escapan como en un string de Rust).
                 ExprKind::Str(s) => push_fmt_literal(&mut fmt, s),
-                // to_string(x) / x.to_string() → inlina x como `{}` (su Display), sin Rc intermedio.
+                // to_string(x) / x.to_string(): si `x` es un PRIMITIVO Display (int/float/bool/char/string)
+                // se inlina como `{}` sobre `x` (sin Rc intermedio). Si no (bytes/struct/enum/array — no
+                // son Display en Rust), se emite el `to_string(x)` entero → `Rc<str>` (que sí es Display).
                 ExprKind::Call { callee, args: cargs } if is_to_string(callee) => {
                     fmt.push_str("{}");
                     let (_, recv) = resolve_callee(callee)?;
-                    args.push(recv.unwrap_or(&cargs[0]));
+                    let arg = recv.unwrap_or(&cargs[0]);
+                    if is_display_primitive(&self.type_of(arg)?) {
+                        args.push(arg);
+                    } else {
+                        args.push(op);
+                    }
                 }
                 _ => {
                     fmt.push_str("{}");
@@ -1298,6 +1328,35 @@ impl Transpiler {
                      Ok(_) => Err(Rc::<str>::from(\"no es un file\")), \
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
+            }
+            // I/O binaria: read_file_bytes -> Result<bytes,string>; write/append_file_bytes -> Result<int,string>.
+            "read_file_bytes" => {
+                out.push_str("(match std::fs::read(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ") { Ok(__b) => Ok::<Rc<[u8]>, Rc<str>>(Rc::<[u8]>::from(__b)), \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
+            "write_file_bytes" => {
+                out.push_str("(match std::fs::write(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(") { Ok(()) => Ok::<i64, Rc<str>>(");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(".len() as i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })");
+            }
+            "append_file_bytes" => {
+                out.push_str(
+                    "(match std::fs::OpenOptions::new().create(true).append(true).open(&*",
+                );
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").and_then(|mut __f| { use std::io::Write; __f.write_all(&*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(") }) { Ok(()) => Ok::<i64, Rc<str>>(");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(".len() as i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })");
             }
             _ => return Err(format!("spike: std::fs::{} no soportada", ffn)),
         }
@@ -1519,6 +1578,30 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".parse::<i64>().ok())");
             }
+            // Bytes: to_bytes(s) codifica un string a UTF-8; from_utf8(b) decodifica (Result); sub_bytes
+            // corta [i,j) por octeto con clamp (nunca falla). Repr = Rc<[u8]>.
+            "to_bytes" => {
+                out.push_str("Rc::<[u8]>::from(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".as_bytes())");
+            }
+            "from_utf8" => {
+                out.push_str("(match std::str::from_utf8(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ") { Ok(__s) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__s)), \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
+            "sub_bytes" => {
+                out.push_str("{ let __b = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __n = __b.len() as i64; let __lo = (");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(").clamp(0, __n); let __hi = (");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(").clamp(__lo, __n); Rc::<[u8]>::from(&__b[__lo as usize..__hi as usize]) }");
+            }
             // I/O de ENTRADA (no determinista → sin oráculo; probado por subproceso, como tests/io_cli.rs).
             // `input() -> Option<string>`: una línea de stdin, sin '\n'/'\r' finales (como la VM); None en EOF.
             "input" => {
@@ -1633,6 +1716,7 @@ impl Transpiler {
             ExprKind::Float(_) => Type::Float,
             ExprKind::Bool(_) => Type::Bool,
             ExprKind::Str(_) => Type::String,
+            ExprKind::Bytes(_) => Type::Bytes,
             ExprKind::Char(_) => Type::Char,
             ExprKind::Ident(n) if n == "std::math::PI" || n == "std::math::E" => Type::Float,
             ExprKind::Ident(n) => {
@@ -1677,8 +1761,10 @@ impl Transpiler {
                 if let Some(ffn) = n.strip_prefix("std::fs::") {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
+                        "read_file_bytes" => Type::Enum("Result".into(), vec![Type::Bytes, Type::String]),
                         "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir"
-                        | "rename" | "copy_file" | "file_size" => {
+                        | "rename" | "copy_file" | "file_size" | "write_file_bytes"
+                        | "append_file_bytes" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }
                         "read_line" => opt_of(Type::String),
@@ -1701,6 +1787,9 @@ impl Transpiler {
                     "len" => Type::Int,
                     "parse_int" => opt_of(Type::Int),
                     "parse_float" => opt_of(Type::Float),
+                    // Bytes: to_bytes → bytes; sub_bytes → bytes; from_utf8 → Result<string,string>.
+                    "to_bytes" | "sub_bytes" => Type::Bytes,
+                    "from_utf8" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                     // I/O de entrada del prelude: input → Option<string>; read_int → Option<int>.
                     "input" => opt_of(Type::String),
                     "read_int" => opt_of(Type::Int),
@@ -1854,7 +1943,7 @@ impl Transpiler {
                 let (k, v) = pairs.first().ok_or("spike: Map literal vacío sin anotación")?;
                 Type::Map(Box::new(self.type_of(k)?), Box::new(self.type_of(v)?))
             }
-            other => return Err(format!("spike: no sé inferir el tipo de {:?}", other)),
+            // (Exhaustivo sobre ExprKind, como emit_expr: una variante nueva rompe la compilación aquí.)
         })
     }
 }
@@ -1891,6 +1980,8 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         Type::Char => "char",
         Type::Unit => "()",
         Type::String => "Rc<str>",
+        // bytes: secuencia INMUTABLE de octetos (como string) → Rc<[u8]> (clon barato, compartible).
+        Type::Bytes => return Ok("Rc<[u8]>".to_string()),
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),
         // Map: igual, sobre un HashMap.
@@ -2292,6 +2383,20 @@ mod tests {
         assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
         assert!(rust.contains("let __c = "), "{}", rust); // captura del concreto en la coerción
         assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
+    }
+
+    #[test]
+    fn transpila_bytes() {
+        // bytes → Rc<[u8]>; literal b"..."; to_bytes/sub_bytes/from_utf8; render en hex (como la VM).
+        let rust = transpile_src(
+            "fn main() -> int { let b = \"Hi\".to_bytes(); let l = b\"xy\"; \
+             print(to_string(b)); print(to_string(l)); print(to_string(b.sub_bytes(0, 1))); b.len() }",
+        );
+        assert!(rust.contains("Rc<[u8]>"), "tipo bytes: {}", rust);
+        assert!(rust.contains(".as_bytes()"), "to_bytes → as_bytes: {}", rust);
+        assert!(rust.contains("Rc::<[u8]>::from(vec!["), "literal de bytes: {}", rust);
+        assert!(rust.contains("impl RayShow for Rc<[u8]>"), "render hex: {}", rust);
+        assert!(rust.contains("{:02x}"), "hex minúsculas: {}", rust);
     }
 
     #[test]

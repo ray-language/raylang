@@ -388,6 +388,15 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             tparams: f.type_params.clone(),
         });
     }
+    // Funciones externas (FFI, M41): se registran como funciones ordinarias → una llamada `sqrt(2.0)`
+    // resuelve al WRAPPER emitido (que marshala y llama al símbolo C por `extern "C"`).
+    for e in &prog.externs {
+        funcs.insert(e.name.clone(), FnSig {
+            params: e.params.iter().map(|p| normalize_type(&p.ty)).collect(),
+            ret: normalize_type(&e.return_type),
+            tparams: Vec::new(),
+        });
+    }
     // Enums de USUARIO (incl. genéricos). Option/Result se excluyen: son los nativos de Rust, no se emiten.
     let enums: std::collections::HashSet<String> =
         prog.enums.iter().filter(|e| e.name != "Option" && e.name != "Result").map(|e| e.name.clone()).collect();
@@ -554,6 +563,8 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         t.emit_expr(&mut out, &c.value)?;
         out.push_str(" }\n");
     }
+    // Funciones externas (FFI, M41): declaraciones `extern "C"` + wrappers que marshalan.
+    t.emit_externs(&mut out, prog)?;
     out.push('\n');
 
     let mut main_ret_int = false;
@@ -895,6 +906,97 @@ impl Transpiler {
         )
         .unwrap();
         self.tparams.clear();
+        Ok(())
+    }
+
+    /// Emite el FFI (M41): por cada `extern "lib" { fn name(...) -> ret; }`, (1) una declaración
+    /// `extern "C"` del símbolo C (`__ffi_name` con `#[link_name = "name"]`, tipos de ABI) agrupada por
+    /// librería con su `#[link(name = "lib")]` (libc va implícita), y (2) un WRAPPER `fn name(...)` con la
+    /// firma raylang que **marshala** los argumentos (string→`CString`, bool→`c_int`, ptr→`*mut c_void`),
+    /// llama al símbolo dentro de `unsafe`, y marshala el retorno (`c_int`→bool, `char*`→`Option<...>`
+    /// copiando hasta el NUL, etc.). Espejo conductual de `src/ffi.rs`. Es la frontera insegura.
+    fn emit_externs(&self, out: &mut String, prog: &Program) -> Result<(), String> {
+        if prog.externs.is_empty() {
+            return Ok(());
+        }
+        // (1) Declaraciones `extern "C"`, agrupadas por librería (orden estable).
+        let mut by_lib: std::collections::BTreeMap<&str, Vec<&crate::ast::ExternFn>> =
+            std::collections::BTreeMap::new();
+        for e in &prog.externs {
+            by_lib.entry(e.lib.as_str()).or_default().push(e);
+        }
+        for (lib, fns) in &by_lib {
+            // libc ya está enlazada (símbolos disponibles); otras librerías (`m`, …) llevan `#[link]`.
+            if *lib != "c" {
+                writeln!(out, "#[link(name = \"{}\")]", lib).unwrap();
+            }
+            out.push_str("unsafe extern \"C\" {\n");
+            for e in fns {
+                let cargs: Vec<String> = e
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| ffi_c_arg_ty(&p.ty).map(|c| format!("__a{}: {}", i, c)))
+                    .collect::<Result<_, _>>()?;
+                writeln!(out, "    #[link_name = \"{}\"]", e.name).unwrap();
+                writeln!(
+                    out,
+                    "    fn __ffi_{}({}) -> {};",
+                    mangle(&e.name),
+                    cargs.join(", "),
+                    ffi_c_ret_ty(&e.return_type)?
+                )
+                .unwrap();
+            }
+            out.push_str("}\n");
+        }
+        // (2) Wrappers con la firma raylang + marshalling.
+        for e in &prog.externs {
+            let params: Vec<String> = e
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| rust_ty(&p.ty, &self.enums, &self.tparams).map(|r| format!("mut __p{}: {}", i, r)))
+                .collect::<Result<_, _>>()?;
+            let ret = rust_ty(&e.return_type, &self.enums, &self.tparams)?;
+            write!(out, "fn {}({}) -> {} {{\n", mangle(&e.name), params.join(", "), ret).unwrap();
+            // Pre-marshalling de argumentos: los `string` necesitan un `CString` VIVO durante la llamada.
+            let mut passes = Vec::new();
+            for (i, p) in e.params.iter().enumerate() {
+                match normalize_type(&p.ty) {
+                    Type::Int | Type::Float => passes.push(format!("__p{}", i)),
+                    Type::Bool => passes.push(format!("(__p{} as std::os::raw::c_int)", i)),
+                    Type::String => {
+                        writeln!(out, "    let __c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"FFI: el string tiene un NUL interno\");", i, i).unwrap();
+                        passes.push(format!("__c{}.as_ptr()", i));
+                    }
+                    Type::Bytes => passes.push(format!("__p{}.as_ptr()", i)),
+                    Type::Ptr => passes.push(format!("(__p{} as *mut std::ffi::c_void)", i)),
+                    other => return Err(format!("spike: FFI arg no marshalable: {:?}", other)),
+                }
+            }
+            writeln!(out, "    let __r = unsafe {{ __ffi_{}({}) }};", mangle(&e.name), passes.join(", ")).unwrap();
+            // Marshalling del retorno C → valor raylang.
+            let ret_expr = match normalize_type(&e.return_type) {
+                // `__r` es `c_int` (i32) para Int → extiende el signo a i64 (como la VM).
+                Type::Int => "__r as i64".to_string(),
+                Type::Float => "__r".to_string(),
+                Type::Bool => "__r != 0".to_string(),
+                Type::Unit => "()".to_string(),
+                Type::Ptr => "__r as i64".to_string(),
+                Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
+                    // char* → Option<bytes>: NULL→None; si no, copia los bytes hasta el NUL (nunca libera).
+                    Type::Bytes => "if __r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__r) }.to_bytes())) }".to_string(),
+                    // char* → Option<string>: como bytes, validando UTF-8 (inválido → error de ejecución).
+                    Type::String => "if __r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__r) }.to_bytes()).expect(\"FFI: el char* devuelto no es UTF-8 válido\"))) }".to_string(),
+                    // ptr fallible → Option<ptr>: NULL→None; si no, la dirección opaca.
+                    Type::Ptr => "if __r.is_null() { None } else { Some(__r as i64) }".to_string(),
+                    other => return Err(format!("spike: FFI retorno Option<{:?}> no soportado", other)),
+                },
+                other => return Err(format!("spike: FFI retorno no marshalable: {:?}", other)),
+            };
+            writeln!(out, "    {}\n}}", ret_expr).unwrap();
+        }
         Ok(())
     }
 
@@ -3117,6 +3219,9 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         Type::Bool => "bool",
         Type::Char => "char",
         Type::Unit => "()",
+        // ptr (FFI, M41.4b): una dirección opaca de C → un `i64` inline (como `Value::Ptr`). Se pasa a
+        // otras funciones C pero no se desreferencia en raylang.
+        Type::Ptr => "i64",
         Type::String => "Rc<str>",
         // bytes: secuencia INMUTABLE de octetos (como string) → Rc<[u8]> (clon barato, compartible).
         Type::Bytes => return Ok("Rc<[u8]>".to_string()),
@@ -3238,6 +3343,44 @@ fn enum_subst(
 /// clon-al-leer, `RayShow` para mostrar/`to_string`, `'static` porque un valor genérico puede acabar en
 /// un `Rc<dyn Fn…>` —p. ej. el `Iter<T>` de los iteradores— que exige `T: 'static`; es SIEMPRE cierto en
 /// raylang (todos los valores son `Rc`/`Copy`, sin préstamos). rustc los monomorfiza → nativo.
+// =====================================================================
+// FFI (M41): tipos y marshalling de la frontera C
+// =====================================================================
+
+/// El tipo C de un ARGUMENTO de `extern fn` en la declaración `extern "C"` (ABI). Espejo de `ffi::arg_kind`.
+fn ffi_c_arg_ty(t: &Type) -> Result<&'static str, String> {
+    Ok(match normalize_type(t) {
+        Type::Int => "i64",                              // long
+        Type::Float => "f64",                            // double
+        Type::Bool => "std::os::raw::c_int",             // int (0/1)
+        Type::String => "*const std::os::raw::c_char",   // char* (NUL-terminado)
+        Type::Bytes => "*const u8",                      // buffer crudo
+        Type::Ptr => "*mut std::ffi::c_void",            // void* opaco
+        other => return Err(format!("spike: FFI arg no marshalable: {:?}", other)),
+    })
+}
+
+/// El tipo C de RETORNO de una `extern fn`. Un `char*` de retorno se modela con `Option` (NULL→None);
+/// un `ptr` fallible con `Option<ptr>`. Espejo de `ffi::ret_kind`.
+fn ffi_c_ret_ty(t: &Type) -> Result<&'static str, String> {
+    Ok(match normalize_type(t) {
+        // `int` de retorno → C **`int`** de 32 bits (como la VM, `RetMold::I32`): el `int` de raylang es
+        // `long`, pero un `-> int` FFI se lee como el `int` de C y se extiende el signo. Declararlo `i64`
+        // rompería el ABI (los 32 bits altos de `rax` son basura → p. ej. el EOF -1 de `fgetc` se vería +).
+        Type::Int => "std::os::raw::c_int",
+        Type::Float => "f64",
+        Type::Bool => "std::os::raw::c_int",
+        Type::Unit => "()",
+        Type::Ptr => "*mut std::ffi::c_void",
+        Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
+            Type::Bytes | Type::String => "*const std::os::raw::c_char",
+            Type::Ptr => "*mut std::ffi::c_void",
+            other => return Err(format!("spike: FFI retorno Option<{:?}> no soportado", other)),
+        },
+        other => return Err(format!("spike: FFI retorno no marshalable: {:?}", other)),
+    })
+}
+
 fn generic_decl(tparams: &[String]) -> String {
     generic_bound(tparams, "Clone + RayShow + 'static")
 }
@@ -3620,6 +3763,34 @@ mod tests {
         let rust = transpile_src("fn main() { var x: int = 0; x = x + 1; print(x); }");
         assert!(rust.contains("let mut x: i64 = 0i64;"), "x es local normal: {}", rust);
         assert!(!rust.contains("let x = Rc::new(std::cell::RefCell"), "x NO va en celda: {}", rust);
+    }
+
+    #[test]
+    fn ffi_emite_extern_c_y_wrapper_con_marshalling() {
+        // FFI (M41): `extern "m" { fn sqrt(x: float) -> float; }` → una decl `extern "C"` del símbolo C
+        // (`__ffi_sqrt` con `#[link_name]`, bajo `#[link(name = "m")]`) + un wrapper que llama en `unsafe`.
+        let rust = transpile_src(
+            "extern \"m\" { fn sqrt(x: float) -> float; }\n\
+             fn main() { print(sqrt(2.0)); }",
+        );
+        assert!(rust.contains("#[link(name = \"m\")]"), "link a libm: {}", rust);
+        assert!(rust.contains("#[link_name = \"sqrt\"]"), "link_name del símbolo: {}", rust);
+        assert!(rust.contains("fn __ffi_sqrt(__a0: f64) -> f64"), "decl extern C: {}", rust);
+        assert!(rust.contains("unsafe { __ffi_sqrt("), "wrapper llama en unsafe: {}", rust);
+    }
+
+    #[test]
+    fn ffi_retorno_int_es_c_int_de_32_bits() {
+        // El retorno `int` de una extern es C `int` (32 bits, sign-extendido), NO `long`: declararlo i64
+        // rompería el ABI (el EOF -1 de `fgetc` se vería positivo). Debe ir por `c_int` + `as i64`.
+        let rust = transpile_src(
+            "extern \"c\" { fn fgetc(s: ptr) -> int; }\n\
+             fn main() { print(0); }",
+        );
+        assert!(rust.contains("-> std::os::raw::c_int;"), "retorno c_int: {}", rust);
+        assert!(rust.contains("__r as i64"), "sign-extiende a i64: {}", rust);
+        // libc no lleva #[link] (ya enlazada).
+        assert!(!rust.contains("#[link(name = \"c\")]"), "libc implícita: {}", rust);
     }
 
     #[test]

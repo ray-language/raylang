@@ -566,6 +566,29 @@ fn build_native_iteradores_coinciden_con_la_vm() {
 }
 
 #[test]
+fn build_native_ffi_libc_libm_coincide_con_la_vm() {
+    // `ray build --native` con FFI (M41): `extern "m"/"c" { … }` → declaraciones `extern "C"` + wrappers
+    // que marshalan (string→char*, etc.). rustc enlaza libm (`#[link(name="m")]`) y libc (implícita). Las
+    // llamadas a `sqrt`/`pow`/`abs`/`strlen`/`atoi` dan el MISMO resultado que la VM (que usa dlopen/dlsym).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native ffi: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/ffi/libm.ray");
+    let base = tmp("build_native_ffi");
+    let bin = base.join("ffi_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de ffi sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "ffi nativo ≡ VM");
+    assert!(native_out.contains("1.4142135623730951"), "sqrt(2) por libm\n{native_out}");
+    assert!(native_out.contains("10"), "strlen(\"hola mundo\") por libc\n{native_out}");
+}
+
+#[test]
 fn build_native_servidor_tcp_hace_eco() {
     // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
     // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.

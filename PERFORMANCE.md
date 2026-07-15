@@ -433,6 +433,26 @@ toda llamada genérica) → verificado sin regresión: corpus 37/37, 38 web idé
 `for_sobre_enumerate_destructura_la_tupla` (unit) + `build_native_iteradores_coinciden_con_la_vm`
 (integración, ahora sobre el `iterador.ray` completo). **B2 sin diferidos.**
 
+#### Fase 49 — FFI (M41): llamar a funciones C nativas (`extern "lib" { … }`)
+
+Un `extern "lib" { fn name(params) -> ret; }` declara funciones de una librería C (la VM las resuelve con
+dlopen/dlsym). **Transpilación**: por cada extern se emite (1) una declaración `extern "C"` del símbolo
+(`__ffi_name` con `#[link_name = "name"]`, tipos de ABI) agrupada por librería con su `#[link(name =
+"lib")]` (libc va implícita), y (2) un **wrapper** `fn name(...)` con la firma raylang que **marshala**:
+argumentos (string→`CString` VIVO durante la llamada, bool→`c_int`, bytes→`*const u8`, ptr→`*mut
+c_void`), llama al símbolo en `unsafe`, y marshala el retorno (`c_int`→bool, `char*`→`Option<bytes>`/
+`Option<string>` copiando hasta el NUL y validando UTF-8, `ptr`→`Option<ptr>`). rustc enlaza libm/libc.
+**Gotcha de ABI cazado**: un retorno `int` es C **`int` de 32 bits** (como la VM, `RetMold::I32`), NO
+`long` — declararlo `i64` deja los 32 bits altos de `rax` con basura y el **EOF -1 de `fgetc` se ve
+positivo → bucle infinito**; se declara `c_int` y se extiende el signo (`__r as i64`). Cubre
+`examples/ffi/libm.ray` (sqrt/pow/cbrt/hypot de libm + abs/strlen/atoi de libc, con string→char*) y
+`examples/ffi/cstrings.ray` (strstr→`Option<string>`, strchr→`Option<bytes>`, fopen→`Option<ptr>`,
+fgetc/fclose leyendo un archivo real), byte-idénticos a la VM. `Type::Ptr` → `i64` (dirección opaca).
+Tests: `ffi_emite_extern_c_y_wrapper_con_marshalling`, `ffi_retorno_int_es_c_int_de_32_bits` (unit) +
+`build_native_ffi_libc_libm_coincide_con_la_vm` (integración). 605 tests lib + corpus 37/37 intactos
+(el FFI solo afecta a programas con `extern`). Diferido: `print` de un `ptr` (se vería la dirección, no
+`<ptr>`), arreglos/structs por FFI (aridad 0..=3 primitivos, como M41).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

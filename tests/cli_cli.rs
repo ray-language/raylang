@@ -229,6 +229,42 @@ fn build_native_concurrencia_csp_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_structured_concurrency_coincide_con_la_vm() {
+    // `ray build --native` de structured concurrency (scope + spawn→Task + join): las tareas se lanzan en
+    // hilos reales, join recoge sus resultados, scope las une al salir. Salida determinista-por-diseño.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native structured: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_struct");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn sq(n: int) -> int { n * n }\n\
+         fn main() -> int {\n\
+           let total = scope(fn() -> int {\n\
+             let a: Task<int> = spawn(fn() -> int { sq(3) });\n\
+             let b: Task<int> = spawn(fn() -> int { sq(4) });\n\
+             let c: Task<int> = spawn(fn() -> int { sq(5) });\n\
+             join(a) + join(b) + join(c)\n\
+           });\n\
+           print(total);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native structured ok\n{err}");
+
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, "50\n", "VM: 9+16+25 = 50");
+    for _ in 0..5 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), "50\n", "nativo ≡ VM (estable)");
+    }
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

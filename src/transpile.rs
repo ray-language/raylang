@@ -413,6 +413,33 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "    }\n",
             "    fn close(&self) { let (m, cv) = &*self.inner; m.lock().unwrap().closed = true; cv.notify_all(); }\n",
             "}\n",
+            // Structured concurrency (M12.3): Task<T> = un JoinHandle envuelto (Arc<Mutex>) que cachea el
+            // resultado (join una vez ejecuta el hilo; joins posteriores devuelven el clon cacheado → una
+            // tarea puede unirse explícitamente O por el scope, no dos veces).
+            "struct __TaskState<T> { handle: Option<std::thread::JoinHandle<T>>, result: Option<T> }\n",
+            "struct __RayTask<T> { inner: std::sync::Arc<std::sync::Mutex<__TaskState<T>>> }\n",
+            "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone() } } }\n",
+            "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
+            "    fn join(&self) -> T {\n",
+            "        let mut st = self.inner.lock().unwrap();\n",
+            "        if let Some(h) = st.handle.take() { let r = h.join().unwrap(); st.result = Some(r); }\n",
+            "        st.result.clone().unwrap()\n",
+            "    }\n",
+            "}\n",
+            // Cada scope activo (por hilo) acumula clausuras que unen las tareas lanzadas dentro; al salir
+            // el scope las ejecuta (une todas). `spawn` registra su tarea en el scope más interno, si hay.
+            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<Box<dyn FnOnce()>>>> = std::cell::RefCell::new(Vec::new()); }\n",
+            "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
+            "    let task = __RayTask { inner: std::sync::Arc::new(std::sync::Mutex::new(__TaskState { handle: Some(std::thread::spawn(f)), result: None })) };\n",
+            "    let t = task.clone();\n",
+            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(Box::new(move || { let _ = t.join(); })); } });\n",
+            "    task\n}\n",
+            "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R {\n",
+            "    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n",
+            "    let r = body();\n",
+            "    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n",
+            "    for j in frame { j(); }\n",
+            "    r\n}\n",
         ));
     }
     Ok(out)
@@ -1559,6 +1586,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // join(t) → t.join() (Task, structured concurrency); join(arr, sep) → __ray_join (string). El
+            // `join` es ad-hoc: se distingue por el tipo del primer arg (Task vs arreglo).
+            "join" if matches!(self.type_of(eff[0])?, Type::Task(_)) => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".join()");
+            }
             "join" => {
                 out.push_str("__ray_join(&");
                 self.emit_expr(out, eff[0])?;
@@ -1709,23 +1742,24 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".recv()");
             }
-            // spawn(fn() {...}) → std::thread::spawn(move || {...}). Solo un FnExpr literal (captura solo
-            // valores Send, p. ej. canales). El resultado (Task<T>) se DESCARTA (fire-and-forget); `join`
-            // (structured concurrency) es una fase posterior.
-            "spawn" => {
+            // spawn(fn()->T {...}) → __ray_spawn(move || {...}) → Task<T> (JoinHandle envuelto, registrado
+            // en el scope activo). Solo un FnExpr literal (captura solo valores Send, p. ej. canales).
+            // scope(fn()->R {...}) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro.
+            "spawn" | "scope" => {
                 let ExprKind::Func(fnexpr) = &eff[0].kind else {
-                    return Err("spike: spawn solo acepta una función anónima literal (por ahora)".into());
+                    return Err(format!("spike: {} solo acepta una función anónima literal", method));
                 };
                 self.needs_concurrency = true;
-                // El closure captura por `move`; los canales en ámbito los comparten varios spawns/main,
-                // así que se CLONAN (Arc bump) antes → el closure mueve un clon, el original sigue usable.
+                // El closure captura por `move`; los canales en ámbito los comparten varios spawns/main/
+                // scope, así que se CLONAN (Arc bump) antes → el closure mueve un clon, el original sigue.
                 out.push_str("{ ");
                 for name in self.in_scope_channels() {
                     write!(out, "let {n} = {n}.clone(); ", n = mangle(&name)).unwrap();
                 }
-                out.push_str("std::thread::spawn(move || ");
+                let runtime = if method == "spawn" { "__ray_spawn" } else { "__ray_scope" };
+                write!(out, "{}(move || ", runtime).unwrap();
                 self.emit_block(out, &fnexpr.body)?;
-                out.push_str("); }");
+                out.push_str(") }");
             }
             "unwrap_or" => {
                 self.emit_expr(out, eff[0])?;
@@ -1883,7 +1917,12 @@ impl Transpiler {
                 // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
                 let recv0 = recv.or_else(|| args.first());
                 match method {
-                    "to_string" | "join" => Type::String,
+                    "to_string" => Type::String,
+                    // join(t) → T de la Task; join(arr, sep) → String (ad-hoc por el tipo del primer arg).
+                    "join" => match recv0.map(|e| self.type_of(e)).transpose()? {
+                        Some(Type::Task(t)) => *t,
+                        _ => Type::String,
+                    },
                     "show" if n.contains('#') => Type::String,
                     "eq" | "less" if n.contains('#') => Type::Bool,
                     "len" => Type::Int,
@@ -1901,7 +1940,19 @@ impl Transpiler {
                         Type::Channel(t) => opt_of(*t),
                         other => return Err(format!("spike: recv sobre {:?}", other)),
                     },
-                    "send" | "spawn" => Type::Unit,
+                    "send" => Type::Unit,
+                    // spawn(fn()->T) → Task<T>; scope(fn()->R) → R (el tipo de retorno de la función anónima).
+                    "spawn" | "scope" => {
+                        let ret = match recv0.map(|e| &e.kind) {
+                            Some(ExprKind::Func(f)) => normalize_type(&f.return_type),
+                            _ => return Err(format!("spike: {} sin función anónima", method)),
+                        };
+                        if method == "spawn" {
+                            Type::Task(Box::new(ret))
+                        } else {
+                            ret
+                        }
+                    }
                     // close ad-hoc: canal → unit; handle de archivo (int) → 0.
                     "close" => match recv0.map(|e| self.type_of(e)).transpose()? {
                         Some(Type::Channel(_)) => Type::Unit,
@@ -2108,6 +2159,8 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         // Channel<T> (concurrencia): canal MPMC thread-safe propio (Arc<Mutex+Condvar>). T debe ser Send
         // (primitivos en v1; string/struct → diferido, requerirían el modelo de valores thread-safe).
         Type::Channel(t) => return Ok(format!("__RayChan<{}>", rust_ty(t, enums, tparams)?)),
+        // Task<T> (structured concurrency): handle al resultado futuro de un `spawn` (JoinHandle envuelto).
+        Type::Task(t) => return Ok(format!("__RayTask<{}>", rust_ty(t, enums, tparams)?)),
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),
         // Map: igual, sobre un HashMap.
@@ -2570,6 +2623,22 @@ mod tests {
     }
 
     #[test]
+    fn transpila_structured_concurrency() {
+        // Task/join/scope (M12.3): spawn → __ray_spawn (devuelve Task); join(t) → t.join(); scope → __ray_scope.
+        let rust = transpile_src(
+            "fn sq(n: int) -> int { n * n }\n\
+             fn main() -> int { scope(fn() -> int { \
+             let a: Task<int> = spawn(fn() -> int { sq(3) }); \
+             let b: Task<int> = spawn(fn() -> int { sq(4) }); \
+             join(a) + join(b) }) }",
+        );
+        assert!(rust.contains("__RayTask<i64>"), "Task → __RayTask: {}", rust);
+        assert!(rust.contains("__ray_spawn(move ||"), "spawn → __ray_spawn: {}", rust);
+        assert!(rust.contains("__ray_scope(move ||"), "scope → __ray_scope: {}", rust);
+        assert!(rust.contains(".join()"), "join(t) → .join(): {}", rust);
+    }
+
+    #[test]
     fn transpila_concurrencia_csp() {
         // spawn + canales (M12.1/M12.2): Channel.new/bounded → __RayChan; send/recv/close; spawn → thread.
         let rust = transpile_src(
@@ -2580,7 +2649,7 @@ mod tests {
         );
         assert!(rust.contains("__RayChan<i64>"), "canal → __RayChan: {}", rust);
         assert!(rust.contains("__RayChan::make(Some("), "bounded: {}", rust);
-        assert!(rust.contains("std::thread::spawn(move ||"), "spawn → hilo: {}", rust);
+        assert!(rust.contains("__ray_spawn(move ||"), "spawn → hilo (vía __ray_spawn): {}", rust);
         assert!(rust.contains(".send("), "send: {}", rust);
         assert!(rust.contains(".recv()"), "recv: {}", rust);
         assert!(rust.contains(".close()"), "close de canal: {}", rust);

@@ -607,6 +607,23 @@ Test de integración `build_native_concurrencia_csp_coincide_con_la_vm` (`tests/
 `rechaza_` pasa a usar `select`. Corpus 37/37 + multi-módulo intactos. **Diferido**: `select`, structured
 (`scope`/`join`/`Task`), cancelación; canales de tipos no-Send.
 
+#### Fase 29 — structured concurrency (`Task`/`join`/`scope`)
+
+Segundo slice (M12.3): spawn tareas, recoge resultados. `Task<T>` → **`__RayTask<T>`** = un
+`JoinHandle<T>` envuelto en `Arc<Mutex>` que **cachea el resultado** (join una vez ejecuta el hilo; joins
+posteriores devuelven el clon cacheado → una tarea se une explícitamente **o** por el scope, no dos veces).
+`spawn(fn()->T)` pasa de fire-and-forget a **`__ray_spawn`** → devuelve el `Task` **y** se registra en el
+scope activo; `join(t)` → `t.join()` (espera + re-lanza si falló; ad-hoc con el `join(arr,sep)` de strings,
+se distingue por el tipo del primer arg); `scope(fn()->R)` → **`__ray_scope`**, que corre el cuerpo y al
+salir **une todas** las tareas lanzadas dentro. Mecánica: un **thread-local** `__SCOPES` = pila de frames;
+cada frame acumula clausuras-de-join; `__ray_spawn` empuja la suya al frame más interno; `__ray_scope`
+las ejecuta al salir. `T: Send + Clone` (primitivos). Verificado: `examples/concurrency/structured.ray`
+(3 tareas `cuadrado(3/4/5)` unidas con `join`, + un scope que espera un `spawn` sin join explícito)
+transpila con hilos reales y da salida byte-idéntica a la VM (`50`, `7`), estable 10/10. `spawn`
+fire-and-forget (concurrencia.ray, sin scope) sigue funcionando (sin scope activo → tarea detached). Test
+de integración `build_native_structured_concurrency_coincide_con_la_vm`. **Diferido**: `select` (M12.4),
+cancelación (M12.5); canales de tipos no-Send.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

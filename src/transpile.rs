@@ -99,9 +99,9 @@ fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
 /// inyectadas por el checker se SALTAN (el transpilador las mapea a Rust nativo, o no las soporta y su
 /// cuerpo referiría builtins ausentes). Lista extraída de `src/prelude.ray` + los builtins públicos.
 fn is_handled_builtin(name: &str) -> bool {
-    // `std::math::*` se intercepta en emit_call/type_of (→ métodos de `f64` de Rust); no emitimos sus
-    // wrappers (`sqrt` llama al primitivo `__sqrt`) ni las genéricas abs/min/max (usan diccionarios).
-    if name.starts_with("std::math::") {
+    // `std::math::*`/`std::fs::*` se interceptan en emit_call/type_of (→ Rust nativo); no emitimos sus
+    // wrappers del módulo (llaman a primitivos `__sqrt`/`__read_file` que no transpilamos).
+    if name.starts_with("std::math::") || name.starts_with("std::fs::") {
         return true;
     }
     matches!(
@@ -1140,6 +1140,42 @@ impl Transpiler {
 
     /// `std::math::<fn>(args)` → el método de `f64` de Rust equivalente. Unarias float→float directas;
     /// pow→powf; abs/min/max preservan el tipo (int|float, ambos con esos métodos en Rust).
+    /// `std::fs::<fn>(args)` → I/O de archivos con `std::fs`/`std::io` de Rust. Ok/Err como la VM (mensajes
+    /// vía `e.to_string()`). No determinista → probado por subproceso (no oráculo). Se cubre la ENTRADA
+    /// (read_file) + la salida básica (write_file) + la consulta (exists); el resto → error claro.
+    fn emit_fs(&mut self, out: &mut String, ffn: &str, eff: &[&Expr]) -> Result<(), String> {
+        match ffn {
+            // read_file(path) -> Result<string, string>: lee el archivo entero a un string.
+            "read_file" => {
+                out.push_str("(match std::fs::read_to_string(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ") { Ok(__c) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__c)), \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
+            // write_file(path, content) -> Result<int, string>: escribe (trunca); Ok(0) como la VM.
+            "write_file" => {
+                out.push_str("(match std::fs::write(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(
+                    ".as_bytes()) { Ok(()) => Ok::<i64, Rc<str>>(0i64), \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
+            // exists(path) -> bool.
+            "exists" => {
+                out.push_str("std::path::Path::new(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").exists()");
+            }
+            _ => return Err(format!("spike: std::fs::{} no soportada", ffn)),
+        }
+        Ok(())
+    }
+
     fn emit_math(&mut self, out: &mut String, mfn: &str, eff: &[&Expr]) -> Result<(), String> {
         const UNARY: &[&str] = &[
             "sqrt", "sin", "cos", "tan", "ln", "log10", "log2", "exp", "floor", "ceil", "round", "trunc",
@@ -1202,6 +1238,10 @@ impl Transpiler {
         // resultado). abs/min/max son ad-hoc int|float (ambos tienen esos métodos en Rust).
         if let Some(mfn) = name.strip_prefix("std::math::") {
             return self.emit_math(out, mfn, &eff);
+        }
+        // `std::fs::*` (módulo std/fs) → I/O de archivos con `std::fs`/`std::io` de Rust (Ok/Err como la VM).
+        if let Some(ffn) = name.strip_prefix("std::fs::") {
+            return self.emit_fs(out, ffn, &eff);
         }
         // Métodos de la stdlib manglados por el checker (`string#len`, `Len` trait…): el método real es
         // lo que va tras el último `#`. Los nombres de usuario no llevan `#` (ilegal) → quedan intactos.
@@ -1351,6 +1391,21 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".parse::<i64>().ok())");
             }
+            // I/O de ENTRADA (no determinista → sin oráculo; probado por subproceso, como tests/io_cli.rs).
+            // `input() -> Option<string>`: una línea de stdin, sin '\n'/'\r' finales (como la VM); None en EOF.
+            "input" => {
+                out.push_str(
+                    "{ let mut __s = String::new(); match std::io::stdin().read_line(&mut __s) \
+                     { Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(__s.trim_end_matches(['\\n', '\\r']))) } }",
+                );
+            }
+            // `read_int() -> Option<int>` = input() + parse_int (composición del prelude).
+            "read_int" => {
+                out.push_str(
+                    "{ let mut __s = String::new(); match std::io::stdin().read_line(&mut __s) \
+                     { Ok(0) | Err(_) => None, Ok(_) => __s.trim_end_matches(['\\n', '\\r']).parse::<i64>().ok() } }",
+                );
+            }
             "unwrap_or" => {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".unwrap_or(");
@@ -1482,6 +1537,15 @@ impl Transpiler {
                         _ => Type::Float,
                     });
                 }
+                // `std::fs::*`: read_file → Result<string,string>; write_file → Result<int,string>; exists → bool.
+                if let Some(ffn) = n.strip_prefix("std::fs::") {
+                    return Ok(match ffn {
+                        "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
+                        "write_file" => Type::Enum("Result".into(), vec![Type::Int, Type::String]),
+                        "exists" => Type::Bool,
+                        other => return Err(format!("spike: std::fs::{} no soportada", other)),
+                    });
+                }
                 let _ = &args;
                 let method = n.rsplit('#').next().unwrap_or(n).trim_start_matches("__");
                 // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
@@ -1493,6 +1557,9 @@ impl Transpiler {
                     "len" => Type::Int,
                     "parse_int" => opt_of(Type::Int),
                     "parse_float" => opt_of(Type::Float),
+                    // I/O de entrada del prelude: input → Option<string>; read_int → Option<int>.
+                    "input" => opt_of(Type::String),
+                    "read_int" => opt_of(Type::Int),
                     "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
                     "split" => Type::Array(Box::new(Type::String)),
                     "args" => Type::Array(Box::new(Type::String)),
@@ -2196,10 +2263,22 @@ mod tests {
 
     #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `input()` (stdin, aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens = crate::lexer::lex("fn main() { let s = input(); print(s); }").unwrap();
+        // un `main` con `env()` (I/O de entorno, aún fuera del subconjunto) → sin `main` transpilable.
+        let tokens = crate::lexer::lex("fn main() { let e = env(\"PATH\"); print(e); }").unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());
+    }
+
+    #[test]
+    fn transpila_io_de_entrada() {
+        // input()/read_int() (prelude) → stdin; read_file/write_file/exists (std/fs, cualificados) → std::fs.
+        let rust = transpile_src(
+            "fn main() -> int { \
+             match (input()) { Option.Some(l) => print(l), Option.None => print(\"eof\") } \
+             match (read_int()) { Option.Some(n) => n, Option.None => 0 } }",
+        );
+        assert!(rust.contains("std::io::stdin().read_line("), "input/read_int leen stdin: {}", rust);
+        assert!(rust.contains("trim_end_matches"), "quita el salto de línea como la VM: {}", rust);
     }
 }

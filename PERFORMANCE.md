@@ -473,9 +473,32 @@ deploy=nativo**, como Rust: `ray run` (VM, arranque ≤5 ms, iteración rápida)
 El nativo bate a node **5×** y a la propia VM **~76×**. **raylang pasa de peor-de-la-clase** (la VM era
 12.5× más lenta que node en el banco original) **a mejor-de-la-clase** en cómputo — el giro ~68× del spike
 se confirma en el pipeline real. Test de integración `build_native_produce_un_binario_que_corre_como_la_vm`
-(`tests/cli_cli.rs`): el binario nativo da salida idéntica a la VM. Siguiente: medir el banco poliglota
-completo (wordcount/jsonserialize/logparse — necesitan que el transpilador cubra su I/O de entrada) con
-binarios nativos.
+(`tests/cli_cli.rs`): el binario nativo da salida idéntica a la VM.
+
+#### Fase 21 — el nicho de servicios en nativo + I/O de entrada transpilable
+
+**El nicho de servicios, medido en nativo** (14 jul, best-of-3): los 3 benchmarks del banco poliglota
+(wordcount/jsonserialize/logparse) **ya transpilaban** (generan datos sintéticos en memoria: split + Map +
+sort, sin I/O). Compilados con `ray build --native` y comparados con los líderes del nicho:
+
+| bench | ray-nativo | node | php | python | ray vs líder |
+|-------|-----------|------|-----|--------|--------------|
+| wordcount | **0.09 s** | 0.16 | 0.10 | 0.17 | ~1.1× (empata php) |
+| jsonserialize | **0.04 s** | 0.11 | 0.08 | 0.15 | **2× más rápido** |
+| logparse | **0.05 s** | 0.09 | 0.07 | 0.10 | **1.4× más rápido** |
+
+El nicho de servicios era donde raylang iba **2.9–9.7× por detrás** del líder (banco original) → **1.9–2.5×**
+tras P0 → ahora **el más rápido o empatado** en nativo. El giro se completa en los DOS perfiles (cómputo y
+servicios).
+
+**I/O de entrada transpilable** (para programas reales, no solo los benchmarks sintéticos): se añaden al
+transpilador los builtins de **lectura**. Del prelude (nombre pelado): `input() -> Option<string>` (una
+línea de stdin, quita `\n`/`\r` finales, `None` en EOF — byte-idéntico a la VM), `read_int() -> Option<int>`
+(input + parse). Del módulo `std/fs` (cualificado `std::fs::*`, interceptado por prefijo como `std::math`):
+`read_file -> Result<string,string>` (`std::fs::read_to_string`), `write_file -> Result<int,string>`,
+`exists -> bool`. No deterministas → sin oráculo; se prueban por subproceso (nativo vs VM con el mismo
+stdin/archivo) en `tests/io_cli.rs::native_io_de_entrada_coincide_con_la_vm`. Diferido (aún fuera):
+handles de archivo (`open`/`read_line`/`write`/`close`), `env`/`args`-de-entorno, `list_dir`/`remove_file`.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

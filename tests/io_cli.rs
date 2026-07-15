@@ -379,3 +379,48 @@ fn main() -> int {
         assert_eq!(out, expected, "ciclo fs complete (vm={vm})");
     }
 }
+
+/// P2.b: I/O de entrada transpilable. Compila con `ray build --native` un programa que lee stdin y un
+/// archivo, y comprueba que el binario nativo produce la MISMA salida que la VM. Requiere `rustc`; se
+/// salta limpiamente si no está (no es un fallo).
+#[test]
+fn native_io_de_entrada_coincide_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_io: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_io");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let data = dir.join("data.txt");
+    std::fs::write(&data, "contenido de archivo").expect("escribe data");
+    let src = format!(
+        "import std/fs;\n\
+         fn main() -> int {{\n\
+           match (fs.read_file(\"{}\")) {{ Result.Ok(c) => print(\"file: \" + c), Result.Err(e) => print(\"err: \" + e) }}\n\
+           match (input()) {{ Option.Some(l) => print(\"in: \" + l), Option.None => print(\"in: eof\") }}\n\
+           match (read_int()) {{ Option.Some(n) => print(\"n: \" + to_string(n * 3)), Option.None => print(\"n: none\") }}\n\
+           0\n\
+         }}\n",
+        data.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("lanza build --native");
+    assert!(build.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let stdin = "hola\n14\n";
+    // Salida del binario nativo.
+    let mut nat = Command::new(&bin)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("lanza nativo");
+    nat.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    let nat_out = String::from_utf8_lossy(&nat.wait_with_output().unwrap().stdout).into_owned();
+    // Salida de la VM.
+    let (vm_out, _e, _c) = run_io("native_io_vm", &src, stdin, true);
+    assert_eq!(nat_out, vm_out, "nativo ≡ VM");
+    assert_eq!(nat_out, "file: contenido de archivo\nin: hola\nn: 42\n", "salida esperada");
+}

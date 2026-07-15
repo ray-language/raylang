@@ -116,7 +116,7 @@ fn is_handled_builtin(name: &str) -> bool {
         name,
         "std::net::tcp_connect" | "std::net::tcp_listen" | "std::net::tcp_accept" | "std::net::socket_read"
             | "std::net::socket_read_bytes" | "std::net::socket_write" | "std::net::socket_write_bytes"
-            | "std::net::local_port"
+            | "std::net::local_port" | "std::net::set_read_timeout"
     ) {
         return true;
     }
@@ -377,6 +377,12 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
                 if f.name == "main" {
                     return Err(format!("spike: main fuera del subconjunto: {}", e));
                 }
+                // Una función no-main que no transpila se SALTA (no bloquea al programa que no la usa);
+                // pero si algo la llama, `rustc` fallará por la llamada colgante. `RAYLANG_TRANSPILE_DEBUG`
+                // reporta qué se salta y por qué → diagnóstico de la cola larga de builtins.
+                if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
+                    eprintln!("[transpile skip] {} — {}", f.name, e);
+                }
             }
         }
     }
@@ -459,6 +465,10 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "fn __ray_local_port(h: i64) -> i64 {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
+            "fn __ray_set_read_timeout(h: i64, ms: i64) {\n",
+            "    let d = if ms <= 0 { None } else { Some(std::time::Duration::from_millis(ms as u64)) };\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let _ = s.set_read_timeout(d); } }\n",
         ));
     }
     // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
@@ -1674,6 +1684,14 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // set_read_timeout(h, ms) -> unit: fija el timeout de lectura del socket (ms<=0 → sin límite).
+            "set_read_timeout" => {
+                out.push_str("__ray_set_read_timeout(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             // socket_write(h, s) → escribe los bytes UTF-8 del string; socket_write_bytes(h, data) → los bytes.
             "socket_write" | "socket_write_bytes" => {
                 out.push_str("__ray_socket_write(");
@@ -1777,7 +1795,7 @@ impl Transpiler {
             if matches!(
                 nfn,
                 "tcp_connect" | "tcp_listen" | "tcp_accept" | "socket_read" | "socket_read_bytes"
-                    | "socket_write" | "socket_write_bytes" | "local_port"
+                    | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout"
             ) {
                 return self.emit_net(out, nfn, &eff);
             }
@@ -1989,7 +2007,9 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
-            "get_or" => {
+            // get_or(m, k, default) — el del prelude lleva 3 args; un `get_or` con otra aridad no es este
+            // builtin → cae al fallback (evita el pánico por `eff[2]` inexistente).
+            "get_or" if eff.len() == 3 => {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().get(&");
                 self.emit_expr(out, eff[1])?;
@@ -2038,6 +2058,35 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".parse::<i64>().ok())");
             }
+            "parse_float" => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".parse::<f64>().ok())");
+            }
+            // contains ad-hoc: string → subcadena; bytes → subsecuencia; arreglo → pertenencia (==).
+            "contains" => match self.type_of(eff[0])? {
+                Type::String => {
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(".contains(&*");
+                    self.emit_expr(out, eff[1])?;
+                    out.push(')');
+                }
+                Type::Bytes => {
+                    out.push_str("{ let __s = ");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str("; __s.is_empty() || ");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(".windows(__s.len().max(1)).any(|__w| __w == &*__s) }");
+                }
+                Type::Array(_) => {
+                    out.push_str("{ let __x = ");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str("; ");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(".borrow().iter().any(|__e| *__e == __x) }");
+                }
+                other => return Err(format!("spike: contains sobre {:?}", other)),
+            },
             // Bytes: to_bytes(s) codifica un string a UTF-8; from_utf8(b) decodifica (Result); sub_bytes
             // corta [i,j) por octeto con clamp (nunca falla). Repr = Rc<[u8]>.
             "to_bytes" => {
@@ -2324,6 +2373,7 @@ impl Transpiler {
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),
+                    "std::net::set_read_timeout" => return Ok(Type::Unit),
                     "std::net::tcp_connect" | "std::net::tcp_listen" | "std::net::tcp_accept"
                     | "std::net::socket_write" | "std::net::socket_write_bytes" => {
                         return Ok(Type::Enum("Result".into(), vec![Type::Int, Type::String]))
@@ -2391,7 +2441,7 @@ impl Transpiler {
                     // Más string builtins: trim/to_upper/to_lower/repeat/replace/substring → string;
                     // starts_with/ends_with → bool.
                     "trim" | "to_upper" | "to_lower" | "repeat" | "replace" | "substring" => Type::String,
-                    "starts_with" | "ends_with" => Type::Bool,
+                    "starts_with" | "ends_with" | "contains" => Type::Bool,
                     "index_of" => opt_of(Type::Int), // índice de subcadena → Option<int>
 
                     "split" => Type::Array(Box::new(Type::String)),
@@ -3084,6 +3134,34 @@ mod tests {
         assert!(rust.contains("std::f64::consts::E"), "{}", rust);
         // No debe emitir los wrappers del módulo (`fn ...sqrt`) ni el primitivo `__sqrt`.
         assert!(!rust.contains("__sqrt"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_contains_y_parse_float() {
+        // contains ad-hoc (string subcadena / arreglo pertenencia) + parse_float → Option<float>.
+        let rust = transpile_src(
+            "fn main() -> int { let ok = \"abc\".contains(\"b\"); let xs: [int] = [1, 2]; \
+             let m = xs.contains(2); match (parse_float(\"1.5\")) { Option.Some(f) => { if (ok && m) { 1 } else { 0 } }, Option.None => 0 } }",
+        );
+        assert!(rust.contains(".contains(&*"), "string contains: {}", rust);
+        assert!(rust.contains(".iter().any(|__e| *__e == __x)"), "array contains: {}", rust);
+        assert!(rust.contains(".parse::<f64>().ok()"), "parse_float: {}", rust);
+    }
+
+    #[test]
+    fn get_or_no_builtin_no_crashea() {
+        // Un `get_or` con aridad distinta a 3 (no es el del prelude) NO debe hacer ICE (antes: pánico por
+        // eff[2]); debe dar un error de transpilación limpio (cae al fallback).
+        let tokens = crate::lexer::lex(
+            "fn get_or(m: Map<string, int>, k: string) -> int { m.get_or(k, 0) }\n\
+             fn main() { var m: Map<string, int> = Map.new(); m.insert(\"a\", 1); print(get_or(m, \"a\")); }",
+        )
+        .unwrap();
+        let mut prog = crate::parser::parse(tokens).unwrap();
+        // Puede ser válido o no en el checker; lo importante es que transpile() no PANIQUE.
+        if crate::checker::check(&mut prog).is_ok() {
+            let _ = super::transpile(&prog); // no debe hacer panic
+        }
     }
 
     #[test]

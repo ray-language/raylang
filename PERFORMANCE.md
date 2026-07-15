@@ -243,6 +243,19 @@ transpilar, el *silent-skip* dejaba llamadas colgantes en cadena. Con index_of, 
 `base64_demo` completo ≡ VM). `uuid` compila pero difiere (genera un UUID ALEATORIO → no determinista, como
 random). Corpus 37/37 intacto.
 
+#### Fase 39 — diagnóstico de la cola larga + contains/parse_float/set_read_timeout + fix ICE
+
+Para atacar la cola larga con datos, se añade **`RAYLANG_TRANSPILE_DEBUG`**: reporta cada función no-main
+que el *silent-skip* descarta y por qué (`[transpile skip] <fn> — <error>`). El escaneo reveló los bloqueos
+top: `__tls_*` (fuera, rustls), `__contains` (19), `__socket_set_read_timeout` (19), `parse_float` (bug),
+UDP, crypto. Añadidos: **`contains`** ad-hoc (string→subcadena `str::contains`, arreglo→pertenencia
+`.iter().any(== )`, bytes→subsecuencia `windows`), **`parse_float`** (faltaba en emit_call —solo estaba en
+type_of— → `.parse::<f64>().ok()`), **`set_read_timeout`** (socket op → `TcpStream::set_read_timeout`).
+**Bug real (ICE) cazado y arreglado**: `get_or(q, "x")` con **2 args** (no el del prelude, que lleva 3)
+hacía `panic` por `eff[2]` inexistente → ahora el arm se guarda con `eff.len() == 3` y una aridad distinta
+cae al fallback (error limpio, no crash). Test de regresión. Librería rustc OK: 32 → 33 (los que usan
+`contains` suelen usar además TLS/crypto). Corpus 37/37 intacto.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

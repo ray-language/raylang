@@ -425,7 +425,7 @@ impl Transpiler {
                     write!(out, ": {}", a).unwrap();
                 }
                 out.push_str(" = ");
-                self.emit_expr(out, value)?;
+                self.emit_typed(out, value, &vty)?; // pina el tipo sized de un literal (`u8`/`u32`/`u64`)
                 out.push_str(";\n");
                 self.declare(name, vty);
             }
@@ -465,9 +465,10 @@ impl Transpiler {
                 // objeto (`p.x = p.x + 1`), evita el doble borrow del RefCell (leer + mutar a la vez).
                 match &target.kind {
                     ExprKind::Ident(name) => {
+                        let tty = self.type_of(target)?;
                         out.push_str(&mangle(name));
                         out.push_str(" = ");
-                        self.emit_expr(out, value)?;
+                        self.emit_typed(out, value, &tty)?; // sized: pina el tipo del literal en el RHS
                         out.push_str(";\n");
                     }
                     ExprKind::Index { array, index } => {
@@ -572,6 +573,45 @@ impl Transpiler {
         Ok(())
     }
 
+    /// Emite `e` sabiendo el tipo ESPERADO. Solo cambia algo para enteros con tamaño (`u8`/`u32`/`u64`):
+    /// Rust no coacciona `i64`→`u8`, así que un literal entero se emite con su sufijo (`200u8`), un arreglo
+    /// propaga el tipo de elemento, y cualquier otra expr cuyo tipo real no case con el sized esperado se
+    /// castea `(e) as uW`. La aritmética entre valores sized ya es del tipo correcto (`type_of` lo propaga),
+    /// así que NO se castea de más. Para tipos no-sized delega en `emit_expr`.
+    fn emit_typed(&mut self, out: &mut String, e: &Expr, expected: &Type) -> Result<(), String> {
+        let exp = normalize_type(expected);
+        match (&e.kind, &exp) {
+            (ExprKind::Int(n), Type::UInt(w)) => write!(out, "{}u{}", n, w).unwrap(),
+            (ExprKind::ArrayLit(elems), Type::Array(et)) => {
+                out.push_str("Rc::new(std::cell::RefCell::new(");
+                if elems.is_empty() {
+                    out.push_str("Vec::new()");
+                } else {
+                    out.push_str("vec![");
+                    for (i, el) in elems.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        self.emit_typed(out, el, et)?;
+                    }
+                    out.push(']');
+                }
+                out.push_str("))");
+            }
+            (_, Type::UInt(w)) => {
+                if self.type_of(e)? == exp {
+                    self.emit_expr(out, e)?; // ya es del tipo sized (var/cast/aritmética entre sized)
+                } else {
+                    out.push('(');
+                    self.emit_expr(out, e)?;
+                    write!(out, ") as u{}", w).unwrap(); // p. ej. un producto de literales i64 → uW
+                }
+            }
+            _ => self.emit_expr(out, e)?,
+        }
+        Ok(())
+    }
+
     fn emit_expr(&mut self, out: &mut String, e: &Expr) -> Result<(), String> {
         match &e.kind {
             ExprKind::Int(n) => write!(out, "{}i64", n).unwrap(),
@@ -604,6 +644,13 @@ impl Transpiler {
                         out.push('(');
                         self.emit_expr(out, expr)?;
                         out.push_str(" as f64)");
+                    }
+                    // A entero con tamaño (`x as u32`): el `as` de Rust trunca/envuelve a N bits (mismo
+                    // resultado que la VM). Cubre int→uN, uN→uM, char→uN.
+                    (_, Type::UInt(w)) => {
+                        out.push('(');
+                        self.emit_expr(out, expr)?;
+                        write!(out, " as u{})", w).unwrap();
                     }
                     _ => return Err(format!("spike: cast {:?}→{:?} no soportado", src, target)),
                 }
@@ -641,6 +688,21 @@ impl Transpiler {
                     let mut operands = Vec::new();
                     self.flatten_concat(e, &mut operands)?;
                     self.emit_concat(out, &operands)?;
+                } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                    && matches!(self.type_of(left)?, Type::UInt(_))
+                {
+                    // Enteros con tamaño: aritmética ENVOLVENTE explícita — Rust deniega en compilación el
+                    // overflow constante (`200u8 + 100u8`), y `wrapping_*` garantiza mod 2^N como la VM.
+                    let m = match op {
+                        BinaryOp::Add => "wrapping_add",
+                        BinaryOp::Sub => "wrapping_sub",
+                        _ => "wrapping_mul",
+                    };
+                    out.push('(');
+                    self.emit_expr(out, left)?;
+                    write!(out, ").{}(", m).unwrap();
+                    self.emit_expr(out, right)?;
+                    out.push(')');
                 } else {
                     out.push('(');
                     self.emit_expr(out, left)?;
@@ -1609,6 +1671,9 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
     let t = normalize_type(raw);
     Ok(match &t {
         Type::Int => "i64",
+        // Enteros con tamaño (M-tipos): a los nativos de Rust. Su aritmética ENVUELVE (mod 2^N); rustc con
+        // `-O` desactiva los overflow-checks → `+`/`*` envuelven, casando con la VM.
+        Type::UInt(w) => return Ok(format!("u{}", w)),
         Type::Float => "f64",
         Type::Bool => "bool",
         Type::Char => "char",
@@ -2065,6 +2130,26 @@ mod tests {
         assert!(rust.contains("Vec2_HH_show"), "impl Show custom emitido y llamado: {}", rust);
         // `.show()` NO debe mapearse a `.ray_show()` (eso daría el render default `Vec2 { x, y }`).
         assert!(rust.contains("fn Vec2_HH_show"), "el impl Show se emite: {}", rust);
+    }
+
+    #[test]
+    fn transpila_enteros_con_tamano() {
+        // u8/u32/u64 → nativos de Rust; literal tipado por contexto (200u8, elementos de [u8]); aritmética
+        // envolvente (wrapping_*) entre valores sized para no chocar con el deny de overflow constante de
+        // Rust; cast `as uN`/`as int`. Aritmética con vars sized (no literales) → dispara wrapping.
+        let rust = transpile_src(
+            "fn fnv(data: [u8]) -> u32 { var h: u32 = 2166136261; let p: u32 = 16777619; \
+             for b in data { h = (h ^ b as u32) * p; } h }\n\
+             fn main() -> int { let a: u8 = 200; let b: u8 = 100; let d: [u8] = [104, 105]; \
+             (a + b) as int + fnv(d) as int }",
+        );
+        // El checker coacciona los literales con un Cast explícito → `(200i64 as u8)`; mi Cast lo emite.
+        assert!(rust.contains("let a: u8 = (200i64 as u8)"), "u8 anotado + literal coaccionado: {}", rust);
+        assert!(rust.contains("(104i64 as u8)"), "elemento de [u8] coaccionado: {}", rust);
+        assert!(rust.contains(".wrapping_add("), "suma envolvente u8: {}", rust);
+        assert!(rust.contains(".wrapping_mul("), "mult envolvente u32: {}", rust);
+        assert!(rust.contains(" as u32)"), "cast a u32: {}", rust);
+        assert!(rust.contains("as i64"), "cast a int: {}", rust);
     }
 
     #[test]

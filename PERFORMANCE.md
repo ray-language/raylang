@@ -425,12 +425,33 @@ custom de `Vec2` ahora se respeta. `operadores.ray` transpila y da salida byte-i
 
 **36/37 ejemplos** (añade `operadores`) — nativo ≡ VM byte a byte.
 
-**Cobertura tras 18 fases**: escalares · control · recursión · strings · arreglos · Map · structs/enums/
-match · Option/Result/`?` (+ From-conversion) · closures/map/filter/fold · genéricos (fns + tipos) ·
-traits (estático + defaults + bounds) · tuplas · **trait objects (`dyn`)** · `std::math` · `args()` ·
-`for` sobre Map · `@derive(Eq)` · **operator-overloading + `impl Show` custom** · const/char/cast · UFCS.
-**El transpilador cubre CASI TODO el lenguaje** con salida byte-idéntica a la VM (36/37 ejemplos). Resta
-solo 1: enteros con tamaño (`u8`/`u32`/`u64`). Sin incógnitas de viabilidad.
+#### Fase 19 — enteros con tamaño (`u8`/`u32`/`u64`) — CIERRA el corpus (14 jul)
+
+Enteros de ancho fijo → los nativos de Rust (`Type::UInt(w)` → `u8`/`u32`/`u64`). Tres piezas: (1)
+**literales tipados por contexto** — Rust no coacciona `i64`→`u8`; el checker ya inserta un `Cast`
+explícito por cada coerción de literal (`200`→`(200i64 as u8)`), que el transpilador emite (helper
+`emit_typed` como red de seguridad para literales sin cast: sufijo `200u8`, propagación al tipo de
+elemento de un arreglo, o `(e) as uW`). (2) **aritmética ENVOLVENTE**: `a + b` sobre `u8` con `a,b`
+sized → `a.wrapping_add(b)` (Rust **deniega en compilación** el overflow constante `200u8 + 100u8`, y el
+`-O` solo desactiva el chequeo en *runtime*; `wrapping_*` garantiza mod 2^N como la VM). Solo `+`/`-`/`*`
+entre operandos sized; `^`/`&`/`|` (bitwise) y los casts no desbordan. (3) **casts** `x as u32`/`as int`
+vía el `as` de Rust (trunca/envuelve a N bits, igual que la VM). `enteros.ray` (hash FNV-1a con
+wrap a 32 bits, `~0u8`, `u64` de 10^12) transpila y da salida byte-idéntica a la VM.
+
+**37/37 ejemplos** (añade `enteros`) — **el corpus determinista COMPLETO** transpila y da salida
+byte-idéntica a la VM.
+
+**Cobertura tras 19 fases — ARCO P2.b (transpilar-a-Rust) COMPLETO**: escalares · control · recursión ·
+strings · arreglos · Map · structs/enums/match · Option/Result/`?` (+ From-conversion) ·
+closures/map/filter/fold · genéricos (fns + tipos) · traits (estático + defaults + bounds) · tuplas ·
+trait objects (`dyn`) · `std::math` · `args()` · `for` sobre Map · `@derive(Eq)` · operator-overloading +
+`impl Show` custom · **enteros con tamaño** · const/char/cast · UFCS. **El transpilador cubre el lenguaje
+COMPLETO** del corpus con salida byte-idéntica a la VM (**37/37 ejemplos deterministas**). Fuera del
+corpus determinista quedan solo features no-transpilables por naturaleza (I/O no determinista: stdin/env;
+concurrencia M12: `spawn`/canales → "caen a la VM" en v1) y limitaciones acotadas conocidas (captura
+mutable en closures → `FnMut`, `.show()` de una función, protocolo `Iterator<T>`). La tesis de P2.b queda
+**probada de punta a punta**: `ray build --native` transpila todo el lenguaje a Rust nativo, y la medición
+del spike (fibrec 5.4× más rápido que node, 61× que la VM) se generaliza a programas reales.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

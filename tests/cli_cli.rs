@@ -405,6 +405,50 @@ fn build_native_release_produce_binario_correcto() {
 }
 
 #[test]
+fn build_native_servidor_tcp_hace_eco() {
+    // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
+    // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native servidor TCP: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_tcp");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/net;\n\
+         fn main() -> int {\n\
+           let l = match (net.tcp_listen(\"127.0.0.1\", 0)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+           print(to_string(net.local_port(l)));\n\
+           let c = match (net.tcp_accept(l)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+           let m = match (net.socket_read(c)) { Result.Ok(s) => s, Result.Err(e) => \"ERR\" };\n\
+           let _ = net.socket_write(c, \"eco: \" + m);\n\
+           let _ = close(c); let _ = close(l);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("srv");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native servidor TCP ok\n{err}");
+
+    // Lanza el servidor y lee su puerto de stdout (primera línea).
+    use std::io::{BufRead, BufReader, Read, Write};
+    let mut srv = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el servidor");
+    let mut sout = BufReader::new(srv.stdout.take().unwrap());
+    let mut port_line = String::new();
+    sout.read_line(&mut port_line).expect("lee el puerto");
+    let port: u16 = port_line.trim().parse().expect("puerto numérico");
+
+    // El TEST es el cliente: conecta, envía, lee el eco.
+    let mut cli = std::net::TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    cli.write_all(b"hola").expect("envía");
+    let mut resp = Vec::new();
+    cli.read_to_end(&mut resp).expect("lee la respuesta");
+    assert_eq!(String::from_utf8_lossy(&resp), "eco: hola", "el servidor hace eco con prefijo");
+    let _ = srv.wait();
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

@@ -212,6 +212,24 @@ end-to-end). Nota sobre la cola larga: de 63 ejemplos de librería que EMITEN, 1
 llamadas colgantes de funciones con builtins aún no soportados (sockets/crypto/regex…), cola larga aparte.
 Corpus 37/37 intacto.
 
+#### Fase 37 — sockets TCP (`std/net`)
+
+Red real: `std::net::{tcp_connect,tcp_listen,tcp_accept,socket_read,socket_write,socket_read_bytes,
+socket_write_bytes,local_port}` → `std::net::TcpStream`/`TcpListener` de Rust (cero deps). Se **extiende el
+registro de handles** (M11.8, compartido con archivos) con dos variantes `Tcp(TcpStream)`/
+`Listener(TcpListener)`; el bloque del registro se refactoriza (base común `__RayHandle`/`__RayReg`/
+`__ray_reg_insert`/`__ray_close` bajo `needs_handles||needs_net`; ops de archivo bajo `needs_handles`; ops
+de socket bajo `needs_net`). Como la VM, los ops de socket **clonan el stream** (`try_clone`) para no
+retener el lock del registro durante la I/O bloqueante; `socket_read` lee ≤64 KiB (UTF-8 lossy, EOF→"");
+`socket_write` escribe todo (Ok(nº bytes)). `close` de un socket ya funcionaba (handle int → `__ray_close`
+→ el `Drop` cierra). Interceptados por prefijo `std::net::` (solo las 8 TCP; TLS/rustls quedan fuera —
+dep externa, imposible en un `.rs` standalone). **Verificado end-to-end con binarios nativos**: un servidor
+transpilado (listen puerto 0 → imprime el puerto → accept → read → eco → close) y un cliente que conecta,
+envía y lee la respuesta — real TCP, round-trip `eco: hola`. Test de integración
+`build_native_servidor_tcp_hace_eco` (el test hace de cliente con `std::net`). Librería rustc OK: 18 → 21
+(desbloquea los ejemplos TCP-sin-TLS). Corpus 37/37 intacto. Diferido: TLS (rustls), UDP,
+`set_read_timeout`, y la cesión no-bloqueante de M15.5 (innecesaria con hilos de SO reales).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

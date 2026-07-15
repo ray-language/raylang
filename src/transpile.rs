@@ -111,6 +111,15 @@ fn is_handled_builtin(name: &str) -> bool {
     {
         return true;
     }
+    // Sockets TCP de `std/net` (interceptados en emit_call → std::net de Rust). TLS y demás quedan fuera.
+    if matches!(
+        name,
+        "std::net::tcp_connect" | "std::net::tcp_listen" | "std::net::tcp_accept" | "std::net::socket_read"
+            | "std::net::socket_read_bytes" | "std::net::socket_write" | "std::net::socket_write_bytes"
+            | "std::net::local_port"
+    ) {
+        return true;
+    }
     matches!(
         name,
         // --- funciones del prelude (src/prelude.ray) ---
@@ -176,6 +185,9 @@ struct Transpiler {
     /// ¿Usa `std::time::monotonic`/`std::random::*`? Si es cierto, se anexa el PRNG (SplitMix64) + el
     /// reloj monotónico (necesitan estado global; `now`/`sleep` son inline y no lo activan).
     needs_time_rng: bool,
+    /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
+    /// de socket (`std::net::TcpStream`/`TcpListener`).
+    needs_net: bool,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -226,6 +238,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         needs_concurrency: false,
         needs_signals: false,
         needs_time_rng: false,
+        needs_net: false,
     };
 
     let mut out = String::new();
@@ -374,13 +387,21 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     // Registro global de handles de archivo (M11.8), solo si el programa los usa. Rust permite items
     // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +
     // mapa handle→archivo tras un Mutex/OnceLock; los mensajes de error son byte-idénticos a la VM.
-    if t.needs_handles {
+    // Registro de handles (M11.8): compartido por archivos y sockets. Se emite si el programa usa cualquiera.
+    if t.needs_handles || t.needs_net {
         out.push_str(concat!(
-            "enum __RayHandle { Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File) }\n",
+            "enum __RayHandle { Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener) }\n",
             "struct __RayReg { next: i64, open: __RayMap<i64, __RayHandle> }\n",
             "fn __ray_reg() -> &'static std::sync::Mutex<__RayReg> {\n",
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
             "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::new() }))\n}\n",
+            "fn __ray_reg_insert(h: __RayHandle) -> i64 { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); id }\n",
+            "fn __ray_close(h: i64) -> i64 { __ray_reg().lock().unwrap().open.remove(&h); 0 }\n",
+        ));
+    }
+    // Ops de archivo (open/read_line/write) — solo si se usan handles de archivo.
+    if t.needs_handles {
+        out.push_str(concat!(
             "fn __ray_open(path: &str, mode: &str) -> Result<i64, Rc<str>> {\n",
             "    let h = match mode {\n",
             "        \"r\" => std::fs::File::open(path).map(|f| __RayHandle::Reader(std::io::BufReader::new(f))),\n",
@@ -388,7 +409,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "        \"a\" => std::fs::OpenOptions::new().create(true).append(true).open(path).map(__RayHandle::Writer),\n",
             "        _ => return Err(Rc::<str>::from(format!(\"invalid open mode: '{}' (use \\\"r\\\", \\\"w\\\" or \\\"a\\\")\", mode))),\n",
             "    }.map_err(|e| Rc::<str>::from(e.to_string()))?;\n",
-            "    let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); Ok(id)\n}\n",
+            "    Ok(__ray_reg_insert(h))\n}\n",
             "fn __ray_read_line(h: i64) -> Option<Rc<str>> {\n",
             "    use std::io::BufRead; let mut reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get_mut(&h) {\n",
@@ -400,8 +421,37 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "    match reg.open.get_mut(&h) {\n",
             "        Some(__RayHandle::Writer(f)) => f.write_all(s.as_bytes()).map(|_| s.chars().count() as i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
             "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
-            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
-            "fn __ray_close(h: i64) -> i64 { __ray_reg().lock().unwrap().open.remove(&h); 0 }\n",
+            "        _ => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
+        ));
+    }
+    // Ops de socket TCP — solo si se usa la red. Clonan el stream para no retener el lock en la I/O
+    // bloqueante (como la VM). read lee ≤64KiB (lossy UTF-8; EOF → ""); write escribe todo (Ok(nº bytes)).
+    if t.needs_net {
+        out.push_str(concat!(
+            "fn __ray_sock_clone(h: i64) -> Result<std::net::TcpStream, Rc<str>> {\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.try_clone().map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
+            "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
+            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => Ok(__ray_reg_insert(__RayHandle::Tcp(s))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
+            "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
+            "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
+            "    match l.accept() { Ok((s, _)) => Ok(__ray_reg_insert(__RayHandle::Tcp(s))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {\n",
+            "    use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536];\n",
+            "    match s.read(&mut buf) { Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {\n",
+            "    use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536];\n",
+            "    match s.read(&mut buf) { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {\n",
+            "    use std::io::Write; let mut s = __ray_sock_clone(h)?; let mut off = 0;\n",
+            "    while off < bytes.len() { match s.write(&bytes[off..]) { Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) } }\n",
+            "    Ok(bytes.len() as i64) }\n",
+            "fn __ray_local_port(h: i64) -> i64 {\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
         ));
     }
     // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
@@ -1588,6 +1638,54 @@ impl Transpiler {
         Ok(())
     }
 
+    /// `std::net::<fn>` (sockets TCP) → los helpers `__ray_tcp_*`/`__ray_socket_*` del registro de handles
+    /// (activa `needs_net`). connect/listen/accept → Result<int,string>; read → Result<string,string>;
+    /// read_bytes → Result<bytes,string>; write/write_bytes → Result<int,string>; local_port → int.
+    fn emit_net(&mut self, out: &mut String, nfn: &str, eff: &[&Expr]) -> Result<(), String> {
+        self.needs_net = true;
+        match nfn {
+            "tcp_connect" | "tcp_listen" => {
+                let f = if nfn == "tcp_connect" { "__ray_tcp_connect" } else { "__ray_tcp_listen" };
+                write!(out, "{}(&*", f).unwrap();
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "tcp_accept" => {
+                out.push_str("__ray_tcp_accept(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "socket_read" | "socket_read_bytes" | "local_port" => {
+                let f = match nfn {
+                    "socket_read" => "__ray_socket_read",
+                    "socket_read_bytes" => "__ray_socket_read_bytes",
+                    _ => "__ray_local_port",
+                };
+                write!(out, "{}(", f).unwrap();
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            // socket_write(h, s) → escribe los bytes UTF-8 del string; socket_write_bytes(h, data) → los bytes.
+            "socket_write" | "socket_write_bytes" => {
+                out.push_str("__ray_socket_write(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                if nfn == "socket_write" {
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(".as_bytes()");
+                } else {
+                    out.push_str("&*");
+                    self.emit_expr(out, eff[1])?;
+                }
+                out.push(')');
+            }
+            _ => return Err(format!("spike: std::net::{} no soportada", nfn)),
+        }
+        Ok(())
+    }
+
     fn emit_math(&mut self, out: &mut String, mfn: &str, eff: &[&Expr]) -> Result<(), String> {
         const UNARY: &[&str] = &[
             "sqrt", "sin", "cos", "tan", "ln", "log10", "log2", "exp", "floor", "ceil", "round", "trunc",
@@ -1665,6 +1763,16 @@ impl Transpiler {
         if let Some(rfn) = name.strip_prefix("std::random::") {
             if matches!(rfn, "next" | "below" | "seed") {
                 return self.emit_random(out, rfn, &eff);
+            }
+        }
+        // `std::net::*` (sockets TCP) → std::net de Rust (registro de handles compartido con archivos).
+        if let Some(nfn) = name.strip_prefix("std::net::") {
+            if matches!(
+                nfn,
+                "tcp_connect" | "tcp_listen" | "tcp_accept" | "socket_read" | "socket_read_bytes"
+                    | "socket_write" | "socket_write_bytes" | "local_port"
+            ) {
+                return self.emit_net(out, nfn, &eff);
             }
         }
         // Métodos de la stdlib manglados por el checker (`string#len`, `Len` trait…): el método real es
@@ -2200,6 +2308,17 @@ impl Transpiler {
                     "std::time::now" | "std::time::monotonic" | "std::random::below" => return Ok(Type::Int),
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
                     "std::random::next" => return Ok(Type::Float),
+                    "std::net::local_port" => return Ok(Type::Int),
+                    "std::net::tcp_connect" | "std::net::tcp_listen" | "std::net::tcp_accept"
+                    | "std::net::socket_write" | "std::net::socket_write_bytes" => {
+                        return Ok(Type::Enum("Result".into(), vec![Type::Int, Type::String]))
+                    }
+                    "std::net::socket_read" => {
+                        return Ok(Type::Enum("Result".into(), vec![Type::String, Type::String]))
+                    }
+                    "std::net::socket_read_bytes" => {
+                        return Ok(Type::Enum("Result".into(), vec![Type::Bytes, Type::String]))
+                    }
                     _ => {}
                 }
                 let _ = &args;
@@ -2959,6 +3078,33 @@ mod tests {
         );
         assert!(rust.contains("as u32 as i64)"), "char_code → code point: {}", rust);
         assert!(rust.contains("char::from_u32("), "char_from_code → Option<char>: {}", rust);
+    }
+
+    #[test]
+    fn transpila_sockets_tcp() {
+        // std::net::{tcp_connect,tcp_listen,tcp_accept,socket_read,socket_write,local_port} → std::net.
+        let dir = std::env::temp_dir().join(format!("ray_net_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let src = "import std/net;\n\
+             fn main() -> int {\n\
+               let l = match (net.tcp_listen(\"127.0.0.1\", 0)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+               let p = net.local_port(l);\n\
+               let c = match (net.tcp_accept(l)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+               let m = match (net.socket_read(c)) { Result.Ok(s) => s, Result.Err(e) => \"\" };\n\
+               let _ = net.socket_write(c, m); p }\n";
+        std::fs::write(dir.join("main.ray"), src).unwrap();
+        let loaded = match crate::loader::load(&dir.join("main.ray")) {
+            Ok(l) => l,
+            Err(_) => panic!("no se pudo cargar el programa de sockets"),
+        };
+        let mut prog = loaded.program;
+        crate::checker::check(&mut prog).expect("check");
+        let rust = transpile(&prog).expect("transpile");
+        assert!(rust.contains("Tcp(std::net::TcpStream)"), "handle Tcp: {}", rust);
+        assert!(rust.contains("__ray_tcp_listen(") && rust.contains("__ray_tcp_accept("), "listen/accept: {}", rust);
+        assert!(rust.contains("__ray_socket_read(") && rust.contains("__ray_socket_write("), "read/write: {}", rust);
+        assert!(rust.contains("__ray_local_port("), "local_port: {}", rust);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -194,6 +194,24 @@ OOB → pánico (equivale al error de runtime de la VM; el camino feliz casa byt
 (recorrer `"Hi!".to_bytes()` → 72/105/33, suma 210). Librería emit OK: 62 → 63 (desbloquea el ejemplo de
 hash que indexa bytes). Corpus 37/37 intacto.
 
+#### Fase 36 — time/RNG + char_code (y `std/time` transpila entero)
+
+Builtins de reloj y aleatoriedad, **no deterministas** → el nativo casa por PROPIEDADES (rango/tipo), no
+byte a byte (como en la VM: la semilla del PRNG viene del reloj). `std::time::now`/`monotonic` → int
+(millis; `SystemTime`/`Instant`), `sleep(ms)` → `thread::sleep`; `std::random::next` → float [0,1),
+`below(n)` → int [0,n), `seed(n)` fija la semilla — con un **PRNG SplitMix64 propio** (el MISMO que la VM)
+de estado global (`Mutex<u64>` sembrado del reloj), emitido bajo `needs_time_rng`. Interceptados por
+prefijo como `std::math`/`std::fs`, pero **solo las funciones-primitivo**; el resto de `std/time`/
+`std/random` (helpers de `DateTime` en raylang puro) se emiten normal. **Bug de cadena cazado**: `import
+std/time` arrastra TODO el módulo; una función (`campo`) usaba **`char_code`** (no soportado), y por el
+diseño de *silent-skip* (una función no-main que no transpila se salta callada) quedaba una **llamada
+colgante** desde una función SÍ emitida (`parse_iso8601` → `campo`/`parse_iso8601_millis`) → `rustc`
+fallaba. Fix: soportar **`char_code(c)` → `(c as u32 as i64)`** y **`char_from_code(n)` →
+`char::from_u32(n as u32)`** (Option<char>). Con eso **`std/time` transpila y compila ENTERO** (verificado
+end-to-end). Nota sobre la cola larga: de 63 ejemplos de librería que EMITEN, 18 COMPILAN — el resto tiene
+llamadas colgantes de funciones con builtins aún no soportados (sockets/crypto/regex…), cola larga aparte.
+Corpus 37/37 intacto.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

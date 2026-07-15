@@ -100,8 +100,15 @@ fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
 /// cuerpo referiría builtins ausentes). Lista extraída de `src/prelude.ray` + los builtins públicos.
 fn is_handled_builtin(name: &str) -> bool {
     // `std::math::*`/`std::fs::*` se interceptan en emit_call/type_of (→ Rust nativo); no emitimos sus
-    // wrappers del módulo (llaman a primitivos `__sqrt`/`__read_file` que no transpilamos).
+    // wrappers del módulo (llaman a primitivos `__sqrt`/`__read_file`… ausentes).
     if name.starts_with("std::math::") || name.starts_with("std::fs::") {
+        return true;
+    }
+    // De `std/time` y `std/random` SOLO se saltan las funciones que envuelven un primitivo (interceptadas);
+    // el resto (p. ej. `std::time::to_epoch_millis`, helpers de `DateTime`) son raylang puro → se emiten.
+    if matches!(name, "std::time::now" | "std::time::monotonic" | "std::time::sleep")
+        || matches!(name, "std::random::next" | "std::random::below" | "std::random::seed")
+    {
         return true;
     }
     matches!(
@@ -166,6 +173,9 @@ struct Transpiler {
     needs_concurrency: bool,
     /// ¿Usa `signals()`? Si es cierto, se anexa el runtime de señales del SO (self-pipe + FFI a libc).
     needs_signals: bool,
+    /// ¿Usa `std::time::monotonic`/`std::random::*`? Si es cierto, se anexa el PRNG (SplitMix64) + el
+    /// reloj monotónico (necesitan estado global; `now`/`sleep` son inline y no lo activan).
+    needs_time_rng: bool,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -215,6 +225,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         needs_handles: false,
         needs_concurrency: false,
         needs_signals: false,
+        needs_time_rng: false,
     };
 
     let mut out = String::new();
@@ -486,6 +497,28 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "        });\n",
             "        ch\n",
             "    }).clone()\n}\n",
+        ));
+    }
+    // PRNG (SplitMix64, mismo que la VM) + reloj monotónico, solo si el programa usa monotonic/random.
+    // Estado global tras un Mutex/OnceLock; sembrado del reloj. No determinista → casa por propiedades.
+    if t.needs_time_rng {
+        out.push_str(concat!(
+            "fn __ray_monotonic() -> i64 {\n",
+            "    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();\n",
+            "    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as i64\n}\n",
+            "fn __ray_rng() -> &'static std::sync::Mutex<u64> {\n",
+            "    static R: std::sync::OnceLock<std::sync::Mutex<u64>> = std::sync::OnceLock::new();\n",
+            "    R.get_or_init(|| std::sync::Mutex::new(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9E37_79B9_7F4A_7C15)))\n}\n",
+            "fn __ray_next_u64() -> u64 {\n",
+            "    let mut s = __ray_rng().lock().unwrap();\n",
+            "    *s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);\n",
+            "    let mut z = *s;\n",
+            "    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);\n",
+            "    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);\n",
+            "    z ^ (z >> 31)\n}\n",
+            "fn __ray_random_f64() -> f64 { (__ray_next_u64() >> 11) as f64 / (1u64 << 53) as f64 }\n",
+            "fn __ray_random_int(n: i64) -> i64 { if n <= 0 { 0 } else { (__ray_next_u64() % (n as u64)) as i64 } }\n",
+            "fn __ray_random_seed(n: i64) { *__ray_rng().lock().unwrap() = n as u64; }\n",
         ));
     }
     Ok(out)
@@ -1513,6 +1546,48 @@ impl Transpiler {
         Ok(())
     }
 
+    /// `std::time::<fn>`: now/monotonic → int (millis), sleep(ms) → duerme. now/sleep inline; monotonic
+    /// usa un `Instant` global (helper `__ray_monotonic`, activa `needs_time_rng`).
+    fn emit_time(&mut self, out: &mut String, tfn: &str, eff: &[&Expr]) -> Result<(), String> {
+        match tfn {
+            "now" => out.push_str(
+                "(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|__d| __d.as_millis() as i64).unwrap_or(0))",
+            ),
+            "monotonic" => {
+                self.needs_time_rng = true;
+                out.push_str("__ray_monotonic()");
+            }
+            "sleep" => {
+                out.push_str("std::thread::sleep(std::time::Duration::from_millis((");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").max(0) as u64))");
+            }
+            _ => return Err(format!("spike: std::time::{} no soportada", tfn)),
+        }
+        Ok(())
+    }
+
+    /// `std::random::<fn>`: next() → float [0,1); below(n) → int [0,n); seed(n) fija la semilla. PRNG
+    /// SplitMix64 propio (mismo que la VM) con estado global; no determinista → casa por propiedades.
+    fn emit_random(&mut self, out: &mut String, rfn: &str, eff: &[&Expr]) -> Result<(), String> {
+        self.needs_time_rng = true;
+        match rfn {
+            "next" => out.push_str("__ray_random_f64()"),
+            "below" => {
+                out.push_str("__ray_random_int(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "seed" => {
+                out.push_str("__ray_random_seed(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            _ => return Err(format!("spike: std::random::{} no soportada", rfn)),
+        }
+        Ok(())
+    }
+
     fn emit_math(&mut self, out: &mut String, mfn: &str, eff: &[&Expr]) -> Result<(), String> {
         const UNARY: &[&str] = &[
             "sqrt", "sin", "cos", "tan", "ln", "log10", "log2", "exp", "floor", "ceil", "round", "trunc",
@@ -1580,6 +1655,18 @@ impl Transpiler {
         if let Some(ffn) = name.strip_prefix("std::fs::") {
             return self.emit_fs(out, ffn, &eff);
         }
+        // `std::time::{now,monotonic,sleep}`/`std::random::{next,below,seed}` → reloj + PRNG de Rust (no
+        // deterministas → casan por propiedades). El resto de std/time|random es raylang puro → pasa de largo.
+        if let Some(tfn) = name.strip_prefix("std::time::") {
+            if matches!(tfn, "now" | "monotonic" | "sleep") {
+                return self.emit_time(out, tfn, &eff);
+            }
+        }
+        if let Some(rfn) = name.strip_prefix("std::random::") {
+            if matches!(rfn, "next" | "below" | "seed") {
+                return self.emit_random(out, rfn, &eff);
+            }
+        }
         // Métodos de la stdlib manglados por el checker (`string#len`, `Len` trait…): el método real es
         // lo que va tras el último `#`. Los nombres de usuario no llevan `#` (ilegal) → quedan intactos.
         let method = name.rsplit('#').next().unwrap_or(name).trim_start_matches("__");
@@ -1629,6 +1716,18 @@ impl Transpiler {
                     self.emit_expr(out, eff[0])?;
                     out.push_str(".ray_show())");
                 }
+            }
+            // char_code(c) -> int: el code point Unicode del char (paréntesis por el `as`, como bytes[i]).
+            "char_code" => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(" as u32 as i64)");
+            }
+            // char_from_code(n) -> Option<char>: el char del code point (None si inválido, como la VM).
+            "char_from_code" => {
+                out.push_str("char::from_u32(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(" as u32)");
             }
             // bytes_of([int]) -> bytes: construye bytes de un arreglo de octetos (cada 0–255, `as u8`).
             "bytes_of" => {
@@ -2094,6 +2193,15 @@ impl Transpiler {
                         other => return Err(format!("spike: std::fs::{} no soportada", other)),
                     });
                 }
+                // std::time: now/monotonic → int; sleep → unit. std::random: next → float; below → int;
+                // seed → unit.
+                // Solo las funciones-primitivo; el resto de std/time|random (raylang puro) → ruta genérica.
+                match n {
+                    "std::time::now" | "std::time::monotonic" | "std::random::below" => return Ok(Type::Int),
+                    "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
+                    "std::random::next" => return Ok(Type::Float),
+                    _ => {}
+                }
                 let _ = &args;
                 let method = n.rsplit('#').next().unwrap_or(n).trim_start_matches("__");
                 // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
@@ -2144,6 +2252,8 @@ impl Transpiler {
                     },
                     "print" | "eprint" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
                     "bytes_of" => Type::Bytes,
+                    "char_code" => Type::Int,
+                    "char_from_code" => opt_of(Type::Char),
                     // Más string builtins: trim/to_upper/to_lower/repeat/replace/substring → string;
                     // starts_with/ends_with → bool.
                     "trim" | "to_upper" | "to_lower" | "repeat" | "replace" | "substring" => Type::String,
@@ -2838,6 +2948,41 @@ mod tests {
         assert!(rust.contains("std::f64::consts::E"), "{}", rust);
         // No debe emitir los wrappers del módulo (`fn ...sqrt`) ni el primitivo `__sqrt`.
         assert!(!rust.contains("__sqrt"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_char_code() {
+        // char_code(c) -> int (code point); char_from_code(n) -> Option<char>.
+        let rust = transpile_src(
+            "fn main() -> int { let n = char_code('A'); \
+             match (char_from_code(n + 1)) { Option.Some(c) => char_code(c), Option.None => 0 } }",
+        );
+        assert!(rust.contains("as u32 as i64)"), "char_code → code point: {}", rust);
+        assert!(rust.contains("char::from_u32("), "char_from_code → Option<char>: {}", rust);
+    }
+
+    #[test]
+    fn transpila_time_y_random() {
+        // std::time::{now,monotonic,sleep} + std::random::{next,below,seed} (necesitan el loader por el
+        // `import`). No deterministas → aquí solo se comprueba la ESTRUCTURA del Rust emitido.
+        let dir = std::env::temp_dir().join(format!("ray_tr_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let src = "import std/time;\nimport std/random;\n\
+             fn main() -> int { let t = time.now() + time.monotonic(); random.seed(1); \
+             let r = random.next(); let n = random.below(6); if (r > 0.0) { n + t } else { 0 } }\n";
+        std::fs::write(dir.join("main.ray"), src).unwrap();
+        let loaded = match crate::loader::load(&dir.join("main.ray")) {
+            Ok(l) => l,
+            Err(_) => panic!("no se pudo cargar el programa de time/random"),
+        };
+        let mut prog = loaded.program;
+        crate::checker::check(&mut prog).expect("check");
+        let rust = transpile(&prog).expect("transpile");
+        assert!(rust.contains("SystemTime::now()"), "now → SystemTime: {}", rust);
+        assert!(rust.contains("__ray_monotonic()"), "monotonic: {}", rust);
+        assert!(rust.contains("__ray_random_f64()") && rust.contains("__ray_random_int("), "random: {}", rust);
+        assert!(rust.contains("fn __ray_next_u64()"), "PRNG SplitMix64 emitido: {}", rust);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

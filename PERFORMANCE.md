@@ -230,6 +230,19 @@ envía y lee la respuesta — real TCP, round-trip `eco: hola`. Test de integrac
 (desbloquea los ejemplos TCP-sin-TLS). Corpus 37/37 intacto. Diferido: TLS (rustls), UDP,
 `set_read_timeout`, y la cesión no-bloqueante de M15.5 (innecesaria con hilos de SO reales).
 
+#### Fase 38 — `index_of` (desbloquea hex/base64/url/uuid/json…)
+
+`index_of(s, sub) -> Option<int>`: índice **por CARÁCTER** de la primera aparición de la subcadena (sub
+vacío → Some(0); no encontrado → None). Rust `str::find` da índice de BYTE, así que el helper de preámbulo
+`__ray_index_of` compara por `char` (como la VM `char_index_of`). Estaba en la lista de skip pero nunca se
+emitía en los sitios de llamada (como trim/substring). **El mayor desbloqueo de la cola larga hasta ahora**:
+`index_of` es el bloque nº1 (18+ referencias) — lo usan hex/base64/url/uuid/json y sus demos para decodificar
+caracteres (`match (index_of("0123…", c)) …`). Como esas funciones (`hex_val`, `dec_char_std`…) fallaban al
+transpilar, el *silent-skip* dejaba llamadas colgantes en cadena. Con index_of, **librería rustc OK: 21 →
+32** (+11). Verificado byte a byte (incl. por carácter: `index_of("murciélago","élago")` → 5;
+`base64_demo` completo ≡ VM). `uuid` compila pero difiere (genera un UUID ALEATORIO → no determinista, como
+random). Corpus 37/37 intacto.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

@@ -252,6 +252,13 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     out.push_str("    let v = a.borrow();\n");
     out.push_str("    let parts: Vec<&str> = v.iter().map(|s| &**s).collect();\n");
     out.push_str("    Rc::<str>::from(parts.join(sep))\n}\n");
+    // index_of(s, sub) -> Option<int>: índice por CARÁCTER de la primera aparición de sub (como la VM;
+    // sub vacío → Some(0)). Rust `str::find` da índice de BYTE, así que se compara por char.
+    out.push_str("fn __ray_index_of(s: &str, sub: &str) -> Option<i64> {\n");
+    out.push_str("    let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();\n");
+    out.push_str("    if sub.is_empty() { return Some(0); }\n");
+    out.push_str("    if sub.len() > chars.len() { return None; }\n");
+    out.push_str("    (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..]).map(|i| i as i64)\n}\n");
     out.push_str("use std::collections::HashMap as __RayMap;\n");
     out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
     out.push_str("    let mut v = a.borrow().clone(); v.sort(); Rc::new(std::cell::RefCell::new(v))\n}\n");
@@ -1849,6 +1856,14 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".trim())");
             }
+            // index_of(s, sub) -> Option<int>: índice por carácter de la subcadena (helper del preámbulo).
+            "index_of" => {
+                out.push_str("__ray_index_of(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             "to_upper" | "to_lower" => {
                 let m = if method == "to_upper" { "to_uppercase" } else { "to_lowercase" };
                 out.push_str("Rc::<str>::from(");
@@ -2377,6 +2392,8 @@ impl Transpiler {
                     // starts_with/ends_with → bool.
                     "trim" | "to_upper" | "to_lower" | "repeat" | "replace" | "substring" => Type::String,
                     "starts_with" | "ends_with" => Type::Bool,
+                    "index_of" => opt_of(Type::Int), // índice de subcadena → Option<int>
+
                     "split" => Type::Array(Box::new(Type::String)),
                     "args" => Type::Array(Box::new(Type::String)),
                     "chars" => Type::Array(Box::new(Type::Char)),
@@ -3067,6 +3084,16 @@ mod tests {
         assert!(rust.contains("std::f64::consts::E"), "{}", rust);
         // No debe emitir los wrappers del módulo (`fn ...sqrt`) ni el primitivo `__sqrt`.
         assert!(!rust.contains("__sqrt"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_index_of() {
+        // index_of(s, sub) -> Option<int>: índice por CARÁCTER de la subcadena (helper __ray_index_of).
+        let rust = transpile_src(
+            "fn main() -> int { match (index_of(\"hello\", \"ll\")) { Option.Some(i) => i, Option.None => 0 - 1 } }",
+        );
+        assert!(rust.contains("__ray_index_of(&*"), "index_of → helper: {}", rust);
+        assert!(rust.contains("fn __ray_index_of(s: &str, sub: &str) -> Option<i64>"), "helper por carácter: {}", rust);
     }
 
     #[test]

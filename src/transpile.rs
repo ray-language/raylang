@@ -162,6 +162,8 @@ struct Transpiler {
     /// ¿El programa usa handles de archivo (`open`/`read_line`/`write`/`close`)? Se activa al emitirlos;
     /// si es cierto, se anexa al final el registro global de handles (espejo del `FileRegistry` de la VM).
     needs_handles: bool,
+    /// ¿Usa concurrencia (`spawn`/canales)? Si es cierto, se anexa el runtime de canales MPMC.
+    needs_concurrency: bool,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -209,6 +211,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         trait_method_sigs,
         tparams: std::collections::HashSet::new(),
         needs_handles: false,
+        needs_concurrency: false,
     };
 
     let mut out = String::new();
@@ -387,6 +390,31 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "fn __ray_close(h: i64) -> i64 { __ray_reg().lock().unwrap().open.remove(&h); 0 }\n",
         ));
     }
+    // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
+    // canal thread-safe propio (Arc<Mutex+Condvar>) — sin deps, ya que el `.rs` es standalone — con
+    // backpressure (bounded) y cierre. FIFO como la VM. `T: Send` (primitivos en v1).
+    if t.needs_concurrency {
+        out.push_str(concat!(
+            "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize> }\n",
+            "struct __RayChan<T> { inner: std::sync::Arc<(std::sync::Mutex<__ChanState<T>>, std::sync::Condvar)> }\n",
+            "impl<T> Clone for __RayChan<T> { fn clone(&self) -> Self { __RayChan { inner: self.inner.clone() } } }\n",
+            "impl<T: Send> __RayChan<T> {\n",
+            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap }), std::sync::Condvar::new())) } }\n",
+            "    fn send(&self, v: T) {\n",
+            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = cv.wait(st).unwrap(); }\n",
+            "        if st.closed { return; }\n",
+            "        st.q.push_back(v); cv.notify_all();\n",
+            "    }\n",
+            "    fn recv(&self) -> Option<T> {\n",
+            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        while st.q.is_empty() && !st.closed { st = cv.wait(st).unwrap(); }\n",
+            "        let v = st.q.pop_front(); if v.is_some() { cv.notify_all(); } v\n",
+            "    }\n",
+            "    fn close(&self) { let (m, cv) = &*self.inner; m.lock().unwrap().closed = true; cv.notify_all(); }\n",
+            "}\n",
+        ));
+    }
     Ok(out)
 }
 
@@ -434,6 +462,22 @@ impl Transpiler {
 
     fn lookup(&self, name: &str) -> Option<&Type> {
         self.scopes.iter().rev().find_map(|s| s.get(name))
+    }
+
+    /// Nombres de las variables en ámbito cuyo tipo es `Channel`/`Task` (los valores compartibles entre
+    /// hilos). Se clonan antes de un `spawn` para que el closure `move` no consuma el original. Dedup:
+    /// el nombre más interno (shadowing) gana, y no se repite.
+    fn in_scope_channels(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut names = Vec::new();
+        for scope in self.scopes.iter().rev() {
+            for (name, ty) in scope {
+                if matches!(ty, Type::Channel(_) | Type::Task(_)) && seen.insert(name.clone()) {
+                    names.push(name.clone());
+                }
+            }
+        }
+        names
     }
 
     fn emit_block(&mut self, out: &mut String, b: &Block) -> Result<(), String> {
@@ -1440,6 +1484,24 @@ impl Transpiler {
                     out.push_str("Rc::new(std::cell::RefCell::new(__RayMap::new()))");
                     return Ok(());
                 }
+                // `Channel.new()` (función asociada): canal MPMC no acotado.
+                if matches!(&o.kind, ExprKind::Ident(n) if n == "Channel") {
+                    self.needs_concurrency = true;
+                    out.push_str("__RayChan::make(None)");
+                    return Ok(());
+                }
+            }
+        }
+        // `Channel.bounded(n)` (función asociada): canal MPMC acotado a `n` (backpressure).
+        if method == "bounded" {
+            if let Some(o) = recv {
+                if matches!(&o.kind, ExprKind::Ident(n) if n == "Channel") {
+                    self.needs_concurrency = true;
+                    out.push_str("__RayChan::make(Some((");
+                    self.emit_expr(out, &args[0])?;
+                    out.push_str(") as usize))");
+                    return Ok(());
+                }
             }
         }
         match method {
@@ -1625,11 +1687,45 @@ impl Transpiler {
             }
             // `close(h) -> int` (builtin pelado, ad-hoc): un handle de archivo (int) → lo quita del registro
             // y devuelve 0 (el caso de canal es concurrencia, fuera del subconjunto).
+            // `close` ad-hoc: un CANAL (concurrencia) → `.close()` (unit); un handle de archivo (int) → 0.
+            "close" if matches!(self.type_of(eff[0])?, Type::Channel(_)) => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".close()");
+            }
             "close" => {
                 self.needs_handles = true;
                 out.push_str("__ray_close(");
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
+            }
+            // Canales (concurrencia): send(ch, v) → ch.send(v); recv(ch) → ch.recv() (Option<T>).
+            "send" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".send(");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "recv" => {
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".recv()");
+            }
+            // spawn(fn() {...}) → std::thread::spawn(move || {...}). Solo un FnExpr literal (captura solo
+            // valores Send, p. ej. canales). El resultado (Task<T>) se DESCARTA (fire-and-forget); `join`
+            // (structured concurrency) es una fase posterior.
+            "spawn" => {
+                let ExprKind::Func(fnexpr) = &eff[0].kind else {
+                    return Err("spike: spawn solo acepta una función anónima literal (por ahora)".into());
+                };
+                self.needs_concurrency = true;
+                // El closure captura por `move`; los canales en ámbito los comparten varios spawns/main,
+                // así que se CLONAN (Arc bump) antes → el closure mueve un clon, el original sigue usable.
+                out.push_str("{ ");
+                for name in self.in_scope_channels() {
+                    write!(out, "let {n} = {n}.clone(); ", n = mangle(&name)).unwrap();
+                }
+                out.push_str("std::thread::spawn(move || ");
+                self.emit_block(out, &fnexpr.body)?;
+                out.push_str("); }");
             }
             "unwrap_or" => {
                 self.emit_expr(out, eff[0])?;
@@ -1800,7 +1896,17 @@ impl Transpiler {
                     // env → Option<string> (variable de entorno).
                     "input" | "env" => opt_of(Type::String),
                     "read_int" => opt_of(Type::Int),
-                    "close" => Type::Int, // close(h) de un handle de archivo → 0 (ad-hoc; canal es concurrencia)
+                    // Concurrencia: recv(ch) → Option<T> (T = elemento del canal); send/spawn → unit.
+                    "recv" => match self.type_of(recv0.ok_or("spike: recv sin canal")?)? {
+                        Type::Channel(t) => opt_of(*t),
+                        other => return Err(format!("spike: recv sobre {:?}", other)),
+                    },
+                    "send" | "spawn" => Type::Unit,
+                    // close ad-hoc: canal → unit; handle de archivo (int) → 0.
+                    "close" => match recv0.map(|e| self.type_of(e)).transpose()? {
+                        Some(Type::Channel(_)) => Type::Unit,
+                        _ => Type::Int,
+                    },
                     "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
                     "split" => Type::Array(Box::new(Type::String)),
                     "args" => Type::Array(Box::new(Type::String)),
@@ -1962,6 +2068,16 @@ fn normalize_type(t: &Type) -> Type {
         Type::Struct(n, args) if n == "Map" && args.len() == 2 => {
             Type::Map(Box::new(normalize_type(&args[0])), Box::new(normalize_type(&args[1])))
         }
+        // Channel<T>/Task<T> (concurrencia): el parser los deja como `Struct`; el checker los reclasifica,
+        // pero la anotación del AST puede llegar como `Struct` → los normalizamos aquí (como Map).
+        Type::Struct(n, args) if n == "Channel" && args.len() == 1 => {
+            Type::Channel(Box::new(normalize_type(&args[0])))
+        }
+        Type::Struct(n, args) if n == "Task" && args.len() == 1 => {
+            Type::Task(Box::new(normalize_type(&args[0])))
+        }
+        Type::Channel(t) => Type::Channel(Box::new(normalize_type(t))),
+        Type::Task(t) => Type::Task(Box::new(normalize_type(t))),
         // Option/Result (enums genéricos del prelude) → se mapean a los NATIVOS de Rust. El parser los
         // deja como `Struct`; los tratamos como `Enum` con sus args para bajarlos a `Option`/`Result`.
         Type::Struct(n, args) if (n == "Option" && args.len() == 1) || (n == "Result" && args.len() == 2) => {
@@ -1989,6 +2105,9 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         Type::String => "Rc<str>",
         // bytes: secuencia INMUTABLE de octetos (como string) → Rc<[u8]> (clon barato, compartible).
         Type::Bytes => return Ok("Rc<[u8]>".to_string()),
+        // Channel<T> (concurrencia): canal MPMC thread-safe propio (Arc<Mutex+Condvar>). T debe ser Send
+        // (primitivos en v1; string/struct → diferido, requerirían el modelo de valores thread-safe).
+        Type::Channel(t) => return Ok(format!("__RayChan<{}>", rust_ty(t, enums, tparams)?)),
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),
         // Map: igual, sobre un HashMap.
@@ -2170,6 +2289,7 @@ fn is_heap(t: &Type) -> bool {
         t,
         Type::String | Type::Bytes | Type::Array(_) | Type::Tuple(_) | Type::Map(_, _)
             | Type::Struct(_, _) | Type::Enum(_, _) | Type::Fn(_, _) | Type::Var(_) | Type::Dyn(_)
+            | Type::Channel(_) | Type::Task(_) // semántica de referencia: clon = Arc bump
     )
 }
 
@@ -2450,6 +2570,25 @@ mod tests {
     }
 
     #[test]
+    fn transpila_concurrencia_csp() {
+        // spawn + canales (M12.1/M12.2): Channel.new/bounded → __RayChan; send/recv/close; spawn → thread.
+        let rust = transpile_src(
+            "fn prod(c: Channel<int>) { send(c, 1); close(c); }\n\
+             fn main() -> int { let c: Channel<int> = Channel.bounded(2); \
+             spawn(fn() { prod(c); }); \
+             match (recv(c)) { Option.Some(v) => v, Option.None => 0 } }",
+        );
+        assert!(rust.contains("__RayChan<i64>"), "canal → __RayChan: {}", rust);
+        assert!(rust.contains("__RayChan::make(Some("), "bounded: {}", rust);
+        assert!(rust.contains("std::thread::spawn(move ||"), "spawn → hilo: {}", rust);
+        assert!(rust.contains(".send("), "send: {}", rust);
+        assert!(rust.contains(".recv()"), "recv: {}", rust);
+        assert!(rust.contains(".close()"), "close de canal: {}", rust);
+        // el canal capturado se clona antes del spawn (Arc bump → el original sigue usable).
+        assert!(rust.contains("let c = c.clone();"), "clona el canal antes del spawn: {}", rust);
+    }
+
+    #[test]
     fn transpila_env() {
         // env(name) -> Option<string>: variable de entorno vía std::env::var(...).ok().
         let rust = transpile_src(
@@ -2552,8 +2691,11 @@ mod tests {
 
     #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `spawn` (concurrencia, aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens = crate::lexer::lex("fn main() { spawn(fn() { print(\"x\"); }); }").unwrap();
+        // un `main` con `select` (concurrencia avanzada, aún fuera del subconjunto) → no transpilable.
+        let tokens = crate::lexer::lex(
+            "fn main() { let c: Channel<int> = Channel.new(); let i = select([c]); print(i); }",
+        )
+        .unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());

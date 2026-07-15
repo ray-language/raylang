@@ -587,6 +587,26 @@ prog.ray uno dos` con el mismo env. El test `rechaza_` pasa a usar `spawn` (conc
 37/37 intacto. **Diferido restante**: concurrencia (`spawn`/canales → "cae a la VM" en v1) y red
 (sockets/TLS) — ambos requieren runtime propio, no I/O simple.
 
+#### Fase 28 — concurrencia CSP (spawn + canales) — hilos de SO reales
+
+**Decisión de modelo (con el usuario): hilos de SO reales** (paralelismo de verdad), no el scheduler
+cooperativo determinista de la VM. La VM ya corre multicore no-determinista por default (M38); su salida
+casa con `--deterministic` porque los programas concurrentes bien hechos son **deterministas por diseño**
+(pipelines FIFO). Primera fase: el **slice CSP** (M12.1/M12.2). `Channel<T>` → **`__RayChan<T>`**, un canal
+**MPMC thread-safe propio** (`Arc<(Mutex<VecDeque>, Condvar)>` — sin deps, el `.rs` es standalone) con
+backpressure (bounded), cierre y FIFO. `Channel.new()` (no acotado) / `Channel.bounded(n)`; `send`/`recv`
+(→ `Option<T>`) / `close` (ad-hoc: canal → `.close()`, handle de archivo → int); `spawn(fn(){…})` →
+**`std::thread::spawn(move || …)`** (fire-and-forget; el `Task<T>` se descarta — `join` es la fase
+siguiente). **Gotcha clave**: el closure captura por `move`, pero varios spawns/main comparten el mismo
+canal → antes de cada `spawn` se **clonan** los canales en ámbito (`in_scope_channels`, Arc bump) para que
+el closure mueva un clon y el original siga usable. `T: Send` (primitivos en v1; canales de string/struct →
+diferido, necesitarían el modelo de valores thread-safe). **Verificado**: `examples/concurrency/
+concurrencia.ray` (pipeline productor→cuadrador→main) transpila a un binario nativo con hilos reales y da
+salida byte-idéntica a la VM (`1 4 9 16 25 55`), **estable en 10/10 corridas** pese al paralelismo real.
+Test de integración `build_native_concurrencia_csp_coincide_con_la_vm` (`tests/cli_cli.rs`). El test
+`rechaza_` pasa a usar `select`. Corpus 37/37 + multi-módulo intactos. **Diferido**: `select`, structured
+(`scope`/`join`/`Task`), cancelación; canales de tipos no-Send.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

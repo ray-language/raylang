@@ -188,6 +188,47 @@ fn build_native_env_y_args_coinciden_con_la_vm() {
 }
 
 #[test]
+fn build_native_concurrencia_csp_coincide_con_la_vm() {
+    // `ray build --native` de un pipeline CSP (spawn + canales): el binario nativo usa hilos de SO reales
+    // y, por el orden FIFO de los canales, produce la MISMA salida (determinista-por-diseño) que la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native concurrencia: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_conc");
+    // productor → cuadrador → main (pipeline con canal acotado, como examples/concurrency/concurrencia.ray).
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn gen(out: Channel<int>, n: int) { var i = 1; while (i <= n) { send(out, i); i = i + 1; } close(out); }\n\
+         fn sq(inp: Channel<int>, out: Channel<int>) { var go = true; while (go) { match (recv(inp)) { Option.Some(v) => send(out, v * v), Option.None => { close(out); go = false; } } } }\n\
+         fn main() -> int {\n\
+           let a: Channel<int> = Channel.bounded(2);\n\
+           let b: Channel<int> = Channel.new();\n\
+           spawn(fn() { gen(a, 5); });\n\
+           spawn(fn() { sq(a, b); });\n\
+           var total = 0; var go = true;\n\
+           while (go) { match (recv(b)) { Option.Some(v) => { print(v); total = total + v; }, Option.None => { go = false; } } }\n\
+           print(total);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native concurrencia ok\n{err}");
+
+    let expected = "1\n4\n9\n16\n25\n55\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da el pipeline");
+    // El binario nativo, 5 veces, siempre igual (determinista-por-diseño pese a los hilos reales).
+    for _ in 0..5 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+        assert_eq!(native_out, expected, "nativo ≡ VM (estable)");
+    }
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

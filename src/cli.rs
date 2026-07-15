@@ -5,6 +5,8 @@
 //!   `ray new <nombre>`      — crea un proyecto nuevo (ray.toml + src/main.ray).
 //!   `ray run [archivo]`     — ejecuta (por defecto `src/main.ray`) en la VM (M35).
 //!   `ray build [archivo]`   — chequea y compila sin ejecutar (para CI); 0 ok / 65 error.
+//!                             con `--native [-o <salida>]` transpila a Rust y compila con `rustc -O`
+//!                             → binario nativo (P2.b, requiere `rustc` en el PATH).
 //!   `ray test [archivo]`    — corre las funciones `@test` (M10.1).
 //!   `ray fmt <archivo>`     — imprime la versión canónica por stdout (M29.2).
 //!   `ray lsp`               — arranca el Language Server (M10.2).
@@ -82,7 +84,7 @@ Usage: ray <subcommand> [options]
   new <name>      create a new project (ray.toml + src/main.ray)
   run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error)
+  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out]]
   test [file]    run the @test functions [filter]
   add <name>[@req]  add a dependency from the index to ray.toml and download it
   remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
@@ -370,10 +372,22 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// `ray build [archivo]`: chequea y **compila** el programa sin ejecutarlo (útil para CI y
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
 fn cmd_build(args: &[String]) {
-    let path = resolve_entry(args.first().map(String::as_str), true);
+    // `--native [-o <salida>]` (P2.b): transpila a Rust y lo compila con `rustc -O` → binario nativo.
+    // El resto de flags/archivo se pasan igual; el archivo es el primer no-flag.
+    let native = args.iter().any(|a| a == "--native");
+    let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
+    let file = args
+        .iter()
+        .find(|a| !a.starts_with('-') && Some(a.as_str()) != output.as_deref())
+        .map(String::as_str);
+    let path = resolve_entry(file, true);
     regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
+    if native {
+        build_native(&path, output.as_deref());
+        return;
+    }
     match compiler::compile_program(&program) {
         Ok(_) => println!("ok: '{path}' compila"),
         Err(mut e) => {
@@ -381,6 +395,49 @@ fn cmd_build(args: &[String]) {
             e.line = local;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
             eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
+            process::exit(65);
+        }
+    }
+}
+
+/// `ray build --native` (P2.b, transpilar-a-Rust): transpila el programa **ya chequeado** a Rust, lo
+/// escribe a un `.rs` temporal y lo compila con `rustc -O` → binario nativo. El nombre por defecto es el
+/// *stem* del archivo de entrada en el directorio actual; `-o <ruta>` lo cambia. Requiere `rustc` en el
+/// PATH. El programa se re-carga/re-chequea aquí (barato) para no cambiar la firma de `cmd_build`.
+fn build_native(path: &str, output: Option<&str>) {
+    let (mut program, locate, multi) = load_and_locate(path);
+    check_or_exit(&mut program, &locate, multi);
+    let rust = match crate::transpile::transpile(&program) {
+        Ok(src) => src,
+        Err(e) => {
+            eprintln!("native build: {e}");
+            process::exit(65);
+        }
+    };
+    // Nombre de salida: `-o`, o el stem del archivo de entrada.
+    let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
+    let out_bin = output.map(String::from).unwrap_or_else(|| stem.to_string());
+    // El `.rs` temporal va al directorio temporal del sistema (nombre = stem para trazabilidad).
+    let rs_path = std::env::temp_dir().join(format!("ray_native_{stem}.rs"));
+    if let Err(e) = std::fs::write(&rs_path, rust) {
+        eprintln!("native build: no se pudo escribir el Rust temporal: {e}");
+        process::exit(65);
+    }
+    // `rustc -O -A warnings <tmp.rs> -o <out>` (silencia los warnings de estilo del código generado).
+    let status = process::Command::new("rustc")
+        .args(["-O", "-A", "warnings"])
+        .arg(&rs_path)
+        .arg("-o")
+        .arg(&out_bin)
+        .status();
+    match status {
+        Ok(s) if s.success() => println!("ok: binario nativo '{out_bin}'"),
+        Ok(s) => {
+            eprintln!("native build: rustc falló (código {})", s.code().unwrap_or(-1));
+            process::exit(65);
+        }
+        Err(e) => {
+            eprintln!("native build: no se pudo ejecutar rustc (¿está en el PATH?): {e}");
             process::exit(65);
         }
     }

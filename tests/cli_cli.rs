@@ -83,6 +83,34 @@ fn build_compila_ok_y_reports_errors() {
 }
 
 #[test]
+fn build_native_produce_un_binario_que_corre_como_la_vm() {
+    // `ray build --native` (P2.b): transpila a Rust, compila con `rustc -O` y produce un binario nativo
+    // cuya salida coincide con la VM. Requiere `rustc` en el PATH; si no está, se salta (no es un fallo).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\n\
+         fn main() -> int { print(fib(10)); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
+    assert!(out.contains("binario nativo"), "reporta el binario\n{out}");
+    assert!(bin.is_file(), "el binario nativo existe");
+    // El binario nativo produce la MISMA salida que la VM.
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "nativo ≡ VM");
+    assert_eq!(native_out.trim(), "55", "fib(10) = 55");
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

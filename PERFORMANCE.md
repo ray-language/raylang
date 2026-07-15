@@ -453,6 +453,30 @@ mutable en closures → `FnMut`, `.show()` de una función, protocolo `Iterator<
 **probada de punta a punta**: `ray build --native` transpila todo el lenguaje a Rust nativo, y la medición
 del spike (fibrec 5.4× más rápido que node, 61× que la VM) se generaliza a programas reales.
 
+#### Fase 20 — `ray build --native` (el subcomando de producto)
+
+El flag oculto `--emit-rust` (spike) se cablea en el subcomando de producto: **`ray build --native [-o
+<salida>]`** carga+chequea, transpila a Rust (`transpile::transpile`), escribe un `.rs` temporal e invoca
+**`rustc -O -A warnings`** → binario nativo (nombre por defecto = *stem* del archivo; `-o` lo cambia).
+Requiere `rustc` en el PATH; el test de integración lo salta limpiamente si no está. **Modelo dev=VM /
+deploy=nativo**, como Rust: `ray run` (VM, arranque ≤5 ms, iteración rápida) para desarrollar; `ray build
+--native` para el binario de producción.
+
+**Medición end-to-end (14 jul, fib(35) recursivo, best-of-3, release+`-O`)**:
+
+| motor | tiempo | vs node |
+|-------|--------|---------|
+| raylang **nativo** (`ray build --native`) | **0.02 s** | **5× más rápido** |
+| node v26 | 0.10 s | — (referencia) |
+| raylang VM (release) | 1.53 s | 15× más lento |
+
+El nativo bate a node **5×** y a la propia VM **~76×**. **raylang pasa de peor-de-la-clase** (la VM era
+12.5× más lenta que node en el banco original) **a mejor-de-la-clase** en cómputo — el giro ~68× del spike
+se confirma en el pipeline real. Test de integración `build_native_produce_un_binario_que_corre_como_la_vm`
+(`tests/cli_cli.rs`): el binario nativo da salida idéntica a la VM. Siguiente: medir el banco poliglota
+completo (wordcount/jsonserialize/logparse — necesitan que el transpilador cubra su I/O de entrada) con
+binarios nativos.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

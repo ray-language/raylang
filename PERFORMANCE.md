@@ -185,6 +185,15 @@ byte a byte). **Ejemplos que transpilan: 40 → 62** (de `stdlib/web/net/io`; lo
 archivos-LIBRERÍA sin `main`, se importan, no aplican). Corpus 37/37 intacto. Restan bloqueos menores:
 `indexar bytes` (`b[i]`), protocolo `Iterator<T>`, `spawn` no-literal, canales de tipos mutables.
 
+#### Fase 35 — indexar bytes (`b[i]`)
+
+`b[i]` sobre `bytes` → el octeto como **int** (checker: `Type::Bytes` indexado → `Int`). Como `bytes` es
+`Rc<[u8]>` (sin `RefCell`), se indexa directo: `(<b>[<i> as usize] as i64)` — con paréntesis porque el
+`as i64` no puede ir seguido de un método (`.ray_show()`), y sin `.borrow()` (a diferencia de arreglos).
+OOB → pánico (equivale al error de runtime de la VM; el camino feliz casa byte a byte). Verificado
+(recorrer `"Hi!".to_bytes()` → 72/105/33, suma 210). Librería emit OK: 62 → 63 (desbloquea el ejemplo de
+hash que indexa bytes). Corpus 37/37 intacto.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

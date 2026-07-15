@@ -960,16 +960,30 @@ impl Transpiler {
                 }
             }
             ExprKind::Index { array, index } => {
-                if matches!(self.type_of(array)?, Type::String) {
-                    self.emit_expr(out, array)?;
-                    out.push_str(".chars().nth(");
-                    self.emit_expr(out, index)?;
-                    out.push_str(" as usize).unwrap()");
-                } else {
-                    self.emit_expr(out, array)?;
-                    out.push_str(".borrow()[");
-                    self.emit_expr(out, index)?;
-                    out.push_str(" as usize].clone()");
+                match self.type_of(array)? {
+                    // string: `s[i]` → el carácter en la posición i (por carácter, como la VM).
+                    Type::String => {
+                        self.emit_expr(out, array)?;
+                        out.push_str(".chars().nth(");
+                        self.emit_expr(out, index)?;
+                        out.push_str(" as usize).unwrap()");
+                    }
+                    // bytes: `b[i]` → el octeto como int (Rc<[u8]>, sin borrow); OOB = pánico (~error de la VM).
+                    // Paréntesis: el `as i64` no puede ir seguido de un método (p. ej. `.ray_show()`).
+                    Type::Bytes => {
+                        out.push('(');
+                        self.emit_expr(out, array)?;
+                        out.push('[');
+                        self.emit_expr(out, index)?;
+                        out.push_str(" as usize] as i64)");
+                    }
+                    // arreglo/Map: `a[i]` → el elemento (clon al leer; a través del RefCell).
+                    _ => {
+                        self.emit_expr(out, array)?;
+                        out.push_str(".borrow()[");
+                        self.emit_expr(out, index)?;
+                        out.push_str(" as usize].clone()");
+                    }
                 }
             }
             // Coerción concreto→`dyn Trait` (M9.3b): el checker la baja a `__dyn_T { data: <concreto>,
@@ -2215,6 +2229,7 @@ impl Transpiler {
             ExprKind::Index { array, index } => match self.type_of(array)? {
                 Type::Array(t) => *t,
                 Type::String => Type::Char, // s[i] → char
+                Type::Bytes => Type::Int, // b[i] → el octeto como int
                 Type::Tuple(ts) => {
                     let i = match &index.kind {
                         ExprKind::Int(n) => *n as usize,
@@ -2823,6 +2838,16 @@ mod tests {
         assert!(rust.contains("std::f64::consts::E"), "{}", rust);
         // No debe emitir los wrappers del módulo (`fn ...sqrt`) ni el primitivo `__sqrt`.
         assert!(!rust.contains("__sqrt"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_indexar_bytes() {
+        // b[i] sobre bytes → el octeto como int (Rc<[u8]>, sin borrow; envuelto en () por el `as i64`).
+        let rust = transpile_src(
+            "fn main() -> int { let b = \"Hi\".to_bytes(); print(to_string(b[0])); b[1] }",
+        );
+        assert!(rust.contains("[0i64 as usize] as i64)"), "b[i] → octeto int con paréntesis: {}", rust);
+        assert!(!rust.contains("b.clone().borrow()"), "bytes no lleva borrow: {}", rust);
     }
 
     #[test]

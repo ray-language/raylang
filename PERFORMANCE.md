@@ -270,6 +270,20 @@ remitente) y un cliente `UdpSocket` — datagrama de ida y vuelta `hola udp`. Te
 `build_native_udp_hace_eco` (el test es el cliente). Librería rustc OK: 33 → 34. Corpus 37/37 intacto.
 Diferido en red: TLS (rustls), crypto (`ring`) — deps externas, techo estructural de los ejemplos web.
 
+#### Fase 41 — crypto en raylang puro (fix del doble-borrow en `push`)
+
+Exploración: sha1/sha256/sha512/hmac/chacha20/poly1305 están escritos en **raylang PURO** (cero primitivos
+`__`, cero `ring`) → deberían transpilar. `chacha20_demo` ya salía idéntico; pero **sha256/sha512/hmac
+COMPILABAN pero PANICABAN en runtime** con `RefCell already mutably borrowed`. **Bug de corrección real
+cazado**: `w.push(w[i] + w[j])` (patrón ubicuo en cripto) se emitía `w.borrow_mut().push(<arg>)`, y Rust
+evalúa el **receptor primero** → `borrow_mut()` retiene el préstamo mientras el `<arg>` hace `w.borrow()`
+→ pánico (doble borrow del RefCell). Fix (como en las asignaciones `a[i]=a[j]`): el valor de `push` se
+evalúa a un **temp ANTES** del `borrow_mut` (`{ let __v = <arg>; a.borrow_mut().push(__v); }`). Con eso
+**sha256/sha512/hmac/chacha20 → byte-idénticos a la VM** (hashes correctos): crypto de verdad en el binario
+nativo, sin deps. Es un fix de RUNTIME (esos demos ya *compilaban*), no cambia el conteo de rustc pero sí la
+CORRECCIÓN. Test de regresión `push_que_lee_el_mismo_arreglo_no_doble_borra`. Corpus 37/37 intacto.
+Diferido: crypto vía `ring` (ed25519, aead con nonce del SO), TLS.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

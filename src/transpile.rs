@@ -1983,10 +1983,13 @@ impl Transpiler {
             }
             // push(a, v) → a.borrow_mut().push(v) (muta en el sitio, devuelve unit).
             "push" => {
-                self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().push(");
+                // El valor se evalúa a un TEMP ANTES del borrow_mut: si lee del MISMO arreglo (p. ej.
+                // `w.push(w[i] + w[j])`, típico en cripto), evita el doble borrow del RefCell (panic).
+                out.push_str("{ let __v = ");
                 self.emit_expr(out, eff[1])?;
-                out.push(')');
+                out.push_str("; ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow_mut().push(__v); }");
             }
             // chars(s) → [char]: los caracteres del string como arreglo.
             "chars" => {
@@ -3231,6 +3234,18 @@ mod tests {
         );
         assert!(rust.contains("as u32 as i64)"), "char_code → code point: {}", rust);
         assert!(rust.contains("char::from_u32("), "char_from_code → Option<char>: {}", rust);
+    }
+
+    #[test]
+    fn push_que_lee_el_mismo_arreglo_no_doble_borra() {
+        // `w.push(w[i] + w[j])` (típico en cripto): el valor debe evaluarse a un TEMP antes del borrow_mut,
+        // si no el RefCell entra en doble borrow y PANICA en runtime. Regresión de sha256/hmac.
+        let rust = transpile_src(
+            "fn main() -> int { var w: [int] = [1, 2, 3]; w.push(w[0] + w[2]); w[3] }",
+        );
+        // el valor se saca a __v antes del borrow_mut().push.
+        assert!(rust.contains("{ let __v = "), "push evalúa el valor a un temp: {}", rust);
+        assert!(rust.contains(".borrow_mut().push(__v);"), "push del temp: {}", rust);
     }
 
     #[test]

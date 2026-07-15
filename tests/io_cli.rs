@@ -513,3 +513,54 @@ fn native_list_dir_y_remove_file_coinciden_con_la_vm() {
     // 3 archivos → borra b (ok) → 2 archivos; borrar inexistente → err.
     assert_eq!(nat, "n=3\nrm b: ok\nrm no: err\nn=2\n", "salida esperada");
 }
+
+/// P2.b: operaciones de directorio/metadatos transpilables (mkdir/is_dir/is_file/file_size/copy_file/
+/// rename/remove_dir). Ejercita el ciclo completo y comprueba nativo ≡ VM. Requiere rustc.
+#[test]
+fn native_directorios_coinciden_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_directorios: rustc no disponible");
+        return;
+    }
+    let root = std::env::temp_dir().join("ray_native_dirs");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("crea root");
+    let base = root.join("proj");
+    let src = format!(
+        "import std/fs;\n\
+         fn tag(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok \" + to_string(n), Result.Err(e) => \"err\" }} }}\n\
+         fn main() -> int {{\n\
+           let b = \"{b}\";\n\
+           print(\"mkdir: \" + tag(fs.mkdir(b + \"/sub\")));\n\
+           print(\"isdir: \" + to_string(fs.is_dir(b + \"/sub\")) + \" isfile: \" + to_string(fs.is_file(b + \"/sub\")));\n\
+           let _ = fs.write_file(b + \"/sub/a.txt\", \"hola\");\n\
+           print(\"size: \" + tag(fs.file_size(b + \"/sub/a.txt\")));\n\
+           print(\"size dir: \" + tag(fs.file_size(b + \"/sub\")));\n\
+           print(\"copy: \" + tag(fs.copy_file(b + \"/sub/a.txt\", b + \"/sub/b.txt\")));\n\
+           print(\"rename: \" + tag(fs.rename(b + \"/sub/b.txt\", b + \"/sub/c.txt\")));\n\
+           print(\"rmdir full: \" + tag(fs.remove_dir(b + \"/sub\")));\n\
+           let _ = fs.remove_file(b + \"/sub/a.txt\");\n\
+           let _ = fs.remove_file(b + \"/sub/c.txt\");\n\
+           print(\"rmdir: \" + tag(fs.remove_dir(b + \"/sub\")));\n\
+           print(\"rmdir base: \" + tag(fs.remove_dir(b)));\n\
+           0\n\
+         }}\n",
+        b = base.to_str().unwrap()
+    );
+    let ray = root.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = root.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let _ = std::fs::remove_dir_all(&base);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    let _ = std::fs::remove_dir_all(&base);
+    let (vm, _e, _c) = run_io("native_dirs_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    let expected = "mkdir: ok 0\nisdir: true isfile: false\nsize: ok 4\nsize dir: err\ncopy: ok 0\n\
+        rename: ok 0\nrmdir full: err\nrmdir: ok 0\nrmdir base: ok 0\n";
+    assert_eq!(nat, expected, "ciclo de directorios");
+}

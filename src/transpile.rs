@@ -1254,6 +1254,46 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // Operaciones de directorio con resultado unitario → Result<int,string> (Ok(0)/Err(msg)):
+            // mkdir (create_dir_all), remove_dir (solo vacío), rename, copy_file (std::fs::copy).
+            "mkdir" | "remove_dir" | "rename" | "copy_file" => {
+                let (rust_fn, two_args, map_unit) = match ffn {
+                    "mkdir" => ("std::fs::create_dir_all", false, false),
+                    "remove_dir" => ("std::fs::remove_dir", false, false),
+                    "rename" => ("std::fs::rename", true, false),
+                    _ => ("std::fs::copy", true, true), // copy devuelve u64 → .map(|_| ())
+                };
+                write!(out, "(match {}(&*", rust_fn).unwrap();
+                self.emit_expr(out, eff[0])?;
+                if two_args {
+                    out.push_str(", &*");
+                    self.emit_expr(out, eff[1])?;
+                }
+                out.push(')');
+                if map_unit {
+                    out.push_str(".map(|_| ())");
+                }
+                out.push_str(
+                    " { Ok(()) => Ok::<i64, Rc<str>>(0i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
+            // is_dir/is_file(path) -> bool (totales, nunca fallan).
+            "is_dir" | "is_file" => {
+                out.push_str("std::path::Path::new(&*");
+                self.emit_expr(out, eff[0])?;
+                write!(out, ").{}()", ffn).unwrap();
+            }
+            // file_size(path) -> Result<int,string>: tamaño en bytes; un directorio es error (mensaje
+            // byte-idéntico a la VM: "no es un file").
+            "file_size" => {
+                out.push_str("(match std::fs::metadata(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ") { Ok(__md) if __md.is_file() => Ok::<i64, Rc<str>>(__md.len() as i64), \
+                     Ok(_) => Err(Rc::<str>::from(\"no es un file\")), \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
             _ => return Err(format!("spike: std::fs::{} no soportada", ffn)),
         }
         Ok(())
@@ -1632,7 +1672,8 @@ impl Transpiler {
                 if let Some(ffn) = n.strip_prefix("std::fs::") {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
-                        "write_file" | "open" | "write" | "remove_file" => {
+                        "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir"
+                        | "rename" | "copy_file" | "file_size" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }
                         "read_line" => opt_of(Type::String),
@@ -1640,7 +1681,7 @@ impl Transpiler {
                             "Result".into(),
                             vec![Type::Array(Box::new(Type::String)), Type::String],
                         ),
-                        "exists" => Type::Bool,
+                        "exists" | "is_dir" | "is_file" => Type::Bool,
                         other => return Err(format!("spike: std::fs::{} no soportada", other)),
                     });
                 }

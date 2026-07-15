@@ -524,11 +524,22 @@ Cierra la gestión de archivos común: `remove_file(path) -> Result<int,string>`
 reconstruye el `[string]` en la repr del transpilador (`Rc<RefCell<Vec<Rc<str>>>>`). Mensajes de error
 byte-idénticos a la VM (el `e.to_string()` del OS: `No such file or directory (os error 2)`, …). Verificado
 nativo ≡ VM (listar ordenado + borrar ok/inexistente + dir inexistente) por subproceso en
-`tests/io_cli.rs::native_list_dir_y_remove_file_coinciden_con_la_vm`. **La I/O de archivos del transpilador
-queda COMPLETA**: leer entero (`read_file`), escribir entero (`write_file`), consultar (`exists`), streaming
-con handles (`open`/`read_line`/`write`/`close`), stdin (`input`/`read_int`), y gestión (`list_dir`/
-`remove_file`). Diferido (aún fuera): `env`/`args`-de-entorno no determinista, directorios (`mkdir`/
-`remove_dir`/`rename`/`copy_file`), sockets/TLS.
+`tests/io_cli.rs::native_list_dir_y_remove_file_coinciden_con_la_vm`.
+
+#### Fase 24 — directorios + metadatos (`mkdir`/`rename`/`copy_file`/`is_dir`/`file_size`…)
+
+Cierra el módulo `std/fs` (M67): `mkdir` (`create_dir_all`), `remove_dir` (solo vacío), `rename`,
+`copy_file` (`std::fs::copy(..).map(|_|())`) → `Result<int,string>` (Ok(0)/Err); `is_dir`/`is_file` →
+`bool` (`Path::is_dir`/`is_file`); `file_size` → `Result<int,string>` (`metadata`; un directorio es error
+con el mensaje byte-idéntico a la VM `no es un file`). Los cuatro de resultado unitario comparten un solo
+brazo parametrizado (nombre de la fn de Rust + aridad + si mapea el retorno). La **escritura atómica**
+(temp + `rename`) ya es transpilable. Verificado nativo ≡ VM (ciclo completo mkdir→escribir→copiar→
+renombrar→borrar + errores) por subproceso en `tests/io_cli.rs::native_directorios_coinciden_con_la_vm`.
+**La I/O de archivos del transpilador queda COMPLETA — TODO `std/fs`**: leer/escribir entero
+(`read_file`/`write_file`), consultar (`exists`/`is_dir`/`is_file`/`file_size`), streaming con handles
+(`open`/`read_line`/`write`/`close`), stdin (`input`/`read_int`), gestión de archivos (`list_dir`/
+`remove_file`) y de directorios (`mkdir`/`remove_dir`/`rename`/`copy_file`). Diferido (aún fuera):
+`env`/`args`-de-entorno no determinista, I/O binaria (`*_bytes`), sockets/TLS.
 
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;

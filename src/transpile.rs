@@ -123,7 +123,7 @@ fn is_handled_builtin(name: &str) -> bool {
         "all" | "any" | "assert" | "assert_eq" | "char_from_code" | "env" | "filter" | "fold"
             | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "input" | "map" | "max" | "min"
             | "parse_float" | "parse_int" | "pop" | "position" | "read_int" | "recv"
-            | "remove" | "sort" | "sum" | "sum_float" | "try_join"
+            | "remove" | "sort" | "try_join"
         // --- builtins públicos manejados en emit_call ---
             | "len" | "push" | "split" | "join" | "chars" | "to_string" | "print" | "eprint"
             | "contains_key" | "keys" | "values" | "insert" | "add_to" | "unwrap" | "unwrap_or"
@@ -3291,6 +3291,27 @@ fn unify(param: &Type, arg: &Type, tparams: &[String], subst: &mut HashMap<Strin
                 unify(r, &ar, tparams, subst);
             }
         }
+        // Structs/enums genéricos (`Iter<T>`, `Caja<T>`, `Option<T>`) y tuplas: unificar arg-a-arg, para
+        // resolver el `T` a través de cadenas de adaptadores (`iter().enumerate()` → `Iter<(int, T)>`).
+        Type::Struct(n, pargs) if !pargs.is_empty() => {
+            if let Type::Struct(an, aargs) = normalize_type(arg) {
+                if *n == an && pargs.len() == aargs.len() {
+                    for (p, a) in pargs.iter().zip(&aargs) { unify(p, a, tparams, subst); }
+                }
+            }
+        }
+        Type::Enum(n, pargs) => {
+            if let Type::Enum(an, aargs) = normalize_type(arg) {
+                if *n == an && pargs.len() == aargs.len() {
+                    for (p, a) in pargs.iter().zip(&aargs) { unify(p, a, tparams, subst); }
+                }
+            }
+        }
+        Type::Tuple(ps) => {
+            if let Type::Tuple(as2) = normalize_type(arg) {
+                for (p, a) in ps.iter().zip(&as2) { unify(p, a, tparams, subst); }
+            }
+        }
         _ => {}
     }
 }
@@ -3300,10 +3321,16 @@ fn subst_type(t: &Type, subst: &HashMap<String, Type>) -> Type {
     match t {
         Type::Var(n) => subst.get(n).cloned().unwrap_or_else(|| t.clone()),
         Type::Struct(n, a) if a.is_empty() => subst.get(n).cloned().unwrap_or_else(|| t.clone()),
+        // Structs/enums genéricos y tuplas: sustituir en cada argumento (p. ej. `Iter<(int, T)>`).
+        Type::Struct(n, a) => Type::Struct(n.clone(), a.iter().map(|x| subst_type(x, subst)).collect()),
+        Type::Enum(n, a) => Type::Enum(n.clone(), a.iter().map(|x| subst_type(x, subst)).collect()),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(|x| subst_type(x, subst)).collect()),
         Type::Array(e) => Type::Array(Box::new(subst_type(e, subst))),
         Type::Map(k, v) => {
             Type::Map(Box::new(subst_type(k, subst)), Box::new(subst_type(v, subst)))
         }
+        Type::Channel(e) => Type::Channel(Box::new(subst_type(e, subst))),
+        Type::Task(e) => Type::Task(Box::new(subst_type(e, subst))),
         Type::Fn(ps, r) => Type::Fn(
             ps.iter().map(|p| subst_type(p, subst)).collect(),
             Box::new(subst_type(r, subst)),
@@ -3608,6 +3635,17 @@ mod tests {
         assert!(rust.contains("let __it = "), "liga el iterador a __it: {}", rust);
         assert!(rust.contains("(__it.clone()) { Some("), "loop match next(__it): {}", rust);
         assert!(rust.contains("None => break"), "corta en None: {}", rust);
+    }
+
+    #[test]
+    fn for_sobre_enumerate_destructura_la_tupla() {
+        // `for (i, x) in it.enumerate()`: `next` da `Option<(int, T)>`; el `T` se resuelve unificando el
+        // tipo del iterador con el `self` de `next` a TRAVÉS de la cadena de adaptadores (unify/subst_type
+        // recurren en structs genéricos y tuplas). Baja a `match … { Some((i, x)) => …, None => break }`.
+        let rust = transpile_src(
+            "fn main() { for (i, x) in [10, 20].iter().enumerate() { print(i); print(x); } }",
+        );
+        assert!(rust.contains("{ Some((") && rust.contains(")) => "), "destructura la tupla: {}", rust);
     }
 
     #[test]

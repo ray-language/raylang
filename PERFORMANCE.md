@@ -417,6 +417,22 @@ elemento — el `iterador.ray` completo los usa). Tests: `for_sobre_iterador_de_
 next`, `campo_closure_se_llama_desenvolviendolo` (unit) + `build_native_iteradores_coinciden_con_la_vm`
 (integración). 602 tests lib + corpus 37/37 + 38 web idénticos, 0 regresiones. **B COMPLETO** (B1 + B2).
 
+#### Fase 48 — enumerate/zip: inferencia genérica a través de la cadena de adaptadores
+
+Cierra el diferido de la Fase 47. `for (i, x) in it.enumerate()` (y `zip`) fallaba porque el tipo del
+elemento (`Struct("T", [])`, sin resolver) no cruzaba la cadena de adaptadores. **Causa raíz**:
+`unify`/`subst_type` (la inferencia genérica del transpilador) **no recurrían en structs genéricos con
+args, enums ni tuplas** — sólo en Array/Map/Fn. Así `unify(Iter<T>, Iter<(int, string)>)` no ligaba `T`,
+y `subst_type(Option<(int, T)>)` no sustituía dentro de la tupla. **Fix**: ambas funciones recurren ahora
+en `Struct(n, args)` (genérico), `Enum(n, args)`, `Tuple(ts)` (y `Channel`/`Task` en subst). Además se
+emiten los terminales `sum`/`sum_float` (se quitan de la lista de builtins-omitidos). Con esto **el
+`examples/stdlib/iterador.ray` COMPLETO transpila byte-idéntico** — `impl Iterator` de usuario + TODOS los
+adaptadores del prelude: `.iter()`/`range`/`.map()`/`.filter()`/`.take()`/`.skip()`/`.enumerate()`/
+`.zip()`/`.sum()`/`.fold()`/`.collect()`. El fix de `unify`/`subst_type` es en la inferencia CORE (afecta
+toda llamada genérica) → verificado sin regresión: corpus 37/37, 38 web idénticos, 604 tests lib. Tests:
+`for_sobre_enumerate_destructura_la_tupla` (unit) + `build_native_iteradores_coinciden_con_la_vm`
+(integración, ahora sobre el `iterador.ray` completo). **B2 sin diferidos.**
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

@@ -404,11 +404,24 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
                 if f.name == "main" {
                     return Err(format!("spike: main fuera del subconjunto: {}", e));
                 }
-                // Una función no-main que no transpila se SALTA (no bloquea al programa que no la usa);
-                // pero si algo la llama, `rustc` fallará por la llamada colgante. `RAYLANG_TRANSPILE_DEBUG`
-                // reporta qué se salta y por qué → diagnóstico de la cola larga de builtins.
-                if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
-                    eprintln!("[transpile skip] {} — {}", f.name, e);
+                // Una función no-main cuyo CUERPO no transpila se emite como STUB que panica (con su firma):
+                // el programa COMPILA y, si el flujo real no la llama, corre igual que la VM. Si ni la firma
+                // es representable, se OMITE (última salida; una llamada colgante haría fallar rustc).
+                // `RAYLANG_TRANSPILE_DEBUG` reporta qué se convirtió en stub (u omitió) y por qué.
+                let mut sbuf = String::new();
+                match t.emit_stub(&mut sbuf, &rust_name, f) {
+                    Ok(()) => {
+                        out.push_str(&sbuf);
+                        out.push('\n');
+                        if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
+                            eprintln!("[transpile stub] {} — {}", f.name, e);
+                        }
+                    }
+                    Err(se) => {
+                        if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
+                            eprintln!("[transpile skip] {} — cuerpo: {} — firma: {}", f.name, e, se);
+                        }
+                    }
                 }
             }
         }
@@ -662,6 +675,31 @@ impl Transpiler {
         self.emit_block(out, &f.body)?;
         out.push('\n');
         self.scopes.pop();
+        self.tparams.clear();
+        Ok(())
+    }
+
+    /// Emite un STUB que panica, con la FIRMA declarada de `f`, cuando su CUERPO no transpila (usa algo
+    /// fuera del subconjunto: un primitivo TLS, `for` sobre iterador, etc.). Motivo: antes esas funciones
+    /// se OMITÍAN y sus llamadas quedaban colgantes → rustc fallaba **aunque el flujo real nunca las
+    /// llamara** (p. ej. `http_demo` habla HTTP plano pero arrastra `tls_connect`). Con el stub el programa
+    /// COMPILA; si nunca se alcanza, corre idéntico a la VM; si se alcanza, panica con un mensaje claro
+    /// (mejor que un error críptico de rustc). El tipo de retorno `!` de `panic!` encaja con cualquier
+    /// firma. Devuelve Err solo si ni la FIRMA es representable (raro) → el llamador vuelve a omitirla.
+    fn emit_stub(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
+        self.tparams = f.type_params.iter().cloned().collect();
+        let generics = generic_decl(&f.type_params);
+        let mut params = Vec::new();
+        for p in &f.params {
+            params.push(format!("mut {}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?));
+        }
+        let ret = rust_ty(&f.return_type, &self.enums, &self.tparams)?;
+        write!(
+            out,
+            "fn {}{}({}) -> {} {{ panic!(\"'{}' no está soportada en el binario nativo (transpilación a Rust)\") }}\n",
+            rust_name, generics, params.join(", "), ret, f.name
+        )
+        .unwrap();
         self.tparams.clear();
         Ok(())
     }
@@ -3199,6 +3237,25 @@ mod tests {
         assert!(rust.contains("Rc::<[u8]>::from(vec!["), "literal de bytes: {}", rust);
         assert!(rust.contains("impl RayShow for Rc<[u8]>"), "render hex: {}", rust);
         assert!(rust.contains("{:02x}"), "hex minúsculas: {}", rust);
+    }
+
+    #[test]
+    fn una_funcion_no_transpilable_queda_como_stub_que_panica() {
+        // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí `spawn` de una fn nombrada) se
+        // emite como STUB que panica, con su firma → el programa COMPILA; si el flujo real no la llama,
+        // corre igual que la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
+        let rust = transpile_src(
+            "fn worker() -> int { 0 }\n\
+             fn arranca() -> int { spawn(worker); 1 }\n\
+             fn main() -> int { print(42); 0 }",
+        );
+        assert!(
+            rust.contains("fn arranca() -> i64 { panic!("),
+            "arranca es un stub que panica: {}",
+            rust
+        );
+        // main y worker SÍ se transpilan normalmente.
+        assert!(rust.contains("fn ray_main()"), "main normal: {}", rust);
     }
 
     #[test]

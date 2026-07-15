@@ -353,6 +353,26 @@ arreglos`, `len_de_string_cuenta_caracteres`, `una_funcion_de_usuario_gana_a_un_
 `campo_funcion_se_muestra_como_marcador`) + 2 integración (`build_native_protobuf…`/`build_native_url…`
 nativo ≡ VM). 597 tests lib + corpus 37/37 intactos.
 
+#### Fase 45 — stubs que panican para funciones no transpilables (dead-code) — el mayor desbloqueo
+
+Antes, una función no-main que no transpilaba (usa un primitivo TLS, `for` sobre iterador, etc.) se
+**OMITÍA**, y sus llamadas quedaban **colgantes** → rustc fallaba **aunque el flujo real nunca la llamara**.
+Caso testigo: `http_demo` habla **HTTP plano** (ya soportado) pero importa el módulo `http`, que arrastra
+`std::net::tls_connect`; una sola referencia colgante a esa función tumbaba TODO el binario. **Fix**:
+`emit_stub` emite la función con su **firma declarada** y cuerpo `panic!(...)` (el `!` de `panic!` encaja
+con cualquier retorno). Así el programa **COMPILA**; si el flujo real no alcanza el código no soportado,
+corre **idéntico a la VM**; si lo alcanza, **panica con un mensaje claro** en runtime (mejor que un error
+críptico de rustc por llamada colgante). Si ni la firma es representable (raro), se omite como antes.
+**Impacto medido** (web-demos deterministas): **de 24 → 38 byte-idénticos**, **0 DIFF, 0 CRASH** (ninguno
+de los previamente-idénticos regresó → confirma que lo que se convierte en stub es genuinamente inalcanzable
+en los caminos deterministas). Los 14 nuevos son "servidores"/clientes self-contained que en realidad
+computan protocolo/encoding sin peer vivo: `http`/`http2`(×4)/`https`/`websocket`(+client)/`grpc_call`/
+`oauth2`/`dns`(+cache)/`redis`/`postgres`/`udp`. Tests: `una_funcion_no_transpilable_queda_como_stub_que_
+panica` (unit) + `build_native_http_con_tls_no_alcanzado_coincide_con_la_vm` (integración). Corpus 37/37
+intacto. Restan fuera del subconjunto en su **`main`** (el stub no aplica): `metrics_server_demo` (canal de
+struct no-Send), `udp_yield_demo` (`spawn` de fn nombrada), y por rustc: `framework`/`webserver`/
+`https_server` (bug de captura `t` en spawn + `ray_show` de un `[fn]`; + techo TLS de `webserver`/`https`).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

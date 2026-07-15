@@ -495,6 +495,28 @@ fn build_native_url_con_override_y_utf8_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_http_con_tls_no_alcanzado_coincide_con_la_vm() {
+    // `ray build --native` de un cliente HTTP: importa el módulo `http`, que trae funciones TLS
+    // (`std::net::tls_connect`) fuera del subconjunto. Antes rustc fallaba por la llamada colgante,
+    // aunque el demo habla HTTP PLANO y nunca alcanza TLS. Ahora la función no soportada se emite como
+    // stub que panica → compila, y como el flujo real no la llama, la salida ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native http: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/http_demo.ray");
+    let base = tmp("build_native_http");
+    let bin = base.join("http_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de http sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "http nativo ≡ VM (TLS no alcanzado)");
+}
+
+#[test]
 fn build_native_servidor_tcp_hace_eco() {
     // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
     // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.

@@ -336,9 +336,10 @@ fn build_native_signals_apagado_ordenado() {
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native signals ok\n{err}");
 
-    // Corre el binario, deja que procese el trabajo, envía SIGTERM (15) y comprueba el apagado ordenado.
+    // Corre el binario y le da tiempo de sobra a arrancar e instalar los handlers de señal (bajo carga
+    // paralela de tests el arranque puede tardar), luego envía SIGTERM (15) y comprueba el apagado ordenado.
     let mut child = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el nativo");
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    std::thread::sleep(std::time::Duration::from_millis(1500));
     let pid = child.id().to_string();
     let _ = Command::new("kill").args(["-TERM", &pid]).status();
     let out = child.wait_with_output().expect("espera al proceso");
@@ -381,6 +382,26 @@ fn build_native_canal_de_string_coincide_con_la_vm() {
         let native = Command::new(&bin).output().expect("corre el binario nativo");
         assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "nativo ≡ VM (canal de string)");
     }
+}
+
+#[test]
+fn build_native_release_produce_binario_correcto() {
+    // `ray build --native --release` usa el tier agresivo (opt3+lto+cgu1+target-cpu=native): compila más
+    // lento y no-portable, pero el binario da la MISMA salida que el default y la VM (solo cambia rustc).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native --release: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_release");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { print(2 + 3 * 4); 0 }\n").unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--release", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --release sale 0\nstdout={out}\nstderr={err}");
+    assert!(out.contains("release: opt3+lto+native"), "reporta el tier release\n{out}");
+    assert!(bin.is_file(), "el binario existe");
+    let native = Command::new(&bin).output().expect("corre el binario release");
+    assert_eq!(String::from_utf8_lossy(&native.stdout).trim(), "14", "2 + 3*4 = 14");
 }
 
 #[test]

@@ -676,6 +676,28 @@ por canal → error `canal/tarea de tipo no-Send`. Test de integración
 structs/arreglos/Map (mutables → el modelo thread-safe con sus hazards); `try_join`/`Selected`/`cancel`,
 cancelación M12.5.
 
+#### Fase 33 — tier de optimización `ray build --native --release` (medido)
+
+Optimización del BINARIO nativo, con el método **medir-primero**. Medición (best-of-6, sobre el binario
+transpilado):
+
+| flags de rustc | fibrec (cómputo) | wordcount (Map/alloc) | compilación |
+|----------------|-----------------|-----------------------|-------------|
+| `-O` (opt2, default) | 0.10 s | 0.10 s | 0.21 s |
+| `opt3 + lto=fat + codegen-units=1 + target-cpu=native` | 0.10 s | **0.09 s** | 1.83 s |
+
+**Conclusión**: los flags agresivos dan **~10 %** en cargas de asignación/Map (wordcount), **nada** en
+cómputo puro (fibrec — rustc ya lo deja óptimo en opt2, un solo archivo/crate → inlining completo), a
+cambio de **~9× de tiempo de compilación** y un binario **no portable** (features de la CPU del host).
+**PGO se DESCARTÓ** (como el NaN-boxing de P1): con `-Cprofile-generate`+entrenamiento+`llvm-profdata`+
+`-Cprofile-use`, wordcount quedó en 0.08 s **igual que sin PGO** — sin ganancia medible y con alta
+complejidad (requiere un run de entrenamiento con input representativo). Decisión de producto: un **tier**,
+como cargo dev/release. `ray build --native` → `-O` (rápido, portable, el mejor equilibrio para dev/deploy
+general); `ray build --native --release` → `opt3+lto+cgu1+target-cpu=native` (el ~10 % extra cuando importa,
+asumiendo compilación lenta y binario no portable). Ambos dan salida byte-idéntica (solo cambian los flags
+de rustc). Test de integración `build_native_release_produce_binario_correcto`. Ayuda + module-doc
+actualizados.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

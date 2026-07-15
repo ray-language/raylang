@@ -5,8 +5,9 @@
 //!   `ray new <nombre>`      — crea un proyecto nuevo (ray.toml + src/main.ray).
 //!   `ray run [archivo]`     — ejecuta (por defecto `src/main.ray`) en la VM (M35).
 //!   `ray build [archivo]`   — chequea y compila sin ejecutar (para CI); 0 ok / 65 error.
-//!                             con `--native [-o <salida>]` transpila a Rust y compila con `rustc -O`
-//!                             → binario nativo (P2.b, requiere `rustc` en el PATH).
+//!                             con `--native [-o <salida>] [--release]` transpila a Rust y compila con
+//!                             rustc → binario nativo (P2.b, requiere `rustc`). `--release` = opt3+lto+
+//!                             codegen-units=1+target-cpu=native (más lento de compilar, no portable).
 //!   `ray test [archivo]`    — corre las funciones `@test` (M10.1).
 //!   `ray fmt <archivo>`     — imprime la versión canónica por stdout (M29.2).
 //!   `ray lsp`               — arranca el Language Server (M10.2).
@@ -84,7 +85,7 @@ Usage: ray <subcommand> [options]
   new <name>      create a new project (ray.toml + src/main.ray)
   run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out]]
+  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release]]
   test [file]    run the @test functions [filter]
   add <name>[@req]  add a dependency from the index to ray.toml and download it
   remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
@@ -372,9 +373,10 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// `ray build [archivo]`: chequea y **compila** el programa sin ejecutarlo (útil para CI y
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
 fn cmd_build(args: &[String]) {
-    // `--native [-o <salida>]` (P2.b): transpila a Rust y lo compila con `rustc -O` → binario nativo.
-    // El resto de flags/archivo se pasan igual; el archivo es el primer no-flag.
+    // `--native [-o <salida>] [--release]` (P2.b): transpila a Rust y lo compila con rustc → binario
+    // nativo. El resto de flags/archivo se pasan igual; el archivo es el primer no-flag.
     let native = args.iter().any(|a| a == "--native");
+    let release = args.iter().any(|a| a == "--release");
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
     let file = args
         .iter()
@@ -385,7 +387,7 @@ fn cmd_build(args: &[String]) {
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
-        build_native(&path, output.as_deref());
+        build_native(&path, output.as_deref(), release);
         return;
     }
     match compiler::compile_program(&program) {
@@ -400,11 +402,18 @@ fn cmd_build(args: &[String]) {
     }
 }
 
-/// `ray build --native` (P2.b, transpilar-a-Rust): transpila el programa **ya chequeado** a Rust, lo
-/// escribe a un `.rs` temporal y lo compila con `rustc -O` → binario nativo. El nombre por defecto es el
-/// *stem* del archivo de entrada en el directorio actual; `-o <ruta>` lo cambia. Requiere `rustc` en el
+/// `ray build --native [--release]` (P2.b, transpilar-a-Rust): transpila el programa **ya chequeado** a
+/// Rust, lo escribe a un `.rs` temporal y lo compila con rustc → binario nativo. El nombre por defecto es
+/// el *stem* del archivo de entrada en el directorio actual; `-o <ruta>` lo cambia. Requiere `rustc` en el
 /// PATH. El programa se re-carga/re-chequea aquí (barato) para no cambiar la firma de `cmd_build`.
-fn build_native(path: &str, output: Option<&str>) {
+///
+/// **Tiers de optimización** (elegidos por medición — ver PERFORMANCE.md §P2 fase 33):
+/// - por defecto: `-O` (opt-level=2). Compila rápido (~0.2 s) y PORTABLE; el mejor equilibrio para dev.
+/// - `--release`: `opt-level=3 + lto=fat + codegen-units=1 + target-cpu=native`. ~10 % más rápido en
+///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
+///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
+///   medible + alta complejidad).
+fn build_native(path: &str, output: Option<&str>, release: bool) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
     let rust = match crate::transpile::transpile(&program) {
@@ -417,21 +426,30 @@ fn build_native(path: &str, output: Option<&str>) {
     // Nombre de salida: `-o`, o el stem del archivo de entrada.
     let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
     let out_bin = output.map(String::from).unwrap_or_else(|| stem.to_string());
-    // El `.rs` temporal va al directorio temporal del sistema (nombre = stem para trazabilidad).
-    let rs_path = std::env::temp_dir().join(format!("ray_native_{stem}.rs"));
+    // El `.rs` temporal va al directorio temporal del sistema. Incluye el PID para que dos `ray build
+    // --native` CONCURRENTES (o con archivos del mismo stem) no colisionen sobre el mismo temporal.
+    let rs_path = std::env::temp_dir().join(format!("ray_native_{stem}_{}.rs", process::id()));
     if let Err(e) = std::fs::write(&rs_path, rust) {
         eprintln!("native build: no se pudo escribir el Rust temporal: {e}");
         process::exit(65);
     }
-    // `rustc -O -A warnings <tmp.rs> -o <out>` (silencia los warnings de estilo del código generado).
+    // Flags de rustc según el tier (`-A warnings` silencia los warnings de estilo del código generado).
+    let flags: &[&str] = if release {
+        &["-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1", "-C", "target-cpu=native", "-A", "warnings"]
+    } else {
+        &["-O", "-A", "warnings"]
+    };
     let status = process::Command::new("rustc")
-        .args(["-O", "-A", "warnings"])
+        .args(flags)
         .arg(&rs_path)
         .arg("-o")
         .arg(&out_bin)
         .status();
     match status {
-        Ok(s) if s.success() => println!("ok: binario nativo '{out_bin}'"),
+        Ok(s) if s.success() => {
+            let tier = if release { " (release: opt3+lto+native)" } else { "" };
+            println!("ok: binario nativo '{out_bin}'{tier}");
+        }
         Ok(s) => {
             eprintln!("native build: rustc falló (código {})", s.code().unwrap_or(-1));
             process::exit(65);

@@ -284,6 +284,28 @@ nativo, sin deps. Es un fix de RUNTIME (esos demos ya *compilaban*), no cambia e
 CORRECCIÓN. Test de regresión `push_que_lee_el_mismo_arreglo_no_doble_borra`. Corpus 37/37 intacto.
 Diferido: crypto vía `ring` (ed25519, aead con nonce del SO), TLS.
 
+#### Fase 42 — enteros con tamaño (`u64`) sin corromper el prelude (colisión de posiciones)
+
+`poly1305_demo` (MAC con aritmética `u64`, *showcase* de enteros con tamaño) COMPILABA mal: `rustc`
+rechazaba `string#hash` del prelude (`let mut h = (17i64 as u64)` mezclado con `i64`). Causa raíz —
+**colisión de posiciones**, misma clase que el bug de L3 (loader): la lowering de literales uint del
+checker (M28.3b) indexa por `(línea, col)` sobre el programa **fusionado**. El loader ya da a cada
+módulo de usuario una **banda de líneas disjunta** (`shift_program`), pero **el prelude se inyecta
+DESPUÉS con sus líneas propias** (1..). Un literal `u64` de `poly1305.ray` (desplazado) caía en la misma
+`(260, 17)` que el `17` de `var h = 17` de `string#hash` del prelude → la lowering por posición lo
+envolvía como `u64`. El transpiler lo destapó porque **emite TODAS las funciones** (incluidas las
+muertas: el `string#hash` del prelude nunca se llama en poly1305, así la VM lo toleraba). Era además un
+bug latente en la VM/intérprete: si `string#hash` se usara (p. ej. `Set<string>`) con la colisión,
+hashearía con semántica `u64` errónea. **Fix**: el prelude se desplaza a su **banda disjunta**
+(`prelude::LINE_BASE = 1e9`, `loader::shift_program` hecho `pub`) al parsearse → posiciones globalmente
+únicas; arregla de golpe TODAS las lowerings por posición (uint + UFCS/dicts/`dyn` de M9). Con esto
+**poly1305 transpila byte-idéntico a la VM** → **todo el crypto en raylang puro nativo** (19/19 de los
+web-demos deterministas no-servidor: sha256/512, hmac, chacha20(+poly1305 AEAD), ed25519, poly1305,
+scram, sigv4). Tests: `el_prelude_va_en_su_banda_de_lineas_disjunta` (invariante) +
+`build_native_enteros_con_tamano_no_corrompen_el_prelude` (poly1305 nativo ≡ VM). 591 tests lib + corpus
+37/37 intactos. Restan sin transpilar (no crypto): json/jwt/jwt_eddsa/protobuf/framework (rustc) y
+url_demo (emit).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

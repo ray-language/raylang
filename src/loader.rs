@@ -341,7 +341,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
 /// (de las que dependen las pre-pasadas del checker, p. ej. que un `Call` comparta posición con su
 /// receptor) y, con bandas disjuntas, vuelve las posiciones **únicas entre módulos**. Con `delta`
 /// 0 es un no-op (el caso de un solo archivo).
-fn shift_program(program: &mut Program, delta: usize) {
+pub fn shift_program(program: &mut Program, delta: usize) {
     if delta == 0 {
         return;
     }

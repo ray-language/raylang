@@ -405,6 +405,31 @@ fn build_native_release_produce_binario_correcto() {
 }
 
 #[test]
+fn build_native_enteros_con_tamano_no_corrompen_el_prelude() {
+    // Regresión: un módulo con literales `u64` (aquí `poly1305`, importado) se desplaza a una banda de
+    // líneas por el loader; el prelude se inyecta con SUS líneas. Antes del fix, un literal u64 podía caer
+    // en la misma (línea, col) que un literal `int` del prelude (p. ej. el `17` de `string#hash`), y la
+    // lowering de uint por posición lo envolvía como u64 → `string#hash` no compilaba en Rust. Con el
+    // prelude en su banda disjunta, esto no ocurre: poly1305 (crypto con u64) transpila y ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native poly1305: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/poly1305_demo.ray");
+    let base = tmp("build_native_u64");
+    let bin = base.join("poly_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de poly1305 sale 0\nstdout={out}\nstderr={err}");
+    assert!(bin.is_file(), "el binario nativo existe");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "poly1305 nativo ≡ VM");
+    assert!(!native_out.trim().is_empty(), "el MAC no es vacío\n{native_out}");
+}
+
+#[test]
 fn build_native_servidor_tcp_hace_eco() {
     // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
     // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.

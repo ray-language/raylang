@@ -424,3 +424,45 @@ fn native_io_de_entrada_coincide_con_la_vm() {
     assert_eq!(nat_out, vm_out, "nativo ≡ VM");
     assert_eq!(nat_out, "file: contenido de archivo\nin: hola\nn: 42\n", "salida esperada");
 }
+
+/// P2.b: handles de archivo transpilables (open/write/read_line/close). Compila con `ray build --native`
+/// un programa que escribe con un handle y lo relee línea a línea, y comprueba nativo ≡ VM. Requiere rustc.
+#[test]
+fn native_handles_de_archivo_coinciden_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_handles: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_handles");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let target = dir.join("out.txt");
+    let src = format!(
+        "import std/fs;\n\
+         fn main() -> int {{\n\
+           let h = match (fs.open(\"{p}\", \"w\")) {{ Result.Ok(x) => x, Result.Err(e) => 0 - 1 }};\n\
+           match (fs.write(h, \"uno\\ndos\\n\")) {{ Result.Ok(n) => print(\"w: \" + to_string(n)), Result.Err(e) => print(e) }}\n\
+           print(\"c: \" + to_string(close(h)));\n\
+           let r = match (fs.open(\"{p}\", \"r\")) {{ Result.Ok(x) => x, Result.Err(e) => 0 - 1 }};\n\
+           var go = true;\n\
+           while (go) {{ match (fs.read_line(r)) {{ Option.Some(l) => print(\"r: \" + l), Option.None => {{ go = false; }} }} }}\n\
+           let _ = close(r);\n\
+           0\n\
+         }}\n",
+        p = target.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let _ = std::fs::remove_file(&target);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    let _ = std::fs::remove_file(&target);
+    let (vm, _e, _c) = run_io("native_handles_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    assert_eq!(nat, "w: 8\nc: 0\nr: uno\nr: dos\n", "salida esperada");
+}

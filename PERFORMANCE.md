@@ -500,6 +500,22 @@ línea de stdin, quita `\n`/`\r` finales, `None` en EOF — byte-idéntico a la 
 stdin/archivo) en `tests/io_cli.rs::native_io_de_entrada_coincide_con_la_vm`. Diferido (aún fuera):
 handles de archivo (`open`/`read_line`/`write`/`close`), `env`/`args`-de-entorno, `list_dir`/`remove_file`.
 
+#### Fase 22 — handles de archivo (`open`/`read_line`/`write`/`close`)
+
+I/O bufferizada con handles (M11.8): un servidor/parser que streamea un archivo. `open`/`read_line`/`write`
+viven en `std/fs` (cualificados `std::fs::*`, por `emit_fs`); `close(h)` es un builtin pelado ad-hoc (para
+un handle de archivo, int → 0). La VM guarda los archivos abiertos en un **registro global de proceso**
+(`Mutex<HashMap<i64, OpenHandle>>` + contador); el transpilador **emite el mismo registro** en Rust
+(`__RayHandle` = Reader(BufReader)/Writer(File), `__RayReg` tras `Mutex`/`OnceLock`, `__ray_open/read_line/
+write/close`) — mensajes de error **byte-idénticos** a la VM (`invalid open mode…`, `invalid file handle:
+N`, `the handle is open for reading, not writing`). El registro se **anexa al final** del `.rs` (Rust
+permite items top-level en cualquier orden) y **solo si el programa usa handles** (flag `needs_handles`,
+activado al emitirlos) → los programas sin handles no lo arrastran. `open`→`Result<int,string>`,
+`read_line`→`Option<string>` (bufferizada, sin `\n`), `write`→`Result<int,string>` (nº de caracteres,
+como `s.len()` de la VM), `close`→`int` (0). Verificado nativo ≡ VM (escribir + releer línea a línea + los
+3 casos de error) por subproceso en `tests/io_cli.rs::native_handles_de_archivo_coinciden_con_la_vm`.
+Diferido (aún fuera): `env`/`args`-de-entorno no determinista, `list_dir`/`remove_file`, sockets/TLS.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

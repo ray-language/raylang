@@ -150,6 +150,9 @@ struct Transpiler {
     /// Parámetros de tipo de la función genérica en curso (p. ej. `{T, U}`): un `Struct(n)` con `n` aquí
     /// es un tipo VARIABLE → se emite como el genérico `n` de Rust (no como un struct de usuario).
     tparams: std::collections::HashSet<String>,
+    /// ¿El programa usa handles de archivo (`open`/`read_line`/`write`/`close`)? Se activa al emitirlos;
+    /// si es cierto, se anexa al final el registro global de handles (espejo del `FileRegistry` de la VM).
+    needs_handles: bool,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -196,6 +199,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         consts,
         trait_method_sigs,
         tparams: std::collections::HashSet::new(),
+        needs_handles: false,
     };
 
     let mut out = String::new();
@@ -339,6 +343,39 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         out.push_str("    ray_main();\n");
     }
     out.push_str("}\n");
+    // Registro global de handles de archivo (M11.8), solo si el programa los usa. Rust permite items
+    // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +
+    // mapa handle→archivo tras un Mutex/OnceLock; los mensajes de error son byte-idénticos a la VM.
+    if t.needs_handles {
+        out.push_str(concat!(
+            "enum __RayHandle { Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File) }\n",
+            "struct __RayReg { next: i64, open: __RayMap<i64, __RayHandle> }\n",
+            "fn __ray_reg() -> &'static std::sync::Mutex<__RayReg> {\n",
+            "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
+            "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::new() }))\n}\n",
+            "fn __ray_open(path: &str, mode: &str) -> Result<i64, Rc<str>> {\n",
+            "    let h = match mode {\n",
+            "        \"r\" => std::fs::File::open(path).map(|f| __RayHandle::Reader(std::io::BufReader::new(f))),\n",
+            "        \"w\" => std::fs::File::create(path).map(__RayHandle::Writer),\n",
+            "        \"a\" => std::fs::OpenOptions::new().create(true).append(true).open(path).map(__RayHandle::Writer),\n",
+            "        _ => return Err(Rc::<str>::from(format!(\"invalid open mode: '{}' (use \\\"r\\\", \\\"w\\\" or \\\"a\\\")\", mode))),\n",
+            "    }.map_err(|e| Rc::<str>::from(e.to_string()))?;\n",
+            "    let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); Ok(id)\n}\n",
+            "fn __ray_read_line(h: i64) -> Option<Rc<str>> {\n",
+            "    use std::io::BufRead; let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Reader(r)) => { let mut line = String::new(); match r.read_line(&mut line) {\n",
+            "            Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(line.trim_end_matches(['\\n', '\\r']))) } }\n",
+            "        _ => None } }\n",
+            "fn __ray_write(h: i64, s: &str) -> Result<i64, Rc<str>> {\n",
+            "    use std::io::Write; let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Writer(f)) => f.write_all(s.as_bytes()).map(|_| s.chars().count() as i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
+            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
+            "fn __ray_close(h: i64) -> i64 { __ray_reg().lock().unwrap().open.remove(&h); 0 }\n",
+        ));
+    }
     Ok(out)
 }
 
@@ -1171,6 +1208,30 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").exists()");
             }
+            // Handles de archivo (M11.8): un registro global (espejo del FileRegistry de la VM). open →
+            // Result<int,string>, read_line → Option<string> (bufferizada, sin '\n'), write → Result<int,string>.
+            "open" => {
+                self.needs_handles = true;
+                out.push_str("__ray_open(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "read_line" => {
+                self.needs_handles = true;
+                out.push_str("__ray_read_line(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "write" => {
+                self.needs_handles = true;
+                out.push_str("__ray_write(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             _ => return Err(format!("spike: std::fs::{} no soportada", ffn)),
         }
         Ok(())
@@ -1406,6 +1467,14 @@ impl Transpiler {
                      { Ok(0) | Err(_) => None, Ok(_) => __s.trim_end_matches(['\\n', '\\r']).parse::<i64>().ok() } }",
                 );
             }
+            // `close(h) -> int` (builtin pelado, ad-hoc): un handle de archivo (int) → lo quita del registro
+            // y devuelve 0 (el caso de canal es concurrencia, fuera del subconjunto).
+            "close" => {
+                self.needs_handles = true;
+                out.push_str("__ray_close(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "unwrap_or" => {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".unwrap_or(");
@@ -1541,7 +1610,8 @@ impl Transpiler {
                 if let Some(ffn) = n.strip_prefix("std::fs::") {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
-                        "write_file" => Type::Enum("Result".into(), vec![Type::Int, Type::String]),
+                        "write_file" | "open" | "write" => Type::Enum("Result".into(), vec![Type::Int, Type::String]),
+                        "read_line" => opt_of(Type::String),
                         "exists" => Type::Bool,
                         other => return Err(format!("spike: std::fs::{} no soportada", other)),
                     });
@@ -1560,6 +1630,7 @@ impl Transpiler {
                     // I/O de entrada del prelude: input → Option<string>; read_int → Option<int>.
                     "input" => opt_of(Type::String),
                     "read_int" => opt_of(Type::Int),
+                    "close" => Type::Int, // close(h) de un handle de archivo → 0 (ad-hoc; canal es concurrencia)
                     "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
                     "split" => Type::Array(Box::new(Type::String)),
                     "args" => Type::Array(Box::new(Type::String)),

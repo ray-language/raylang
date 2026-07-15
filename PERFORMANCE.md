@@ -624,6 +624,22 @@ fire-and-forget (concurrencia.ray, sin scope) sigue funcionando (sin scope activ
 de integración `build_native_structured_concurrency_coincide_con_la_vm`. **Diferido**: `select` (M12.4),
 cancelación (M12.5); canales de tipos no-Send.
 
+#### Fase 30 — `select` sobre varios canales
+
+Tercer slice (M12.4): `select(chs: [Channel<T>]) -> int` → índice del PRIMER canal listo para recibir
+(cola no vacía ∨ cerrado). Runtime `__ray_select` = **poll con backoff** del índice menor listo (std no
+tiene un select multi-condvar; un `sleep(50µs)` entre rondas evita el busy-spin; el resultado es correcto).
+`select(chs)` → `__ray_select(&chs.borrow()[..])`. **Hallazgo importante** (verificado): el **orden** de
+`select` es inherentemente **no-determinista bajo paralelismo real** — la VM misma, en su default multicore,
+ya alterna entre `100 101 200 201` y `200 100 101 201` (solo `--deterministic` lo fija). Así que el nativo
+**no** casa byte-a-byte con una corrida única, pero SÍ el **invariante**: el multiset de valores
+`{100,101,200,201}`, el `total` (602) y el **exit code** (90 = 602&0xFF) — todos order-independientes.
+El test de integración `build_native_select_invariante_coincide_con_la_vm` verifica ese invariante (multiset
+ordenado + exit), no un orden fijo — honesto con la semántica. `examples/concurrency/select.ray` transpila.
+Corpus 37/37 intacto. El test `rechaza_` pasa a usar `signals()` (canal de señales del SO, M88.1). **Queda
+en concurrencia**: `signals()` (señales del SO — runtime de señales aparte), cancelación de hermanas M12.5
+(automática), `try_join`/`Selected<T>`/`cancel(t)` explícito; y canales de tipos no-Send.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

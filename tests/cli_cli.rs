@@ -265,6 +265,47 @@ fn build_native_structured_concurrency_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_select_invariante_coincide_con_la_vm() {
+    // `select` sobre varios canales: bajo paralelismo real el ORDEN de impresión es no-determinista (la
+    // VM multicore por default también varía), pero el INVARIANTE (multiset de valores + total + exit
+    // code) casa. El binario nativo recoge los 4 valores {100,101,200,201}, total 602, exit 90 (602&0xFF).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native select: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_select");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn src(ch: Channel<int>, base: int, k: int) { var i = 0; while (i < k) { send(ch, base + i); i = i + 1; } }\n\
+         fn main() -> int {\n\
+           let a: Channel<int> = Channel.new();\n\
+           let b: Channel<int> = Channel.new();\n\
+           spawn(fn() { src(a, 100, 2); });\n\
+           spawn(fn() { src(b, 200, 2); });\n\
+           let chs: [Channel<int>] = [a, b];\n\
+           var total = 0; var n = 0;\n\
+           while (n < 4) { let i = select(chs); match (recv(chs[i])) { Option.Some(v) => { print(v); total = total + v; }, Option.None => { } } n = n + 1; }\n\
+           print(total);\n\
+           total\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native select ok\n{err}");
+
+    // El binario, varias veces: el multiset ordenado y el exit code son invariantes (aunque el orden no).
+    for _ in 0..5 {
+        let out = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(out.status.code(), Some(90), "exit = 602 & 0xFF");
+        let s = String::from_utf8_lossy(&out.stdout).into_owned();
+        let mut lines: Vec<&str> = s.lines().collect();
+        lines.sort();
+        assert_eq!(lines, vec!["100", "101", "200", "201", "602"], "multiset de valores + total");
+    }
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

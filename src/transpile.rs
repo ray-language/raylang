@@ -440,6 +440,18 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n",
             "    for j in frame { j(); }\n",
             "    r\n}\n",
+            // select (M12.4): espera a que algún canal de la lista esté LISTO para recibir (cola no vacía
+            // ∨ cerrado) y devuelve el índice del PRIMERO listo (menor índice → determinista en el índice;
+            // el ORDEN entre canales listos a la vez depende del scheduling, como la VM multicore por
+            // default). Poll con backoff (std no tiene un select multi-condvar; el resultado es correcto).
+            "fn __ray_select<T>(chs: &[__RayChan<T>]) -> i64 {\n",
+            "    loop {\n",
+            "        for (i, ch) in chs.iter().enumerate() {\n",
+            "            let (m, _) = &*ch.inner; let st = m.lock().unwrap();\n",
+            "            if !st.q.is_empty() || st.closed { return i as i64; }\n",
+            "        }\n",
+            "        std::thread::sleep(std::time::Duration::from_micros(50));\n",
+            "    }\n}\n",
         ));
     }
     Ok(out)
@@ -1742,6 +1754,13 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".recv()");
             }
+            // select([chs]) -> int: índice del primer canal listo para recibir (poll del índice menor).
+            "select" => {
+                self.needs_concurrency = true;
+                out.push_str("__ray_select(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow()[..])");
+            }
             // spawn(fn()->T {...}) → __ray_spawn(move || {...}) → Task<T> (JoinHandle envuelto, registrado
             // en el scope activo). Solo un FnExpr literal (captura solo valores Send, p. ej. canales).
             // scope(fn()->R {...}) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro.
@@ -1941,6 +1960,7 @@ impl Transpiler {
                         other => return Err(format!("spike: recv sobre {:?}", other)),
                     },
                     "send" => Type::Unit,
+                    "select" => Type::Int, // índice del canal listo
                     // spawn(fn()->T) → Task<T>; scope(fn()->R) → R (el tipo de retorno de la función anónima).
                     "spawn" | "scope" => {
                         let ret = match recv0.map(|e| &e.kind) {
@@ -2623,6 +2643,17 @@ mod tests {
     }
 
     #[test]
+    fn transpila_select() {
+        // select([chs]) -> int (M12.4): índice del primer canal listo (poll del índice menor).
+        let rust = transpile_src(
+            "fn main() -> int { let a: Channel<int> = Channel.new(); let b: Channel<int> = Channel.new(); \
+             let chs: [Channel<int>] = [a, b]; select(chs) }",
+        );
+        assert!(rust.contains("__ray_select(&"), "select → __ray_select: {}", rust);
+        assert!(rust.contains("fn __ray_select<T>"), "runtime de select emitido: {}", rust);
+    }
+
+    #[test]
     fn transpila_structured_concurrency() {
         // Task/join/scope (M12.3): spawn → __ray_spawn (devuelve Task); join(t) → t.join(); scope → __ray_scope.
         let rust = transpile_src(
@@ -2760,9 +2791,9 @@ mod tests {
 
     #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `select` (concurrencia avanzada, aún fuera del subconjunto) → no transpilable.
+        // un `main` con `signals()` (canal de señales del SO, aún fuera del subconjunto) → no transpilable.
         let tokens = crate::lexer::lex(
-            "fn main() { let c: Channel<int> = Channel.new(); let i = select([c]); print(i); }",
+            "fn main() { let sig: Channel<int> = signals(); match (recv(sig)) { Option.Some(s) => print(s), Option.None => print(0) } }",
         )
         .unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();

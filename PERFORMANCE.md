@@ -323,6 +323,36 @@ no-servidor. Tests: `emite_rayshow_para_map` (unit) + `build_native_json_con_map
 (json nativo ≡ VM). Corpus 37/37 intacto. Restan (no JSON/crypto): `framework`/`protobuf` (rustc),
 `url_demo` (emit).
 
+#### Fase 44 — protobuf + url (concat de bytes/arreglos, override de builtin, `len` por caracteres, Map de función, `<fn>`)
+
+Cerrando el lote web. Cinco arreglos, cada uno **verificado aislado contra la VM** (no solo que compile):
+- **Concat de bytes y arreglos** (`a + b`): caían al `+` genérico, que Rust rechaza (`Rc<[u8]>`/`Vec` no
+  tienen `Add`). Bytes → `Rc::<[u8]>::from([&*a, &*b].concat())`; arreglos → arreglo nuevo con los
+  elementos clonados de ambos. Desbloquea **`protobuf_demo`** (codec lleno de concat de bytes). ✓ ≡ VM.
+- **Override de un builtin del prelude**: si el usuario **redefine** una función homónima de un builtin
+  manejado (p. ej. su propio `get_or(m, k)` de 2 args), antes se descartaba como si fuera el del prelude
+  → la llamada quedaba sin destino (`'get_or' no soportada`). Ahora `skip_fn_def` solo salta la versión
+  del **prelude** (`line >= LINE_BASE`); una redefinición de usuario (línea normal) se emite. Los `std::*`
+  (con `::`) siguen saltándose siempre.
+- **`len(string)` cuenta CARACTERES, no bytes** (`.chars().count()`): con UTF-8 multibyte (`más`, `ñ`) el
+  `.len()` en bytes hacía que `while i < len { s[i] }` se pasara e indexara fuera de rango (panic). Bytes
+  sí cuenta octetos.
+  Estos dos desbloquean **`url_demo`** (redefine `get_or` + recorre strings UTF-8). ✓ ≡ VM.
+- **`get`/`remove`/… sobre un Map de una FUNCIÓN**: `type_of` devolvía el retorno guardado **sin
+  normalizar** → `get(mkmap(), k)` veía `Struct("Map")` (no `Type::Map`) y hacía silent-skip. Se
+  normalizan los tipos de la firma (`normalize_type`) al registrar `self.funcs`. Win general.
+- **Campo/payload de tipo función → `<fn>`**: el `RayShow` generado de un struct/enum con un campo función
+  llamaba `.ray_show()` sobre `Rc<dyn Fn…>` (inexistente). Ahora esos campos se renderizan con el literal
+  `<fn>` (como el Display del runtime; las firmas variadas impiden un impl único). Win general.
+
+Resultado: **24/25 web-demos deterministas no-servidor byte-idénticos** (0 DIFF, 0 CRASH). Único restante:
+**`framework_demo`** — **techo estructural TLS**: usa `std::net::tls_accept`/`tls_connect` (rustls, crate
+externo) → imposible en un `.rs` autónomo, como la nota TLS/ring. (Sus sub-gaps residuales —`ray_show`
+de un `[fn]`, llamada a un handler-closure— quedan tras ese techo.) Tests: 4 unit (`concat_de_bytes_y_
+arreglos`, `len_de_string_cuenta_caracteres`, `una_funcion_de_usuario_gana_a_un_builtin_del_prelude`,
+`campo_funcion_se_muestra_como_marcador`) + 2 integración (`build_native_protobuf…`/`build_native_url…`
+nativo ≡ VM). 597 tests lib + corpus 37/37 intactos.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

@@ -453,6 +453,48 @@ fn build_native_json_con_map_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_protobuf_con_concat_de_bytes_coincide_con_la_vm() {
+    // `ray build --native` de un codec protobuf: usa concatenación de bytes (`b1 + b2`) por doquier.
+    // Antes rustc fallaba (`cannot add Rc<[u8]> to Rc<[u8]>`); ahora `a + b` baja a un concat de slices.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native protobuf: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/protobuf_demo.ray");
+    let base = tmp("build_native_protobuf");
+    let bin = base.join("pb_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de protobuf sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "protobuf nativo ≡ VM");
+}
+
+#[test]
+fn build_native_url_con_override_y_utf8_coincide_con_la_vm() {
+    // `ray build --native` de un codec URL: (1) redefine `get_or` (2 args) — el builtin del prelude no debe
+    // taparlo; (2) recorre strings con `len`/`s[i]` sobre UTF-8 multibyte (`más`, `ñ`) — `len` debe contar
+    // CARACTERES, no bytes. Ambos eran bugs; la salida (encode/decode) debe casar con la VM byte a byte.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native url: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/url_demo.ray");
+    let base = tmp("build_native_url");
+    let bin = base.join("url_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de url sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "url nativo ≡ VM");
+    assert!(native_out.contains("hola mundo & más"), "decodifica UTF-8\n{native_out}");
+}
+
+#[test]
 fn build_native_servidor_tcp_hace_eco() {
     // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
     // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.

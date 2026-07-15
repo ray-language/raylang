@@ -134,6 +134,22 @@ fn is_handled_builtin(name: &str) -> bool {
     )
 }
 
+/// ¿Se salta la DEFINICIÓN de esta función al registrarla/emitirla? Sí para las sintéticas (`__`),
+/// los impls del prelude (`int#eq`…) y los builtins manejados. Matiz del override: un builtin con `::`
+/// (`std::fs::*`) envuelve un primitivo → siempre se salta; un builtin del prelude de nombre pelado
+/// (`map`/`get_or`/`sort`…) se salta SOLO si viene del prelude (`line >= LINE_BASE`). Si el usuario lo
+/// **redefine** (línea de usuario, por debajo de la banda del prelude), es una función de usuario y debe
+/// emitirse (override), o su llamada quedaría sin destino (p. ej. un `get_or(m, k)` de 2 args propio).
+fn skip_fn_def(f: &Function) -> bool {
+    if f.name.starts_with("__") || is_prelude_impl(&f.name) {
+        return true;
+    }
+    if is_handled_builtin(&f.name) {
+        return f.name.contains("::") || f.line >= crate::prelude::LINE_BASE;
+    }
+    false
+}
+
 /// ¿Es un tipo primitivo que implementa `Display` en Rust (i64/f64/bool/char/Rc<str>)? Los demás
 /// (bytes, struct, enum, array, Map, tupla, función) no → su `to_string` debe pasar por `ray_show`.
 fn is_display_primitive(t: &Type) -> bool {
@@ -195,10 +211,17 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
-        if f.name.starts_with("__") || is_handled_builtin(&f.name) || is_prelude_impl(&f.name) {
+        if skip_fn_def(f) {
             continue;
         }
-        funcs.insert(f.name.clone(), FnSig { params: f.params.iter().map(|p| p.ty.clone()).collect(), ret: f.return_type.clone(), tparams: f.type_params.clone() });
+        // Se NORMALIZAN los tipos de la firma (Struct("Map"/"Channel"/"Task"/"Option"/"Result") → su
+        // variante propia): el parser deja `Map<K,V>` como `Struct("Map", …)`, y `type_of` de una llamada
+        // devuelve el retorno guardado → sin normalizar, `get(mkmap(), k)` veía `Struct("Map")` y fallaba.
+        funcs.insert(f.name.clone(), FnSig {
+            params: f.params.iter().map(|p| normalize_type(&p.ty)).collect(),
+            ret: normalize_type(&f.return_type),
+            tparams: f.type_params.clone(),
+        });
     }
     // Enums de USUARIO (incl. genéricos). Option/Result se excluyen: son los nativos de Rust, no se emiten.
     let enums: std::collections::HashSet<String> =
@@ -363,7 +386,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     let mut main_ret_int = false;
     let mut main_seen = false;
     for f in &prog.functions {
-        if f.name.starts_with("__") || is_handled_builtin(&f.name) || is_prelude_impl(&f.name) {
+        if skip_fn_def(f) {
             continue;
         }
         let rust_name = if f.name == "main" { "ray_main".to_string() } else { mangle(&f.name) };
@@ -1004,6 +1027,21 @@ impl Transpiler {
                     let mut operands = Vec::new();
                     self.flatten_concat(e, &mut operands)?;
                     self.emit_concat(out, &operands)?;
+                } else if matches!(op, BinaryOp::Add) && matches!(self.type_of(left)?, Type::Bytes) {
+                    // bytes: `a + b` concatena los dos slices en un Rc<[u8]> nuevo (como `Value::Bytes` +).
+                    out.push_str("Rc::<[u8]>::from([&*");
+                    self.emit_expr(out, left)?;
+                    out.push_str(", &*");
+                    self.emit_expr(out, right)?;
+                    out.push_str("].concat())");
+                } else if matches!(op, BinaryOp::Add) && matches!(self.type_of(left)?, Type::Array(_)) {
+                    // arreglos (M11.7b): `a + b` es un arreglo NUEVO con los elementos (clonados) de ambos.
+                    // Dos `.borrow()` compartidos coexisten (incl. `a + a`); el `clone()` libera el primero.
+                    out.push_str("{ let mut __v = ");
+                    self.emit_expr(out, left)?;
+                    out.push_str(".borrow().clone(); __v.extend(");
+                    self.emit_expr(out, right)?;
+                    out.push_str(".borrow().iter().cloned()); Rc::new(std::cell::RefCell::new(__v)) }");
                 } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                     && matches!(self.type_of(left)?, Type::UInt(_))
                 {
@@ -1265,12 +1303,18 @@ impl Transpiler {
             let sm = mangle(&s.name);
             let mut fmt = format!("{} {{{{ ", s.name);
             let mut args = String::new();
-            for (i, (fname, _)) in s.fields.iter().enumerate() {
+            for (i, (fname, fty)) in s.fields.iter().enumerate() {
                 if i > 0 {
                     fmt.push_str(", ");
                 }
                 write!(fmt, "{}: {{}}", fname).unwrap();
-                write!(args, ", __b.{}.ray_show()", fname).unwrap();
+                // Un campo de tipo función se muestra como `<fn>` (como el Display del runtime): los tipos
+                // función tienen firmas variadas → no hay un `impl RayShow` único; se renderiza el literal.
+                if matches!(normalize_type(fty), Type::Fn(_, _)) {
+                    write!(args, ", \"<fn>\"").unwrap();
+                } else {
+                    write!(args, ", __b.{}.ray_show()", fname).unwrap();
+                }
             }
             fmt.push_str(" }}");
             writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __b = self.borrow(); format!(\"{}\"{}) }} }}", gens, sm, sfx, fmt, args).unwrap();
@@ -1291,12 +1335,17 @@ impl Transpiler {
                     let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__p{}", i)).collect();
                     let mut fmt = format!("{}.{}(", e.name, v.name);
                     let mut args = String::new();
-                    for (i, _) in v.payload.iter().enumerate() {
+                    for (i, pty) in v.payload.iter().enumerate() {
                         if i > 0 {
                             fmt.push_str(", ");
                         }
                         fmt.push_str("{}");
-                        write!(args, ", {}.ray_show()", binds[i]).unwrap();
+                        // Payload de tipo función → `<fn>` literal (como en los campos de struct).
+                        if matches!(normalize_type(pty), Type::Fn(_, _)) {
+                            write!(args, ", \"<fn>\"").unwrap();
+                        } else {
+                            write!(args, ", {}.ray_show()", binds[i]).unwrap();
+                        }
                     }
                     fmt.push(')');
                     writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", em, v.name, binds.join(", "), fmt, args).unwrap();
@@ -1982,6 +2031,10 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 match self.type_of(eff[0])? {
                     Type::Array(_) | Type::Map(_, _) => out.push_str(".borrow().len() as i64)"),
+                    // string: `len` cuenta CARACTERES (como la VM), no bytes — clave con UTF-8 multibyte
+                    // (`más`, `ñ`): usar `.len()` (bytes) haría que `while i < len` sobre-itere `s[i]`.
+                    Type::String => out.push_str(".chars().count() as i64)"),
+                    // bytes: `len` es el nº de octetos → `.len()` es correcto.
                     _ => out.push_str(".len() as i64)"),
                 }
             }
@@ -3146,6 +3199,49 @@ mod tests {
         assert!(rust.contains("Rc::<[u8]>::from(vec!["), "literal de bytes: {}", rust);
         assert!(rust.contains("impl RayShow for Rc<[u8]>"), "render hex: {}", rust);
         assert!(rust.contains("{:02x}"), "hex minúsculas: {}", rust);
+    }
+
+    #[test]
+    fn concat_de_bytes_y_arreglos() {
+        // `a + b` para bytes → concat de slices en un Rc<[u8]> nuevo; para arreglos → arreglo nuevo con
+        // los elementos de ambos. Antes caían al `+` genérico, que Rust rechaza (Rc<[u8]>/Vec no tienen Add).
+        let by = transpile_src(
+            "fn main() { let a = \"x\".to_bytes(); let b = \"y\".to_bytes(); print(to_string(a + b)); }",
+        );
+        assert!(by.contains("Rc::<[u8]>::from([&*"), "concat de bytes: {}", by);
+        let ar = transpile_src(
+            "fn main() { let a = [1, 2]; let b = [3]; let c = a + b; print(c.len()); }",
+        );
+        assert!(ar.contains(".borrow().clone(); __v.extend("), "concat de arreglos: {}", ar);
+    }
+
+    #[test]
+    fn len_de_string_cuenta_caracteres() {
+        // `len(string)` = nº de CARACTERES (como la VM), no bytes → `.chars().count()` (clave con UTF-8).
+        let rust = transpile_src("fn main() { let s = \"ab\"; print(s.len()); }");
+        assert!(rust.contains(".chars().count() as i64"), "len de string por caracteres: {}", rust);
+    }
+
+    #[test]
+    fn una_funcion_de_usuario_gana_a_un_builtin_del_prelude() {
+        // Si el usuario define su propio `get_or` (aquí 2 args), NO se descarta como el builtin del prelude
+        // (que está en LINE_BASE): se emite y su llamada baja a `get_or(...)` ordinario (override).
+        let rust = transpile_src(
+            "fn get_or(m: Map<string, int>, k: string) -> int { match (get(m, k)) { Option.Some(v) => v, Option.None => 0 } }\n\
+             fn main() { var m: Map<string, int> = Map.new(); m.insert(\"a\", 1); print(get_or(m, \"a\")); }",
+        );
+        assert!(rust.contains("fn get_or("), "la fn get_or del usuario se emite: {}", rust);
+    }
+
+    #[test]
+    fn campo_funcion_se_muestra_como_marcador() {
+        // Un campo/payload de tipo función se renderiza `<fn>` (como el Display del runtime), no vía
+        // `.ray_show()` (que no existe para `Rc<dyn Fn…>`).
+        let rust = transpile_src(
+            "struct Bx { f: fn(int) -> int, n: int }\n\
+             fn main() { print(Bx { f: fn(x: int) -> int { x }, n: 1 }); }",
+        );
+        assert!(rust.contains("\"<fn>\""), "campo función como <fn>: {}", rust);
     }
 
     #[test]

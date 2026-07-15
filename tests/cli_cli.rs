@@ -145,6 +145,49 @@ fn build_native_de_un_proyecto_multi_modulo_es_un_solo_binario() {
 }
 
 #[test]
+fn build_native_env_y_args_coinciden_con_la_vm() {
+    // `ray build --native` de un programa que lee una variable de entorno (env) y los argumentos de
+    // línea de comandos (args): el binario nativo, con el MISMO entorno/args, produce la salida de la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native env/args: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_env");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           match (env(\"RAY_IT_VAR\")) { Option.Some(v) => print(\"env: \" + v), Option.None => print(\"env: none\") }\n\
+           let a = args();\n\
+           print(\"argc: \" + to_string(a.len()));\n\
+           if (a.len() > 0) { print(\"arg0: \" + a[0]); } else { print(\"arg0: -\"); }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native env/args ok\n{err}");
+
+    // Nativo: mismo env + args posicionales.
+    let native = Command::new(&bin)
+        .env("RAY_IT_VAR", "hola")
+        .args(["uno", "dos"])
+        .output()
+        .expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    // VM: `ray run prog.ray uno dos` con el mismo env (los args tras el archivo van a args()).
+    let vm = Command::new(BIN)
+        .args(["run", "prog.ray", "uno", "dos"])
+        .env("RAY_IT_VAR", "hola")
+        .current_dir(&base)
+        .output()
+        .expect("corre la VM");
+    let vm_out = String::from_utf8_lossy(&vm.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "nativo ≡ VM (env + args)");
+    assert_eq!(native_out, "env: hola\nargc: 2\narg0: uno\n", "salida esperada");
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

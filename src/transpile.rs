@@ -1610,6 +1610,12 @@ impl Transpiler {
                      { Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(__s.trim_end_matches(['\\n', '\\r']))) } }",
                 );
             }
+            // `env(name) -> Option<string>`: variable de entorno; None si no está (como la VM).
+            "env" => {
+                out.push_str("std::env::var(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").ok().map(Rc::<str>::from)");
+            }
             // `read_int() -> Option<int>` = input() + parse_int (composición del prelude).
             "read_int" => {
                 out.push_str(
@@ -1790,8 +1796,9 @@ impl Transpiler {
                     // Bytes: to_bytes → bytes; sub_bytes → bytes; from_utf8 → Result<string,string>.
                     "to_bytes" | "sub_bytes" => Type::Bytes,
                     "from_utf8" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
-                    // I/O de entrada del prelude: input → Option<string>; read_int → Option<int>.
-                    "input" => opt_of(Type::String),
+                    // I/O de entrada del prelude: input → Option<string>; read_int → Option<int>;
+                    // env → Option<string> (variable de entorno).
+                    "input" | "env" => opt_of(Type::String),
                     "read_int" => opt_of(Type::Int),
                     "close" => Type::Int, // close(h) de un handle de archivo → 0 (ad-hoc; canal es concurrencia)
                     "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
@@ -2443,6 +2450,16 @@ mod tests {
     }
 
     #[test]
+    fn transpila_env() {
+        // env(name) -> Option<string>: variable de entorno vía std::env::var(...).ok().
+        let rust = transpile_src(
+            "fn main() -> int { match (env(\"HOME\")) { Option.Some(v) => v.len(), Option.None => 0 } }",
+        );
+        assert!(rust.contains("std::env::var("), "env → std::env::var: {}", rust);
+        assert!(rust.contains(".ok().map(Rc::<str>::from)"), "→ Option<string>: {}", rust);
+    }
+
+    #[test]
     fn transpila_args() {
         // args() → arreglo de string (argv tras el binario); a[i] indexa, a.len() cuenta.
         let rust = transpile_src(
@@ -2535,8 +2552,8 @@ mod tests {
 
     #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `env()` (I/O de entorno, aún fuera del subconjunto) → sin `main` transpilable.
-        let tokens = crate::lexer::lex("fn main() { let e = env(\"PATH\"); print(e); }").unwrap();
+        // un `main` con `spawn` (concurrencia, aún fuera del subconjunto) → sin `main` transpilable.
+        let tokens = crate::lexer::lex("fn main() { spawn(fn() { print(\"x\"); }); }").unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());

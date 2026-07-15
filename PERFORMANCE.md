@@ -576,6 +576,17 @@ runtime). Verificado nativo ≡ VM (hex, sub_bytes, from_utf8, round-trip de arc
 `tests/io_cli.rs::native_io_binaria_coincide_con_la_vm`. Corpus 37/37 + multi-módulo intactos. Diferido:
 `env`/`args`-de-entorno, sockets/TLS.
 
+#### Fase 27 — `env` de entorno (cierra la I/O de proceso)
+
+`env(name) -> Option<string>` → `std::env::var(&*name).ok().map(Rc::<str>::from)` (`Some` si está,
+`None` si no — como la VM). Con `args()` (ya soportado, Fase 14) el **entorno de proceso queda cubierto**:
+un programa nativo lee las mismas variables de entorno y argumentos posicionales que bajo la VM. Determinista
+si el harness controla el entorno → test de integración `build_native_env_y_args_coinciden_con_la_vm`
+(`tests/cli_cli.rs`): el binario nativo con `RAY_IT_VAR=hola` y args `uno dos` da la salida de `ray run
+prog.ray uno dos` con el mismo env. El test `rechaza_` pasa a usar `spawn` (concurrencia, aún fuera). Corpus
+37/37 intacto. **Diferido restante**: concurrencia (`spawn`/canales → "cae a la VM" en v1) y red
+(sockets/TLS) — ambos requieren runtime propio, no I/O simple.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

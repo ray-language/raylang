@@ -289,6 +289,10 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         writeln!(out, "impl RayShow for {} {{ fn ray_show(&self) -> String {{ {} }} }}", ty, body).unwrap();
     }
     out.push_str("impl<T: RayShow> RayShow for Rc<std::cell::RefCell<Vec<T>>> { fn ray_show(&self) -> String { format!(\"[{}]\", self.borrow().iter().map(|__e| __e.ray_show()).collect::<Vec<_>>().join(\", \")) } }\n");
+    // Map: `Map{k: v, …}` con los pares (renderizados) ordenados como cadena, como el Display del
+    // runtime (`Value::Map`): determinista pese al HashMap. `print(map)` directo lo veta el checker,
+    // pero un struct/enum que CONTENGA un Map (p. ej. `Json.JObject`) sí se renderiza recursivamente.
+    out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>> { fn ray_show(&self) -> String { let __m = self.borrow(); let mut __parts: Vec<String> = __m.iter().map(|(__k, __v)| format!(\"{}: {}\", __k.ray_show(), __v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
     out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__v) => format!(\"Option.Some({})\", __v.ray_show()), None => \"Option.None\".to_string() } } }\n");
     out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__v) => format!(\"Result.Ok({})\", __v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
     // bytes → hex minúsculas sin separador ({:02x} por octeto), como la VM (bytes_to_hex).
@@ -3142,6 +3146,23 @@ mod tests {
         assert!(rust.contains("Rc::<[u8]>::from(vec!["), "literal de bytes: {}", rust);
         assert!(rust.contains("impl RayShow for Rc<[u8]>"), "render hex: {}", rust);
         assert!(rust.contains("{:02x}"), "hex minúsculas: {}", rust);
+    }
+
+    #[test]
+    fn emite_rayshow_para_map() {
+        // Un enum con una variante que lleva un Map (patrón `Json.JObject(Map<string, Json>)`): el
+        // RayShow generado para el enum recurre al del Map. Debe existir el impl de Map (`Map{k: v}`,
+        // pares ordenados) o rustc no compila el (posiblemente muerto) RayShow del enum.
+        let rust = transpile_src(
+            "enum J { JInt(int), JObj(Map<string, J>) }\n\
+             fn main() { print(J.JInt(1)); }",
+        );
+        assert!(
+            rust.contains("RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>>"),
+            "impl RayShow para Map: {}",
+            rust
+        );
+        assert!(rust.contains("Map{{{}}}"), "formato Map{{…}}: {}", rust);
     }
 
     #[test]

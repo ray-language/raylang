@@ -430,6 +430,29 @@ fn build_native_enteros_con_tamano_no_corrompen_el_prelude() {
 }
 
 #[test]
+fn build_native_json_con_map_coincide_con_la_vm() {
+    // `ray build --native` de un serializador JSON: el enum `Json` tiene una variante `JObject(Map<
+    // string, Json>)`. El transpiler emite el `RayShow` de TODOS los enums (aunque no se impriman); el
+    // de `Json` recurre al del Map, así que necesita `impl RayShow for Map` (`Map{k: v}`, ordenado). Sin
+    // él, rustc no compilaba. La salida (stringify canónico) debe coincidir byte a byte con la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native json: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/json_demo.ray");
+    let base = tmp("build_native_json");
+    let bin = base.join("json_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de json sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "json nativo ≡ VM");
+    assert!(native_out.contains("\"nombre\":\"raylang\""), "serializa el objeto\n{native_out}");
+}
+
+#[test]
 fn build_native_servidor_tcp_hace_eco() {
     // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
     // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.

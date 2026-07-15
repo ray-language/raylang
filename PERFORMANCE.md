@@ -306,6 +306,23 @@ scram, sigv4). Tests: `el_prelude_va_en_su_banda_de_lineas_disjunta` (invariante
 37/37 intactos. Restan sin transpilar (no crypto): json/jwt/jwt_eddsa/protobuf/framework (rustc) y
 url_demo (emit).
 
+#### Fase 43 — `RayShow` para `Map` (desbloquea JSON + JWT)
+
+`json_demo`/`jwt_demo`/`jwt_eddsa_demo` no compilaban: `error: no method named 'ray_show' for
+Rc<RefCell<HashMap<Rc<str>, Rc<json::Json>>>>`. Causa — el enum `Json` tiene la variante `JObject(Map<
+string, Json>)`, y el transpiler **emite el `RayShow` de TODOS los enums de usuario** (aunque no se
+impriman; mismo patrón de "código muerto emitido"): el de `Json` recurre a `.ray_show()` sobre el campo
+Map, pero **no existía `impl RayShow for Map`**. `print(map)` directo lo veta el checker, PERO el
+runtime SÍ renderiza un Map contenido en un struct/enum (`Value::Map` Display): `Map{k: v, …}` con los
+pares (renderizados) **ordenados como cadena** → determinista pese al `HashMap`. **Fix**: emitir
+`impl<K: RayShow + Hash + Eq, V: RayShow> RayShow for Rc<RefCell<HashMap<K,V>>>` con ese formato exacto
+(clave vía `k.ray_show()` = string sin comillas, como `k.to_value().to_string()` de la VM). Verificado
+conductualmente (imprimir `Json.JObject`/Map con claves string e int → byte-idéntico a la VM, no solo
+que compile). Con esto **json/jwt/jwt_eddsa transpilan byte-idénticos** → 22/22 web-demos deterministas
+no-servidor. Tests: `emite_rayshow_para_map` (unit) + `build_native_json_con_map_coincide_con_la_vm`
+(json nativo ≡ VM). Corpus 37/37 intacto. Restan (no JSON/crypto): `framework`/`protobuf` (rustc),
+`url_demo` (emit).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

@@ -172,6 +172,19 @@ valores thread-safe con el aislamiento de borrows), `try_join`/`Selected`/`cance
 VM auto-alojada del propio transpilador. **Punto de consolidación**: se retoma el núcleo del lenguaje/VM;
 el transpilador queda como un tercer backend de producto, estable y extensible fila-a-fila.
 
+#### Fase 34 — cobertura de builtins de las librerías (eprint + string + bytes_of)
+
+Tras consolidar, se retoma "las implementaciones nativas que faltan" para que **los ejemplos de librería**
+(`stdlib/`/`web/`/`net/`/`io/`) transpilen. Escaneo de bloqueos → el nº1 era **`eprint`** (17 ejemplos):
+añadido (→ `eprintln!`, stderr; comparte el arm con `print`). Luego **`bytes_of([int]) -> bytes`** (5) y
+el resto de **string builtins** que estaban en la lista de skip pero nunca se emitían (el corpus no los
+ejercitaba): `trim` (→ `str::trim`), `to_upper`/`to_lower` (Unicode, `to_uppercase`/`to_lowercase`),
+`starts_with`/`ends_with` (→ bool), `repeat` (n≤0→""), `replace`, `substring` (corte por carácter con
+clamp). Todos mapean 1:1 a métodos de `str`/`String` de Rust con la misma semántica que la VM (verificado
+byte a byte). **Ejemplos que transpilan: 40 → 62** (de `stdlib/web/net/io`; los `missing main` restantes son
+archivos-LIBRERÍA sin `main`, se importan, no aplican). Corpus 37/37 intacto. Restan bloqueos menores:
+`indexar bytes` (`b[i]`), protocolo `Iterator<T>`, `spawn` no-literal, canales de tipos mutables.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

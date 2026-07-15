@@ -1605,15 +1605,67 @@ impl Transpiler {
                      .map(|__a| Rc::<str>::from(__a)).collect::<Vec<Rc<str>>>()))",
                 );
             }
-            "print" => {
-                // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos).
+            "print" | "eprint" => {
+                // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos). eprint → stderr.
+                let macro_name = if method == "eprint" { "eprintln" } else { "println" };
                 if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
-                    out.push_str("println!(\"<fn>\")"); // una función se muestra como <fn>
+                    write!(out, "{}!(\"<fn>\")", macro_name).unwrap(); // una función se muestra como <fn>
                 } else {
-                    out.push_str("println!(\"{}\", ");
+                    write!(out, "{}!(\"{{}}\", ", macro_name).unwrap();
                     self.emit_expr(out, eff[0])?;
                     out.push_str(".ray_show())");
                 }
+            }
+            // bytes_of([int]) -> bytes: construye bytes de un arreglo de octetos (cada 0–255, `as u8`).
+            "bytes_of" => {
+                out.push_str("Rc::<[u8]>::from(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().iter().map(|__x| *__x as u8).collect::<Vec<u8>>())");
+            }
+            // Más builtins de string (→ métodos de `str`/`String` de Rust, misma semántica que la VM).
+            "trim" => {
+                out.push_str("Rc::<str>::from(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".trim())");
+            }
+            "to_upper" | "to_lower" => {
+                let m = if method == "to_upper" { "to_uppercase" } else { "to_lowercase" };
+                out.push_str("Rc::<str>::from(");
+                self.emit_expr(out, eff[0])?;
+                write!(out, ".{}())", m).unwrap();
+            }
+            "starts_with" | "ends_with" => {
+                self.emit_expr(out, eff[0])?;
+                write!(out, ".{}(&*", method).unwrap();
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            // repeat(s, n): n<=0 → "" (como la VM).
+            "repeat" => {
+                out.push_str("{ let __n = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; if __n <= 0 { Rc::<str>::from(\"\") } else { Rc::<str>::from(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".repeat(__n as usize)) } }");
+            }
+            "replace" => {
+                out.push_str("Rc::<str>::from(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".replace(&*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[2])?;
+                out.push_str("))");
+            }
+            // substring(s, i, j): corte por CARÁCTER con clamp (nunca falla), como la VM.
+            "substring" => {
+                out.push_str("{ let __c: Vec<char> = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".chars().collect(); let __n = __c.len() as i64; let __lo = (");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(").clamp(0, __n); let __hi = (");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(").clamp(__lo, __n); Rc::<str>::from(__c[__lo as usize..__hi as usize].iter().collect::<String>()) }");
             }
             // to_string(x) → Rc<str>. Vía show_expr (maneja struct→borrow, arreglo→[…], escalar/enum).
             "to_string" => {
@@ -2076,7 +2128,12 @@ impl Transpiler {
                         Some(Type::Channel(_)) => Type::Unit,
                         _ => Type::Int,
                     },
-                    "print" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
+                    "print" | "eprint" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
+                    "bytes_of" => Type::Bytes,
+                    // Más string builtins: trim/to_upper/to_lower/repeat/replace/substring → string;
+                    // starts_with/ends_with → bool.
+                    "trim" | "to_upper" | "to_lower" | "repeat" | "replace" | "substring" => Type::String,
+                    "starts_with" | "ends_with" => Type::Bool,
                     "split" => Type::Array(Box::new(Type::String)),
                     "args" => Type::Array(Box::new(Type::String)),
                     "chars" => Type::Array(Box::new(Type::Char)),
@@ -2766,6 +2823,22 @@ mod tests {
         assert!(rust.contains("std::f64::consts::E"), "{}", rust);
         // No debe emitir los wrappers del módulo (`fn ...sqrt`) ni el primitivo `__sqrt`.
         assert!(!rust.contains("__sqrt"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_mas_builtins_string_y_eprint() {
+        // eprint (stderr), bytes_of, y el resto de builtins de string (→ métodos de str de Rust).
+        let rust = transpile_src(
+            "fn main() -> int { eprint(\"e\"); let b = bytes_of([1, 2]); \
+             print(\"  x  \".trim().to_upper().to_lower()); \
+             print(\"ab\".repeat(2).replace(\"a\", \"z\").substring(0, 3)); \
+             if (\"hi\".starts_with(\"h\")) { b.len() } else { 0 } }",
+        );
+        assert!(rust.contains("eprintln!("), "eprint → eprintln!: {}", rust);
+        assert!(rust.contains(".trim()") && rust.contains(".to_uppercase()"), "trim/to_upper: {}", rust);
+        assert!(rust.contains(".repeat(") && rust.contains(".replace(&*"), "repeat/replace: {}", rust);
+        assert!(rust.contains(".starts_with(&*"), "starts_with: {}", rust);
+        assert!(rust.contains("*__x as u8"), "bytes_of: {}", rust);
     }
 
     #[test]

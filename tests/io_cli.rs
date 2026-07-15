@@ -466,3 +466,50 @@ fn native_handles_de_archivo_coinciden_con_la_vm() {
     assert_eq!(nat, vm, "nativo ≡ VM");
     assert_eq!(nat, "w: 8\nc: 0\nr: uno\nr: dos\n", "salida esperada");
 }
+
+/// P2.b: list_dir/remove_file transpilables. Crea archivos, lista el dir (ordenado), borra uno y re-lista;
+/// comprueba nativo ≡ VM. Requiere rustc; se salta si no está.
+#[test]
+fn native_list_dir_y_remove_file_coinciden_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_list_dir: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_lsdir");
+    let _ = std::fs::remove_dir_all(&dir);
+    let sub = dir.join("d");
+    std::fs::create_dir_all(&sub).expect("crea dir");
+    let src = format!(
+        "import std/fs;\n\
+         fn muestra(r: Result<[string], string>) {{ match (r) {{ Result.Ok(ns) => print(\"n=\" + to_string(ns.len())), Result.Err(e) => print(\"err\") }} }}\n\
+         fn tag(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok\", Result.Err(e) => \"err\" }} }}\n\
+         fn main() -> int {{\n\
+           let d = \"{d}\";\n\
+           let _ = fs.write_file(d + \"/c.txt\", \"c\");\n\
+           let _ = fs.write_file(d + \"/a.txt\", \"a\");\n\
+           let _ = fs.write_file(d + \"/b.txt\", \"b\");\n\
+           muestra(fs.list_dir(d));\n\
+           print(\"rm b: \" + tag(fs.remove_file(d + \"/b.txt\")));\n\
+           print(\"rm no: \" + tag(fs.remove_file(d + \"/no.txt\")));\n\
+           muestra(fs.list_dir(d));\n\
+           0\n\
+         }}\n",
+        d = sub.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let clean = |sub: &std::path::Path| { for n in ["a.txt", "b.txt", "c.txt"] { let _ = std::fs::remove_file(sub.join(n)); } };
+    clean(&sub);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    clean(&sub);
+    let (vm, _e, _c) = run_io("native_lsdir_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    // 3 archivos → borra b (ok) → 2 archivos; borrar inexistente → err.
+    assert_eq!(nat, "n=3\nrm b: ok\nrm no: err\nn=2\n", "salida esperada");
+}

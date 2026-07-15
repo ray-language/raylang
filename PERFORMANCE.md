@@ -516,6 +516,20 @@ como `s.len()` de la VM), `close`→`int` (0). Verificado nativo ≡ VM (escribi
 3 casos de error) por subproceso en `tests/io_cli.rs::native_handles_de_archivo_coinciden_con_la_vm`.
 Diferido (aún fuera): `env`/`args`-de-entorno no determinista, `list_dir`/`remove_file`, sockets/TLS.
 
+#### Fase 23 — `list_dir`/`remove_file` (gestión de archivos)
+
+Cierra la gestión de archivos común: `remove_file(path) -> Result<int,string>` (`std::fs::remove_file` →
+`Ok(0)`/`Err(msg)`) y `list_dir(path) -> Result<[string],string>` (`std::fs::read_dir`, nombres
+**ORDENADOS** → determinista, como la VM). Ambos en `std/fs` (cualificados, por `emit_fs`); `list_dir`
+reconstruye el `[string]` en la repr del transpilador (`Rc<RefCell<Vec<Rc<str>>>>`). Mensajes de error
+byte-idénticos a la VM (el `e.to_string()` del OS: `No such file or directory (os error 2)`, …). Verificado
+nativo ≡ VM (listar ordenado + borrar ok/inexistente + dir inexistente) por subproceso en
+`tests/io_cli.rs::native_list_dir_y_remove_file_coinciden_con_la_vm`. **La I/O de archivos del transpilador
+queda COMPLETA**: leer entero (`read_file`), escribir entero (`write_file`), consultar (`exists`), streaming
+con handles (`open`/`read_line`/`write`/`close`), stdin (`input`/`read_int`), y gestión (`list_dir`/
+`remove_file`). Diferido (aún fuera): `env`/`args`-de-entorno no determinista, directorios (`mkdir`/
+`remove_dir`/`rename`/`copy_file`), sockets/TLS.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

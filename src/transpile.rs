@@ -1208,6 +1208,28 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").exists()");
             }
+            // remove_file(path) -> Result<int, string>: borra un archivo; Ok(0) u Err(mensaje).
+            "remove_file" => {
+                out.push_str("(match std::fs::remove_file(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ") { Ok(()) => Ok::<i64, Rc<str>>(0i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
+            // list_dir(path) -> Result<[string], string>: nombres de las entradas, ORDENADOS (como la VM
+            // → determinista). El arreglo usa la repr del transpilador (Rc<RefCell<Vec<Rc<str>>>>).
+            "list_dir" => {
+                out.push_str("(match std::fs::read_dir(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ") { Ok(__rd) => { \
+                     let mut __ns: Vec<Rc<str>> = __rd.filter_map(|__e| __e.ok()) \
+                     .map(|__e| Rc::<str>::from(__e.file_name().to_string_lossy().into_owned())).collect(); \
+                     __ns.sort(); \
+                     Ok::<Rc<std::cell::RefCell<Vec<Rc<str>>>>, Rc<str>>(Rc::new(std::cell::RefCell::new(__ns))) }, \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
             // Handles de archivo (M11.8): un registro global (espejo del FileRegistry de la VM). open →
             // Result<int,string>, read_line → Option<string> (bufferizada, sin '\n'), write → Result<int,string>.
             "open" => {
@@ -1610,8 +1632,14 @@ impl Transpiler {
                 if let Some(ffn) = n.strip_prefix("std::fs::") {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
-                        "write_file" | "open" | "write" => Type::Enum("Result".into(), vec![Type::Int, Type::String]),
+                        "write_file" | "open" | "write" | "remove_file" => {
+                            Type::Enum("Result".into(), vec![Type::Int, Type::String])
+                        }
                         "read_line" => opt_of(Type::String),
+                        "list_dir" => Type::Enum(
+                            "Result".into(),
+                            vec![Type::Array(Box::new(Type::String)), Type::String],
+                        ),
                         "exists" => Type::Bool,
                         other => return Err(format!("spike: std::fs::{} no soportada", other)),
                     });

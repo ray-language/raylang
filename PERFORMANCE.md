@@ -391,6 +391,32 @@ plana. Tests: `var_capturada_y_mutada_por_closure_va_en_una_celda`, `var_mutable
 siendo_local_normal` (unit) + `build_native_closures_con_estado_mutable_coincide_con_la_vm` (integración).
 598 tests lib + corpus 37/37 + 38 web-demos idénticos, 0 regresiones.
 
+#### Fase 47 — `for` sobre iteradores (B2): Iterator de usuario + adaptadores escalares del prelude
+
+`for x in it` sobre un `impl Iterator<T>` (M40.2) no transpilaba. **Fix** en varias piezas, todas
+verificadas contra la VM:
+- **`ForIter::Iter`**: `for x in it` baja a `{ let __it = it; loop { match next(__it.clone()) { Some(x) =>
+  {cuerpo}, None => break } } }`. El tipo del elemento sale de unificar el tipo del iterador con el `self`
+  de `next` y sustituir en su retorno `Option<T>` (funciona para adaptadores genéricos). Variante de
+  patrón-tupla para `Some((a, b))`.
+- **Campo-closure** (`self.step()`): llamar un campo de tipo función → `(r.borrow().f.clone())(args)`
+  (prioridad campo→método). Es el linchpin del `Iter<T>` del prelude (`{ step: fn() -> Option<T> }`, cuyo
+  `next` es `self.step()`).
+- **`Iter<T>` del prelude se EMITE** (antes se omitía): ahora `iter`/`range` (que capturan+mutan su cursor)
+  son transpilables gracias a B1; se quitan de la lista de builtins-omitidos y los métodos `Iter#*` dejan
+  de saltarse. Guardas `!name.contains('#')` en `map`/`filter`/`fold` para NO confundir la función libre
+  sobre `[T]` con el método `Iter#map` (que cae al despacho de método).
+- **`'static` en los genéricos** (`<T: Clone + RayShow + 'static>`): un valor genérico puede acabar en un
+  `Rc<dyn Fn…>` (el `Iter<T>`) que lo exige; SIEMPRE cierto en raylang (todo es `Rc`/`Copy`, sin préstamos).
+- **`RayShow` para tuplas** (2/3): satisface el bound de un `Iter<(k, v)>` (aun cuando `enumerate`/`zip`
+  queden como stubs).
+Cubre: `impl Iterator` de usuario + `.iter()`/`range`/`.map()`/`.filter()`/`.take()`/`.skip()` (escalares),
+byte-idéntico a la VM (`examples/stdlib/iterador_escalar.ray`). **Diferido**: `.enumerate()`/`.zip()`
+(entregan tuplas; la inferencia genérica a través de la cadena de adaptadores no resuelve el tipo del
+elemento — el `iterador.ray` completo los usa). Tests: `for_sobre_iterador_de_usuario_baja_a_un_loop_con_
+next`, `campo_closure_se_llama_desenvolviendolo` (unit) + `build_native_iteradores_coinciden_con_la_vm`
+(integración). 602 tests lib + corpus 37/37 + 38 web idénticos, 0 regresiones. **B COMPLETO** (B1 + B2).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

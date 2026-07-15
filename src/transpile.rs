@@ -57,10 +57,7 @@ fn is_prelude_impl(name: &str) -> bool {
     if method == "less" {
         return true;
     }
-    // `Iter` (struct del protocolo de iterador del prelude) → saltar sus métodos.
-    if key == "Iter" {
-        return true;
-    }
+    // (Los métodos `Iter#*` del protocolo de iterador SÍ se emiten desde B2.)
     // `eq`/`show` se EMITEN (realizan el bound `T: Eq`/`T: Show` por diccionarios) para tipos de usuario y
     // primitivos ESCALARES (`int#eq` = `self == other`, `int#show` = `to_string(self)`); para contenedores
     // ([], Map, Channel, Task, bytes, unit…) se salta: clave no-identificador o impl no transpilable.
@@ -124,8 +121,8 @@ fn is_handled_builtin(name: &str) -> bool {
         name,
         // --- funciones del prelude (src/prelude.ray) ---
         "all" | "any" | "assert" | "assert_eq" | "char_from_code" | "env" | "filter" | "fold"
-            | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "input" | "iter" | "map" | "max" | "min"
-            | "parse_float" | "parse_int" | "pop" | "position" | "range" | "read_int" | "recv"
+            | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "input" | "map" | "max" | "min"
+            | "parse_float" | "parse_int" | "pop" | "position" | "read_int" | "recv"
             | "remove" | "sort" | "sum" | "sum_float" | "try_join"
         // --- builtins públicos manejados en emit_call ---
             | "len" | "push" | "split" | "join" | "chars" | "to_string" | "print" | "eprint"
@@ -487,13 +484,20 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
     out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>> { fn ray_show(&self) -> String { let __m = self.borrow(); let mut __parts: Vec<String> = __m.iter().map(|(__k, __v)| format!(\"{}: {}\", __k.ray_show(), __v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
     out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__v) => format!(\"Option.Some({})\", __v.ray_show()), None => \"Option.None\".to_string() } } }\n");
     out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__v) => format!(\"Result.Ok({})\", __v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
+    // Tuplas (2 y 3 elementos): `(a, b)`. El checker no deja `print`ar una tupla, así que esto rara vez
+    // se llama; hace falta para satisfacer el bound `T: RayShow` de un `Iter<(k, v)>` (los adaptadores
+    // `enumerate`/`zip` generados por el trait Iterator, aun cuando queden como stubs).
+    out.push_str("impl<A: RayShow, B: RayShow> RayShow for (A, B) { fn ray_show(&self) -> String { format!(\"({}, {})\", self.0.ray_show(), self.1.ray_show()) } }\n");
+    out.push_str("impl<A: RayShow, B: RayShow, C: RayShow> RayShow for (A, B, C) { fn ray_show(&self) -> String { format!(\"({}, {}, {})\", self.0.ray_show(), self.1.ray_show(), self.2.ray_show()) } }\n");
     // bytes → hex minúsculas sin separador ({:02x} por octeto), como la VM (bytes_to_hex).
     out.push_str("impl RayShow for Rc<[u8]> { fn ray_show(&self) -> String { let mut __s = String::with_capacity(self.len() * 2); for __b in self.iter() { __s.push_str(&format!(\"{:02x}\", __b)); } __s } }\n\n");
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
     for s in &prog.structs {
-        if s.name == "Iter" { continue; } // struct del protocolo de iterador del prelude
+        // (El struct `Iter` del protocolo de iterador del prelude SÍ se emite desde B2: es
+        // `{ step: Rc<dyn Fn() -> Option<T>> }`, y `iter`/`range`/`map`/`filter` lo construyen con
+        // closures que mutan su cursor capturado — transpilable desde B1.)
         t.tparams = s.type_params.iter().cloned().collect();
         // `dyn Trait` (M9.3b): struct sintetizado `__dyn_T { data, métodos… }`. Aquí, un juego de closures
         // que CAPTURAN el valor concreto (sin `data`, sin Box<dyn Any>): cada campo `Rc<dyn Fn(args)->ret>`.
@@ -1057,6 +1061,43 @@ impl Transpiler {
                 out.push_str(";\n");
             }
             StmtKind::For { pat, iter, body } => {
+                // `for (a, b) in <iterador que entrega tuplas>` (M40.2: `enumerate`/`zip`): el `next(it)`
+                // devuelve `Option<(A, B)>` → se destructura en el `match Some((a, b))`. Mismo `loop` que el
+                // caso simple pero ligando dos nombres.
+                if let (ForPat::Tuple(names), ForIter::Iter { expr, next_fn }) = (pat, iter) {
+                    let sig = self
+                        .funcs
+                        .get(next_fn)
+                        .ok_or_else(|| format!("spike: iterador sin método next '{}'", next_fn))?
+                        .clone();
+                    let it_ty = self.type_of(expr)?;
+                    let mut subst = HashMap::new();
+                    if let Some(p0) = sig.params.first() {
+                        unify(p0, &it_ty, &sig.tparams, &mut subst);
+                    }
+                    let elems = match subst_type(&normalize_type(&sig.ret), &subst) {
+                        Type::Enum(n, args) if n == "Option" && args.len() == 1 => match &args[0] {
+                            Type::Tuple(ts) if ts.len() == names.len() => ts.clone(),
+                            other => return Err(format!("spike: for de tupla sobre next que da {:?}", other)),
+                        },
+                        other => return Err(format!("spike: next de '{}' no da Option<tupla> ({:?})", next_fn, other)),
+                    };
+                    let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
+                    let binders: Vec<String> = names.iter().map(binder).collect();
+                    out.push_str("{ let __it = ");
+                    self.emit_expr(out, expr)?;
+                    write!(out, "; loop {{ match {}(__it.clone()) {{ Some((", mangle(next_fn)).unwrap();
+                    out.push_str(&binders.join(", "));
+                    out.push_str(")) => ");
+                    self.scopes.push(HashMap::new());
+                    for (n, t) in names.iter().zip(&elems) {
+                        if let Some(nm) = n { self.declare(nm, t.clone()); }
+                    }
+                    self.emit_block(out, body)?;
+                    self.scopes.pop();
+                    out.push_str(", None => break, } } }\n");
+                    return Ok(());
+                }
                 // `for (k, v) in <Map>`: itera pares ordenados por clave (helper `__ray_pairs`).
                 if let ForPat::Tuple(names) = pat {
                     let expr = match iter {
@@ -1120,7 +1161,38 @@ impl Transpiler {
                         self.scopes.pop();
                         out.push('\n');
                     }
-                    _ => return Err("spike: for sobre iterador (Iterator<T>) no soportado".into()),
+                    // `for x in <it>` sobre un Iterator<T> de usuario (M40.2): el checker guarda el método
+                    // `next(self) -> Option<T>` manglado. Se baja a un `loop`: llamar `next(it)` hasta `None`,
+                    // ligando cada `Some(x)`. El iterador se liga a `__it` UNA vez; `next` recibe un clon del
+                    // Rc → su estado (campos mutados por referencia) persiste entre iteraciones.
+                    ForIter::Iter { expr, next_fn } => {
+                        // T del elemento = el `T` de `Option<T>` de la firma de `next`, tras unificar el tipo
+                        // real del iterador con su `self` (para adaptadores genéricos como `ArrayIter<int>`).
+                        let sig = self
+                            .funcs
+                            .get(next_fn)
+                            .ok_or_else(|| format!("spike: iterador sin método next '{}'", next_fn))?
+                            .clone();
+                        let it_ty = self.type_of(expr)?;
+                        let mut subst = HashMap::new();
+                        if let Some(p0) = sig.params.first() {
+                            unify(p0, &it_ty, &sig.tparams, &mut subst);
+                        }
+                        let elem = match subst_type(&normalize_type(&sig.ret), &subst) {
+                            Type::Enum(n, args) if n == "Option" && args.len() == 1 => args[0].clone(),
+                            other => return Err(format!("spike: next de '{}' no devuelve Option<T> ({:?})", next_fn, other)),
+                        };
+                        out.push_str("{ let __it = ");
+                        self.emit_expr(out, expr)?;
+                        write!(out, "; loop {{ match {}(__it.clone()) {{ Some(", mangle(next_fn)).unwrap();
+                        out.push_str(&mangle(&var));
+                        out.push_str(") => ");
+                        self.scopes.push(HashMap::new());
+                        self.declare(&var, elem);
+                        self.emit_block(out, body)?;
+                        self.scopes.pop();
+                        out.push_str(", None => break, } } }\n");
+                    }
                 }
             }
         }
@@ -2105,6 +2177,33 @@ impl Transpiler {
                 return Ok(());
             }
         }
+        // Llamada a un CAMPO-closure: `r.f(args)` donde `f` es un campo de tipo función del struct receptor
+        // (p. ej. `self.step()` en `Iter#next`, con `step: fn() -> Option<T>`). Prioridad campo→método (como
+        // el checker). Baja a `(r.borrow().f.clone())(args)`; el receptor NO se pasa (el closure no lleva self).
+        if let Some(r) = recv {
+            let rty = self.type_of(r).ok().map(|t| normalize_type(&t));
+            if let Some(Type::Struct(sname, _)) = &rty {
+                let is_fn_field = self
+                    .struct_fields
+                    .get(sname)
+                    .and_then(|fs| fs.iter().find(|(fnm, _)| fnm.as_str() == name))
+                    .map(|(_, fty)| matches!(normalize_type(fty), Type::Fn(_, _)))
+                    .unwrap_or(false);
+                if is_fn_field {
+                    out.push('(');
+                    self.emit_expr(out, r)?;
+                    write!(out, ".borrow().{}.clone())(", name).unwrap();
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        self.emit_expr(out, a)?;
+                    }
+                    out.push(')');
+                    return Ok(());
+                }
+            }
+        }
         // Argumentos efectivos: el receptor de UFCS (si lo hay) va primero.
         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
         // `std::math::*` (módulo std/math) → los métodos de `f64` de Rust (misma impl que la VM → mismo
@@ -2625,23 +2724,25 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
-            // Orden superior (prelude map/filter/fold) → iteradores de Rust. `__f` liga la closure una
-            // vez; `__x`/`__acc` son los elementos/acumulador. (Anidados: cada uno en su propio bloque.)
-            "map" => {
+            // Orden superior (prelude map/filter/fold SOBRE ARREGLOS) → iteradores de Rust. `__f` liga la
+            // closure una vez; `__x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
+            // distingue la función libre `map`/`filter`/`fold` (sobre `[T]`) del MÉTODO `Iter#map`/… (sobre
+            // un iterador de primera clase), que cae al despacho de método ordinario (`_ =>`).
+            "map" if !name.contains('#') => {
                 out.push_str("{ let __f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().iter().map(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
             }
-            "filter" => {
+            "filter" if !name.contains('#') => {
                 out.push_str("{ let __f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().iter().cloned().filter(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
             }
-            "fold" => {
+            "fold" if !name.contains('#') => {
                 out.push_str("{ let __f = ");
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; ");
@@ -2847,12 +2948,13 @@ impl Transpiler {
                         unwrapped(&self.type_of(recv0.ok_or("spike: unwrap sin receptor")?)?)
                     }
                     // Orden superior: map(xs,f) → [ret(f)]; filter(xs,f) → [elem(xs)]; fold(xs,init,f) → ret(f).
-                    "map" => match self.type_of(effargs(recv, args, 1)?)? {
+                    // Guarda `!n.contains('#')`: la función libre sobre `[T]`; `Iter#map`/… (método) cae al `_`.
+                    "map" if !n.contains('#') => match self.type_of(effargs(recv, args, 1)?)? {
                         Type::Fn(_, r) => Type::Array(r),
                         other => return Err(format!("spike: map con f no-función {:?}", other)),
                     },
-                    "filter" => self.type_of(effargs(recv, args, 0)?)?,
-                    "fold" => match self.type_of(effargs(recv, args, 2)?)? {
+                    "filter" if !n.contains('#') => self.type_of(effargs(recv, args, 0)?)?,
+                    "fold" if !n.contains('#') => match self.type_of(effargs(recv, args, 2)?)? {
                         Type::Fn(_, r) => *r,
                         other => return Err(format!("spike: fold con f no-función {:?}", other)),
                     },
@@ -3132,10 +3234,12 @@ fn enum_subst(
     }
 }
 
-/// Declaración de genéricos de Rust `<A: Clone + RayShow, …>` (fn/struct/enum: `Clone` para el clon-al-
-/// leer, `RayShow` para mostrar/`to_string`). rustc los monomorfiza → nativo.
+/// Declaración de genéricos de Rust `<A: Clone + RayShow + 'static, …>` (fn/struct/enum: `Clone` para el
+/// clon-al-leer, `RayShow` para mostrar/`to_string`, `'static` porque un valor genérico puede acabar en
+/// un `Rc<dyn Fn…>` —p. ej. el `Iter<T>` de los iteradores— que exige `T: 'static`; es SIEMPRE cierto en
+/// raylang (todos los valores son `Rc`/`Copy`, sin préstamos). rustc los monomorfiza → nativo.
 fn generic_decl(tparams: &[String]) -> String {
-    generic_bound(tparams, "Clone + RayShow")
+    generic_bound(tparams, "Clone + RayShow + 'static")
 }
 
 /// `<A: bound, B: bound>` para una lista de params de tipo (o "" si vacía).
@@ -3394,7 +3498,7 @@ mod tests {
              fn neg(b: bool) -> bool { !b }\n\
              fn main() -> int { let a: int = id(5); print(apply(neg, false)); a }",
         );
-        assert!(rust.contains("fn id<T: Clone + RayShow>(mut x: T) -> T"), "{}", rust);
+        assert!(rust.contains("fn id<T: Clone + RayShow + 'static>(mut x: T) -> T"), "{}", rust);
         assert!(rust.contains("fn apply<T:") && rust.contains("U:"), "{}", rust);
         assert!(rust.contains("apply(Rc::new(neg)"), "{}", rust); // función como valor → Rc::new(fn)
     }
@@ -3488,7 +3592,33 @@ mod tests {
         // Una `var` mutada pero NO capturada por ninguna closure NO va en celda (sin coste): `let mut`.
         let rust = transpile_src("fn main() { var x: int = 0; x = x + 1; print(x); }");
         assert!(rust.contains("let mut x: i64 = 0i64;"), "x es local normal: {}", rust);
-        assert!(!rust.contains("RefCell::new(0i64)"), "x NO va en celda: {}", rust);
+        assert!(!rust.contains("let x = Rc::new(std::cell::RefCell"), "x NO va en celda: {}", rust);
+    }
+
+    #[test]
+    fn for_sobre_iterador_de_usuario_baja_a_un_loop_con_next() {
+        // B2: `for x in it` sobre un `impl Iterator<T>` de usuario baja a un `loop` que llama `next(it)`
+        // hasta `None`, ligando cada `Some(x)`. El iterador se liga a `__it` una vez (estado persistente).
+        let rust = transpile_src(
+            "struct R { a: int, b: int }\n\
+             impl Iterator<int> for R { fn next(self) -> Option<int> { if (self.a >= self.b) { Option.None } else { let v: int = self.a; self.a = self.a + 1; Option.Some(v) } } }\n\
+             fn r(a: int, b: int) -> R { R { a: a, b: b } }\n\
+             fn main() { for n in r(1, 4) { print(n); } }",
+        );
+        assert!(rust.contains("let __it = "), "liga el iterador a __it: {}", rust);
+        assert!(rust.contains("(__it.clone()) { Some("), "loop match next(__it): {}", rust);
+        assert!(rust.contains("None => break"), "corta en None: {}", rust);
+    }
+
+    #[test]
+    fn campo_closure_se_llama_desenvolviendolo() {
+        // Llamar un campo de tipo función (`self.step()`, como en `Iter#next`) → `(r.borrow().step.clone())()`.
+        let rust = transpile_src(
+            "struct Caja { f: fn() -> int }\n\
+             fn tira(c: Caja) -> int { c.f() }\n\
+             fn main() { print(tira(Caja { f: fn() -> int { 7 } })); }",
+        );
+        assert!(rust.contains(".borrow().f.clone())("), "llama el campo-closure: {}", rust);
     }
 
     #[test]

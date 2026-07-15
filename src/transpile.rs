@@ -164,6 +164,8 @@ struct Transpiler {
     needs_handles: bool,
     /// ¿Usa concurrencia (`spawn`/canales)? Si es cierto, se anexa el runtime de canales MPMC.
     needs_concurrency: bool,
+    /// ¿Usa `signals()`? Si es cierto, se anexa el runtime de señales del SO (self-pipe + FFI a libc).
+    needs_signals: bool,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -212,6 +214,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         tparams: std::collections::HashSet::new(),
         needs_handles: false,
         needs_concurrency: false,
+        needs_signals: false,
     };
 
     let mut out = String::new();
@@ -452,6 +455,37 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "        }\n",
             "        std::thread::sleep(std::time::Duration::from_micros(50));\n",
             "    }\n}\n",
+        ));
+    }
+    // signals() (M88.1): el canal de señales del SO (SIGTERM=15/SIGINT=2). El truco del self-pipe (como
+    // la VM, `src/builtins.rs`): el handler (async-signal-safe: solo `write`) escribe el nº de señal a un
+    // pipe; un hilo lector lo lee (bloqueante) y lo envía al canal. FFI a libc sin crates (siempre
+    // enlazada). Unix; en otras plataformas signals() no se soporta (el checker lo permite, pero aquí
+    // no compilaría → se documenta como diferido no-unix).
+    if t.needs_signals {
+        out.push_str(concat!(
+            "static __RAY_SIG_PIPE_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);\n",
+            "unsafe extern \"C\" { fn pipe(fds: *mut i32) -> i32; fn read(fd: i32, buf: *mut u8, n: usize) -> isize; fn write(fd: i32, buf: *const u8, n: usize) -> isize; fn signal(sig: i32, handler: usize) -> usize; }\n",
+            "extern \"C\" fn __ray_on_signal(sig: i32) {\n",
+            "    let b = sig as u8; let w = __RAY_SIG_PIPE_W.load(std::sync::atomic::Ordering::Relaxed);\n",
+            "    if w >= 0 { unsafe { let _ = write(w, &b as *const u8, 1); } }\n}\n",
+            "fn __ray_signals() -> __RayChan<i64> {\n",
+            "    static CHAN: std::sync::OnceLock<__RayChan<i64>> = std::sync::OnceLock::new();\n",
+            "    CHAN.get_or_init(|| {\n",
+            "        let ch: __RayChan<i64> = __RayChan::make(None);\n",
+            "        let mut fds = [0i32; 2];\n",
+            "        unsafe { if pipe(fds.as_mut_ptr()) == 0 {\n",
+            "            __RAY_SIG_PIPE_W.store(fds[1], std::sync::atomic::Ordering::Release);\n",
+            "            signal(15, __ray_on_signal as *const () as usize);\n",
+            "            signal(2, __ray_on_signal as *const () as usize);\n",
+            "        } }\n",
+            "        let rfd = fds[0]; let ch2 = ch.clone();\n",
+            "        std::thread::spawn(move || loop {\n",
+            "            let mut b = 0u8; let n = unsafe { read(rfd, &mut b as *mut u8, 1) };\n",
+            "            if n == 1 { ch2.send(b as i64); } else if n == 0 { break; }\n",
+            "        });\n",
+            "        ch\n",
+            "    }).clone()\n}\n",
         ));
     }
     Ok(out)
@@ -1754,6 +1788,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".recv()");
             }
+            // signals() -> Channel<int>: canal de señales del SO (SIGTERM/SIGINT), singleton (self-pipe).
+            "signals" => {
+                self.needs_concurrency = true;
+                self.needs_signals = true;
+                out.push_str("__ray_signals()");
+            }
             // select([chs]) -> int: índice del primer canal listo para recibir (poll del índice menor).
             "select" => {
                 self.needs_concurrency = true;
@@ -1961,6 +2001,7 @@ impl Transpiler {
                     },
                     "send" => Type::Unit,
                     "select" => Type::Int, // índice del canal listo
+                    "signals" => Type::Channel(Box::new(Type::Int)), // canal de señales del SO
                     // spawn(fn()->T) → Task<T>; scope(fn()->R) → R (el tipo de retorno de la función anónima).
                     "spawn" | "scope" => {
                         let ret = match recv0.map(|e| &e.kind) {
@@ -2643,6 +2684,19 @@ mod tests {
     }
 
     #[test]
+    fn transpila_signals() {
+        // signals() -> Channel<int> (M88.1): canal de señales del SO (self-pipe + FFI a libc).
+        let rust = transpile_src(
+            "fn main() -> int { let sig: Channel<int> = signals(); \
+             match (recv(sig)) { Option.Some(n) => n, Option.None => 0 } }",
+        );
+        assert!(rust.contains("__ray_signals()"), "signals → __ray_signals: {}", rust);
+        assert!(rust.contains("fn __ray_signals()"), "runtime de señales emitido: {}", rust);
+        assert!(rust.contains("__ray_on_signal"), "handler de señal: {}", rust);
+        assert!(rust.contains("signal(15,") && rust.contains("signal(2,"), "instala SIGTERM/SIGINT: {}", rust);
+    }
+
+    #[test]
     fn transpila_select() {
         // select([chs]) -> int (M12.4): índice del primer canal listo (poll del índice menor).
         let rust = transpile_src(
@@ -2791,9 +2845,9 @@ mod tests {
 
     #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `signals()` (canal de señales del SO, aún fuera del subconjunto) → no transpilable.
+        // un `main` con `try_join` (une una Task devolviendo Result; aún fuera) → no transpilable.
         let tokens = crate::lexer::lex(
-            "fn main() { let sig: Channel<int> = signals(); match (recv(sig)) { Option.Some(s) => print(s), Option.None => print(0) } }",
+            "fn main() { let t: Task<int> = spawn(fn() -> int { 1 }); match (try_join(t)) { Result.Ok(v) => print(v), Result.Err(e) => print(0) } }",
         )
         .unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();

@@ -305,6 +305,48 @@ fn build_native_select_invariante_coincide_con_la_vm() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn build_native_signals_apagado_ordenado() {
+    // `ray build --native` de un programa que usa signals() (SIGTERM/SIGINT): el binario nativo instala
+    // los handlers (self-pipe + FFI a libc) y, al recibir SIGTERM, drena el canal de señales y apaga.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native signals: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_signals");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           let work: Channel<int> = Channel.new();\n\
+           let sig = signals();\n\
+           spawn(fn() { var i = 0; while (i < 3) { send(work, i); i = i + 1; } });\n\
+           let chs: [Channel<int>] = [work, sig];\n\
+           var go = true;\n\
+           while (go) {\n\
+             let idx = select(chs);\n\
+             if (idx == 0) { match (recv(work)) { Option.Some(x) => print(\"work \" + to_string(x)), Option.None => { } } }\n\
+             else { match (recv(sig)) { Option.Some(n) => { print(\"signal \" + to_string(n) + \": shutdown\"); go = false; }, Option.None => { go = false; } } }\n\
+           }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native signals ok\n{err}");
+
+    // Corre el binario, deja que procese el trabajo, envía SIGTERM (15) y comprueba el apagado ordenado.
+    let mut child = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el nativo");
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let pid = child.id().to_string();
+    let _ = Command::new("kill").args(["-TERM", &pid]).status();
+    let out = child.wait_with_output().expect("espera al proceso");
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("signal 15: shutdown"), "SIGTERM → apagado ordenado\nsalida:\n{s}");
+    assert!(s.contains("work 0"), "procesó al menos un item de trabajo\n{s}");
+}
+
 #[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");

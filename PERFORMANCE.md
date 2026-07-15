@@ -640,6 +640,23 @@ Corpus 37/37 intacto. El test `rechaza_` pasa a usar `signals()` (canal de seña
 en concurrencia**: `signals()` (señales del SO — runtime de señales aparte), cancelación de hermanas M12.5
 (automática), `try_join`/`Selected<T>`/`cancel(t)` explícito; y canales de tipos no-Send.
 
+#### Fase 31 — `signals()` — el apagado ordenado (patrón microservicio)
+
+Cierra el ejemplo `senales.ray` (M88.1): `signals() -> Channel<int>` = el canal de señales del SO
+(SIGTERM=15/SIGINT=2 llegan como int; singleton). Réplica del truco del **self-pipe** de la VM, con
+**FFI a libc sin crates** (el `.rs` es standalone; `pipe`/`write`/`read`/`signal` viven en libSystem/libc,
+siempre enlazadas): el handler `__ray_on_signal` (async-signal-safe: solo un `write` + un store atómico)
+escribe el nº de señal a un pipe; un **hilo lector** lo lee (bloqueante, sin poll) y lo `send`ea al
+`__RayChan<i64>`. `signals()` → `__ray_signals()`, singleton vía `OnceLock` (instala los handlers una vez).
+Unix-only (el diferido no-unix se documenta). Verificado nativo ≡ VM byte a byte: corriendo `senales.ray`,
+procesa 3 items de `trabajo` y al recibir **SIGTERM** (o **SIGINT**) imprime `señal 15/2: drenando y
+apagando` y sale limpio — estable en varias corridas. Test de integración (unix)
+`build_native_signals_apagado_ordenado` (`tests/cli_cli.rs`): lanza el binario, envía `kill -TERM`, verifica
+el apagado. **Los 4 ejemplos de concurrencia transpilan** (`concurrencia`/`structured` byte-idénticos;
+`select`/`senales` con el invariante correcto). El `rechaza_` pasa a usar `try_join`. Corpus 37/37 intacto.
+**Diferido restante en concurrencia**: `try_join`/`Selected<T>`/`cancel(t)` explícito, cancelación
+automática de hermanas M12.5, canales de tipos no-Send.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

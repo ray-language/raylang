@@ -657,6 +657,25 @@ el apagado. **Los 4 ejemplos de concurrencia transpilan** (`concurrencia`/`struc
 **Diferido restante en concurrencia**: `try_join`/`Selected<T>`/`cancel(t)` explícito, cancelación
 automática de hermanas M12.5, canales de tipos no-Send.
 
+#### Fase 32 — canales/tasks de `string` y `bytes` (tipos heap inmutables)
+
+`Channel<string>`/`Channel<bytes>` (y `Task<…>`). **El obstáculo**: los valores del transpilador son
+`Rc`/`RefCell` (mono-hilo, `!Send`), y cruzar un hilo exige `Send`. El **modelo de valores thread-safe
+completo** (Arc/Mutex para todo) NO es un drop-in: `a[i] + a[j]` (dos lecturas del mismo arreglo) emite dos
+`.borrow()`, legal en `RefCell` (lecturas compartidas) pero **deadlock** con `Mutex`/`RwLock` (re-lock
+mismo hilo, no-portable) → requeriría aislar cada borrow. **Subconjunto limpio y seguro**: los heap
+**INMUTABLES** (`string`/`bytes`) se mandan **copiando al BORDE** a una repr Send (`Arc<str>`/`Arc<[u8]>`)
+y de vuelta al recibir — **sin tocar el modelo de valores** (todo sigue `Rc`, mono-hilo). Como son
+inmutables, copiar es semánticamente idéntico. `send_type(T)` da la repr del canal (primitivos igual,
+string/bytes→Arc, structs/arreglos/Map→error claro); `send` convierte con `Arc::from(&*v)`, `recv` con
+`.map(|x| Rc::from(&*x))`, `spawn(fn()->string)` envuelve el retorno del closure (corre en otro hilo),
+`join` desenvuelve. Verificado nativo ≡ VM: `Channel<string>` (pipeline de saludos), `Task<string>`,
+`Channel<bytes>` — byte-idénticos, estables. Int/float/bool/char intactos (sin conversión); struct/arreglo
+por canal → error `canal/tarea de tipo no-Send`. Test de integración
+`build_native_canal_de_string_coincide_con_la_vm`. Corpus 37/37 intacto. **Diferido**: canales de
+structs/arreglos/Map (mutables → el modelo thread-safe con sus hazards); `try_join`/`Selected`/`cancel`,
+cancelación M12.5.
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

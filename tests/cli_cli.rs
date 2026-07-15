@@ -348,6 +348,42 @@ fn build_native_signals_apagado_ordenado() {
 }
 
 #[test]
+fn build_native_canal_de_string_coincide_con_la_vm() {
+    // `ray build --native` de un programa que manda STRINGS por un canal y una Task<string>: el valor
+    // viaja como repr Send (Arc<str>) al cruzar el hilo y se convierte de vuelta a Rc<str> al recibir.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native canal string: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_chstr");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn saluda(n: string) -> string { \"hola \" + n }\n\
+         fn main() -> int {\n\
+           let ch: Channel<string> = Channel.new();\n\
+           spawn(fn() { send(ch, \"mundo\"); send(ch, \"raylang\"); close(ch); });\n\
+           var go = true;\n\
+           while (go) { match (recv(ch)) { Option.Some(s) => print(saluda(s)), Option.None => { go = false; } } }\n\
+           let t: Task<string> = spawn(fn() -> string { saluda(\"tarea\") });\n\
+           print(join(t));\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native canal string ok\n{err}");
+
+    let expected = "hola mundo\nhola raylang\nhola tarea\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM");
+    for _ in 0..5 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "nativo ≡ VM (canal de string)");
+    }
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

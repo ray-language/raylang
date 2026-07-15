@@ -777,6 +777,25 @@ impl Transpiler {
         Ok(())
     }
 
+    /// Emite `e` convertido a la repr SEND de un `Channel<T>`/`Task<T>` (para cruzar el hilo): string→
+    /// Arc<str>, bytes→Arc<[u8]> (copia al borde, seguro por ser inmutables); primitivos sin cambio.
+    fn emit_to_send(&mut self, out: &mut String, e: &Expr, t: &Type) -> Result<(), String> {
+        match normalize_type(t) {
+            Type::String => {
+                out.push_str("std::sync::Arc::<str>::from(&*");
+                self.emit_expr(out, e)?;
+                out.push(')');
+            }
+            Type::Bytes => {
+                out.push_str("std::sync::Arc::<[u8]>::from(&*");
+                self.emit_expr(out, e)?;
+                out.push(')');
+            }
+            _ => self.emit_expr(out, e)?,
+        }
+        Ok(())
+    }
+
     fn emit_expr(&mut self, out: &mut String, e: &Expr) -> Result<(), String> {
         match &e.kind {
             ExprKind::Int(n) => write!(out, "{}i64", n).unwrap(),
@@ -1635,8 +1654,20 @@ impl Transpiler {
             // join(t) → t.join() (Task, structured concurrency); join(arr, sep) → __ray_join (string). El
             // `join` es ad-hoc: se distingue por el tipo del primer arg (Task vs arreglo).
             "join" if matches!(self.type_of(eff[0])?, Type::Task(_)) => {
+                // t.join() da la repr SEND; se convierte de vuelta a la del programa (string/bytes → Rc).
+                let elem = match self.type_of(eff[0])? {
+                    Type::Task(t) => (*t).clone(),
+                    _ => unreachable!("guard garantiza Task"),
+                };
+                let (pre, post): (&str, &str) = match normalize_type(&elem) {
+                    Type::String => ("Rc::<str>::from(&*", ")"),
+                    Type::Bytes => ("Rc::<[u8]>::from(&*", ")"),
+                    _ => ("", ""),
+                };
+                out.push_str(pre);
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".join()");
+                out.push_str(post);
             }
             "join" => {
                 out.push_str("__ray_join(&");
@@ -1779,14 +1810,25 @@ impl Transpiler {
             }
             // Canales (concurrencia): send(ch, v) → ch.send(v); recv(ch) → ch.recv() (Option<T>).
             "send" => {
+                // El valor se convierte a la repr SEND del canal (string/bytes → Arc; primitivos igual).
+                let elem = match self.type_of(eff[0])? {
+                    Type::Channel(t) => (*t).clone(),
+                    other => return Err(format!("spike: send sobre {:?}", other)),
+                };
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".send(");
-                self.emit_expr(out, eff[1])?;
+                self.emit_to_send(out, eff[1], &elem)?;
                 out.push(')');
             }
             "recv" => {
+                // recv devuelve Option<repr-send>; se convierte de vuelta a la repr del programa (Rc).
+                let elem = match self.type_of(eff[0])? {
+                    Type::Channel(t) => (*t).clone(),
+                    other => return Err(format!("spike: recv sobre {:?}", other)),
+                };
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".recv()");
+                out.push_str(from_send_map(&elem));
             }
             // signals() -> Channel<int>: canal de señales del SO (SIGTERM/SIGINT), singleton (self-pipe).
             "signals" => {
@@ -1817,7 +1859,22 @@ impl Transpiler {
                 }
                 let runtime = if method == "spawn" { "__ray_spawn" } else { "__ray_scope" };
                 write!(out, "{}(move || ", runtime).unwrap();
-                self.emit_block(out, &fnexpr.body)?;
+                // spawn: el closure corre en OTRO hilo → devuelve la repr SEND (string/bytes → Arc); el
+                // cuerpo produce la repr del programa, se envuelve. scope corre en el hilo actual → sin conv.
+                let wrap = if method == "spawn" { normalize_type(&fnexpr.return_type) } else { Type::Unit };
+                match wrap {
+                    Type::String => {
+                        out.push_str("std::sync::Arc::<str>::from(&*");
+                        self.emit_block(out, &fnexpr.body)?;
+                        out.push(')');
+                    }
+                    Type::Bytes => {
+                        out.push_str("std::sync::Arc::<[u8]>::from(&*");
+                        self.emit_block(out, &fnexpr.body)?;
+                        out.push(')');
+                    }
+                    _ => self.emit_block(out, &fnexpr.body)?,
+                }
                 out.push_str(") }");
             }
             "unwrap_or" => {
@@ -2217,11 +2274,12 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         Type::String => "Rc<str>",
         // bytes: secuencia INMUTABLE de octetos (como string) → Rc<[u8]> (clon barato, compartible).
         Type::Bytes => return Ok("Rc<[u8]>".to_string()),
-        // Channel<T> (concurrencia): canal MPMC thread-safe propio (Arc<Mutex+Condvar>). T debe ser Send
-        // (primitivos en v1; string/struct → diferido, requerirían el modelo de valores thread-safe).
-        Type::Channel(t) => return Ok(format!("__RayChan<{}>", rust_ty(t, enums, tparams)?)),
+        // Channel<T> (concurrencia): canal MPMC thread-safe propio. El elemento usa la repr SEND
+        // (`send_type`): primitivos tal cual, string→Arc<str>, bytes→Arc<[u8]> (se convierte al borde);
+        // structs/arreglos (mutables) → diferido, requerirían el modelo de valores thread-safe.
+        Type::Channel(t) => return Ok(format!("__RayChan<{}>", send_type(t, enums, tparams)?)),
         // Task<T> (structured concurrency): handle al resultado futuro de un `spawn` (JoinHandle envuelto).
-        Type::Task(t) => return Ok(format!("__RayTask<{}>", rust_ty(t, enums, tparams)?)),
+        Type::Task(t) => return Ok(format!("__RayTask<{}>", send_type(t, enums, tparams)?)),
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),
         // Map: igual, sobre un HashMap.
@@ -2284,6 +2342,33 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
+}
+
+/// La repr **Send** de un tipo que viaja por un `Channel<T>`/`Task<T>`: se convierte al BORDE (send/recv/
+/// spawn/join) para no cambiar el modelo de valores del resto (que sigue `Rc`, mono-hilo). Los primitivos
+/// son Send tal cual; string/bytes (heap INMUTABLE) → `Arc<str>`/`Arc<[u8]>` (copia barata al cruzar el
+/// hilo, semánticamente idéntico por ser inmutables). Structs/arreglos/Map (mutables) → error (diferido:
+/// necesitarían el modelo de valores thread-safe con sus hazards de bloqueo).
+fn send_type(t: &Type, enums: &std::collections::HashSet<String>, tparams: &std::collections::HashSet<String>) -> Result<String, String> {
+    match normalize_type(t) {
+        Type::String => Ok("std::sync::Arc<str>".to_string()),
+        Type::Bytes => Ok("std::sync::Arc<[u8]>".to_string()),
+        Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) => rust_ty(t, enums, tparams),
+        other => Err(format!(
+            "spike: canal/tarea de tipo no-Send {:?} — soportados: int/float/bool/char/string/bytes",
+            other
+        )),
+    }
+}
+
+/// El sufijo `.map(|__x| Rc::…::from(&*__x))` para convertir la repr SEND recibida (Arc) de vuelta a la
+/// del programa (Rc). Vacío para primitivos (sin conversión).
+fn from_send_map(t: &Type) -> &'static str {
+    match normalize_type(t) {
+        Type::String => ".map(|__x| Rc::<str>::from(&*__x))",
+        Type::Bytes => ".map(|__x| Rc::<[u8]>::from(&*__x))",
+        _ => "",
+    }
 }
 
 /// Sustitución `param_de_tipo → arg` para un tipo nominal aplicado: los `tparams` del enum/struct `name`
@@ -2681,6 +2766,31 @@ mod tests {
         assert!(rust.contains("std::f64::consts::E"), "{}", rust);
         // No debe emitir los wrappers del módulo (`fn ...sqrt`) ni el primitivo `__sqrt`.
         assert!(!rust.contains("__sqrt"), "{}", rust);
+    }
+
+    #[test]
+    fn transpila_canal_de_string() {
+        // Channel<string>: el elemento viaja como repr SEND (Arc<str>), convertido al borde (send/recv).
+        let rust = transpile_src(
+            "fn main() -> int { let ch: Channel<string> = Channel.new(); \
+             spawn(fn() { send(ch, \"hola\"); close(ch); }); \
+             match (recv(ch)) { Option.Some(s) => s.len(), Option.None => 0 } }",
+        );
+        assert!(rust.contains("__RayChan<std::sync::Arc<str>>"), "canal de Arc<str>: {}", rust);
+        assert!(rust.contains("std::sync::Arc::<str>::from(&*"), "send convierte a Arc<str>: {}", rust);
+        assert!(rust.contains(".map(|__x| Rc::<str>::from(&*__x))"), "recv convierte de vuelta a Rc<str>: {}", rust);
+    }
+
+    #[test]
+    fn rechaza_canal_de_struct() {
+        // Un canal de struct (mutable, no-Send) → error claro (diferido).
+        let tokens = crate::lexer::lex(
+            "struct P { x: int } fn main() { let ch: Channel<P> = Channel.new(); send(ch, P { x: 1 }); }",
+        )
+        .unwrap();
+        let mut prog = crate::parser::parse(tokens).unwrap();
+        crate::checker::check(&mut prog).unwrap();
+        assert!(super::transpile(&prog).is_err());
     }
 
     #[test]

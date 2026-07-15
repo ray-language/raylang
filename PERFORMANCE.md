@@ -157,6 +157,21 @@ un programa pequeño: **0.03 s** (el modelo dev=VM / deploy=nativo, como Rust). 
 y espectacular para el núcleo de cómputo. Confirma el veredicto de P0/P1: lo único que el HW cobra es el
 bucle de despacho, y P2.b lo **borra**.
 
+#### 🏁 ARCO P2.b CONSOLIDADO (15 jul 2026) — 33 fases, todo medido / byte-idéntico a la VM
+
+Del spike escalar al producto: `src/transpile.rs` (~2.6k líneas) + `ray build --native [--release]`. El
+transpilador cubre el **lenguaje completo** del corpus (37/37 ejemplos deterministas byte-idénticos) +
+**multi-módulo/cápsulas → un binario** + **toda la I/O de `std/fs`** (texto/binaria/handles/dirs/stdin/env)
++ **concurrencia CSP con hilos de SO reales** (spawn/canales/Task/join/scope/select/signals; canales de
+int/float/bool/char/string/bytes). Método invariante en las 33 fases: **verificar contra la VM, no asumir**
+(el oráculo cazó los bugs de multi-módulo namespacing, `$`-temps, concat-no-Display, colisión del `.rs`
+temporal…), y **medir antes de optimizar** (LTO ~10% solo en alloc/Map; PGO descartado). Estado: **581
+tests lib + 32 del transpilador + 9 `build_native` verdes**, working tree limpio. **Diferido consciente**
+(proyectos grandes con tradeoffs, no huecos): canales de tipos MUTABLES (struct/arreglo/Map → el modelo de
+valores thread-safe con el aislamiento de borrows), `try_join`/`Selected`/`cancel`/cancelación M12.5, y la
+VM auto-alojada del propio transpilador. **Punto de consolidación**: se retoma el núcleo del lenguaje/VM;
+el transpilador queda como un tercer backend de producto, estable y extensible fila-a-fila.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

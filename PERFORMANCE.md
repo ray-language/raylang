@@ -541,6 +541,23 @@ renombrar→borrar + errores) por subproceso en `tests/io_cli.rs::native_directo
 `remove_file`) y de directorios (`mkdir`/`remove_dir`/`rename`/`copy_file`). Diferido (aún fuera):
 `env`/`args`-de-entorno no determinista, I/O binaria (`*_bytes`), sockets/TLS.
 
+#### Fase 25 — proyectos multi-módulo / cápsulas → UN binario nativo
+
+`ray build --native` sobre un `main.ray` que importa otros módulos/cápsulas produce **un solo binario**:
+el loader ya aplana `main` + sus `import`/`from`/cápsulas (transitivos) en **un `Program`** antes de
+transpilar (mismo camino que `ray run`). **Bug encontrado y arreglado**: el loader namespaca los nombres a
+`modulo::nombre`; el transpilador manglaba las FUNCIONES (`geo::area`→`geo_CC_area`) pero **no los TIPOS**
+(`struct geo::Punto` → `::` ilegal en un identificador Rust → `rustc` fallaba). Fix: aplicar `mangle` a los
+nombres de tipo en los ~9 sitios de emisión (def de struct/enum, referencias en `rust_ty`, literal de
+struct, construcción de enum, target + arms de los impls de RayShow, patrones de match). **Sutileza de
+render** (verificada contra la VM): el `print(x)` default (RayShow) muestra el nombre **COMPLETO**
+namespacado (`geo::Punto { … }`), mientras que el `.show()` de `@derive(Show)` muestra el **LOCAL**
+(`Punto`) — el derivado ya lo trae bien (string literal del codegen del checker), y RayShow usa el completo.
+`@derive(Eq)` cruza módulos sin cambios (diccionarios). Los 3 proyectos reales (`examples/modulos`,
+`examples/capsula`, `examples/proyecto`) transpilan y dan salida byte-idéntica a la VM. Archivo único
+(sin `import`) intacto (`mangle` es la identidad sin `::`). Tests: unitario (los tipos se manglan, Display
+completo) + integración (`build_native_de_un_proyecto_multi_modulo_es_un_solo_binario`, `tests/cli_cli.rs`).
+
 **Lo que el spike NO cubre (= el trabajo real de P2.b completo)**: strings, arreglos, structs, enums,
 closures, genéricos, `Map`, y sobre todo la **semántica de referencia + GC** (raylang: mark-sweep;
 Rust: `Rc<RefCell>`/arena) y la **concurrencia** M12/M38. raylang mapea 1:1 en lo estructural

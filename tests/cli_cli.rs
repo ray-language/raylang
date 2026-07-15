@@ -111,6 +111,40 @@ fn build_native_produce_un_binario_que_corre_como_la_vm() {
 }
 
 #[test]
+fn build_native_de_un_proyecto_multi_modulo_es_un_solo_binario() {
+    // `ray build --native` sobre un main que importa OTRO módulo con tipos propios: el loader aplana
+    // todo en un Program, el transpilador mangla los tipos namespacados (`geo::Punto` → `geo_CC_Punto`)
+    // y sale UN solo binario nativo cuya salida coincide con la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native multi-módulo: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_multi");
+    std::fs::write(
+        base.join("geo.ray"),
+        "pub struct Punto { x: int, y: int }\n\
+         pub fn suma(p: Punto) -> int { p.x + p.y }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        "import geo;\n\
+         fn main() -> int { let p = geo.Punto { x: 3, y: 4 }; print(geo.suma(p)); print(p); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("app");
+    let (out, err, code) = ray(&base, &["build", "main.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native multi-módulo sale 0\nstdout={out}\nstderr={err}");
+    assert!(bin.is_file(), "un solo binario nativo");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "main.ray"]);
+    assert_eq!(native_out, vm_out, "nativo ≡ VM (multi-módulo)");
+    // suma(3,4)=7; el render default de `print` sobre un struct namespacado usa el nombre COMPLETO (geo::Punto).
+    assert_eq!(native_out, "7\ngeo::Punto { x: 3, y: 4 }\n", "salida esperada");
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

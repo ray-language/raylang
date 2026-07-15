@@ -270,7 +270,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             out.push_str("}\n");
             continue;
         }
-        writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", s.name, generic_decl(&s.type_params)).unwrap();
+        writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", mangle(&s.name), generic_decl(&s.type_params)).unwrap();
         for (fname, fty) in &s.fields {
             writeln!(out, "    {}: {},", fname, rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
         }
@@ -281,7 +281,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             continue; // nativos de Rust
         }
         t.tparams = e.type_params.iter().cloned().collect();
-        writeln!(out, "#[derive(Clone)]\nenum {}{} {{", e.name, generic_decl(&e.type_params)).unwrap();
+        writeln!(out, "#[derive(Clone)]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params)).unwrap();
         for v in &e.variants {
             if v.payload.is_empty() {
                 writeln!(out, "    {},", v.name).unwrap();
@@ -860,7 +860,7 @@ impl Transpiler {
             }
             // Literal de struct: Punto { x: 1, y: 2 } → Rc::new(RefCell::new(Punto { x: 1, y: 2 })).
             ExprKind::StructLit { name, fields } => {
-                write!(out, "Rc::new(std::cell::RefCell::new({} {{ ", name).unwrap();
+                write!(out, "Rc::new(std::cell::RefCell::new({} {{ ", mangle(name)).unwrap();
                 for (i, (fname, val)) in fields.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
@@ -888,7 +888,7 @@ impl Transpiler {
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err
                 } else {
-                    write!(out, "Rc::new({}::{}", enum_name, variant).unwrap();
+                    write!(out, "Rc::new({}::{}", mangle(enum_name), variant).unwrap();
                 }
                 if !args.is_empty() {
                     out.push('(');
@@ -966,6 +966,9 @@ impl Transpiler {
             if s.name == "Iter" || s.name.starts_with("__dyn_") { continue; }
             let gens = generic_decl(&s.type_params);
             let sfx = type_args(&s.type_params);
+            // El nombre del TIPO en Rust va manglado (multi-módulo); en la cadena de Display, el nombre
+            // COMPLETO namespacado (`geo::Punto`), como el render default de `print` en la VM.
+            let sm = mangle(&s.name);
             let mut fmt = format!("{} {{{{ ", s.name);
             let mut args = String::new();
             for (i, (fname, _)) in s.fields.iter().enumerate() {
@@ -976,7 +979,7 @@ impl Transpiler {
                 write!(args, ", __b.{}.ray_show()", fname).unwrap();
             }
             fmt.push_str(" }}");
-            writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __b = self.borrow(); format!(\"{}\"{}) }} }}", gens, s.name, sfx, fmt, args).unwrap();
+            writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __b = self.borrow(); format!(\"{}\"{}) }} }}", gens, sm, sfx, fmt, args).unwrap();
         }
         for e in &prog.enums {
             if e.name == "Option" || e.name == "Result" {
@@ -984,10 +987,12 @@ impl Transpiler {
             }
             let gens = generic_decl(&e.type_params);
             let sfx = type_args(&e.type_params);
-            writeln!(out, "impl{} RayShow for Rc<{}{}> {{ fn ray_show(&self) -> String {{ match &**self {{", gens, e.name, sfx).unwrap();
+            // Rust manglado; Display con el nombre COMPLETO (como el render default de `print` en la VM).
+            let em = mangle(&e.name);
+            writeln!(out, "impl{} RayShow for Rc<{}{}> {{ fn ray_show(&self) -> String {{ match &**self {{", gens, em, sfx).unwrap();
             for v in &e.variants {
                 if v.payload.is_empty() {
-                    writeln!(out, "{}::{} => \"{}.{}\".to_string(),", e.name, v.name, e.name, v.name).unwrap();
+                    writeln!(out, "{}::{} => \"{}.{}\".to_string(),", em, v.name, e.name, v.name).unwrap();
                 } else {
                     let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__p{}", i)).collect();
                     let mut fmt = format!("{}.{}(", e.name, v.name);
@@ -1000,7 +1005,7 @@ impl Transpiler {
                         write!(args, ", {}.ray_show()", binds[i]).unwrap();
                     }
                     fmt.push(')');
-                    writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", e.name, v.name, binds.join(", "), fmt, args).unwrap();
+                    writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", em, v.name, binds.join(", "), fmt, args).unwrap();
                 }
             }
             out.push_str("} } }\n");
@@ -1084,7 +1089,7 @@ impl Transpiler {
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err (nativos, sin `EnumName::`)
                 } else {
-                    write!(out, "{}::{}", enum_name, variant).unwrap();
+                    write!(out, "{}::{}", mangle(enum_name), variant).unwrap();
                 }
                 if !subpatterns.is_empty() {
                     // Payload: user enum → tabla de variantes; Option/Result → los args del tipo esperado
@@ -1907,10 +1912,11 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
                 let ra: Vec<String> = args.iter().map(|a| rust_ty(a, enums, tparams)).collect::<Result<_, _>>()?;
                 format!("<{}>", ra.join(", "))
             };
+            // Multi-módulo: un tipo namespacado (`figuras::Rect`) se mangla a un identificador Rust válido.
             return Ok(if enums.contains(n) {
-                format!("Rc<{}{}>", n, sfx)
+                format!("Rc<{}{}>", mangle(n), sfx)
             } else {
-                format!("Rc<std::cell::RefCell<{}{}>>", n, sfx)
+                format!("Rc<std::cell::RefCell<{}{}>>", mangle(n), sfx)
             });
         }
         // Option/Result → los nativos de Rust (genéricos gestionados por rustc, sin monomorfizar).
@@ -1928,7 +1934,7 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
                 let ra: Vec<String> = args.iter().map(|a| rust_ty(a, enums, tparams)).collect::<Result<_, _>>()?;
                 format!("<{}>", ra.join(", "))
             };
-            return Ok(format!("Rc<{}{}>", n, sfx));
+            return Ok(format!("Rc<{}{}>", mangle(n), sfx));
         }
         // Tupla → tupla NATIVA de Rust (heterogénea, inmutable; sin Rc — valor, como en raylang).
         Type::Tuple(ts) => {
@@ -2286,6 +2292,27 @@ mod tests {
         assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
         assert!(rust.contains("let __c = "), "{}", rust); // captura del concreto en la coerción
         assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
+    }
+
+    #[test]
+    fn transpila_multi_modulo_mangla_los_tipos() {
+        // Un proyecto multi-módulo: el loader namespaca los tipos a `modulo::Tipo`. El transpilador debe
+        // manglarlos a un identificador Rust válido (`figuras_CC_Rect`), no dejar el `::`; en las cadenas
+        // de Display de RayShow debe usar el nombre LOCAL (`Rect`), como la VM.
+        let loaded = match crate::loader::load(std::path::Path::new("examples/modulos/main.ray")) {
+            Ok(l) => l,
+            Err(_) => panic!("no se pudo cargar modulos/main.ray"),
+        };
+        let mut prog = loaded.program;
+        crate::checker::check(&mut prog).expect("check");
+        let rust = transpile(&prog).expect("transpile");
+        assert!(rust.contains("figuras_CC_Rect"), "tipo namespacado manglado: {}", rust);
+        // No debe quedar `::` en un IDENTIFICADOR de tipo Rust (struct/enum def, referencia): esos van
+        // manglados. (El `::` sí aparece en las cadenas de Display de RayShow, entre comillas.)
+        assert!(!rust.contains("struct figuras::"), "def de struct manglada: {}", rust);
+        assert!(!rust.contains("RefCell<figuras::"), "referencia de tipo manglada: {}", rust);
+        // El render default de `print` (RayShow) usa el nombre COMPLETO namespacado, como la VM.
+        assert!(rust.contains("\"figuras::Rect {{"), "Display con nombre completo: {}", rust);
     }
 
     #[test]

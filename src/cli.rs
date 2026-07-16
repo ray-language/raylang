@@ -189,23 +189,17 @@ fn cmd_dev(args: &[String]) {
                 .filter(|p| p.as_os_str().len() > 0)
         })
         .unwrap_or(cwd);
+    // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
+    // (mismos que `cmd_run`), y el primer resto es el archivo explícito (o `None` → default del proyecto).
+    let entry = dev_entry(args);
     eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
+    let mut child = spawn_dev_child(&exe, args);
+    let mut running = true;
     loop {
-        // Lanza el programa como `ray run <args...>` (mismo binario): hereda la resolución de
-        // entrada, la regeneración de templates y los flags (--interp/--fuel/…).
-        let mut child = match process::Command::new(&exe).arg("run").args(args).spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[dev] could not launch the program: {e}");
-                process::exit(70);
-            }
-        };
-        DEV_CHILD.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
-        let mut running = true;
         let change = loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
             let actual = scan_sources(&root);
@@ -218,10 +212,76 @@ fn cmd_dev(args: &[String]) {
                 eprintln!("[dev] the program finished ({status}); waiting for changes…");
             }
         };
+        // Debounce: coalesce una ráfaga (un guardado + el formateador del editor = varios eventos)
+        // esperando a que los fuentes se estabilicen antes de actuar → un solo reinicio.
+        dev_debounce(&root, &mut snapshot);
+        // Check-before-restart: compila primero (ms). Si NO compila, mantén el programa en marcha e
+        // imprime el diagnóstico — no mates un servidor que funciona por un error a medio escribir.
+        if let Err(diag) = dev_check_compiles(&exe, &entry) {
+            eprintln!("[dev] change in {change}: does not compile — keeping the running program:");
+            eprint!("{diag}");
+            continue;
+        }
+        // Verde → reinicia (drena el viejo, relanza fresco).
         eprintln!("[dev] change in {change}: restarting…");
         if running {
             terminate_gracefully(&mut child);
         }
+        child = spawn_dev_child(&exe, args);
+        running = true;
+    }
+}
+
+/// El archivo de entrada que `ray dev` pasará al hijo (para el check-before-restart), despojando los
+/// mismos flags que `ray run` consume; `None` = el default del proyecto (`src/main.ray`).
+fn dev_entry(args: &[String]) -> Option<String> {
+    let (_det, a) = take_flag_bool(args, "--deterministic");
+    let (_interp, a) = take_interp(&a);
+    let (_fuel, a) = take_flag_num(&a, "--fuel", "");
+    let (_heap, a) = take_flag_num(&a, "--heap", "");
+    a.first().cloned()
+}
+
+/// Lanza el programa como `ray run <args...>` (mismo binario): hereda la resolución de entrada, la
+/// regeneración de templates y los flags. Registra el pid en `DEV_CHILD` para la limpieza por señal.
+fn spawn_dev_child(exe: &Path, args: &[String]) -> process::Child {
+    match process::Command::new(exe).arg("run").args(args).spawn() {
+        Ok(c) => {
+            DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
+            c
+        }
+        Err(e) => {
+            eprintln!("[dev] could not launch the program: {e}");
+            process::exit(70);
+        }
+    }
+}
+
+/// Corre `ray build <entry>` (chequea + compila, sin ejecutar) como el gate del reinicio: `Ok(())` si
+/// compila, `Err(diagnóstico)` con el stderr renderizado si no. Reusa exactamente la salida de `ray build`.
+fn dev_check_compiles(exe: &Path, entry: &Option<String>) -> Result<(), String> {
+    let mut cmd = process::Command::new(exe);
+    cmd.arg("build");
+    if let Some(e) = entry {
+        cmd.arg(e);
+    }
+    match cmd.output() {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+        Err(e) => Err(format!("could not run the compile check: {e}\n")),
+    }
+}
+
+/// Debounce: espera a que los fuentes se estabilicen (~120 ms sin cambios) antes de continuar, para
+/// coalescer una ráfaga de eventos (guardado + formateador) en una sola acción. Actualiza `snapshot`.
+fn dev_debounce(root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>) {
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let actual = scan_sources(root);
+        if actual == *snapshot {
+            break;
+        }
+        *snapshot = actual;
     }
 }
 

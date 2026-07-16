@@ -55,3 +55,45 @@ fn dev_reinicia_ante_cambios() {
     let _ = dev.kill();
     let _ = dev.wait();
 }
+
+#[test]
+fn dev_no_reinicia_si_el_cambio_no_compila() {
+    // Check-before-restart (M92.2): un cambio que NO compila NO debe reiniciar el programa; el
+    // supervisor imprime el diagnóstico y mantiene lo que había. Un cambio verde posterior sí reinicia.
+    let base = std::env::temp_dir().join("ray_dev_check");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v1\"); 0 }\n").unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev");
+
+    esperar_contenido(&out_path, "v1", 10);
+    esperar_contenido(&out_path, "waiting for changes", 10);
+
+    // 1) Un cambio que NO compila (falta cerrar la llave): el supervisor lo rechaza, no reinicia.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"roto\"); 0 \n").unwrap();
+    esperar_contenido(&out_path, "does not compile", 10);
+
+    // 2) Un cambio verde posterior SÍ reinicia con el código nuevo.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
+    let output = esperar_contenido(&out_path, "v2", 10);
+    assert!(output.contains("does not compile"), "rechazó el cambio roto:\n{output}");
+    assert!(output.contains("restarting"), "reinició con el cambio verde:\n{output}");
+    // El código roto nunca corrió (no imprimió "roto").
+    assert!(!output.contains("roto"), "el cambio roto no llegó a ejecutarse:\n{output}");
+
+    let _ = dev.kill();
+    let _ = dev.wait();
+}

@@ -46,6 +46,11 @@ jobs:
         run: rustc --version
       - name: Tests (incluye el fuzzer del front-end)
         run: cargo test
+      # El corpus nativo corre en CADA push (antes: solo nocturno → una regresión se veía hasta 24 h
+      # después, post-merge, sin bloquear ningún PR). Con la caché de `~/.ray/native-cache` y el target
+      # compartido tarda ~2-3 min — menos que el build de release de abajo. `#[ignore]` en local sigue.
+      - name: Corpus nativo ≡ VM (ejemplos deterministas)
+        run: cargo test --test native_corpus -- --ignored --nocapture
       - name: Build de release
         run: cargo build --release
       # La release mínima excluye el intérprete (solo-VM). No se corren tests aquí: los oráculos
@@ -81,16 +86,3 @@ jobs:
         env:
           RAYLANG_FUZZ_ITERS: "200000"
         run: cargo test --test fuzz_frontend -- --nocapture
-
-  # Corpus nativo (`#[ignore]` porque compila ~50 binarios con rustc, ~2-3 min): verifica que TODOS los
-  # ejemplos deterministas transpilan byte-idénticos a la VM. Nocturno porque es lento para cada push.
-  corpus-nativo-nocturno:
-    name: corpus nativo (nocturno)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Instalar Rust estable
-        run: rustup toolchain install stable --profile minimal
-      - name: Corpus nativo ≡ VM (ejemplos deterministas)
-        run: cargo test --test native_corpus -- --ignored --nocapture

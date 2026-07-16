@@ -58,6 +58,12 @@ fn excluido(p: &Path) -> Option<&'static str> {
 #[ignore = "compila ~50 binarios nativos con rustc (~2-3 min); correr con -- --ignored"]
 fn los_ejemplos_deterministas_transpilan_identicos_a_la_vm() {
     if !tiene_rustc() {
+        // En LOCAL el skip es honesto (no todo el mundo tiene rustc a mano). Bajo CI sería un falso
+        // verde silencioso — exactamente lo que este corpus existe para impedir → fallo duro.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "rustc no disponible bajo CI: el corpus nativo daría un falso verde"
+        );
         eprintln!("saltando native_corpus: rustc no disponible");
         return;
     }

@@ -923,6 +923,14 @@ fn get<K, V>(m: Map<K, V>, k: K) -> Option<V> {
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// P0.2 (perf): valor asociado a `k`, o `default` si la clave no está — en un solo lookup y SIN
+// alocar (a diferencia de `get(m, k).unwrap_or(default)`, que aloca el arreglo del primitivo y el
+// Option intermedio). Es el idioma de conteo/acumulación: `m.get_or(k, 0) + 1`.
+/// Returns the value for key `k`, or `default` if the key is absent — one lookup, no allocation.
+fn get_or<K, V>(m: Map<K, V>, k: K, default: V) -> V {
+    __get_or(m, k, default)
+}
+
 // M13.1b: quita la clave `k` del mapa y devuelve su valor (None si no estaba).
 /// Removes key `k` from the map and returns its value, or `None` if it was not present.
 fn remove<K, V>(m: Map<K, V>, k: K) -> Option<V> {

@@ -61,6 +61,9 @@ fn main() -> int {
 - **Concurrencia de verdad.** Modelo de **actores con aislamiento de heap** + canales tipados, sobre un
   scheduler **M:N multicore** con *data-race freedom* por construcción.
 - **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
+- **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
+  ejecutable: **24–61× más rápido que la VM**, y en cómputo puro **le gana a node (V8) por 5,4×**. Modelo
+  *dev = VM / deploy = nativo*, con paridad byte-idéntica.
 - **Corre en el navegador.** La VM compilada a WebAssembly, sin `wasm-bindgen`.
 
 ## Instalación
@@ -91,6 +94,7 @@ ray new hola           # crea un proyecto (ray.toml + src/main.ray)
 cd hola
 ray run                # ejecuta src/main.ray en la VM
 ray build              # chequea y compila sin ejecutar
+ray build --native     # transpila a Rust y compila un binario nativo (24–61× la VM)
 ray test               # corre las funciones @test
 ray fmt src/main.ray   # formatea
 ray doc src/main.ray   # genera documentación desde /// 
@@ -101,6 +105,13 @@ ray lsp                # servidor LSP (diagnósticos, hover, definición, refs, 
 El código de salida de `ray run` es el `int` que devuelve `main` (0 si es `unit`). Para embeber raylang
 confinado: `ray run --fuel N` (límite de instrucciones) y `--heap N` (tope de objetos). Concurrencia
 reproducible: `--deterministic`.
+
+**Deploy nativo** (*dev = VM / deploy = nativo*, como Rust): `ray build --native prog.ray` produce un
+ejecutable de código máquina, byte-idéntico a la VM. Los subsistemas con crate de producción (TLS,
+criptografía, SQLite) se enlazan **solo cuando el programa los usa** (vía un proyecto Cargo generado); si
+no toca ninguno, se compila con `rustc` pelado en ~0,2 s. `--release` sube el tier de optimización;
+`--without crypto,tls,sqlite` (o `[native] without = [...]` en `ray.toml`) excluye un subsistema para
+builds herméticos/cross-compile. Ver [Compilación a binario nativo](#documentación).
 
 ## Un vistazo al lenguaje
 

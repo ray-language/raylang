@@ -43,6 +43,11 @@ pub struct Manifest {
     /// índice, otra URL de descarga); el hash publicado verifica igual. Si el mirror falla, se cae a
     /// la URL original. Lo puede sobrescribir la variable de entorno `RAY_MIRROR`.
     pub registry_mirror: Option<String>,
+    /// `[native] without` — subsistemas con-crate (crypto/tls/sqlite) a EXCLUIR del binario nativo
+    /// (`ray build --native`), como política estable del proyecto. Equivale a `--without` pero versionado
+    /// con el repo (builds herméticos/policy). El flag `--without` de CLI se UNE a esta lista. Vacío = sin
+    /// exclusión. Ver docs/transpilador-nativo.md §3.3.
+    pub native_without: Vec<String>,
 }
 
 impl Manifest {
@@ -89,6 +94,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut indent_size = None;
     let mut registry_index = None;
     let mut registry_mirror = None;
+    let mut native_without = Vec::new();
 
     for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
@@ -140,6 +146,14 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "mirror" => registry_mirror = Some(as_string()?),
                 _ => {} // otras claves del registro se ignoran por ahora (extensibilidad)
             },
+            "native" => match key {
+                // `without = ["tls", "sqlite"]` — array de subsistemas a excluir del binario nativo.
+                "without" => {
+                    native_without = parse_string_array(value_raw)
+                        .ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"tls\", \"sqlite\"]"))?;
+                }
+                _ => {} // otras claves de [native] se ignoran por ahora (extensibilidad)
+            },
             "" => return Err(err(num, "key outside any section (missing '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
@@ -155,7 +169,19 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         indent_size,
         registry_index,
         registry_mirror,
+        native_without,
     })
+}
+
+/// Parsea un array TOML simple de cadenas en una línea: `["a", "b", "c"]` → `["a","b","c"]`; `[]` → vacío.
+/// `None` si no tiene la forma `[ … ]` o algún elemento no está entre comillas. (No admite arrays
+/// multilínea ni comas finales — suficiente para `[native] without`, que es una lista corta y plana.)
+fn parse_string_array(s: &str) -> Option<Vec<String>> {
+    let inner = s.strip_prefix('[')?.strip_suffix(']')?.trim();
+    if inner.is_empty() {
+        return Some(Vec::new());
+    }
+    inner.split(',').map(|part| unquote_string(part.trim())).collect()
 }
 
 /// Inserta o actualiza `nombre = "<req>"` en la sección `[dependencies]` del fuente de un `ray.toml`
@@ -250,7 +276,22 @@ mod tests {
         assert_eq!(m.version, "0.1.0");
         assert_eq!(m.entry, "src/main.ray"); // por defecto
         assert!(m.dependencies.is_empty());
+        assert!(m.native_without.is_empty()); // sin [native] → sin exclusión
         assert_eq!(m.entry_path(), PathBuf::from("/proj/src/main.ray"));
+    }
+
+    #[test]
+    fn native_without_es_un_array_de_subsistemas() {
+        // [native] without = ["tls", "sqlite"] → la política estable de exclusión del binario nativo.
+        let src = "[package]\nname = \"svc\"\nversion = \"1.0.0\"\n\n[native]\nwithout = [\"tls\", \"sqlite\"]\n";
+        let m = parse_src(src).unwrap();
+        assert_eq!(m.native_without, vec!["tls".to_string(), "sqlite".to_string()]);
+        // Array vacío → sin exclusión (equivalente a no declararlo).
+        let empty = parse_src("[package]\nname=\"x\"\nversion=\"1\"\n[native]\nwithout = []\n").unwrap();
+        assert!(empty.native_without.is_empty());
+        // Un valor mal formado (no-array) es un error claro, no un ignorado silencioso.
+        let bad = parse_src("[package]\nname=\"x\"\nversion=\"1\"\n[native]\nwithout = \"tls\"\n");
+        assert!(bad.is_err(), "un `without` no-array debe fallar: {bad:?}");
     }
 
     #[test]

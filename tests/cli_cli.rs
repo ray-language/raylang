@@ -83,6 +83,943 @@ fn build_compila_ok_y_reports_errors() {
 }
 
 #[test]
+fn build_native_produce_un_binario_que_corre_como_la_vm() {
+    // `ray build --native` (P2.b): transpila a Rust, compila con `rustc -O` y produce un binario nativo
+    // cuya salida coincide con la VM. Requiere `rustc` en el PATH; si no está, se salta (no es un fallo).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\n\
+         fn main() -> int { print(fib(10)); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
+    assert!(out.contains("binario nativo"), "reporta el binario\n{out}");
+    assert!(bin.is_file(), "el binario nativo existe");
+    // El binario nativo produce la MISMA salida que la VM.
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "nativo ≡ VM");
+    assert_eq!(native_out.trim(), "55", "fib(10) = 55");
+}
+
+#[test]
+fn build_native_de_un_proyecto_multi_modulo_es_un_solo_binario() {
+    // `ray build --native` sobre un main que importa OTRO módulo con tipos propios: el loader aplana
+    // todo en un Program, el transpilador mangla los tipos namespacados (`geo::Punto` → `geo_CC_Punto`)
+    // y sale UN solo binario nativo cuya salida coincide con la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native multi-módulo: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_multi");
+    std::fs::write(
+        base.join("geo.ray"),
+        "pub struct Punto { x: int, y: int }\n\
+         pub fn suma(p: Punto) -> int { p.x + p.y }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        "import geo;\n\
+         fn main() -> int { let p = geo.Punto { x: 3, y: 4 }; print(geo.suma(p)); print(p); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("app");
+    let (out, err, code) = ray(&base, &["build", "main.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native multi-módulo sale 0\nstdout={out}\nstderr={err}");
+    assert!(bin.is_file(), "un solo binario nativo");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "main.ray"]);
+    assert_eq!(native_out, vm_out, "nativo ≡ VM (multi-módulo)");
+    // suma(3,4)=7; el render default de `print` sobre un struct namespacado usa el nombre COMPLETO (geo::Punto).
+    assert_eq!(native_out, "7\ngeo::Punto { x: 3, y: 4 }\n", "salida esperada");
+}
+
+#[test]
+fn build_native_env_y_args_coinciden_con_la_vm() {
+    // `ray build --native` de un programa que lee una variable de entorno (env) y los argumentos de
+    // línea de comandos (args): el binario nativo, con el MISMO entorno/args, produce la salida de la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native env/args: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_env");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           match (env(\"RAY_IT_VAR\")) { Option.Some(v) => print(\"env: \" + v), Option.None => print(\"env: none\") }\n\
+           let a = args();\n\
+           print(\"argc: \" + to_string(a.len()));\n\
+           if (a.len() > 0) { print(\"arg0: \" + a[0]); } else { print(\"arg0: -\"); }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native env/args ok\n{err}");
+
+    // Nativo: mismo env + args posicionales.
+    let native = Command::new(&bin)
+        .env("RAY_IT_VAR", "hola")
+        .args(["uno", "dos"])
+        .output()
+        .expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    // VM: `ray run prog.ray uno dos` con el mismo env (los args tras el archivo van a args()).
+    let vm = Command::new(BIN)
+        .args(["run", "prog.ray", "uno", "dos"])
+        .env("RAY_IT_VAR", "hola")
+        .current_dir(&base)
+        .output()
+        .expect("corre la VM");
+    let vm_out = String::from_utf8_lossy(&vm.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "nativo ≡ VM (env + args)");
+    assert_eq!(native_out, "env: hola\nargc: 2\narg0: uno\n", "salida esperada");
+}
+
+#[test]
+fn build_native_concurrencia_csp_coincide_con_la_vm() {
+    // `ray build --native` de un pipeline CSP (spawn + canales): el binario nativo usa hilos de SO reales
+    // y, por el orden FIFO de los canales, produce la MISMA salida (determinista-por-diseño) que la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native concurrencia: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_conc");
+    // productor → cuadrador → main (pipeline con canal acotado, como examples/concurrency/concurrencia.ray).
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn gen(out: Channel<int>, n: int) { var i = 1; while (i <= n) { send(out, i); i = i + 1; } close(out); }\n\
+         fn sq(inp: Channel<int>, out: Channel<int>) { var go = true; while (go) { match (recv(inp)) { Option.Some(v) => send(out, v * v), Option.None => { close(out); go = false; } } } }\n\
+         fn main() -> int {\n\
+           let a: Channel<int> = Channel.bounded(2);\n\
+           let b: Channel<int> = Channel.new();\n\
+           spawn(fn() { gen(a, 5); });\n\
+           spawn(fn() { sq(a, b); });\n\
+           var total = 0; var go = true;\n\
+           while (go) { match (recv(b)) { Option.Some(v) => { print(v); total = total + v; }, Option.None => { go = false; } } }\n\
+           print(total);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native concurrencia ok\n{err}");
+
+    let expected = "1\n4\n9\n16\n25\n55\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da el pipeline");
+    // El binario nativo, 5 veces, siempre igual (determinista-por-diseño pese a los hilos reales).
+    for _ in 0..5 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+        assert_eq!(native_out, expected, "nativo ≡ VM (estable)");
+    }
+}
+
+#[test]
+fn build_native_spawn_de_funcion_nombrada_coincide_con_la_vm() {
+    // `spawn(worker)` con `worker` una función de nivel superior (no un literal `fn(){}`) → el binario
+    // nativo la corre en un hilo real y `join` recoge su resultado, byte-idéntico a la VM. (Fleco no-crate
+    // del transpilador: antes `spawn` solo aceptaba una función anónima literal.)
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native spawn-nombrada: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_spawn_named");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn trabajo() -> int { print(\"worker\"); 42 }\n\
+         fn main() -> int {\n\
+           let t = spawn(trabajo);\n\
+           let r = join(t);\n\
+           print(\"r \" + to_string(r));\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native spawn-nombrada ok\n{err}");
+
+    let expected = "worker\nr 42\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da la salida");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, expected, "nativo ≡ VM (spawn de función nombrada)");
+}
+
+/// Un echo TLS mínimo (servidor): lee cert/clave de los args, escucha en un puerto efímero (lo imprime),
+/// acepta una conexión, la envuelve con `tls_accept` y devuelve por eco lo que reciba (I/O TLS por
+/// `socket_read_bytes`/`socket_write_bytes`). Sirve tanto para el VM como transpilado a nativo.
+const TLS_ECHO_SERVER_RAY: &str = "import std/net;\n\
+import std/fs;\n\
+fn handle(conn: int) {\n\
+    match (net.socket_read_bytes(conn)) {\n\
+        Result.Ok(data) => { let _ = net.socket_write_bytes(conn, data); },\n\
+        Result.Err(e) => eprint(e),\n\
+    }\n\
+    close(conn);\n\
+}\n\
+fn main() -> int {\n\
+    let a = args();\n\
+    var cert = \"\";\n\
+    var key = \"\";\n\
+    match (fs.read_file(a[0])) { Result.Ok(c) => { cert = c; }, Result.Err(e) => { eprint(e); return 1; } }\n\
+    match (fs.read_file(a[1])) { Result.Ok(k) => { key = k; }, Result.Err(e) => { eprint(e); return 1; } }\n\
+    match (net.tcp_listen(\"127.0.0.1\", 0)) {\n\
+        Result.Err(e) => { eprint(e); return 1; },\n\
+        Result.Ok(srv) => {\n\
+            print(to_string(net.local_port(srv)));\n\
+            var go = true;\n\
+            while (go) {\n\
+                match (net.tcp_accept(srv)) {\n\
+                    Result.Ok(tcp) => match (net.tls_accept(tcp, cert, key)) {\n\
+                        Result.Ok(conn) => handle(conn),\n\
+                        Result.Err(e) => eprint(\"tls_accept: \" + e),\n\
+                    },\n\
+                    Result.Err(e) => eprint(e),\n\
+                }\n\
+            }\n\
+        },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// El echo TLS (cliente): conecta por TLS a `localhost:<puerto>` (el cert de prueba es de localhost),
+/// envía \"hola tls\" y espera el eco. Args: [puerto]. Confía en la CA de prueba vía `SSL_CERT_FILE`.
+const TLS_ECHO_CLIENT_RAY: &str = "import std/net;\n\
+fn main() -> int {\n\
+    let a = args();\n\
+    let port = parse_int(a[0]).unwrap_or(0);\n\
+    match (net.tls_connect(\"localhost\", port)) {\n\
+        Result.Ok(conn) => {\n\
+            let _ = net.socket_write_bytes(conn, \"hola tls\".to_bytes());\n\
+            match (net.socket_read_bytes(conn)) {\n\
+                Result.Ok(data) => match (from_utf8(data)) {\n\
+                    Result.Ok(s) => print(\"eco: \" + s),\n\
+                    Result.Err(e) => eprint(e),\n\
+                },\n\
+                Result.Err(e) => eprint(e),\n\
+            }\n\
+            close(conn);\n\
+        },\n\
+        Result.Err(e) => { eprint(\"connect: \" + e); return 1; },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// Lanza un proceso servidor TLS (VM o nativo) con el cert/clave de prueba y devuelve (proceso, puerto).
+/// El servidor imprime el puerto efímero como primera línea (`println!` de Rust hace flush por newline).
+fn launch_tls_echo_server(cmd: &mut Command) -> (std::process::Child, u16) {
+    use std::io::{BufRead, BufReader};
+    let root = env!("CARGO_MANIFEST_DIR");
+    let cert = format!("{root}/tests/fixtures/tls_cert.pem");
+    let key = format!("{root}/tests/fixtures/tls_key.pem");
+    let mut child = cmd
+        .arg(&cert)
+        .arg(&key)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("lanza el servidor TLS");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el puerto");
+    let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("puerto inválido: {line:?}"));
+    (child, port)
+}
+
+#[test]
+fn build_native_tls_cliente_contra_servidor_vm_hace_eco() {
+    // Paso 1 del crate ray-runtime: un cliente TLS (std/net → rustls) transpila a nativo. build_native
+    // detecta la feature `tls`, genera un proyecto Cargo con ray-runtime y compila con cargo. El binario
+    // hace I/O TLS bloqueante (ray_runtime::tls::TlsStream). Cliente NATIVO ↔ servidor TLS del VM (echo).
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native tls cliente: cargo no disponible");
+        return;
+    }
+    let base = tmp("build_native_tls_cli");
+    std::fs::write(base.join("client.ray"), TLS_ECHO_CLIENT_RAY).unwrap();
+    let bin = base.join("client_bin");
+    let (out, err, code) = ray(&base, &["build", "client.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native tls cliente ok\n{err}");
+    assert!(out.contains("ray-runtime: tls"), "usó el camino Cargo con ray-runtime tls: {out}");
+
+    // Servidor TLS en el VM (echo); el cliente NATIVO conecta y espera el eco.
+    std::fs::write(base.join("server.ray"), TLS_ECHO_SERVER_RAY).unwrap();
+    let mut server_cmd = Command::new(BIN);
+    server_cmd.arg("run").arg(base.join("server.ray"));
+    let (mut server, port) = launch_tls_echo_server(&mut server_cmd);
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let client = Command::new(&bin)
+        .arg(port.to_string())
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("corre el cliente TLS nativo");
+    let _ = server.kill();
+    assert_eq!(
+        String::from_utf8_lossy(&client.stdout),
+        "eco: hola tls\n",
+        "cliente TLS nativo ≡ VM (rustls en ray-runtime)\nstderr: {}",
+        String::from_utf8_lossy(&client.stderr)
+    );
+}
+
+#[test]
+fn build_native_tls_servidor_contra_cliente_vm_hace_eco() {
+    // El otro lado: un servidor TLS (tls_accept) transpila a nativo; un cliente del VM conecta por TLS y
+    // recibe el eco. Valida el camino de servidor (rustls server-side) del binario transpilado.
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native tls servidor: cargo no disponible");
+        return;
+    }
+    let base = tmp("build_native_tls_srv");
+    std::fs::write(base.join("server.ray"), TLS_ECHO_SERVER_RAY).unwrap();
+    std::fs::write(base.join("client.ray"), TLS_ECHO_CLIENT_RAY).unwrap();
+    let bin = base.join("server_bin");
+    let (out, err, code) = ray(&base, &["build", "server.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native tls servidor ok\n{err}");
+    assert!(out.contains("ray-runtime: tls"), "usó el camino Cargo con ray-runtime tls: {out}");
+
+    // Servidor TLS NATIVO; el cliente en el VM conecta y espera el eco.
+    let (mut server, port) = launch_tls_echo_server(&mut Command::new(&bin));
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let client = Command::new(BIN)
+        .arg("run")
+        .arg(base.join("client.ray"))
+        .arg(port.to_string())
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("corre el cliente TLS del VM");
+    let _ = server.kill();
+    assert_eq!(
+        String::from_utf8_lossy(&client.stdout),
+        "eco: hola tls\n",
+        "servidor TLS nativo atiende al cliente VM\nstderr: {}",
+        String::from_utf8_lossy(&client.stderr)
+    );
+}
+
+#[test]
+fn build_native_crypto_de_produccion_via_ray_runtime_coincide_con_la_vm() {
+    // Paso 0b del crate ray-runtime (docs/transpilador-nativo.md §4-5): un programa que usa cripto de
+    // PRODUCCIÓN (std/crypto → ring) transpila a nativo por PRIMERA vez. build_native detecta la feature
+    // `crypto`, genera un proyecto Cargo con ray-runtime incrustado y compila con cargo. El binario llama al
+    // MISMO ring que la VM → salida byte-idéntica (sha256/hmac/ed25519 son deterministas).
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native crypto: cargo no disponible");
+        return;
+    }
+    let base = tmp("build_native_crypto");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/crypto;\n\
+         fn main() -> int {\n\
+           let data = \"hola mundo\".to_bytes();\n\
+           print(to_string(crypto.sha256(data)));\n\
+           print(to_string(crypto.hmac_sha256(\"clave\".to_bytes(), data)));\n\
+           let seed = \"0123456789abcdef0123456789abcdef\".to_bytes();\n\
+           match (crypto.ed25519_public_key(seed)) {\n\
+             Option.Some(pk) => match (crypto.ed25519_sign(seed, data)) {\n\
+               Option.Some(sig) => print(to_string(crypto.ed25519_verify(pk, data, sig))),\n\
+               Option.None => print(\"no sign\"),\n\
+             },\n\
+             Option.None => print(\"no pk\"),\n\
+           }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native crypto ok\n{err}");
+    assert!(out.contains("ray-runtime: crypto"), "usó el camino Cargo con ray-runtime: {out}");
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "nativo ≡ VM (cripto de producción vía ring en ray-runtime)");
+}
+
+#[test]
+fn build_native_sqlite_via_ray_runtime_coincide_con_la_vm() {
+    // Paso 2 del crate ray-runtime: SQLite embebido (db/sqlite → rusqlite) transpila a nativo. build_native
+    // detecta la feature `sqlite`, genera un proyecto Cargo con ray-runtime (rusqlite bundled) y compila con
+    // cargo. El binario usa el MISMO SQLite que la VM → salida byte-idéntica (el demo usa `:memory:` →
+    // determinista). Corre el demo real `examples/db/sqlite_demo.ray` (necesita su ray.toml para el paquete).
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native sqlite: cargo no disponible");
+        return;
+    }
+    let db_dir = format!("{}/examples/db", env!("CARGO_MANIFEST_DIR"));
+    let db_path = std::path::Path::new(&db_dir);
+    let bin = std::env::temp_dir().join("ray_native_sqlite_test_bin");
+    let (out, err, code) =
+        ray(db_path, &["build", "sqlite_demo.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sqlite ok\n{err}");
+    assert!(out.contains("ray-runtime: sqlite"), "usó el camino Cargo con ray-runtime sqlite: {out}");
+
+    // El demo sin args usa `:memory:` (determinista). VM ≡ nativo byte a byte.
+    let (vm_out, _e, _c) = ray(db_path, &["run", "sqlite_demo.ray"]);
+    let native = Command::new(&bin).output().expect("corre el binario SQLite nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "SQLite nativo ≡ VM (rusqlite en ray-runtime)");
+    assert!(native_out.contains("ada | 9.5"), "el demo consultó filas: {native_out}");
+}
+
+#[test]
+fn build_native_without_crypto_fuerza_la_via_rapida_y_stubbea() {
+    // `--without crypto` (escape hatch): aunque el programa use cripto, NO se enlaza ray-runtime → el
+    // binario compila por la vía rápida `rustc` (sin cargo/red; el éxito no menciona ray-runtime) y su uso
+    // de cripto cae en un stub que panica en runtime. Para builds herméticos/cross-compile/policy.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native --without: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_without");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/crypto;\n\
+         fn main() -> int { print(to_string(crypto.sha256(\"x\".to_bytes()))); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--without", "crypto", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --without crypto ok\n{err}");
+    assert!(!out.contains("ray-runtime"), "vía rápida rustc, sin ray-runtime: {out}");
+    // El binario compila pero panica al alcanzar la cripto stubbeada (código de salida != 0).
+    let run = Command::new(&bin).output().expect("corre el binario stubbeado");
+    assert!(!run.status.success(), "el binario panica al alcanzar la cripto excluida");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("no está soportada"),
+        "el stub panica con un mensaje claro: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn build_native_lee_la_exclusion_estable_del_ray_toml() {
+    // `[native] without = ["crypto"]` en ray.toml: política de exclusión versionada con el proyecto, sin
+    // pasar `--without`. Un `ray build --native` la aplica → el uso de cripto stubbea y el binario compila
+    // por la vía rápida (rustc, sin ray-runtime). Equivalente a `--without crypto` pero persistente.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native ray.toml policy: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_toml_policy");
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[native]\nwithout = [\"crypto\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/crypto;\n\
+         fn main() -> int { print(to_string(crypto.sha256(\"x\".to_bytes()))); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    // Sin `--without` en la CLI: la exclusión viene SOLO del ray.toml.
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native con política ray.toml ok\n{err}");
+    assert!(!out.contains("ray-runtime"), "la política excluyó crypto → vía rápida rustc: {out}");
+    let run = Command::new(&bin).output().expect("corre el binario");
+    assert!(!run.status.success(), "panica al alcanzar la cripto excluida por el ray.toml");
+}
+
+#[test]
+fn build_native_without_rechaza_un_subsistema_desconocido() {
+    // Fail-fast ante un typo en `--without` (como `ray add` valida el nombre del paquete).
+    let base = tmp("build_native_without_bad");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { 0 }\n").unwrap();
+    let (_out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--without", "foo", "-o", "x"]);
+    assert_eq!(code, 64, "nombre inválido → exit 64\n{err}");
+    assert!(err.contains("unknown subsystem in --without"), "mensaje claro: {err}");
+}
+
+#[test]
+fn build_native_sin_crate_externo_usa_la_via_rapida_rustc() {
+    // El otro lado de la bifurcación: un programa SIN subsistemas-con-crate compila por `rustc` pelado
+    // (camino rápido, sin Cargo) → el mensaje de éxito NO menciona ray-runtime. Cero regresión de
+    // velocidad/red para el caso común (el 90 % de programas).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native fast-path: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_fast");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { print(\"hola\"); 0 }\n").unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native fast-path ok\n{err}");
+    assert!(!out.contains("ray-runtime"), "camino rápido rustc, sin ray-runtime: {out}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(String::from_utf8_lossy(&native.stdout), "hola\n", "corre como la VM");
+}
+
+#[test]
+fn build_native_structured_concurrency_coincide_con_la_vm() {
+    // `ray build --native` de structured concurrency (scope + spawn→Task + join): las tareas se lanzan en
+    // hilos reales, join recoge sus resultados, scope las une al salir. Salida determinista-por-diseño.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native structured: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_struct");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn sq(n: int) -> int { n * n }\n\
+         fn main() -> int {\n\
+           let total = scope(fn() -> int {\n\
+             let a: Task<int> = spawn(fn() -> int { sq(3) });\n\
+             let b: Task<int> = spawn(fn() -> int { sq(4) });\n\
+             let c: Task<int> = spawn(fn() -> int { sq(5) });\n\
+             join(a) + join(b) + join(c)\n\
+           });\n\
+           print(total);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native structured ok\n{err}");
+
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, "50\n", "VM: 9+16+25 = 50");
+    for _ in 0..5 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), "50\n", "nativo ≡ VM (estable)");
+    }
+}
+
+#[test]
+fn build_native_select_invariante_coincide_con_la_vm() {
+    // `select` sobre varios canales: bajo paralelismo real el ORDEN de impresión es no-determinista (la
+    // VM multicore por default también varía), pero el INVARIANTE (multiset de valores + total + exit
+    // code) casa. El binario nativo recoge los 4 valores {100,101,200,201}, total 602, exit 90 (602&0xFF).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native select: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_select");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn src(ch: Channel<int>, base: int, k: int) { var i = 0; while (i < k) { send(ch, base + i); i = i + 1; } }\n\
+         fn main() -> int {\n\
+           let a: Channel<int> = Channel.new();\n\
+           let b: Channel<int> = Channel.new();\n\
+           spawn(fn() { src(a, 100, 2); });\n\
+           spawn(fn() { src(b, 200, 2); });\n\
+           let chs: [Channel<int>] = [a, b];\n\
+           var total = 0; var n = 0;\n\
+           while (n < 4) { let i = select(chs); match (recv(chs[i])) { Option.Some(v) => { print(v); total = total + v; }, Option.None => { } } n = n + 1; }\n\
+           print(total);\n\
+           total\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native select ok\n{err}");
+
+    // El binario, varias veces: el multiset ordenado y el exit code son invariantes (aunque el orden no).
+    for _ in 0..5 {
+        let out = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(out.status.code(), Some(90), "exit = 602 & 0xFF");
+        let s = String::from_utf8_lossy(&out.stdout).into_owned();
+        let mut lines: Vec<&str> = s.lines().collect();
+        lines.sort();
+        assert_eq!(lines, vec!["100", "101", "200", "201", "602"], "multiset de valores + total");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn build_native_signals_apagado_ordenado() {
+    // `ray build --native` de un programa que usa signals() (SIGTERM/SIGINT): el binario nativo instala
+    // los handlers (self-pipe + FFI a libc) y, al recibir SIGTERM, drena el canal de señales y apaga.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native signals: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_signals");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           let work: Channel<int> = Channel.new();\n\
+           let sig = signals();\n\
+           spawn(fn() { var i = 0; while (i < 3) { send(work, i); i = i + 1; } });\n\
+           let chs: [Channel<int>] = [work, sig];\n\
+           var go = true;\n\
+           while (go) {\n\
+             let idx = select(chs);\n\
+             if (idx == 0) { match (recv(work)) { Option.Some(x) => print(\"work \" + to_string(x)), Option.None => { } } }\n\
+             else { match (recv(sig)) { Option.Some(n) => { print(\"signal \" + to_string(n) + \": shutdown\"); go = false; }, Option.None => { go = false; } } }\n\
+           }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native signals ok\n{err}");
+
+    // Corre el binario y le da tiempo de sobra a arrancar e instalar los handlers de señal (bajo carga
+    // paralela de tests el arranque puede tardar), luego envía SIGTERM (15) y comprueba el apagado ordenado.
+    let mut child = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el nativo");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let pid = child.id().to_string();
+    let _ = Command::new("kill").args(["-TERM", &pid]).status();
+    let out = child.wait_with_output().expect("espera al proceso");
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("signal 15: shutdown"), "SIGTERM → apagado ordenado\nsalida:\n{s}");
+    assert!(s.contains("work 0"), "procesó al menos un item de trabajo\n{s}");
+}
+
+#[test]
+fn build_native_canal_de_string_coincide_con_la_vm() {
+    // `ray build --native` de un programa que manda STRINGS por un canal y una Task<string>: el valor
+    // viaja como repr Send (Arc<str>) al cruzar el hilo y se convierte de vuelta a Rc<str> al recibir.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native canal string: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_chstr");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn saluda(n: string) -> string { \"hola \" + n }\n\
+         fn main() -> int {\n\
+           let ch: Channel<string> = Channel.new();\n\
+           spawn(fn() { send(ch, \"mundo\"); send(ch, \"raylang\"); close(ch); });\n\
+           var go = true;\n\
+           while (go) { match (recv(ch)) { Option.Some(s) => print(saluda(s)), Option.None => { go = false; } } }\n\
+           let t: Task<string> = spawn(fn() -> string { saluda(\"tarea\") });\n\
+           print(join(t));\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native canal string ok\n{err}");
+
+    let expected = "hola mundo\nhola raylang\nhola tarea\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM");
+    for _ in 0..5 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "nativo ≡ VM (canal de string)");
+    }
+}
+
+#[test]
+fn build_native_release_produce_binario_correcto() {
+    // `ray build --native --release` usa el tier agresivo (opt3+lto+cgu1+target-cpu=native): compila más
+    // lento y no-portable, pero el binario da la MISMA salida que el default y la VM (solo cambia rustc).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native --release: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_release");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { print(2 + 3 * 4); 0 }\n").unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--release", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --release sale 0\nstdout={out}\nstderr={err}");
+    assert!(out.contains("release: opt3+lto+native"), "reporta el tier release\n{out}");
+    assert!(bin.is_file(), "el binario existe");
+    let native = Command::new(&bin).output().expect("corre el binario release");
+    assert_eq!(String::from_utf8_lossy(&native.stdout).trim(), "14", "2 + 3*4 = 14");
+}
+
+#[test]
+fn build_native_enteros_con_tamano_no_corrompen_el_prelude() {
+    // Regresión: un módulo con literales `u64` (aquí `poly1305`, importado) se desplaza a una banda de
+    // líneas por el loader; el prelude se inyecta con SUS líneas. Antes del fix, un literal u64 podía caer
+    // en la misma (línea, col) que un literal `int` del prelude (p. ej. el `17` de `string#hash`), y la
+    // lowering de uint por posición lo envolvía como u64 → `string#hash` no compilaba en Rust. Con el
+    // prelude en su banda disjunta, esto no ocurre: poly1305 (crypto con u64) transpila y ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native poly1305: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/poly1305_demo.ray");
+    let base = tmp("build_native_u64");
+    let bin = base.join("poly_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de poly1305 sale 0\nstdout={out}\nstderr={err}");
+    assert!(bin.is_file(), "el binario nativo existe");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "poly1305 nativo ≡ VM");
+    assert!(!native_out.trim().is_empty(), "el MAC no es vacío\n{native_out}");
+}
+
+#[test]
+fn build_native_json_con_map_coincide_con_la_vm() {
+    // `ray build --native` de un serializador JSON: el enum `Json` tiene una variante `JObject(Map<
+    // string, Json>)`. El transpiler emite el `RayShow` de TODOS los enums (aunque no se impriman); el
+    // de `Json` recurre al del Map, así que necesita `impl RayShow for Map` (`Map{k: v}`, ordenado). Sin
+    // él, rustc no compilaba. La salida (stringify canónico) debe coincidir byte a byte con la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native json: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/json_demo.ray");
+    let base = tmp("build_native_json");
+    let bin = base.join("json_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de json sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "json nativo ≡ VM");
+    assert!(native_out.contains("\"nombre\":\"raylang\""), "serializa el objeto\n{native_out}");
+}
+
+#[test]
+fn build_native_protobuf_con_concat_de_bytes_coincide_con_la_vm() {
+    // `ray build --native` de un codec protobuf: usa concatenación de bytes (`b1 + b2`) por doquier.
+    // Antes rustc fallaba (`cannot add Rc<[u8]> to Rc<[u8]>`); ahora `a + b` baja a un concat de slices.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native protobuf: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/protobuf_demo.ray");
+    let base = tmp("build_native_protobuf");
+    let bin = base.join("pb_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de protobuf sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "protobuf nativo ≡ VM");
+}
+
+#[test]
+fn build_native_url_con_override_y_utf8_coincide_con_la_vm() {
+    // `ray build --native` de un codec URL: (1) redefine `get_or` (2 args) — el builtin del prelude no debe
+    // taparlo; (2) recorre strings con `len`/`s[i]` sobre UTF-8 multibyte (`más`, `ñ`) — `len` debe contar
+    // CARACTERES, no bytes. Ambos eran bugs; la salida (encode/decode) debe casar con la VM byte a byte.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native url: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/url_demo.ray");
+    let base = tmp("build_native_url");
+    let bin = base.join("url_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de url sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "url nativo ≡ VM");
+    assert!(native_out.contains("hola mundo & más"), "decodifica UTF-8\n{native_out}");
+}
+
+#[test]
+fn build_native_http_con_tls_no_alcanzado_coincide_con_la_vm() {
+    // `ray build --native` de un cliente HTTP: importa el módulo `http`, que trae funciones TLS
+    // (`std::net::tls_connect`) fuera del subconjunto. Antes rustc fallaba por la llamada colgante,
+    // aunque el demo habla HTTP PLANO y nunca alcanza TLS. Ahora la función no soportada se emite como
+    // stub que panica → compila, y como el flujo real no la llama, la salida ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native http: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/web/http_demo.ray");
+    let base = tmp("build_native_http");
+    let bin = base.join("http_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de http sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "http nativo ≡ VM (TLS no alcanzado)");
+}
+
+#[test]
+fn build_native_closures_con_estado_mutable_coincide_con_la_vm() {
+    // `ray build --native` de closures con ESTADO mutable (patrón contador: `var n` que la closure
+    // incrementa entre llamadas, y contadores independientes). Antes rustc fallaba (`cannot assign to
+    // captured variable in a Fn closure`); ahora la var capturada+mutada vive en Rc<RefCell> (B1) →
+    // la salida (contadores, captura transitiva) coincide con la VM byte a byte.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native closures: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/stdlib/closures.ray");
+    let base = tmp("build_native_closures");
+    let bin = base.join("cl_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de closures sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "closures con estado nativo ≡ VM");
+    // Contadores independientes: c1 llega a 4 mientras c2 arranca en 1.
+    assert!(native_out.contains("4"), "el contador llega a 4\n{native_out}");
+}
+
+#[test]
+fn build_native_iteradores_coinciden_con_la_vm() {
+    // `ray build --native` del ejemplo COMPLETO de iteradores (B2): `impl Iterator<T>` de usuario
+    // recorrido con `for`, más los adaptadores del prelude — escalares (`.iter()`/`range`/`.map()`/
+    // `.filter()`/`.take()`/`.skip()`/`.sum()`) Y los que entregan TUPLAS (`.enumerate()`/`.zip()`). Antes
+    // fallaba; ahora baja a un `loop` que llama `next` hasta `None` (con destructuración de tupla en los
+    // `enumerate`/`zip`, que la inferencia genérica resuelve a través de la cadena de adaptadores). La
+    // salida coincide con la VM byte a byte.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native iteradores: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/stdlib/iterador.ray");
+    let base = tmp("build_native_iter");
+    let bin = base.join("iter_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de iteradores sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "iteradores nativo ≡ VM");
+    assert!(native_out.contains("fib:"), "corre el iterador de Fibonacci\n{native_out}");
+}
+
+#[test]
+fn build_native_ffi_libc_libm_coincide_con_la_vm() {
+    // `ray build --native` con FFI (M41): `extern "m"/"c" { … }` → declaraciones `extern "C"` + wrappers
+    // que marshalan (string→char*, etc.). rustc enlaza libm (`#[link(name="m")]`) y libc (implícita). Las
+    // llamadas a `sqrt`/`pow`/`abs`/`strlen`/`atoi` dan el MISMO resultado que la VM (que usa dlopen/dlsym).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native ffi: rustc no disponible");
+        return;
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/ffi/libm.ray");
+    let base = tmp("build_native_ffi");
+    let bin = base.join("ffi_bin");
+    let (out, err, code) =
+        ray(&base, &["build", src.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de ffi sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
+    assert_eq!(native_out, vm_out, "ffi nativo ≡ VM");
+    assert!(native_out.contains("1.4142135623730951"), "sqrt(2) por libm\n{native_out}");
+    assert!(native_out.contains("10"), "strlen(\"hola mundo\") por libc\n{native_out}");
+}
+
+#[test]
+fn build_native_servidor_tcp_hace_eco() {
+    // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
+    // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native servidor TCP: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_tcp");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/net;\n\
+         fn main() -> int {\n\
+           let l = match (net.tcp_listen(\"127.0.0.1\", 0)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+           print(to_string(net.local_port(l)));\n\
+           let c = match (net.tcp_accept(l)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+           let m = match (net.socket_read(c)) { Result.Ok(s) => s, Result.Err(e) => \"ERR\" };\n\
+           let _ = net.socket_write(c, \"eco: \" + m);\n\
+           let _ = close(c); let _ = close(l);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("srv");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native servidor TCP ok\n{err}");
+
+    // Lanza el servidor y lee su puerto de stdout (primera línea).
+    use std::io::{BufRead, BufReader, Read, Write};
+    let mut srv = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el servidor");
+    let mut sout = BufReader::new(srv.stdout.take().unwrap());
+    let mut port_line = String::new();
+    sout.read_line(&mut port_line).expect("lee el puerto");
+    let port: u16 = port_line.trim().parse().expect("puerto numérico");
+
+    // El TEST es el cliente: conecta, envía, lee el eco.
+    let mut cli = std::net::TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    cli.write_all(b"hola").expect("envía");
+    let mut resp = Vec::new();
+    cli.read_to_end(&mut resp).expect("lee la respuesta");
+    assert_eq!(String::from_utf8_lossy(&resp), "eco: hola", "el servidor hace eco con prefijo");
+    let _ = srv.wait();
+}
+
+#[test]
+fn build_native_udp_hace_eco() {
+    // `ray build --native` de un servidor UDP: bind en un puerto libre (imprime el puerto vía
+    // net.local_port), recibe un datagrama y responde al remitente. El TEST hace de cliente (UdpSocket).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native UDP: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_udp");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/net;\n\
+         fn main() -> int {\n\
+           let b = __udp_bind(\"127.0.0.1\", 0);\n\
+           let h = match (parse_int(b[1])) { Option.Some(x) => x, Option.None => 0 - 1 };\n\
+           print(to_string(net.local_port(h)));\n\
+           let r = __udp_recv_from(h);\n\
+           let host = match (from_utf8(r[1])) { Result.Ok(s) => s, Result.Err(e) => \"\" };\n\
+           let port = match (parse_int(match (from_utf8(r[2])) { Result.Ok(s) => s, Result.Err(e) => \"0\" })) { Option.Some(n) => n, Option.None => 0 };\n\
+           let _ = __udp_send_to(h, host, port, r[3]);\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("srv");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native UDP ok\n{err}");
+
+    use std::io::{BufRead, BufReader};
+    let mut srv = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el servidor UDP");
+    let mut sout = BufReader::new(srv.stdout.take().unwrap());
+    let mut port_line = String::new();
+    sout.read_line(&mut port_line).expect("lee el puerto");
+    let port: u16 = port_line.trim().parse().expect("puerto numérico");
+
+    // El TEST es el cliente UDP: envía un datagrama y espera el eco.
+    let cli = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind cliente");
+    cli.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+    cli.send_to(b"hola udp", ("127.0.0.1", port)).expect("envía");
+    let mut buf = [0u8; 64];
+    let (n, _) = cli.recv_from(&mut buf).expect("recibe el eco");
+    assert_eq!(&buf[..n], b"hola udp", "el servidor hace eco del datagrama");
+    let _ = srv.wait();
+}
+
+#[test]
 fn test_subcomando_runs_las_tests() {
     let base = tmp("test");
     std::fs::write(

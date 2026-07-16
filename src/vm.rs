@@ -704,6 +704,39 @@ impl<'a> Vm<'a> {
                     let v = self.pop();
                     self.set_local(fi, *slot, v);
                 }
+                // P0.6 (ronda 3): la guarda entera `local op const` de if/while en UNA instrucción.
+                // Semántica idéntica a [GetLocalConst(s,c), CmpJump(op,t)]: compara local[s] con
+                // const[c] y, si es falso, salta a t — sin apilar/sacar los operandos.
+                OpCode::GetLocalConstCmpJump(s, c, op, target) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        match op {
+                            CmpOp::Less => a < b,
+                            CmpOp::LessEqual => a <= b,
+                            CmpOp::Greater => a > b,
+                            CmpOp::GreaterEqual => a >= b,
+                            CmpOp::Equal => a == b,
+                            CmpOp::NotEqual => a != b,
+                        }
+                    } else {
+                        let legacy = match op {
+                            CmpOp::Less => &OpCode::Less,
+                            CmpOp::LessEqual => &OpCode::LessEqual,
+                            CmpOp::Greater => &OpCode::Greater,
+                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
+                            CmpOp::Equal => &OpCode::Equal,
+                            CmpOp::NotEqual => &OpCode::NotEqual,
+                        };
+                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
+                            HeapValue::Bool(b) => b,
+                            _ => unreachable!("a comparison produces bool"),
+                        }
+                    };
+                    if !res {
+                        self.cur.frames[fi].ip = *target;
+                    }
+                }
                 // A4 (ronda 2): la guarda de if/while en UNA instrucción. Semántica idéntica a
                 // [Cmp, JumpIfFalse(t), Pop]: saca ambos operandos, compara, y si es falso salta
                 // (el destino ya viene ajustado tras el Pop del lado else). El bool nunca se apila.
@@ -966,7 +999,7 @@ impl<'a> Vm<'a> {
                 }
                 // --- Mapas Map<K,V> (M13.1) ---
                 OpCode::MapNew => {
-                    let h = self.cur.heap.allocate(Obj::Map(HashMap::new()));
+                    let h = self.cur.heap.allocate(Obj::Map(Default::default()));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::MapInsert => {
@@ -1001,6 +1034,42 @@ impl<'a> Vm<'a> {
                     };
                     let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
+                }
+                OpCode::MapGetOr => {
+                    // P0.2: get-or-default SIN alocar. Args apilados (map, key, default) → cima = default.
+                    let d = self.pop();
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    let v = match self.cur.heap.get(h) {
+                        Obj::Map(m) => m.get(&k).cloned().unwrap_or(d),
+                        _ => unreachable!("the checker guarantees a Map"),
+                    };
+                    self.push(v);
+                }
+                OpCode::MapAdd => {
+                    // P0.3: upsert acumulativo en UN lookup (entry-API). Args (map, key, delta) → cima = delta.
+                    use std::collections::hash_map::Entry;
+                    let delta = self.pop();
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    let (l, c) = pos!();
+                    let ovf = || runtime_error(l, c, "arithmetic overflow on int");
+                    match self.cur.heap.get_mut(h) {
+                        Obj::Map(m) => match m.entry(k) {
+                            Entry::Occupied(mut e) => {
+                                let nv = match (e.get(), &delta) {
+                                    (HeapValue::Int(a), HeapValue::Int(b)) => HeapValue::Int(a.checked_add(*b).ok_or_else(ovf)?),
+                                    (HeapValue::Float(a), HeapValue::Float(b)) => HeapValue::Float(a + b),
+                                    _ => unreachable!("the checker guarantees int/float map value + matching delta"),
+                                };
+                                e.insert(nv);
+                            }
+                            // Ausente: m[k] = delta (0 + delta).
+                            Entry::Vacant(e) => { e.insert(delta); }
+                        },
+                        _ => unreachable!("the checker guarantees a Map"),
+                    }
+                    self.push(HeapValue::Unit);
                 }
                 OpCode::MapRemove => {
                     // M13.1b: quita la clave; [] o [v]. El prelude → Option<V>.
@@ -3539,7 +3608,7 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
             Obj::Cell(inner) => to_value(heap, enums, inner),
             // M13.1: reconstruye el Map del intérprete (igual igualdad estructural → oráculo).
             Obj::Map(m) => {
-                let mut hm: HashMap<MapKey, Value> = HashMap::with_capacity(m.len());
+                let mut hm = crate::runtime::MapStore::with_capacity_and_hasher(m.len(), Default::default());
                 for (k, val) in m {
                     hm.insert(k.clone(), to_value(heap, enums, val));
                 }
@@ -3632,7 +3701,7 @@ fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handl
         }
         Obj::Map(m) => {
             let pairs: Vec<(MapKey, HeapValue)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let mut nm: HashMap<MapKey, HeapValue> = HashMap::with_capacity(pairs.len());
+            let mut nm = crate::gc::MapStore::with_capacity_and_hasher(pairs.len(), Default::default());
             for (k, val) in pairs {
                 let nv = transfer_value(src, dst, &val, remap);
                 nm.insert(k, nv); // las claves son primitivos (sin handles)
@@ -4887,6 +4956,44 @@ mod tests {
                 m.insert(\"a\", 10);
                 let total = match (m.get(\"a\")) { Option.Some(v) => v, Option.None => 0 };
                 total + m.len()
+             }",
+        );
+    }
+
+    /// P0.3: `add_to(m, k, delta)` — upsert acumulativo en 1 lookup (opcode `MapAdd`). Cubre conteo
+    /// (int), clave ausente (`m[k] = delta`), acumulación repetida y valores float. Oráculo VM↔intérprete.
+    #[test]
+    fn map_add_to_oracle() {
+        oracle_program(
+            "fn main() -> int {
+                let m: Map<string, int> = Map.new();
+                m.add_to(\"a\", 1);
+                m.add_to(\"a\", 1);
+                m.add_to(\"b\", 5);
+                m.add_to(\"a\", 10);
+                let f: Map<string, float> = Map.new();
+                f.add_to(\"x\", 1.5);
+                f.add_to(\"x\", 2.25);
+                m.get_or(\"a\", 0) + m.get_or(\"b\", 0) + m.get_or(\"z\", 0) + m.len()
+                    + (if (f.get_or(\"x\", 0.0) > 3.7) { 100 } else { 0 })
+             }",
+        );
+    }
+
+    /// P0.6: la fusión `GetLocalConst;CmpJump` (guarda `local op const`) preserva la semántica de
+    /// `if`/`while` — incluida la **vuelta del bucle** (su `Jump` apunta al inicio de la condición, que
+    /// tras la fusión es la instrucción fusionada). Cubre guardas `<` (while) y `>` (if). Oráculo.
+    #[test]
+    fn guard_fusion_round3_oracle() {
+        oracle_program(
+            "fn main() -> int {
+                var i = 0;
+                var acc = 0;
+                while (i < 100) {
+                    if (i > 50) { acc = acc + i; } else { acc = acc + 1; }
+                    i = i + 1;
+                }
+                acc
              }",
         );
     }

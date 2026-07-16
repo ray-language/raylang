@@ -40,6 +40,13 @@ tipado, orientado a expresiones, sintaxis de llaves.
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`
 - **Guía de builds** (features slim M89, PGO, flags de adelgazamiento): `docs/build.md`.
   Release PGO: `sh tools/pgo.sh [--slim | --features "a,b,c"]`.
+- **Binario nativo del PROGRAMA (arco P2.b)**: `ray build --native prog.ray [-o out] [--release]
+  [--without crypto,tls,sqlite]` transpila el programa a Rust (`src/transpile.rs`) y lo compila
+  con `rustc`/`cargo` → binario de código máquina, byte-idéntico a la VM (24–61×). Los subsistemas
+  con-crate (TLS/cripto/SQLite) viven en `crates/ray-runtime` (workspace) y se enlazan **bajo
+  demanda** (proyecto Cargo generado; si no se usan, `rustc` pelado). Exclusión estable del
+  proyecto: `[native] without = ["tls", …]` en `ray.toml`. Diseño: `docs/transpilador-nativo.md`;
+  crónica: `PERFORMANCE.md` (arco P2.b, Fases 34–53). No confundir con construir la toolchain `ray`.
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).
 
 ## Arquitectura (pipeline)

@@ -1,0 +1,38 @@
+# `ray-runtime` — el runtime compartido de raylang con dependencias de crates externos (P2.b, jul 2026).
+#
+# Motivo (ver docs/transpilador-nativo.md §4): las funciones que envuelven crates de producción
+# (ring/rustls/rusqlite) las necesitan DOS consumidores — la VM (el binario `ray`) y el binario
+# TRANSPILADO a Rust (`ray build --native`). Extraerlas a este crate compartido da PARIDAD por
+# construcción (ambos llaman al MISMO código) y una única fuente de verdad de versiones.
+#
+# Cada subsistema-con-crate va tras una FEATURE (bajo demanda): un consumidor solo activa lo que usa.
+# Sin features activas, el crate compila sin ninguna dependencia externa (stubs).
+[package]
+name = "ray-runtime"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Runtime compartido de raylang: envoltorios de crates de producción (crypto/tls/sqlite) tras features, para la VM y el binario transpilado."
+
+[features]
+default = []
+# Cripto de PRODUCCIÓN (ring): SHA/HMAC/Ed25519/ChaCha20-Poly1305/CSPRNG. Determinista → oráculo VM↔nativo.
+crypto = ["dep:ring"]
+# TLS de PRODUCCIÓN (rustls). El binario transpilado usa hilos de SO reales → I/O TLS BLOQUEANTE
+# (StreamOwned), a diferencia de la VM (no-bloqueante + fibras). ring provee el proveedor de rustls.
+tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+# SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
+# del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
+sqlite = ["dep:rusqlite"]
+
+[dependencies]
+# M43 — ring 0.17: primitivas de tiempo constante y auditadas. Misma versión que la que usaba el binario
+# `ray` (era transitiva vía rustls); aquí se declara directa para el módulo crypto.
+ring = { version = "0.17", optional = true }
+# M19.4 — rustls (proveedor ring, sin OpenSSL): TLS puro Rust+C portable. Mismas versiones/features que
+# usaba el binario `ray` → mismo comportamiento. Las raíces de Mozilla (webpki-roots) verifican certificados.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
+rustls-pki-types = { version = "1", features = ["std"], optional = true }
+# M53.3 — rusqlite 0.32 con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }

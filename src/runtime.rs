@@ -13,6 +13,10 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+/// Almacén interno de un `Map` en el intérprete (P0.1, perf): `HashMap` con el hasher **aHash** en
+/// vez del SipHash de std — 2–5× más rápido sobre claves cortas. Espeja [`crate::gc::MapStore`] (VM).
+pub type MapStore = HashMap<MapKey, Value, ahash::RandomState>;
 use std::rc::Rc;
 
 use crate::ast::{Expr, ExprKind, UnaryOp};
@@ -73,7 +77,7 @@ pub enum Value {
     Enum(Rc<EnumInstance>),
     /// Un mapa `Map<K, V>` (M13.1). Como el arreglo: `Rc<RefCell<...>>` da semántica de
     /// referencia + mutación. La clave es un `MapKey` (primitivo hashable).
-    Map(Rc<RefCell<HashMap<MapKey, Value>>>),
+    Map(Rc<RefCell<MapStore>>),
 }
 
 /// La **clave** de un `Map` en runtime (M13.1): un primitivo hashable. No incluye `float`

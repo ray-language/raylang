@@ -139,6 +139,11 @@ pub enum OpCode {
     /// saca los dos operandos, compara, y si es falso salta a `t+1` (tras el Pop del lado else,
     /// que la fusión ya consumió conceptualmente — el bool nunca llega a la pila).
     CmpJump(CmpOp, usize),
+    /// P0.6 (ronda 3): la guarda ENTERA de `if`/`while` sobre `local op const` en una instrucción
+    /// (`[GetLocalConst(slot, const), CmpJump(op, target)]`): lee `local[slot]` y `const[const]`,
+    /// compara, y si es falso salta a `target` — sin apilar ni sacar los operandos. Es el par de
+    /// opcodes más ejecutado en fib/bucles (la guarda `n < 2`, `i < N`). Campos: `(slot, const, op, target)`.
+    GetLocalConstCmpJump(usize, usize, CmpOp, usize),
     /// A4 (ronda 2): `local[slot] + const` en una instrucción (`[GetLocalConst, Add]`).
     AddLocalConst(usize, usize),
     /// A4 (ronda 2): `local[slot] - const` en una instrucción (`[GetLocalConst, Sub]`).
@@ -334,6 +339,15 @@ pub enum OpCode {
     /// Saca clave y mapa; empuja un arreglo `[V]` con **0 o 1** elementos (el valor asociado,
     /// o vacío). Primitivo `__map_get`; el prelude lo envuelve en `Option<V>`.
     MapGet,
+    /// Saca `default`, clave y mapa; empuja el valor asociado a la clave, o `default` si no está —
+    /// **sin alocar** (a diferencia de `MapGet`+`Option`+`unwrap_or`, que aloca el arreglo y el enum).
+    /// Primitivo `__get_or`; el prelude expone `get_or(m, k, default) -> V` (P0.2, perf).
+    MapGetOr,
+    /// Saca `delta`, clave y mapa; hace `m[k] += delta` (o `m[k] = delta` si la clave no está) en un
+    /// **único lookup** vía la *entry-API* — a diferencia de `get_or(k,0)+insert(k,...)`, que hashea y
+    /// busca dos veces y clona la clave dos veces. Valor int o float (checked como `+`). Builtin
+    /// `add_to(m, k, delta) -> unit`; el idioma de conteo/acumulación de servicios (P0.3, perf).
+    MapAdd,
     /// Saca clave y mapa; empuja un `bool`: si la clave está presente. Builtin `contains_key`.
     MapContainsKey,
     /// Saca clave y mapa; **quita** la clave (mutando el mapa) y empuja un arreglo `[V]` con **0 o

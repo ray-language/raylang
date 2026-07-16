@@ -8,6 +8,15 @@
 //!
 //! El binario (`src/main.rs`) es un cliente delgado de esta librería.
 
+/// Allocador global **mimalloc** (P0.4, perf). El malloc del sistema (macOS libmalloc en particular)
+/// es lento para el *churn* de objetos pequeños del intérprete: `split`/`to_string`/arrays alocan
+/// millones de `String` pequeños. mimalloc es 2–4× más rápido en ese patrón y acelera todos los
+/// benchmarks **sin cambio semántico** (el oráculo VM↔intérprete no lo ve). No en wasm (no hay
+/// allocador de sistema que reemplazar; mimalloc necesita C).
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod ast;
 pub mod builtins;
 pub mod bytecode;
@@ -29,6 +38,7 @@ pub mod lsp;
 pub mod raydoc;
 pub mod manifest;
 pub mod parser;
+pub mod transpile;
 pub mod poll;
 pub mod prelude;
 pub mod repl;

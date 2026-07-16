@@ -467,7 +467,7 @@ Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs
 | `ray new <nombre>` | crea un proyecto (ray.toml + src/main.ray + .gitignore) |
 | `ray run [archivo] [args…]` | ejecuta (por defecto `src/main.ray`); resuelve dependencias |
 | `ray dev [archivo] [args…]` | como `run`, pero reinicia ante cambios en `.ray`/`.ray.html`/`ray.toml` (SIGTERM → drenado con `serve_graceful`) |
-| `ray build [archivo]` | chequea y compila sin ejecutar (0 ok / 65 error) |
+| `ray build [archivo] [--native …]` | chequea y compila sin ejecutar (0 ok / 65 error); `--native` transpila a Rust y produce un **binario nativo** (24–61× la VM, byte-idéntico) |
 | `ray test [archivo] [filtro]` | corre las `@test` (filtro por subcadena del nombre) |
 | `ray fmt <archivo>` | imprime la versión canónica |
 | `ray templ <ruta>…` | compila templates `.ray.html` (firma `{% params %}`) a módulos raylang tipados |
@@ -493,6 +493,19 @@ Flags de `run`:
 | `--deterministic` | scheduler M:1 reproducible (un hilo, FIFO); también `RAYLANG_THREADS=1` |
 | `--fuel N` | límite de instrucciones de la VM (para embeber confinado) |
 | `--heap N` | tope de objetos vivos del heap (fuerza GC; si no basta, aborta) |
+
+Flags de `build --native`:
+
+| Flag | Efecto |
+|---|---|
+| `-o <ruta>` | nombre del binario de salida (por defecto, el *stem* del archivo) |
+| `--release` | tier de optimización `opt-level=3 + lto=fat + codegen-units=1 + target-cpu=native` (más lento de compilar, no portable) |
+| `--without <lista>` | excluye subsistemas con-crate `crypto,tls,sqlite` (caen en un *stub* que panica → vía rápida `rustc`); se une a `[native] without` del `ray.toml` |
+
+Los subsistemas con crate de producción (TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`) se enlazan **solo
+cuando el programa los usa** (proyecto Cargo generado; el binario llama al mismo código que la VM vía el
+crate `ray-runtime`). Sin ninguno → `rustc` pelado. `[native] without = ["tls", …]` en `ray.toml` fija una
+política de exclusión estable del proyecto.
 
 Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (registro de paquetes),
 `RAY_MIRROR` (mirror de descarga de paquetes), `RAYLANG_THREADS`.

@@ -379,3 +379,232 @@ fn main() -> int {
         assert_eq!(out, expected, "ciclo fs complete (vm={vm})");
     }
 }
+
+/// P2.b: I/O de entrada transpilable. Compila con `ray build --native` un programa que lee stdin y un
+/// archivo, y comprueba que el binario nativo produce la MISMA salida que la VM. Requiere `rustc`; se
+/// salta limpiamente si no está (no es un fallo).
+#[test]
+fn native_io_de_entrada_coincide_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_io: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_io");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let data = dir.join("data.txt");
+    std::fs::write(&data, "contenido de archivo").expect("escribe data");
+    let src = format!(
+        "import std/fs;\n\
+         fn main() -> int {{\n\
+           match (fs.read_file(\"{}\")) {{ Result.Ok(c) => print(\"file: \" + c), Result.Err(e) => print(\"err: \" + e) }}\n\
+           match (input()) {{ Option.Some(l) => print(\"in: \" + l), Option.None => print(\"in: eof\") }}\n\
+           match (read_int()) {{ Option.Some(n) => print(\"n: \" + to_string(n * 3)), Option.None => print(\"n: none\") }}\n\
+           0\n\
+         }}\n",
+        data.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("lanza build --native");
+    assert!(build.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let stdin = "hola\n14\n";
+    // Salida del binario nativo.
+    let mut nat = Command::new(&bin)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("lanza nativo");
+    nat.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    let nat_out = String::from_utf8_lossy(&nat.wait_with_output().unwrap().stdout).into_owned();
+    // Salida de la VM.
+    let (vm_out, _e, _c) = run_io("native_io_vm", &src, stdin, true);
+    assert_eq!(nat_out, vm_out, "nativo ≡ VM");
+    assert_eq!(nat_out, "file: contenido de archivo\nin: hola\nn: 42\n", "salida esperada");
+}
+
+/// P2.b: handles de archivo transpilables (open/write/read_line/close). Compila con `ray build --native`
+/// un programa que escribe con un handle y lo relee línea a línea, y comprueba nativo ≡ VM. Requiere rustc.
+#[test]
+fn native_handles_de_archivo_coinciden_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_handles: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_handles");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let target = dir.join("out.txt");
+    let src = format!(
+        "import std/fs;\n\
+         fn main() -> int {{\n\
+           let h = match (fs.open(\"{p}\", \"w\")) {{ Result.Ok(x) => x, Result.Err(e) => 0 - 1 }};\n\
+           match (fs.write(h, \"uno\\ndos\\n\")) {{ Result.Ok(n) => print(\"w: \" + to_string(n)), Result.Err(e) => print(e) }}\n\
+           print(\"c: \" + to_string(close(h)));\n\
+           let r = match (fs.open(\"{p}\", \"r\")) {{ Result.Ok(x) => x, Result.Err(e) => 0 - 1 }};\n\
+           var go = true;\n\
+           while (go) {{ match (fs.read_line(r)) {{ Option.Some(l) => print(\"r: \" + l), Option.None => {{ go = false; }} }} }}\n\
+           let _ = close(r);\n\
+           0\n\
+         }}\n",
+        p = target.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let _ = std::fs::remove_file(&target);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    let _ = std::fs::remove_file(&target);
+    let (vm, _e, _c) = run_io("native_handles_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    assert_eq!(nat, "w: 8\nc: 0\nr: uno\nr: dos\n", "salida esperada");
+}
+
+/// P2.b: list_dir/remove_file transpilables. Crea archivos, lista el dir (ordenado), borra uno y re-lista;
+/// comprueba nativo ≡ VM. Requiere rustc; se salta si no está.
+#[test]
+fn native_list_dir_y_remove_file_coinciden_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_list_dir: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_lsdir");
+    let _ = std::fs::remove_dir_all(&dir);
+    let sub = dir.join("d");
+    std::fs::create_dir_all(&sub).expect("crea dir");
+    let src = format!(
+        "import std/fs;\n\
+         fn muestra(r: Result<[string], string>) {{ match (r) {{ Result.Ok(ns) => print(\"n=\" + to_string(ns.len())), Result.Err(e) => print(\"err\") }} }}\n\
+         fn tag(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok\", Result.Err(e) => \"err\" }} }}\n\
+         fn main() -> int {{\n\
+           let d = \"{d}\";\n\
+           let _ = fs.write_file(d + \"/c.txt\", \"c\");\n\
+           let _ = fs.write_file(d + \"/a.txt\", \"a\");\n\
+           let _ = fs.write_file(d + \"/b.txt\", \"b\");\n\
+           muestra(fs.list_dir(d));\n\
+           print(\"rm b: \" + tag(fs.remove_file(d + \"/b.txt\")));\n\
+           print(\"rm no: \" + tag(fs.remove_file(d + \"/no.txt\")));\n\
+           muestra(fs.list_dir(d));\n\
+           0\n\
+         }}\n",
+        d = sub.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let clean = |sub: &std::path::Path| { for n in ["a.txt", "b.txt", "c.txt"] { let _ = std::fs::remove_file(sub.join(n)); } };
+    clean(&sub);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    clean(&sub);
+    let (vm, _e, _c) = run_io("native_lsdir_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    // 3 archivos → borra b (ok) → 2 archivos; borrar inexistente → err.
+    assert_eq!(nat, "n=3\nrm b: ok\nrm no: err\nn=2\n", "salida esperada");
+}
+
+/// P2.b: operaciones de directorio/metadatos transpilables (mkdir/is_dir/is_file/file_size/copy_file/
+/// rename/remove_dir). Ejercita el ciclo completo y comprueba nativo ≡ VM. Requiere rustc.
+#[test]
+fn native_directorios_coinciden_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_directorios: rustc no disponible");
+        return;
+    }
+    let root = std::env::temp_dir().join("ray_native_dirs");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("crea root");
+    let base = root.join("proj");
+    let src = format!(
+        "import std/fs;\n\
+         fn tag(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok \" + to_string(n), Result.Err(e) => \"err\" }} }}\n\
+         fn main() -> int {{\n\
+           let b = \"{b}\";\n\
+           print(\"mkdir: \" + tag(fs.mkdir(b + \"/sub\")));\n\
+           print(\"isdir: \" + to_string(fs.is_dir(b + \"/sub\")) + \" isfile: \" + to_string(fs.is_file(b + \"/sub\")));\n\
+           let _ = fs.write_file(b + \"/sub/a.txt\", \"hola\");\n\
+           print(\"size: \" + tag(fs.file_size(b + \"/sub/a.txt\")));\n\
+           print(\"size dir: \" + tag(fs.file_size(b + \"/sub\")));\n\
+           print(\"copy: \" + tag(fs.copy_file(b + \"/sub/a.txt\", b + \"/sub/b.txt\")));\n\
+           print(\"rename: \" + tag(fs.rename(b + \"/sub/b.txt\", b + \"/sub/c.txt\")));\n\
+           print(\"rmdir full: \" + tag(fs.remove_dir(b + \"/sub\")));\n\
+           let _ = fs.remove_file(b + \"/sub/a.txt\");\n\
+           let _ = fs.remove_file(b + \"/sub/c.txt\");\n\
+           print(\"rmdir: \" + tag(fs.remove_dir(b + \"/sub\")));\n\
+           print(\"rmdir base: \" + tag(fs.remove_dir(b)));\n\
+           0\n\
+         }}\n",
+        b = base.to_str().unwrap()
+    );
+    let ray = root.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = root.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let _ = std::fs::remove_dir_all(&base);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    let _ = std::fs::remove_dir_all(&base);
+    let (vm, _e, _c) = run_io("native_dirs_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    let expected = "mkdir: ok 0\nisdir: true isfile: false\nsize: ok 4\nsize dir: err\ncopy: ok 0\n\
+        rename: ok 0\nrmdir full: err\nrmdir: ok 0\nrmdir base: ok 0\n";
+    assert_eq!(nat, expected, "ciclo de directorios");
+}
+
+/// P2.b: I/O binaria transpilable (bytes + read_file_bytes/write_file_bytes). Escribe bytes a un archivo
+/// y los relee; comprueba nativo ≡ VM (incl. el render en hex). Requiere rustc.
+#[test]
+fn native_io_binaria_coincide_con_la_vm() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_io_binaria: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_native_bytes");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let f = dir.join("b.bin");
+    let src = format!(
+        "import std/fs;\n\
+         fn tag_i(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok \" + to_string(n), Result.Err(e) => \"err\" }} }}\n\
+         fn tag_s(r: Result<string, string>) -> string {{ match (r) {{ Result.Ok(s) => \"ok \" + s, Result.Err(e) => \"err\" }} }}\n\
+         fn main() -> int {{\n\
+           let b = \"Hola\".to_bytes();\n\
+           print(\"hex: \" + to_string(b));\n\
+           print(\"sub: \" + to_string(b.sub_bytes(1, 3)));\n\
+           print(\"dec: \" + tag_s(from_utf8(b)));\n\
+           print(\"w: \" + tag_i(fs.write_file_bytes(\"{p}\", b)));\n\
+           match (fs.read_file_bytes(\"{p}\")) {{ Result.Ok(rb) => print(\"r: \" + to_string(rb)), Result.Err(e) => print(\"err\") }}\n\
+           0\n\
+         }}\n",
+        p = f.to_str().unwrap()
+    );
+    let ray = dir.join("prog.ray");
+    std::fs::write(&ray, &src).expect("escribe prog");
+    let bin = dir.join("prog_native");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output().expect("lanza build --native");
+    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
+
+    let _ = std::fs::remove_file(&f);
+    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
+    let _ = std::fs::remove_file(&f);
+    let (vm, _e, _c) = run_io("native_bytes_vm", &src, "", true);
+    assert_eq!(nat, vm, "nativo ≡ VM");
+    // "Hola" = 486f6c61; sub[1,3) = 6f6c; write = 4 bytes; readback = 486f6c61.
+    assert_eq!(nat, "hex: 486f6c61\nsub: 6f6c\ndec: ok Hola\nw: ok 4\nr: 486f6c61\n", "salida esperada");
+}

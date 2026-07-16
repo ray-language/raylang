@@ -29,6 +29,10 @@
 use crate::runtime::MapKey;
 use std::collections::{HashMap, VecDeque};
 
+/// Almacén interno de un `Map` en la VM (P0.1, perf): `HashMap` con el hasher **aHash** en vez del
+/// SipHash de std — 2–5× más rápido sobre claves cortas (int/string), con resistencia a hash-flooding.
+pub type MapStore = HashMap<MapKey, HeapValue, ahash::RandomState>;
+
 /// Un *handle*: la referencia a un objeto del heap (su índice de ranura).
 pub type Handle = usize;
 
@@ -146,8 +150,8 @@ pub enum Obj {
     /// lo que comparten una closure y el dueño de la variable (M4.2).
     Cell(HeapValue),
     /// Un mapa `Map<K, V>` (M13.1): clave hashable → valor. El GC traza los **valores**
-    /// (las claves son primitivos *inline*, sin handles).
-    Map(HashMap<MapKey, HeapValue>),
+    /// (las claves son primitivos *inline*, sin handles). Usa el hasher aHash (P0.1) vía [`MapStore`].
+    Map(MapStore),
     // M38.1b: `Channel`/`Task` YA NO son objetos del heap. Son sincronización compartida entre actores,
     // viven en almacenes del host de la VM (`Vm.channels`/`Vm.tasks`) referenciados por
     // `HeapValue::Channel(id)`/`Task(id)`. Sus structs (`VmChannel`/`VmTask`/`TaskState`) siguen definidos

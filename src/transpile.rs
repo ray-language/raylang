@@ -932,34 +932,53 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     // backpressure (bounded) y cierre. FIFO como la VM. `T: Send` (primitivos en v1).
     if t.needs_concurrency {
         out.push_str(concat!(
-            "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize> }\n",
+            // `taken` cuenta los valores CONSUMIDOS (para el handshake rendezvous por generación) y
+            // `senders` los emisores bloqueados (para que `close` los detecte, como la VM). Los panics
+            // llevan el MISMO texto que el error de ejecución de la VM (exit code ≠ 70: diferido a H6).
+            "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize>, taken: u64, senders: usize }\n",
             "struct __RayChan<T> { inner: std::sync::Arc<(std::sync::Mutex<__ChanState<T>>, std::sync::Condvar)> }\n",
             "impl<T> Clone for __RayChan<T> { fn clone(&self) -> Self { __RayChan { inner: self.inner.clone() } } }\n",
             "impl<T: Send> __RayChan<T> {\n",
-            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap }), std::sync::Condvar::new())) } }\n",
+            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0 }), std::sync::Condvar::new())) } }\n",
             "    fn send(&self, v: T) {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            // Rendezvous (cap 0): la VM entrega el valor DIRECTAMENTE a un receptor y el emisor no continúa
-            // hasta que se consume (M12.2). Aquí se modela con un único valor en vuelo: el emisor espera cola
-            // vacía, empuja, y ESPERA a que el receptor lo saque (cola vacía otra vez) → mismo orden síncrono
-            // que la VM, sin el `q.len() >= 0` que bloqueaba para siempre. Serializa emisores concurrentes.
+            // `send` sobre un canal cerrado = error de ejecución, como la VM (antes: descarte silencioso).
+            // El guard se suelta antes del panic para no envenenar el Mutex (los otros hilos verían
+            // PoisonError en vez del mensaje real).
+            "        if st.closed { drop(st); panic!(\"send on a closed channel\"); }\n",
+            // Rendezvous (cap 0): la VM entrega el valor directamente y el emisor no continúa hasta que SU
+            // valor se consume (M12.2). El handshake es por GENERACIÓN (`taken`), no por cola-vacía: con
+            // ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse para siempre aunque el
+            // suyo ya se consumió. `my` = el ordinal que consumirá su valor; A retorna cuando `taken >= my`.
             "        if st.cap == Some(0) {\n",
+            "            st.senders += 1;\n",
             "            while !st.closed && !st.q.is_empty() { st = cv.wait(st).unwrap(); }\n",
-            "            if st.closed { return; }\n",
-            "            st.q.push_back(v); cv.notify_all();\n",
-            "            while !st.closed && !st.q.is_empty() { st = cv.wait(st).unwrap(); }\n",
+            "            if st.closed { st.senders -= 1; drop(st); panic!(\"send on a closed channel\"); }\n",
+            "            st.q.push_back(v);\n",
+            "            let my = st.taken + 1; cv.notify_all();\n",
+            "            while !st.closed && st.taken < my { st = cv.wait(st).unwrap(); }\n",
+            "            st.senders -= 1;\n",
+            "            if st.taken < my { drop(st); panic!(\"send on a closed channel\"); }\n",
             "            return;\n",
             "        }\n",
+            "        st.senders += 1;\n",
             "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = cv.wait(st).unwrap(); }\n",
-            "        if st.closed { return; }\n",
+            "        st.senders -= 1;\n",
+            "        if st.closed { drop(st); panic!(\"send on a closed channel\"); }\n",
             "        st.q.push_back(v); cv.notify_all();\n",
             "    }\n",
             "    fn recv(&self) -> Option<T> {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
             "        while st.q.is_empty() && !st.closed { st = cv.wait(st).unwrap(); }\n",
-            "        let v = st.q.pop_front(); if v.is_some() { cv.notify_all(); } v\n",
+            "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; cv.notify_all(); } v\n",
             "    }\n",
-            "    fn close(&self) { let (m, cv) = &*self.inner; m.lock().unwrap().closed = true; cv.notify_all(); }\n",
+            // `close` con un emisor bloqueado = error de ejecución en el sitio del close, como la VM
+            // (M12.2; antes el emisor hacía return silencioso y su valor quedaba consumible).
+            "    fn close(&self) {\n",
+            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        if st.senders > 0 { drop(st); panic!(\"close on a channel with a blocked sender\"); }\n",
+            "        st.closed = true; cv.notify_all();\n",
+            "    }\n",
             "}\n",
             // Structured concurrency (M12.3): Task<T> = un JoinHandle envuelto (Arc<Mutex>) que cachea el
             // resultado (join una vez ejecuta el hilo; joins posteriores devuelven el clon cacheado → una

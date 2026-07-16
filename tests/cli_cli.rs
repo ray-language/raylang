@@ -273,6 +273,126 @@ fn build_native_canal_rendezvous_no_se_deadlockea() {
 }
 
 #[test]
+fn build_native_rendezvous_multi_emisor_no_se_cuelga() {
+    // Slice de canales (revisión post-H2/H21): el handshake rendezvous esperaba "cola vacía", no "MI
+    // valor consumido" — con ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse
+    // para siempre aunque el suyo ya se consumió. Ahora el handshake es por generación (`taken`).
+    // Dos emisores concurrentes sobre cap=0: ambos deben completar su send (lo señalan por `done`).
+    // Si volviera el cuelgue, `output()` no retornaría → el test colgaría (señal clara en CI).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native rendezvous multi-emisor: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_rdv_multi");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           let ch: Channel<int> = Channel.bounded(0);\n\
+           let done: Channel<int> = Channel.new();\n\
+           spawn(fn() { send(ch, 1); send(done, 10); });\n\
+           spawn(fn() { send(ch, 2); send(done, 20); });\n\
+           var suma = 0;\n\
+           match (recv(ch)) { Option.Some(v) => { suma = suma + v; }, Option.None => {}, }\n\
+           match (recv(ch)) { Option.Some(v) => { suma = suma + v; }, Option.None => {}, }\n\
+           var hechas = 0;\n\
+           match (recv(done)) { Option.Some(v) => { hechas = hechas + v; }, Option.None => {}, }\n\
+           match (recv(done)) { Option.Some(v) => { hechas = hechas + v; }, Option.None => {}, }\n\
+           print(suma);    // 3 (1+2, en cualquier orden)\n\
+           print(hechas);  // 30: AMBOS emisores completaron su send\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("rdvm_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native rendezvous multi-emisor ok\n{err}");
+    let (vm_out, _e, vm_code) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, "3\n30\n", "la VM completa ambos sends");
+    assert_eq!(vm_code, 0);
+    // 10 veces: la carrera A-pierde-el-despertar depende del scheduling de hilos reales.
+    for _ in 0..10 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), vm_out, "multi-emisor nativo ≡ VM");
+        assert_eq!(native.status.code(), Some(0));
+    }
+}
+
+#[test]
+fn build_native_send_sobre_canal_cerrado_es_error_como_la_vm() {
+    // Slice de canales: `send` sobre un canal cerrado se DESCARTABA en silencio en nativo; la VM da
+    // "send on a closed channel" (error de ejecución). Ahora el nativo aborta con el MISMO texto.
+    // (El exit code difiere aún — 101 panic vs 70 VM — diferido a H6.)
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native send-cerrado: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_send_closed");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           let ch: Channel<int> = Channel.new();\n\
+           close(ch);\n\
+           send(ch, 1);\n\
+           print(\"inalcanzable\");\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("sc_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native send-cerrado ok\n{err}");
+    let (vm_out, vm_err, vm_code) = ray(&base, &["run", "prog.ray"]);
+    assert!(vm_err.contains("send on a closed channel"), "la VM da el error\n{vm_err}");
+    assert_ne!(vm_code, 0);
+    assert!(!vm_out.contains("inalcanzable"));
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
+    assert!(native_err.contains("send on a closed channel"), "el nativo aborta con el texto de la VM\n{native_err}");
+    assert_ne!(native.status.code(), Some(0), "el send sobre cerrado no continúa");
+    assert!(!String::from_utf8_lossy(&native.stdout).contains("inalcanzable"));
+}
+
+#[test]
+fn build_native_close_con_emisor_bloqueado_es_error_como_la_vm() {
+    // Slice de canales: `close` con un emisor bloqueado hacía return silencioso del emisor (y su valor
+    // quedaba consumible); la VM da "close on a channel with a blocked sender" en el sitio del close
+    // (M12.2). Ahora el nativo detecta los emisores bloqueados (contador `senders`) y aborta igual.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native close-bloqueado: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_close_blocked");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/time;\n\
+         fn main() -> int {\n\
+           let ch: Channel<int> = Channel.bounded(0);\n\
+           spawn(fn() { send(ch, 1); });  // se bloquea: nadie recibe\n\
+           time.sleep(200);               // deja al emisor aparcarse (hilos reales)\n\
+           close(ch);                     // → error de ejecución\n\
+           print(\"inalcanzable\");\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("cb_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native close-bloqueado ok\n{err}");
+    let (vm_out, vm_err, vm_code) = ray(&base, &["run", "prog.ray"]);
+    assert!(vm_err.contains("close on a channel with a blocked sender"), "la VM da el error\n{vm_err}");
+    assert_ne!(vm_code, 0);
+    assert!(!vm_out.contains("inalcanzable"));
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
+    assert!(
+        native_err.contains("close on a channel with a blocked sender"),
+        "el nativo aborta con el texto de la VM\n{native_err}"
+    );
+    assert_ne!(native.status.code(), Some(0));
+    assert!(!String::from_utf8_lossy(&native.stdout).contains("inalcanzable"));
+}
+
+#[test]
 fn build_native_spawn_de_funcion_nombrada_coincide_con_la_vm() {
     // `spawn(worker)` con `worker` una función de nivel superior (no un literal `fn(){}`) → el binario
     // nativo la corre en un hilo real y `join` recoge su resultado, byte-idéntico a la VM. (Fleco no-crate

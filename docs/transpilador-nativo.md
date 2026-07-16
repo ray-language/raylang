@@ -499,10 +499,20 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > el texto de la VM, corpus +4 entradas (multi-módulo `modulos`/`capsula`/`proyecto` — antes el loader
 > →transpile estaba a ciegas — y `sqlite_demo` — antes el camino Cargo no se cubría), caso rustls sin
 > red (server name inválido) en el test H13, y `docs/build.md` actualizado (`--target`, lock, caché).
-> **Deuda anotada, diferida a sabiendas**: rendezvous multi-emisor (un emisor puede esperar el valor
-> de otro, `transpile.rs` runtime de canales) y `close` con emisor bloqueado (return silencioso vs
-> error de la VM) — ambos junto a H21; `ASSOC_FNS` fuera de la guardia H11; reproducibilidad del lock
-> solo por máquina (H20); CI solo Linux x86_64.
+> **Deuda anotada, diferida a sabiendas**: `ASSOC_FNS` fuera de la guardia H11; reproducibilidad del
+> lock solo por máquina (H20); CI solo Linux x86_64.
+
+> **Slice de canales (16 jul 2026, post-revisión)**: los tres bugs de corrección del runtime de
+> canales embebido, que vivían solo como nota dentro del diferido H21, están CERRADOS: (1) el
+> handshake rendezvous pasa de "cola vacía" a **generación de consumo** (`taken`) — con ≥2 emisores,
+> A podía despertar con el valor de B en cola y re-dormirse para siempre aunque el suyo ya se
+> consumió; (2) **`send` sobre canal cerrado** aborta con el texto de la VM (`send on a closed
+> channel`; antes: descarte silencioso); (3) **`close` con emisor bloqueado** aborta en el sitio del
+> close (`close on a channel with a blocked sender`, contador `senders`; antes: return silencioso del
+> emisor y su valor quedaba consumible). Los panics llevan el MISMO texto que el error de ejecución de
+> la VM; el exit code (101 vs 70) queda con H6. Tests: multi-emisor ×10, send-cerrado y
+> close-bloqueado en `tests/cli_cli.rs`. Lo que QUEDA de H21 es solo el port de semántica de
+> scheduler (cancelación M12.5, `try_join`, select sin busy-wait) — sin bugs de corrección conocidos.
 
 ### 6.1 P0 — Roto en el momento de la auditoría
 

@@ -853,6 +853,21 @@ impl Transpiler {
     }
 
     fn emit_function(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
+        // Un cuerpo que NO transpila (p. ej. usa `try_join`) propaga `Err` con `?` sin haber popeado los
+        // scopes ni deshecho las cells que ya declaró → sus locales (p. ej. un `Task t`) se FILTRABAN al
+        // siguiente `emit_function`, cuyo `spawn` capturaba ese `t` fantasma (`in_scope_channels`) y emitía
+        // `let t = t.clone()` con `t` inexistente en Rust. Se restaura el estado en TODOS los caminos.
+        let base_scopes = self.scopes.len();
+        let prev_tparams = std::mem::take(&mut self.tparams);
+        let prev_cells = std::mem::take(&mut self.cells);
+        let r = self.emit_function_inner(out, rust_name, f);
+        self.scopes.truncate(base_scopes);
+        self.tparams = prev_tparams;
+        self.cells = prev_cells;
+        r
+    }
+
+    fn emit_function_inner(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
         // Params de tipo en ámbito (para `rust_ty` y la clasificación de `Struct(T)`→genérico).
         self.tparams = f.type_params.iter().cloned().collect();
         // Genéricos de Rust con bound `Clone` (todo valor genérico se clona al leer) + `RayShow` (por si
@@ -1736,6 +1751,27 @@ impl Transpiler {
     /// Genera `impl RayShow` para cada struct/enum de usuario (recursivo; genérico-consciente con
     /// `where` `A: RayShow`). struct → `Name { f: v, … }`; enum → `Name.Variant(payload)` / `Name.Variant`.
     fn emit_rayshow_impls(&self, out: &mut String, prog: &Program) -> Result<(), String> {
+        // Un tipo-función usado como ELEMENTO de un contenedor (`[fn]`, `Map<_, fn>`, `(fn, …)`) de un campo
+        // o payload necesita su `impl RayShow` (el impl genérico del contenedor exige `T: RayShow`). Un `fn`
+        // se muestra `<fn>` (como el Display del runtime). Uno por firma concreta distinta (dedup).
+        let mut fn_types: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for s in &prog.structs {
+            let tps: std::collections::HashSet<String> = s.type_params.iter().cloned().collect();
+            for (_, fty) in &s.fields {
+                collect_fn_rayshow(fty, &self.enums, &tps, &mut fn_types);
+            }
+        }
+        for e in &prog.enums {
+            let tps: std::collections::HashSet<String> = e.type_params.iter().cloned().collect();
+            for v in &e.variants {
+                for pty in &v.payload {
+                    collect_fn_rayshow(pty, &self.enums, &tps, &mut fn_types);
+                }
+            }
+        }
+        for ft in &fn_types {
+            writeln!(out, "impl RayShow for {} {{ fn ray_show(&self) -> String {{ \"<fn>\".to_string() }} }}", ft).unwrap();
+        }
         for s in &prog.structs {
             if s.name == "Iter" || s.name.starts_with("__dyn_") { continue; }
             let gens = generic_decl(&s.type_params);
@@ -2754,38 +2790,55 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow()[..])");
             }
-            // spawn(fn()->T {...}) → __ray_spawn(move || {...}) → Task<T> (JoinHandle envuelto, registrado
-            // en el scope activo). Solo un FnExpr literal (captura solo valores Send, p. ej. canales).
-            // scope(fn()->R {...}) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro.
+            // spawn(f) → __ray_spawn(move || {...}) → Task<T> (JoinHandle envuelto, registrado en el scope
+            // activo). scope(f) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro. `f`
+            // es una función anónima literal `fn(){}` (captura valores Send, p. ej. canales) O el NOMBRE de
+            // una función de nivel superior de aridad 0 (`spawn(worker)` → `move || worker()`; sin captura).
             "spawn" | "scope" => {
-                let ExprKind::Func(fnexpr) = &eff[0].kind else {
-                    return Err(format!("spike: {} solo acepta una función anónima literal", method));
-                };
                 self.needs_concurrency = true;
-                // El closure captura por `move`; los canales en ámbito los comparten varios spawns/main/
-                // scope, así que se CLONAN (Arc bump) antes → el closure mueve un clon, el original sigue.
+                let named: Option<String> = match &eff[0].kind {
+                    ExprKind::Func(_) => None,
+                    ExprKind::Ident(n) if self.funcs.contains_key(n) => {
+                        if !self.funcs[n].params.is_empty() {
+                            return Err(format!("spike: {} de una función con parámetros ('{}')", method, n));
+                        }
+                        Some(n.clone())
+                    }
+                    _ => {
+                        return Err(format!(
+                            "spike: {} solo acepta una función anónima literal o el nombre de una función",
+                            method
+                        ))
+                    }
+                };
+                let ret = match &eff[0].kind {
+                    ExprKind::Func(fnexpr) => normalize_type(&fnexpr.return_type),
+                    _ => normalize_type(&self.funcs[named.as_ref().unwrap()].ret),
+                };
                 out.push_str("{ ");
-                for name in self.in_scope_channels() {
-                    write!(out, "let {n} = {n}.clone(); ", n = mangle(&name)).unwrap();
+                // El literal captura por `move` los canales del ámbito (compartidos → se CLONAN antes; el
+                // closure mueve un clon, el original sigue). Una fn nombrada es top-level y no captura nada.
+                if named.is_none() {
+                    for name in self.in_scope_channels() {
+                        write!(out, "let {n} = {n}.clone(); ", n = mangle(&name)).unwrap();
+                    }
                 }
                 let runtime = if method == "spawn" { "__ray_spawn" } else { "__ray_scope" };
                 write!(out, "{}(move || ", runtime).unwrap();
                 // spawn: el closure corre en OTRO hilo → devuelve la repr SEND (string/bytes → Arc); el
                 // cuerpo produce la repr del programa, se envuelve. scope corre en el hilo actual → sin conv.
-                let wrap = if method == "spawn" { normalize_type(&fnexpr.return_type) } else { Type::Unit };
-                match wrap {
-                    Type::String => {
-                        out.push_str("std::sync::Arc::<str>::from(&*");
-                        self.emit_block(out, &fnexpr.body)?;
-                        out.push(')');
-                    }
-                    Type::Bytes => {
-                        out.push_str("std::sync::Arc::<[u8]>::from(&*");
-                        self.emit_block(out, &fnexpr.body)?;
-                        out.push(')');
-                    }
-                    _ => self.emit_block(out, &fnexpr.body)?,
+                let wrap = if method == "spawn" { ret } else { Type::Unit };
+                let (pre, suf) = match wrap {
+                    Type::String => ("std::sync::Arc::<str>::from(&*", ")"),
+                    Type::Bytes => ("std::sync::Arc::<[u8]>::from(&*", ")"),
+                    _ => ("", ""),
+                };
+                out.push_str(pre);
+                match &eff[0].kind {
+                    ExprKind::Func(fnexpr) => self.emit_block(out, &fnexpr.body)?,
+                    _ => write!(out, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
                 }
+                out.push_str(suf);
                 out.push_str(") }");
             }
             "unwrap_or" => {
@@ -2993,11 +3046,14 @@ impl Transpiler {
                     "send" => Type::Unit,
                     "select" => Type::Int, // índice del canal listo
                     "signals" => Type::Channel(Box::new(Type::Int)), // canal de señales del SO
-                    // spawn(fn()->T) → Task<T>; scope(fn()->R) → R (el tipo de retorno de la función anónima).
+                    // spawn(f)→Task<T>; scope(f)→R. `f` es un literal `fn()->T` o el nombre de una función.
                     "spawn" | "scope" => {
                         let ret = match recv0.map(|e| &e.kind) {
                             Some(ExprKind::Func(f)) => normalize_type(&f.return_type),
-                            _ => return Err(format!("spike: {} sin función anónima", method)),
+                            Some(ExprKind::Ident(n)) if self.funcs.contains_key(n) => {
+                                normalize_type(&self.funcs[n].ret)
+                            }
+                            _ => return Err(format!("spike: {} sin función anónima ni nombre de función", method)),
                         };
                         if method == "spawn" {
                             Type::Task(Box::new(ret))
@@ -3293,6 +3349,62 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         other => return Err(format!("spike: tipo no soportado {:?}", other)),
     }
     .to_string())
+}
+
+/// Recolecta los tipos-**función** que aparecen (incluso ANIDADOS en arreglos/Map/tuplas) en un tipo, a su
+/// forma `rust_ty` (`Rc<dyn Fn(..)->..>`). Un `fn` dentro de un contenedor de un campo/payload necesita su
+/// propio `impl RayShow` (los impls genéricos de `Vec`/`Map`/tupla exigen `T: RayShow`, y no hay un RayShow
+/// único para todas las firmas de función). Solo firmas CONCRETAS (representables): las que mencionan un
+/// param de tipo se saltan (`rust_ty` falla → se omite). Dedup en el `BTreeSet` del llamador.
+fn collect_fn_rayshow(
+    ty: &Type,
+    enums: &std::collections::HashSet<String>,
+    item_tparams: &std::collections::HashSet<String>,
+    acc: &mut std::collections::BTreeSet<String>,
+) {
+    match normalize_type(ty) {
+        Type::Fn(ref params, ref ret) => {
+            // Solo firmas SIN parámetros de tipo del item envolvente: `rust_ty` no falla ante un `T`
+            // (lo renderiza literal → `cannot find type T`), así que la concreción se chequea aparte.
+            if !ty_mentions_tparam(ty, item_tparams) {
+                if let Ok(rt) = rust_ty(ty, enums, &std::collections::HashSet::new()) {
+                    acc.insert(rt);
+                }
+            }
+            for p in params {
+                collect_fn_rayshow(p, enums, item_tparams, acc);
+            }
+            collect_fn_rayshow(ret, enums, item_tparams, acc);
+        }
+        Type::Array(inner) => collect_fn_rayshow(&inner, enums, item_tparams, acc),
+        Type::Map(k, v) => {
+            collect_fn_rayshow(&k, enums, item_tparams, acc);
+            collect_fn_rayshow(&v, enums, item_tparams, acc);
+        }
+        Type::Tuple(ts) => ts.iter().for_each(|t| collect_fn_rayshow(t, enums, item_tparams, acc)),
+        Type::Struct(_, args) | Type::Enum(_, args) => {
+            args.iter().for_each(|a| collect_fn_rayshow(a, enums, item_tparams, acc))
+        }
+        _ => {}
+    }
+}
+
+/// ¿El tipo menciona algún parámetro de tipo del conjunto dado (o una `Type::Var` cualquiera)? Un tipo así
+/// NO es representable como `impl RayShow` concreto (mencionaría un `T` inexistente en ese ámbito).
+fn ty_mentions_tparam(ty: &Type, tps: &std::collections::HashSet<String>) -> bool {
+    match ty {
+        Type::Var(_) => true,
+        Type::Struct(n, args) | Type::Enum(n, args) => {
+            tps.contains(n) || args.iter().any(|a| ty_mentions_tparam(a, tps))
+        }
+        Type::Array(inner) => ty_mentions_tparam(inner, tps),
+        Type::Map(k, v) => ty_mentions_tparam(k, tps) || ty_mentions_tparam(v, tps),
+        Type::Tuple(ts) => ts.iter().any(|t| ty_mentions_tparam(t, tps)),
+        Type::Fn(params, ret) => {
+            params.iter().any(|p| ty_mentions_tparam(p, tps)) || ty_mentions_tparam(ret, tps)
+        }
+        _ => false,
+    }
 }
 
 /// La repr **Send** de un tipo que viaja por un `Channel<T>`/`Task<T>`: se convierte al BORDE (send/recv/
@@ -3832,12 +3944,13 @@ mod tests {
 
     #[test]
     fn una_funcion_no_transpilable_queda_como_stub_que_panica() {
-        // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí `spawn` de una fn nombrada) se
-        // emite como STUB que panica, con su firma → el programa COMPILA; si el flujo real no la llama,
-        // corre igual que la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
+        // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí un canal de un struct no-Send,
+        // como el real de metrics_server) se emite como STUB que panica, con su firma → el programa
+        // COMPILA; si el flujo real no la llama, corre igual que la VM. Antes se OMITÍA y una llamada
+        // colgante hacía fallar rustc.
         let rust = transpile_src(
-            "fn worker() -> int { 0 }\n\
-             fn arranca() -> int { spawn(worker); 1 }\n\
+            "struct Msg { x: int }\n\
+             fn arranca() -> int { let c: Channel<Msg> = Channel.new(); send(c, Msg { x: 1 }); 1 }\n\
              fn main() -> int { print(42); 0 }",
         );
         assert!(

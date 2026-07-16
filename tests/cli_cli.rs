@@ -229,6 +229,39 @@ fn build_native_concurrencia_csp_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_spawn_de_funcion_nombrada_coincide_con_la_vm() {
+    // `spawn(worker)` con `worker` una función de nivel superior (no un literal `fn(){}`) → el binario
+    // nativo la corre en un hilo real y `join` recoge su resultado, byte-idéntico a la VM. (Fleco no-crate
+    // del transpilador: antes `spawn` solo aceptaba una función anónima literal.)
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native spawn-nombrada: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_spawn_named");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn trabajo() -> int { print(\"worker\"); 42 }\n\
+         fn main() -> int {\n\
+           let t = spawn(trabajo);\n\
+           let r = join(t);\n\
+           print(\"r \" + to_string(r));\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native spawn-nombrada ok\n{err}");
+
+    let expected = "worker\nr 42\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da la salida");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, expected, "nativo ≡ VM (spawn de función nombrada)");
+}
+
+#[test]
 fn build_native_structured_concurrency_coincide_con_la_vm() {
     // `ray build --native` de structured concurrency (scope + spawn→Task + join): las tareas se lanzan en
     // hilos reales, join recoge sus resultados, scope las une al salir. Salida determinista-por-diseño.

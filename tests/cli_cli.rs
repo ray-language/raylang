@@ -261,6 +261,158 @@ fn build_native_spawn_de_funcion_nombrada_coincide_con_la_vm() {
     assert_eq!(native_out, expected, "nativo ≡ VM (spawn de función nombrada)");
 }
 
+/// Un echo TLS mínimo (servidor): lee cert/clave de los args, escucha en un puerto efímero (lo imprime),
+/// acepta una conexión, la envuelve con `tls_accept` y devuelve por eco lo que reciba (I/O TLS por
+/// `socket_read_bytes`/`socket_write_bytes`). Sirve tanto para el VM como transpilado a nativo.
+const TLS_ECHO_SERVER_RAY: &str = "import std/net;\n\
+import std/fs;\n\
+fn handle(conn: int) {\n\
+    match (net.socket_read_bytes(conn)) {\n\
+        Result.Ok(data) => { let _ = net.socket_write_bytes(conn, data); },\n\
+        Result.Err(e) => eprint(e),\n\
+    }\n\
+    close(conn);\n\
+}\n\
+fn main() -> int {\n\
+    let a = args();\n\
+    var cert = \"\";\n\
+    var key = \"\";\n\
+    match (fs.read_file(a[0])) { Result.Ok(c) => { cert = c; }, Result.Err(e) => { eprint(e); return 1; } }\n\
+    match (fs.read_file(a[1])) { Result.Ok(k) => { key = k; }, Result.Err(e) => { eprint(e); return 1; } }\n\
+    match (net.tcp_listen(\"127.0.0.1\", 0)) {\n\
+        Result.Err(e) => { eprint(e); return 1; },\n\
+        Result.Ok(srv) => {\n\
+            print(to_string(net.local_port(srv)));\n\
+            var go = true;\n\
+            while (go) {\n\
+                match (net.tcp_accept(srv)) {\n\
+                    Result.Ok(tcp) => match (net.tls_accept(tcp, cert, key)) {\n\
+                        Result.Ok(conn) => handle(conn),\n\
+                        Result.Err(e) => eprint(\"tls_accept: \" + e),\n\
+                    },\n\
+                    Result.Err(e) => eprint(e),\n\
+                }\n\
+            }\n\
+        },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// El echo TLS (cliente): conecta por TLS a `localhost:<puerto>` (el cert de prueba es de localhost),
+/// envía \"hola tls\" y espera el eco. Args: [puerto]. Confía en la CA de prueba vía `SSL_CERT_FILE`.
+const TLS_ECHO_CLIENT_RAY: &str = "import std/net;\n\
+fn main() -> int {\n\
+    let a = args();\n\
+    let port = parse_int(a[0]).unwrap_or(0);\n\
+    match (net.tls_connect(\"localhost\", port)) {\n\
+        Result.Ok(conn) => {\n\
+            let _ = net.socket_write_bytes(conn, \"hola tls\".to_bytes());\n\
+            match (net.socket_read_bytes(conn)) {\n\
+                Result.Ok(data) => match (from_utf8(data)) {\n\
+                    Result.Ok(s) => print(\"eco: \" + s),\n\
+                    Result.Err(e) => eprint(e),\n\
+                },\n\
+                Result.Err(e) => eprint(e),\n\
+            }\n\
+            close(conn);\n\
+        },\n\
+        Result.Err(e) => { eprint(\"connect: \" + e); return 1; },\n\
+    }\n\
+    0\n\
+}\n";
+
+/// Lanza un proceso servidor TLS (VM o nativo) con el cert/clave de prueba y devuelve (proceso, puerto).
+/// El servidor imprime el puerto efímero como primera línea (`println!` de Rust hace flush por newline).
+fn launch_tls_echo_server(cmd: &mut Command) -> (std::process::Child, u16) {
+    use std::io::{BufRead, BufReader};
+    let root = env!("CARGO_MANIFEST_DIR");
+    let cert = format!("{root}/tests/fixtures/tls_cert.pem");
+    let key = format!("{root}/tests/fixtures/tls_key.pem");
+    let mut child = cmd
+        .arg(&cert)
+        .arg(&key)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("lanza el servidor TLS");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el puerto");
+    let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("puerto inválido: {line:?}"));
+    (child, port)
+}
+
+#[test]
+fn build_native_tls_cliente_contra_servidor_vm_hace_eco() {
+    // Paso 1 del crate ray-runtime: un cliente TLS (std/net → rustls) transpila a nativo. build_native
+    // detecta la feature `tls`, genera un proyecto Cargo con ray-runtime y compila con cargo. El binario
+    // hace I/O TLS bloqueante (ray_runtime::tls::TlsStream). Cliente NATIVO ↔ servidor TLS del VM (echo).
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native tls cliente: cargo no disponible");
+        return;
+    }
+    let base = tmp("build_native_tls_cli");
+    std::fs::write(base.join("client.ray"), TLS_ECHO_CLIENT_RAY).unwrap();
+    let bin = base.join("client_bin");
+    let (out, err, code) = ray(&base, &["build", "client.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native tls cliente ok\n{err}");
+    assert!(out.contains("ray-runtime: tls"), "usó el camino Cargo con ray-runtime tls: {out}");
+
+    // Servidor TLS en el VM (echo); el cliente NATIVO conecta y espera el eco.
+    std::fs::write(base.join("server.ray"), TLS_ECHO_SERVER_RAY).unwrap();
+    let mut server_cmd = Command::new(BIN);
+    server_cmd.arg("run").arg(base.join("server.ray"));
+    let (mut server, port) = launch_tls_echo_server(&mut server_cmd);
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let client = Command::new(&bin)
+        .arg(port.to_string())
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("corre el cliente TLS nativo");
+    let _ = server.kill();
+    assert_eq!(
+        String::from_utf8_lossy(&client.stdout),
+        "eco: hola tls\n",
+        "cliente TLS nativo ≡ VM (rustls en ray-runtime)\nstderr: {}",
+        String::from_utf8_lossy(&client.stderr)
+    );
+}
+
+#[test]
+fn build_native_tls_servidor_contra_cliente_vm_hace_eco() {
+    // El otro lado: un servidor TLS (tls_accept) transpila a nativo; un cliente del VM conecta por TLS y
+    // recibe el eco. Valida el camino de servidor (rustls server-side) del binario transpilado.
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native tls servidor: cargo no disponible");
+        return;
+    }
+    let base = tmp("build_native_tls_srv");
+    std::fs::write(base.join("server.ray"), TLS_ECHO_SERVER_RAY).unwrap();
+    std::fs::write(base.join("client.ray"), TLS_ECHO_CLIENT_RAY).unwrap();
+    let bin = base.join("server_bin");
+    let (out, err, code) = ray(&base, &["build", "server.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native tls servidor ok\n{err}");
+    assert!(out.contains("ray-runtime: tls"), "usó el camino Cargo con ray-runtime tls: {out}");
+
+    // Servidor TLS NATIVO; el cliente en el VM conecta y espera el eco.
+    let (mut server, port) = launch_tls_echo_server(&mut Command::new(&bin));
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let client = Command::new(BIN)
+        .arg("run")
+        .arg(base.join("client.ray"))
+        .arg(port.to_string())
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("corre el cliente TLS del VM");
+    let _ = server.kill();
+    assert_eq!(
+        String::from_utf8_lossy(&client.stdout),
+        "eco: hola tls\n",
+        "servidor TLS nativo atiende al cliente VM\nstderr: {}",
+        String::from_utf8_lossy(&client.stderr)
+    );
+}
+
 #[test]
 fn build_native_crypto_de_produccion_via_ray_runtime_coincide_con_la_vm() {
     // Paso 0b del crate ray-runtime (docs/transpilador-nativo.md §4-5): un programa que usa cripto de

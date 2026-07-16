@@ -368,6 +368,11 @@ struct Transpiler {
     /// interceptan a `ray_runtime::crypto::*` → el binario nativo llama al MISMO código que la VM (ring).
     /// Activa la feature `crypto` de `ray-runtime` → `build_native` genera un proyecto Cargo (no rustc pelado).
     needs_rt_crypto: bool,
+    /// ¿Usa TLS (`__tls_connect`/`__tls_connect_h2`/`__tls_accept`/`__tls_upgrade`)? El binario transpilado
+    /// hace I/O TLS **bloqueante** (hilos reales; `ray_runtime::tls::TlsStream` sobre `StreamOwned`). Añade
+    /// la variante `Tls` al registro de handles inline y el despacho en `socket_read/write`. Implica
+    /// `needs_net` (registro + TcpStream). Activa la feature `tls` de `ray-runtime`.
+    needs_rt_tls: bool,
     /// Nombres de `var` locales que van en una **celda** `Rc<RefCell<T>>` (B1): capturadas y mutadas por
     /// una closure. Se leen con `.borrow().clone()` y se escriben con `.borrow_mut()`; la closure captura
     /// un clon del `Rc`. Se pueblan al entrar en cada función/closure (con su `cell_vars`) y se quitan al
@@ -450,6 +455,7 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
         needs_time_rng: false,
         needs_net: false,
         needs_rt_crypto: false,
+        needs_rt_tls: false,
         cells: std::collections::HashSet::new(),
     };
 
@@ -635,13 +641,28 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
         out.push_str("    ray_main();\n");
     }
     out.push_str("}\n");
+    // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) → implica net.
+    if t.needs_rt_tls {
+        t.needs_net = true;
+    }
     // Registro global de handles de archivo (M11.8), solo si el programa los usa. Rust permite items
     // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +
     // mapa handle→archivo tras un Mutex/OnceLock; los mensajes de error son byte-idénticos a la VM.
     // Registro de handles (M11.8): compartido por archivos y sockets. Se emite si el programa usa cualquiera.
     if t.needs_handles || t.needs_net {
+        // La variante `Tls` (una conexión TLS bloqueante tras `Arc<Mutex>` propio → el I/O no retiene el
+        // lock global del registro) solo se añade si el programa usa TLS.
+        let tls_variant = if t.needs_rt_tls {
+            ", Tls(std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>)"
+        } else {
+            ""
+        };
+        writeln!(
+            out,
+            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant} }}"
+        )
+        .unwrap();
         out.push_str(concat!(
-            "enum __RayHandle { Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener), Udp(std::net::UdpSocket) }\n",
             "struct __RayReg { next: i64, open: __RayMap<i64, __RayHandle> }\n",
             "fn __ray_reg() -> &'static std::sync::Mutex<__RayReg> {\n",
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
@@ -690,16 +711,26 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
             "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
             "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
             "    match l.accept() { Ok((s, _)) => Ok(__ray_reg_insert(__RayHandle::Tcp(s))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
-            "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {\n",
-            "    use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536];\n",
-            "    match s.read(&mut buf) { Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
-            "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {\n",
-            "    use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536];\n",
-            "    match s.read(&mut buf) { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
-            "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {\n",
-            "    use std::io::Write; let mut s = __ray_sock_clone(h)?; let mut off = 0;\n",
-            "    while off < bytes.len() { match s.write(&bytes[off..]) { Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) } }\n",
-            "    Ok(bytes.len() as i64) }\n",
+        ));
+        // socket_read/read_bytes/write DESPACHAN a TLS si el handle es una conexión TLS (solo si el
+        // programa usa TLS): se clona el `Arc<Mutex<TlsStream>>` del registro y se hace I/O tras SU lock
+        // (no el global) → conexiones concurrentes no se serializan. Si no, la vía TCP de siempre (clona el
+        // stream para no retener el lock durante la I/O bloqueante).
+        // Como la VM: SOLO las variantes `_bytes` despachan a TLS (socket_read/write string dan el error de
+        // no-socket sobre un handle TLS). read tiene helper propio (matchea la VM: sin TLS); el `write`
+        // compartido cubre write_bytes (el uso real de TLS) → lleva el despacho.
+        let (tls_rdb, tls_wr) = if t.needs_rt_tls {
+            (
+                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); let mut buf = [0u8; 65536]; return match __g.read(&mut buf) { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+            )
+        } else {
+            ("", "")
+        };
+        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536]; match s.read(&mut buf) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
+        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536]; match s.read(&mut buf) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
+        write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let mut s = __ray_sock_clone(h)?; let mut off = 0; while off < bytes.len() {{ match s.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
+        out.push_str(concat!(
             "fn __ray_local_port(h: i64) -> i64 {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Udp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
@@ -724,6 +755,37 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
             "            Ok((n, addr)) => { buf.truncate(n); Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(addr.ip().to_string().as_bytes()), Rc::<[u8]>::from(addr.port().to_string().as_bytes()), Rc::<[u8]>::from(&buf[..])])) }\n",
             "            Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.to_string().as_bytes())])) } }\n",
             "        None => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"handle {} is not a UDP socket\", h).as_bytes())])) } }\n",
+        ));
+    }
+    // Helpers de TLS (P2.b Paso 1), solo si el programa usa TLS. El binario transpilado hace I/O TLS
+    // BLOQUEANTE (hilos reales) vía `ray_runtime::tls` — a diferencia de la VM (no-bloqueante + fibras).
+    // Los primitivos devuelven arreglos ETIQUETADOS (`["ok", handle]`/`["err", msg]`, como UDP); los
+    // wrappers de `std/net.ray` los parsean a `Result`. accept/upgrade parten de un handle TCP: sacan su
+    // `TcpStream` del registro y reinsertan la conexión TLS con el MISMO handle (como la VM).
+    if t.needs_rt_tls {
+        out.push_str(concat!(
+            // Clona el Arc<Mutex<TlsStream>> del handle (si es TLS) → la I/O va tras su lock, no el global.
+            "fn __ray_tls_get(h: i64) -> Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>> {\n",
+            "    let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None } }\n",
+            "fn __ray_tls_tag_ok(id: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
+            "fn __ray_tls_tag_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(msg)])) }\n",
+            "fn __ray_tls_wrap(s: ray_runtime::tls::TlsStream) -> i64 { __ray_reg_insert(__RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))) }\n",
+            "fn __ray_tls_connect(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    match ray_runtime::tls::connect(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
+            "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
+            // Saca el TcpStream del handle `h` (debe ser TCP), lo deja fuera del registro y lo devuelve.
+            "fn __ray_tls_take_tcp(h: i64) -> Result<std::net::TcpStream, String> {\n",
+            "    let mut reg = __ray_reg().lock().unwrap(); match reg.open.remove(&h) {\n",
+            "        Some(__RayHandle::Tcp(s)) => Ok(s),\n",
+            "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} is not an accepted TCP socket\", h)) }\n",
+            "        None => Err(format!(\"invalid handle: {}\", h)) } }\n",
+            "fn __ray_tls_accept(h: i64, cert: &str, key: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let sock = match __ray_tls_take_tcp(h) { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
+            "    match ray_runtime::tls::accept(sock, cert, key) { Ok(s) => { __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))); __ray_tls_tag_ok(h) } Err(e) => __ray_tls_tag_err(e) } }\n",
+            "fn __ray_tls_upgrade(h: i64, host: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let sock = match __ray_tls_take_tcp(h) { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
+            "    match ray_runtime::tls::upgrade(sock, host) { Ok(s) => { __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))); __ray_tls_tag_ok(h) } Err(e) => __ray_tls_tag_err(e) } }\n",
         ));
     }
     // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
@@ -847,6 +909,9 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
     let mut rt_features = Vec::new();
     if t.needs_rt_crypto {
         rt_features.push("crypto");
+    }
+    if t.needs_rt_tls {
+        rt_features.push("tls");
     }
     Ok(Transpiled { source: out, rt_features })
 }
@@ -2981,6 +3046,36 @@ impl Transpiler {
                 }
                 out.push_str("); Rc::new(std::cell::RefCell::new(match __r { Some(__v) => vec![Rc::<[u8]>::from(__v)], None => Vec::new() })) }");
             }
+            // TLS de producción (Paso 1): los primitivos `__tls_*` → helpers `__ray_tls_*` (I/O bloqueante
+            // vía ray_runtime::tls) y activan `needs_rt_tls`. Devuelven arreglos ETIQUETADOS (`["ok",h]`/
+            // `["err",msg]`) que los wrappers de std/net.ray parsean; se emiten tal cual (sin envolver). El
+            // arg string es `Rc<str>`; `&expr` deref-coerce a `&str`. `method` ya viene sin el prefijo `__`.
+            "tls_connect" | "tls_connect_h2" if name.starts_with("__") => {
+                self.needs_rt_tls = true;
+                write!(out, "__ray_{}(&", method).unwrap();
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "tls_accept" if name.starts_with("__") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_accept(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            "tls_upgrade" if name.starts_with("__") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_upgrade(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             _ => {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));
@@ -3190,6 +3285,12 @@ impl Transpiler {
                         if n.starts_with("__") =>
                     {
                         Type::Array(Box::new(Type::Bytes))
+                    }
+                    // TLS (Paso 1): los primitivos devuelven `[string]` etiquetado (["ok",h]/["err",msg]).
+                    "tls_connect" | "tls_connect_h2" | "tls_accept" | "tls_upgrade"
+                        if n.starts_with("__") =>
+                    {
+                        Type::Array(Box::new(Type::String))
                     }
                     // unwrap_or/unwrap desenvuelven un Option<T>/Result<T,E> → T.
                     "unwrap_or" | "unwrap" => {

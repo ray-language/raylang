@@ -18,8 +18,16 @@ description = "Runtime compartido de raylang: envoltorios de crates de producci�
 default = []
 # Cripto de PRODUCCIÓN (ring): SHA/HMAC/Ed25519/ChaCha20-Poly1305/CSPRNG. Determinista → oráculo VM↔nativo.
 crypto = ["dep:ring"]
+# TLS de PRODUCCIÓN (rustls). El binario transpilado usa hilos de SO reales → I/O TLS BLOQUEANTE
+# (StreamOwned), a diferencia de la VM (no-bloqueante + fibras). ring provee el proveedor de rustls.
+tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 
 [dependencies]
 # M43 — ring 0.17: primitivas de tiempo constante y auditadas. Misma versión que la que usaba el binario
 # `ray` (era transitiva vía rustls); aquí se declara directa para el módulo crypto.
 ring = { version = "0.17", optional = true }
+# M19.4 — rustls (proveedor ring, sin OpenSSL): TLS puro Rust+C portable. Mismas versiones/features que
+# usaba el binario `ray` → mismo comportamiento. Las raíces de Mozilla (webpki-roots) verifican certificados.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
+rustls-pki-types = { version = "1", features = ["std"], optional = true }

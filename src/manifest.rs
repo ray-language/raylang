@@ -48,6 +48,10 @@ pub struct Manifest {
     /// con el repo (builds herméticos/policy). El flag `--without` de CLI se UNE a esta lista. Vacío = sin
     /// exclusión. Ver docs/transpilador-nativo.md §3.3.
     pub native_without: Vec<String>,
+    /// `[dev] listen` — dirección `host:port` que `ray dev` **pre-abre y retiene** entre reinicios
+    /// (socket-activation, M92.3): el hijo la ADOPTA en vez de re-bind → cero conexiones rechazadas. El
+    /// flag `--port`/`--listen` de la CLI la sobrescribe. `None` = sin socket retenido (bind por reinicio).
+    pub dev_listen: Option<String>,
 }
 
 impl Manifest {
@@ -95,6 +99,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut registry_index = None;
     let mut registry_mirror = None;
     let mut native_without = Vec::new();
+    let mut dev_listen = None;
 
     for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
@@ -154,6 +159,11 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 }
                 _ => {} // otras claves de [native] se ignoran por ahora (extensibilidad)
             },
+            "dev" => match key {
+                // `listen = "127.0.0.1:8080"` — socket que `ray dev` retiene entre reinicios (M92.3).
+                "listen" => dev_listen = Some(as_string()?),
+                _ => {} // otras claves de [dev] se ignoran por ahora (extensibilidad)
+            },
             "" => return Err(err(num, "key outside any section (missing '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
@@ -170,6 +180,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         registry_index,
         registry_mirror,
         native_without,
+        dev_listen,
     })
 }
 

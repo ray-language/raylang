@@ -1064,7 +1064,7 @@ Reglas (tabla completa en [`REFERENCIA.md` §13](REFERENCIA.md#13-ffi-tipos-mars
 ## 17. Herramientas
 
 ```sh
-ray dev [archivo]        # modo desarrollo: como run, pero REINICIA ante cambios (M92.1)
+ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
 ray fmt archivo.ray      # formatea (canónico e idempotente)
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
 ray doc archivo.ray      # documentación Markdown desde ///
@@ -1113,6 +1113,24 @@ y ante un cambio reinicia el programa — un template editado se regenera al rel
 con `serve_graceful` **drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la
 compilación en milisegundos, el ciclo editar→ver es de decenas de ms. Un programa que termina solo
 queda a la espera del siguiente cambio.
+
+Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
+compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**
+(no tira un servidor que funciona por un cambio roto). Además hace **debounce** de una ráfaga de
+guardados (p. ej. tu editor + un formateador) en un solo reinicio.
+
+**Sin conexiones caídas entre reinicios** (unix): con `ray dev --port 8080` (o `--listen host:port`,
+o `[dev] listen = "127.0.0.1:8080"` en `ray.toml`) el supervisor **retiene el socket de escucha** y
+cada reinicio lo **adopta** en vez de re-vincularlo — el puerto nunca se cierra, así que una petición
+que llega durante el reinicio **se encola** (no se rechaza) y la atiende el programa nuevo. El downtime
+percibido es el de una compilación (ms). Tu `tcp_listen`/`serve` no cambia: adopta el socket heredado
+de forma transparente cuando el `host:port` coincide. (El estado en memoria del programa **se resetea**
+por reload; si quieres estado persistente entre reloads, guárdalo en un `sqlite.connect("dev.db")`.)
+
+Y **live-reload del navegador**: en una sesión con `--port`, `ray dev` levanta un canal SSE lateral e
+**inyecta** en tus respuestas HTML (del paquete `webserver`) un `<script>` que **refresca la página**
+sola cuando un cambio compila y reinicia. No tocas nada; en producción no se inyecta. (Es un canal
+solo-de-dev, distinto del SSE de tu aplicación: tu `sse_open`/`sse_event` sigue en tu puerto, intacto.)
 
 Pruebas con `@test` (una función `() -> bool` o `() -> unit` que usa `assert`); cada test corre
 **aislado** (un panic no tumba la batería):

@@ -1339,12 +1339,38 @@ pub fn tcp_accept_nb(h: i64) -> Result<Option<i64>, String> {
 /// Hace *bind* + *listen* en `host:port` (con `port=0` el SO asigna un puerto efímero) y devuelve un
 /// handle de escucha (M15.3).
 pub fn tcp_listen(host: &str, port: i64) -> Result<i64, String> {
-    let listener = std::net::TcpListener::bind((host, port as u16)).map_err(|e| e.to_string())?;
+    let listener = adopt_or_bind(host, port)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
     reg.open.insert(id, OpenHandle::Listener(listener));
     Ok(id)
+}
+
+/// M92.3 (socket-activation para `ray dev`): si el proceso heredó un socket de escucha del supervisor
+/// (`RAY_LISTEN_FD` + `RAY_LISTEN_ADDR` == `host:port`), lo **ADOPTA** (`from_raw_fd`) en vez de hacer
+/// `bind` → el socket lo retiene el supervisor entre reinicios (cero conexiones rechazadas, cero re-bind).
+/// La adopción es una sola vez por proceso (un `AtomicBool`; un segundo `tcp_listen` del mismo addr hace
+/// bind normal → `EADDRINUSE`, correcto). Sin herencia, o en no-unix, es el `bind` de siempre.
+fn adopt_or_bind(host: &str, port: i64) -> Result<std::net::TcpListener, String> {
+    #[cfg(unix)]
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static ADOPTED: AtomicBool = AtomicBool::new(false);
+        if let (Ok(fd_s), Ok(addr)) = (std::env::var("RAY_LISTEN_FD"), std::env::var("RAY_LISTEN_ADDR"))
+            && addr == format!("{host}:{port}")
+            && let Ok(fd) = fd_s.parse::<i32>()
+            && ADOPTED
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            use std::os::unix::io::FromRawFd;
+            // SAFETY: el fd lo dup2-eó el supervisor a este número (RAY_LISTEN_FD) antes del exec, es un
+            // socket de escucha válido, y `ADOPTED` garantiza que solo un `TcpListener` toma su propiedad.
+            return Ok(unsafe { std::net::TcpListener::from_raw_fd(fd) });
+        }
+    }
+    std::net::TcpListener::bind((host, port as u16)).map_err(|e| e.to_string())
 }
 
 /// Bloquea hasta una conexión entrante en el handle de escucha `h` y devuelve un handle de conexión

@@ -1280,10 +1280,41 @@ socket de escucha. Tres caminos analizados:
 |---|---|---|
 | **A. `ray dev` = watcher + restart** (fase 1) | Supervisor con polling de mtimes (~200 ms; portable, cero deps — mismo mecanismo que la regen de templates) sobre `.ray`/`.ray.html`/`ray.toml`; ante un cambio, SIGTERM al hijo (compone con `serve_graceful`: drena) y re-run. Reload percibido ~20–50 ms. Templates gratis (la regen de `ray run` ya existe) | ✅ **M92.1** |
 | **B. Hot swap DENTRO de la VM** (estilo Erlang/Dart: generaciones de código, safepoints, solo-cuerpos) | Única opción que preserva el heap del invitado, pero: marcos vivos con ips viejos, formas de struct cambiadas rompen el heap, VM-only sin oráculo, y el restart ya cuesta ms → máximo coste para mínimo delta | 💤 aparcado (como §5); solo si aparece estado en memoria caro de reconstruir |
-| **C. Swap de programa in-process conservando el listener** (fase 2) | Modo dev del webserver: el proceso retiene el handle de escucha (host-side), y ante un cambio recompila (ms) y despacha las peticiones siguientes contra el programa NUEVO — cero conexiones caídas, cero re-bind, downtime ≈ una compilación. Estado del invitado se RESETEA por reload (decisión: limpio y documentado). Es un **cliente externo** más (REPL/runner/LSP), cero cambios en la VM. Bonus: live-reload del navegador vía SSE (el webserver ya lo habla) + snippet inyectado en dev | **M92.2** (siguiente) |
+| **C. Swap de programa in-process conservando el listener** (era la fase 2) | Modo dev del webserver: el proceso retiene el handle de escucha (host-side), y ante un cambio recompila (ms) y despacha las peticiones siguientes contra el programa NUEVO — cero conexiones caídas, cero re-bind, downtime ≈ una compilación. Estado del invitado se RESETEA por reload (decisión: limpio y documentado). Es un **cliente externo** más (REPL/runner/LSP), cero cambios en la VM. | 💤 **aparcado** (re-análisis 16 jul, abajo): el teardown in-process es el problema irresuelto |
 
-Fases: **92.1** `ray dev` (watcher+restart+drenado) · **92.2** modo dev del webserver (listener
-retenido + swap in-process + SSE al navegador) · 92.3 = camino B, aparcado.
+### Re-análisis (16 jul 2026, tras M92.1 en producción) — dos hechos del código que cambian el mapa
+
+1. **A favor de C**: el registro de handles es **global de proceso** (`OnceLock<Mutex<FileRegistry>>`,
+   `builtins.rs`) → una segunda instancia corrida en el mismo proceso vería *literalmente el mismo
+   handle* del listener. La fontanería de "retener el listener" existe gratis.
+2. **En contra de C, y decisivo**: cuando se fijó este diseño la VM era M:1 cooperativa en un hilo.
+   Desde **M38 es M:N multicore con hilos de SO reales**, la cancelación es **cooperativa, no
+   preemptiva** (diferido de M12.5), y no hay `catch_unwind` alrededor del invitado. Para recargar
+   in-process hay que PARAR la instancia vieja: no existe forma fiable de detener N workers con
+   fibras en vuelo (una fibra colgada = supervisor colgado = **listener perdido igualmente**), y un
+   panic desmonta el proceso supervisor entero. **El teardown por proceso (el kernel como mecanismo
+   de cancelación) es hoy la única parada fiable** → C tal como estaba diseñado queda aparcado.
+
+**Opciones adicionales evaluadas** (con su relación coste/beneficio):
+
+| Opción | Qué preserva | Complejidad | Veredicto |
+|---|---|---|---|
+| **A+. Endurecer el watch+restart** | — | **baja** | ✅ **M92.2** (check-before-restart + debounce): (1) ✅ **chequear ANTES de reiniciar** — `ray build <entry>` primero (ms), solo reiniciar en verde; en rojo imprimir el diagnóstico y dejar el programa viejo corriendo (ya no mata un servidor que funciona por un cambio roto). (2) ✅ **debounce** ~120 ms (coalesce guardado+formateador). (3) 💤 drenado graceful en Windows (hoy kill duro; unix-only por diseño, como todo el manejo de señales del proyecto). (4) 💤 latencia vía `kqueue EVFILT_VNODE` — Linux pediría inotify → el polling de ~200 ms se conserva (portable, cero deps) |
+| **D. Herencia de fd** (socket-activation estilo systemd) | el listener | **media** | ✅ **M92.3**: el SUPERVISOR pre-abre y RETIENE el socket (`--port N`/`--listen host:port`/`[dev] listen` en ray.toml) y lo pasa a cada hijo (`pre_exec` dup2 al fd 3 + `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR`); `tcp_listen` (builtins) ADOPTA con `from_raw_fd` si el env matchea (una vez, guardado por `AtomicBool`) → el mismo programa corre idéntico en dev y prod. Durante el reinicio el socket nunca se cierra: el kernel encola en el backlog → **cero conexiones rechazadas, cero re-bind**, conservando el aislamiento por proceso (SIGTERM+drenado como antes). Gotcha cazado: si el fd del listener ya era 3 (primer libre tras stdio), `dup2(3,3)` es no-op que NO limpia CLOEXEC → fix con `fcntl(F_SETFD,0)` explícito. Unix; no-unix cae al re-bind por reinicio. Test rigoroso: si el 2.º hijo no re-adoptara, su bind chocaría (EADDRINUSE) con el socket retenido |
+| **E. `SO_REUSEPORT`** (blue/green local) | el puerto (solape de procesos) | media | descartada para dev: `std` no lo expone (setsockopt por FFI, factible), semántica de reparto difiere macOS/Linux, y durante el solape DOS versiones sirven a la vez (confuso en dev). Es la herramienta de *deploy* sin downtime, no de dev; D es más simple y suficiente |
+| **F. Live-reload del navegador (SSE)** | — (UX) | baja-media | ✅ **M92.4**: hub SSE en el SUPERVISOR (puerto lateral, solo en sesión web con `--port`), un servidor SSE mínimo en Rust que emite `data: reload` a los navegadores en cada reinicio VÁLIDO (compone con check-before-restart). Vive en el supervisor porque es lo único vivo entre reinicios. El webserver, viendo `RAY_DEV_RELOAD`, inyecta el `<script>EventSource(...).onmessage=location.reload()</script>` antes de `</body>` en las respuestas text/html (Content-Length recalculado; no-op en producción). NO reemplaza el SSE del paquete (ese es de la app; este es solo-dev, lateral). Diferido: inyección para CUALQUIER programa (necesitaría un proxy, en tensión con la herencia de fd de D) — hoy solo el paquete webserver |
+| **G. Estado del invitado entre reloads** | estado app | — | NO construir maquinaria (es exactamente el coste/beneficio descartado en B): **documentar el patrón** "estado de dev en SQLite de archivo" en el MANUAL — un `sqlite.connect("dev.db")` sobrevive reloads de forma natural |
+
+**Contexto del ecosistema**: Go (air), Node (nodemon), Rails = watch+restart → M92.1 ya es el
+estándar de la industria. Flutter/Vite hacen hot reload real porque su runtime lo soporta (clase B).
+El nicho diferencial barato de raylang es D: *restart tan rápido (arranque ~3 ms) que, con el
+listener retenido, se percibe como hot reload*.
+
+Fases (revisadas 16 jul): **92.1** ✅ watcher+restart+drenado · **92.2** ✅ A+ (check-before-restart +
+debounce; Windows-graceful aparcado) · **92.3** ✅ D (herencia de fd: `--port`/`--listen`/`[dev] listen`)
++ ✅ G (patrón de estado sqlite-de-archivo, documentado en el MANUAL) · **92.4** ✅ F (live-reload SSE
+desde el supervisor). **ARCO M92 COMPLETO** (A+ + D + F + G; B y C aparcados con criterio — C revive solo
+si la VM gana cancelación preemptiva/teardown fiable).
 
 ## Cómo usar este archivo
 

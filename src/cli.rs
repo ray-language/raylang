@@ -189,23 +189,58 @@ fn cmd_dev(args: &[String]) {
                 .filter(|p| p.as_os_str().len() > 0)
         })
         .unwrap_or(cwd);
+    // Socket-activation (M92.3): `--port N`/`--listen host:port` (o `[dev] listen` del ray.toml) → el
+    // supervisor pre-abre y RETIENE ese socket; los hijos lo adoptan (fd heredado) en vez de re-bind, así
+    // sobrevive a los reinicios (cero conexiones rechazadas). `--port`/`--listen` NO se reenvían al hijo.
+    let (cli_listen, fwd_args) = take_listen(args);
+    let listen_addr = cli_listen.or_else(|| load_manifest().and_then(|m| m.dev_listen));
+    // Retiene el socket durante toda la sesión (vive hasta que `ray dev` muere). Solo unix (fd passing).
+    #[cfg(unix)]
+    let dev_sock = listen_addr.as_ref().and_then(|addr| match std::net::TcpListener::bind(addr) {
+        Ok(l) => {
+            eprintln!("[dev] holding {addr} across restarts (socket-activation)");
+            Some(l)
+        }
+        Err(e) => {
+            eprintln!("[dev] could not pre-open {addr}: {e}; restarts will re-bind normally");
+            None
+        }
+    });
+    #[cfg(not(unix))]
+    let dev_sock: Option<std::net::TcpListener> = {
+        if listen_addr.is_some() {
+            eprintln!("[dev] --port/--listen (socket-activation) is unix-only; ignoring");
+        }
+        None
+    };
+    #[cfg(unix)]
+    let listen_pair = {
+        use std::os::unix::io::AsRawFd;
+        dev_sock.as_ref().zip(listen_addr.as_ref()).map(|(l, a)| (l.as_raw_fd(), a.as_str()))
+    };
+    #[cfg(not(unix))]
+    let listen_pair: Option<(i32, &str)> = None;
+    let _ = &dev_sock; // se retiene por su lado (el fd vive mientras `dev_sock` no se dropee)
+
+    // Live-reload del navegador (M92.4): solo en una sesión web (hay `--port`/`--listen`/`[dev] listen`).
+    // El hub SSE emite `reload` en cada reinicio; el webserver, viendo `RAY_DEV_RELOAD`, inyecta el snippet.
+    let reload = if listen_addr.is_some() { start_reload_hub() } else { None };
+    let reload_port = reload.as_ref().map(|(_, p)| *p);
+    if let Some(p) = reload_port {
+        eprintln!("[dev] live-reload on http://127.0.0.1:{p} (browser refresh on restart)");
+    }
+
+    // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
+    // (mismos que `cmd_run`), y el primer resto es el archivo explícito (o `None` → default del proyecto).
+    let entry = dev_entry(&fwd_args);
     eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
+    let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
+    let mut running = true;
     loop {
-        // Lanza el programa como `ray run <args...>` (mismo binario): hereda la resolución de
-        // entrada, la regeneración de templates y los flags (--interp/--fuel/…).
-        let mut child = match process::Command::new(&exe).arg("run").args(args).spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[dev] could not launch the program: {e}");
-                process::exit(70);
-            }
-        };
-        DEV_CHILD.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
-        let mut running = true;
         let change = loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
             let actual = scan_sources(&root);
@@ -218,10 +253,178 @@ fn cmd_dev(args: &[String]) {
                 eprintln!("[dev] the program finished ({status}); waiting for changes…");
             }
         };
+        // Debounce: coalesce una ráfaga (un guardado + el formateador del editor = varios eventos)
+        // esperando a que los fuentes se estabilicen antes de actuar → un solo reinicio.
+        dev_debounce(&root, &mut snapshot);
+        // Check-before-restart: compila primero (ms). Si NO compila, mantén el programa en marcha e
+        // imprime el diagnóstico — no mates un servidor que funciona por un error a medio escribir.
+        if let Err(diag) = dev_check_compiles(&exe, &entry) {
+            eprintln!("[dev] change in {change}: does not compile — keeping the running program:");
+            eprint!("{diag}");
+            continue;
+        }
+        // Verde → reinicia (drena el viejo, relanza fresco).
         eprintln!("[dev] change in {change}: restarting…");
         if running {
             terminate_gracefully(&mut child);
         }
+        child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
+        running = true;
+        // Avisa a los navegadores conectados (con socket-activation la recarga se encola en el backlog
+        // hasta que el hijo nuevo la sirve → refresca con el código nuevo, sin conexión rechazada).
+        if let Some((hub, _)) = &reload {
+            hub.broadcast();
+        }
+    }
+}
+
+/// El archivo de entrada que `ray dev` pasará al hijo (para el check-before-restart), despojando los
+/// mismos flags que `ray run` consume; `None` = el default del proyecto (`src/main.ray`).
+fn dev_entry(args: &[String]) -> Option<String> {
+    let (_det, a) = take_flag_bool(args, "--deterministic");
+    let (_interp, a) = take_interp(&a);
+    let (_fuel, a) = take_flag_num(&a, "--fuel", "");
+    let (_heap, a) = take_flag_num(&a, "--heap", "");
+    a.first().cloned()
+}
+
+/// Lanza el programa como `ray run <args...>` (mismo binario): hereda la resolución de entrada, la
+/// regeneración de templates y los flags. Registra el pid en `DEV_CHILD` para la limpieza por señal.
+/// Si `listen` está (unix, socket-activation M92.3): dup2-ea el socket retenido del supervisor al fd 3
+/// del hijo (antes del exec) y le pasa `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR` → el hijo lo ADOPTA en `tcp_listen`.
+fn spawn_dev_child(
+    exe: &Path,
+    args: &[String],
+    listen: Option<(i32, &str)>,
+    reload_port: Option<u16>,
+) -> process::Child {
+    let mut cmd = process::Command::new(exe);
+    cmd.arg("run").args(args);
+    // M92.4: el hijo aprende el puerto del hub de live-reload; el webserver inyecta el snippet SSE.
+    if let Some(p) = reload_port {
+        cmd.env("RAY_DEV_RELOAD", p.to_string());
+    }
+    #[cfg(unix)]
+    if let Some((fd, addr)) = listen {
+        use std::os::unix::process::CommandExt;
+        const TARGET_FD: i32 = 3; // convención systemd (SD_LISTEN_FDS_START)
+        cmd.env("RAY_LISTEN_FD", TARGET_FD.to_string()).env("RAY_LISTEN_ADDR", addr);
+        // SAFETY: `pre_exec` corre en el hijo tras `fork` y antes de `exec`; solo se llama a `dup2`/`fcntl`
+        // (async-signal-safe). `fd` (el listener del supervisor) es válido en el hijo por herencia del fork.
+        // Se limpia CLOEXEC en el fd destino EXPLÍCITAMENTE: si `fd` ya ERA 3 (típico: primer libre tras
+        // stdio), `dup2(3,3)` es un no-op que NO limpia CLOEXEC → sin esto, el fd 3 se cerraría en el exec.
+        unsafe {
+            cmd.pre_exec(move || {
+                unsafe extern "C" {
+                    fn dup2(oldfd: i32, newfd: i32) -> i32;
+                    fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
+                }
+                const F_SETFD: i32 = 2; // limpiar los flags del descriptor (quita FD_CLOEXEC)
+                if unsafe { dup2(fd, TARGET_FD) } < 0 || unsafe { fcntl(TARGET_FD, F_SETFD, 0) } < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let _ = &listen; // en no-unix el parámetro no se usa
+    match cmd.spawn() {
+        Ok(c) => {
+            DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
+            c
+        }
+        Err(e) => {
+            eprintln!("[dev] could not launch the program: {e}");
+            process::exit(70);
+        }
+    }
+}
+
+/// Separa el socket a retener entre reinicios (M92.3) de los args a reenviar: `--listen host:port` o
+/// `--port N` (→ `127.0.0.1:N`). Devuelve `(addr, resto_de_args)`. Sin el flag, `(None, args)`.
+fn take_listen(args: &[String]) -> (Option<String>, Vec<String>) {
+    let mut listen = None;
+    let mut rest = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--listen" => listen = it.next().cloned(),
+            "--port" => listen = it.next().map(|p| format!("127.0.0.1:{p}")),
+            _ => rest.push(a.clone()),
+        }
+    }
+    (listen, rest)
+}
+
+/// M92.4 — hub de **live-reload del navegador**: un servidor SSE mínimo en un puerto lateral del
+/// supervisor. Los navegadores conectan un `EventSource` (el webserver inyecta el snippet bajo dev) y el
+/// supervisor les emite un evento `reload` en cada reinicio → la página se refresca sola. Cliente externo,
+/// cero cambios en la VM; se apoya en que el webserver ya habla SSE.
+struct ReloadHub {
+    clients: std::sync::Mutex<Vec<std::net::TcpStream>>,
+}
+
+impl ReloadHub {
+    /// Emite `data: reload` a cada navegador conectado; descarta los que ya cerraron.
+    fn broadcast(&self) {
+        use std::io::Write;
+        let mut clients = self.clients.lock().unwrap();
+        clients.retain_mut(|c| c.write_all(b"data: reload\n\n").and_then(|_| c.flush()).is_ok());
+    }
+}
+
+/// Arranca el hub SSE en un puerto libre (hilo de fondo que acepta navegadores y los registra tras
+/// enviarles las cabeceras SSE). Devuelve `(hub, puerto)`, o `None` si no se pudo abrir el socket.
+fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+    let port = listener.local_addr().ok()?.port();
+    let hub = std::sync::Arc::new(ReloadHub { clients: std::sync::Mutex::new(Vec::new()) });
+    let hub_bg = hub.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut s = stream;
+            let _ = s.set_nodelay(true);
+            // Descarta la petición (solo interesa que sea un GET del EventSource); un read basta.
+            let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.set_read_timeout(None);
+            // Cabeceras SSE + un comentario inicial para establecer el stream (CORS abierto: dev local).
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n: connected\n\n";
+            if s.write_all(head.as_bytes()).and_then(|_| s.flush()).is_ok() {
+                hub_bg.clients.lock().unwrap().push(s);
+            }
+        }
+    });
+    Some((hub, port))
+}
+
+/// Corre `ray build <entry>` (chequea + compila, sin ejecutar) como el gate del reinicio: `Ok(())` si
+/// compila, `Err(diagnóstico)` con el stderr renderizado si no. Reusa exactamente la salida de `ray build`.
+fn dev_check_compiles(exe: &Path, entry: &Option<String>) -> Result<(), String> {
+    let mut cmd = process::Command::new(exe);
+    cmd.arg("build");
+    if let Some(e) = entry {
+        cmd.arg(e);
+    }
+    match cmd.output() {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+        Err(e) => Err(format!("could not run the compile check: {e}\n")),
+    }
+}
+
+/// Debounce: espera a que los fuentes se estabilicen (~120 ms sin cambios) antes de continuar, para
+/// coalescer una ráfaga de eventos (guardado + formateador) en una sola acción. Actualiza `snapshot`.
+fn dev_debounce(root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>) {
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let actual = scan_sources(root);
+        if actual == *snapshot {
+            break;
+        }
+        *snapshot = actual;
     }
 }
 

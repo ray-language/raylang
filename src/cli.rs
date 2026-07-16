@@ -728,6 +728,10 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
     };
     let mut cmd = process::Command::new("rustc");
     cmd.args(&flags);
+    // MISMA edition que el proyecto Cargo generado (edition 2024 en su Cargo.toml). Sin el flag, rustc
+    // pelado caía a la 2015 → los dos caminos compilaban el MISMO Rust generado bajo reglas distintas
+    // (p. ej. `gen` es keyword solo en 2024: un identificador podía pasar por un tier y romper por el otro).
+    cmd.arg("--edition").arg("2024");
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
     }

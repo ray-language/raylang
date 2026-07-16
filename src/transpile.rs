@@ -71,9 +71,10 @@ fn is_rust_keyword(s: &str) -> bool {
         // Estrictas de Rust que SON identificadores legales en raylang (raylang no las reserva):
         "as" | "const" | "extern" | "loop" | "mod" | "move" | "mut" | "ref" | "static" | "type"
             | "unsafe" | "use" | "where" | "async" | "await" | "dyn"
-            // Reservadas de Rust para el futuro:
+            // Reservadas de Rust para el futuro (y `gen`, keyword desde la edition 2024 — la que
+            // usan AMBOS caminos de build, rustc pelado y el proyecto Cargo generado):
             | "abstract" | "become" | "box" | "do" | "final" | "macro" | "override" | "priv"
-            | "typeof" | "unsized" | "virtual" | "yield" | "try"
+            | "typeof" | "unsized" | "virtual" | "yield" | "try" | "gen"
     )
 }
 

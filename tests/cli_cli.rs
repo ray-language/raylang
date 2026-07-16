@@ -1333,7 +1333,8 @@ fn build_native_identificadores_palabra_clave_de_rust_no_rompen_rustc() {
          }\n\
          fn main() -> int {\n\
            let where = 5;\n\
-           var mut = twice(where);        // 10\n\
+           let gen = 1;                   // keyword de la edition 2024 (la de AMBOS caminos de build)\n\
+           var mut = twice(where) - gen + 1; // 10\n\
            let c = Cfg { type: 3, ref: 4 };\n\
            mut = mut + c.type + c.ref;     // 10 + 3 + 4 = 17\n\
            let plus1 = fn(loop: int) -> int { loop + 1 };  // closure con param keyword\n\

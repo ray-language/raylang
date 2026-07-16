@@ -511,6 +511,36 @@ fn build_native_without_crypto_fuerza_la_via_rapida_y_stubbea() {
 }
 
 #[test]
+fn build_native_lee_la_exclusion_estable_del_ray_toml() {
+    // `[native] without = ["crypto"]` en ray.toml: política de exclusión versionada con el proyecto, sin
+    // pasar `--without`. Un `ray build --native` la aplica → el uso de cripto stubbea y el binario compila
+    // por la vía rápida (rustc, sin ray-runtime). Equivalente a `--without crypto` pero persistente.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native ray.toml policy: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_toml_policy");
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[native]\nwithout = [\"crypto\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/crypto;\n\
+         fn main() -> int { print(to_string(crypto.sha256(\"x\".to_bytes()))); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    // Sin `--without` en la CLI: la exclusión viene SOLO del ray.toml.
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native con política ray.toml ok\n{err}");
+    assert!(!out.contains("ray-runtime"), "la política excluyó crypto → vía rápida rustc: {out}");
+    let run = Command::new(&bin).output().expect("corre el binario");
+    assert!(!run.status.success(), "panica al alcanzar la cripto excluida por el ray.toml");
+}
+
+#[test]
 fn build_native_without_rechaza_un_subsistema_desconocido() {
     // Fail-fast ante un typo en `--without` (como `ray add` valida el nombre del paquete).
     let base = tmp("build_native_without_bad");

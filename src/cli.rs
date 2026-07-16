@@ -381,16 +381,28 @@ fn cmd_build(args: &[String]) {
     // `--without <lista>` (P2.b): excluye subsistemas con-crate (crypto/tls/sqlite) del binario nativo. Su
     // uso cae en un stub que panica → el binario compila por la vía rápida (rustc pelado, sin cargo/red) si
     // no queda ningún otro subsistema con-crate. Escape hatch para builds herméticos/cross-compile/policy.
+    // Se UNE a la política estable del proyecto (`[native] without` en ray.toml).
     let without_arg = args.iter().position(|a| a == "--without").and_then(|i| args.get(i + 1)).cloned();
-    let exclude: Vec<String> = without_arg
+    let mut exclude: Vec<String> = without_arg
         .as_deref()
         .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect())
         .unwrap_or_default();
-    // Valida los nombres antes de nada (fail-fast ante un typo, como `ray add`).
+    // Une la política del ray.toml ([native] without): la exclusión versionada con el repo + la ad-hoc de
+    // CLI. `load_manifest` sale con error si el ray.toml está mal formado; `None` = sin proyecto (solo CLI).
+    if native {
+        if let Some(m) = load_manifest() {
+            for dep in m.native_without {
+                if !exclude.contains(&dep) {
+                    exclude.push(dep);
+                }
+            }
+        }
+    }
+    // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`.
     const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite"];
     for dep in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
-            eprintln!("unknown subsystem in --without: '{dep}' (valid: {})", RT_SUBSYSTEMS.join(", "));
+            eprintln!("unknown subsystem to exclude: '{dep}' (valid: {})", RT_SUBSYSTEMS.join(", "));
             process::exit(64);
         }
     }

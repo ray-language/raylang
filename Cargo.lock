@@ -182,6 +182,7 @@ name = "ray-runtime"
 version = "0.1.0"
 dependencies = [
  "ring",
+ "rusqlite",
  "rustls",
  "rustls-pki-types",
  "webpki-roots 0.26.11",

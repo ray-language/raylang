@@ -373,6 +373,10 @@ struct Transpiler {
     /// la variante `Tls` al registro de handles inline y el despacho en `socket_read/write`. Implica
     /// `needs_net` (registro + TcpStream). Activa la feature `tls` de `ray-runtime`.
     needs_rt_tls: bool,
+    /// ¿Usa SQLite (`__sqlite_open`/`__sqlite_exec`/`__sqlite_query`)? El binario transpilado guarda cada
+    /// conexión (`ray_runtime::sqlite::Conn`) en el registro de handles inline (variante `Sqlite`). I/O
+    /// local → se retiene el lock global (como la VM). Activa la feature `sqlite` de `ray-runtime`.
+    needs_rt_sqlite: bool,
     /// Nombres de `var` locales que van en una **celda** `Rc<RefCell<T>>` (B1): capturadas y mutadas por
     /// una closure. Se leen con `.borrow().clone()` y se escriben con `.borrow_mut()`; la closure captura
     /// un clon del `Rc`. Se pueblan al entrar en cada función/closure (con su `cell_vars`) y se quitan al
@@ -456,6 +460,7 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
         needs_net: false,
         needs_rt_crypto: false,
         needs_rt_tls: false,
+        needs_rt_sqlite: false,
         cells: std::collections::HashSet::new(),
     };
 
@@ -649,17 +654,19 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
     // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +
     // mapa handle→archivo tras un Mutex/OnceLock; los mensajes de error son byte-idénticos a la VM.
     // Registro de handles (M11.8): compartido por archivos y sockets. Se emite si el programa usa cualquiera.
-    if t.needs_handles || t.needs_net {
-        // La variante `Tls` (una conexión TLS bloqueante tras `Arc<Mutex>` propio → el I/O no retiene el
-        // lock global del registro) solo se añade si el programa usa TLS.
+    if t.needs_handles || t.needs_net || t.needs_rt_sqlite {
+        // Variantes con-crate del registro, añadidas solo si el programa usa el subsistema: `Tls` (conexión
+        // TLS bloqueante tras `Arc<Mutex>` propio → el I/O no retiene el lock global) y `Sqlite` (conexión
+        // rusqlite; I/O local → se opera reteniendo el lock global, como la VM).
         let tls_variant = if t.needs_rt_tls {
             ", Tls(std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>)"
         } else {
             ""
         };
+        let sqlite_variant = if t.needs_rt_sqlite { ", Sqlite(ray_runtime::sqlite::Conn)" } else { "" };
         writeln!(
             out,
-            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant} }}"
+            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant} }}"
         )
         .unwrap();
         out.push_str(concat!(
@@ -788,6 +795,28 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
             "    match ray_runtime::tls::upgrade(sock, host) { Ok(s) => { __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))); __ray_tls_tag_ok(h) } Err(e) => __ray_tls_tag_err(e) } }\n",
         ));
     }
+    // Helpers de SQLite (P2.b Paso 2), solo si el programa usa SQLite. Los primitivos devuelven arreglos
+    // ETIQUETADOS que los wrappers de `db/sqlite.ray` parsean: open → ["ok", handle]/["err", msg]; exec →
+    // ["ok", n_afectadas]/["err", msg]; query → ["ok", ncols, celda0, celda1, …]/["err", msg]. La conexión
+    // vive en el registro (variante Sqlite); exec/query la operan reteniendo el lock global (I/O local).
+    if t.needs_rt_sqlite {
+        out.push_str(concat!(
+            "fn __ray_sqlite_tag(v: Vec<Rc<str>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(v)) }\n",
+            "fn __ray_sqlite_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { __ray_sqlite_tag(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(msg)]) }\n",
+            "fn __ray_sqlite_open(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    match ray_runtime::sqlite::open(path) { Ok(c) => { let id = __ray_reg_insert(__RayHandle::Sqlite(c)); __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())]) } Err(e) => __ray_sqlite_err(e) } }\n",
+            // Colecta los parámetros [string] a Vec<String> para la firma de ray_runtime::sqlite.
+            "fn __ray_sqlite_params(params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Vec<String> { params.borrow().iter().map(|s| s.to_string()).collect() }\n",
+            "fn __ray_sqlite_exec(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
+            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.exec(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
+            "    match r { Ok(n) => __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())]), Err(e) => __ray_sqlite_err(e) } }\n",
+            "fn __ray_sqlite_query(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
+            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.query(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
+            "    match r { Ok((ncols, cells)) => { let mut v = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ncols.to_string())]; for cell in cells { v.push(Rc::<str>::from(cell)); } __ray_sqlite_tag(v) } Err(e) => __ray_sqlite_err(e) } }\n",
+        ));
+    }
     // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
     // canal thread-safe propio (Arc<Mutex+Condvar>) — sin deps, ya que el `.rs` es standalone — con
     // backpressure (bounded) y cierre. FIFO como la VM. `T: Send` (primitivos en v1).
@@ -912,6 +941,9 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
     }
     if t.needs_rt_tls {
         rt_features.push("tls");
+    }
+    if t.needs_rt_sqlite {
+        rt_features.push("sqlite");
     }
     Ok(Transpiled { source: out, rt_features })
 }
@@ -3076,6 +3108,26 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // SQLite (Paso 2): `__sqlite_*` → helpers `__ray_sqlite_*` (rusqlite en ray-runtime) + activa
+            // `needs_rt_sqlite`. Devuelven arreglos etiquetados que los wrappers de db/sqlite.ray parsean.
+            // open(path): string→&str. exec/query(h, sql, params): h int, sql `&str`, params `[string]` →
+            // se pasa por referencia (`&Rc<RefCell<Vec<Rc<str>>>>`) y el helper lo colecta a Vec<String>.
+            "sqlite_open" if name.starts_with("__") => {
+                self.needs_rt_sqlite = true;
+                out.push_str("__ray_sqlite_open(&");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "sqlite_exec" | "sqlite_query" if name.starts_with("__") => {
+                self.needs_rt_sqlite = true;
+                write!(out, "__ray_{}(", method).unwrap();
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
             _ => {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));
@@ -3286,8 +3338,10 @@ impl Transpiler {
                     {
                         Type::Array(Box::new(Type::Bytes))
                     }
-                    // TLS (Paso 1): los primitivos devuelven `[string]` etiquetado (["ok",h]/["err",msg]).
-                    "tls_connect" | "tls_connect_h2" | "tls_accept" | "tls_upgrade"
+                    // TLS (Paso 1) y SQLite (Paso 2): los primitivos devuelven `[string]` etiquetado
+                    // (["ok",…]/["err",msg]; sqlite_query aplana ncols + celdas).
+                    "tls_connect" | "tls_connect_h2" | "tls_accept" | "tls_upgrade" | "sqlite_open"
+                    | "sqlite_exec" | "sqlite_query"
                         if n.starts_with("__") =>
                     {
                         Type::Array(Box::new(Type::String))
@@ -3408,11 +3462,15 @@ impl Transpiler {
                 let subst = enum_subst(&self.struct_tparams, &sn, &obj_ty);
                 subst_type(&normalize_type(&fty), &subst)
             }
-            ExprKind::Match { arms, .. } => {
-                // El tipo del match = el de cualquier brazo. Se prueba hasta que uno resuelva: el cuerpo
-                // del primero puede referir un binding del patrón (no en ámbito aquí); otro no.
+            ExprKind::Match { scrutinee, arms } => {
+                // El tipo del match = el de un brazo NO divergente. Su cuerpo puede ser un binding del
+                // patrón (`Ok(conn) => conn`), que no está en ámbito para `type_of`; se resuelve desde el
+                // tipo del escrutinio + el patrón. Se saltan los brazos que divergen (`Err(e) => { return }`)
+                // → su "tipo" (`!`) no debe ganar sobre el real (bug: un `var c = match {...}` con struct no
+                // se clonaba al leer → move error).
+                let scrut_ty = self.type_of(scrutinee).ok();
                 arms.iter()
-                    .find_map(|a| self.type_of(&a.body).ok())
+                    .find_map(|a| self.arm_type(scrut_ty.as_ref(), a))
                     .ok_or("spike: no pude inferir el tipo del match")?
             }
             ExprKind::Cast { ty, .. } => normalize_type(ty),
@@ -3422,6 +3480,64 @@ impl Transpiler {
             }
             // (Exhaustivo sobre ExprKind, como emit_expr: una variante nueva rompe la compilación aquí.)
         })
+    }
+
+    /// El tipo que aporta un brazo de `match` al tipo del `match`, o `None` si diverge o no se resuelve.
+    /// Resuelve un cuerpo que es un binding del patrón (`Ok(conn) => conn`) desde el tipo del escrutinio.
+    fn arm_type(&self, scrut_ty: Option<&Type>, arm: &MatchArm) -> Option<Type> {
+        if expr_diverges(&arm.body) {
+            return None;
+        }
+        let binds = self.pattern_binding_types(scrut_ty, &arm.pattern);
+        if let ExprKind::Ident(n) = &arm.body.kind {
+            if let Some(t) = binds.get(n) {
+                return Some(t.clone());
+            }
+        }
+        self.type_of(&arm.body).ok()
+    }
+
+    /// Los tipos de los bindings de un patrón, dado el tipo del escrutinio. Cubre el binding suelto (todo
+    /// el escrutinio) y una variante con subpatrones-binding (payload sustituido con los args del tipo,
+    /// como en `emit_pattern`). Los patrones más complejos (anidados) se omiten (no aportan al caso común).
+    fn pattern_binding_types(&self, scrut_ty: Option<&Type>, pat: &Pattern) -> HashMap<String, Type> {
+        let mut out = HashMap::new();
+        match &pat.kind {
+            PatternKind::Binding(x) => {
+                if let Some(t) = scrut_ty {
+                    out.insert(x.clone(), t.clone());
+                }
+            }
+            PatternKind::Variant { enum_name, variant, subpatterns } if !subpatterns.is_empty() => {
+                let payload: Option<Vec<Type>> = match scrut_ty.map(normalize_type) {
+                    Some(Type::Enum(_, args)) if enum_name == "Option" || enum_name == "Result" => {
+                        match variant.as_str() {
+                            "Some" | "Ok" => args.first().map(|t| vec![t.clone()]),
+                            "Err" => args.get(1).map(|t| vec![t.clone()]),
+                            _ => None,
+                        }
+                    }
+                    Some(expected @ Type::Enum(_, _)) => self
+                        .enum_variants
+                        .get(enum_name)
+                        .and_then(|m| m.get(variant))
+                        .map(|raw| {
+                            let subst = enum_subst(&self.enum_tparams, enum_name, &expected);
+                            raw.iter().map(|p| subst_type(p, &subst)).collect()
+                        }),
+                    _ => None,
+                };
+                if let Some(payload) = payload {
+                    for (sp, ty) in subpatterns.iter().zip(payload) {
+                        if let PatternKind::Binding(x) = &sp.kind {
+                            out.insert(x.clone(), ty);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
     }
 }
 
@@ -3804,6 +3920,20 @@ fn unwrapped(t: &Type) -> Type {
 }
 
 /// ¿Es un tipo de heap (semántica de referencia / no `Copy`) → hay que clonar al leer?
+/// ¿La expresión DIVERGE (no produce valor: termina en `return` o `panic`)? Un brazo de `match` que
+/// diverge no contribuye al tipo del `match` (su "tipo" sería `!`). Se usa para inferir el tipo de un
+/// `match` cuyo brazo real lleva un binding del patrón y el otro solo aborta (`Err(e) => { …; return }`).
+fn expr_diverges(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Block(b) => match &b.tail {
+            Some(t) => expr_diverges(t),
+            None => matches!(b.statements.last().map(|s| &s.kind), Some(StmtKind::Return { .. })),
+        },
+        ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic"),
+        _ => false,
+    }
+}
+
 fn is_heap(t: &Type) -> bool {
     matches!(
         t,

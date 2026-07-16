@@ -9,4 +9,5 @@
 //! así un build "slim" de raylang (sin `net-tls`) no arrastra nada.
 
 pub mod crypto;
+pub mod sqlite;
 pub mod tls;

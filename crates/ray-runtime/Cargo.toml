@@ -21,6 +21,9 @@ crypto = ["dep:ring"]
 # TLS de PRODUCCIÓN (rustls). El binario transpilado usa hilos de SO reales → I/O TLS BLOQUEANTE
 # (StreamOwned), a diferencia de la VM (no-bloqueante + fibras). ring provee el proveedor de rustls.
 tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+# SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
+# del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
+sqlite = ["dep:rusqlite"]
 
 [dependencies]
 # M43 — ring 0.17: primitivas de tiempo constante y auditadas. Misma versión que la que usaba el binario
@@ -31,3 +34,5 @@ ring = { version = "0.17", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
+# M53.3 — rusqlite 0.32 con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }

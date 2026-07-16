@@ -454,6 +454,32 @@ fn build_native_crypto_de_produccion_via_ray_runtime_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_sqlite_via_ray_runtime_coincide_con_la_vm() {
+    // Paso 2 del crate ray-runtime: SQLite embebido (db/sqlite → rusqlite) transpila a nativo. build_native
+    // detecta la feature `sqlite`, genera un proyecto Cargo con ray-runtime (rusqlite bundled) y compila con
+    // cargo. El binario usa el MISMO SQLite que la VM → salida byte-idéntica (el demo usa `:memory:` →
+    // determinista). Corre el demo real `examples/db/sqlite_demo.ray` (necesita su ray.toml para el paquete).
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native sqlite: cargo no disponible");
+        return;
+    }
+    let db_dir = format!("{}/examples/db", env!("CARGO_MANIFEST_DIR"));
+    let db_path = std::path::Path::new(&db_dir);
+    let bin = std::env::temp_dir().join("ray_native_sqlite_test_bin");
+    let (out, err, code) =
+        ray(db_path, &["build", "sqlite_demo.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sqlite ok\n{err}");
+    assert!(out.contains("ray-runtime: sqlite"), "usó el camino Cargo con ray-runtime sqlite: {out}");
+
+    // El demo sin args usa `:memory:` (determinista). VM ≡ nativo byte a byte.
+    let (vm_out, _e, _c) = ray(db_path, &["run", "sqlite_demo.ray"]);
+    let native = Command::new(&bin).output().expect("corre el binario SQLite nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "SQLite nativo ≡ VM (rusqlite en ray-runtime)");
+    assert!(native_out.contains("ada | 9.5"), "el demo consultó filas: {native_out}");
+}
+
+#[test]
 fn build_native_sin_crate_externo_usa_la_via_rapida_rustc() {
     // El otro lado de la bifurcación: un programa SIN subsistemas-con-crate compila por `rustc` pelado
     // (camino rápido, sin Cargo) → el mensaje de éxito NO menciona ray-runtime. Cero regresión de

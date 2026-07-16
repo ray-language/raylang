@@ -476,6 +476,7 @@ const RT_CARGO_TOML: &str = include_str!("../crates/ray-runtime/Cargo.toml");
 const RT_LIB_RS: &str = include_str!("../crates/ray-runtime/src/lib.rs");
 const RT_CRYPTO_RS: &str = include_str!("../crates/ray-runtime/src/crypto.rs");
 const RT_TLS_RS: &str = include_str!("../crates/ray-runtime/src/tls.rs");
+const RT_SQLITE_RS: &str = include_str!("../crates/ray-runtime/src/sqlite.rs");
 
 /// Camino Cargo: el programa usa un subsistema con crate externo (cripto/…). Se genera un proyecto Cargo
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
@@ -511,6 +512,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
         ("ray-runtime/src/lib.rs", RT_LIB_RS),
         ("ray-runtime/src/crypto.rs", RT_CRYPTO_RS),
         ("ray-runtime/src/tls.rs", RT_TLS_RS),
+        ("ray-runtime/src/sqlite.rs", RT_SQLITE_RS),
     ];
     for (rel, content) in files {
         if let Err(e) = write(rel, content) {

@@ -71,7 +71,7 @@ fn build_compila_ok_y_reports_errors() {
     std::fs::write(base.join("ok.ray"), "fn main() -> int { 1 + 2 }\n").unwrap();
     let (out, _err, code) = ray(&base, &["build", "ok.ray"]);
     assert_eq!(code, 0, "build de un program válido sale 0\n{out}");
-    assert!(out.contains("compila"), "{out}");
+    assert!(out.contains("compiles"), "{out}");
     // build NO ejecuta: un programa que devolvería 42 igual sale 0 (solo compiló).
     std::fs::write(base.join("cuarenta.ray"), "fn main() -> int { 42 }\n").unwrap();
     assert_eq!(ray(&base, &["build", "cuarenta.ray"]).2, 0, "build no runs el program");
@@ -100,7 +100,7 @@ fn build_native_produce_un_binario_que_corre_como_la_vm() {
     let bin = base.join("prog_bin");
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
-    assert!(out.contains("binario nativo"), "reporta el binario\n{out}");
+    assert!(out.contains("native binary"), "reporta el binario\n{out}");
     assert!(bin.is_file(), "el binario nativo existe");
     // El binario nativo produce la MISMA salida que la VM.
     let native = Command::new(&bin).output().expect("corre el binario nativo");
@@ -619,7 +619,14 @@ fn build_native_tls_error_de_conexion_coincide_con_la_vm() {
         base.join("prog.ray"),
         "import std/net;\n\
          fn main() -> int {\n\
-           match (net.tls_connect(\"127.0.0.1\", 1)) {  // puerto 1: nadie escucha → error\n\
+           // (a) Error de RUSTLS sin red: un server name inválido (espacio) lo rechaza la validación\n\
+           //     SNI de rustls ANTES de abrir el socket → cubre el map_err de la librería TLS, no\n\
+           //     solo el de std::io como el caso (b).\n\
+           match (net.tls_connect(\"inva lid.host\", 443)) {\n\
+             Result.Ok(h) => print(\"sni?!\"),\n\
+             Result.Err(e) => print(\"sni err: \" + e),\n\
+           }\n\
+           match (net.tls_connect(\"127.0.0.1\", 1)) {  // (b) puerto 1: nadie escucha → error\n\
              Result.Ok(h) => { print(\"conectado?!\"); 0 },\n\
              Result.Err(e) => { print(\"tls err: \" + e); 0 },\n\
            }\n\
@@ -635,6 +642,8 @@ fn build_native_tls_error_de_conexion_coincide_con_la_vm() {
     let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
     let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
     assert_eq!(native_out, vm_out, "el error de conexión TLS nativo ≡ VM (byte a byte)");
+    assert!(native_out.contains("sni err: invalid server name for TLS: inva lid.host"),
+        "el error de rustls (server name inválido): {native_out}");
     assert!(native_out.contains("tls err:") && native_out.to_lowercase().contains("refused"),
         "el error indica conexión rechazada: {native_out}");
 }
@@ -1612,8 +1621,8 @@ fn build_y_run_usan_la_entry_del_manifest() {
     // build: banner con nombre+versión (a stderr) y compila la entry del manifiesto.
     let (out, err, code) = ray(&root, &["build"]);
     assert_eq!(code, 0, "{err}");
-    assert!(err.contains("compilando miapp v2.0.0"), "banner del project\n{err}");
-    assert!(out.contains("arranque.ray") && out.contains("compila"), "{out}");
+    assert!(err.contains("compiling miapp v2.0.0"), "banner del project\n{err}");
+    assert!(out.contains("arranque.ray") && out.contains("compiles"), "{out}");
     // run: ejecuta la entry del manifiesto (sin pasar archivo).
     let (out, _err, code) = ray(&root, &["run"]);
     assert!(out.contains("arranque"), "{out}");

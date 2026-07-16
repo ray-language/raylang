@@ -486,6 +486,24 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > de mantenibilidad de bajo ROI), **H21** (cancelación M12.5 en hilos reales — 3-5 días, su propia
 > sesión). **Auditoría cerrada salvo los tres diferidos.** Los ítems marcados abajo con ✅ ya están hechos.
 
+> **Revisión post-lote (16 jul 2026)**: un análisis crítico de los cuatro lotes cerró seis huecos que
+> los fixes originales dejaron (patrón común: cada fix cubría los sitios enumerados, no la clase):
+> **H3-bis** (guarda defensiva `builtins::lookup` en `shadows_builtin` + test de las tres resoluciones
+> — se verificó que la divergencia espejo temida NO puede ocurrir: el checker prohíbe redefinir un
+> builtin de tabla), **H4-bis** (la clase del doble borrow vivía también en `insert`/`add_to`/`remove`
+> de Map → izado `__rt_*`), **H14-bis** (la carrera del stem: el pkg de la caché lleva un hash de la
+> ruta canónica), **H12-bis** (el corpus corre en CADA push, no nocturno — el schedule solo evalúa
+> `main` y no habría corrido hasta el merge; skip sin rustc = fallo duro bajo CI), **H5-bis** (`gen`
+> keyword + los dos caminos compilaban con ediciones DISTINTAS, 2015 vs 2024 → ambos a `--edition
+> 2024`), y el lote barato: mensajes de éxito del build a inglés, expects FFI generados alineados con
+> el texto de la VM, corpus +4 entradas (multi-módulo `modulos`/`capsula`/`proyecto` — antes el loader
+> →transpile estaba a ciegas — y `sqlite_demo` — antes el camino Cargo no se cubría), caso rustls sin
+> red (server name inválido) en el test H13, y `docs/build.md` actualizado (`--target`, lock, caché).
+> **Deuda anotada, diferida a sabiendas**: rendezvous multi-emisor (un emisor puede esperar el valor
+> de otro, `transpile.rs` runtime de canales) y `close` con emisor bloqueado (return silencioso vs
+> error de la VM) — ambos junto a H21; `ASSOC_FNS` fuera de la guardia H11; reproducibilidad del lock
+> solo por máquina (H20); CI solo Linux x86_64.
+
 ### 6.1 P0 — Roto en el momento de la auditoría
 
 **H1. ✅ RESUELTO. CI rojo en `main`: assert desincronizado con su mensaje.** El commit `e6bb6b7` cambió el

@@ -637,7 +637,7 @@ fn cmd_build(args: &[String]) {
         return;
     }
     match compiler::compile_program(&program) {
-        Ok(_) => println!("ok: '{path}' compila"),
+        Ok(_) => println!("ok: '{path}' compiles"),
         Err(mut e) => {
             let (source, name, local) = locate(e.line);
             e.line = local;
@@ -745,7 +745,7 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
                 (false, Some(t)) => format!(" (target: {t})"),
                 (false, None) => String::new(),
             };
-            println!("ok: binario nativo '{out_bin}'{tier}");
+            println!("ok: native binary '{out_bin}'{tier}");
         }
         Ok(s) => {
             // Falló: se CONSERVA el `.rs` y se nombra su ruta, para poder inspeccionar el Rust generado.
@@ -873,7 +873,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
                 (false, Some(t)) => format!(" (target: {t})"),
                 (false, None) => String::new(),
             };
-            println!("ok: binario nativo '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
+            println!("ok: native binary '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
         }
         Ok(s) => {
             // Falló: se CONSERVA el proyecto y se nombra su ruta, para inspeccionar el Rust generado.
@@ -1784,7 +1784,7 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
     let manifest = load_manifest();
     if let Some(m) = &manifest {
         if banner {
-            eprintln!("compilando {} v{}", m.name, m.version);
+            eprintln!("compiling {} v{}", m.name, m.version);
         }
         // Auto-descarga (M39c-2a, estilo cargo): asegura que las dependencias declaradas estén en
         // `.ray-deps/` antes de cargar el programa. Las presentes se saltan (sin red); si falta

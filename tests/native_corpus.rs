@@ -1,8 +1,9 @@
 //! H10 — Corpus automatizado del backend nativo (`ray build --native`). El claim "los ejemplos
 //! transpilan byte-idénticos a la VM" (docs/transpilador-nativo.md §2.3) dejaba de estar cubierto por
 //! ningún test: era una afirmación manual que se descompasaba en silencio. Este test lo AUTOMATIZA:
-//! itera los ejemplos DETERMINISTAS (`examples/{basics,data,types,stdlib}`) y, para cada uno, compila el
-//! binario nativo, lo ejecuta y exige que su stdout + código de salida coincidan con la VM.
+//! itera los ejemplos DETERMINISTAS (`examples/{basics,data,types,stdlib}` + los EXTRAS multi-archivo y
+//! el camino Cargo) y, para cada uno, compila el binario nativo, lo ejecuta y exige que su stdout +
+//! código de salida coincidan con la VM.
 //!
 //! Es un GUARDIA de regresión: si un cambio del transpilador rompe un ejemplo (o uno nuevo usa algo fuera
 //! del subconjunto), el test falla. Los ejemplos que el backend nativo NO soporta o que no son
@@ -33,6 +34,12 @@ const EXCLUIDOS: &[(&str, &str)] = &[
 
 /// Directorios de ejemplos DETERMINISTAS que el corpus cubre.
 const DIRS: &[&str] = &["basics", "data", "types", "stdlib"];
+
+/// Entradas EXTRA fuera de los directorios planos (revisión post-H10): los programas MULTI-ARCHIVO
+/// (ejercitan la dimensión loader→transpile: bandas de líneas, namespacing `::`, cápsulas) y
+/// `sqlite_demo` (el ÚNICO del corpus por el camino Cargo/ray-runtime, que los 50 planos nunca tocan;
+/// determinista: SQLite en `:memory:`). Cada una corre con cwd en su directorio (resuelve sus imports).
+const EXTRAS: &[&str] = &["modulos/main.ray", "capsula/main.ray", "proyecto/main.ray", "db/sqlite_demo.ray"];
 
 fn tiene_rustc() -> bool {
     Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
@@ -74,6 +81,46 @@ fn los_ejemplos_deterministas_transpilan_identicos_a_la_vm() {
     let mut saltados = 0usize;
     let mut fallos: Vec<String> = Vec::new();
 
+    // Cubre UN ejemplo: VM (oráculo) → build --native → binario ≡ VM (stdout + código de salida).
+    // `cwd` fija el directorio de trabajo (los EXTRAS resuelven sus imports/manifiesto relativo a él).
+    let mut cubrir = |etiqueta: &str, src: &str, cwd: &Path, bin: &Path,
+                      cubiertos: &mut usize, fallos: &mut Vec<String>| {
+        // (1) La VM: oráculo de referencia.
+        let vm = Command::new(BIN).args(["run", src]).current_dir(cwd).output().expect("corre la VM");
+        let vm_out = String::from_utf8_lossy(&vm.stdout).into_owned();
+        let vm_code = vm.status.code();
+
+        // (2) El binario nativo debe COMPILAR (si un ejemplo nuevo usa algo fuera del subconjunto, esto
+        //     falla → hay que soportarlo o añadirlo a EXCLUIDOS con su motivo).
+        let build = Command::new(BIN)
+            .args(["build", src, "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(cwd)
+            .output()
+            .expect("lanza el build --native");
+        if !build.status.success() {
+            fallos.push(format!(
+                "{etiqueta}: build --native falló\n  {}",
+                String::from_utf8_lossy(&build.stderr).trim()
+            ));
+            return;
+        }
+        // (3) El binario nativo ≡ VM (stdout + código de salida).
+        let nat = Command::new(bin).output().expect("corre el binario nativo");
+        let nat_out = String::from_utf8_lossy(&nat.stdout).into_owned();
+        if nat_out != vm_out {
+            fallos.push(format!("{etiqueta}: stdout diverge\n  VM: {vm_out:?}\n  nativo: {nat_out:?}"));
+        } else if nat.status.code() != vm_code {
+            fallos.push(format!(
+                "{etiqueta}: código de salida diverge (VM={vm_code:?}, nativo={:?})",
+                nat.status.code()
+            ));
+        } else {
+            *cubiertos += 1;
+        }
+        let _ = std::fs::remove_file(bin);
+    };
+
+    let raiz = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
     for dir in DIRS {
         for ejemplo in ejemplos_de(dir) {
             if let Some(motivo) = excluido(&ejemplo) {
@@ -82,42 +129,17 @@ fn los_ejemplos_deterministas_transpilan_identicos_a_la_vm() {
                 continue;
             }
             let etiqueta = format!("{}/{}", dir, ejemplo.file_name().unwrap().to_string_lossy());
-            let src = ejemplo.to_str().unwrap();
             let bin = tmp.join(ejemplo.file_stem().unwrap());
-
-            // (1) La VM: oráculo de referencia.
-            let vm = Command::new(BIN).args(["run", src]).output().expect("corre la VM");
-            let vm_out = String::from_utf8_lossy(&vm.stdout).into_owned();
-            let vm_code = vm.status.code();
-
-            // (2) El binario nativo debe COMPILAR (si un ejemplo nuevo usa algo fuera del subconjunto, esto
-            //     falla → hay que soportarlo o añadirlo a EXCLUIDOS con su motivo).
-            let build = Command::new(BIN)
-                .args(["build", src, "--native", "-o", bin.to_str().unwrap()])
-                .output()
-                .expect("lanza el build --native");
-            if !build.status.success() {
-                fallos.push(format!(
-                    "{etiqueta}: build --native falló\n  {}",
-                    String::from_utf8_lossy(&build.stderr).trim()
-                ));
-                continue;
-            }
-            // (3) El binario nativo ≡ VM (stdout + código de salida).
-            let nat = Command::new(&bin).output().expect("corre el binario nativo");
-            let nat_out = String::from_utf8_lossy(&nat.stdout).into_owned();
-            if nat_out != vm_out {
-                fallos.push(format!("{etiqueta}: stdout diverge\n  VM: {vm_out:?}\n  nativo: {nat_out:?}"));
-            } else if nat.status.code() != vm_code {
-                fallos.push(format!(
-                    "{etiqueta}: código de salida diverge (VM={vm_code:?}, nativo={:?})",
-                    nat.status.code()
-                ));
-            } else {
-                cubiertos += 1;
-            }
-            let _ = std::fs::remove_file(&bin);
+            cubrir(&etiqueta, ejemplo.to_str().unwrap(), &raiz, &bin, &mut cubiertos, &mut fallos);
         }
+    }
+    // Los EXTRAS corren con cwd en SU directorio y un nombre de binario propio (dos se llaman main.ray).
+    for extra in EXTRAS {
+        let ruta = raiz.join("examples").join(extra);
+        let cwd = ruta.parent().unwrap().to_path_buf();
+        let nombre = ruta.file_name().unwrap().to_str().unwrap().to_string();
+        let bin = tmp.join(extra.replace('/', "_").replace(".ray", ""));
+        cubrir(extra, &nombre, &cwd, &bin, &mut cubiertos, &mut fallos);
     }
     let _ = std::fs::remove_dir_all(&tmp);
 

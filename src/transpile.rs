@@ -1222,7 +1222,8 @@ impl Transpiler {
                     Type::Int | Type::Float => passes.push(format!("__p{}", i)),
                     Type::Bool => passes.push(format!("(__p{} as std::os::raw::c_int)", i)),
                     Type::String => {
-                        writeln!(out, "    let __rt_c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"FFI: el string tiene un NUL interno\");", i, i).unwrap();
+                        // mismo texto que la VM (src/ffi.rs; allí es error de ejecución, aquí panic).
+                        writeln!(out, "    let __rt_c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"the string argument of '{}' contains an interior NUL\");", i, i, e.name).unwrap();
                         passes.push(format!("__rt_c{}.as_ptr()", i));
                     }
                     Type::Bytes => passes.push(format!("__p{}.as_ptr()", i)),
@@ -1242,8 +1243,9 @@ impl Transpiler {
                 Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
                     // char* → Option<bytes>: NULL→None; si no, copia los bytes hasta el NUL (nunca libera).
                     Type::Bytes => "if __rt_r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes())) }".to_string(),
-                    // char* → Option<string>: como bytes, validando UTF-8 (inválido → error de ejecución).
-                    Type::String => "if __rt_r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes()).expect(\"FFI: el char* devuelto no es UTF-8 válido\"))) }".to_string(),
+                    // char* → Option<string>: como bytes, validando UTF-8. Mismo texto que la VM
+                    // (src/interpreter.rs, ffi_to_value; allí es error de ejecución, aquí panic).
+                    Type::String => "if __rt_r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes()).expect(\"the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)\"))) }".to_string(),
                     // ptr fallible → Option<ptr>: NULL→None; si no, la dirección opaca.
                     Type::Ptr => "if __rt_r.is_null() { None } else { Some(__rt_r as i64) }".to_string(),
                     other => return Err(format!("FFI return type Option<{:?}> is not supported", other)),

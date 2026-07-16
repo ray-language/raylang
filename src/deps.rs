@@ -39,8 +39,8 @@ pub fn valid_package_name(name: &str) -> bool {
 /// El error estándar para un nombre de paquete inválido, con el contexto de dónde apareció.
 fn bad_name_err(name: &str, origin: &str) -> String {
     format!(
-        "nombre de paquete inválido '{name}' ({origin}): solo letras, dígitos, '-' y '_', \
-         empezando por letra o dígito"
+        "invalid package name '{name}' ({origin}): only letters, digits, '-' and '_', \
+         starting with a letter or digit"
     )
 }
 
@@ -57,16 +57,16 @@ pub fn path_of_path_dep(spec: &str) -> Option<&str> {
 /// build reproducible. Se parte por el **último** `@` para no romper URLs con `usuario@host`.
 pub fn parse_spec(spec: &str) -> Result<GitSpec, String> {
     let without_prefix = spec.strip_prefix("git+").ok_or_else(|| {
-        format!("spec de dependencia no soportada: '{spec}' (se esperaba 'git+<URL>@<ref>')")
+        format!("unsupported dependency spec: '{spec}' (expected 'git+<URL>@<ref>')")
     })?;
     let (url, git_ref) = without_prefix.rsplit_once('@').ok_or_else(|| {
         format!(
-            "la dependencia '{spec}' no fija una versión (falta '@<tag>'); \
-             una versión fija hace el build reproducible"
+            "the dependency '{spec}' does not fix a version (missing '@<tag>'); \
+             a fixed version makes the build reproducible"
         )
     })?;
     if url.is_empty() || git_ref.is_empty() {
-        return Err(format!("spec de dependencia mal formada: '{spec}'"));
+        return Err(format!("malformed dependency spec: '{spec}'"));
     }
     Ok(GitSpec { url: url.to_string(), git_ref: git_ref.to_string() })
 }
@@ -78,11 +78,11 @@ pub fn fetch(name: &str, spec: &GitSpec, dest: &Path) -> Result<String, String> 
         let _ = std::fs::create_dir_all(parent); // asegura `.ray-deps/`
     }
     git(&["clone", "--quiet", &spec.url, &dest.to_string_lossy()], None)
-        .map_err(|e| format!("no se pudo clonar la dependencia '{name}' ({}): {e}", spec.url))?;
+        .map_err(|e| format!("could not clone dependency '{name}' ({}): {e}", spec.url))?;
     // Checkout de la ref fijada. Sirve para tags, ramas y SHAs (a diferencia de `clone --branch`).
     if let Err(e) = git(&["checkout", "--quiet", &spec.git_ref], Some(dest)) {
         let _ = std::fs::remove_dir_all(dest); // deja la caché limpia si la ref no existe
-        return Err(format!("no se pudo hacer checkout de '{}' en '{name}': {e}", spec.git_ref));
+        return Err(format!("could not check out '{}' in '{name}': {e}", spec.git_ref));
     }
     rev_parse(dest)
 }
@@ -101,7 +101,7 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     cmd.args(args);
     let output = cmd
         .output()
-        .map_err(|e| format!("no se pudo ejecutar 'git': {e} (¿está instalado?)"))?;
+        .map_err(|e| format!("could not run 'git': {e} (is it installed?)"))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -172,7 +172,7 @@ fn fetch_mirrored(
             Ok(commit) => return Ok(commit),
             Err(e) => {
                 let _ = std::fs::remove_dir_all(dest); // deja la caché limpia para el reintento
-                eprintln!("  aviso: el mirror no sirvió '{name}' ({e}); se usa la URL original");
+                eprintln!("  warning: the mirror did not serve '{name}' ({e}); the original URL is used");
             }
         }
     }
@@ -213,15 +213,15 @@ fn ensure_index_clone(raw: &str, cache: &Path) -> Result<(), String> {
         let _ = std::fs::create_dir_all(parent);
     }
     git(&["clone", "--quiet", url, &cache.to_string_lossy()], None)
-        .map_err(|e| format!("no se pudo clonar el índice de paquetes ({url}): {e}"))?;
+        .map_err(|e| format!("could not clone the package index ({url}): {e}"))?;
     if let Some(r) = git_ref
         && let Err(e) = git(&["checkout", "--quiet", r], Some(cache))
     {
         let _ = std::fs::remove_dir_all(cache);
-        return Err(format!("no se pudo hacer checkout de '{r}' en el índice: {e}"));
+        return Err(format!("could not check out '{r}' in the index: {e}"));
     }
     std::fs::write(&spec_file, raw)
-        .map_err(|e| format!("no se pudo registrar la spec del índice: {e}"))?;
+        .map_err(|e| format!("could not register the index spec: {e}"))?;
     Ok(())
 }
 
@@ -241,15 +241,15 @@ pub fn refresh_index(manifest: &Manifest) -> Result<(), String> {
     match git_ref {
         None => git(&["pull", "--quiet"], Some(&cache))
             .map(|_| ())
-            .map_err(|e| format!("no se pudo refrescar el índice de paquetes: {e}")),
+            .map_err(|e| format!("could not refresh the package index: {e}")),
         Some(r) => {
             git(&["fetch", "--quiet", "--tags", "--force", "origin"], Some(&cache))
-                .map_err(|e| format!("no se pudo refrescar el índice de paquetes: {e}"))?;
+                .map_err(|e| format!("could not refresh the package index: {e}"))?;
             // Rama → seguir la punta remota; tag/SHA → la ref tal cual (posiblemente actualizada).
             let remote = format!("origin/{r}");
             if git(&["checkout", "--quiet", "--detach", &remote], Some(&cache)).is_err() {
                 git(&["checkout", "--quiet", "--detach", r], Some(&cache)).map_err(|e| {
-                    format!("no se pudo re-checkout de '{r}' al refrescar el índice: {e}")
+                    format!("could not re-check out '{r}' when refreshing the index: {e}")
                 })?;
             }
             Ok(())
@@ -272,8 +272,8 @@ fn to_gitspec(
     if crate::index::is_registry_spec(spec) {
         let dir = index.ok_or_else(|| {
             format!(
-                "la dependencia '{name} = \"{spec}\"' se resuelve por nombre, pero no hay índice \
-                 configurado (declara '[registry] index = \"<dir>\"' en ray.toml o exporta RAY_INDEX)"
+                "the dependency '{name} = \"{spec}\"' resolves by name, but no index is \
+                 configured (declare '[registry] index = \"<dir>\"' in ray.toml or export RAY_INDEX)"
             )
         })?;
         crate::index::resolve_pinned(dir, name, spec, locked, update)
@@ -328,7 +328,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     };
     for (n, s) in &manifest.dependencies {
         if !valid_package_name(n) {
-            return Err(bad_name_err(n, "declarado en ray.toml"));
+            return Err(bad_name_err(n, "declared in ray.toml"));
         }
         if path_of_path_dep(s).is_some() {
             continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
@@ -362,7 +362,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
                 let _ = std::fs::remove_dir_all(&dest); // upgrade dentro de esta resolución o vs. disco
             }
             if !dest.exists() {
-                eprintln!("  descargando {name} ({}@{})", chosen_spec.url, chosen_spec.git_ref);
+                eprintln!("  downloading {name} ({}@{})", chosen_spec.url, chosen_spec.git_ref);
                 fetch_mirrored(&name, &chosen_spec, &dest, mirror.as_deref())?;
                 downloaded += 1;
             }
@@ -381,16 +381,16 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
             && pkg_deps.iter().any(|(_, s)| crate::index::is_registry_spec(s) && path_of_path_dep(s).is_none())
         {
             eprintln!(
-                "  aviso: '{name}' declara su propio índice ('{pr}'); sus dependencias por nombre \
-                 se resuelven contra el índice de ESTE proyecto (riesgo de dependency confusion \
-                 si los nombres difieren entre índices)"
+                "  warning: '{name}' declares its own index ('{pr}'); its dependencies by name \
+                 are resolved against THIS project's index (risk of dependency confusion \
+                 if the names differ between indexes)"
             );
         }
         for (dn, ds) in pkg_deps {
             // M51d: el `ray.toml` de una transitiva NO es confiable — validar su nombre ANTES de
             // usarlo en cualquier ruta (es la valla contra `../../x` → escape de la caché).
             if !valid_package_name(&dn) {
-                return Err(bad_name_err(&dn, &format!("declarado por la dependencia '{name}'")));
+                return Err(bad_name_err(&dn, &format!("declared by dependency '{name}'")));
             }
             if path_of_path_dep(&ds).is_some() {
                 continue;
@@ -411,9 +411,9 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
             && b.hash != hash
         {
             return Err(format!(
-                "la dependencia '{name}' no coincide con 'ray.lock': su contenido cambió desde que \
-                 se bloqueó (posible manipulación).\n  esperado: {}\n  actual:   {}\n  Si el cambio es \
-                 legítimo, borra '.ray-deps/{name}' y 'ray.lock' y vuelve a resolver.",
+                "the dependency '{name}' does not match 'ray.lock': its content changed from what \
+                 was locked (possible tampering).\n  expected: {}\n  actual:   {}\n  If the change is \
+                 legitimate, delete '.ray-deps/{name}' and 'ray.lock' and resolve again.",
                 b.hash, hash
             ));
         }
@@ -425,8 +425,8 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
             && *ihash != hash
         {
             return Err(format!(
-                "la dependencia '{name}' no coincide con el hash publicado en el índice (posible \
-                 manipulación del repositorio del paquete).\n  publicado: {ihash}\n  descargado: {hash}"
+                "the dependency '{name}' does not match the hash published in the index (possible \
+                 tampering of the package repository).\n  published: {ihash}\n  downloaded: {hash}"
             ));
         }
         new_lock.push(LockEntry {
@@ -452,8 +452,8 @@ fn mvs(name: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
         return Ok(if vb > va { b.clone() } else { a.clone() });
     }
     Err(format!(
-        "conflicto de versiones para la dependencia '{name}': se pide '{}@{}' y '{}@{}', \
-         irreconciliables (URLs distintas o refs no semver). Fija una sola versión.",
+        "version conflict for dependency '{name}': '{}@{}' and '{}@{}' are requested, \
+         irreconcilable (different URLs or non-semver refs). Pin a single version.",
         a.url, a.git_ref, b.url, b.git_ref
     ))
 }
@@ -516,7 +516,7 @@ pub fn hash_package(dir: &Path) -> Result<String, String> {
     let mut summary = String::new();
     for (rel, abs) in &files {
         let content = std::fs::read(abs)
-            .map_err(|e| format!("no se pudo leer '{}': {e}", abs.display()))?;
+            .map_err(|e| format!("could not read '{}': {e}", abs.display()))?;
         summary.push_str(rel);
         summary.push(':');
         summary.push_str(&crate::sha256::sha256_hex(&content));
@@ -533,7 +533,7 @@ pub(crate) fn collect_files(
     out: &mut Vec<(String, std::path::PathBuf)>,
 ) -> Result<(), String> {
     let entries = std::fs::read_dir(dir)
-        .map_err(|e| format!("no se pudo listar '{}': {e}", dir.display()))?;
+        .map_err(|e| format!("could not list '{}': {e}", dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("error listando '{}': {e}", dir.display()))?;
         if entry.file_name() == *".git" {
@@ -585,7 +585,7 @@ fn read_lock(root: &Path) -> Result<std::collections::HashMap<String, LockEntry>
         if let Some(rest) = line.strip_prefix('[') {
             close(&mut current, &mut map);
             let name = rest.strip_suffix(']')
-                .ok_or_else(|| format!("ray.lock:{}: cabecera sin ']'", i + 1))?;
+                .ok_or_else(|| format!("ray.lock:{}: header without ']'", i + 1))?;
             current = Some(LockEntry {
                 name: name.trim().to_string(),
                 url: String::new(), git_ref: String::new(), commit: String::new(), hash: String::new(),
@@ -593,11 +593,11 @@ fn read_lock(root: &Path) -> Result<std::collections::HashMap<String, LockEntry>
             continue;
         }
         let (key, value) = line.split_once('=')
-            .ok_or_else(|| format!("ray.lock:{}: se esperaba 'clave = valor'", i + 1))?;
+            .ok_or_else(|| format!("ray.lock:{}: expected 'key = value'", i + 1))?;
         let value = value.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"'))
-            .ok_or_else(|| format!("ray.lock:{}: el valor debe ir entre comillas", i + 1))?;
+            .ok_or_else(|| format!("ray.lock:{}: the value must be in quotes", i + 1))?;
         let Some(e) = current.as_mut() else {
-            return Err(format!("ray.lock:{}: clave fuera de una sección [nombre]", i + 1));
+            return Err(format!("ray.lock:{}: key outside a [name] section", i + 1));
         };
         match key.trim() {
             "url" => e.url = value.to_string(),
@@ -653,8 +653,8 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
 fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     let mut s = String::from(
-        "# ray.lock — versiones y hashes bloqueados de las dependencias (generado por 'ray').\n\
-         # Se commitea al repositorio. No editar a mano.\n",
+        "# ray.lock — locked versions and hashes of the dependencies (generated by 'ray').\n\
+         # Committed to the repository. Do not edit by hand.\n",
     );
     for e in entries.iter() {
         s.push_str(&format!(
@@ -663,7 +663,7 @@ fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
         ));
     }
     std::fs::write(root.join("ray.lock"), s)
-        .map_err(|e| format!("no se pudo escribir 'ray.lock': {e}"))
+        .map_err(|e| format!("could not write 'ray.lock': {e}"))
 }
 
 #[cfg(test)]
@@ -671,17 +671,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valida_nombres_de_paquete() {
+    fn validates_names_de_package() {
         // M51d: el nombre construye rutas (caché/índice) → charset estricto.
         assert!(valid_package_name("geo"));
-        assert!(valid_package_name("mi-paquete_2"));
+        assert!(valid_package_name("mi-package_2"));
         assert!(valid_package_name("9lives"));
         assert!(!valid_package_name(""));
         assert!(!valid_package_name("../evil"));
         assert!(!valid_package_name("a/b"));
         assert!(!valid_package_name("a.b"));
         assert!(!valid_package_name("-a")); // no empieza por alfanumérico
-        assert!(!valid_package_name("con espacios"));
+        assert!(!valid_package_name("with spaces"));
     }
 
     #[test]
@@ -703,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn parsea_spec_git() {
+    fn parses_spec_git() {
         let s = parse_spec("git+https://ejemplo/geo@v1.0").unwrap();
         assert_eq!(s.url, "https://ejemplo/geo");
         assert_eq!(s.git_ref, "v1.0");
@@ -727,14 +727,14 @@ mod tests {
     }
 
     #[test]
-    fn spec_errores() {
+    fn spec_errors() {
         assert!(parse_spec("https://x/geo@v1").unwrap_err().contains("git+"));
-        assert!(parse_spec("git+https://x/geo").unwrap_err().contains("no fija una versión"));
-        assert!(parse_spec("git+@v1").unwrap_err().contains("mal formada"));
+        assert!(parse_spec("git+https://x/geo").unwrap_err().contains("does not fix a version"));
+        assert!(parse_spec("git+@v1").unwrap_err().contains("malformed"));
     }
 
     #[test]
-    fn parsea_semver() {
+    fn parses_semver() {
         use crate::semver::Version;
         assert_eq!(semver("v1.2.3"), Some(Version::new(1, 2, 3)));
         assert_eq!(semver("1.2"), Some(Version::new(1, 2, 0)));
@@ -749,17 +749,17 @@ mod tests {
     }
 
     #[test]
-    fn mvs_elige_o_falla() {
+    fn mvs_elige_o_fails() {
         let a = GitSpec { url: "u".into(), git_ref: "v1.0.0".into() };
         let b = GitSpec { url: "u".into(), git_ref: "v2.1.0".into() };
         // Misma URL, semver → gana el mayor.
         assert_eq!(mvs("x", &a, &b).unwrap(), b);
         assert_eq!(mvs("x", &b, &a).unwrap(), b);
         // URLs distintas → error (caché plana, un slot por nombre).
-        let c = GitSpec { url: "otra".into(), git_ref: "v3.0.0".into() };
-        assert!(mvs("x", &a, &c).unwrap_err().contains("conflicto"));
+        let c = GitSpec { url: "other".into(), git_ref: "v3.0.0".into() };
+        assert!(mvs("x", &a, &c).unwrap_err().contains("conflict"));
         // Ref no semver → error.
         let d = GitSpec { url: "u".into(), git_ref: "main".into() };
-        assert!(mvs("x", &a, &d).unwrap_err().contains("conflicto"));
+        assert!(mvs("x", &a, &d).unwrap_err().contains("conflict"));
     }
 }

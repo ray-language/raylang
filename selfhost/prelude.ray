@@ -58,13 +58,13 @@ fn parse_float(s: string) -> Option<float> {
 // conoce por inyección y el intérprete resuelve por etiqueta de valor). Port de `src/prelude.rs`.
 fn assert(cond: bool) {
     if (!cond) {
-        panic("aserción falló");
+        panic("assertion failed");
     }
 }
 
 fn assert_eq<T: Eq + Show>(a: T, b: T) {
     if (!a.eq(b)) {
-        panic("assert_eq falló: " + a.show() + " != " + b.show());
+        panic("assert_eq failed: " + a.show() + " != " + b.show());
     }
 }
 

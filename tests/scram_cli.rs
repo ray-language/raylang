@@ -11,15 +11,15 @@ const ESPERADO: &[&str] = &[
     "server verificado",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/scram_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta scram_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 const RECHAZOS: &[&str] = &[
@@ -29,31 +29,31 @@ const RECHAZOS: &[&str] = &[
     "verify rechazado",             // scram_verify con server_sig vacío = false
 ];
 
-fn correr_reject(flags: &[&str]) -> (Vec<String>, bool) {
+fn run_reject(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/scram_reject_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta scram_reject_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 /// M75 — salvaguardas de la revisión en frío. Rápido (todos los casos retornan antes del PBKDF2), va
 /// en la suite por defecto por ambos motores.
 #[test]
-fn scram_rechazos_interprete() {
-    let (lineas, ok) = correr_reject(&[]);
+fn scram_rechazos_interpreter() {
+    let (lines, ok) = run_reject(&[]);
     assert!(ok, "scram_reject_demo falló en el intérprete");
-    assert_eq!(lineas, RECHAZOS);
+    assert_eq!(lines, RECHAZOS);
 }
 
 #[test]
 fn scram_rechazos_vm() {
-    let (lineas, ok) = correr_reject(&["--vm"]);
+    let (lines, ok) = run_reject(&["--vm"]);
     assert!(ok, "scram_reject_demo falló en la VM");
-    assert_eq!(lineas, RECHAZOS);
+    assert_eq!(lines, RECHAZOS);
 }
 
 /// Ambos van `#[ignore]`: este test valida SCRAM contra el vector del RFC 7677 con i=4096 (PBKDF2 lento,
@@ -61,16 +61,16 @@ fn scram_rechazos_vm() {
 /// (e2e a i=64, rápido); la validación contra el RFC se corre a demanda con `-- --ignored`.
 #[test]
 #[ignore]
-fn scram_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn scram_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "scram_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 #[ignore]
 fn scram_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "scram_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }

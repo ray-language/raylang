@@ -13,10 +13,10 @@ use std::time::Duration;
 // conexión se atiende en su propia fibra (`spawn`); accept/read ceden al scheduler.
 const SERVIDOR: &str = r#"
 import std/net;
-fn atender(conn: int) {
+fn handle(conn: int) {
     match (net.socket_read(conn)) {
         Result.Ok(msg) => {
-            match (net.socket_write(conn, "eco:" + msg)) {
+            match (net.socket_write(conn, "echo:" + msg)) {
                 Result.Ok(_) => {},
                 Result.Err(e) => eprint("write: " + e),
             }
@@ -34,7 +34,7 @@ fn main() -> int {
                 var i: int = 0;
                 while (i < 2) {
                     match (net.tcp_accept(srv)) {
-                        Result.Ok(conn) => { spawn(fn() { atender(conn) }); },
+                        Result.Ok(conn) => { spawn(fn() { handle(conn) }); },
                         Result.Err(e) => { eprint("accept: " + e); i = 2; },
                     }
                     i = i + 1;
@@ -49,7 +49,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_concurrente_atiende_fuera_de_orden() {
+fn servidor_concurrente_atiende_outside_de_order() {
     let mut path = std::env::temp_dir();
     path.push("ray_srv_concurrente.ray");
     std::fs::File::create(&path).expect("crea").write_all(SERVIDOR.as_bytes()).expect("escribe");
@@ -64,8 +64,8 @@ fn servidor_concurrente_atiende_fuera_de_orden() {
 
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el puerto");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("puerto inválido: {linea:?}"));
+    reader.read_line(&mut linea).expect("lee el port");
+    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
 
     // Dos clientes; el SEGUNDO en conectarse pide su eco PRIMERO. Un servidor secuencial bloqueado
     // leyendo al primero nunca respondería → el read del segundo daría timeout y el test fallaría.
@@ -78,16 +78,16 @@ fn servidor_concurrente_atiende_fuera_de_orden() {
     c2.write_all(b"dos").expect("envía c2");
     let mut r2 = String::new();
     c2.read_to_string(&mut r2).expect("lee c2 (¿servidor no concurrente?)");
-    assert_eq!(r2, "eco:dos", "el segundo cliente recibió su eco pese a que el primero no había enviado");
+    assert_eq!(r2, "echo:dos", "el segundo client recibió su echo pese a what el primero no había enviado");
 
     // Ahora c1.
     let mut c1 = c1;
     c1.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout c1");
-    c1.write_all(b"uno").expect("envía c1");
+    c1.write_all(b"one").expect("envía c1");
     let mut r1 = String::new();
     c1.read_to_string(&mut r1).expect("lee c1");
-    assert_eq!(r1, "eco:uno");
+    assert_eq!(r1, "echo:one");
 
     let status = child.wait().expect("espera servidor");
-    assert_eq!(status.code(), Some(0), "el servidor terminó bien tras 2 conexiones");
+    assert_eq!(status.code(), Some(0), "el servidor terminó bien after 2 conexiones");
 }

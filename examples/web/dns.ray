@@ -241,7 +241,7 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> Result<string, string> 
         let slen = byte_at(data, p)?;
         p = p + 1;
         if (p + slen > fin) {
-            return Result.Err("character-string de TXT rebasa el RDATA");
+            return Result.Err("TXT character-string overruns the RDATA");
         }
         s = s + match (from_utf8(data.sub_bytes(p, p + slen))) {
             Result.Ok(t) => t,
@@ -381,7 +381,7 @@ pub fn format_records(recs: [Record]) -> [string] {
 }
 
 fn nombre_rcode(rcode: int) -> string {
-    if (rcode == 1) { " (error de formato)" } else {
+    if (rcode == 1) { " (format error)" } else {
         if (rcode == 2) { " (fallo del servidor)" } else {
             if (rcode == 3) { " (nombre inexistente)" } else { "" }
         }

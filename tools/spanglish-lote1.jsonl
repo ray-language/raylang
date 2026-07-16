@@ -1,0 +1,681 @@
+{"text": "\"error léxico en {}:{}: {}\"", "en": "\"lex error at {}:{}: {}\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"error léxico en \"", "en": "\"lex error at \"", "sites": ["selfhost/lex_dump.ray:1", "selfhost/check_dump.ray:1"], "count": 2}
+{"text": "\"carácter inesperado '{}'\"", "en": "\"unexpected character '{}'\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"carácter inesperado '\"", "en": "\"unexpected character '\"", "sites": ["selfhost/lexer.ray:1"], "count": 1}
+{"text": "\"flotante inválido '{}'\"", "en": "\"invalid float '{}'\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"flotante inválido '\"", "en": "\"invalid float '\"", "sites": ["selfhost/lexer.ray:1"], "count": 1}
+{"text": "\"entero outside de range '{}'\"", "en": "\"integer out of range '{}'\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"entero outside de range '\"", "en": "\"integer out of range '\"", "sites": ["selfhost/lexer.ray:1"], "count": 1}
+{"text": "\"string sin close\"", "en": "\"unterminated string\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"salto de línea inside de one string sin close\"", "en": "\"newline inside an unterminated string\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"secuencia de escape inválida '\\\\{}'\"", "en": "\"invalid escape sequence '\\\\{}'\"", "sites": ["src/lexer.rs:1", "src/lexer.rs:2", "src/lexer.rs:3"], "count": 3}
+{"text": "\"secuencia de escape inválida '\\\\\"", "en": "\"invalid escape sequence '\\\\\"", "sites": ["selfhost/lexer.ray:1", "selfhost/lexer.ray:2"], "count": 2}
+{"text": "\"string sin close after '\\\\'\"", "en": "\"unterminated string after '\\\\'\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"interpolación '${' sin close en la string\"", "en": "\"unterminated '${' interpolation in string\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"salto de línea inside de one interpolación\"", "en": "\"newline inside an interpolation\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"interpolación vacía '${}' en la string\"", "en": "\"empty interpolation '${}' in string\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"string de bytes sin close\"", "en": "\"unterminated byte string\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"salto de línea inside de one string de bytes sin close\"", "en": "\"newline inside an unterminated byte string\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"string de bytes sin close after '\\\\'\"", "en": "\"unterminated byte string after '\\\\'\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"'{c}' pasó el guard de hexdigit\"", "en": "\"'{c}' passed the hexdigit guard\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"se esperaba un dígito hexadecimal after '\\\\x', no '{}'\"", "en": "\"expected a hex digit after '\\\\x', not '{}'\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"string de bytes sin close (faltan dígitos hex after '\\\\x')\"", "en": "\"unterminated byte string (missing hex digits after '\\\\x')\"", "sites": ["src/lexer.rs:1"], "count": 1}
+{"text": "\"carácter sin close\"", "en": "\"unterminated char literal\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"un literal de carácter no can estar vacío ('')\"", "en": "\"a char literal cannot be empty ('')\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"salto de línea inside de un literal de carácter\"", "en": "\"newline inside a char literal\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"carácter sin close after '\\\\'\"", "en": "\"unterminated char literal after '\\\\'\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"se esperaba ''' para close el literal de carácter (¿más de un carácter?)\"", "en": "\"expected ''' to close the char literal (more than one character?)\"", "sites": ["src/lexer.rs:1", "selfhost/lexer.ray:1"], "count": 2}
+{"text": "\"se esperaba '&&' (¿olvidaste un '&'?)\"", "en": "\"expected '&&' (did you forget a '&'?)\"", "sites": ["selfhost/lexer.ray:1"], "count": 1}
+{"text": "\"se esperaba '||' o '|>' (¿olvidaste un '|'?)\"", "en": "\"expected '||' or '|>' (did you forget a '|'?)\"", "sites": ["selfhost/lexer.ray:1"], "count": 1}
+{"text": "\"error de syntax en {}:{}: {}\"", "en": "\"syntax error at {}:{}: {}\"", "sites": ["src/parser.rs:37"], "count": 1}
+{"text": "\"el name de la constante\"", "en": "\"the constant name\"", "sites": ["src/parser.rs:208"], "count": 1}
+{"text": "\"':' after el name de la constante\"", "en": "\"':' after the constant name\"", "sites": ["src/parser.rs:209"], "count": 1}
+{"text": "\"'=' en la constante\"", "en": "\"'=' in the constant\"", "sites": ["src/parser.rs:211"], "count": 1}
+{"text": "\"';' al final de la constante\"", "en": "\"';' at the end of the constant\"", "sites": ["src/parser.rs:213"], "count": 1}
+{"text": "\"un trait\"", "en": "\"a trait\"", "sites": ["src/parser.rs:226"], "count": 1}
+{"text": "\"un impl\"", "en": "\"an impl\"", "sites": ["src/parser.rs:231", "src/parser.rs:232"], "count": 2}
+{"text": "\"el alias after 'as'\"", "en": "\"the alias after 'as'\"", "sites": ["src/parser.rs:249", "src/parser.rs:282", "selfhost/parser.ray:611", "selfhost/parser.ray:629"], "count": 4}
+{"text": "\"el name del módulo a importar\"", "en": "\"the module name to import\"", "sites": ["src/parser.rs:261", "selfhost/parser.ray:597"], "count": 2}
+{"text": "\"un segmento de la path after '/'\"", "en": "\"a path segment after '/'\"", "sites": ["src/parser.rs:264", "selfhost/parser.ray:599"], "count": 2}
+{"text": "\"un name a importar\"", "en": "\"a name to import\"", "sites": ["src/parser.rs:280", "selfhost/parser.ray:626"], "count": 2}
+{"text": "\"';' para close el 'from M import …'\"", "en": "\"';' to close the 'from M import …'\"", "sites": ["src/parser.rs:291", "selfhost/parser.ray:636"], "count": 2}
+{"text": "\"'pub' no se admite en {} (exporta el trait/type, no el impl)\"", "en": "\"'pub' is not allowed on {} (export the trait/type, not the impl)\"", "sites": ["src/parser.rs:301"], "count": 1}
+{"text": "\"el name de la anotación after '@'\"", "en": "\"the annotation name after '@'\"", "sites": ["src/parser.rs:315", "selfhost/parser.ray:576"], "count": 2}
+{"text": "\"un argumento de la anotación\"", "en": "\"an annotation argument\"", "sites": ["src/parser.rs:320", "selfhost/parser.ray:582"], "count": 2}
+{"text": "\"')' para close los argumentos de la anotación\"", "en": "\"')' to close the annotation arguments\"", "sites": ["src/parser.rs:327", "selfhost/parser.ray:588"], "count": 2}
+{"text": "\"no se permiten annotations about {}\"", "en": "\"annotations are not allowed on {}\"", "sites": ["src/parser.rs:339"], "count": 1}
+{"text": "\"el name del enum\"", "en": "\"the enum name\"", "sites": ["src/parser.rs:354", "selfhost/parser.ray:665"], "count": 2}
+{"text": "\"'{' after el name del enum\"", "en": "\"'{' after the enum name\"", "sites": ["src/parser.rs:356", "selfhost/parser.ray:667"], "count": 2}
+{"text": "\"el name de one variant\"", "en": "\"a variant name\"", "sites": ["src/parser.rs:359", "selfhost/parser.ray:672"], "count": 2}
+{"text": "\"')' para close el payload de la variant\"", "en": "\"')' to close the variant payload\"", "sites": ["src/parser.rs:369", "selfhost/parser.ray:682"], "count": 2}
+{"text": "\"'}' para close el enum\"", "en": "\"'}' to close the enum\"", "sites": ["src/parser.rs:376", "selfhost/parser.ray:689"], "count": 2}
+{"text": "\"el name del struct\"", "en": "\"the struct name\"", "sites": ["src/parser.rs:384", "selfhost/parser.ray:643"], "count": 2}
+{"text": "\"'{' after el name del struct\"", "en": "\"'{' after the struct name\"", "sites": ["src/parser.rs:386", "selfhost/parser.ray:645"], "count": 2}
+{"text": "\"el name de un campo\"", "en": "\"a field name\"", "sites": ["src/parser.rs:389", "src/parser.rs:1646", "src/parser.rs:1715", "selfhost/parser.ray:649", "selfhost/parser.ray:1443"], "count": 5}
+{"text": "\"':' after el name del campo\"", "en": "\"':' after the field name\"", "sites": ["src/parser.rs:390", "src/parser.rs:1716", "selfhost/parser.ray:650", "selfhost/parser.ray:1444"], "count": 4}
+{"text": "\"'}' para close el struct\"", "en": "\"'}' to close the struct\"", "sites": ["src/parser.rs:397", "selfhost/parser.ray:657"], "count": 2}
+{"text": "\"el name de la función\"", "en": "\"the function name\"", "sites": ["src/parser.rs:406", "selfhost/parser.ray:806"], "count": 2}
+{"text": "\"'(' after el name de la función\"", "en": "\"'(' after the function name\"", "sites": ["src/parser.rs:408", "selfhost/parser.ray:808"], "count": 2}
+{"text": "\"se esperaba el name de la librería como string after 'extern' (p. ej. extern \\\"m\\\")\"", "en": "\"expected the library name as a string after 'extern' (e.g. extern \\\"m\\\")\"", "sites": ["src/parser.rs:450"], "count": 1}
+{"text": "\"'fn' en el block extern\"", "en": "\"'fn' in the extern block\"", "sites": ["src/parser.rs:456"], "count": 1}
+{"text": "\"el name de la función externa\"", "en": "\"the extern function name\"", "sites": ["src/parser.rs:457"], "count": 1}
+{"text": "\"'(' after el name de la función externa\"", "en": "\"'(' after the extern function name\"", "sites": ["src/parser.rs:458"], "count": 1}
+{"text": "\"';' al final de la signature externa (no lleva body)\"", "en": "\"';' at the end of the extern signature (it has no body)\"", "sites": ["src/parser.rs:462"], "count": 1}
+{"text": "\"'}' para close el block extern\"", "en": "\"'}' to close the extern block\"", "sites": ["src/parser.rs:465"], "count": 1}
+{"text": "\"el name del trait\"", "en": "\"the trait name\"", "sites": ["src/parser.rs:475", "src/parser.rs:523", "selfhost/parser.ray:696", "selfhost/parser.ray:731"], "count": 4}
+{"text": "\"'{' after el name del trait\"", "en": "\"'{' after the trait name\"", "sites": ["src/parser.rs:478", "selfhost/parser.ray:697"], "count": 2}
+{"text": "\"'}' para close el trait\"", "en": "\"'}' to close the trait\"", "sites": ["src/parser.rs:483", "selfhost/parser.ray:702"], "count": 2}
+{"text": "\"'fn' en one signature de método\"", "en": "\"'fn' in a method signature\"", "sites": ["src/parser.rs:492", "selfhost/parser.ray:708"], "count": 2}
+{"text": "\"el name del método\"", "en": "\"the method name\"", "sites": ["src/parser.rs:493", "src/parser.rs:555", "selfhost/parser.ray:709", "selfhost/parser.ray:750"], "count": 4}
+{"text": "\"'(' after el name del método\"", "en": "\"'(' after the method name\"", "sites": ["src/parser.rs:496", "src/parser.rs:557", "selfhost/parser.ray:710", "selfhost/parser.ray:751"], "count": 4}
+{"text": "\"';' o un body '{ ... }' para el método\"", "en": "\"';' or a '{ ... }' body for the method\"", "sites": ["src/parser.rs:508", "selfhost/parser.ray:721"], "count": 2}
+{"text": "\"se esperaba 'for', no '{}'\"", "en": "\"expected 'for', not '{}'\"", "sites": ["src/parser.rs:537"], "count": 1}
+{"text": "\"'{' para abrir el body del impl\"", "en": "\"'{' to open the impl body\"", "sites": ["src/parser.rs:540", "selfhost/parser.ray:738"], "count": 2}
+{"text": "\"'}' para close el impl\"", "en": "\"'}' to close the impl\"", "sites": ["src/parser.rs:545", "selfhost/parser.ray:743"], "count": 2}
+{"text": "\"'fn' en un método de impl\"", "en": "\"'fn' in an impl method\"", "sites": ["src/parser.rs:554", "selfhost/parser.ray:749"], "count": 2}
+{"text": "\"el name de un parámetro\"", "en": "\"a parameter name\"", "sites": ["src/parser.rs:603", "src/parser.rs:664", "selfhost/parser.ray:792", "selfhost/parser.ray:828"], "count": 4}
+{"text": "\"':' after el name del parámetro\"", "en": "\"':' after the parameter name\"", "sites": ["src/parser.rs:604", "src/parser.rs:665", "selfhost/parser.ray:793", "selfhost/parser.ray:829"], "count": 4}
+{"text": "\"el name de un parámetro de type\"", "en": "\"a type parameter name\"", "sites": ["src/parser.rs:622", "selfhost/parser.ray:920"], "count": 2}
+{"text": "\"el name de un trait en el bound\"", "en": "\"a trait name in the bound\"", "sites": ["src/parser.rs:626", "selfhost/parser.ray:924"], "count": 2}
+{"text": "\"'>' para close los parámetros de type\"", "en": "\"'>' to close the type parameters\"", "sites": ["src/parser.rs:638", "selfhost/parser.ray:936"], "count": 2}
+{"text": "\"'>' para close los argumentos de type\"", "en": "\"'>' to close the type arguments\"", "sites": ["src/parser.rs:655", "selfhost/parser.ray:908"], "count": 2}
+{"text": "\"el name del trait after 'dyn'\"", "en": "\"the trait name after 'dyn'\"", "sites": ["src/parser.rs:690", "selfhost/parser.ray:847"], "count": 2}
+{"text": "\"']' para close el type de array\"", "en": "\"']' to close the array type\"", "sites": ["src/parser.rs:704", "selfhost/parser.ray:857"], "count": 2}
+{"text": "\"')' para close el type tupla\"", "en": "\"')' to close the tuple type\"", "sites": ["src/parser.rs:722"], "count": 1}
+{"text": "\"tupla de 1 elemento sin elemento\"", "en": "\"1-element tuple without an element\"", "sites": ["src/parser.rs:724"], "count": 1}
+{"text": "\"'(' after 'fn' en un type función\"", "en": "\"'(' after 'fn' in a function type\"", "sites": ["src/parser.rs:731", "selfhost/parser.ray:862"], "count": 2}
+{"text": "\"')' para close el type función\"", "en": "\"')' to close the function type\"", "sites": ["src/parser.rs:741", "selfhost/parser.ray:873"], "count": 2}
+{"text": "\"el name del type after 'M.'\"", "en": "\"the type name after 'M.'\"", "sites": ["src/parser.rs:758", "selfhost/parser.ray:886"], "count": 2}
+{"text": "\"se esperaba un type (int, float, bool, string, char, bytes, [T] o un struct)\"", "en": "\"expected a type (int, float, bool, string, char, bytes, [T] or a struct)\"", "sites": ["src/parser.rs:775", "selfhost/parser.ray:894"], "count": 2}
+{"text": "\"el lado izquierdo de '=' no es asignable\"", "en": "\"the left-hand side of '=' is not assignable\"", "sites": ["src/parser.rs:821", "selfhost/parser.ray:974"], "count": 2}
+{"text": "\"';' al final de la asignación\"", "en": "\"';' at the end of the assignment\"", "sites": ["src/parser.rs:824", "selfhost/parser.ray:977"], "count": 2}
+{"text": "\"se esperaba ';' después de la expresión\"", "en": "\"expected ';' after the expression\"", "sites": ["src/parser.rs:842", "selfhost/parser.ray:988"], "count": 2}
+{"text": "\"'}' para close el block\"", "en": "\"'}' to close the block\"", "sites": ["src/parser.rs:846", "selfhost/parser.ray:992"], "count": 2}
+{"text": "\"un name en la desestructuración\"", "en": "\"a name in the destructuring\"", "sites": ["src/parser.rs:869"], "count": 1}
+{"text": "\"')' para close la desestructuración\"", "en": "\"')' to close the destructuring\"", "sites": ["src/parser.rs:878"], "count": 1}
+{"text": "\"'=' en la desestructuración\"", "en": "\"'=' in the destructuring\"", "sites": ["src/parser.rs:879"], "count": 1}
+{"text": "\"';' al final de la declaración\"", "en": "\"';' at the end of the declaration\"", "sites": ["src/parser.rs:881", "src/parser.rs:896", "selfhost/parser.ray:1007"], "count": 3}
+{"text": "\"el name de la variable\"", "en": "\"the variable name\"", "sites": ["src/parser.rs:888", "selfhost/parser.ray:1000"], "count": 2}
+{"text": "\"'=' en la declaración\"", "en": "\"'=' in the declaration\"", "sites": ["src/parser.rs:894", "selfhost/parser.ray:1005"], "count": 2}
+{"text": "\"en la interpolación: {}\"", "en": "\"in the interpolation: {}\"", "sites": ["src/parser.rs:924", "src/parser.rs:927"], "count": 2}
+{"text": "\"la interpolación must ser one sola expresión\"", "en": "\"an interpolation must be a single expression\"", "sites": ["src/parser.rs:929"], "count": 1}
+{"text": "\"one string interpolada llegó sin parts del lexer\"", "en": "\"an interpolated string arrived without parts from the lexer\"", "sites": ["src/parser.rs:950"], "count": 1}
+{"text": "\"un name en el patrón del for\"", "en": "\"a name in the for pattern\"", "sites": ["src/parser.rs:974"], "count": 1}
+{"text": "\"')' para close el patrón del for\"", "en": "\"')' to close the for pattern\"", "sites": ["src/parser.rs:983"], "count": 1}
+{"text": "\"el name de la variable del for\"", "en": "\"the for variable name\"", "sites": ["src/parser.rs:986"], "count": 1}
+{"text": "\"'in' en el for\"", "en": "\"'in' in the for\"", "sites": ["src/parser.rs:989"], "count": 1}
+{"text": "\"';' al final del return\"", "en": "\"';' at the end of the return\"", "sites": ["src/parser.rs:1015", "selfhost/parser.ray:1018"], "count": 2}
+{"text": "\"nesting demasiado profundo (límite: {MAX_PARSE_DEPTH} niveles)\"", "en": "\"nesting too deep (limit: {MAX_PARSE_DEPTH} levels)\"", "sites": ["src/parser.rs:1049"], "count": 1}
+{"text": "\"')' para close la llamada\"", "en": "\"')' to close the call\"", "sites": ["src/parser.rs:1282", "selfhost/parser.ray:1182"], "count": 2}
+{"text": "\"']' para close la indexación\"", "en": "\"']' to close the indexing\"", "sites": ["src/parser.rs:1291", "selfhost/parser.ray:1187"], "count": 2}
+{"text": "\"el name del campo after '.'\"", "en": "\"the field name after '.'\"", "sites": ["src/parser.rs:1311", "selfhost/parser.ray:1191"], "count": 2}
+{"text": "\"')' para close la tupla\"", "en": "\"')' to close the tuple\"", "sites": ["src/parser.rs:1411"], "count": 1}
+{"text": "\"')' para close el paréntesis\"", "en": "\"')' to close the parenthesis\"", "sites": ["src/parser.rs:1414", "selfhost/parser.ray:1289"], "count": 2}
+{"text": "\"se esperaba one expresión, se encontró {:?}\"", "en": "\"expected an expression, found {:?}\"", "sites": ["src/parser.rs:1419"], "count": 1}
+{"text": "\"')' after la condición\"", "en": "\"')' after the condition\"", "sites": ["src/parser.rs:1439", "src/parser.rs:1550", "selfhost/parser.ray:1302", "selfhost/parser.ray:1321"], "count": 4}
+{"text": "\"'=' en 'if let <patrón> = <expr>'\"", "en": "\"'=' in 'if let <pattern> = <expr>'\"", "sites": ["src/parser.rs:1467"], "count": 1}
+{"text": "\"')' after la expresión de match\"", "en": "\"')' after the match expression\"", "sites": ["src/parser.rs:1568", "selfhost/parser.ray:1373"], "count": 2}
+{"text": "\"'{' para abrir los brazos del match\"", "en": "\"'{' to open the match arms\"", "sites": ["src/parser.rs:1569", "selfhost/parser.ray:1374"], "count": 2}
+{"text": "\"'}' para close el match\"", "en": "\"'}' to close the match\"", "sites": ["src/parser.rs:1577", "selfhost/parser.ray:1383"], "count": 2}
+{"text": "\"'=>' after el patrón\"", "en": "\"'=>' after the pattern\"", "sites": ["src/parser.rs:1595", "selfhost/parser.ray:1392"], "count": 2}
+{"text": "\"un patrón (variant, name o '_')\"", "en": "\"a pattern (variant, name or '_')\"", "sites": ["src/parser.rs:1607", "selfhost/parser.ray:1401"], "count": 2}
+{"text": "\"el name de la variant\"", "en": "\"the variant name\"", "sites": ["src/parser.rs:1614", "selfhost/parser.ray:1406"], "count": 2}
+{"text": "\"el name de la variant after 'M.Enum.'\"", "en": "\"the variant name after 'M.Enum.'\"", "sites": ["src/parser.rs:1619", "selfhost/parser.ray:1410"], "count": 2}
+{"text": "\"')' para close el patrón de variant\"", "en": "\"')' to close the variant pattern\"", "sites": ["src/parser.rs:1632", "selfhost/parser.ray:1429"], "count": 2}
+{"text": "\"'}' para close el patrón de struct\"", "en": "\"'}' to close the struct pattern\"", "sites": ["src/parser.rs:1658"], "count": 1}
+{"text": "\"']' para close el Map vacío '[:]'\"", "en": "\"']' to close the empty Map '[:]'\"", "sites": ["src/parser.rs:1673"], "count": 1}
+{"text": "\"':' between la clave y el valor del Map\"", "en": "\"':' between the Map key and value\"", "sites": ["src/parser.rs:1691"], "count": 1}
+{"text": "\"']' para close el Map\"", "en": "\"']' to close the Map\"", "sites": ["src/parser.rs:1694"], "count": 1}
+{"text": "\"']' para close el array\"", "en": "\"']' to close the array\"", "sites": ["src/parser.rs:1705", "selfhost/parser.ray:1341"], "count": 2}
+{"text": "\"'}' para close el literal de struct\"", "en": "\"'}' to close the struct literal\"", "sites": ["src/parser.rs:1723", "selfhost/parser.ray:1451"], "count": 2}
+{"text": "\"se esperaba {}\"", "en": "\"expected {}\"", "sites": ["src/parser.rs:1780", "src/parser.rs:1802", "src/parser.rs:1813"], "count": 3}
+{"text": "\"nesting demasiado profundo\"", "en": "\"nesting too deep\"", "sites": ["src/parser.rs:1929"], "count": 1}
+{"text": "\"se esperaba one expresión\"", "en": "\"expected an expression\"", "sites": ["src/parser.rs:1942"], "count": 1}
+{"text": "\"se esperaba 'for'\"", "en": "\"expected 'for'\"", "sites": ["src/parser.rs:2511"], "count": 1}
+{"text": "\"no se permiten annotations\"", "en": "\"annotations are not allowed\"", "sites": ["src/parser.rs:2538"], "count": 1}
+{"text": "\"error de syntax en \"", "en": "\"syntax error at \"", "sites": ["selfhost/check_dump.ray:40", "selfhost/parse_dump.ray:463"], "count": 2}
+{"text": "\"se esperaba \"", "en": "\"expected \"", "sites": ["selfhost/checker.ray:540", "selfhost/checker.ray:543", "selfhost/checker.ray:550", "selfhost/checker.ray:557", "selfhost/checker.ray:563", "selfhost/checker.ray:568", "selfhost/parser.ray:489", "selfhost/parser.ray:499"], "count": 8}
+{"text": "\"no se permiten annotations about un trait\"", "en": "\"annotations are not allowed on a trait\"", "sites": ["selfhost/parser.ray:547"], "count": 1}
+{"text": "\"'pub' no se admite en un impl (exporta el trait/type, no el impl)\"", "en": "\"'pub' is not allowed on an impl (export the trait/type, not the impl)\"", "sites": ["selfhost/parser.ray:554"], "count": 1}
+{"text": "\"no se permiten annotations about un impl\"", "en": "\"annotations are not allowed on an impl\"", "sites": ["selfhost/parser.ray:557"], "count": 1}
+{"text": "\"'for' after el name del trait\"", "en": "\"'for' after the trait name\"", "sites": ["selfhost/parser.ray:733"], "count": 1}
+{"text": "\"se esperaba 'for', no '\"", "en": "\"expected 'for', not '\"", "sites": ["selfhost/parser.ray:735"], "count": 1}
+{"text": "\"se esperaba one expresión, se encontró \"", "en": "\"expected an expression, found \"", "sites": ["selfhost/parser.ray:1293"], "count": 1}
+{"text": "\"un sub-patrón (name o '_')\"", "en": "\"a sub-pattern (name or '_')\"", "sites": ["selfhost/parser.ray:1418"], "count": 1}
+{"text": "\"argumento\"", "en": "\"argument\"", "sites": ["src/builtins.rs:1507", "selfhost/checker.ray:1981"], "count": 2}
+{"text": "\"argumentos\"", "en": "\"arguments\"", "sites": ["src/builtins.rs:1507", "selfhost/checker.ray:1981"], "count": 2}
+{"text": "\"{} espera {} {}{}, se le pasaron {}\"", "en": "\"{} expects {} {}{}, received {}\"", "sites": ["src/builtins.rs:1508"], "count": 1}
+{"text": "\"{} no espera argumentos, se le pasaron {}\"", "en": "\"{} expects no arguments, received {}\"", "sites": ["src/builtins.rs:1516"], "count": 1}
+{"text": "\"{} espera un float, no {}\"", "en": "\"{} expects a float, not {}\"", "sites": ["src/builtins.rs:1547"], "count": 1}
+{"text": "\"print no can imprimir un {}\"", "en": "\"print cannot print a {}\"", "sites": ["src/builtins.rs:1560"], "count": 1}
+{"text": "\"__len espera un array, un string, un Map o bytes, no {}\"", "en": "\"__len expects an array, a string, a Map or bytes, not {}\"", "sites": ["src/builtins.rs:1568"], "count": 1}
+{"text": "\" (array, valor)\"", "en": "\" (array, value)\"", "sites": ["src/builtins.rs:1574", "src/builtins.rs:1879"], "count": 2}
+{"text": "\"__push espera un array como primer argumento, no {}\"", "en": "\"__push expects an array as first argument, not {}\"", "sites": ["src/builtins.rs:1577"], "count": 1}
+{"text": "\"__push: el array es de {} pero se empuja {}\"", "en": "\"__push: the array is of {} but got {}\"", "sites": ["src/builtins.rs:1580"], "count": 1}
+{"text": "\"to_string solo convierte int/float/bool/string/char/bytes/u*, no {}\"", "en": "\"to_string only converts int/float/bool/string/char/bytes/u*, not {}\"", "sites": ["src/builtins.rs:1588"], "count": 1}
+{"text": "\" (string/array, valor)\"", "en": "\" (string/array, value)\"", "sites": ["src/builtins.rs:1595", "selfhost/checker.ray:2174"], "count": 2}
+{"text": "\"__contains espera un string como subcadena, no {}\"", "en": "\"__contains expects a string as substring, not {}\"", "sites": ["src/builtins.rs:1598"], "count": 1}
+{"text": "\"__contains: el array es de {} pero se busca {}\"", "en": "\"__contains: the array is of {} but looking for {}\"", "sites": ["src/builtins.rs:1601"], "count": 1}
+{"text": "\"__contains espera un string o un array, no {}\"", "en": "\"__contains expects a string or an array, not {}\"", "sites": ["src/builtins.rs:1603"], "count": 1}
+{"text": "\"char_code espera un char, no {}\"", "en": "\"char_code expects a char, not {}\"", "sites": ["src/builtins.rs:1611"], "count": 1}
+{"text": "\" (el code point)\"", "en": "\" (the code point)\"", "sites": ["src/builtins.rs:1682"], "count": 1}
+{"text": "\"__char_from_code espera un int, no {}\"", "en": "\"__char_from_code expects an int, not {}\"", "sites": ["src/builtins.rs:1683"], "count": 1}
+{"text": "\"__trim espera un string, no {}\"", "en": "\"__trim expects a string, not {}\"", "sites": ["src/builtins.rs:1757"], "count": 1}
+{"text": "\"__split espera un string, no {}\"", "en": "\"__split expects a string, not {}\"", "sites": ["src/builtins.rs:1762"], "count": 1}
+{"text": "\"__split espera un string como separador, no {}\"", "en": "\"__split expects a string as separator, not {}\"", "sites": ["src/builtins.rs:1763"], "count": 1}
+{"text": "\" (string, de, a)\"", "en": "\" (string, from, to)\"", "sites": ["src/builtins.rs:1767", "selfhost/checker.ray:2121"], "count": 2}
+{"text": "\"__replace espera un string, no {}\"", "en": "\"__replace expects a string, not {}\"", "sites": ["src/builtins.rs:1768"], "count": 1}
+{"text": "\"__replace espera un string en 'de', no {}\"", "en": "\"__replace expects a string in 'from', not {}\"", "sites": ["src/builtins.rs:1769"], "count": 1}
+{"text": "\"__replace espera un string en 'a', no {}\"", "en": "\"__replace expects a string in 'to', not {}\"", "sites": ["src/builtins.rs:1770"], "count": 1}
+{"text": "\"__chars espera un string, no {}\"", "en": "\"__chars expects a string, not {}\"", "sites": ["src/builtins.rs:1775"], "count": 1}
+{"text": "\"__starts_with espera un string, no {}\"", "en": "\"__starts_with expects a string, not {}\"", "sites": ["src/builtins.rs:1780"], "count": 1}
+{"text": "\"__starts_with espera un string como prefijo, no {}\"", "en": "\"__starts_with expects a string as prefix, not {}\"", "sites": ["src/builtins.rs:1781"], "count": 1}
+{"text": "\"__ends_with espera un string, no {}\"", "en": "\"__ends_with expects a string, not {}\"", "sites": ["src/builtins.rs:1786"], "count": 1}
+{"text": "\"__ends_with espera un string como sufijo, no {}\"", "en": "\"__ends_with expects a string as suffix, not {}\"", "sites": ["src/builtins.rs:1787"], "count": 1}
+{"text": "\"__to_upper espera un string, no {}\"", "en": "\"__to_upper expects a string, not {}\"", "sites": ["src/builtins.rs:1792"], "count": 1}
+{"text": "\"__to_lower espera un string, no {}\"", "en": "\"__to_lower expects a string, not {}\"", "sites": ["src/builtins.rs:1797"], "count": 1}
+{"text": "\"__substring espera un string, no {}\"", "en": "\"__substring expects a string, not {}\"", "sites": ["src/builtins.rs:1802"], "count": 1}
+{"text": "\"__substring espera un int como start, no {}\"", "en": "\"__substring expects an int as start, not {}\"", "sites": ["src/builtins.rs:1803"], "count": 1}
+{"text": "\"__substring espera un int como fin, no {}\"", "en": "\"__substring expects an int as end, not {}\"", "sites": ["src/builtins.rs:1804"], "count": 1}
+{"text": "\"__repeat espera un string, no {}\"", "en": "\"__repeat expects a string, not {}\"", "sites": ["src/builtins.rs:1809"], "count": 1}
+{"text": "\"__repeat espera un int como nº de veces, no {}\"", "en": "\"__repeat expects an int as the repeat count, not {}\"", "sites": ["src/builtins.rs:1810"], "count": 1}
+{"text": "\"__index_of espera un string como primer argumento, no {}\"", "en": "\"__index_of expects a string as first argument, not {}\"", "sites": ["src/builtins.rs:1838"], "count": 1}
+{"text": "\"__index_of espera un string como subcadena, no {}\"", "en": "\"__index_of expects a string as substring, not {}\"", "sites": ["src/builtins.rs:1839"], "count": 1}
+{"text": "\" (array de string, separador)\"", "en": "\" (array of string, separator)\"", "sites": ["src/builtins.rs:1854", "selfhost/checker.ray:2163"], "count": 2}
+{"text": "\"join espera un [string] o one Task como primer argumento, no {}\"", "en": "\"join expects a [string] or a Task as first argument, not {}\"", "sites": ["src/builtins.rs:1856"], "count": 1}
+{"text": "\"join espera un string como separador, no {}\"", "en": "\"join expects a string as separator, not {}\"", "sites": ["src/builtins.rs:1858"], "count": 1}
+{"text": "\"__reverse espera un array, no {}\"", "en": "\"__reverse expects an array, not {}\"", "sites": ["src/builtins.rs:1866"], "count": 1}
+{"text": "\"__pop espera un array, no {}\"", "en": "\"__pop expects an array, not {}\"", "sites": ["src/builtins.rs:1874"], "count": 1}
+{"text": "\"__position: el array es de {} pero se busca {}\"", "en": "\"__position: the array is of {} but looking for {}\"", "sites": ["src/builtins.rs:1882"], "count": 1}
+{"text": "\"__position espera un array, no {}\"", "en": "\"__position expects an array, not {}\"", "sites": ["src/builtins.rs:1884"], "count": 1}
+{"text": "\" (one función sin parámetros)\"", "en": "\" (a function with no parameters)\"", "sites": ["src/builtins.rs:1899", "src/builtins.rs:1928"], "count": 2}
+{"text": "\"spawn requiere one función SIN parámetros (fn() -> T)\"", "en": "\"spawn requires a function WITHOUT parameters (fn() -> T)\"", "sites": ["src/builtins.rs:1902"], "count": 1}
+{"text": "\"spawn espera one función, no {}\"", "en": "\"spawn expects a function, not {}\"", "sites": ["src/builtins.rs:1903"], "count": 1}
+{"text": "\"__task_failed espera one Task, no {}\"", "en": "\"__task_failed expects a Task, not {}\"", "sites": ["src/builtins.rs:1913"], "count": 1}
+{"text": "\" (un array de canales)\"", "en": "\" (an array of channels)\"", "sites": ["src/builtins.rs:1919"], "count": 1}
+{"text": "\"select espera un [Channel<T>], no {}\"", "en": "\"select expects a [Channel<T>], not {}\"", "sites": ["src/builtins.rs:1922"], "count": 1}
+{"text": "\"scope requiere one función SIN parámetros (fn() -> R)\"", "en": "\"scope requires a function WITHOUT parameters (fn() -> R)\"", "sites": ["src/builtins.rs:1931"], "count": 1}
+{"text": "\"scope espera one función, no {}\"", "en": "\"scope expects a function, not {}\"", "sites": ["src/builtins.rs:1932"], "count": 1}
+{"text": "\" (canal, valor)\"", "en": "\" (channel, value)\"", "sites": ["src/builtins.rs:1940"], "count": 1}
+{"text": "\"send espera un Channel como primer argumento, no {}\"", "en": "\"send expects a Channel as first argument, not {}\"", "sites": ["src/builtins.rs:1943"], "count": 1}
+{"text": "\"send: el canal es de {} pero se pasó {}\"", "en": "\"send: the channel is of {} but got {}\"", "sites": ["src/builtins.rs:1945"], "count": 1}
+{"text": "\"__recv espera un Channel, no {}\"", "en": "\"__recv expects a Channel, not {}\"", "sites": ["src/builtins.rs:1954"], "count": 1}
+{"text": "\" (mapa, clave, valor)\"", "en": "\" (map, key, value)\"", "sites": ["src/builtins.rs:1963", "selfhost/checker.ray:2217"], "count": 2}
+{"text": "\"__insert espera un Map como primer argumento, no {}\"", "en": "\"__insert expects a Map as first argument, not {}\"", "sites": ["src/builtins.rs:1966"], "count": 1}
+{"text": "\"__insert: la clave del Map es {} pero se pasó {}\"", "en": "\"__insert: the Map key is {} but got {}\"", "sites": ["src/builtins.rs:1968"], "count": 1}
+{"text": "\"__insert: el valor del Map es {} pero se pasó {}\"", "en": "\"__insert: the Map value is {} but got {}\"", "sites": ["src/builtins.rs:1969"], "count": 1}
+{"text": "\" (mapa, clave)\"", "en": "\" (map, key)\"", "sites": ["src/builtins.rs:1973", "src/builtins.rs:1997", "src/builtins.rs:2007", "selfhost/checker.ray:2234", "selfhost/checker.ray:2249", "selfhost/checker.ray:2264"], "count": 6}
+{"text": "\"__contains_key espera un Map como primer argumento, no {}\"", "en": "\"__contains_key expects a Map as first argument, not {}\"", "sites": ["src/builtins.rs:1976"], "count": 1}
+{"text": "\"__contains_key: la clave del Map es {} pero se pasó {}\"", "en": "\"__contains_key: the Map key is {} but got {}\"", "sites": ["src/builtins.rs:1978"], "count": 1}
+{"text": "\"__keys espera un Map, no {}\"", "en": "\"__keys expects a Map, not {}\"", "sites": ["src/builtins.rs:1985"], "count": 1}
+{"text": "\"__values espera un Map, no {}\"", "en": "\"__values expects a Map, not {}\"", "sites": ["src/builtins.rs:1992"], "count": 1}
+{"text": "\"__map_get espera un Map como primer argumento, no {}\"", "en": "\"__map_get expects a Map as first argument, not {}\"", "sites": ["src/builtins.rs:2000"], "count": 1}
+{"text": "\"__map_get: la clave del Map es {} pero se pasó {}\"", "en": "\"__map_get: the Map key is {} but got {}\"", "sites": ["src/builtins.rs:2002"], "count": 1}
+{"text": "\"__map_remove espera un Map como primer argumento, no {}\"", "en": "\"__map_remove expects a Map as first argument, not {}\"", "sites": ["src/builtins.rs:2010"], "count": 1}
+{"text": "\"__map_remove: la clave del Map es {} pero se pasó {}\"", "en": "\"__map_remove: the Map key is {} but got {}\"", "sites": ["src/builtins.rs:2012"], "count": 1}
+{"text": "\"pow espera un float, no {}\"", "en": "\"pow expects a float, not {}\"", "sites": ["src/builtins.rs:2036", "src/builtins.rs:2037"], "count": 2}
+{"text": "\"atan2 espera un float, no {}\"", "en": "\"atan2 expects a float, not {}\"", "sites": ["src/builtins.rs:2043", "src/builtins.rs:2044"], "count": 2}
+{"text": "\"panic espera un string, no {}\"", "en": "\"panic expects a string, not {}\"", "sites": ["src/builtins.rs:2077"], "count": 1}
+{"text": "\"eprint no can imprimir un {}\"", "en": "\"eprint cannot print a {}\"", "sites": ["src/builtins.rs:2083"], "count": 1}
+{"text": "\"__parse_int espera un string, no {}\"", "en": "\"__parse_int expects a string, not {}\"", "sites": ["src/builtins.rs:2089"], "count": 1}
+{"text": "\"__parse_float espera un string, no {}\"", "en": "\"__parse_float expects a string, not {}\"", "sites": ["src/builtins.rs:2095"], "count": 1}
+{"text": "\"__env espera un string, no {}\"", "en": "\"__env expects a string, not {}\"", "sites": ["src/builtins.rs:2106"], "count": 1}
+{"text": "\"__read_file espera un string (la path), no {}\"", "en": "\"__read_file expects a string (the path), not {}\"", "sites": ["src/builtins.rs:2123"], "count": 1}
+{"text": "\"__write_file espera un string (la path), no {}\"", "en": "\"__write_file expects a string (the path), not {}\"", "sites": ["src/builtins.rs:2129"], "count": 1}
+{"text": "\"__write_file espera un string (el contenido), no {}\"", "en": "\"__write_file expects a string (the contents), not {}\"", "sites": ["src/builtins.rs:2130"], "count": 1}
+{"text": "\"close espera un handle (int) o un Channel, no {}\"", "en": "\"close expects a handle (int) or a Channel, not {}\"", "sites": ["src/builtins.rs:2326"], "count": 1}
+{"text": "\"exists espera un string (la path), no {}\"", "en": "\"exists expects a string (the path), not {}\"", "sites": ["src/builtins.rs:2332"], "count": 1}
+{"text": "\"error de types en {}:{}: {}\"", "en": "\"type error at {}:{}: {}\"", "sites": ["src/checker.rs:48"], "count": 1}
+{"text": "\"'{}' es un builtin del lenguaje y no can redefinirse\"", "en": "\"'{}' is a language builtin and cannot be redefined\"", "sites": ["src/checker.rs:144"], "count": 1}
+{"text": "\"el valor de la constante '{}' must ser un literal\"", "en": "\"the value of constant '{}' must be a literal\"", "sites": ["src/checker.rs:662"], "count": 1}
+{"text": "\"la constante '{}' se declara como {} pero su valor es {}\"", "en": "\"constant '{}' is declared as {} but its value is {}\"", "sites": ["src/checker.rs:667"], "count": 1}
+{"text": "\"constante '{}' declarada dos veces\"", "en": "\"constant '{}' declared twice\"", "sites": ["src/checker.rs:670"], "count": 1}
+{"text": "\"enum '{}' declarado dos veces\"", "en": "\"enum '{}' declared twice\"", "sites": ["src/checker.rs:694"], "count": 1}
+{"text": "\"'{}' ya es un enum; no can ser también un struct\"", "en": "\"'{}' is already an enum; it cannot also be a struct\"", "sites": ["src/checker.rs:699"], "count": 1}
+{"text": "\"variant '{}' repetida en el enum '{}'\"", "en": "\"variant '{}' repeated in enum '{}'\"", "sites": ["src/checker.rs:723"], "count": 1}
+{"text": "\"struct '{}' declarado dos veces\"", "en": "\"struct '{}' declared twice\"", "sites": ["src/checker.rs:734"], "count": 1}
+{"text": "\"enum '{}' recién registrado no está en la tabla\"", "en": "\"enum '{}' just registered is not in the table\"", "sites": ["src/checker.rs:746"], "count": 1}
+{"text": "\"struct '{}' recién registrado no está en la tabla\"", "en": "\"struct '{}' just registered is not in the table\"", "sites": ["src/checker.rs:755"], "count": 1}
+{"text": "\"función '{}' declarada dos veces\"", "en": "\"function '{}' declared twice\"", "sites": ["src/checker.rs:781"], "count": 1}
+{"text": "\"'{}' ya está declarada (colisión between one función y one 'extern fn')\"", "en": "\"'{}' is already declared (collision between a function and an 'extern fn')\"", "sites": ["src/checker.rs:809"], "count": 1}
+{"text": "\"el type {} del parámetro '{}' de la 'extern fn {}' no es marshalable por FFI (int, float, bool, string, bytes)\"", "en": "\"the type {} of parameter '{}' of 'extern fn {}' is not FFI-marshalable (int, float, bool, string, bytes)\"", "sites": ["src/checker.rs:816"], "count": 1}
+{"text": "\"el type de return_val {} de la 'extern fn {}' no es marshalable por FFI (int, float, bool, unit; un char* de return_val se declara Option<bytes> u Option<string>)\"", "en": "\"the return type {} of 'extern fn {}' is not FFI-marshalable (int, float, bool, unit; a char* return is declared Option<bytes> or Option<string>)\"", "sites": ["src/checker.rs:823"], "count": 1}
+{"text": "\"falta la función de entry 'main'\"", "en": "\"missing entry function 'main'\"", "sites": ["src/checker.rs:839", "src/checker.rs:6533", "selfhost/checker.ray:970"], "count": 3}
+{"text": "\"'main' no must recibir parámetros\"", "en": "\"'main' must not take parameters\"", "sites": ["src/checker.rs:844", "selfhost/checker.ray:974"], "count": 2}
+{"text": "\"'main' must devolver int o unit, no {}\"", "en": "\"'main' must return int or unit, not {}\"", "sites": ["src/checker.rs:847"], "count": 1}
+{"text": "\"'@derive' solo se permite about struct o enum\"", "en": "\"'@derive' is only allowed on a struct or enum\"", "sites": ["src/checker.rs:900", "selfhost/checker.ray:3196"], "count": 2}
+{"text": "\"anotación desconocida: '@{}'\"", "en": "\"unknown annotation: '@{}'\"", "sites": ["src/checker.rs:901", "src/checker.rs:914"], "count": 2}
+{"text": "\"parámetro de type '{}' repetido en '{}'\"", "en": "\"type parameter '{}' repeated in '{}'\"", "sites": ["src/checker.rs:927", "src/checker.rs:1598"], "count": 2}
+{"text": "\"el bound '{}: {}' no acota a ningún parámetro de type de '{}'\"", "en": "\"the bound '{}: {}' does not constrain any type parameter of '{}'\"", "sites": ["src/checker.rs:954"], "count": 1}
+{"text": "\"trait '{}' no declarado (en el bound de '{}')\"", "en": "\"trait '{}' not declared (in the bound of '{}')\"", "sites": ["src/checker.rs:959"], "count": 1}
+{"text": "\"el bound '{}: {}' no acota a ningún parámetro de type del {} '{}'\"", "en": "\"the bound '{}: {}' does not constrain any type parameter of the {} '{}'\"", "sites": ["src/checker.rs:974"], "count": 1}
+{"text": "\"trait '{}' no declarado (en el bound del {} '{}')\"", "en": "\"trait '{}' not declared (in the bound of the {} '{}')\"", "sites": ["src/checker.rs:979"], "count": 1}
+{"text": "\"'{}' ya es un type; no can ser también un trait\"", "en": "\"'{}' is already a type; it cannot also be a trait\"", "sites": ["src/checker.rs:1006"], "count": 1}
+{"text": "\"trait '{}' declarado dos veces\"", "en": "\"trait '{}' declared twice\"", "sites": ["src/checker.rs:1009"], "count": 1}
+{"text": "\"método '{}' repetido en el trait '{}'\"", "en": "\"method '{}' repeated in trait '{}'\"", "sites": ["src/checker.rs:1014"], "count": 1}
+{"text": "\"trait '{}' no declarado\"", "en": "\"trait '{}' not declared\"", "sites": ["src/checker.rs:1025"], "count": 1}
+{"text": "\"el objetivo de impl validado no has clave de type\"", "en": "\"the validated impl target has no type key\"", "sites": ["src/checker.rs:1039"], "count": 1}
+{"text": "\"método '{}' implementado dos veces\"", "en": "\"method '{}' implemented twice\"", "sites": ["src/checker.rs:1061"], "count": 1}
+{"text": "\"el impl de '{}' para {} no implementa el método '{}'\"", "en": "\"the impl of '{}' for {} does not implement method '{}'\"", "sites": ["src/checker.rs:1069"], "count": 1}
+{"text": "\"el trait '{}' no declara un método '{}'\"", "en": "\"the trait '{}' does not declare a method '{}'\"", "sites": ["src/checker.rs:1085"], "count": 1}
+{"text": "\"método '{}' ambiguo para {}: ya hay un impl what lo provee\"", "en": "\"method '{}' ambiguous for {}: an impl already provides it\"", "sites": ["src/checker.rs:1092", "src/checker.rs:1105"], "count": 2}
+{"text": "\"el trait '{}' toma {} parámetro(s) de type, pero el impl pasa {}\"", "en": "\"the trait '{}' takes {} type parameter(s), but the impl passes {}\"", "sites": ["src/checker.rs:1127"], "count": 1}
+{"text": "\"el type de origen de 'From' no admite conversión\"", "en": "\"the source type of 'From' does not support conversion\"", "sites": ["src/checker.rs:1139"], "count": 1}
+{"text": "\"el impl de 'From' para {} no implementa el método 'convert'\"", "en": "\"the impl of 'From' for {} does not implement method 'convert'\"", "sites": ["src/checker.rs:1144"], "count": 1}
+{"text": "\"'convert' toma exactamente un parámetro (el valor de origen), sin 'self'\"", "en": "\"'convert' takes exactly one parameter (the source value), without 'self'\"", "sites": ["src/checker.rs:1148"], "count": 1}
+{"text": "\"el parámetro de 'convert' es {}, pero 'From<{}>' asks {}\"", "en": "\"the parameter of 'convert' is {}, but 'From<{}>' requires {}\"", "sites": ["src/checker.rs:1153"], "count": 1}
+{"text": "\"'convert' must devolver {} (el type target), no {}\"", "en": "\"'convert' must return {} (the target type), not {}\"", "sites": ["src/checker.rs:1158"], "count": 1}
+{"text": "\"el bound '{}: {}' menciona un parámetro de type what el impl no declara\"", "en": "\"the bound '{}: {}' mentions a type parameter the impl does not declare\"", "sites": ["src/checker.rs:1171"], "count": 1}
+{"text": "\"el bound '{}: {}' uses un trait no declarado\"", "en": "\"the bound '{}: {}' uses an undeclared trait\"", "sites": ["src/checker.rs:1176"], "count": 1}
+{"text": "\"un type primitivo no es genérico: no admite parámetros de type en el impl\"", "en": "\"a primitive type is not generic: it does not take type parameters in the impl\"", "sites": ["src/checker.rs:1194", "selfhost/checker.ray:3240"], "count": 2}
+{"text": "\"'{}' espera {} parámetro(s) de type, el impl declara {}\"", "en": "\"'{}' expects {} type parameter(s), the impl declares {}\"", "sites": ["src/checker.rs:1207", "src/checker.rs:1240"], "count": 2}
+{"text": "\"el impl de un type incorporado must aplicarse a sus propios parámetros de type distintos, p. ej. 'impl<T> ... for [T]' o 'impl<K, V> ... for Map<K, V>'\"", "en": "\"the impl of a built-in type must apply to its own distinct type parameters, e.g. 'impl<T> ... for [T]' or 'impl<K, V> ... for Map<K, V>'\"", "sites": ["src/checker.rs:1214"], "count": 1}
+{"text": "\"solo se can implementar un trait para un struct, enum o primitivo\"", "en": "\"a trait can only be implemented for a struct, enum or primitive\"", "sites": ["src/checker.rs:1220", "selfhost/checker.ray:3257"], "count": 2}
+{"text": "\"no se can implementar para un type unknown: '{}'\"", "en": "\"cannot implement for an unknown type: '{}'\"", "sites": ["src/checker.rs:1225"], "count": 1}
+{"text": "\"'{name}' es genérico: declara sus parámetros en el impl, p. ej. 'impl<T> ... for {name}<T>' (M9.2b)\"", "en": "\"'{name}' is generic: declare its parameters in the impl, e.g. 'impl<T> ... for {name}<T>' (M9.2b)\"", "sites": ["src/checker.rs:1232"], "count": 1}
+{"text": "\"el impl genérico must aplicarse a '{}<{}>' (sus propios parámetros de type, distintos)\"", "en": "\"the generic impl must apply to '{}<{}>' (its own distinct type parameters)\"", "sites": ["src/checker.rs:1248"], "count": 1}
+{"text": "\"el método '{}' toma {} parámetro(s) (incluido self), pero el trait asks {}\"", "en": "\"the method '{}' takes {} parameter(s) (including self), but the trait requires {}\"", "sites": ["src/checker.rs:1260"], "count": 1}
+{"text": "\"el parámetro {} del método '{}' es {}, pero el trait asks {}\"", "en": "\"the parameter {} of method '{}' is {}, but the trait requires {}\"", "sites": ["src/checker.rs:1273"], "count": 1}
+{"text": "\"el método '{}' returns {}, pero el trait asks {}\"", "en": "\"the method '{}' returns {}, but the trait requires {}\"", "sites": ["src/checker.rs:1282"], "count": 1}
+{"text": "\"{} no declara return_val (unit), pero su body produce {}\"", "en": "\"{} declares no return (unit), but its body produces {}\"", "sites": ["src/checker.rs:1330"], "count": 1}
+{"text": "\"{} declara devolver {}, pero su body produce {}\"", "en": "\"{} declares return type {}, but its body produces {}\"", "sites": ["src/checker.rs:1340"], "count": 1}
+{"text": "\"'{}' se declara como {} pero se inicializa con {}\"", "en": "\"'{}' is declared as {} but initialized with {}\"", "sites": ["src/checker.rs:1365"], "count": 1}
+{"text": "\"la desestructuración has {} names pero la tupla has {} elementos\"", "en": "\"the destructuring has {} names but the tuple has {} elements\"", "sites": ["src/checker.rs:1387"], "count": 1}
+{"text": "\"no se can desestructurar un {} (se esperaba one tupla)\"", "en": "\"cannot destructure a {} (expected a tuple)\"", "sites": ["src/checker.rs:1399"], "count": 1}
+{"text": "\"el range de un for must ser int..int, no {}..{}\"", "en": "\"a for range must be int..int, not {}..{}\"", "sites": ["src/checker.rs:1412"], "count": 1}
+{"text": "\"un range liga one sola variable (no one tupla)\"", "en": "\"a range binds a single variable (not a tuple)\"", "sites": ["src/checker.rs:1417"], "count": 1}
+{"text": "\"iterar un Map liga exactamente dos variables (clave, valor)\"", "en": "\"iterating a Map binds exactly two variables (key, value)\"", "sites": ["src/checker.rs:1428"], "count": 1}
+{"text": "\"iterar un Map requiere one tupla `(clave, valor)`\"", "en": "\"iterating a Map requires a `(key, value)` tuple\"", "sites": ["src/checker.rs:1436"], "count": 1}
+{"text": "\"no se can iterar about {} (se esperaba un array, string, Map o un Iterator)\"", "en": "\"cannot iterate over {} (expected an array, string, Map or an Iterator)\"", "sites": ["src/checker.rs:1444", "src/checker.rs:1462"], "count": 2}
+{"text": "\"el patrón de {} variables no casa con el elemento {} del iterador\"", "en": "\"the {}-variable pattern does not match the iterator element {}\"", "sites": ["src/checker.rs:1453"], "count": 1}
+{"text": "\"ForIter::Iter no existe durante el chequeo\"", "en": "\"ForIter::Iter does not exist during checking\"", "sites": ["src/checker.rs:1467"], "count": 1}
+{"text": "\"se returns {} pero la función declara return_val {}\"", "en": "\"returning {} but the function declares return type {}\"", "sites": ["src/checker.rs:1489"], "count": 1}
+{"text": "\"variable '{}' no declarada\"", "en": "\"variable '{}' not declared\"", "sites": ["src/checker.rs:1511"], "count": 1}
+{"text": "\"no se can asignar a '{}': es inmutable (declarada con 'let'; uses 'var')\"", "en": "\"cannot assign to '{}': it is immutable (declared with 'let'; use 'var')\"", "sites": ["src/checker.rs:1515"], "count": 1}
+{"text": "\"'{}' es {} pero se le asigna {}\"", "en": "\"'{}' is {} but is assigned {}\"", "sites": ["src/checker.rs:1523"], "count": 1}
+{"text": "\"no se can asignar a un carácter de un string (los strings son inmutables)\"", "en": "\"cannot assign to a character of a string (strings are immutable)\"", "sites": ["src/checker.rs:1533", "selfhost/checker.ray:1147"], "count": 2}
+{"text": "\"el elemento es {} pero se le asigna {}\"", "en": "\"the element is {} but is assigned {}\"", "sites": ["src/checker.rs:1538"], "count": 1}
+{"text": "\"one posición de tupla no es asignable ('.{name}'); desestructura la tupla o uses un array\"", "en": "\"a tuple position is not assignable ('.{name}'); destructure the tuple or use an array\"", "sites": ["src/checker.rs:1551"], "count": 1}
+{"text": "\"el campo '{}' es {} pero se le asigna {}\"", "en": "\"the field '{}' is {} but is assigned {}\"", "sites": ["src/checker.rs:1558"], "count": 1}
+{"text": "\"el lado izquierdo no es asignable\"", "en": "\"the left-hand side is not assignable\"", "sites": ["src/checker.rs:1562", "selfhost/checker.ray:1164"], "count": 2}
+{"text": "\"el índice must ser int, no {}\"", "en": "\"the index must be int, not {}\"", "sites": ["src/checker.rs:1572"], "count": 1}
+{"text": "\"no se can index un {} (no es un array, string ni bytes)\"", "en": "\"cannot index a {} (not an array, string or bytes)\"", "sites": ["src/checker.rs:1581"], "count": 1}
+{"text": "\"la clave de un Map must ser int/string/char/bool/bytes, no {}\"", "en": "\"a Map key must be int/string/char/bool/bytes, not {}\"", "sites": ["src/checker.rs:1616"], "count": 1}
+{"text": "\"Map espera 2 argumentos de type (clave y valor), no {}\"", "en": "\"Map expects 2 type arguments (key and value), not {}\"", "sites": ["src/checker.rs:1625"], "count": 1}
+{"text": "\"Channel espera 1 argumento de type, no {}\"", "en": "\"Channel expects 1 type argument, not {}\"", "sites": ["src/checker.rs:1636"], "count": 1}
+{"text": "\"Task espera 1 argumento de type, no {}\"", "en": "\"Task expects 1 type argument, not {}\"", "sites": ["src/checker.rs:1646"], "count": 1}
+{"text": "\"'Self' solo es válido inside de un trait o impl\"", "en": "\"'Self' is only valid inside a trait or impl\"", "sites": ["src/checker.rs:1654", "src/checker.rs:1684", "src/checker.rs:7466"], "count": 3}
+{"text": "\"el parámetro de type '{}' no recibe argumentos\"", "en": "\"the type parameter '{}' takes no arguments\"", "sites": ["src/checker.rs:1662"], "count": 1}
+{"text": "\"type unknown: '{}' no declarado\"", "en": "\"unknown type: '{}' not declared\"", "sites": ["src/checker.rs:1670"], "count": 1}
+{"text": "\"type unknown: enum '{}' no declarado\"", "en": "\"unknown type: enum '{}' not declared\"", "sites": ["src/checker.rs:1675"], "count": 1}
+{"text": "\"parámetro de type '{}' outside de ámbito\"", "en": "\"type parameter '{}' out of scope\"", "sites": ["src/checker.rs:1679"], "count": 1}
+{"text": "\"trait '{}' no declarado (en 'dyn {}')\"", "en": "\"trait '{}' not declared (in 'dyn {}')\"", "sites": ["src/checker.rs:1692"], "count": 1}
+{"text": "\"el método '{}' aparece en más de un trait de 'dyn {}': es ambiguo\"", "en": "\"the method '{}' appears in more than one trait of 'dyn {}': it is ambiguous\"", "sites": ["src/checker.rs:1697"], "count": 1}
+{"text": "\"'{}' espera {} argumento(s) de type, se le dieron {}\"", "en": "\"'{}' expects {} type argument(s), got {}\"", "sites": ["src/checker.rs:1718"], "count": 1}
+{"text": "\"struct '{}' no declarado\"", "en": "\"struct '{}' not declared\"", "sites": ["src/checker.rs:1793"], "count": 1}
+{"text": "\"'{}' no has un campo '{}'\"", "en": "\"'{}' has no field '{}'\"", "sites": ["src/checker.rs:1804"], "count": 1}
+{"text": "\"falta el campo '{}' en el literal de '{}'\"", "en": "\"missing field '{}' in the literal of '{}'\"", "sites": ["src/checker.rs:1820"], "count": 1}
+{"text": "\"campo '{}' de '{}': {}\"", "en": "\"field '{}' of '{}': {}\"", "sites": ["src/checker.rs:1824"], "count": 1}
+{"text": "\"campo '{}' de '{}' repetido\"", "en": "\"field '{}' of '{}' repeated\"", "sites": ["src/checker.rs:1827"], "count": 1}
+{"text": "\"el struct '{}'\"", "en": "\"the struct '{}'\"", "sites": ["src/checker.rs:1830"], "count": 1}
+{"text": "\"'{}' requiere what '{}' sea '{}', pero {} no lo implementa\"", "en": "\"'{}' requires that '{}' be '{}', but {} does not implement it\"", "sites": ["src/checker.rs:1848"], "count": 1}
+{"text": "\"el enum '{}' no has la variant '{}'\"", "en": "\"the enum '{}' has no variant '{}'\"", "sites": ["src/checker.rs:1862", "src/checker.rs:2144"], "count": 2}
+{"text": "\"enum '{}' no declarado\"", "en": "\"enum '{}' not declared\"", "sites": ["src/checker.rs:1864"], "count": 1}
+{"text": "\"la variant '{}.{}' espera {} argumento(s), se dieron {}\"", "en": "\"the variant '{}.{}' expects {} argument(s), got {}\"", "sites": ["src/checker.rs:1884"], "count": 1}
+{"text": "\"la variant '{}.{}'\"", "en": "\"the variant '{}.{}'\"", "sites": ["src/checker.rs:1902"], "count": 1}
+{"text": "\"no se pudo inferir el parámetro de type '{}' de {}; anota el type\"", "en": "\"could not infer the type parameter '{}' of {}; annotate the type\"", "sites": ["src/checker.rs:1929"], "count": 1}
+{"text": "\"match requiere un enum, pero el escrutinio es {}\"", "en": "\"match requires an enum, but the scrutinee is {}\"", "sites": ["src/checker.rs:1946"], "count": 1}
+{"text": "\"un match no can estar vacío\"", "en": "\"a match cannot be empty\"", "sites": ["src/checker.rs:1950", "selfhost/checker.ray:2758"], "count": 2}
+{"text": "\"el enum '{}' no está en la tabla del checker\"", "en": "\"the enum '{}' is not in the checker table\"", "sites": ["src/checker.rs:1954", "src/checker.rs:2140"], "count": 2}
+{"text": "\"branch inalcanzable: un branch anterior ya cubre all los cases\"", "en": "\"unreachable arm: a previous arm already covers all cases\"", "sites": ["src/checker.rs:1964", "selfhost/checker.ray:2770"], "count": 2}
+{"text": "\"la keeps de un branch del match must ser de type bool\"", "en": "\"a match arm guard must be of type bool\"", "sites": ["src/checker.rs:1989"], "count": 1}
+{"text": "\"los brazos del match producen types distintos: {} y {}\"", "en": "\"the match arms produce different types: {} and {}\"", "sites": ["src/checker.rs:2003"], "count": 1}
+{"text": "\"match no exhaustive en '{}': faltan las variantes: {}\"", "en": "\"non-exhaustive match on '{}': missing variants: {}\"", "sites": ["src/checker.rs:2019"], "count": 1}
+{"text": "\"'?' about {} requiere what la función devuelva Result<_, {}>, pero returns {}\"", "en": "\"'?' on {} requires the function to return Result<_, {}>, but it returns {}\"", "sites": ["src/checker.rs:2054", "src/checker.rs:2060"], "count": 2}
+{"text": "\"'?' about {} requiere what la función devuelva Option<_>, pero returns {}\"", "en": "\"'?' on {} requires the function to return Option<_>, but it returns {}\"", "sites": ["src/checker.rs:2070"], "count": 1}
+{"text": "\"'?' requiere un Result o un Option, no {}\"", "en": "\"'?' requires a Result or an Option, not {}\"", "sites": ["src/checker.rs:2076"], "count": 1}
+{"text": "\"Option con 1 arg pero sin elemento\"", "en": "\"Option with 1 arg but no element\"", "sites": ["src/checker.rs:2106"], "count": 1}
+{"text": "\"el patrón es del enum '{}', pero aquí el valor es {}\"", "en": "\"the pattern is of enum '{}', but the value here is {}\"", "sites": ["src/checker.rs:2130"], "count": 1}
+{"text": "\"el patrón es del enum '{}', pero el escrutinio es '{}'\"", "en": "\"the pattern is of enum '{}', but the scrutinee is '{}'\"", "sites": ["src/checker.rs:2136"], "count": 1}
+{"text": "\"el patrón '{}.{}' liga {} valor(es), pero la variant has {}\"", "en": "\"the pattern '{}.{}' binds {} value(s), but the variant has {}\"", "sites": ["src/checker.rs:2149"], "count": 1}
+{"text": "\"el patrón de struct '{}' no casa: aquí el valor es {}\"", "en": "\"the struct pattern '{}' does not match: the value here is {}\"", "sites": ["src/checker.rs:2181"], "count": 1}
+{"text": "\"el patrón es del struct '{}', pero aquí el valor es del struct '{}'\"", "en": "\"the pattern is of struct '{}', but the value here is of struct '{}'\"", "sites": ["src/checker.rs:2186"], "count": 1}
+{"text": "\"el struct '{}' no está en la tabla del checker\"", "en": "\"the struct '{}' is not in the checker table\"", "sites": ["src/checker.rs:2190", "src/checker.rs:2266"], "count": 2}
+{"text": "\"el struct '{}' no has un campo '{}'\"", "en": "\"the struct '{}' has no field '{}'\"", "sites": ["src/checker.rs:2199", "src/checker.rs:2269"], "count": 2}
+{"text": "\"la variant '{}' ya está cubierta por un branch anterior\"", "en": "\"the variant '{}' is already covered by a previous arm\"", "sites": ["src/checker.rs:2229"], "count": 1}
+{"text": "\"no se can acceder a '.{}' en one tupla (uses un índice como .0)\"", "en": "\"cannot access '.{}' on a tuple (use an index like .0)\"", "sites": ["src/checker.rs:2257"], "count": 1}
+{"text": "\"la tupla has {} elementos; el índice .{} está outside de range\"", "en": "\"the tuple has {} elements; index .{} is out of range\"", "sites": ["src/checker.rs:2260"], "count": 1}
+{"text": "\"no se can acceder a '.{}' en un {} (no es un struct)\"", "en": "\"cannot access '.{}' on a {} (not a struct)\"", "sites": ["src/checker.rs:2279"], "count": 1}
+{"text": "\"callee garantizado Ident por la keeps del match\"", "en": "\"callee guaranteed Ident by the match guard\"", "sites": ["src/checker.rs:2338"], "count": 1}
+{"text": "\"los elementos del array deben ser {}, no {}\"", "en": "\"the array elements must be {}, not {}\"", "sites": ["src/checker.rs:2364"], "count": 1}
+{"text": "\"las keys del Map deben ser {}, no {}\"", "en": "\"the Map keys must be {}, not {}\"", "sites": ["src/checker.rs:2382"], "count": 1}
+{"text": "\"los values del Map deben ser {}, no {}\"", "en": "\"the Map values must be {}, not {}\"", "sites": ["src/checker.rs:2387"], "count": 1}
+{"text": "\"la condición del if must ser bool, no {}\"", "en": "\"the if condition must be bool, not {}\"", "sites": ["src/checker.rs:2397", "src/checker.rs:2685"], "count": 2}
+{"text": "\"un if sin else has type unit, pero su rama produce {} (añade un else)\"", "en": "\"an if without else has type unit, but its branch produces {} (add an else)\"", "sites": ["src/checker.rs:2404", "src/checker.rs:2694"], "count": 2}
+{"text": "\"las ramas del if tienen types distintos: {} y {}\"", "en": "\"the if branches have different types: {} and {}\"", "sites": ["src/checker.rs:2420", "src/checker.rs:2712"], "count": 2}
+{"text": "\"no se can convertir 'dyn {}' en 'dyn {}': solo se can upcastear a un subconjunto de traits\"", "en": "\"cannot convert 'dyn {}' into 'dyn {}': can only upcast to a subset of traits\"", "sites": ["src/checker.rs:2449"], "count": 1}
+{"text": "\"no se can convertir {} en 'dyn {}'\"", "en": "\"cannot convert {} into 'dyn {}'\"", "sites": ["src/checker.rs:2454"], "count": 1}
+{"text": "\"{} no implementa '{}': no can usarse como 'dyn {}'\"", "en": "\"{} does not implement '{}': it cannot be used as 'dyn {}'\"", "sites": ["src/checker.rs:2460"], "count": 1}
+{"text": "\"no se can usar la función genérica '{}' como valor; llámala directamente\"", "en": "\"cannot use the generic function '{}' as a value; call it directly\"", "sites": ["src/checker.rs:2531"], "count": 1}
+{"text": "\"name '{}' no declarado\"", "en": "\"name '{}' not declared\"", "sites": ["src/checker.rs:2539"], "count": 1}
+{"text": "\"no se can negar (-) un {}\"", "en": "\"cannot negate (-) a {}\"", "sites": ["src/checker.rs:2553"], "count": 1}
+{"text": "\"el '!' requiere bool, no {}\"", "en": "\"'!' requires bool, not {}\"", "sites": ["src/checker.rs:2556"], "count": 1}
+{"text": "\"el '~' requiere int, no {}\"", "en": "\"'~' requires int, not {}\"", "sites": ["src/checker.rs:2560"], "count": 1}
+{"text": "\"no se can inferir el type de [] aquí; anótalo (p. ej. let xs: [int] = [];)\"", "en": "\"cannot infer the type of [] here; annotate it (e.g. let xs: [int] = [];)\"", "sites": ["src/checker.rs:2571", "selfhost/checker.ray:2439"], "count": 2}
+{"text": "\"los elementos del array deben ser del same type: {} y {}\"", "en": "\"the array elements must be of the same type: {} and {}\"", "sites": ["src/checker.rs:2578"], "count": 1}
+{"text": "\"no se can inferir el type de [:] aquí; anótalo (p. ej. let m: Map<string, int> = [:];)\"", "en": "\"cannot infer the type of [:] here; annotate it (e.g. let m: Map<string, int> = [:];)\"", "sites": ["src/checker.rs:2591"], "count": 1}
+{"text": "\"las keys del Map deben ser del same type: {} y {}\"", "en": "\"the Map keys must be of the same type: {} and {}\"", "sites": ["src/checker.rs:2599"], "count": 1}
+{"text": "\"los values del Map deben ser del same type: {} y {}\"", "en": "\"the Map values must be of the same type: {} and {}\"", "sites": ["src/checker.rs:2604"], "count": 1}
+{"text": "\"no se can convertir {} a {} con 'as' (solo int↔float, char↔int y de/hacia u8/u32/u64)\"", "en": "\"cannot convert {} to {} with 'as' (only int↔float, char↔int and to/from u8/u32/u64)\"", "sites": ["src/checker.rs:2642"], "count": 1}
+{"text": "\"la función anónima\"", "en": "\"the anonymous function\"", "sites": ["src/checker.rs:2672", "selfhost/checker.ray:1208"], "count": 2}
+{"text": "\"la condición del while must ser bool, no {}\"", "en": "\"the while condition must be bool, not {}\"", "sites": ["src/checker.rs:2724"], "count": 1}
+{"text": "\"el operador '{}' requiere ambos operandos int o ambos float, no {} y {}\"", "en": "\"the operator '{}' requires both operands int or both float, not {} and {}\"", "sites": ["src/checker.rs:2783"], "count": 1}
+{"text": "\"el operador '{}' compara int/float/string/char del same type, no {} y {}\"", "en": "\"the operator '{}' compares int/float/string/char of the same type, not {} and {}\"", "sites": ["src/checker.rs:2796"], "count": 1}
+{"text": "\"el operador '{}' requiere ambos operandos del same type comparable, no {} y {}\"", "en": "\"the operator '{}' requires both operands of the same comparable type, not {} and {}\"", "sites": ["src/checker.rs:2806"], "count": 1}
+{"text": "\"el operador '{}' requiere operandos bool, no {} y {}\"", "en": "\"the operator '{}' requires bool operands, not {} and {}\"", "sites": ["src/checker.rs:2817"], "count": 1}
+{"text": "\"el operador '{}' requiere operandos int, no {} y {}\"", "en": "\"the operator '{}' requires int operands, not {} and {}\"", "sites": ["src/checker.rs:2829"], "count": 1}
+{"text": "\"el literal {} no cabe en u{}\"", "en": "\"the literal {} does not fit in u{}\"", "sites": ["src/checker.rs:2871"], "count": 1}
+{"text": "\"'{}.{}' espera {} argumento(s), se dieron {}\"", "en": "\"'{}.{}' expects {} argument(s), got {}\"", "sites": ["src/checker.rs:2912"], "count": 1}
+{"text": "\"el argumento de '{}.{}' must ser int, no {}\"", "en": "\"the argument of '{}.{}' must be int, not {}\"", "sites": ["src/checker.rs:2919"], "count": 1}
+{"text": "\"'{}.{}' produce un {}, pero aquí se espera {}\"", "en": "\"'{}.{}' produces a {}, but the context expects {}\"", "sites": ["src/checker.rs:2927"], "count": 1}
+{"text": "\"no se can inferir el type de '{}.{}'; anótalo, p. ej. '{}'\"", "en": "\"cannot infer the type of '{}.{}'; annotate it, e.g. '{}'\"", "sites": ["src/checker.rs:2935"], "count": 1}
+{"text": "\"no existe campo ni función '{}' aplicable a {}\"", "en": "\"no field or function '{}' applicable to {}\"", "sites": ["src/checker.rs:3183"], "count": 1}
+{"text": "\"función '{}' no declarada\"", "en": "\"function '{}' not declared\"", "sites": ["src/checker.rs:3280"], "count": 1}
+{"text": "\"la función\"", "en": "\"the function\"", "sites": ["src/checker.rs:3289", "selfhost/checker.ray:2300"], "count": 2}
+{"text": "\"no se can llamar un valor de type {} (no es one función)\"", "en": "\"cannot call a value of type {} (not a function)\"", "sites": ["src/checker.rs:3292"], "count": 1}
+{"text": "\"{} espera {} argumento(s), se le pasaron {}\"", "en": "\"{} expects {} argument(s), received {}\"", "sites": ["src/checker.rs:3320", "src/checker.rs:3356"], "count": 2}
+{"text": "\"argumento {} de {}: se esperaba {}, se pasó {}\"", "en": "\"argument {} of {}: expected {}, got {}\"", "sites": ["src/checker.rs:3330"], "count": 1}
+{"text": "\"argumento {} de {}: {}\"", "en": "\"argument {} of {}: {}\"", "sites": ["src/checker.rs:3365"], "count": 1}
+{"text": "\"no se pudo inferir el parámetro de type '{}' de {} (no aparece en los argumentos)\"", "en": "\"could not infer the type parameter '{}' of {} (it does not appear in the arguments)\"", "sites": ["src/checker.rs:3385"], "count": 1}
+{"text": "\"método '{}' ambiguo para '{}': lo declaran various traits acotados ({})\"", "en": "\"method '{}' ambiguous for '{}': several bounded traits declare it ({})\"", "sites": ["src/checker.rs:3412"], "count": 1}
+{"text": "\"el trait '{}' del bound no está registrado\"", "en": "\"the trait '{}' of the bound is not registered\"", "sites": ["src/checker.rs:3420"], "count": 1}
+{"text": "\"el método '{}' no está en el trait '{}'\"", "en": "\"the method '{}' is not in trait '{}'\"", "sites": ["src/checker.rs:3423"], "count": 1}
+{"text": "\"el método '{}' espera {} argumento(s) (sin count el receptor), se le pasaron {}\"", "en": "\"the method '{}' expects {} argument(s) (not counting the receiver), received {}\"", "sites": ["src/checker.rs:3432", "src/checker.rs:3478"], "count": 2}
+{"text": "\"argumento {} del método '{}': se esperaba {}, se pasó {}\"", "en": "\"argument {} of method '{}': expected {}, got {}\"", "sites": ["src/checker.rs:3440", "src/checker.rs:3486"], "count": 2}
+{"text": "\"'dyn {}' no declara un método '{}'\"", "en": "\"'dyn {}' does not declare a method '{}'\"", "sites": ["src/checker.rs:3462"], "count": 1}
+{"text": "\"el método '{}' uses 'Self': no es invocable about 'dyn {}'\"", "en": "\"the method '{}' uses 'Self': it is not callable on 'dyn {}'\"", "sites": ["src/checker.rs:3471"], "count": 1}
+{"text": "\"el parámetro de type '{}' no está bounded por '{}' (requerido por la llamada)\"", "en": "\"the type parameter '{}' is not bounded by '{}' (required by the call)\"", "sites": ["src/checker.rs:3530"], "count": 1}
+{"text": "\"{} no can implementar el trait '{}'\"", "en": "\"{} cannot implement the trait '{}'\"", "sites": ["src/checker.rs:3535"], "count": 1}
+{"text": "\"{} no implementa '{}' (requerido por la llamada)\"", "en": "\"{} does not implement '{}' (required by the call)\"", "sites": ["src/checker.rs:3539"], "count": 1}
+{"text": "\"el método no pertenece al trait (el impl se validó)\"", "en": "\"the method does not belong to the trait (the impl was validated)\"", "sites": ["src/checker.rs:3552"], "count": 1}
+{"text": "\"no hay ámbito activo al declarar one variable\"", "en": "\"no active scope when declaring a variable\"", "sites": ["src/checker.rs:3627"], "count": 1}
+{"text": "\"'{}' no can ser {} y {} a la vez\"", "en": "\"'{}' cannot be {} and {} at the same time\"", "sites": ["src/checker.rs:3838"], "count": 1}
+{"text": "\"se esperaba {}, se pasó {}\"", "en": "\"expected {}, got {}\"", "sites": ["src/checker.rs:3855", "src/checker.rs:3882"], "count": 2}
+{"text": "\"ident_name exige un Ident\"", "en": "\"ident_name requires an Ident\"", "sites": ["src/checker.rs:4079"], "count": 1}
+{"text": "\"validate_derive garantiza un trait conocido\"", "en": "\"validate_derive guarantees a known trait\"", "sites": ["src/checker.rs:4227", "src/checker.rs:4246"], "count": 2}
+{"text": "\"'@derive' requiere al menos un trait (p. ej. @derive(Eq))\"", "en": "\"'@derive' requires at least one trait (e.g. @derive(Eq))\"", "sites": ["src/checker.rs:4283", "selfhost/checker.ray:3144"], "count": 2}
+{"text": "\"no se sabe derivar '{}' (por ahora Eq, Show y Hash)\"", "en": "\"cannot derive '{}' (for now Eq, Show and Hash)\"", "sites": ["src/checker.rs:4287"], "count": 1}
+{"text": "\"no se can derivar para el type genérico '{}'\"", "en": "\"cannot derive for the generic type '{}'\"", "sites": ["src/checker.rs:4291"], "count": 1}
+{"text": "\"no se can derivar Show para un campo de type {} (por ahora primitivos, struct y enum)\"", "en": "\"cannot derive Show for a field of type {} (for now primitives, struct and enum)\"", "sites": ["src/checker.rs:4306"], "count": 1}
+{"text": "\"el impl derivado no lexea: {e}\"", "en": "\"the derived impl does not lex: {e}\"", "sites": ["src/checker.rs:4355"], "count": 1}
+{"text": "\"el impl derivado no parses: {e}\"", "en": "\"the derived impl does not parse: {e}\"", "sites": ["src/checker.rs:4356"], "count": 1}
+{"text": "\"el guard de sitio garantiza Call con callee Field\"", "en": "\"the site guard guarantees a Call with a Field callee\"", "sites": ["src/checker.rs:5244"], "count": 1}
+{"text": "\"el guard de sitio garantiza un Call\"", "en": "\"the site guard guarantees a Call\"", "sites": ["src/checker.rs:5247"], "count": 1}
+{"text": "\"el guard garantiza un Try\"", "en": "\"the guard guarantees a Try\"", "sites": ["src/checker.rs:5458"], "count": 1}
+{"text": "\"el guard de sitio garantiza Binary o Unary Neg\"", "en": "\"the site guard guarantees Binary or Unary Neg\"", "sites": ["src/checker.rs:5589"], "count": 1}
+{"text": "\"sitio de dispatch es un Call\"", "en": "\"a dispatch site is a Call\"", "sites": ["src/checker.rs:5993"], "count": 1}
+{"text": "\"el callee de un dispatch es un Field\"", "en": "\"the callee of a dispatch is a Field\"", "sites": ["src/checker.rs:5994"], "count": 1}
+{"text": "\"parámetros de type distintos\"", "en": "\"distinct type parameters\"", "sites": ["src/checker.rs:6232"], "count": 1}
+{"text": "\"espera 1 parámetro\"", "en": "\"expects 1 parameter\"", "sites": ["src/checker.rs:6232"], "count": 1}
+{"text": "\"'{name}' es un builtin del lenguaje\"", "en": "\"'{name}' is a language builtin\"", "sites": ["src/checker.rs:6241"], "count": 1}
+{"text": "\"'{name}' como función libre ahora must compilar\"", "en": "\"'{name}' as a free function must now compile\"", "sites": ["src/checker.rs:6248"], "count": 1}
+{"text": "\"no se can inferir el type de [:]\"", "en": "\"cannot infer the type of [:]\"", "sites": ["src/checker.rs:6265"], "count": 1}
+{"text": "\"las keys del Map deben ser del same type\"", "en": "\"the Map keys must be of the same type\"", "sites": ["src/checker.rs:6268"], "count": 1}
+{"text": "\"los values del Map deben ser del same type\"", "en": "\"the Map values must be of the same type\"", "sites": ["src/checker.rs:6270"], "count": 1}
+{"text": "\"clave de un Map\"", "en": "\"Map key\"", "sites": ["src/checker.rs:6273"], "count": 1}
+{"text": "\"no se can inferir el type de 'Map.new'\"", "en": "\"cannot infer the type of 'Map.new'\"", "sites": ["src/checker.rs:6286"], "count": 1}
+{"text": "\"espera 0 argumento(s)\"", "en": "\"expects 0 argument(s)\"", "sites": ["src/checker.rs:6289"], "count": 1}
+{"text": "\"produce un Map\"", "en": "\"produces a Map\"", "sites": ["src/checker.rs:6295"], "count": 1}
+{"text": "\"one posición de tupla no es asignable\"", "en": "\"a tuple position is not assignable\"", "sites": ["src/checker.rs:6336"], "count": 1}
+{"text": "\"declarada dos veces\"", "en": "\"declared twice\"", "sites": ["src/checker.rs:6367", "src/checker.rs:6553"], "count": 2}
+{"text": "\"requiere ambos operandos\"", "en": "\"requires both operands\"", "sites": ["src/checker.rs:6381", "src/checker.rs:6449", "src/checker.rs:6450"], "count": 3}
+{"text": "\"se esperaba int\"", "en": "\"expected int\"", "sites": ["src/checker.rs:6385", "src/checker.rs:6596"], "count": 2}
+{"text": "\"trait 'NoExiste' no declarado\"", "en": "\"trait 'NoExiste' not declared\"", "sites": ["src/checker.rs:6426", "src/checker.rs:7338", "src/checker.rs:7546", "src/checker.rs:7644"], "count": 4}
+{"text": "\"condición del if must ser bool\"", "en": "\"if condition must be bool\"", "sites": ["src/checker.rs:6455", "src/checker.rs:7208"], "count": 2}
+{"text": "\"condición del while must ser bool\"", "en": "\"while condition must be bool\"", "sites": ["src/checker.rs:6456"], "count": 1}
+{"text": "\"ramas del if tienen types distintos\"", "en": "\"if branches have different types\"", "sites": ["src/checker.rs:6463"], "count": 1}
+{"text": "\"sin else has type unit\"", "en": "\"without else has type unit\"", "sites": ["src/checker.rs:6469"], "count": 1}
+{"text": "\"es inmutable\"", "en": "\"it is immutable\"", "sites": ["src/checker.rs:6476", "src/checker.rs:6680"], "count": 2}
+{"text": "\"no declarado\"", "en": "\"not declared\"", "sites": ["src/checker.rs:6483", "src/checker.rs:6595", "src/checker.rs:6760"], "count": 3}
+{"text": "\"no declarada\"", "en": "\"not declared\"", "sites": ["src/checker.rs:6484", "src/checker.rs:6521"], "count": 2}
+{"text": "\"se inicializa con bool\"", "en": "\"initialized with bool\"", "sites": ["src/checker.rs:6489", "src/checker.rs:7245"], "count": 2}
+{"text": "\"se returns bool\"", "en": "\"returning bool\"", "sites": ["src/checker.rs:6495"], "count": 1}
+{"text": "\"espera 2 argumento\"", "en": "\"expects 2 argument\"", "sites": ["src/checker.rs:6515"], "count": 1}
+{"text": "\"se esperaba int, se pasó bool\"", "en": "\"expected int, got bool\"", "sites": ["src/checker.rs:6519", "src/checker.rs:6644", "src/checker.rs:6731", "src/checker.rs:7112"], "count": 4}
+{"text": "\"espera 1 argumento\"", "en": "\"expects 1 argument\"", "sites": ["src/checker.rs:6527", "src/checker.rs:6528", "src/checker.rs:6639", "src/checker.rs:6726"], "count": 4}
+{"text": "\"no must recibir parámetros\"", "en": "\"must not take parameters\"", "sites": ["src/checker.rs:6534", "src/checker.rs:7671"], "count": 2}
+{"text": "\"must devolver int o unit\"", "en": "\"must return int or unit\"", "sites": ["src/checker.rs:6535"], "count": 1}
+{"text": "\"deben ser int\"", "en": "\"must be int\"", "sites": ["src/checker.rs:6569"], "count": 1}
+{"text": "\"índice must ser int\"", "en": "\"index must be int\"", "sites": ["src/checker.rs:6570"], "count": 1}
+{"text": "\"no es un array\"", "en": "\"not an array\"", "sites": ["src/checker.rs:6571"], "count": 1}
+{"text": "\"no se can inferir\"", "en": "\"cannot infer\"", "sites": ["src/checker.rs:6572", "src/repl.rs:395"], "count": 2}
+{"text": "\"se le asigna bool\"", "en": "\"is assigned bool\"", "sites": ["src/checker.rs:6573"], "count": 1}
+{"text": "\"no existe campo ni función 'len' aplicable a int\"", "en": "\"no field or function 'len' applicable to int\"", "sites": ["src/checker.rs:6574"], "count": 1}
+{"text": "\"'T' no can ser int y bool a la vez\"", "en": "\"'T' cannot be int and bool at the same time\"", "sites": ["src/checker.rs:6575"], "count": 1}
+{"text": "\"falta el campo\"", "en": "\"missing field\"", "sites": ["src/checker.rs:6597"], "count": 1}
+{"text": "\"no has un campo\"", "en": "\"has no field\"", "sites": ["src/checker.rs:6598", "src/checker.rs:6599"], "count": 2}
+{"text": "\"no es un struct\"", "en": "\"not a struct\"", "sites": ["src/checker.rs:6600"], "count": 1}
+{"text": "\"declarado dos veces\"", "en": "\"declared twice\"", "sites": ["src/checker.rs:6601", "src/checker.rs:6754"], "count": 2}
+{"text": "\"se inicializa con\"", "en": "\"initialized with\"", "sites": ["src/checker.rs:6634"], "count": 1}
+{"text": "\"no es one función\"", "en": "\"not a function\"", "sites": ["src/checker.rs:6647"], "count": 1}
+{"text": "\"no has la variant 'C'\"", "en": "\"has no variant 'C'\"", "sites": ["src/checker.rs:6721"], "count": 1}
+{"text": "\"no can ser también un struct\"", "en": "\"cannot also be a struct\"", "sites": ["src/checker.rs:6744"], "count": 1}
+{"text": "\"no exhaustive\"", "en": "\"non-exhaustive\"", "sites": ["src/checker.rs:6790"], "count": 1}
+{"text": "\"ya está cubierta\"", "en": "\"is already covered\"", "sites": ["src/checker.rs:6806"], "count": 1}
+{"text": "\"liga 0 valor(es), pero la variant has 1\"", "en": "\"binds 0 value(s), but the variant has 1\"", "sites": ["src/checker.rs:6822"], "count": 1}
+{"text": "\"match requiere un enum\"", "en": "\"match requires an enum\"", "sites": ["src/checker.rs:6830"], "count": 1}
+{"text": "\"es del enum 'F'\"", "en": "\"is of enum 'F'\"", "sites": ["src/checker.rs:6838"], "count": 1}
+{"text": "\"no can ser int y bool\"", "en": "\"cannot be int and bool\"", "sites": ["src/checker.rs:6879", "src/checker.rs:7166"], "count": 2}
+{"text": "\"no se pudo inferir el parámetro de type 'T'\"", "en": "\"could not infer the type parameter 'T'\"", "sites": ["src/checker.rs:6887"], "count": 1}
+{"text": "\"función genérica 'id' como valor\"", "en": "\"generic function 'id' as a value\"", "sites": ["src/checker.rs:6895"], "count": 1}
+{"text": "\"parámetro de type 'T' repetido\"", "en": "\"type parameter 'T' repeated\"", "sites": ["src/checker.rs:6909", "src/checker.rs:6974"], "count": 2}
+{"text": "\"'Desconocido' no declarado\"", "en": "\"'Desconocido' not declared\"", "sites": ["src/checker.rs:6914"], "count": 1}
+{"text": "\"no can ser bool y int\"", "en": "\"cannot be bool and int\"", "sites": ["src/checker.rs:6951"], "count": 1}
+{"text": "\"espera 1 argumento(s) de type\"", "en": "\"expects 1 type argument(s)\"", "sites": ["src/checker.rs:6959"], "count": 1}
+{"text": "\"no se pudo inferir\"", "en": "\"could not infer\"", "sites": ["src/checker.rs:6968"], "count": 1}
+{"text": "\"requiere un Result o un Option\"", "en": "\"requires a Result or an Option\"", "sites": ["src/checker.rs:7020"], "count": 1}
+{"text": "\"requiere what la función devuelva Result\"", "en": "\"requires the function to return Result\"", "sites": ["src/checker.rs:7028"], "count": 1}
+{"text": "\"no existe campo ni función 'frobnicate' aplicable a int\"", "en": "\"no field or function 'frobnicate' applicable to int\"", "sites": ["src/checker.rs:7103"], "count": 1}
+{"text": "\"es int pero se le asigna bool\"", "en": "\"is int but is assigned bool\"", "sites": ["src/checker.rs:7218"], "count": 1}
+{"text": "\"no se can inferir el type de []\"", "en": "\"cannot infer the type of []\"", "sites": ["src/checker.rs:7236"], "count": 1}
+{"text": "\"no implementa el método 'b'\"", "en": "\"does not implement method 'b'\"", "sites": ["src/checker.rs:7304"], "count": 1}
+{"text": "\"returns bool, pero el trait asks int\"", "en": "\"returns bool, but the trait requires int\"", "sites": ["src/checker.rs:7315"], "count": 1}
+{"text": "\"es genérico: declara sus parámetros en el impl\"", "en": "\"is generic: declare its parameters in the impl\"", "sites": ["src/checker.rs:7351"], "count": 1}
+{"text": "\"no existe campo ni función\"", "en": "\"no field or function\"", "sites": ["src/checker.rs:7475"], "count": 1}
+{"text": "\"Punto no implementa 'Valor'\"", "en": "\"Punto does not implement 'Valor'\"", "sites": ["src/checker.rs:7517"], "count": 1}
+{"text": "\"no existe campo ni función 'other'\"", "en": "\"no field or function 'other'\"", "sites": ["src/checker.rs:7527"], "count": 1}
+{"text": "\"no está bounded por 'Valor'\"", "en": "\"is not bounded by 'Valor'\"", "sites": ["src/checker.rs:7538"], "count": 1}
+{"text": "\"no implementa el método 'req'\"", "en": "\"does not implement method 'req'\"", "sites": ["src/checker.rs:7578"], "count": 1}
+{"text": "\"no implementa 'Figura'\"", "en": "\"does not implement 'Figura'\"", "sites": ["src/checker.rs:7624"], "count": 1}
+{"text": "\"uses 'Self': no es invocable about 'dyn Clon'\"", "en": "\"uses 'Self': it is not callable on 'dyn Clon'\"", "sites": ["src/checker.rs:7636"], "count": 1}
+{"text": "\"must devolver bool\"", "en": "\"must return bool\"", "sites": ["src/checker.rs:7663"], "count": 1}
+{"text": "\"anotación desconocida: '@magia'\"", "en": "\"unknown annotation: '@magia'\"", "sites": ["src/checker.rs:7679"], "count": 1}
+{"text": "\"no se sabe derivar 'Ord'\"", "en": "\"cannot derive 'Ord'\"", "sites": ["src/checker.rs:7723"], "count": 1}
+{"text": "\"no se can derivar Show para un campo de type [int]\"", "en": "\"cannot derive Show for a field of type [int]\"", "sites": ["src/checker.rs:7765"], "count": 1}
+{"text": "\"error de types en\"", "en": "\"type error at\"", "sites": ["tests/selfhost_checker.rs:80", "tests/selfhost_checker.rs:81"], "count": 2}
+{"text": "\"error de types en \"", "en": "\"type error at \"", "sites": ["selfhost/check_dump.ray:35", "selfhost/run.ray:94", "selfhost/run_vm.ray:88"], "count": 3}
+{"text": "\"Map espera 2 argumentos de type (clave y valor), no \"", "en": "\"Map expects 2 type arguments (key and value), not \"", "sites": ["selfhost/checker.ray:339"], "count": 1}
+{"text": "\"la clave de un Map must ser int/string/char/bool, no \"", "en": "\"a Map key must be int/string/char/bool, not \"", "sites": ["selfhost/checker.ray:342"], "count": 1}
+{"text": "\"el parámetro de type '\"", "en": "\"the type parameter '\"", "sites": ["selfhost/checker.ray:350", "selfhost/checker.ray:1904"], "count": 2}
+{"text": "\"' no recibe argumentos\"", "en": "\"' takes no arguments\"", "sites": ["selfhost/checker.ray:350"], "count": 1}
+{"text": "\" argumento(s) de type, se le dieron \"", "en": "\" type argument(s), got \"", "sites": ["selfhost/checker.ray:358"], "count": 1}
+{"text": "\"' no declarado\"", "en": "\"' not declared\"", "sites": ["selfhost/checker.ray:367", "selfhost/checker.ray:1309", "selfhost/checker.ray:2614", "selfhost/checker.ray:2696", "selfhost/checker.ray:3010"], "count": 5}
+{"text": "\"' no declarado (en 'dyn \"", "en": "\"' not declared (in 'dyn \"", "sites": ["selfhost/checker.ray:380"], "count": 1}
+{"text": "\"el método '\"", "en": "\"the method '\"", "sites": ["selfhost/checker.ray:386", "selfhost/checker.ray:1478", "selfhost/checker.ray:1598", "selfhost/checker.ray:1608", "selfhost/checker.ray:3295", "selfhost/checker.ray:3309"], "count": 6}
+{"text": "\"' aparece en más de un trait de 'dyn \"", "en": "\"' appears in more than one trait of 'dyn \"", "sites": ["selfhost/checker.ray:386"], "count": 1}
+{"text": "\"': es ambiguo\"", "en": "\"': it is ambiguous\"", "sites": ["selfhost/checker.ray:386"], "count": 1}
+{"text": "\"' no can ser \"", "en": "\"' cannot be \"", "sites": ["selfhost/checker.ray:525"], "count": 1}
+{"text": "\" a la vez\"", "en": "\" at the same time\"", "sites": ["selfhost/checker.ray:525"], "count": 1}
+{"text": "\", se pasó \"", "en": "\", got \"", "sites": ["selfhost/checker.ray:540", "selfhost/checker.ray:543", "selfhost/checker.ray:550", "selfhost/checker.ray:557", "selfhost/checker.ray:563", "selfhost/checker.ray:568", "selfhost/checker.ray:1484", "selfhost/checker.ray:1614", "selfhost/checker.ray:2331"], "count": 9}
+{"text": "\"' declarado dos veces\"", "en": "\"' declared twice\"", "sites": ["selfhost/checker.ray:848", "selfhost/checker.ray:880", "selfhost/checker.ray:2982"], "count": 3}
+{"text": "\"' repetida en el enum '\"", "en": "\"' repeated in enum '\"", "sites": ["selfhost/checker.ray:856"], "count": 1}
+{"text": "\"' ya es un enum; no can ser también un struct\"", "en": "\"' is already an enum; it cannot also be a struct\"", "sites": ["selfhost/checker.ray:877"], "count": 1}
+{"text": "\"función '\"", "en": "\"function '\"", "sites": ["selfhost/checker.ray:952", "selfhost/checker.ray:1843"], "count": 2}
+{"text": "\"' declarada dos veces\"", "en": "\"' declared twice\"", "sites": ["selfhost/checker.ray:952"], "count": 1}
+{"text": "\"'main' must devolver int o unit, no \"", "en": "\"'main' must return int or unit, not \"", "sites": ["selfhost/checker.ray:977"], "count": 1}
+{"text": "\"el bound '\"", "en": "\"the bound '\"", "sites": ["selfhost/checker.ray:1016", "selfhost/checker.ray:3084", "selfhost/checker.ray:3087"], "count": 3}
+{"text": "\"' no acota a ningún parámetro de type de '\"", "en": "\"' does not constrain any type parameter of '\"", "sites": ["selfhost/checker.ray:1016"], "count": 1}
+{"text": "\"' no declarado (en el bound de '\"", "en": "\"' not declared (in the bound of '\"", "sites": ["selfhost/checker.ray:1019"], "count": 1}
+{"text": "\"parámetro de type '\"", "en": "\"type parameter '\"", "sites": ["selfhost/checker.ray:1033"], "count": 1}
+{"text": "\"' repetido en '\"", "en": "\"' repeated in '\"", "sites": ["selfhost/checker.ray:1033"], "count": 1}
+{"text": "\" no declara return_val (unit), pero su body produce \"", "en": "\" declares no return (unit), but its body produces \"", "sites": ["selfhost/checker.ray:1069"], "count": 1}
+{"text": "\" declara devolver \"", "en": "\" declares return type \"", "sites": ["selfhost/checker.ray:1075"], "count": 1}
+{"text": "\", pero su body produce \"", "en": "\", but its body produces \"", "sites": ["selfhost/checker.ray:1075"], "count": 1}
+{"text": "\"' se declara como \"", "en": "\"' is declared as \"", "sites": ["selfhost/checker.ray:1092"], "count": 1}
+{"text": "\" pero se inicializa con \"", "en": "\" but initialized with \"", "sites": ["selfhost/checker.ray:1092"], "count": 1}
+{"text": "\"se returns \"", "en": "\"returning \"", "sites": ["selfhost/checker.ray:1113"], "count": 1}
+{"text": "\" pero la función declara return_val \"", "en": "\" but the function declares return type \"", "sites": ["selfhost/checker.ray:1113"], "count": 1}
+{"text": "\"' no declarada\"", "en": "\"' not declared\"", "sites": ["selfhost/checker.ray:1130", "selfhost/checker.ray:1843"], "count": 2}
+{"text": "\"no se can asignar a '\"", "en": "\"cannot assign to '\"", "sites": ["selfhost/checker.ray:1133"], "count": 1}
+{"text": "\"': es inmutable (declarada con 'let'; uses 'var')\"", "en": "\"': it is immutable (declared with 'let'; use 'var')\"", "sites": ["selfhost/checker.ray:1133"], "count": 1}
+{"text": "\" pero se le asigna \"", "en": "\" but is assigned \"", "sites": ["selfhost/checker.ray:1137", "selfhost/checker.ray:1152", "selfhost/checker.ray:1160"], "count": 3}
+{"text": "\"el elemento es \"", "en": "\"the element is \"", "sites": ["selfhost/checker.ray:1152"], "count": 1}
+{"text": "\"el campo '\"", "en": "\"the field '\"", "sites": ["selfhost/checker.ray:1160"], "count": 1}
+{"text": "\"expresión aún no soportada por el checker auto-alojado\"", "en": "\"expression not yet supported by the self-hosted checker\"", "sites": ["selfhost/checker.ray:1192"], "count": 1}
+{"text": "\" requiere what la función devuelva Result<_, \"", "en": "\" requires the function to return Result<_, \"", "sites": ["selfhost/checker.ray:1235", "selfhost/checker.ray:1238"], "count": 2}
+{"text": "\">, pero returns \"", "en": "\">, but it returns \"", "sites": ["selfhost/checker.ray:1235", "selfhost/checker.ray:1238"], "count": 2}
+{"text": "\" requiere what la función devuelva Option<_>, pero returns \"", "en": "\" requires the function to return Option<_>, but it returns \"", "sites": ["selfhost/checker.ray:1247", "selfhost/checker.ray:1250"], "count": 2}
+{"text": "\"'?' requiere un Result o un Option, no \"", "en": "\"'?' requires a Result or an Option, not \"", "sites": ["selfhost/checker.ray:1253", "selfhost/checker.ray:1256"], "count": 2}
+{"text": "\"los elementos del array deben ser \"", "en": "\"the array elements must be \"", "sites": ["selfhost/checker.ray:1284"], "count": 1}
+{"text": "\"no se can negar (-) un \"", "en": "\"cannot negate (-) a \"", "sites": ["selfhost/checker.ray:1319"], "count": 1}
+{"text": "\"el '!' requiere bool, no \"", "en": "\"'!' requires bool, not \"", "sites": ["selfhost/checker.ray:1322"], "count": 1}
+{"text": "\"el operador '\"", "en": "\"the operator '\"", "sites": ["selfhost/checker.ray:1333", "selfhost/checker.ray:1337", "selfhost/checker.ray:1341", "selfhost/checker.ray:1345"], "count": 4}
+{"text": "\"' requiere ambos operandos int o ambos float, no \"", "en": "\"' requires both operands int or both float, not \"", "sites": ["selfhost/checker.ray:1333"], "count": 1}
+{"text": "\"' compara int/float/string/char del same type, no \"", "en": "\"' compares int/float/string/char of the same type, not \"", "sites": ["selfhost/checker.ray:1337"], "count": 1}
+{"text": "\"' requiere ambos operandos del same type comparable, no \"", "en": "\"' requires both operands of the same comparable type, not \"", "sites": ["selfhost/checker.ray:1341"], "count": 1}
+{"text": "\"' requiere operandos bool, no \"", "en": "\"' requires bool operands, not \"", "sites": ["selfhost/checker.ray:1345"], "count": 1}
+{"text": "\"método '\"", "en": "\"method '\"", "sites": ["selfhost/checker.ray:1460", "selfhost/checker.ray:1467", "selfhost/checker.ray:2989", "selfhost/checker.ray:3025", "selfhost/checker.ray:3051", "selfhost/checker.ray:3065"], "count": 6}
+{"text": "\"' ambiguo para '\"", "en": "\"' ambiguous for '\"", "sites": ["selfhost/checker.ray:1460"], "count": 1}
+{"text": "\" argumento(s) (sin count el receptor), se le pasaron \"", "en": "\" argument(s) (not counting the receiver), received \"", "sites": ["selfhost/checker.ray:1478", "selfhost/checker.ray:1608"], "count": 2}
+{"text": "\"argumento \"", "en": "\"argument \"", "sites": ["selfhost/checker.ray:1484", "selfhost/checker.ray:1614", "selfhost/checker.ray:1861", "selfhost/checker.ray:2331"], "count": 4}
+{"text": "\" del método '\"", "en": "\" of method '\"", "sites": ["selfhost/checker.ray:1484", "selfhost/checker.ray:1614", "selfhost/checker.ray:3302"], "count": 3}
+{"text": "\"no se can convertir 'dyn \"", "en": "\"cannot convert 'dyn \"", "sites": ["selfhost/checker.ray:1567"], "count": 1}
+{"text": "\"' en 'dyn \"", "en": "\"' into 'dyn \"", "sites": ["selfhost/checker.ray:1567"], "count": 1}
+{"text": "\"': solo se can upcastear a un subconjunto de traits\"", "en": "\"': can only upcast to a subset of traits\"", "sites": ["selfhost/checker.ray:1567"], "count": 1}
+{"text": "\"no se can convertir \"", "en": "\"cannot convert \"", "sites": ["selfhost/checker.ray:1572"], "count": 1}
+{"text": "\" en 'dyn \"", "en": "\" into 'dyn \"", "sites": ["selfhost/checker.ray:1572"], "count": 1}
+{"text": "\" no implementa '\"", "en": "\" does not implement '\"", "sites": ["selfhost/checker.ray:1577", "selfhost/checker.ray:1906", "selfhost/checker.ray:1911"], "count": 3}
+{"text": "\"': no can usarse como 'dyn \"", "en": "\"': it cannot be used as 'dyn \"", "sites": ["selfhost/checker.ray:1577"], "count": 1}
+{"text": "\"' no declara un método '\"", "en": "\"' does not declare a method '\"", "sites": ["selfhost/checker.ray:1593", "selfhost/checker.ray:3045"], "count": 2}
+{"text": "\"' uses 'Self': no es invocable about 'dyn \"", "en": "\"' uses 'Self': it is not callable on 'dyn \"", "sites": ["selfhost/checker.ray:1598"], "count": 1}
+{"text": "\"no existe campo ni función '\"", "en": "\"no field or function '\"", "sites": ["selfhost/checker.ray:1691"], "count": 1}
+{"text": "\" argumento(s), se le pasaron \"", "en": "\" argument(s), received \"", "sites": ["selfhost/checker.ray:1852", "selfhost/checker.ray:2324"], "count": 2}
+{"text": "\"no se pudo inferir el parámetro de type '\"", "en": "\"could not infer the type parameter '\"", "sites": ["selfhost/checker.ray:1870", "selfhost/checker.ray:2589"], "count": 2}
+{"text": "\" (no aparece en los argumentos)\"", "en": "\" (it does not appear in the arguments)\"", "sites": ["selfhost/checker.ray:1870"], "count": 1}
+{"text": "\"' no está bounded por '\"", "en": "\"' is not bounded by '\"", "sites": ["selfhost/checker.ray:1904"], "count": 1}
+{"text": "\"' (requerido por la llamada)\"", "en": "\"' (required by the call)\"", "sites": ["selfhost/checker.ray:1904", "selfhost/checker.ray:1906", "selfhost/checker.ray:1911"], "count": 3}
+{"text": "\" no can implementar el trait '\"", "en": "\" cannot implement the trait '\"", "sites": ["selfhost/checker.ray:1913"], "count": 1}
+{"text": "\" espera 1 argumento, se le pasaron \"", "en": "\" expects 1 argument, received \"", "sites": ["selfhost/checker.ray:1934"], "count": 1}
+{"text": "\" no can imprimir un \"", "en": "\" cannot print a \"", "sites": ["selfhost/checker.ray:1938"], "count": 1}
+{"text": "\"len espera 1 argumento, se le pasaron \"", "en": "\"len expects 1 argument, received \"", "sites": ["selfhost/checker.ray:1946"], "count": 1}
+{"text": "\"len espera un array, un string, un Map o bytes, no \"", "en": "\"len expects an array, a string, a Map or bytes, not \"", "sites": ["selfhost/checker.ray:1950"], "count": 1}
+{"text": "\"push espera 2 argumentos (array, valor), se le pasaron \"", "en": "\"push expects 2 arguments (array, value), received \"", "sites": ["selfhost/checker.ray:1959"], "count": 1}
+{"text": "\"push: el array es de \"", "en": "\"push: the array is of \"", "sites": ["selfhost/checker.ray:1966"], "count": 1}
+{"text": "\" pero se empuja \"", "en": "\" but got \"", "sites": ["selfhost/checker.ray:1966"], "count": 1}
+{"text": "\"push espera un array como primer argumento, no \"", "en": "\"push expects an array as first argument, not \"", "sites": ["selfhost/checker.ray:1970"], "count": 1}
+{"text": "\"to_string solo convierte int/float/bool/string/char, no \"", "en": "\"to_string only converts int/float/bool/string/char, not \"", "sites": ["selfhost/checker.ray:2018"], "count": 1}
+{"text": "\"panic espera un string, no \"", "en": "\"panic expects a string, not \"", "sites": ["selfhost/checker.ray:2028"], "count": 1}
+{"text": "\" espera un string, no \"", "en": "\" expects a string, not \"", "sites": ["selfhost/checker.ray:2037"], "count": 1}
+{"text": "\"__read_file espera un string (la path), no \"", "en": "\"__read_file expects a string (the path), not \"", "sites": ["selfhost/checker.ray:2045"], "count": 1}
+{"text": "\"__write_file espera un string (la path), no \"", "en": "\"__write_file expects a string (the path), not \"", "sites": ["selfhost/checker.ray:2053"], "count": 1}
+{"text": "\"__write_file espera un string (el contenido), no \"", "en": "\"__write_file expects a string (the contents), not \"", "sites": ["selfhost/checker.ray:2054"], "count": 1}
+{"text": "\"__pop espera un array, no \"", "en": "\"__pop expects an array, not \"", "sites": ["selfhost/checker.ray:2064"], "count": 1}
+{"text": "\"args no espera argumentos, se le pasaron \"", "en": "\"args expects no arguments, received \"", "sites": ["selfhost/checker.ray:2071"], "count": 1}
+{"text": "\"exists espera un string (la path), no \"", "en": "\"exists expects a string (the path), not \"", "sites": ["selfhost/checker.ray:2080"], "count": 1}
+{"text": "\"trim espera un string, no \"", "en": "\"trim expects a string, not \"", "sites": ["selfhost/checker.ray:2087"], "count": 1}
+{"text": "\"to_upper espera un string, no \"", "en": "\"to_upper expects a string, not \"", "sites": ["selfhost/checker.ray:2094"], "count": 1}
+{"text": "\"to_lower espera un string, no \"", "en": "\"to_lower expects a string, not \"", "sites": ["selfhost/checker.ray:2101"], "count": 1}
+{"text": "\"chars espera un string, no \"", "en": "\"chars expects a string, not \"", "sites": ["selfhost/checker.ray:2108"], "count": 1}
+{"text": "\"split espera un string como primer argumento, no \"", "en": "\"split expects a string as first argument, not \"", "sites": ["selfhost/checker.ray:2115"], "count": 1}
+{"text": "\"split espera un string como separador, no \"", "en": "\"split expects a string as separator, not \"", "sites": ["selfhost/checker.ray:2116"], "count": 1}
+{"text": "\"replace espera un string como primer argumento, no \"", "en": "\"replace expects a string as first argument, not \"", "sites": ["selfhost/checker.ray:2123"], "count": 1}
+{"text": "\"replace espera un string en 'de', no \"", "en": "\"replace expects a string in 'from', not \"", "sites": ["selfhost/checker.ray:2124"], "count": 1}
+{"text": "\"replace espera un string en 'a', no \"", "en": "\"replace expects a string in 'to', not \"", "sites": ["selfhost/checker.ray:2125"], "count": 1}
+{"text": "\"starts_with espera un string como primer argumento, no \"", "en": "\"starts_with expects a string as first argument, not \"", "sites": ["selfhost/checker.ray:2132"], "count": 1}
+{"text": "\"starts_with espera un string como prefijo, no \"", "en": "\"starts_with expects a string as prefix, not \"", "sites": ["selfhost/checker.ray:2133"], "count": 1}
+{"text": "\"ends_with espera un string como primer argumento, no \"", "en": "\"ends_with expects a string as first argument, not \"", "sites": ["selfhost/checker.ray:2140"], "count": 1}
+{"text": "\"ends_with espera un string como sufijo, no \"", "en": "\"ends_with expects a string as suffix, not \"", "sites": ["selfhost/checker.ray:2141"], "count": 1}
+{"text": "\"substring espera un string como primer argumento, no \"", "en": "\"substring expects a string as first argument, not \"", "sites": ["selfhost/checker.ray:2148"], "count": 1}
+{"text": "\"substring espera un int como start, no \"", "en": "\"substring expects an int as start, not \"", "sites": ["selfhost/checker.ray:2149"], "count": 1}
+{"text": "\"substring espera un int como fin, no \"", "en": "\"substring expects an int as end, not \"", "sites": ["selfhost/checker.ray:2150"], "count": 1}
+{"text": "\"repeat espera un string como primer argumento, no \"", "en": "\"repeat expects a string as first argument, not \"", "sites": ["selfhost/checker.ray:2157"], "count": 1}
+{"text": "\"repeat espera un int como nº de veces, no \"", "en": "\"repeat expects an int as the repeat count, not \"", "sites": ["selfhost/checker.ray:2158"], "count": 1}
+{"text": "\"join espera un [string] como primer argumento, no \"", "en": "\"join expects a [string] as first argument, not \"", "sites": ["selfhost/checker.ray:2166"], "count": 1}
+{"text": "\"join espera un string como separador, no \"", "en": "\"join expects a string as separator, not \"", "sites": ["selfhost/checker.ray:2168"], "count": 1}
+{"text": "\"contains espera un string como subcadena, no \"", "en": "\"contains expects a string as substring, not \"", "sites": ["selfhost/checker.ray:2178"], "count": 1}
+{"text": "\"contains: el array es de \"", "en": "\"contains: the array is of \"", "sites": ["selfhost/checker.ray:2182"], "count": 1}
+{"text": "\" pero se busca \"", "en": "\" but looking for \"", "sites": ["selfhost/checker.ray:2182"], "count": 1}
+{"text": "\"contains espera un string o un array, no \"", "en": "\"contains expects a string or an array, not \"", "sites": ["selfhost/checker.ray:2186"], "count": 1}
+{"text": "\"'Map.new' espera 0 argumento(s), se dieron \"", "en": "\"'Map.new' expects 0 argument(s), got \"", "sites": ["selfhost/checker.ray:2200"], "count": 1}
+{"text": "\"'Map.new' produce un Map, pero aquí se espera \"", "en": "\"'Map.new' produces a Map, but the context expects \"", "sites": ["selfhost/checker.ray:2209"], "count": 1}
+{"text": "\"no se can inferir el type de 'Map.new'; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'\"", "en": "\"cannot infer the type of 'Map.new'; annotate it, e.g. 'let m: Map<string, int> = Map.new()'\"", "sites": ["selfhost/checker.ray:2212"], "count": 1}
+{"text": "\"insert: la clave del Map es \"", "en": "\"insert: the Map key is \"", "sites": ["selfhost/checker.ray:2222"], "count": 1}
+{"text": "\" pero se pasó \"", "en": "\" but got \"", "sites": ["selfhost/checker.ray:2222", "selfhost/checker.ray:2225", "selfhost/checker.ray:2239", "selfhost/checker.ray:2254", "selfhost/checker.ray:2269"], "count": 5}
+{"text": "\"insert: el valor del Map es \"", "en": "\"insert: the Map value is \"", "sites": ["selfhost/checker.ray:2225"], "count": 1}
+{"text": "\"insert espera un Map como primer argumento, no \"", "en": "\"insert expects a Map as first argument, not \"", "sites": ["selfhost/checker.ray:2229"], "count": 1}
+{"text": "\"contains_key: la clave del Map es \"", "en": "\"contains_key: the Map key is \"", "sites": ["selfhost/checker.ray:2239"], "count": 1}
+{"text": "\"contains_key espera un Map como primer argumento, no \"", "en": "\"contains_key expects a Map as first argument, not \"", "sites": ["selfhost/checker.ray:2243"], "count": 1}
+{"text": "\"get: la clave del Map es \"", "en": "\"get: the Map key is \"", "sites": ["selfhost/checker.ray:2254"], "count": 1}
+{"text": "\"get espera un Map como primer argumento, no \"", "en": "\"get expects a Map as first argument, not \"", "sites": ["selfhost/checker.ray:2258"], "count": 1}
+{"text": "\"remove: la clave del Map es \"", "en": "\"remove: the Map key is \"", "sites": ["selfhost/checker.ray:2269"], "count": 1}
+{"text": "\"remove espera un Map como primer argumento, no \"", "en": "\"remove expects a Map as first argument, not \"", "sites": ["selfhost/checker.ray:2273"], "count": 1}
+{"text": "\"keys espera un Map, no \"", "en": "\"keys expects a Map, not \"", "sites": ["selfhost/checker.ray:2282"], "count": 1}
+{"text": "\"values espera un Map, no \"", "en": "\"values expects a Map, not \"", "sites": ["selfhost/checker.ray:2291"], "count": 1}
+{"text": "\"no se can llamar un valor de type \"", "en": "\"cannot call a value of type \"", "sites": ["selfhost/checker.ray:2302"], "count": 1}
+{"text": "\" (no es one función)\"", "en": "\" (not a function)\"", "sites": ["selfhost/checker.ray:2302"], "count": 1}
+{"text": "\": se esperaba \"", "en": "\": expected \"", "sites": ["selfhost/checker.ray:2331"], "count": 1}
+{"text": "\"la condición del if must ser bool, no \"", "en": "\"the if condition must be bool, not \"", "sites": ["selfhost/checker.ray:2342"], "count": 1}
+{"text": "\"un if sin else has type unit, pero su rama produce \"", "en": "\"an if without else has type unit, but its branch produces \"", "sites": ["selfhost/checker.ray:2348"], "count": 1}
+{"text": "\" (añade un else)\"", "en": "\" (add an else)\"", "sites": ["selfhost/checker.ray:2348"], "count": 1}
+{"text": "\"las ramas del if tienen types distintos: \"", "en": "\"the if branches have different types: \"", "sites": ["selfhost/checker.ray:2361"], "count": 1}
+{"text": "\"la condición del while must ser bool, no \"", "en": "\"the while condition must be bool, not \"", "sites": ["selfhost/checker.ray:2388"], "count": 1}
+{"text": "\"los elementos del array deben ser del same type: \"", "en": "\"the array elements must be of the same type: \"", "sites": ["selfhost/checker.ray:2446"], "count": 1}
+{"text": "\"el índice must ser int, no \"", "en": "\"the index must be int, not \"", "sites": ["selfhost/checker.ray:2459"], "count": 1}
+{"text": "\"no se can index un \"", "en": "\"cannot index a \"", "sites": ["selfhost/checker.ray:2465"], "count": 1}
+{"text": "\" (no es un array, string ni bytes)\"", "en": "\" (not an array, string or bytes)\"", "sites": ["selfhost/checker.ray:2465"], "count": 1}
+{"text": "\"el struct '\"", "en": "\"the struct '\"", "sites": ["selfhost/checker.ray:2488", "selfhost/checker.ray:2648"], "count": 2}
+{"text": "\"' no has un campo '\"", "en": "\"' has no field '\"", "sites": ["selfhost/checker.ray:2488", "selfhost/checker.ray:2622"], "count": 2}
+{"text": "\"no se can acceder a '.\"", "en": "\"cannot access '.\"", "sites": ["selfhost/checker.ray:2491", "selfhost/checker.ray:2494"], "count": 2}
+{"text": "\"' en un \"", "en": "\"' on a \"", "sites": ["selfhost/checker.ray:2491", "selfhost/checker.ray:2494"], "count": 2}
+{"text": "\" (no es un struct)\"", "en": "\" (not a struct)\"", "sites": ["selfhost/checker.ray:2491", "selfhost/checker.ray:2494"], "count": 2}
+{"text": "\"; anota el type\"", "en": "\"; annotate the type\"", "sites": ["selfhost/checker.ray:2589"], "count": 1}
+{"text": "\"falta el campo '\"", "en": "\"missing field '\"", "sites": ["selfhost/checker.ray:2633"], "count": 1}
+{"text": "\"' en el literal de '\"", "en": "\"' in the literal of '\"", "sites": ["selfhost/checker.ray:2633"], "count": 1}
+{"text": "\"' de '\"", "en": "\"' of '\"", "sites": ["selfhost/checker.ray:2636", "selfhost/checker.ray:2643"], "count": 2}
+{"text": "\"el enum '\"", "en": "\"the enum '\"", "sites": ["selfhost/checker.ray:2699", "selfhost/checker.ray:2837"], "count": 2}
+{"text": "\"' no has la variant '\"", "en": "\"' has no variant '\"", "sites": ["selfhost/checker.ray:2699", "selfhost/checker.ray:2837"], "count": 2}
+{"text": "\"la variant '\"", "en": "\"the variant '\"", "sites": ["selfhost/checker.ray:2702", "selfhost/checker.ray:2718", "selfhost/checker.ray:2843"], "count": 3}
+{"text": "\" argumento(s), se dieron \"", "en": "\" argument(s), got \"", "sites": ["selfhost/checker.ray:2702"], "count": 1}
+{"text": "\"match requiere un enum, pero el escrutinio es \"", "en": "\"match requires an enum, but the scrutinee is \"", "sites": ["selfhost/checker.ray:2750", "selfhost/checker.ray:2754"], "count": 2}
+{"text": "\"los brazos del match producen types distintos: \"", "en": "\"the match arms produce different types: \"", "sites": ["selfhost/checker.ray:2789"], "count": 1}
+{"text": "\"match no exhaustive en '\"", "en": "\"non-exhaustive match on '\"", "sites": ["selfhost/checker.ray:2808"], "count": 1}
+{"text": "\"': faltan las variantes: \"", "en": "\"': missing variants: \"", "sites": ["selfhost/checker.ray:2808"], "count": 1}
+{"text": "\"el patrón es del enum '\"", "en": "\"the pattern is of enum '\"", "sites": ["selfhost/checker.ray:2834"], "count": 1}
+{"text": "\"', pero el escrutinio es '\"", "en": "\"', but the scrutinee is '\"", "sites": ["selfhost/checker.ray:2834"], "count": 1}
+{"text": "\"el patrón '\"", "en": "\"the pattern '\"", "sites": ["selfhost/checker.ray:2840"], "count": 1}
+{"text": "\" valor(es), pero la variant has \"", "en": "\" value(s), but the variant has \"", "sites": ["selfhost/checker.ray:2840"], "count": 1}
+{"text": "\"' ya está cubierta por un branch anterior\"", "en": "\"' is already covered by a previous arm\"", "sites": ["selfhost/checker.ray:2843"], "count": 1}
+{"text": "\"' ya es un type; no can ser también un trait\"", "en": "\"' is already a type; it cannot also be a trait\"", "sites": ["selfhost/checker.ray:2979"], "count": 1}
+{"text": "\"' repetido en el trait '\"", "en": "\"' repeated in trait '\"", "sites": ["selfhost/checker.ray:2989"], "count": 1}
+{"text": "\"el impl de '\"", "en": "\"the impl of '\"", "sites": ["selfhost/checker.ray:3035"], "count": 1}
+{"text": "\"' para \"", "en": "\"' for \"", "sites": ["selfhost/checker.ray:3035"], "count": 1}
+{"text": "\" no implementa el método '\"", "en": "\" does not implement method '\"", "sites": ["selfhost/checker.ray:3035"], "count": 1}
+{"text": "\"el trait '\"", "en": "\"the trait '\"", "sites": ["selfhost/checker.ray:3045"], "count": 1}
+{"text": "\"' ambiguo para \"", "en": "\"' ambiguous for \"", "sites": ["selfhost/checker.ray:3051", "selfhost/checker.ray:3065"], "count": 2}
+{"text": "\": ya hay un impl what lo provee\"", "en": "\": an impl already provides it\"", "sites": ["selfhost/checker.ray:3051", "selfhost/checker.ray:3065"], "count": 2}
+{"text": "\"' menciona un parámetro de type what el impl no declara\"", "en": "\"' mentions a type parameter the impl does not declare\"", "sites": ["selfhost/checker.ray:3084"], "count": 1}
+{"text": "\"' uses un trait no declarado\"", "en": "\"' uses an undeclared trait\"", "sites": ["selfhost/checker.ray:3087"], "count": 1}
+{"text": "\"no se sabe derivar '\"", "en": "\"cannot derive '\"", "sites": ["selfhost/checker.ray:3149"], "count": 1}
+{"text": "\"' (por ahora Eq, Show y Hash)\"", "en": "\"' (for now Eq, Show and Hash)\"", "sites": ["selfhost/checker.ray:3149"], "count": 1}
+{"text": "\"no se can derivar para el type genérico '\"", "en": "\"cannot derive for the generic type '\"", "sites": ["selfhost/checker.ray:3154"], "count": 1}
+{"text": "\"' no must recibir parámetros\"", "en": "\"' must not take parameters\"", "sites": ["selfhost/checker.ray:3189"], "count": 1}
+{"text": "\"anotación desconocida: '@\"", "en": "\"unknown annotation: '@\"", "sites": ["selfhost/checker.ray:3198", "selfhost/checker.ray:3226"], "count": 2}
+{"text": "\"no se can implementar para un type unknown: '\"", "en": "\"cannot implement for an unknown type: '\"", "sites": ["selfhost/checker.ray:3245"], "count": 1}
+{"text": "\"' es genérico: declara sus parámetros en el impl, p. ej. 'impl<T> ... for \"", "en": "\"' is generic: declare its parameters in the impl, e.g. 'impl<T> ... for \"", "sites": ["selfhost/checker.ray:3250"], "count": 1}
+{"text": "\" parámetro(s) de type, el impl declara \"", "en": "\" type parameter(s), the impl declares \"", "sites": ["selfhost/checker.ray:3265"], "count": 1}
+{"text": "\"el impl genérico must aplicarse a '\"", "en": "\"the generic impl must apply to '\"", "sites": ["selfhost/checker.ray:3286"], "count": 1}
+{"text": "\">' (sus propios parámetros de type, distintos)\"", "en": "\">' (its own distinct type parameters)\"", "sites": ["selfhost/checker.ray:3286"], "count": 1}
+{"text": "\"' toma \"", "en": "\"' takes \"", "sites": ["selfhost/checker.ray:3295"], "count": 1}
+{"text": "\" parámetro(s) (incluido self), pero el trait asks \"", "en": "\" parameter(s) (including self), but the trait requires \"", "sites": ["selfhost/checker.ray:3295"], "count": 1}
+{"text": "\"el parámetro \"", "en": "\"the parameter \"", "sites": ["selfhost/checker.ray:3302"], "count": 1}
+{"text": "\", pero el trait asks \"", "en": "\", but the trait requires \"", "sites": ["selfhost/checker.ray:3302", "selfhost/checker.ray:3309"], "count": 2}

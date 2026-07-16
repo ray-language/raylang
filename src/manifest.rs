@@ -68,7 +68,7 @@ impl Manifest {
         };
         let root = path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let source = std::fs::read_to_string(&path)
-            .map_err(|e| format!("no se pudo leer '{}': {e}", path.display()))?;
+            .map_err(|e| format!("could not read '{}': {e}", path.display()))?;
         parse(&source, root).map(Some)
     }
 
@@ -105,19 +105,19 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         if let Some(rest) = line.strip_prefix('[') {
             let name = rest
                 .strip_suffix(']')
-                .ok_or_else(|| err(num, "cabecera de sección sin ']'"))?;
+                .ok_or_else(|| err(num, "section header without ']'"))?;
             section = name.trim().to_string();
             continue;
         }
         // Par `clave = valor`.
         let (key, value) = line
             .split_once('=')
-            .ok_or_else(|| err(num, "se esperaba 'clave = valor' o '[seccion]'"))?;
+            .ok_or_else(|| err(num, "expected 'key = value' or '[section]'"))?;
         let key = key.trim();
         let value_raw = value.trim();
         // La mayoría de valores son cadenas `"..."`; `[fmt] indent_size` admite un entero sin comillas.
         let as_string = || unquote_string(value_raw)
-            .ok_or_else(|| err(num, "el valor debe ir entre comillas dobles"));
+            .ok_or_else(|| err(num, "the value must be in double quotes"));
         match section.as_str() {
             "package" => match key {
                 "name" => name = Some(as_string()?),
@@ -140,14 +140,14 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "mirror" => registry_mirror = Some(as_string()?),
                 _ => {} // otras claves del registro se ignoran por ahora (extensibilidad)
             },
-            "" => return Err(err(num, "clave fuera de toda sección (falta '[package]')")),
+            "" => return Err(err(num, "key outside any section (missing '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
     }
 
     Ok(Manifest {
-        name: name.ok_or("ray.toml: falta 'name' en [package]")?,
-        version: version.ok_or("ray.toml: falta 'version' en [package]")?,
+        name: name.ok_or("ray.toml: missing 'name' in [package]")?,
+        version: version.ok_or("ray.toml: missing 'version' in [package]")?,
         entry: entry.unwrap_or_else(|| "src/main.ray".to_string()),
         dependencies,
         root,
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn manifiesto_minimo() {
+    fn manifest_minimo() {
         let m = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\n").unwrap();
         assert_eq!(m.name, "demo");
         assert_eq!(m.version, "0.1.0");
@@ -254,11 +254,11 @@ mod tests {
     }
 
     #[test]
-    fn entry_y_dependencias_y_comentarios() {
+    fn entry_y_dependencies_y_comments() {
         let src = "\
-# mi proyecto
+# mi project
 [package]
-name = \"app\"          # el nombre
+name = \"app\"          # el name
 version = \"1.2.3\"
 entry = \"src/app.ray\"
 
@@ -281,7 +281,7 @@ util = \"git+https://ejemplo/util@v2.1\"
         // Reemplaza el requisito de una dep existente, sin duplicar.
         let b = upsert_dependency(&a, "geo", "2.0.0");
         assert!(b.contains("geo = \"2.0.0\""), "reemplaza:\n{b}");
-        assert!(!b.contains("^1.2"), "sin duplicar:\n{b}");
+        assert!(!b.contains("^1.2"), "sin duplicate:\n{b}");
         assert_eq!(b.matches("geo =").count(), 1);
         // Crea la sección si no existe.
         let c = upsert_dependency("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", "util", "1.0.0");
@@ -291,26 +291,26 @@ util = \"git+https://ejemplo/util@v2.1\"
         let deps_idx = d.find("[dependencies]").unwrap();
         let fmt_idx = d.find("[fmt]").unwrap();
         let b_idx = d.find("b = ").unwrap();
-        assert!(deps_idx < b_idx && b_idx < fmt_idx, "b va dentro de [dependencies], antes de [fmt]:\n{d}");
+        assert!(deps_idx < b_idx && b_idx < fmt_idx, "b va inside de [dependencies], antes de [fmt]:\n{d}");
     }
 
     #[test]
-    fn remove_quita_la_dep_y_preserva_el_resto() {
+    fn remove_quita_la_dep_y_preserves_el_rest() {
         // Quita solo la línea de la dep pedida, sin tocar otras secciones (M51f).
         let src = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^1.2\"\nutil = \"1.0.0\"\n\n[fmt]\nindent_size = 2\n";
         let out = remove_dependency(src, "geo").unwrap();
         assert!(!out.contains("geo ="), "geo eliminada:\n{out}");
-        assert!(out.contains("util = \"1.0.0\"") && out.contains("[fmt]"), "el resto intacto:\n{out}");
+        assert!(out.contains("util = \"1.0.0\"") && out.contains("[fmt]"), "el rest intacto:\n{out}");
         // Un nombre no declarado devuelve None (y una clave igual en OTRA sección no cuenta).
         assert!(remove_dependency(src, "nada").is_none());
         assert!(remove_dependency("[fmt]\ngeo = \"x\"\n", "geo").is_none());
     }
 
     #[test]
-    fn errores_claros() {
-        assert!(parse_src("name = \"x\"\n").unwrap_err().contains("fuera de toda sección"));
-        assert!(parse_src("[package]\nname = x\n").unwrap_err().contains("comillas"));
-        assert!(parse_src("[package]\nname = \"x\"\n").unwrap_err().contains("falta 'version'"));
-        assert!(parse_src("[package\n").unwrap_err().contains("sin ']'"));
+    fn errors_claros() {
+        assert!(parse_src("name = \"x\"\n").unwrap_err().contains("outside any section"));
+        assert!(parse_src("[package]\nname = x\n").unwrap_err().contains("quotes"));
+        assert!(parse_src("[package]\nname = \"x\"\n").unwrap_err().contains("missing 'version'"));
+        assert!(parse_src("[package\n").unwrap_err().contains("without ']'"));
     }
 }

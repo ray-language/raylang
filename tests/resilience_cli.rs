@@ -6,7 +6,7 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
-fn correr(flags: &[&str], main: &str) -> (String, i32) {
+fn run(flags: &[&str], main: &str) -> (String, i32) {
     let dir = std::env::temp_dir().join("ray_resilience");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("m.ray");
@@ -36,7 +36,7 @@ fn main() -> int {
     let p = resilience.policy(5, 1, 10);
     let c1 = Contador { n: 0 };
     match (resilience.retry(p, fn() -> Result<int, int> { intento(c1, 2) })) {
-        Result.Ok(v) => print("retry ok tras " + to_string(v) + " intentos"),
+        Result.Ok(v) => print("retry ok after " + to_string(v) + " intentos"),
         Result.Err(e) => print("retry err " + to_string(e)),
     }
     // Retry agotado: falla siempre → devuelve el último Err.
@@ -67,7 +67,7 @@ fn main() -> int {
 }
 "#;
 
-const ESPERADO: &str = "retry ok tras 3 intentos\n\
+const ESPERADO: &str = "retry ok after 3 intentos\n\
 retry agotado en 3\n\
 guard err 1\n\
 guard err 2\n\
@@ -77,11 +77,11 @@ f corrió 2 veces; abierto=true\n\
 deadline expirado=false\n";
 
 #[test]
-fn resilience_ambos_motores() {
-    let (o_in, c_in) = correr(&["--interp"], PROG);
-    let (o_vm, c_vm) = correr(&["--vm"], PROG);
+fn resilience_ambos_engines() {
+    let (o_in, c_in) = run(&["--interp"], PROG);
+    let (o_vm, c_vm) = run(&["--vm"], PROG);
     assert_eq!(c_in, 0, "intérprete 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm 0\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    assert_eq!(o_in, ESPERADO, "salida esperada");
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    assert_eq!(o_in, ESPERADO, "output expected_val");
 }

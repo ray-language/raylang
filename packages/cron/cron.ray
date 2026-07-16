@@ -55,7 +55,7 @@ fn all_set(n: int) -> [bool] {
 fn parse_int_or(s: string) -> Result<int, string> {
     match (parse_int(s)) {
         Option.Some(n) => Result.Ok(n),
-        Option.None => Result.Err("cron: número inválido '" + s + "'"),
+        Option.None => Result.Err("cron: invalid number '" + s + "'"),
     }
 }
 
@@ -68,7 +68,7 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
     while (p < parts.len()) {
         let part = parts[p];
         if (part.len() == 0) {
-            return Result.Err("cron: campo '" + name + "' con un elemento vacío");
+            return Result.Err("cron: field '" + name + "' with an empty element");
         }
         // paso: `X/n` (X = `*` o `a-b`)
         var base = part;
@@ -78,10 +78,10 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
             base = sp[0];
             step = parse_int_or(sp[1])?;
             if (step <= 0) {
-                return Result.Err("cron: paso inválido en '" + name + "'");
+                return Result.Err("cron: invalid step in '" + name + "'");
             }
         } else if (sp.len() > 2) {
-            return Result.Err("cron: campo '" + name + "' malformado ('" + part + "')");
+            return Result.Err("cron: field '" + name + "' malformed ('" + part + "')");
         }
         // base: `*`, `a` o `a-b`
         var a = lo;
@@ -99,11 +99,11 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
                 a = parse_int_or(r[0])?;
                 b = parse_int_or(r[1])?;
             } else {
-                return Result.Err("cron: rango malformado en '" + name + "' ('" + base + "')");
+                return Result.Err("cron: malformed range in '" + name + "' ('" + base + "')");
             }
         }
         if (a < lo || b > hi || a > b) {
-            return Result.Err("cron: '" + name + "' fuera de rango [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')");
+            return Result.Err("cron: '" + name + "' out of range [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')");
         }
         var v = a;
         while (v <= b) {
@@ -143,13 +143,13 @@ pub fn parse(expr: string) -> Result<Schedule, string> {
     if (e == "@yearly" || e == "@annually") { e = "0 0 1 1 *"; }
     let fs = fields_of(e);
     if (fs.len() != 5) {
-        return Result.Err("cron: se esperaban 5 campos (min hora dom mes dow), hay " + to_string(fs.len()));
+        return Result.Err("cron: expected 5 fields (min hour dom mon dow), got " + to_string(fs.len()));
     }
-    let mins = parse_field(fs[0], 0, 59, "minuto")?;
-    let hours = parse_field(fs[1], 0, 23, "hora")?;
-    let dom = parse_field(fs[2], 1, 31, "día del mes")?;
-    let months = parse_field(fs[3], 1, 12, "mes")?;
-    var dow = parse_field(fs[4], 0, 7, "día de la semana")?;
+    let mins = parse_field(fs[0], 0, 59, "minute")?;
+    let hours = parse_field(fs[1], 0, 23, "hour")?;
+    let dom = parse_field(fs[2], 1, 31, "day of month")?;
+    let months = parse_field(fs[3], 1, 12, "month")?;
+    var dow = parse_field(fs[4], 0, 7, "day of week")?;
     if (dow[7]) {
         dow[0] = true;  // 7 = domingo, como el 0
     }
@@ -210,7 +210,7 @@ pub fn next_after(s: Schedule, ms: int) -> Result<int, string> {
             return Result.Ok(t);
         }
     }
-    Result.Err("cron: la expresión no casa con ninguna fecha (¿día imposible?)")
+    Result.Err("cron: the expression matches no date (impossible day?)")
 }
 
 fn floor_div(a: int, b: int) -> int {

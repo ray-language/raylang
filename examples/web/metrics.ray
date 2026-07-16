@@ -223,7 +223,7 @@ fn ensure_hist_series(reg: Registry, mi: int, name: string, buckets: [float], la
 pub fn add(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
-        panic("métrica no registrada: " + name);
+        panic("unregistered metric: " + name);
     }
     // M70: el tipo debe cuadrar — antes `add` sobre un histograma creaba una serie espuria
     // (`nombre{}` mezclada con `nombre_bucket{…}`) que corrompía la exposición en silencio.
@@ -241,7 +241,7 @@ pub fn inc(reg: Registry, name: string, labels: Map<string, string>) {
 pub fn set(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
-        panic("métrica no registrada: " + name);
+        panic("unregistered metric: " + name);
     }
     // M70: `set` es de gauges — sobre un counter viola la monotonía; sobre un histograma
     // crearía una serie espuria.
@@ -258,7 +258,7 @@ pub fn set(reg: Registry, name: string, labels: Map<string, string>, v: float) {
 pub fn observe_l(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
-        panic("histograma no registrado: " + name);
+        panic("unregistered histogram: " + name);
     }
     // M70: observar un counter/gauge crearía series _bucket espurias.
     if (reg.kinds[mi] != 2) {

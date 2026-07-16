@@ -309,7 +309,7 @@ fn fields_equal(a: [SField], b: [SField]) -> bool {
 fn as_str(v: Value) -> string {
     match (v) {
         Value.VStr(s) => s,
-        _ => panic("se esperaba un string"),
+        _ => panic("expected a string"),
     }
 }
 
@@ -318,7 +318,7 @@ fn as_str(v: Value) -> string {
 pub fn as_int(v: Value) -> int {
     match (v) {
         Value.VInt(n) => n,
-        _ => panic("se esperaba un int"),
+        _ => panic("expected an int"),
     }
 }
 
@@ -329,7 +329,7 @@ fn no_bindings() -> [Binding] { [] }
 fn struct_fields(c: Interp, name: string) -> [FieldDef] {
     match (get(c.structs, name)) {
         Option.Some(fs) => fs,
-        Option.None => panic("struct no registrado: " + name),
+        Option.None => panic("unregistered struct: " + name),
     }
 }
 
@@ -360,7 +360,7 @@ fn find_field_init(inits: [FieldInit], fname: string) -> Expr {
         }
         i = i + 1;
     }
-    panic("campo ausente en el literal: " + fname)
+    panic("missing field in the literal: " + fname)
 }
 
 // Lee el valor del campo `fname` de un struct en runtime (el checker garantiza el campo). `pub`: lo
@@ -373,7 +373,7 @@ pub fn struct_get(fields: [SField], fname: string) -> Value {
         }
         i = i + 1;
     }
-    panic("campo no encontrado: " + fname)
+    panic("field not found: " + fname)
 }
 
 // Asigna al campo `fname` de un struct en runtime, mutando la celda compartida (aliasing). `pub`: lo
@@ -387,7 +387,7 @@ pub fn struct_set(fields: [SField], fname: string, v: Value) {
         }
         i = i + 1;
     }
-    panic("campo no encontrado: " + fname)
+    panic("field not found: " + fname)
 }
 
 // =====================================================================
@@ -494,7 +494,7 @@ fn cmp_int(op: BinOp, a: int, b: int) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_int: operador inesperado"),
+        _ => panic("cmp_int: unexpected operator"),
     }
 }
 
@@ -504,7 +504,7 @@ fn cmp_float(op: BinOp, a: float, b: float) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_float: operador inesperado"),
+        _ => panic("cmp_float: unexpected operator"),
     }
 }
 
@@ -514,7 +514,7 @@ fn cmp_str(op: BinOp, a: string, b: string) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_str: operador inesperado"),
+        _ => panic("cmp_str: unexpected operator"),
     }
 }
 
@@ -524,7 +524,7 @@ fn cmp_char(op: BinOp, a: char, b: char) -> bool {
         BinOp.Le => a <= b,
         BinOp.Gt => a > b,
         BinOp.Ge => a >= b,
-        _ => panic("cmp_char: operador inesperado"),
+        _ => panic("cmp_char: unexpected operator"),
     }
 }
 
@@ -534,21 +534,21 @@ pub fn eval_add(l: Value, r: Value) -> Result<Value, Flow> {
     match (l) {
         Value.VInt(a) => match (r) {
             Value.VInt(b) => Result.Ok(Value.VInt(a + b)),
-            _ => panic("+ inválido"),
+            _ => panic("invalid +"),
         },
         Value.VFloat(a) => match (r) {
             Value.VFloat(b) => Result.Ok(Value.VFloat(a + b)),
-            _ => panic("+ inválido"),
+            _ => panic("invalid +"),
         },
         Value.VStr(a) => match (r) {
             Value.VStr(b) => Result.Ok(Value.VStr(a + b)),
-            _ => panic("+ inválido"),
+            _ => panic("invalid +"),
         },
         Value.VArray(a) => match (r) {
             Value.VArray(b) => Result.Ok(Value.VArray(concat_values(a, b))),
-            _ => panic("+ inválido"),
+            _ => panic("invalid +"),
         },
-        _ => panic("+ inválido"),
+        _ => panic("invalid +"),
     }
 }
 
@@ -574,17 +574,17 @@ fn arith_int(op: BinOp, a: int, b: int, line: int, col: int) -> Result<Value, Fl
         BinOp.Mul => Result.Ok(Value.VInt(a * b)),
         BinOp.Div => {
             if (b == 0) {
-                return Result.Err(Flow.FError(rt_error(line, col, "división entera por cero")));
+                return Result.Err(Flow.FError(rt_error(line, col, "integer division by zero")));
             }
             Result.Ok(Value.VInt(a / b))
         },
         BinOp.Rem => {
             if (b == 0) {
-                return Result.Err(Flow.FError(rt_error(line, col, "módulo por cero")));
+                return Result.Err(Flow.FError(rt_error(line, col, "modulo by zero")));
             }
             Result.Ok(Value.VInt(a % b))
         },
-        _ => panic("arith_int: operador inesperado"),
+        _ => panic("arith_int: unexpected operator"),
     }
 }
 
@@ -594,7 +594,7 @@ fn arith_float(op: BinOp, a: float, b: float) -> Result<Value, Flow> {
         BinOp.Mul => Result.Ok(Value.VFloat(a * b)),
         BinOp.Div => Result.Ok(Value.VFloat(a / b)),
         BinOp.Rem => Result.Ok(Value.VFloat(a % b)),
-        _ => panic("arith_float: operador inesperado"),
+        _ => panic("arith_float: unexpected operator"),
     }
 }
 
@@ -603,13 +603,13 @@ pub fn eval_arith(op: BinOp, l: Value, r: Value, line: int, col: int) -> Result<
     match (l) {
         Value.VInt(a) => match (r) {
             Value.VInt(b) => arith_int(op, a, b, line, col),
-            _ => panic("aritmética inválida"),
+            _ => panic("invalid arithmetic"),
         },
         Value.VFloat(a) => match (r) {
             Value.VFloat(b) => arith_float(op, a, b),
-            _ => panic("aritmética inválida"),
+            _ => panic("invalid arithmetic"),
         },
-        _ => panic("aritmética inválida"),
+        _ => panic("invalid arithmetic"),
     }
 }
 
@@ -618,21 +618,21 @@ pub fn eval_cmp(op: BinOp, l: Value, r: Value) -> Result<Value, Flow> {
     match (l) {
         Value.VInt(a) => match (r) {
             Value.VInt(b) => Result.Ok(Value.VBool(cmp_int(op, a, b))),
-            _ => panic("comparación inválida"),
+            _ => panic("invalid comparison"),
         },
         Value.VFloat(a) => match (r) {
             Value.VFloat(b) => Result.Ok(Value.VBool(cmp_float(op, a, b))),
-            _ => panic("comparación inválida"),
+            _ => panic("invalid comparison"),
         },
         Value.VStr(a) => match (r) {
             Value.VStr(b) => Result.Ok(Value.VBool(cmp_str(op, a, b))),
-            _ => panic("comparación inválida"),
+            _ => panic("invalid comparison"),
         },
         Value.VChar(a) => match (r) {
             Value.VChar(b) => Result.Ok(Value.VBool(cmp_char(op, a, b))),
-            _ => panic("comparación inválida"),
+            _ => panic("invalid comparison"),
         },
-        _ => panic("comparación inválida"),
+        _ => panic("invalid comparison"),
     }
 }
 
@@ -667,8 +667,8 @@ fn eval_binary(c: Interp, op: BinOp, left: Expr, right: Expr, line: int, col: in
         BinOp.Le => eval_cmp(op, l, r),
         BinOp.Gt => eval_cmp(op, l, r),
         BinOp.Ge => eval_cmp(op, l, r),
-        BinOp.And => panic("inalcanzable: && ya tratado"),
-        BinOp.Or => panic("inalcanzable: || ya tratado"),
+        BinOp.And => panic("unreachable: && already handled"),
+        BinOp.Or => panic("unreachable: || already handled"),
     }
 }
 
@@ -678,11 +678,11 @@ fn eval_unary(c: Interp, op: UnOp, inner: Expr) -> Result<Value, Flow> {
         UnOp.Neg => match (v) {
             Value.VInt(n) => Result.Ok(Value.VInt(-n)),
             Value.VFloat(x) => Result.Ok(Value.VFloat(-x)),
-            _ => panic("negación inválida"),
+            _ => panic("invalid negation"),
         },
         UnOp.Not => match (v) {
             Value.VBool(b) => Result.Ok(Value.VBool(!b)),
-            _ => panic("negación lógica inválida"),
+            _ => panic("invalid logical negation"),
         },
     }
 }
@@ -694,7 +694,7 @@ fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
     let v = eval_expr(c, e)?;
     match (v) {
         Value.VBool(b) => Result.Ok(b),
-        _ => panic("se esperaba una condición booleana"),
+        _ => panic("expected a boolean condition"),
     }
 }
 
@@ -711,7 +711,7 @@ fn builtin_len(v: Value) -> int {
         Value.VArray(elems) => elems.len(),
         Value.VStr(s) => s.len(),
         Value.VMap(d) => d.keys.len(),
-        _ => panic("len: se esperaba un arreglo, string o Map"),
+        _ => panic("len: expected an array, string or Map"),
     }
 }
 
@@ -787,21 +787,21 @@ pub fn value_lt(a: Value, b: Value) -> bool {
     match (a) {
         Value.VInt(x) => match (b) {
             Value.VInt(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("less: incompatible types"),
         },
         Value.VFloat(x) => match (b) {
             Value.VFloat(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("less: incompatible types"),
         },
         Value.VStr(x) => match (b) {
             Value.VStr(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("less: incompatible types"),
         },
         Value.VChar(x) => match (b) {
             Value.VChar(y) => x < y,
-            _ => panic("menor: tipos incompatibles"),
+            _ => panic("less: incompatible types"),
         },
-        _ => panic("menor: tipo no ordenable"),
+        _ => panic("less: non-orderable type"),
     }
 }
 
@@ -863,7 +863,7 @@ fn builtin_join(arrv: Value, sep: string) -> string {
             }
             s
         },
-        _ => panic("join: se esperaba un arreglo"),
+        _ => panic("join: expected an array"),
     }
 }
 
@@ -881,7 +881,7 @@ fn builtin_contains(x: Value, y: Value) -> bool {
             }
             false
         },
-        _ => panic("contains: se esperaba string o arreglo"),
+        _ => panic("contains: expected string or array"),
     }
 }
 
@@ -931,7 +931,7 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
                 elems.push(vals[1]);
                 Result.Ok(Value.VUnit)
             },
-            _ => panic("push: se esperaba un arreglo"),
+            _ => panic("push: expected an array"),
         };
     }
     // --- Builtins de string (M14.6a): delegan en los del host ---
@@ -1009,7 +1009,7 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
                     Option.None => Result.Ok(Value.VArray(no_vals())),
                 }
             },
-            _ => panic("__pop: se esperaba un arreglo"),
+            _ => panic("__pop: expected an array"),
         };
     }
     // --- Builtins de Map (M14.6b) ---
@@ -1024,13 +1024,13 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
                 map_put(d, vals[1], vals[2]);
                 Result.Ok(Value.VUnit)
             },
-            _ => panic("insert: se esperaba un Map"),
+            _ => panic("insert: expected a Map"),
         };
     }
     if (name == "contains_key") {
         return match (vals[0]) {
             Value.VMap(d) => Result.Ok(Value.VBool(map_find(d, vals[1]) >= 0)),
-            _ => panic("contains_key: se esperaba un Map"),
+            _ => panic("contains_key: expected a Map"),
         };
     }
     if (name == "get") {
@@ -1039,28 +1039,28 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
                 let idx = map_find(d, vals[1]);
                 if (idx >= 0) { Result.Ok(Value.VEnum("Option", "Some", [d.vals[idx]])) } else { Result.Ok(Value.VEnum("Option", "None", no_vals())) }
             },
-            _ => panic("get: se esperaba un Map"),
+            _ => panic("get: expected a Map"),
         };
     }
     if (name == "remove") {
         return match (vals[0]) {
             Value.VMap(d) => Result.Ok(map_take(d, vals[1])),
-            _ => panic("remove: se esperaba un Map"),
+            _ => panic("remove: expected a Map"),
         };
     }
     if (name == "keys") {
         return match (vals[0]) {
             Value.VMap(d) => Result.Ok(map_collect(d.keys, map_sorted_order(d.keys))),
-            _ => panic("keys: se esperaba un Map"),
+            _ => panic("keys: expected a Map"),
         };
     }
     if (name == "values") {
         return match (vals[0]) {
             Value.VMap(d) => Result.Ok(map_collect(d.vals, map_sorted_order(d.keys))),
-            _ => panic("values: se esperaba un Map"),
+            _ => panic("values: expected a Map"),
         };
     }
-    panic("builtin no implementado: " + name)
+    panic("unimplemented builtin: " + name)
 }
 
 // Reúne `src[order[i]]` en un VArray (para keys/values en orden de clave ordenada).
@@ -1246,7 +1246,7 @@ fn dispatch_method(c: Interp, recv: Value, fname: string, args: [Expr], line: in
         let vals = eval_args(c, args)?;
         return dispatch_builtin(c.args, fname, prepend(recv, vals), line, col);
     }
-    panic("no se pudo resolver '" + fname + "' sobre el receptor")
+    panic("could not resolve '" + fname + "' on the receiver")
 }
 
 // Una llamada. Camino directo por nombre (builtin o función global), construcción de enum
@@ -1270,7 +1270,7 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
                                 let vals = eval_args(c, args)?;
                                 call_named(c, f, vals)
                             },
-                            Option.None => panic("función no resuelta: " + name),
+                            Option.None => panic("unresolved function: " + name),
                         }
                     }
                 },
@@ -1358,7 +1358,7 @@ fn call_value(c: Interp, fv: Value, args: [Value]) -> Result<Value, Flow> {
     match (fv) {
         Value.VFunc(f) => call_body(c, f.params, f.body, args, no_captures()),
         Value.VClosure(fe, caps) => call_body(c, fe.params, fe.body, args, caps),
-        _ => panic("se intentó llamar a un valor que no es función"),
+        _ => panic("attempted to call a value that is not a function"),
     }
 }
 
@@ -1381,7 +1381,7 @@ fn exec_stmt(c: Interp, s: Stmt) -> Result<Value, Flow> {
                 },
                 EKind.EIndex(arr_e, idx_e) => assign_index(c, arr_e, idx_e, v),
                 EKind.EField(obj_e, fname) => assign_field(c, obj_e, fname, v),
-                _ => panic("lvalue inválido (el checker debió rechazarlo)"),
+                _ => panic("invalid lvalue (the checker should have rejected it)"),
             }
         },
         SKind.SReturn(opt) => {
@@ -1456,7 +1456,7 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
                 Option.None => {
                     match (get(c.funcs, name)) {
                         Option.Some(f) => Result.Ok(Value.VFunc(f)),
-                        Option.None => panic("identificador no resuelto: " + name),
+                        Option.None => panic("unresolved identifier: " + name),
                     }
                 },
             }
@@ -1491,7 +1491,7 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
 // =====================================================================
 // Error de índice fuera de rango (mensaje idéntico al de Rust).
 fn oob(idx_e: Expr, i: int, n: int) -> RuntimeError {
-    rt_error(idx_e.line, idx_e.col, "índice " + to_string(i) + " fuera de rango (longitud " + to_string(n) + ")")
+    rt_error(idx_e.line, idx_e.col, "index " + to_string(i) + " out of range (length " + to_string(n) + ")")
 }
 
 fn eval_array(c: Interp, elems: [Expr]) -> Result<Value, Flow> {
@@ -1523,7 +1523,7 @@ fn eval_index(c: Interp, arr_e: Expr, idx_e: Expr) -> Result<Value, Flow> {
             }
             Result.Ok(Value.VChar(cs[i]))
         },
-        _ => panic("indexar sobre un no-arreglo/string"),
+        _ => panic("index on a non-array/string"),
     }
 }
 
@@ -1550,7 +1550,7 @@ fn eval_field(c: Interp, obj: Expr, fname: string) -> Result<Value, Flow> {
     let v = eval_expr(c, obj)?;
     match (v) {
         Value.VStruct(_, fields) => Result.Ok(struct_get(fields, fname)),
-        _ => panic("acceso a campo sobre un no-struct"),
+        _ => panic("field access on a non-struct"),
     }
 }
 
@@ -1579,7 +1579,7 @@ fn assign_index(c: Interp, arr_e: Expr, idx_e: Expr, v: Value) -> Result<Value, 
             elems[i] = v;  // muta el arreglo compartido
             Result.Ok(Value.VUnit)
         },
-        _ => panic("asignar índice sobre un no-arreglo"),
+        _ => panic("index assignment on a non-array"),
     }
 }
 
@@ -1590,7 +1590,7 @@ fn assign_field(c: Interp, obj_e: Expr, fname: string, v: Value) -> Result<Value
             struct_set(fields, fname, v);
             Result.Ok(Value.VUnit)
         },
-        _ => panic("asignar campo sobre un no-struct"),
+        _ => panic("field assignment on a non-struct"),
     }
 }
 
@@ -1652,7 +1652,7 @@ fn eval_match(c: Interp, scr: Expr, arms: [MatchArm]) -> Result<Value, Flow> {
         }
         i = i + 1;
     }
-    Result.Err(Flow.FError(rt_error(scr.line, scr.col, "ningún brazo del match casó (no debería ocurrir)")))
+    Result.Err(Flow.FError(rt_error(scr.line, scr.col, "no match branch matched (should not happen)")))
 }
 
 // `?`: desempaqueta `Ok(v)`/`Some(v)` a `v`, o propaga `Err(e)`/`None` como un `return` de la función
@@ -1667,7 +1667,7 @@ fn eval_try(c: Interp, inner: Expr) -> Result<Value, Flow> {
                 Result.Err(Flow.FReturn(v))
             }
         },
-        _ => panic("? sobre un valor que no es Result/Option"),
+        _ => panic("? on a value that is not Result/Option"),
     }
 }
 
@@ -1713,6 +1713,6 @@ pub fn run(prog: Program, prog_args: [string]) -> Result<Value, RuntimeError> {
                 },
             }
         },
-        Option.None => Result.Err(rt_error(0, 0, "no hay función 'main'")),
+        Option.None => Result.Err(rt_error(0, 0, "no 'main' function")),
     }
 }

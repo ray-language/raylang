@@ -19,7 +19,7 @@ const KEY_PEM: &str = include_str!("fixtures/tls_key.pem");
 
 /// Servidor STARTTLS de una conexión: lee "STARTTLS\n" en claro, responde "GO\n", y SOLO entonces
 /// arranca TLS de servidor sobre el mismo socket; bajo TLS lee una línea y responde "hola-seguro\n".
-fn lanzar_servidor_starttls() -> u16 {
+fn launch_servidor_starttls() -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("certificado de prueba válido");
@@ -46,8 +46,8 @@ fn lanzar_servidor_starttls() -> u16 {
         let mut tls = rustls::Stream::new(&mut conn, &mut sock);
         let mut req = [0u8; 64];
         let m = tls.read(&mut req).expect("lee bajo TLS");
-        assert!(&req[..m] == b"hola\n", "esperaba hola bajo TLS, llegó {:?}", &req[..m]);
-        tls.write_all(b"hola-seguro\n").expect("responde bajo TLS");
+        assert!(&req[..m] == b"hello\n", "esperaba hello bajo TLS, llegó {:?}", &req[..m]);
+        tls.write_all(b"hello-seguro\n").expect("responde bajo TLS");
         let _ = tls.flush();
         conn.send_close_notify();
         let _ = conn.complete_io(&mut sock);
@@ -84,7 +84,7 @@ fn main() -> int {
         Result.Ok(x) => x,
         Result.Err(e) => { print("upgrade: " + e); return 1; },
     };
-    let _ = net.socket_write_bytes(h, "hola\n".to_bytes());
+    let _ = net.socket_write_bytes(h, "hello\n".to_bytes());
     let seguro = match (net.socket_read_bytes(h)) {
         Result.Ok(b) => match (from_utf8(b)) {
             Result.Ok(s) => s,
@@ -96,16 +96,16 @@ fn main() -> int {
     // Upgrade de un handle que YA es TLS → error limpio, como valor.
     match (net.tls_upgrade(h, "localhost")) {
         Result.Ok(_) => { print("no debería"); return 1; },
-        Result.Err(e) => { print("doble: " + e); },
+        Result.Err(e) => { print("double: " + e); },
     }
     close(h);
     0
 }
 "#;
 
-const ESPERADO: &str = "claro: GO\ntls: hola-seguro\ndoble: el handle 1 no es un socket TCP plano\n";
+const ESPERADO: &str = "claro: GO\ntls: hello-seguro\ndouble: handle 1 is not a plain TCP socket\n";
 
-fn correr(port: u16, flags: &[&str]) -> String {
+fn run(port: u16, flags: &[&str]) -> String {
     let dir = std::env::temp_dir().join(format!("ray_tls_upgrade_{}", flags.join("_")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -121,7 +121,7 @@ fn correr(port: u16, flags: &[&str]) -> String {
         .expect("lanza raylang");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -129,13 +129,13 @@ fn correr(port: u16, flags: &[&str]) -> String {
 }
 
 #[test]
-fn starttls_upgrade_interprete() {
-    let port = lanzar_servidor_starttls();
-    assert_eq!(correr(port, &["--interp"]), ESPERADO);
+fn starttls_upgrade_interpreter() {
+    let port = launch_servidor_starttls();
+    assert_eq!(run(port, &["--interp"]), ESPERADO);
 }
 
 #[test]
 fn starttls_upgrade_vm() {
-    let port = lanzar_servidor_starttls();
-    assert_eq!(correr(port, &["--vm"]), ESPERADO);
+    let port = launch_servidor_starttls();
+    assert_eq!(run(port, &["--vm"]), ESPERADO);
 }

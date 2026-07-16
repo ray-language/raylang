@@ -42,18 +42,18 @@ impl Rng {
 
 /// Recoge recursivamente los `.ray` de `examples/` y `selfhost/` como bytes.
 fn corpus() -> Vec<Vec<u8>> {
-    let raiz = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut archivos = Vec::new();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
     for dir in ["examples", "selfhost"] {
-        recoger(&raiz.join(dir), &mut archivos);
+        recoger(&root.join(dir), &mut files);
     }
-    assert!(archivos.len() > 50, "el corpus debe tener los .ray del repo");
-    archivos
+    assert!(files.len() > 50, "el corpus must tener los .ray del repo");
+    files
 }
 
 fn recoger(dir: &Path, sink: &mut Vec<Vec<u8>>) {
-    let Ok(entradas) = std::fs::read_dir(dir) else { return };
-    for e in entradas.flatten() {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
             recoger(&p, sink);
@@ -69,33 +69,33 @@ fn recoger(dir: &Path, sink: &mut Vec<Vec<u8>>) {
 
 /// Produce un caso: un archivo del corpus con 1–4 mutaciones aplicadas.
 fn mutar(rng: &mut Rng, corpus: &[Vec<u8>]) -> Vec<u8> {
-    let mut caso = corpus[rng.below(corpus.len())].clone();
+    let mut case = corpus[rng.below(corpus.len())].clone();
     for _ in 0..(1 + rng.below(4)) {
-        if caso.is_empty() {
-            caso = corpus[rng.below(corpus.len())].clone();
+        if case.is_empty() {
+            case = corpus[rng.below(corpus.len())].clone();
         }
         match rng.below(7) {
             // Flip de un byte.
             0 => {
-                let i = rng.below(caso.len());
-                caso[i] ^= 1 << rng.below(8);
+                let i = rng.below(case.len());
+                case[i] ^= 1 << rng.below(8);
             }
             // Truncar por un punto arbitrario.
-            1 => caso.truncate(rng.below(caso.len())),
+            1 => case.truncate(rng.below(case.len())),
             // Borrar un span.
             2 => {
-                let ini = rng.below(caso.len());
-                let fin = (ini + 1 + rng.below(64)).min(caso.len());
-                caso.drain(ini..fin);
+                let ini = rng.below(case.len());
+                let fin = (ini + 1 + rng.below(64)).min(case.len());
+                case.drain(ini..fin);
             }
             // Duplicar un span (crea anidamientos/repeticiones).
             3 => {
-                let ini = rng.below(caso.len());
-                let fin = (ini + 1 + rng.below(64)).min(caso.len());
-                let trozo: Vec<u8> = caso[ini..fin].to_vec();
-                let destino = rng.below(caso.len());
+                let ini = rng.below(case.len());
+                let fin = (ini + 1 + rng.below(64)).min(case.len());
+                let trozo: Vec<u8> = case[ini..fin].to_vec();
+                let target = rng.below(case.len());
                 for (k, b) in trozo.into_iter().enumerate() {
-                    caso.insert(destino + k, b);
+                    case.insert(target + k, b);
                 }
             }
             // Insertar basura (ASCII imprimible, tokens raros y UTF-8 multibyte).
@@ -105,42 +105,42 @@ fn mutar(rng: &mut Rng, corpus: &[Vec<u8>]) -> Vec<u8> {
                     b"|>", b"=>", b"->", b"::", "é😀\u{7f}".as_bytes(), b"\x00\xff\xfe",
                 ];
                 let g = basura[rng.below(basura.len())];
-                let destino = rng.below(caso.len() + 1);
+                let target = rng.below(case.len() + 1);
                 for (k, b) in g.iter().enumerate() {
-                    caso.insert(destino + k, *b);
+                    case.insert(target + k, *b);
                 }
             }
             // Amplificar un carácter (la clase que encontró el anidamiento profundo).
             5 => {
-                let i = rng.below(caso.len());
-                let b = caso[i];
+                let i = rng.below(case.len());
+                let b = case[i];
                 let n = 1 << (3 + rng.below(9)); // 8..=2048 repeticiones
                 for _ in 0..n {
-                    caso.insert(i, b);
+                    case.insert(i, b);
                 }
             }
             // Empalmar con el prefijo de otro archivo del corpus.
             _ => {
-                let otro = &corpus[rng.below(corpus.len())];
-                let corte = rng.below(caso.len());
-                let toma = rng.below(otro.len().max(1));
-                caso.truncate(corte);
-                caso.extend_from_slice(&otro[..toma]);
+                let other = &corpus[rng.below(corpus.len())];
+                let cut = rng.below(case.len());
+                let toma = rng.below(other.len().max(1));
+                case.truncate(cut);
+                case.extend_from_slice(&other[..toma]);
             }
         }
     }
-    caso.truncate(64 * 1024); // acotar el caso: el valor está en la forma, no el tamaño
-    caso
+    case.truncate(64 * 1024); // acotar el caso: el valor está en la forma, no el tamaño
+    case
 }
 
 // ── Ejecución de un caso ─────────────────────────────────────────────────────────────
 
 /// Corre el front-end completo sobre el caso, en un hilo con pila grande.
 /// Devuelve `Some(mensaje_del_pánico)` si el compilador panicó (hallazgo).
-fn correr(caso: &[u8]) -> Option<String> {
+fn run(case: &[u8]) -> Option<String> {
     // El binario lee con `read_to_string` (rechaza UTF-8 inválido con un error de I/O),
     // así que el front-end solo ve UTF-8 válido: `lossy` reproduce esa frontera.
-    let src = String::from_utf8_lossy(caso).into_owned();
+    let src = String::from_utf8_lossy(case).into_owned();
     let src2 = src.clone();
     let h = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
@@ -150,7 +150,7 @@ fn correr(caso: &[u8]) -> Option<String> {
             let _ = raylang::lsp::analyze_all(&src2); // lex → parse_all → check_all
             let _ = raylang::fmt::format_source(&src2); // rayfmt: lex → parse → pretty-print
         })
-        .expect("hilo del caso");
+        .expect("hilo del case");
     h.join().err().map(|p| {
         p.downcast_ref::<String>()
             .cloned()
@@ -160,20 +160,20 @@ fn correr(caso: &[u8]) -> Option<String> {
 }
 
 /// El bucle: `iters` casos desde `semilla`; el primer pánico guarda la entrada y falla.
-fn fuzz(semilla: u64, iters: usize) {
+fn fuzz(seed: u64, iters: usize) {
     let corpus = corpus();
-    let mut rng = Rng(semilla);
+    let mut rng = Rng(seed);
     for i in 0..iters {
-        let caso = mutar(&mut rng, &corpus);
-        if let Some(msg) = correr(&caso) {
+        let case = mutar(&mut rng, &corpus);
+        if let Some(msg) = run(&case) {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fuzz");
             std::fs::create_dir_all(&dir).expect("crea target/fuzz");
-            let ruta: PathBuf = dir.join(format!("hallazgo_{semilla}_{i}.ray"));
-            std::fs::write(&ruta, &caso).expect("guarda el hallazgo");
+            let path: PathBuf = dir.join(format!("hallazgo_{seed}_{i}.ray"));
+            std::fs::write(&path, &case).expect("keeps el hallazgo");
             panic!(
-                "el front-end panicó en el caso {i} (semilla {semilla}):\n  {msg}\n\
-                 entrada guardada en {}",
-                ruta.display()
+                "el front-end panicó en el case {i} (seed {seed}):\n  {msg}\n\
+                 entry guardada en {}",
+                path.display()
             );
         }
     }
@@ -198,10 +198,10 @@ fn fuzz_campana() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(50_000);
     // Semilla del reloj: cada campaña explora casos distintos (se imprime para reproducir).
-    let semilla = std::time::SystemTime::now()
+    let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("reloj")
         .as_secs();
-    eprintln!("campaña de fuzzing: semilla {semilla}, {iters} iteraciones");
-    fuzz(semilla, iters);
+    eprintln!("campaña de fuzzing: seed {seed}, {iters} iteraciones");
+    fuzz(seed, iters);
 }

@@ -458,7 +458,7 @@ conversión vía el trait `From`:
 struct ErrorApp { detalle: string }
 
 impl From<string> for ErrorApp {
-    fn desde(source: string) -> ErrorApp { ErrorApp { detalle: source } }   // `from` es keyword → `desde`
+    fn convert(source: string) -> ErrorApp { ErrorApp { detalle: source } }  // `from` es keyword → `convert`
 }
 
 fn correr() -> Result<int, ErrorApp> {

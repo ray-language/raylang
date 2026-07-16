@@ -46,7 +46,7 @@ fn main() -> int {
 "#;
 
 /// Escribe el driver a un temporal, lo lanza con `--vm` y devuelve (proceso, puerto).
-fn lanzar() -> (std::process::Child, u16) {
+fn launch() -> (std::process::Child, u16) {
     let mut dir = std::env::temp_dir();
     dir.push("ray_sockwrite");
     std::fs::create_dir_all(&dir).expect("crea dir");
@@ -58,8 +58,8 @@ fn lanzar() -> (std::process::Child, u16) {
         .spawn().expect("lanza servidor");
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee puerto");
-    let port = linea.trim().parse().unwrap_or_else(|_| panic!("puerto: {linea:?}"));
+    reader.read_line(&mut linea).expect("lee port");
+    let port = linea.trim().parse().unwrap_or_else(|_| panic!("port: {linea:?}"));
     (child, port)
 }
 
@@ -72,7 +72,7 @@ fn leer_ready(s: &mut TcpStream) {
 
 #[test]
 fn socket_write_cede_y_no_acapara_el_scheduler() {
-    let (mut child, port) = lanzar();
+    let (mut child, port) = launch();
 
     // Cliente 1: lee "READY", luego NO drena el blob → su escritura en el servidor se aparca.
     let mut c1 = TcpStream::connect(("127.0.0.1", port)).expect("conecta c1");
@@ -89,10 +89,10 @@ fn socket_write_cede_y_no_acapara_el_scheduler() {
         match c2.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => recibido += n,
-            Err(e) => panic!("c2 no recibió su blob completo (cesión rota → scheduler acaparado): {e}"),
+            Err(e) => panic!("c2 no recibió su blob complete (cesión rota → scheduler acaparado): {e}"),
         }
     }
-    assert_eq!(recibido, BLOB, "el cliente 2 debe recibir su blob entero mientras el 1 está aparcado");
+    assert_eq!(recibido, BLOB, "el client 2 must recibir su blob entero mientras el 1 está aparcado");
 
     // Ahora c1 drena su blob → su escritura aparcada termina → el scope une y el servidor sale limpio.
     let mut total1 = 0usize;
@@ -103,7 +103,7 @@ fn socket_write_cede_y_no_acapara_el_scheduler() {
             Err(_) => break,
         }
     }
-    assert_eq!(total1, BLOB, "el cliente 1 también recibe su blob al drenar");
+    assert_eq!(total1, BLOB, "el client 1 también recibe su blob al drenar");
 
     let _ = child.wait();
 }

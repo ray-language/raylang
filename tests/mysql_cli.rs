@@ -28,7 +28,7 @@ fn pkt(seq: u8, payload: &[u8]) -> Vec<u8> {
 
 fn read_pkt<S: Read>(s: &mut S) -> (u8, Vec<u8>) {
     let mut hdr = [0u8; 4];
-    s.read_exact(&mut hdr).expect("cabecera");
+    s.read_exact(&mut hdr).expect("header");
     let len = hdr[0] as usize | (hdr[1] as usize) << 8 | (hdr[2] as usize) << 16;
     let mut payload = vec![0u8; len];
     s.read_exact(&mut payload).expect("carga");
@@ -69,22 +69,22 @@ fn lenc(s: &str) -> Vec<u8> {
 }
 
 /// Una definición de columna mínima (el cliente de texto se la salta; el binario lee tipo+flags).
-fn col_def(nombre: &str) -> Vec<u8> {
-    col_def_tipo(nombre, 0xfd)
+fn col_def(name: &str) -> Vec<u8> {
+    col_def_ty(name, 0xfd)
 }
 
-fn col_def_tipo(nombre: &str, tipo: u8) -> Vec<u8> {
+fn col_def_ty(name: &str, ty: u8) -> Vec<u8> {
     let mut p = Vec::new();
     p.extend_from_slice(&lenc("def")); // catálogo
     for _ in 0..3 {
         p.extend_from_slice(&lenc("")); // esquema, tabla, tabla original
     }
-    p.extend_from_slice(&lenc(nombre)); // nombre
-    p.extend_from_slice(&lenc(nombre)); // nombre original
+    p.extend_from_slice(&lenc(name)); // nombre
+    p.extend_from_slice(&lenc(name)); // nombre original
     p.push(0x0c); // longitud del bloque fijo
     p.extend_from_slice(&[33, 0]); // charset
     p.extend_from_slice(&[255, 0, 0, 0]); // longitud de columna
-    p.push(tipo);
+    p.push(ty);
     p.extend_from_slice(&[0, 0]); // flags
     p.push(0); // decimales
     p.extend_from_slice(&[0, 0]); // relleno
@@ -94,7 +94,7 @@ fn col_def_tipo(nombre: &str, tipo: u8) -> Vec<u8> {
 const EOF: [u8; 5] = [0xfe, 0, 0, 0, 0]; // EOF clásico: marcador + warnings + estado
 
 /// Atiende una sesión completa: handshake, auth verificada, y comandos hasta COM_QUIT.
-fn atender(mut s: TcpStream) {
+fn handle(mut s: TcpStream) {
     s.write_all(&pkt(0, &handshake_v10())).unwrap();
     let (_seq, resp) = read_pkt(&mut s);
     // HandshakeResponse41: capacidades(4) + max(4) + charset(1) + reservado(23) + user NUL + auth.
@@ -175,22 +175,22 @@ fn fase_comandos<S: Read + Write>(s: &mut S) {
                 } else if prep_sql.starts_with("SELECT") {
                     // Result set BINARIO: 4 columnas que ejercitan la decodificación por tipo.
                     s.write_all(&pkt(1, &[4])).unwrap();
-                    s.write_all(&pkt(2, &col_def_tipo("nombre", 0xfd))).unwrap(); // VAR_STRING
-                    s.write_all(&pkt(3, &col_def_tipo("nota", 8))).unwrap(); // LONGLONG
-                    s.write_all(&pkt(4, &col_def_tipo("media", 5))).unwrap(); // DOUBLE
-                    s.write_all(&pkt(5, &col_def_tipo("creado", 12))).unwrap(); // DATETIME
+                    s.write_all(&pkt(2, &col_def_ty("name", 0xfd))).unwrap(); // VAR_STRING
+                    s.write_all(&pkt(3, &col_def_ty("nota", 8))).unwrap(); // LONGLONG
+                    s.write_all(&pkt(4, &col_def_ty("media", 5))).unwrap(); // DOUBLE
+                    s.write_all(&pkt(5, &col_def_ty("creado", 12))).unwrap(); // DATETIME
                     s.write_all(&pkt(6, &EOF)).unwrap();
                     // Fila 1: eco del primer parámetro + -5 + 2.5 + 2026-07-09 12:34:56.
-                    let eco = params.first().cloned().unwrap_or_default();
+                    let echo = params.first().cloned().unwrap_or_default();
                     let mut f1 = vec![0u8, 0]; // header + bitmap (sin NULLs)
-                    f1.extend_from_slice(&lenc(&eco));
+                    f1.extend_from_slice(&lenc(&echo));
                     f1.extend_from_slice(&(-5i64).to_le_bytes());
                     f1.extend_from_slice(&2.5f64.to_le_bytes());
                     f1.extend_from_slice(&[7, 0xEA, 0x07, 7, 9, 12, 34, 56]);
                     s.write_all(&pkt(7, &f1)).unwrap();
                     // Fila 2: nota y media NULL (bits 3 y 4 del bitmap) + datetime cero (len 0).
                     let mut f2 = vec![0u8, 0b0001_1000];
-                    f2.extend_from_slice(&lenc("fija"));
+                    f2.extend_from_slice(&lenc("fixes"));
                     f2.push(0); // DATETIME len 0
                     s.write_all(&pkt(8, &f2)).unwrap();
                     s.write_all(&pkt(9, &EOF)).unwrap();
@@ -206,7 +206,7 @@ fn fase_comandos<S: Read + Write>(s: &mut S) {
                 if sql.starts_with("SELECT") {
                     // Result set: 2 columnas, 2 filas (la segunda con un NULL).
                     s.write_all(&pkt(1, &[2])).unwrap();
-                    s.write_all(&pkt(2, &col_def("nombre"))).unwrap();
+                    s.write_all(&pkt(2, &col_def("name"))).unwrap();
                     s.write_all(&pkt(3, &col_def("nota"))).unwrap();
                     s.write_all(&pkt(4, &EOF)).unwrap();
                     let mut fila1 = lenc("ada");
@@ -239,19 +239,19 @@ fn fase_comandos<S: Read + Write>(s: &mut S) {
 }
 
 /// Lanza el servidor de juguete en un puerto efímero; atiende conexiones en serie (una por motor).
-fn lanzar_servidor() -> u16 {
+fn launch_servidor() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
         for s in listener.incoming().flatten() {
-            atender(s);
+            handle(s);
         }
     });
     port
 }
 
 /// Crea el proyecto cliente (path-dep a packages/db) y devuelve su raíz.
-fn proyecto(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -271,7 +271,7 @@ fn main() -> int {{
         Result.Ok(conn) => conn,
         Result.Err(e) => {{ print(e); return 1; }},
     }};
-    match (mysql.query(c, "SELECT nombre, nota FROM alumnos", [])) {{
+    match (mysql.query(c, "SELECT name, nota FROM alumnos", [])) {{
         Result.Ok(rows) => {{
             var i = 0;
             while (i < rows.len()) {{
@@ -303,13 +303,13 @@ fn main() -> int {{
     app
 }
 
-fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
+fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
-    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binario");
+    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -323,30 +323,30 @@ fn mysql_handshake_query_exec_y_error() {
     let base = std::env::temp_dir().join("ray_mysql_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor();
-    let app = proyecto(&base, port);
+    let port = launch_servidor();
+    let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    let (out_vm, _) = correr(&app, &[]);
+    let (out_vm, _) = run(&app, &[]);
     assert_eq!(out_vm, ESPERADO, "VM");
-    let (out_interp, _) = correr(&app, &["--interp"]);
+    let (out_interp, _) = run(&app, &["--interp"]);
     assert_eq!(out_interp, ESPERADO, "intérprete");
 }
 
 #[test]
-fn mysql_password_incorrecta_da_error_claro() {
+fn mysql_password_incorrect_da_error_claro() {
     let base = std::env::temp_dir().join("ray_mysql_cli_badpw");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor();
-    let app = proyecto(&base, port);
+    let port = launch_servidor();
+    let app = project(&base, port);
     // Reescribe el main con una contraseña equivocada → el servidor rechaza con su ERR.
     let main = std::fs::read_to_string(app.join("src/main.ray")).unwrap();
     std::fs::write(app.join("src/main.ray"), main.replace("\"secret\"", "\"mala\"")).unwrap();
     let out = Command::new(BIN).args(["run"]).current_dir(&app).output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("acceso denegado"), "ERR del servidor visible:\n{stdout}");
-    assert_eq!(out.status.code(), Some(1), "el programa sale con 1");
+    assert_eq!(out.status.code(), Some(1), "el program sale con 1");
 }
 
 // --- TLS: connect_tls (SSLRequest → tls_upgrade → full-path de caching_sha2) ---
@@ -354,13 +354,13 @@ fn mysql_password_incorrecta_da_error_claro() {
 /// Atiende una sesión TLS con `caching_sha2_password` forzando el **full-path**: handshake en
 /// claro → SSLRequest (verificado octeto a octeto) → TLS → respuesta completa cifrada →
 /// AuthMoreData(full auth) → contraseña EN CLARO por el canal cifrado (verificada) → OK → comandos.
-fn atender_tls(mut s: TcpStream, config: std::sync::Arc<rustls::ServerConfig>) {
+fn handle_tls(mut s: TcpStream, config: std::sync::Arc<rustls::ServerConfig>) {
     s.write_all(&pkt(0, &handshake_v10_plugin("caching_sha2_password"))).unwrap();
     // SSLRequest: el prefijo de la respuesta (32 octetos), con CLIENT_SSL encendido.
     let (_seq, ssl_req) = read_pkt(&mut s);
-    assert_eq!(ssl_req.len(), 32, "longitud del SSLRequest");
+    assert_eq!(ssl_req.len(), 32, "length del SSLRequest");
     let caps = u32::from_le_bytes([ssl_req[0], ssl_req[1], ssl_req[2], ssl_req[3]]);
-    assert_ne!(caps & 2048, 0, "CLIENT_SSL debe estar encendido");
+    assert_ne!(caps & 2048, 0, "CLIENT_SSL must estar encendido");
     // El mismo socket sube a TLS; el resto de la sesión va cifrado.
     let mut conn = rustls::ServerConnection::new(config).expect("server conn");
     let mut tls = rustls::Stream::new(&mut conn, &mut s);
@@ -387,7 +387,7 @@ fn atender_tls(mut s: TcpStream, config: std::sync::Arc<rustls::ServerConfig>) {
     let _ = conn.complete_io(&mut s);
 }
 
-fn lanzar_servidor_tls() -> u16 {
+fn launch_servidor_tls() -> u16 {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
@@ -405,14 +405,14 @@ fn lanzar_servidor_tls() -> u16 {
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
         for s in listener.incoming().flatten() {
-            atender_tls(s, config.clone());
+            handle_tls(s, config.clone());
         }
     });
     port
 }
 
 /// Cliente TLS: conexión buena (full-path completo) + contraseña mala (ERR sobre el canal cifrado).
-fn proyecto_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -433,7 +433,7 @@ fn main() -> int {{
         Result.Err(e) => {{ print(e); return 1; }},
     }};
     print("conectado seguro");
-    match (mysql.query(c, "SELECT nombre, nota FROM alumnos", [])) {{
+    match (mysql.query(c, "SELECT name, nota FROM alumnos", [])) {{
         Result.Ok(rows) => {{
             var i = 0;
             while (i < rows.len()) {{
@@ -457,7 +457,7 @@ fn main() -> int {{
     app
 }
 
-fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
+fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
@@ -466,10 +466,10 @@ fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
         .current_dir(app)
         .env("SSL_CERT_FILE", &ca)
         .output()
-        .expect("lanza el binario");
+        .expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -483,18 +483,18 @@ fn mysql_tls_full_path_de_caching_sha2() {
     let base = std::env::temp_dir().join("ray_mysql_cli_tls");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor_tls();
-    let app = proyecto_tls(&base, port);
+    let port = launch_servidor_tls();
+    let app = project_tls(&base, port);
 
-    assert_eq!(correr_tls(&app, &[]), ESPERADO_TLS, "VM");
-    assert_eq!(correr_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
+    assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");
+    assert_eq!(run_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
 }
 
 // --- Protocolo binario (prepared statements) ---
 
 /// Cliente del protocolo binario: SELECT con parámetro (eco + tipos LONGLONG/DOUBLE/DATETIME +
 /// NULLs por bitmap), INSERT con parámetro, y un error del servidor en el execute.
-fn proyecto_binario(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project_binary(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -516,7 +516,7 @@ fn main() -> int {{
     }};
     // SELECT preparado: el servidor devuelve el parámetro como primera celda (el binding fluye)
     // y tipos binarios de verdad (LONGLONG con signo, DOUBLE, DATETIME, NULLs por bitmap).
-    match (mysql.query(c, "SELECT nombre, nota, media, creado FROM t WHERE nombre = ?", ["eco"])) {{
+    match (mysql.query(c, "SELECT name, nota, media, creado FROM t WHERE name = ?", ["echo"])) {{
         Result.Ok(rows) => {{
             var i = 0;
             while (i < rows.len()) {{
@@ -527,7 +527,7 @@ fn main() -> int {{
         Result.Err(e) => {{ print(e); return 1; }},
     }}
     // INSERT preparado.
-    match (mysql.exec(c, "INSERT INTO t (nombre) VALUES (?)", ["x"])) {{
+    match (mysql.exec(c, "INSERT INTO t (name) VALUES (?)", ["x"])) {{
         Result.Ok(n) => {{ print("afectadas: " + to_string(n)); }},
         Result.Err(e) => {{ print(e); return 1; }},
     }}
@@ -545,21 +545,21 @@ fn main() -> int {{
     app
 }
 
-const ESPERADO_BIN: &str = "eco|-5|2.5|2026-07-09 12:34:56\n\
-fija|||0000-00-00 00:00:00\n\
+const ESPERADO_BIN: &str = "echo|-5|2.5|2026-07-09 12:34:56\n\
+fixes|||0000-00-00 00:00:00\n\
 afectadas: 4\n\
 mysql: la tabla no existe\n";
 
 #[test]
-fn mysql_protocolo_binario_prepared() {
+fn mysql_protocolo_binary_prepared() {
     let base = std::env::temp_dir().join("ray_mysql_cli_bin");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor();
-    let app = proyecto_binario(&base, port);
+    let port = launch_servidor();
+    let app = project_binary(&base, port);
 
-    let (out_vm, _) = correr(&app, &[]);
+    let (out_vm, _) = run(&app, &[]);
     assert_eq!(out_vm, ESPERADO_BIN, "VM");
-    let (out_interp, _) = correr(&app, &["--interp"]);
+    let (out_interp, _) = run(&app, &["--interp"]);
     assert_eq!(out_interp, ESPERADO_BIN, "intérprete");
 }

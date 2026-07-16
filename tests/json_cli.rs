@@ -28,16 +28,16 @@ fn run_with_lib(name: &str, driver: &str, vm: bool) -> (String, i32) {
 }
 
 /// Comprueba que `driver` produce `esperado` (stdout, trim) en ambos motores.
-fn check(name: &str, driver: &str, esperado: &str) {
+fn check(name: &str, driver: &str, expected: &str) {
     for vm in [false, true] {
         let (out, code) = run_with_lib(name, driver, vm);
-        assert_eq!(out.trim(), esperado, "driver '{name}' (vm={vm})");
-        assert_eq!(code, 0, "salida 0 (vm={vm})");
+        assert_eq!(out.trim(), expected, "driver '{name}' (vm={vm})");
+        assert_eq!(code, 0, "output 0 (vm={vm})");
     }
 }
 
 #[test]
-fn round_trip_canonico_con_claves_ordenadas() {
+fn round_trip_canonical_con_keys_ordenadas() {
     let driver = r#"
 from json import parse, stringify;
 fn main() -> int {
@@ -53,11 +53,11 @@ fn main() -> int {
 }
 
 #[test]
-fn numeros_y_escapes() {
+fn numbers_and_escapes() {
     let driver = r#"
 from json import parse, stringify;
 fn main() -> int {
-    let s = "{\"neg\": -3.5, \"exp\": 1e3, \"texto\": \"a\\tb\\n\"}";
+    let s = "{\"neg\": -3.5, \"exp\": 1e3, \"text\": \"a\\tb\\n\"}";
     match (parse(s)) {
         Result.Ok(j) => { print(stringify(j)); 0 },
         Result.Err(e) => { eprint(e); 1 },
@@ -65,62 +65,62 @@ fn main() -> int {
 }
 "#;
     // -3.5 se mantiene; 1e3 -> 1000; el tab/newline se re-escapan en la salida.
-    check("numeros", driver, r#"{"exp":1000,"neg":-3.5,"texto":"a\tb\n"}"#);
+    check("numeros", driver, r#"{"exp":1000,"neg":-3.5,"text":"a\tb\n"}"#);
 }
 
 #[test]
-fn escapes_unicode() {
+fn unicode_escapes() {
     // Diferido JSON-1: \uXXXX — BMP de 1 y 2 octetos UTF-8, par surrogate (astral), y los
     // errores como valores: surrogate suelto, par incompleto, dígito no hex.
     let driver = r#"
 from json import parse, stringify, Json;
-fn reporta(s: string) {
+fn reports(s: string) {
     match (parse(s)) {
         Result.Ok(j) => { print(stringify(j)); },
         Result.Err(e) => { print("err: " + e); },
     }
 }
 fn main() -> int {
-    reporta("\"caf\\u00e9\"");
-    reporta("\"\\u0041\\u2764\"");
-    reporta("\"\\ud83d\\ude00\"");
-    reporta("\"\\udc00\"");
-    reporta("\"\\ud83dx\"");
-    reporta("\"\\u12g4\"");
+    reports("\"caf\\u00e9\"");
+    reports("\"\\u0041\\u2764\"");
+    reports("\"\\ud83d\\ude00\"");
+    reports("\"\\udc00\"");
+    reports("\"\\ud83dx\"");
+    reports("\"\\u12g4\"");
     0
 }
 "#;
-    let esperado = "\"café\"\n\"A❤\"\n\"😀\"\nerr: escape \\u con surrogate suelto\nerr: par surrogate incompleto en \\u\nerr: escape \\u con dígito no hexadecimal";
-    check("unicode", driver, esperado);
+    let expected = "\"café\"\n\"A❤\"\n\"😀\"\nerr: escape \\u con surrogate suelto\nerr: par surrogate incompleto en \\u\nerr: escape \\u con dígito no hexadecimal";
+    check("unicode", driver, expected);
 }
 
 #[test]
-fn escapes_de_control_rfc8259() {
+fn control_escapes_rfc8259() {
     // M59.1 — conformidad con la RFC 8259 §7: (1) \b y \f son escapes LEGALES y el parse los
     // acepta (antes: "secuencia de escape no soportada"); (2) quote los re-emite cortos; (3) un
     // control < 0x20 sin escape corto sale como \u00XX (antes: crudo → JSON inválido).
     let driver = r#"
 from json import parse, stringify;
-fn reporta(s: string) {
+fn reports(s: string) {
     match (parse(s)) {
         Result.Ok(j) => { print(stringify(j)); },
         Result.Err(e) => { print("err: " + e); },
     }
 }
 fn main() -> int {
-    reporta("\"a\\bb\\fc\"");
-    reporta("\"\\u0008\\u000c\"");
-    reporta("\"\\u0001\\u001f\"");
+    reports("\"a\\bb\\fc\"");
+    reports("\"\\u0008\\u000c\"");
+    reports("\"\\u0001\\u001f\"");
     0
 }
 "#;
     // Los / se canonicalizan a \b/\f; los controles sin escape corto, a \u00XX.
-    let esperado = "\"a\\bb\\fc\"\n\"\\b\\f\"\n\"\\u0001\\u001f\"";
-    check("control", driver, esperado);
+    let expected = "\"a\\bb\\fc\"\n\"\\b\\f\"\n\"\\u0001\\u001f\"";
+    check("control", driver, expected);
 }
 
 #[test]
-fn vacios_y_anidamiento() {
+fn vacios_y_nesting() {
     let driver = r#"
 from json import parse, stringify;
 fn main() -> int {
@@ -135,34 +135,34 @@ fn main() -> int {
 }
 
 #[test]
-fn errores_como_valores() {
+fn errors_como_values() {
     let driver = r#"
 from json import parse, stringify;
-fn reporta(s: string) {
+fn reports(s: string) {
     match (parse(s)) {
         Result.Ok(j) => print("ok: " + stringify(j)),
         Result.Err(e) => print("err: " + e),
     }
 }
 fn main() -> int {
-    reporta("{\"a\": 1} basura");      // texto sobrante
-    reporta("[1, 2");                   // arreglo sin cerrar
-    reporta("\"sin cierre");            // string sin cerrar
+    reports("{\"a\": 1} basura");      // texto sobrante
+    reports("[1, 2");                   // arreglo sin cerrar
+    reports("\"sin cierre");            // string sin cerrar
     0
 }
 "#;
-    let esperado = "err: texto sobrante tras el JSON\nerr: arreglo sin cerrar\nerr: string sin cerrar";
-    check("errores", driver, esperado);
+    let expected = "err: texto sobrante tras el JSON\nerr: arreglo sin cerrar\nerr: string sin cerrar";
+    check("errors", driver, expected);
 }
 
 // ── Helpers de acceso + pretty-print (M90.3) ─────────────────────────────────────────
 
 #[test]
-fn helpers_de_acceso() {
+fn helpers_de_access() {
     let driver = r#"
 from json import parse, get_string, get_int, get_float, get_bool, get_array, member, at, as_int, as_string, is_null;
 
-fn muestra(o: Option<string>) -> string {
+fn shows(o: Option<string>) -> string {
     match (o) {
         Option.Some(s) => s,
         Option.None => "None",
@@ -170,12 +170,12 @@ fn muestra(o: Option<string>) -> string {
 }
 
 fn main() -> int {
-    let s = "{\"nombre\": \"ada\", \"edad\": 36, \"pi\": 3.5, \"viva\": false, \"nums\": [10, 20], \"nada\": null}";
+    let s = "{\"name\": \"ada\", \"edad\": 36, \"pi\": 3.5, \"viva\": false, \"nums\": [10, 20], \"nada\": null}";
     match (parse(s)) {
         Result.Err(e) => { eprint(e); 1 },
         Result.Ok(j) => {
-            print(muestra(j.get_string("nombre")));           // ada
-            print(muestra(j.get_string("edad")));             // None (no es string)
+            print(shows(j.get_string("name")));           // ada
+            print(shows(j.get_string("edad")));             // None (no es string)
             match (j.get_int("edad")) {
                 Option.Some(n) => print(to_string(n)),        // 36
                 Option.None => print("None"),
@@ -211,7 +211,7 @@ fn main() -> int {
                 Option.Some(v) => print(to_string(is_null(v))),          // true
                 Option.None => print("None"),
             };
-            print(muestra(j.get_string("no_existe")));        // None
+            print(shows(j.get_string("no_existe")));        // None
             match (at(j, 0)) {
                 Option.Some(_) => print("algo"),
                 Option.None => print("None"),                 // None (un objeto no se indexa)
@@ -229,13 +229,13 @@ fn pretty_print_con_sangria() {
     let driver = r#"
 from json import parse, stringify_pretty;
 fn main() -> int {
-    let s = "{\"b\": [1, 2], \"a\": \"x\", \"vacio\": {}, \"lista_vacia\": []}";
+    let s = "{\"b\": [1, 2], \"a\": \"x\", \"empty\": {}, \"list_empty\": []}";
     match (parse(s)) {
         Result.Ok(j) => { print(stringify_pretty(j, 2)); 0 },
         Result.Err(e) => { eprint(e); 1 },
     }
 }
 "#;
-    let esperado = "{\n  \"a\": \"x\",\n  \"b\": [\n    1,\n    2\n  ],\n  \"lista_vacia\": [],\n  \"vacio\": {}\n}";
-    check("pretty", driver, esperado);
+    let expected = "{\n  \"a\": \"x\",\n  \"b\": [\n    1,\n    2\n  ],\n  \"empty\": {},\n  \"list_empty\": []\n}";
+    check("pretty", driver, expected);
 }

@@ -15,44 +15,44 @@ const ESPERADO: &[&str] = &[
     r##"{"ts":"2026-06-30T12:00:00Z","level":"INFO","service":"api","msg":"bel:\u0007 esc:\u001b bs:\b ff:\f","k":"v\u0001"}"##,
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/log_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta log_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout)
+    let lines = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|l| l.to_string())
         .collect();
-    (lineas, out.status.success())
+    (lines, out.status.success())
 }
 
 #[test]
-fn log_estructurado_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn log_estructurado_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "log_demo falló");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn log_estructurado_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "log_demo falló");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 /// Cada línea JSON (salvo "(filtrado)") debe ser parseable por Python `json.loads` (escapado correcto).
 #[test]
-fn las_lineas_son_json_valido() {
+fn las_lines_son_json_valid() {
     if Command::new("python3").arg("--version").output().is_err() {
         eprintln!("python3 no disponible: se omite la validación JSON");
         return;
     }
-    let (lineas, ok) = correr(&[]);
+    let (lines, ok) = run(&[]);
     assert!(ok);
-    for l in &lineas {
+    for l in &lines {
         if l == "(filtrado)" {
             continue;
         }

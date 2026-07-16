@@ -213,12 +213,12 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
     if (is_float) {
         match (parse_float(text)) {
             Option.Some(f) => Result.Ok(TokKind.Float(f)),
-            Option.None => Result.Err(lex_error(lx, "flotante inválido '" + text + "'")),
+            Option.None => Result.Err(lex_error(lx, "invalid float '" + text + "'")),
         }
     } else {
         match (parse_int(text)) {
             Option.Some(n) => Result.Ok(TokKind.Int(n)),
-            Option.None => Result.Err(lex_error(lx, "entero fuera de rango '" + text + "'")),
+            Option.None => Result.Err(lex_error(lx, "integer out of range '" + text + "'")),
         }
     }
 }
@@ -259,18 +259,18 @@ fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
     var value = "";
     while (true) {
         if (at_end(lx)) {
-            return Result.Err(lex_error(lx, "cadena sin cerrar"));
+            return Result.Err(lex_error(lx, "unterminated string"));
         }
         let c = cur(lx);
         if (c == '"') {
             advance(lx);
             return Result.Ok(TokKind.Str(value));
         } else if (c == '\n') {
-            return Result.Err(lex_error(lx, "salto de línea dentro de una cadena sin cerrar"));
+            return Result.Err(lex_error(lx, "newline inside an unterminated string"));
         } else if (c == '\\') {
             advance(lx);  // la barra invertida
             if (at_end(lx)) {
-                return Result.Err(lex_error(lx, "cadena sin cerrar tras '\\'"));
+                return Result.Err(lex_error(lx, "unterminated string after '\\'"));
             }
             let e = cur(lx);
             if (e == 'n') {
@@ -284,7 +284,7 @@ fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
             } else if (e == '"') {
                 value = value + to_string('"');
             } else {
-                return Result.Err(lex_error(lx, "secuencia de escape inválida '\\" + to_string(e) + "'"));
+                return Result.Err(lex_error(lx, "invalid escape sequence '\\" + to_string(e) + "'"));
             }
             advance(lx);  // el carácter escapado
         } else {
@@ -292,25 +292,25 @@ fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
             advance(lx);
         }
     }
-    panic("inalcanzable")  // el while(true) solo sale por return; diverge, cede el tipo
+    panic("unreachable")  // el while(true) solo sale por return; diverge, cede el tipo
 }
 
 // Lee un literal de carácter 'a' (la comilla de apertura ya fue consumida). Mismos escapes
 // que la cadena más \'. Exactamente un carácter.
 fn char_lit(lx: Lexer) -> Result<TokKind, LexError> {
     if (at_end(lx)) {
-        return Result.Err(lex_error(lx, "carácter sin cerrar"));
+        return Result.Err(lex_error(lx, "unterminated char literal"));
     }
     let first = cur(lx);
     var c = ' ';
     if (first == '\'') {
-        return Result.Err(lex_error(lx, "un literal de carácter no puede estar vacío ('')"));
+        return Result.Err(lex_error(lx, "a char literal cannot be empty ('')"));
     } else if (first == '\n') {
-        return Result.Err(lex_error(lx, "salto de línea dentro de un literal de carácter"));
+        return Result.Err(lex_error(lx, "newline inside a char literal"));
     } else if (first == '\\') {
         advance(lx);  // la barra invertida
         if (at_end(lx)) {
-            return Result.Err(lex_error(lx, "carácter sin cerrar tras '\\'"));
+            return Result.Err(lex_error(lx, "unterminated char literal after '\\'"));
         }
         let e = cur(lx);
         if (e == 'n') {
@@ -324,7 +324,7 @@ fn char_lit(lx: Lexer) -> Result<TokKind, LexError> {
         } else if (e == '\'') {
             c = '\'';
         } else {
-            return Result.Err(lex_error(lx, "secuencia de escape inválida '\\" + to_string(e) + "'"));
+            return Result.Err(lex_error(lx, "invalid escape sequence '\\" + to_string(e) + "'"));
         }
         advance(lx);  // el carácter escapado
     } else {
@@ -335,7 +335,7 @@ fn char_lit(lx: Lexer) -> Result<TokKind, LexError> {
         advance(lx);  // comilla de cierre
         Result.Ok(TokKind.Char(c))
     } else {
-        Result.Err(lex_error(lx, "se esperaba ''' para cerrar el literal de carácter (¿más de un carácter?)"))
+        Result.Err(lex_error(lx, "expected ''' to close the char literal (more than one character?)"))
     }
 }
 
@@ -353,10 +353,10 @@ fn next_token(lx: Lexer) -> Result<TokKind, LexError> {
     } else if (c == '>') {
         if (match_char(lx, '=')) { Result.Ok(TokKind.GtEq) } else { Result.Ok(TokKind.Gt) }
     } else if (c == '&') {
-        if (match_char(lx, '&')) { Result.Ok(TokKind.AmpAmp) } else { Result.Err(lex_error(lx, "se esperaba '&&' (¿olvidaste un '&'?)")) }
+        if (match_char(lx, '&')) { Result.Ok(TokKind.AmpAmp) } else { Result.Err(lex_error(lx, "expected '&&' (did you forget a '&'?)")) }
     } else if (c == '|') {
-        if (match_char(lx, '|')) { Result.Ok(TokKind.PipePipe) } else if (match_char(lx, '>')) { Result.Ok(TokKind.PipeArrow) } else { Result.Err(lex_error(lx, "se esperaba '||' o '|>' (¿olvidaste un '|'?)")) }
-    } else if (c == '"') { string_lit(lx) } else if (c == '\'') { char_lit(lx) } else if (is_digit(c)) { number(lx) } else if (is_alpha(c)) { Result.Ok(identifier(lx)) } else { Result.Err(lex_error(lx, "carácter inesperado '" + to_string(c) + "'")) }
+        if (match_char(lx, '|')) { Result.Ok(TokKind.PipePipe) } else if (match_char(lx, '>')) { Result.Ok(TokKind.PipeArrow) } else { Result.Err(lex_error(lx, "expected '||' or '|>' (did you forget a '|'?)")) }
+    } else if (c == '"') { string_lit(lx) } else if (c == '\'') { char_lit(lx) } else if (is_digit(c)) { number(lx) } else if (is_alpha(c)) { Result.Ok(identifier(lx)) } else { Result.Err(lex_error(lx, "unexpected character '" + to_string(c) + "'")) }
 }
 
 // --- El bucle principal: produce los tokens, cerrando con Eof ---

@@ -103,7 +103,7 @@ fn kind_str(k: TokKind) -> string {
 
 // Volcado canónico del resultado del lexer. En el caso feliz, un token por línea; ante un
 // error léxico, una sola línea con el mismo formato que el `Display` de `LexError` en Rust
-// (`error léxico en <l>:<c>: <msg>`), para que el oráculo compare también los errores.
+// (`lex error at <l>:<c>: <msg>`), para que el oráculo compare también los errores.
 fn dump(src: string) {
     match (lex(src)) {
         Result.Ok(toks) => {
@@ -115,7 +115,7 @@ fn dump(src: string) {
             }
         },
         Result.Err(e) => {
-            print("error léxico en " + to_string(e.line) + ":" + to_string(e.col) + ": " + e.msg);
+            print("lex error at " + to_string(e.line) + ":" + to_string(e.col) + ": " + e.msg);
         },
     }
 }
@@ -129,7 +129,7 @@ fn read_file(path: string) -> Result<string, string> {
 fn main() -> int {
     let argv = args();
     if (argv.len() == 0) {
-        eprint("uso: raylang selfhost/lex_dump.ray <archivo>");
+        eprint("use: raylang selfhost/lex_dump.ray <file>");
         return 1;
     }
     match (read_file(argv[0])) {

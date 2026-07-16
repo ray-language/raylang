@@ -88,12 +88,12 @@ fn run_ntp(driver: &str, vm: bool) -> (String, String, i32) {
 }
 
 #[test]
-fn sntp_hora_fija_del_servidor() {
+fn sntp_hora_fixes_del_servidor() {
     for vm in [false, true] {
         let port = toy_sntp_server();
         let driver = DRIVER.replace("__PORT__", &port.to_string());
         let (out, err, code) = run_ntp(&driver, vm);
-        assert_eq!(code, 0, "salida 0 (vm={vm})\n{err}");
+        assert_eq!(code, 0, "output 0 (vm={vm})\n{err}");
         // t3 = 2026-01-01 00:00:00.5 UTC en ms; stratum 2. offset/delay dependen del reloj local.
         assert_eq!(out.trim(), "1767225600500\n2", "hora del servidor (vm={vm}): {out}");
     }

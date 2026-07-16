@@ -47,7 +47,7 @@ fn main() -> int {
             0
         },
         Result.Err(e) => {
-            eprint("no se pudo conectar: " + e);
+            eprint("could not connect: " + e);
             1
         },
     }

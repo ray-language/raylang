@@ -139,7 +139,7 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   `fn map<U>(self, f: fn(T) -> U) -> Iter<U>`. Se suman a los del impl al resolver la llamada;
   la inferencia los fija por los argumentos. Habilita p. ej. los adaptadores de `Iterator` (§10).
 - Los **traits con parámetros de tipo** (`trait From<S>`, `trait Iterator<T>`) existen con
-  semántica limitada: `From<S> { fn desde(origen: S) -> Self; }` alimenta la conversión de `?`
+  semántica limitada: `From<S> { fn convert(origen: S) -> Self; }` alimenta la conversión de `?`
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
   por punto ordinario. Usar un trait parametrizado del usuario en bounds o `dyn` es error.
 - `const` de nivel superior: el valor es un **literal** (o literal negado).

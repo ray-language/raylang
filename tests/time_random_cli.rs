@@ -59,29 +59,29 @@ fn main() -> int {
 
 /// `random.next()` siempre cae en `[0, 1)`; `random.below(n)` en `[0, n)`; los casos de borde son totales.
 #[test]
-fn random_respeta_sus_rangos() {
+fn random_respects_sus_rangos() {
     let src = r#"
 import std/random;
 fn main() -> int {
     var i: int = 0;
-    var fuera: int = 0;
+    var outside: int = 0;
     while (i < 2000) {
         let r: float = random.next();
-        if (r < 0.0 || r >= 1.0) { fuera = fuera + 1; }
+        if (r < 0.0 || r >= 1.0) { outside = outside + 1; }
         let x: int = random.below(6);
-        if (x < 0 || x >= 6) { fuera = fuera + 1; }
+        if (x < 0 || x >= 6) { outside = outside + 1; }
         i = i + 1;
     }
     // Casos de borde: random.below(1) siempre 0; n<=0 → 0 (sin error).
-    if (random.below(1) != 0) { fuera = fuera + 1; }
-    if (random.below(0) != 0) { fuera = fuera + 1; }
-    print(fuera);
+    if (random.below(1) != 0) { outside = outside + 1; }
+    if (random.below(0) != 0) { outside = outside + 1; }
+    print(outside);
     0
 }
 "#;
     for vm in [false, true] {
         let (out, code) = run("ray_rand", src, vm);
-        assert_eq!(out.trim(), "0", "random/random_int dentro de rango (vm={vm}): {out}");
+        assert_eq!(out.trim(), "0", "random/random_int inside de range (vm={vm}): {out}");
         assert_eq!(code, 0);
     }
 }
@@ -89,7 +89,7 @@ fn main() -> int {
 /// El RNG produce variedad: 2000 tiradas de un dado tocan los 6 valores (probabilidad de fallo
 /// despreciable: ~ (5/6)^2000). Detecta un generador "pegado".
 #[test]
-fn random_int_tiene_variedad() {
+fn random_int_has_variedad() {
     let src = r#"
 import std/random;
 fn main() -> int {
@@ -112,7 +112,7 @@ fn main() -> int {
 "#;
     for vm in [false, true] {
         let (out, _) = run("ray_variedad", src, vm);
-        assert_eq!(out.trim(), "6", "las 6 caras salieron al menos una vez (vm={vm}): {out}");
+        assert_eq!(out.trim(), "6", "las 6 caras salieron al menos one vez (vm={vm}): {out}");
     }
 }
 
@@ -138,8 +138,8 @@ fn main() -> int {
     let xs = [1, 2, 3, 4, 5, 6, 7, 8];
     random.shuffle(xs);
     print(join_ints(xs));
-    var vacio: [int] = [];
-    match (random.choice(vacio)) {
+    var empty: [int] = [];
+    match (random.choice(empty)) {
         Option.Some(v) => print(v),
         Option.None => print("None ok"),
     }
@@ -148,11 +148,11 @@ fn main() -> int {
     0
 }
 "#;
-    let esperado = "13\n91\n1\n5\n9\n1,7,8,6,4,2,5,3\nNone ok\n13\n";
+    let expected = "13\n91\n1\n5\n9\n1,7,8,6,4,2,5,3\nNone ok\n13\n";
     let (o_in, c_in) = run("m68_seed_in", src, false);
     let (o_vm, c_vm) = run("m68_seed_vm", src, true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, esperado, "secuencia determinista con seed(42)");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, expected, "secuencia determinista con seed(42)");
+    assert_eq!(o_in, o_vm, "ambos engines match");
 }

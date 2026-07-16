@@ -25,7 +25,7 @@ const ESPERADO: &[&str] = &[
     "err: carácter base64url inválido",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/base64_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -44,11 +44,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn base64_estricto_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn base64_estricto_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn base64_estricto_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

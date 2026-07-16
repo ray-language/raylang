@@ -72,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn modulos_conocidos_resuelven() {
+    fn modules_conocidos_resuelven() {
         assert!(embedded("std/math").is_some());
         assert!(embedded("std/text").is_some());
         assert!(embedded("std/sort").is_some());
@@ -81,13 +81,13 @@ mod tests {
     }
 
     #[test]
-    fn desconocido_es_none() {
-        assert!(embedded("std/inexistente").is_none());
+    fn unknown_es_none() {
+        assert!(embedded("std/nonexistent").is_none());
         assert!(embedded("math").is_none()); // sin el prefijo std/ no es de la stdlib
     }
 
     #[test]
-    fn la_fuente_embebida_no_esta_vacia() {
+    fn la_source_embebida_no_esta_empty() {
         assert!(embedded("std/math").unwrap().contains("pub fn gcd"));
         assert!(embedded("std/text").unwrap().contains("pub fn capitalize"));
     }

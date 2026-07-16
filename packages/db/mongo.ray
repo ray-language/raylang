@@ -71,18 +71,18 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
         if (c.buf.len() >= 4) {
             let total = le32_at(c.buf, 0);
             if (total < 21) {
-                return Result.Err("mongo: mensaje demasiado corto (" + to_string(total) + " octetos)");
+                return Result.Err("mongo: message too short (" + to_string(total) + " bytes)");
             }
             if (total > max_message()) {
-                return Result.Err("mongo: mensaje excede el límite (" + to_string(total) + " octetos, posible bomba de memoria)");
+                return Result.Err("mongo: message exceeds the limit (" + to_string(total) + " bytes, possible memory bomb)");
             }
             if (c.buf.len() >= total) {
                 let op = le32_at(c.buf, 12);
                 if (op != 2013) {
-                    return Result.Err("mongo: opCode inesperado: " + to_string(op));
+                    return Result.Err("mongo: unexpected opCode: " + to_string(op));
                 }
                 if (c.buf[20] != 0) {
-                    return Result.Err("mongo: sección OP_MSG no soportada: " + to_string(c.buf[20]));
+                    return Result.Err("mongo: unsupported OP_MSG section: " + to_string(c.buf[20]));
                 }
                 let raw = c.buf.sub_bytes(21, total);
                 c.buf = c.buf.sub_bytes(total, c.buf.len());
@@ -91,11 +91,11 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
         }
         let chunk = net.socket_read_bytes(c.handle)?;
         if (chunk.len() == 0) {
-            return Result.Err("mongo: el servidor cerró la conexión");
+            return Result.Err("mongo: the server closed the connection");
         }
         c.buf = c.buf + chunk;
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 /// Sends a raw command document and returns the reply document. The building block of every
@@ -124,9 +124,9 @@ fn error_of(fields: [bson.Field]) -> string {
     return match (bson.get(fields, "errmsg")) {
         Option.Some(v) => match (v) {
             bson.Bson.Str(s) => s,
-            _ => "error de MongoDB",
+            _ => "MongoDB error",
         },
-        Option.None => "error de MongoDB",
+        Option.None => "MongoDB error",
     };
 }
 
@@ -136,11 +136,11 @@ fn payload_str(fields: [bson.Field]) -> Result<string, string> {
         Option.Some(v) => match (v) {
             bson.Bson.Bin(b) => match (from_utf8(b)) {
                 Result.Ok(s) => Result.Ok(s),
-                Result.Err(_) => Result.Err("mongo: el payload SASL no es UTF-8"),
+                Result.Err(_) => Result.Err("mongo: the SASL payload is not UTF-8"),
             },
-            _ => Result.Err("mongo: la respuesta SASL no trae payload binario"),
+            _ => Result.Err("mongo: the SASL response has no binary payload"),
         },
-        Option.None => Result.Err("mongo: la respuesta SASL no trae payload"),
+        Option.None => Result.Err("mongo: the SASL response has no payload"),
     };
 }
 
@@ -236,7 +236,7 @@ fn session(handle: int, user: string, password: string, database: string, nonce:
     };
     if (!scram_verify(sc, server_final)) {
         close(handle);
-        return Result.Err("mongo: la firma del servidor no verifica (autenticación fallida)");
+        return Result.Err("mongo: the server signature does not verify (authentication failed)");
     }
     Result.Ok(c)
 }
@@ -271,9 +271,9 @@ fn cursor_of(fields: [bson.Field]) -> Result<[bson.Field], string> {
     return match (bson.get(fields, "cursor")) {
         Option.Some(v) => match (v) {
             bson.Bson.Doc(f) => Result.Ok(f),
-            _ => Result.Err("mongo: la respuesta no trae cursor"),
+            _ => Result.Err("mongo: the response has no cursor"),
         },
-        Option.None => Result.Err("mongo: la respuesta no trae cursor"),
+        Option.None => Result.Err("mongo: the response has no cursor"),
     };
 }
 
@@ -282,15 +282,15 @@ fn append_batch(out: [[bson.Field]], cursor: [bson.Field], key: string) -> Resul
     let batch = match (bson.get(cursor, key)) {
         Option.Some(v) => match (v) {
             bson.Bson.Arr(items) => items,
-            _ => { return Result.Err("mongo: el cursor no trae " + key); },
+            _ => { return Result.Err("mongo: the cursor has no " + key); },
         },
-        Option.None => { return Result.Err("mongo: el cursor no trae " + key); },
+        Option.None => { return Result.Err("mongo: the cursor has no " + key); },
     };
     var i = 0;
     while (i < batch.len()) {
         match (batch[i]) {
             bson.Bson.Doc(f) => { out.push(f); },
-            _ => { return Result.Err("mongo: el batch trae un elemento que no es documento"); },
+            _ => { return Result.Err("mongo: the batch has an element that is not a document"); },
         }
         i = i + 1;
     }

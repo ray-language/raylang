@@ -26,7 +26,7 @@ const ESPERADO: &[&str] = &[
     "roundtrip: ok (32 octetos)",
 ];
 
-fn correr(flags: &[&str]) -> Vec<String> {
+fn run(flags: &[&str]) -> Vec<String> {
     let demo = format!("{}/examples/web/inflate_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -45,11 +45,11 @@ fn correr(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn inflate_gzip_interprete() {
-    assert_eq!(correr(&[]), ESPERADO);
+fn inflate_gzip_interpreter() {
+    assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
 fn inflate_gzip_vm() {
-    assert_eq!(correr(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), ESPERADO);
 }

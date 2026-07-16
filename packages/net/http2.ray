@@ -76,14 +76,14 @@ pub fn encode_frame(ftype: int, flags: int, stream_id: int, payload: bytes) -> b
 /// use `frame_size` to check completeness and to advance past the frame.
 pub fn parse_frame(data: bytes) -> Result<Http2Frame, string> {
     if (data.len() < 9) {
-        return Result.Err("frame HTTP/2 incompleto (cabecera < 9 octetos)");
+        return Result.Err("incomplete HTTP/2 frame (header < 9 bytes)");
     }
     let plen = data[0] << 16 | data[1] << 8 | data[2];
     let ftype = data[3];
     let flags = data[4];
     let stream_id = (data[5] & 127) << 24 | data[6] << 16 | data[7] << 8 | data[8];
     if (data.len() < 9 + plen) {
-        return Result.Err("frame HTTP/2 truncado (carga incompleta)");
+        return Result.Err("truncated HTTP/2 frame (incomplete payload)");
     }
     Result.Ok(Http2Frame { ftype: ftype, flags: flags, stream_id: stream_id, payload: data.sub_bytes(9, 9 + plen) })
 }

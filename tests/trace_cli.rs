@@ -10,8 +10,8 @@ const BIN: &str = env!("CARGO_BIN_EXE_ray");
 
 /// Crea un proyecto temporal con `ray.toml` (dep de ruta a `packages/net`) y `src/main.ray`,
 /// y lo corre con `ray run [--interp]`.
-fn correr(nombre: &str, main: &str, interp: bool) -> (String, String, i32) {
-    let base = std::env::temp_dir().join(format!("ray_trace_{nombre}"));
+fn run(name: &str, main: &str, interp: bool) -> (String, String, i32) {
+    let base = std::env::temp_dir().join(format!("ray_trace_{name}"));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("src")).expect("crea el dir temporal");
     let repo = env!("CARGO_MANIFEST_DIR");
@@ -38,7 +38,7 @@ import net/log;
 import std/random;
 
 // ¿`parse_traceparent(s)` rechaza? (true = inválida)
-fn rechaza(s: string) -> bool {
+fn rejects(s: string) -> bool {
     match (trace.parse_traceparent(s)) {
         Option.Some(t) => false,
         Option.None => true,
@@ -47,49 +47,49 @@ fn rechaza(s: string) -> bool {
 
 fn main() -> int {
     random.seed(7);
-    let valida = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let validates = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
     // Parse de una cabecera válida: campos exactos + round-trip.
-    match (trace.parse_traceparent(valida)) {
+    match (trace.parse_traceparent(validates)) {
         Option.Some(t) => {
             print(t.trace_id + " " + t.span_id + " " + t.flags);
-            print(trace.traceparent(t) == valida);
+            print(trace.traceparent(t) == validates);
         },
-        Option.None => print("no parsea"),
+        Option.None => print("no parses"),
     }
     // Inválidas: versión ff, hex en mayúscula, trace-id todo ceros, span corto, basura.
-    print(rechaza("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"));
-    print(rechaza("00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01"));
-    print(rechaza("00-00000000000000000000000000000000-00f067aa0ba902b7-01"));
-    print(rechaza("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba9-01"));
-    print(rechaza("nada"));
+    print(rejects("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"));
+    print(rejects("00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01"));
+    print(rejects("00-00000000000000000000000000000000-00f067aa0ba902b7-01"));
+    print(rejects("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba9-01"));
+    print(rejects("nada"));
 
     // new_trace: forma correcta (largos, flags, re-parseable) sin fijar los ids del PRNG.
-    let raiz = trace.new_trace();
-    print(to_string(raiz.trace_id.len()) + " " + to_string(raiz.span_id.len()) + " " + raiz.flags);
-    print(rechaza(trace.traceparent(raiz)) == false);
+    let root = trace.new_trace();
+    print(to_string(root.trace_id.len()) + " " + to_string(root.span_id.len()) + " " + root.flags);
+    print(rejects(trace.traceparent(root)) == false);
 
     // child: mismo trace_id, span nuevo.
-    let hijo = trace.child(raiz);
-    print(hijo.trace_id == raiz.trace_id);
-    print(hijo.span_id != raiz.span_id);
-    print(hijo.flags == raiz.flags);
+    let child = trace.child(root);
+    print(child.trace_id == root.trace_id);
+    print(child.span_id != root.span_id);
+    print(child.flags == root.flags);
 
     // from_headers: adopta la entrante; sin cabecera (o malformada) arranca una nueva.
     var h: Map<string, string> = Map.new();
-    h.insert("traceparent", valida);
+    h.insert("traceparent", validates);
     let adoptada = trace.from_headers(h);
     print(adoptada.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736");
     var h2: Map<string, string> = Map.new();
-    let nueva = trace.from_headers(h2);
-    print(nueva.trace_id != adoptada.trace_id);
+    let new = trace.from_headers(h2);
+    print(new.trace_id != adoptada.trace_id);
     h2.insert("traceparent", "basura");
     print(trace.from_headers(h2).trace_id.len() == 32);
 
     // log.with_trace: la línea lleva trace_id (tras service, antes de msg); sin él, no.
     let lg = log.logger("svc");
-    print(log.render(log.info(lg, "hola"), "TS"));
+    print(log.render(log.info(lg, "hello"), "TS"));
     let lgt = log.with_trace(lg, adoptada.trace_id);
-    print(log.render(log.field_int(log.info(lgt, "hola"), "n", 3), "TS"));
+    print(log.render(log.field_int(log.info(lgt, "hello"), "n", 3), "TS"));
     // with_level conserva el trace y filtra de verdad.
     let lgw = log.with_level(lgt, 2);
     print(log.render(log.error(lgw, "boom"), "TS"));
@@ -104,16 +104,16 @@ true\ntrue\ntrue\ntrue\ntrue\n\
 true\n\
 true\ntrue\ntrue\n\
 true\ntrue\ntrue\n\
-{\"ts\":\"TS\",\"level\":\"INFO\",\"service\":\"svc\",\"msg\":\"hola\"}\n\
-{\"ts\":\"TS\",\"level\":\"INFO\",\"service\":\"svc\",\"trace_id\":\"4bf92f3577b34da6a3ce929d0e0e4736\",\"msg\":\"hola\",\"n\":3}\n\
+{\"ts\":\"TS\",\"level\":\"INFO\",\"service\":\"svc\",\"msg\":\"hello\"}\n\
+{\"ts\":\"TS\",\"level\":\"INFO\",\"service\":\"svc\",\"trace_id\":\"4bf92f3577b34da6a3ce929d0e0e4736\",\"msg\":\"hello\",\"n\":3}\n\
 {\"ts\":\"TS\",\"level\":\"ERROR\",\"service\":\"svc\",\"trace_id\":\"4bf92f3577b34da6a3ce929d0e0e4736\",\"msg\":\"boom\"}\n";
 
 #[test]
-fn trace_golden_ambos_motores() {
-    let (o_vm, e_vm, c_vm) = correr("golden_vm", GOLDEN, false);
+fn trace_golden_ambos_engines() {
+    let (o_vm, e_vm, c_vm) = run("golden_vm", GOLDEN, false);
     assert_eq!(c_vm, 0, "vm sale 0\n{e_vm}\n{o_vm}");
     assert_eq!(o_vm, GOLDEN_ESPERADO, "golden vm");
-    let (o_in, e_in, c_in) = correr("golden_interp", GOLDEN, true);
+    let (o_in, e_in, c_in) = run("golden_interp", GOLDEN, true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{e_in}\n{o_in}");
     assert_eq!(o_in, GOLDEN_ESPERADO, "golden intérprete");
 }
@@ -140,7 +140,7 @@ fn main() -> int {
                 match (webserver.read_request(conn)) {
                     Result.Ok(req) => {
                         let t = webserver.trace_of(req);
-                        let _ = webserver.send_response(conn, webserver.ok("hola"));
+                        let _ = webserver.send_response(conn, webserver.ok("hello"));
                         let _ = close(conn);
                         t.trace_id + "|" + t.span_id
                     },
@@ -150,25 +150,25 @@ fn main() -> int {
             Result.Err(e) => "accept err " + e,
         }
     });
-    let raiz = trace.new_trace();
+    let root = trace.new_trace();
     let url = "http://127.0.0.1:" + to_string(port) + "/";
-    match (http.request_traced("GET", url, "", Map.new(), raiz)) {
+    match (http.request_traced("GET", url, "", Map.new(), root)) {
         Result.Ok(r) => print(r.status),
         Result.Err(e) => print("http err " + e),
     }
     let visto = join(srv);
-    let partes = visto.split("|");
-    if (partes.len() != 2) { print("servidor: " + visto); return 1; }
-    print(partes[0] == raiz.trace_id);   // mismo trace de punta a punta
-    print(partes[1] != raiz.span_id);    // pero un span HIJO (fresco por salto)
-    print(partes[1].len() == 16);
+    let parts = visto.split("|");
+    if (parts.len() != 2) { print("servidor: " + visto); return 1; }
+    print(parts[0] == root.trace_id);   // mismo trace de punta a punta
+    print(parts[1] != root.span_id);    // pero un span HIJO (fresco por salto)
+    print(parts[1].len() == 16);
     0
 }
 "#;
 
 #[test]
-fn traceparent_viaja_del_cliente_al_servidor() {
-    let (out, err, code) = correr("e2e", E2E, false);
+fn traceparent_viaja_del_client_al_servidor() {
+    let (out, err, code) = run("e2e", E2E, false);
     assert_eq!(code, 0, "e2e sale 0\n{err}\n{out}");
-    assert_eq!(out, "200\ntrue\ntrue\ntrue\n", "el trace viaja y el span es hijo\n{out}");
+    assert_eq!(out, "200\ntrue\ntrue\ntrue\n", "el trace viaja y el span es child\n{out}");
 }

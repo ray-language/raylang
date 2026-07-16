@@ -44,11 +44,11 @@ fn header_alg(header_b64u: string) -> Result<string, string> {
         Json.JObject(m) => match (m.get("alg")) {
             Option.Some(v) => match (v) {
                 Json.JStr(a) => Result.Ok(a),
-                _ => Result.Err("'alg' no es una cadena"),
+                _ => Result.Err("'alg' is not a string"),
             },
-            Option.None => Result.Err("falta 'alg'"),
+            Option.None => Result.Err("missing 'alg'"),
         },
-        _ => Result.Err("el header no es un objeto JSON"),
+        _ => Result.Err("the header is not a JSON object"),
     }
 }
 
@@ -60,17 +60,17 @@ fn header_alg(header_b64u: string) -> Result<string, string> {
 pub fn jwt_eddsa_verify(pubkey: bytes, token: string) -> Result<string, string> {
     let parts = token.split(".");
     if (parts.len() != 3) {
-        return Result.Err("JWT mal formado: se esperaban 3 segmentos");
+        return Result.Err("malformed JWT: expected 3 segments");
     }
     // Defensa en profundidad: el header debe declarar EdDSA (rechaza alg:none / confusión de algoritmo).
     match (header_alg(parts[0])) {
         Result.Ok(a) => {
             if (a != "EdDSA") {
-                return Result.Err("algoritmo no soportado: se esperaba EdDSA, el token declara " + a);
+                return Result.Err("unsupported algorithm: expected EdDSA, the token declares " + a);
             }
         },
         Result.Err(e) => {
-            return Result.Err("header JWT inválido: " + e);
+            return Result.Err("invalid JWT header: " + e);
         },
     }
     let signing_input = parts[0] + "." + parts[1];
@@ -81,7 +81,7 @@ pub fn jwt_eddsa_verify(pubkey: bytes, token: string) -> Result<string, string> 
         },
     };
     if (!crypto.ed25519_verify(pubkey, signing_input.to_bytes(), sig)) {
-        return Result.Err("firma inválida");
+        return Result.Err("invalid signature");
     }
     // Firma válida: decodifica el payload (base64url → UTF-8).
     match (base64url_decode(parts[1])) {

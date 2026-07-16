@@ -324,7 +324,7 @@ definiendo el mismo nombre).
 | `Hash` | `hash(self) -> int` | claves de `Set`; derivable |
 | `Add` `Sub` `Mul` `Div` | `add/sub/mul/div(self, other: Self) -> Self` | sobrecarga de `+ - * /` en tipos de usuario |
 | `Neg` | `neg(self) -> Self` | sobrecarga del `-` unario |
-| `From<S>` | `desde(source: S) -> Self` | conversión; la usa `?` para convertir errores (`from` es keyword → el método se llama `desde`) |
+| `From<S>` | `convert(source: S) -> Self` | conversión; la usa `?` para convertir errores (`from` es keyword → el método se llama `convert`) |
 | `Iterator<T>` | `next(self) -> Option<T>` | el protocolo de iteración; trae los adaptadores como métodos por defecto |
 | `Len` / `Push<T>` / `Contains<T>` | `len`/`push`/`contains` | los métodos de contenedor, como traits |
 | `Signed` | `abs(self) -> Self` | para el `abs` genérico de `std/math` |

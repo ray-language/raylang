@@ -88,8 +88,8 @@ fn pull(c: Conn) -> bool {
 }
 
 // Posición del primer \r\n en `b` desde `desde`, o -1 (como find_crlf del cliente HTTP).
-fn find_crlf(b: bytes, desde: int) -> int {
-    var i = desde;
+fn find_crlf(b: bytes, start: int) -> int {
+    var i = start;
     while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;
@@ -101,7 +101,7 @@ fn find_crlf(b: bytes, desde: int) -> int {
 
 // Texto de unos bytes, o "?" si no son UTF-8 válido (las líneas de protocolo son ASCII; un
 // payload no-UTF-8 degrada visiblemente, no corrompe el framing).
-fn texto(b: bytes) -> string {
+fn text(b: bytes) -> string {
     match (from_utf8(b)) {
         Result.Ok(s) => s,
         Result.Err(_) => "?",
@@ -113,22 +113,22 @@ fn read_line(c: Conn) -> Result<string, string> {
     while (true) {
         let pos = find_crlf(c.buf, 0);
         if (pos >= 0) {
-            let line = texto(c.buf.sub_bytes(0, pos));
+            let line = text(c.buf.sub_bytes(0, pos));
             c.buf = c.buf.sub_bytes(pos + 2, c.buf.len());
             return Result.Ok(line);
         }
         if (!pull(c)) {
-            return Result.Err("conexión cerrada al leer una línea");
+            return Result.Err("connection closed while reading a line");
         }
     }
-    Result.Err("inalcanzable")
+    Result.Err("unreachable")
 }
 
 // Lee exactamente `n` OCTETOS, rellenando desde el socket si hace falta.
 fn read_n(c: Conn, n: int) -> Result<bytes, string> {
     while (c.buf.len() < n) {
         if (!pull(c)) {
-            return Result.Err("conexión cerrada al leer el cuerpo");
+            return Result.Err("connection closed while reading the body");
         }
     }
     let b = c.buf.sub_bytes(0, n);
@@ -141,7 +141,7 @@ fn read_n(c: Conn, n: int) -> Result<bytes, string> {
 fn parse_len(s: string) -> Result<int, string> {
     match (parse_int(s)) {
         Option.Some(n) => Result.Ok(n),
-        Option.None => Result.Err("longitud RESP inválida: '" + s + "'"),
+        Option.None => Result.Err("invalid RESP length: '" + s + "'"),
     }
 }
 
@@ -151,7 +151,7 @@ fn read_reply(c: Conn) -> Result<Reply, string> {
         Result.Err(e) => Result.Err(e),
         Result.Ok(line) => {
             if (line.len() == 0) {
-                return Result.Err("respuesta RESP vacía");
+                return Result.Err("empty RESP response");
             }
             let t = line[0];
             let rest = line.substring(1, line.len());
@@ -182,7 +182,7 @@ fn read_reply(c: Conn) -> Result<Reply, string> {
                                     },
                                 }
                             } else {
-                                Result.Err("tipo RESP desconocido: " + to_string(t))
+                                Result.Err("type RESP unknown: " + to_string(t))
                             }
                         }
                     }
@@ -200,12 +200,12 @@ fn read_bulk(c: Conn, rest: string) -> Result<Reply, string> {
         return Result.Ok(Reply.Nil);
     }
     if (n > max_bulk()) {
-        return Result.Err("bulk RESP excede el límite (" + to_string(n) + " octetos)");
+        return Result.Err("RESP bulk exceeds the limit (" + to_string(n) + " bytes)");
     }
     let data = read_n(c, n)?;
     // Consume el \r\n que cierra el bulk string.
     match (read_line(c)) {
-        Result.Ok(_) => Result.Ok(Reply.Str(texto(data))),
+        Result.Ok(_) => Result.Ok(Reply.Str(text(data))),
         Result.Err(e) => Result.Err(e),
     }
 }
@@ -237,7 +237,7 @@ fn read_array(c: Conn, n: int) -> Result<Reply, string> {
 /// a server-side error arrives as `Ok(Reply.Err(msg))`, not as Err.
 pub fn command(c: Conn, args: [string]) -> Result<Reply, string> {
     match (net.socket_write_bytes(c.h, encode_command(args))) {
-        Result.Err(e) => Result.Err("error al enviar: " + e),
+        Result.Err(e) => Result.Err("error sending: " + e),
         Result.Ok(_) => read_reply(c),
     }
 }

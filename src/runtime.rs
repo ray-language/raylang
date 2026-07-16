@@ -100,7 +100,7 @@ impl MapKey {
             Value::Char(c) => MapKey::Char(*c),
             Value::Bool(b) => MapKey::Bool(*b),
             Value::Bytes(b) => MapKey::Bytes((**b).clone()),
-            _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool/bytes)"),
+            _ => unreachable!("the checker guarantees a hashable key (int/string/char/bool/bytes)"),
         }
     }
 
@@ -241,7 +241,7 @@ pub struct RuntimeError {
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "error en ejecución en {}:{}: {}", self.line, self.col, self.msg)
+        write!(f, "runtime error at {}:{}: {}", self.line, self.col, self.msg)
     }
 }
 
@@ -260,9 +260,9 @@ pub fn eval_const_literal(e: &Expr) -> Value {
         ExprKind::Unary { op: UnaryOp::Neg, expr } => match &expr.kind {
             ExprKind::Int(n) => Value::Int(-n),
             ExprKind::Float(f) => Value::Float(-f),
-            _ => unreachable!("el checker garantiza un literal numérico negado"),
+            _ => unreachable!("the checker guarantees a negated numeric literal"),
         },
-        _ => unreachable!("el checker garantiza un literal"),
+        _ => unreachable!("the checker guarantees a literal"),
     }
 }
 

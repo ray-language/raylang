@@ -10,16 +10,16 @@ use std::time::Duration;
 
 /// Copia `framework.ray` (puerto 8080 → 0, efímero) y `webserver.ray` a un temporal, lo lanza con `--vm`
 /// y devuelve el proceso + el puerto que imprime ("escuchando en el puerto N").
-fn lanzar() -> (Child, u16) {
-    let raiz = env!("CARGO_MANIFEST_DIR");
+fn launch() -> (Child, u16) {
+    let root = env!("CARGO_MANIFEST_DIR");
     let mut dir = std::env::temp_dir();
     dir.push("ray_framework");
     std::fs::create_dir_all(&dir).expect("crea dir");
     // El framework es una librería (sin `main`): se prueba a través de su demo, que lo IMPORTA. Se
     // copian los tres archivos (webserver ← framework ← framework_demo) al temporal.
-    std::fs::copy(format!("{raiz}/examples/web/webserver.ray"), dir.join("webserver.ray")).expect("copia webserver");
-    std::fs::copy(format!("{raiz}/examples/web/framework.ray"), dir.join("framework.ray")).expect("copia framework");
-    let demo = std::fs::read_to_string(format!("{raiz}/examples/web/framework_demo.ray")).expect("lee demo");
+    std::fs::copy(format!("{root}/examples/web/webserver.ray"), dir.join("webserver.ray")).expect("copia webserver");
+    std::fs::copy(format!("{root}/examples/web/framework.ray"), dir.join("framework.ray")).expect("copia framework");
+    let demo = std::fs::read_to_string(format!("{root}/examples/web/framework_demo.ray")).expect("lee demo");
     std::fs::write(dir.join("framework_demo.ray"), demo.replace("8080", "0")).expect("escribe demo");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -29,22 +29,22 @@ fn lanzar() -> (Child, u16) {
 
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee puerto");
+    reader.read_line(&mut linea).expect("lee port");
     // "escuchando en el puerto N" → el último token es el puerto.
     let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("no se pudo leer el puerto de: {linea:?}"));
+        .unwrap_or_else(|| panic!("no se pudo leer el port de: {linea:?}"));
 
     // El framework loguea cada petición a stdout (middleware). Hay que DRENAR ese stdout en un hilo: si
     // no, al cerrarse el read-end del pipe el `println` del servidor falla con "broken pipe" y aborta.
     std::thread::spawn(move || {
-        let mut sumidero = Vec::new();
-        let _ = reader.read_to_end(&mut sumidero);
+        let mut sink = Vec::new();
+        let _ = reader.read_to_end(&mut sink);
     });
     (child, port)
 }
 
 /// Envía una petición HTTP cruda y devuelve la respuesta completa (hasta que el servidor cierra).
-fn pedir(port: u16, req: &str) -> String {
+fn ask(port: u16, req: &str) -> String {
     let mut s = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
     s.set_read_timeout(Some(Duration::from_secs(5))).ok();
     s.write_all(req.as_bytes()).expect("envía");
@@ -55,46 +55,46 @@ fn pedir(port: u16, req: &str) -> String {
 
 #[test]
 fn framework_enruta_params_middleware_y_404() {
-    let (mut child, port) = lanzar();
+    let (mut child, port) = launch();
 
     // Ruta raíz.
-    let r = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("200 OK"), "GET /: {r}");
-    assert!(r.contains("micro-framework"), "GET / cuerpo: {r}");
+    assert!(r.contains("micro-framework"), "GET / body: {r}");
 
     // Parámetro de ruta + JSON.
-    let r = pedir(port, "GET /users/42 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-    assert!(r.contains("application/json"), "tipo JSON: {r}");
+    let r = ask(port, "GET /users/42 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("application/json"), "type JSON: {r}");
     assert!(r.contains("\"id\": \"42\""), "param id capturado: {r}");
     assert!(r.contains("usuario-42"), "param interpolado: {r}");
 
     // POST con cuerpo (eco).
-    let r = pedir(port, "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\nConnection: close\r\n\r\neco esto");
+    let r = ask(port, "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\nConnection: close\r\n\r\neco esto");
     assert!(r.contains("200 OK"), "POST /echo estado: {r}");
     assert!(r.ends_with("eco esto"), "POST /echo eco: {r}");
 
     // M56.2: la query NO forma parte del path → la ruta con :id sigue casando con ?x=1.
-    let r = pedir(port, "GET /users/42?x=1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-    assert!(r.contains("\"id\": \"42\""), "ruta con query debe casar: {r}");
+    let r = ask(port, "GET /users/42?x=1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("\"id\": \"42\""), "path con query must casar: {r}");
 
     // M56.2: c.query("nombre") lee la query string (decodificada: + = espacio).
-    let r = pedir(port, "GET /saluda?nombre=Ada+Lovelace HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let r = ask(port, "GET /saluda?nombre=Ada+Lovelace HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("hola, Ada Lovelace"), "query param: {r}");
-    let r = pedir(port, "GET /saluda HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let r = ask(port, "GET /saluda HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("hola, mundo"), "query param ausente → default: {r}");
 
     // M56.7: dos cookies = dos líneas Set-Cookie en la respuesta.
-    let r = pedir(port, "GET /entra HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let r = ask(port, "GET /entra HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("Set-Cookie: sesion=abc123; Path=/; HttpOnly"), "1ª cookie: {r}");
     assert!(r.contains("Set-Cookie: flash=hola"), "2ª cookie: {r}");
 
     // Estado a medida encadenado.
-    let r = pedir(port, "GET /teapot HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let r = ask(port, "GET /teapot HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("418"), "GET /teapot estado: {r}");
-    assert!(r.contains("tetera"), "GET /teapot cuerpo: {r}");
+    assert!(r.contains("tetera"), "GET /teapot body: {r}");
 
     // Ruta inexistente → 404.
-    let r = pedir(port, "GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let r = ask(port, "GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("404"), "GET /nope: {r}");
 
     let _ = child.kill();

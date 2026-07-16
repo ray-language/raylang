@@ -87,7 +87,7 @@ pub fn client_credentials(token_url: string, client_id: string, client_secret: s
     h.insert("Content-Type", "application/x-www-form-urlencoded");
     h.insert("Accept", "application/json");
     match (request_with("POST", token_url, body, h)) {
-        Result.Err(e) => Result.Err("no se pudo contactar el token endpoint: " + e),
+        Result.Err(e) => Result.Err("could not contact the token endpoint: " + e),
         Result.Ok(resp) => {
             match (body_text(resp)) {
                 Result.Err(e) => Result.Err("cuerpo del token no es UTF-8: " + e),

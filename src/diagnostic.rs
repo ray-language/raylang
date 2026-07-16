@@ -33,9 +33,9 @@ macro_rules! ice {
 /// `ice!` o el de un pánico no auditado, p. ej. un índice fuera de rango).
 pub fn ice_banner(detail: &str) -> String {
     format!(
-        "error interno del compilador (ICE): {detail}\n\
-         Esto es un bug de raylang, no de tu programa. Por favor repórtalo\n\
-         junto con el fuente que lo causó."
+        "internal compiler error (ICE): {detail}\n\
+         This is a bug in raylang, not in your program. Please report it\n\
+         along with the source that caused it."
     )
 }
 
@@ -92,21 +92,21 @@ mod tests {
     #[test]
     fn dibuja_la_linea_y_el_cursor() {
         let src = "fn main() -> int {\n    let x = 1 + true;\n    x\n}\n";
-        let out = render(src, 2, 13, 1, "error de tipos en 2:13: no se pueden sumar int y bool");
+        let out = render(src, 2, 13, 1, "error de types en 2:13: no se pueden add int y bool");
         let expected = "\
-error de tipos en 2:13: no se pueden sumar int y bool
+error de types en 2:13: no se pueden add int y bool
   2 |     let x = 1 + true;
     |             ^";
         assert_eq!(out, expected);
     }
 
     #[test]
-    fn subraya_el_rango_completo() {
+    fn underscores_el_range_complete() {
         // M33a: un error con extensión subraya el lexema entero.
         let src = "let x = 1 + while;\n";
-        let out = render(src, 1, 13, 5, "error de sintaxis en 1:13: se esperaba una expresión, se encontró While");
+        let out = render(src, 1, 13, 5, "error de syntax en 1:13: se esperaba one expresión, se encontró While");
         let expected = "\
-error de sintaxis en 1:13: se esperaba una expresión, se encontró While
+error de syntax en 1:13: se esperaba one expresión, se encontró While
   1 | let x = 1 + while;
     |             ^^^^^";
         assert_eq!(out, expected);
@@ -131,7 +131,7 @@ error de sintaxis en 1:13: se esperaba una expresión, se encontró While
     }
 
     #[test]
-    fn una_linea_larguisima_se_recorta_a_una_ventana() {
+    fn one_linea_larguisima_se_recorta_a_one_ventana() {
         // M33d: la línea se acota alrededor de la columna del error, con `…` en los bordes.
         let line = format!("{}AQUI{}", "x".repeat(500), "y".repeat(500));
         let out = render(&line, 1, 501, 4, "err");
@@ -161,17 +161,17 @@ error de sintaxis en 1:13: se esperaba una expresión, se encontró While
     }
 
     #[test]
-    fn el_banner_pide_reporte() {
+    fn el_banner_asks_reporte() {
         let b = ice_banner("ICE: algo se rompió");
-        assert!(b.starts_with("error interno del compilador (ICE): ICE: algo se rompió"));
-        assert!(b.contains("bug de raylang"), "{b}");
-        assert!(b.contains("repórtalo"), "{b}");
+        assert!(b.starts_with("internal compiler error (ICE): ICE: algo se rompió"));
+        assert!(b.contains("bug in raylang"), "{b}");
+        assert!(b.contains("report it"), "{b}");
     }
 
     #[test]
-    fn sin_ubicacion_util_solo_la_cabecera() {
+    fn sin_ubicacion_util_solo_la_header() {
         // Línea fuera de rango: se devuelve solo la cabecera, sin reventar.
-        assert_eq!(render("una línea\n", 99, 1, 1, "err"), "err");
+        assert_eq!(render("one línea\n", 99, 1, 1, "err"), "err");
         assert_eq!(render("x", 0, 0, 1, "err"), "err");
     }
 }

@@ -19,12 +19,12 @@ use std::process::Command;
 #[test]
 #[ignore = "lento (~1 min) y no determinista; córrelo con --ignored"]
 fn sin_regresion_de_rendimiento() {
-    let raiz = env!("CARGO_MANIFEST_DIR");
+    let root = env!("CARGO_MANIFEST_DIR");
 
     // 1. Compila la release (el gate mide `target/release/raylang`).
     let build = Command::new("cargo")
         .args(["build", "--release", "--quiet"])
-        .current_dir(raiz)
+        .current_dir(root)
         .status()
         .expect("lanza cargo build --release");
     assert!(build.success(), "la compilación de release falló");
@@ -32,12 +32,12 @@ fn sin_regresion_de_rendimiento() {
     // 2. Corre el gate (no `--strict`: informativo si la máquina no casa con el baseline).
     let gate = Command::new("python3")
         .arg("benchmarks/regress.py")
-        .current_dir(raiz)
+        .current_dir(root)
         .status()
         .expect("lanza python3 benchmarks/regress.py");
     assert!(
         gate.success(),
         "regresión de rendimiento detectada (o falta el baseline / la release); \
-         revisa la salida de benchmarks/regress.py"
+         revisa la output de benchmarks/regress.py"
     );
 }

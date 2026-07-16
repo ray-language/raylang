@@ -29,7 +29,7 @@ pub struct LexError {
 
 impl std::fmt::Display for LexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "error léxico en {}:{}: {}", self.line, self.col, self.msg)
+        write!(f, "lex error at {}:{}: {}", self.line, self.col, self.msg)
     }
 }
 
@@ -215,7 +215,7 @@ impl Lexer {
             c if is_ident_start(c) => self.identifier(),
 
             other => {
-                return Err(self.error(format!("carácter inesperado '{}'", other)));
+                return Err(self.error(format!("unexpected character '{}'", other)));
             }
         };
         Ok(kind)
@@ -267,12 +267,12 @@ impl Lexer {
         if is_float {
             let v = text
                 .parse::<f64>()
-                .map_err(|_| self.error(format!("flotante inválido '{}'", text)))?;
+                .map_err(|_| self.error(format!("invalid float '{}'", text)))?;
             Ok(TokenKind::Float(v))
         } else {
             let v = text
                 .parse::<i64>()
-                .map_err(|_| self.error(format!("entero fuera de rango '{}'", text)))?;
+                .map_err(|_| self.error(format!("integer out of range '{}'", text)))?;
             Ok(TokenKind::Int(v))
         }
     }
@@ -299,9 +299,9 @@ impl Lexer {
         let mut cur = String::new();
         loop {
             match self.peek() {
-                None => return Err(self.error("cadena sin cerrar".into())),
+                None => return Err(self.error("unterminated string".into())),
                 Some('\n') => {
-                    return Err(self.error("salto de línea dentro de una cadena sin cerrar".into()))
+                    return Err(self.error("newline inside an unterminated string".into()))
                 }
                 Some('"') => {
                     self.advance(); // comilla de cierre
@@ -317,9 +317,9 @@ impl Lexer {
                         Some('"') => cur.push('"'),
                         Some('$') => cur.push('$'), // `\$` → un `$` literal (para un `${` sin interpolar)
                         Some(other) => {
-                            return Err(self.error(format!("secuencia de escape inválida '\\{}'", other)))
+                            return Err(self.error(format!("invalid escape sequence '\\{}'", other)))
                         }
-                        None => return Err(self.error("cadena sin cerrar tras '\\'".into())),
+                        None => return Err(self.error("unterminated string after '\\'".into())),
                     }
                     self.advance(); // el carácter escapado
                 }
@@ -336,8 +336,8 @@ impl Lexer {
                     let mut depth = 1;
                     loop {
                         match self.peek() {
-                            None => return Err(self.error("interpolación '${' sin cerrar en la cadena".into())),
-                            Some('\n') => return Err(self.error("salto de línea dentro de una interpolación".into())),
+                            None => return Err(self.error("unterminated '${' interpolation in string".into())),
+                            Some('\n') => return Err(self.error("newline inside an interpolation".into())),
                             Some('{') => { depth += 1; expr_src.push('{'); self.advance(); }
                             Some('}') => {
                                 depth -= 1;
@@ -349,7 +349,7 @@ impl Lexer {
                         }
                     }
                     if expr_src.trim().is_empty() {
-                        return Err(self.error("interpolación vacía '${}' en la cadena".into()));
+                        return Err(self.error("empty interpolation '${}' in string".into()));
                     }
                     parts.push(InterpPart::Expr(expr_src, el, ec));
                 }
@@ -379,9 +379,9 @@ impl Lexer {
         let mut bytes: Vec<u8> = Vec::new();
         loop {
             match self.peek() {
-                None => return Err(self.error("cadena de bytes sin cerrar".into())),
+                None => return Err(self.error("unterminated byte string".into())),
                 Some('\n') => {
-                    return Err(self.error("salto de línea dentro de una cadena de bytes sin cerrar".into()))
+                    return Err(self.error("newline inside an unterminated byte string".into()))
                 }
                 Some('"') => {
                     self.advance(); // comilla de cierre
@@ -402,9 +402,9 @@ impl Lexer {
                             bytes.push((hi << 4) | lo);
                         }
                         Some(other) => {
-                            return Err(self.error(format!("secuencia de escape inválida '\\{}'", other)))
+                            return Err(self.error(format!("invalid escape sequence '\\{}'", other)))
                         }
-                        None => return Err(self.error("cadena de bytes sin cerrar tras '\\'".into())),
+                        None => return Err(self.error("unterminated byte string after '\\'".into())),
                     }
                 }
                 Some(c) => {
@@ -421,10 +421,10 @@ impl Lexer {
         match self.peek() {
             Some(c) if c.is_ascii_hexdigit() => {
                 self.advance();
-                Ok(c.to_digit(16).unwrap_or_else(|| crate::ice!("'{c}' pasó el guard de hexdigit")) as u8)
+                Ok(c.to_digit(16).unwrap_or_else(|| crate::ice!("'{c}' passed the hexdigit guard")) as u8)
             }
-            Some(other) => Err(self.error(format!("se esperaba un dígito hexadecimal tras '\\x', no '{}'", other))),
-            None => Err(self.error("cadena de bytes sin cerrar (faltan dígitos hex tras '\\x')".into())),
+            Some(other) => Err(self.error(format!("expected a hex digit after '\\x', not '{}'", other))),
+            None => Err(self.error("unterminated byte string (missing hex digits after '\\x')".into())),
         }
     }
 
@@ -433,9 +433,9 @@ impl Lexer {
     /// `''` (vacío) o varios caracteres son error.
     fn char_literal(&mut self) -> Result<TokenKind, LexError> {
         let c = match self.peek() {
-            None => return Err(self.error("carácter sin cerrar".into())),
-            Some('\'') => return Err(self.error("un literal de carácter no puede estar vacío ('')".into())),
-            Some('\n') => return Err(self.error("salto de línea dentro de un literal de carácter".into())),
+            None => return Err(self.error("unterminated char literal".into())),
+            Some('\'') => return Err(self.error("a char literal cannot be empty ('')".into())),
+            Some('\n') => return Err(self.error("newline inside a char literal".into())),
             Some('\\') => {
                 self.advance(); // la barra invertida
                 let escaped = match self.peek() {
@@ -444,8 +444,8 @@ impl Lexer {
                     Some('r') => '\r', // M14: retorno de carro
                     Some('\\') => '\\',
                     Some('\'') => '\'',
-                    Some(other) => return Err(self.error(format!("secuencia de escape inválida '\\{}'", other))),
-                    None => return Err(self.error("carácter sin cerrar tras '\\'".into())),
+                    Some(other) => return Err(self.error(format!("invalid escape sequence '\\{}'", other))),
+                    None => return Err(self.error("unterminated char literal after '\\'".into())),
                 };
                 self.advance(); // el carácter escapado
                 escaped
@@ -460,7 +460,7 @@ impl Lexer {
                 self.advance(); // comilla de cierre
                 Ok(TokenKind::Char(c))
             }
-            _ => Err(self.error("se esperaba ''' para cerrar el literal de carácter (¿más de un carácter?)".into())),
+            _ => Err(self.error("expected ''' to close the char literal (more than one character?)".into())),
         }
     }
 
@@ -617,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn interpolacion_de_cadenas() {
+    fn interpolation_de_strings() {
         use crate::token::InterpPart::{Expr, Lit};
         // `${expr}` en cualquier cadena → InterpStr con partes literales y de expresión (código crudo).
         assert_eq!(
@@ -643,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn los_tokens_llevan_su_longitud() {
+    fn los_tokens_llevan_su_length() {
         // M33a: cada token mide su lexema en caracteres (col..col+len es el span).
         let toks = lex("let foo = 12345 + \"ab\\n\";").expect("tokeniza");
         let lens: Vec<(TokenKind, usize)> =
@@ -662,16 +662,16 @@ mod tests {
     #[test]
     fn el_error_lexico_lleva_su_extension() {
         // M33a: "cadena sin cerrar" subraya desde la comilla hasta donde se rompió.
-        let e = lex("let s = \"hola").unwrap_err();
+        let e = lex("let s = \"hello").unwrap_err();
         assert_eq!((e.line, e.col), (1, 9));
-        assert_eq!(e.len, 5, "desde la comilla hasta el final: \"hola son 5 chars");
+        assert_eq!(e.len, 6, "desde la comilla hasta el final: \"hello son 6 chars");
         // Un carácter inesperado mide 1.
         let e = lex("let # = 1").unwrap_err();
         assert_eq!(e.len, 1);
     }
 
     #[test]
-    fn vacio_produce_solo_eof() {
+    fn empty_produce_solo_eof() {
         assert_eq!(kinds(""), vec![TokenKind::Eof]);
         assert_eq!(kinds("   \n\t  "), vec![TokenKind::Eof]);
     }
@@ -679,12 +679,12 @@ mod tests {
     #[test]
     // `3.14` prueba el lexeo de floats, no es una aproximación de PI (falso positivo de `approx_constant`).
     #[allow(clippy::approx_constant)]
-    fn literales() {
+    fn literals() {
         assert_eq!(kinds("42"), vec![TokenKind::Int(42), TokenKind::Eof]);
         assert_eq!(kinds("3.14"), vec![TokenKind::Float(3.14), TokenKind::Eof]);
         assert_eq!(
-            kinds("\"hola\""),
-            vec![TokenKind::Str("hola".into()), TokenKind::Eof]
+            kinds("\"hello\""),
+            vec![TokenKind::Str("hello".into()), TokenKind::Eof]
         );
     }
 
@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn escapes_en_cadena() {
+    fn escapes_in_string() {
         assert_eq!(
             kinds(r#""a\nb\t\\\"""#),
             vec![TokenKind::Str("a\nb\t\\\"".into()), TokenKind::Eof]
@@ -709,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_de_caracter_con_escapes() {
+    fn char_literal_with_escapes() {
         // M11.4c: 'a', escapes, y la keyword de tipo `char`.
         assert_eq!(kinds("'a'"), vec![TokenKind::Char('a'), TokenKind::Eof]);
         assert_eq!(
@@ -730,11 +730,11 @@ mod tests {
         // Vacío, multi-carácter y sin cerrar son errores de lexado.
         assert!(crate::lexer::lex("''").is_err(), "'' vacío");
         assert!(crate::lexer::lex("'ab'").is_err(), "más de un carácter");
-        assert!(crate::lexer::lex("'a").is_err(), "sin cerrar");
+        assert!(crate::lexer::lex("'a").is_err(), "sin close");
     }
 
     #[test]
-    fn palabras_clave_vs_identificadores() {
+    fn words_clave_vs_identificadores() {
         assert_eq!(
             kinds("let x int while123 ifx"),
             vec![
@@ -749,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn palabras_clave_de_m5() {
+    fn words_clave_de_m5() {
         // `enum` y `match` son palabras clave (M5); `=>` es un token propio.
         assert_eq!(
             kinds("enum match => enumx"),
@@ -793,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn operadores_bit_a_bit() {
+    fn operators_bit_a_bit() {
         // M19.3a: & | ^ ~ << >> sueltos. Ojo: '<<'/'>>' priman sobre '<'/'>'.
         assert_eq!(
             kinds("& | ^ ~ << >>"),
@@ -810,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn operadores_de_uno_y_dos_caracteres() {
+    fn operators_de_one_y_dos_caracteres() {
         assert_eq!(
             kinds("== = != ! <= < >= > && || -> - + * / %"),
             vec![
@@ -836,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn comentarios_se_ignoran() {
+    fn comments_se_ignoran() {
         assert_eq!(
             kinds("let // esto se ignora\n x"),
             vec![TokenKind::Let, TokenKind::Ident("x".into()), TokenKind::Eof]
@@ -844,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn posiciones_son_correctas() {
+    fn positions_son_correctas() {
         // fuente:
         //   let x      (línea 1)
         //     42       (línea 2, con 2 espacios de sangría)
@@ -861,15 +861,15 @@ mod tests {
     }
 
     #[test]
-    fn errores_lexicos() {
+    fn errors_lexicos() {
         // carácter inesperado ('@' ya está reservado para anotaciones; usamos '#')
         let e = lex("#").unwrap_err();
         assert_eq!((e.line, e.col), (1, 1));
-        assert!(e.msg.contains("inesperado"));
+        assert!(e.msg.contains("unexpected"));
 
         // cadena sin cerrar
-        let e = lex("\"sin cerrar").unwrap_err();
-        assert!(e.msg.contains("sin cerrar"));
+        let e = lex("\"sin close").unwrap_err();
+        assert!(e.msg.contains("unterminated"));
 
         // escape inválido
         assert!(lex("\"\\q\"").is_err());
@@ -878,7 +878,7 @@ mod tests {
     // Nota (M19.3a): '&' y '|' sueltos ya NO son error (son AND/OR bit a bit).
 
     #[test]
-    fn programa_fib_completo() {
+    fn program_fib_complete() {
         // El programa-objetivo de M1 (DESIGN.md §9) debe tokenizar sin error.
         let src = r#"
 fn fib(n: int) -> int {
@@ -898,7 +898,7 @@ fn main() -> int {
     0
 }
 "#;
-        let toks = lex(src).expect("fib debe tokenizar");
+        let toks = lex(src).expect("fib must tokenizar");
         // Comprobaciones de cordura: empieza con 'fn fib (' y termina en Eof.
         assert_eq!(toks[0].kind, TokenKind::Fn);
         assert_eq!(toks[1].kind, TokenKind::Ident("fib".into()));

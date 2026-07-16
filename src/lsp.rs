@@ -370,7 +370,7 @@ fn doc_in_prelude(name: &str) -> Option<String> {
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
     for (i, l) in lines.iter().enumerate() {
         let l = l.trim_start();
-        // Declaraciones de nivel superior y métodos de trait/impl: `fn nombre(`/`fn nombre<`,
+        // Declaraciones de nivel superior y métodos de trait/impl: `fn name(`/`fn name<`,
         // `enum/struct/trait Nombre`.
         let is_decl = ["fn ", "enum ", "struct ", "trait "].iter().any(|kw| {
             l.strip_prefix(kw).is_some_and(|rest| {
@@ -1824,14 +1824,14 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
 
     // Kinds LSP: 6 = Variable, 14 = Keyword. Los sortText ponen las variables antes que las keywords.
     let mut list: Vec<Json> = Vec::new();
-    for (nombre, tipo) in &vars {
+    for (name, ty) in &vars {
         let mut fields = vec![
-            ("label", Json::Str(nombre.clone())),
+            ("label", Json::Str(name.clone())),
             ("kind", num(6)),
-            ("sortText", Json::Str(format!("0{nombre}"))),
+            ("sortText", Json::Str(format!("0{name}"))),
         ];
-        if !tipo.is_empty() {
-            fields.push(("detail", Json::Str(tipo.clone())));
+        if !ty.is_empty() {
+            fields.push(("detail", Json::Str(ty.clone())));
         }
         list.push(obj(fields));
     }
@@ -1903,9 +1903,9 @@ fn template_block_snippets(with_opener: bool, lead_space: bool, replace: Option<
         ("for", "for ${1:elem} in ${2:coleccion} %}\n\t$0\n{% endfor %}"),
         ("if", "if ${1:condicion} %}\n\t$0\n{% endif %}"),
         ("if/else", "if ${1:condicion} %}\n\t$2\n{% else %}\n\t$0\n{% endif %}"),
-        ("let", "let ${1:nombre} = ${2:expr} %}$0"),
-        ("include", "include ${1:ruta/al/template}($2) %}$0"),
-        ("block", "block ${1:nombre} %}\n\t$0\n{% endblock %}"),
+        ("let", "let ${1:name} = ${2:expr} %}$0"),
+        ("include", "include ${1:path/al/template}($2) %}$0"),
+        ("block", "block ${1:name} %}\n\t$0\n{% endblock %}"),
     ];
     cases.iter().map(|(label, body)| {
         let insert = if with_opener {
@@ -1977,11 +1977,11 @@ fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(S
             if groups.len() > 1 {
                 groups.pop();
             }
-        } else if let Some(cuerpo) = tag.strip_prefix("for ")
-            && let Some((v, expr)) = cuerpo.split_once(" in ")
+        } else if let Some(body) = tag.strip_prefix("for ")
+            && let Some((v, expr)) = body.split_once(" in ")
         {
             let expr = expr.trim();
-            let tipo = if expr.contains("..") {
+            let ty = if expr.contains("..") {
                 "int".to_string()
             } else {
                 params.iter().find(|(n, _)| n == expr)
@@ -1989,9 +1989,9 @@ fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(S
                     .map(|t| t.trim().to_string())
                     .unwrap_or_default()
             };
-            groups.push(vec![(v.trim().to_string(), tipo)]);
-        } else if let Some(cuerpo) = tag.strip_prefix("let ")
-            && let Some((v, _)) = cuerpo.split_once('=')
+            groups.push(vec![(v.trim().to_string(), ty)]);
+        } else if let Some(body) = tag.strip_prefix("let ")
+            && let Some((v, _)) = body.split_once('=')
         {
             // Tipo desconocido textualmente (el hover semántico vía el generado sí lo da).
             groups
@@ -2013,11 +2013,11 @@ fn template_hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, u
     // El ámbito se calcula en el INICIO del identificador (así el propio nombre no cuenta como
     // texto del prefijo y un cursor al final del ident no cambia el resultado).
     let (_, vars) = template_scope(src, line0, start)?;
-    let (_, tipo) = vars.iter().find(|(n, _)| *n == name)?;
-    if tipo.is_empty() {
+    let (_, ty) = vars.iter().find(|(n, _)| *n == name)?;
+    if ty.is_empty() {
         return None;
     }
-    Some((format!("{name}: {tipo}"), start, end))
+    Some((format!("{name}: {ty}"), start, end))
 }
 
 // ── Templates: inteligencia DENTRO de las expresiones, vía el módulo generado ────────────────────
@@ -2176,7 +2176,7 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
                 continue; // rutas de import/extends y nombres de bloque no son variables
             }
             // En `{% include ruta(args) %}` la RUTA no liga (solo los args son expresión).
-            let idents_desde = if is_tag && first_word == "include"
+            let idents_from = if is_tag && first_word == "include"
                 && content.trim_start().strip_prefix("include")
                     .is_some_and(|r| crate::templ::template_ref(r.trim()).is_some())
             {
@@ -2185,7 +2185,7 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
                 0
             };
             for (k, (off, name)) in idents.iter().enumerate() {
-                if *off < idents_desde && !(k == 0 && *name == "include") {
+                if *off < idents_from && !(k == 0 && *name == "include") {
                     continue; // la ruta del include: no liga
                 }
                 if content[..*off].trim_end().ends_with('.') {
@@ -2368,7 +2368,7 @@ fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
     let Some((name, active, receiver)) = enclosing_call(src, line0, char0) else { return Json::Null };
     // 2. Resolver la firma con el resolutor unificado (M46b): buffer + módulos importados + prelude +
     //    builtins. Textual → robusto ante el documento a medio escribir (solo exige que la
-    //    *declaración* `fn nombre(...) -> ...` esté bien formada). Así el signature help funciona
+    //    *declaración* `fn name(...) -> ...` esté bien formada). Así el signature help funciona
     //    también para funciones importadas (`u.cuadrado(`) y del prelude, no solo las del archivo.
     let ctx = SigCtx::new(src, uri_to_path(uri).as_deref());
     // M48.1: función asociada de un tipo incorporado (`Map.new(`/`Channel.bounded(`): la firma sale del
@@ -2412,7 +2412,7 @@ fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
     if is_method && !params.is_empty() {
         params.remove(0);
     }
-    // 3. Construir el label `fn nombre(p: T, …) -> R` y la lista de parámetros (para resaltar).
+    // 3. Construir el label `fn name(p: T, …) -> R` y la lista de parámetros (para resaltar).
     let label = format!("fn {}({}) -> {}", name, params.join(", "), ret);
     let parameters: Vec<Json> = params.iter().map(|p| obj(vec![("label", Json::Str(p.clone()))])).collect();
     let active = active.min(params.len().saturating_sub(1));
@@ -3041,7 +3041,7 @@ fn result_message(id: Json, result: Json) -> Json {
 fn method_error(id: Json, method: &str) -> Json {
     let error = obj(vec![
         ("code", num(-32601)),
-        ("message", Json::Str(format!("método no soportado: {method}"))),
+        ("message", Json::Str(format!("unsupported method: {method}"))),
     ]);
     obj(vec![("jsonrpc", text("2.0")), ("id", id), ("error", error)])
 }
@@ -3440,12 +3440,12 @@ mod json {
             loop {
                 self.skip_ws();
                 if self.peek() != Some('"') {
-                    return Err("se esperaba una clave de objeto".into());
+                    return Err("expected an object key".into());
                 }
                 let key = self.string()?;
                 self.skip_ws();
                 if self.bump() != Some(':') {
-                    return Err("se esperaba ':' en un objeto".into());
+                    return Err("expected ':' in an object".into());
                 }
                 let val = self.value()?;
                 pairs.push((key, val));
@@ -3453,7 +3453,7 @@ mod json {
                 match self.bump() {
                     Some(',') => continue,
                     Some('}') => break,
-                    other => return Err(format!("se esperaba ',' o '}}', vino {other:?}")),
+                    other => return Err(format!("expected ',' or '}}', got {other:?}")),
                 }
             }
             Ok(Json::Obj(pairs))
@@ -3473,7 +3473,7 @@ mod json {
                 match self.bump() {
                     Some(',') => continue,
                     Some(']') => break,
-                    other => return Err(format!("se esperaba ',' o ']', vino {other:?}")),
+                    other => return Err(format!("expected ',' or ']', got {other:?}")),
                 }
             }
             Ok(Json::Arr(items))
@@ -3484,7 +3484,7 @@ mod json {
             let mut s = String::new();
             loop {
                 match self.bump() {
-                    None => return Err("cadena sin terminar".into()),
+                    None => return Err("unterminated string".into()),
                     Some('"') => break,
                     Some('\\') => self.escape(&mut s)?,
                     Some(c) => s.push(c),
@@ -3520,7 +3520,7 @@ mod json {
                         s.push(ch);
                     }
                 }
-                other => return Err(format!("escape inválido: \\{other:?}")),
+                other => return Err(format!("invalid escape: \\{other:?}")),
             }
             Ok(())
         }
@@ -3530,7 +3530,7 @@ mod json {
             let mut v = 0u32;
             for _ in 0..4 {
                 let c = self.bump().ok_or("escape \\u incompleto")?;
-                let d = c.to_digit(16).ok_or("dígito hexadecimal inválido")?;
+                let d = c.to_digit(16).ok_or("invalid hex digit")?;
                 v = v * 16 + d;
             }
             Ok(v)
@@ -3550,7 +3550,7 @@ mod json {
             let s: String = self.chars[start..self.i].iter().collect();
             s.parse::<f64>()
                 .map(Json::Num)
-                .map_err(|_| format!("número inválido: {s}"))
+                .map_err(|_| format!("invalid number: {s}"))
         }
 
         fn boolean(&mut self) -> Result<Json, String> {
@@ -3559,7 +3559,7 @@ mod json {
             } else if self.lit("false") {
                 Ok(Json::Bool(false))
             } else {
-                Err("literal booleano inválido".into())
+                Err("invalid boolean literal".into())
             }
         }
 
@@ -3567,7 +3567,7 @@ mod json {
             if self.lit("null") {
                 Ok(Json::Null)
             } else {
-                Err("literal null inválido".into())
+                Err("invalid null literal".into())
             }
         }
 
@@ -3589,7 +3589,7 @@ mod json {
         use super::*;
 
         #[test]
-        fn parsea_objeto_anidado() {
+        fn parses_objeto_nested() {
             let v = parse(r#"{"a":1,"b":[true,null,"x"],"c":{"d":-2.5}}"#).unwrap();
             assert_eq!(v.get("a"), Some(&Json::Num(1.0)));
             assert_eq!(v.get("b").unwrap().as_array().unwrap().len(), 3);
@@ -3597,7 +3597,7 @@ mod json {
         }
 
         #[test]
-        fn desescapa_cadenas() {
+        fn desescapa_strings() {
             let v = parse(r#""línea\n\t\"fin\"""#).unwrap();
             assert_eq!(v.as_str(), Some("línea\n\t\"fin\""));
             // \uXXXX (BMP) y pareja sustituta (emoji).
@@ -3606,12 +3606,12 @@ mod json {
         }
 
         #[test]
-        fn serializa_y_reparsea_igual() {
+        fn serializa_y_reparsea_equal() {
             let original = obj_from(vec![
                 ("jsonrpc", Json::Str("2.0".into())),
                 ("id", Json::Num(7.0)),
                 ("ok", Json::Bool(true)),
-                ("lista", Json::Arr(vec![Json::Num(1.0), Json::Null])),
+                ("list", Json::Arr(vec![Json::Num(1.0), Json::Null])),
             ]);
             let serialized = original.serialize();
             assert_eq!(parse(&serialized).unwrap(), original);
@@ -3630,7 +3630,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn analizar_todos_publica_varios_errores() {
+    fn analizar_all_public_various_errors() {
         // M33c: dos errores de tipos → dos diagnósticos.
         let ds = analyze_all("fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { 0 }");
         assert_eq!(ds.len(), 2, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
@@ -3639,38 +3639,38 @@ mod tests {
         let ds = analyze_all("fn f() -> int { let = 1; 0 }\nfn g() -> int { 2 + }\nfn main() -> int { 0 }");
         assert!(ds.len() >= 2, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
         // …pero un parse sucio NO llega al checker (sería cascada sobre un AST parcial).
-        assert!(ds.iter().all(|d| d.message.contains("sintaxis")), "{:?}",
+        assert!(ds.iter().all(|d| d.message.contains("syntax")), "{:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
         // Sin errores → lista vacía (borra los diagnósticos previos del editor).
         assert!(analyze_all("fn main() -> int { 0 }").is_empty());
     }
 
         #[test]
-    fn analiza_programa_valido_sin_errores() {
+    fn analiza_program_valid_sin_errors() {
         assert!(analyze("fn main() -> int { 1 + 2 }").is_none());
     }
 
     #[test]
-    fn diagnosticos_con_modulos() {
+    fn diagnostics_con_modules() {
         // Un proyecto de dos archivos: `geo.ray` (en disco) y la entrada `main.ray` (en el buffer).
         let dir = std::env::temp_dir().join("ray_lsp_mod");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("geo.ray"), "pub fn duplicar(x: int) -> int { x * 2 }\n").unwrap();
+        std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
         let entry = dir.join("main.ray");
         let uri = format!("file://{}", entry.display());
 
         // (a) Un import válido NO produce diagnósticos (antes: "función 'duplicar' no declarada").
-        let src = "from geo import duplicar;\nfn main() -> int { duplicar(21) }\n";
-        let ds = analyze_modular(&uri, src).expect("modo modular (es un archivo)");
-        assert!(ds.is_empty(), "un import válido no debe dar errores: {:?}",
+        let src = "from geo import duplicate;\nfn main() -> int { duplicate(21) }\n";
+        let ds = analyze_modular(&uri, src).expect("mode modular (es un file)");
+        assert!(ds.is_empty(), "un import válido no must dar errors: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
         // (b) Un error de tipos EN LA ENTRADA sí se reporta, con la línea local.
-        let src = "from geo import duplicar;\nfn main() -> int { duplicar(true) }\n";
+        let src = "from geo import duplicate;\nfn main() -> int { duplicate(true) }\n";
         let ds = analyze_modular(&uri, src).expect("modular");
         assert_eq!(ds.len(), 1, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-        assert_eq!(ds[0].line, 2, "línea local de la entrada, no la global del programa fusionado");
+        assert_eq!(ds[0].line, 2, "línea local de la entry, no la global del program fusionado");
 
         // (c) Un import a un módulo inexistente se reporta (la entrada parsea → error del loader).
         let src = "from noexiste import cosa;\nfn main() -> int { 0 }\n";
@@ -3682,7 +3682,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnosticos_submodulo_sin_main_y_import_por_ruta() {
+    fn diagnostics_submodule_sin_main_y_import_por_path() {
         // Reproduce dos problemas al abrir un ARCHIVO DE MÓDULO (no la entrada) en el editor:
         //   1. Un submódulo `pub` sin `main` marcaba "falta la función de entrada 'main'".
         //   2. Un `import geo/util;` (ruta absoluta desde la raíz) no resolvía, porque el loader
@@ -3695,32 +3695,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
         std::fs::write(dir.join("main.ray"),
-            "import geo/formas/circulo;\nfn main() -> int { circulo.area(circulo.Circulo { radio: 4 }) }\n").unwrap();
-        let util_src = "pub fn cuadrado(n: int) -> int { n * n }\n";
+            "import geo/formas/circle;\nfn main() -> int { circle.area(circle.Circulo { radio: 4 }) }\n").unwrap();
+        let util_src = "pub fn square(n: int) -> int { n * n }\n";
         std::fs::write(dir.join("geo/util.ray"), util_src).unwrap();
-        let circulo_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }\n";
-        std::fs::write(dir.join("geo/formas/circulo.ray"), circulo_src).unwrap();
+        let circle_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.square(c.radio) }\n";
+        std::fs::write(dir.join("geo/formas/circle.ray"), circle_src).unwrap();
 
         // La raíz del proyecto se detecta como el ancestro con `main.ray`, desde un submódulo profundo.
-        let root = project_root_for(&dir.join("geo/formas/circulo.ray")).expect("raíz");
-        assert_eq!(root, dir, "la raíz es el directorio con main.ray, no la del submódulo");
+        let root = project_root_for(&dir.join("geo/formas/circle.ray")).expect("raíz");
+        assert_eq!(root, dir, "la raíz es el directory con main.ray, no la del submódulo");
 
         // (1) util.ray: submódulo sin `main` → SIN diagnósticos (antes: "falta … 'main'").
         let uri_util = format!("file://{}", dir.join("geo/util.ray").display());
         let ds = analyze_modular(&uri_util, util_src).expect("modular");
-        assert!(ds.is_empty(), "un submódulo sin main no debe dar errores: {:?}",
+        assert!(ds.is_empty(), "un submódulo sin main no must dar errors: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
         // (2) circulo.ray: `import geo/util;` resuelve desde la raíz + sin `main` → SIN diagnósticos.
-        let uri_circ = format!("file://{}", dir.join("geo/formas/circulo.ray").display());
-        let ds = analyze_modular(&uri_circ, circulo_src).expect("modular");
-        assert!(ds.is_empty(), "el import por ruta absoluta debe resolver: {:?}",
+        let uri_circ = format!("file://{}", dir.join("geo/formas/circle.ray").display());
+        let ds = analyze_modular(&uri_circ, circle_src).expect("modular");
+        assert!(ds.is_empty(), "el import por path absoluta must resolver: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
         // (3) Un error de tipos REAL en el submódulo sí se reporta (no se traga por el modo módulo).
-        let circulo_malo = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.cuadrado(c) }\n";
-        let ds = analyze_modular(&uri_circ, circulo_malo).expect("modular");
-        assert_eq!(ds.len(), 1, "el error real del cuerpo debe verse: {:?}",
+        let circle_malo = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.square(c) }\n";
+        let ds = analyze_modular(&uri_circ, circle_malo).expect("modular");
+        assert_eq!(ds.len(), 1, "el error real del body must verse: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
         assert_eq!(ds[0].line, 3, "línea local del submódulo");
 
@@ -3728,38 +3728,38 @@ mod tests {
     }
 
     #[test]
-    fn diagnosticos_submodulo_interno_de_capsula() {
+    fn diagnostics_submodule_internal_de_capsule() {
         // Un submódulo DENTRO de una cápsula que importa a un vecino interno de la MISMA cápsula.
         // `geo/mod.ray` hace de `geo` una cápsula; `geo/util` es interno; `geo/formas/circulo.ray`
         // (también dentro de `geo/`) hace `import geo/util;` → legítimo (el importador vive bajo la
         // cápsula). Antes, al abrir el submódulo, el loader lo identificaba por su stem ("circulo")
         // y el enforcement lo trataba como externo: "el módulo 'geo/util' es interno a la cápsula 'geo'".
-        let dir = std::env::temp_dir().join("ray_lsp_capsula");
+        let dir = std::env::temp_dir().join("ray_lsp_capsule");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
         std::fs::write(dir.join("main.ray"),
             "import geo;\nfn main() -> int { geo.area(geo.Circulo { radio: 4 }) }\n").unwrap();
         std::fs::write(dir.join("geo/mod.ray"),
-            "pub from geo/formas/circulo import Circulo, area;\n").unwrap();
-        std::fs::write(dir.join("geo/util.ray"), "pub fn cuadrado(n: int) -> int { n * n }\n").unwrap();
-        let circulo_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }\n";
-        std::fs::write(dir.join("geo/formas/circulo.ray"), circulo_src).unwrap();
+            "pub from geo/formas/circle import Circulo, area;\n").unwrap();
+        std::fs::write(dir.join("geo/util.ray"), "pub fn square(n: int) -> int { n * n }\n").unwrap();
+        let circle_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.square(c.radio) }\n";
+        std::fs::write(dir.join("geo/formas/circle.ray"), circle_src).unwrap();
 
         // La identidad real del submódulo es "geo/formas/circulo" → está bajo la cápsula "geo".
-        let root = project_root_for(&dir.join("geo/formas/circulo.ray")).expect("raíz");
+        let root = project_root_for(&dir.join("geo/formas/circle.ray")).expect("raíz");
         assert_eq!(root, dir);
 
         // Abrir el submódulo interno: SIN diagnósticos (import a un vecino de la cápsula, y sin main).
-        let uri = format!("file://{}", dir.join("geo/formas/circulo.ray").display());
-        let ds = analyze_modular(&uri, circulo_src).expect("modular");
-        assert!(ds.is_empty(), "importar a un vecino interno de la propia cápsula es legítimo: {:?}",
+        let uri = format!("file://{}", dir.join("geo/formas/circle.ray").display());
+        let ds = analyze_modular(&uri, circle_src).expect("modular");
+        assert!(ds.is_empty(), "importar a un vecino internal de la propia cápsula es legítimo: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
         // Hover DENTRO del submódulo (sin `main`): antes no daba nada porque el chequeo de main
         // cortaba antes de recorrer los cuerpos. `circulo_src` línea 3 (0-based 2):
-        //   `pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }`  — uso de `c` en col 51.
-        let (t, _, _) = hover_at(Some(&uri), circulo_src, 2, 51).expect("hover sobre uso de 'c'");
-        assert_eq!(t, "c: Circulo", "hover de un uso dentro de un submódulo sin main");
+        //   `pub fn area(c: Circulo) -> int { 3 * util.square(c.radio) }`  — uso de `c` en col 49.
+        let (t, _, _) = hover_at(Some(&uri), circle_src, 2, 49).expect("hover about use de 'c'");
+        assert_eq!(t, "c: Circulo", "hover de un use inside de un submódulo sin main");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3773,7 +3773,7 @@ mod tests {
         let msg = obj(vec![("params", obj(vec![("textDocument", obj(vec![("uri", text(&uri))]))]))]);
         let r = formatting_result(&msg, &docs);
         let edits = r.as_array().expect("array de edits");
-        assert_eq!(edits.len(), 1, "un único edit de documento completo");
+        assert_eq!(edits.len(), 1, "un único edit de documento complete");
         let new = edits[0].get("newText").and_then(Json::as_str).unwrap();
         // El resultado es el mismo que `ray fmt` (el formateador compartido).
         assert_eq!(new, crate::fmt::format_source("fn  main( )->int{1+2}\n").unwrap());
@@ -3794,7 +3794,7 @@ mod tests {
     }
 
     #[test]
-    fn document_symbol_lista_el_outline() {
+    fn document_symbol_list_el_outline() {
         let mut docs = HashMap::new();
         let uri = "file:///t.ray".to_string();
         let src = "const K: int = 3;\nstruct Punto { x: int, y: int }\nenum Color { Rojo, Verde }\ntrait Show { fn show(self) -> string; }\nimpl Show for Punto { fn show(self) -> string { \"p\" } }\nfn main() -> int { 0 }\n";
@@ -3837,20 +3837,20 @@ mod tests {
         assert_eq!(tp, "print: fn(int) -> unit");
         // Signature help por firma fija de la tabla (`signature`): sigue sirviendo a `math.pow(` (el
         // envoltorio de `std/math`) aunque `pow` ya no sea builtin.
-        let (ps, ret) = crate::builtins::signature("pow").expect("firma de pow");
+        let (ps, ret) = crate::builtins::signature("pow").expect("signature de pow");
         assert_eq!((ps, ret), (vec!["base: float", "exp: float"], "float"));
         // M46a: los builtins-método también llevan firma (para el detalle del popup).
         assert_eq!(crate::builtins::signature("len"), Some((vec!["c"], "int")));
-        assert!(crate::builtins::signature("print").is_none(), "print es variádico ad-hoc, sin firma fija");
+        assert!(crate::builtins::signature("print").is_none(), "print es variádico ad-hoc, sin signature fixes");
     }
 
     #[test]
-    fn hover_muestra_documentacion() {
+    fn hover_shows_documentacion() {
         // Una función con `///` encima: el hover trae la firma + la doc, como Markdown.
-        let src = "/// Duplica un número.\n/// Segunda línea.\nfn duplicar(x: int) -> int { x * 2 }\nfn main() -> int {\n  duplicar(21)\n}\n";
+        let src = "/// Duplica un número.\n/// Segunda línea.\nfn duplicate(x: int) -> int { x * 2 }\nfn main() -> int {\n  duplicate(21)\n}\n";
         // Uso de `duplicar` en la línea 5 (0-based 4), col 2.
         let (info, _, _) = hover_at(None, src, 4, 2).expect("hover");
-        assert!(info.starts_with("duplicar: fn(int) -> int"), "{info}");
+        assert!(info.starts_with("duplicate: fn(int) -> int"), "{info}");
         // La doc se localiza escaneando los `///` encima de la declaración.
         let mut docs = HashMap::new();
         let uri = format!("file://{}", std::env::temp_dir().join("ray_hover_doc.ray").display());
@@ -3864,7 +3864,7 @@ mod tests {
         ]))]);
         let r = hover_result(&msg, &docs);
         let val = r.get("contents").unwrap().get("value").and_then(Json::as_str).unwrap();
-        assert!(val.contains("```raylang"), "firma en bloque de código: {val}");
+        assert!(val.contains("```raylang"), "signature en block de código: {val}");
         assert!(val.contains("Duplica un número."), "incluye la doc: {val}");
         assert_eq!(r.get("contents").unwrap().get("kind"), Some(&Json::Str("markdown".into())));
 
@@ -3917,7 +3917,7 @@ mod tests {
         ]))]);
         docs.insert(uri.clone(), src.to_string());
         let r = completion_result(&msg, &docs);
-        let Json::Arr(items) = &r else { panic!("completion no es lista") };
+        let Json::Arr(items) = &r else { panic!("completion no es list") };
         // M49: `pow`/`sqrt`/`abs`/… se movieron a `std/math` (ya no en el completion global de builtins);
         // se prueba con `char_code`, que sigue siendo builtin.
         let cc = items.iter().find(|i| i.get("label") == Some(&Json::Str("char_code".into()))).expect("char_code en completion");
@@ -3949,40 +3949,40 @@ mod tests {
     }
 
     #[test]
-    fn hover_con_modulos() {
+    fn hover_con_modules() {
         // Antes: un archivo con `import` no daba NINGÚN hover (el checker fallaba por el import).
         let dir = std::env::temp_dir().join("ray_lsp_hover_mod");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("geo.ray"), "pub fn duplicar(x: int) -> int { x * 2 }\n").unwrap();
+        std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
         let uri = format!("file://{}", dir.join("main.ray").display());
-        let src = "from geo import duplicar;\nfn main() -> int {\n  let y = 5;\n  duplicar(y)\n}\n";
+        let src = "from geo import duplicate;\nfn main() -> int {\n  let y = 5;\n  duplicate(y)\n}\n";
 
         // Variable LOCAL: hover funciona pese al import (índice sobre el programa fusionado).
-        let (t, _, _) = hover_at(Some(&uri), src, 3, 11).expect("hover sobre 'y'");
+        let (t, _, _) = hover_at(Some(&uri), src, 3, 12).expect("hover about 'y'");
         assert_eq!(t, "y: int");
         // Función IMPORTADA de otro módulo: muestra su tipo en forma de fachada (`geo.duplicar`,
         // no el `geo::duplicar` interno).
-        let (t, _, _) = hover_at(Some(&uri), src, 3, 2).expect("hover sobre 'duplicar'");
-        assert_eq!(t, "geo.duplicar: fn(int) -> int", "forma de fachada, sin '::'");
+        let (t, _, _) = hover_at(Some(&uri), src, 3, 2).expect("hover about 'duplicate'");
+        assert_eq!(t, "geo.duplicate: fn(int) -> int", "forma de fachada, sin '::'");
 
         // Rename de una variable local en un archivo multi-módulo: seguro (vive entera aquí).
-        let (_, _, _, is_local) = symbol_occurrences(Some(&uri), src, 3, 11).expect("símbolo");
+        let (_, _, _, is_local) = symbol_occurrences(Some(&uri), src, 3, 12).expect("símbolo");
         assert!(is_local, "'y' es local → renombrable");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn hover_de_campos_y_metodos() {
+    fn hover_de_fields_y_methods() {
         // Campo de struct: `p.x` → el tipo del campo, en la posición del nombre tras el `.`.
         let src = "struct Punto { x: int, y: int }\nfn main() -> int {\n  let p = Punto { x: 3, y: 4 };\n  p.x + p.y\n}\n";
         let (t, _, _) = hover_at(None, src, 3, 4).expect("hover del campo x");
         assert_eq!(t, "x: int");
 
         // Método de trait: `n.doblar()` → la firma del método (incluye el receptor).
-        let src = "trait D { fn doblar(self) -> int; }\nstruct N { v: int }\nimpl D for N { fn doblar(self) -> int { self.v * 2 } }\nfn main() -> int {\n  let n = N { v: 21 };\n  n.doblar()\n}\n";
-        let (t, _, _) = hover_at(None, src, 5, 4).expect("hover del método doblar");
-        assert_eq!(t, "doblar: fn(N) -> int");
+        let src = "trait D { fn fold(self) -> int; }\nstruct N { v: int }\nimpl D for N { fn fold(self) -> int { self.v * 2 } }\nfn main() -> int {\n  let n = N { v: 21 };\n  n.fold()\n}\n";
+        let (t, _, _) = hover_at(None, src, 5, 4).expect("hover del método fold");
+        assert_eq!(t, "fold: fn(N) -> int");
 
         // Método por UFCS a una función del prelude: `xs.map(f)`.
         let src = "fn main() -> int {\n  let xs = [1, 2, 3];\n  xs.map(fn(a: int) -> int { a + 1 });\n  0\n}\n";
@@ -3991,7 +3991,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_dentro_de_interpolacion() {
+    fn hover_inside_de_interpolation() {
         // Las expresiones de `${…}` se re-lexan con posiciones reales → hover funciona dentro.
         let src = "fn main() -> int {\n  let x = 7;\n  print(\"n=${x} y ${x + 1}\");\n  0\n}\n";
         // línea 3 (0-based 2): `  print("n=${x} y ${x + 1}");`
@@ -4003,10 +4003,10 @@ mod tests {
     }
 
     #[test]
-    fn nombre_fachada_colapsa_namespaces() {
+    fn name_fachada_colapsa_namespaces() {
         // Sin imports conocidos → fallback `primer.último` (respeta la cápsula, sin `::`).
-        assert_eq!(facade_name("geo::formas::circulo::Circulo", &[]), "geo.Circulo");
-        assert_eq!(facade_name("geo::area: fn(geo::formas::circulo::Circulo) -> int", &[]),
+        assert_eq!(facade_name("geo::formas::circle::Circulo", &[]), "geo.Circulo");
+        assert_eq!(facade_name("geo::area: fn(geo::formas::circle::Circulo) -> int", &[]),
             "geo.area: fn(geo.Circulo) -> int");
         // Nombres sin namespacing (locales, primitivos) intactos.
         assert_eq!(facade_name("c: Punto", &[]), "c: Punto");
@@ -4018,21 +4018,21 @@ mod tests {
         let imp = vec![("math".to_string(), "std::math".to_string()), ("geo".to_string(), "geo".to_string())];
         assert_eq!(facade_name("std::math::sqrt: fn(float) -> float", &imp), "math.sqrt: fn(float) -> float");
         assert_eq!(facade_name("std::math::PI: float", &imp), "math.PI: float");
-        assert_eq!(facade_name("geo::formas::circulo::Circulo", &imp), "geo.Circulo");
+        assert_eq!(facade_name("geo::formas::circle::Circulo", &imp), "geo.Circulo");
     }
 
     #[test]
-    fn definicion_cruza_modulos() {
+    fn definicion_cross_modules() {
         let dir = std::env::temp_dir().join("ray_lsp_def_mod");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("geo.ray"), "pub fn duplicar(x: int) -> int { x * 2 }\n").unwrap();
+        std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
         let uri = format!("file://{}", dir.join("main.ray").display());
-        let src = "from geo import duplicar;\nfn main() -> int {\n  let r = duplicar(21);\n  r\n}\n";
+        let src = "from geo import duplicate;\nfn main() -> int {\n  let r = duplicate(21);\n  r\n}\n";
 
         // Ir-a-definición de la función IMPORTADA → salta al otro archivo (geo.ray, línea 0).
-        let (turi, line, _, _) = definition_at(&uri, src, 2, 10).expect("def de duplicar");
-        assert!(turi.ends_with("geo.ray"), "el destino es el archivo del módulo: {turi}");
+        let (turi, line, _, _) = definition_at(&uri, src, 2, 10).expect("def de duplicate");
+        assert!(turi.ends_with("geo.ray"), "el target es el file del módulo: {turi}");
         assert_eq!(line, 0);
 
         // Ir-a-definición de una variable LOCAL → se queda en este archivo.
@@ -4043,39 +4043,39 @@ mod tests {
     }
 
     #[test]
-    fn references_cruzan_modulos() {
+    fn references_cruzan_modules() {
         let dir = std::env::temp_dir().join("ray_lsp_refs_mod");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // geo.ray: define `duplicar` y lo usa una vez internamente.
         std::fs::write(dir.join("geo.ray"),
-            "pub fn duplicar(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicar(x) }\n").unwrap();
+            "pub fn duplicate(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicate(x) }\n").unwrap();
         let uri = format!("file://{}", dir.join("main.ray").display());
-        let src = "from geo import duplicar;\nfn main() -> int {\n  duplicar(21)\n}\n";
+        let src = "from geo import duplicate;\nfn main() -> int {\n  duplicate(21)\n}\n";
 
         // Find-references desde el uso en main.ray → apariciones en AMBOS archivos.
         let locs = references_cross(&uri, src, 2, 2, true).expect("references");
         let files: std::collections::HashSet<&str> = locs.iter()
             .map(|(u, _)| u.rsplit('/').next().unwrap())
             .collect();
-        assert!(files.contains("geo.ray"), "incluye la declaración y el uso interno: {locs:?}");
-        assert!(files.contains("main.ray"), "incluye el uso del archivo abierto: {locs:?}");
+        assert!(files.contains("geo.ray"), "incluye la declaración y el use internal: {locs:?}");
+        assert!(files.contains("main.ray"), "incluye el use del file abierto: {locs:?}");
         // 3 apariciones: declaración + uso interno en geo.ray, uso en main.ray.
         assert_eq!(locs.len(), 3, "{locs:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn rename_cruza_modulos() {
+    fn rename_cross_modules() {
         let dir = std::env::temp_dir().join("ray_lsp_ren_mod");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("geo.ray"),
-            "pub fn duplicar(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicar(x) }\n").unwrap();
+            "pub fn duplicate(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicate(x) }\n").unwrap();
         let uri = format!("file://{}", dir.join("main.ray").display());
 
         // Rename de una función importada → toca AMBOS archivos, INCLUIDA la línea del import.
-        let src = "from geo import duplicar;\nfn main() -> int {\n  duplicar(21)\n}\n";
+        let src = "from geo import duplicate;\nfn main() -> int {\n  duplicate(21)\n}\n";
         let pos = rename_cross(&uri, src, 2, 2).expect("rename cross-módulo");
         let files: std::collections::HashSet<&str> =
             pos.iter().map(|(u, _)| u.rsplit('/').next().unwrap()).collect();
@@ -4086,20 +4086,20 @@ mod tests {
         assert!(pos.iter().any(|(u, (l, _, _))| u.ends_with("main.ray") && *l == 0), "falta el import: {pos:?}");
 
         // Con `as alias`, el rename se NIEGA (los usos van por el alias → incompleto e inseguro).
-        let src = "from geo import duplicar as d;\nfn main() -> int { d(21) }\n";
-        assert!(rename_cross(&uri, src, 1, 19).is_none(), "rename con alias debe rechazarse");
+        let src = "from geo import duplicate as d;\nfn main() -> int { d(21) }\n";
+        assert!(rename_cross(&uri, src, 1, 19).is_none(), "rename con alias must rechazarse");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn uri_a_ruta_decodifica() {
+    fn uri_a_path_decodifica() {
         assert_eq!(uri_to_path("file:///a/b/c.ray"), Some(PathBuf::from("/a/b/c.ray")));
         assert_eq!(uri_to_path("file:///a/mi%20carpeta/x.ray"), Some(PathBuf::from("/a/mi carpeta/x.ray")));
         assert_eq!(uri_to_path("untitled:Untitled-1"), None); // buffer sin archivo → single-file
     }
 
     #[test]
-    fn referencias_de_variable_local() {
+    fn references_de_variable_local() {
         // `let x = 1; x + x` → declaración + 2 usos.
         let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
         // Cursor sobre el primer uso de `x` (línea 3 → 0-based 2, col 2).
@@ -4107,14 +4107,14 @@ mod tests {
         assert_eq!(name, "x");
         assert_eq!(decl, Some((1, 6, 1)), "la declaración apunta al NOMBRE x, no al 'let'");
         assert_eq!(uses.len(), 2, "x + x son dos usos");
-        assert!(is_local, "una variable local vive entera en este archivo");
+        assert!(is_local, "one variable local vive entera en este file");
         // Y desde el nombre de la declaración (línea 2 → 0-based 1, col 6) da lo mismo.
-        let (n2, d2, u2, _) = symbol_occurrences(None, src, 1, 6).expect("símbolo desde la declaración");
+        let (n2, d2, u2, _) = symbol_occurrences(None, src, 1, 6).expect("símbolo from la declaración");
         assert_eq!((n2, d2, u2.len()), ("x".to_string(), Some((1, 6, 1)), 2));
     }
 
     #[test]
-    fn referencias_distinguen_ambitos() {
+    fn references_distinguen_ambitos() {
         // Dos `x` en funciones distintas no se mezclan (claves de declaración distintas).
         let src = "fn f(a: int) -> int {\n  let x = a;\n  x + x\n}\nfn main() -> int {\n  let x = 9;\n  x\n}\n";
         // El `x` de `f` (línea 3 → 0-based 2): 2 usos.
@@ -4126,13 +4126,13 @@ mod tests {
     }
 
     #[test]
-    fn referencias_de_funcion() {
+    fn references_de_function() {
         // Una función llamada dos veces: declaración + 2 usos.
-        let src = "fn doble(n: int) -> int { n + n }\nfn main() -> int {\n  doble(1) + doble(2)\n}\n";
-        // Cursor sobre la primera llamada `doble` (línea 3 → 0-based 2, col 2).
+        let src = "fn double(n: int) -> int { n + n }\nfn main() -> int {\n  double(1) + double(2)\n}\n";
+        // Cursor sobre la primera llamada `double` (línea 3 → 0-based 2, col 2).
         let (name, decl, uses, _) = symbol_occurrences(None, src, 2, 2).expect("hay símbolo");
-        assert_eq!(name, "doble");
-        assert_eq!(decl, Some((0, 3, 5)), "la declaración apunta al nombre 'doble' tras 'fn '");
+        assert_eq!(name, "double");
+        assert_eq!(decl, Some((0, 3, 6)), "la declaración apunta al name 'double' tras 'fn '");
         assert_eq!(uses.len(), 2);
     }
 
@@ -4151,8 +4151,8 @@ mod tests {
     }
 
     #[test]
-    fn completion_ofrece_simbolos_builtins_y_keywords() {
-        let src = "struct Punto { x: int }\nfn doble(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
+    fn completion_offers_symbols_builtins_y_keywords() {
+        let src = "struct Punto { x: int }\nfn double(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
         let msg = json::parse(
             r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":0}}}"#
         ).unwrap();
@@ -4161,17 +4161,17 @@ mod tests {
         let res = completion_result(&msg, &docs);
         let items = res.as_array().unwrap();
         let labels: Vec<&str> = items.iter().filter_map(|i| i.get("label").and_then(|l| l.as_str())).collect();
-        assert!(labels.contains(&"doble"), "función propia\n{labels:?}");
-        assert!(labels.contains(&"Punto"), "tipo propio");
+        assert!(labels.contains(&"double"), "función propia\n{labels:?}");
+        assert!(labels.contains(&"Punto"), "type propio");
         assert!(labels.contains(&"print"), "builtin");
         assert!(labels.contains(&"map"), "función del prelude");
         assert!(labels.contains(&"while"), "palabra clave");
         // No expone nombres sintéticos (manglados, internos).
-        assert!(!labels.iter().any(|l| l.contains('#') || l.starts_with("__")), "sin nombres sintéticos");
+        assert!(!labels.iter().any(|l| l.contains('#') || l.starts_with("__")), "sin names sintéticos");
     }
 
     #[test]
-    fn completion_ofrece_snippet_de_closure_para_spawn_y_scope() {
+    fn completion_offers_snippet_de_closure_para_spawn_y_scope() {
         // `spawn`/`scope` toman una función anónima → un ítem-extra inserta `name(fn() { … });`.
         let src = "fn main() -> int { 0 }\n";
         let msg = json::parse(
@@ -4189,7 +4189,7 @@ mod tests {
             assert_eq!(
                 snippet.get("insertText").and_then(|t| t.as_str()),
                 Some(format!("{name}(fn() {{\n\t$0\n}});").as_str()),
-                "{name}: inserta el cuerpo de la función anónima"
+                "{name}: inserta el body de la función anónima"
             );
             // El builtin pelado sigue ofreciéndose aparte.
             assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(name)),
@@ -4210,35 +4210,35 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_miembros_de_struct() {
+    fn completion_de_members_de_struct() {
         // M45: `p.` sobre un struct ofrece sus campos y sus métodos de trait, no los símbolos de archivo.
-        let src = "struct P { x: int, y: int }\ntrait Ver { fn ver(self) -> int; }\nimpl Ver for P { fn ver(self) -> int { self.x } }\nfn suma(p: P) -> int { p.x + p.y }\nfn main() -> int {\n    let p = P { x: 1, y: 2 };\n    p.\n    0\n}\n";
+        let src = "struct P { x: int, y: int }\ntrait Ver { fn see(self) -> int; }\nimpl Ver for P { fn see(self) -> int { self.x } }\nfn sum(p: P) -> int { p.x + p.y }\nfn main() -> int {\n    let p = P { x: 1, y: 2 };\n    p.\n    0\n}\n";
         let labels = completion_labels(src, 6, 6); // línea "    p." (0-basada), tras el punto
-        assert!(labels.contains(&"x".to_string()) && labels.contains(&"y".to_string()), "campos: {labels:?}");
-        assert!(labels.contains(&"ver".to_string()), "método de trait: {labels:?}");
-        assert!(labels.contains(&"suma".to_string()), "UFCS del usuario: {labels:?}");
+        assert!(labels.contains(&"x".to_string()) && labels.contains(&"y".to_string()), "fields: {labels:?}");
+        assert!(labels.contains(&"see".to_string()), "método de trait: {labels:?}");
+        assert!(labels.contains(&"sum".to_string()), "UFCS del user: {labels:?}");
         // NO ofrece los símbolos de archivo (no es una completion de archivo tras el punto).
         assert!(!labels.contains(&"print".to_string()), "sin builtins globales: {labels:?}");
-        assert!(!labels.contains(&"while".to_string()), "sin palabras clave: {labels:?}");
+        assert!(!labels.contains(&"while".to_string()), "sin words clave: {labels:?}");
     }
 
     #[test]
-    fn completion_de_miembros_de_string_y_array() {
+    fn completion_de_members_de_string_y_array() {
         // string: builtins de string + métodos de trait; NADA de funciones de E/S que toman una ruta.
         let s = "fn main() -> int {\n    let s = \"h\";\n    s.\n    0\n}\n";
         let ls = completion_labels(s, 2, 6);
         assert!(ls.contains(&"trim".to_string()) && ls.contains(&"split".to_string()) && ls.contains(&"len".to_string()), "string builtins: {ls:?}");
-        assert!(!ls.contains(&"read_file".to_string()) && !ls.contains(&"env".to_string()), "sin E/S sobre string: {ls:?}");
+        assert!(!ls.contains(&"read_file".to_string()) && !ls.contains(&"env".to_string()), "sin E/S about string: {ls:?}");
         // array: builtins + orden superior del prelude por UFCS.
         let a = "fn main() -> int {\n    let xs = [1, 2, 3];\n    xs.\n    0\n}\n";
         let la = completion_labels(a, 2, 7);
         for m in ["len", "push", "reverse", "map", "filter", "fold", "sort"] {
-            assert!(la.contains(&m.to_string()), "array debe ofrecer '{m}': {la:?}");
+            assert!(la.contains(&m.to_string()), "array must ofrecer '{m}': {la:?}");
         }
     }
 
     #[test]
-    fn completion_de_miembros_en_contexto_de_expresion() {
+    fn completion_de_members_en_context_de_expression() {
         // M45b: `x.` como argumento de una llamada NO debe romper el parseo (bug del `;` dentro
         // del paréntesis). `sum(x.)` ofrece los miembros del array.
         let src = "fn sum(xs: [int]) -> int { 0 }\nfn main() -> int {\n    let x = [1, 2];\n    let y = sum(x.);\n    0\n}\n";
@@ -4247,10 +4247,10 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_miembros_snippet_y_doc() {
+    fn completion_de_members_snippet_y_doc() {
         // M45b/M46c: un método con args → snippet con placeholders por parámetro, sin el receptor
         // (`doblar(${1:k})`); un campo no inserta `()`; los métodos del usuario traen su doc `///`.
-        let src = "struct P { x: int }\n/// Duplica x.\nfn doblar(p: P, k: int) -> int { p.x * k }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
+        let src = "struct P { x: int }\n/// Duplica x.\nfn fold(p: P, k: int) -> int { p.x * k }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
         let msg = json::parse(
             r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":5,"character":6}}}"#
         ).unwrap();
@@ -4258,10 +4258,10 @@ mod tests {
         docs.insert("file:///t.ray".to_string(), src.to_string());
         let items = completion_result(&msg, &docs);
         let arr = items.as_array().unwrap();
-        let doblar = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("doblar")).expect("doblar");
-        assert_eq!(doblar.get("insertText").and_then(|t| t.as_str()), Some("doblar(${1:k})"), "snippet con placeholder, sin receptor");
-        assert!(doblar.get("command").is_some(), "dispara signature help");
-        let doc = doblar.get("documentation").and_then(|d| d.get("value")).and_then(|v| v.as_str()).unwrap_or("");
+        let fold = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("fold")).expect("fold");
+        assert_eq!(fold.get("insertText").and_then(|t| t.as_str()), Some("fold(${1:k})"), "snippet con placeholder, sin receptor");
+        assert!(fold.get("command").is_some(), "dispara signature help");
+        let doc = fold.get("documentation").and_then(|d| d.get("value")).and_then(|v| v.as_str()).unwrap_or("");
         assert!(doc.contains("Duplica x"), "doc /// del método: {doc}");
         // el campo x no es invocable → sin insertText de llamada.
         let x = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("x")).expect("x");
@@ -4269,30 +4269,30 @@ mod tests {
     }
 
     #[test]
-    fn completion_tras_pipe_es_type_aware() {
+    fn completion_after_pipe_es_type_aware() {
         // La completion tras `|>` ofrece las funciones aplicables al tipo del operando izquierdo
         // (`x |> f` ≡ `f(x)`), como el acceso a miembro: `duplicar(int)` sí, `saludar(string)` no.
-        let src = "fn duplicar(n: int) -> int { n * 2 }\nfn saludar(s: string) -> string { s }\nfn main() -> int {\n    let x = 5;\n    x |> d\n    0\n}\n";
+        let src = "fn duplicate(n: int) -> int { n * 2 }\nfn greet(s: string) -> string { s }\nfn main() -> int {\n    let x = 5;\n    x |> d\n    0\n}\n";
         // Línea 4 = "    x |> d"; el cursor va tras la `d` (columna 10).
         let labels = completion_labels(src, 4, 10);
-        assert!(labels.contains(&"duplicar".to_string()), "ofrece la función de int: {labels:?}");
-        assert!(!labels.contains(&"saludar".to_string()), "NO ofrece la función de string: {labels:?}");
+        assert!(labels.contains(&"duplicate".to_string()), "offers la función de int: {labels:?}");
+        assert!(!labels.contains(&"greet".to_string()), "NO offers la función de string: {labels:?}");
         // También un builtin aplicable a int (to_string) — enumera builtins-como-método.
-        assert!(labels.contains(&"to_string".to_string()), "ofrece builtins de int: {labels:?}");
+        assert!(labels.contains(&"to_string".to_string()), "offers builtins de int: {labels:?}");
         // Un método de trait (show) NO es pipeable: `n |> show` sería `show(n)`, y no hay `show` libre.
-        assert!(!labels.contains(&"show".to_string()), "NO ofrece métodos de trait: {labels:?}");
+        assert!(!labels.contains(&"show".to_string()), "NO offers méall de trait: {labels:?}");
 
         // Segundo pipe SIN prefijo, cursor justo tras `|>` (lo dispara el trigger char `>`): sobre
         // `v |> duplicar() |>` el operando izquierdo sigue siendo int → ofrece las mismas funciones.
-        let src2 = "fn duplicar(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> duplicar() |>\n    0\n}\n";
-        let line = "    v |> duplicar() |>"; // cursor al final (tras el segundo `|>`)
+        let src2 = "fn duplicate(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> duplicate() |>\n    0\n}\n";
+        let line = "    v |> duplicate() |>"; // cursor al final (tras el segundo `|>`)
         let labels2 = completion_labels(src2, 3, line.chars().count());
-        assert!(labels2.contains(&"duplicar".to_string()), "segundo pipe sin prefijo: {labels2:?}");
+        assert!(labels2.contains(&"duplicate".to_string()), "segundo pipe sin prefijo: {labels2:?}");
     }
 
     #[test]
-    fn completion_tras_pipe_inserta_con_espacio_y_espacio_dispara() {
-        let src = "fn duplicar(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |>\n    0\n}\n";
+    fn completion_after_pipe_inserta_con_espacio_y_espacio_dispara() {
+        let src = "fn duplicate(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |>\n    0\n}\n";
         // (a) Pegado al `|>` (cursor tras `>`): el insertText lleva un espacio inicial → `|> duplicar()`.
         let msg = json::parse(
             r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":3,"character":8}}}"#
@@ -4301,23 +4301,23 @@ mod tests {
         docs.insert("file:///t.ray".to_string(), src.to_string());
         let arr = completion_result(&msg, &docs);
         let dup = arr.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicar")).expect("duplicar");
-        assert_eq!(dup.get("insertText").and_then(|t| t.as_str()), Some(" duplicar()"), "pegado → espacio inicial");
+            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicate")).expect("duplicate");
+        assert_eq!(dup.get("insertText").and_then(|t| t.as_str()), Some(" duplicate()"), "pegado → espacio inicial");
 
         // (b) El espacio como trigger dispara el pipeline: `v |> ` (con espacio) sigue ofreciendo.
-        let src_sp = "fn duplicar(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> \n    0\n}\n";
+        let src_sp = "fn duplicate(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> \n    0\n}\n";
         let msg_sp = json::parse(
             r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":3,"character":9},"context":{"triggerKind":2,"triggerCharacter":" "}}}"#
         ).unwrap();
         docs.insert("file:///t.ray".to_string(), src_sp.to_string());
         let arr_sp = completion_result(&msg_sp, &docs);
         let has = arr_sp.as_array().unwrap().iter()
-            .any(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicar"));
-        assert!(has, "el espacio-trigger sigue ofreciendo en pipeline");
+            .any(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicate"));
+        assert!(has, "el espacio-trigger follows ofreciendo en pipeline");
         // Y su insertText NO duplica el espacio (ya hay uno antes del cursor).
         let dup_sp = arr_sp.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicar")).unwrap();
-        assert_eq!(dup_sp.get("insertText").and_then(|t| t.as_str()), Some("duplicar()"), "con espacio previo → sin duplicar");
+            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicate")).unwrap();
+        assert_eq!(dup_sp.get("insertText").and_then(|t| t.as_str()), Some("duplicate()"), "con espacio previo → sin duplicate");
 
         // (c) El espacio como trigger FUERA de un pipeline no ofrece nada (no inunda el archivo).
         let src_no = "fn main() -> int {\n    let w = \n    0\n}\n";
@@ -4326,11 +4326,11 @@ mod tests {
         ).unwrap();
         docs.insert("file:///t.ray".to_string(), src_no.to_string());
         let arr_no = completion_result(&msg_no, &docs);
-        assert!(arr_no.as_array().unwrap().is_empty(), "espacio fuera de pipeline → vacío");
+        assert!(arr_no.as_array().unwrap().is_empty(), "espacio outside de pipeline → vacío");
     }
 
     #[test]
-    fn completion_de_miembros_en_interpolacion() {
+    fn completion_de_members_en_interpolation() {
         // M45b: dentro de `${x.}` el LSP ofrece los miembros (el reparado no rompe la cadena).
         let src = "fn main() -> int {\n    let x = [1, 2];\n    let y = \"n ${x.}\";\n    0\n}\n";
         let line = "    let y = \"n ${x.}\";";
@@ -4340,7 +4340,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_import_simbolos_y_rutas() {
+    fn completion_de_import_symbols_y_paths() {
         // M45c: crea un proyecto temporal en disco y comprueba el completion de import.
         let base = std::env::temp_dir().join("ray_lsp_import_test");
         let _ = std::fs::remove_dir_all(&base);
@@ -4348,10 +4348,10 @@ mod tests {
         std::fs::create_dir_all(base.join("util")).unwrap();
         let w = |rel: &str, txt: &str| std::fs::write(base.join(rel), txt).unwrap();
         w("main.ray", "fn main() -> int { 0 }\n");
-        w("geo.ray", "pub struct Circulo { r: int }\npub fn area(c: Circulo) -> int { c.r }\nfn interno() -> int { 0 }\n");
-        w("geo/formas/circulo.ray", "pub fn dibujar() -> int { 0 }\n");
+        w("geo.ray", "pub struct Circulo { r: int }\npub fn area(c: Circulo) -> int { c.r }\nfn internal() -> int { 0 }\n");
+        w("geo/formas/circle.ray", "pub fn dibujar() -> int { 0 }\n");
         w("util/mod.ray", "pub fn publico() -> int { 0 }\n"); // cápsula
-        w("util/interno.ray", "pub fn oculto() -> int { 0 }\n"); // interno a la cápsula
+        w("util/internal.ray", "pub fn oculto() -> int { 0 }\n"); // interno a la cápsula
 
         let uri = format!("file://{}/main.ray", base.display());
         let labels = |line: &str, ch: usize| -> Vec<String> {
@@ -4368,19 +4368,19 @@ mod tests {
         // from geo import <cursor> → símbolos `pub` (no `interno`).
         let syms = labels("from geo import ", 16);
         assert!(syms.contains(&"Circulo".to_string()) && syms.contains(&"area".to_string()), "pub de geo: {syms:?}");
-        assert!(!syms.contains(&"interno".to_string()), "no expone lo privado: {syms:?}");
-        assert!(!syms.contains(&"print".to_string()), "no cae al completion de archivo: {syms:?}");
+        assert!(!syms.contains(&"internal".to_string()), "no expone lo private: {syms:?}");
+        assert!(!syms.contains(&"print".to_string()), "no cae al completion de file: {syms:?}");
 
         // import <cursor> → rutas de módulo; la cápsula `util` sí, su interno NO.
         let paths = labels("import ", 7);
         assert!(paths.contains(&"geo".to_string()), "módulo geo: {paths:?}");
-        assert!(paths.contains(&"geo/formas/circulo".to_string()), "ruta de directorios: {paths:?}");
+        assert!(paths.contains(&"geo/formas/circle".to_string()), "path de directories: {paths:?}");
         assert!(paths.contains(&"util".to_string()), "la cápsula util: {paths:?}");
-        assert!(!paths.contains(&"util/interno".to_string()), "el interno de la cápsula queda oculto: {paths:?}");
+        assert!(!paths.contains(&"util/internal".to_string()), "el internal de la cápsula queda oculto: {paths:?}");
 
         // M45c-3: acceso calificado `u.` (alias) / `circulo.` (leaf) → símbolos `pub` del módulo.
         let qualified = |body: &str, line: usize, ch: usize| -> Vec<String> {
-            let src = format!("import geo/formas/circulo;\nimport geo as u;\nfn main() -> int {{\n{body}\n0\n}}\n");
+            let src = format!("import geo/formas/circle;\nimport geo as u;\nfn main() -> int {{\n{body}\n0\n}}\n");
             let mut docs = HashMap::new();
             docs.insert(uri.clone(), src);
             let msg = json::parse(&format!(
@@ -4391,16 +4391,16 @@ mod tests {
         };
         let by_alias = qualified("    u.", 3, 6); // `import geo as u` → símbolos pub de geo
         assert!(by_alias.contains(&"Circulo".to_string()) && by_alias.contains(&"area".to_string()), "alias u.: {by_alias:?}");
-        assert!(!by_alias.contains(&"interno".to_string()), "no expone lo privado del módulo: {by_alias:?}");
-        let by_leaf = qualified("    circulo.", 3, 12); // leaf `circulo` (geo/formas/circulo.ray)
-        assert!(by_leaf.contains(&"dibujar".to_string()), "leaf circulo.: {by_leaf:?}");
+        assert!(!by_alias.contains(&"internal".to_string()), "no expone lo private del módulo: {by_alias:?}");
+        let by_leaf = qualified("    circle.", 3, 12); // leaf `circulo` (geo/formas/circulo.ray)
+        assert!(by_leaf.contains(&"dibujar".to_string()), "leaf circle.: {by_leaf:?}");
 
         // M46c: en el acceso calificado, las funciones traen firma + snippet con placeholders, y las
         // firmas de un RE-EXPORT de cápsula se resuelven en el módulo origen (no en `mod.ray`).
         std::fs::write(base.join("util/mod.ray"),
-            "pub from util/interno import saludar;\npub fn publico() -> int { 0 }\n").unwrap();
-        std::fs::write(base.join("util/interno.ray"),
-            "pub fn saludar(nombre: string, veces: int) -> string { nombre }\n").unwrap();
+            "pub from util/internal import greet;\npub fn publico() -> int { 0 }\n").unwrap();
+        std::fs::write(base.join("util/internal.ray"),
+            "pub fn greet(name: string, veces: int) -> string { name }\n").unwrap();
         let items_at = |body: &str, line: usize, ch: usize| -> Json {
             let src = format!("import util;\nfn main() -> int {{\n{body}\n0\n}}\n");
             let mut docs = HashMap::new();
@@ -4413,15 +4413,15 @@ mod tests {
         let it = |arr: &Json, label: &str| arr.as_array().unwrap().iter()
             .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label)).cloned();
         let items = items_at("    util.", 2, 9);
-        let saludar = it(&items, "saludar").expect("re-export saludar");
-        assert_eq!(saludar.get("insertText").and_then(Json::as_str), Some("saludar(${1:nombre}, ${2:veces})"),
-                   "firma del re-export resuelta en el módulo origen + placeholders");
+        let greet = it(&items, "greet").expect("re-export greet");
+        assert_eq!(greet.get("insertText").and_then(Json::as_str), Some("greet(${1:name}, ${2:veces})"),
+                   "signature del re-export resuelta en el módulo origen + placeholders");
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
-    fn completion_simbolos_importados_y_variantes_de_enum() {
+    fn completion_symbols_importados_y_variantes_de_enum() {
         // Proyecto: un módulo `figuras` con una función `pub`, un struct y un enum; el archivo de
         // entrada los importa.
         let base = std::env::temp_dir().join("ray_lsp_import_syms_test");
@@ -4449,9 +4449,9 @@ mod tests {
         assert!(file_items.iter().any(|(l, _)| l == "area"), "from-import area: {file_items:?}");
         // `Orientacion.` → sus variantes (kind 20 = EnumMember).
         let vars = items("    Orientacion.", 3, 16);
-        assert!(vars.iter().any(|(l, k)| l == "Horizontal" && *k == 20), "variante Horizontal: {vars:?}");
-        assert!(vars.iter().any(|(l, _)| l == "Vertical"), "variante Vertical: {vars:?}");
-        assert!(!vars.iter().any(|(l, _)| l == "figuras"), "tras el punto NO sale la completion de archivo: {vars:?}");
+        assert!(vars.iter().any(|(l, k)| l == "Horizontal" && *k == 20), "variant Horizontal: {vars:?}");
+        assert!(vars.iter().any(|(l, _)| l == "Vertical"), "variant Vertical: {vars:?}");
+        assert!(!vars.iter().any(|(l, _)| l == "figuras"), "after el punto NO sale la completion de file: {vars:?}");
 
         // Una variante con payload muestra los tipos en el popup (`labelDetails.detail`).
         let src = "enum Figura { Circulo(float), Rect(float, float), Punto }\nfn main() -> int {\n    Figura.\n0\n}\n";
@@ -4464,13 +4464,13 @@ mod tests {
         let rect = vs.as_array().unwrap().iter()
             .find(|i| i.get("label").and_then(Json::as_str) == Some("Rect")).unwrap();
         let det = rect.get("labelDetails").and_then(|d| d.get("detail")).and_then(Json::as_str);
-        assert_eq!(det, Some("(float, float)"), "tipos del payload en el popup: {rect:?}");
+        assert_eq!(det, Some("(float, float)"), "types del payload en el popup: {rect:?}");
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
-    fn completion_y_signature_de_funciones_asociadas() {
+    fn completion_y_signature_de_functions_asociadas() {
         // M48.1: `Channel.` completa `new`/`bounded` (kind 3); el sig help de `Channel.bounded(` sale
         // del registro de asociadas.
         let uri = "file:///t.ray";
@@ -4497,7 +4497,7 @@ mod tests {
     }
 
     #[test]
-    fn signature_help_metodos_y_prelude() {
+    fn signature_help_methods_y_prelude() {
         // M46b: el signature help resuelve funciones del prelude y recorta el receptor en un método,
         // pero NO en una llamada calificada de módulo (esa parte cross-módulo se cubre en el CLI).
         let sig = |src: &str, line: usize, ch: usize| -> Option<(String, usize)> {
@@ -4517,11 +4517,11 @@ mod tests {
         assert_eq!(sig("fn main() -> int {\n    let xs = [3,1];\n    sort(\n}\n", 2, 9),
                    Some(("fn sort(a: [T]) -> [T]".into(), 0)));
         // Método: p.doblar( → receptor recortado, `(k: int)`.
-        let m = "struct P { x: int }\nfn doblar(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.doblar(\n}\n";
-        assert_eq!(sig(m, 4, 13), Some(("fn doblar(k: int) -> int".into(), 0)));
+        let m = "struct P { x: int }\nfn fold(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.fold(\n}\n";
+        assert_eq!(sig(m, 4, 13), Some(("fn fold(k: int) -> int".into(), 0)));
         // Función libre con una coma: doblar(1, → firma completa, param activo 1.
-        let free_call = "fn doblar(p: int, k: int) -> int { p }\nfn main() -> int {\n    doblar(1, \n}\n";
-        assert_eq!(sig(free_call, 2, 13), Some(("fn doblar(p: int, k: int) -> int".into(), 1)));
+        let free_call = "fn fold(p: int, k: int) -> int { p }\nfn main() -> int {\n    fold(1, \n}\n";
+        assert_eq!(sig(free_call, 2, 13), Some(("fn fold(p: int, k: int) -> int".into(), 1)));
         // Builtin: pow(.
         assert_eq!(sig("fn main() -> int {\n    let x = pow(\n    0\n}\n", 1, 16),
                    Some(("fn pow(base: float, exp: float) -> float".into(), 0)));
@@ -4532,7 +4532,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_snippet_con_placeholders_por_parametro() {
+    fn completion_snippet_con_placeholders_por_parameter() {
         // M46c: el insertText usa un placeholder por parámetro (nombre), navegable con Tab.
         let insert = |src: &str, line: usize, ch: usize, label: &str| -> Option<String> {
             let mut docs = HashMap::new();
@@ -4545,8 +4545,8 @@ mod tests {
                 .and_then(|i| i.get("insertText")).and_then(Json::as_str).map(|s| s.to_string())
         };
         // Función de archivo con dos params.
-        let f = "fn doblar(p: int, k: int) -> int { p }\nfn main() -> int {\n    dob\n    0\n}\n";
-        assert_eq!(insert(f, 2, 7, "doblar").as_deref(), Some("doblar(${1:p}, ${2:k})"));
+        let f = "fn fold(p: int, k: int) -> int { p }\nfn main() -> int {\n    dob\n    0\n}\n";
+        assert_eq!(insert(f, 2, 7, "fold").as_deref(), Some("fold(${1:p}, ${2:k})"));
         // Método: receptor recortado → solo el resto.
         let m = "struct P { x: int }\nfn tri(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
         assert_eq!(insert(m, 4, 6, "tri").as_deref(), Some("tri(${1:k})"));
@@ -4556,7 +4556,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_campos_de_literal_de_struct() {
+    fn completion_de_fields_de_literal_de_struct() {
         // M47a: dentro de `Nombre { … }` (posición de nombre de campo), los campos del struct.
         let labels = |body: &str, line: usize, ch: usize| -> Vec<(String, i64, Option<String>)> {
             let src = format!("struct Punto {{ x: int, y: int }}\nfn dobla(n: int) -> int {{ n }}\nfn main() -> int {{\n{body}\n0\n}}\n");
@@ -4575,25 +4575,25 @@ mod tests {
         let empty = labels("    let p = Punto { ", 3, 20);
         assert!(empty.iter().any(|(l, k, ins)| l == "x" && *k == 5 && ins.as_deref() == Some("x: ")), "campo x: {empty:?}");
         assert!(empty.iter().any(|(l, _, _)| l == "y"), "campo y: {empty:?}");
-        assert!(!empty.iter().any(|(l, _, _)| l == "print"), "no cae a la completion de archivo: {empty:?}");
+        assert!(!empty.iter().any(|(l, _, _)| l == "print"), "no cae a la completion de file: {empty:?}");
         // `Punto { x: 1, |` → solo el campo que falta.
         let one = labels("    let p = Punto { x: 1, ", 3, 26);
         assert!(one.iter().any(|(l, _, _)| l == "y") && !one.iter().any(|(l, _, _)| l == "x"),
                 "excluye el campo ya escrito: {one:?}");
         // `Punto { x: dob|` (posición de VALOR) → cae a la completion de archivo (dobla), no campos.
         let value_labels = labels("    let p = Punto { x: dob", 3, 26);
-        assert!(value_labels.iter().any(|(l, _, _)| l == "dobla"), "en posición de valor, completion de archivo: {value_labels:?}");
+        assert!(value_labels.iter().any(|(l, _, _)| l == "dobla"), "en posición de valor, completion de file: {value_labels:?}");
 
         // M47b: al teclear el TIPO, un ítem extra `Punto {…}` que inserta el literal con placeholders,
         // aparte del tipo pelado `Punto`.
         let type_labels = labels("    let p = Pun", 3, 15);
-        assert!(type_labels.iter().any(|(l, k, _)| l == "Punto" && *k == 22), "el tipo pelado sigue: {type_labels:?}");
+        assert!(type_labels.iter().any(|(l, k, _)| l == "Punto" && *k == 22), "el type pelado follows: {type_labels:?}");
         assert!(type_labels.iter().any(|(l, k, ins)| l == "Punto {…}" && *k == 15
             && ins.as_deref() == Some("Punto { x: ${1:int}, y: ${2:int} }")), "el literal-snippet: {type_labels:?}");
     }
 
     #[test]
-    fn hover_de_funcion_asociada() {
+    fn hover_de_function_associated() {
         // M48.1: hover sobre el nombre asociado (`Channel.new`) → su firma del registro de asociadas.
         let src = "fn main() -> int {\n    let ch: Channel<int> = Channel.new();\n    0\n}\n";
         let mut docs = HashMap::new();
@@ -4609,7 +4609,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_de_const_y_tipo_incorporado() {
+    fn hover_de_const_y_ty_incorporado() {
         let hover_of = |src: &str, line: usize, ch: usize| -> String {
             let mut docs = HashMap::new();
             docs.insert("file:///t.ray".to_string(), src.to_string());
@@ -4621,14 +4621,14 @@ mod tests {
         };
         // Uso de una constante → su tipo (como una variable).
         let c = hover_of("const MAXIMO: int = 100;\nfn main() -> int {\n    let x = MAXIMO;\n    x\n}\n", 2, 13);
-        assert!(c.contains("MAXIMO: int"), "hover de const en uso: {c}");
+        assert!(c.contains("MAXIMO: int"), "hover de const en use: {c}");
         // Tipo incorporado (Channel) → descripción breve.
         let t = hover_of("fn main() -> int {\n    let ch: Channel<int> = channel();\n    0\n}\n", 1, 13);
-        assert!(t.contains("Channel<T>"), "hover de tipo Channel: {t}");
+        assert!(t.contains("Channel<T>"), "hover de type Channel: {t}");
     }
 
     #[test]
-    fn completion_ofrece_consts_y_tipos_incorporados() {
+    fn completion_offers_consts_y_types_incorporados() {
         let comp = |src: &str, line: usize, ch: usize| -> Vec<String> {
             let mut docs = HashMap::new();
             docs.insert("file:///t.ray".to_string(), src.to_string());
@@ -4643,12 +4643,12 @@ mod tests {
         assert!(c.contains(&"MAXIMO".to_string()), "const MAXIMO: {c:?}");
         // Tipos genéricos incorporados / del prelude.
         for t in ["Channel", "Task", "Map", "Option", "Result"] {
-            assert!(c.contains(&t.to_string()), "tipo {t}: {c:?}");
+            assert!(c.contains(&t.to_string()), "type {t}: {c:?}");
         }
     }
 
     #[test]
-    fn completion_muestra_la_firma_en_el_detalle() {
+    fn completion_shows_la_signature_en_el_detalle() {
         // M46a: los ítems invocables llevan `labelDetails` con params y retorno.
         let detail_of = |src: &str, line: usize, ch: usize, label: &str| -> Option<(String, String)> {
             let mut docs = HashMap::new();
@@ -4665,8 +4665,8 @@ mod tests {
                 ))
         };
         // Función de archivo (incompleta: `parse_all` la recupera) → firma completa.
-        let src = "fn doblar(p: int, k: int) -> int { p * k }\nfn main() -> int {\n    dob\n    0\n}\n";
-        assert_eq!(detail_of(src, 2, 7, "doblar"), Some(("(p: int, k: int)".into(), "int".into())));
+        let src = "fn fold(p: int, k: int) -> int { p * k }\nfn main() -> int {\n    dob\n    0\n}\n";
+        assert_eq!(detail_of(src, 2, 7, "fold"), Some(("(p: int, k: int)".into(), "int".into())));
         // Método → sin el receptor.
         let m = "struct P { x: int }\nfn tri(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
         assert_eq!(detail_of(m, 4, 6, "tri"), Some(("(k: int)".into(), "int".into())));
@@ -4676,15 +4676,15 @@ mod tests {
     }
 
     #[test]
-    fn completion_sin_punto_sigue_siendo_de_archivo() {
+    fn completion_sin_punto_follows_siendo_de_file() {
         // Sin `.` delante, la completion es la de archivo (regresión de M10.2e).
-        let src = "fn doble(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
+        let src = "fn double(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
         let labels = completion_labels(src, 1, 19);
-        assert!(labels.contains(&"doble".to_string()) && labels.contains(&"print".to_string()), "{labels:?}");
+        assert!(labels.contains(&"double".to_string()) && labels.contains(&"print".to_string()), "{labels:?}");
     }
 
     #[test]
-    fn analiza_error_de_tipos() {
+    fn analiza_error_de_types() {
         let d = analyze("fn main() -> int { 1 + true }").expect("debería haber error");
         assert_eq!(d.line, 1);
         assert!(d.col >= 1);
@@ -4692,7 +4692,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostico_usa_coordenadas_0_basadas() {
+    fn diagnostic_uses_coordenadas_0_basadas() {
         // Error en la línea 2: la fase reporta 1-basado; LSP debe verlo 0-basado.
         let src = "fn main() -> int {\n    1 + true\n}";
         let d = analyze(src).unwrap();
@@ -4709,7 +4709,7 @@ mod tests {
     }
 
     #[test]
-    fn serve_responde_initialize_y_publica_diagnosticos() {
+    fn serve_responde_initialize_y_public_diagnostics() {
         let mut input = String::new();
         input.push_str(&frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#));
         // didOpen de un programa con error de tipos.
@@ -4734,7 +4734,7 @@ mod tests {
     }
 
     #[test]
-    fn serve_programa_valido_publica_lista_vacia() {
+    fn serve_program_valid_public_list_empty() {
         let body = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///ok.ray","text":"fn main() -> int { 42 }"}}}"#;
         let mut input = frame(body);
         input.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
@@ -4747,15 +4747,15 @@ mod tests {
     }
 
     #[test]
-    fn completion_en_un_template_ofrece_params_y_vars_de_for() {
+    fn completion_en_un_template_offers_params_y_vars_de_for() {
         // M55: dentro de `{{ }}` se ofrecen los params tipados de la cabecera; dentro de un
         // `{% for %}` abierto, también la variable de bucle (con su tipo inferido del `[T]`);
         // en contexto de etiqueta `{%`, además las keywords; fuera de los delimitadores, nada.
         let tpl = "{% params titulo: string, filas: [string], total: int %}\n\
                    <h1>{{ ti }}</h1>\n\
-                   {% for fila in filas %}<li>{{ f }}</li>{% endfor %}\n\
+                   {% for row in filas %}<li>{{ f }}</li>{% endfor %}\n\
                    {% if total > 0 %}<p>hay</p>{% endif %}\n\
-                   <p>fuera</p>\n";
+                   <p>outside</p>\n";
         let labels = |line0: usize, char0: usize| -> Vec<(String, Option<String>)> {
             template_completion_items(tpl, line0, char0).get("items").unwrap().as_array().unwrap().iter()
                 .map(|i| (
@@ -4770,10 +4770,10 @@ mod tests {
         assert!(en_expr.contains(&("filas".into(), Some("[string]".into()))), "{en_expr:?}");
         assert!(en_expr.contains(&("total".into(), Some("int".into()))), "{en_expr:?}");
         assert!(!en_expr.iter().any(|(l, _)| l == "endif"), "sin keywords de tag en {{{{ }}}}: {en_expr:?}");
-        assert!(!en_expr.iter().any(|(l, _)| l == "fila"), "el for aún no está abierto: {en_expr:?}");
+        assert!(!en_expr.iter().any(|(l, _)| l == "row"), "el for aún no está abierto: {en_expr:?}");
         // Dentro del for (línea 3, `{{ f| }}`): la variable de bucle con el tipo del elemento.
         let en_for = labels(2, 31);
-        assert!(en_for.contains(&("fila".into(), Some("string".into()))), "{en_for:?}");
+        assert!(en_for.contains(&("row".into(), Some("string".into()))), "{en_for:?}");
         // En una etiqueta `{% if |` (línea 4): params + keywords.
         let en_tag = labels(3, 6);
         assert!(en_tag.iter().any(|(l, _)| l == "total"), "{en_tag:?}");
@@ -4790,7 +4790,7 @@ mod tests {
         let for_item_of = |items: &Json| items.get("items").unwrap().as_array().unwrap().iter()
             .find(|i| i.get("label").and_then(Json::as_str) == Some("{% for %}")).cloned().unwrap();
         let edit_of = |item: &Json| {
-            let e = item.get("textEdit").expect("textEdit explícito (sin él cada cliente adivina)");
+            let e = item.get("textEdit").expect("textEdit explícito (sin él cada client adivina)");
             let r = e.get("range").unwrap().serialize();
             (r, e.get("newText").and_then(Json::as_str).unwrap().to_string())
         };
@@ -4798,7 +4798,7 @@ mod tests {
         // (cols 3..5) con el bloque entero — sin llave duplicada, en cualquier cliente.
         let tpl2 = "{% params t: string %}\n{% f}\n";
         let items = template_completion_items(tpl2, 1, 4);
-        assert!(items.serialize().contains("\"isIncomplete\":true"), "re-consulta por tecla");
+        assert!(items.serialize().contains("\"isIncomplete\":true"), "re-query por tecla");
         let (r, txt) = edit_of(&for_item_of(&items));
         assert!(r.contains("\"character\":3") && r.contains("\"character\":5"), "{r}");
         assert!(txt.starts_with("for ") && txt.ends_with("{% endfor %}"), "{txt}");
@@ -4826,9 +4826,9 @@ mod tests {
         // Hover: sobre `ti` de `{{ ti }}`... no hay símbolo; sobre `filas` del for (línea 3,
         // "{% for fila in filas %}" → `filas` empieza en col 15) → `filas: [string]`; sobre la
         // variable de bucle usada dentro (no cubierta aquí: `f` no es `fila`); y sobre HTML, nada.
-        assert_eq!(template_hover_at(tpl, 2, 16), Some(("filas: [string]".into(), 15, 20)));
+        assert_eq!(template_hover_at(tpl, 2, 16), Some(("filas: [string]".into(), 14, 19)));
         assert_eq!(template_hover_at(tpl, 3, 7), Some(("total: int".into(), 6, 11))); // {% if total
-        assert!(template_hover_at(tpl, 4, 4).is_none(), "sobre el HTML no hay hover");
+        assert!(template_hover_at(tpl, 4, 4).is_none(), "about el HTML no hay hover");
         // Y el enrutado por hover_result con URI .ray.html.
         let hmsg = json::parse(&format!(
             r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":3,"character":7}}}}}}"#
@@ -4851,15 +4851,15 @@ mod tests {
         let uri = format!("file://{}/vista.ray.html", base.display());
         let tpl = "{% params titulo: string, filas: [string] %}\n\
                    <h1>{{ titulo }}</h1>\n\
-                   {% for fila in filas %}<li>{{ fila.trim() }}</li>{% endfor %}\n";
+                   {% for row in filas %}<li>{{ row.trim() }}</li>{% endfor %}\n";
 
-        // Hover semántico: sobre `fila` dentro de `{{ fila.trim() }}` → su tipo REAL (string,
+        // Hover semántico: sobre `row` dentro de `{{ row.trim() }}` → su tipo REAL (string,
         // inferido por el checker del `for` sobre `[string]`); el rango es el del template.
         let l2 = tpl.lines().nth(2).unwrap();
-        let col_fila = l2.rfind("fila.trim").unwrap() + 1; // dentro de `fila` (ASCII: byte == char)
-        let (info, start, end) = template_semantic_hover(&uri, tpl, 2, col_fila).expect("hover de fila");
+        let col_row = l2.rfind("row.trim").unwrap() + 1; // dentro de `row` (ASCII: byte == char)
+        let (info, start, end) = template_semantic_hover(&uri, tpl, 2, col_row).expect("hover de row");
         assert!(info.contains("string"), "{info}");
-        assert_eq!((start, end), (l2.rfind("fila.trim").unwrap(), l2.rfind("fila.trim").unwrap() + 4));
+        assert_eq!((start, end), (l2.rfind("row.trim").unwrap(), l2.rfind("row.trim").unwrap() + 3));
 
         // Ir-a-definición: sobre `titulo` en `{{ titulo }}` → la línea del `{% params %}` del
         // PROPIO template (la declaración vive en la firma del generado, que mapea a la línea 1).
@@ -4874,12 +4874,12 @@ mod tests {
         let tpl2 = "{% params titulo: string %}\n<p>{{ titulo. }}</p>\n";
         let (code, map, gen_uri) = template_generated(&uri, tpl2).unwrap();
         let l = "<p>{{ titulo. }}</p>";
-        let (gl, gc) = template_pos_to_generated(tpl2, &code, &map, 1, l.find('.').unwrap() + 1).expect("mapea tras el punto");
+        let (gl, gc) = template_pos_to_generated(tpl2, &code, &map, 1, l.find('.').unwrap() + 1).expect("mapea after el punto");
         let docs = HashMap::new();
         // Como en completion_result: stub local en vez del import (member_completion es de un buffer).
         let code_sb = code.replacen("from std/template import escape_html;",
             "fn escape_html(s: string) -> string { s }", 1);
-        let items = member_completion_items(Some(&gen_uri), &code_sb, gl, gc, &docs).expect("miembros de string");
+        let items = member_completion_items(Some(&gen_uri), &code_sb, gl, gc, &docs).expect("members de string");
         let labels: Vec<String> = items.as_array().unwrap().iter()
             .filter_map(|i| i.get("label").and_then(Json::as_str).map(|s| s.to_string())).collect();
         assert!(labels.iter().any(|l| l == "len"), "{labels:?}");
@@ -4889,7 +4889,7 @@ mod tests {
         let tpl3 = "{% params titulo: string %}\n<p>{{ titulo.substring( }}</p>\n";
         let (code3, map3, gen_uri3) = template_generated(&uri, tpl3).unwrap();
         let l3 = "<p>{{ titulo.substring( }}</p>";
-        let (gl3, gc3) = template_pos_to_generated(tpl3, &code3, &map3, 1, l3.find('(').unwrap() + 1).expect("mapea tras el paréntesis");
+        let (gl3, gc3) = template_pos_to_generated(tpl3, &code3, &map3, 1, l3.find('(').unwrap() + 1).expect("mapea after el paréntesis");
         let sh = signature_help_at(&gen_uri3, &code3, gl3, gc3);
         assert!(sh.serialize().contains("substring"), "{sh:?}");
 
@@ -4901,11 +4901,11 @@ mod tests {
         // M55: el escáner de ocurrencias del template resuelve cada ident de los delimitadores a su
         // binding (param / var de for, con shadowing) y sobre él corren references / rename /
         // highlight / outline. El HTML de fuera de los delimitadores NUNCA se toca.
-        let uri = "file:///tmp/lista.ray.html".to_string();
-        let tpl = "{% params fila: string, filas: [string] %}\n\
-                   <p>fila {{ fila }}</p>\n\
-                   {% for fila in filas %}<li>{{ fila.trim() }}</li>{% endfor %}\n\
-                   <i>{{ fila }}</i>\n";
+        let uri = "file:///tmp/list.ray.html".to_string();
+        let tpl = "{% params row: string, filas: [string] %}\n\
+                   <p>row {{ row }}</p>\n\
+                   {% for row in filas %}<li>{{ row.trim() }}</li>{% endfor %}\n\
+                   <i>{{ row }}</i>\n";
         let occs = template_occurrences(tpl);
         // El `fila` del texto HTML (línea 2, "fila " literal) NO es ocurrencia.
         assert!(!occs.iter().any(|(l, c, _, _, _)| *l == 1 && *c == 3), "{occs:?}");
@@ -4913,11 +4913,11 @@ mod tests {
         assert!(!occs.iter().any(|(l, c, _, _, _)| *l == 2 && tpl.lines().nth(2).unwrap().chars().skip(*c).take(4).collect::<String>() == "trim"), "{occs:?}");
         // El `fila` DENTRO del for liga a la var del for (shadowing del param).
         let l2 = tpl.lines().nth(2).unwrap();
-        let col_uso = l2.rfind("fila.trim").unwrap(); // ASCII: byte == char
-        let uso = template_occurrence_at(&occs, 2, col_uso + 1).expect("uso de fila en el for");
-        assert!(uso.3.starts_with("f:"), "liga al for, no al param: {uso:?}");
+        let col_usage = l2.rfind("row.trim").unwrap(); // ASCII: byte == char
+        let usage = template_occurrence_at(&occs, 2, col_usage + 1).expect("use de row en el for");
+        assert!(usage.3.starts_with("f:"), "liga al for, no al param: {usage:?}");
         // Los `fila` de FUERA del for ligan al param (línea 2 y línea 4 + su decl en la cabecera).
-        let param_occs: Vec<_> = occs.iter().filter(|o| o.3 == "p:fila").collect();
+        let param_occs: Vec<_> = occs.iter().filter(|o| o.3 == "p:row").collect();
         assert_eq!(param_occs.len(), 3, "decl + 2 usos: {param_occs:?}");
 
         let mut docs = HashMap::new();
@@ -4928,29 +4928,29 @@ mod tests {
             )).unwrap()
         };
         // Rename del param `fila` → 3 ediciones (cabecera + 2 usos), sin tocar el for ni el HTML.
-        let col_p = tpl.lines().nth(1).unwrap().rfind("fila").unwrap();
+        let col_p = tpl.lines().nth(1).unwrap().rfind("row").unwrap();
         let w = rename_result(&at(1, col_p + 1, r#","newName":"registro""#), &docs);
         let ser = w.serialize();
         assert_eq!(ser.matches("registro").count(), 3, "{ser}");
         // Un nombre nuevo inválido → null.
         assert!(matches!(rename_result(&at(1, col_p + 1, r#","newName":"1x""#), &docs), Json::Null));
         // References sobre la var del for → decl + uso (2), no los del param.
-        let refs = references_result(&at(2, col_uso + 1, ""), &docs);
+        let refs = references_result(&at(2, col_usage + 1, ""), &docs);
         assert_eq!(refs.as_array().unwrap().len(), 2, "{}", refs.serialize());
         // Highlight: mismas 2, la decl como Write (kind 3).
-        let hl = document_highlight_result(&at(2, col_uso + 1, ""), &docs);
+        let hl = document_highlight_result(&at(2, col_usage + 1, ""), &docs);
         assert_eq!(hl.as_array().unwrap().len(), 2);
         assert!(hl.serialize().contains("\"kind\":3"), "{}", hl.serialize());
         // Outline: raíz `render_lista` con las decls como hijas (2 params + 1 var de for).
         let syms = document_symbol_result(&at(0, 0, ""), &docs);
         let ser = syms.serialize();
-        assert!(ser.contains("render_lista"), "{ser}");
+        assert!(ser.contains("render_list"), "{ser}");
         assert_eq!(ser.matches("\"kind\":13").count(), 3, "{ser}");
     }
 
     #[test]
-    fn serve_metodo_desconocido_con_id_da_error() {
-        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/inexistente","params":{}}"#;
+    fn serve_method_unknown_con_id_da_error() {
+        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/nonexistent","params":{}}"#;
         let mut input = frame(body);
         input.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
 

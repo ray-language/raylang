@@ -9,7 +9,7 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
-fn proyecto(base: &std::path::Path) -> std::path::PathBuf {
+fn project(base: &std::path::Path) -> std::path::PathBuf {
     let cron = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/cron");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -25,10 +25,10 @@ fn proyecto(base: &std::path::Path) -> std::path::PathBuf {
 import std/time;
 
 // Imprime los `n` siguientes disparos de `expr` tras `desde` (epoch-ms), en ISO.
-fn secuencia(expr: string, desde: int, n: int) {
+fn secuencia(expr: string, start: int, n: int) {
     match (cron.parse(expr)) {
         Result.Ok(s) => {
-            var t = desde;
+            var t = start;
             var i = 0;
             var line = expr + " →";
             var ok = true;
@@ -82,12 +82,12 @@ const ESPERADO: &str = "*/15 * * * * → 2026-07-11T10:45:00Z 2026-07-11T11:00:0
 0 0 29 2 * → 2028-02-29T00:00:00Z\n\
 0 12 13 * 5 → 2026-07-13T12:00:00Z 2026-07-17T12:00:00Z 2026-07-24T12:00:00Z\n\
 5,20 8-10/2 * * * → 2026-07-12T08:05:00Z 2026-07-12T08:20:00Z 2026-07-12T10:05:00Z 2026-07-12T10:20:00Z\n\
-0 0 30 2 * → ERR:cron: la expresión no casa con ninguna fecha (¿día imposible?)\n\
-* * * * → parse ERR: cron: se esperaban 5 campos (min hora dom mes dow), hay 4\n\
-61 * * * * → parse ERR: cron: 'minuto' fuera de rango [0-59] ('61')\n\
-* * * * 8-9 → parse ERR: cron: 'día de la semana' fuera de rango [0-7] ('8-9')\n";
+0 0 30 2 * → ERR:cron: the expression matches no date (impossible day?)\n\
+* * * * → parse ERR: cron: expected 5 fields (min hour dom mon dow), got 4\n\
+61 * * * * → parse ERR: cron: 'minute' out of range [0-59] ('61')\n\
+* * * * 8-9 → parse ERR: cron: 'day of week' out of range [0-7] ('8-9')\n";
 
-fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
+fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     let out = Command::new(BIN)
         .args(flags)
         .arg(app.join("src/main.ray"))
@@ -98,16 +98,16 @@ fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
 }
 
 #[test]
-fn cron_next_after_ambos_motores() {
+fn cron_next_after_ambos_engines() {
     let base = std::env::temp_dir().join("ray_cron_cli");
     let _ = std::fs::remove_dir_all(&base);
-    let app = proyecto(&base);
-    let (o_in, c_in) = correr(&app, &[]);
-    let (o_vm, c_vm) = correr(&app, &["--vm"]);
+    let app = project(&base);
+    let (o_in, c_in) = run(&app, &[]);
+    let (o_vm, c_vm) = run(&app, &["--vm"]);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    assert_eq!(o_in, ESPERADO, "salida esperada");
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    assert_eq!(o_in, ESPERADO, "output expected_val");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ fn cron_next_after_ambos_motores() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn cron_local_dst_ambos_motores() {
+fn cron_local_dst_ambos_engines() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let (cron, tz) = (repo.join("packages/cron"), repo.join("packages/tz"));
     let fixture = tz.join("fixtures/Europe_Madrid.tzif");
@@ -140,10 +140,10 @@ import cron/local;
 import tz/tz;
 import std/time;
 
-fn secuencia(z: tz.Zone, expr: string, desde: int, n: int) {{
+fn secuencia(z: tz.Zone, expr: string, start: int, n: int) {{
     match (cron.parse(expr)) {{
         Result.Ok(s) => {{
-            var t = desde;
+            var t = start;
             var i = 0;
             var line = expr + " →";
             while (i < n) {{
@@ -185,14 +185,14 @@ fn main() -> int {{
     );
     std::fs::write(app.join("src/main.ray"), main).unwrap();
 
-    let esperado = "30 2 * * * → 2026-07-11T00:30:00Z(CEST)\n\
+    let expected = "30 2 * * * → 2026-07-11T00:30:00Z(CEST)\n\
 30 2 * * * → 2026-03-29T01:00:00Z(CEST) 2026-03-30T00:30:00Z(CEST)\n\
 30 2 * * * → 2026-10-25T00:30:00Z(CEST) 2026-10-26T01:30:00Z(CET)\n";
 
-    let (o_in, c_in) = correr(&app, &[]);
-    let (o_vm, c_vm) = correr(&app, &["--vm"]);
+    let (o_in, c_in) = run(&app, &[]);
+    let (o_vm, c_vm) = run(&app, &["--vm"]);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    assert_eq!(o_in, esperado, "salida esperada");
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    assert_eq!(o_in, expected, "output expected_val");
 }

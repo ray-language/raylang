@@ -66,8 +66,8 @@ fn main() -> int {
             };
             // M19.2: el cuerpo es bytes → decodificar a texto antes de parsearlo como JSON.
             match (body_text(resp)) {
-                Result.Ok(texto) => {
-                    match (parse(texto)) {
+                Result.Ok(text) => {
+                    match (parse(text)) {
                         Result.Ok(j) => print(stringify(j)),
                         Result.Err(e) => print("json err: " + e),
                     }
@@ -82,19 +82,19 @@ fn main() -> int {
 "#;
 
 #[test]
-fn cliente_http_compone_con_json() {
+fn client_http_compone_con_json() {
     for vm in [false, true] {
         let port = toy_http_server();
         let driver = DRIVER.replace("__PORT__", &port.to_string());
         let (out, code) = run_with_libs("compose", &driver, vm);
-        let esperado = "200\napplication/json\n{\"n\":42,\"ok\":true}";
-        assert_eq!(out.trim(), esperado, "http+json (vm={vm}): {out}");
-        assert_eq!(code, 0, "salida 0 (vm={vm})");
+        let expected = "200\napplication/json\n{\"n\":42,\"ok\":true}";
+        assert_eq!(out.trim(), expected, "http+json (vm={vm}): {out}");
+        assert_eq!(code, 0, "output 0 (vm={vm})");
     }
 }
 
 #[test]
-fn fetch_falla_con_url_no_http() {
+fn fetch_fails_con_url_no_http() {
     let driver = r#"
 from http import fetch;
 fn main() -> int {
@@ -106,7 +106,7 @@ fn main() -> int {
 "#;
     for vm in [false, true] {
         let (out, code) = run_with_libs("noproto", driver, vm);
-        assert_eq!(out.trim(), "solo se soporta http:// o https://", "rechaza no-http (vm={vm}): {out}");
+        assert_eq!(out.trim(), "only http:// or https:// is supported", "rejects no-http (vm={vm}): {out}");
         assert_eq!(code, 1);
     }
 }
@@ -114,7 +114,7 @@ fn main() -> int {
 // --- M58.2: robustez del cliente ---
 
 /// Servidor de juguete que CAPTURA la petición (la envía por el canal) y responde 200 con "ok".
-fn toy_captura() -> (u16, std::sync::mpsc::Receiver<String>) {
+fn toy_capture() -> (u16, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -132,8 +132,8 @@ fn toy_captura() -> (u16, std::sync::mpsc::Receiver<String>) {
                 }
             }
             // Si hay Content-Length, lee el cuerpo restante.
-            let texto = String::from_utf8_lossy(&acc).into_owned();
-            if let Some(cl) = texto.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))) {
+            let text = String::from_utf8_lossy(&acc).into_owned();
+            if let Some(cl) = text.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))) {
                 let fin_cab = acc.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4).unwrap_or(acc.len());
                 while acc.len() < fin_cab + cl {
                     match stream.read(&mut buf) {
@@ -151,10 +151,10 @@ fn toy_captura() -> (u16, std::sync::mpsc::Receiver<String>) {
 }
 
 #[test]
-fn peticion_con_host_puerto_accept_encoding_y_octetos() {
+fn peticion_con_host_port_accept_encoding_y_octetos() {
     // M58.2: Host lleva el puerto no-default, Accept-Encoding: gzip se anuncia, y el
     // Content-Length cuenta OCTETOS ("café" = 5 octetos UTF-8, no 4 caracteres — antes fallaba).
-    let (port, rx) = toy_captura();
+    let (port, rx) = toy_capture();
     let driver = r#"
 from http import request, body_text;
 
@@ -175,19 +175,19 @@ fn main() -> int {
 }
 "#
     .replace("__PORT__", &port.to_string());
-    let (out, code) = run_with_libs("robusto", &driver, true);
+    let (out, code) = run_with_libs("robust", &driver, true);
     assert_eq!(code, 0, "driver falló: {out}");
-    assert!(out.contains("ok"), "esperaba el cuerpo ok: {out}");
+    assert!(out.contains("ok"), "esperaba el body ok: {out}");
 
     let req = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("petición capturada");
-    assert!(req.contains(&format!("Host: 127.0.0.1:{port}")), "Host debe llevar el puerto: {req}");
-    assert!(req.contains("Accept-Encoding: gzip"), "debe anunciar gzip: {req}");
+    assert!(req.contains(&format!("Host: 127.0.0.1:{port}")), "Host must llevar el port: {req}");
+    assert!(req.contains("Accept-Encoding: gzip"), "must anunciar gzip: {req}");
     assert!(req.contains("Content-Length: 5"), "Content-Length en octetos (café = 5): {req}");
-    assert!(req.ends_with("café"), "el cuerpo debe llegar entero: {req}");
+    assert!(req.ends_with("café"), "el body must llegar entero: {req}");
 }
 
 #[test]
-fn cliente_corta_por_timeout_a_servidor_mudo() {
+fn client_corta_por_timeout_a_servidor_mudo() {
     // M58.2: un servidor que acepta y no responde ya no cuelga al cliente para siempre.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -214,15 +214,15 @@ fn main() -> int {
 }
 "#
     .replace("__PORT__", &port.to_string());
-    let inicio = std::time::Instant::now();
+    let start = std::time::Instant::now();
     let (out, code) = run_with_libs("timeout", &driver, true);
     assert_eq!(code, 0, "esperaba Err por timeout: {out}");
-    assert!(out.contains("tiempo de espera"), "esperaba el error de timeout: {out}");
-    assert!(inicio.elapsed() < std::time::Duration::from_secs(10), "tardó demasiado (¿sin timeout?)");
+    assert!(out.contains("read timeout"), "esperaba el error de timeout: {out}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "tardó demasiado (¿sin timeout?)");
 }
 
 #[test]
-fn respuesta_truncada_es_error() {
+fn response_truncada_es_error() {
     // M58.2: Content-Length declarado 10 pero solo llegan 3 octetos → Err, no un cuerpo a medias.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();

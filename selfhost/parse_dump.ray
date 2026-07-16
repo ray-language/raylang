@@ -395,7 +395,7 @@ fn dump_from_import(fi: FromImport) -> string {
 fn lex_or_die(src: string) -> [Token] {
     match (lex(src)) {
         Result.Ok(toks) => toks,
-        Result.Err(e) => panic("error léxico: " + e.msg),
+        Result.Err(e) => panic("lex error: " + e.msg),
     }
 }
 
@@ -448,7 +448,7 @@ fn read_file(path: string) -> Result<string, string> {
 fn main() -> int {
     let argv = args();
     if (argv.len() == 0) {
-        eprint("uso: raylang selfhost/parse_dump.ray <archivo>");
+        eprint("use: raylang selfhost/parse_dump.ray <file>");
         return 1;
     }
     match (read_file(argv[0])) {
@@ -460,7 +460,7 @@ fn main() -> int {
                     dump_program(prog);
                 },
                 Result.Err(pe) => {
-                    print("error de sintaxis en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                    print("syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
                 },
             }
             0

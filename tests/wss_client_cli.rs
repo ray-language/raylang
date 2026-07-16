@@ -7,11 +7,11 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 
 /// Lanza `wss_echo.ray` con el cert/clave de prueba; devuelve el proceso + el puerto efímero.
-fn lanzar_servidor() -> (Child, u16) {
-    let raiz = env!("CARGO_MANIFEST_DIR");
-    let echo = format!("{raiz}/examples/web/wss_echo.ray");
-    let cert = format!("{raiz}/tests/fixtures/tls_cert.pem");
-    let key = format!("{raiz}/tests/fixtures/tls_key.pem");
+fn launch_servidor() -> (Child, u16) {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let echo = format!("{root}/examples/web/wss_echo.ray");
+    let cert = format!("{root}/tests/fixtures/tls_cert.pem");
+    let key = format!("{root}/tests/fixtures/tls_key.pem");
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .arg("--vm")
         .arg(&echo)
@@ -24,19 +24,19 @@ fn lanzar_servidor() -> (Child, u16) {
 
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee puerto");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("puerto inválido: {linea:?}"));
+    reader.read_line(&mut linea).expect("lee port");
+    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
     std::thread::spawn(move || {
-        let mut sumidero = Vec::new();
-        let _ = reader.read_to_end(&mut sumidero);
+        let mut sink = Vec::new();
+        let _ = reader.read_to_end(&mut sink);
     });
     (child, port)
 }
 
-fn correr_cliente(flags: &[&str], port: u16) -> Vec<String> {
-    let raiz = env!("CARGO_MANIFEST_DIR");
-    let demo = format!("{raiz}/examples/web/websocket_client_demo.ray");
-    let ca = format!("{raiz}/tests/fixtures/tls_ca.pem"); // el cliente confía en la CA de prueba
+fn run_client(flags: &[&str], port: u16) -> Vec<String> {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let demo = format!("{root}/examples/web/websocket_client_demo.ray");
+    let ca = format!("{root}/tests/fixtures/tls_ca.pem"); // el cliente confía en la CA de prueba
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
@@ -44,10 +44,10 @@ fn correr_cliente(flags: &[&str], port: u16) -> Vec<String> {
         .arg("wss")
         .env("SSL_CERT_FILE", &ca)
         .output()
-        .expect("ejecuta el cliente wss");
+        .expect("ejecuta el client wss");
     assert!(
         out.status.success(),
-        "cliente wss falló: {}",
+        "client wss falló: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout)
@@ -58,20 +58,20 @@ fn correr_cliente(flags: &[&str], port: u16) -> Vec<String> {
 
 const ESPERADO: &[&str] = &["hola", "mundo", "raylang ☃ unicode"];
 
-fn caso(flags: &[&str]) {
-    let (mut servidor, port) = lanzar_servidor();
-    let salida = correr_cliente(flags, port);
+fn case(flags: &[&str]) {
+    let (mut servidor, port) = launch_servidor();
+    let output = run_client(flags, port);
     let _ = servidor.kill();
     let _ = servidor.wait();
-    assert_eq!(salida, ESPERADO);
+    assert_eq!(output, ESPERADO);
 }
 
 #[test]
-fn cliente_wss_eco_interprete() {
-    caso(&[]);
+fn client_wss_echo_interpreter() {
+    case(&[]);
 }
 
 #[test]
-fn cliente_wss_eco_vm() {
-    caso(&["--vm"]);
+fn client_wss_echo_vm() {
+    case(&["--vm"]);
 }

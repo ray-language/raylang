@@ -13,7 +13,7 @@ import std/crypto;
 // mensaje es `Err`, nunca un crash por índice fuera de rango (clase inflate pre-M64).
 fn byte_at(data: bytes, i: int) -> Result<int, string> {
     if (i < 0 || i >= data.len()) {
-        return Result.Err("respuesta DNS truncada");
+        return Result.Err("truncated DNS response");
     }
     Result.Ok(data[i])
 }
@@ -106,15 +106,15 @@ fn read_name(data: bytes, pos: int) -> Result<NameResult, string> {
     var next = 0 - 1;
     var jumps = 0;
     let max_jumps = data.len() + 1;
-    var seguir = true;
-    while (seguir) {
+    var follow = true;
+    while (follow) {
         let lenb = byte_at(data, p)?;
         if (lenb == 0) {
             p = p + 1;
             if (next < 0) {
                 next = p;
             }
-            seguir = false;
+            follow = false;
         } else if ((lenb & 192) == 192) {
             // puntero 0xC0xx
             let lo = byte_at(data, p + 1)?;
@@ -123,13 +123,13 @@ fn read_name(data: bytes, pos: int) -> Result<NameResult, string> {
             }
             jumps = jumps + 1;
             if (jumps > max_jumps) {
-                return Result.Err("bucle de punteros de compresión en el nombre DNS");
+                return Result.Err("loop of compression pointers in the DNS name");
             }
             p = (lenb & 63) << 8 | lo;
         } else {
             // label: `lenb` octetos a partir de p+1 (debe caber en el mensaje).
             if (p + 1 + lenb > data.len()) {
-                return Result.Err("etiqueta de nombre DNS truncada");
+                return Result.Err("truncated DNS name label");
             }
             let etiqueta = match (from_utf8(data.sub_bytes(p + 1, p + 1 + lenb))) {
                 Result.Ok(s) => s,
@@ -246,7 +246,7 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> Result<string, string> 
         let slen = byte_at(data, p)?;
         p = p + 1;
         if (p + slen > fin) {
-            return Result.Err("character-string de TXT rebasa el RDATA");
+            return Result.Err("TXT character-string overruns the RDATA");
         }
         s = s + match (from_utf8(data.sub_bytes(p, p + slen))) {
             Result.Ok(t) => t,
@@ -273,12 +273,12 @@ pub struct DnsResult {
 /// Returns Err if the message is shorter than a header or the response RCODE signals an error (e.g. NXDOMAIN).
 pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
     if (data.len() < 12) {
-        return Result.Err("respuesta DNS demasiado corta");
+        return Result.Err("DNS response too short");
     }
     let flags = be16(data, 2)?;
     let rcode = flags & 15;
     if (rcode != 0) {
-        return Result.Err("DNS rcode=" + to_string(rcode) + nombre_rcode(rcode));
+        return Result.Err("DNS rcode=" + to_string(rcode) + name_rcode(rcode));
     }
     let qdcount = be16(data, 4)?;
     let ancount = be16(data, 6)?;
@@ -306,7 +306,7 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
         let rdstart = pos + 10;
         // M72.1: el RDATA completo debe caber en el mensaje antes de interpretarlo.
         if (rdstart + rdlength > data.len()) {
-            return Result.Err("RDATA de la respuesta DNS truncado");
+            return Result.Err("DNS response RDATA truncated");
         }
         if (atype == 1 && rdlength == 4) {
             recs.push(Record.A(format_ipv4(data, rdstart)?));
@@ -332,9 +332,9 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
             // SRV: prioridad + peso + puerto (cada uno 2 octetos) + target (nombre, con compresión).
             let prio = be16(data, rdstart)?;
             let peso = be16(data, rdstart + 2)?;
-            let puerto = be16(data, rdstart + 4)?;
+            let port = be16(data, rdstart + 4)?;
             let target = read_name(data, rdstart + 6)?;
-            recs.push(Record.Srv(prio, peso, puerto, target.name));
+            recs.push(Record.Srv(prio, peso, port, target.name));
         } else {
             recs.push(Record.Other(atype));
         }
@@ -384,8 +384,8 @@ pub fn format_records(recs: [Record]) -> [string] {
             Record.Ns(name) => {
                 out.push(name);
             },
-            Record.Srv(prio, peso, puerto, target) => {
-                out.push(to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target);
+            Record.Srv(prio, peso, port, target) => {
+                out.push(to_string(prio) + " " + to_string(peso) + " " + to_string(port) + " " + target);
             },
             Record.Other(_) => { },
         }
@@ -394,10 +394,10 @@ pub fn format_records(recs: [Record]) -> [string] {
     out
 }
 
-fn nombre_rcode(rcode: int) -> string {
-    if (rcode == 1) { " (error de formato)" } else {
-        if (rcode == 2) { " (fallo del servidor)" } else {
-            if (rcode == 3) { " (nombre inexistente)" } else { "" }
+fn name_rcode(rcode: int) -> string {
+    if (rcode == 1) { " (format error)" } else {
+        if (rcode == 2) { " (server failure)" } else {
+            if (rcode == 3) { " (name nonexistent)" } else { "" }
         }
     }
 }
@@ -421,11 +421,11 @@ fn random_id() -> int {
 /// is rejected as `Err` (anti-spoofing). No retries (one query, one response).
 pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result<DnsResult, string> {
     let id = random_id();
-    let consulta = build_query(id, name, qtype);
+    let query = build_query(id, name, qtype);
     match (bind("0.0.0.0", 0)) {
         Result.Err(e) => Result.Err("bind: " + e),
         Result.Ok(h) => {
-            match (send_to(h, server, port, consulta)) {
+            match (send_to(h, server, port, query)) {
                 Result.Err(e) => {
                     close(h);
                     Result.Err("send: " + e)
@@ -438,7 +438,7 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
                             // M72.2: la respuesta debe llevar el ID de la consulta (anti-spoofing).
                             let rid = be16(pkt.data, 0)?;
                             if (rid != id) {
-                                Result.Err("ID de la respuesta DNS no coincide con la consulta (posible spoofing)")
+                                Result.Err("DNS response ID does not match the query (possible spoofing)")
                             } else {
                                 parse_full(pkt.data)
                             }

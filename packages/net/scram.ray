@@ -76,11 +76,11 @@ pub fn scram_client_first_message(sc: Scram) -> string {
 
 // Devuelve el valor de un atributo `k=valor` en un mensaje `a=..,b=..,..` separado por comas.
 fn attr(msg: string, clave: string) -> string {
-    let partes = msg.split(",");
+    let parts = msg.split(",");
     var v = "";
     var i = 0;
-    while (i < partes.len()) {
-        let p = partes[i];
+    while (i < parts.len()) {
+        let p = parts[i];
         if (p.len() >= 2 && p[0] == clave[0] && p[1] == '=') {
             v = p.substring(2, p.len());
         }
@@ -102,28 +102,28 @@ pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<
     // client-first-bare que guardamos.
     let client_nonce = attr(sc.client_first_bare, "r");
     if (client_nonce == "" || !rnonce.starts_with(client_nonce)) {
-        return Result.Err("el nonce del servidor no extiende el del cliente (posible replay/MITM)");
+        return Result.Err("the server nonce does not extend the client's (possible replay/MITM)");
     }
     let salt_b64 = attr(server_first, "s");
     let iter_str = attr(server_first, "i");
     let iterations = match (parse_int(iter_str)) {
         Option.Some(n) => n,
         Option.None => {
-            return Result.Err("iteraciones inválidas en server-first");
+            return Result.Err("invalid iterations in server-first");
         },
     };
     // El recuento de iteraciones lo fija el servidor; un valor enorme haría girar PBKDF2 sin fin en el
     // cliente (bomba de CPU, clase M64.2). Se acota a un máximo generoso (RFC 7677 exige >= 4096).
     if (iterations < 1) {
-        return Result.Err("iteraciones inválidas en server-first (debe ser >= 1)");
+        return Result.Err("invalid iterations in server-first (must be >= 1)");
     }
     if (iterations > 10000000) {
-        return Result.Err("iteraciones excesivas del servidor (posible DoS): " + to_string(iterations));
+        return Result.Err("excessive server iterations (possible DoS): " + to_string(iterations));
     }
     let salt = match (base64_decode(salt_b64)) {
         Result.Ok(s) => s,
         Result.Err(e) => {
-            return Result.Err("salt base64 inválido: " + e);
+            return Result.Err("invalid base64 salt: " + e);
         },
     };
 

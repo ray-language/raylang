@@ -29,11 +29,11 @@ fn frame(ftype: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Servidor gRPC de juguete (una conexión) con ALPN `h2`. Puerto efímero.
-fn lanzar_servidor_grpc() -> u16 {
-    lanzar_servidor_grpc_cfg(true)
+fn launch_servidor_grpc() -> u16 {
+    launch_servidor_grpc_cfg(true)
 }
 
-fn lanzar_servidor_grpc_cfg(con_grpc_status: bool) -> u16 {
+fn launch_servidor_grpc_cfg(con_grpc_status: bool) -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("cert de prueba");
@@ -55,10 +55,10 @@ fn lanzar_servidor_grpc_cfg(con_grpc_status: bool) -> u16 {
             let mut buf = [0u8; 4096];
             let _ = tls.read(&mut buf);
 
-            // Mensaje protobuf de respuesta: campo 1 (string) = "hola, raylang" (13 octetos).
-            //   tag = (1<<3)|2 = 0x0a ; longitud = 0x0d ; luego los octetos.
-            let mut pb = vec![0x0a, 0x0d];
-            pb.extend_from_slice(b"hola, raylang");
+            // Mensaje protobuf de respuesta: campo 1 (string) = "hello, raylang" (14 octetos).
+            //   tag = (1<<3)|2 = 0x0a ; longitud = 0x0e ; luego los octetos.
+            let mut pb = vec![0x0a, 0x0e];
+            pb.extend_from_slice(b"hello, raylang");
             // gRPC frame: [flag=0 (sin comprimir)] [longitud u32 BE] [mensaje].
             let mut grpc = vec![0u8, (pb.len() >> 24) as u8, (pb.len() >> 16) as u8, (pb.len() >> 8) as u8, pb.len() as u8];
             grpc.extend_from_slice(&pb);
@@ -87,7 +87,7 @@ fn lanzar_servidor_grpc_cfg(con_grpc_status: bool) -> u16 {
     port
 }
 
-fn correr(flags: &[&str], port: u16) -> Vec<String> {
+fn run(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/grpc_call_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -101,18 +101,18 @@ fn correr(flags: &[&str], port: u16) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect()
 }
 
-const ESPERADO: &[&str] = &["grpc-status: 0", "greeting: hola, raylang"];
+const ESPERADO: &[&str] = &["grpc-status: 0", "greeting: hello, raylang"];
 
 #[test]
-fn grpc_call_interprete() {
-    let port = lanzar_servidor_grpc();
-    assert_eq!(correr(&[], port), ESPERADO);
+fn grpc_call_interpreter() {
+    let port = launch_servidor_grpc();
+    assert_eq!(run(&[], port), ESPERADO);
 }
 
 #[test]
 fn grpc_call_vm() {
-    let port = lanzar_servidor_grpc();
-    assert_eq!(correr(&["--vm"], port), ESPERADO);
+    let port = launch_servidor_grpc();
+    assert_eq!(run(&["--vm"], port), ESPERADO);
 }
 
 /// M73 — un servidor gRPC que cierra el stream SIN `grpc-status` en los trailers (protocolo
@@ -120,7 +120,7 @@ fn grpc_call_vm() {
 /// computaba pero no se leía → `Ok(grpc_status: 0)` indistinguible de un OK legítimo.
 #[test]
 fn grpc_sin_status_es_error() {
-    let port = lanzar_servidor_grpc_cfg(false);
+    let port = launch_servidor_grpc_cfg(false);
     let demo = format!("{}/examples/web/grpc_call_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -132,9 +132,9 @@ fn grpc_sin_status_es_error() {
         .output()
         .expect("ejecuta grpc_call_demo.ray");
     // El demo imprime el error de grpc_call y sale != 0 (o imprime un mensaje de error).
-    let salida = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+    let output = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
     assert!(
-        salida.contains("grpc-status"),
-        "sin grpc-status en los trailers = Err mencionándolo\n{salida}"
+        output.contains("grpc-status"),
+        "sin grpc-status en los trailers = Err mencionándolo\n{output}"
     );
 }

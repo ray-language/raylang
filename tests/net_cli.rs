@@ -64,14 +64,14 @@ fn main() -> int {
 "#;
 
 #[test]
-fn cliente_tcp_intercambia_con_un_servidor() {
+fn client_tcp_intercambia_con_un_servidor() {
     for vm in [false, true] {
         // Un servidor nuevo por ejecución (cada uno acepta una sola conexión).
         let port = toy_echo_server();
         let src = CLIENTE.replace("__PORT__", &port.to_string());
         let (out, code) = run("ray_tcp_ok", &src, vm);
         assert_eq!(out.trim(), "pong:ping", "intercambio TCP (vm={vm}): {out}");
-        assert_eq!(code, 0, "salida 0 (vm={vm})");
+        assert_eq!(code, 0, "output 0 (vm={vm})");
     }
 }
 
@@ -124,15 +124,15 @@ fn servidor_tcp_acepta_y_responde() {
         // Leer el puerto (println! es line-buffered → se vacía con el salto, aunque el proceso siga).
         let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
         let mut linea = String::new();
-        reader.read_line(&mut linea).expect("lee el puerto");
-        let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("puerto inválido (vm={vm}): {linea:?}"));
+        reader.read_line(&mut linea).expect("lee el port");
+        let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("port inválido (vm={vm}): {linea:?}"));
 
         // Conectar como cliente, escribir, y leer hasta que el servidor cierre.
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
-        stream.write_all(b"hola").expect("escribe");
+        stream.write_all(b"hello").expect("escribe");
         let mut resp = String::new();
-        stream.read_to_string(&mut resp).expect("lee respuesta");
-        assert_eq!(resp, "echo:hola", "el servidor hizo eco (vm={vm})");
+        stream.read_to_string(&mut resp).expect("lee response");
+        assert_eq!(resp, "echo:hello", "el servidor hizo echo (vm={vm})");
 
         let status = child.wait().expect("espera al servidor");
         assert_eq!(status.code(), Some(0), "el servidor terminó bien (vm={vm})");
@@ -140,7 +140,7 @@ fn servidor_tcp_acepta_y_responde() {
 }
 
 #[test]
-fn tcp_connect_falla_a_un_puerto_cerrado() {
+fn tcp_connect_fails_a_un_port_closed() {
     // Puerto efímero reservado y soltado: nadie escucha → la conexión debe ser rechazada.
     let port = {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -151,6 +151,6 @@ fn tcp_connect_falla_a_un_puerto_cerrado() {
         let src = CLIENTE.replace("__PORT__", &port.to_string());
         let (out, code) = run("ray_tcp_err", &src, vm);
         assert!(out.contains("connect err"), "conexión rechazada (vm={vm}): {out}");
-        assert_eq!(code, 1, "salida 1 en error (vm={vm})");
+        assert_eq!(code, 1, "output 1 en error (vm={vm})");
     }
 }

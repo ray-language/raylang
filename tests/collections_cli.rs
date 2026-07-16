@@ -28,35 +28,35 @@ fn run_src(name: &str, src: &str) -> i32 {
 
 /// Oráculo por subproceso: los dos motores coinciden (stdout + código) sobre el ejemplo, y la salida
 /// es la esperada.
-fn ambos_motores_coinciden(path: &str, esperado: &str) {
+fn ambos_engines_matches(path: &str, expected: &str) {
     let (o_in, c_in) = run_file(path, false);
     let (o_vm, c_vm) = run_file(path, true);
     assert_eq!(c_in, 0, "intérprete sale 0 ({path})\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0 ({path})\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden ({path})");
-    assert_eq!(o_in, esperado, "salida esperada ({path})");
+    assert_eq!(o_in, o_vm, "ambos engines match ({path})");
+    assert_eq!(o_in, expected, "output expected_val ({path})");
 }
 
 /// M61.1 — el hash NO desborda: el `int` es checked (trap) y el polinomio h*31+c crecía sin
 /// cota → `.hash()` de un string ≥ ~12 chars (o un derive con un campo de valor grande)
 /// reventaba con "desbordamiento aritmético", matando `Set<string>` con claves reales.
 #[test]
-fn hash_sin_overflow_ambos_motores() {
+fn hash_sin_overflow_ambos_engines() {
     let src = "import std/collections/set;\n\
         @derive(Hash, Eq)\n\
-        struct Q { a: int, b: int, nombre: string }\n\
+        struct Q { a: int, b: int, name: string }\n\
         fn main() {\n\
         \x20 let largo = \"abcdefghijklmnopqrstuvwxyz\".repeat(40);\n\
         \x20 print(to_string(largo.hash()));\n\
         \x20 let s: set.Set<string> = set.new();\n\
-        \x20 set.add(s, \"una clave de longitud completamente normal\");\n\
+        \x20 set.add(s, \"one clave de length completamente normal\");\n\
         \x20 set.add(s, largo);\n\
-        \x20 print(to_string(set.has(s, \"una clave de longitud completamente normal\")));\n\
+        \x20 print(to_string(set.has(s, \"one clave de length completamente normal\")));\n\
         \x20 print(to_string(set.has(s, largo)));\n\
         \x20 print(to_string(set.has(s, \"ausente\")));\n\
-        \x20 let q = Q { a: 400000000000000000, b: 7, nombre: largo };\n\
+        \x20 let q = Q { a: 400000000000000000, b: 7, name: largo };\n\
         \x20 print(to_string(q.hash()));\n\
-        \x20 print(to_string(q.hash() == Q { a: 400000000000000000, b: 7, nombre: largo }.hash()));\n\
+        \x20 print(to_string(q.hash() == Q { a: 400000000000000000, b: 7, name: largo }.hash()));\n\
         }\n";
     let path = std::env::temp_dir().join("m61_hash_overflow.ray");
     std::fs::write(&path, src).unwrap();
@@ -64,18 +64,18 @@ fn hash_sin_overflow_ambos_motores() {
     let (o_vm, c_vm) = run_file(path.to_str().unwrap(), true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    let lineas: Vec<&str> = o_in.lines().collect();
-    assert_eq!(lineas[1], "true");
-    assert_eq!(lineas[2], "true");
-    assert_eq!(lineas[3], "false");
-    assert_eq!(lineas[5], "true", "hash determinista del struct derivado");
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    let lines: Vec<&str> = o_in.lines().collect();
+    assert_eq!(lines[1], "true");
+    assert_eq!(lines[2], "true");
+    assert_eq!(lines[3], "false");
+    assert_eq!(lines[5], "true", "hash determinista del struct derivado");
 }
 
 /// M61.2 — `sort` pasó de insertion sort O(n²) a merge sort bottom-up O(n log n). Debe seguir
 /// siendo ESTABLE (claves iguales conservan su orden relativo) y cubrir los bordes.
 #[test]
-fn sort_merge_estable_ambos_motores() {
+fn sort_merge_estable_ambos_engines() {
     let src = "import std/sort as su;\n\
         struct Par { k: int, tag: string }\n\
         impl Ord for Par {\n\
@@ -105,13 +105,13 @@ fn sort_merge_estable_ambos_motores() {
         }\n";
     let path = std::env::temp_dir().join("m61_sort_estable.ray");
     std::fs::write(&path, src).unwrap();
-    let esperado = "0\n1,1,2,3,3\n1,2,3,4,5\nkiwi,pera,uva\ntrue\n1b1d2a2c2e\n";
+    let expected = "0\n1,1,2,3,3\n1,2,3,4,5\nkiwi,pera,uva\ntrue\n1b1d2a2c2e\n";
     let (o_in, c_in) = run_file(path.to_str().unwrap(), false);
     let (o_vm, c_vm) = run_file(path.to_str().unwrap(), true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    assert_eq!(o_in, esperado, "sort correcto y ESTABLE");
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    assert_eq!(o_in, expected, "sort correcto y ESTABLE");
 }
 
 /// Revisión de collections (post-M64): el Set CRECE — rehash al doble de buckets cuando la carga
@@ -119,7 +119,7 @@ fn sort_merge_estable_ambos_motores() {
 /// degeneraba a búsqueda lineal O(n/16) (medido: 20k adds 2235→38 ms, 59×). Corrección bajo
 /// varios rehash: size/has/ausencia/remove intactos, por ambos motores.
 #[test]
-fn set_crece_con_rehash_ambos_motores() {
+fn set_crece_con_rehash_ambos_engines() {
     let src = "import std/collections/set;\n\
         fn main() {\n\
         \x20 let s: set.Set<int> = set.new();\n\
@@ -138,53 +138,53 @@ fn set_crece_con_rehash_ambos_motores() {
         }\n";
     let path = std::env::temp_dir().join("set_rehash.ray");
     std::fs::write(&path, src).unwrap();
-    let esperado = "2000\ntrue\nfalse\n1000\nfalse,true\n";
+    let expected = "2000\ntrue\nfalse\n1000\nfalse,true\n";
     let (o_in, c_in) = run_file(path.to_str().unwrap(), false);
     let (o_vm, c_vm) = run_file(path.to_str().unwrap(), true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    assert_eq!(o_in, esperado, "el Set con rehash es correcto");
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    assert_eq!(o_in, expected, "el Set con rehash es correcto");
 }
 
 #[test]
-fn set_conjunto_ambos_motores() {
-    ambos_motores_coinciden(
+fn set_conjunto_ambos_engines() {
+    ambos_engines_matches(
         "examples/stdlib/conjunto.ray",
         "7\ntrue\nfalse\nfalse\n6\n2\ntrue\n26\n",
     );
 }
 
 #[test]
-fn stringbuilder_y_deque_ambos_motores() {
-    ambos_motores_coinciden(
+fn stringbuilder_y_deque_ambos_engines() {
+    ambos_engines_matches(
         "examples/stdlib/builder_deque.ray",
         "fila1\nfila2\nfila3\nfila4\nfila5\n\n15\n10\n20\nb\n3\n0\n",
     );
 }
 
 #[test]
-fn nombres_globales_ya_no_existen() {
+fn names_globales_ya_no_existen() {
     // M50.2: la forma global del prelude se retiró; usar los nombres sin importar el submódulo es error.
     assert_ne!(
         run_src("m50_set_bad", "fn main() -> int { let s: Set<int> = set_new(); set_size(s) }"),
         0,
-        "set_new/Set global debe fallar (ya no está en el prelude)"
+        "set_new/Set global must fallar (ya no está en el prelude)"
     );
     assert_ne!(
         run_src("m50_deque_bad", "fn main() -> int { let d: Deque<int> = deque_new(); deque_len(d) }"),
         0,
-        "deque_new/Deque global debe fallar"
+        "deque_new/Deque global must fallar"
     );
     assert_ne!(
         run_src("m50_sb_bad", "fn main() -> int { let b = sb_new(); sb_count(b) }"),
         0,
-        "sb_new global debe fallar"
+        "sb_new global must fallar"
     );
 }
 
 #[test]
-fn import_calificado_de_submodulo() {
+fn import_qualified_de_submodule() {
     // El leaf-binding liga el último segmento: `import std/collections/set;` → `set.new()`.
     let src = "import std/collections/set;\n\
                fn main() -> int {\n\
@@ -199,7 +199,7 @@ fn import_calificado_de_submodulo() {
 /// hermano del Set. Claves struct con @derive(Hash, Eq), reemplazo (last wins), remove
 /// que devuelve el valor, crecimiento con rehash (200 claves) y keys/values alineados.
 #[test]
-fn dict_claves_de_usuario_ambos_motores() {
+fn dict_keys_de_user_ambos_engines() {
     let src = r#"import std/collections/dict;
 
 @derive(Hash, Eq, Show)
@@ -220,7 +220,7 @@ fn main() -> int {
     // Reemplazo (last wins) y size.
     dict.insert(d, Punto { x: 1, y: 2 }, "A");
     match (dict.get(d, Punto { x: 1, y: 2 })) {
-        Option.Some(v) => print("tras reemplazo = " + v),
+        Option.Some(v) => print("after reemplazo = " + v),
         Option.None => print("<none>"),
     }
     print("size = " + to_string(dict.size(d)));
@@ -260,9 +260,9 @@ fn main() -> int {
 {o_in}");
     assert_eq!(c_vm, 0, "vm sale 0
 {o_vm}");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
-    let esperado = "get(1,2) = a
-tras reemplazo = A
+    assert_eq!(o_in, o_vm, "ambos engines match");
+    let expected = "get(1,2) = a
+after reemplazo = A
 size = 2
 removed = b
 has(3,4) = false
@@ -270,5 +270,5 @@ size = 1
 crecimiento 200 ok = true, size = 200
 keys+values casan = true
 ";
-    assert_eq!(o_in, esperado, "salida esperada");
+    assert_eq!(o_in, expected, "output expected_val");
 }

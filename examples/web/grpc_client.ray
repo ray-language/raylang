@@ -89,7 +89,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
         // M73: un frame que declara más que el tope se rechaza ANTES de acumular sus octetos.
         if (frame_size(buf) > max_frame()) {
             close(h);
-            return Result.Err("frame HTTP/2 excede el límite (" + to_string(frame_size(buf)) + " octetos)");
+            return Result.Err("HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " octetos)");
         }
         while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
@@ -169,11 +169,11 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                         // M58.3: stream reseteado = error con causa (antes: leer hasta EOF).
                         if (fr.stream_id == 1) {
                             close(h);
-                            return Result.Err("el servidor reseteó el stream (RST_STREAM, código " + to_string(rst_error_code(fr.payload)) + ")");
+                            return Result.Err("the server reset the stream (RST_STREAM, code " + to_string(rst_error_code(fr.payload)) + ")");
                         }
                     } else if (fr.ftype == ft_goaway()) {
                         close(h);
-                        return Result.Err("el servidor envió GOAWAY");
+                        return Result.Err("the server sent GOAWAY");
                     }
                     if (fr.stream_id == 1 && (fr.flags & fl_end_stream()) != 0) {
                         done = true;

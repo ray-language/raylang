@@ -30,7 +30,7 @@ fn frame(ftype: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Levanta un servidor HTTP/2 de juguete (una conexión) con ALPN `h2`. Devuelve su puerto efímero.
-fn lanzar_servidor_h2() -> u16 {
+fn launch_servidor_h2() -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("cert de prueba");
@@ -56,7 +56,7 @@ fn lanzar_servidor_h2() -> u16 {
             let mut out = Vec::new();
             out.extend_from_slice(&frame(4, 0, 0, &[]));            // SETTINGS vacío
             out.extend_from_slice(&frame(1, 4, 1, &[0x88]));        // HEADERS END_HEADERS, :status 200
-            out.extend_from_slice(&frame(0, 1, 1, b"hola-h2"));     // DATA END_STREAM
+            out.extend_from_slice(&frame(0, 1, 1, b"hello-h2"));     // DATA END_STREAM
             let _ = tls.write_all(&out);
             let _ = tls.flush();
         }
@@ -64,7 +64,7 @@ fn lanzar_servidor_h2() -> u16 {
     port
 }
 
-fn correr(flags: &[&str], port: u16) -> Vec<String> {
+fn run(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/http2_get_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -78,18 +78,18 @@ fn correr(flags: &[&str], port: u16) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect()
 }
 
-const ESPERADO: &[&str] = &["status: 200", "body: hola-h2"];
+const ESPERADO: &[&str] = &["status: 200", "body: hello-h2"];
 
 #[test]
-fn http2_get_interprete() {
-    let port = lanzar_servidor_h2();
-    assert_eq!(correr(&[], port), ESPERADO);
+fn http2_get_interpreter() {
+    let port = launch_servidor_h2();
+    assert_eq!(run(&[], port), ESPERADO);
 }
 
 #[test]
 fn http2_get_vm() {
-    let port = lanzar_servidor_h2();
-    assert_eq!(correr(&["--vm"], port), ESPERADO);
+    let port = launch_servidor_h2();
+    assert_eq!(run(&["--vm"], port), ESPERADO);
 }
 
 // --- M58.3: flow control + PING + RST contra servidores de juguete más exigentes ---
@@ -137,7 +137,7 @@ fn tls_config_h2() -> Arc<ServerConfig> {
 /// ventana inicial (65535) y solo sigue cuando el cliente concede crédito con WINDOW_UPDATE.
 /// También manda un PING a mitad y EXIGE su ACK antes de continuar. Sin las dos cosas del
 /// cliente (M58.3), este servidor se queda esperando y el test falla por timeout.
-fn lanzar_servidor_h2_grande(total: usize) -> u16 {
+fn launch_servidor_h2_grande(total: usize) -> u16 {
     let config = tls_config_h2();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
@@ -207,7 +207,7 @@ fn lanzar_servidor_h2_grande(total: usize) -> u16 {
 }
 
 /// Servidor h2 que resetea el stream 1 con RST_STREAM (código 8 = CANCEL) tras el HEADERS.
-fn lanzar_servidor_h2_rst() -> u16 {
+fn launch_servidor_h2_rst() -> u16 {
     let config = tls_config_h2();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
@@ -230,7 +230,7 @@ fn lanzar_servidor_h2_rst() -> u16 {
     port
 }
 
-fn correr_len(port: u16) -> Vec<String> {
+fn run_len(port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/http2_len_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -245,22 +245,22 @@ fn correr_len(port: u16) -> Vec<String> {
 }
 
 #[test]
-fn http2_get_respuesta_grande_con_flow_control() {
+fn http2_get_response_grande_con_flow_control() {
     // M58.3: 200 000 octetos > la ventana inicial (65535). Sin los WINDOW_UPDATE del cliente el
     // servidor se pararía a los 64 KiB (y sin el ACK del PING, se quedaría esperándolo).
-    let port = lanzar_servidor_h2_grande(200_000);
-    let lineas = correr_len(port);
-    assert_eq!(lineas, vec!["status: 200".to_string(), "len: 200000".to_string()]);
+    let port = launch_servidor_h2_grande(200_000);
+    let lines = run_len(port);
+    assert_eq!(lines, vec!["status: 200".to_string(), "len: 200000".to_string()]);
 }
 
 #[test]
 fn http2_get_rst_stream_es_error_con_causa() {
     // M58.3: un RST_STREAM ya no deja al cliente leyendo hasta EOF: es un Err con el código.
-    let port = lanzar_servidor_h2_rst();
-    let lineas = correr_len(port);
-    assert_eq!(lineas.len(), 1, "esperaba solo la línea de error: {lineas:?}");
+    let port = launch_servidor_h2_rst();
+    let lines = run_len(port);
+    assert_eq!(lines.len(), 1, "esperaba solo la línea de error: {lines:?}");
     assert!(
-        lineas[0].contains("RST_STREAM") && lineas[0].contains("código 8"),
-        "esperaba el error de RST con su código, got: {lineas:?}"
+        lines[0].contains("RST_STREAM") && lines[0].contains("code 8"),
+        "esperaba el error de RST con su código, got: {lines:?}"
     );
 }

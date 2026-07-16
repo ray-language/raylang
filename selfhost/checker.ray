@@ -336,10 +336,10 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             // tipo); aridad 2. No es un struct/enum registrado → se trata aparte.
             if (name == "Map") {
                 if (args.len() != 2) {
-                    return Result.Err(terr(line, col, "Map espera 2 argumentos de tipo (clave y valor), no " + to_string(args.len())));
+                    return Result.Err(terr(line, col, "Map expects 2 type arguments (key and value), not " + to_string(args.len())));
                 }
                 if (!is_hashable_key(c, args[0])) {
-                    return Result.Err(terr(line, col, "la clave de un Map debe ser int/string/char/bool, no " + type_str(args[0])));
+                    return Result.Err(terr(line, col, "a Map key must be int/string/char/bool, not " + type_str(args[0])));
                 }
                 ensure_type(c, args[0], line, col)?;
                 return ensure_type(c, args[1], line, col);
@@ -347,7 +347,7 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             // Un parámetro de tipo en ámbito (M14.3c) es un tipo válido; no recibe argumentos.
             if (contains_str(c.tparams, name)) {
                 if (args.len() != 0) {
-                    return Result.Err(terr(line, col, "el parámetro de tipo '" + name + "' no recibe argumentos"));
+                    return Result.Err(terr(line, col, "the type parameter '" + name + "' takes no arguments"));
                 }
                 return Result.Ok(0);
             }
@@ -355,7 +355,7 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             if (c.structs.contains_key(name) || c.enums.contains_key(name)) {
                 let arity = type_arity(c, name);
                 if (args.len() != arity) {
-                    return Result.Err(terr(line, col, "'" + name + "' espera " + to_string(arity) + " argumento(s) de tipo, se le dieron " + to_string(args.len())));
+                    return Result.Err(terr(line, col, "'" + name + "' expects " + to_string(arity) + " type argument(s), got " + to_string(args.len())));
                 }
                 var i = 0;
                 while (i < args.len()) {
@@ -364,7 +364,7 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                 }
                 Result.Ok(0)
             } else {
-                Result.Err(terr(line, col, "tipo desconocido: '" + name + "' no declarado"))
+                Result.Err(terr(line, col, "type unknown: '" + name + "' not declared"))
             }
         },
         Type.TDyn(traits) => {
@@ -377,13 +377,13 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                 let tr = traits[i];
                 match (get(c.traits, tr)) {
                     Option.None => {
-                        return Result.Err(terr(line, col, "trait '" + tr + "' no declarado (en 'dyn " + join_strs(traits) + "')"));
+                        return Result.Err(terr(line, col, "trait '" + tr + "' not declared (in 'dyn " + join_strs(traits) + "')"));
                     },
                     Option.Some(ms) => {
                         var mi = 0;
                         while (mi < ms.len()) {
                             if (contains_str(seen, ms[mi].name)) {
-                                return Result.Err(terr(line, col, "el método '" + ms[mi].name + "' aparece en más de un trait de 'dyn " + join_strs(traits) + "': es ambiguo"));
+                                return Result.Err(terr(line, col, "the method '" + ms[mi].name + "' appears in more than one trait of 'dyn " + join_strs(traits) + "': it is ambiguous"));
                             }
                             seen.push(ms[mi].name);
                             mi = mi + 1;
@@ -522,7 +522,7 @@ fn unify(param: Type, arg: Type, sigma: Map<string, Type>, holes: [string]) -> R
                 match (get(sigma, n)) {
                     Option.Some(prev) => {
                         if (!type_eq(prev, arg)) {
-                            Result.Err("'" + n + "' no puede ser " + type_str(prev) + " y " + type_str(arg) + " a la vez")
+                            Result.Err("'" + n + "' cannot be " + type_str(prev) + " and " + type_str(arg) + " at the same time")
                         } else { Result.Ok(0) }
                     },
                     Option.None => {
@@ -537,35 +537,35 @@ fn unify(param: Type, arg: Type, sigma: Map<string, Type>, holes: [string]) -> R
                         if (n == an && pargs.len() == aargs.len()) {
                             unify_list(pargs, aargs, sigma, holes)
                         } else {
-                            Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg))
+                            Result.Err("expected " + type_str(param) + ", got " + type_str(arg))
                         }
                     },
-                    _ => Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)),
+                    _ => Result.Err("expected " + type_str(param) + ", got " + type_str(arg)),
                 }
             }
         },
         Type.TArray(pe) => {
             match (arg) {
                 Type.TArray(ae) => unify(pe, ae, sigma, holes),
-                _ => Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)),
+                _ => Result.Err("expected " + type_str(param) + ", got " + type_str(arg)),
             }
         },
         Type.TFn(pps, pr) => {
             match (arg) {
                 Type.TFn(aps, ar) => {
                     if (pps.len() != aps.len()) {
-                        Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg))
+                        Result.Err("expected " + type_str(param) + ", got " + type_str(arg))
                     } else {
                         unify_list(pps, aps, sigma, holes)?;
                         unify(pr, ar, sigma, holes)
                     }
                 },
-                _ => Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)),
+                _ => Result.Err("expected " + type_str(param) + ", got " + type_str(arg)),
             }
         },
         // Primitivos (y variable rígida vs lo que sea): igualdad exacta.
         _ => {
-            if (type_eq(param, arg)) { Result.Ok(0) } else { Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)) }
+            if (type_eq(param, arg)) { Result.Ok(0) } else { Result.Err("expected " + type_str(param) + ", got " + type_str(arg)) }
         },
     }
 }
@@ -845,7 +845,7 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
     while (ei < prog.enums.len()) {
         let e = prog.enums[ei];
         if (c.enums.contains_key(e.name)) {
-            return Result.Err(terr(e.line, e.col, "enum '" + e.name + "' declarado dos veces"));
+            return Result.Err(terr(e.line, e.col, "enum '" + e.name + "' declared twice"));
         }
         var seen: [string] = [];
         var variants: [VariantDef] = [];
@@ -853,7 +853,7 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
         while (vi < e.variants.len()) {
             let v = e.variants[vi];
             if (contains_str(seen, v.name)) {
-                return Result.Err(terr(v.line, v.col, "variante '" + v.name + "' repetida en el enum '" + e.name + "'"));
+                return Result.Err(terr(v.line, v.col, "variant '" + v.name + "' repeated in enum '" + e.name + "'"));
             }
             seen.push(v.name);
             var rp: [Type] = [];
@@ -874,10 +874,10 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
     while (si < prog.structs.len()) {
         let s = prog.structs[si];
         if (c.enums.contains_key(s.name)) {
-            return Result.Err(terr(s.line, s.col, "'" + s.name + "' ya es un enum; no puede ser también un struct"));
+            return Result.Err(terr(s.line, s.col, "'" + s.name + "' is already an enum; it cannot also be a struct"));
         }
         if (c.structs.contains_key(s.name)) {
-            return Result.Err(terr(s.line, s.col, "struct '" + s.name + "' declarado dos veces"));
+            return Result.Err(terr(s.line, s.col, "struct '" + s.name + "' declared twice"));
         }
         var rf: [FieldDef] = [];
         var fj = 0;
@@ -949,7 +949,7 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
     while (fi < prog.funcs.len()) {
         let f = prog.funcs[fi];
         if (c.funcs.contains_key(f.name)) {
-            return Result.Err(terr(f.line, f.col, "función '" + f.name + "' declarada dos veces"));
+            return Result.Err(terr(f.line, f.col, "function '" + f.name + "' declared twice"));
         }
         check_unique_tparams(f.type_params, f.name, f.line, f.col)?;
         var ps: [Type] = [];
@@ -967,14 +967,14 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
     // 'main' es obligatoria: sin parámetros, retorno int o unit.
     match (get(c.funcs, "main")) {
         Option.None => {
-            return Result.Err(terr(1, 1, "falta la función de entrada 'main'"));
+            return Result.Err(terr(1, 1, "missing entry function 'main'"));
         },
         Option.Some(sig) => {
             if (sig.params.len() != 0) {
-                return Result.Err(terr(1, 1, "'main' no debe recibir parámetros"));
+                return Result.Err(terr(1, 1, "'main' must not take parameters"));
             }
             if (!type_eq(sig.ret, Type.TInt) && !type_eq(sig.ret, Type.TUnit)) {
-                return Result.Err(terr(1, 1, "'main' debe devolver int o unit, no " + type_str(sig.ret)));
+                return Result.Err(terr(1, 1, "'main' must return int or unit, not " + type_str(sig.ret)));
             }
         },
     }
@@ -1013,10 +1013,10 @@ fn check_bounds(c: Checker, f: Func) -> Result<int, TypeError> {
     while (i < f.bounds.len()) {
         let b = f.bounds[i];
         if (!contains_str(f.type_params, b.param)) {
-            return Result.Err(terr(f.line, f.col, "el bound '" + b.param + ": " + b.trait_name + "' no acota a ningún parámetro de tipo de '" + f.name + "'"));
+            return Result.Err(terr(f.line, f.col, "the bound '" + b.param + ": " + b.trait_name + "' does not constrain any type parameter of '" + f.name + "'"));
         }
         if (!c.traits.contains_key(b.trait_name)) {
-            return Result.Err(terr(f.line, f.col, "trait '" + b.trait_name + "' no declarado (en el bound de '" + f.name + "')"));
+            return Result.Err(terr(f.line, f.col, "trait '" + b.trait_name + "' not declared (in the bound of '" + f.name + "')"));
         }
         i = i + 1;
     }
@@ -1030,7 +1030,7 @@ fn check_unique_tparams(params: [string], owner: string, line: int, col: int) ->
         var j = 0;
         while (j < i) {
             if (params[i] == params[j]) {
-                return Result.Err(terr(line, col, "parámetro de tipo '" + params[i] + "' repetido en '" + owner + "'"));
+                return Result.Err(terr(line, col, "type parameter '" + params[i] + "' repeated in '" + owner + "'"));
             }
             j = j + 1;
         }
@@ -1066,13 +1066,13 @@ fn check_fn_body(c: Checker, params: [Param], ret_ann: Type, body: Block, line: 
     pop_scope(c);
     if (type_eq(ret, Type.TUnit)) {
         if (!type_eq(body_ty, Type.TUnit) && !diverges) {
-            return Result.Err(terr(eline, ecol, label + " no declara retorno (unit), pero su cuerpo produce " + type_str(body_ty)));
+            return Result.Err(terr(eline, ecol, label + " declares no return (unit), but its body produces " + type_str(body_ty)));
         }
         Result.Ok(0)
     } else if (type_eq(body_ty, ret) || diverges) {
         Result.Ok(0)
     } else {
-        Result.Err(terr(eline, ecol, label + " declara devolver " + type_str(ret) + ", pero su cuerpo produce " + type_str(body_ty)))
+        Result.Err(terr(eline, ecol, label + " declares return type " + type_str(ret) + ", but its body produces " + type_str(body_ty)))
     }
 }
 
@@ -1089,7 +1089,7 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
                     // El tipo declarado es el esperado del valor (chequeo bidireccional: fija el `[]`).
                     let vt = check_expr_expected(c, value, ty)?;
                     if (!type_eq(vt, ty)) {
-                        return Result.Err(terr(value.line, value.col, "'" + name + "' se declara como " + type_str(ty) + " pero se inicializa con " + type_str(vt)));
+                        return Result.Err(terr(value.line, value.col, "'" + name + "' is declared as " + type_str(ty) + " but initialized with " + type_str(vt)));
                     }
                     declare(c, name, ty, mutable, stmt.line, stmt.col);
                 },
@@ -1110,7 +1110,7 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
                 Option.None => { },
             }
             if (!type_eq(vt, c.current_return)) {
-                return Result.Err(terr(stmt.line, stmt.col, "se devuelve " + type_str(vt) + " pero la función declara retorno " + type_str(c.current_return)));
+                return Result.Err(terr(stmt.line, stmt.col, "returning " + type_str(vt) + " but the function declares return type " + type_str(c.current_return)));
             }
             Result.Ok(0)
         },
@@ -1127,14 +1127,14 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
     match (target.kind) {
         EKind.EIdent(name) => {
             match (lookup(c, name)) {
-                Option.None => Result.Err(terr(target.line, target.col, "variable '" + name + "' no declarada")),
+                Option.None => Result.Err(terr(target.line, target.col, "variable '" + name + "' not declared")),
                 Option.Some(v) => {
                     if (!v.mutable) {
-                        return Result.Err(terr(line, col, "no se puede asignar a '" + name + "': es inmutable (declarada con 'let'; usa 'var')"));
+                        return Result.Err(terr(line, col, "cannot assign to '" + name + "': it is immutable (declared with 'let'; use 'var')"));
                     }
                     let vt = check_expr(c, value)?;
                     if (!type_eq(vt, v.ty)) {
-                        return Result.Err(terr(value.line, value.col, "'" + name + "' es " + type_str(v.ty) + " pero se le asigna " + type_str(vt)));
+                        return Result.Err(terr(value.line, value.col, "'" + name + "' is " + type_str(v.ty) + " but is assigned " + type_str(vt)));
                     }
                     Result.Ok(0)
                 },
@@ -1144,12 +1144,12 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
             // Los strings son inmutables: `s[i] = c` no se permite (sí se lee `s[i]`).
             let at = check_expr(c, array)?;
             if (type_eq(at, Type.TString)) {
-                return Result.Err(terr(target.line, target.col, "no se puede asignar a un carácter de un string (los strings son inmutables)"));
+                return Result.Err(terr(target.line, target.col, "cannot assign to a character of a string (strings are immutable)"));
             }
             let elem = check_index(c, array, index)?;
             let vt = check_expr(c, value)?;
             if (!type_eq(vt, elem)) {
-                return Result.Err(terr(value.line, value.col, "el elemento es " + type_str(elem) + " pero se le asigna " + type_str(vt)));
+                return Result.Err(terr(value.line, value.col, "the element is " + type_str(elem) + " but is assigned " + type_str(vt)));
             }
             Result.Ok(0)
         },
@@ -1157,11 +1157,11 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
             let fty = check_field(c, object, name)?;
             let vt = check_expr(c, value)?;
             if (!type_eq(vt, fty)) {
-                return Result.Err(terr(value.line, value.col, "el campo '" + name + "' es " + type_str(fty) + " pero se le asigna " + type_str(vt)));
+                return Result.Err(terr(value.line, value.col, "the field '" + name + "' is " + type_str(fty) + " but is assigned " + type_str(vt)));
             }
             Result.Ok(0)
         },
-        _ => Result.Err(terr(target.line, target.col, "el lado izquierdo no es asignable")),
+        _ => Result.Err(terr(target.line, target.col, "the left-hand side is not assignable")),
     }
 }
 
@@ -1189,7 +1189,7 @@ fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
         EKind.EMatch(scrut, arms) => check_match(c, scrut, arms, Option.None, e.line, e.col),
         EKind.ETry(inner) => check_try(c, inner, e.line, e.col),
         EKind.EFunc(fe) => check_func_expr(c, fe),
-        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado")),
+        _ => Result.Err(terr(e.line, e.col, "expression not yet supported by the self-hosted checker")),
     }
 }
 
@@ -1205,7 +1205,7 @@ fn check_func_expr(c: Checker, fe: FnExpr) -> Result<Type, TypeError> {
     }
     ensure_type(c, fe.ret, fe.line, fe.col)?;
     let saved = c.current_return;
-    let r = check_fn_body(c, fe.params, fe.ret, fe.body, fe.line, fe.col, "la función anónima");
+    let r = check_fn_body(c, fe.params, fe.ret, fe.body, fe.line, fe.col, "the anonymous function");
     c.current_return = saved;
     r?;
     var ps: [Type] = [];
@@ -1232,10 +1232,10 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                         if (rn == "Result" && rargs.len() == 2 && type_eq(rargs[1], err_ty)) {
                             Result.Ok(ok_ty)
                         } else {
-                            Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, " + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return)))
+                            Result.Err(terr(line, col, "'?' on " + type_str(it) + " requires the function to return Result<_, " + type_str(err_ty) + ">, but it returns " + type_str(c.current_return)))
                         }
                     },
-                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, " + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return))),
+                    _ => Result.Err(terr(line, col, "'?' on " + type_str(it) + " requires the function to return Result<_, " + type_str(err_ty) + ">, but it returns " + type_str(c.current_return))),
                 }
             } else if (n == "Option" && args.len() == 1) {
                 let some_ty = args[0];
@@ -1244,16 +1244,16 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                         if (rn == "Option" && rargs.len() == 1) {
                             Result.Ok(some_ty)
                         } else {
-                            Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return)))
+                            Result.Err(terr(line, col, "'?' on " + type_str(it) + " requires the function to return Option<_>, but it returns " + type_str(c.current_return)))
                         }
                     },
-                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return))),
+                    _ => Result.Err(terr(line, col, "'?' on " + type_str(it) + " requires the function to return Option<_>, but it returns " + type_str(c.current_return))),
                 }
             } else {
-                Result.Err(terr(inner.line, inner.col, "'?' requiere un Result o un Option, no " + type_str(it)))
+                Result.Err(terr(inner.line, inner.col, "'?' requires a Result or an Option, not " + type_str(it)))
             }
         },
-        _ => Result.Err(terr(inner.line, inner.col, "'?' requiere un Result o un Option, no " + type_str(it))),
+        _ => Result.Err(terr(inner.line, inner.col, "'?' requires a Result or an Option, not " + type_str(it))),
     }
 }
 
@@ -1281,7 +1281,7 @@ fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, Type
                     while (i < elems.len()) {
                         let t = check_expr_expected(c, elems[i], elem_exp)?;
                         if (!type_eq(t, elem_exp)) {
-                            return Result.Err(terr(elems[i].line, elems[i].col, "los elementos del arreglo deben ser " + type_str(elem_exp) + ", no " + type_str(t)));
+                            return Result.Err(terr(elems[i].line, elems[i].col, "the array elements must be " + type_str(elem_exp) + ", not " + type_str(t)));
                         }
                         i = i + 1;
                     }
@@ -1306,7 +1306,7 @@ fn check_ident(c: Checker, name: string, line: int, col: int) -> Result<Type, Ty
         Option.None => {
             match (get(c.funcs, name)) {
                 Option.Some(sig) => Result.Ok(Type.TFn(sig.params, sig.ret)),
-                Option.None => Result.Err(terr(line, col, "nombre '" + name + "' no declarado")),
+                Option.None => Result.Err(terr(line, col, "name '" + name + "' not declared")),
             }
         },
     }
@@ -1316,10 +1316,10 @@ fn check_unary(c: Checker, op: UnOp, inner: Expr, line: int, col: int) -> Result
     let t = check_expr(c, inner)?;
     match (op) {
         UnOp.Neg => {
-            if (type_eq(t, Type.TInt) || type_eq(t, Type.TFloat)) { Result.Ok(t) } else { Result.Err(terr(line, col, "no se puede negar (-) un " + type_str(t))) }
+            if (type_eq(t, Type.TInt) || type_eq(t, Type.TFloat)) { Result.Ok(t) } else { Result.Err(terr(line, col, "cannot negate (-) a " + type_str(t))) }
         },
         UnOp.Not => {
-            if (type_eq(t, Type.TBool)) { Result.Ok(Type.TBool) } else { Result.Err(terr(line, col, "el '!' requiere bool, no " + type_str(t))) }
+            if (type_eq(t, Type.TBool)) { Result.Ok(Type.TBool) } else { Result.Err(terr(line, col, "'!' requires bool, not " + type_str(t))) }
         },
     }
 }
@@ -1330,19 +1330,19 @@ fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) ->
     let kind = op_kind(op);
     if (kind == 0) {
         if (type_eq(lt, Type.TInt) && type_eq(rt, Type.TInt)) { Result.Ok(Type.TInt) } else if (type_eq(lt, Type.TFloat) && type_eq(rt, Type.TFloat)) { Result.Ok(Type.TFloat) } else if (is_add(op) && type_eq(lt, Type.TString) && type_eq(rt, Type.TString)) { Result.Ok(Type.TString) } else if (is_add(op) && is_array(lt) && type_eq(lt, rt)) { Result.Ok(lt) } else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' requiere ambos operandos int o ambos float, no " + type_str(lt) + " y " + type_str(rt)))
+            Result.Err(terr(line, col, "the operator '" + bin_op_str(op) + "' requires both operands int or both float, not " + type_str(lt) + " and " + type_str(rt)))
         }
     } else if (kind == 1) {
         if (order_ok(lt, rt)) { Result.Ok(Type.TBool) } else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' compara int/float/string/char del mismo tipo, no " + type_str(lt) + " y " + type_str(rt)))
+            Result.Err(terr(line, col, "the operator '" + bin_op_str(op) + "' compares int/float/string/char of the same type, not " + type_str(lt) + " and " + type_str(rt)))
         }
     } else if (kind == 2) {
         if (type_eq(lt, rt) && is_comparable(lt)) { Result.Ok(Type.TBool) } else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' requiere ambos operandos del mismo tipo comparable, no " + type_str(lt) + " y " + type_str(rt)))
+            Result.Err(terr(line, col, "the operator '" + bin_op_str(op) + "' requires both operands of the same comparable type, not " + type_str(lt) + " and " + type_str(rt)))
         }
     } else {
         if (type_eq(lt, Type.TBool) && type_eq(rt, Type.TBool)) { Result.Ok(Type.TBool) } else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' requiere operandos bool, no " + type_str(lt) + " y " + type_str(rt)))
+            Result.Err(terr(line, col, "the operator '" + bin_op_str(op) + "' requires bool operands, not " + type_str(lt) + " and " + type_str(rt)))
         }
     }
 }
@@ -1457,14 +1457,14 @@ fn resolve_bound_method(c: Checker, tp: string, method: string, cargs: [Expr], l
         return Result.Ok(Option.None);
     }
     if (hits.len() > 1) {
-        return Result.Err(terr(line, col, "método '" + method + "' ambiguo para '" + tp + "': lo declaran varios traits acotados (" + join_comma(hits) + ")"));
+        return Result.Err(terr(line, col, "method '" + method + "' ambiguous for '" + tp + "': several bounded traits declare it (" + join_comma(hits) + ")"));
     }
     let trait_name = hits[0];
     let self_ty = Type.TNamed(tp, []);
     let sig = match (find_method_sig(trait_methods_of(c, trait_name), method)) {
         Option.Some(m) => m,
         Option.None => {
-            return Result.Err(terr(line, col, "método '" + method + "' no encontrado"));
+            return Result.Err(terr(line, col, "the method '" + method + "' is not in trait '" + trait_name + "'"));
         },
     };
     // Argumentos esperados: los del método sin el receptor (self), con Self→T.
@@ -1475,13 +1475,13 @@ fn resolve_bound_method(c: Checker, tp: string, method: string, cargs: [Expr], l
         j = j + 1;
     }
     if (cargs.len() != expected.len()) {
-        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(expected.len()) + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, "the method '" + method + "' expects " + to_string(expected.len()) + " argument(s) (not counting the receiver), received " + to_string(cargs.len())));
     }
     var k = 0;
     while (k < cargs.len()) {
         let at = check_expr_expected(c, cargs[k], expected[k])?;
         if (!type_eq(at, expected[k])) {
-            return Result.Err(terr(cargs[k].line, cargs[k].col, "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
+            return Result.Err(terr(cargs[k].line, cargs[k].col, "argument " + to_string(k + 1) + " of method '" + method + "': expected " + type_str(expected[k]) + ", got " + type_str(at)));
         }
         k = k + 1;
     }
@@ -1564,17 +1564,17 @@ fn coerce_to_dyn(c: Checker, e: Expr, traits: [string], line: int, col: int) -> 
             if (subset_strs(traits, source)) {
                 return Result.Ok(Type.TDyn(traits));
             }
-            return Result.Err(terr(line, col, "no se puede convertir 'dyn " + join_strs(source) + "' en 'dyn " + join_strs(traits) + "': solo se puede upcastear a un subconjunto de traits"));
+            return Result.Err(terr(line, col, "cannot convert 'dyn " + join_strs(source) + "' into 'dyn " + join_strs(traits) + "': can only upcast to a subset of traits"));
         },
         _ => { },
     }
     match (type_key_of(current)) {
-        Option.None => Result.Err(terr(line, col, "no se puede convertir " + type_str(current) + " en 'dyn " + join_strs(traits) + "'")),
+        Option.None => Result.Err(terr(line, col, "cannot convert " + type_str(current) + " into 'dyn " + join_strs(traits) + "'")),
         Option.Some(key) => {
             var i = 0;
             while (i < traits.len()) {
                 if (!c.impl_traits.contains_key(mangle(key, traits[i]))) {
-                    return Result.Err(terr(line, col, type_str(current) + " no implementa '" + traits[i] + "': no puede usarse como 'dyn " + join_strs(traits) + "'"));
+                    return Result.Err(terr(line, col, type_str(current) + " does not implement '" + traits[i] + "': it cannot be used as 'dyn " + join_strs(traits) + "'"));
                 }
                 i = i + 1;
             }
@@ -1590,12 +1590,12 @@ fn dispatch_dyn_method(c: Checker, traits: [string], method: string, cargs: [Exp
     let sig = match (find_dyn_method(c, traits, method)) {
         Option.Some(m) => m,
         Option.None => {
-            return Result.Err(terr(line, col, "'dyn " + join_strs(traits) + "' no declara un método '" + method + "'"));
+            return Result.Err(terr(line, col, "'dyn " + join_strs(traits) + "' does not declare a method '" + method + "'"));
         },
     };
     // Object safety: si `Self` aparece fuera del receptor (en un param o el retorno), no es invocable.
     if (method_uses_self(sig)) {
-        return Result.Err(terr(line, col, "el método '" + method + "' usa 'Self': no es invocable sobre 'dyn " + join_strs(traits) + "'"));
+        return Result.Err(terr(line, col, "the method '" + method + "' uses 'Self': it is not callable on 'dyn " + join_strs(traits) + "'"));
     }
     // Argumentos (sin el receptor, que es el propio objeto).
     var expected: [Type] = [];
@@ -1605,13 +1605,13 @@ fn dispatch_dyn_method(c: Checker, traits: [string], method: string, cargs: [Exp
         j = j + 1;
     }
     if (cargs.len() != expected.len()) {
-        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(expected.len()) + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, "the method '" + method + "' expects " + to_string(expected.len()) + " argument(s) (not counting the receiver), received " + to_string(cargs.len())));
     }
     var k = 0;
     while (k < cargs.len()) {
         let at = check_expr_expected(c, cargs[k], expected[k])?;
         if (!type_eq(at, expected[k])) {
-            return Result.Err(terr(cargs[k].line, cargs[k].col, "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
+            return Result.Err(terr(cargs[k].line, cargs[k].col, "argument " + to_string(k + 1) + " of method '" + method + "': expected " + type_str(expected[k]) + ", got " + type_str(at)));
         }
         k = k + 1;
     }
@@ -1688,7 +1688,7 @@ fn struct_field_type(c: Checker, sname: string, targs: [Type], fname: string) ->
 // es llamable, el error habla de UFCS (no es ni campo ni función), mencionando el tipo del receptor.
 fn check_ufcs(c: Checker, name: string, recv_ty: Type, obj: Expr, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     if (!name_is_callable(c, name)) {
-        return Result.Err(terr(line, col, "no existe campo ni función '" + name + "' aplicable a " + type_str(recv_ty)));
+        return Result.Err(terr(line, col, "no field or function '" + name + "' applicable to " + type_str(recv_ty)));
     }
     var all: [Expr] = [];
     all.push(obj);
@@ -1840,7 +1840,7 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
                 check_generic_call(c, sig.type_params, sig.params, sig.ret, sig.bounds, cargs, "'" + name + "'", line, col)
             }
         },
-        Option.None => Result.Err(terr(line, col, "función '" + name + "' no declarada")),
+        Option.None => Result.Err(terr(line, col, "function '" + name + "' not declared")),
     }
 }
 
@@ -1849,7 +1849,7 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
 // parámetro de tipo no queda determinado por los argumentos, es error (M6.1 no usa el tipo esperado).
 fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Type, bounds: [Bound], cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
     if (cargs.len() != params.len()) {
-        return Result.Err(terr(line, col, label + " espera " + to_string(params.len()) + " argumento(s), se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, label + " expects " + to_string(params.len()) + " argument(s), received " + to_string(cargs.len())));
     }
     let sigma: Map<string, Type> = Map.new();
     var i = 0;
@@ -1858,7 +1858,7 @@ fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Ty
         match (unify(params[i], at, sigma, type_params)) {
             Result.Ok(_) => { },
             Result.Err(reason) => {
-                return Result.Err(terr(cargs[i].line, cargs[i].col, "argumento " + to_string(i + 1) + " de " + label + ": " + reason));
+                return Result.Err(terr(cargs[i].line, cargs[i].col, "argument " + to_string(i + 1) + " of " + label + ": " + reason));
             },
         }
         i = i + 1;
@@ -1867,7 +1867,7 @@ fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Ty
     var ti = 0;
     while (ti < type_params.len()) {
         if (!sigma.contains_key(type_params[ti])) {
-            return Result.Err(terr(line, col, "no se pudo inferir el parámetro de tipo '" + type_params[ti] + "' de " + label + " (no aparece en los argumentos)"));
+            return Result.Err(terr(line, col, "could not infer the type parameter '" + type_params[ti] + "' of " + label + " (it does not appear in the arguments)"));
         }
         ti = ti + 1;
     }
@@ -1901,16 +1901,16 @@ fn check_bound_satisfied(c: Checker, concrete: Type, trait_name: string, line: i
                 if (bounds_has(c.bounds, u, trait_name)) {
                     return Result.Ok(0);
                 }
-                return Result.Err(terr(line, col, "el parámetro de tipo '" + u + "' no está acotado por '" + trait_name + "' (requerido por la llamada)"));
+                return Result.Err(terr(line, col, "the type parameter '" + u + "' is not bounded by '" + trait_name + "' (required by the call)"));
             }
-            if (c.impl_traits.contains_key(mangle(u, trait_name))) { Result.Ok(0) } else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
+            if (c.impl_traits.contains_key(mangle(u, trait_name))) { Result.Ok(0) } else { Result.Err(terr(line, col, type_str(concrete) + " does not implement '" + trait_name + "' (required by the call)")) }
         },
         _ => {
             match (type_key_of(concrete)) {
                 Option.Some(key) => {
-                    if (c.impl_traits.contains_key(mangle(key, trait_name))) { Result.Ok(0) } else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
+                    if (c.impl_traits.contains_key(mangle(key, trait_name))) { Result.Ok(0) } else { Result.Err(terr(line, col, type_str(concrete) + " does not implement '" + trait_name + "' (required by the call)")) }
                 },
-                Option.None => Result.Err(terr(line, col, type_str(concrete) + " no puede implementar el trait '" + trait_name + "'")),
+                Option.None => Result.Err(terr(line, col, type_str(concrete) + " cannot implement the trait '" + trait_name + "'")),
             }
         },
     }
@@ -1931,11 +1931,11 @@ fn bounds_has(bounds: [Bound], param: string, trait_name: string) -> bool {
 // El builtin print/eprint: 1 argumento imprimible → unit.
 fn check_print(c: Checker, name: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     if (cargs.len() != 1) {
-        return Result.Err(terr(line, col, name + " espera 1 argumento, se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, name + " expects 1 argument, received " + to_string(cargs.len())));
     }
     let at = check_expr(c, cargs[0])?;
     if (!is_printable(at)) {
-        return Result.Err(terr(cargs[0].line, cargs[0].col, name + " no puede imprimir un " + type_str(at)));
+        return Result.Err(terr(cargs[0].line, cargs[0].col, name + " cannot print a " + type_str(at)));
     }
     Result.Ok(Type.TUnit)
 }
@@ -1943,11 +1943,11 @@ fn check_print(c: Checker, name: string, cargs: [Expr], line: int, col: int) -> 
 // El builtin len(a) -> int: longitud de un arreglo o un string (los Map llegan en M14.3c).
 fn check_len(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     if (cargs.len() != 1) {
-        return Result.Err(terr(line, col, "len espera 1 argumento, se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, "len expects 1 argument, received " + to_string(cargs.len())));
     }
     let at = check_expr(c, cargs[0])?;
     if (!(is_array(at) || type_eq(at, Type.TString) || is_map(at))) {
-        return Result.Err(terr(cargs[0].line, cargs[0].col, "len espera un arreglo, un string, un Map o bytes, no " + type_str(at)));
+        return Result.Err(terr(cargs[0].line, cargs[0].col, "len expects an array, a string, a Map or bytes, not " + type_str(at)));
     }
     Result.Ok(Type.TInt)
 }
@@ -1956,18 +1956,18 @@ fn check_len(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Typ
 // los elementos. Tipa ambos argumentos antes de aplicar la regla (como el registro de builtins).
 fn check_push(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     if (cargs.len() != 2) {
-        return Result.Err(terr(line, col, "push espera 2 argumentos (arreglo, valor), se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, "push expects 2 arguments (array, value), received " + to_string(cargs.len())));
     }
     let a0 = check_expr(c, cargs[0])?;
     let a1 = check_expr(c, cargs[1])?;
     match (a0) {
         Type.TArray(elem) => {
             if (!type_eq(a1, elem)) {
-                return Result.Err(terr(cargs[1].line, cargs[1].col, "push: el arreglo es de " + type_str(elem) + " pero se empuja " + type_str(a1)));
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "push: the array is of " + type_str(elem) + " but got " + type_str(a1)));
             }
             Result.Ok(Type.TUnit)
         },
-        _ => Result.Err(terr(cargs[0].line, cargs[0].col, "push espera un arreglo como primer argumento, no " + type_str(a0))),
+        _ => Result.Err(terr(cargs[0].line, cargs[0].col, "push expects an array as first argument, not " + type_str(a0))),
     }
 }
 
@@ -1978,8 +1978,8 @@ fn check_push(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
 // Mensaje de aridad idéntico al helper `arity` de Rust.
 fn b_arity(name: string, n: int, det: string, got: int, line: int, col: int) -> Result<int, TypeError> {
     if (got != n) {
-        let plural = if (n == 1) { "argumento" } else { "argumentos" };
-        return Result.Err(terr(line, col, name + " espera " + to_string(n) + " " + plural + det + ", se le pasaron " + to_string(got)));
+        let plural = if (n == 1) { "argument" } else { "arguments" };
+        return Result.Err(terr(line, col, name + " expects " + to_string(n) + " " + plural + det + ", received " + to_string(got)));
     }
     Result.Ok(0)
 }
@@ -2015,7 +2015,7 @@ fn check_to_string(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Typ
     b_arity("to_string", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     if (!(type_eq(a[0], Type.TInt) || type_eq(a[0], Type.TFloat) || type_eq(a[0], Type.TBool) || type_eq(a[0], Type.TString) || type_eq(a[0], Type.TChar))) {
-        return Result.Err(terr(cargs[0].line, cargs[0].col, "to_string solo convierte int/float/bool/string/char, no " + type_str(a[0])));
+        return Result.Err(terr(cargs[0].line, cargs[0].col, "to_string only converts int/float/bool/string/char, not " + type_str(a[0])));
     }
     Result.Ok(Type.TString)
 }
@@ -2025,7 +2025,7 @@ fn check_to_string(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Typ
 fn check_panic(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("panic", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "panic espera un string, no ")?;
+    want_string(a, cargs, 0, "panic expects a string, not ")?;
     Result.Ok(Type.TUnit)
 }
 
@@ -2034,7 +2034,7 @@ fn check_panic(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, T
 fn check_parse_prim(c: Checker, name: string, elem: Type, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity(name, 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, name + " espera un string, no ")?;
+    want_string(a, cargs, 0, name + " expects a string, not ")?;
     Result.Ok(Type.TArray(elem))
 }
 
@@ -2042,16 +2042,16 @@ fn check_parse_prim(c: Checker, name: string, elem: Type, cargs: [Expr], line: i
 fn check_read_file(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("__read_file", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "__read_file espera un string (la ruta), no ")?;
+    want_string(a, cargs, 0, "__read_file expects a string (the path), not ")?;
     Result.Ok(Type.TArray(Type.TString))
 }
 
 // __write_file(ruta: string, contenido: string) -> [string] (M14.6d): ["ok"] / ["err", msg].
 fn check_write_file(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("__write_file", 2, " (ruta, contenido)", cargs.len(), line, col)?;
+    b_arity("__write_file", 2, " (path, content)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "__write_file espera un string (la ruta), no ")?;
-    want_string(a, cargs, 1, "__write_file espera un string (el contenido), no ")?;
+    want_string(a, cargs, 0, "__write_file expects a string (the path), not ")?;
+    want_string(a, cargs, 1, "__write_file expects a string (the contents), not ")?;
     Result.Ok(Type.TArray(Type.TString))
 }
 
@@ -2061,14 +2061,14 @@ fn check_pop_prim(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
     let a0 = check_expr(c, cargs[0])?;
     match (a0) {
         Type.TArray(elem) => Result.Ok(Type.TArray(elem)),
-        _ => Result.Err(terr(cargs[0].line, cargs[0].col, "__pop espera un arreglo, no " + type_str(a0))),
+        _ => Result.Err(terr(cargs[0].line, cargs[0].col, "__pop expects an array, not " + type_str(a0))),
     }
 }
 
 // args() -> [string] (M14.7c): los argumentos de la línea de comandos del programa. Nulario.
 fn check_args_builtin(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     if (cargs.len() != 0) {
-        return Result.Err(terr(line, col, "args no espera argumentos, se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, "args expects no arguments, received " + to_string(cargs.len())));
     }
     Result.Ok(Type.TArray(Type.TString))
 }
@@ -2077,113 +2077,113 @@ fn check_args_builtin(c: Checker, cargs: [Expr], line: int, col: int) -> Result<
 fn check_exists(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("__exists", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "exists espera un string (la ruta), no ")?;
+    want_string(a, cargs, 0, "exists expects a string (the path), not ")?;
     Result.Ok(Type.TBool)
 }
 
 fn check_trim(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("trim", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "trim espera un string, no ")?;
+    want_string(a, cargs, 0, "trim expects a string, not ")?;
     Result.Ok(Type.TString)
 }
 
 fn check_to_upper(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("to_upper", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "to_upper espera un string, no ")?;
+    want_string(a, cargs, 0, "to_upper expects a string, not ")?;
     Result.Ok(Type.TString)
 }
 
 fn check_to_lower(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("to_lower", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "to_lower espera un string, no ")?;
+    want_string(a, cargs, 0, "to_lower expects a string, not ")?;
     Result.Ok(Type.TString)
 }
 
 fn check_chars(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("chars", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "chars espera un string, no ")?;
+    want_string(a, cargs, 0, "chars expects a string, not ")?;
     Result.Ok(Type.TArray(Type.TChar))
 }
 
 fn check_split(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("split", 2, " (string, separador)", cargs.len(), line, col)?;
+    b_arity("split", 2, " (string, separator)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "split espera un string como primer argumento, no ")?;
-    want_string(a, cargs, 1, "split espera un string como separador, no ")?;
+    want_string(a, cargs, 0, "split expects a string as first argument, not ")?;
+    want_string(a, cargs, 1, "split expects a string as separator, not ")?;
     Result.Ok(Type.TArray(Type.TString))
 }
 
 fn check_replace(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("replace", 3, " (string, de, a)", cargs.len(), line, col)?;
+    b_arity("replace", 3, " (string, from, to)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "replace espera un string como primer argumento, no ")?;
-    want_string(a, cargs, 1, "replace espera un string en 'de', no ")?;
-    want_string(a, cargs, 2, "replace espera un string en 'a', no ")?;
+    want_string(a, cargs, 0, "replace expects a string as first argument, not ")?;
+    want_string(a, cargs, 1, "replace expects a string in 'from', not ")?;
+    want_string(a, cargs, 2, "replace expects a string in 'to', not ")?;
     Result.Ok(Type.TString)
 }
 
 fn check_starts_with(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("starts_with", 2, " (string, prefijo)", cargs.len(), line, col)?;
+    b_arity("starts_with", 2, " (string, prefix)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "starts_with espera un string como primer argumento, no ")?;
-    want_string(a, cargs, 1, "starts_with espera un string como prefijo, no ")?;
+    want_string(a, cargs, 0, "starts_with expects a string as first argument, not ")?;
+    want_string(a, cargs, 1, "starts_with expects a string as prefix, not ")?;
     Result.Ok(Type.TBool)
 }
 
 fn check_ends_with(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("ends_with", 2, " (string, sufijo)", cargs.len(), line, col)?;
+    b_arity("ends_with", 2, " (string, suffix)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "ends_with espera un string como primer argumento, no ")?;
-    want_string(a, cargs, 1, "ends_with espera un string como sufijo, no ")?;
+    want_string(a, cargs, 0, "ends_with expects a string as first argument, not ")?;
+    want_string(a, cargs, 1, "ends_with expects a string as suffix, not ")?;
     Result.Ok(Type.TBool)
 }
 
 fn check_substring(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("substring", 3, " (string, inicio, fin)", cargs.len(), line, col)?;
+    b_arity("substring", 3, " (string, start, fin)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "substring espera un string como primer argumento, no ")?;
-    want_int(a, cargs, 1, "substring espera un int como inicio, no ")?;
-    want_int(a, cargs, 2, "substring espera un int como fin, no ")?;
+    want_string(a, cargs, 0, "substring expects a string as first argument, not ")?;
+    want_int(a, cargs, 1, "substring expects an int as start, not ")?;
+    want_int(a, cargs, 2, "substring expects an int as end, not ")?;
     Result.Ok(Type.TString)
 }
 
 fn check_repeat(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("repeat", 2, " (string, veces)", cargs.len(), line, col)?;
+    b_arity("repeat", 2, " (string, times)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
-    want_string(a, cargs, 0, "repeat espera un string como primer argumento, no ")?;
-    want_int(a, cargs, 1, "repeat espera un int como nº de veces, no ")?;
+    want_string(a, cargs, 0, "repeat expects a string as first argument, not ")?;
+    want_int(a, cargs, 1, "repeat expects an int as the repeat count, not ")?;
     Result.Ok(Type.TString)
 }
 
 fn check_join(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("join", 2, " (arreglo de string, separador)", cargs.len(), line, col)?;
+    b_arity("join", 2, " (array of string, separator)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     if (!type_eq(a[0], Type.TArray(Type.TString))) {
-        return Result.Err(terr(cargs[0].line, cargs[0].col, "join espera un [string] como primer argumento, no " + type_str(a[0])));
+        return Result.Err(terr(cargs[0].line, cargs[0].col, "join expects a [string] as first argument, not " + type_str(a[0])));
     }
-    want_string(a, cargs, 1, "join espera un string como separador, no ")?;
+    want_string(a, cargs, 1, "join expects a string as separator, not ")?;
     Result.Ok(Type.TString)
 }
 
 // contains(x, y) -> bool: ad-hoc polimórfico. String: ¿subcadena? Arreglo: ¿pertenencia (mismo elem)?
 fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("contains", 2, " (string/arreglo, valor)", cargs.len(), line, col)?;
+    b_arity("contains", 2, " (string/array, value)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (a[0]) {
         Type.TString => {
-            want_string(a, cargs, 1, "contains espera un string como subcadena, no ")?;
+            want_string(a, cargs, 1, "contains expects a string as substring, not ")?;
         },
         Type.TArray(elem) => {
             if (!type_eq(a[1], elem)) {
-                return Result.Err(terr(cargs[1].line, cargs[1].col, "contains: el arreglo es de " + type_str(elem) + " pero se busca " + type_str(a[1])));
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "contains: the array is of " + type_str(elem) + " but looking for " + type_str(a[1])));
             }
         },
         _ => {
-            return Result.Err(terr(cargs[0].line, cargs[0].col, "contains espera un string o un arreglo, no " + type_str(a[0])));
+            return Result.Err(terr(cargs[0].line, cargs[0].col, "contains expects a string or an array, not " + type_str(a[0])));
         },
     }
     Result.Ok(Type.TBool)
@@ -2197,7 +2197,7 @@ fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
 // idénticos a `try_assoc_call` de Rust. La aridad se valida primero (como en Rust).
 fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     if (cargs.len() != 0) {
-        return Result.Err(terr(line, col, "'Map.new' espera 0 argumento(s), se dieron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, "'Map.new' expects 0 argument(s), got " + to_string(cargs.len())));
     }
     match (expected) {
         Option.Some(t) => {
@@ -2206,89 +2206,89 @@ fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: 
                     ensure_type(c, t, line, col)?;
                     Result.Ok(t)
                 },
-                Option.None => Result.Err(terr(line, col, "'Map.new' produce un Map, pero aquí se espera " + type_str(t))),
+                Option.None => Result.Err(terr(line, col, "'Map.new' produces a Map, but the context expects " + type_str(t))),
             }
         },
-        Option.None => Result.Err(terr(line, col, "no se puede inferir el tipo de 'Map.new'; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'")),
+        Option.None => Result.Err(terr(line, col, "cannot infer the type of 'Map.new'; annotate it, e.g. 'let m: Map<string, int> = Map.new()'")),
     }
 }
 
 fn check_insert(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("insert", 3, " (mapa, clave, valor)", cargs.len(), line, col)?;
+    b_arity("insert", 3, " (map, key, value)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {
-                return Result.Err(terr(cargs[1].line, cargs[1].col, "insert: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "insert: the Map key is " + type_str(kv[0]) + " but got " + type_str(a[1])));
             }
             if (!type_eq(a[2], kv[1])) {
-                return Result.Err(terr(cargs[2].line, cargs[2].col, "insert: el valor del Map es " + type_str(kv[1]) + " pero se pasó " + type_str(a[2])));
+                return Result.Err(terr(cargs[2].line, cargs[2].col, "insert: the Map value is " + type_str(kv[1]) + " but got " + type_str(a[2])));
             }
             Result.Ok(Type.TUnit)
         },
-        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "insert espera un Map como primer argumento, no " + type_str(a[0]))),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "insert expects a Map as first argument, not " + type_str(a[0]))),
     }
 }
 
 fn check_contains_key(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("contains_key", 2, " (mapa, clave)", cargs.len(), line, col)?;
+    b_arity("contains_key", 2, " (map, key)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {
-                return Result.Err(terr(cargs[1].line, cargs[1].col, "contains_key: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "contains_key: the Map key is " + type_str(kv[0]) + " but got " + type_str(a[1])));
             }
             Result.Ok(Type.TBool)
         },
-        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "contains_key espera un Map como primer argumento, no " + type_str(a[0]))),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "contains_key expects a Map as first argument, not " + type_str(a[0]))),
     }
 }
 
 // get(m, k) -> Option<V> (envoltorio del prelude en Rust; aquí builtin directo, mismo tipo).
 fn check_get(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("get", 2, " (mapa, clave)", cargs.len(), line, col)?;
+    b_arity("get", 2, " (map, key)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {
-                return Result.Err(terr(cargs[1].line, cargs[1].col, "get: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "get: the Map key is " + type_str(kv[0]) + " but got " + type_str(a[1])));
             }
             Result.Ok(Type.TNamed("Option", [kv[1]]))
         },
-        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "get espera un Map como primer argumento, no " + type_str(a[0]))),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "get expects a Map as first argument, not " + type_str(a[0]))),
     }
 }
 
 // remove(m, k) -> Option<V> (envoltorio del prelude; aquí builtin directo, mismo tipo).
 fn check_remove(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("remove", 2, " (mapa, clave)", cargs.len(), line, col)?;
+    b_arity("remove", 2, " (map, key)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => {
             if (!type_eq(a[1], kv[0])) {
-                return Result.Err(terr(cargs[1].line, cargs[1].col, "remove: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "remove: the Map key is " + type_str(kv[0]) + " but got " + type_str(a[1])));
             }
             Result.Ok(Type.TNamed("Option", [kv[1]]))
         },
-        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "remove espera un Map como primer argumento, no " + type_str(a[0]))),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "remove expects a Map as first argument, not " + type_str(a[0]))),
     }
 }
 
 fn check_keys(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("keys", 1, " (mapa)", cargs.len(), line, col)?;
+    b_arity("keys", 1, " (map)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => Result.Ok(Type.TArray(kv[0])),
-        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "keys espera un Map, no " + type_str(a[0]))),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "keys expects a Map, not " + type_str(a[0]))),
     }
 }
 
 fn check_values(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
-    b_arity("values", 1, " (mapa)", cargs.len(), line, col)?;
+    b_arity("values", 1, " (map)", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (map_kv(a[0])) {
         Option.Some(kv) => Result.Ok(Type.TArray(kv[1])),
-        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "values espera un Map, no " + type_str(a[0]))),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "values expects a Map, not " + type_str(a[0]))),
     }
 }
 
@@ -2297,11 +2297,11 @@ fn check_values(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, 
 // al del checker de Rust.
 fn call_type(c: Checker, ty: Type, cargs: [Expr], pista: bool, line: int, col: int) -> Result<Type, TypeError> {
     match (ty) {
-        Type.TFn(params, ret) => check_args(c, params, ret, cargs, "la función", line, col),
+        Type.TFn(params, ret) => check_args(c, params, ret, cargs, "the function", line, col),
         _ => {
-            var msg = "no se puede llamar un valor de tipo " + type_str(ty) + " (no es una función)";
+            var msg = "cannot call a value of type " + type_str(ty) + " (not a function)";
             if (pista) {
-                msg = msg + "; ojo: una cola que empieza con '(' tras un if/while/match/bloque se parsea como llamada a su valor — sepárala con 'return' o 'let'";
+                msg = msg + "; note: a tail starting with '(' after an if/while/match/block parses as a call of its value — separate it with 'return' or 'let'";
             }
             Result.Err(terr(line, col, msg))
         },
@@ -2321,14 +2321,14 @@ fn block_like(e: Expr) -> bool {
 
 fn check_args(c: Checker, params: [Type], ret: Type, cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
     if (cargs.len() != params.len()) {
-        return Result.Err(terr(line, col, label + " espera " + to_string(params.len()) + " argumento(s), se le pasaron " + to_string(cargs.len())));
+        return Result.Err(terr(line, col, label + " expects " + to_string(params.len()) + " argument(s), received " + to_string(cargs.len())));
     }
     var i = 0;
     while (i < cargs.len()) {
         // El tipo del parámetro es el esperado del argumento (propaga a `[]`, etc.).
         let at = check_expr_expected(c, cargs[i], params[i])?;
         if (!type_eq(at, params[i])) {
-            return Result.Err(terr(cargs[i].line, cargs[i].col, "argumento " + to_string(i + 1) + " de " + label + ": se esperaba " + type_str(params[i]) + ", se pasó " + type_str(at)));
+            return Result.Err(terr(cargs[i].line, cargs[i].col, "argument " + to_string(i + 1) + " of " + label + ": expected " + type_str(params[i]) + ", got " + type_str(at)));
         }
         i = i + 1;
     }
@@ -2339,13 +2339,13 @@ fn check_args(c: Checker, params: [Type], ret: Type, cargs: [Expr], label: strin
 fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     let ct = check_expr(c, cond)?;
     if (!type_eq(ct, Type.TBool)) {
-        return Result.Err(terr(cond.line, cond.col, "la condición del if debe ser bool, no " + type_str(ct)));
+        return Result.Err(terr(cond.line, cond.col, "the if condition must be bool, not " + type_str(ct)));
     }
     let then_ty = check_block_opt(c, then_b, expected)?;
     match (elseopt) {
         Option.None => {
             if (!type_eq(then_ty, Type.TUnit)) {
-                return Result.Err(terr(line, col, "un if sin else tiene tipo unit, pero su rama produce " + type_str(then_ty) + " (añade un else)"));
+                return Result.Err(terr(line, col, "an if without else has type unit, but its branch produces " + type_str(then_ty) + " (add an else)"));
             }
             Result.Ok(Type.TUnit)
         },
@@ -2358,7 +2358,7 @@ fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, expect
                 return Result.Ok(then_ty);
             }
             if (!type_eq(then_ty, else_ty)) {
-                return Result.Err(terr(line, col, "las ramas del if tienen tipos distintos: " + type_str(then_ty) + " y " + type_str(else_ty)));
+                return Result.Err(terr(line, col, "the if branches have different types: " + type_str(then_ty) + " and " + type_str(else_ty)));
             }
             Result.Ok(then_ty)
         },
@@ -2385,7 +2385,7 @@ fn check_block_opt(c: Checker, b: Block, expected: Option<Type>) -> Result<Type,
 fn check_while(c: Checker, cond: Expr, body: Block, line: int, col: int) -> Result<Type, TypeError> {
     let ct = check_expr(c, cond)?;
     if (!type_eq(ct, Type.TBool)) {
-        return Result.Err(terr(cond.line, cond.col, "la condición del while debe ser bool, no " + type_str(ct)));
+        return Result.Err(terr(cond.line, cond.col, "the while condition must be bool, not " + type_str(ct)));
     }
     check_block(c, body)?;
     Result.Ok(Type.TUnit)
@@ -2436,14 +2436,14 @@ fn check_block_expected(c: Checker, block: Block, expected: Type) -> Result<Type
 // es indeterminado aquí (necesita un tipo esperado, vía `check_expr_expected`).
 fn check_array(c: Checker, elems: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     if (elems.len() == 0) {
-        return Result.Err(terr(line, col, "no se puede inferir el tipo de [] aquí; anótalo (p. ej. let xs: [int] = [];)"));
+        return Result.Err(terr(line, col, "cannot infer the type of [] here; annotate it (e.g. let xs: [int] = [];)"));
     }
     let first = check_expr(c, elems[0])?;
     var i = 1;
     while (i < elems.len()) {
         let t = check_expr(c, elems[i])?;
         if (!type_eq(t, first)) {
-            return Result.Err(terr(elems[i].line, elems[i].col, "los elementos del arreglo deben ser del mismo tipo: " + type_str(first) + " y " + type_str(t)));
+            return Result.Err(terr(elems[i].line, elems[i].col, "the array elements must be of the same type: " + type_str(first) + " and " + type_str(t)));
         }
         i = i + 1;
     }
@@ -2456,15 +2456,15 @@ fn check_index(c: Checker, array: Expr, index: Expr) -> Result<Type, TypeError> 
     let at = check_expr(c, array)?;
     let it = check_expr(c, index)?;
     if (!type_eq(it, Type.TInt)) {
-        return Result.Err(terr(index.line, index.col, "el índice debe ser int, no " + type_str(it)));
+        return Result.Err(terr(index.line, index.col, "the index must be int, not " + type_str(it)));
     }
     match (at) {
         Type.TArray(elem) => Result.Ok(elem),
         Type.TString => Result.Ok(Type.TChar),
         _ => {
-            var msg = "no se puede indexar un " + type_str(at) + " (no es un arreglo, string ni bytes)";
+            var msg = "cannot index a " + type_str(at) + " (not an array, string or bytes)";
             if (block_like(array)) {
-                msg = msg + "; ojo: una cola que empieza con '[' tras un if/while/match/bloque se parsea como indexación de su valor — sepárala con 'return' o 'let'";
+                msg = msg + "; note: a tail starting with '[' after an if/while/match/block parses as an indexing of its value — separate it with 'return' or 'let'";
             }
             Result.Err(terr(array.line, array.col, msg))
         },
@@ -2485,13 +2485,13 @@ fn check_field(c: Checker, object: Expr, name: string) -> Result<Type, TypeError
                             let sigma = build_sigma(struct_tparams(c, sname), targs);
                             Result.Ok(subst(fty, sigma))
                         },
-                        Option.None => Result.Err(terr(object.line, object.col, "el struct '" + sname + "' no tiene un campo '" + name + "'")),
+                        Option.None => Result.Err(terr(object.line, object.col, "the struct '" + sname + "' has no field '" + name + "'")),
                     }
                 },
-                Option.None => Result.Err(terr(object.line, object.col, "no se puede acceder a '." + name + "' en un " + type_str(ot) + " (no es un struct)")),
+                Option.None => Result.Err(terr(object.line, object.col, "cannot access '." + name + "' on a " + type_str(ot) + " (not a struct)")),
             }
         },
-        _ => Result.Err(terr(object.line, object.col, "no se puede acceder a '." + name + "' en un " + type_str(ot) + " (no es un struct)")),
+        _ => Result.Err(terr(object.line, object.col, "cannot access '." + name + "' on a " + type_str(ot) + " (not a struct)")),
     }
 }
 
@@ -2586,7 +2586,7 @@ fn finalize_type_args(tparams: [string], sigma: Map<string, Type>, label: string
                 targs.push(t);
             },
             Option.None => {
-                return Result.Err(terr(line, col, "no se pudo inferir el parámetro de tipo '" + tparams[i] + "' de " + label + "; anota el tipo"));
+                return Result.Err(terr(line, col, "could not infer the type parameter '" + tparams[i] + "' of " + label + "; annotate the type"));
             },
         }
         i = i + 1;
@@ -2611,7 +2611,7 @@ fn find_field(fields: [FieldDef], name: string) -> Option<Type> {
 // los valores (y del tipo esperado). Devuelve `TNamed(name, targs)`.
 fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (get(c.structs, name)) {
-        Option.None => Result.Err(terr(line, col, "struct '" + name + "' no declarado")),
+        Option.None => Result.Err(terr(line, col, "struct '" + name + "' not declared")),
         Option.Some(declared) => {
             let tparams = struct_tparams(c, name);
             // No debe haber campos desconocidos.
@@ -2619,7 +2619,7 @@ fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], expected: Opt
             while (i < fields.len()) {
                 let fi = fields[i];
                 if (!field_declared(declared, fi.name)) {
-                    return Result.Err(terr(fi.value.line, fi.value.col, "'" + name + "' no tiene un campo '" + fi.name + "'"));
+                    return Result.Err(terr(fi.value.line, fi.value.col, "'" + name + "' has no field '" + fi.name + "'"));
                 }
                 i = i + 1;
             }
@@ -2630,22 +2630,22 @@ fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], expected: Opt
                 let df = declared[di];
                 let cnt = count_field(fields, df.name);
                 if (cnt == 0) {
-                    return Result.Err(terr(line, col, "falta el campo '" + df.name + "' en el literal de '" + name + "'"));
+                    return Result.Err(terr(line, col, "missing field '" + df.name + "' in the literal of '" + name + "'"));
                 }
                 if (cnt > 1) {
-                    return Result.Err(terr(line, col, "campo '" + df.name + "' de '" + name + "' repetido"));
+                    return Result.Err(terr(line, col, "field '" + df.name + "' of '" + name + "' repeated"));
                 }
                 let value = field_value(fields, df.name);
                 let vt = check_value_against(c, value, df.ty, sigma, tparams)?;
                 match (unify(df.ty, vt, sigma, tparams)) {
                     Result.Ok(_) => { },
                     Result.Err(reason) => {
-                        return Result.Err(terr(value.line, value.col, "campo '" + df.name + "' de '" + name + "': " + reason));
+                        return Result.Err(terr(value.line, value.col, "field '" + df.name + "' of '" + name + "': " + reason));
                     },
                 }
                 di = di + 1;
             }
-            let targs = finalize_type_args(tparams, sigma, "el struct '" + name + "'", line, col)?;
+            let targs = finalize_type_args(tparams, sigma, "the struct '" + name + "'", line, col)?;
             Result.Ok(Type.TNamed(name, targs))
         },
     }
@@ -2693,13 +2693,13 @@ fn field_value(fields: [FieldInit], name: string) -> Expr {
 // tipo esperado, p. ej. `Caja.Vacia`). Devuelve `TNamed(enum_name, targs)`.
 fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (get(c.enums, enum_name)) {
-        Option.None => Result.Err(terr(line, col, "enum '" + enum_name + "' no declarado")),
+        Option.None => Result.Err(terr(line, col, "enum '" + enum_name + "' not declared")),
         Option.Some(variants) => {
             match (find_variant(variants, variant)) {
-                Option.None => Result.Err(terr(line, col, "el enum '" + enum_name + "' no tiene la variante '" + variant + "'")),
+                Option.None => Result.Err(terr(line, col, "the enum '" + enum_name + "' has no variant '" + variant + "'")),
                 Option.Some(payload) => {
                     if (cargs.len() != payload.len()) {
-                        return Result.Err(terr(line, col, "la variante '" + enum_name + "." + variant + "' espera " + to_string(payload.len()) + " argumento(s), se dieron " + to_string(cargs.len())));
+                        return Result.Err(terr(line, col, "the variant '" + enum_name + "." + variant + "' expects " + to_string(payload.len()) + " argument(s), got " + to_string(cargs.len())));
                     }
                     let tparams = enum_tparams(c, enum_name);
                     let sigma = seed_sigma_from_expected(expected, enum_name, tparams);
@@ -2715,7 +2715,7 @@ fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr],
                         }
                         i = i + 1;
                     }
-                    let targs = finalize_type_args(tparams, sigma, "la variante '" + enum_name + "." + variant + "'", line, col)?;
+                    let targs = finalize_type_args(tparams, sigma, "the variant '" + enum_name + "." + variant + "'", line, col)?;
                     Result.Ok(Type.TNamed(enum_name, targs))
                 },
             }
@@ -2747,15 +2747,15 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
                 enum_name = n;
                 enum_targs = targs;
             } else {
-                return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty)));
+                return Result.Err(terr(scrut.line, scrut.col, "match requires an enum, but the scrutinee is " + type_str(scrut_ty)));
             }
         },
         _ => {
-            return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty)));
+            return Result.Err(terr(scrut.line, scrut.col, "match requires an enum, but the scrutinee is " + type_str(scrut_ty)));
         },
     }
     if (arms.len() == 0) {
-        return Result.Err(terr(line, col, "un match no puede estar vacío"));
+        return Result.Err(terr(line, col, "a match cannot be empty"));
     }
     let variants = enum_variants(c, enum_name);
     // σ del enum: liga sus parámetros de tipo con los args del escrutinio, para sustituir los payloads
@@ -2767,7 +2767,7 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
     while (ai < arms.len()) {
         let arm = arms[ai];
         if (st.catchall) {
-            return Result.Err(terr(arm.line, arm.col, "brazo inalcanzable: un brazo anterior ya cubre todos los casos"));
+            return Result.Err(terr(arm.line, arm.col, "unreachable arm: a previous arm already covers all cases"));
         }
         let binds = check_pattern(c, arm.pat, scrut_ty, enum_name, variants, enum_sigma, st)?;
         push_scope(c);
@@ -2786,7 +2786,7 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
                 },
                 Option.Some(prev) => {
                     if (!type_eq(prev, body_ty)) {
-                        return Result.Err(terr(arm.body.line, arm.body.col, "los brazos del match producen tipos distintos: " + type_str(prev) + " y " + type_str(body_ty)));
+                        return Result.Err(terr(arm.body.line, arm.body.col, "the match arms produce different types: " + type_str(prev) + " and " + type_str(body_ty)));
                     }
                 },
             }
@@ -2805,7 +2805,7 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
             vi = vi + 1;
         }
         if (missing.len() > 0) {
-            return Result.Err(terr(line, col, "match no exhaustivo en '" + enum_name + "': faltan las variantes: " + join_comma(missing)));
+            return Result.Err(terr(line, col, "non-exhaustive match on '" + enum_name + "': missing variants: " + join_comma(missing)));
         }
     }
     match (result_ty) {
@@ -2831,16 +2831,16 @@ fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, va
         },
         PKind.PVariant(pat_enum, variant, bindings) => {
             if (pat_enum != enum_name) {
-                return Result.Err(terr(pat.line, pat.col, "el patrón es del enum '" + pat_enum + "', pero el escrutinio es '" + enum_name + "'"));
+                return Result.Err(terr(pat.line, pat.col, "the pattern is of enum '" + pat_enum + "', but the scrutinee is '" + enum_name + "'"));
             }
             match (find_variant(variants, variant)) {
-                Option.None => Result.Err(terr(pat.line, pat.col, "el enum '" + enum_name + "' no tiene la variante '" + variant + "'")),
+                Option.None => Result.Err(terr(pat.line, pat.col, "the enum '" + enum_name + "' has no variant '" + variant + "'")),
                 Option.Some(payload) => {
                     if (bindings.len() != payload.len()) {
-                        return Result.Err(terr(pat.line, pat.col, "el patrón '" + enum_name + "." + variant + "' liga " + to_string(bindings.len()) + " valor(es), pero la variante tiene " + to_string(payload.len())));
+                        return Result.Err(terr(pat.line, pat.col, "the pattern '" + enum_name + "." + variant + "' binds " + to_string(bindings.len()) + " value(s), but the variant has " + to_string(payload.len())));
                     }
                     if (contains_str(st.covered, variant)) {
-                        return Result.Err(terr(pat.line, pat.col, "la variante '" + variant + "' ya está cubierta por un brazo anterior"));
+                        return Result.Err(terr(pat.line, pat.col, "the variant '" + variant + "' is already covered by a previous arm"));
                     }
                     st.covered.push(variant);
                     // Cada sub-binding liga el payload ya SUSTITUIDO con los args de tipo del
@@ -2976,17 +2976,17 @@ fn register_traits_impls(c: Checker, prog: Program) -> Result<int, TypeError> {
     while (ti < prog.traits.len()) {
         let t = prog.traits[ti];
         if (c.structs.contains_key(t.name) || c.enums.contains_key(t.name)) {
-            return Result.Err(terr(t.line, t.col, "'" + t.name + "' ya es un tipo; no puede ser también un trait"));
+            return Result.Err(terr(t.line, t.col, "'" + t.name + "' is already a type; it cannot also be a trait"));
         }
         if (c.traits.contains_key(t.name)) {
-            return Result.Err(terr(t.line, t.col, "trait '" + t.name + "' declarado dos veces"));
+            return Result.Err(terr(t.line, t.col, "trait '" + t.name + "' declared twice"));
         }
         var seen: [string] = [];
         var mi = 0;
         while (mi < t.methods.len()) {
             let m = t.methods[mi];
             if (contains_str(seen, m.name)) {
-                return Result.Err(terr(m.line, m.col, "método '" + m.name + "' repetido en el trait '" + t.name + "'"));
+                return Result.Err(terr(m.line, m.col, "method '" + m.name + "' repeated in trait '" + t.name + "'"));
             }
             seen.push(m.name);
             mi = mi + 1;
@@ -3007,7 +3007,7 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     let trait_methods = match (get(c.traits, imp.trait_name)) {
         Option.Some(ms) => ms,
         Option.None => {
-            return Result.Err(terr(imp.line, imp.col, "trait '" + imp.trait_name + "' no declarado"));
+            return Result.Err(terr(imp.line, imp.col, "trait '" + imp.trait_name + "' not declared"));
         },
     };
     // M9.2b: los parámetros de tipo del impl entran en ámbito (`Caja<T>` y `x: T` válidos).
@@ -3022,7 +3022,7 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     while (mi < imp.methods.len()) {
         let m = imp.methods[mi];
         if (contains_str(impl_names, m.name)) {
-            return Result.Err(terr(m.line, m.col, "método '" + m.name + "' implementado dos veces"));
+            return Result.Err(terr(m.line, m.col, "method '" + m.name + "' implemented twice"));
         }
         impl_names.push(m.name);
         mi = mi + 1;
@@ -3032,7 +3032,7 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     while (tj < trait_methods.len()) {
         let tm = trait_methods[tj];
         if (!contains_str(impl_names, tm.name) && !has_default(tm)) {
-            return Result.Err(terr(imp.line, imp.col, "el impl de '" + imp.trait_name + "' para " + type_str(target) + " no implementa el método '" + tm.name + "'"));
+            return Result.Err(terr(imp.line, imp.col, "the impl of '" + imp.trait_name + "' for " + type_str(target) + " does not implement method '" + tm.name + "'"));
         }
         tj = tj + 1;
     }
@@ -3042,13 +3042,13 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
         let m = imp.methods[mi];
         match (find_method_sig(trait_methods, m.name)) {
             Option.None => {
-                return Result.Err(terr(m.line, m.col, "el trait '" + imp.trait_name + "' no declara un método '" + m.name + "'"));
+                return Result.Err(terr(m.line, m.col, "the trait '" + imp.trait_name + "' does not declare a method '" + m.name + "'"));
             },
             Option.Some(tm) => {
                 check_method_sig(tm, m, target)?;
                 let mangled = mangle(key, m.name);
                 if (c.methods.contains_key(mangled)) {
-                    return Result.Err(terr(m.line, m.col, "método '" + m.name + "' ambiguo para " + type_str(target) + ": ya hay un impl que lo provee"));
+                    return Result.Err(terr(m.line, m.col, "method '" + m.name + "' ambiguous for " + type_str(target) + ": an impl already provides it"));
                 }
                 c.methods.insert(mangled, method_fnsig(m.params, m.ret, target, imp.type_params, imp.bounds));
             },
@@ -3062,7 +3062,7 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
         if (has_default(tm) && !contains_str(impl_names, tm.name)) {
             let mangled = mangle(key, tm.name);
             if (c.methods.contains_key(mangled)) {
-                return Result.Err(terr(imp.line, imp.col, "método '" + tm.name + "' ambiguo para " + type_str(target) + ": ya hay un impl que lo provee"));
+                return Result.Err(terr(imp.line, imp.col, "method '" + tm.name + "' ambiguous for " + type_str(target) + ": an impl already provides it"));
             }
             c.methods.insert(mangled, method_fnsig(tm.params, tm.ret, target, imp.type_params, imp.bounds));
         }
@@ -3081,10 +3081,10 @@ fn check_impl_bounds(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     while (i < imp.bounds.len()) {
         let b = imp.bounds[i];
         if (!contains_str(imp.type_params, b.param)) {
-            return Result.Err(terr(imp.line, imp.col, "el bound '" + b.param + ": " + b.trait_name + "' menciona un parámetro de tipo que el impl no declara"));
+            return Result.Err(terr(imp.line, imp.col, "the bound '" + b.param + ": " + b.trait_name + "' mentions a type parameter the impl does not declare"));
         }
         if (!c.traits.contains_key(b.trait_name)) {
-            return Result.Err(terr(imp.line, imp.col, "el bound '" + b.param + ": " + b.trait_name + "' usa un trait no declarado"));
+            return Result.Err(terr(imp.line, imp.col, "the bound '" + b.param + ": " + b.trait_name + "' uses an undeclared trait"));
         }
         i = i + 1;
     }
@@ -3141,17 +3141,17 @@ fn generate_derives_for(c: Checker, annotations: [Annotation], name: string, typ
 // Valida `@derive(...)`: argumentos no vacíos, todos derivables (Eq/Show), tipo no genérico.
 fn validate_derive(a: Annotation, name: string, type_params: [string]) -> Result<int, TypeError> {
     if (a.args.len() == 0) {
-        return Result.Err(terr(a.line, a.col, "'@derive' requiere al menos un trait (p. ej. @derive(Eq))"));
+        return Result.Err(terr(a.line, a.col, "'@derive' requires at least one trait (e.g. @derive(Eq))"));
     }
     var i = 0;
     while (i < a.args.len()) {
         if (a.args[i] != "Eq" && a.args[i] != "Show" && a.args[i] != "Hash") {
-            return Result.Err(terr(a.line, a.col, "no se sabe derivar '" + a.args[i] + "' (por ahora Eq, Show y Hash)"));
+            return Result.Err(terr(a.line, a.col, "cannot derive '" + a.args[i] + "' (for now Eq, Show and Hash)"));
         }
         i = i + 1;
     }
     if (type_params.len() != 0) {
-        return Result.Err(terr(a.line, a.col, "no se puede derivar para el tipo genérico '" + name + "'"));
+        return Result.Err(terr(a.line, a.col, "cannot derive for the generic type '" + name + "'"));
     }
     Result.Ok(0)
 }
@@ -3183,19 +3183,19 @@ fn check_annotations(c: Checker, prog: Program) -> Result<int, TypeError> {
             let a = f.annotations[ai];
             if (a.name == "test") {
                 if (a.args.len() != 0) {
-                    return Result.Err(terr(a.line, a.col, "'@test' no recibe argumentos"));
+                    return Result.Err(terr(a.line, a.col, "'@test' takes no arguments"));
                 }
                 if (f.params.len() != 0) {
-                    return Result.Err(terr(a.line, a.col, "la función de prueba '@test' '" + f.name + "' no debe recibir parámetros"));
+                    return Result.Err(terr(a.line, a.col, "the '@test' test function '" + f.name + "' must not take parameters"));
                 }
                 let ret = resolve_type(f.ret);
                 if (!type_eq(ret, Type.TBool) && !type_eq(ret, Type.TUnit)) {
-                    return Result.Err(terr(a.line, a.col, "una función '@test' debe devolver bool o unit, no " + type_str(f.ret)));
+                    return Result.Err(terr(a.line, a.col, "an '@test' function must return bool or unit, not " + type_str(f.ret)));
                 }
             } else if (a.name == "derive") {
-                return Result.Err(terr(a.line, a.col, "'@derive' solo se permite sobre struct o enum"));
+                return Result.Err(terr(a.line, a.col, "'@derive' is only allowed on a struct or enum"));
             } else {
-                return Result.Err(terr(a.line, a.col, "anotación desconocida: '@" + a.name + "'"));
+                return Result.Err(terr(a.line, a.col, "unknown annotation: '@" + a.name + "'"));
             }
             ai = ai + 1;
         }
@@ -3221,9 +3221,9 @@ fn check_type_annotations(annotations: [Annotation]) -> Result<int, TypeError> {
         if (a.name == "derive") {
             // ok: ya validada/generada en generate_derives.
         } else if (a.name == "test") {
-            return Result.Err(terr(a.line, a.col, "'@test' solo se permite sobre funciones"));
+            return Result.Err(terr(a.line, a.col, "'@test' is only allowed on functions"));
         } else {
-            return Result.Err(terr(a.line, a.col, "anotación desconocida: '@" + a.name + "'"));
+            return Result.Err(terr(a.line, a.col, "unknown annotation: '@" + a.name + "'"));
         }
         i = i + 1;
     }
@@ -3237,24 +3237,24 @@ fn ensure_impl_target(c: Checker, target: Type, type_params: [string], line: int
         if (type_params.len() == 0) {
             return Result.Ok(0);
         }
-        return Result.Err(terr(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl"));
+        return Result.Err(terr(line, col, "a primitive type is not generic: it does not take type parameters in the impl"));
     }
     match (target) {
         Type.TNamed(n, args) => {
             if (!c.structs.contains_key(n) && !c.enums.contains_key(n)) {
-                return Result.Err(terr(line, col, "no se puede implementar para un tipo desconocido: '" + n + "'"));
+                return Result.Err(terr(line, col, "cannot implement for an unknown type: '" + n + "'"));
             }
             let arity = type_arity(c, n);
             if (type_params.len() == 0) {
                 if (arity != 0) {
-                    return Result.Err(terr(line, col, "'" + n + "' es genérico: declara sus parámetros en el impl, p. ej. 'impl<T> ... for " + n + "<T>' (M9.2b)"));
+                    return Result.Err(terr(line, col, "'" + n + "' is generic: declare its parameters in the impl, e.g. 'impl<T> ... for " + n + "<T>' (M9.2b)"));
                 }
                 Result.Ok(0)
             } else {
                 ensure_generic_impl_target(n, args, type_params, arity, line, col)
             }
         },
-        _ => Result.Err(terr(line, col, "solo se puede implementar un trait para un struct, enum o primitivo")),
+        _ => Result.Err(terr(line, col, "a trait can only be implemented for a struct, enum or primitive")),
     }
 }
 
@@ -3262,7 +3262,7 @@ fn ensure_impl_target(c: Checker, target: Type, type_params: [string], line: int
 // de tipo del impl (cada uno un `Var` distinto): `impl<T> ... for Caja<T>`.
 fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], arity: int, line: int, col: int) -> Result<int, TypeError> {
     if (arity != type_params.len()) {
-        return Result.Err(terr(line, col, "'" + n + "' espera " + to_string(arity) + " parámetro(s) de tipo, el impl declara " + to_string(type_params.len())));
+        return Result.Err(terr(line, col, "'" + n + "' expects " + to_string(arity) + " type parameter(s), the impl declares " + to_string(type_params.len())));
     }
     var ok = args.len() == type_params.len();
     var seen: [string] = [];
@@ -3283,7 +3283,7 @@ fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], ar
         i = i + 1;
     }
     if (!ok) {
-        return Result.Err(terr(line, col, "el impl genérico debe aplicarse a '" + n + "<" + join_comma(type_params) + ">' (sus propios parámetros de tipo, distintos)"));
+        return Result.Err(terr(line, col, "the generic impl must apply to '" + n + "<" + join_comma(type_params) + ">' (its own distinct type parameters)"));
     }
     Result.Ok(0)
 }
@@ -3292,21 +3292,21 @@ fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], ar
 // tipo implementador en ambas.
 fn check_method_sig(tm: MethodSig, m: Func, target: Type) -> Result<int, TypeError> {
     if (tm.params.len() != m.params.len()) {
-        return Result.Err(terr(m.line, m.col, "el método '" + m.name + "' toma " + to_string(m.params.len()) + " parámetro(s) (incluido self), pero el trait pide " + to_string(tm.params.len())));
+        return Result.Err(terr(m.line, m.col, "the method '" + m.name + "' takes " + to_string(m.params.len()) + " parameter(s) (including self), but the trait requires " + to_string(tm.params.len())));
     }
     var i = 0;
     while (i < tm.params.len()) {
         let want = resolve_type(subst_self(tm.params[i].ty, target));
         let got = resolve_type(subst_self(m.params[i].ty, target));
         if (!type_eq(want, got)) {
-            return Result.Err(terr(m.params[i].line, m.params[i].col, "el parámetro " + to_string(i + 1) + " del método '" + m.name + "' es " + type_str(got) + ", pero el trait pide " + type_str(want)));
+            return Result.Err(terr(m.params[i].line, m.params[i].col, "the parameter " + to_string(i + 1) + " of method '" + m.name + "' is " + type_str(got) + ", but the trait requires " + type_str(want)));
         }
         i = i + 1;
     }
     let want_ret = resolve_type(subst_self(tm.ret, target));
     let got_ret = resolve_type(subst_self(m.ret, target));
     if (!type_eq(want_ret, got_ret)) {
-        return Result.Err(terr(m.line, m.col, "el método '" + m.name + "' devuelve " + type_str(got_ret) + ", pero el trait pide " + type_str(want_ret)));
+        return Result.Err(terr(m.line, m.col, "the method '" + m.name + "' returns " + type_str(got_ret) + ", but the trait requires " + type_str(want_ret)));
     }
     Result.Ok(0)
 }

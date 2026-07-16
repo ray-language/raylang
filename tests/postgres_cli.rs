@@ -42,7 +42,7 @@ fn read_msg(s: &mut TcpStream) {
     let _ = read_exact(s, len - 4);
 }
 
-fn lanzar_servidor_pg() -> u16 {
+fn launch_servidor_pg() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -72,9 +72,9 @@ fn lanzar_servidor_pg() -> u16 {
             td.extend_from_slice(b"greeting\0");
             td.extend_from_slice(&[0u8; 18]);
             s.write_all(&msg(b'T', &td)).unwrap();
-            // DataRow ('D'): 1 columna, valor "hola-postgres" (13 octetos).
-            let mut dr = vec![0u8, 1, 0, 0, 0, 13];
-            dr.extend_from_slice(b"hola-postgres");
+            // DataRow ('D'): 1 columna, valor "hello-postgres" (14 octetos).
+            let mut dr = vec![0u8, 1, 0, 0, 0, 14];
+            dr.extend_from_slice(b"hello-postgres");
             s.write_all(&msg(b'D', &dr)).unwrap();
             s.write_all(&msg(b'C', b"SELECT 1\0")).unwrap();   // CommandComplete
             s.write_all(&msg(b'Z', b"I")).unwrap();            // ReadyForQuery
@@ -84,7 +84,7 @@ fn lanzar_servidor_pg() -> u16 {
     port
 }
 
-fn correr(flags: &[&str], port: u16) -> Vec<String> {
+fn run(flags: &[&str], port: u16) -> Vec<String> {
     let demo = format!("{}/examples/web/postgres_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -96,16 +96,16 @@ fn correr(flags: &[&str], port: u16) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect()
 }
 
-const ESPERADO: &[&str] = &["row: hola-postgres"];
+const ESPERADO: &[&str] = &["row: hello-postgres"];
 
 #[test]
 fn pg_query_vm() {
-    let port = lanzar_servidor_pg();
-    assert_eq!(correr(&["--vm"], port), ESPERADO);
+    let port = launch_servidor_pg();
+    assert_eq!(run(&["--vm"], port), ESPERADO);
 }
 
 #[test]
-fn pg_query_interprete() {
-    let port = lanzar_servidor_pg();
-    assert_eq!(correr(&[], port), ESPERADO);
+fn pg_query_interpreter() {
+    let port = launch_servidor_pg();
+    assert_eq!(run(&[], port), ESPERADO);
 }

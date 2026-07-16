@@ -45,12 +45,12 @@ const PROHIBIDOS: &[&str] = &[
 
 #[test]
 fn el_front_end_no_panica_a_pelo() {
-    let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut violaciones = Vec::new();
-    for archivo in EN_POLITICA {
-        let fuente = std::fs::read_to_string(raiz.join(archivo))
-            .unwrap_or_else(|e| panic!("no se pudo leer {archivo}: {e}"));
-        for (i, linea) in fuente.lines().enumerate() {
+    for file in EN_POLITICA {
+        let source = std::fs::read_to_string(root.join(file))
+            .unwrap_or_else(|e| panic!("no se pudo leer {file}: {e}"));
+        for (i, linea) in source.lines().enumerate() {
             // Todo lo que sigue al primer bloque de tests no cuenta (convención del
             // proyecto: los tests van al final del archivo).
             if linea.trim_start().starts_with("#[cfg(test)]") {
@@ -61,14 +61,14 @@ fn el_front_end_no_panica_a_pelo() {
             }
             for patron in PROHIBIDOS {
                 if linea.contains(patron) {
-                    violaciones.push(format!("{archivo}:{}: {}", i + 1, linea.trim()));
+                    violaciones.push(format!("{file}:{}: {}", i + 1, linea.trim()));
                 }
             }
         }
     }
     assert!(
         violaciones.is_empty(),
-        "el front-end debe usar `ice!` (invariantes) o errores con posición (usuario), \
+        "el front-end must usar `ice!` (invariantes) o errors con posición (user), \
          no pánicos a pelo (M33b). Violaciones:\n{}",
         violaciones.join("\n")
     );
@@ -85,7 +85,7 @@ fn la_red_central_presenta_el_ice() {
         raylang::with_big_stack_or_ice(|| panic!("invariante rota de prueba"));
         return;
     }
-    let exe = std::env::current_exe().expect("ruta del test");
+    let exe = std::env::current_exe().expect("path del test");
     let out = std::process::Command::new(exe)
         .arg("la_red_central_presenta_el_ice")
         .arg("--nocapture") // sin esto el arnés captura el stderr y el exit() lo pierde
@@ -94,7 +94,7 @@ fn la_red_central_presenta_el_ice() {
         .expect("ejecuta el subproceso");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(101), "código 101 (convención Rust)\n{stderr}");
-    assert!(stderr.contains("error interno del compilador (ICE)"), "{stderr}");
+    assert!(stderr.contains("internal compiler error (ICE)"), "{stderr}");
     assert!(stderr.contains("invariante rota de prueba"), "el payload del pánico\n{stderr}");
-    assert!(stderr.contains("repórtalo"), "pide el reporte\n{stderr}");
+    assert!(stderr.contains("report it"), "asks el reporte\n{stderr}");
 }

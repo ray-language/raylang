@@ -10,7 +10,7 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
-fn proyecto(base: &std::path::Path) -> std::path::PathBuf {
+fn project(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -103,7 +103,7 @@ fn main() -> int {
     }
     match (bson.decode(from_hex("0c0000000e7800040000000000"))) {
         Result.Ok(_) => { print("no debería"); },
-        Result.Err(e) => { print("tipo: " + e); },
+        Result.Err(e) => { print("type: " + e); },
     }
     0
 }
@@ -112,13 +112,13 @@ fn main() -> int {
     app
 }
 
-fn correr(app: &std::path::Path, flags: &[&str]) -> String {
+fn run(app: &std::path::Path, flags: &[&str]) -> String {
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
-    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binario");
+    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -129,10 +129,10 @@ const ESPERADO: &str = "enc1: 160000000268656c6c6f0006000000776f726c640000\n\
 dec2: {BSON: [\"awesome\", 5.05, 1986]}\n\
 dec3: {d: -2.5, s: \"café\", sub: {ok: 1}, a: [-42, null], bin: bin(0102ff), id: oid(000102030405060708090a0b), t: true, n: null, big: 9007199254740993, dt: date(2026-07-09T12:34:56.789Z), ts: timestamp(1783600000,7)}\n\
 rt: true\n\
-trunc: BSON inválido (octeto 0): longitud de documento inválida: 49\n\
-tipo: BSON inválido (octeto 6): tipo BSON no soportado: 14\n";
+trunc: invalid BSON (byte 0): invalid document length: 49\n\
+type: invalid BSON (byte 6): unsupported BSON type: 14\n";
 
-fn proyecto_puente(base: &std::path::Path) -> std::path::PathBuf {
+fn project_puente(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -149,7 +149,7 @@ from std/json import stringify;
 
 fn main() -> int {
     // JSON string → documento BSON (la ruta ergonómica para filtros de mongo).
-    match (bson.doc_from_json("{\"nombre\": \"ada\", \"nota\": 36, \"tags\": [\"a\", null, true]}")) {
+    match (bson.doc_from_json("{\"name\": \"ada\", \"nota\": 36, \"tags\": [\"a\", null, true]}")) {
         Result.Ok(fields) => { print("from: " + bson.dump_doc(fields)); },
         Result.Err(e) => { print("err: " + e); },
     }
@@ -177,9 +177,9 @@ fn main() -> int {
     app
 }
 
-const ESPERADO_PUENTE: &str = "from: {nombre: \"ada\", nota: 36, tags: [\"a\", null, true]}\n\
+const ESPERADO_PUENTE: &str = "from: {name: \"ada\", nota: 36, tags: [\"a\", null, true]}\n\
 uni: {s: \"café\"}\n\
-tope: el JSON de un documento debe ser un objeto\n\
+tope: a document's JSON must be an object\n\
 to: {\"id\":\"000102030405060708090a0b\",\"n\":42,\"sub\":{\"ok\":1}}\n";
 
 #[test]
@@ -187,25 +187,25 @@ fn bson_puente_json() {
     let base = std::env::temp_dir().join("ray_bson_cli_json");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = proyecto_puente(&base);
+    let app = project_puente(&base);
 
-    assert_eq!(correr(&app, &[]), ESPERADO_PUENTE, "VM");
-    assert_eq!(correr(&app, &["--interp"]), ESPERADO_PUENTE, "intérprete");
+    assert_eq!(run(&app, &[]), ESPERADO_PUENTE, "VM");
+    assert_eq!(run(&app, &["--interp"]), ESPERADO_PUENTE, "intérprete");
 }
 
 #[test]
-fn bson_vectores_del_spec_roundtrip_y_errores() {
+fn bson_vectors_del_spec_roundtrip_y_errors() {
     let base = std::env::temp_dir().join("ray_bson_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = proyecto(&base);
+    let app = project(&base);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    assert_eq!(correr(&app, &[]), ESPERADO, "VM");
-    assert_eq!(correr(&app, &["--interp"]), ESPERADO, "intérprete");
+    assert_eq!(run(&app, &[]), ESPERADO, "VM");
+    assert_eq!(run(&app, &["--interp"]), ESPERADO, "intérprete");
 }
 
-fn proyecto_profundo(base: &std::path::Path) -> std::path::PathBuf {
+fn project_profundo(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -261,13 +261,13 @@ fn main() -> int {
 /// por desbordamiento de pila: se rechaza como valor (`Err`). Antes, ~4.8 KB (600 niveles) abortaban
 /// el proceso con "desbordamiento de pila".
 #[test]
-fn bson_anidamiento_profundo_es_error() {
+fn bson_nesting_profundo_es_error() {
     let base = std::env::temp_dir().join("ray_bson_cli_profundo");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = proyecto_profundo(&base);
+    let app = project_profundo(&base);
 
     const ESPERADO_PROFUNDO: &str = "d50: OK\nd200: OK\nd600: Err\n";
-    assert_eq!(correr(&app, &[]), ESPERADO_PROFUNDO, "VM");
-    assert_eq!(correr(&app, &["--interp"]), ESPERADO_PROFUNDO, "intérprete");
+    assert_eq!(run(&app, &[]), ESPERADO_PROFUNDO, "VM");
+    assert_eq!(run(&app, &["--interp"]), ESPERADO_PROFUNDO, "intérprete");
 }

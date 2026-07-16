@@ -40,9 +40,9 @@ fn repo_path(rel: &str) -> PathBuf {
 
 /// Ejecuta el checker auto-alojado sobre `src`: lo escribe a un temporal y corre
 /// `raylang selfhost/check_dump.ray <temporal>`. Devuelve su stdout (sin el salto final).
-fn check_dump(src: &str, nombre_tmp: &str) -> String {
+fn check_dump(src: &str, name_tmp: &str) -> String {
     let mut tmp = std::env::temp_dir();
-    tmp.push(nombre_tmp);
+    tmp.push(name_tmp);
     let mut f = std::fs::File::create(&tmp).expect("crea el temporal");
     f.write_all(src.as_bytes()).expect("escribe el temporal");
     drop(f);
@@ -61,10 +61,10 @@ fn check_dump(src: &str, nombre_tmp: &str) -> String {
 }
 
 /// Compara el checker auto-alojado con el oráculo para una fuente concreta.
-fn comparar(src: &str, nombre_tmp: &str) {
-    let esperado = canonical(src);
-    let obtenido = check_dump(src, nombre_tmp);
-    assert_eq!(obtenido, esperado, "el checker auto-alojado difiere del oráculo para:\n{src}");
+fn compare(src: &str, name_tmp: &str) {
+    let expected = canonical(src);
+    let obtained = check_dump(src, name_tmp);
+    assert_eq!(obtained, expected, "el checker auto-alojado difiere del oráculo para:\n{src}");
 }
 
 /// Como [`comparar`], pero solo exige que ambos pipelines **rechacen en la misma posición** (mismo
@@ -73,371 +73,371 @@ fn comparar(src: &str, nombre_tmp: &str) {
 /// de `[]#push`; `(3).push(1)` → "no existe campo ni función 'push' aplicable a int"), mientras este
 /// validador auto-alojado —un subconjunto que los sigue modelando como **builtins de arreglo/string**—
 /// da su propio mensaje. Ambos rechazan el mismo error en el mismo sitio; la redacción difiere por diseño.
-fn comparar_pos(src: &str, nombre_tmp: &str) {
-    let esperado = canonical(src);
-    let obtenido = check_dump(src, nombre_tmp);
+fn compare_pos(src: &str, name_tmp: &str) {
+    let expected = canonical(src);
+    let obtained = check_dump(src, name_tmp);
     let pos = |s: &str| s.split(": ").next().unwrap_or("").to_string();
-    assert!(esperado.starts_with("error de tipos en"), "el oráculo no rechazó:\n{src}\n  {esperado}");
-    assert!(obtenido.starts_with("error de tipos en"), "el auto-alojado no rechazó:\n{src}\n  {obtenido}");
-    assert_eq!(pos(&obtenido), pos(&esperado),
-        "posición del rechazo difiere para:\n{src}\n  auto: {obtenido}\n  rust: {esperado}");
+    assert!(expected.starts_with("type error at"), "el oráculo no rechazó:\n{src}\n  {expected}");
+    assert!(obtained.starts_with("type error at"), "el auto-alojado no rechazó:\n{src}\n  {obtained}");
+    assert_eq!(pos(&obtained), pos(&expected),
+        "posición del rechazo difiere para:\n{src}\n  auto: {obtained}\n  rust: {expected}");
 }
 
 #[test]
-fn programas_validos() {
-    comparar("fn main() -> int { 0 }", "sc_min.ray");
-    comparar("fn main() { }", "sc_unit.ray");
-    comparar("fn main() -> int { let x = 3; let y = x + 1; y }", "sc_let.ray");
-    comparar("fn main() -> int { var i = 0; while (i < 10) { i = i + 1; } i }", "sc_while.ray");
-    comparar("fn main() -> int { if (1 < 2) { 1 } else { 2 } }", "sc_if.ray");
-    comparar("fn doble(x: int) -> int { x * 2 } fn main() -> int { doble(21) }", "sc_call.ray");
-    comparar("fn main() -> int { print(\"hola\"); print(42); 0 }", "sc_print.ray");
-    comparar("fn main() -> int { let b = true && false || 1 == 2; if (b) { 1 } else { 0 } }", "sc_logic.ray");
+fn programas_valid_vals() {
+    compare("fn main() -> int { 0 }", "sc_min.ray");
+    compare("fn main() { }", "sc_unit.ray");
+    compare("fn main() -> int { let x = 3; let y = x + 1; y }", "sc_let.ray");
+    compare("fn main() -> int { var i = 0; while (i < 10) { i = i + 1; } i }", "sc_while.ray");
+    compare("fn main() -> int { if (1 < 2) { 1 } else { 2 } }", "sc_if.ray");
+    compare("fn double(x: int) -> int { x * 2 } fn main() -> int { double(21) }", "sc_call.ray");
+    compare("fn main() -> int { print(\"hello\"); print(42); 0 }", "sc_print.ray");
+    compare("fn main() -> int { let b = true && false || 1 == 2; if (b) { 1 } else { 0 } }", "sc_logic.ray");
 }
 
 #[test]
-fn errores_de_tipo() {
+fn errors_de_ty() {
     // Operadores.
-    comparar("fn main() -> int { 1 + true }", "sce_add.ray");
-    comparar("fn main() -> int { if (1) { 1 } else { 2 } }", "sce_cond.ray");
-    comparar("fn main() -> bool { 1 < true }", "sce_order.ray");
-    comparar("fn main() -> int { -true }", "sce_neg.ray");
-    comparar("fn main() -> int { if (!1) { 0 } else { 1 } }", "sce_not.ray");
+    compare("fn main() -> int { 1 + true }", "sce_add.ray");
+    compare("fn main() -> int { if (1) { 1 } else { 2 } }", "sce_cond.ray");
+    compare("fn main() -> bool { 1 < true }", "sce_order.ray");
+    compare("fn main() -> int { -true }", "sce_neg.ray");
+    compare("fn main() -> int { if (!1) { 0 } else { 1 } }", "sce_not.ray");
     // Variables.
-    comparar("fn main() -> int { x }", "sce_undecl.ray");
-    comparar("fn main() -> int { let x = 3; x = 4; 0 }", "sce_immut.ray");
-    comparar("fn main() -> int { let x: int = true; x }", "sce_annot.ray");
+    compare("fn main() -> int { x }", "sce_undecl.ray");
+    compare("fn main() -> int { let x = 3; x = 4; 0 }", "sce_immut.ray");
+    compare("fn main() -> int { let x: int = true; x }", "sce_annot.ray");
     // Retorno.
-    comparar("fn main() -> int { true }", "sce_ret.ray");
-    comparar("fn f() -> int { } fn main() -> int { 0 }", "sce_ret_unit.ray");
+    compare("fn main() -> int { true }", "sce_ret.ray");
+    compare("fn f() -> int { } fn main() -> int { 0 }", "sce_ret_unit.ray");
     // Llamadas.
-    comparar("fn g(x: int) -> int { x } fn main() -> int { g() }", "sce_arity.ray");
-    comparar("fn g(x: int) -> int { x } fn main() -> int { g(true) }", "sce_argty.ray");
-    comparar("fn main() -> int { h(1) }", "sce_nofn.ray");
-    comparar("fn main() -> int { print(1, 2) }", "sce_print_arity.ray");
+    compare("fn g(x: int) -> int { x } fn main() -> int { g() }", "sce_arity.ray");
+    compare("fn g(x: int) -> int { x } fn main() -> int { g(true) }", "sce_argty.ray");
+    compare("fn main() -> int { h(1) }", "sce_nofn.ray");
+    compare("fn main() -> int { print(1, 2) }", "sce_print_arity.ray");
     // if sin else con valor.
-    comparar("fn main() -> int { if (true) { 1 } 0 }", "sce_if_noelse.ray");
+    compare("fn main() -> int { if (true) { 1 } 0 }", "sce_if_noelse.ray");
     // main mal.
-    comparar("fn main(x: int) -> int { 0 }", "sce_main_params.ray");
-    comparar("fn main() -> bool { true }", "sce_main_ret.ray");
-    comparar("fn f() -> int { 1 }", "sce_no_main.ray");
+    compare("fn main(x: int) -> int { 0 }", "sce_main_params.ray");
+    compare("fn main() -> bool { true }", "sce_main_ret.ray");
+    compare("fn f() -> int { 1 }", "sce_no_main.ray");
     // tipo desconocido.
-    comparar("fn main() -> Foo { 0 }", "sce_unknown_type.ray");
+    compare("fn main() -> Foo { 0 }", "sce_unknown_type.ray");
 }
 
 #[test]
-fn datos_validos() {
+fn data_valid_vals() {
     // Structs: definición, literal, acceso a campo, asignación a campo (incl. anidada).
-    comparar("struct P { x: int, y: int } fn area(p: P) -> int { p.x + p.y } fn main() -> int { let p = P { x: 1, y: 2 }; area(p) }", "scd_struct.ray");
-    comparar("struct P { x: int } fn main() -> int { var p = P { x: 1 }; p.x = 9; p.x }", "scd_fassign.ray");
-    comparar("struct Q { p: int } struct R { q: Q } fn main() -> int { var r = R { q: Q { p: 1 } }; r.q.p = 5; r.q.p }", "scd_nested.ray");
+    compare("struct P { x: int, y: int } fn area(p: P) -> int { p.x + p.y } fn main() -> int { let p = P { x: 1, y: 2 }; area(p) }", "scd_struct.ray");
+    compare("struct P { x: int } fn main() -> int { var p = P { x: 1 }; p.x = 9; p.x }", "scd_fassign.ray");
+    compare("struct Q { p: int } struct R { q: Q } fn main() -> int { var r = R { q: Q { p: 1 } }; r.q.p = 5; r.q.p }", "scd_nested.ray");
     // Arreglos: literal anotado vacío, push, len, índice y asignación por índice.
-    comparar("fn main() -> int { var xs: [int] = []; xs.push(3); xs[0] = 4; xs.len() }", "scd_arr.ray");
-    comparar("fn main() -> int { let m: [[int]] = [[1, 2], [3, 4]]; m[1][0] }", "scd_matriz.ray");
+    compare("fn main() -> int { var xs: [int] = []; xs.push(3); xs[0] = 4; xs.len() }", "scd_arr.ray");
+    compare("fn main() -> int { let m: [[int]] = [[1, 2], [3, 4]]; m[1][0] }", "scd_matriz.ray");
     // Enums: construcción con/sin payload, match con bindings, comodín, catch-all.
-    comparar("enum E { A, B(int) } fn f(e: E) -> int { match (e) { E.A => 0, E.B(n) => n } } fn main() -> int { f(E.B(7)) }", "scd_match.ray");
-    comparar("enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, _ => 0 } } fn main() -> int { f(E.C) }", "scd_catchall.ray");
-    comparar("enum F { C(float), R(float, float) } fn area(f: F) -> float { match (f) { F.C(r) => r * r, F.R(w, h) => w * h } } fn main() { print(area(F.C(2.0))); }", "scd_payload.ray");
+    compare("enum E { A, B(int) } fn f(e: E) -> int { match (e) { E.A => 0, E.B(n) => n } } fn main() -> int { f(E.B(7)) }", "scd_match.ray");
+    compare("enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, _ => 0 } } fn main() -> int { f(E.C) }", "scd_catchall.ray");
+    compare("enum F { C(float), R(float, float) } fn area(f: F) -> float { match (f) { F.C(r) => r * r, F.R(w, h) => w * h } } fn main() { print(area(F.C(2.0))); }", "scd_payload.ray");
 }
 
 #[test]
-fn errores_de_datos() {
+fn errors_de_data() {
     // Structs.
-    comparar("fn main() -> int { let p = Q { x: 1 }; 0 }", "scde_unk_struct.ray");
-    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1 }; 0 }", "scde_missing.ray");
-    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, z: 2, y: 3 }; 0 }", "scde_unkfield.ray");
-    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, x: 2, y: 3 }; 0 }", "scde_repfield.ray");
-    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: true, y: 2 }; 0 }", "scde_fieldty.ray");
-    comparar("fn main() -> int { let n = 3; n.x }", "scde_field_nonst.ray");
-    comparar("struct P { x: int } fn main() -> int { let p = P { x: 1 }; p.z }", "scde_field_unk.ray");
-    comparar("struct P { x: int } fn main() -> int { var p = P { x: 1 }; p.x = true; 0 }", "scde_fassign_ty.ray");
+    compare("fn main() -> int { let p = Q { x: 1 }; 0 }", "scde_unk_struct.ray");
+    compare("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1 }; 0 }", "scde_missing.ray");
+    compare("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, z: 2, y: 3 }; 0 }", "scde_unkfield.ray");
+    compare("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, x: 2, y: 3 }; 0 }", "scde_repfield.ray");
+    compare("struct P { x: int, y: int } fn main() -> int { let p = P { x: true, y: 2 }; 0 }", "scde_fieldty.ray");
+    compare("fn main() -> int { let n = 3; n.x }", "scde_field_nonst.ray");
+    compare("struct P { x: int } fn main() -> int { let p = P { x: 1 }; p.z }", "scde_field_unk.ray");
+    compare("struct P { x: int } fn main() -> int { var p = P { x: 1 }; p.x = true; 0 }", "scde_fassign_ty.ray");
     // Arreglos.
-    comparar("fn main() -> int { let xs = []; 0 }", "scde_empty.ray");
-    comparar("fn main() -> int { let xs = [1, true]; 0 }", "scde_arrty.ray");
-    comparar("fn main() -> int { let xs: [int] = [1]; xs[true] }", "scde_idxty.ray");
-    comparar("fn main() -> int { let n = 3; n[0] }", "scde_idx_nonarr.ray");
-    comparar("fn main() -> int { var xs: [int] = [1]; xs[0] = true; 0 }", "scde_iassign_ty.ray");
+    compare("fn main() -> int { let xs = []; 0 }", "scde_empty.ray");
+    compare("fn main() -> int { let xs = [1, true]; 0 }", "scde_arrty.ray");
+    compare("fn main() -> int { let xs: [int] = [1]; xs[true] }", "scde_idxty.ray");
+    compare("fn main() -> int { let n = 3; n[0] }", "scde_idx_nonarr.ray");
+    compare("fn main() -> int { var xs: [int] = [1]; xs[0] = true; 0 }", "scde_iassign_ty.ray");
     // M48.4e: builtins de contenedor retirados → métodos de trait en Rust; el validador auto-alojado los
     // sigue modelando como builtins de arreglo. Ambos rechazan en el mismo sitio, con distinta redacción.
-    comparar_pos("fn main() -> int { var xs: [int] = []; xs.push(true); 0 }", "scde_push_ty.ray");
-    comparar_pos("fn main() -> int { (3).push(1); 0 }", "scde_push_nonarr.ray");
-    comparar_pos("fn main() -> int { (3).len() }", "scde_len_nonarr.ray");
+    compare_pos("fn main() -> int { var xs: [int] = []; xs.push(true); 0 }", "scde_push_ty.ray");
+    compare_pos("fn main() -> int { (3).push(1); 0 }", "scde_push_nonarr.ray");
+    compare_pos("fn main() -> int { (3).len() }", "scde_len_nonarr.ray");
     // Enums.
-    comparar("enum E { A } fn main() -> int { let x = E.C; 0 }", "scde_unkvariant.ray");
-    comparar("enum F { C(float) } fn main() -> int { let x = F.C(); 0 }", "scde_enum_arity.ray");
-    comparar("enum F { C(float) } fn main() -> int { let x = F.C(true); 0 }", "scde_payty.ray");
+    compare("enum E { A } fn main() -> int { let x = E.C; 0 }", "scde_unkvariant.ray");
+    compare("enum F { C(float) } fn main() -> int { let x = F.C(); 0 }", "scde_enum_arity.ray");
+    compare("enum F { C(float) } fn main() -> int { let x = F.C(true); 0 }", "scde_payty.ray");
     // match.
-    comparar("fn main() -> int { match (3) { _ => 0 } }", "scde_match_nonen.ray");
-    comparar("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1 } }", "scde_nonexh.ray");
-    comparar("enum E { A, B } fn main() -> int { match (E.A) { _ => 1, E.A => 2 } }", "scde_unreach.ray");
-    comparar("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1, E.A => 2, E.B => 3 } }", "scde_covered.ray");
-    comparar("enum F { C(float) } fn main() -> int { match (F.C(1.0)) { F.C(a, b) => 0 } }", "scde_pat_arity.ray");
-    comparar("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1, E.B => true } }", "scde_arm_ty.ray");
-    comparar("enum E { A } enum G { Z } fn main() -> int { match (E.A) { G.Z => 0 } }", "scde_pat_enum.ray");
+    compare("fn main() -> int { match (3) { _ => 0 } }", "scde_match_nonen.ray");
+    compare("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1 } }", "scde_nonexh.ray");
+    compare("enum E { A, B } fn main() -> int { match (E.A) { _ => 1, E.A => 2 } }", "scde_unreach.ray");
+    compare("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1, E.A => 2, E.B => 3 } }", "scde_covered.ray");
+    compare("enum F { C(float) } fn main() -> int { match (F.C(1.0)) { F.C(a, b) => 0 } }", "scde_pat_arity.ray");
+    compare("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1, E.B => true } }", "scde_arm_ty.ray");
+    compare("enum E { A } enum G { Z } fn main() -> int { match (E.A) { G.Z => 0 } }", "scde_pat_enum.ray");
     // Definiciones de tipos (el checker las detecta directamente; en el pipeline completo lo haría el loader).
-    comparar("enum E { A } enum E { B } fn main() -> int { 0 }", "scde_dup_enum.ray");
-    comparar("struct P { x: int } struct P { y: int } fn main() -> int { 0 }", "scde_dup_struct.ray");
-    comparar("enum E { A } struct E { x: int } fn main() -> int { 0 }", "scde_struct_enum.ray");
-    comparar("enum E { A, A } fn main() -> int { 0 }", "scde_repvariant.ray");
+    compare("enum E { A } enum E { B } fn main() -> int { 0 }", "scde_dup_enum.ray");
+    compare("struct P { x: int } struct P { y: int } fn main() -> int { 0 }", "scde_dup_struct.ray");
+    compare("enum E { A } struct E { x: int } fn main() -> int { 0 }", "scde_struct_enum.ray");
+    compare("enum E { A, A } fn main() -> int { 0 }", "scde_repvariant.ray");
 }
 
 #[test]
-fn genericos_validos() {
+fn generics_valid_vals() {
     // Función genérica mínima; inferencia de T desde el argumento.
-    comparar("fn id<T>(x: T) -> T { x } fn main() -> int { let a: int = id(5); a }", "scg_id.ray");
+    compare("fn id<T>(x: T) -> T { x } fn main() -> int { let a: int = id(5); a }", "scg_id.ray");
     // Genérica de orden superior (tipo función con T, U).
-    comparar("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn doble(n: int) -> int { n * 2 } fn main() -> int { ap(doble, 21) }", "scg_ap.ray");
+    compare("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn double(n: int) -> int { n * 2 } fn main() -> int { ap(double, 21) }", "scg_ap.ray");
     // Genérica sobre arreglos.
-    comparar("fn ultimo<T>(xs: [T]) -> T { xs[xs.len() - 1] } fn main() -> int { ultimo([1, 2, 3]) }", "scg_last.ray");
-    comparar("fn par<T>(a: T, b: T) -> [T] { [a, b] } fn main() -> int { let xs: [int] = par(10, 20); xs[0] }", "scg_par.ray");
+    compare("fn ultimo<T>(xs: [T]) -> T { xs[xs.len() - 1] } fn main() -> int { ultimo([1, 2, 3]) }", "scg_last.ray");
+    compare("fn par<T>(a: T, b: T) -> [T] { [a, b] } fn main() -> int { let xs: [int] = par(10, 20); xs[0] }", "scg_par.ray");
 }
 
 #[test]
-fn errores_genericos() {
-    comparar("fn id<T>(x: T) -> T { x } fn main() -> int { id(1, 2) }", "scge_arity.ray");
-    comparar("fn par<T>(a: T, b: T) -> [T] { [a, b] } fn main() -> int { let xs = par(1, true); 0 }", "scge_consist.ray");
-    comparar("fn raro<T>(x: int) -> int { x } fn main() -> int { raro(3) }", "scge_uninfer.ray");
-    comparar("fn f<T, T>(x: T) -> T { x } fn main() -> int { 0 }", "scge_duptp.ray");
-    comparar("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn negar(b: bool) -> bool { !b } fn main() -> int { ap(negar, 3) }", "scge_fnarg.ray");
+fn errors_generics() {
+    compare("fn id<T>(x: T) -> T { x } fn main() -> int { id(1, 2) }", "scge_arity.ray");
+    compare("fn par<T>(a: T, b: T) -> [T] { [a, b] } fn main() -> int { let xs = par(1, true); 0 }", "scge_consist.ray");
+    compare("fn raro<T>(x: int) -> int { x } fn main() -> int { raro(3) }", "scge_uninfer.ray");
+    compare("fn f<T, T>(x: T) -> T { x } fn main() -> int { 0 }", "scge_duptp.ray");
+    compare("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn negar(b: bool) -> bool { !b } fn main() -> int { ap(negar, 3) }", "scge_fnarg.ray");
 }
 
 #[test]
-fn tipos_genericos_validos() {
+fn types_generics_valid_vals() {
     // Struct genérico: infiere A, B de los valores; acceso a campo sustituye el tipo.
-    comparar("struct Par<A, B> { primero: A, segundo: B } fn main() -> int { let p: Par<int, bool> = Par { primero: 7, segundo: true }; if (p.segundo) { p.primero } else { 0 } }", "sct_par.ray");
+    compare("struct Par<A, B> { primero: A, segundo: B } fn main() -> int { let p: Par<int, bool> = Par { primero: 7, segundo: true }; if (p.segundo) { p.primero } else { 0 } }", "sct_par.ray");
     // Enum genérico: T del payload y T del tipo esperado (Vacia); match sustituye el payload.
-    comparar("enum Caja<T> { Llena(T), Vacia } fn val(c: Caja<int>, d: int) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => d } } fn main() -> int { let a: Caja<int> = Caja.Llena(35); let b: Caja<int> = Caja.Vacia; val(a, 0) + val(b, 9) }", "sct_caja.ray");
+    compare("enum Caja<T> { Llena(T), Vacia } fn val(c: Caja<int>, d: int) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => d } } fn main() -> int { let a: Caja<int> = Caja.Llena(35); let b: Caja<int> = Caja.Vacia; val(a, 0) + val(b, 9) }", "sct_caja.ray");
     // Enum genérico recursivo + función genérica que lo recorre.
-    comparar("enum Lista<T> { Cons(T, Lista<T>), Nil } fn longitud<T>(xs: Lista<T>) -> int { match (xs) { Lista.Cons(_, r) => 1 + longitud(r), Lista.Nil => 0 } } fn main() -> int { let ns: Lista<string> = Lista.Cons(\"a\", Lista.Cons(\"b\", Lista.Nil)); longitud(ns) }", "sct_lista.ray");
+    compare("enum Lista<T> { Cons(T, Lista<T>), Nil } fn length<T>(xs: Lista<T>) -> int { match (xs) { Lista.Cons(_, r) => 1 + length(r), Lista.Nil => 0 } } fn main() -> int { let ns: Lista<string> = Lista.Cons(\"a\", Lista.Cons(\"b\", Lista.Nil)); length(ns) }", "sct_list.ray");
     // Inferencia local de un enum genérico (sin anotación) + match.
-    comparar("enum Caja<T> { Llena(T), Vacia } fn main() -> int { let c = Caja.Llena(5); match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 } }", "sct_infer.ray");
+    compare("enum Caja<T> { Llena(T), Vacia } fn main() -> int { let c = Caja.Llena(5); match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 } }", "sct_infer.ray");
 }
 
 #[test]
-fn errores_tipos_genericos() {
-    comparar("struct Par<A, B> { primero: A, segundo: B } fn main() -> int { let p: Par<int, bool> = Par { primero: true, segundo: true }; 0 }", "scte_fieldty.ray");
-    comparar("enum Caja<T> { Llena(T), Vacia } fn main() -> int { let c = Caja.Vacia; 0 }", "scte_vacia.ray");
-    comparar("enum Caja<T> { Llena(T), Vacia } fn f(c: Caja<int, bool>) -> int { 0 } fn main() -> int { 0 }", "scte_arity.ray");
-    comparar("enum Par2<T> { P(T, T) } fn main() -> int { let x = Par2.P(1, true); 0 }", "scte_payincon.ray");
-    comparar("struct Caja<T> { v: T } fn f(c: Caja) -> int { 0 } fn main() -> int { 0 }", "scte_noargs.ray");
+fn errors_types_generics() {
+    compare("struct Par<A, B> { primero: A, segundo: B } fn main() -> int { let p: Par<int, bool> = Par { primero: true, segundo: true }; 0 }", "scte_fieldty.ray");
+    compare("enum Caja<T> { Llena(T), Vacia } fn main() -> int { let c = Caja.Vacia; 0 }", "scte_empty.ray");
+    compare("enum Caja<T> { Llena(T), Vacia } fn f(c: Caja<int, bool>) -> int { 0 } fn main() -> int { 0 }", "scte_arity.ray");
+    compare("enum Par2<T> { P(T, T) } fn main() -> int { let x = Par2.P(1, true); 0 }", "scte_payincon.ray");
+    compare("struct Caja<T> { v: T } fn f(c: Caja) -> int { 0 } fn main() -> int { 0 }", "scte_noargs.ray");
 }
 
 #[test]
-fn prelude_y_try_validos() {
+fn prelude_y_try_valid_vals() {
     // Result del prelude: construcción + match (con el tipo esperado fijando T y E).
-    comparar("fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn main() -> int { match (div(6, 2)) { Result.Ok(v) => v, Result.Err(_) => -1 } }", "scp_result.ray");
+    compare("fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn main() -> int { match (div(6, 2)) { Result.Ok(v) => v, Result.Err(_) => -1 } }", "scp_result.ray");
     // El operador `?` sobre Result.
-    comparar("fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn ev(a: int, b: int) -> Result<int, string> { let p: int = div(a, b)?; Result.Ok(p + 1) } fn main() -> int { match (ev(6, 2)) { Result.Ok(v) => v, Result.Err(_) => -1 } }", "scp_try.ray");
+    compare("fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn ev(a: int, b: int) -> Result<int, string> { let p: int = div(a, b)?; Result.Ok(p + 1) } fn main() -> int { match (ev(6, 2)) { Result.Ok(v) => v, Result.Err(_) => -1 } }", "scp_try.ray");
     // Option del prelude + `?` sobre Option.
-    comparar("fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } } fn main() -> int { match (primero([7])) { Option.Some(v) => v, Option.None => -1 } }", "scp_option.ray");
-    comparar("fn g(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } } fn f(xs: [int]) -> Option<int> { let x: int = g(xs)?; Option.Some(x + 1) } fn main() -> int { match (f([3])) { Option.Some(v) => v, Option.None => -1 } }", "scp_tryopt.ray");
+    compare("fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } } fn main() -> int { match (primero([7])) { Option.Some(v) => v, Option.None => -1 } }", "scp_option.ray");
+    compare("fn g(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } } fn f(xs: [int]) -> Option<int> { let x: int = g(xs)?; Option.Some(x + 1) } fn main() -> int { match (f([3])) { Option.Some(v) => v, Option.None => -1 } }", "scp_tryopt.ray");
 }
 
 #[test]
-fn errores_prelude_y_try() {
-    comparar("fn f() -> Result<int, string> { let x: int = 5?; Result.Ok(x) } fn main() -> int { 0 }", "scpe_nores.ray");
-    comparar("fn div() -> Result<int, string> { Result.Ok(1) } fn f() -> int { let x: int = div()?; x } fn main() -> int { 0 }", "scpe_badret.ray");
-    comparar("fn div() -> Result<int, string> { Result.Ok(1) } fn f() -> Result<int, bool> { let x: int = div()?; Result.Ok(x) } fn main() -> int { 0 }", "scpe_errmis.ray");
-    comparar("fn primero(xs: [int]) -> Option<int> { Option.Algun(xs[0]) } fn main() -> int { 0 }", "scpe_optvar.ray");
-    comparar("fn f() -> int { let r = Result.Ok(5); 0 } fn main() -> int { 0 }", "scpe_uninf.ray");
+fn errors_prelude_y_try() {
+    compare("fn f() -> Result<int, string> { let x: int = 5?; Result.Ok(x) } fn main() -> int { 0 }", "scpe_nores.ray");
+    compare("fn div() -> Result<int, string> { Result.Ok(1) } fn f() -> int { let x: int = div()?; x } fn main() -> int { 0 }", "scpe_badret.ray");
+    compare("fn div() -> Result<int, string> { Result.Ok(1) } fn f() -> Result<int, bool> { let x: int = div()?; Result.Ok(x) } fn main() -> int { 0 }", "scpe_errmis.ray");
+    compare("fn primero(xs: [int]) -> Option<int> { Option.Algun(xs[0]) } fn main() -> int { 0 }", "scpe_optvar.ray");
+    compare("fn f() -> int { let r = Result.Ok(5); 0 } fn main() -> int { 0 }", "scpe_uninf.ray");
 }
 
 #[test]
-fn ufcs_y_closures_validos() {
+fn ufcs_y_closures_valid_vals() {
     // UFCS: función libre como método (encadenada), receptor como primer argumento.
-    comparar("fn doble(x: int) -> int { x * 2 } fn main() -> int { let v = 5; v.doble().doble() }", "scu_ufcs.ray");
+    compare("fn double(x: int) -> int { x * 2 } fn main() -> int { let v = 5; v.double().double() }", "scu_ufcs.ray");
     // Builtin como método.
-    comparar("fn main() -> int { let xs: [int] = [1, 2, 3]; xs.len() }", "scu_builtin.ray");
+    compare("fn main() -> int { let xs: [int] = [1, 2, 3]; xs.len() }", "scu_builtin.ray");
     // Campo de struct (de tipo función) gana sobre la función libre homónima.
-    comparar("struct M { op: fn(int) -> int } fn op(a: int, b: int) -> int { a - b } fn main() -> int { let m = M { op: fn(x: int) -> int { x + 1 } }; m.op(41) }", "scu_field.ray");
+    compare("struct M { op: fn(int) -> int } fn op(a: int, b: int) -> int { a - b } fn main() -> int { let m = M { op: fn(x: int) -> int { x + 1 } }; m.op(41) }", "scu_field.ray");
     // UFCS sobre una función genérica: el receptor cuenta para la inferencia.
-    comparar("fn cabeza<T>(xs: [T]) -> T { xs[0] } fn main() -> int { let xs: [int] = [10, 20]; xs.cabeza() }", "scu_gen.ray");
+    compare("fn head<T>(xs: [T]) -> T { xs[0] } fn main() -> int { let xs: [int] = [10, 20]; xs.head() }", "scu_gen.ray");
     // Función anónima como valor + captura del entorno (closure).
-    comparar("fn aplica(f: fn(int) -> int, x: int) -> int { f(x) } fn main() -> int { let g = fn(n: int) -> int { n + 1 }; aplica(g, 41) }", "scu_closure.ray");
-    comparar("fn main() -> int { let base = 10; let f = fn(x: int) -> int { x + base }; f(5) }", "scu_capture.ray");
+    compare("fn applies(f: fn(int) -> int, x: int) -> int { f(x) } fn main() -> int { let g = fn(n: int) -> int { n + 1 }; applies(g, 41) }", "scu_closure.ray");
+    compare("fn main() -> int { let base = 10; let f = fn(x: int) -> int { x + base }; f(5) }", "scu_capture.ray");
 }
 
 #[test]
-fn errores_ufcs_y_closures() {
-    comparar("fn main() -> int { let v = 5; v.inexistente() }", "scue_noufcs.ray");
-    comparar("fn doble(x: int) -> int { x * 2 } fn main() -> int { let b = true; b.doble() }", "scue_ufcsty.ray");
-    comparar("fn main() -> int { let f = fn(x: int) -> int { true }; 0 }", "scue_anonret.ray");
+fn errors_ufcs_y_closures() {
+    compare("fn main() -> int { let v = 5; v.nonexistent() }", "scue_noufcs.ray");
+    compare("fn double(x: int) -> int { x * 2 } fn main() -> int { let b = true; b.double() }", "scue_ufcsty.ray");
+    compare("fn main() -> int { let f = fn(x: int) -> int { true }; 0 }", "scue_anonret.ray");
 }
 
 #[test]
-fn traits_validos() {
+fn traits_valid_vals() {
     // Despacho estático sobre struct, enum y primitivo; Self en el retorno.
-    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } fn main() -> int { let p = P { x: 7 }; p.valor() }", "sctr_struct.ray");
-    comparar("trait V { fn valor(self) -> int; } enum M { Cara, Cruz } impl V for M { fn valor(self) -> int { match (self) { M.Cara => 1, M.Cruz => 0 } } } fn main() -> int { M.Cara.valor() }", "sctr_enum.ray");
-    comparar("trait V { fn valor(self) -> int; } impl V for int { fn valor(self) -> int { self } } fn main() -> int { 42.valor() }", "sctr_prim.ray");
-    comparar("struct P { x: int } trait Pt { fn doble(self) -> Self; } impl Pt for P { fn doble(self) -> Self { P { x: self.x + self.x } } } fn main() -> int { let p = P { x: 3 }; p.doble().x }", "sctr_self.ray");
+    compare("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } fn main() -> int { let p = P { x: 7 }; p.valor() }", "sctr_struct.ray");
+    compare("trait V { fn valor(self) -> int; } enum M { Cara, Cruz } impl V for M { fn valor(self) -> int { match (self) { M.Cara => 1, M.Cruz => 0 } } } fn main() -> int { M.Cara.valor() }", "sctr_enum.ray");
+    compare("trait V { fn valor(self) -> int; } impl V for int { fn valor(self) -> int { self } } fn main() -> int { 42.valor() }", "sctr_prim.ray");
+    compare("struct P { x: int } trait Pt { fn double(self) -> Self; } impl Pt for P { fn double(self) -> Self { P { x: self.x + self.x } } } fn main() -> int { let p = P { x: 3 }; p.double().x }", "sctr_self.ray");
     // Método por defecto (heredado y redefinido).
-    comparar("trait S { fn nombre(self) -> string; fn saludar(self) -> string { self.nombre() } } struct P { n: string } impl S for P { fn nombre(self) -> string { self.n } } fn main() -> int { let p = P { n: \"a\" }; print(p.saludar()); 0 }", "sctr_default.ray");
-    comparar("trait S { fn nombre(self) -> string; fn saludar(self) -> string { self.nombre() } } struct R { id: int } impl S for R { fn nombre(self) -> string { \"robot\" } fn saludar(self) -> string { \"beep\" } } fn main() -> int { let r = R { id: 1 }; print(r.saludar()); 0 }", "sctr_overr.ray");
+    compare("trait S { fn name(self) -> string; fn greet(self) -> string { self.name() } } struct P { n: string } impl S for P { fn name(self) -> string { self.n } } fn main() -> int { let p = P { n: \"a\" }; print(p.greet()); 0 }", "sctr_default.ray");
+    compare("trait S { fn name(self) -> string; fn greet(self) -> string { self.name() } } struct R { id: int } impl S for R { fn name(self) -> string { \"robot\" } fn greet(self) -> string { \"beep\" } } fn main() -> int { let r = R { id: 1 }; print(r.greet()); 0 }", "sctr_overr.ray");
 }
 
 #[test]
-fn errores_traits() {
-    comparar("impl Foo for int { fn f(self) -> int { self } } fn main() -> int { 0 }", "sctre_notrait.ray");
-    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { } fn main() -> int { 0 }", "sctre_missing.ray");
-    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } fn otro(self) -> int { 0 } } fn main() -> int { 0 }", "sctre_extra.ray");
-    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> bool { true } } fn main() -> int { 0 }", "sctre_sigret.ray");
-    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } fn main() -> int { let p = P { x: 1 }; p.inexistente() }", "sctre_nomethod.ray");
-    comparar("struct T { x: int } trait T { fn f(self) -> int; } fn main() -> int { 0 }", "sctre_duptype.ray");
-    comparar("trait V { fn valor(self) -> int; } struct C<T> { v: T } impl V for C { fn valor(self) -> int { 0 } } fn main() -> int { 0 }", "sctre_genimpl.ray");
+fn errors_traits() {
+    compare("impl Foo for int { fn f(self) -> int { self } } fn main() -> int { 0 }", "sctre_notrait.ray");
+    compare("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { } fn main() -> int { 0 }", "sctre_missing.ray");
+    compare("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } fn other(self) -> int { 0 } } fn main() -> int { 0 }", "sctre_extra.ray");
+    compare("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> bool { true } } fn main() -> int { 0 }", "sctre_sigret.ray");
+    compare("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } fn main() -> int { let p = P { x: 1 }; p.nonexistent() }", "sctre_nomethod.ray");
+    compare("struct T { x: int } trait T { fn f(self) -> int; } fn main() -> int { 0 }", "sctre_duptype.ray");
+    compare("trait V { fn valor(self) -> int; } struct C<T> { v: T } impl V for C { fn valor(self) -> int { 0 } } fn main() -> int { 0 }", "sctre_genimpl.ray");
 }
 
 #[test]
-fn bounds_validos() {
+fn bounds_valid_vals() {
     let t = "trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } impl V for int { fn valor(self) -> int { self } } ";
     // Genérico acotado: x.valor() legal porque T: V; sirve para Punto y para int.
-    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() + x.valor() }} fn main() -> int {{ let p = P {{ x: 3 }}; dv(p) + dv(10) }}"), "scb_bound.ray");
+    compare(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() + x.valor() }} fn main() -> int {{ let p = P {{ x: 3 }}; dv(p) + dv(10) }}"), "scb_bound.ray");
     // Reenvío de diccionario: un genérico acotado llama a otro con su propio T.
-    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() }} fn res<T: V>(a: T, b: T) -> int {{ dv(a) + b.valor() }} fn main() -> int {{ let p = P {{ x: 3 }}; res(p, p) }}"), "scb_forward.ray");
+    compare(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() }} fn res<T: V>(a: T, b: T) -> int {{ dv(a) + b.valor() }} fn main() -> int {{ let p = P {{ x: 3 }}; res(p, p) }}"), "scb_forward.ray");
     // Varios bounds a la vez (T: A + B).
-    comparar(&format!("{t}trait E {{ fn eti(self) -> string; }} impl E for P {{ fn eti(self) -> string {{ \"p\" }} }} fn des<T: V + E>(x: T) -> int {{ print(x.eti()); x.valor() }} fn main() -> int {{ des(P {{ x: 3 }}) }}"), "scb_multi.ray");
+    compare(&format!("{t}trait E {{ fn eti(self) -> string; }} impl E for P {{ fn eti(self) -> string {{ \"p\" }} }} fn des<T: V + E>(x: T) -> int {{ print(x.eti()); x.valor() }} fn main() -> int {{ des(P {{ x: 3 }}) }}"), "scb_multi.ray");
     // Método por defecto a través de un bound.
-    comparar("trait S { fn nombre(self) -> string; fn s(self) -> string { self.nombre() } } struct P { nom: string } impl S for P { fn nombre(self) -> string { self.nom } } fn an<T: S>(x: T) -> int { print(x.s()); 0 } fn main() -> int { an(P { nom: \"a\" }) }", "scb_default.ray");
+    compare("trait S { fn name(self) -> string; fn s(self) -> string { self.name() } } struct P { nom: string } impl S for P { fn name(self) -> string { self.nom } } fn an<T: S>(x: T) -> int { print(x.s()); 0 } fn main() -> int { an(P { nom: \"a\" }) }", "scb_default.ray");
 }
 
 #[test]
-fn errores_bounds() {
+fn errors_bounds() {
     let t = "trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } impl V for int { fn valor(self) -> int { self } } ";
-    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() }} fn main() -> int {{ dv(true) }}"), "scbe_unsat.ray");
-    comparar("fn f<T: NoExiste>(x: T) -> int { 0 } fn main() -> int { 0 }", "scbe_badbound.ray");
-    comparar("trait V { fn valor(self) -> int; } fn f<T: V>(x: int) -> int { 0 } fn g<U: V>(y: U) -> int { f(y) } fn main() -> int { 0 }", "scbe_boundtp.ray");
-    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.otro() }} fn main() -> int {{ 0 }}"), "scbe_nomethod.ray");
+    compare(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() }} fn main() -> int {{ dv(true) }}"), "scbe_unsat.ray");
+    compare("fn f<T: NoExiste>(x: T) -> int { 0 } fn main() -> int { 0 }", "scbe_badbound.ray");
+    compare("trait V { fn valor(self) -> int; } fn f<T: V>(x: int) -> int { 0 } fn g<U: V>(y: U) -> int { f(y) } fn main() -> int { 0 }", "scbe_boundtp.ray");
+    compare(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.other() }} fn main() -> int {{ 0 }}"), "scbe_nomethod.ray");
 }
 
 #[test]
-fn impls_genericos_validos() {
-    let m = "struct C<T> { v: T } trait M { fn medir(self) -> int; } impl M for int { fn medir(self) -> int { self } } impl<T: M> M for C<T> { fn medir(self) -> int { self.v.medir() + 1 } } ";
+fn impls_generics_valid_vals() {
+    let m = "struct C<T> { v: T } trait M { fn measure(self) -> int; } impl M for int { fn measure(self) -> int { self } } impl<T: M> M for C<T> { fn measure(self) -> int { self.v.measure() + 1 } } ";
     // Impl genérico SIN bounds (el método no usa T): vale para cualquier C<T>.
-    comparar("struct C<T> { v: T } trait Cont { fn contar(self) -> int; } impl<T> Cont for C<T> { fn contar(self) -> int { 1 } } fn main() -> int { let ci = C { v: 42 }; let cs = C { v: \"x\" }; ci.contar() + cs.contar() }", "scgi_nobound.ray");
+    compare("struct C<T> { v: T } trait Cont { fn count(self) -> int; } impl<T> Cont for C<T> { fn count(self) -> int { 1 } } fn main() -> int { let ci = C { v: 42 }; let cs = C { v: \"x\" }; ci.count() + cs.count() }", "scgi_nobound.ray");
     // Impl genérico ACOTADO (el cuerpo usa T.medir()).
-    comparar(&format!("{m}fn main() -> int {{ let c = C {{ v: 10 }}; c.medir() }}"), "scgi_bound.ray");
+    compare(&format!("{m}fn main() -> int {{ let c = C {{ v: 10 }}; c.measure() }}"), "scgi_bound.ray");
     // Caja<Caja<int>>: diccionario anidado (satisfacción recursiva, validada en el sitio).
-    comparar(&format!("{m}fn main() -> int {{ let c2 = C {{ v: C {{ v: 100 }} }}; c2.medir() }}"), "scgi_nested.ray");
+    compare(&format!("{m}fn main() -> int {{ let c2 = C {{ v: C {{ v: 100 }} }}; c2.measure() }}"), "scgi_nested.ray");
     // Pasar un Caja<int> a otro genérico acotado.
-    comparar(&format!("{m}fn md<X: M>(a: X) -> int {{ a.medir() }} fn main() -> int {{ let c = C {{ v: 10 }}; md(c) }}"), "scgi_pass.ray");
+    compare(&format!("{m}fn md<X: M>(a: X) -> int {{ a.measure() }} fn main() -> int {{ let c = C {{ v: 10 }}; md(c) }}"), "scgi_pass.ray");
 }
 
 #[test]
-fn errores_impls_genericos() {
-    comparar("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T, U> V for C<T> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_arity.ray");
-    comparar("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T> V for C<int> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_shape.ray");
-    comparar("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T: NoExiste> V for C<T> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_implbnd.ray");
+fn errors_impls_generics() {
+    compare("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T, U> V for C<T> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_arity.ray");
+    compare("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T> V for C<int> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_shape.ray");
+    compare("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T: NoExiste> V for C<T> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_implbnd.ray");
 }
 
 #[test]
-fn dyn_validos() {
+fn dyn_valid_vals() {
     let f = "trait F { fn area(self) -> int; } struct C { l: int } impl F for C { fn area(self) -> int { self.l * self.l } } ";
     // Coerción concreto→dyn en un arreglo + despacho dinámico.
-    comparar(&format!("{f}fn total(fs: [dyn F]) -> int {{ var s = 0; var i = 0; while (i < fs.len()) {{ s = s + fs[i].area(); i = i + 1; }} s }} fn main() -> int {{ let fs: [dyn F] = [C {{ l: 3 }}, C {{ l: 2 }}]; total(fs) }}"), "scd_coerce.ray");
+    compare(&format!("{f}fn total(fs: [dyn F]) -> int {{ var s = 0; var i = 0; while (i < fs.len()) {{ s = s + fs[i].area(); i = i + 1; }} s }} fn main() -> int {{ let fs: [dyn F] = [C {{ l: 3 }}, C {{ l: 2 }}]; total(fs) }}"), "scd_coerce.ray");
     // Método por defecto despachado sobre el objeto.
-    comparar("trait F { fn area(self) -> int; fn d(self) -> int { self.area() } } struct C { l: int } impl F for C { fn area(self) -> int { self.l } } fn main() -> int { let x: dyn F = C { l: 5 }; x.d() }", "scd_default.ray");
+    compare("trait F { fn area(self) -> int; fn d(self) -> int { self.area() } } struct C { l: int } impl F for C { fn area(self) -> int { self.l } } fn main() -> int { let x: dyn F = C { l: 5 }; x.d() }", "scd_default.ray");
     // dyn multi-trait (dyn A + B).
-    comparar("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn main() -> int { let x: dyn A + B = S {}; x.a() + x.b() }", "scd_multi.ray");
+    compare("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn main() -> int { let x: dyn A + B = S {}; x.a() + x.b() }", "scd_multi.ray");
     // Upcasting dyn A + B → dyn A.
-    comparar("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn f(x: dyn A) -> int { x.a() } fn main() -> int { let x: dyn A + B = S {}; f(x) }", "scd_upcast.ray");
+    compare("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn f(x: dyn A) -> int { x.a() } fn main() -> int { let x: dyn A + B = S {}; f(x) }", "scd_upcast.ray");
 }
 
 #[test]
-fn errores_dyn() {
+fn errors_dyn() {
     let f = "trait F { fn area(self) -> int; } struct C { l: int } impl F for C { fn area(self) -> int { self.l * self.l } } ";
-    comparar(&format!("{f}struct D {{}} fn main() -> int {{ let x: dyn F = D {{}}; 0 }}"), "scde_noimpl.ray");
-    comparar(&format!("{f}fn main() -> int {{ let x: dyn F = C {{ l: 1 }}; x.nope() }}"), "scde_nomethod.ray");
-    comparar("struct S {} fn main() -> int { let x: dyn NoExiste = S {}; 0 }", "scde_notrait.ray");
-    comparar("trait F { fn dup(self) -> Self; } struct C {} impl F for C { fn dup(self) -> Self { C {} } } fn main() -> int { let x: dyn F = C {}; x.dup(); 0 }", "scde_objsafe.ray");
-    comparar("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn f(x: dyn A + B) -> int { x.a() } fn main() -> int { let x: dyn A = S {}; f(x) }", "scde_baddown.ray");
+    compare(&format!("{f}struct D {{}} fn main() -> int {{ let x: dyn F = D {{}}; 0 }}"), "scde_noimpl.ray");
+    compare(&format!("{f}fn main() -> int {{ let x: dyn F = C {{ l: 1 }}; x.nope() }}"), "scde_nomethod.ray");
+    compare("struct S {} fn main() -> int { let x: dyn NoExiste = S {}; 0 }", "scde_notrait.ray");
+    compare("trait F { fn dup(self) -> Self; } struct C {} impl F for C { fn dup(self) -> Self { C {} } } fn main() -> int { let x: dyn F = C {}; x.dup(); 0 }", "scde_objsafe.ray");
+    compare("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn f(x: dyn A + B) -> int { x.a() } fn main() -> int { let x: dyn A = S {}; f(x) }", "scde_baddown.ray");
 }
 
 #[test]
 fn prelude_map_filter_fold() {
-    let d = "fn doble(x: int) -> int { x * 2 } fn par(x: int) -> bool { x % 2 == 0 } fn suma(a: int, b: int) -> int { a + b } ";
+    let d = "fn double(x: int) -> int { x * 2 } fn par(x: int) -> bool { x % 2 == 0 } fn sum(a: int, b: int) -> int { a + b } ";
     // map/filter/fold del prelude, vía UFCS encadenado.
-    comparar(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3]; xs.map(doble).filter(par).fold(0, suma) }}"), "scpre_chain.ray");
+    compare(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3]; xs.map(double).filter(par).fold(0, sum) }}"), "scpre_chain.ray");
     // Vía pipelines.
-    comparar(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3, 4]; xs |> filter(par) |> map(doble) |> fold(0, suma) }}"), "scpre_pipe.ray");
+    compare(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3, 4]; xs |> filter(par) |> map(double) |> fold(0, sum) }}"), "scpre_pipe.ray");
     // Con closures inline.
-    comparar(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3]; xs |> map(fn(x: int) -> int {{ x * x }}) |> fold(0, suma) }}"), "scpre_clos.ray");
+    compare(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3]; xs |> map(fn(x: int) -> int {{ x * x }}) |> fold(0, sum) }}"), "scpre_clos.ray");
     // El usuario puede redefinir 'map' (override del prelude).
-    comparar("fn map(x: int) -> int { x + 1 } fn main() -> int { map(5) }", "scpre_override.ray");
+    compare("fn map(x: int) -> int { x + 1 } fn main() -> int { map(5) }", "scpre_override.ray");
     // Error: el predicado/función no casa con el elemento.
-    comparar("fn negar(b: bool) -> bool { !b } fn main() -> int { let xs: [int] = [1, 2]; let ys = xs.map(negar); 0 }", "scpre_mapty.ray");
+    compare("fn negar(b: bool) -> bool { !b } fn main() -> int { let xs: [int] = [1, 2]; let ys = xs.map(negar); 0 }", "scpre_mapty.ray");
 }
 
 #[test]
-fn derive_y_anotaciones_validos() {
+fn derive_y_annotations_valid_vals() {
     // @derive(Eq): .eq() sobre struct.
-    comparar("@derive(Eq) struct P { x: int } fn main() -> int { let a = P { x: 1 }; let b = P { x: 1 }; if (a.eq(b)) { 1 } else { 0 } }", "scan_eq.ray");
+    compare("@derive(Eq) struct P { x: int } fn main() -> int { let a = P { x: 1 }; let b = P { x: 1 }; if (a.eq(b)) { 1 } else { 0 } }", "scan_eq.ray");
     // @derive(Show): .show() sobre enum.
-    comparar("@derive(Show) enum C { Rojo, Azul } fn main() -> int { print(C.Rojo.show()); 0 }", "scan_show.ray");
+    compare("@derive(Show) enum C { Rojo, Azul } fn main() -> int { print(C.Rojo.show()); 0 }", "scan_show.ray");
     // @derive(Eq, Show) a la vez.
-    comparar("@derive(Eq, Show) struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, y: 2 }; print(p.show()); if (p.eq(p)) { 1 } else { 0 } }", "scan_both.ray");
+    compare("@derive(Eq, Show) struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, y: 2 }; print(p.show()); if (p.eq(p)) { 1 } else { 0 } }", "scan_both.ray");
     // El tipo derivado satisface un bound T: Eq.
-    comparar("@derive(Eq) enum C { A, B } fn ci<T: Eq>(a: T, b: T) -> int { if (a.eq(b)) { 1 } else { 0 } } fn main() -> int { ci(C.A, C.A) }", "scan_bound.ray");
+    compare("@derive(Eq) enum C { A, B } fn ci<T: Eq>(a: T, b: T) -> int { if (a.eq(b)) { 1 } else { 0 } } fn main() -> int { ci(C.A, C.A) }", "scan_bound.ray");
     // Eq/Show del prelude sobre primitivos.
-    comparar("fn main() -> int { print(42.show()); if (1.eq(1)) { 0 } else { 1 } }", "scan_prim.ray");
+    compare("fn main() -> int { print(42.show()); if (1.eq(1)) { 0 } else { 1 } }", "scan_prim.ray");
     // @test (función de prueba).
-    comparar("@test fn t() -> bool { true } fn main() -> int { 0 }", "scan_test.ray");
+    compare("@test fn t() -> bool { true } fn main() -> int { 0 }", "scan_test.ray");
 }
 
 #[test]
-fn errores_derive_y_anotaciones() {
-    comparar("@frobnicate fn f() -> int { 0 } fn main() -> int { 0 }", "scane_unk.ray");
-    comparar("@test fn t(x: int) -> bool { true } fn main() -> int { 0 }", "scane_testpar.ray");
-    comparar("@test fn t() -> int { 0 } fn main() -> int { 0 }", "scane_testret.ray");
-    comparar("@derive(Eq) fn f() -> int { 0 } fn main() -> int { 0 }", "scane_derfn.ray");
-    comparar("@test struct S {} fn main() -> int { 0 }", "scane_testty.ray");
-    comparar("@derive(Frob) struct S { x: int } fn main() -> int { 0 }", "scane_derunk.ray");
-    comparar("@derive(Eq) struct C<T> { v: T } fn main() -> int { 0 }", "scane_dergen.ray");
-    comparar("@derive() struct S { x: int } fn main() -> int { 0 }", "scane_derempty.ray");
+fn errors_derive_y_annotations() {
+    compare("@frobnicate fn f() -> int { 0 } fn main() -> int { 0 }", "scane_unk.ray");
+    compare("@test fn t(x: int) -> bool { true } fn main() -> int { 0 }", "scane_testpar.ray");
+    compare("@test fn t() -> int { 0 } fn main() -> int { 0 }", "scane_testret.ray");
+    compare("@derive(Eq) fn f() -> int { 0 } fn main() -> int { 0 }", "scane_derfn.ray");
+    compare("@test struct S {} fn main() -> int { 0 }", "scane_testty.ray");
+    compare("@derive(Frob) struct S { x: int } fn main() -> int { 0 }", "scane_derunk.ray");
+    compare("@derive(Eq) struct C<T> { v: T } fn main() -> int { 0 }", "scane_dergen.ray");
+    compare("@derive() struct S { x: int } fn main() -> int { 0 }", "scane_derempty.ray");
 }
 
 #[test]
 fn panic_y_parse() {
     // M14.6c-1: válidos.
     // parse_int/parse_float (envoltorios del prelude) → Option<int>/Option<float>.
-    comparar("fn main() -> int { match (parse_int(\"5\")) { Option.Some(n) => n, Option.None => 0 } }", "scpp_pi.ray");
-    comparar("fn main() -> int { match (parse_float(\"5.0\")) { Option.Some(f) => 1, Option.None => 0 } }", "scpp_pf.ray");
+    compare("fn main() -> int { match (parse_int(\"5\")) { Option.Some(n) => n, Option.None => 0 } }", "scpp_pi.ray");
+    compare("fn main() -> int { match (parse_float(\"5.0\")) { Option.Some(f) => 1, Option.None => 0 } }", "scpp_pf.ray");
     // panic como expresión divergente: cede el tipo al otro brazo del if.
-    comparar("fn pos(n: int) -> int { if (n >= 0) { n } else { panic(\"neg\") } } fn main() -> int { pos(3) }", "scpp_pan.ray");
+    compare("fn pos(n: int) -> int { if (n >= 0) { n } else { panic(\"neg\") } } fn main() -> int { pos(3) }", "scpp_pan.ray");
     // Errores (mensajes byte-idénticos a Rust).
-    comparar("fn main() -> int { panic(5); 0 }", "scpp_pantype.ray");
-    comparar("fn main() -> int { panic(); 0 }", "scpp_panarity.ray");
-    comparar("fn main() -> int { match (parse_int(42)) { Option.Some(n) => n, Option.None => 0 } }", "scpp_pitype.ray");
+    compare("fn main() -> int { panic(5); 0 }", "scpp_pantype.ray");
+    compare("fn main() -> int { panic(); 0 }", "scpp_panarity.ray");
+    compare("fn main() -> int { match (parse_int(42)) { Option.Some(n) => n, Option.None => 0 } }", "scpp_pitype.ray");
     // M14.6c-2: assert/assert_eq/sort (sobre los traits del prelude Eq/Show/Ord).
-    comparar("fn main() -> int { assert(true); 0 }", "scpp_assert.ray");
-    comparar("fn main() -> int { assert_eq(1, 1); 0 }", "scpp_asserteq.ray");
-    comparar("fn main() -> int { let xs = sort([3, 1, 2]); xs[0] }", "scpp_sort.ray");
-    comparar("fn main() -> int { let xs = sort([\"b\", \"a\"]); 0 }", "scpp_sortstr.ray");
+    compare("fn main() -> int { assert(true); 0 }", "scpp_assert.ray");
+    compare("fn main() -> int { assert_eq(1, 1); 0 }", "scpp_asserteq.ray");
+    compare("fn main() -> int { let xs = sort([3, 1, 2]); xs[0] }", "scpp_sort.ray");
+    compare("fn main() -> int { let xs = sort([\"b\", \"a\"]); 0 }", "scpp_sortstr.ray");
     // sort sobre un tipo sin Ord → error de bound (mensaje byte-idéntico a Rust).
-    comparar("struct P { v: int } fn main() -> int { let xs = sort([P { v: 1 }]); 0 }", "scpp_sortnoord.ray");
+    compare("struct P { v: int } fn main() -> int { let xs = sort([P { v: 1 }]); 0 }", "scpp_sortnoord.ray");
     // M14.6d (M50.1: fs → std/fs; el oráculo es pre-loader → usa los primitivos __x): __read_file/
     // __write_file (arreglo etiquetado [string]) + __exists (bool).
-    comparar("fn main() -> int { let r = __read_file(\"x\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_rf.ray");
-    comparar("fn main() -> int { let r = __write_file(\"x\", \"y\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_wf.ray");
-    comparar("fn main() -> int { if (__exists(\"x\")) { 1 } else { 0 } }", "scpp_exists.ray");
+    compare("fn main() -> int { let r = __read_file(\"x\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_rf.ray");
+    compare("fn main() -> int { let r = __write_file(\"x\", \"y\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_wf.ray");
+    compare("fn main() -> int { if (__exists(\"x\")) { 1 } else { 0 } }", "scpp_exists.ray");
     // Error de tipo en __exists (mensaje byte-idéntico a Rust).
-    comparar("fn main() -> int { if (__exists(5)) { 1 } else { 0 } }", "scpp_existstype.ray");
+    compare("fn main() -> int { if (__exists(5)) { 1 } else { 0 } }", "scpp_existstype.ray");
 }
 
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
-fn ejemplos_reales_validos() {
-    let archivos = ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray", "examples/basics/primes.ray",
+fn ejemplos_reales_valid_vals() {
+    let files = ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray", "examples/basics/primes.ray",
         "examples/data/structs.ray", "examples/data/match_figuras.ray", "examples/data/enums.ray", "examples/data/arrays.ray",
         "examples/data/matriz.ray", "examples/types/genericos.ray", "examples/types/tipos_genericos.ray", "examples/types/opcional.ray",
         "examples/types/errores.ray", "examples/stdlib/ufcs.ray", "examples/stdlib/closures.ray", "examples/types/traits.ray",
         "examples/types/bounds.ray", "examples/types/metodos_por_defecto.ray", "examples/types/impls_genericos.ray",
         "examples/types/trait_objects.ray", "examples/stdlib/stdlib.ray", "examples/types/anotaciones.ray"];
-    for rel in archivos {
+    for rel in files {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
-        let esperado = canonical(&src);
-        let nombre_tmp = format!("sc_real_{}.ray", rel.replace('/', "_"));
-        let obtenido = check_dump(&src, &nombre_tmp);
-        assert_eq!(obtenido, esperado, "el checker auto-alojado difiere del oráculo en {rel}");
+        let expected = canonical(&src);
+        let name_tmp = format!("sc_real_{}.ray", rel.replace('/', "_"));
+        let obtained = check_dump(&src, &name_tmp);
+        assert_eq!(obtained, expected, "el checker auto-alojado difiere del oráculo en {rel}");
     }
 }
 
@@ -447,14 +447,14 @@ fn ejemplos_reales_validos() {
 #[test]
 fn gotcha_55_lleva_pista() {
     // Llamada: el "callee" es un while-expresión (unit).
-    comparar(
+    compare(
         "fn main() { var i = 0; while (i < 3) { i = i + 1; } (2); }",
         "sc_g55_call.ray",
     );
     // Llamada con un if-sentencia como callee.
-    comparar("fn main() { if (true) { print(1); } (2); }", "sc_g55_if.ray");
+    compare("fn main() { if (true) { print(1); } (2); }", "sc_g55_if.ray");
     // Indexación: la cola `[0]` tras el if.
-    comparar("fn main() { if (true) { print(1); } [0]; }", "sc_g55_index.ray");
+    compare("fn main() { if (true) { print(1); } [0]; }", "sc_g55_index.ray");
     // Control: llamar un valor no-función SIN forma de bloque NO lleva la pista.
-    comparar("fn main() { let x = 3; x(1); }", "sc_g55_plain.ray");
+    compare("fn main() { let x = 3; x(1); }", "sc_g55_plain.ray");
 }

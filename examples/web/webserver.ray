@@ -193,7 +193,7 @@ fn find_fin_cabeceras(b: bytes, desde: int) -> int {
     0 - 1
 }
 
-// Lee una petición HTTP completa de la conexión: acumula bytes hasta el fin de cabeceras (\r\n\r\n),
+// Lee una petición HTTP completa de la connection: acumula bytes hasta el fin de cabeceras (\r\n\r\n),
 // decodifica SOLO las cabeceras como texto para parsearlas, y —si hay Content-Length— sigue leyendo
 // hasta completar el cuerpo (bytes crudos, octetos). M19.2: cuerpo binario correcto.
 pub fn read_request(conn: int) -> Result<Request, string> {
@@ -302,7 +302,7 @@ fn leer_con_plazo(conn: int, plazo_fin: int) -> Result<bytes, string> {
     if (plazo_fin > 0) {
         let restante: int = plazo_fin - time.monotonic();
         if (restante <= 0) {
-            return Result.Err("tiempo de espera de lectura agotado");
+            return Result.Err("read timeout");
         }
         net.set_read_timeout(conn, restante);
     }
@@ -338,18 +338,18 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     }
                 },
                 Result.Err(e) => {
-                    // M56.6: EOF/timeout SIN nada recibido = "conexión cerrada" (cierre silencioso).
+                    // M56.6: EOF/timeout SIN nada recibido = "connection closed" (cierre silencioso).
                     if (acc.len() == 0) {
-                        return Result.Err("conexión cerrada");
+                        return Result.Err("connection closed");
                     }
-                    return Result.Err("error al leer: " + e);
+                    return Result.Err("error reading: " + e);
                 },
             }
         }
     }
     if (sep < 0) {
         if (acc.len() == 0) {
-            return Result.Err("conexión cerrada");
+            return Result.Err("connection closed");
         }
         return Result.Err("petición incompleta (sin fin de cabeceras)");
     }
@@ -365,11 +365,11 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
         Result.Ok(cabeceras_raw) => {
             let lineas: [string] = cabeceras_raw.split("\r\n");
 
-            // Línea de petición: "GET /ruta?query HTTP/1.1". M56.2: se parte en el PRIMER `?`
+            // Línea de request: "GET /ruta?query HTTP/1.1". M56.2: se parte en el PRIMER `?`
             // (la query cruda va aparte) y la ruta se decodifica (%XX; escape inválido = 400).
             let partes: [string] = lineas[0].split(" ");
             if (partes.len() < 2) {
-                return Result.Err("línea de petición malformada: " + lineas[0]);
+                return Result.Err("malformed request line: " + lineas[0]);
             }
             let method: string = partes[0];
             let target: string = partes[1];
@@ -522,7 +522,7 @@ pub fn sse_event(conn: int, data: string) -> Result<int, string> {
 }
 
 // --- El bucle del servidor (concurrente: una fibra por conexión) ---
-// Atiende UNA conexión: lee la petición y se la pasa al handler (que controla la conexión). Cierra al
+// Atiende UNA connection: lee la petición y se la pasa al handler (que controla la conexión). Cierra al
 // terminar. Lo usa serve_raw; cada conexión corre en su propia fibra.
 // M56.1: una petición ilegible responde 400 antes de cerrar (best effort, sin filtrar el detalle).
 // M56.5: el handler corre en su PROPIA tarea (try_join observa el fallo sin re-lanzar) → un panic
@@ -543,9 +543,9 @@ fn atender(conn: int, handler: fn(Request, int), limits: Limits) {
             }
         },
         Result.Err(e) => {
-            // "conexión cerrada" = el peer cerró sin pedir nada (o quedó ocioso): silencio.
-            if (e != "conexión cerrada") {
-                eprint("petición: " + e);
+            // "connection closed" = el peer cerró sin pedir nada (o quedó ocioso): silencio.
+            if (e != "connection closed") {
+                eprint("request: " + e);
                 match (send_response(conn, text(400, "Bad Request"))) {
                     Result.Ok(_) => { },
                     Result.Err(_) => { },
@@ -603,8 +603,8 @@ fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                 }
             },
             Result.Err(e) => {
-                if (e != "conexión cerrada") {
-                    eprint("petición: " + e);
+                if (e != "connection closed") {
+                    eprint("request: " + e);
                     match (send_response(conn, text(400, "Bad Request"))) {
                         Result.Ok(_) => { },
                         Result.Err(_) => { },
@@ -636,7 +636,7 @@ pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Req
 
 // El bucle de accept compartido por TCP plano y TLS (M56.3). `preparar` transforma la conexión
 // recién aceptada antes de atenderla (identidad para HTTP; `net.tls_accept` para HTTPS) y corre
-// DENTRO de la fibra de la conexión: un handshake TLS lento no frena el accept de las demás.
+// DENTRO de la fibra de la connection: un handshake TLS lento no frena el accept de las demás.
 // M56.6: `atender_conn` atiende la conexión preparada (crudo: una petición; ergonómico: bucle
 // keep-alive); debe cerrar la conexión al terminar.
 fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, atender_conn: fn(int)) -> Result<int, string> {
@@ -661,7 +661,7 @@ fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> 
                                     atender_conn(c);
                                 },
                                 Result.Err(e) => {
-                                    eprint("conexión: " + e);
+                                    eprint("connection: " + e);
                                     close(conn);
                                 },
                             }

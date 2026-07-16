@@ -13,8 +13,8 @@
 //!   - `{% for x in expr %} … {% endfor %}` — cualquier iterable del `for` de raylang
 //!     (arreglos, rangos `a..b`, `Map` con `(k, v)`, iteradores).
 //!
-//! `vistas/lista.ray.html` genera `vistas/lista.ray` con `pub fn render_lista(…) -> string`, que se
-//! importa como cualquier módulo (`import vistas/lista;` → `lista.render_lista(…)`). El archivo
+//! `views/list.ray.html` genera `views/list.ray` con `pub fn render_list(…) -> string`, que se
+//! importa como cualquier módulo (`import views/list;` → `list.render_list(…)`). El archivo
 //! generado se commitea (inspeccionable, cero magia); el escape reusa el `escape_html` de
 //! `std/template` (pub). Es un cliente del front-end (como `ray fmt`/`ray doc`): el `.ray` generado
 //! lo valida el pipeline entero al compilarse; aquí solo se comprueba que **parsea** para dar el
@@ -69,27 +69,27 @@ impl Tok {
 /// generada. `Err` con el archivo, la línea y el motivo si el template está mal formado.
 pub fn generate_file(input: &Path) -> Result<PathBuf, String> {
     let src = std::fs::read_to_string(input)
-        .map_err(|e| format!("no se pudo leer '{}': {e}", input.display()))?;
+        .map_err(|e| format!("could not read '{}': {e}", input.display()))?;
     let name = fn_suffix_of(input)?;
     let (code, _map) = generate_with_map_at(&src, &name, input.parent())
-        .map_err(|e| format!("{}: línea {}: {}", input.display(), e.line, e.msg))?;
+        .map_err(|e| format!("{}: line {}: {}", input.display(), e.line, e.msg))?;
     let out_path = output_path(input)?;
     std::fs::write(&out_path, &code)
-        .map_err(|e| format!("no se pudo escribir '{}': {e}", out_path.display()))?;
+        .map_err(|e| format!("could not write '{}': {e}", out_path.display()))?;
     // Validación temprana: el generado debe parsear. Un error aquí es un error DEL TEMPLATE
     // (expresión empalmada mal formada); el archivo queda escrito para inspección.
     let tokens = crate::lexer::lex(&code)
-        .map_err(|e| format!("{}: el código generado no lexea (línea {}): {e}", input.display(), e.line))?;
+        .map_err(|e| format!("{}: the generated code does not lex (line {}): {e}", input.display(), e.line))?;
     crate::parser::parse(tokens)
-        .map_err(|e| format!("{}: el código generado no parsea ({}:{}): {e}", input.display(), out_path.display(), e.line))?;
+        .map_err(|e| format!("{}: the generated code does not parse ({}:{}): {e}", input.display(), out_path.display(), e.line))?;
     Ok(out_path)
 }
 
-// `vistas/lista.ray.html` → `vistas/lista.ray`.
+// `views/list.ray.html` → `views/list.ray`.
 fn output_path(input: &Path) -> Result<PathBuf, String> {
     let s = input.to_string_lossy();
     let Some(base) = s.strip_suffix(".ray.html") else {
-        return Err(format!("'{}' no termina en .ray.html", input.display()));
+        return Err(format!("'{}' does not end in .ray.html", input.display()));
     };
     Ok(PathBuf::from(format!("{base}.ray")))
 }
@@ -102,13 +102,13 @@ pub fn fn_suffix_of(input: &Path) -> Result<String, String> {
         .file_name()
         .and_then(|n| n.to_str())
         .and_then(|n| n.strip_suffix(".ray.html"))
-        .ok_or_else(|| format!("'{}' no termina en .ray.html", input.display()))?;
+        .ok_or_else(|| format!("'{}' does not end in .ray.html", input.display()))?;
     let name: String = s.chars().map(|c| if c == '-' { '_' } else { c }).collect();
-    let valido = !name.is_empty()
+    let valid = !name.is_empty()
         && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if !valido {
-        return Err(format!("'{s}' no es un nombre de template válido (identificador: letras/dígitos/_)"));
+    if !valid {
+        return Err(format!("'{s}' is not a valid template name (identifier: letters/digits/_)"));
     }
     Ok(name)
 }
@@ -157,8 +157,8 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
                 }
             }
             let Some(fin) = fin else {
-                let que = if es_tag { "'{%' sin cerrar" } else { "'{{' sin cerrar" };
-                return Err(TplError { line: tok_line, msg: que.into() });
+                let what = if es_tag { "'{%' without close" } else { "'{{' without close" };
+                return Err(TplError { line: tok_line, msg: what.into() });
             };
             let inner: String = cs[ini..fin].iter().collect();
             line += inner.matches('\n').count();
@@ -168,8 +168,8 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
             start_line = line;
             if es_tag {
                 toks.push(Tok::Tag(inner, tok_line));
-            } else if let Some(resto) = inner.strip_prefix('&') {
-                toks.push(Tok::Raw(resto.trim().to_string(), tok_line));
+            } else if let Some(rest) = inner.strip_prefix('&') {
+                toks.push(Tok::Raw(rest.trim().to_string(), tok_line));
             } else {
                 toks.push(Tok::Var(inner, tok_line));
             }
@@ -335,16 +335,16 @@ pub fn template_ref(s: &str) -> Option<(&str, &str)> {
     if !s.ends_with(')') {
         return None;
     }
-    let ruta = s[..abre].trim_end();
+    let path = s[..abre].trim_end();
     let seg_ok = |x: &str| {
         !x.is_empty()
             && x.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     };
-    if ruta.is_empty() || !ruta.split('/').all(seg_ok) {
+    if path.is_empty() || !path.split('/').all(seg_ok) {
         return None;
     }
-    Some((ruta, s[abre + 1..s.len() - 1].trim()))
+    Some((path, s[abre + 1..s.len() - 1].trim()))
 }
 
 // Qué abre/cierra cada etiqueta (para validar el anidamiento y cuadrar las llaves).
@@ -377,34 +377,34 @@ pub fn generate_with_map_at(tpl: &str, name: &str, dir: Option<&Path>) -> Result
                 let Some(Tok::Tag(t, l)) = it.next() else { unreachable!() };
                 break (t["params".len()..].trim().to_string(), l);
             }
-            otro => {
-                let line = otro.map(|t| t.line()).unwrap_or(1);
+            other => {
+                let line = other.map(|t| t.line()).unwrap_or(1);
                 return Err(TplError {
                     line,
-                    msg: "la primera directiva debe ser '{% params nombre: tipo, … %}' (la firma de la función)".into(),
+                    msg: "the first directive must be '{% params name: type, … %}' (the function signature)".into(),
                 });
             }
         }
     };
     for p in split_params(&params) {
-        let Some((nombre, tipo)) = p.split_once(':') else {
-            return Err(TplError { line: params_line, msg: format!("parámetro mal formado en params: '{p}' (se espera 'nombre: tipo')") });
+        let Some((name, ty)) = p.split_once(':') else {
+            return Err(TplError { line: params_line, msg: format!("malformed parameter in params: '{p}' (expected 'name: type')") });
         };
-        let nombre = nombre.trim();
-        if nombre.is_empty() || tipo.trim().is_empty() || !nombre.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err(TplError { line: params_line, msg: format!("parámetro mal formado en params: '{p}'") });
+        let name = name.trim();
+        if name.is_empty() || ty.trim().is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(TplError { line: params_line, msg: format!("malformed parameter in params: '{p}'") });
         }
     }
     // Si el template continúa con un salto de línea inmediato tras `%}`, se recorta (estética del
     // HTML generado; el resto del espaciado se respeta tal cual).
     let mut toks: Vec<Tok> = Vec::new();
     if let Some(Tok::Text(t, l)) = it.peek()
-        && let Some(resto) = t.strip_prefix('\n')
+        && let Some(rest) = t.strip_prefix('\n')
     {
-        let (resto, l) = (resto.to_string(), *l);
+        let (rest, l) = (rest.to_string(), *l);
         it.next();
-        if !resto.is_empty() {
-            toks.push(Tok::Text(resto, l + 1));
+        if !rest.is_empty() {
+            toks.push(Tok::Text(rest, l + 1));
         }
     }
     toks.extend(it);
@@ -452,22 +452,22 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
         let mut open: Option<usize> = None;
         for tok in toks {
             if let Tok::Tag(t, l) = &tok {
-                let (kw, resto) = kw_of(t);
+                let (kw, rest) = kw_of(t);
                 match kw.as_str() {
-                    "extends" => return Err(TplError { line: *l, msg: "'{% extends %}' debe ser la primera etiqueta tras '{% params %}'".into() }),
+                    "extends" => return Err(TplError { line: *l, msg: "'{% extends %}' must be the first tag after '{% params %}'".into() }),
                     "block" => {
                         if open.is_some() {
-                            return Err(TplError { line: *l, msg: "'{% block %}' anidado".into() });
+                            return Err(TplError { line: *l, msg: "'{% block %}' nested".into() });
                         }
-                        if !ident_ok(&resto) {
-                            return Err(TplError { line: *l, msg: format!("'{{% block %}}' mal formado: '{resto}' (se espera un nombre)") });
+                        if !ident_ok(&rest) {
+                            return Err(TplError { line: *l, msg: format!("malformed '{{% block %}}': '{rest}' (a name is expected)") });
                         }
                         open = Some(*l);
                         continue;
                     }
                     "endblock" => {
                         if open.is_none() {
-                            return Err(TplError { line: *l, msg: "'{% endblock %}' sin '{% block %}' que cerrar".into() });
+                            return Err(TplError { line: *l, msg: "'{% endblock %}' without a '{% block %}' to close".into() });
                         }
                         open = None;
                         continue;
@@ -478,7 +478,7 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
             out.push(tok);
         }
         if let Some(l) = open {
-            return Err(TplError { line: l, msg: "'{% block %}' sin '{% endblock %}'".into() });
+            return Err(TplError { line: l, msg: "'{% block %}' without '{% endblock %}'".into() });
         }
         return Ok(out);
     }
@@ -490,16 +490,16 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
     let mut cur: Option<(String, usize)> = None;
     for tok in toks {
         if let Tok::Tag(t, l) = &tok {
-            let (kw, resto) = kw_of(t);
+            let (kw, rest) = kw_of(t);
             match kw.as_str() {
                 "extends" if cur.is_none() => {
                     if layout_ref.is_some() {
                         return Err(TplError { line: *l, msg: "'{% extends %}' repetido".into() });
                     }
-                    if !valid_import(&resto) || resto.contains(" as ") {
-                        return Err(TplError { line: *l, msg: format!("'{{% extends %}}' mal formado: '{resto}' (se espera 'ruta/al/layout')") });
+                    if !valid_import(&rest) || rest.contains(" as ") {
+                        return Err(TplError { line: *l, msg: format!("malformed '{{% extends %}}': '{rest}' (expected 'path/to/layout')") });
                     }
-                    layout_ref = Some((resto, *l));
+                    layout_ref = Some((rest, *l));
                     continue;
                 }
                 "import" if cur.is_none() => {
@@ -508,21 +508,21 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
                 }
                 "block" => {
                     if cur.is_some() {
-                        return Err(TplError { line: *l, msg: "'{% block %}' anidado".into() });
+                        return Err(TplError { line: *l, msg: "'{% block %}' nested".into() });
                     }
-                    if !ident_ok(&resto) {
-                        return Err(TplError { line: *l, msg: format!("'{{% block %}}' mal formado: '{resto}' (se espera un nombre)") });
+                    if !ident_ok(&rest) {
+                        return Err(TplError { line: *l, msg: format!("malformed '{{% block %}}': '{rest}' (a name is expected)") });
                     }
-                    if blocks.iter().any(|(n, _, _)| *n == resto) {
-                        return Err(TplError { line: *l, msg: format!("'{{% block {resto} %}}' repetido") });
+                    if blocks.iter().any(|(n, _, _)| *n == rest) {
+                        return Err(TplError { line: *l, msg: format!("'{{% block {rest} %}}' repetido") });
                     }
-                    cur = Some((resto.clone(), *l));
-                    blocks.push((resto, *l, Vec::new()));
+                    cur = Some((rest.clone(), *l));
+                    blocks.push((rest, *l, Vec::new()));
                     continue;
                 }
                 "endblock" => {
                     if cur.is_none() {
-                        return Err(TplError { line: *l, msg: "'{% endblock %}' sin '{% block %}' que cerrar".into() });
+                        return Err(TplError { line: *l, msg: "'{% endblock %}' without a '{% block %}' to close".into() });
                     }
                     cur = None;
                     continue;
@@ -531,35 +531,35 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
             }
         }
         match (&cur, &tok) {
-            (Some(_), _) => blocks.last_mut().expect("bloque abierto").2.push(tok),
+            (Some(_), _) => blocks.last_mut().expect("open block").2.push(tok),
             (None, Tok::Text(s, _)) if s.trim().is_empty() => {}
             (None, t) => {
-                return Err(TplError { line: t.line(), msg: "un template con '{% extends %}' solo puede tener '{% block %}'s (e '{% import %}'s) fuera de los bloques".into() });
+                return Err(TplError { line: t.line(), msg: "a template with '{% extends %}' can only have '{% block %}'s (and '{% import %}'s) outside the blocks".into() });
             }
         }
     }
     if let Some((n, l)) = cur {
-        return Err(TplError { line: l, msg: format!("'{{% block {n} %}}' sin '{{% endblock %}}'") });
+        return Err(TplError { line: l, msg: format!("'{{% block {n} %}}' without '{{% endblock %}}'") });
     }
     let (lpath, eline) = layout_ref.expect("hereda");
     let Some(dir) = dir else {
-        return Err(TplError { line: eline, msg: "'{% extends %}' requiere generar desde un archivo (la ruta del layout se resuelve desde la raíz del proyecto)".into() });
+        return Err(TplError { line: eline, msg: "'{% extends %}' requires generating from a file (the layout path is resolved from the project root)".into() });
     };
     // La ruta del layout se resuelve COMO LOS IMPORTS/INCLUDES: desde la **raíz del proyecto**
     // (el directorio con `ray.toml` más cercano por encima del template) — una sola convención
     // de rutas en los templates. Fallback: relativa al directorio del template (proyectos sin
     // manifiesto, o un layout hermano).
     let file = {
-        let desde_raiz = project_root_of(dir).map(|r| r.join(format!("{lpath}.ray.html")));
-        match desde_raiz {
+        let from_root = project_root_of(dir).map(|r| r.join(format!("{lpath}.ray.html")));
+        match from_root {
             Some(p) if p.is_file() => p,
             _ => dir.join(format!("{lpath}.ray.html")),
         }
     };
     let lsrc = std::fs::read_to_string(&file)
-        .map_err(|e| TplError { line: eline, msg: format!("no se pudo leer el layout '{}': {e}", file.display()) })?;
+        .map_err(|e| TplError { line: eline, msg: format!("could not read layout '{}': {e}", file.display()) })?;
     let ltoks = tokenize(&lsrc)
-        .map_err(|e| TplError { line: eline, msg: format!("en el layout '{}' (línea {}): {}", file.display(), e.line, e.msg) })?;
+        .map_err(|e| TplError { line: eline, msg: format!("in layout '{}' (line {}): {}", file.display(), e.line, e.msg) })?;
     // Saltar el `{% params %}` del layout (+ su salto de cortesía): la firma la pone el hijo.
     let mut it = ltoks.into_iter().peekable();
     loop {
@@ -570,14 +570,14 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
         }
     }
     if let Some(Tok::Text(t, l)) = it.peek()
-        && let Some(resto) = t.strip_prefix('\n')
+        && let Some(rest) = t.strip_prefix('\n')
     {
-        let (resto, l) = (resto.to_string(), *l);
+        let (rest, l) = (rest.to_string(), *l);
         it.next();
-        if !resto.is_empty() {
+        if !rest.is_empty() {
             // Se reintroduce sin el salto (la línea real es la siguiente, pero todo el layout se
             // atribuye al extends de todos modos).
-            let tok = Tok::Text(resto, l + 1);
+            let tok = Tok::Text(rest, l + 1);
             return merge_layout(imports, blocks, std::iter::once(tok).chain(it).collect(), &lpath, eline);
         }
     }
@@ -613,20 +613,20 @@ fn merge_layout(
     let mut skip_default = false;
     for tok in ltoks {
         if let Tok::Tag(t, _) = &tok {
-            let (kw, resto) = match t.split_once(char::is_whitespace) {
+            let (kw, rest) = match t.split_once(char::is_whitespace) {
                 Some((k, r)) => (k, r.trim()),
                 None => (t.as_str(), ""),
             };
             match kw {
                 "extends" => {
-                    return Err(TplError { line: eline, msg: format!("el layout '{lpath}' también usa '{{% extends %}}' (herencia encadenada: diferida)") });
+                    return Err(TplError { line: eline, msg: format!("the layout '{lpath}' also uses '{{% extends %}}' (chained inheritance: deferred)") });
                 }
                 "block" => {
                     if in_block {
-                        return Err(TplError { line: eline, msg: format!("en el layout '{lpath}': '{{% block %}}' anidado") });
+                        return Err(TplError { line: eline, msg: format!("in layout '{lpath}': nested '{{% block %}}'") });
                     }
                     in_block = true;
-                    if let Some((n, _, body)) = blocks.iter().find(|(n, _, _)| n == resto) {
+                    if let Some((n, _, body)) = blocks.iter().find(|(n, _, _)| n == rest) {
                         out.extend(body.iter().cloned()); // líneas del HIJO: mapean exactas
                         usados.push(n);
                         skip_default = true;
@@ -650,7 +650,7 @@ fn merge_layout(
     }
     for (n, l, _) in &blocks {
         if !usados.contains(&n.as_str()) {
-            return Err(TplError { line: *l, msg: format!("el layout '{lpath}' no declara un '{{% block {n} %}}'") });
+            return Err(TplError { line: *l, msg: format!("the layout '{lpath}' does not declare a '{{% block {n} %}}'") });
         }
     }
     Ok(out)
@@ -682,49 +682,49 @@ fn generate_body(
             }
             Tok::Var(e, l) => {
                 if e.is_empty() {
-                    return Err(TplError { line: l, msg: "'{{ }}' vacío".into() });
+                    return Err(TplError { line: l, msg: "empty '{{ }}'".into() });
                 }
                 linea(&mut body, depth, l, format!("out.push(escape_html(to_string({e})));"));
             }
             Tok::Raw(e, l) => {
                 if e.is_empty() {
-                    return Err(TplError { line: l, msg: "'{{& }}' vacío".into() });
+                    return Err(TplError { line: l, msg: "empty '{{& }}'".into() });
                 }
                 linea(&mut body, depth, l, format!("out.push(to_string({e}));"));
             }
             // (Los casos `import`/`include` de composición van en el match de etiquetas, abajo.)
             Tok::Tag(t, l) => {
-                let (kw, resto) = match t.split_once(char::is_whitespace) {
+                let (kw, rest) = match t.split_once(char::is_whitespace) {
                     Some((k, r)) => (k, r.trim()),
                     None => (t.as_str(), ""),
                 };
                 match kw {
                     "if" => {
-                        if resto.is_empty() {
-                            return Err(TplError { line: l, msg: "'{% if %}' sin condición".into() });
+                        if rest.is_empty() {
+                            return Err(TplError { line: l, msg: "'{% if %}' without condition".into() });
                         }
-                        linea(&mut body, depth, l, format!("if ({resto}) {{"));
+                        linea(&mut body, depth, l, format!("if ({rest}) {{"));
                         depth += 1;
                         stack.push(Marco::If);
                     }
                     "elif" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
-                            return Err(TplError { line: l, msg: "'{% elif %}' fuera de un '{% if %}'".into() });
+                            return Err(TplError { line: l, msg: "'{% elif %}' outside an '{% if %}'".into() });
                         }
-                        if resto.is_empty() {
-                            return Err(TplError { line: l, msg: "'{% elif %}' sin condición".into() });
+                        if rest.is_empty() {
+                            return Err(TplError { line: l, msg: "'{% elif %}' without condition".into() });
                         }
-                        linea(&mut body, depth - 1, l, format!("}} else if ({resto}) {{"));
+                        linea(&mut body, depth - 1, l, format!("}} else if ({rest}) {{"));
                     }
                     "else" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
-                            return Err(TplError { line: l, msg: "'{% else %}' fuera de un '{% if %}'".into() });
+                            return Err(TplError { line: l, msg: "'{% else %}' outside an '{% if %}'".into() });
                         }
                         linea(&mut body, depth - 1, l, "} else {".to_string());
                     }
                     "endif" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
-                            return Err(TplError { line: l, msg: "'{% endif %}' sin '{% if %}' que cerrar".into() });
+                            return Err(TplError { line: l, msg: "'{% endif %}' without an '{% if %}' to close".into() });
                         }
                         stack.pop();
                         depth -= 1;
@@ -732,13 +732,13 @@ fn generate_body(
                     }
                     "for" => {
                         // `for <patrón> in <expr>`: el patrón puede ser `x` o `(k, v)`.
-                        let Some(pos) = resto.find(" in ") else {
-                            return Err(TplError { line: l, msg: "'{% for %}' mal formado (se espera 'for x in expr')".into() });
+                        let Some(pos) = rest.find(" in ") else {
+                            return Err(TplError { line: l, msg: "malformed '{% for %}' (expected 'for x in expr')".into() });
                         };
-                        let patron = resto[..pos].trim();
-                        let expr = resto[pos + 4..].trim();
+                        let patron = rest[..pos].trim();
+                        let expr = rest[pos + 4..].trim();
                         if patron.is_empty() || expr.is_empty() {
-                            return Err(TplError { line: l, msg: "'{% for %}' mal formado (se espera 'for x in expr')".into() });
+                            return Err(TplError { line: l, msg: "malformed '{% for %}' (expected 'for x in expr')".into() });
                         }
                         linea(&mut body, depth, l, format!("for {patron} in {expr} {{"));
                         depth += 1;
@@ -746,16 +746,16 @@ fn generate_body(
                     }
                     "endfor" => {
                         if !matches!(stack.last(), Some(Marco::For)) {
-                            return Err(TplError { line: l, msg: "'{% endfor %}' sin '{% for %}' que cerrar".into() });
+                            return Err(TplError { line: l, msg: "'{% endfor %}' without a '{% for %}' to close".into() });
                         }
                         stack.pop();
                         depth -= 1;
                         linea(&mut body, depth, l, "}".to_string());
                     }
-                    // `{% let nombre = expr %}`: una local inmutable del template. Alcance = el
+                    // `{% let name = expr %}`: una local inmutable del template. Alcance = el
                     // bloque raylang generado (dentro de un for/if vive hasta su endfor/endif).
                     "let" => {
-                        let bien = resto.split_once('=').is_some_and(|(lhs, rhs)| {
+                        let bien = rest.split_once('=').is_some_and(|(lhs, rhs)| {
                             let lhs = lhs.trim();
                             !rhs.trim().is_empty()
                                 && !lhs.is_empty()
@@ -763,21 +763,21 @@ fn generate_body(
                                 && lhs.chars().all(|c| c.is_alphanumeric() || c == '_')
                         });
                         if !bien {
-                            return Err(TplError { line: l, msg: format!("'{{% let %}}' mal formado: '{resto}' (se espera 'let nombre = expr')") });
+                            return Err(TplError { line: l, msg: format!("malformed '{{% let %}}': '{rest}' (expected 'let name = expr')") });
                         }
                         // Se empalma tal cual (espaciado incluido): el LSP localiza el fragmento
                         // del template como subcadena de la línea generada.
-                        linea(&mut body, depth, l, format!("let {resto};"));
+                        linea(&mut body, depth, l, format!("let {rest};"));
                     }
                     // Composición de templates: `{% import vistas/tarjeta [as t] %}` trae otro
                     // módulo (otro template compilado, o cualquier módulo del proyecto) al ámbito
                     // del generado. Se HOISTEA a la cabecera (los imports van al frente del módulo),
                     // esté donde esté en el template.
                     "import" => {
-                        if !valid_import(resto) {
-                            return Err(TplError { line: l, msg: format!("'{{% import %}}' mal formado: '{resto}' (se espera 'ruta/al/modulo [as alias]')") });
+                        if !valid_import(rest) {
+                            return Err(TplError { line: l, msg: format!("malformed '{{% import %}}': '{rest}' (expected 'path/to/module [as alias]')") });
                         }
-                        imports.push((resto.to_string(), l));
+                        imports.push((rest.to_string(), l));
                     }
                     // `{% include ruta/al/template(args) %}`: incluye OTRO template. Quien escribe
                     // el template no tiene por qué conocer el nombre de la función generada: el
@@ -786,25 +786,25 @@ fn generate_body(
                     // string de `expr` SIN escapar — HTML ya renderizado (p. ej. el `contenido`
                     // de un layout). Para una expresión arbitraria inline está `{{& expr }}`.
                     "include" => {
-                        if resto.is_empty() {
-                            return Err(TplError { line: l, msg: "'{% include %}' sin argumento (se espera 'include ruta/al/template(args)' o 'include expr')".into() });
+                        if rest.is_empty() {
+                            return Err(TplError { line: l, msg: "'{% include %}' without argument (expected 'include path/to/template(args)' or 'include expr')".into() });
                         }
-                        if let Some((ruta, args)) = template_ref(resto) {
-                            let leaf = ruta.rsplit('/').next().unwrap_or(ruta);
+                        if let Some((path, args)) = template_ref(rest) {
+                            let leaf = path.rsplit('/').next().unwrap_or(path);
                             let f: String = leaf.chars().map(|c| if c == '-' { '_' } else { c }).collect();
-                            if !imports.iter().any(|(p, _)| p == ruta) {
-                                imports.push((ruta.to_string(), l));
+                            if !imports.iter().any(|(p, _)| p == path) {
+                                imports.push((path.to_string(), l));
                             }
                             linea(&mut body, depth, l, format!("out.push(to_string({leaf}.render_{f}({args})));"));
                         } else {
-                            linea(&mut body, depth, l, format!("out.push(to_string({resto}));"));
+                            linea(&mut body, depth, l, format!("out.push(to_string({rest}));"));
                         }
                     }
                     "params" => {
-                        return Err(TplError { line: l, msg: "'{% params %}' repetido (solo puede ir una vez, al principio)".into() });
+                        return Err(TplError { line: l, msg: "'{% params %}' repeated (it can appear only once, at the start)".into() });
                     }
-                    otro => {
-                        return Err(TplError { line: l, msg: format!("etiqueta desconocida: '{otro}'") });
+                    other => {
+                        return Err(TplError { line: l, msg: format!("unknown tag: '{other}'") });
                     }
                 }
             }
@@ -815,15 +815,15 @@ fn generate_body(
             Some(Marco::If) => "endif",
             _ => "endfor",
         };
-        return Err(TplError { line: last_line, msg: format!("falta un '{{% {falta} %}}' al final del template") });
+        return Err(TplError { line: last_line, msg: format!("missing a '{{% {falta} %}}' at the end of the template") });
     }
 
     // Ensamblado + line map. La cabecera son 3 líneas fijas + un `import` por cada `{% import %}`
     // (mapean a SU línea del template) + 4 fijas más (todas las fijas mapean a la línea de
     // `params`, donde vive la firma); el cierre, a la última línea del template.
     let mut header = format!(
-        "// GENERADO por `ray templ` desde {name}.ray.html — NO editar a mano; regenera con\n\
-         // `ray templ <ruta>`. El template es la fuente de verdad.\n\
+        "// GENERATED by `ray templ` from {name}.ray.html — do NOT edit by hand; regenerate with\n\
+         // `ray templ <path>`. The template is the source of truth.\n\
          from std/template import escape_html;\n"
     );
     let mut map: Vec<usize> = vec![params_line; 3];
@@ -859,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn genera_una_funcion_tipada() {
+    fn genera_one_function_tipada() {
         let tpl = "{% params titulo: string, n: int %}\n<h1>{{ titulo }}</h1>{% if n > 0 %}<p>{{ n }}</p>{% endif %}";
         let code = generate(tpl, "vista").unwrap();
         assert!(code.contains("pub fn render_vista(titulo: string, n: int) -> string {"), "{code}");
@@ -871,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn escapa_los_literales_del_html() {
+    fn escapa_los_literals_del_html() {
         // Un `${` o una comilla del HTML no deben romper (ni interpolar) el string generado.
         let tpl = "{% params x: int %}precio: \"${simbolo}\" y \\ raro {{ x }}";
         let code = generate(tpl, "t").unwrap();
@@ -882,30 +882,31 @@ mod tests {
     }
 
     #[test]
-    fn errores_del_template_con_linea() {
+    fn errors_del_template_con_linea() {
         assert!(generate("<html>", "t").unwrap_err().msg.contains("params"));
         let e = generate("{% params x: int %}\n\n{% if x %}", "t").unwrap_err();
         assert!(e.msg.contains("endif"));
-        assert_eq!(e.line, 3, "el error señala la línea del if sin cerrar");
+        assert_eq!(e.line, 3, "el error señala la línea del if sin close");
         assert!(generate("{% params x: int %}{% endfor %}", "t").unwrap_err().msg.contains("endfor"));
-        assert!(generate("{% params x: int %}{% bloque %}", "t").unwrap_err().msg.contains("desconocida"));
-        assert!(generate("{% params x %}hola", "t").unwrap_err().msg.contains("mal formado"));
+        // Etiqueta INVENTADA (no `block`, que es real desde M55): debe dar "etiqueta desconocida".
+        assert!(generate("{% params x: int %}{% zzz %}", "t").unwrap_err().msg.contains("unknown"));
+        assert!(generate("{% params x %}hello", "t").unwrap_err().msg.contains("malformed"));
     }
 
     #[test]
-    fn split_params_respeta_los_anidados() {
+    fn split_params_respects_los_nested_vars() {
         let ps = split_params("m: Map<string, int>, xs: [string], f: fn(int) -> int");
         assert_eq!(ps, vec!["m: Map<string, int>", "xs: [string]", "f: fn(int) -> int"]);
     }
 
     #[test]
-    fn include_por_ruta_no_expone_el_nombre_generado() {
+    fn include_por_path_no_expone_el_name_generado() {
         // `{% include ruta/al/template(args) %}`: quien escribe el template NO conoce el
         // `render_<x>` generado — el generador importa el módulo solo (dedup con un import
         // explícito) y llama a la función por él.
         let tpl = "{% params p: string %}\n<div>{% include vistas/tarjeta(p) %}</div>\n{% include vistas/tarjeta(p + \"!\") %}\n";
         let (code, _) = generate_with_map(tpl, "pagina").unwrap();
-        assert_eq!(code.matches("import vistas/tarjeta;\n").count(), 1, "auto-import, sin duplicar\n{code}");
+        assert_eq!(code.matches("import vistas/tarjeta;\n").count(), 1, "auto-import, sin duplicate\n{code}");
         assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p)));"), "{code}");
         assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p + \"!\")));"), "{code}");
         let tokens = crate::lexer::lex(&code).unwrap();
@@ -936,20 +937,20 @@ mod tests {
         let tokens = crate::lexer::lex(&code).unwrap();
         assert!(crate::parser::parse(tokens).is_ok());
         // Errores: import mal formado (no se empalma texto arbitrario) e include vacío.
-        assert!(generate("{% params x: int %}{% import ../fuera %}", "t").unwrap_err().msg.contains("mal formado"));
-        assert!(generate("{% params x: int %}{% import a; drop %}", "t").unwrap_err().msg.contains("mal formado"));
+        assert!(generate("{% params x: int %}{% import ../outside %}", "t").unwrap_err().msg.contains("malformed"));
+        assert!(generate("{% params x: int %}{% import a; drop %}", "t").unwrap_err().msg.contains("malformed"));
         assert!(generate("{% params x: int %}{% include %}", "t").unwrap_err().msg.contains("include"));
     }
 
     #[test]
-    fn let_declara_locales() {
+    fn let_declara_locals() {
         let tpl = "{% params precios: [int] %}\n{% let total = precios.len() %}\n<p>{{ total }}</p>\n";
         let code = generate(tpl, "v").unwrap();
         assert!(code.contains("let total = precios.len();"), "{code}");
         let tokens = crate::lexer::lex(&code).unwrap();
         assert!(crate::parser::parse(tokens).is_ok());
-        assert!(generate("{% params x: int %}{% let 1a = 2 %}", "t").unwrap_err().msg.contains("mal formado"));
-        assert!(generate("{% params x: int %}{% let y %}", "t").unwrap_err().msg.contains("mal formado"));
+        assert!(generate("{% params x: int %}{% let 1a = 2 %}", "t").unwrap_err().msg.contains("malformed"));
+        assert!(generate("{% params x: int %}{% let y %}", "t").unwrap_err().msg.contains("malformed"));
     }
 
     #[test]
@@ -958,14 +959,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("base.ray.html"),
-            "{% params titulo: string %}\n<html><title>{{ titulo }}</title><body>\n{% block cuerpo %}<p>defecto</p>{% endblock %}\n<footer>{% block pie %}pie común{% endblock %}</footer>\n</body></html>\n").unwrap();
+            "{% params titulo: string %}\n<html><title>{{ titulo }}</title><body>\n{% block body %}<p>default</p>{% endblock %}\n<footer>{% block pie %}pie común{% endblock %}</footer>\n</body></html>\n").unwrap();
         // El hijo solo aporta bloques; hereda la estructura (y el bloque `pie` queda con su defecto).
-        let hijo = "{% params titulo: string, n: int %}\n{% extends base %}\n{% block cuerpo %}<b>{{ n }}</b>{% endblock %}\n";
-        let (code, map) = generate_with_map_at(hijo, "pagina", Some(&base)).unwrap();
-        assert!(code.contains("pub fn render_pagina(titulo: string, n: int) -> string"), "la firma es la del HIJO\n{code}");
-        assert!(code.contains("out.push(escape_html(to_string(n)));"), "el bloque del hijo\n{code}");
-        assert!(code.contains("pie com"), "el defecto del layout queda\n{code}");
-        assert!(!code.contains("defecto"), "el bloque sobreescrito NO deja su defecto\n{code}");
+        let child = "{% params titulo: string, n: int %}\n{% extends base %}\n{% block body %}<b>{{ n }}</b>{% endblock %}\n";
+        let (code, map) = generate_with_map_at(child, "pagina", Some(&base)).unwrap();
+        assert!(code.contains("pub fn render_pagina(titulo: string, n: int) -> string"), "la signature es la del HIJO\n{code}");
+        assert!(code.contains("out.push(escape_html(to_string(n)));"), "el block del child\n{code}");
+        assert!(code.contains("pie com"), "el default del layout queda\n{code}");
+        assert!(!code.contains("default"), "el block sobreescrito NO deja su default\n{code}");
         let tokens = crate::lexer::lex(&code).unwrap();
         assert!(crate::parser::parse(tokens).is_ok());
         // El line map: la línea del bloque del hijo apunta a SU línea (3); las del layout, al extends (2).
@@ -980,17 +981,17 @@ mod tests {
         // El layout compila STANDALONE: los marcadores de bloque son transparentes.
         let lsrc = std::fs::read_to_string(base.join("base.ray.html")).unwrap();
         let solo = generate(&lsrc, "base").unwrap();
-        assert!(solo.contains("defecto") && solo.contains("pie com"), "{solo}");
+        assert!(solo.contains("default") && solo.contains("pie com"), "{solo}");
         assert!(!solo.contains("block"), "{solo}");
 
         // Errores: bloque que el layout no declara; extends tardío; contenido suelto; sin endblock.
         let e = generate_with_map_at("{% params t: string %}\n{% extends base %}\n{% block noexiste %}x{% endblock %}\n", "p", Some(&base)).unwrap_err();
-        assert!(e.msg.contains("no declara"), "{}", e.msg);
+        assert!(e.msg.contains("does not declare"), "{}", e.msg);
         assert_eq!(e.line, 3);
         let e = generate("{% params t: string %}\nhola\n{% extends base %}\n", "p").unwrap_err();
-        assert!(e.msg.contains("primera etiqueta"), "{}", e.msg);
+        assert!(e.msg.contains("first tag"), "{}", e.msg);
         let e = generate_with_map_at("{% params t: string %}\n{% extends base %}\nsuelto\n", "p", Some(&base)).unwrap_err();
-        assert!(e.msg.contains("solo puede tener"), "{}", e.msg);
+        assert!(e.msg.contains("can only have"), "{}", e.msg);
         let e = generate("{% params t: string %}\n{% block a %}x\n", "p").unwrap_err();
         assert!(e.msg.contains("endblock"), "{}", e.msg);
 
@@ -999,9 +1000,9 @@ mod tests {
         std::fs::write(base.join("ray.toml"), "[package]\nname = \"t\"\nversion = \"0.1.0\"\n").unwrap();
         std::fs::create_dir_all(base.join("sub")).unwrap();
         std::fs::write(base.join("sub/base2.ray.html"),
-            "{% params t: string %}<b>{% block cuerpo %}{% endblock %}</b>\n").unwrap();
+            "{% params t: string %}<b>{% block body %}{% endblock %}</b>\n").unwrap();
         let (code, _) = generate_with_map_at(
-            "{% params t: string %}\n{% extends sub/base2 %}\n{% block cuerpo %}{{ t }}{% endblock %}\n",
+            "{% params t: string %}\n{% extends sub/base2 %}\n{% block body %}{{ t }}{% endblock %}\n",
             "p", Some(&base.join("sub"))).unwrap();
         assert!(code.contains("out.push(escape_html(to_string(t)));"), "{code}");
         let _ = std::fs::remove_dir_all(&base);
@@ -1017,7 +1018,7 @@ mod tests {
                    \n\
                    {%if ok%}<p>{{titulo}} y {{& crudo }}</p>{%else%}<i>no</i>{%endif%}\n";
         let out = format_template(tpl, "    ").unwrap();
-        let esperado = "{% params xs: [string], ok: bool %}\n\
+        let expected = "{% params xs: [string], ok: bool %}\n\
                         <ul>\n\
                         {% for lang in xs %}\n\
                         \x20   {% include tarjeta.render_tarjeta(lang) %}\n\
@@ -1029,13 +1030,13 @@ mod tests {
                         {% else %}\n\
                         \x20   <i>no</i>\n\
                         {% endif %}\n";
-        assert_eq!(out, esperado);
+        assert_eq!(out, expected);
         // Idempotente: formatear lo formateado no cambia nada.
         assert_eq!(format_template(&out, "    ").unwrap(), out);
         // Los bloques anidan; el interior de una expresión NO se toca (string con espacios).
-        let tpl = "{% params xs: [[int]] %}{% for fila in xs %}{% for c in fila %}{{ \"dos  espacios\" }}{% endfor %}{% endfor %}\n";
+        let tpl = "{% params xs: [[int]] %}{% for row in xs %}{% for c in row %}{{ \"dos  espacios\" }}{% endfor %}{% endfor %}\n";
         let out = format_template(tpl, "  ").unwrap();
-        assert!(out.contains("\n  {% for c in fila %}\n    {{ \"dos  espacios\" }}\n  {% endfor %}\n"), "{out}");
+        assert!(out.contains("\n  {% for c in row %}\n    {{ \"dos  espacios\" }}\n  {% endfor %}\n"), "{out}");
         // Un buffer roto (delimitador sin cerrar) no se formatea.
         assert!(format_template("{% params x: int %}\n<p>{{ x </p>\n", "    ").is_none());
     }
@@ -1045,7 +1046,7 @@ mod tests {
         let tpl = "{% params t: string %}\n<h1>{{ t }}</h1>\n{% if t != \"\" %}\n<p>{{ t }}</p>\n{% endif %}\n";
         let (code, map) = generate_with_map(tpl, "v").unwrap();
         let lines: Vec<&str> = code.lines().collect();
-        assert_eq!(lines.len(), map.len(), "una entrada del mapa por línea generada");
+        assert_eq!(lines.len(), map.len(), "one entry del mapa por línea generada");
         // La línea generada del `if` mapea a la línea 3 del template.
         let (i, _) = lines.iter().enumerate().find(|(_, l)| l.contains("if (t !=")).unwrap();
         assert_eq!(map[i], 3, "{code}");

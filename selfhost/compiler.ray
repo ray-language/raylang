@@ -282,7 +282,7 @@ fn patch_jump(comp: Comp, at: int) {
     s.code[at] = match (s.code[at]) {
         Op.OJump(_) => Op.OJump(target),
         Op.OJumpIfFalse(_) => Op.OJumpIfFalse(target),
-        _ => panic("patch_jump sobre una instrucción que no es salto"),
+        _ => panic("patch_jump on an instruction that is not a jump"),
     };
 }
 
@@ -300,7 +300,7 @@ fn binop_to_op(op: BinOp) -> Op {
         BinOp.Le => Op.OLe,
         BinOp.Gt => Op.OGt,
         BinOp.Ge => Op.OGe,
-        _ => panic("binop_to_op: && / || se tratan aparte"),
+        _ => panic("binop_to_op: && / || are handled separately"),
     }
 }
 
@@ -308,7 +308,7 @@ fn binop_to_op(op: BinOp) -> Op {
 fn struct_field_defs(comp: Comp, name: string) -> [FieldDef] {
     match (get(comp.structs, name)) {
         Option.Some(fs) => fs,
-        Option.None => panic("compilador: struct no registrado: " + name),
+        Option.None => panic("compiler: unregistered struct: " + name),
     }
 }
 
@@ -321,7 +321,7 @@ fn find_init(inits: [FieldInit], fname: string) -> Expr {
         }
         i = i + 1;
     }
-    panic("compilador: campo ausente en el literal: " + fname)
+    panic("compiler: missing field in the literal: " + fname)
 }
 
 // ¿`name` es un enum (del programa o del prelude) con una variante `variant`? Reconoce la construcción
@@ -443,7 +443,7 @@ fn emit_ident(comp: Comp, name: string) {
         Option.Some(idx) => {
             emit(comp, Op.OFunc(idx));
         },
-        Option.None => panic("compilador: nombre no resuelto: " + name),
+        Option.None => panic("compiler: unresolved name: " + name),
     }
 }
 
@@ -577,7 +577,7 @@ fn emit_stmt(comp: Comp, s: Stmt) {
                         if (up >= 0) {
                             emit(comp, Op.OSetUpvalue(up));
                         } else {
-                            panic("compilador: asignación a nombre no resuelto: " + name);
+                            panic("compiler: assignment to unresolved name: " + name);
                         }
                     }
                 },
@@ -594,7 +594,7 @@ fn emit_stmt(comp: Comp, s: Stmt) {
                     emit_expr(comp, value);
                     emit(comp, Op.OSetField(fname));
                 },
-                _ => panic("compilador: destino de asignación no soportado"),
+                _ => panic("compiler: unsupported assignment target"),
             }
         },
         SKind.SReturn(opt) => {

@@ -44,12 +44,12 @@ Para eso hizo falta un habilitador de peso: **parámetros de tipo en traits**. `
 con `<…>` del proyecto (`TraitDef.type_params`, `ImplBlock.trait_args`). Vive en el prelude:
 
 ```raylang
-trait From<S> { fn desde(origen: S) -> Self; }
+trait From<S> { fn convert(origen: S) -> Self; }
 
-impl From<string> for MiError { fn desde(o: string) -> MiError { MiError { msg: o } } }
+impl From<string> for MiError { fn convert(o: string) -> MiError { MiError { msg: o } } }
 ```
 
-Dos detalles de diseño. El método se llama `desde`, no `from`: `from` ya es palabra clave (del `from M
+Dos detalles de diseño. El método se llama `convert`, no `from`: `from` ya es palabra clave (del `from M
 import …`). Y `desde` **no tiene `self`** —es un método asociado, se invoca por el tipo—, como el `from`
 de Rust.
 

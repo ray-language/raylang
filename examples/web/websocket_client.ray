@@ -91,12 +91,12 @@ fn read_handshake(h: int) -> Result<HandshakeRead, string> {
         match (net.socket_read_bytes(h)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
-                    return Result.Err("la conexión se cerró durante el handshake");
+                    return Result.Err("the connection closed during the handshake");
                 }
                 acc = acc + trozo;
             },
             Result.Err(e) => {
-                return Result.Err("error al leer el handshake: " + e);
+                return Result.Err("error reading the handshake: " + e);
             },
         }
     }
@@ -127,7 +127,7 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<WsConn,
                         Result.Ok(ws)
                     } else {
                         close(h);
-                        Result.Err("handshake de WebSocket inválido")
+                        Result.Err("invalid WebSocket handshake")
                     }
                 },
             }
@@ -167,16 +167,16 @@ pub fn send_text(ws: WsConn, message: string) -> Result<int, string> {
 
 // Recibe el siguiente mensaje de texto. Sobre `read_message` (M58.1): tramas partidas/pegadas,
 // ping→pong automático (enmascarado, somos cliente), fragmentación reensamblada; un close del
-// servidor (ya contestado de cortesía) es `Err("conexión cerrada por el peer")`.
+// servidor (ya contestado de cortesía) es `Err("connection closed by the peer")`.
 /// Receives the next text (or binary-decoded-as-UTF-8) message. Robust framing: buffers across
 /// reads, auto-answers pings, reassembles fragmented messages. A close from the server (already
-/// answered) yields `Err("conexión cerrada por el peer")`; non-UTF-8 payloads are an `Err` too.
+/// answered) yields `Err("connection closed by the peer")`; non-UTF-8 payloads are an `Err` too.
 pub fn recv_text(ws: WsConn) -> Result<string, string> {
     match (read_message(ws)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(f) => {
             if (f.opcode == op_close()) {
-                Result.Err("conexión cerrada por el peer")
+                Result.Err("connection closed by the peer")
             } else {
                 from_utf8(f.payload)
             }
@@ -184,7 +184,7 @@ pub fn recv_text(ws: WsConn) -> Result<string, string> {
     }
 }
 
-// Cierra la conexión: envía una trama close (enmascarada) y cierra el socket.
+// Cierra la connection: envía una trama close (enmascarada) y cierra el socket.
 /// Closes the WebSocket: sends a masked close frame (best-effort, write errors are
 /// ignored) and then closes the underlying socket handle.
 pub fn close_ws(ws: WsConn) {

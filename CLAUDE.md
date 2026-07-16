@@ -24,6 +24,10 @@ tipado, orientado a expresiones, sintaxis de llaves.
 > ⚠️ Rust se instaló vía rustup y **no está en el PATH por defecto**. Antes de
 > cualquier `cargo`, ejecuta: `source "$HOME/.cargo/env"`
 
+- **`make help`** lista todos los comandos del proyecto unificados (el `Makefile` ya
+  exporta el PATH de cargo): build/run/test/clippy/ci, release/slim/pgo, bench,
+  book, playground, vscode, install.
+
 - Tests: `cargo test`
 - Ejecutar un programa: `cargo run --quiet -- examples/basics/fib.ray` (corre en la **VM**, el
   motor de producto desde M35). `--interp` fuerza el intérprete (oráculo de desarrollo); `--vm`
@@ -34,6 +38,8 @@ tipado, orientado a expresiones, sintaxis de llaves.
   (`--vm`/`--interp`/`--test`/`--fmt`/`--lsp`/`--repl`/`<archivo>`) se conserva (los tests la usan).
 - REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl` (sobre la VM).
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`
+- **Guía de builds** (features slim M89, PGO, flags de adelgazamiento): `docs/build.md`.
+  Release PGO: `sh tools/pgo.sh [--slim | --features "a,b,c"]`.
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).
 
 ## Arquitectura (pipeline)
@@ -69,7 +75,23 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (La **limpieza de identificadores a inglés** L1+L2+L3 está **COMPLETA** — todo el
   core Rust, el core raylang y los métodos Eq/Show/Ord; ver
   `docs/limpieza-nombres-en-ingles.md`.)
+  - **Alcance del inglés (decisión jul 2026)**: aplica a TODO el código de `src/`,
+    `tests/`, `selfhost/`, `packages/` y `benchmarks/` — **incluidos los nombres de
+    funciones de test y los snippets raylang embebidos en tests**. `examples/` y
+    `book/` son flexibles (código de usuario / didáctico). Lo vigila el check CI
+    `tests/naming_policy.rs` (wordlist `tests/naming_policy_es.txt`; excepción
+    puntual con `// es-ok`).
 - **Comentarios y documentación en español**, en el propio código.
+- **Mensajes de diagnóstico de cara al usuario: en INGLÉS** (decisión 13 jul 2026;
+  cabeceras `type error at L:C:`, `syntax error at`, `lex error at`). Los mensajes
+  `expect()`/descripciones de asserts en tests son internos → siguen en español.
+  La migración se hizo por lotes con `tools/spanglish.py` y está **COMPLETA**
+  (lote 1 compilador + lote 2 runtime + lote 3 tooling + lote 4 stdlib/paquetes;
+  se conservan en español las descripciones de asserts de test, los fixtures
+  raylang embebidos, los comentarios, y `tools/registry_site.ray` —fuera de la
+  política—). ⚠️ El espejo selfhost (`selfhost/checker.ray` etc.) debe emitir
+  mensajes byte-idénticos a Rust: todo cambio de mensaje va en tándem con su
+  espejo y con los tests que lo aseveran.
 - Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo).
 - **Todo token/nodo lleva `(línea, columna)`**; los errores siempre reportan
   ubicación. Es un principio, no un extra.

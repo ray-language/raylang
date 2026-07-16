@@ -280,7 +280,7 @@ fn open_lib(lib: &str) -> Result<&'static libloading::Library, String> {
     let l = match opened {
         Some(l) => l,
         // Handle global del proceso: símbolos ya cargados (libc/libm que enlaza el propio binario).
-        None => this_process().map_err(|e| format!("no se pudo cargar la librería '{lib}': {e}"))?,
+        None => this_process().map_err(|e| format!("could not load library '{lib}': {e}"))?,
     };
     // La librería vive para siempre (los punteros a símbolos que retiene la VM lo exigen).
     let l: &'static libloading::Library = Box::leak(Box::new(l));
@@ -297,7 +297,7 @@ fn resolve_symbol(lib: &str, symbol: &str) -> Result<*mut c_void, String> {
     let sym: libloading::Symbol<'static, *mut c_void> = unsafe {
         library
             .get(symbol.as_bytes())
-            .map_err(|e| format!("no se encontró el símbolo '{symbol}' en la librería '{lib}': {e}"))?
+            .map_err(|e| format!("symbol '{symbol}' not found in library '{lib}': {e}"))?
     };
     Ok(*sym)
 }
@@ -325,7 +325,7 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
             FfiVal::Float(v) => Reg::F(*v),
             FfiVal::Str(s) => {
                 let cs = std::ffi::CString::new(*s)
-                    .map_err(|_| format!("el argumento string de '{}' contiene un NUL interior", desc.name))?;
+                    .map_err(|_| format!("the string argument of '{}' contains an interior NUL", desc.name))?;
                 let ptr = cs.as_ptr() as i64;
                 keep.push(cs);
                 Reg::I(ptr)
@@ -371,7 +371,7 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
         [F, F, I] => dispatch!((f64, f64, i64), (f(0), f(1), i(2))),
         [F, F, F] => dispatch!((f64, f64, f64), (f(0), f(1), f(2))),
         _ => return Err(format!(
-            "la firma de '{}' no está en el catálogo FFI soportado (int/u64/float/bool/puntero, aridad 0..=3)",
+            "the signature of '{}' is not in the supported FFI catalog (int/u64/float/bool/pointer, arity 0..=3)",
             desc.name
         )),
     })
@@ -384,9 +384,9 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
 #[cfg(any(not(feature = "ffi"), target_arch = "wasm32"))]
 pub fn call(desc: &ExternDesc, _args: &[FfiVal]) -> Result<FfiRet, String> {
     if cfg!(target_arch = "wasm32") {
-        Err(format!("FFI no disponible en el playground web (wasm): '{}'", desc.name))
+        Err(format!("FFI not available in the web playground (wasm): '{}'", desc.name))
     } else {
-        Err(format!("este binario se compiló sin soporte de FFI (recompila con la feature 'ffi'): '{}'", desc.name))
+        Err(format!("this binary was built without FFI support (rebuild with the 'ffi' feature): '{}'", desc.name))
     }
 }
 
@@ -403,21 +403,21 @@ mod tests {
         let d = desc("sqrt", vec![CKind::Float], CKind::Float);
         match call(&d, &[FfiVal::Float(2.0)]).unwrap() {
             FfiRet::Float(v) => assert!((v - std::f64::consts::SQRT_2).abs() < 1e-12),
-            other => panic!("se esperaba float, {other:?}"),
+            other => panic!("expected float, {other:?}"),
         }
     }
 
     #[test]
-    fn llama_a_pow_aridad_2() {
+    fn llama_a_pow_arity_2() {
         let d = desc("pow", vec![CKind::Float, CKind::Float], CKind::Float);
         match call(&d, &[FfiVal::Float(2.0), FfiVal::Float(10.0)]).unwrap() {
             FfiRet::Float(v) => assert!((v - 1024.0).abs() < 1e-9),
-            other => panic!("se esperaba float, {other:?}"),
+            other => panic!("expected float, {other:?}"),
         }
     }
 
     #[test]
-    fn simbolo_inexistente_es_error() {
+    fn simbolo_nonexistent_es_error() {
         let d = desc("no_existe_este_simbolo_xyz", vec![], CKind::Int);
         assert!(call(&d, &[]).is_err());
     }
@@ -425,9 +425,9 @@ mod tests {
     #[test]
     fn strlen_marshala_string_a_char_ptr() {
         let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int };
-        match call(&d, &[FfiVal::Str("hola mundo")]).unwrap() {
-            FfiRet::Int(n) => assert_eq!(n, 10),
-            other => panic!("se esperaba int, {other:?}"),
+        match call(&d, &[FfiVal::Str("hello mundo")]).unwrap() {
+            FfiRet::Int(n) => assert_eq!(n, 11),
+            other => panic!("expected int, {other:?}"),
         }
     }
 
@@ -436,36 +436,36 @@ mod tests {
         let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Bytes], ret_kind: CKind::Int };
         match call(&d, &[FfiVal::Bytes(b"abcde\x00")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 5),
-            other => panic!("se esperaba int, {other:?}"),
+            other => panic!("expected int, {other:?}"),
         }
     }
 
     #[test]
-    fn strstr_devuelve_char_ptr_como_optbytes() {
+    fn strstr_returns_char_ptr_como_optbytes() {
         let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes };
         // Encontrado → Some(bytes desde la coincidencia).
         match call(&d, &[FfiVal::Str("hello world"), FfiVal::Str("world")]).unwrap() {
             FfiRet::OptBytes(Some(b)) => assert_eq!(b, b"world"),
-            other => panic!("se esperaba Some, {other:?}"),
+            other => panic!("expected Some, {other:?}"),
         }
         // No encontrado → NULL → None.
         match call(&d, &[FfiVal::Str("abc"), FfiVal::Str("z")]).unwrap() {
             FfiRet::OptBytes(None) => {}
-            other => panic!("se esperaba None, {other:?}"),
+            other => panic!("expected None, {other:?}"),
         }
     }
 
     #[test]
-    fn strstr_devuelve_option_ptr() {
+    fn strstr_returns_option_ptr() {
         // M41.4b: el mismo char* como puntero OPACO. No se desreferencia: solo Some(dirección≠0)/None.
         let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptPtr };
         match call(&d, &[FfiVal::Str("hello"), FfiVal::Str("ll")]).unwrap() {
             FfiRet::OptPtr(Some(p)) => assert_ne!(p, 0),
-            other => panic!("se esperaba Some, {other:?}"),
+            other => panic!("expected Some, {other:?}"),
         }
         match call(&d, &[FfiVal::Str("hello"), FfiVal::Str("z")]).unwrap() {
             FfiRet::OptPtr(None) => {}
-            other => panic!("se esperaba None, {other:?}"),
+            other => panic!("expected None, {other:?}"),
         }
     }
 }

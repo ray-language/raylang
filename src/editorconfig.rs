@@ -100,11 +100,11 @@ mod tests {
         assert!(!glob_matches("*.rs", "main.ray"));
         assert!(glob_matches("*.{ray,toml}", "ray.toml"));
         assert!(glob_matches("main.ray", "main.ray"));
-        assert!(!glob_matches("otro.ray", "main.ray"));
+        assert!(!glob_matches("other.ray", "main.ray"));
     }
 
     #[test]
-    fn parsea_secciones_y_root() {
+    fn parses_secciones_y_root() {
         let src = "root = true\n\n[*]\nindent_style = space\nindent_size = 2\n\n[*.ray]\nindent_size = 4\n";
         // Para un .ray, la última sección que casa (`[*.ray]`) fija size=4; `[*]` fija style=space.
         let (style, size, root) = parse(src, "main.ray");

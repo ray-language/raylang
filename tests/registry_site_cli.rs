@@ -35,7 +35,7 @@ fn genera(idx: &std::path::Path, out: &std::path::Path, interp: bool) {
 }
 
 #[test]
-fn genera_el_sitio_y_ambos_motores_coinciden() {
+fn genera_el_sitio_y_ambos_engines_matches() {
     let base = std::env::temp_dir().join("ray_registry_site");
     let _ = std::fs::remove_dir_all(&base);
     let idx = fixture(&base);
@@ -47,7 +47,7 @@ fn genera_el_sitio_y_ambos_motores_coinciden() {
     for rel in ["index.html", "p/mate.html", "p/textutils.html"] {
         let a = std::fs::read_to_string(vm.join(rel)).unwrap_or_else(|_| panic!("falta {rel}"));
         let b = std::fs::read_to_string(interp.join(rel)).unwrap();
-        assert_eq!(a, b, "ambos motores idénticos en {rel}");
+        assert_eq!(a, b, "ambos engines idénticos en {rel}");
     }
 
     // Contenido clave.
@@ -62,7 +62,7 @@ fn genera_el_sitio_y_ambos_motores_coinciden() {
     // La 1.1.0 (más nueva) se lista antes que la 1.0.0.
     let p110 = mate.find("1.1.0").unwrap();
     let p100 = mate.find("1.0.0").unwrap();
-    assert!(p110 < p100, "las versiones van de nueva a vieja");
+    assert!(p110 < p100, "las versiones van de new a vieja");
     // El paquete sin reclamar no muestra dueño.
     let tx = std::fs::read_to_string(vm.join("p/textutils.html")).unwrap();
     assert!(!tx.contains("reclamado"), "{tx}");

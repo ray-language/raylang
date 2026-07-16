@@ -41,20 +41,20 @@ fn main() -> int {
 
 #[test]
 fn std_math_envoltorios() {
-    let esperado = "4\n1024\n3\n4\n3\n0\n1\n3\n7\n2.5\n3\n9\na\ntrue\n";
+    let expected = "4\n1024\n3\n4\n3\n0\n1\n3\n7\n2.5\n3\n9\na\ntrue\n";
     let (o_in, c_in) = run("m49_math_in", PROG, false);
     let (o_vm, c_vm) = run("m49_math_vm", PROG, true);
     assert_eq!(c_in, 0, "intérprete sale 0");
     assert_eq!(c_vm, 0, "vm sale 0");
-    assert_eq!(o_in, esperado, "salida del intérprete");
-    assert_eq!(o_vm, esperado, "salida de la vm");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, expected, "output del intérprete");
+    assert_eq!(o_vm, expected, "output de la vm");
+    assert_eq!(o_in, o_vm, "ambos engines match");
 }
 
 /// M65.3 — `clamp` genérica sobre `Ord` (antes solo-int). Retrocompatible (int infiere T=int)
 /// y funciona con float/string/tipo de usuario, como min/max.
 #[test]
-fn clamp_generica() {
+fn clamp_generic() {
     let src = r#"import std/math;
 fn main() -> int {
     print(math.clamp(5, 1, 10));       // 5  (int, dentro)
@@ -65,13 +65,13 @@ fn main() -> int {
     0
 }
 "#;
-    let esperado = "5\n1\n10\n1\nf\n";
+    let expected = "5\n1\n10\n1\nf\n";
     let (o_in, c_in) = run("m65_clamp_in", src, false);
     let (o_vm, c_vm) = run("m65_clamp_vm", src, true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, esperado, "salida del intérprete");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, expected, "output del intérprete");
+    assert_eq!(o_in, o_vm, "ambos engines match");
 }
 
 /// M65.2 — trig inversa y compañía: los envoltorios `math.asin/acos/atan/atan2/log2/trunc`
@@ -90,13 +90,13 @@ fn main() -> int {
     0
 }
 "#;
-    let esperado = "true\ntrue\n0\n0\n10\n3\n-3\n";
+    let expected = "true\ntrue\n0\n0\n10\n3\n-3\n";
     let (o_in, c_in) = run("m65_trig_in", src, false);
     let (o_vm, c_vm) = run("m65_trig_vm", src, true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, esperado, "salida del intérprete");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, expected, "output del intérprete");
+    assert_eq!(o_in, o_vm, "ambos engines match");
 }
 
 /// M65.1 — dos fixes de corrección: (a) `ipow` ya no trap-ea con resultados que caben (el
@@ -107,9 +107,9 @@ fn main() -> int {
 fn ipow_sin_trap_y_empates_min_max() {
     let src = r#"import std/math;
 @derive(Eq, Show)
-struct P { orden: int, tag: string }
+struct P { order: int, tag: string }
 impl Ord for P {
-    fn less(self, otro: P) -> bool { self.orden < otro.orden }
+    fn less(self, other: P) -> bool { self.order < other.order }
 }
 fn main() -> int {
     print(math.ipow(2, 40));      // 1099511627776 (antes: trap)
@@ -117,8 +117,8 @@ fn main() -> int {
     print(math.ipow(3, 5));       // 243
     print(math.ipow(7, 0));       // 1
     print(math.ipow(5, -1));      // 0 (contrato: exp < 0 → 0)
-    let a = P { orden: 1, tag: "a" };
-    let b = P { orden: 1, tag: "b" };
+    let a = P { order: 1, tag: "a" };
+    let b = P { order: 1, tag: "b" };
     print(math.min(a, b).tag);    // a (empate → a)
     print(math.max(a, b).tag);    // a (empate → a)
     print(math.min(3, 8));        // 3 (no-empate intacto)
@@ -126,18 +126,18 @@ fn main() -> int {
     0
 }
 "#;
-    let esperado = "1099511627776\n4611686018427387904\n243\n1\n0\na\na\n3\n9\n";
+    let expected = "1099511627776\n4611686018427387904\n243\n1\n0\na\na\n3\n9\n";
     let (o_in, c_in) = run("m65_ipow_in", src, false);
     let (o_vm, c_vm) = run("m65_ipow_vm", src, true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
-    assert_eq!(o_in, esperado, "salida del intérprete");
-    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, expected, "output del intérprete");
+    assert_eq!(o_in, o_vm, "ambos engines match");
 }
 
 #[test]
 fn prefijo_global_ya_no_existe() {
     // M49.1a: la forma prefija global se retiró; `sqrt(x)` sin importar `std/math` es un error de tipos.
     let (_o, c) = run("m49_math_bad", "fn main() -> int { print(sqrt(16.0)); 0 }", true);
-    assert_ne!(c, 0, "sqrt() global debe fallar (ya no es builtin)");
+    assert_ne!(c, 0, "sqrt() global must fallar (ya no es builtin)");
 }

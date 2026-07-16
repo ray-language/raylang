@@ -590,7 +590,7 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     }
     // Preserva un bloque **inline**: un cuerpo de solo un tail (sin sentencias) que en la FUENTE cabía
     // ENTERO en una línea (`{`, tail y `}` en `b.line`) y no es una forma con bloque se mantiene inline
-    // (`{ expr }`). raylang tiene muchas funciones de una línea (`fn cuadrado(n) { n * n }`); expandirlas
+    // (`{ expr }`). raylang tiene muchas funciones de una línea (`fn square(n) { n * n }`); expandirlas
     // todas sería anti-idiomático. Al ser de una sola línea, no hay comentarios dentro.
     if b.statements.is_empty()
         && let Some(tail) = &b.tail
@@ -1125,22 +1125,22 @@ mod tests {
     }
 
     #[test]
-    fn preserva_doc_trailing_y_sueltos() {
-        let src = "/// Documenta.\nfn f(x: int) -> int {\n  let y = x * 2;   // el doble\n  // resultado\n  y\n}\n";
+    fn preserves_doc_trailing_y_sueltos() {
+        let src = "/// Documenta.\nfn f(x: int) -> int {\n  let y = x * 2;   // el double\n  // resultado\n  y\n}\n";
         let out = fmt(src);
         assert!(out.contains("/// Documenta."), "doc comment: {out}");
-        assert!(out.contains("let y = x * 2;  // el doble"), "trailing: {out}");
-        assert!(out.contains("    // resultado"), "suelto en el cuerpo: {out}");
+        assert!(out.contains("let y = x * 2;  // el double"), "trailing: {out}");
+        assert!(out.contains("    // resultado"), "suelto en el body: {out}");
     }
 
     #[test]
-    fn fn_anonima_como_argumento_indenta_el_cuerpo() {
+    fn fn_anonymous_como_argumento_indenta_el_body() {
         // Regresión: `spawn(fn() { … })` como sentencia — el cuerpo va un nivel más adentro que la
         // llamada y el `});` alinea con ella (antes el cuerpo se quedaba al nivel de la llamada y el
         // cierre en la columna 0).
         let src = "fn main() -> int {\n    spawn(fn() {\n        work(1);\n    });\n    0\n}\n";
         let out = fmt(src);
-        assert!(out.contains("    spawn(fn() {\n        work(1);\n    });"), "cuerpo a +1, cierre alineado: {out:?}");
+        assert!(out.contains("    spawn(fn() {\n        work(1);\n    });"), "body a +1, cierre alineado: {out:?}");
         assert_eq!(fmt(&out), out, "idempotente");
         // Anidado: `scope(fn() { spawn(fn() { … }) })`.
         let nested = "fn main() -> int {\n    scope(fn() {\n        spawn(fn() {\n            send(ch, 7);\n        });\n    });\n    0\n}\n";
@@ -1148,22 +1148,22 @@ mod tests {
     }
 
     #[test]
-    fn preserva_comentarios_entre_variantes() {
+    fn preserves_comments_between_variantes() {
         let src = "enum Color {\n  Rojo,   // primario\n  // el ultimo\n  Azul,\n}\nfn main() -> int { 0 }\n";
         let out = fmt(src);
-        assert!(out.contains("Rojo,  // primario"), "trailing de variante: {out}");
-        assert!(out.contains("    // el ultimo"), "suelto entre variantes: {out}");
+        assert!(out.contains("Rojo,  // primario"), "trailing de variant: {out}");
+        assert!(out.contains("    // el ultimo"), "suelto between variantes: {out}");
     }
 
     #[test]
-    fn preserva_comentario_en_brazo_de_match() {
-        let src = "enum E { A, B }\nfn f(e: E) -> int {\n  match (e) {\n    E.A => 1,   // caso A\n    E.B => 2,\n  }\n}\nfn main() -> int { 0 }\n";
+    fn preserves_comment_en_branch_de_match() {
+        let src = "enum E { A, B }\nfn f(e: E) -> int {\n  match (e) {\n    E.A => 1,   // case A\n    E.B => 2,\n  }\n}\nfn main() -> int { 0 }\n";
         let out = fmt(src);
-        assert!(out.contains("caso A"), "comentario en brazo: {out}");
+        assert!(out.contains("case A"), "comment en branch: {out}");
     }
 
     #[test]
-    fn ningun_comentario_se_pierde() {
+    fn ningun_comment_se_pierde() {
         // Cuenta las líneas de comentario de entrada y de salida: no debe faltar ninguna.
         let src = "// a\n// b\nfn f() -> int {\n  // c\n  let x = 1;  // d\n  x\n}\n// e\n";
         let out = fmt(src);
@@ -1175,8 +1175,8 @@ mod tests {
     }
 
     #[test]
-    fn idempotente_con_comentarios() {
-        let src = "// cabecera\n\n/// doc\nfn f(x: int) -> int {\n  let y = x;  // t\n  // suelto\n  y\n}\n";
+    fn idempotente_con_comments() {
+        let src = "// header\n\n/// doc\nfn f(x: int) -> int {\n  let y = x;  // t\n  // suelto\n  y\n}\n";
         let a = fmt(src);
         assert_eq!(a, fmt(&a), "fmt(fmt(x)) == fmt(x)");
     }
@@ -1192,33 +1192,33 @@ mod tests {
     }
 
     #[test]
-    fn comentario_antes_del_cierre_queda_dentro() {
+    fn comment_antes_del_cierre_queda_inside() {
         // Un comentario tras la última sentencia, antes del `}`, se acota al bloque (ya no se reubica
         // tras el `}`). Con blanco previo, se conserva. Y un bloque vacío con solo un comentario lo mantiene.
-        let src = "fn g() -> int {\n  let z = 1;\n  z\n\n  // final\n}\nfn vacia() {\n  // solo comentario\n}\nfn main() -> int { 0 }\n";
+        let src = "fn g() -> int {\n  let z = 1;\n  z\n\n  // final\n}\nfn empty() {\n  // solo comment\n}\nfn main() -> int { 0 }\n";
         let out = fmt(src);
-        assert!(out.contains("    z\n\n    // final\n}"), "comentario final dentro, con blanco: {out:?}");
-        assert!(out.contains("fn vacia() {\n    // solo comentario\n}"), "bloque vacío conserva su comentario: {out:?}");
+        assert!(out.contains("    z\n\n    // final\n}"), "comment final inside, con blanco: {out:?}");
+        assert!(out.contains("fn empty() {\n    // solo comment\n}"), "block vacío conserva su comment: {out:?}");
         assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]
-    fn preserva_lineas_en_blanco_entre_sentencias() {
+    fn preserves_lines_en_blanco_between_statements() {
         // Un blanco entre grupos de sentencias se conserva; 2+ se colapsan a uno; sin blanco al inicio.
         let src = "fn main() -> int {\n  let a = 1;\n  let b = 2;\n\n\n  // grupo 2\n  let c = 3;\n  c\n}\n";
         let out = fmt(src);
         assert!(out.contains("let b = 2;\n\n    // grupo 2"), "un blanco antes del grupo 2: {out:?}");
-        assert!(!out.contains("\n\n\n"), "2+ blancos colapsados a uno: {out:?}");
-        assert!(out.starts_with("fn main() -> int {\n    let a = 1;"), "sin blanco tras el {{: {out:?}");
+        assert!(!out.contains("\n\n\n"), "2+ blancos colapsados a one: {out:?}");
+        assert!(out.starts_with("fn main() -> int {\n    let a = 1;"), "sin blanco after el {{: {out:?}");
         assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]
-    fn funcion_inline_se_conserva() {
+    fn function_inline_se_conserva() {
         // Cuerpo de una línea en la fuente → se mantiene inline; multilínea → se mantiene multilínea.
-        let src = "fn cuadrado(n: int) -> int { n * n }\nfn largo(x: int) -> int {\n  let y = x;\n  y\n}\n";
+        let src = "fn square(n: int) -> int { n * n }\nfn largo(x: int) -> int {\n  let y = x;\n  y\n}\n";
         let out = fmt(src);
-        assert!(out.contains("fn cuadrado(n: int) -> int { n * n }"), "inline conservado: {out:?}");
+        assert!(out.contains("fn square(n: int) -> int { n * n }"), "inline conservado: {out:?}");
         assert!(out.contains("fn largo(x: int) -> int {\n    let y = x;"), "multilínea conservado: {out:?}");
         // Un cuerpo multilínea con un solo tail NO se colapsa a inline (respeta la fuente).
         let ml = "fn f() -> int {\n  1 + 2\n}\n";
@@ -1228,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn indent_configurable_y_canonico() {
+    fn indent_configurable_y_canonical() {
         let src = "fn f(x: int) -> int {\n  if (x > 0) {\n    x\n  } else {\n    0\n  }\n}\n";
         // Canónico = 4 espacios.
         assert!(fmt(src).contains("\n    if ("), "canónico 4 espacios");
@@ -1246,19 +1246,19 @@ mod tests {
     }
 
     #[test]
-    fn preserva_interpolacion() {
+    fn preserves_interpolation() {
         // M29.3: `ray fmt` ya NO desazucara la interpolación a `+ to_string(...)`.
-        let src = "fn main() -> int {\n  let x = 7;\n  print(\"${x} al cuadrado es ${x * x}.\");\n  print(\"lit \\${no} y ${x}\");\n  0\n}\n";
+        let src = "fn main() -> int {\n  let x = 7;\n  print(\"${x} al square es ${x * x}.\");\n  print(\"lit \\${no} y ${x}\");\n  0\n}\n";
         let out = fmt(src);
-        assert!(out.contains("\"${x} al cuadrado es ${x * x}.\""), "interpolación conservada: {out:?}");
-        assert!(!out.contains("to_string"), "no debe aparecer to_string: {out:?}");
+        assert!(out.contains("\"${x} al square es ${x * x}.\""), "interpolación conservada: {out:?}");
+        assert!(!out.contains("to_string"), "no must aparecer to_string: {out:?}");
         // Un `${` literal (`\${no}`) se conserva escapado (no reabre interpolación).
         assert!(out.contains("\\${no}"), "'${{' literal escapado: {out:?}");
         assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]
-    fn forma_con_bloque_como_subexpresion_se_indenta() {
+    fn forma_con_block_como_subexpresion_se_indenta() {
         // Regresión: un `match`/bloque como ARGUMENTO de llamada (u otra sub-expresión no-valor) se
         // indentaba desde la columna 0 (`fmt_expr` no llevaba la indentación). Debe indentarse relativo
         // a su línea: brazos a base+1, cierre a base.
@@ -1276,7 +1276,7 @@ mod tests {
     }
 
     #[test]
-    fn preserva_punto_y_coma_en_block_form_final() {
+    fn preserves_punto_y_coma_en_block_form_final() {
         // Regresión (grave: cambiaba semántica): un `match`/`if`/bloque como sentencia-expresión ÚLTIMA de
         // un bloque sin tail se emitía SIN `;`; al re-parsear, un block-form final sin `;` es el **tail**,
         // así que el bloque pasaba de producir `unit` a producir el valor del block-form. El `;` debe
@@ -1293,23 +1293,23 @@ mod tests {
     }
 
     #[test]
-    fn preserva_pipelines() {
+    fn preserves_pipelines() {
         let src = "fn dob(n: int) -> int { n + n }\nfn inc(n: int) -> int { n + 1 }\nfn main() -> int {\n  5 |> dob() |> inc()\n}\n";
         let out = fmt(src);
-        assert!(out.contains("5 |> dob() |> inc()"), "pipeline conservado (encadenado): {out:?}");
+        assert!(out.contains("5 |> dob() |> inc()"), "pipeline conservado (chained): {out:?}");
         assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]
-    fn tipo_funcion_que_retorna_unit_omite_el_retorno() {
+    fn ty_function_what_retorna_unit_omite_el_return_val() {
         // Un tipo `fn(...) -> unit` (retorno implícito) NO debe emitirse con `-> unit` (no es escribible).
         // Antes se emitía por el `Display` de Type, corrompiendo el archivo.
         let src = "struct R { h: fn(int, string) }\nfn f(cb: fn(int)) -> int { 0 }\nfn g(xs: [fn(int)]) -> int { 0 }\nfn main() -> int { 0 }\n";
         let out = fmt(src);
-        assert!(!out.contains("-> unit"), "no debe aparecer '-> unit': {out:?}");
-        assert!(out.contains("h: fn(int, string)"), "campo función sin retorno: {out:?}");
-        assert!(out.contains("cb: fn(int)"), "param función sin retorno: {out:?}");
-        assert!(out.contains("xs: [fn(int)]"), "función anidada en arreglo: {out:?}");
+        assert!(!out.contains("-> unit"), "no must aparecer '-> unit': {out:?}");
+        assert!(out.contains("h: fn(int, string)"), "campo función sin return_val: {out:?}");
+        assert!(out.contains("cb: fn(int)"), "param función sin return_val: {out:?}");
+        assert!(out.contains("xs: [fn(int)]"), "función anidada en array: {out:?}");
         // Un retorno NO-unit sí se conserva.
         assert!(fmt("fn f(cb: fn(int) -> bool) -> int { 0 }\nfn main() -> int { 0 }\n").contains("fn(int) -> bool"));
         assert_eq!(out, fmt(&out), "idempotente");
@@ -1321,7 +1321,7 @@ mod tests {
         let src = "fn main() -> int {\n  let b = b\"\\x8b\\xff\\x00A\";\n  b.len()\n}\n";
         let a = fmt(src);
         assert!(a.contains("\\x8b") && a.contains("\\xff") && a.contains("\\x00"), "{a}");
-        assert!(a.contains('A'), "ASCII imprimible tal cual: {a}");
+        assert!(a.contains('A'), "ASCII imprimible tal which: {a}");
         assert_eq!(a, fmt(&a), "idempotente");
     }
 
@@ -1501,8 +1501,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "codemod auxiliar (M48.4e-3): migra el archivo en RAY_MIGRATE_FILE (p. ej. el prelude extraído)"]
-    fn migrar_archivo_env() {
+    #[ignore = "codemod auxiliar (M48.4e-3): migra el file en RAY_MIGRATE_FILE (p. ej. el prelude extraído)"]
+    fn migrar_file_env() {
         let path = std::env::var("RAY_MIGRATE_FILE").expect("RAY_MIGRATE_FILE");
         let src = std::fs::read_to_string(&path).expect("lee");
         let tokens = crate::lexer::lex(&src).unwrap_or_else(|e| panic!("lex: {e}"));
@@ -1516,7 +1516,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "codemod de un solo uso (M48.4e-2); corre con --ignored"]
+    #[ignore = "codemod de un solo use (M48.4e-2); runs con --ignored"]
     fn migrar_builtins_prefijos() {
         let root = env!("CARGO_MANIFEST_DIR");
         let mut files = Vec::new();
@@ -1541,6 +1541,6 @@ mod tests {
             changed += 1;
             println!("{sites:>5}  (+{n:>3})  {}", f.strip_prefix(root).unwrap().display());
         }
-        println!("TOTAL: {sites} sitios migrados en {changed} archivos");
+        println!("TOTAL: {sites} sitios migrados en {changed} files");
     }
 }

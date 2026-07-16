@@ -16,30 +16,30 @@ const ESPERADO: &[&str] = &[
     "alg:none rechazado",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/web/jwt_eddsa_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta jwt_eddsa_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    (lineas, out.status.success())
+    let lines = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lines, out.status.success())
 }
 
 /// El intérprete es lento para Ed25519 (~55 s); va `#[ignore]` (corre con `-- --ignored`). La VM queda
 /// en la suite por defecto y ambos motores producen salida idéntica.
 #[test]
 #[ignore]
-fn jwt_eddsa_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn jwt_eddsa_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "jwt_eddsa_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn jwt_eddsa_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "jwt_eddsa_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }

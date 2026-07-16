@@ -21,9 +21,9 @@ fn fmt(path: &str) -> (String, bool) {
 }
 
 /// Escribe `content` a un temporal con nombre único y devuelve su ruta.
-fn escribe_tmp(nombre: &str, content: &str) -> String {
+fn escribe_tmp(name: &str, content: &str) -> String {
     let mut p = std::env::temp_dir();
-    p.push(format!("rayfmt_{}_{}", std::process::id(), nombre));
+    p.push(format!("rayfmt_{}_{}", std::process::id(), name));
     let mut f = std::fs::File::create(&p).expect("crea temporal");
     f.write_all(content.as_bytes()).expect("escribe temporal");
     p.to_str().unwrap().to_string()
@@ -69,19 +69,19 @@ fn es_idempotente() {
 }
 
 /// Ejecuta un `.ray` y devuelve (stdout, código de salida) con el motor indicado.
-fn correr(path: &str, vm: bool) -> (String, i32) {
+fn run(path: &str, vm: bool) -> (String, i32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
     if vm {
         cmd.arg("--vm");
     }
-    let out = cmd.arg(path).output().expect("ejecuta programa");
+    let out = cmd.arg(path).output().expect("ejecuta program");
     (String::from_utf8_lossy(&out.stdout).to_string(), out.status.code().unwrap_or(-1))
 }
 
 /// El formateo preserva el comportamiento: original y formateado dan la misma salida y código de salida,
 /// en ambos motores. Se prueba con programas autocontenidos (sin imports).
 #[test]
-fn preserva_el_comportamiento() {
+fn preserves_el_comportamiento() {
     for rel in ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray"] {
         let orig = repo(rel);
         let (formateado, ok) = fmt(&orig);
@@ -89,10 +89,10 @@ fn preserva_el_comportamiento() {
         let tmp = escribe_tmp(&format!("run_{}", rel.replace('/', "_")), &formateado);
 
         for vm in [false, true] {
-            let (o_out, o_code) = correr(&orig, vm);
-            let (f_out, f_code) = correr(&tmp, vm);
-            assert_eq!(o_out, f_out, "{} (vm={}): la salida cambió al formatear", rel, vm);
-            assert_eq!(o_code, f_code, "{} (vm={}): el código de salida cambió al formatear", rel, vm);
+            let (o_out, o_code) = run(&orig, vm);
+            let (f_out, f_code) = run(&tmp, vm);
+            assert_eq!(o_out, f_out, "{} (vm={}): la output cambió al formatear", rel, vm);
+            assert_eq!(o_code, f_code, "{} (vm={}): el código de output cambió al formatear", rel, vm);
         }
     }
 }

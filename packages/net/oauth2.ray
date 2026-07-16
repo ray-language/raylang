@@ -62,7 +62,7 @@ fn int_field(j: Json, key: string) -> int {
 // Parsea la respuesta JSON del token endpoint a un `Token` (o un error de OAuth con su `error`).
 fn parse_token(body: string) -> Result<Token, string> {
     match (parse(body)) {
-        Result.Err(e) => Result.Err("respuesta del token no es JSON: " + e),
+        Result.Err(e) => Result.Err("token response is not JSON: " + e),
         Result.Ok(j) => {
             let err = str_field(j, "error");
             if (err.len() > 0) {
@@ -70,7 +70,7 @@ fn parse_token(body: string) -> Result<Token, string> {
             } else {
                 let at = str_field(j, "access_token");
                 if (at.len() == 0) {
-                    Result.Err("la respuesta no trae access_token")
+                    Result.Err("the response has no access_token")
                 } else {
                     Result.Ok(Token { access_token: at, token_type: str_field(j, "token_type"), expires_in: int_field(j, "expires_in") })
                 }
@@ -93,10 +93,10 @@ pub fn client_credentials(token_url: string, client_id: string, client_secret: s
     h.insert("Content-Type", "application/x-www-form-urlencoded");
     h.insert("Accept", "application/json");
     match (request_with("POST", token_url, body, h)) {
-        Result.Err(e) => Result.Err("no se pudo contactar el token endpoint: " + e),
+        Result.Err(e) => Result.Err("could not contact the token endpoint: " + e),
         Result.Ok(resp) => {
             match (body_text(resp)) {
-                Result.Err(e) => Result.Err("cuerpo del token no es UTF-8: " + e),
+                Result.Err(e) => Result.Err("token body is not UTF-8: " + e),
                 Result.Ok(txt) => {
                     if (resp.status != 200) {
                         // Aun en error, OAuth devuelve un JSON con `error`; se intenta parsear.

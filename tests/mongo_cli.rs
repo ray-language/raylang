@@ -124,7 +124,7 @@ fn read_op_msg<S: Read>(s: &mut S) -> Option<(i32, Vec<u8>)> {
     }
     let total = i32::from_le_bytes(hdr) as usize;
     let mut rest = vec![0u8; total - 4];
-    s.read_exact(&mut rest).expect("cuerpo del mensaje");
+    s.read_exact(&mut rest).expect("body del mensaje");
     let req_id = i32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]);
     let mut full = hdr.to_vec();
     full.extend(rest);
@@ -137,12 +137,12 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// El servidor de juguete: hello → ok; saslStart (verifica el client-first) → server-first;
 /// saslContinue → server-final. Un usuario desconocido recibe ok: 0.0 + errmsg.
-fn atender(mut s: TcpStream) {
-    atender_stream(&mut s);
+fn handle(mut s: TcpStream) {
+    handle_stream(&mut s);
 }
 
 /// La sesión en sí, genérica sobre el flujo (TCP plano o rustls::Stream → sirve para el test TLS).
-fn atender_stream<S: Read + Write>(s: &mut S) {
+fn handle_stream<S: Read + Write>(s: &mut S) {
     while let Some((req, msg)) = read_op_msg(&mut *s) {
         let reply = if contains(&msg, b"hello") {
             doc(&[elem_double("ok", 1.0)])
@@ -182,7 +182,7 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
             // Paginación multi-ronda: el id 77 pide la segunda página (deja vivo el 88); el 88,
             // la tercera y última (id 0 = cursor agotado). El id viaja como int64 LE.
             if contains(&msg, &77i64.to_le_bytes()) {
-                let d = doc(&[elem_str("nombre", "grace")]);
+                let d = doc(&[elem_str("name", "grace")]);
                 let batch = doc(&[elem_doc("0", &d)]);
                 let cursor = doc(&[
                     elem_arr("nextBatch", &batch),
@@ -191,7 +191,7 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
                 ]);
                 doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
             } else if contains(&msg, &88i64.to_le_bytes()) {
-                let d = doc(&[elem_str("nombre", "lin")]);
+                let d = doc(&[elem_str("name", "lin")]);
                 let batch = doc(&[elem_doc("0", &d)]);
                 let cursor = doc(&[
                     elem_arr("nextBatch", &batch),
@@ -200,13 +200,13 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
                 ]);
                 doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
             } else {
-                doc(&[elem_double("ok", 0.0), elem_str("errmsg", "cursor desconocido"), elem_i32("code", 43)])
+                doc(&[elem_double("ok", 0.0), elem_str("errmsg", "cursor unknown"), elem_i32("code", 43)])
             }
         } else if contains(&msg, b"find") {
             if contains(&msg, b"paginada") {
                 // El firstBatch trae un documento y deja el cursor VIVO (id 77) → el cliente
                 // debe agotar con getMore.
-                let d = doc(&[elem_str("nombre", "ada")]);
+                let d = doc(&[elem_str("name", "ada")]);
                 let batch = doc(&[elem_doc("0", &d)]);
                 let cursor = doc(&[
                     elem_arr("firstBatch", &batch),
@@ -216,8 +216,8 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
                 doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
             } else {
                 // Un cursor con dos documentos en el firstBatch (el segundo sin `nota`) e id 0.
-                let d0 = doc(&[elem_str("nombre", "ada"), elem_i32("nota", 36)]);
-                let d1 = doc(&[elem_str("nombre", "grace")]);
+                let d0 = doc(&[elem_str("name", "ada"), elem_i32("nota", 36)]);
+                let d1 = doc(&[elem_str("name", "grace")]);
                 let batch = doc(&[elem_doc("0", &d0), elem_doc("1", &d1)]);
                 let cursor = doc(&[
                     elem_arr("firstBatch", &batch),
@@ -235,20 +235,20 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
         } else if contains(&msg, b"delete") {
             doc(&[elem_i32("n", 3), elem_double("ok", 1.0)])
         } else {
-            doc(&[elem_double("ok", 0.0), elem_str("errmsg", "comando desconocido")])
+            doc(&[elem_double("ok", 0.0), elem_str("errmsg", "comando unknown")])
         };
         s.write_all(&op_msg(req, reply)).expect("responde");
     }
 }
 
-fn lanzar_servidor() -> u16 {
+fn launch_servidor() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
                 Ok(s) => {
-                    thread::spawn(move || atender(s));
+                    thread::spawn(move || handle(s));
                 }
                 Err(_) => break,
             }
@@ -257,7 +257,7 @@ fn lanzar_servidor() -> u16 {
     port
 }
 
-fn proyecto(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -285,9 +285,9 @@ fn main() -> int {{
         Result.Err(e) => {{ print("mala clave: " + e); }},
     }}
     // 3. Usuario desconocido: el servidor responde ok: 0.0 + errmsg.
-    match (mongo.connect("127.0.0.1", {port}, "otro", "secret", "test", "clientnonce123456")) {{
+    match (mongo.connect("127.0.0.1", {port}, "other", "secret", "test", "clientnonce123456")) {{
         Result.Ok(_) => {{ print("no debería"); return 1; }},
-        Result.Err(e) => {{ print("mal usuario: " + e); }},
+        Result.Err(e) => {{ print("mal user: " + e); }},
     }}
     0
 }}
@@ -297,13 +297,13 @@ fn main() -> int {{
     app
 }
 
-fn correr(app: &std::path::Path, flags: &[&str]) -> String {
+fn run(app: &std::path::Path, flags: &[&str]) -> String {
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
-    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binario");
+    let out = Command::new(BIN).args(&args).current_dir(app).output().expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -311,25 +311,25 @@ fn correr(app: &std::path::Path, flags: &[&str]) -> String {
 }
 
 const ESPERADO: &str = "conectado\n\
-mala clave: mongo: la firma del servidor no verifica (autenticación fallida)\n\
-mal usuario: mongo: Authentication failed.\n";
+mala clave: mongo: the server signature does not verify (authentication failed)\n\
+mal user: mongo: Authentication failed.\n";
 
 #[test]
-fn mongo_hello_scram_y_errores_de_auth() {
+fn mongo_hello_scram_y_errors_de_auth() {
     let base = std::env::temp_dir().join("ray_mongo_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor();
-    let app = proyecto(&base, port);
+    let port = launch_servidor();
+    let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    assert_eq!(correr(&app, &[]), ESPERADO, "VM");
-    assert_eq!(correr(&app, &["--interp"]), ESPERADO, "intérprete");
+    assert_eq!(run(&app, &[]), ESPERADO, "VM");
+    assert_eq!(run(&app, &["--interp"]), ESPERADO, "intérprete");
 }
 
 // --- M54.3: CRUD ---
 
-fn proyecto_crud(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project_crud(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -353,8 +353,8 @@ fn main() -> int {{
 
     // insert: dos documentos (el _id lo asigna el servidor).
     let docs = [
-        [bson.field("nombre", bson.Bson.Str("ada")), bson.field("nota", bson.Bson.Int(36))],
-        [bson.field("nombre", bson.Bson.Str("grace"))],
+        [bson.field("name", bson.Bson.Str("ada")), bson.field("nota", bson.Bson.Int(36))],
+        [bson.field("name", bson.Bson.Str("grace"))],
     ];
     match (mongo.insert(c, "usuarios", docs)) {{
         Result.Ok(n) => {{ print("insertados: " + to_string(n)); }},
@@ -362,7 +362,7 @@ fn main() -> int {{
     }}
 
     // find: el firstBatch del cursor, documento a documento.
-    let filter = [bson.field("nombre", bson.Bson.Str("ada"))];
+    let filter = [bson.field("name", bson.Bson.Str("ada"))];
     match (mongo.find(c, "usuarios", filter)) {{
         Result.Ok(rows) => {{
             var i = 0;
@@ -417,14 +417,14 @@ fn main() -> int {{
 }
 
 const ESPERADO_CRUD: &str = "insertados: 2\n\
-{nombre: \"ada\", nota: 36}\n\
-{nombre: \"grace\"}\n\
+{name: \"ada\", nota: 36}\n\
+{name: \"grace\"}\n\
 modificados: 1\n\
 borrados: 3\n\
 paginados: 3\n\
-{nombre: \"ada\"}\n\
-{nombre: \"grace\"}\n\
-{nombre: \"lin\"}\n\
+{name: \"ada\"}\n\
+{name: \"grace\"}\n\
+{name: \"lin\"}\n\
 mongo: ns not found\n";
 
 #[test]
@@ -432,16 +432,16 @@ fn mongo_crud_y_error_del_servidor() {
     let base = std::env::temp_dir().join("ray_mongo_cli_crud");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor();
-    let app = proyecto_crud(&base, port);
+    let port = launch_servidor();
+    let app = project_crud(&base, port);
 
-    assert_eq!(correr(&app, &[]), ESPERADO_CRUD, "VM");
-    assert_eq!(correr(&app, &["--interp"]), ESPERADO_CRUD, "intérprete");
+    assert_eq!(run(&app, &[]), ESPERADO_CRUD, "VM");
+    assert_eq!(run(&app, &["--interp"]), ESPERADO_CRUD, "intérprete");
 }
 
 // --- TLS: connect_tls (cifrado desde el octeto 0, sin STARTTLS) ---
 
-fn lanzar_servidor_tls() -> u16 {
+fn launch_servidor_tls() -> u16 {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
@@ -462,7 +462,7 @@ fn lanzar_servidor_tls() -> u16 {
             // TLS desde el octeto 0: el ClientHello es lo primero que llega.
             let mut conn = rustls::ServerConnection::new(config.clone()).expect("server conn");
             let mut tls = rustls::Stream::new(&mut conn, &mut s);
-            atender_stream(&mut tls);
+            handle_stream(&mut tls);
             conn.send_close_notify();
             let _ = conn.complete_io(&mut s);
         }
@@ -470,7 +470,7 @@ fn lanzar_servidor_tls() -> u16 {
     port
 }
 
-fn proyecto_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+fn project_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -493,7 +493,7 @@ fn main() -> int {{
         Result.Err(e) => {{ print(e); return 1; }},
     }};
     print("conectado seguro");
-    let filter = [bson.field("nombre", bson.Bson.Str("ada"))];
+    let filter = [bson.field("name", bson.Bson.Str("ada"))];
     match (mongo.find(c, "usuarios", filter)) {{
         Result.Ok(rows) => {{
             var i = 0;
@@ -513,7 +513,7 @@ fn main() -> int {{
     app
 }
 
-fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
+fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let mut args = vec!["run"];
     args.extend_from_slice(flags);
@@ -522,10 +522,10 @@ fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
         .current_dir(app)
         .env("SSL_CERT_FILE", &ca)
         .output()
-        .expect("lanza el binario");
+        .expect("lanza el binary");
     assert!(
         out.status.success(),
-        "corre sin error\nstdout: {}\nstderr: {}",
+        "runs sin error\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -533,17 +533,17 @@ fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
 }
 
 const ESPERADO_TLS: &str = "conectado seguro\n\
-{nombre: \"ada\", nota: 36}\n\
-{nombre: \"grace\"}\n";
+{name: \"ada\", nota: 36}\n\
+{name: \"grace\"}\n";
 
 #[test]
 fn mongo_tls_conexion_y_find_cifrados() {
     let base = std::env::temp_dir().join("ray_mongo_cli_tls");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = lanzar_servidor_tls();
-    let app = proyecto_tls(&base, port);
+    let port = launch_servidor_tls();
+    let app = project_tls(&base, port);
 
-    assert_eq!(correr_tls(&app, &[]), ESPERADO_TLS, "VM");
-    assert_eq!(correr_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
+    assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");
+    assert_eq!(run_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
 }

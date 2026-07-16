@@ -18,7 +18,7 @@ fn read_file(path: string) -> Result<string, string> {
 fn main() -> int {
     let argv = args();
     if (argv.len() == 0) {
-        eprint("uso: raylang selfhost/check_dump.ray <archivo>");
+        eprint("use: raylang selfhost/check_dump.ray <file>");
         return 1;
     }
     match (read_file(argv[0])) {
@@ -32,17 +32,17 @@ fn main() -> int {
                                     print("ok");
                                 },
                                 Result.Err(te) => {
-                                    print("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                                    print("type error at " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
                                 },
                             }
                         },
                         Result.Err(pe) => {
-                            print("error de sintaxis en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                            print("syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
                         },
                     }
                 },
                 Result.Err(le) => {
-                    print("error léxico en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+                    print("lex error at " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
                 },
             }
             0

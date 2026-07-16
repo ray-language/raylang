@@ -63,7 +63,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     for (i, f) in program.functions.iter().enumerate() {
         indices.insert(f.name.clone(), i);
     }
-    let main = *indices.get("main").expect("el checker garantiza 'main'");
+    let main = *indices.get("main").expect("the checker guarantees 'main'");
 
     // Tabla de structs + mapa nombre → (índice, nombres de campo en orden).
     let mut struct_table = Vec::new();
@@ -336,7 +336,7 @@ impl<'a> Compiler<'a> {
         // cuerpo. `bind` genera el código que, dado `idx` en la pila NO, liga la(s) variable(s).
         match iter {
             ForIter::Range { start, end } => {
-                let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un nombre") };
+                let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un name") };
                 self.emit_expr(start)?;
                 let i_slot = self.declare_local(&name);
                 self.emit(OpCode::InitLocal(i_slot), line, col);
@@ -394,7 +394,7 @@ impl<'a> Compiler<'a> {
                         }
                     })?;
                 } else {
-                    let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un nombre") };
+                    let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un name") };
                     let arr_slot = self.declare_local("$arr");
                     self.emit(OpCode::InitLocal(arr_slot), line, col);
                     let x_slot = self.declare_local(&name);
@@ -409,7 +409,7 @@ impl<'a> Compiler<'a> {
             // M40.2: iterador de usuario. Evaluamos el iterable una vez (semántica de referencia →
             // `next` muta su estado) y llamamos a `next` hasta que devuelva `None` (tag 1 de Option).
             ForIter::Iter { expr, next_fn } => {
-                let &idx = self.indices.get(next_fn).expect("el checker garantiza next");
+                let &idx = self.indices.get(next_fn).expect("the checker guarantees next");
                 self.emit_expr(expr)?;
                 let it_slot = self.declare_local("$it");
                 self.emit(OpCode::InitLocal(it_slot), line, col);
@@ -511,7 +511,7 @@ impl<'a> Compiler<'a> {
         s.chunk.code[at] = match s.chunk.code[at] {
             OpCode::Jump(_) => OpCode::Jump(target),
             OpCode::JumpIfFalse(_) => OpCode::JumpIfFalse(target),
-            _ => unreachable!("patch_jump sobre una instrucción que no es salto"),
+            _ => unreachable!("patch_jump about one instrucción what no es salto"),
         };
     }
 
@@ -551,7 +551,7 @@ impl<'a> Compiler<'a> {
             }
             PatternKind::Variant { enum_name, variant, subpatterns } => {
                 let (_, vmap) = self.enums.get(enum_name).expect("el checker registró el enum");
-                let (tag, _arity) = *vmap.get(variant).expect("el checker validó la variante");
+                let (tag, _arity) = *vmap.get(variant).expect("el checker validó la variant");
                 // ¿Es esta la variante? Si no, al siguiente brazo (dejando el bool).
                 self.emit(OpCode::GetLocal(val_slot), line, col);
                 self.emit(OpCode::EnumTagEq(tag), line, col);
@@ -731,7 +731,7 @@ impl<'a> Compiler<'a> {
                     self.emit_expr(value)?;
                     self.emit(OpCode::SetField(name.clone()), line, col);
                 }
-                _ => unreachable!("el checker garantiza un lvalue"),
+                _ => unreachable!("the checker guarantees an lvalue"),
             },
             StmtKind::Return { value } => {
                 match value {
@@ -811,7 +811,7 @@ impl<'a> Compiler<'a> {
                         self.emit(OpCode::Constant(cidx), line, col);
                     } else {
                         // No es variable ni upvalue ni constante: un nombre de función como valor.
-                        let idx = *self.indices.get(name).expect("el checker garantiza el nombre");
+                        let idx = *self.indices.get(name).expect("the checker guarantees the name");
                         self.emit(OpCode::Function(idx), line, col);
                     }
                 }
@@ -956,7 +956,7 @@ impl<'a> Compiler<'a> {
             }
 
             ExprKind::StructLit { name, fields } => {
-                let (idx, field_names) = self.structs.get(name).expect("el checker registró el struct");
+                let (idx, field_names) = self.structs.get(name).expect("the checker registered the struct");
                 let idx = *idx;
                 let field_names = field_names.clone(); // suelta el préstamo de self
                 // Emitimos los valores en ORDEN DE DECLARACIÓN (así MakeStruct los
@@ -966,7 +966,7 @@ impl<'a> Compiler<'a> {
                         .iter()
                         .find(|(n, _)| n == fname)
                         .map(|(_, e)| e)
-                        .expect("el checker garantiza el campo");
+                        .expect("the checker guarantees the field");
                     self.emit_expr(value_expr)?;
                 }
                 self.emit(OpCode::MakeStruct(idx), line, col);
@@ -975,7 +975,7 @@ impl<'a> Compiler<'a> {
             ExprKind::EnumLit { enum_name, variant, args } => {
                 let (enum_id, variant_map) = self.enums.get(enum_name).expect("el checker registró el enum");
                 let enum_id = *enum_id;
-                let (tag, _arity) = *variant_map.get(variant).expect("el checker validó la variante");
+                let (tag, _arity) = *variant_map.get(variant).expect("el checker validó la variant");
                 // Emitimos el payload en orden; MakeEnum saca esos valores y arma el enum.
                 for a in args {
                     self.emit_expr(a)?;
@@ -1104,7 +1104,7 @@ impl<'a> Compiler<'a> {
 /// reconocer el patrón en el bytecode ya generado, sin tocar la emisión.
 fn optimize_tail_calls(chunk: &mut Chunk) {
     for i in 0..chunk.code.len() {
-        let nuevo = match &chunk.code[i] {
+        let new = match &chunk.code[i] {
             OpCode::Call(idx, argc) if returns_immediately(chunk, i + 1) => {
                 Some(OpCode::TailCall(*idx, *argc))
             }
@@ -1113,7 +1113,7 @@ fn optimize_tail_calls(chunk: &mut Chunk) {
             }
             _ => None,
         };
-        if let Some(op) = nuevo {
+        if let Some(op) = new {
             chunk.code[i] = op;
         }
     }
@@ -1215,23 +1215,23 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
         return;
     }
     // (1) Marca qué índices son destino de algún salto (no se puede fusionar "dentro" de ellos).
-    let mut es_destino = vec![false; n];
+    let mut es_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_destino[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_target[*t] = true,
             _ => {}
         }
     }
     // (2) Reconstruye el código fusionando pares elegibles; `viejo_a_nuevo[i]` = nueva posición de la
     // instrucción que empezaba en `i`. El segundo opcode de un par fusionado nunca es destino de salto
     // (lo garantiza `es_destino`), así que su entrada en el mapa queda sin usar.
-    let mut viejo_a_nuevo = vec![0usize; n];
+    let mut old_a_new = vec![0usize; n];
     let mut code = Vec::with_capacity(n);
     let mut lines = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
-        viejo_a_nuevo[i] = code.len();
-        if i + 1 < n && !es_destino[i + 1] {
+        old_a_new[i] = code.len();
+        if i + 1 < n && !es_target[i + 1] {
             if let Some(fusion) = match (&chunk.code[i], &chunk.code[i + 1]) {
                 (OpCode::GetLocal(s), OpCode::GetLocal(t)) => Some(OpCode::GetLocalLocal(*s, *t)),
                 (OpCode::GetLocal(s), OpCode::Constant(c)) => Some(OpCode::GetLocalConst(*s, *c)),
@@ -1250,7 +1250,7 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
     // (3) Remapea los destinos de salto a las nuevas posiciones.
     for op in &mut code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => *t = viejo_a_nuevo[*t],
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => *t = old_a_new[*t],
             _ => {}
         }
     }
@@ -1272,22 +1272,22 @@ fn fuse_round2(chunk: &mut Chunk) {
     if n == 0 {
         return;
     }
-    let mut es_destino = vec![false; n];
+    let mut es_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_destino[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_target[*t] = true,
             _ => {}
         }
     }
     // n+1 entradas: una CmpJump puede apuntar a `t+1 == n` (el Pop era la última instrucción).
-    let mut viejo_a_nuevo = vec![0usize; n + 1];
+    let mut old_a_new = vec![0usize; n + 1];
     let mut code = Vec::with_capacity(n);
     let mut lines = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
-        viejo_a_nuevo[i] = code.len();
+        old_a_new[i] = code.len();
         // [Cmp, JumpIfFalse(t), Pop] con code[t] == Pop → CmpJump(op, t+1)
-        if i + 2 < n && !es_destino[i + 1] && !es_destino[i + 2] {
+        if i + 2 < n && !es_target[i + 1] && !es_target[i + 2] {
             let cmp = match &chunk.code[i] {
                 OpCode::Less => Some(CmpOp::Less),
                 OpCode::LessEqual => Some(CmpOp::LessEqual),
@@ -1308,7 +1308,7 @@ fn fuse_round2(chunk: &mut Chunk) {
                 }
             }
         }
-        if i + 1 < n && !es_destino[i + 1] {
+        if i + 1 < n && !es_target[i + 1] {
             // [GetLocalConst, Add|Sub] → AddLocalConst/SubLocalConst
             if let OpCode::GetLocalConst(s2, c) = &chunk.code[i] {
                 let fusion = match &chunk.code[i + 1] {
@@ -1336,11 +1336,11 @@ fn fuse_round2(chunk: &mut Chunk) {
         lines.push(chunk.lines[i]);
         i += 1;
     }
-    viejo_a_nuevo[n] = code.len();
+    old_a_new[n] = code.len();
     for op in &mut code {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => {
-                *t = viejo_a_nuevo[*t]
+                *t = old_a_new[*t]
             }
             _ => {}
         }

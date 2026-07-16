@@ -25,7 +25,7 @@ fn main() -> int {
     // 1. Conectar (handshake v10 + autenticación).
     var c = match (mysql.connect(host, port, a[2], a[3], a[4])) {
         Result.Ok(conn) => conn,
-        Result.Err(e) => { print("no se pudo conectar: " + e); return 1; },
+        Result.Err(e) => { print("could not connect: " + e); return 1; },
     };
     print("conectado a MySQL en " + host + ":" + to_string(port));
 

@@ -21,10 +21,10 @@ fn toy_server() -> u16 {
             let mut buf = [0u8; 4096];
             let n = stream.read(&mut buf).unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..n]).into_owned();
-            let ruta = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/").to_string();
+            let path = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/").to_string();
 
             // /gzip: cuerpo binario (gzip de "raylang es un lenguaje...") con Content-Encoding: gzip.
-            if ruta == "/gzip" {
+            if path == "/gzip" {
                 const GZIP: &[u8] = &[
                     31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 43, 74, 172, 204, 73, 204, 75, 87, 72, 45, 86, 40,
                     205, 83, 200, 73, 205, 75, 47, 77, 204, 74, 85, 72, 73, 85, 72, 44, 40, 74, 205, 75,
@@ -40,7 +40,7 @@ fn toy_server() -> u16 {
                 continue;
             }
 
-            let resp: String = if ruta == "/headers" {
+            let resp: String = if path == "/headers" {
                 // Eco del valor de la cabecera X-Token.
                 let token = req
                     .lines()
@@ -48,11 +48,11 @@ fn toy_server() -> u16 {
                     .map(|l| l[8..].trim().to_string())
                     .unwrap_or_default();
                 format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{token}")
-            } else if ruta == "/redirect" {
+            } else if path == "/redirect" {
                 "HTTP/1.1 302 Found\r\nLocation: /final\r\nConnection: close\r\n\r\n".to_string()
-            } else if ruta == "/final" {
+            } else if path == "/final" {
                 "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nllegada".to_string()
-            } else if ruta == "/chunked" {
+            } else if path == "/chunked" {
                 // "Wiki"+"pedia "+"in chunks." = "Wikipedia in chunks." (a = 10 hex).
                 "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n\
                  4\r\nWiki\r\n6\r\npedia \r\na\r\nin chunks.\r\n0\r\n\r\n"
@@ -74,28 +74,28 @@ fn main() -> int {
     var hdrs: Map<string, string> = Map.new();
     hdrs.insert("X-Token", "secreto42");
     match (request_with("GET", "http://127.0.0.1:__PORT__/headers", "", hdrs)) {
-        Result.Ok(r) => print(texto(r)),
+        Result.Ok(r) => print(text(r)),
         Result.Err(e) => print("err: " + e),
     };
     // 2. Redirección 302 → /final, seguida automáticamente.
     match (fetch_follow("http://127.0.0.1:__PORT__/redirect", 5)) {
-        Result.Ok(r) => { print(to_string(r.status)); print(texto(r)); },
+        Result.Ok(r) => { print(to_string(r.status)); print(text(r)); },
         Result.Err(e) => print("err: " + e),
     };
     // 3. Transfer-Encoding chunked, decodificado.
     match (fetch("http://127.0.0.1:__PORT__/chunked")) {
-        Result.Ok(r) => print(texto(r)),
+        Result.Ok(r) => print(text(r)),
         Result.Err(e) => print("err: " + e),
     };
     // 4. Content-Encoding: gzip, descomprimido automáticamente (M20.10b).
     match (fetch("http://127.0.0.1:__PORT__/gzip")) {
-        Result.Ok(r) => print(texto(r)),
+        Result.Ok(r) => print(text(r)),
         Result.Err(e) => print("err: " + e),
     };
     0
 }
 
-fn texto(r: Response) -> string {
+fn text(r: Response) -> string {
     match (body_text(r)) {
         Result.Ok(t) => t,
         Result.Err(e) => "utf8 err: " + e,
@@ -109,9 +109,9 @@ fn run_with_http(driver: &str, vm: bool) -> (String, i32) {
 
 // Cada test usa su propio directorio (`caso`): los tests corren en paralelo y compartirlo
 // haría que se pisaran el `main.ray`.
-fn run_with_http_en(caso: &str, driver: &str, vm: bool) -> (String, i32) {
+fn run_with_http_en(case: &str, driver: &str, vm: bool) -> (String, i32) {
     let mut dir = std::env::temp_dir();
-    dir.push(format!("ray_{caso}_{}", if vm { "vm" } else { "interp" }));
+    dir.push(format!("ray_{case}_{}", if vm { "vm" } else { "interp" }));
     std::fs::create_dir_all(&dir).expect("crea dir");
     for lib in ["http.ray", "inflate.ray"] {
         let src = format!("{}/examples/web/{lib}", env!("CARGO_MANIFEST_DIR"));
@@ -132,15 +132,15 @@ fn run_with_http_en(caso: &str, driver: &str, vm: bool) -> (String, i32) {
 }
 
 #[test]
-fn http_robusto_headers_redirect_chunked() {
+fn http_robust_headers_redirect_chunked() {
     for vm in [false, true] {
         let port = toy_server();
         let driver = DRIVER.replace("__PORT__", &port.to_string());
         let (out, code) = run_with_http(&driver, vm);
-        let esperado = "secreto42\n200\nllegada\nWikipedia in chunks.\n\
+        let expected = "secreto42\n200\nllegada\nWikipedia in chunks.\n\
                         raylang es un lenguaje de aprendizaje. raylang es divertido. raylang raylang raylang!";
-        assert_eq!(out.trim(), esperado, "http robusto (vm={vm}): {out}");
-        assert_eq!(code, 0, "salida 0 (vm={vm})");
+        assert_eq!(out.trim(), expected, "http robust (vm={vm}): {out}");
+        assert_eq!(code, 0, "output 0 (vm={vm})");
     }
 }
 
@@ -179,9 +179,9 @@ fn toy_server_keepalive() -> u16 {
                         }
                     }
                     nreq += 1;
-                    let texto = String::from_utf8_lossy(&req);
-                    let ruta = texto.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
-                    match ruta {
+                    let text = String::from_utf8_lossy(&req);
+                    let path = text.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("/");
+                    match path {
                         "/chunked" => {
                             let _ = stream.write_all(
                                 b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n\
@@ -219,16 +219,16 @@ fn toy_server_keepalive() -> u16 {
 const DRIVER_KEEPALIVE: &str = r#"
 from http import connect, conn_request, conn_close, Conn, Response, body_text;
 
-fn texto(r: Response) -> string {
+fn text(r: Response) -> string {
     match (body_text(r)) {
         Result.Ok(t) => t,
         Result.Err(e) => "utf8 err: " + e,
     }
 }
 
-fn pide(c: Conn, path: string) -> string {
+fn asks(c: Conn, path: string) -> string {
     match (conn_request(c, "GET", path, "", Map.new())) {
-        Result.Ok(r) => texto(r),
+        Result.Ok(r) => text(r),
         Result.Err(e) => "err: " + e,
     }
 }
@@ -240,14 +240,14 @@ fn main() -> int {
             1
         },
         Result.Ok(c) => {
-            print(pide(c, "/quien"));    // c1 r1
-            print(pide(c, "/quien"));    // c1 r2 — MISMA conexión (keep-alive real)
-            print(pide(c, "/chunked"));  // chunked delimitado sin EOF, misma conexión
-            print(pide(c, "/quien"));    // c1 r4 — la delimitación chunked no se comió de más
-            print(pide(c, "/cierra"));   // el servidor pide cerrar
-            print(pide(c, "/quien"));    // c2 r1 — reconexión tras Connection: close
-            print(pide(c, "/silencio")); // c2 r2; el servidor cierra sin avisar
-            print(pide(c, "/quien"));    // c3 r1 — reintento transparente sobre conexión fresca
+            print(asks(c, "/quien"));    // c1 r1
+            print(asks(c, "/quien"));    // c1 r2 — MISMA conexión (keep-alive real)
+            print(asks(c, "/chunked"));  // chunked delimitado sin EOF, misma conexión
+            print(asks(c, "/quien"));    // c1 r4 — la delimitación chunked no se comió de más
+            print(asks(c, "/cierra"));   // el servidor pide cerrar
+            print(asks(c, "/quien"));    // c2 r1 — reconexión tras Connection: close
+            print(asks(c, "/silencio")); // c2 r2; el servidor cierra sin avisar
+            print(asks(c, "/quien"));    // c3 r1 — reintento transparente sobre conexión fresca
             conn_close(c);
             0
         },
@@ -261,8 +261,8 @@ fn http_keepalive_reusa_y_reintenta() {
         let port = toy_server_keepalive();
         let driver = DRIVER_KEEPALIVE.replace("__PORT__", &port.to_string());
         let (out, code) = run_with_http_en("httpka", &driver, vm);
-        let esperado = "c1 r1\nc1 r2\nWikipedia in chunks.\nc1 r4\nadios\nc2 r1\nultima\nc3 r1";
-        assert_eq!(out.trim(), esperado, "keep-alive (vm={vm}): {out}");
-        assert_eq!(code, 0, "salida 0 (vm={vm})");
+        let expected = "c1 r1\nc1 r2\nWikipedia in chunks.\nc1 r4\nadios\nc2 r1\nultima\nc3 r1";
+        assert_eq!(out.trim(), expected, "keep-alive (vm={vm}): {out}");
+        assert_eq!(code, 0, "output 0 (vm={vm})");
     }
 }

@@ -16,7 +16,7 @@ const KEY_PEM: &str = include_str!("fixtures/tls_key.pem");
 
 /// Levanta un servidor TLS de una conexión; si `ofrece_h2`, anuncia ALPN `h2`. Completa el handshake y
 /// cierra. Devuelve el puerto efímero.
-fn lanzar_servidor(ofrece_h2: bool) -> u16 {
+fn launch_servidor(offers_h2: bool) -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("cert de prueba");
@@ -25,7 +25,7 @@ fn lanzar_servidor(ofrece_h2: bool) -> u16 {
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .expect("config servidor");
-    if ofrece_h2 {
+    if offers_h2 {
         cfg.alpn_protocols = vec![b"h2".to_vec()];
     }
     let config = Arc::new(cfg);
@@ -48,7 +48,7 @@ fn lanzar_servidor(ofrece_h2: bool) -> u16 {
 
 /// Corre el demo con el binario de raylang, pasándole host y puerto, con `SSL_CERT_FILE` apuntando a la
 /// CA de prueba para que confíe en el certificado autofirmado. Devuelve stdout (primera línea).
-fn correr(flags: &[&str], port: u16) -> String {
+fn run(flags: &[&str], port: u16) -> String {
     let demo = format!("{}/examples/net/h2_alpn_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let cert_path = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -63,20 +63,20 @@ fn correr(flags: &[&str], port: u16) -> String {
 }
 
 #[test]
-fn negocia_h2_interprete() {
-    let port = lanzar_servidor(true);
-    assert_eq!(correr(&[], port), "h2 ok");
+fn negocia_h2_interpreter() {
+    let port = launch_servidor(true);
+    assert_eq!(run(&[], port), "h2 ok");
 }
 
 #[test]
 fn negocia_h2_vm() {
-    let port = lanzar_servidor(true);
-    assert_eq!(correr(&["--vm"], port), "h2 ok");
+    let port = launch_servidor(true);
+    assert_eq!(run(&["--vm"], port), "h2 ok");
 }
 
 #[test]
-fn rechaza_sin_h2() {
-    let port = lanzar_servidor(false);
+fn rejects_sin_h2() {
+    let port = launch_servidor(false);
     // El servidor no ofrece `h2` → `tls_connect_h2` debe fallar.
-    assert!(correr(&[], port).starts_with("h2 err"), "debería fallar sin ALPN h2");
+    assert!(run(&[], port).starts_with("h2 err"), "debería fallar sin ALPN h2");
 }

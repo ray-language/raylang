@@ -94,7 +94,7 @@ where
     std::thread::Builder::new()
         .stack_size(STACK_SIZE)
         .spawn(f)
-        .unwrap_or_else(|e| ice!("no se pudo crear el hilo worker con pila grande: {e}"))
+        .unwrap_or_else(|e| ice!("could not create the large-stack worker thread: {e}"))
         .join()
 }
 
@@ -108,7 +108,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    spawn_big_stack(f).expect("el hilo worker entró en pánico") // ice-ok: re-lanzar es deliberado (tests)
+    spawn_big_stack(f).expect("the worker thread panicked") // ice-ok: re-lanzar es deliberado (tests)
 }
 
 /// **La red central de ICEs (M33b)**: como [`with_big_stack`], pero si el worker
@@ -130,7 +130,7 @@ where
                 .downcast_ref::<String>()
                 .cloned()
                 .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_else(|| "pánico sin mensaje".to_string());
+                .unwrap_or_else(|| "panic without message".to_string());
             eprintln!("{}", diagnostic::ice_banner(&detail));
             std::process::exit(101);
         }

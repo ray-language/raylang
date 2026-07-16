@@ -179,7 +179,7 @@ pub struct Program {
     /// porque en una cadena (`v.doble().inc().doble()`) todos los eslabones comparten la posición del
     /// receptor: dos `.doble()` colapsarían a la misma clave; se guardan ambas posiciones.
     pub field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
-    /// Funciones externas (M41, FFI): `extern "lib" { fn nombre(params) -> ret; … }`. Cada una es
+    /// Funciones externas (M41, FFI): `extern "lib" { fn name(params) -> ret; … }`. Cada una es
     /// una firma **sin cuerpo** cuya implementación vive en una librería C nativa, cargada por
     /// `dlopen`/`dlsym` en tiempo de ejecución (`src/ffi.rs`). El checker valida que los tipos sean
     /// marshalables (primitivos en M41.1) y las registra como llamables; los motores despachan la
@@ -348,7 +348,7 @@ pub struct TraitDef {
     pub col: usize,
 }
 
-/// La **firma** de un método de trait (M9): `fn nombre(self, p: T, ...) -> R;`.
+/// La **firma** de un método de trait (M9): `fn name(self, p: T, ...) -> R;`.
 /// `params` incluye `self` como **primer** parámetro (su `ty` es `Type::SelfType`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodSig {
@@ -392,7 +392,7 @@ pub struct ImplBlock {
     pub col: usize,
 }
 
-/// Una función: `fn nombre<params de tipo>(params) -> retorno { cuerpo }`.
+/// Una función: `fn name<params de tipo>(params) -> retorno { cuerpo }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     /// Anotaciones de la declaración (M10.1), p. ej. `@test`. Vacío si no hay.
@@ -400,7 +400,7 @@ pub struct Function {
     /// `pub` (M11.3): la función se exporta de su módulo. Sin `pub`, privada al módulo.
     pub is_pub: bool,
     pub name: String,
-    /// Parámetros de tipo: los `T, U` de `fn mapear<T, U>(...)` (M6). Vacío = no
+    /// Parámetros de tipo: los `T, U` de `fn map<T, U>(...)` (M6). Vacío = no
     /// genérica. Dentro del cuerpo, cada nombre está en ámbito como `Type::Var`.
     pub type_params: Vec<String>,
     /// Bounds de los parámetros de tipo (M9.2): pares `(parámetro, trait)` de
@@ -682,7 +682,7 @@ pub fn collect_fn_exprs(program: &Program) -> Vec<&FnExpr> {
     for fe in acc {
         by_id[fe.id] = Some(fe);
     }
-    by_id.into_iter().map(|o| o.unwrap_or_else(|| crate::ice!("hueco en los ids densos de fn-expr"))).collect()
+    by_id.into_iter().map(|o| o.unwrap_or_else(|| crate::ice!("gap in the dense fn-expr ids"))).collect()
 }
 
 fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {

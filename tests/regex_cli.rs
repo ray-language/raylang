@@ -74,39 +74,39 @@ const ESPERADO: &[&str] = &[
     "re    repl = \"quedan N de N\"",
 ];
 
-fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+fn run(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/stdlib/regex_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta regex_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout)
+    let lines = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|l| l.to_string())
         .collect();
-    (lineas, out.status.success())
+    (lines, out.status.success())
 }
 
 #[test]
-fn regex_interprete() {
-    let (lineas, ok) = correr(&[]);
+fn regex_interpreter() {
+    let (lines, ok) = run(&[]);
     assert!(ok, "regex_demo falló en el intérprete");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 #[test]
 fn regex_vm() {
-    let (lineas, ok) = correr(&["--vm"]);
+    let (lines, ok) = run(&["--vm"]);
     assert!(ok, "regex_demo falló en la VM");
-    assert_eq!(lineas, ESPERADO);
+    assert_eq!(lines, ESPERADO);
 }
 
 /// Oráculo conductual: intérprete y VM deben producir EXACTAMENTE la misma salida.
 #[test]
-fn regex_ambos_motores_coinciden() {
-    let (interp, ok1) = correr(&[]);
-    let (vm, ok2) = correr(&["--vm"]);
+fn regex_ambos_engines_matches() {
+    let (interp, ok1) = run(&[]);
+    let (vm, ok2) = run(&["--vm"]);
     assert!(ok1 && ok2, "regex_demo falló");
     assert_eq!(interp, vm, "el intérprete y la VM difieren en regex_demo");
 }
@@ -138,24 +138,24 @@ const ESPERADO_M81: &[&str] = &[
     "a_b_c",
 ];
 
-fn correr_m81(flags: &[&str]) -> (Vec<String>, bool) {
+fn run_m81(flags: &[&str]) -> (Vec<String>, bool) {
     let demo = format!("{}/examples/stdlib/regex_captures_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
         .output()
         .expect("ejecuta regex_captures_demo.ray");
-    let lineas = String::from_utf8_lossy(&out.stdout)
+    let lines = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|l| l.to_string())
         .collect();
-    (lineas, out.status.success())
+    (lines, out.status.success())
 }
 
 #[test]
-fn regex_capturas_ambos_motores() {
-    let (interp, ok1) = correr_m81(&[]);
-    let (vm, ok2) = correr_m81(&["--vm"]);
+fn regex_capturas_ambos_engines() {
+    let (interp, ok1) = run_m81(&[]);
+    let (vm, ok2) = run_m81(&["--vm"]);
     assert!(ok1 && ok2, "regex_captures_demo falló");
     assert_eq!(interp, ESPERADO_M81, "intérprete vs golden");
     assert_eq!(vm, ESPERADO_M81, "VM vs golden");

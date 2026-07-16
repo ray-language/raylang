@@ -2,7 +2,7 @@
 // (`__udp_bind`/`__udp_send_to`/`__udp_recv_from`). Importable:
 //   from udp import bind, send_to, recv_from, Packet;
 //
-// A diferencia de TCP, no hay conexión: cada datagrama lleva su remitente, así que `recv_from`
+// A diferencia de TCP, no hay connection: cada datagrama lleva su remitente, así que `recv_from`
 // devuelve un `Packet { host, port, data }` (con quién y qué). Habilita DNS, statsd, descubrimiento,
 // juegos, etc. I/O **bloqueante** en ambos motores por ahora (la cesión cooperativa queda diferida).
 //
@@ -21,7 +21,7 @@ pub fn bind(host: string, port: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle UDP inválido"),
+            Option.None => Result.Err("invalid UDP handle"),
         }
     } else {
         Result.Err(r[1])

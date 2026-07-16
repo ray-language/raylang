@@ -524,6 +524,133 @@ fn build_native_sqlite_via_ray_runtime_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_target_cross_compile_pasa_el_triple_a_rustc() {
+    // H20: `--target <triple>` (cross-compilation). Se prueba con el triple del HOST (que siempre está
+    // instalado) → el flag llega a rustc, la ruta del binario resuelve y el binario corre. El mensaje de
+    // éxito nombra el target. (Un cross real a otro SO necesita `rustup target add`, fuera del test.)
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native --target: rustc no disponible");
+        return;
+    }
+    // Triple del host: `rustc -vV` → línea `host: <triple>`.
+    let host = match Command::new("rustc").arg("-vV").output() {
+        Ok(o) => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .find_map(|l| l.strip_prefix("host: ").map(|s| s.trim().to_string())),
+        Err(_) => None,
+    };
+    let Some(host) = host else {
+        eprintln!("saltando build_native --target: no se pudo leer el triple del host");
+        return;
+    };
+    let base = tmp("build_native_target");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { print(\"cross ok\"); 0 }\n").unwrap();
+    let bin = base.join("t_bin");
+    let (out, err, code) = ray(
+        &base,
+        &["build", "prog.ray", "--native", "--target", &host, "-o", bin.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "build --native --target ok\nstdout={out}\nstderr={err}");
+    assert!(out.contains(&format!("target: {host}")), "el mensaje nombra el target: {out}");
+    let run = Command::new(&bin).output().expect("corre el binario cross (== host)");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "cross ok\n", "el binario corre");
+
+    // Un triple inválido → error limpio (exit 65), no un pánico.
+    let (_o, _e, bad_code) = ray(
+        &base,
+        &["build", "prog.ray", "--native", "--target", "no-such-triple", "-o", "x"],
+    );
+    assert_eq!(bad_code, 65, "target inválido → exit 65");
+}
+
+#[test]
+fn build_native_tls_error_de_conexion_coincide_con_la_vm() {
+    // H13: camino de ERROR de TLS (los tests de TLS solo cubrían el eco feliz). Conectar a un puerto
+    // cerrado → `Result.Err` cuyo mensaje lo produce `ray_runtime::tls` (el mismo código en el binario
+    // nativo y la VM). El texto exacto ("Connection refused (os error N)") depende del SO, pero el ORÁCULO
+    // compara nativo↔VM en la MISMA máquina → deben coincidir byte a byte (valida el borde `map_err`).
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native tls error: cargo no disponible");
+        return;
+    }
+    let base = tmp("build_native_tls_err");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/net;\n\
+         fn main() -> int {\n\
+           match (net.tls_connect(\"127.0.0.1\", 1)) {  // puerto 1: nadie escucha → error\n\
+             Result.Ok(h) => { print(\"conectado?!\"); 0 },\n\
+             Result.Err(e) => { print(\"tls err: \" + e); 0 },\n\
+           }\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("tlserr_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native tls error ok\nstdout={out}\nstderr={err}");
+    assert!(out.contains("ray-runtime: tls"), "usó el camino Cargo con ray-runtime tls: {out}");
+    let native = Command::new(&bin).output().expect("corre el bin TLS");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "el error de conexión TLS nativo ≡ VM (byte a byte)");
+    assert!(native_out.contains("tls err:") && native_out.to_lowercase().contains("refused"),
+        "el error indica conexión rechazada: {native_out}");
+}
+
+#[test]
+fn build_native_sqlite_errores_coinciden_byte_a_byte_con_la_vm() {
+    // H13: el camino con-crate (SQLite vía ray-runtime) solo tenía oráculo del camino FELIZ. Aquí se
+    // ejercitan los caminos de ERROR (SQL malformado, tabla inexistente): el mensaje de `Result.Err` lo
+    // produce rusqlite en `ray-runtime`, el MISMO código en el binario nativo y en la VM → debe ser
+    // byte-idéntico. Verifica que el marshalling `map_err` del borde no altera el texto del error.
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native sqlite errores: cargo no disponible");
+        return;
+    }
+    let db_dir = format!("{}/examples/db", env!("CARGO_MANIFEST_DIR"));
+    let db_path = std::path::Path::new(&db_dir);
+    // Programa con SQL erróneo, escrito en examples/db (donde el paquete `db` resuelve). Nombre único
+    // para no chocar con tests paralelos; se borra al final.
+    let prog = db_path.join("__sqlite_err_test.ray");
+    std::fs::write(
+        &prog,
+        "import db/sqlite;\n\
+         fn main() -> int {\n\
+           var c = match (sqlite.connect(\":memory:\")) {\n\
+             Result.Ok(conn) => conn,\n\
+             Result.Err(e) => { print(\"open err: \" + e); return 1; },\n\
+           };\n\
+           let no: [string] = [];\n\
+           match (sqlite.exec(c, \"SELCT malformado\", no)) {\n\
+             Result.Ok(n) => print(\"ok: \" + to_string(n)),\n\
+             Result.Err(e) => print(\"exec err: \" + e),\n\
+           }\n\
+           match (sqlite.query(c, \"SELECT * FROM no_existe\", no)) {\n\
+             Result.Ok(r) => print(\"rows: \" + to_string(r.len())),\n\
+             Result.Err(e) => print(\"query err: \" + e),\n\
+           }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = std::env::temp_dir().join("ray_native_sqlite_err_bin");
+    let (out, err, code) =
+        ray(db_path, &["build", "__sqlite_err_test.ray", "--native", "-o", bin.to_str().unwrap()]);
+    let build_ok = code == 0;
+    let (vm_out, _e, _c) = ray(db_path, &["run", "__sqlite_err_test.ray"]);
+    let native_out = if build_ok {
+        Some(String::from_utf8_lossy(&Command::new(&bin).output().expect("corre el bin").stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_file(&prog); // limpieza pase lo que pase
+    assert!(build_ok, "build --native sqlite errores ok\nstdout={out}\nstderr={err}");
+    assert_eq!(native_out.unwrap(), vm_out, "los errores de SQLite nativo ≡ VM (byte a byte)");
+    assert!(vm_out.contains("syntax error") && vm_out.contains("no such table"), "ejercitó ambos errores: {vm_out}");
+}
+
+#[test]
 fn build_native_without_crypto_fuerza_la_via_rapida_y_stubbea() {
     // `--without crypto` (escape hatch): aunque el programa use cripto, NO se enlaza ray-runtime → el
     // binario compila por la vía rápida `rustc` (sin cargo/red; el éxito no menciona ray-runtime) y su uso

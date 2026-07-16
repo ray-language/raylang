@@ -677,6 +677,17 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     }
 }
 
+/// Directorio de caché de builds nativos, PERSISTENTE entre sesiones (`~/.ray/native-cache/`, decidido en
+/// docs/transpilador-nativo.md §3.3). Sobrevive a la purga de `/tmp` (macOS: 3 días sin uso; Linux: reboot)
+/// → el target compartido (ring/rustls compilados una vez por máquina) NO se pierde periódicamente. Si no
+/// hay HOME/USERPROFILE, cae al temporal (comportamiento anterior).
+fn native_cache_dir() -> std::path::PathBuf {
+    match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        Some(home) => Path::new(&home).join(".ray").join("native-cache"),
+        None => std::env::temp_dir().join("ray_native_cache"),
+    }
+}
+
 /// Camino rápido: transpila a un `.rs` autocontenido y lo compila con `rustc` directo (sin Cargo). Para
 /// programas que no usan ningún crate externo — el 90 % de los casos. `-O` (dev) / opt3+lto+native (release).
 fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool) {
@@ -696,11 +707,17 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool) {
     let status = process::Command::new("rustc").args(flags).arg(&rs_path).arg("-o").arg(out_bin).status();
     match status {
         Ok(s) if s.success() => {
+            let _ = std::fs::remove_file(&rs_path); // build ok → no dejar el `.rs` temporal (sin fugas)
             let tier = if release { " (release: opt3+lto+native)" } else { "" };
             println!("ok: binario nativo '{out_bin}'{tier}");
         }
         Ok(s) => {
-            eprintln!("native build: rustc falló (código {})", s.code().unwrap_or(-1));
+            // Falló: se CONSERVA el `.rs` y se nombra su ruta, para poder inspeccionar el Rust generado.
+            eprintln!(
+                "native build: rustc falló (código {}); Rust generado en {}",
+                s.code().unwrap_or(-1),
+                rs_path.display()
+            );
             process::exit(65);
         }
         Err(e) => {
@@ -761,8 +778,9 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
             process::exit(65);
         }
     }
-    // Caché de target COMPARTIDA entre builds → ring/… se compilan una vez por máquina.
-    let target_dir = std::env::temp_dir().join("ray_native_cache");
+    // Caché de target COMPARTIDA entre builds y PERSISTENTE (`~/.ray/native-cache/`) → ring/rustls se
+    // compilan una vez por máquina y no se pierden con la purga de /tmp.
+    let target_dir = native_cache_dir();
     let mut cmd = process::Command::new("cargo");
     cmd.arg("build").current_dir(&proj).env("CARGO_TARGET_DIR", &target_dir);
     if release {
@@ -774,7 +792,10 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
         Ok(s) if s.success() => {
             let sub = if release { "release" } else { "debug" };
             let produced = target_dir.join(sub).join(&pkg);
-            if let Err(e) = std::fs::copy(&produced, out_bin) {
+            let copied = std::fs::copy(&produced, out_bin);
+            let _ = std::fs::remove_dir_all(&proj); // build ok → borrar el proyecto Cargo temporal (el binario
+                                                    // ya vive en la caché compartida, no en `proj/target`)
+            if let Err(e) = copied {
                 eprintln!("native build: no se pudo copiar el binario ({}): {e}", produced.display());
                 process::exit(65);
             }
@@ -782,7 +803,12 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
             println!("ok: binario nativo '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
         }
         Ok(s) => {
-            eprintln!("native build: cargo falló (código {})", s.code().unwrap_or(-1));
+            // Falló: se CONSERVA el proyecto y se nombra su ruta, para inspeccionar el Rust generado.
+            eprintln!(
+                "native build: cargo falló (código {}); proyecto en {}",
+                s.code().unwrap_or(-1),
+                proj.display()
+            );
             process::exit(65);
         }
         Err(e) => {

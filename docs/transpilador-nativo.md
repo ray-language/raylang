@@ -466,9 +466,20 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > (b) la **capa de verificación** (más débil de lo que §2.3 promete) y (c) flecos de DX.
 > Nada estructural que re-litigar.
 
+> **Estado (16 jul 2026): LOTE URGENTE COMPLETO.** Resueltos y con test oráculo nativo≡VM: **H1**
+> (CI verde; el error nombra el origen del typo), **H2** (rendezvous ya no se deadlockea, handshake
+> síncrono), **H3** (el override del usuario gana sobre el builtin), **H4/H8** (izado de índice/
+> receptor/RHS en asignaciones autoreferentes + orden de la VM), **H5** (keywords de Rust como
+> identificadores vía raw idents; campos/variantes/constantes/params-de-closure enrutados por
+> `mangle`; temporales al prefijo reservado `__rt_*`), **H14** (caché en `~/.ray/native-cache/`),
+> **H15** (limpieza de `.rs`/proyecto Cargo tras un build ok). Pendientes: lote de **verificación**
+> (H10 corpus, H11 guardia de `BUILTINS`, H12 CI), **pulido** (H6 overflow/exit, H7 rechazo de
+> semántica no implementada, H9 args de tipo, H17 mensajes/jerga, H18 robustez) y **estructural**
+> (H16, H19, H13, H20, H21). Los ítems marcados abajo con ✅ ya están hechos.
+
 ### 6.1 P0 — Roto en el momento de la auditoría
 
-**H1. CI rojo en `main`: assert desincronizado con su mensaje.** El commit `e6bb6b7` cambió el
+**H1. ✅ RESUELTO. CI rojo en `main`: assert desincronizado con su mensaje.** El commit `e6bb6b7` cambió el
 mensaje de `src/cli.rs:608` de `"unknown subsystem in --without"` a `"unknown subsystem to
 exclude"` (necesario porque la exclusión ahora une CLI + `ray.toml` y el origen ya no es siempre
 el flag) pero no actualizó el assert de `tests/cli_cli.rs:551`. Verificado ejecutándolo:
@@ -478,7 +489,7 @@ conviene que el error diga de dónde vino el nombre inválido (flag vs manifiest
 `ray.toml` versionado afecta a todo el equipo. **Esfuerzo: ~5 min** (el fix; +30 min si se
 distingue el origen).
 
-**H2. Deadlock en canales rendezvous (`channel(0)`).** En el runtime de canales embebido
+**H2. ✅ RESUELTO. Deadlock en canales rendezvous (`channel(0)`).** En el runtime de canales embebido
 (`src/transpile.rs:843-894`), `send` espera en la condvar mientras `q.len() >= cap` (con `cap=0`,
 siempre cierto) y `recv` espera mientras `q.is_empty()` — **no existe la entrega directa
 emisor→receptor** que la VM sí hace (M12.2, caso 1 de `send`). Ambos hilos duermen para siempre:
@@ -491,7 +502,7 @@ runtime es código-como-string, cada iteración recompila el binario de prueba).
 
 ### 6.2 P1 — Divergencias silenciosas en programas válidos
 
-**H3. Los builtins interceptados PISAN los overrides del usuario.** `skip_fn_def`
+**H3. ✅ RESUELTO. Los builtins interceptados PISAN los overrides del usuario.** `skip_fn_def`
 (`transpile.rs:140`) emite correctamente la *definición* de un `sort`/`trim`/`get`/`map`
 redefinido por el usuario (línea < `LINE_BASE` = no-prelude), pero el sitio de llamada en
 `emit_call` (`transpile.rs:2537+`) matchea el nombre del builtin **antes** de mirar
@@ -501,14 +512,14 @@ override gana (M7.3); en nativo gana el builtin, **en silencio**. *Fix:* antepon
 `self.funcs.contains_key(name) && !viene_del_prelude` al match de interceptación + test por
 builtin sobreescribible. **Esfuerzo: 2–3 h** (la guarda es pequeña; lo laborioso es el test).
 
-**H4. Doble borrow de RefCell en asignación indexada.** El RHS se iza a un temporal `__rhs`
+**H4. ✅ RESUELTO. Doble borrow de RefCell en asignación indexada.** El RHS se iza a un temporal `__rhs`
 (`transpile.rs:1278-1285`), pero el **índice** se evalúa dentro del `borrow_mut()`:
 `a[a.len()-1] = v` genera `a.borrow_mut()[a.borrow().len()-1] = …` → panic de RefCell en runtime
 donde la VM funciona. `push` (`transpile.rs:2679`) iza el valor pero tiene el mismo agujero si el
 receptor es una expresión que borrowea la misma colección. *Fix:* izar también el índice (y el
 receptor en `push`) a temporales, igual que ya se hace con el RHS. **Esfuerzo: 1–2 h.**
 
-**H5. Identificadores raylang legales que generan Rust inválido o valores equivocados.**
+**H5. ✅ RESUELTO. Identificadores raylang legales que generan Rust inválido o valores equivocados.**
 `mangle` (`transpile.rs:35-42`) solo trata `self`; no cubre:
 - **Keywords de Rust** (`type`, `loop`, `move`, `ref`, `mod`, `use`, `where`, `crate`,
   `unsafe`, …) como variables (`transpile.rs:1219`), params (`:1010`) y sobre todo **campos de
@@ -545,7 +556,7 @@ resta algo del 24–61×; quizá un flag `--unchecked` para el tier release). **
 cancelación/`try_join`; imprimir SIEMPRE un resumen "N funciones degradadas a stub: …" al
 compilar. **Esfuerzo: ~0,5 día** (es detectar y reportar, no implementar).
 
-**H8. Orden de evaluación divergente en varios puntos.** `push(a, v)` evalúa `v` antes que `a`
+**H8. ✅ RESUELTO (con H4). Orden de evaluación divergente en varios puntos.** `push(a, v)` evalúa `v` antes que `a`
 (`transpile.rs:2679`); la asignación indexada evalúa RHS antes que target/índice (`:1279`); el
 `Assign` a campo igual (`:1288`). La VM evalúa izquierda→derecha; con expresiones con efectos
 (llamadas que mutan) el nativo observa otro orden. *Fix:* izar operandos a temporales en orden
@@ -593,7 +604,7 @@ el marshalling `map_err` del borde puede alterar el mensaje. **Esfuerzo: 1–2 d
 
 ### 6.4 P2 — DX, robustez y rendimiento del código generado
 
-**H14. La caché de builds vive en `temp_dir()`, contradiciendo este mismo doc.** §3.3 decide
+**H14. ✅ RESUELTO. La caché de builds vive en `temp_dir()`, contradiciendo este mismo doc.** §3.3 decide
 `~/.ray/native-cache/`, pero `cli.rs:759` usa `std::env::temp_dir().join("ray_native_cache")` —
 macOS purga `/tmp` (3 días sin uso) y Linux al reboot → la promesa "ring compila una vez por
 máquina" se rompe periódicamente sin explicación. Carrera menor: el binario producido se copia de
@@ -602,7 +613,7 @@ programas distintos con el mismo stem comparten esa ruta (el proyecto temporal l
 salida en la caché compartida, no). **Esfuerzo: ~30 min** (mover la caché; +1 h si se
 desambigua el stem, p. ej. hash de la ruta).
 
-**H15. Artefactos temporales sin limpiar.** Ni el `.rs` temporal (`cli.rs:679`) ni el proyecto
+**H15. ✅ RESUELTO. Artefactos temporales sin limpiar.** Ni el `.rs` temporal (`cli.rs:679`) ni el proyecto
 Cargo generado (`cli.rs:726`) se borran tras compilar — se acumulan en `$TMP` uno por PID. Choca
 con la política del proyecto de cero fugas de artefactos. **Esfuerzo: ~30 min.**
 

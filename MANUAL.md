@@ -1064,7 +1064,7 @@ Reglas (tabla completa en [`REFERENCIA.md` §13](REFERENCIA.md#13-ffi-tipos-mars
 ## 17. Herramientas
 
 ```sh
-ray dev [archivo]        # modo desarrollo: como run, pero REINICIA ante cambios (M92.1)
+ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
 ray fmt archivo.ray      # formatea (canónico e idempotente)
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
 ray doc archivo.ray      # documentación Markdown desde ///
@@ -1113,6 +1113,11 @@ y ante un cambio reinicia el programa — un template editado se regenera al rel
 con `serve_graceful` **drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la
 compilación en milisegundos, el ciclo editar→ver es de decenas de ms. Un programa que termina solo
 queda a la espera del siguiente cambio.
+
+Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
+compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**
+(no tira un servidor que funciona por un cambio roto). Además hace **debounce** de una ráfaga de
+guardados (p. ej. tu editor + un formateador) en un solo reinicio.
 
 Pruebas con `@test` (una función `() -> bool` o `() -> unit` que usa `assert`); cada test corre
 **aislado** (un panic no tumba la batería):

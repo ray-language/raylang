@@ -1299,7 +1299,7 @@ socket de escucha. Tres caminos analizados:
 
 | Opción | Qué preserva | Complejidad | Veredicto |
 |---|---|---|---|
-| **A+. Endurecer el watch+restart** | — | **baja** | **siguiente paso** (nueva 92.2): (1) **chequear ANTES de reiniciar** — hoy un cambio que no compila MATA el servidor que funcionaba y lo relanza contra el error; lo correcto (Vite/Next): `ray build` primero (ms) y solo reiniciar en verde, en rojo imprimir el diagnóstico y dejar el viejo corriendo. La mejora de mayor valor/coste de toda la lista. (2) **debounce** ~100 ms tras el último cambio (un guardado+formateador dispara reinicio doble). (3) drenado graceful en Windows (hoy kill duro). (4, opcional) latencia vía `kqueue EVFILT_VNODE` en macOS (el poller propio existe) — pero Linux pediría inotify → quedarse con el polling es razonable |
+| **A+. Endurecer el watch+restart** | — | **baja** | ✅ **M92.2** (check-before-restart + debounce): (1) ✅ **chequear ANTES de reiniciar** — `ray build <entry>` primero (ms), solo reiniciar en verde; en rojo imprimir el diagnóstico y dejar el programa viejo corriendo (ya no mata un servidor que funciona por un cambio roto). (2) ✅ **debounce** ~120 ms (coalesce guardado+formateador). (3) 💤 drenado graceful en Windows (hoy kill duro; unix-only por diseño, como todo el manejo de señales del proyecto). (4) 💤 latencia vía `kqueue EVFILT_VNODE` — Linux pediría inotify → el polling de ~200 ms se conserva (portable, cero deps) |
 | **D. Herencia de fd** (socket-activation estilo systemd) | el listener | **media** | **candidata a fase 3** (nueva 92.3, sustituye a C): el SUPERVISOR abre el socket una vez y lo pasa a cada hijo (fd heredado + `RAY_LISTEN_ADDR`/`RAY_LISTEN_FD`); `tcp_listen(host,port)` en el hijo, si el env matchea, ADOPTA el fd en vez de bind → el mismo programa corre idéntico en dev y prod. Durante el reinicio el socket nunca se cierra: el kernel encola en el backlog → **cero conexiones rechazadas, cero re-bind** (lo que C prometía) **conservando el aislamiento por proceso** (el hecho 2 no aplica; SIGTERM+drenado ya funciona). ~90% del beneficio de C con ~20% de su complejidad. Coste: `pre_exec`/`dup2` (unix; precedente de libc crudo por todo el host) + saber el puerto de antemano (`ray dev --port` o `[dev] listen` en ray.toml — limitación honesta). Windows: fallback al comportamiento actual |
 | **E. `SO_REUSEPORT`** (blue/green local) | el puerto (solape de procesos) | media | descartada para dev: `std` no lo expone (setsockopt por FFI, factible), semántica de reparto difiere macOS/Linux, y durante el solape DOS versiones sirven a la vez (confuso en dev). Es la herramienta de *deploy* sin downtime, no de dev; D es más simple y suficiente |
 | **F. Live-reload del navegador (SSE)** | — (UX) | baja-media | bonus tras D: el webserver ya habla SSE (`sse_open`/`sse_event`). Preferible desde el SUPERVISOR (endpoint SSE en puerto lateral + snippet inyectado en dev) — funciona con cualquier programa, no solo el paquete webserver |
@@ -1310,10 +1310,10 @@ estándar de la industria. Flutter/Vite hacen hot reload real porque su runtime 
 El nicho diferencial barato de raylang es D: *restart tan rápido (arranque ~3 ms) que, con el
 listener retenido, se percibe como hot reload*.
 
-Fases (revisadas 16 jul): **92.1** ✅ watcher+restart+drenado · **92.2** A+ (check-before-restart +
-debounce + Windows graceful) · **92.3** D (herencia de fd + `[dev] listen`) · **92.4** F (live-reload
-SSE desde el supervisor) + G (patrón de estado en el MANUAL) · B y C aparcados (C revive solo si la
-VM gana cancelación preemptiva/teardown fiable).
+Fases (revisadas 16 jul): **92.1** ✅ watcher+restart+drenado · **92.2** ✅ A+ (check-before-restart +
+debounce; Windows-graceful aparcado) · **92.3** D (herencia de fd + `[dev] listen`) · **92.4** F
+(live-reload SSE desde el supervisor) + G (patrón de estado en el MANUAL) · B y C aparcados (C revive
+solo si la VM gana cancelación preemptiva/teardown fiable).
 
 ## Cómo usar este archivo
 

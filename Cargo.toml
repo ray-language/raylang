@@ -1,3 +1,9 @@
+# Workspace (P2.b, jul 2026): el binario `ray` + el crate `ray-runtime` (runtime compartido con crates de
+# producción tras features — crypto/tls/sqlite). Ver docs/transpilador-nativo.md §4. `ray-runtime` lo
+# consumen la VM (aquí) y el binario TRANSPILADO a Rust (`ray build --native`), con el MISMO código.
+[workspace]
+members = ["crates/ray-runtime"]
+
 [package]
 name = "raylang"
 version = "1.0.0"
@@ -34,7 +40,10 @@ sqlite = ["dep:rusqlite"]
 # error claro), y `ray publish --sign`/verificación de firmas del registro no disponibles (el CLI
 # lo dice explícito — nunca una verificación que "pasa" en silencio). El hash de integridad del
 # lockfile NO depende de esto (src/sha256.rs es Rust puro).
-net-tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:ring"]
+# La cripto (SHA/HMAC/Ed25519/ChaCha) vive ahora en `ray-runtime` (feature `crypto`) → mismo código que el
+# binario transpilado. `ring` ya no se declara directo aquí: llega vía `ray-runtime/crypto` (+ transitivo de
+# rustls). El *stub* de slim/wasm sigue en `builtins.rs` (rama `not(net-tls)`).
+net-tls = ["dep:ray-runtime", "ray-runtime?/crypto", "dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 # M89.3: la carga de librerías nativas (extern/FFI, libloading) tras una feature (activa por
 # defecto). El slim sin ella tiene la propiedad "no puede cargar código nativo" (contenedores
 # endurecidos); un `extern fn` chequea igual y su llamada da un error de ejecución claro.
@@ -53,6 +62,10 @@ ffi = ["dep:libloading"]
 ahash = "0.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# P2.b — el runtime compartido con crates de producción (crypto/tls/sqlite tras features). Opcional: solo se
+# enlaza cuando una feature de raylang lo pide (`net-tls` → `crypto`); el build slim/wasm no lo trae. No en
+# wasm (ring no compila a wasm32; el playground embarca solo el núcleo).
+ray-runtime = { path = "crates/ray-runtime", optional = true, default-features = false }
 # P0.4 (perf, jul 2026): allocador global mimalloc. El malloc del sistema (macOS libmalloc en
 # particular) es lento para el CHURN de objetos pequeños del intérprete —`split`/`to_string`/arrays
 # alocan millones de `String` pequeños (en `wordcount`, `split` es el 82% del tiempo, todo malloc)—.
@@ -66,11 +79,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = { version = "0.26", optional = true }
 # Para leer certificados PEM (SSL_CERT_FILE): la feature `std` de los tipos de rustls (ya en el árbol).
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
-# M43 — cripto de PRODUCCIÓN. `ring` ya está en el árbol (lo enlaza rustls); declararlo directo resuelve a
-# la MISMA copia (0.17.x) → cero crate nuevo, dentro de la excepción "TLS/ring" ya sancionada. Da las
-# primitivas de tiempo constante y auditadas (SHA/HMAC/Ed25519/AEAD) que raylang puro no puede garantizar.
-# Las implementaciones en raylang (`examples/web/*.ray`) se conservan como DEMOSTRACIÓN DEL LENGUAJE.
-ring = { version = "0.17", optional = true }
+# M43 — cripto de PRODUCCIÓN (SHA/HMAC/Ed25519/AEAD): se movió a `ray-runtime` (feature `crypto`) en P2.b
+# → mismo código que el binario transpilado. `ring` ya no se declara directo aquí (llega vía ray-runtime +
+# transitivo de rustls). Las implementaciones en raylang (`examples/web/*.ray`) se conservan como DEMO.
 # M53.3 — SQLite de PRODUCCIÓN. Igual que `ring` (M43): territorio donde envolver la librería C a mano
 # (FFI + dobles punteros + lifetimes de statements) es peor ingeniería que delegar en el binding maduro.
 # `bundled` compila SQLite dentro del binario → cero dependencia del sistema, versión determinista.

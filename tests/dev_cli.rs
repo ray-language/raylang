@@ -168,9 +168,13 @@ fn dev_live_reload_inyecta_el_snippet_y_emite_reload() {
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let base = std::env::temp_dir().join("ray_dev_livereload");
     let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
-    let src = format!("{}/examples/web/webserver.ray", env!("CARGO_MANIFEST_DIR"));
-    std::fs::copy(&src, base.join("webserver.ray")).unwrap();
+    std::fs::create_dir_all(base.join("net")).unwrap();
+    // Usa el PAQUETE real (`packages/net/webserver.ray`, donde vive la inyección) + su dep `net/trace`
+    // (un solo archivo, que solo importa std). Así el test ejercita el código publicado, sin duplicar la
+    // inyección en la copia standalone `examples/web/webserver.ray`.
+    let pkg = format!("{}/packages/net", env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(format!("{pkg}/webserver.ray"), base.join("webserver.ray")).unwrap();
+    std::fs::copy(format!("{pkg}/trace.ray"), base.join("net/trace.ray")).unwrap();
     let driver = |v: &str| {
         format!(
             "from webserver import serve, html_response, Request, Response;\n\

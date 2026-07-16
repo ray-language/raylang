@@ -1276,20 +1276,27 @@ impl Transpiler {
                         }
                     }
                     ExprKind::Index { array, index } => {
-                        out.push_str("{ let __rhs = ");
-                        self.emit_expr(out, value)?;
-                        out.push_str("; ");
+                        // Orden de la VM (compiler.rs: SetIndex consume arreglo, índice, valor en ese
+                        // orden): izquierda→derecha. Los TRES van a temporales ANTES del borrow_mut: el
+                        // índice o el valor pueden leer el MISMO arreglo (`a[a.len()-1] = a[0]`) →
+                        // izarlos evita el doble borrow del RefCell (leer + mutar a la vez = panic).
+                        out.push_str("{ let __arr = ");
                         self.emit_expr(out, array)?;
-                        out.push_str(".borrow_mut()[");
+                        out.push_str("; let __idx = ");
                         self.emit_expr(out, index)?;
-                        out.push_str(" as usize] = __rhs; }\n");
+                        out.push_str("; let __rhs = ");
+                        self.emit_expr(out, value)?;
+                        out.push_str("; __arr.borrow_mut()[__idx as usize] = __rhs; }\n");
                     }
                     ExprKind::Field { object, name } => {
-                        out.push_str("{ let __rhs = ");
-                        self.emit_expr(out, value)?;
-                        out.push_str("; ");
+                        // Orden de la VM (SetField consume objeto, valor): objeto ANTES que el valor.
+                        // Ambos a temporales antes del borrow_mut (el RHS puede leer el mismo campo,
+                        // `p.x = p.x + 1`) → evita el doble borrow.
+                        out.push_str("{ let __obj = ");
                         self.emit_expr(out, object)?;
-                        write!(out, ".borrow_mut().{} = __rhs; }}\n", name).unwrap();
+                        out.push_str("; let __rhs = ");
+                        self.emit_expr(out, value)?;
+                        write!(out, "; __obj.borrow_mut().{} = __rhs; }}\n", name).unwrap();
                     }
                     _ => return Err("spike: lvalue no soportado".into()),
                 }
@@ -2674,13 +2681,14 @@ impl Transpiler {
             }
             // push(a, v) → a.borrow_mut().push(v) (muta en el sitio, devuelve unit).
             "push" => {
-                // El valor se evalúa a un TEMP ANTES del borrow_mut: si lee del MISMO arreglo (p. ej.
-                // `w.push(w[i] + w[j])`, típico en cripto), evita el doble borrow del RefCell (panic).
-                out.push_str("{ let __v = ");
-                self.emit_expr(out, eff[1])?;
-                out.push_str("; ");
+                // Orden de la VM: arreglo, luego valor. Ambos a temporales ANTES del borrow_mut: si el
+                // valor lee del MISMO arreglo (p. ej. `w.push(w[i] + w[j])`, típico en cripto), evita el
+                // doble borrow del RefCell (panic). El receptor también se iza por si borrowea.
+                out.push_str("{ let __arr = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().push(__v); }");
+                out.push_str("; let __v = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; __arr.borrow_mut().push(__v); }");
             }
             // chars(s) → [char]: los caracteres del string como arreglo.
             "chars" => {

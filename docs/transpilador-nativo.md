@@ -454,3 +454,220 @@ DB transpilan a nativo, bajo demanda, con paridad por construcción (mismo códi
 `ray-runtime` escala fila-a-fila para cualquier crate futuro. El escape hatch `--without` está **hecho**
 (§3.3.3). No quedan pasos obligatorios; `ring`-extra solo si aparecen builtins de crypto avanzada no
 cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política estable en `ray.toml`.
+
+## 6. Auditoría del backend nativo (16 jul 2026) — hallazgos, prioridades y esfuerzo
+
+> Revisión a fondo de `src/transpile.rs` (~4.760 líneas), `src/cli.rs::build_native`,
+> `crates/ray-runtime/` y los tests `build_native_*` de `tests/cli_cli.rs`, contrastando puntos
+> clave contra la VM (`vm.rs`). Veredicto general: **el diseño es sólido** (bifurcación
+> rustc-pelado/cargo limpia y testeada por ambos lados, runtime incrustado con `include_str!` que
+> garantiza paridad de versión binario↔runtime, deuda declarada honestamente en §2.4) — la
+> debilidad está en (a) varias **divergencias silenciosas VM↔nativo en programas válidos**,
+> (b) la **capa de verificación** (más débil de lo que §2.3 promete) y (c) flecos de DX.
+> Nada estructural que re-litigar.
+
+### 6.1 P0 — Roto en el momento de la auditoría
+
+**H1. CI rojo en `main`: assert desincronizado con su mensaje.** El commit `e6bb6b7` cambió el
+mensaje de `src/cli.rs:608` de `"unknown subsystem in --without"` a `"unknown subsystem to
+exclude"` (necesario porque la exclusión ahora une CLI + `ray.toml` y el origen ya no es siempre
+el flag) pero no actualizó el assert de `tests/cli_cli.rs:551`. Verificado ejecutándolo:
+`build_native_without_rechaza_un_subsistema_desconocido` **falla hoy** → `cargo test` completo
+(el CI, `.github/workflows/ci.yml`) está rojo en `main`. *Fix de una línea.* Al arreglarlo,
+conviene que el error diga de dónde vino el nombre inválido (flag vs manifiesto): un typo en un
+`ray.toml` versionado afecta a todo el equipo. **Esfuerzo: ~5 min** (el fix; +30 min si se
+distingue el origen).
+
+**H2. Deadlock en canales rendezvous (`channel(0)`).** En el runtime de canales embebido
+(`src/transpile.rs:843-894`), `send` espera en la condvar mientras `q.len() >= cap` (con `cap=0`,
+siempre cierto) y `recv` espera mientras `q.is_empty()` — **no existe la entrega directa
+emisor→receptor** que la VM sí hace (M12.2, caso 1 de `send`). Ambos hilos duermen para siempre:
+un programa rendezvous válido que corre en la VM se cuelga en nativo. Además `__ray_select` solo
+considera listo `!q.is_empty() || closed` — no ve "emisor bloqueado", que en la VM cuenta como
+canal listo (M12.4). *Fix:* implementar el handshake de entrega directa (un slot de rendezvous o
+un contador de emisores esperando que `recv` consuma) + que `select` lo consulte; testear los
+tres casos (cap=0, acotado lleno, `select` sobre emisor bloqueado). **Esfuerzo: ~1 día** (el
+runtime es código-como-string, cada iteración recompila el binario de prueba).
+
+### 6.2 P1 — Divergencias silenciosas en programas válidos
+
+**H3. Los builtins interceptados PISAN los overrides del usuario.** `skip_fn_def`
+(`transpile.rs:140`) emite correctamente la *definición* de un `sort`/`trim`/`get`/`map`
+redefinido por el usuario (línea < `LINE_BASE` = no-prelude), pero el sitio de llamada en
+`emit_call` (`transpile.rs:2537+`) matchea el nombre del builtin **antes** de mirar
+`self.funcs` → `sort(xs)` llama al `__ray_sort` ascendente aunque el usuario definiera su propio
+`sort` descendente. Solo `get_or` tiene guarda (por aridad, `transpile.rs:2751`). En la VM el
+override gana (M7.3); en nativo gana el builtin, **en silencio**. *Fix:* anteponer
+`self.funcs.contains_key(name) && !viene_del_prelude` al match de interceptación + test por
+builtin sobreescribible. **Esfuerzo: 2–3 h** (la guarda es pequeña; lo laborioso es el test).
+
+**H4. Doble borrow de RefCell en asignación indexada.** El RHS se iza a un temporal `__rhs`
+(`transpile.rs:1278-1285`), pero el **índice** se evalúa dentro del `borrow_mut()`:
+`a[a.len()-1] = v` genera `a.borrow_mut()[a.borrow().len()-1] = …` → panic de RefCell en runtime
+donde la VM funciona. `push` (`transpile.rs:2679`) iza el valor pero tiene el mismo agujero si el
+receptor es una expresión que borrowea la misma colección. *Fix:* izar también el índice (y el
+receptor en `push`) a temporales, igual que ya se hace con el RHS. **Esfuerzo: 1–2 h.**
+
+**H5. Identificadores raylang legales que generan Rust inválido o valores equivocados.**
+`mangle` (`transpile.rs:35-42`) solo trata `self`; no cubre:
+- **Keywords de Rust** (`type`, `loop`, `move`, `ref`, `mod`, `use`, `where`, `crate`,
+  `unsafe`, …) como variables (`transpile.rs:1219`), params (`:1010`) y sobre todo **campos de
+  struct, que nunca se manglan** (`:570`, `:1766`, `:1292`) → rustc rechaza el fuente generado.
+- **Colisiones con temporales sintéticos**: un local del usuario llamado `__v`/`__it`/`__c`/
+  `__rhs` es shadowed por los temporales que emite el transpilador (`:2679`, `:1279`, `:1721`) →
+  **valor equivocado en runtime**, ni siquiera error de compilación.
+- **Constantes de módulo**: la definición emite `fn {c.name}()` SIN manglar
+  (`transpile.rs:600`) mientras el uso sí mangla (`:1575`) → un `pub let` en un módulo importado
+  genera `fn geo::PI()`, Rust ilegal.
+*Fix barato:* raw identifiers (`r#type`) o sufijo en `mangle` + aplicarlo a campos y constantes;
+prefijo imposible `__ray_tmp_` para todos los temporales sintéticos. **Esfuerzo: 2–4 h**
+(mecánico pero toca muchos sitios de emisión; la constante de módulo cae junto, ~30 min).
+
+**H6. Overflow y rutas de error: wrapping + exit 101 vs checked + exit 70.** La VM hace
+`checked_add` → `"arithmetic overflow on int"` + **exit 70** (`vm.rs:579,632`; `cli.rs:338`);
+el nativo (rustc con `-O` en ambos tiers, `cli.rs:685-689`) **envuelve en silencio**. Div-por-cero
+e `i64::MIN / -1` panican en Rust (mensaje inglés de Rust, **exit 101**) vs error raylang +
+exit 70. `panic`/`assert`/`assert_eq` (`transpile.rs:2993-3009`) bajan a `panic!` de Rust:
+`thread 'main' panicked …` + exit 101, no el formato ni el exit de la VM. Está documentado como
+"fiel sin desbordamiento" (§1), pero es **LA divergencia byte-conductual sistemática** del
+backend. *Fix:* aritmética checked en la emisión de operadores (mensaje byte-idéntico + exit 70,
+p. ej. vía un panic hook propio o salida de proceso controlada) — y **medir** el coste (checked
+resta algo del 24–61×; quizá un flag `--unchecked` para el tier release). **Esfuerzo: ~1 día**
+(mecánico en la emisión, pero hay que cuadrar mensajes byte-idénticos y benchmarkear).
+
+**H7. Semántica no implementada que NO se rechaza en compilación.** Dos formas:
+- **Divergencia muda**: la **cancelación de hermanas M12.5** y `try_join` no están implementadas
+  en nativo (deuda declarada en §2.4), pero un programa que dependa de ellas **compila sin aviso
+  y se comporta distinto** (las hermanas siguen corriendo). Peor que un stub que panica.
+- **Stub silencioso**: la degradación a `panic!("… no está soportada")` (`transpile.rs:625-648`)
+  solo se ve con `RAYLANG_TRANSPILE_DEBUG`; el build dice "ok" y el binario muere en runtime.
+*Fix:* detectar y **rechazar en compilación** (o al menos warning prominente) los usos de
+cancelación/`try_join`; imprimir SIEMPRE un resumen "N funciones degradadas a stub: …" al
+compilar. **Esfuerzo: ~0,5 día** (es detectar y reportar, no implementar).
+
+**H8. Orden de evaluación divergente en varios puntos.** `push(a, v)` evalúa `v` antes que `a`
+(`transpile.rs:2679`); la asignación indexada evalúa RHS antes que target/índice (`:1279`); el
+`Assign` a campo igual (`:1288`). La VM evalúa izquierda→derecha; con expresiones con efectos
+(llamadas que mutan) el nativo observa otro orden. *Fix:* izar operandos a temporales en orden
+fuente (compone con H4). **Esfuerzo: incluido en H4** si se hace junto (+1 h de tests).
+
+**H9. `type_of` de literales genéricos descarta los args de tipo.** `type_of(StructLit/EnumLit)`
+devuelve `Type::Struct(name, vec![])` (`transpile.rs:3435`, `:3448`) → con un literal genérico
+(`Par { a: 1, b: true }`), `enum_subst` recibe args vacíos y el tipo del campo queda como el
+param sin sustituir → clasificación heap/escalar errónea o degradación a stub en código genérico
+válido. *Fix:* propagar los args de tipo que el checker ya resolvió. **Esfuerzo: 2–4 h.**
+
+### 6.3 P1 — Capa de verificación (lo que evita que todo lo anterior vuelva a pasar)
+
+**H10. El claim "37/37 ejemplos byte-idénticos" (§2.3) NO está automatizado.** No existe ningún
+test que itere `examples/` por el camino nativo (grep de `read_dir`/corpus en `tests/`: nada).
+Hay ~28 tests `build_native_*` en `tests/cli_cli.rs` sobre programas concretos (fib,
+multi-módulo, env/args, CSP, TLS×2, crypto, sqlite, json, protobuf, iteradores, FFI, TCP/UDP…) —
+buena selección, pero la cobertura "lenguaje completo" es un claim manual que se descompasará en
+silencio. *Fix:* test corpus que itera los ejemplos deterministas nativo↔VM, probablemente
+`#[ignore]` por lento (como los metacirculares), corrido en CI nightly o bajo demanda.
+**Esfuerzo: 0,5–1 día.**
+
+**H11. Sin guardia contra la "triple implementación" de builtins.** `transpile.rs` **no consulta
+la tabla `BUILTINS`** de `src/builtins.rs` (cero referencias): un builtin nuevo añadido a
+checker/VM/intérprete cae en nativo en `emit_stub` (panic en runtime) o en
+`Err("spike: … no soportada")` sin que ningún test lo detecte. *Fix:* test que recorre `BUILTINS`
+y exige que cada fila esté (a) interceptada por el transpilador o (b) en una lista explícita de
+omitidos-conscientes; requiere exponer del transpilador "qué nombres intercepto".
+**Esfuerzo: 0,5–1 día.** — Este hallazgo es el síntoma de **H16** (duplicación interna).
+
+**H12. Tests nativos que se saltan en silencio + caché de CI incompleta.** Cada test
+`build_native_*` hace `if rustc/cargo no disponible → return` con un `eprintln`
+(`cli_cli.rs:89-92`): en una máquina sin toolchain pasan todos "en verde" sin ejecutar nada.
+Además los 5 tests del camino Cargo (TLS×2, crypto, sqlite) compilan ring+rustls+rusqlite-bundled
+(SQLite en C) en cada CI limpio: la caché del CI (`ci.yml:31-36`) guarda `~/.cargo` y `target`
+pero **no** `$TMP/ray_native_cache` → minutos de compilación por run. *Fix:* en CI, fallar (o
+skip explícito reportado) si falta rustc; añadir `ray_native_cache` a la caché.
+**Esfuerzo: 1–2 h.**
+
+**H13. TLS/sqlite: un solo escenario feliz cada uno, ningún camino de error.** TLS: un eco
+cliente↔servidor (`cli_cli.rs:346,382`); sqlite: un demo `:memory:` (`cli_cli.rs:457`). La
+promesa "mensajes byte-idénticos porque es el mismo código" (§4.8) es precisamente lo que habría
+que verificar en los caminos de error (certificado inválido, handshake fallido, SQL malformado):
+el marshalling `map_err` del borde puede alterar el mensaje. **Esfuerzo: 1–2 días.**
+
+### 6.4 P2 — DX, robustez y rendimiento del código generado
+
+**H14. La caché de builds vive en `temp_dir()`, contradiciendo este mismo doc.** §3.3 decide
+`~/.ray/native-cache/`, pero `cli.rs:759` usa `std::env::temp_dir().join("ray_native_cache")` —
+macOS purga `/tmp` (3 días sin uso) y Linux al reboot → la promesa "ring compila una vez por
+máquina" se rompe periódicamente sin explicación. Carrera menor: el binario producido se copia de
+`target/debug/<pkg>` donde `pkg` es solo el *stem* (`cli.rs:770`) — dos builds concurrentes de
+programas distintos con el mismo stem comparten esa ruta (el proyecto temporal lleva PID; la
+salida en la caché compartida, no). **Esfuerzo: ~30 min** (mover la caché; +1 h si se
+desambigua el stem, p. ej. hash de la ruta).
+
+**H15. Artefactos temporales sin limpiar.** Ni el `.rs` temporal (`cli.rs:679`) ni el proyecto
+Cargo generado (`cli.rs:726`) se borran tras compilar — se acumulan en `$TMP` uno por PID. Choca
+con la política del proyecto de cero fugas de artefactos. **Esfuerzo: ~30 min.**
+
+**H16. Duplicación interna del registro de builtins (deuda estructural).** El conocimiento de
+los builtins está repetido a mano en ≥4 sitios de `transpile.rs` — `emit_call` (~735 líneas),
+`type_of` (~330 líneas de match paralelo), `is_handled_builtin` (`:98`) e `is_prelude_impl`
+(`:47`) — sin apoyarse en la tabla `BUILTINS` (la limpieza L1 hizo exactamente esto para
+checker/VM/intérprete). Cada builtin nuevo exige 3–4 ediciones sincronizadas; H3 y la guarda
+ad-hoc de `get_or` son síntomas. Al menos la regla `check` de L1 debería aportar el tipo de
+retorno y matar el `type_of` paralelo. **Esfuerzo: 2–3 días** (refactor estructural del archivo
+más grande del repo; convierte la guardia H11 en permanente).
+
+**H17. Mensajes en español y jerga interna de cara al usuario.** Contra la convención del
+proyecto (diagnósticos en INGLÉS): el panic del stub `"'f' no está soportada en el binario
+nativo…"` (`transpile.rs:1048`), `"native build: no se pudo ejecutar rustc (¿está en el
+PATH?)"` (`cli.rs:701`), `"cargo falló (código N)"` (`cli.rs:779`), y los rechazos `"spike: …"`
+(~40 sitios) — jerga del spike de julio que llega al usuario final. *Fix:* traducción por lotes
+(`tools/spanglish.py` ya existe) + renombrar el prefijo `spike:`. **Esfuerzo: 2–3 h.**
+
+**H18. Robustez menor del codegen.** (a) Inyección de Rust vía el nombre de librería FFI:
+`#[link(name = "{}")]` interpola `e.lib` sin escapar (`transpile.rs:1075`; ídem `#[link_name]`
+`:1085`) — no es frontera de seguridad (el usuario compila su propio código) pero merece
+validación o `{:?}`. (b) `ExprKind::Float` con `{:?}f64` (`:1509`) emite `inff64`/`NaNf64`
+(Rust inválido) para un literal `1e999`. El escaping de strings (`{:?}` en `:1512`,
+`push_fmt_literal` `:3961`) sí es correcto. **Esfuerzo: 1–2 h.**
+
+**H19. Rendimiento del código generado (margen fácil para el objetivo 24–61×).**
+- Strings por carácter O(n) por operación → bucles O(n²): `s[i]` → `.chars().nth(i)`
+  (`transpile.rs:1693`), `len(s)` → `.chars().count()` (`:2670`) recomputados en cada iteración
+  de un `while i < s.len() { s[i] }`; `substring` colecta un `Vec<char>` completo por llamada
+  (`:2648`), `__ray_index_of` dos (`:493`).
+- `for x in arr` clona el `Vec` entero al entrar (`:1402`, `.borrow().clone()`) incluso cuando el
+  cuerpo no muta; `filter` clona cada elemento dos veces
+  (`.cloned().filter(|__x| __f(__x.clone()))`, `:3027`). Un análisis "el cuerpo no muta el
+  arreglo" permitiría iterar el borrow.
+*Método:* cada mejora con benchmark antes/después, estilo arco P. **Esfuerzo: 2–4 días.**
+
+**H20. Portabilidad y reproducibilidad no declaradas.** No hay `--target` (cross-compilation);
+`--release` fija `target-cpu=native` (binario no portable, documentado) sin alternativa "release
+portable"; el proyecto Cargo generado no fija `Cargo.lock` (las deps de `ray-runtime` son rangos
+`0.23`/`0.17`) → dos máquinas pueden resolver versiones distintas de rustls, erosionando la
+"paridad por construcción" **entre instalaciones**. `docs/build.md` no menciona ninguna de las
+dos cosas. **Esfuerzo: 1–2 días.**
+
+**H21. Flecos de concurrencia conocidos (contexto, no acción inmediata).** Deuda ya declarada en
+§2.4 que la auditoría confirma: canales/Task solo de primitivos+string/bytes (`send_type`
+`transpile.rs:3740`); `spawn`/`scope` solo con literal anónimo o función nombrada nularia — no un
+closure en variable (`:2926-2942`); `Rc<dyn Fn>` no-`Send` bloquea `webserver`/`framework`/
+`metrics_server`; guardas de `match` (`:1987`) y patrones de struct (`:2079`) fuera del
+subconjunto; `signals()` solo Unix (`:897-901`). Semántica distinta documentable: scheduling con
+hilos reales vs VM determinista (el oráculo CSP lo mitiga corriendo solo salidas estables,
+`cli_cli.rs:225` — es decir, solo se testea el subconjunto determinista); `__ray_select` es poll
+con sleep de 50µs (busy-wait); **`send` sobre canal cerrado se descarta en silencio**
+(`transpile.rs:846`) donde la VM tiene semántica propia — este último sí merece fix junto a H2.
+La implementación real de cancelación M12.5/`try_join` en hilos reales es el ítem más difícil de
+toda la lista: **3–5 días**, diferible si H7 los rechaza en compilación.
+
+### 6.5 Plan de ataque sugerido (por lotes)
+
+| Lote | Hallazgos | Esfuerzo | Resultado |
+|------|-----------|----------|-----------|
+| **Urgente** | H1, H2, H3, H4+H8, H5, H14, H15 | **~3 días** | Sin bugs conocidos en programas válidos; sin fugas |
+| **Verificación** | H10, H11, H12 | **~2 días** | Red contra regresiones futuras |
+| **Pulido** | H6, H7, H9, H17, H18 | **~2 días** | Contrato de comportamiento cerrado; mensajes según convención |
+| **Estructural (opcional, priorizable pieza a pieza)** | H16, H19, H13, H20, H21 | **~2 semanas** | Desduplicación, rendimiento, error-paths, portabilidad, concurrencia plena |
+
+Orden natural del lote urgente: H1 → H4 → H5 → H3 → H2 → H14/H15. Los tres primeros lotes
+(~1 semana) cubren todo lo *necesario*; el cuarto es inversión incremental tipo arco.

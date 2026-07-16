@@ -146,10 +146,16 @@ subsistemas.
 2. **Camino rápido de cero-deps intacto**: si ningún `needs_rt_*` se activa —el caso de TODO
    lo cubierto hasta hoy—, se sigue compilando con `rustc` pelado. Cero regresión de velocidad
    de build ni de requisitos (sin red, sin Cargo) para el caso común.
-3. **Flags encima, como escape hatch** (lo útil de la opción 1): p. ej. `--without tls` fuerza
-   el comportamiento actual (stub que panica) aunque se detecte el uso — para builds herméticos,
-   cross-compile complicado o depuración. Se implementan apagando el mismo flag `needs_rt_*`,
-   así que cuestan casi nada una vez existe el punto 1.
+3. **Flags encima, como escape hatch** (lo útil de la opción 1). **HECHO** (commit `383d831`):
+   `ray build --native --without crypto,tls,sqlite` fuerza el stub-que-panica aunque se detecte
+   el uso. Se aplica **durante** la transpilación (las guardas de los arms de interceptación
+   consultan un set `exclude` → el subsistema excluido cae en `_ =>` → la función stubbea), NO
+   solo en el `Cargo.toml` generado — así el binario compila por la **vía rápida `rustc`** (sin
+   cargo/red) si no queda otro subsistema con-crate. Vive en el `ray` CLI (arg efímero, como
+   `--release`), no en el proyecto generado ni en el binario. Medido: cripto + `--without crypto`
+   compila en ~0.15 s (vs cargo compilando ring). Casos de uso: builds herméticos/cross-compile/
+   policy, y programas que **referencian** un crate pero no lo ejecutan (el escenario Fase 45).
+   Diferido opcional: leer una política estable del `ray.toml` del proyecto (mismo mecanismo).
 
 **Nota sobre los stubs**: la detección debe distinguir *uso alcanzable* de *referencia muerta*.
 Hoy un `import http` arrastra `tls_connect` como stub aunque el programa hable HTTP plano
@@ -445,6 +451,6 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
 **Estado (15 jul 2026)**: **Paso previo**, **Paso 0** (crypto/ring), **Paso 1** (`rustls` TLS, cliente +
 servidor) y **Paso 2** (`rusqlite` DB) **HECHOS**. **El techo de los crates está quitado**: crypto + TLS +
 DB transpilan a nativo, bajo demanda, con paridad por construcción (mismo código que la VM). El diseño
-`ray-runtime` escala fila-a-fila para cualquier crate futuro. No quedan pasos obligatorios; `ring`-extra
-solo si aparecen builtins de crypto avanzada no cubiertos (hoy ninguno). Opcional pendiente: `--without
-<dep>` como flag de CLI (§3.3.3), trivial sobre el mecanismo existente.
+`ray-runtime` escala fila-a-fila para cualquier crate futuro. El escape hatch `--without` está **hecho**
+(§3.3.3). No quedan pasos obligatorios; `ring`-extra solo si aparecen builtins de crypto avanzada no
+cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política estable en `ray.toml`.

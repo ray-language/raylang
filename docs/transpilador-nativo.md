@@ -478,9 +478,13 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > `~/.ray/native-cache`, verifica rustc, corpus nocturno), **H9** (infiere args de tipo en literales
 > genéricos anidados), **H17** (mensajes del transpilador/build a inglés, sin jerga `spike:`), **H18**
 > (escape de nombres FFI + float inf/NaN), **H7** (aviso de funciones stubbeadas al compilar; la
-> divergencia muda de cancelación queda documentada). **⏸️ DIFERIDO por decisión del usuario:** **H6**
-> (overflow checked + exit 70 — tradeoff paridad-vs-rendimiento; ver su ficha). Pendiente:
-> **estructural** (H16, H19, H13, H20, H21). Los ítems marcados abajo con ✅ ya están hechos.
+> divergencia muda de cancelación queda documentada). **Estructural:** **H13** (error-paths de
+> SQLite/TLS byte-idénticos nativo≡VM), **H20** (`--target` cross-compile + `Cargo.lock` cacheado),
+> **H19** (medido: el nativo ya gana a la VM en código idiomático; fast-path ASCII en `len` aplicado).
+> **⏸️ DIFERIDOS por decisión del usuario:** **H6** (overflow checked + exit 70 — tradeoff
+> paridad-vs-rendimiento), **H16** (dedup de builtins — la guardia H11 ya evita la deriva; queda deuda
+> de mantenibilidad de bajo ROI), **H21** (cancelación M12.5 en hilos reales — 3-5 días, su propia
+> sesión). **Auditoría cerrada salvo los tres diferidos.** Los ítems marcados abajo con ✅ ya están hechos.
 
 ### 6.1 P0 — Roto en el momento de la auditoría
 
@@ -616,7 +620,7 @@ pero **no** `$TMP/ray_native_cache` → minutos de compilación por run. *Fix:* 
 skip explícito reportado) si falta rustc; añadir `ray_native_cache` a la caché.
 **Esfuerzo: 1–2 h.**
 
-**H13. TLS/sqlite: un solo escenario feliz cada uno, ningún camino de error.** TLS: un eco
+**H13. ✅ RESUELTO. TLS/sqlite: un solo escenario feliz cada uno, ningún camino de error.** TLS: un eco
 cliente↔servidor (`cli_cli.rs:346,382`); sqlite: un demo `:memory:` (`cli_cli.rs:457`). La
 promesa "mensajes byte-idénticos porque es el mismo código" (§4.8) es precisamente lo que habría
 que verificar en los caminos de error (certificado inválido, handshake fallido, SQL malformado):
@@ -637,7 +641,8 @@ desambigua el stem, p. ej. hash de la ruta).
 Cargo generado (`cli.rs:726`) se borran tras compilar — se acumulan en `$TMP` uno por PID. Choca
 con la política del proyecto de cero fugas de artefactos. **Esfuerzo: ~30 min.**
 
-**H16. Duplicación interna del registro de builtins (deuda estructural).** El conocimiento de
+**H16. ⏸️ DIFERIDO (decisión del usuario, 16 jul 2026). Duplicación interna del registro de builtins
+(deuda estructural).** El conocimiento de
 los builtins está repetido a mano en ≥4 sitios de `transpile.rs` — `emit_call` (~735 líneas),
 `type_of` (~330 líneas de match paralelo), `is_handled_builtin` (`:98`) e `is_prelude_impl`
 (`:47`) — sin apoyarse en la tabla `BUILTINS` (la limpieza L1 hizo exactamente esto para
@@ -645,6 +650,11 @@ checker/VM/intérprete). Cada builtin nuevo exige 3–4 ediciones sincronizadas;
 ad-hoc de `get_or` son síntomas. Al menos la regla `check` de L1 debería aportar el tipo de
 retorno y matar el `type_of` paralelo. **Esfuerzo: 2–3 días** (refactor estructural del archivo
 más grande del repo; convierte la guardia H11 en permanente).
+> **Diferido:** el RIESGO real (un builtin nuevo cae en un stub silencioso en nativo) ya lo
+> neutraliza la **guardia H11** (`NATIVE_TRACKED_BUILTINS` + test): un builtin nuevo falla el test
+> hasta clasificarlo. Lo que queda es deuda de MANTENIBILIDAD (menos ediciones sincronizadas), no
+> visible al usuario, con alto churn en el archivo más grande del repo → bajo ROI ahora. Retomar
+> como limpieza dedicada si el `type_of`/`emit_call` paralelos se vuelven un estorbo recurrente.
 
 **H17. ✅ RESUELTO. Mensajes en español y jerga interna de cara al usuario.** Contra la convención del
 proyecto (diagnósticos en INGLÉS): el panic del stub `"'f' no está soportada en el binario
@@ -683,7 +693,7 @@ código generado.
 > indexable por char), un cambio grande y arriesgado que solo beneficia código no-idiomático; los clones
 > de `for`/`filter` no son cuello (el nativo gana igual) → no valen el análisis de mutación.
 
-**H20. Portabilidad y reproducibilidad no declaradas.** No hay `--target` (cross-compilation);
+**H20. ✅ RESUELTO. Portabilidad y reproducibilidad no declaradas.** No hay `--target` (cross-compilation);
 `--release` fija `target-cpu=native` (binario no portable, documentado) sin alternativa "release
 portable"; el proyecto Cargo generado no fija `Cargo.lock` (las deps de `ray-runtime` son rangos
 `0.23`/`0.17`) → dos máquinas pueden resolver versiones distintas de rustls, erosionando la
@@ -702,6 +712,11 @@ con sleep de 50µs (busy-wait); **`send` sobre canal cerrado se descarta en sile
 (`transpile.rs:846`) donde la VM tiene semántica propia — este último sí merece fix junto a H2.
 La implementación real de cancelación M12.5/`try_join` en hilos reales es el ítem más difícil de
 toda la lista: **3–5 días**, diferible si H7 los rechaza en compilación.
+> **⏸️ DIFERIDO (decisión del usuario, 16 jul 2026):** la cancelación M12.5 en hilos reales es un
+> port de semántica de scheduler (su propia sesión), no un bug; ya documentada como límite del
+> backend (§2.4) y ahora los stubs (p. ej. `try_join`) se AVISAN al compilar (H7). Pieza pequeña
+> que sí conviene junto a un futuro H2-bis: **`send` sobre canal cerrado se descarta en silencio**
+> (`transpile.rs:846`) — la VM tiene semántica propia; anotado aquí para no perderlo.
 
 ### 6.5 Plan de ataque sugerido (por lotes)
 

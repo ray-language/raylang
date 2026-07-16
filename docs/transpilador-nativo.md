@@ -660,7 +660,8 @@ validación o `{:?}`. (b) `ExprKind::Float` con `{:?}f64` (`:1509`) emite `inff6
 (Rust inválido) para un literal `1e999`. El escaping de strings (`{:?}` en `:1512`,
 `push_fmt_literal` `:3961`) sí es correcto. **Esfuerzo: 1–2 h.**
 
-**H19. Rendimiento del código generado (margen fácil para el objetivo 24–61×).**
+**H19. ✅ MEDIDO — mayormente un no-problema; 1 win aplicado, el resto diferido.** Rendimiento del
+código generado.
 - Strings por carácter O(n) por operación → bucles O(n²): `s[i]` → `.chars().nth(i)`
   (`transpile.rs:1693`), `len(s)` → `.chars().count()` (`:2670`) recomputados en cada iteración
   de un `while i < s.len() { s[i] }`; `substring` colecta un `Vec<char>` completo por llamada
@@ -670,6 +671,17 @@ validación o `{:?}`. (b) `ExprKind::Float` con `{:?}f64` (`:1509`) emite `inff6
   (`.cloned().filter(|__x| __f(__x.clone()))`, `:3027`). Un análisis "el cuerpo no muta el
   arreglo" permitiría iterar el borrow.
 *Método:* cada mejora con benchmark antes/después, estilo arco P. **Esfuerzo: 2–4 días.**
+> **Medido (16 jul).** La premisa "margen fácil para batir a la VM" resultó **mayormente falsa**: el
+> nativo YA aplasta a la VM en código idiomático. Benchmarks (release, aarch64): iteración de arreglo
+> `for x in arr` con clone del Vec → **nativo 0,29 s vs VM 4,1 s (~14×)**, o sea el clone NO es cuello;
+> `for c in s` idiomático (100k×100) → **nativo 0,5 s vs VM sin terminar en 2 min**. El ÚNICO caso donde
+> el nativo PIERDE (~6×) es el **anti-patrón** `while i < s.len() { s[i] }` (indexado de string en bucle,
+> O(n²)) — y ahí la VM también es O(n²), solo con constante menor (`is_ascii` SIMD vs `chars().count()`
+> decodificado). **HECHO**: se copió el fast-path ASCII de la VM a `len` de string (`is_ascii()` → `.len()`,
+> si no `.chars().count()`); correcto (ASCII y no-ASCII casan con la VM), coste cero. **DIFERIDO** (bajo
+> ROI): cerrar del todo el anti-patrón `s[i]` exige cambiar la representación de string (`Rc<str>` →
+> indexable por char), un cambio grande y arriesgado que solo beneficia código no-idiomático; los clones
+> de `for`/`filter` no son cuello (el nativo gana igual) → no valen el análisis de mutación.
 
 **H20. Portabilidad y reproducibilidad no declaradas.** No hay `--target` (cross-compilation);
 `--release` fija `target-cpu=native` (binario no portable, documentado) sin alternativa "release

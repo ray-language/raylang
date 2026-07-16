@@ -2810,17 +2810,29 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".ray_show())");
             }
-            // len(x) → i64. String: nº de octetos; arreglo: nº de elementos (vía borrow()).
+            // len(x) → i64. String: nº de CARACTERES; arreglo/map: nº de elementos (vía borrow()).
             "len" => {
-                out.push('(');
-                self.emit_expr(out, eff[0])?;
                 match self.type_of(eff[0])? {
-                    Type::Array(_) | Type::Map(_, _) => out.push_str(".borrow().len() as i64)"),
-                    // string: `len` cuenta CARACTERES (como la VM), no bytes — clave con UTF-8 multibyte
-                    // (`más`, `ñ`): usar `.len()` (bytes) haría que `while i < len` sobre-itere `s[i]`.
-                    Type::String => out.push_str(".chars().count() as i64)"),
+                    Type::Array(_) | Type::Map(_, _) => {
+                        out.push('(');
+                        self.emit_expr(out, eff[0])?;
+                        out.push_str(".borrow().len() as i64)");
+                    }
+                    // string: `len` cuenta CARACTERES, no octetos — clave con UTF-8 multibyte (`más`, `ñ`).
+                    // Fast-path ASCII (H19, como la VM en vm.rs:960): para un string ASCII, nº de octetos ==
+                    // nº de chars → `.len()` (escaneo `is_ascii` con SIMD) es mucho más rápido que
+                    // `.chars().count()` (decodifica char a char). Cierra la brecha O(n²) de `while i < s.len()`.
+                    Type::String => {
+                        out.push_str("{ let __rt_s = ");
+                        self.emit_expr(out, eff[0])?;
+                        out.push_str("; if __rt_s.is_ascii() { __rt_s.len() as i64 } else { __rt_s.chars().count() as i64 } }");
+                    }
                     // bytes: `len` es el nº de octetos → `.len()` es correcto.
-                    _ => out.push_str(".len() as i64)"),
+                    _ => {
+                        out.push('(');
+                        self.emit_expr(out, eff[0])?;
+                        out.push_str(".len() as i64)");
+                    }
                 }
             }
             // push(a, v) → a.borrow_mut().push(v) (muta en el sitio, devuelve unit).
@@ -4540,9 +4552,11 @@ mod tests {
 
     #[test]
     fn len_de_string_cuenta_caracteres() {
-        // `len(string)` = nº de CARACTERES (como la VM), no bytes → `.chars().count()` (clave con UTF-8).
+        // `len(string)` = nº de CARACTERES (como la VM), no bytes. Fast-path ASCII (H19): `is_ascii()` →
+        // `.len()` (octetos == chars, escaneo SIMD); si no, `.chars().count()` (UTF-8, decodifica).
         let rust = transpile_src("fn main() { let s = \"ab\"; print(s.len()); }");
-        assert!(rust.contains(".chars().count() as i64"), "len de string por caracteres: {}", rust);
+        assert!(rust.contains("is_ascii()"), "len de string con fast-path ASCII: {}", rust);
+        assert!(rust.contains(".chars().count() as i64"), "fallback no-ASCII por caracteres: {}", rust);
     }
 
     #[test]

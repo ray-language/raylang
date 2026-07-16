@@ -548,7 +548,25 @@ fn build_native_without_rechaza_un_subsistema_desconocido() {
     let (_out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "--without", "foo", "-o", "x"]);
     assert_eq!(code, 64, "nombre inválido → exit 64\n{err}");
-    assert!(err.contains("unknown subsystem in --without"), "mensaje claro: {err}");
+    // El mensaje nombra el ORIGEN del typo (aquí la CLI) para apuntar al sitio a corregir.
+    assert!(err.contains("unknown subsystem in --without"), "mensaje claro con origen: {err}");
+}
+
+#[test]
+fn build_native_without_rechaza_un_typo_del_ray_toml_nombrando_el_origen() {
+    // Un typo en `[native] without` del ray.toml versionado afecta a todo el equipo → el error debe
+    // apuntar al ray.toml, no a `--without` (que aquí ni se pasó). Fija la distinción de origen (H1).
+    let base = tmp("build_native_toml_typo");
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[native]\nwithout = [\"crytpo\"]\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { 0 }\n").unwrap();
+    let (_out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", "x"]);
+    assert_eq!(code, 64, "typo en ray.toml → exit 64\n{err}");
+    assert!(err.contains("unknown subsystem in ray.toml"), "el mensaje nombra ray.toml: {err}");
+    assert!(err.contains("crytpo"), "y el nombre ofensor: {err}");
 }
 
 #[test]

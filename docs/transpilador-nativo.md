@@ -389,11 +389,19 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
 > byte-idéntico contra la VM + test de integración `build_native_*` + entrada en PERFORMANCE.md
 > por paso (incl. medir el coste de la primera build con cargo y el tamaño del binario).
 
-- **Paso previo — los flecos que NO son de crates** (lista §2.4.1, fase 45): canal de struct de
-  `metrics_server`, `spawn` de función nombrada (`udp_yield`), captura `t` en spawn + `RayShow`
-  de `[fn]` (`framework`/`webserver`). Son fixes dentro del transpilador actual, sin cambio de
-  arquitectura, y condicionan los demos que TLS desbloquearía — `webserver` necesita *ambas*
-  cosas. Hacerlos primero evita que el estreno de TLS quede deslucido por bugs preexistentes.
+- **Paso previo — los flecos que NO son de crates** (lista §2.4.1, fase 45). **PARCIALMENTE HECHO**
+  (Fase 50, 15 jul — commit `1d60046`). Tres fixes cerrados dentro del transpilador, sin cambio de
+  arquitectura: (a) leak de scope al caer a stub (un `Task t` fantasma se filtraba y corrompía el
+  `spawn` siguiente); (b) `RayShow` de un tipo-función anidado en un contenedor (`[fn]`/`Map`/tupla) →
+  `impl` concreto que renderiza `<fn>`; (c) `spawn`/`scope` de una función **nombrada** de aridad 0
+  (`spawn(worker)`), no solo un literal. Resultado: `udp_yield` **compila**; los dos bugs nombrados de
+  `framework`/`webserver` (captura `t` + `RayShow [fn]`) quedan **corregidos**.
+  - **Queda fuera del Paso previo** (reclasificado al modelo de concurrencia thread-safe, mismo cubo
+    que §2.4.1): `framework`/`webserver` topan ahora con un `Rc<dyn Fn>` no-`Send` capturado por
+    `spawn` (los closures `preparar`/`atender_conn` de `bucle_servidor`), y `metrics_server` con un
+    canal de struct no-`Send`. Ambos exigen la repr `Arc<dyn Fn + Send + Sync>` / valores thread-safe
+    para cruzar hilos → proyecto propio, no un fleco. (Nota: `webserver`/`https_server` además tienen
+    el techo TLS del Paso 1.)
 - **Paso 0 — la extracción + la fontanería**:
   1. Crear el workspace y extraer `crypto.rs`/`tls.rs`/`sqlite.rs` de `src/builtins.rs` a
      `crates/ray-runtime` (§4.3); el binario `ray` delega/re-exporta. Gate: 605 tests lib +

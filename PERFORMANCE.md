@@ -453,6 +453,39 @@ Tests: `ffi_emite_extern_c_y_wrapper_con_marshalling`, `ffi_retorno_int_es_c_int
 (el FFI solo afecta a programas con `extern`). Diferido: `print` de un `ptr` (se vería la dirección, no
 `<ptr>`), arreglos/structs por FFI (aridad 0..=3 primitivos, como M41).
 
+#### Fase 50 — flecos no-crate (Paso previo del crate `ray-runtime`, 15 jul)
+
+Antes de la extracción a `ray-runtime` (ver `docs/transpilador-nativo.md`), se cierran los flecos del
+transpilador que **no** dependen de crates externos (la lista de la Fase 45). Tres fixes:
+
+1. **Leak de estado al caer a stub**: cuando el cuerpo de una función no transpila, `emit_function`
+   propagaba el `Err` con `?` **sin popear los scopes ni deshacer las cells** que ya había declarado →
+   sus locales (p. ej. un `Task t`) se **filtraban** al siguiente `emit_function`, cuyo `spawn` capturaba
+   ese `t` fantasma (`in_scope_channels`) y emitía `let t = t.clone()` con `t` inexistente en Rust
+   (`cannot find value t`). Fix: `emit_function` envuelve a `emit_function_inner` y **restaura el estado
+   (scopes/tparams/cells) en TODOS los caminos**. Bug de corrupción real (código roto emitido), no solo
+   un hueco de cobertura.
+2. **RayShow de un tipo-función dentro de un contenedor** (`[fn]`, `Map<_, fn>`, `(fn, …)`): el `impl`
+   genérico de `Vec`/`Map`/tupla exige `T: RayShow` y no había RayShow para `Rc<dyn Fn>` (el caso
+   directo `campo: fn` ya se renderizaba `<fn>`, pero no anidado). Fix: se emite un `impl RayShow`
+   **concreto** (render `<fn>`, como el Display del runtime) por firma concreta distinta
+   (`collect_fn_rayshow` recorre arrays/maps/tuplas/fn; `ty_mentions_tparam` salta las que mencionan un
+   param de tipo, no representables como impl concreto). Desbloquea el RayShow de `framework` (campo
+   `middlewares: [fn(Ctx, Res) -> bool]`).
+3. **`spawn`/`scope` de una función NOMBRADA** de aridad 0 (`spawn(worker)`, no solo un literal
+   `fn(){}`): se baja a `move || worker()` (sin captura del ámbito, es top-level); `type_of` resuelve el
+   retorno desde la firma. Desbloquea `udp_yield` (que ahora compila y corre byte-idéntico en un caso
+   determinista de prueba).
+
+**Estado de los 4 demos del Paso previo**: `udp_yield` → **compila** ✓. `framework`/`webserver` → los dos
+bugs nombrados (leak de `t` + RayShow de `[fn]`) **corregidos**; ahora topan con el **límite compartido**
+de un `Rc<dyn Fn>` no-`Send` capturado por `spawn` (los closures `preparar`/`atender_conn` que recibe
+`bucle_servidor`). `metrics_server` → sigue en el canal de un struct no-`Send`. Estos dos últimos son el
+**modelo de valores/closures thread-safe** (mismo cubo), no flecos → se difieren conscientemente.
+605 tests lib + 19 `build_native` (serial) verdes; test nuevo `build_native_spawn_de_funcion_nombrada`.
+(El check `naming_policy` ya estaba rojo en la rama antes de esta fase — nombres de test en español del
+arco P2.b; fuera de alcance aquí.)
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

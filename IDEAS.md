@@ -1300,7 +1300,7 @@ socket de escucha. Tres caminos analizados:
 | Opción | Qué preserva | Complejidad | Veredicto |
 |---|---|---|---|
 | **A+. Endurecer el watch+restart** | — | **baja** | ✅ **M92.2** (check-before-restart + debounce): (1) ✅ **chequear ANTES de reiniciar** — `ray build <entry>` primero (ms), solo reiniciar en verde; en rojo imprimir el diagnóstico y dejar el programa viejo corriendo (ya no mata un servidor que funciona por un cambio roto). (2) ✅ **debounce** ~120 ms (coalesce guardado+formateador). (3) 💤 drenado graceful en Windows (hoy kill duro; unix-only por diseño, como todo el manejo de señales del proyecto). (4) 💤 latencia vía `kqueue EVFILT_VNODE` — Linux pediría inotify → el polling de ~200 ms se conserva (portable, cero deps) |
-| **D. Herencia de fd** (socket-activation estilo systemd) | el listener | **media** | **candidata a fase 3** (nueva 92.3, sustituye a C): el SUPERVISOR abre el socket una vez y lo pasa a cada hijo (fd heredado + `RAY_LISTEN_ADDR`/`RAY_LISTEN_FD`); `tcp_listen(host,port)` en el hijo, si el env matchea, ADOPTA el fd en vez de bind → el mismo programa corre idéntico en dev y prod. Durante el reinicio el socket nunca se cierra: el kernel encola en el backlog → **cero conexiones rechazadas, cero re-bind** (lo que C prometía) **conservando el aislamiento por proceso** (el hecho 2 no aplica; SIGTERM+drenado ya funciona). ~90% del beneficio de C con ~20% de su complejidad. Coste: `pre_exec`/`dup2` (unix; precedente de libc crudo por todo el host) + saber el puerto de antemano (`ray dev --port` o `[dev] listen` en ray.toml — limitación honesta). Windows: fallback al comportamiento actual |
+| **D. Herencia de fd** (socket-activation estilo systemd) | el listener | **media** | ✅ **M92.3**: el SUPERVISOR pre-abre y RETIENE el socket (`--port N`/`--listen host:port`/`[dev] listen` en ray.toml) y lo pasa a cada hijo (`pre_exec` dup2 al fd 3 + `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR`); `tcp_listen` (builtins) ADOPTA con `from_raw_fd` si el env matchea (una vez, guardado por `AtomicBool`) → el mismo programa corre idéntico en dev y prod. Durante el reinicio el socket nunca se cierra: el kernel encola en el backlog → **cero conexiones rechazadas, cero re-bind**, conservando el aislamiento por proceso (SIGTERM+drenado como antes). Gotcha cazado: si el fd del listener ya era 3 (primer libre tras stdio), `dup2(3,3)` es no-op que NO limpia CLOEXEC → fix con `fcntl(F_SETFD,0)` explícito. Unix; no-unix cae al re-bind por reinicio. Test rigoroso: si el 2.º hijo no re-adoptara, su bind chocaría (EADDRINUSE) con el socket retenido |
 | **E. `SO_REUSEPORT`** (blue/green local) | el puerto (solape de procesos) | media | descartada para dev: `std` no lo expone (setsockopt por FFI, factible), semántica de reparto difiere macOS/Linux, y durante el solape DOS versiones sirven a la vez (confuso en dev). Es la herramienta de *deploy* sin downtime, no de dev; D es más simple y suficiente |
 | **F. Live-reload del navegador (SSE)** | — (UX) | baja-media | bonus tras D: el webserver ya habla SSE (`sse_open`/`sse_event`). Preferible desde el SUPERVISOR (endpoint SSE en puerto lateral + snippet inyectado en dev) — funciona con cualquier programa, no solo el paquete webserver |
 | **G. Estado del invitado entre reloads** | estado app | — | NO construir maquinaria (es exactamente el coste/beneficio descartado en B): **documentar el patrón** "estado de dev en SQLite de archivo" en el MANUAL — un `sqlite.connect("dev.db")` sobrevive reloads de forma natural |
@@ -1311,9 +1311,10 @@ El nicho diferencial barato de raylang es D: *restart tan rápido (arranque ~3 m
 listener retenido, se percibe como hot reload*.
 
 Fases (revisadas 16 jul): **92.1** ✅ watcher+restart+drenado · **92.2** ✅ A+ (check-before-restart +
-debounce; Windows-graceful aparcado) · **92.3** D (herencia de fd + `[dev] listen`) · **92.4** F
-(live-reload SSE desde el supervisor) + G (patrón de estado en el MANUAL) · B y C aparcados (C revive
-solo si la VM gana cancelación preemptiva/teardown fiable).
+debounce; Windows-graceful aparcado) · **92.3** ✅ D (herencia de fd: `--port`/`--listen`/`[dev] listen`)
++ ✅ G (patrón de estado sqlite-de-archivo, documentado en el MANUAL) · **92.4** F (live-reload SSE desde
+el supervisor, pendiente) · B y C aparcados (C revive solo si la VM gana cancelación preemptiva/teardown
+fiable).
 
 ## Cómo usar este archivo
 

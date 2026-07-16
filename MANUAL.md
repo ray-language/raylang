@@ -1119,6 +1119,14 @@ compila**: un error a medio escribir imprime su diagnóstico y **deja el program
 (no tira un servidor que funciona por un cambio roto). Además hace **debounce** de una ráfaga de
 guardados (p. ej. tu editor + un formateador) en un solo reinicio.
 
+**Sin conexiones caídas entre reinicios** (unix): con `ray dev --port 8080` (o `--listen host:port`,
+o `[dev] listen = "127.0.0.1:8080"` en `ray.toml`) el supervisor **retiene el socket de escucha** y
+cada reinicio lo **adopta** en vez de re-vincularlo — el puerto nunca se cierra, así que una petición
+que llega durante el reinicio **se encola** (no se rechaza) y la atiende el programa nuevo. El downtime
+percibido es el de una compilación (ms). Tu `tcp_listen`/`serve` no cambia: adopta el socket heredado
+de forma transparente cuando el `host:port` coincide. (El estado en memoria del programa **se resetea**
+por reload; si quieres estado persistente entre reloads, guárdalo en un `sqlite.connect("dev.db")`.)
+
 Pruebas con `@test` (una función `() -> bool` o `() -> unit` que usa `assert`); cada test corre
 **aislado** (un panic no tumba la batería):
 

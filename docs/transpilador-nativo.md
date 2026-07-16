@@ -466,16 +466,18 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > (b) la **capa de verificación** (más débil de lo que §2.3 promete) y (c) flecos de DX.
 > Nada estructural que re-litigar.
 
-> **Estado (16 jul 2026): LOTE URGENTE COMPLETO.** Resueltos y con test oráculo nativo≡VM: **H1**
+> **Estado (16 jul 2026): LOTES URGENTE y VERIFICACIÓN COMPLETOS.** Resueltos con test: **H1**
 > (CI verde; el error nombra el origen del typo), **H2** (rendezvous ya no se deadlockea, handshake
 > síncrono), **H3** (el override del usuario gana sobre el builtin), **H4/H8** (izado de índice/
 > receptor/RHS en asignaciones autoreferentes + orden de la VM), **H5** (keywords de Rust como
 > identificadores vía raw idents; campos/variantes/constantes/params-de-closure enrutados por
 > `mangle`; temporales al prefijo reservado `__rt_*`), **H14** (caché en `~/.ray/native-cache/`),
-> **H15** (limpieza de `.rs`/proyecto Cargo tras un build ok). Pendientes: lote de **verificación**
-> (H10 corpus, H11 guardia de `BUILTINS`, H12 CI), **pulido** (H6 overflow/exit, H7 rechazo de
-> semántica no implementada, H9 args de tipo, H17 mensajes/jerga, H18 robustez) y **estructural**
-> (H16, H19, H13, H20, H21). Los ítems marcados abajo con ✅ ya están hechos.
+> **H15** (limpieza de `.rs`/proyecto Cargo tras un build ok), **H10** (corpus automatizado:
+> `tests/native_corpus.rs`, 50 ejemplos deterministas nativo≡VM), **H11** (guardia de la tabla
+> `BUILTINS`: `NATIVE_TRACKED_BUILTINS` + test que la fuerza), **H12** (CI: cachea
+> `~/.ray/native-cache`, verifica rustc, corpus nocturno). Pendientes: **pulido** (H6 overflow/exit,
+> H7 rechazo de semántica no implementada, H9 args de tipo, H17 mensajes/jerga, H18 robustez) y
+> **estructural** (H16, H19, H13, H20, H21). Los ítems marcados abajo con ✅ ya están hechos.
 
 ### 6.1 P0 — Roto en el momento de la auditoría
 
@@ -570,7 +572,7 @@ válido. *Fix:* propagar los args de tipo que el checker ya resolvió. **Esfuerz
 
 ### 6.3 P1 — Capa de verificación (lo que evita que todo lo anterior vuelva a pasar)
 
-**H10. El claim "37/37 ejemplos byte-idénticos" (§2.3) NO está automatizado.** No existe ningún
+**H10. ✅ RESUELTO. El claim "37/37 ejemplos byte-idénticos" (§2.3) NO está automatizado.** No existe ningún
 test que itere `examples/` por el camino nativo (grep de `read_dir`/corpus en `tests/`: nada).
 Hay ~28 tests `build_native_*` en `tests/cli_cli.rs` sobre programas concretos (fib,
 multi-módulo, env/args, CSP, TLS×2, crypto, sqlite, json, protobuf, iteradores, FFI, TCP/UDP…) —
@@ -579,7 +581,7 @@ silencio. *Fix:* test corpus que itera los ejemplos deterministas nativo↔VM, p
 `#[ignore]` por lento (como los metacirculares), corrido en CI nightly o bajo demanda.
 **Esfuerzo: 0,5–1 día.**
 
-**H11. Sin guardia contra la "triple implementación" de builtins.** `transpile.rs` **no consulta
+**H11. ✅ RESUELTO. Sin guardia contra la "triple implementación" de builtins.** `transpile.rs` **no consulta
 la tabla `BUILTINS`** de `src/builtins.rs` (cero referencias): un builtin nuevo añadido a
 checker/VM/intérprete cae en nativo en `emit_stub` (panic en runtime) o en
 `Err("spike: … no soportada")` sin que ningún test lo detecte. *Fix:* test que recorre `BUILTINS`
@@ -587,7 +589,7 @@ y exige que cada fila esté (a) interceptada por el transpilador o (b) en una li
 omitidos-conscientes; requiere exponer del transpilador "qué nombres intercepto".
 **Esfuerzo: 0,5–1 día.** — Este hallazgo es el síntoma de **H16** (duplicación interna).
 
-**H12. Tests nativos que se saltan en silencio + caché de CI incompleta.** Cada test
+**H12. ✅ RESUELTO. Tests nativos que se saltan en silencio + caché de CI incompleta.** Cada test
 `build_native_*` hace `if rustc/cargo no disponible → return` con un `eprintln`
 (`cli_cli.rs:89-92`): en una máquina sin toolchain pasan todos "en verde" sin ejecutar nada.
 Además los 5 tests del camino Cargo (TLS×2, crypto, sqlite) compilan ring+rustls+rusqlite-bundled

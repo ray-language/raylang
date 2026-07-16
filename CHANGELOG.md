@@ -4,6 +4,23 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+### Añadido
+
+- **Compilación a binario nativo** (`ray build --native`, arco P2.b): un tercer backend que **transpila el
+  programa a Rust** y lo compila con `rustc` a un ejecutable de código máquina — modelo *dev = VM / deploy =
+  nativo*. Byte-idéntico a la VM (verificado con oráculos) y **24–61× más rápido**; en cómputo puro le gana
+  a node (V8) por ~5×. Cubre el lenguaje completo + I/O de `std/fs`, sockets TCP/UDP, concurrencia CSP (con
+  hilos de SO reales) y FFI. `-o <ruta>` para el nombre; `--release` para el tier opt3+lto+target-cpu=native.
+- **Crates de producción bajo demanda**: TLS (`rustls`), criptografía (`ring`) y SQLite (`rusqlite`) se
+  enlazan en el binario nativo **solo cuando el programa los usa** (el transpilador genera un proyecto Cargo
+  con el crate compartido `crates/ray-runtime`, del que también depende la VM → paridad por construcción). Un
+  programa que no toca ningún crate se compila con `rustc` pelado (rápido, sin red).
+- **Exclusión de subsistemas** del binario nativo: `ray build --native --without crypto,tls,sqlite` (efímero)
+  o `[native] without = ["tls", …]` en `ray.toml` (política estable del proyecto). Para builds herméticos,
+  *cross-compile* o contenedores endurecidos.
+
 ## 1.0.0 — 2026-07-03
 
 Primera versión estable. raylang pasó de un lenguaje de juguete (un lexer + un intérprete tree-walking) a un

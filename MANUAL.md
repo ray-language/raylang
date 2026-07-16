@@ -1071,6 +1071,41 @@ ray doc archivo.ray      # documentación Markdown desde ///
 ray repl                 # REPL interactivo
 ray lsp                  # servidor LSP (diagnósticos, hover, definición, rename, completion…)
 ray build                # chequea + compila sin ejecutar (para CI: 0 ok / 65 error)
+ray build --native       # transpila a Rust y compila un binario nativo (deploy)
+```
+
+**Compilación a binario nativo** (`ray build --native`): además de correr sobre la VM, un programa se
+puede **transpilar a Rust** y compilar a un ejecutable de código máquina — el modelo *dev = VM / deploy =
+nativo*, como el ciclo dev/release de Rust. El binario es **byte-idéntico a la VM** (verificado con
+oráculos) y **24–61× más rápido**; en cómputo puro le gana a node (V8) por ~5×.
+
+```sh
+ray build --native fib.ray            # → binario './fib' (rustc -O, ~0,2 s, portable)
+ray build --native fib.ray -o bin/fib # nombre de salida a medida
+ray build --native fib.ray --release  # tier opt3+lto+target-cpu=native (~10% extra en alloc, binario no portable)
+```
+
+Transpila el **lenguaje completo** (genéricos, traits, `dyn`, closures, `Map`, `match`…) + toda la I/O de
+`std/fs`, sockets TCP/UDP, la concurrencia CSP (con **hilos de SO reales**) y FFI. Los subsistemas con un
+**crate de producción** —TLS (`rustls`), criptografía (`ring`), SQLite (`rusqlite`)— se enlazan **solo
+cuando el programa los usa**: el transpilador genera un proyecto Cargo y compila con `cargo` enlazando solo
+ese crate (mensaje `ok: … [ray-runtime: crypto]`). Si tu programa no toca ninguno, se compila con `rustc`
+pelado (rápido, sin red). El binario nativo llama **al mismo código** que la VM (vía el crate compartido
+`ray-runtime`) → paridad por construcción.
+
+Para excluir un subsistema (build hermético, *cross-compile*, contenedor endurecido, o cuando el camino
+con-crate es inalcanzable), `--without` fuerza el *stub* que panica y devuelve el binario a la vía rápida:
+
+```sh
+ray build --native app.ray --without tls,sqlite
+```
+
+Cuando es una **política estable** del proyecto, decláralala en `ray.toml` (el `--without` de CLI se
+**une** a ella):
+
+```toml
+[native]
+without = ["tls", "sqlite"]   # este servicio nunca enlaza TLS ni SQLite en el binario nativo
 ```
 
 **Modo desarrollo** (`ray dev`): vigila los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`)

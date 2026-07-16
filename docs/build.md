@@ -100,3 +100,34 @@ de las features slim.
 `cargo build --release --target wasm32-unknown-unknown` — el `cdylib` exporta
 `alloc`/`run`/`dealloc`. ring/rustls/rusqlite quedan fuera solos (dependencias
 condicionadas por target); el playground embarca solo el lenguaje núcleo.
+
+## 6. Compilar un PROGRAMA a binario nativo (`ray build --native`, arco P2.b)
+
+Todo lo anterior construye la **toolchain** (el binario `ray`/`raylang`: la VM + el
+resto). Distinto es compilar un **programa de usuario** a un ejecutable nativo:
+`ray build --native prog.ray` **transpila el programa a Rust** y lo compila con `rustc`
+a un binario de código máquina (24–61× la VM, byte-idéntico; ver el capítulo del libro
+*Compilación a binario nativo* y `docs/transpilador-nativo.md` para el diseño).
+
+```sh
+ray build --native prog.ray            # rustc -O (opt2), ~0,2 s, portable
+ray build --native prog.ray --release  # opt3+lto+cu1+target-cpu=native (no portable)
+ray build --native prog.ray -o bin/app # nombre de salida
+```
+
+**Crates de producción bajo demanda.** El código de TLS/cripto/SQLite vive en el crate
+del workspace `crates/ray-runtime` (features `tls`/`crypto`/`sqlite`), del que dependen
+**tanto la VM como el binario transpilado** → paridad por construcción. Si el programa
+usa uno de esos subsistemas, `build --native` genera un proyecto Cargo temporal con
+`ray-runtime` (fuentes incrustadas vía `include_str!`) + la feature detectada y compila
+con `cargo` (caché de target compartida en `$TMP/ray_native_cache`); si no toca ninguno,
+compila con `rustc` pelado (rápido, sin red).
+
+**Exclusión.** `--without crypto,tls,sqlite` fuerza el *stub* que panica (→ vía rápida
+`rustc`); `[native] without = [...]` en el `ray.toml` fija la política estable del
+proyecto (la CLI se une a ella). Para builds herméticos/cross-compile/policy.
+
+> El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
+> `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`
+> (feature `crypto`); su `tls`/`sqlite` solo se enlazan en el proyecto GENERADO del
+> binario transpilado, no en la VM (que compila rustls/rusqlite directo tras sus features).

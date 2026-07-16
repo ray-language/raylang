@@ -166,3 +166,7 @@
 # Optimización de la VM
 
 - [Medir, cambiar, a veces revertir](opt/intro.md)
+
+# Compilación a binario nativo
+
+- [Transpilar a Rust: dev = VM / deploy = nativo](nativo/transpilar.md)

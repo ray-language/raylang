@@ -557,6 +557,37 @@ fixtures `tests/fixtures/tls_*.pem`). 605 tests lib + 24 `build_native` verdes; 
 (la VM compila rustls directo; `ray-runtime/tls` solo vive en el proyecto generado del binario transpilado).
 **Siguiente**: Paso 2 = `rusqlite` (DB embebida, superficie pequeña, determinista → oráculo directo).
 
+#### Fase 53 — SQLite nativo vía `ray-runtime` (Paso 2 — rusqlite) + fix de `type_of(match)` (15 jul)
+
+Paso 2 del crate `ray-runtime`: **SQLite embebido** (rusqlite `bundled`) en el binario transpilado. Más
+simple que TLS (Paso 1): la conexión es **propia** (no muta un handle TCP) y el I/O es local y rápido → se
+opera reteniendo el lock global del registro (como la VM), sin el `Arc<Mutex>` por-conexión de TLS.
+Resultados **deterministas** → oráculo por **byte-identidad** VM↔nativo (a diferencia de TLS, red no
+determinista).
+
+- `crates/ray-runtime/src/sqlite.rs` (feature `sqlite`, rusqlite 0.32 bundled): `Conn` + `open`/`exec`/
+  `query` (celdas a texto: INTEGER/REAL decimal, NULL `""`, BLOB hex; ncols + celdas aplanadas fila a
+  fila), espejando el host de la VM. Sin la feature, stubs.
+- El transpilador intercepta `__sqlite_open`/`__sqlite_exec`/`__sqlite_query` → helpers `__ray_sqlite_*` y
+  activa `needs_rt_sqlite`. El `__RayHandle` inline gana una variante `Sqlite` condicional; exec/query
+  colectan los params `[string]` a `Vec<String>`. El registro se emite también con `needs_rt_sqlite`
+  (sqlite no implica net). `build_native` incrusta `sqlite.rs`.
+
+**Bug preexistente cazado y arreglado** (bloqueaba sqlite y cualquier `var x = match {…}` con struct):
+`type_of(match)` tomaba el tipo del PRIMER brazo que resolviera, pero un brazo **divergente** (`Err(e) => {
+…; return }`) resuelve a `Unit` y ganaba, mientras el brazo real (`Ok(conn) => conn`) fallaba porque el
+binding `conn` no está en ámbito para `type_of` → el `var c` se declaraba `Unit`, no se clonaba al leer
+(no-heap) → **move error** en rustc al pasar `c` a `exec`/`query` varias veces. Ahora `arm_type` salta los
+brazos divergentes (`expr_diverges`) y resuelve el tipo de un binding del patrón desde el tipo del
+escrutinio + el patrón (`pattern_binding_types`, reusa la sustitución de payload de `emit_pattern`).
+
+**Verificado**: el demo real `examples/db/sqlite_demo.ray` (`:memory:`, determinista) transpila a **NATIVO**
+y da salida **byte-idéntica** a la VM (test `build_native_sqlite_via_ray_runtime`). 605 tests lib + 25
+`build_native` (serial) verdes; slim sin regresión (`ray-runtime/sqlite` solo vive en el proyecto generado).
+**El techo de los crates está quitado**: crypto (ring) + TLS (rustls) + DB (rusqlite) transpilan a nativo,
+bajo demanda, con paridad por construcción. Siguiente posible: `ring`-extra (crypto avanzada) donde los
+ejemplos lo pidan, o retomar otros frentes.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

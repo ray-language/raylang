@@ -430,16 +430,21 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
   determinista): cliente nativo ↔ servidor VM y servidor nativo ↔ cliente VM (`eco: hola tls`, con
   los fixtures `tests/fixtures/tls_*.pem`). Diferido: los web-demos completos (`webserver`/`https`)
   siguen topando además con el `Rc<dyn Fn>` no-`Send` en spawn (Paso previo, modelo de concurrencia).
-- **Paso 2 — `rusqlite` (feature `sqlite`)**: superficie pequeña, resultados deterministas →
-  oráculo directo con `examples/db/sqlite_demo.ray`.
-- **Paso 3 — `ring` (feature `crypto`)**: sha/hmac/ed25519/chacha de producción (M43), donde los
-  ejemplos lo pidan. (Nota: `ring` ya entra en el árbol con `tls`; este paso solo expone los
-  builtins de crypto.)
+- **Paso 2 — `rusqlite` (feature `sqlite`)**. **HECHO** (Fase 53 — commit `2dccb8a`). SQLite embebido
+  (bundled) en el binario transpilado; conexión propia (no muta un handle TCP) → I/O local reteniendo
+  el lock global (sin `Arc<Mutex>` por-conexión). Determinista → **oráculo por byte-identidad**: el demo
+  real `examples/db/sqlite_demo.ray` (`:memory:`) transpila a nativo idéntico a la VM. De paso arregló un
+  **bug preexistente de `type_of(match)`** (un brazo divergente hacía que un `var x = match {…}` con
+  struct no se clonara al leer → move error): `arm_type`/`pattern_binding_types` saltan brazos
+  divergentes y resuelven el tipo del binding desde el escrutinio.
+- **Paso 3 — `ring`-extra (feature `crypto`)**: la crypto ya transpila (Paso 0). Este paso solo
+  aplicaría si aparecen builtins de crypto avanzada aún no cubiertos; hoy no hay pendientes.
 - **Después (opcional)**: `--without <dep>` como flag de CLI (§3.3.3) — trivial una vez existe
   el mecanismo.
 
-**Estado (15 jul 2026)**: **Paso previo**, **Paso 0** (crypto) y **Paso 1** (`rustls` TLS, cliente +
-servidor) **HECHOS**. Siguiente: **Paso 2 — `rusqlite`** (DB embebida; superficie pequeña, resultados
-deterministas → oráculo directo con `examples/db/sqlite_demo.ray`). Luego `ring`-extra si los ejemplos
-lo piden. El split del registro de handles ya está resuelto (Paso 1) → sqlite es más simple (su handle
-no muta uno TCP; es una conexión propia).
+**Estado (15 jul 2026)**: **Paso previo**, **Paso 0** (crypto/ring), **Paso 1** (`rustls` TLS, cliente +
+servidor) y **Paso 2** (`rusqlite` DB) **HECHOS**. **El techo de los crates está quitado**: crypto + TLS +
+DB transpilan a nativo, bajo demanda, con paridad por construcción (mismo código que la VM). El diseño
+`ray-runtime` escala fila-a-fila para cualquier crate futuro. No quedan pasos obligatorios; `ring`-extra
+solo si aparecen builtins de crypto avanzada no cubiertos (hoy ninguno). Opcional pendiente: `--without
+<dep>` como flag de CLI (§3.3.3), trivial sobre el mecanismo existente.

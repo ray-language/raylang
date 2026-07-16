@@ -475,8 +475,11 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > **H15** (limpieza de `.rs`/proyecto Cargo tras un build ok), **H10** (corpus automatizado:
 > `tests/native_corpus.rs`, 50 ejemplos deterministas nativo≡VM), **H11** (guardia de la tabla
 > `BUILTINS`: `NATIVE_TRACKED_BUILTINS` + test que la fuerza), **H12** (CI: cachea
-> `~/.ray/native-cache`, verifica rustc, corpus nocturno). Pendientes: **pulido** (H6 overflow/exit,
-> H7 rechazo de semántica no implementada, H9 args de tipo, H17 mensajes/jerga, H18 robustez) y
+> `~/.ray/native-cache`, verifica rustc, corpus nocturno), **H9** (infiere args de tipo en literales
+> genéricos anidados), **H17** (mensajes del transpilador/build a inglés, sin jerga `spike:`), **H18**
+> (escape de nombres FFI + float inf/NaN), **H7** (aviso de funciones stubbeadas al compilar; la
+> divergencia muda de cancelación queda documentada). **⏸️ DIFERIDO por decisión del usuario:** **H6**
+> (overflow checked + exit 70 — tradeoff paridad-vs-rendimiento; ver su ficha). Pendiente:
 > **estructural** (H16, H19, H13, H20, H21). Los ítems marcados abajo con ✅ ya están hechos.
 
 ### 6.1 P0 — Roto en el momento de la auditoría
@@ -536,7 +539,8 @@ receptor en `push`) a temporales, igual que ya se hace con el RHS. **Esfuerzo: 1
 prefijo imposible `__ray_tmp_` para todos los temporales sintéticos. **Esfuerzo: 2–4 h**
 (mecánico pero toca muchos sitios de emisión; la constante de módulo cae junto, ~30 min).
 
-**H6. Overflow y rutas de error: wrapping + exit 101 vs checked + exit 70.** La VM hace
+**H6. ⏸️ DIFERIDO (decisión del usuario, 16 jul 2026). Overflow y rutas de error: wrapping + exit 101
+vs checked + exit 70.** La VM hace
 `checked_add` → `"arithmetic overflow on int"` + **exit 70** (`vm.rs:579,632`; `cli.rs:338`);
 el nativo (rustc con `-O` en ambos tiers, `cli.rs:685-689`) **envuelve en silencio**. Div-por-cero
 e `i64::MIN / -1` panican en Rust (mensaje inglés de Rust, **exit 101**) vs error raylang +
@@ -547,8 +551,16 @@ backend. *Fix:* aritmética checked en la emisión de operadores (mensaje byte-i
 p. ej. vía un panic hook propio o salida de proceso controlada) — y **medir** el coste (checked
 resta algo del 24–61×; quizá un flag `--unchecked` para el tier release). **Esfuerzo: ~1 día**
 (mecánico en la emisión, pero hay que cuadrar mensajes byte-idénticos y benchmarkear).
+> **Diferido para analizar en el futuro** por el tradeoff paridad-vs-rendimiento (el rendimiento es el
+> objetivo nº 1 del proyecto). **Impacto actual** (evaluado 16 jul): (1) el **overflow silencioso** es el
+> único riesgo de CORRECCIÓN real — un programa que rebase `i64` (~9,2·10¹⁸: factoriales, hashing,
+> acumulados grandes) da un resultado ERRÓNEO en nativo donde la VM aborta limpio; poco común pero es un
+> footgun silencioso. (2) div-por-cero y `panic`/`assert` fallan RUIDOSAMENTE en ambos (solo difieren el
+> código —101 vs 70— y el texto), impacto menor salvo scripts que discriminen por `exit == 70`. (3) Los
+> 50 ejemplos del corpus (H10) NO rebasan → cero impacto en la cobertura actual. Cuando se retome, el
+> menú de enfoques (paridad+`--fast` / solo-exit-code / solo-panic / documentar) quedó en la conversación.
 
-**H7. Semántica no implementada que NO se rechaza en compilación.** Dos formas:
+**H7. ✅ RESUELTO (parcial: aviso de stubs). Semántica no implementada que NO se rechaza en compilación.** Dos formas:
 - **Divergencia muda**: la **cancelación de hermanas M12.5** y `try_join` no están implementadas
   en nativo (deuda declarada en §2.4), pero un programa que dependa de ellas **compila sin aviso
   y se comporta distinto** (las hermanas siguen corriendo). Peor que un stub que panica.
@@ -557,6 +569,12 @@ resta algo del 24–61×; quizá un flag `--unchecked` para el tier release). **
 *Fix:* detectar y **rechazar en compilación** (o al menos warning prominente) los usos de
 cancelación/`try_join`; imprimir SIEMPRE un resumen "N funciones degradadas a stub: …" al
 compilar. **Esfuerzo: ~0,5 día** (es detectar y reportar, no implementar).
+> **HECHO — el stub silencioso**: `build_native` ahora AVISA de cada función stubbeada (nombre + motivo)
+> al compilar (`Transpiled.stubbed`), no solo con `RAYLANG_TRANSPILE_DEBUG`. Un uso de `try_join` cae en
+> ese aviso. **QUEDA — la divergencia muda de cancelación**: la semántica automática de cancelación de
+> hermanas (M12.5) es un comportamiento del scheduler, no una llamada detectable en un punto → no se
+> rechaza estáticamente; sigue documentada como límite del backend nativo (§2.4). Un futuro análisis
+> estático (¿un `scope` con hijos que puedan fallar?) podría avisar, pero es incierto y de bajo ROI.
 
 **H8. ✅ RESUELTO (con H4). Orden de evaluación divergente en varios puntos.** `push(a, v)` evalúa `v` antes que `a`
 (`transpile.rs:2679`); la asignación indexada evalúa RHS antes que target/índice (`:1279`); el
@@ -564,7 +582,7 @@ compilar. **Esfuerzo: ~0,5 día** (es detectar y reportar, no implementar).
 (llamadas que mutan) el nativo observa otro orden. *Fix:* izar operandos a temporales en orden
 fuente (compone con H4). **Esfuerzo: incluido en H4** si se hace junto (+1 h de tests).
 
-**H9. `type_of` de literales genéricos descarta los args de tipo.** `type_of(StructLit/EnumLit)`
+**H9. ✅ RESUELTO. `type_of` de literales genéricos descarta los args de tipo.** `type_of(StructLit/EnumLit)`
 devuelve `Type::Struct(name, vec![])` (`transpile.rs:3435`, `:3448`) → con un literal genérico
 (`Par { a: 1, b: true }`), `enum_subst` recibe args vacíos y el tipo del campo queda como el
 param sin sustituir → clasificación heap/escalar errónea o degradación a stub en código genérico
@@ -628,14 +646,14 @@ ad-hoc de `get_or` son síntomas. Al menos la regla `check` de L1 debería aport
 retorno y matar el `type_of` paralelo. **Esfuerzo: 2–3 días** (refactor estructural del archivo
 más grande del repo; convierte la guardia H11 en permanente).
 
-**H17. Mensajes en español y jerga interna de cara al usuario.** Contra la convención del
+**H17. ✅ RESUELTO. Mensajes en español y jerga interna de cara al usuario.** Contra la convención del
 proyecto (diagnósticos en INGLÉS): el panic del stub `"'f' no está soportada en el binario
 nativo…"` (`transpile.rs:1048`), `"native build: no se pudo ejecutar rustc (¿está en el
 PATH?)"` (`cli.rs:701`), `"cargo falló (código N)"` (`cli.rs:779`), y los rechazos `"spike: …"`
 (~40 sitios) — jerga del spike de julio que llega al usuario final. *Fix:* traducción por lotes
 (`tools/spanglish.py` ya existe) + renombrar el prefijo `spike:`. **Esfuerzo: 2–3 h.**
 
-**H18. Robustez menor del codegen.** (a) Inyección de Rust vía el nombre de librería FFI:
+**H18. ✅ RESUELTO. Robustez menor del codegen.** (a) Inyección de Rust vía el nombre de librería FFI:
 `#[link(name = "{}")]` interpola `e.lib` sin escapar (`transpile.rs:1075`; ídem `#[link_name]`
 `:1085`) — no es frontera de seguridad (el usuario compila su propio código) pero merece
 validación o `{:?}`. (b) `ExprKind::Float` con `{:?}f64` (`:1509`) emite `inff64`/`NaNf64`

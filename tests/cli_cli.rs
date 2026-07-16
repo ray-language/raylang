@@ -229,6 +229,50 @@ fn build_native_concurrencia_csp_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_canal_rendezvous_no_se_deadlockea() {
+    // H2: un canal de capacidad 0 (`Channel.bounded(0)`, rendezvous síncrono) se DEADLOCKEABA en el
+    // binario nativo — `send` esperaba mientras `q.len() >= cap` (con cap=0, siempre) y nadie entregaba
+    // al receptor, así que ambos hilos dormían para siempre, donde la VM entrega directo (M12.2). Ahora el
+    // runtime de canales embebido hace el handshake síncrono. Oráculo: nativo ≡ VM, con watchdog implícito
+    // (si volviera el deadlock, el binario colgaría y `output()` no retornaría → el test se colgaría, que es
+    // señal clara en CI). Salida `10\n20\n30\n` y exit = total (60), como la VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native rendezvous: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_rendezvous");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           let ch: Channel<int> = Channel.bounded(0);\n\
+           spawn(fn() { send(ch, 10); send(ch, 20); send(ch, 30); close(ch); });\n\
+           var total = 0; var follow = true;\n\
+           while (follow) {\n\
+             match (recv(ch)) {\n\
+               Option.Some(v) => { print(v); total = total + v; },\n\
+               Option.None => { follow = false; },\n\
+             }\n\
+           }\n\
+           total\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("rdv_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native rendezvous ok\n{err}");
+    let expected = "10\n20\n30\n";
+    let (vm_out, _e, vm_code) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da el rendezvous");
+    assert_eq!(vm_code, 60, "VM exit = total");
+    // 5 veces: determinista pese a los hilos reales (el rendezvous serializa). Si hubiera deadlock, colgaría.
+    for _ in 0..5 {
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "rendezvous nativo ≡ VM");
+        assert_eq!(native.status.code(), Some(60), "exit nativo = total");
+    }
+}
+
+#[test]
 fn build_native_spawn_de_funcion_nombrada_coincide_con_la_vm() {
     // `spawn(worker)` con `worker` una función de nivel superior (no un literal `fn(){}`) → el binario
     // nativo la corre en un hilo real y `join` recoge su resultado, byte-idéntico a la VM. (Fleco no-crate

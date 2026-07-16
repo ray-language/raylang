@@ -882,6 +882,17 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
             "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap }), std::sync::Condvar::new())) } }\n",
             "    fn send(&self, v: T) {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            // Rendezvous (cap 0): la VM entrega el valor DIRECTAMENTE a un receptor y el emisor no continúa
+            // hasta que se consume (M12.2). Aquí se modela con un único valor en vuelo: el emisor espera cola
+            // vacía, empuja, y ESPERA a que el receptor lo saque (cola vacía otra vez) → mismo orden síncrono
+            // que la VM, sin el `q.len() >= 0` que bloqueaba para siempre. Serializa emisores concurrentes.
+            "        if st.cap == Some(0) {\n",
+            "            while !st.closed && !st.q.is_empty() { st = cv.wait(st).unwrap(); }\n",
+            "            if st.closed { return; }\n",
+            "            st.q.push_back(v); cv.notify_all();\n",
+            "            while !st.closed && !st.q.is_empty() { st = cv.wait(st).unwrap(); }\n",
+            "            return;\n",
+            "        }\n",
             "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = cv.wait(st).unwrap(); }\n",
             "        if st.closed { return; }\n",
             "        st.q.push_back(v); cv.notify_all();\n",

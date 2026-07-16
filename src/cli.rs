@@ -85,7 +85,7 @@ Usage: ray <subcommand> [options]
   new <name>      create a new project (ray.toml + src/main.ray)
   run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release]]
+  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--without crypto,tls,sqlite]]
   test [file]    run the @test functions [filter]
   add <name>[@req]  add a dependency from the index to ray.toml and download it
   remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
@@ -378,16 +378,36 @@ fn cmd_build(args: &[String]) {
     let native = args.iter().any(|a| a == "--native");
     let release = args.iter().any(|a| a == "--release");
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
+    // `--without <lista>` (P2.b): excluye subsistemas con-crate (crypto/tls/sqlite) del binario nativo. Su
+    // uso cae en un stub que panica → el binario compila por la vía rápida (rustc pelado, sin cargo/red) si
+    // no queda ningún otro subsistema con-crate. Escape hatch para builds herméticos/cross-compile/policy.
+    let without_arg = args.iter().position(|a| a == "--without").and_then(|i| args.get(i + 1)).cloned();
+    let exclude: Vec<String> = without_arg
+        .as_deref()
+        .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect())
+        .unwrap_or_default();
+    // Valida los nombres antes de nada (fail-fast ante un typo, como `ray add`).
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite"];
+    for dep in &exclude {
+        if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
+            eprintln!("unknown subsystem in --without: '{dep}' (valid: {})", RT_SUBSYSTEMS.join(", "));
+            process::exit(64);
+        }
+    }
     let file = args
         .iter()
-        .find(|a| !a.starts_with('-') && Some(a.as_str()) != output.as_deref())
+        .find(|a| {
+            !a.starts_with('-')
+                && Some(a.as_str()) != output.as_deref()
+                && Some(a.as_str()) != without_arg.as_deref()
+        })
         .map(String::as_str);
     let path = resolve_entry(file, true);
     regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
-        build_native(&path, output.as_deref(), release);
+        build_native(&path, output.as_deref(), release, &exclude);
         return;
     }
     match compiler::compile_program(&program) {
@@ -413,10 +433,10 @@ fn cmd_build(args: &[String]) {
 ///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
-fn build_native(path: &str, output: Option<&str>, release: bool) {
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String]) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile(&program) {
+    let transpiled = match crate::transpile::transpile_with(&program, exclude) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");

@@ -377,6 +377,9 @@ struct Transpiler {
     /// conexión (`ray_runtime::sqlite::Conn`) en el registro de handles inline (variante `Sqlite`). I/O
     /// local → se retiene el lock global (como la VM). Activa la feature `sqlite` de `ray-runtime`.
     needs_rt_sqlite: bool,
+    /// Subsistemas con-crate EXCLUIDOS por `--without` (crypto/tls/sqlite): sus builtins no se interceptan
+    /// (caen en stub que panica) → el binario puede usar la vía rápida `rustc`. Ver `transpile_with`.
+    exclude: std::collections::HashSet<String>,
     /// Nombres de `var` locales que van en una **celda** `Rc<RefCell<T>>` (B1): capturadas y mutadas por
     /// una closure. Se leen con `.borrow().clone()` y se escriben con `.borrow_mut()`; la closure captura
     /// un clon del `Rc`. Se pueblan al entrar en cada función/closure (con su `cell_vars`) y se quitan al
@@ -394,7 +397,16 @@ pub struct Transpiled {
     pub rt_features: Vec<&'static str>,
 }
 
+/// Transpila sin excluir ningún subsistema (el caso común; lo usan `ray emit-rust` y los tests).
 pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
+    transpile_with(prog, &[])
+}
+
+/// Transpila EXCLUYENDO los subsistemas con-crate dados (`--without crypto,tls,sqlite`): un uso de un
+/// subsistema excluido NO se intercepta a `ray_runtime::*` → su función cae en un stub que panica, y el
+/// binario compila por la vía rápida (`rustc` pelada) si no queda otro subsistema con-crate. Escape hatch
+/// para builds herméticos/cross-compile/policy (docs/transpilador-nativo.md §3.3).
+pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
@@ -461,6 +473,7 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
         needs_rt_crypto: false,
         needs_rt_tls: false,
         needs_rt_sqlite: false,
+        exclude: exclude.iter().cloned().collect(),
         cells: std::collections::HashSet::new(),
     };
 
@@ -3029,13 +3042,13 @@ impl Transpiler {
             // por `__` (no interceptar un método de usuario homónimo). El arg `bytes` es `Rc<[u8]>`; `&expr`
             // deref-coerce a `&[u8]`. Retorno `Vec<u8>` → `Rc<[u8]>`; `Option<Vec<u8>>` → `[bytes]` etiquetado
             // (`Rc<RefCell<Vec<Rc<[u8]>>>>`: vacío/único), que el prelude envuelve en `Option`.
-            "sha256" | "sha512" | "sha1" if name.starts_with("__") => {
+            "sha256" | "sha512" | "sha1" if name.starts_with("__") && !self.exclude.contains("crypto") => {
                 self.needs_rt_crypto = true;
                 write!(out, "Rc::<[u8]>::from(ray_runtime::crypto::{}(&", method).unwrap();
                 self.emit_expr(out, eff[0])?;
                 out.push_str("))");
             }
-            "hmac_sha256" if name.starts_with("__") => {
+            "hmac_sha256" if name.starts_with("__") && !self.exclude.contains("crypto") => {
                 self.needs_rt_crypto = true;
                 out.push_str("Rc::<[u8]>::from(ray_runtime::crypto::hmac_sha256(&");
                 self.emit_expr(out, eff[0])?;
@@ -3043,13 +3056,13 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str("))");
             }
-            "crypto_random_bytes" if name.starts_with("__") => {
+            "crypto_random_bytes" if name.starts_with("__") && !self.exclude.contains("crypto") => {
                 self.needs_rt_crypto = true;
                 out.push_str("Rc::<[u8]>::from(ray_runtime::crypto::crypto_random_bytes(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("))");
             }
-            "ed25519_verify" if name.starts_with("__") => {
+            "ed25519_verify" if name.starts_with("__") && !self.exclude.contains("crypto") => {
                 self.needs_rt_crypto = true;
                 out.push_str("ray_runtime::crypto::ed25519_verify(&");
                 self.emit_expr(out, eff[0])?;
@@ -3060,7 +3073,7 @@ impl Transpiler {
                 out.push(')');
             }
             "ed25519_public_key" | "ed25519_sign" | "chacha20poly1305_seal" | "chacha20poly1305_open"
-                if name.starts_with("__") =>
+                if name.starts_with("__") && !self.exclude.contains("crypto") =>
             {
                 self.needs_rt_crypto = true;
                 let argc = match method {
@@ -3082,7 +3095,7 @@ impl Transpiler {
             // vía ray_runtime::tls) y activan `needs_rt_tls`. Devuelven arreglos ETIQUETADOS (`["ok",h]`/
             // `["err",msg]`) que los wrappers de std/net.ray parsean; se emiten tal cual (sin envolver). El
             // arg string es `Rc<str>`; `&expr` deref-coerce a `&str`. `method` ya viene sin el prefijo `__`.
-            "tls_connect" | "tls_connect_h2" if name.starts_with("__") => {
+            "tls_connect" | "tls_connect_h2" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
                 write!(out, "__ray_{}(&", method).unwrap();
                 self.emit_expr(out, eff[0])?;
@@ -3090,7 +3103,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
-            "tls_accept" if name.starts_with("__") => {
+            "tls_accept" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
                 out.push_str("__ray_tls_accept(");
                 self.emit_expr(out, eff[0])?;
@@ -3100,7 +3113,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
-            "tls_upgrade" if name.starts_with("__") => {
+            "tls_upgrade" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
                 out.push_str("__ray_tls_upgrade(");
                 self.emit_expr(out, eff[0])?;
@@ -3112,13 +3125,13 @@ impl Transpiler {
             // `needs_rt_sqlite`. Devuelven arreglos etiquetados que los wrappers de db/sqlite.ray parsean.
             // open(path): string→&str. exec/query(h, sql, params): h int, sql `&str`, params `[string]` →
             // se pasa por referencia (`&Rc<RefCell<Vec<Rc<str>>>>`) y el helper lo colecta a Vec<String>.
-            "sqlite_open" if name.starts_with("__") => {
+            "sqlite_open" if name.starts_with("__") && !self.exclude.contains("sqlite") => {
                 self.needs_rt_sqlite = true;
                 out.push_str("__ray_sqlite_open(&");
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            "sqlite_exec" | "sqlite_query" if name.starts_with("__") => {
+            "sqlite_exec" | "sqlite_query" if name.starts_with("__") && !self.exclude.contains("sqlite") => {
                 self.needs_rt_sqlite = true;
                 write!(out, "__ray_{}(", method).unwrap();
                 self.emit_expr(out, eff[0])?;

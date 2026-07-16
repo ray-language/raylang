@@ -480,6 +480,48 @@ fn build_native_sqlite_via_ray_runtime_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_without_crypto_fuerza_la_via_rapida_y_stubbea() {
+    // `--without crypto` (escape hatch): aunque el programa use cripto, NO se enlaza ray-runtime → el
+    // binario compila por la vía rápida `rustc` (sin cargo/red; el éxito no menciona ray-runtime) y su uso
+    // de cripto cae en un stub que panica en runtime. Para builds herméticos/cross-compile/policy.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native --without: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_without");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/crypto;\n\
+         fn main() -> int { print(to_string(crypto.sha256(\"x\".to_bytes()))); 0 }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--without", "crypto", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --without crypto ok\n{err}");
+    assert!(!out.contains("ray-runtime"), "vía rápida rustc, sin ray-runtime: {out}");
+    // El binario compila pero panica al alcanzar la cripto stubbeada (código de salida != 0).
+    let run = Command::new(&bin).output().expect("corre el binario stubbeado");
+    assert!(!run.status.success(), "el binario panica al alcanzar la cripto excluida");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("no está soportada"),
+        "el stub panica con un mensaje claro: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn build_native_without_rechaza_un_subsistema_desconocido() {
+    // Fail-fast ante un typo en `--without` (como `ray add` valida el nombre del paquete).
+    let base = tmp("build_native_without_bad");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { 0 }\n").unwrap();
+    let (_out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--without", "foo", "-o", "x"]);
+    assert_eq!(code, 64, "nombre inválido → exit 64\n{err}");
+    assert!(err.contains("unknown subsystem in --without"), "mensaje claro: {err}");
+}
+
+#[test]
 fn build_native_sin_crate_externo_usa_la_via_rapida_rustc() {
     // El otro lado de la bifurcación: un programa SIN subsistemas-con-crate compila por `rustc` pelado
     // (camino rápido, sin Cargo) → el mensaje de éxito NO menciona ray-runtime. Cero regresión de

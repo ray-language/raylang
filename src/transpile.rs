@@ -167,6 +167,55 @@ fn is_handled_builtin(name: &str) -> bool {
     )
 }
 
+/// **Guardia de la triple implementación (H11).** Cada builtin vive en 4 sitios (checker, VM,
+/// intérprete, y ESTE backend nativo). Sin esta lista, un builtin nuevo añadido a los otros tres caía
+/// en nativo en `emit_stub`/`Err("… no soportada")` **sin que ningún test lo detectara**. El test
+/// `todos_los_builtins_estan_clasificados_para_nativo` exige que `builtins::names()` == esta lista: al
+/// añadir un builtin a la tabla `BUILTINS`, el test FALLA hasta que se decide conscientemente su soporte
+/// nativo (implementarlo en `emit_call`/`type_of`, o marcarlo stubbeado en `NATIVE_STUBBED_BUILTINS`).
+/// No es la *implementación* (eso son las ramas de `emit_call`), sino el **checklist** que la obliga.
+#[cfg(test)]
+const NATIVE_TRACKED_BUILTINS: &[&str] = &[
+    // Primitivos de string/bytes/map/arreglo (interceptados en emit_call por su nombre pelado).
+    "__chars", "__contains", "__contains_key", "__ends_with", "__from_utf8", "__get_or", "__index_of",
+    "__insert", "__keys", "__len", "__map_get", "__map_remove", "__pop", "__position", "__push",
+    "__repeat", "__replace", "__reverse", "__split", "__starts_with", "__sub_bytes", "__substring",
+    "__to_bytes", "__to_lower", "__to_upper", "__trim", "__values", "__char_from_code",
+    // Math (interceptados vía `std::math::*` en el sitio del wrapper).
+    "__acos", "__asin", "__atan", "__atan2", "__ceil", "__cos", "__exp", "__floor", "__float_bits",
+    "__float_from_bits", "__ln", "__log10", "__log2", "__pow", "__round", "__sin", "__sqrt", "__tan",
+    "__trunc",
+    // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
+    "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
+    "__is_dir", "__is_file", "__list_dir", "__mkdir", "__open", "__parse_float", "__parse_int",
+    "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__remove_dir",
+    "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
+    // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
+    "__monotonic", "__now", "__random", "__random_int", "__random_seed", "__sleep",
+    // Sockets TCP/UDP (interceptados vía `std::net::*`).
+    "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_read_timeout",
+    "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_listen",
+    "__udp_bind", "__udp_recv_from", "__udp_send_to",
+    // Cripto/TLS/SQLite (interceptados → `ray_runtime::*`, features bajo demanda).
+    "__chacha20poly1305_open", "__chacha20poly1305_seal", "__crypto_random_bytes",
+    "__ed25519_public_key", "__ed25519_sign", "__ed25519_verify", "__hmac_sha256", "__sha1",
+    "__sha256", "__sha512", "__sqlite_exec", "__sqlite_open", "__sqlite_query", "__tls_accept",
+    "__tls_connect", "__tls_connect_h2", "__tls_upgrade",
+    // Concurrencia + canales + varios públicos (ramas de emit_call). Las funciones ASOCIADAS `Map.new`/
+    // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
+    "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
+    "panic", "print", "scope", "select", "send", "signals", "spawn", "to_string",
+    // STUBBED (ver NATIVE_STUBBED_BUILTINS): reconocido pero SIN soporte nativo → stub/error.
+    "__task_failed",
+];
+
+/// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que
+/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). `__task_failed` (el
+/// primitivo tras la unión estructurada `try_join`/cancelación M12.5) aún no está portado a hilos reales
+/// (deuda declarada, §2.4). Si se implementa, quitarlo de aquí (no de la lista de arriba).
+#[cfg(test)]
+const NATIVE_STUBBED_BUILTINS: &[&str] = &["__task_failed"];
+
 /// ¿Se salta la DEFINICIÓN de esta función al registrarla/emitirla? Sí para las sintéticas (`__`),
 /// los impls del prelude (`int#eq`…) y los builtins manejados. Matiz del override: un builtin con `::`
 /// (`std::fs::*`) envuelve un primitivo → siempre se salta; un builtin del prelude de nombre pelado
@@ -4088,6 +4137,36 @@ mod tests {
         let mut prog = crate::parser::parse(tokens).expect("parse");
         crate::checker::check(&mut prog).expect("check");
         transpile(&prog).expect("transpile").source
+    }
+
+    /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar
+    /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
+    /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.
+    #[test]
+    fn todos_los_builtins_estan_clasificados_para_nativo() {
+        use std::collections::BTreeSet;
+        let tabla: BTreeSet<&str> = crate::builtins::names().collect();
+        let clasificados: BTreeSet<&str> = super::NATIVE_TRACKED_BUILTINS.iter().copied().collect();
+
+        // (1) Todo builtin de la tabla está clasificado. Si esto falla: añadiste un builtin — impleméntalo
+        //     en `emit_call`/`type_of` (o, si el backend nativo no lo soportará, márcalo stubbeado) y
+        //     añade su nombre a `NATIVE_TRACKED_BUILTINS` en src/transpile.rs.
+        let sin_clasificar: Vec<&str> = tabla.difference(&clasificados).copied().collect();
+        assert!(
+            sin_clasificar.is_empty(),
+            "builtins de BUILTINS sin clasificar para el backend nativo: {sin_clasificar:?}\n\
+             → decidí su soporte nativo y añádelos a NATIVE_TRACKED_BUILTINS (marca stubbeados los que no soporte)."
+        );
+        // (2) Sin entradas obsoletas (un builtin que se quitó de la tabla pero quedó en la lista).
+        let obsoletos: Vec<&str> = clasificados.difference(&tabla).copied().collect();
+        assert!(
+            obsoletos.is_empty(),
+            "entradas obsoletas en NATIVE_TRACKED_BUILTINS (ya no están en BUILTINS): {obsoletos:?}"
+        );
+        // (3) Los stubbeados son un subconjunto de los clasificados (coherencia interna).
+        for s in super::NATIVE_STUBBED_BUILTINS {
+            assert!(clasificados.contains(s), "'{s}' está en STUBBED pero no en TRACKED");
+        }
     }
 
     #[test]

@@ -420,10 +420,16 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
     slice**: `std/crypto` (sha/hmac/ed25519/chacha) transpila a nativo por primera vez,
     byte-idéntico a la VM. Tests `build_native_crypto_de_produccion_via_ray_runtime` +
     `build_native_sin_crate_externo_usa_la_via_rapida`.
-- **Paso 1 — `rustls` (feature `tls`)**: el crate de mayor valor — desbloquea `https`,
-  `webserver`, `https_server` y los clientes que cuelgan de TLS (postgres/mysql/redis-TLS).
-  Interceptar los `__tls_*` en `emit_call` → `ray_runtime::tls::*`, activar `needs_rt_tls`.
-  Verificación: los web-demos hoy limitados por el techo TLS.
+- **Paso 1 — `rustls` (feature `tls`)**. **HECHO** (Fase 52 — commit `2759650`). TLS cliente +
+  servidor en el binario transpilado. Estrenó el **split del registro de handles** del Paso 0:
+  el binario nativo usa hilos reales → I/O TLS **bloqueante** (`ray_runtime::tls::TlsStream` sobre
+  `rustls::StreamOwned`, mucho más simple que el pump no-bloqueante de la VM); el `__RayHandle`
+  inline gana una variante `Tls` tras un `Arc<Mutex<TlsStream>>` propio (lock por-conexión → no
+  serializa/deadlockea conexiones concurrentes). Intercepta `__tls_connect`/`_h2`/`accept`/`upgrade`;
+  `socket_read_bytes`/`socket_write` despachan a TLS como la VM. Verificado (conductual, red no
+  determinista): cliente nativo ↔ servidor VM y servidor nativo ↔ cliente VM (`eco: hola tls`, con
+  los fixtures `tests/fixtures/tls_*.pem`). Diferido: los web-demos completos (`webserver`/`https`)
+  siguen topando además con el `Rc<dyn Fn>` no-`Send` en spawn (Paso previo, modelo de concurrencia).
 - **Paso 2 — `rusqlite` (feature `sqlite`)**: superficie pequeña, resultados deterministas →
   oráculo directo con `examples/db/sqlite_demo.ray`.
 - **Paso 3 — `ring` (feature `crypto`)**: sha/hmac/ed25519/chacha de producción (M43), donde los
@@ -432,6 +438,8 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
 - **Después (opcional)**: `--without <dep>` como flag de CLI (§3.3.3) — trivial una vez existe
   el mecanismo.
 
-**Estado (15 jul 2026)**: **Paso previo** (flecos no-crate) y **Paso 0** (extracción de crypto +
-fontanería de `build_native` + cripto nativa end-to-end) **HECHOS**. Siguiente: **Paso 1 — `rustls`**
-(el de mayor valor; estrena el split del registro de handles TLS). Luego `rusqlite`, `ring`-extra.
+**Estado (15 jul 2026)**: **Paso previo**, **Paso 0** (crypto) y **Paso 1** (`rustls` TLS, cliente +
+servidor) **HECHOS**. Siguiente: **Paso 2 — `rusqlite`** (DB embebida; superficie pequeña, resultados
+deterministas → oráculo directo con `examples/db/sqlite_demo.ray`). Luego `ring`-extra si los ejemplos
+lo piden. El split del registro de handles ya está resuelto (Paso 1) → sqlite es más simple (su handle
+no muta uno TCP; es una conexión propia).

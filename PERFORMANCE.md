@@ -527,6 +527,36 @@ intacto. 605 tests lib + 22 `build_native` (serial) verdes; tests nuevos
 **Siguiente**: Paso 1 = `rustls` (TLS, el de mayor valor — desbloquea https/webserver + clientes de DB),
 que estrena el split del registro de handles. Luego rusqlite, ring-extra.
 
+#### Fase 52 — TLS nativo vía `ray-runtime` (Paso 1 — rustls, 15 jul)
+
+Paso 1 del crate `ray-runtime`: **TLS de producción** en el binario transpilado (el subsistema de mayor
+valor — desbloquea https/webserver + clientes de DB sobre TLS). Estrena el **split del registro de
+handles** que el Paso 0 identificó (TLS comparte el `enum OpenHandle` con archivos/TCP/UDP).
+
+**Decisión de diseño clave**: el binario transpilado usa **hilos de SO reales**, así que hace I/O TLS
+**BLOQUEANTE** (`ray_runtime::tls::TlsStream` sobre `rustls::StreamOwned`) — mucho más simple que el pump
+no-bloqueante + fibras de la VM (que necesita ceder el hilo del scheduler). El registro de handles inline
+gana una variante `Tls` tras un **`Arc<Mutex<TlsStream>>` propio**: así el I/O TLS bloqueante NO retiene el
+lock global del registro → varias conexiones concurrentes (cada una en su hilo) no se serializan ni
+deadlockean (el hazard que el modelo bloqueante+lock-global habría causado).
+
+- `crates/ray-runtime/src/tls.rs` (feature `tls`): `TlsStream` (enum cliente/servidor, porque
+  `StreamOwned` exige el tipo de sesión CONCRETO — el enum unificado `rustls::Connection` no cumple los
+  bounds) + `connect`/`connect_h2`/`upgrade`/`accept`. Espeja la config de la VM (raíces Mozilla +
+  `SSL_CERT_FILE`). Sin la feature, stubs.
+- El transpilador intercepta `__tls_connect`/`__tls_connect_h2`/`__tls_accept`/`__tls_upgrade` → helpers
+  `__ray_tls_*` y activa `needs_rt_tls` (implica `needs_net`). Emite CONDICIONALMENTE la variante `Tls`
+  del `__RayHandle` y el despacho TLS en `socket_read_bytes`/`socket_write` (**como la VM: solo las
+  variantes `_bytes` desvían a TLS**; accept/upgrade parten de un handle TCP, sacan su `TcpStream` del
+  registro y reinsertan la conexión TLS con el MISMO handle). `build_native` incrusta `tls.rs`.
+
+**Verificado** (oráculo conductual — TLS es I/O de red no determinista, como los tests TCP): cliente TLS
+**NATIVO** ↔ servidor TLS del VM = `eco: hola tls`; servidor TLS **NATIVO** ↔ cliente VM = ídem (tests
+`build_native_tls_cliente_contra_servidor_vm` + `build_native_tls_servidor_contra_cliente_vm`, con los
+fixtures `tests/fixtures/tls_*.pem`). 605 tests lib + 24 `build_native` verdes; slim + wasm sin regresión
+(la VM compila rustls directo; `ray-runtime/tls` solo vive en el proyecto generado del binario transpilado).
+**Siguiente**: Paso 2 = `rusqlite` (DB embebida, superficie pequeña, determinista → oráculo directo).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

@@ -1127,6 +1127,11 @@ percibido es el de una compilación (ms). Tu `tcp_listen`/`serve` no cambia: ado
 de forma transparente cuando el `host:port` coincide. (El estado en memoria del programa **se resetea**
 por reload; si quieres estado persistente entre reloads, guárdalo en un `sqlite.connect("dev.db")`.)
 
+Y **live-reload del navegador**: en una sesión con `--port`, `ray dev` levanta un canal SSE lateral e
+**inyecta** en tus respuestas HTML (del paquete `webserver`) un `<script>` que **refresca la página**
+sola cuando un cambio compila y reinicia. No tocas nada; en producción no se inyecta. (Es un canal
+solo-de-dev, distinto del SSE de tu aplicación: tu `sse_open`/`sse_event` sigue en tu puerto, intacto.)
+
 Pruebas con `@test` (una función `() -> bool` o `() -> unit` que usa `assert`); cada test corre
 **aislado** (un panic no tumba la batería):
 

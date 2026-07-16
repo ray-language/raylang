@@ -1302,7 +1302,7 @@ socket de escucha. Tres caminos analizados:
 | **A+. Endurecer el watch+restart** | — | **baja** | ✅ **M92.2** (check-before-restart + debounce): (1) ✅ **chequear ANTES de reiniciar** — `ray build <entry>` primero (ms), solo reiniciar en verde; en rojo imprimir el diagnóstico y dejar el programa viejo corriendo (ya no mata un servidor que funciona por un cambio roto). (2) ✅ **debounce** ~120 ms (coalesce guardado+formateador). (3) 💤 drenado graceful en Windows (hoy kill duro; unix-only por diseño, como todo el manejo de señales del proyecto). (4) 💤 latencia vía `kqueue EVFILT_VNODE` — Linux pediría inotify → el polling de ~200 ms se conserva (portable, cero deps) |
 | **D. Herencia de fd** (socket-activation estilo systemd) | el listener | **media** | ✅ **M92.3**: el SUPERVISOR pre-abre y RETIENE el socket (`--port N`/`--listen host:port`/`[dev] listen` en ray.toml) y lo pasa a cada hijo (`pre_exec` dup2 al fd 3 + `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR`); `tcp_listen` (builtins) ADOPTA con `from_raw_fd` si el env matchea (una vez, guardado por `AtomicBool`) → el mismo programa corre idéntico en dev y prod. Durante el reinicio el socket nunca se cierra: el kernel encola en el backlog → **cero conexiones rechazadas, cero re-bind**, conservando el aislamiento por proceso (SIGTERM+drenado como antes). Gotcha cazado: si el fd del listener ya era 3 (primer libre tras stdio), `dup2(3,3)` es no-op que NO limpia CLOEXEC → fix con `fcntl(F_SETFD,0)` explícito. Unix; no-unix cae al re-bind por reinicio. Test rigoroso: si el 2.º hijo no re-adoptara, su bind chocaría (EADDRINUSE) con el socket retenido |
 | **E. `SO_REUSEPORT`** (blue/green local) | el puerto (solape de procesos) | media | descartada para dev: `std` no lo expone (setsockopt por FFI, factible), semántica de reparto difiere macOS/Linux, y durante el solape DOS versiones sirven a la vez (confuso en dev). Es la herramienta de *deploy* sin downtime, no de dev; D es más simple y suficiente |
-| **F. Live-reload del navegador (SSE)** | — (UX) | baja-media | bonus tras D: el webserver ya habla SSE (`sse_open`/`sse_event`). Preferible desde el SUPERVISOR (endpoint SSE en puerto lateral + snippet inyectado en dev) — funciona con cualquier programa, no solo el paquete webserver |
+| **F. Live-reload del navegador (SSE)** | — (UX) | baja-media | ✅ **M92.4**: hub SSE en el SUPERVISOR (puerto lateral, solo en sesión web con `--port`), un servidor SSE mínimo en Rust que emite `data: reload` a los navegadores en cada reinicio VÁLIDO (compone con check-before-restart). Vive en el supervisor porque es lo único vivo entre reinicios. El webserver, viendo `RAY_DEV_RELOAD`, inyecta el `<script>EventSource(...).onmessage=location.reload()</script>` antes de `</body>` en las respuestas text/html (Content-Length recalculado; no-op en producción). NO reemplaza el SSE del paquete (ese es de la app; este es solo-dev, lateral). Diferido: inyección para CUALQUIER programa (necesitaría un proxy, en tensión con la herencia de fd de D) — hoy solo el paquete webserver |
 | **G. Estado del invitado entre reloads** | estado app | — | NO construir maquinaria (es exactamente el coste/beneficio descartado en B): **documentar el patrón** "estado de dev en SQLite de archivo" en el MANUAL — un `sqlite.connect("dev.db")` sobrevive reloads de forma natural |
 
 **Contexto del ecosistema**: Go (air), Node (nodemon), Rails = watch+restart → M92.1 ya es el
@@ -1312,9 +1312,9 @@ listener retenido, se percibe como hot reload*.
 
 Fases (revisadas 16 jul): **92.1** ✅ watcher+restart+drenado · **92.2** ✅ A+ (check-before-restart +
 debounce; Windows-graceful aparcado) · **92.3** ✅ D (herencia de fd: `--port`/`--listen`/`[dev] listen`)
-+ ✅ G (patrón de estado sqlite-de-archivo, documentado en el MANUAL) · **92.4** F (live-reload SSE desde
-el supervisor, pendiente) · B y C aparcados (C revive solo si la VM gana cancelación preemptiva/teardown
-fiable).
++ ✅ G (patrón de estado sqlite-de-archivo, documentado en el MANUAL) · **92.4** ✅ F (live-reload SSE
+desde el supervisor). **ARCO M92 COMPLETO** (A+ + D + F + G; B y C aparcados con criterio — C revive solo
+si la VM gana cancelación preemptiva/teardown fiable).
 
 ## Cómo usar este archivo
 

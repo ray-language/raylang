@@ -2671,8 +2671,18 @@ impl Transpiler {
         // cuya def SÍ se emite (las de prelude se saltan) → su llamada debe ir a esa def, nunca a un builtin.
         // También gana un `let f = fn(){…}` local que sombree el nombre (closure en ámbito). Un nombre con
         // `::`/`#` lo sintetizó el checker (módulo/método) → nunca colisiona con un builtin de nombre pelado.
+        // OJO: la regla del override solo vale para funciones del PRELUDE (sort/map/get_or…, escritas en
+        // raylang). Un builtin REAL de la tabla `BUILTINS` (print/to_string/`__*`…) NO se tapa: el checker
+        // lo RECHAZA en la definición ("is a language builtin and cannot be redefined"), así que
+        // `self.funcs` nunca debería traer uno — la guarda `lookup(name).is_none()` es defensiva, por si
+        // la tabla crece o esa regla cambia: mantiene al nativo alineado con el compilador de la VM (que
+        // emite el opcode del builtin antes de mirar `indices`). Una VARIABLE local sí puede taparlo y
+        // gana en ambos motores (el compilador de la VM mira `name_is_variable` primero).
         let shadows_builtin = matches!(self.lookup(name), Some(Type::Fn(_, _)))
-            || (!name.contains("::") && !name.contains('#') && self.funcs.contains_key(name));
+            || (!name.contains("::")
+                && !name.contains('#')
+                && self.funcs.contains_key(name)
+                && crate::builtins::lookup(name).is_none());
         if shadows_builtin {
             out.push_str(&mangle(name));
             out.push('(');

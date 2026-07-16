@@ -1213,6 +1213,58 @@ fn build_native_override_de_prelude_gana_sobre_el_builtin() {
 }
 
 #[test]
+fn build_native_builtin_real_no_se_tapa_y_closure_local_si() {
+    // H3 (semántica completa): tres reglas que el nativo debe compartir con la VM.
+    // (1) Redefinir un builtin de la tabla `BUILTINS` (`to_string`) es error de TIPOS (el programa
+    //     nunca llega al transpilador) — no hay divergencia posible por esa vía.
+    // (2) Un CLOSURE local homónimo de un builtin de tabla sí lo tapa y gana en ambos motores
+    //     (el compilador de la VM mira `name_is_variable` antes que el builtin).
+    // (3) Un wrapper del prelude (`trim`) redefinido: el override gana en llamada prefija; el UFCS
+    //     `s.trim()` resuelve al builtin-método en ambos motores (asimetría propia de la VM, espejada).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native builtin real: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_builtin_real");
+
+    // (1) redefinir un builtin de tabla → error de tipos, mismo mensaje por ambos caminos.
+    std::fs::write(
+        base.join("redef.ray"),
+        "fn to_string(x: int) -> string { \"USER\" }\nfn main() -> int { 0 }\n",
+    )
+    .unwrap();
+    let (_o, err, code) = ray(&base, &["build", "redef.ray", "--native", "-o", "no_bin"]);
+    assert_eq!(code, 65, "redefinir un builtin de tabla es error de tipos\n{err}");
+    assert!(
+        err.contains("is a language builtin and cannot be redefined"),
+        "el mensaje del checker\n{err}"
+    );
+
+    // (2) + (3): closure local homónimo + override de prelude con UFCS. Oráculo: nativo ≡ VM.
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn trim(s: string) -> string { s + \"!\" }\n\
+         fn main() -> int {\n\
+           let to_string = fn(x: int) -> string { \"USER\" };\n\
+           print(to_string(42));      // el closure local tapa al builtin de tabla\n\
+           print(trim(\"  hola  \"));   // prefija: gana el override del usuario\n\
+           print(\"  x  \".trim());     // UFCS: resuelve al builtin-método (como la VM)\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("bi_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native builtin real sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "closure local + override + UFCS nativo ≡ VM");
+    assert_eq!(native_out, "USER\n  hola  !\nx\n", "las tres resoluciones esperadas\n{native_out}");
+}
+
+#[test]
 fn build_native_identificadores_palabra_clave_de_rust_no_rompen_rustc() {
     // H5: un identificador LEGAL de raylang puede ser palabra reservada de Rust (`type`, `loop`, `move`,
     // `mut`, `ref`, `where`) como variable, parámetro o CAMPO de struct. Antes generaba Rust inválido

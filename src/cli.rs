@@ -664,6 +664,19 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
             process::exit(65);
         }
     };
+    // AVISO de stubs (H7): funciones cuyo cuerpo cayó fuera del subconjunto se emitieron como stub que
+    // panica. El binario compila, pero llamarlas aborta → sin este aviso el "ok" ocultaría una divergencia
+    // en runtime. Se listan (nombre + motivo) para que el usuario sepa qué NO se soporta.
+    if !transpiled.stubbed.is_empty() {
+        eprintln!(
+            "native build: warning: {} function(s) not supported in the native subset — emitted as stubs \
+             that panic if called at runtime:",
+            transpiled.stubbed.len()
+        );
+        for (name, reason) in &transpiled.stubbed {
+            eprintln!("  · {name}: {reason}");
+        }
+    }
     // Nombre de salida: `-o`, o el stem del archivo de entrada.
     let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
     let out_bin = output.map(String::from).unwrap_or_else(|| stem.to_string());
@@ -695,7 +708,7 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool) {
     // no colisionen sobre el mismo temporal.
     let rs_path = std::env::temp_dir().join(format!("ray_native_{stem}_{}.rs", process::id()));
     if let Err(e) = std::fs::write(&rs_path, rust) {
-        eprintln!("native build: no se pudo escribir el Rust temporal: {e}");
+        eprintln!("native build: could not write the temporary Rust file: {e}");
         process::exit(65);
     }
     // Flags de rustc según el tier (`-A warnings` silencia los warnings de estilo del código generado).
@@ -714,14 +727,14 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool) {
         Ok(s) => {
             // Falló: se CONSERVA el `.rs` y se nombra su ruta, para poder inspeccionar el Rust generado.
             eprintln!(
-                "native build: rustc falló (código {}); Rust generado en {}",
+                "native build: rustc failed (code {}); generated Rust at {}",
                 s.code().unwrap_or(-1),
                 rs_path.display()
             );
             process::exit(65);
         }
         Err(e) => {
-            eprintln!("native build: no se pudo ejecutar rustc (¿está en el PATH?): {e}");
+            eprintln!("native build: could not run rustc (is it on PATH?): {e}");
             process::exit(65);
         }
     }
@@ -774,7 +787,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
     ];
     for (rel, content) in files {
         if let Err(e) = write(rel, content) {
-            eprintln!("native build: no se pudo escribir el proyecto Cargo ({rel}): {e}");
+            eprintln!("native build: could not write the Cargo project ({rel}): {e}");
             process::exit(65);
         }
     }
@@ -796,7 +809,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
             let _ = std::fs::remove_dir_all(&proj); // build ok → borrar el proyecto Cargo temporal (el binario
                                                     // ya vive en la caché compartida, no en `proj/target`)
             if let Err(e) = copied {
-                eprintln!("native build: no se pudo copiar el binario ({}): {e}", produced.display());
+                eprintln!("native build: could not copy the binary ({}): {e}", produced.display());
                 process::exit(65);
             }
             let tier = if release { " (release: opt3+lto+native)" } else { "" };
@@ -805,14 +818,14 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
         Ok(s) => {
             // Falló: se CONSERVA el proyecto y se nombra su ruta, para inspeccionar el Rust generado.
             eprintln!(
-                "native build: cargo falló (código {}); proyecto en {}",
+                "native build: cargo failed (code {}); project at {}",
                 s.code().unwrap_or(-1),
                 proj.display()
             );
             process::exit(65);
         }
         Err(e) => {
-            eprintln!("native build: no se pudo ejecutar cargo (¿está en el PATH?): {e}");
+            eprintln!("native build: could not run cargo (is it on PATH?): {e}");
             process::exit(65);
         }
     }

@@ -33,9 +33,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+            # Caché del backend nativo (`ray build --native`): los tests `build_native_*` con crate
+            # (TLS/crypto/SQLite) compilan ring/rustls/rusqlite-bundled en este target compartido. Sin
+            # cachearlo se recompilaban en cada run (minutos). Ver docs/transpilador-nativo.md §3.3.
+            ~/.ray/native-cache
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Clippy
         run: cargo clippy --all-targets
+      # Los tests `build_native_*` se SALTAN en silencio si falta `rustc` (en local es honesto; en CI
+      # sería un falso verde). Se verifica su presencia para que un toolchain roto falle ruidosamente aquí.
+      - name: Verificar rustc (los tests nativos lo requieren)
+        run: rustc --version
       - name: Tests (incluye el fuzzer del front-end)
         run: cargo test
       - name: Build de release
@@ -73,3 +81,16 @@ jobs:
         env:
           RAYLANG_FUZZ_ITERS: "200000"
         run: cargo test --test fuzz_frontend -- --nocapture
+
+  # Corpus nativo (`#[ignore]` porque compila ~50 binarios con rustc, ~2-3 min): verifica que TODOS los
+  # ejemplos deterministas transpilan byte-idénticos a la VM. Nocturno porque es lento para cada push.
+  corpus-nativo-nocturno:
+    name: corpus nativo (nocturno)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Corpus nativo ≡ VM (ejemplos deterministas)
+        run: cargo test --test native_corpus -- --ignored --nocapture

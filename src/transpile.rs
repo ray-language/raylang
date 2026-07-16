@@ -124,7 +124,7 @@ fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
     match &callee.kind {
         ExprKind::Ident(n) => Ok((n, None)),
         ExprKind::Field { object, name } => Ok((name, Some(object))),
-        _ => Err("spike: llamada a expresión (no nombre ni método) no soportada".into()),
+        _ => Err("call to an expression (neither a name nor a method) is not supported".into()),
     }
 }
 
@@ -480,6 +480,10 @@ struct Transpiler {
 pub struct Transpiled {
     pub source: String,
     pub rt_features: Vec<&'static str>,
+    /// Funciones cuyo CUERPO cayó fuera del subconjunto → se emitieron como STUB que panica (u omitieron):
+    /// `(nombre, motivo)`. El binario COMPILA, pero llamarlas panica. `build_native` lo AVISA al usuario
+    /// (antes solo con `RAYLANG_TRANSPILE_DEBUG`) para que el "ok" no oculte una divergencia en runtime (H7).
+    pub stubbed: Vec<(String, String)>,
 }
 
 /// Transpila sin excluir ningún subsistema (el caso común; lo usan `ray emit-rust` y los tests).
@@ -642,7 +646,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
                 let (args, ret) = t
                     .trait_method_sigs
                     .get(fname)
-                    .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", fname))?;
+                    .ok_or_else(|| format!("unknown dyn method '{}'", fname))?;
                 let atys: Vec<String> =
                     args.iter().map(|a| rust_ty(a, &t.enums, &t.tparams)).collect::<Result<_, _>>()?;
                 writeln!(out, "    {}: Rc<dyn Fn({}) -> {}>,", mangle(fname), atys.join(", "), rust_ty(ret, &t.enums, &t.tparams)?).unwrap();
@@ -696,6 +700,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
 
     let mut main_ret_int = false;
     let mut main_seen = false;
+    let mut stubbed: Vec<(String, String)> = Vec::new();
     for f in &prog.functions {
         if skip_fn_def(f) {
             continue;
@@ -713,7 +718,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
             }
             Err(e) => {
                 if f.name == "main" {
-                    return Err(format!("spike: main fuera del subconjunto: {}", e));
+                    return Err(format!("main is outside the supported subset: {}", e));
                 }
                 // Una función no-main cuyo CUERPO no transpila se emite como STUB que panica (con su firma):
                 // el programa COMPILA y, si el flujo real no la llama, corre igual que la VM. Si ni la firma
@@ -724,11 +729,13 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
                     Ok(()) => {
                         out.push_str(&sbuf);
                         out.push('\n');
+                        stubbed.push((f.name.clone(), e.clone()));
                         if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
                             eprintln!("[transpile stub] {} — {}", f.name, e);
                         }
                     }
                     Err(se) => {
+                        stubbed.push((f.name.clone(), format!("{e} (signature: {se})")));
                         if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
                             eprintln!("[transpile skip] {} — cuerpo: {} — firma: {}", f.name, e, se);
                         }
@@ -738,7 +745,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         }
     }
     if !main_seen {
-        return Err("spike: `main` no está en el subconjunto soportado".into());
+        return Err("`main` is not in the supported subset".into());
     }
 
     out.push_str("fn main() {\n");
@@ -1058,7 +1065,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     if t.needs_rt_sqlite {
         rt_features.push("sqlite");
     }
-    Ok(Transpiled { source: out, rt_features })
+    Ok(Transpiled { source: out, rt_features, stubbed })
 }
 
 impl Transpiler {
@@ -1145,7 +1152,7 @@ impl Transpiler {
         let ret = rust_ty(&f.return_type, &self.enums, &self.tparams)?;
         write!(
             out,
-            "fn {}{}({}) -> {} {{ panic!(\"'{}' no está soportada en el binario nativo (transpilación a Rust)\") }}\n",
+            "fn {}{}({}) -> {} {{ panic!(\"'{}' is not supported in the native binary (Rust transpilation)\") }}\n",
             rust_name, generics, params.join(", "), ret, f.name
         )
         .unwrap();
@@ -1171,8 +1178,11 @@ impl Transpiler {
         }
         for (lib, fns) in &by_lib {
             // libc ya está enlazada (símbolos disponibles); otras librerías (`m`, …) llevan `#[link]`.
+            // `{:?}` produce un literal de string Rust ESCAPADO: un nombre de librería con comillas no puede
+            // inyectar ítems en el fuente generado (no es frontera de seguridad —el usuario compila su
+            // propio código— pero evita que un `extern "..."` raro genere Rust arbitrario).
             if *lib != "c" {
-                writeln!(out, "#[link(name = \"{}\")]", lib).unwrap();
+                writeln!(out, "#[link(name = {:?})]", lib).unwrap();
             }
             out.push_str("unsafe extern \"C\" {\n");
             for e in fns {
@@ -1182,7 +1192,7 @@ impl Transpiler {
                     .enumerate()
                     .map(|(i, p)| ffi_c_arg_ty(&p.ty).map(|c| format!("__a{}: {}", i, c)))
                     .collect::<Result<_, _>>()?;
-                writeln!(out, "    #[link_name = \"{}\"]", e.name).unwrap();
+                writeln!(out, "    #[link_name = {:?}]", e.name).unwrap(); // escapado (ver #[link] arriba)
                 writeln!(
                     out,
                     "    fn __ffi_{}({}) -> {};",
@@ -1216,7 +1226,7 @@ impl Transpiler {
                     }
                     Type::Bytes => passes.push(format!("__p{}.as_ptr()", i)),
                     Type::Ptr => passes.push(format!("(__p{} as *mut std::ffi::c_void)", i)),
-                    other => return Err(format!("spike: FFI arg no marshalable: {:?}", other)),
+                    other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
                 }
             }
             writeln!(out, "    let __rt_r = unsafe {{ __ffi_{}({}) }};", mangle(&e.name), passes.join(", ")).unwrap();
@@ -1235,9 +1245,9 @@ impl Transpiler {
                     Type::String => "if __rt_r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes()).expect(\"FFI: el char* devuelto no es UTF-8 válido\"))) }".to_string(),
                     // ptr fallible → Option<ptr>: NULL→None; si no, la dirección opaca.
                     Type::Ptr => "if __rt_r.is_null() { None } else { Some(__rt_r as i64) }".to_string(),
-                    other => return Err(format!("spike: FFI retorno Option<{:?}> no soportado", other)),
+                    other => return Err(format!("FFI return type Option<{:?}> is not supported", other)),
                 },
-                other => return Err(format!("spike: FFI retorno no marshalable: {:?}", other)),
+                other => return Err(format!("FFI return type is not marshalable: {:?}", other)),
             };
             writeln!(out, "    {}\n}}", ret_expr).unwrap();
         }
@@ -1329,7 +1339,7 @@ impl Transpiler {
             StmtKind::LetTuple { names, value, mutable } => {
                 let elems = match self.type_of(value)? {
                     Type::Tuple(ts) => ts,
-                    other => return Err(format!("spike: let-tupla sobre {:?}", other)),
+                    other => return Err(format!("tuple let over {:?} is not supported", other)),
                 };
                 out.push_str("let (");
                 for (i, nm) in names.iter().enumerate() {
@@ -1398,7 +1408,7 @@ impl Transpiler {
                         self.emit_expr(out, value)?;
                         write!(out, "; __rt_obj.borrow_mut().{} = __rt_rhs; }}\n", mangle(name)).unwrap();
                     }
-                    _ => return Err("spike: lvalue no soportado".into()),
+                    _ => return Err("unsupported lvalue".into()),
                 }
             }
             StmtKind::Return { value } => {
@@ -1421,7 +1431,7 @@ impl Transpiler {
                     let sig = self
                         .funcs
                         .get(next_fn)
-                        .ok_or_else(|| format!("spike: iterador sin método next '{}'", next_fn))?
+                        .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?
                         .clone();
                     let it_ty = self.type_of(expr)?;
                     let mut subst = HashMap::new();
@@ -1431,9 +1441,9 @@ impl Transpiler {
                     let elems = match subst_type(&normalize_type(&sig.ret), &subst) {
                         Type::Enum(n, args) if n == "Option" && args.len() == 1 => match &args[0] {
                             Type::Tuple(ts) if ts.len() == names.len() => ts.clone(),
-                            other => return Err(format!("spike: for de tupla sobre next que da {:?}", other)),
+                            other => return Err(format!("tuple for over a next that yields {:?}", other)),
                         },
-                        other => return Err(format!("spike: next de '{}' no da Option<tupla> ({:?})", next_fn, other)),
+                        other => return Err(format!("next of '{}' does not yield Option<tuple> ({:?})", next_fn, other)),
                     };
                     let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
                     let binders: Vec<String> = names.iter().map(binder).collect();
@@ -1455,11 +1465,11 @@ impl Transpiler {
                 if let ForPat::Tuple(names) = pat {
                     let expr = match iter {
                         ForIter::In(e) => e,
-                        _ => return Err("spike: for de tupla solo sobre Map".into()),
+                        _ => return Err("tuple for is only supported over a Map".into()),
                     };
                     let (kt, vt) = match self.type_of(expr)? {
                         Type::Map(k, v) => ((*k).clone(), (*v).clone()),
-                        other => return Err(format!("spike: for (k,v) sobre {:?}", other)),
+                        other => return Err(format!("for (k, v) over {:?} is not supported", other)),
                     };
                     let binder = |n: &Option<String>| n.clone().unwrap_or_else(|| "_".into());
                     let (kn, vn) = (binder(&names[0]), binder(&names[1]));
@@ -1502,7 +1512,7 @@ impl Transpiler {
                         let ety = match self.type_of(expr)? {
                             Type::Array(t) => (*t).clone(),
                             Type::String => Type::Char,
-                            other => return Err(format!("spike: for sobre {:?} no soportado", other)),
+                            other => return Err(format!("for over {:?} is not supported", other)),
                         };
                         write!(out, "for {} in ", var).unwrap();
                         self.emit_expr(out, expr)?;
@@ -1524,7 +1534,7 @@ impl Transpiler {
                         let sig = self
                             .funcs
                             .get(next_fn)
-                            .ok_or_else(|| format!("spike: iterador sin método next '{}'", next_fn))?
+                            .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?
                             .clone();
                         let it_ty = self.type_of(expr)?;
                         let mut subst = HashMap::new();
@@ -1533,7 +1543,7 @@ impl Transpiler {
                         }
                         let elem = match subst_type(&normalize_type(&sig.ret), &subst) {
                             Type::Enum(n, args) if n == "Option" && args.len() == 1 => args[0].clone(),
-                            other => return Err(format!("spike: next de '{}' no devuelve Option<T> ({:?})", next_fn, other)),
+                            other => return Err(format!("next of '{}' does not return Option<T> ({:?})", next_fn, other)),
                         };
                         out.push_str("{ let __rt_it = ");
                         self.emit_expr(out, expr)?;
@@ -1613,7 +1623,17 @@ impl Transpiler {
     fn emit_expr(&mut self, out: &mut String, e: &Expr) -> Result<(), String> {
         match &e.kind {
             ExprKind::Int(n) => write!(out, "{}i64", n).unwrap(),
-            ExprKind::Float(x) => write!(out, "{:?}f64", x).unwrap(),
+            ExprKind::Float(x) => {
+                // `{:?}` de un f64 no finito da `inf`/`-inf`/`NaN` → `inff64` es Rust INVÁLIDO. Un literal
+                // como `1e999` parsea a infinito: se emite la constante de Rust correspondiente.
+                if x.is_nan() {
+                    out.push_str("f64::NAN");
+                } else if x.is_infinite() {
+                    out.push_str(if *x < 0.0 { "f64::NEG_INFINITY" } else { "f64::INFINITY" });
+                } else {
+                    write!(out, "{:?}f64", x).unwrap();
+                }
+            }
             ExprKind::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             ExprKind::Char(c) => write!(out, "{:?}", c).unwrap(), // `{:?}` de char → literal Rust escapado
             ExprKind::Str(s) => write!(out, "Rc::<str>::from({:?})", s).unwrap(),
@@ -1661,7 +1681,7 @@ impl Transpiler {
                         self.emit_expr(out, expr)?;
                         write!(out, " as u{})", w).unwrap();
                     }
-                    _ => return Err(format!("spike: cast {:?}→{:?} no soportado", src, target)),
+                    _ => return Err(format!("cast {:?} -> {:?} is not supported", src, target)),
                 }
             }
             ExprKind::Ident(name) if name == "std::math::PI" => out.push_str("std::f64::consts::PI"),
@@ -1789,7 +1809,7 @@ impl Transpiler {
                 self.emit_expr(out, array)?;
                 match &index.kind {
                     ExprKind::Int(n) => write!(out, ".{}", n).unwrap(),
-                    _ => return Err("spike: índice de tupla no literal".into()),
+                    _ => return Err("non-literal tuple index".into()),
                 }
             }
             ExprKind::Index { array, index } => {
@@ -1835,7 +1855,7 @@ impl Transpiler {
                     let (args, _) = self
                         .trait_method_sigs
                         .get(mname)
-                        .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", mname))?
+                        .ok_or_else(|| format!("unknown dyn method '{}'", mname))?
                         .clone();
                     // params de la closure: __a0: T0, __a1: T1, …
                     let mut params = String::new();
@@ -2083,7 +2103,7 @@ impl Transpiler {
         // Option/Result son NATIVOS de Rust (no `Rc<E>`): se matchea sobre `&opt`, no `&*Rc`.
         let native = match &scrut_ty {
             Type::Enum(n, _) => n == "Option" || n == "Result",
-            other => return Err(format!("spike: match sobre {:?} (se esperaba un enum)", other)),
+            other => return Err(format!("match over {:?} (an enum was expected)", other)),
         };
         let temp = format!("__scrut{}", self.match_temp);
         self.match_temp += 1;
@@ -2096,7 +2116,7 @@ impl Transpiler {
         out.push_str(" {\n");
         for arm in arms {
             if arm.guard.is_some() {
-                return Err("spike: guardas de match (`if`) no soportadas".into());
+                return Err("match guards (`if`) are not supported".into());
             }
             self.scopes.push(HashMap::new());
             let mut binds: Vec<(String, Type)> = Vec::new();
@@ -2163,14 +2183,14 @@ impl Transpiler {
                                 "Err" => vec![args[1].clone()],
                                 _ => vec![],
                             },
-                            _ => return Err("spike: patrón Option/Result sin tipo esperado".into()),
+                            _ => return Err("Option/Result pattern without an expected type".into()),
                         }
                     } else {
                         let raw = self
                             .enum_variants
                             .get(enum_name)
                             .and_then(|m| m.get(variant))
-                            .ok_or_else(|| format!("spike: variante desconocida {}.{}", enum_name, variant))?
+                            .ok_or_else(|| format!("unknown variant {}.{}", enum_name, variant))?
                             .clone();
                         // Sustituir los params de tipo del enum por los args del tipo esperado
                         // (`Caja<int>` → T=int), para el tipo de cada binding del payload.
@@ -2188,7 +2208,7 @@ impl Transpiler {
                 }
             }
             PatternKind::Struct { .. } => {
-                return Err("spike: patrón de destructuración de struct no soportado".into())
+                return Err("struct destructuring pattern is not supported".into())
             }
         }
         Ok(())
@@ -2397,7 +2417,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str(".len() as i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })");
             }
-            _ => return Err(format!("spike: std::fs::{} no soportada", ffn)),
+            _ => return Err(format!("std::fs::{} is not supported", ffn)),
         }
         Ok(())
     }
@@ -2418,7 +2438,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").max(0) as u64))");
             }
-            _ => return Err(format!("spike: std::time::{} no soportada", tfn)),
+            _ => return Err(format!("std::time::{} is not supported", tfn)),
         }
         Ok(())
     }
@@ -2439,7 +2459,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            _ => return Err(format!("spike: std::random::{} no soportada", rfn)),
+            _ => return Err(format!("std::random::{} is not supported", rfn)),
         }
         Ok(())
     }
@@ -2495,7 +2515,7 @@ impl Transpiler {
                 }
                 out.push(')');
             }
-            _ => return Err(format!("spike: std::net::{} no soportada", nfn)),
+            _ => return Err(format!("std::net::{} is not supported", nfn)),
         }
         Ok(())
     }
@@ -2531,7 +2551,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").abs()");
             }
-            _ => return Err(format!("spike: std::math::{} no soportada", mfn)),
+            _ => return Err(format!("std::math::{} is not supported", mfn)),
         }
         Ok(())
     }
@@ -2956,7 +2976,7 @@ impl Transpiler {
                     self.emit_expr(out, eff[0])?;
                     out.push_str(".borrow().iter().any(|__e| *__e == __rt_x) }");
                 }
-                other => return Err(format!("spike: contains sobre {:?}", other)),
+                other => return Err(format!("contains on {:?} is not supported", other)),
             },
             // Bytes: to_bytes(s) codifica un string a UTF-8; from_utf8(b) decodifica (Result); sub_bytes
             // corta [i,j) por octeto con clamp (nunca falla). Repr = Rc<[u8]>.
@@ -3021,7 +3041,7 @@ impl Transpiler {
                 // El valor se convierte a la repr SEND del canal (string/bytes → Arc; primitivos igual).
                 let elem = match self.type_of(eff[0])? {
                     Type::Channel(t) => (*t).clone(),
-                    other => return Err(format!("spike: send sobre {:?}", other)),
+                    other => return Err(format!("send on {:?} is not supported", other)),
                 };
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".send(");
@@ -3032,7 +3052,7 @@ impl Transpiler {
                 // recv devuelve Option<repr-send>; se convierte de vuelta a la repr del programa (Rc).
                 let elem = match self.type_of(eff[0])? {
                     Type::Channel(t) => (*t).clone(),
-                    other => return Err(format!("spike: recv sobre {:?}", other)),
+                    other => return Err(format!("recv on {:?} is not supported", other)),
                 };
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".recv()");
@@ -3061,13 +3081,13 @@ impl Transpiler {
                     ExprKind::Func(_) => None,
                     ExprKind::Ident(n) if self.funcs.contains_key(n) => {
                         if !self.funcs[n].params.is_empty() {
-                            return Err(format!("spike: {} de una función con parámetros ('{}')", method, n));
+                            return Err(format!("{} of a function with parameters ('{}')", method, n));
                         }
                         Some(n.clone())
                     }
                     _ => {
                         return Err(format!(
-                            "spike: {} solo acepta una función anónima literal o el nombre de una función",
+                            "{} only accepts a literal anonymous function or a function name",
                             method
                         ))
                     }
@@ -3277,7 +3297,7 @@ impl Transpiler {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));
                 if !self.funcs.contains_key(name) && !is_closure {
-                    return Err(format!("spike: builtin/función '{}' no soportada", name));
+                    return Err(format!("builtin/function '{}' is not supported in the native backend", name));
                 }
                 out.push_str(&mangle(name));
                 out.push('(');
@@ -3311,7 +3331,7 @@ impl Transpiler {
                     // Función como valor → su tipo Fn.
                     Type::Fn(s.params.clone(), Box::new(s.ret.clone()))
                 } else {
-                    return Err(format!("spike: variable '{}' sin tipo conocido", n));
+                    return Err(format!("variable '{}' has no known type", n));
                 }
             }
             ExprKind::Unary { op, expr } => match op {
@@ -3330,7 +3350,7 @@ impl Transpiler {
                 if let Some(r) = recv {
                     if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
                         return Ok(self.trait_method_sigs.get(n).map(|(_, ret)| ret.clone())
-                            .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", n))?);
+                            .ok_or_else(|| format!("unknown dyn method '{}'", n))?);
                     }
                 }
                 // `std::math::*`: abs/min/max preservan el tipo del primer arg (int|float); el resto
@@ -3338,7 +3358,7 @@ impl Transpiler {
                 // que no sabríamos tipar: el arg es `int#less`, un impl del prelude que no emitimos).
                 if let Some(mfn) = n.strip_prefix("std::math::") {
                     return Ok(match mfn {
-                        "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("spike: math sin arg")?)?,
+                        "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("math without an argument")?)?,
                         _ => Type::Float,
                     });
                 }
@@ -3358,7 +3378,7 @@ impl Transpiler {
                             vec![Type::Array(Box::new(Type::String)), Type::String],
                         ),
                         "exists" | "is_dir" | "is_file" => Type::Bool,
-                        other => return Err(format!("spike: std::fs::{} no soportada", other)),
+                        other => return Err(format!("std::fs::{} is not supported", other)),
                     });
                 }
                 // std::time: now/monotonic → int; sleep → unit. std::random: next → float; below → int;
@@ -3406,9 +3426,9 @@ impl Transpiler {
                     "input" | "env" => opt_of(Type::String),
                     "read_int" => opt_of(Type::Int),
                     // Concurrencia: recv(ch) → Option<T> (T = elemento del canal); send/spawn → unit.
-                    "recv" => match self.type_of(recv0.ok_or("spike: recv sin canal")?)? {
+                    "recv" => match self.type_of(recv0.ok_or("recv without a channel")?)? {
                         Type::Channel(t) => opt_of(*t),
-                        other => return Err(format!("spike: recv sobre {:?}", other)),
+                        other => return Err(format!("recv on {:?} is not supported", other)),
                     },
                     "send" => Type::Unit,
                     "select" => Type::Int, // índice del canal listo
@@ -3420,7 +3440,7 @@ impl Transpiler {
                             Some(ExprKind::Ident(n)) if self.funcs.contains_key(n) => {
                                 normalize_type(&self.funcs[n].ret)
                             }
-                            _ => return Err(format!("spike: {} sin función anónima ni nombre de función", method)),
+                            _ => return Err(format!("{} without an anonymous function or function name", method)),
                         };
                         if method == "spawn" {
                             Type::Task(Box::new(ret))
@@ -3451,23 +3471,23 @@ impl Transpiler {
                     "chars" => Type::Array(Box::new(Type::Char)),
                     "contains_key" => Type::Bool,
                     // get_or → V (desenvuelto); get/remove → Option<V> (para match/`?`); keys→[K]; values→[V].
-                    "get_or" => match self.type_of(recv0.ok_or("spike: get_or sin receptor")?)? {
+                    "get_or" => match self.type_of(recv0.ok_or("get_or without a receiver")?)? {
                         Type::Map(_, v) => *v,
-                        other => return Err(format!("spike: get_or sobre {:?}", other)),
+                        other => return Err(format!("get_or on {:?} is not supported", other)),
                     },
-                    "get" | "remove" => match self.type_of(recv0.ok_or("spike: get sin receptor")?)? {
+                    "get" | "remove" => match self.type_of(recv0.ok_or("get without a receiver")?)? {
                         Type::Map(_, v) => opt_of(*v),
-                        other => return Err(format!("spike: get sobre {:?}", other)),
+                        other => return Err(format!("get on {:?} is not supported", other)),
                     },
-                    "keys" => match self.type_of(recv0.ok_or("spike: keys sin receptor")?)? {
+                    "keys" => match self.type_of(recv0.ok_or("keys without a receiver")?)? {
                         Type::Map(k, _) => Type::Array(k),
-                        other => return Err(format!("spike: keys sobre {:?}", other)),
+                        other => return Err(format!("keys on {:?} is not supported", other)),
                     },
-                    "values" => match self.type_of(recv0.ok_or("spike: values sin receptor")?)? {
+                    "values" => match self.type_of(recv0.ok_or("values without a receiver")?)? {
                         Type::Map(_, v) => Type::Array(v),
-                        other => return Err(format!("spike: values sobre {:?}", other)),
+                        other => return Err(format!("values on {:?} is not supported", other)),
                     },
-                    "sort" => self.type_of(recv0.ok_or("spike: sort sin receptor")?)?,
+                    "sort" => self.type_of(recv0.ok_or("sort without a receiver")?)?,
                     // Cripto (M43): hash/hmac/csprng → bytes; verify → bool; los fallibles (ed25519
                     // pk/sign, chacha seal/open) → `[bytes]` etiquetado (el prelude → Option<bytes>). `method`
                     // ya viene sin `__` (ver emit_call); guarda `n` empieza por `__`.
@@ -3493,18 +3513,18 @@ impl Transpiler {
                     }
                     // unwrap_or/unwrap desenvuelven un Option<T>/Result<T,E> → T.
                     "unwrap_or" | "unwrap" => {
-                        unwrapped(&self.type_of(recv0.ok_or("spike: unwrap sin receptor")?)?)
+                        unwrapped(&self.type_of(recv0.ok_or("unwrap without a receiver")?)?)
                     }
                     // Orden superior: map(xs,f) → [ret(f)]; filter(xs,f) → [elem(xs)]; fold(xs,init,f) → ret(f).
                     // Guarda `!n.contains('#')`: la función libre sobre `[T]`; `Iter#map`/… (método) cae al `_`.
                     "map" if !n.contains('#') => match self.type_of(effargs(recv, args, 1)?)? {
                         Type::Fn(_, r) => Type::Array(r),
-                        other => return Err(format!("spike: map con f no-función {:?}", other)),
+                        other => return Err(format!("map with a non-function f {:?}", other)),
                     },
                     "filter" if !n.contains('#') => self.type_of(effargs(recv, args, 0)?)?,
                     "fold" if !n.contains('#') => match self.type_of(effargs(recv, args, 2)?)? {
                         Type::Fn(_, r) => *r,
-                        other => return Err(format!("spike: fold con f no-función {:?}", other)),
+                        other => return Err(format!("fold with a non-function f {:?}", other)),
                     },
                     _ => {
                         // Función de usuario (quizá genérica), o llamada a un closure en ámbito.
@@ -3527,7 +3547,7 @@ impl Transpiler {
                         } else if let Some(Type::Fn(_, r)) = self.lookup(n) {
                             (**r).clone()
                         } else {
-                            return Err(format!("spike: no sé el tipo de retorno de '{}'", n));
+                            return Err(format!("unknown return type of '{}'", n));
                         }
                     }
                 }
@@ -3544,7 +3564,7 @@ impl Transpiler {
             ExprKind::ArrayLit(elems) => {
                 let elem = match elems.first() {
                     Some(e) => self.type_of(e)?,
-                    None => return Err("spike: literal de arreglo vacío sin anotación".into()),
+                    None => return Err("empty array literal without an annotation".into()),
                 };
                 Type::Array(Box::new(elem))
             }
@@ -3555,16 +3575,40 @@ impl Transpiler {
                 Type::Tuple(ts) => {
                     let i = match &index.kind {
                         ExprKind::Int(n) => *n as usize,
-                        _ => return Err("spike: índice de tupla no literal".into()),
+                        _ => return Err("non-literal tuple index".into()),
                     };
-                    ts.get(i).cloned().ok_or("spike: índice de tupla fuera de rango")?
+                    ts.get(i).cloned().ok_or("tuple index out of range")?
                 }
-                other => return Err(format!("spike: indexar {:?} no soportado", other)),
+                other => return Err(format!("indexing {:?} is not supported", other)),
             },
             ExprKind::TupleLit(elems) => {
                 Type::Tuple(elems.iter().map(|e| self.type_of(e)).collect::<Result<_, _>>()?)
             }
-            ExprKind::StructLit { name, .. } => Type::Struct(name.clone(), vec![]),
+            ExprKind::StructLit { name, fields } => {
+                // Inferir los ARGS DE TIPO desde los campos (como el checker): unificar cada tipo de campo
+                // declarado (con params) contra el tipo del valor → fija los params. Sin esto, un literal
+                // genérico daba args vacíos y un acceso anidado (`b.v.v` con `Box<Box<[int]>>`) no podía
+                // sustituir el param → "campo desconocido en T" (H9).
+                let tparams = self.struct_tparams.get(name).cloned().unwrap_or_default();
+                if tparams.is_empty() {
+                    Type::Struct(name.clone(), vec![])
+                } else {
+                    let decl = self.struct_fields.get(name).cloned().unwrap_or_default();
+                    let mut subst = HashMap::new();
+                    for (fname, fval) in fields {
+                        if let Some((_, fty)) = decl.iter().find(|(n, _)| n == fname) {
+                            if let Ok(vty) = self.type_of(fval) {
+                                unify(&normalize_type(fty), &vty, &tparams, &mut subst);
+                            }
+                        }
+                    }
+                    let args = tparams
+                        .iter()
+                        .map(|p| subst.get(p).cloned().unwrap_or_else(|| Type::Var(p.clone())))
+                        .collect();
+                    Type::Struct(name.clone(), args)
+                }
+            }
             ExprKind::EnumLit { enum_name, variant, args } => {
                 if enum_name == "Option" {
                     // Some(x) → Option<tipo(x)>; None → Option<Unit> (placeholder; lo fija el contexto).
@@ -3577,7 +3621,29 @@ impl Transpiler {
                         _ => Type::Enum("Result".into(), vec![Type::Unit, Type::Unit]),
                     }
                 } else {
-                    Type::Enum(enum_name.clone(), vec![])
+                    // Enum de usuario: inferir los args de tipo desde el payload (análogo a StructLit, H9).
+                    let tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
+                    if tparams.is_empty() {
+                        Type::Enum(enum_name.clone(), vec![])
+                    } else {
+                        let payload = self
+                            .enum_variants
+                            .get(enum_name)
+                            .and_then(|vs| vs.get(variant))
+                            .cloned()
+                            .unwrap_or_default();
+                        let mut subst = HashMap::new();
+                        for (pty, aval) in payload.iter().zip(args) {
+                            if let Ok(vty) = self.type_of(aval) {
+                                unify(&normalize_type(pty), &vty, &tparams, &mut subst);
+                            }
+                        }
+                        let targs = tparams
+                            .iter()
+                            .map(|p| subst.get(p).cloned().unwrap_or_else(|| Type::Var(p.clone())))
+                            .collect();
+                        Type::Enum(enum_name.clone(), targs)
+                    }
                 }
             }
             ExprKind::Try(inner) => unwrapped(&self.type_of(inner)?),
@@ -3589,18 +3655,18 @@ impl Transpiler {
                 let obj_ty = self.type_of(object)?;
                 // Tupla: `t.0` → el tipo del i-ésimo elemento.
                 if let Type::Tuple(ts) = &obj_ty {
-                    let i: usize = name.parse().map_err(|_| "spike: campo de tupla no numérico")?;
-                    return ts.get(i).cloned().ok_or_else(|| "spike: campo de tupla fuera de rango".into());
+                    let i: usize = name.parse().map_err(|_| "non-numeric tuple field")?;
+                    return ts.get(i).cloned().ok_or_else(|| "tuple field out of range".into());
                 }
                 let sn = match &obj_ty {
                     Type::Struct(n, _) => n.clone(),
-                    other => return Err(format!("spike: acceso a campo sobre {:?}", other)),
+                    other => return Err(format!("field access on {:?} is not supported", other)),
                 };
                 let fty = self
                     .struct_fields
                     .get(&sn)
                     .and_then(|fs| fs.iter().find(|(f, _)| f == name))
-                    .ok_or_else(|| format!("spike: campo '{}' desconocido en {}", name, sn))?
+                    .ok_or_else(|| format!("unknown field '{}' on {}", name, sn))?
                     .1
                     .clone();
                 // Sustituir los params de tipo del struct por los args (`Par<int,bool>` → A=int, B=bool).
@@ -3616,11 +3682,11 @@ impl Transpiler {
                 let scrut_ty = self.type_of(scrutinee).ok();
                 arms.iter()
                     .find_map(|a| self.arm_type(scrut_ty.as_ref(), a))
-                    .ok_or("spike: no pude inferir el tipo del match")?
+                    .ok_or("could not infer the type of the match")?
             }
             ExprKind::Cast { ty, .. } => normalize_type(ty),
             ExprKind::MapLit(pairs) => {
-                let (k, v) = pairs.first().ok_or("spike: Map literal vacío sin anotación")?;
+                let (k, v) = pairs.first().ok_or("empty Map literal without an annotation")?;
                 Type::Map(Box::new(self.type_of(k)?), Box::new(self.type_of(v)?))
             }
             // (Exhaustivo sobre ExprKind, como emit_expr: una variante nueva rompe la compilación aquí.)
@@ -3798,7 +3864,7 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
             let ps: Vec<String> = params.iter().map(|p| rust_ty(p, enums, tparams)).collect::<Result<_, _>>()?;
             return Ok(format!("Rc<dyn Fn({}) -> {}>", ps.join(", "), rust_ty(ret, enums, tparams)?));
         }
-        other => return Err(format!("spike: tipo no soportado {:?}", other)),
+        other => return Err(format!("unsupported type {:?}", other)),
     }
     .to_string())
 }
@@ -3870,7 +3936,7 @@ fn send_type(t: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         Type::Bytes => Ok("std::sync::Arc<[u8]>".to_string()),
         Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) => rust_ty(t, enums, tparams),
         other => Err(format!(
-            "spike: canal/tarea de tipo no-Send {:?} — soportados: int/float/bool/char/string/bytes",
+            "channel/task of non-Send type {:?} — supported: int/float/bool/char/string/bytes",
             other
         )),
     }
@@ -3920,7 +3986,7 @@ fn ffi_c_arg_ty(t: &Type) -> Result<&'static str, String> {
         Type::String => "*const std::os::raw::c_char",   // char* (NUL-terminado)
         Type::Bytes => "*const u8",                      // buffer crudo
         Type::Ptr => "*mut std::ffi::c_void",            // void* opaco
-        other => return Err(format!("spike: FFI arg no marshalable: {:?}", other)),
+        other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
     })
 }
 
@@ -3939,9 +4005,9 @@ fn ffi_c_ret_ty(t: &Type) -> Result<&'static str, String> {
         Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
             Type::Bytes | Type::String => "*const std::os::raw::c_char",
             Type::Ptr => "*mut std::ffi::c_void",
-            other => return Err(format!("spike: FFI retorno Option<{:?}> no soportado", other)),
+            other => return Err(format!("FFI return type Option<{:?}> is not supported", other)),
         },
-        other => return Err(format!("spike: FFI retorno no marshalable: {:?}", other)),
+        other => return Err(format!("FFI return type is not marshalable: {:?}", other)),
     })
 }
 
@@ -4048,7 +4114,7 @@ fn subst_type(t: &Type, subst: &HashMap<String, Type>) -> Type {
 
 /// El i-ésimo argumento EFECTIVO de una llamada (el receptor de UFCS va primero, luego los args).
 fn effargs<'a>(recv: Option<&'a Expr>, args: &'a [Expr], i: usize) -> Result<&'a Expr, String> {
-    recv.into_iter().chain(args.iter()).nth(i).ok_or_else(|| "spike: falta un argumento".to_string())
+    recv.into_iter().chain(args.iter()).nth(i).ok_or_else(|| "missing an argument".to_string())
 }
 
 /// `Option<t>` (usando el Option nativo de Rust).

@@ -548,7 +548,7 @@ fn build_native_without_crypto_fuerza_la_via_rapida_y_stubbea() {
     let run = Command::new(&bin).output().expect("corre el binario stubbeado");
     assert!(!run.status.success(), "el binario panica al alcanzar la cripto excluida");
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("no está soportada"),
+        String::from_utf8_lossy(&run.stderr).contains("is not supported"),
         "el stub panica con un mensaje claro: {}",
         String::from_utf8_lossy(&run.stderr)
     );
@@ -967,6 +967,80 @@ fn build_native_iteradores_coinciden_con_la_vm() {
     let (vm_out, _e, _c) = ray(&base, &["run", src.to_str().unwrap()]);
     assert_eq!(native_out, vm_out, "iteradores nativo ≡ VM");
     assert!(native_out.contains("fib:"), "corre el iterador de Fibonacci\n{native_out}");
+}
+
+#[test]
+fn build_native_avisa_de_las_funciones_stubbeadas() {
+    // H7: una función cuyo cuerpo cae fuera del subconjunto (aquí un `match` con guarda `if`) se emite
+    // como stub que panica. Antes el build decía "ok" en silencio y el binario moría en runtime si la
+    // llamaba. Ahora AVISA (nombre + motivo) al compilar; el binario sigue compilando y corre si no llama
+    // a la función stubbeada. Oráculo del camino feliz: main no la llama → nativo ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native aviso stub: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_stub_warn");
+    std::fs::write(
+        base.join("prog.ray"),
+        "enum E { A, B }\n\
+         fn g(e: E) -> int {\n\
+           match (e) {\n\
+             E.A if false => 1,   // guarda de match: fuera del subconjunto nativo → g se stubbea\n\
+             E.A => 3,\n\
+             E.B => 2,\n\
+           }\n\
+         }\n\
+         fn main() -> int { print(\"ok\"); 0 }  // NO llama a g → el binario corre bien\n",
+    )
+    .unwrap();
+    let bin = base.join("sw_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native con stub sale 0\nstdout={out}\nstderr={err}");
+    // El aviso nombra la función stubbeada y su motivo.
+    assert!(err.contains("not supported in the native subset"), "avisa del stub: {err}");
+    assert!(err.contains("g:") && err.contains("match guards"), "nombra la función y el motivo: {err}");
+    // El binario compila y corre (no toca el stub) idéntico a la VM.
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "camino feliz nativo ≡ VM");
+    assert_eq!(native_out, "ok\n", "corre main\n{native_out}");
+}
+
+#[test]
+fn build_native_literales_genericos_anidados_transpilan() {
+    // H9: `type_of` de un literal de struct/enum genérico descartaba los args de tipo → un acceso
+    // ANIDADO (`b.v.v` con `Box<Box<[int]>>`) no podía sustituir el param y fallaba con "campo
+    // desconocido en T", donde la VM funciona. Ahora se infieren los args desde los campos/payload.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native genéricos anidados: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_generic_nested");
+    std::fs::write(
+        base.join("prog.ray"),
+        "struct Box<T> { v: T }\n\
+         enum Caja<T> { Llena(T), Vacia }\n\
+         fn main() -> int {\n\
+           let b = Box { v: Box { v: [1, 2, 3] } };  // struct genérico anidado\n\
+           print(to_string(b.v.v[2]));                // 3\n\
+           let c = Caja.Llena(Box { v: [7, 8, 9] });  // enum genérico con payload struct\n\
+           let total = match (c) { Caja.Llena(x) => x.v[0] + x.v[2], Caja.Vacia => 0 };\n\
+           print(to_string(total));                    // 16\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("gn_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native genéricos anidados sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "literales genéricos anidados nativo ≡ VM");
+    assert_eq!(native_out, "3\n16\n", "los valores esperados\n{native_out}");
 }
 
 #[test]

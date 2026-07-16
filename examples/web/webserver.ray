@@ -73,6 +73,14 @@ pub fn ok(body: string) -> Response {
     text(200, body)
 }
 
+// Respuesta HTML con el charset declarado (Content-Type: text/html) — lo que el live-reload (M92.4)
+// reconoce para inyectar su snippet.
+pub fn html_response(status: int, body: string) -> Response {
+    var h: Map<string, string> = Map.new();
+    h.insert("Content-Type", "text/html; charset=utf-8");
+    Response { status: status, headers: h, set_cookie: [], body: body.to_bytes() }
+}
+
 pub fn not_found() -> Response {
     text(404, "Not Found")
 }
@@ -471,9 +479,58 @@ pub fn send_response(conn: int, r: Response) -> Result<int, string> {
     send_response_keep(conn, r, false, false)
 }
 
+// M92.4 (live-reload): ¿la respuesta es text/html? (Content-Type, case-insensitive).
+fn is_html_response(r: Response) -> bool {
+    let ks: [string] = r.headers.keys();
+    var i: int = 0;
+    var html: bool = false;
+    while (i < ks.len()) {
+        if (ks[i].to_lower() == "content-type") {
+            match (get(r.headers, ks[i])) {
+                Option.Some(v) => { if (v.to_lower().contains("text/html")) { html = true; } },
+                Option.None => { },
+            }
+        }
+        i = i + 1;
+    }
+    return html;
+}
+
+// Inserta `snippet` justo antes de `</body>` (o al final si no aparece).
+fn inject_before_body_end(html: string, snippet: string) -> string {
+    return match (html.to_lower().index_of("</body>")) {
+        Option.Some(i) => html.substring(0, i) + snippet + html.substring(i, html.len()),
+        Option.None => html + snippet,
+    };
+}
+
+// M92.4: bajo `ray dev` con live-reload (`RAY_DEV_RELOAD=<puerto>`), inyecta en las respuestas text/html
+// un `EventSource` que recarga la página cuando el supervisor emite `reload`. En producción no hace nada.
+fn inject_live_reload(r: Response) -> Response {
+    return match (env("RAY_DEV_RELOAD")) {
+        Option.None => r,
+        Option.Some(port) => {
+            if (is_html_response(r)) {
+                match (from_utf8(r.body)) {
+                    Result.Ok(html) => {
+                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){location.reload()}</script>";
+                        Response { status: r.status, headers: r.headers, set_cookie: r.set_cookie, body: inject_before_body_end(html, snippet).to_bytes() }
+                    },
+                    Result.Err(e) => r,
+                }
+            } else {
+                r
+            }
+        },
+    };
+}
+
 // M56.6: la escritura real, con `Connection` según si la conexión sigue viva (keep-alive de
 // `serve`) o se cierra. M56.8: `omit_body` = respuesta a un HEAD (cabeceras sin cuerpo).
-fn send_response_keep(conn: int, r: Response, keep: bool, omit_body: bool) -> Result<int, string> {
+fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> Result<int, string> {
+    // M92.4: inyecta el snippet de live-reload en HTML bajo `ray dev` (no-op en producción), antes del
+    // Content-Length para que cuadre con el cuerpo inyectado.
+    let r: Response = inject_live_reload(r0);
     // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
     // junto como bytes para no corromper un cuerpo binario.
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";

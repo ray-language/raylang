@@ -132,6 +132,104 @@ fn dev_socket_activation_retiene_el_listener_entre_reinicios() {
     let _ = dev.wait();
 }
 
+/// Lee el puerto del hub de live-reload del log de `ray dev` (`live-reload on http://127.0.0.1:<port>`).
+#[cfg(unix)]
+fn leer_hub_port(path: &std::path::Path, secs: u64) -> u16 {
+    let s = esperar_contenido(path, "live-reload on http://127.0.0.1:", secs);
+    let marca = "live-reload on http://127.0.0.1:";
+    let i = s.find(marca).unwrap() + marca.len();
+    s[i..].split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()
+}
+
+/// GET `/` a `127.0.0.1:port` (reintenta hasta `secs`; el socket lo retiene el supervisor → se encola).
+#[cfg(unix)]
+fn http_get(port: u16, secs: u64) -> String {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+            let _ = s.write_all(b"GET / HTTP/1.0\r\nHost: x\r\n\r\n");
+            let mut buf = String::new();
+            if s.read_to_string(&mut buf).is_ok() && buf.contains("200") {
+                return buf;
+            }
+        }
+        assert!(Instant::now() < deadline, "sin respuesta HTTP en {port} tras {secs}s");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_live_reload_inyecta_el_snippet_y_emite_reload() {
+    // M92.4: bajo `ray dev --port P` con un webserver, (1) las respuestas HTML llevan inyectado un
+    // `EventSource` al hub SSE del supervisor, y (2) el hub emite `data: reload` en cada reinicio → la
+    // página se refresca sola. El hub es un canal SOLO-de-dev en un puerto lateral (no el SSE de la app).
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let base = std::env::temp_dir().join("ray_dev_livereload");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let src = format!("{}/examples/web/webserver.ray", env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(&src, base.join("webserver.ray")).unwrap();
+    let driver = |v: &str| {
+        format!(
+            "from webserver import serve, html_response, Request, Response;\n\
+             fn h(req: Request) -> Response {{ html_response(200, \"<html><body>{v}</body></html>\") }}\n\
+             fn main() -> int {{ let _ = serve(\"127.0.0.1\", {port}, h); 0 }}\n"
+        )
+    };
+    std::fs::write(base.join("main.ray"), driver("v1")).unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("main.ray")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev --port");
+
+    let hub = leer_hub_port(&out_path, 10);
+    // 1) La respuesta HTML lleva el snippet de live-reload apuntando al hub.
+    let resp = http_get(port, 15);
+    assert!(resp.contains("EventSource"), "el HTML lleva el snippet inyectado:\n{resp}");
+    assert!(resp.contains(&format!(":{hub}/")), "el snippet apunta al hub {hub}:\n{resp}");
+
+    // 2) Un navegador conectado al hub recibe `data: reload` cuando un cambio VÁLIDO reinicia.
+    let mut sse = TcpStream::connect(("127.0.0.1", hub)).expect("conecta al hub SSE");
+    sse.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+    sse.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    // Espera al ": connected" inicial para asegurar el registro antes de editar.
+    let mut got = String::new();
+    let mut probe = [0u8; 256];
+    loop {
+        let n = sse.read(&mut probe).expect("lee del hub");
+        got.push_str(&String::from_utf8_lossy(&probe[..n]));
+        if got.contains(": connected") {
+            break;
+        }
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    std::fs::write(base.join("main.ray"), driver("v2")).unwrap();
+    // Lee hasta el evento reload.
+    loop {
+        if got.contains("data: reload") {
+            break;
+        }
+        let n = sse.read(&mut probe).expect("lee el evento reload del hub");
+        assert!(n > 0, "el hub cerró antes del reload; recibido:\n{got}");
+        got.push_str(&String::from_utf8_lossy(&probe[..n]));
+    }
+
+    let _ = dev.kill();
+    let _ = dev.wait();
+}
+
 #[test]
 fn dev_no_reinicia_si_el_cambio_no_compila() {
     // Check-before-restart (M92.2): un cambio que NO compila NO debe reiniciar el programa; el

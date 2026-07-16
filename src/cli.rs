@@ -222,6 +222,14 @@ fn cmd_dev(args: &[String]) {
     let listen_pair: Option<(i32, &str)> = None;
     let _ = &dev_sock; // se retiene por su lado (el fd vive mientras `dev_sock` no se dropee)
 
+    // Live-reload del navegador (M92.4): solo en una sesión web (hay `--port`/`--listen`/`[dev] listen`).
+    // El hub SSE emite `reload` en cada reinicio; el webserver, viendo `RAY_DEV_RELOAD`, inyecta el snippet.
+    let reload = if listen_addr.is_some() { start_reload_hub() } else { None };
+    let reload_port = reload.as_ref().map(|(_, p)| *p);
+    if let Some(p) = reload_port {
+        eprintln!("[dev] live-reload on http://127.0.0.1:{p} (browser refresh on restart)");
+    }
+
     // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
     // (mismos que `cmd_run`), y el primer resto es el archivo explícito (o `None` → default del proyecto).
     let entry = dev_entry(&fwd_args);
@@ -229,7 +237,7 @@ fn cmd_dev(args: &[String]) {
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
-    let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair);
+    let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
     let mut running = true;
     loop {
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
@@ -260,8 +268,13 @@ fn cmd_dev(args: &[String]) {
         if running {
             terminate_gracefully(&mut child);
         }
-        child = spawn_dev_child(&exe, &fwd_args, listen_pair);
+        child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
         running = true;
+        // Avisa a los navegadores conectados (con socket-activation la recarga se encola en el backlog
+        // hasta que el hijo nuevo la sirve → refresca con el código nuevo, sin conexión rechazada).
+        if let Some((hub, _)) = &reload {
+            hub.broadcast();
+        }
     }
 }
 
@@ -279,9 +292,18 @@ fn dev_entry(args: &[String]) -> Option<String> {
 /// regeneración de templates y los flags. Registra el pid en `DEV_CHILD` para la limpieza por señal.
 /// Si `listen` está (unix, socket-activation M92.3): dup2-ea el socket retenido del supervisor al fd 3
 /// del hijo (antes del exec) y le pasa `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR` → el hijo lo ADOPTA en `tcp_listen`.
-fn spawn_dev_child(exe: &Path, args: &[String], listen: Option<(i32, &str)>) -> process::Child {
+fn spawn_dev_child(
+    exe: &Path,
+    args: &[String],
+    listen: Option<(i32, &str)>,
+    reload_port: Option<u16>,
+) -> process::Child {
     let mut cmd = process::Command::new(exe);
     cmd.arg("run").args(args);
+    // M92.4: el hijo aprende el puerto del hub de live-reload; el webserver inyecta el snippet SSE.
+    if let Some(p) = reload_port {
+        cmd.env("RAY_DEV_RELOAD", p.to_string());
+    }
     #[cfg(unix)]
     if let Some((fd, addr)) = listen {
         use std::os::unix::process::CommandExt;
@@ -332,6 +354,50 @@ fn take_listen(args: &[String]) -> (Option<String>, Vec<String>) {
         }
     }
     (listen, rest)
+}
+
+/// M92.4 — hub de **live-reload del navegador**: un servidor SSE mínimo en un puerto lateral del
+/// supervisor. Los navegadores conectan un `EventSource` (el webserver inyecta el snippet bajo dev) y el
+/// supervisor les emite un evento `reload` en cada reinicio → la página se refresca sola. Cliente externo,
+/// cero cambios en la VM; se apoya en que el webserver ya habla SSE.
+struct ReloadHub {
+    clients: std::sync::Mutex<Vec<std::net::TcpStream>>,
+}
+
+impl ReloadHub {
+    /// Emite `data: reload` a cada navegador conectado; descarta los que ya cerraron.
+    fn broadcast(&self) {
+        use std::io::Write;
+        let mut clients = self.clients.lock().unwrap();
+        clients.retain_mut(|c| c.write_all(b"data: reload\n\n").and_then(|_| c.flush()).is_ok());
+    }
+}
+
+/// Arranca el hub SSE en un puerto libre (hilo de fondo que acepta navegadores y los registra tras
+/// enviarles las cabeceras SSE). Devuelve `(hub, puerto)`, o `None` si no se pudo abrir el socket.
+fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+    let port = listener.local_addr().ok()?.port();
+    let hub = std::sync::Arc::new(ReloadHub { clients: std::sync::Mutex::new(Vec::new()) });
+    let hub_bg = hub.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut s = stream;
+            let _ = s.set_nodelay(true);
+            // Descarta la petición (solo interesa que sea un GET del EventSource); un read basta.
+            let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.set_read_timeout(None);
+            // Cabeceras SSE + un comentario inicial para establecer el stream (CORS abierto: dev local).
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n: connected\n\n";
+            if s.write_all(head.as_bytes()).and_then(|_| s.flush()).is_ok() {
+                hub_bg.clients.lock().unwrap().push(s);
+            }
+        }
+    });
+    Some((hub, port))
 }
 
 /// Corre `ray build <entry>` (chequea + compila, sin ejecutar) como el gate del reinicio: `Ok(())` si

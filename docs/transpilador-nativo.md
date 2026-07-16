@@ -402,14 +402,24 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
     canal de struct no-`Send`. Ambos exigen la repr `Arc<dyn Fn + Send + Sync>` / valores thread-safe
     para cruzar hilos → proyecto propio, no un fleco. (Nota: `webserver`/`https_server` además tienen
     el techo TLS del Paso 1.)
-- **Paso 0 — la extracción + la fontanería**:
-  1. Crear el workspace y extraer `crypto.rs`/`tls.rs`/`sqlite.rs` de `src/builtins.rs` a
-     `crates/ray-runtime` (§4.3); el binario `ray` delega/re-exporta. Gate: 605 tests lib +
-     corpus 37/37 intactos (la VM no cambió).
-  2. `build_native` bifurca: sin features → `rustc` pelado (como hoy); con features → proyecto
-     Cargo generado con las fuentes incrustadas del runtime (§4.5–4.6) + caché de target
-     compartido. Gate: test de que el hola-mundo sigue por la vía rápida + test sintético de que
-     un programa marcado compila vía cargo.
+- **Paso 0 — la extracción + la fontanería**. **HECHO** (Fase 51 — commits `d199b93` + `cf8a8e5`).
+  - **Hallazgo que reordenó la extracción**: los handles TLS y SQLite comparten el `enum
+    OpenHandle` con archivos/TCP/UDP (registro común; `close(h)` no distingue) → extraerlos es un
+    *split de registro* (diseño propio de sus Pasos), NO una extracción mecánica. **Crypto es
+    puro** (10 funciones sin estado, único uso directo de `ring::`) → se extrajo limpio y validó
+    el mecanismo con riesgo cero. Por eso el Paso 0 = **solo crypto**; TLS/SQLite se extraen en
+    sus Pasos, con su registro.
+  - **0a** (`d199b93`): workspace + `crates/ray-runtime` con módulo `crypto` (feature `crypto`,
+    ring 0.17); `builtins.rs` delega (una línea/función) conservando su gating cfg; `ring` deja
+    de declararse directo en raylang (llega vía ray-runtime + transitivo de rustls). Verificado:
+    default + slim + wasm-sin-ring (cargo tree); 605 tests lib intactos.
+  - **0b** (`cf8a8e5`): `build_native` bifurca (sin features → `rustc` pelado; con features →
+    proyecto Cargo con `ray-runtime` **incrustado** vía `include_str!` + `CARGO_TARGET_DIR`
+    compartido). `transpile()` → `Transpiled { source, rt_features }`; el transpilador intercepta
+    los primitivos de cripto → `ray_runtime::crypto::*` y activa `needs_rt_crypto`. **Vertical
+    slice**: `std/crypto` (sha/hmac/ed25519/chacha) transpila a nativo por primera vez,
+    byte-idéntico a la VM. Tests `build_native_crypto_de_produccion_via_ray_runtime` +
+    `build_native_sin_crate_externo_usa_la_via_rapida`.
 - **Paso 1 — `rustls` (feature `tls`)**: el crate de mayor valor — desbloquea `https`,
   `webserver`, `https_server` y los clientes que cuelgan de TLS (postgres/mysql/redis-TLS).
   Interceptar los `__tls_*` en `emit_call` → `ray_runtime::tls::*`, activar `needs_rt_tls`.
@@ -422,5 +432,6 @@ Es el punto de diseño no obvio. Tres opciones evaluadas:
 - **Después (opcional)**: `--without <dep>` como flag de CLI (§3.3.3) — trivial una vez existe
   el mecanismo.
 
-**Estado (15 jul 2026)**: diseño acordado y cerrado; **implementación NO iniciada** — Roberto
-indicará cuándo arrancar (por el Paso previo o el Paso 0).
+**Estado (15 jul 2026)**: **Paso previo** (flecos no-crate) y **Paso 0** (extracción de crypto +
+fontanería de `build_native` + cripto nativa end-to-end) **HECHOS**. Siguiente: **Paso 1 — `rustls`**
+(el de mayor valor; estrena el split del registro de handles TLS). Luego `rusqlite`, `ring`-extra.

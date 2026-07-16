@@ -486,6 +486,47 @@ de un `Rc<dyn Fn>` no-`Send` capturado por `spawn` (los closures `preparar`/`ate
 (El check `naming_policy` ya estaba rojo en la rama antes de esta fase — nombres de test en español del
 arco P2.b; fuera de alcance aquí.)
 
+#### Fase 51 — el crate `ray-runtime` + cripto nativa bajo demanda (Paso 0, 15 jul)
+
+Primer paso del **crate `ray-runtime`** (docs/transpilador-nativo.md §4): el runtime con dependencias de
+crates de producción, que consumen la VM y el binario transpilado con el **mismo código** → paridad
+byte-idéntica por construcción, no verificada a mano. Quita el techo de los crates (rustls/ring/rusqlite)
+que el `rustc` pelado no podía enlazar.
+
+**Hallazgo que fijó el orden**: la doc asumía extraer crypto/tls/sqlite uniformemente, pero los handles
+TLS y SQLite comparten el `enum OpenHandle` con archivos/TCP/UDP (registro común; `close(h)` no distingue)
+→ extraerlos es un **split de registro** (diseño propio de sus Pasos). **Crypto, en cambio, es puro**
+(10 funciones sin estado, único uso directo de `ring::`) → se extrae limpio y valida el mecanismo con
+riesgo cero. Por eso el Paso 0 = crypto.
+
+**0a — extracción** (commit `d199b93`): nuevo workspace member `crates/ray-runtime` con módulo `crypto`
+tras la feature `crypto` (ring 0.17): sha256/sha512/sha1/hmac/ed25519_*/chacha20poly1305_*/crypto_random.
+Firmas de tipos simples (`&[u8]`/`Vec<u8>`); sin la feature, stubs (compila sin ring). `builtins.rs`
+**delega** (una línea por función) conservando su gating cfg (net-tls/wasm) → todos los call sites
+(vm/interpreter/cli/index) intactos. `Cargo.toml`: `[workspace]`; ray-runtime opcional (no-wasm), enlazado
+por `net-tls` vía `ray-runtime?/crypto` (deps target-gated en features); `ring` ya no se declara directo en
+raylang. Verificado: build default + slim (`--no-default-features`) OK; wasm no arrastra ray-runtime/ring
+(`cargo tree`: ausentes; el fallo getrandom/wasm es preexistente y ajeno).
+
+**0b — la fontanería + cripto nativa** (commit `cf8a8e5`): `build_native` **bifurca**. `transpile()`
+devuelve `Transpiled { source, rt_features }`: las features que el programa necesita, activadas **bajo
+demanda** al interceptar un builtin con-crate. El transpilador intercepta los primitivos de cripto
+(`__sha256`/…/`__chacha20poly1305_*`) → `ray_runtime::crypto::*` (marshalling: `bytes`=`Rc<[u8]>`, `&expr`
+deref-coerce a `&[u8]`; `Vec<u8>`→`Rc<[u8]>`; `Option<Vec<u8>>`→`[bytes]` etiquetado) y activa
+`needs_rt_crypto`. `build_native`: sin features → `rustc` pelado (camino rápido de siempre, sin red); con
+features → genera un **proyecto Cargo** temporal (`src/main.rs` + `ray-runtime` con las fuentes
+**incrustadas** vía `include_str!` → paridad con la VM por construcción) y compila con `cargo`, activando
+SOLO lo detectado; `CARGO_TARGET_DIR` compartido → ring compila una vez por máquina. Gotcha cazado: la
+resolución de nombre recorta el prefijo `__` antes del match → se interceptan los nombres pelados
+(`sha256`) con guarda `name` empieza por `__` (no pisar un método de usuario homónimo).
+
+**Vertical slice end-to-end**: un programa con `std/crypto` (sha256/sha512/hmac/ed25519/chacha20poly1305)
+transpila a **NATIVO por primera vez**, byte-idéntico a la VM (antes: stub que panica). Camino rápido
+intacto. 605 tests lib + 22 `build_native` (serial) verdes; tests nuevos
+`build_native_crypto_de_produccion_via_ray_runtime` + `build_native_sin_crate_externo_usa_la_via_rapida`.
+**Siguiente**: Paso 1 = `rustls` (TLS, el de mayor valor — desbloquea https/webserver + clientes de DB),
+que estrena el split del registro de handles. Luego rusqlite, ring-extra.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

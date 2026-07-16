@@ -262,6 +262,65 @@ fn build_native_spawn_de_funcion_nombrada_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_crypto_de_produccion_via_ray_runtime_coincide_con_la_vm() {
+    // Paso 0b del crate ray-runtime (docs/transpilador-nativo.md §4-5): un programa que usa cripto de
+    // PRODUCCIÓN (std/crypto → ring) transpila a nativo por PRIMERA vez. build_native detecta la feature
+    // `crypto`, genera un proyecto Cargo con ray-runtime incrustado y compila con cargo. El binario llama al
+    // MISMO ring que la VM → salida byte-idéntica (sha256/hmac/ed25519 son deterministas).
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native crypto: cargo no disponible");
+        return;
+    }
+    let base = tmp("build_native_crypto");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/crypto;\n\
+         fn main() -> int {\n\
+           let data = \"hola mundo\".to_bytes();\n\
+           print(to_string(crypto.sha256(data)));\n\
+           print(to_string(crypto.hmac_sha256(\"clave\".to_bytes(), data)));\n\
+           let seed = \"0123456789abcdef0123456789abcdef\".to_bytes();\n\
+           match (crypto.ed25519_public_key(seed)) {\n\
+             Option.Some(pk) => match (crypto.ed25519_sign(seed, data)) {\n\
+               Option.Some(sig) => print(to_string(crypto.ed25519_verify(pk, data, sig))),\n\
+               Option.None => print(\"no sign\"),\n\
+             },\n\
+             Option.None => print(\"no pk\"),\n\
+           }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native crypto ok\n{err}");
+    assert!(out.contains("ray-runtime: crypto"), "usó el camino Cargo con ray-runtime: {out}");
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "nativo ≡ VM (cripto de producción vía ring en ray-runtime)");
+}
+
+#[test]
+fn build_native_sin_crate_externo_usa_la_via_rapida_rustc() {
+    // El otro lado de la bifurcación: un programa SIN subsistemas-con-crate compila por `rustc` pelado
+    // (camino rápido, sin Cargo) → el mensaje de éxito NO menciona ray-runtime. Cero regresión de
+    // velocidad/red para el caso común (el 90 % de programas).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native fast-path: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_fast");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { print(\"hola\"); 0 }\n").unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native fast-path ok\n{err}");
+    assert!(!out.contains("ray-runtime"), "camino rápido rustc, sin ray-runtime: {out}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(String::from_utf8_lossy(&native.stdout), "hola\n", "corre como la VM");
+}
+
+#[test]
 fn build_native_structured_concurrency_coincide_con_la_vm() {
     // `ray build --native` de structured concurrency (scope + spawn→Task + join): las tareas se lanzan en
     // hilos reales, join recoge sus resultados, scope las une al salir. Salida determinista-por-diseño.

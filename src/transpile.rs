@@ -364,6 +364,10 @@ struct Transpiler {
     /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
     /// de socket (`std::net::TcpStream`/`TcpListener`).
     needs_net: bool,
+    /// ¿Usa cripto de producción (`__sha256`/`__hmac_sha256`/`__ed25519_*`/`__chacha20poly1305_*`/…)? Se
+    /// interceptan a `ray_runtime::crypto::*` → el binario nativo llama al MISMO código que la VM (ring).
+    /// Activa la feature `crypto` de `ray-runtime` → `build_native` genera un proyecto Cargo (no rustc pelado).
+    needs_rt_crypto: bool,
     /// Nombres de `var` locales que van en una **celda** `Rc<RefCell<T>>` (B1): capturadas y mutadas por
     /// una closure. Se leen con `.borrow().clone()` y se escriben con `.borrow_mut()`; la closure captura
     /// un clon del `Rc`. Se pueblan al entrar en cada función/closure (con su `cell_vars`) y se quitan al
@@ -372,7 +376,16 @@ struct Transpiler {
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
-pub fn transpile(prog: &Program) -> Result<String, String> {
+/// El resultado de transpilar: el fuente Rust + las **features de `ray-runtime`** que el programa necesita
+/// (activadas bajo demanda al interceptar un builtin que envuelve un crate). Vacío → cero deps externas →
+/// `build_native` compila con `rustc` pelado (camino rápido); no vacío → genera un proyecto Cargo con
+/// `ray-runtime` (esas features) y compila con `cargo`. Ver docs/transpilador-nativo.md §4.5.
+pub struct Transpiled {
+    pub source: String,
+    pub rt_features: Vec<&'static str>,
+}
+
+pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
@@ -436,6 +449,7 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
         needs_signals: false,
         needs_time_rng: false,
         needs_net: false,
+        needs_rt_crypto: false,
         cells: std::collections::HashSet::new(),
     };
 
@@ -829,7 +843,12 @@ pub fn transpile(prog: &Program) -> Result<String, String> {
             "fn __ray_random_seed(n: i64) { *__ray_rng().lock().unwrap() = n as u64; }\n",
         ));
     }
-    Ok(out)
+    // Features de `ray-runtime` a activar (bajo demanda). Vacío → `build_native` usa `rustc` pelado.
+    let mut rt_features = Vec::new();
+    if t.needs_rt_crypto {
+        rt_features.push("crypto");
+    }
+    Ok(Transpiled { source: out, rt_features })
 }
 
 impl Transpiler {
@@ -2906,6 +2925,62 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str(", |__acc, __x| __f(__acc, __x.clone())) }");
             }
+            // Cripto de producción (M43): los primitivos `__*` se interceptan a `ray_runtime::crypto::*`
+            // (el MISMO código que la VM → oráculo byte-idéntico) y activan la feature `crypto` de
+            // ray-runtime (→ `build_native` genera un proyecto Cargo). NOTA: `method` ya viene SIN el prefijo
+            // `__` (línea ~2399 lo recorta), así que se matchea el nombre pelado con guarda `name` empieza
+            // por `__` (no interceptar un método de usuario homónimo). El arg `bytes` es `Rc<[u8]>`; `&expr`
+            // deref-coerce a `&[u8]`. Retorno `Vec<u8>` → `Rc<[u8]>`; `Option<Vec<u8>>` → `[bytes]` etiquetado
+            // (`Rc<RefCell<Vec<Rc<[u8]>>>>`: vacío/único), que el prelude envuelve en `Option`.
+            "sha256" | "sha512" | "sha1" if name.starts_with("__") => {
+                self.needs_rt_crypto = true;
+                write!(out, "Rc::<[u8]>::from(ray_runtime::crypto::{}(&", method).unwrap();
+                self.emit_expr(out, eff[0])?;
+                out.push_str("))");
+            }
+            "hmac_sha256" if name.starts_with("__") => {
+                self.needs_rt_crypto = true;
+                out.push_str("Rc::<[u8]>::from(ray_runtime::crypto::hmac_sha256(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("))");
+            }
+            "crypto_random_bytes" if name.starts_with("__") => {
+                self.needs_rt_crypto = true;
+                out.push_str("Rc::<[u8]>::from(ray_runtime::crypto::crypto_random_bytes(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("))");
+            }
+            "ed25519_verify" if name.starts_with("__") => {
+                self.needs_rt_crypto = true;
+                out.push_str("ray_runtime::crypto::ed25519_verify(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            "ed25519_public_key" | "ed25519_sign" | "chacha20poly1305_seal" | "chacha20poly1305_open"
+                if name.starts_with("__") =>
+            {
+                self.needs_rt_crypto = true;
+                let argc = match method {
+                    "ed25519_public_key" => 1,
+                    "ed25519_sign" => 2,
+                    _ => 4, // chacha seal/open: clave, nonce, aad, dato
+                };
+                write!(out, "{{ let __r = ray_runtime::crypto::{}(", method).unwrap();
+                for i in 0..argc {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push('&');
+                    self.emit_expr(out, eff[i])?;
+                }
+                out.push_str("); Rc::new(std::cell::RefCell::new(match __r { Some(__v) => vec![Rc::<[u8]>::from(__v)], None => Vec::new() })) }");
+            }
             _ => {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));
@@ -3101,6 +3176,21 @@ impl Transpiler {
                         other => return Err(format!("spike: values sobre {:?}", other)),
                     },
                     "sort" => self.type_of(recv0.ok_or("spike: sort sin receptor")?)?,
+                    // Cripto (M43): hash/hmac/csprng → bytes; verify → bool; los fallibles (ed25519
+                    // pk/sign, chacha seal/open) → `[bytes]` etiquetado (el prelude → Option<bytes>). `method`
+                    // ya viene sin `__` (ver emit_call); guarda `n` empieza por `__`.
+                    "sha256" | "sha512" | "sha1" | "hmac_sha256" | "crypto_random_bytes"
+                        if n.starts_with("__") =>
+                    {
+                        Type::Bytes
+                    }
+                    "ed25519_verify" if n.starts_with("__") => Type::Bool,
+                    "ed25519_public_key" | "ed25519_sign" | "chacha20poly1305_seal"
+                    | "chacha20poly1305_open"
+                        if n.starts_with("__") =>
+                    {
+                        Type::Array(Box::new(Type::Bytes))
+                    }
                     // unwrap_or/unwrap desenvuelven un Option<T>/Result<T,E> → T.
                     "unwrap_or" | "unwrap" => {
                         unwrapped(&self.type_of(recv0.ok_or("spike: unwrap sin receptor")?)?)
@@ -3670,7 +3760,7 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex");
         let mut prog = crate::parser::parse(tokens).expect("parse");
         crate::checker::check(&mut prog).expect("check");
-        transpile(&prog).expect("transpile")
+        transpile(&prog).expect("transpile").source
     }
 
     #[test]
@@ -4033,7 +4123,7 @@ mod tests {
         };
         let mut prog = loaded.program;
         crate::checker::check(&mut prog).expect("check");
-        let rust = transpile(&prog).expect("transpile");
+        let rust = transpile(&prog).expect("transpile").source;
         assert!(rust.contains("figuras_CC_Rect"), "tipo namespacado manglado: {}", rust);
         // No debe quedar `::` en un IDENTIFICADOR de tipo Rust (struct/enum def, referencia): esos van
         // manglados. (El `::` sí aparece en las cadenas de Display de RayShow, entre comillas.)
@@ -4053,7 +4143,7 @@ mod tests {
         };
         let mut prog = loaded.program;
         crate::checker::check(&mut prog).expect("check");
-        let rust = transpile(&prog).expect("transpile");
+        let rust = transpile(&prog).expect("transpile").source;
         assert!(rust.contains(").sqrt()"), "{}", rust);
         assert!(rust.contains(").powf("), "{}", rust);
         assert!(rust.contains(").floor()"), "{}", rust);
@@ -4160,7 +4250,7 @@ mod tests {
         };
         let mut prog = loaded.program;
         crate::checker::check(&mut prog).expect("check");
-        let rust = transpile(&prog).expect("transpile");
+        let rust = transpile(&prog).expect("transpile").source;
         assert!(rust.contains("Tcp(std::net::TcpStream)"), "handle Tcp: {}", rust);
         assert!(rust.contains("__ray_tcp_listen(") && rust.contains("__ray_tcp_accept("), "listen/accept: {}", rust);
         assert!(rust.contains("__ray_socket_read(") && rust.contains("__ray_socket_write("), "read/write: {}", rust);
@@ -4184,7 +4274,7 @@ mod tests {
         };
         let mut prog = loaded.program;
         crate::checker::check(&mut prog).expect("check");
-        let rust = transpile(&prog).expect("transpile");
+        let rust = transpile(&prog).expect("transpile").source;
         assert!(rust.contains("SystemTime::now()"), "now → SystemTime: {}", rust);
         assert!(rust.contains("__ray_monotonic()"), "monotonic: {}", rust);
         assert!(rust.contains("__ray_random_f64()") && rust.contains("__ray_random_int("), "random: {}", rust);

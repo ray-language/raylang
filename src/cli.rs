@@ -416,8 +416,8 @@ fn cmd_build(args: &[String]) {
 fn build_native(path: &str, output: Option<&str>, release: bool) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let rust = match crate::transpile::transpile(&program) {
-        Ok(src) => src,
+    let transpiled = match crate::transpile::transpile(&program) {
+        Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");
             process::exit(65);
@@ -426,8 +426,21 @@ fn build_native(path: &str, output: Option<&str>, release: bool) {
     // Nombre de salida: `-o`, o el stem del archivo de entrada.
     let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
     let out_bin = output.map(String::from).unwrap_or_else(|| stem.to_string());
-    // El `.rs` temporal va al directorio temporal del sistema. Incluye el PID para que dos `ray build
-    // --native` CONCURRENTES (o con archivos del mismo stem) no colisionen sobre el mismo temporal.
+    // **Bifurcación bajo demanda** (P2.b, docs/transpilador-nativo.md §4.5): sin features de `ray-runtime`
+    // (el caso común) → `rustc` pelado, rápido y sin red (camino de siempre). Con features (el programa usa
+    // cripto/…) → un proyecto Cargo generado que enlaza `ray-runtime` (mismo código que la VM).
+    if transpiled.rt_features.is_empty() {
+        build_native_rustc(&transpiled.source, stem, &out_bin, release);
+    } else {
+        build_native_cargo(&transpiled.source, &transpiled.rt_features, stem, &out_bin, release);
+    }
+}
+
+/// Camino rápido: transpila a un `.rs` autocontenido y lo compila con `rustc` directo (sin Cargo). Para
+/// programas que no usan ningún crate externo — el 90 % de los casos. `-O` (dev) / opt3+lto+native (release).
+fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool) {
+    // El `.rs` temporal incluye el PID para que dos `ray build --native` CONCURRENTES (o con el mismo stem)
+    // no colisionen sobre el mismo temporal.
     let rs_path = std::env::temp_dir().join(format!("ray_native_{stem}_{}.rs", process::id()));
     if let Err(e) = std::fs::write(&rs_path, rust) {
         eprintln!("native build: no se pudo escribir el Rust temporal: {e}");
@@ -439,12 +452,7 @@ fn build_native(path: &str, output: Option<&str>, release: bool) {
     } else {
         &["-O", "-A", "warnings"]
     };
-    let status = process::Command::new("rustc")
-        .args(flags)
-        .arg(&rs_path)
-        .arg("-o")
-        .arg(&out_bin)
-        .status();
+    let status = process::Command::new("rustc").args(flags).arg(&rs_path).arg("-o").arg(out_bin).status();
     match status {
         Ok(s) if s.success() => {
             let tier = if release { " (release: opt3+lto+native)" } else { "" };
@@ -456,6 +464,84 @@ fn build_native(path: &str, output: Option<&str>, release: bool) {
         }
         Err(e) => {
             eprintln!("native build: no se pudo ejecutar rustc (¿está en el PATH?): {e}");
+            process::exit(65);
+        }
+    }
+}
+
+// Fuentes de `ray-runtime` INCRUSTADAS en el binario `ray` (como `prelude.ray`): al generar un proyecto
+// Cargo se escriben tal cual → el runtime es EXACTAMENTE el de esta versión de `ray` (paridad con la VM por
+// construcción), sin publicar el crate ni depender de red salvo la primera descarga de sus deps (ring…).
+const RT_CARGO_TOML: &str = include_str!("../crates/ray-runtime/Cargo.toml");
+const RT_LIB_RS: &str = include_str!("../crates/ray-runtime/src/lib.rs");
+const RT_CRYPTO_RS: &str = include_str!("../crates/ray-runtime/src/crypto.rs");
+
+/// Camino Cargo: el programa usa un subsistema con crate externo (cripto/…). Se genera un proyecto Cargo
+/// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
+/// `cargo build`, activando SOLO las features detectadas. Un `CARGO_TARGET_DIR` compartido compila los
+/// crates (ring…) una vez por máquina; builds siguientes solo recompilan `main.rs`.
+fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &str, release: bool) {
+    // Nombre de paquete Cargo válido (letras/dígitos/`_`/`-`, no empieza por dígito): el stem saneado.
+    let mut pkg: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    if pkg.is_empty() || pkg.chars().next().map_or(true, |c| c.is_ascii_digit()) {
+        pkg.insert(0, 'p');
+    }
+    let proj = std::env::temp_dir().join(format!("ray_native_{stem}_{}", process::id()));
+    let write = |rel: &str, content: &str| -> std::io::Result<()> {
+        let p = proj.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(p, content)
+    };
+    // Las features detectadas, como lista TOML (`"crypto", "tls"`).
+    let feats: String = rt_features.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
+    // `[workspace]` vacío: el proyecto es su PROPIA raíz de workspace (no hereda una ancestra por azar). Los
+    // perfiles espejan los tiers de rustc: dev=opt2 (rápido), release=opt3+lto+cu1 (target-cpu vía RUSTFLAGS).
+    let cargo_toml = format!(
+        "[package]\nname = \"{pkg}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n\n\
+         [dependencies]\nray-runtime = {{ path = \"ray-runtime\", default-features = false, features = [{feats}] }}\n\n\
+         [profile.dev]\nopt-level = 2\n\n[profile.release]\nopt-level = 3\nlto = \"fat\"\ncodegen-units = 1\n"
+    );
+    let files = [
+        ("Cargo.toml", cargo_toml.as_str()),
+        ("src/main.rs", rust),
+        ("ray-runtime/Cargo.toml", RT_CARGO_TOML),
+        ("ray-runtime/src/lib.rs", RT_LIB_RS),
+        ("ray-runtime/src/crypto.rs", RT_CRYPTO_RS),
+    ];
+    for (rel, content) in files {
+        if let Err(e) = write(rel, content) {
+            eprintln!("native build: no se pudo escribir el proyecto Cargo ({rel}): {e}");
+            process::exit(65);
+        }
+    }
+    // Caché de target COMPARTIDA entre builds → ring/… se compilan una vez por máquina.
+    let target_dir = std::env::temp_dir().join("ray_native_cache");
+    let mut cmd = process::Command::new("cargo");
+    cmd.arg("build").current_dir(&proj).env("CARGO_TARGET_DIR", &target_dir);
+    if release {
+        cmd.arg("--release").env("RUSTFLAGS", "-C target-cpu=native -A warnings");
+    } else {
+        cmd.env("RUSTFLAGS", "-A warnings");
+    }
+    match cmd.status() {
+        Ok(s) if s.success() => {
+            let sub = if release { "release" } else { "debug" };
+            let produced = target_dir.join(sub).join(&pkg);
+            if let Err(e) = std::fs::copy(&produced, out_bin) {
+                eprintln!("native build: no se pudo copiar el binario ({}): {e}", produced.display());
+                process::exit(65);
+            }
+            let tier = if release { " (release: opt3+lto+native)" } else { "" };
+            println!("ok: binario nativo '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
+        }
+        Ok(s) => {
+            eprintln!("native build: cargo falló (código {})", s.code().unwrap_or(-1));
+            process::exit(65);
+        }
+        Err(e) => {
+            eprintln!("native build: no se pudo ejecutar cargo (¿está en el PATH?): {e}");
             process::exit(65);
         }
     }
@@ -1450,7 +1536,7 @@ fn emit_rust(path: &str) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
     match crate::transpile::transpile(&program) {
-        Ok(src) => print!("{}", src),
+        Ok(t) => print!("{}", t.source),
         Err(e) => {
             eprintln!("{}", e);
             process::exit(65);

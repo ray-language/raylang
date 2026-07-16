@@ -189,14 +189,47 @@ fn cmd_dev(args: &[String]) {
                 .filter(|p| p.as_os_str().len() > 0)
         })
         .unwrap_or(cwd);
+    // Socket-activation (M92.3): `--port N`/`--listen host:port` (o `[dev] listen` del ray.toml) → el
+    // supervisor pre-abre y RETIENE ese socket; los hijos lo adoptan (fd heredado) en vez de re-bind, así
+    // sobrevive a los reinicios (cero conexiones rechazadas). `--port`/`--listen` NO se reenvían al hijo.
+    let (cli_listen, fwd_args) = take_listen(args);
+    let listen_addr = cli_listen.or_else(|| load_manifest().and_then(|m| m.dev_listen));
+    // Retiene el socket durante toda la sesión (vive hasta que `ray dev` muere). Solo unix (fd passing).
+    #[cfg(unix)]
+    let dev_sock = listen_addr.as_ref().and_then(|addr| match std::net::TcpListener::bind(addr) {
+        Ok(l) => {
+            eprintln!("[dev] holding {addr} across restarts (socket-activation)");
+            Some(l)
+        }
+        Err(e) => {
+            eprintln!("[dev] could not pre-open {addr}: {e}; restarts will re-bind normally");
+            None
+        }
+    });
+    #[cfg(not(unix))]
+    let dev_sock: Option<std::net::TcpListener> = {
+        if listen_addr.is_some() {
+            eprintln!("[dev] --port/--listen (socket-activation) is unix-only; ignoring");
+        }
+        None
+    };
+    #[cfg(unix)]
+    let listen_pair = {
+        use std::os::unix::io::AsRawFd;
+        dev_sock.as_ref().zip(listen_addr.as_ref()).map(|(l, a)| (l.as_raw_fd(), a.as_str()))
+    };
+    #[cfg(not(unix))]
+    let listen_pair: Option<(i32, &str)> = None;
+    let _ = &dev_sock; // se retiene por su lado (el fd vive mientras `dev_sock` no se dropee)
+
     // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
     // (mismos que `cmd_run`), y el primer resto es el archivo explícito (o `None` → default del proyecto).
-    let entry = dev_entry(args);
+    let entry = dev_entry(&fwd_args);
     eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
-    let mut child = spawn_dev_child(&exe, args);
+    let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair);
     let mut running = true;
     loop {
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
@@ -227,7 +260,7 @@ fn cmd_dev(args: &[String]) {
         if running {
             terminate_gracefully(&mut child);
         }
-        child = spawn_dev_child(&exe, args);
+        child = spawn_dev_child(&exe, &fwd_args, listen_pair);
         running = true;
     }
 }
@@ -244,8 +277,36 @@ fn dev_entry(args: &[String]) -> Option<String> {
 
 /// Lanza el programa como `ray run <args...>` (mismo binario): hereda la resolución de entrada, la
 /// regeneración de templates y los flags. Registra el pid en `DEV_CHILD` para la limpieza por señal.
-fn spawn_dev_child(exe: &Path, args: &[String]) -> process::Child {
-    match process::Command::new(exe).arg("run").args(args).spawn() {
+/// Si `listen` está (unix, socket-activation M92.3): dup2-ea el socket retenido del supervisor al fd 3
+/// del hijo (antes del exec) y le pasa `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR` → el hijo lo ADOPTA en `tcp_listen`.
+fn spawn_dev_child(exe: &Path, args: &[String], listen: Option<(i32, &str)>) -> process::Child {
+    let mut cmd = process::Command::new(exe);
+    cmd.arg("run").args(args);
+    #[cfg(unix)]
+    if let Some((fd, addr)) = listen {
+        use std::os::unix::process::CommandExt;
+        const TARGET_FD: i32 = 3; // convención systemd (SD_LISTEN_FDS_START)
+        cmd.env("RAY_LISTEN_FD", TARGET_FD.to_string()).env("RAY_LISTEN_ADDR", addr);
+        // SAFETY: `pre_exec` corre en el hijo tras `fork` y antes de `exec`; solo se llama a `dup2`/`fcntl`
+        // (async-signal-safe). `fd` (el listener del supervisor) es válido en el hijo por herencia del fork.
+        // Se limpia CLOEXEC en el fd destino EXPLÍCITAMENTE: si `fd` ya ERA 3 (típico: primer libre tras
+        // stdio), `dup2(3,3)` es un no-op que NO limpia CLOEXEC → sin esto, el fd 3 se cerraría en el exec.
+        unsafe {
+            cmd.pre_exec(move || {
+                unsafe extern "C" {
+                    fn dup2(oldfd: i32, newfd: i32) -> i32;
+                    fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
+                }
+                const F_SETFD: i32 = 2; // limpiar los flags del descriptor (quita FD_CLOEXEC)
+                if unsafe { dup2(fd, TARGET_FD) } < 0 || unsafe { fcntl(TARGET_FD, F_SETFD, 0) } < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let _ = &listen; // en no-unix el parámetro no se usa
+    match cmd.spawn() {
         Ok(c) => {
             DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
             c
@@ -255,6 +316,22 @@ fn spawn_dev_child(exe: &Path, args: &[String]) -> process::Child {
             process::exit(70);
         }
     }
+}
+
+/// Separa el socket a retener entre reinicios (M92.3) de los args a reenviar: `--listen host:port` o
+/// `--port N` (→ `127.0.0.1:N`). Devuelve `(addr, resto_de_args)`. Sin el flag, `(None, args)`.
+fn take_listen(args: &[String]) -> (Option<String>, Vec<String>) {
+    let mut listen = None;
+    let mut rest = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--listen" => listen = it.next().cloned(),
+            "--port" => listen = it.next().map(|p| format!("127.0.0.1:{p}")),
+            _ => rest.push(a.clone()),
+        }
+    }
+    (listen, rest)
 }
 
 /// Corre `ray build <entry>` (chequea + compila, sin ejecutar) como el gate del reinicio: `Ok(())` si

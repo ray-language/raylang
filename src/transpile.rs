@@ -2896,15 +2896,19 @@ impl Transpiler {
                 out.push(')');
             }
             // --- Map ---
+            // H4 (la clase completa): igual que en las asignaciones indexadas, la clave/valor/delta
+            // pueden LEER el mismo map (`m.insert(k, m.get_or(k,0)+1)`) → van a temporales `__rt_*`
+            // ANTES del borrow_mut, en el orden de la VM (map, clave, valor), o el RefCell panica
+            // donde la VM funciona.
             "insert" => {
                 // devuelve unit → bloque con `;` (HashMap::insert de Rust devuelve Option).
-                out.push('{');
+                out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().insert(");
+                out.push_str("; let __rt_k = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(", ");
+                out.push_str("; let __rt_v = ");
                 self.emit_expr(out, eff[2])?;
-                out.push_str(");}");
+                out.push_str("; __rt_m.borrow_mut().insert(__rt_k, __rt_v); }");
             }
             // add_to(m, k, delta): `*m.entry(k).or_insert(0) += delta` (upsert acumulativo, como la VM).
             "add_to" => {
@@ -2912,13 +2916,14 @@ impl Transpiler {
                     Type::Map(_, v) if matches!(*v, Type::Float) => "0.0",
                     _ => "0i64",
                 };
-                out.push_str("(*");
+                out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().entry(");
+                out.push_str("; let __rt_k = ");
                 self.emit_expr(out, eff[1])?;
-                write!(out, ").or_insert({}) += ", zero).unwrap();
+                out.push_str("; let __rt_d = ");
                 self.emit_expr(out, eff[2])?;
-                out.push(')');
+                write!(out, "; *__rt_m.borrow_mut().entry(__rt_k).or_insert({}) += __rt_d; }}", zero)
+                    .unwrap();
             }
             // get_or(m, k, default) — el del prelude lleva 3 args; un `get_or` con otra aridad no es este
             // builtin → cae al fallback (evita el pánico por `eff[2]` inexistente).
@@ -2937,12 +2942,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str(").cloned()");
             }
-            // remove(m, k) → Option<V> (quita y devuelve). Fusionado con unwrap_or.
+            // remove(m, k) → Option<V> (quita y devuelve). Fusionado con unwrap_or. La clave se iza
+            // antes del borrow_mut (puede leer el mismo map: `m.remove(m.keys()[0])`).
             "remove" => {
+                out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().remove(&");
+                out.push_str("; let __rt_k = ");
                 self.emit_expr(out, eff[1])?;
-                out.push(')');
+                // el resultado se liga a un temporal: el RefMut de una expr de cola sobreviviría
+                // a los locales del bloque (E0597).
+                out.push_str("; let __rt_r = __rt_m.borrow_mut().remove(&__rt_k); __rt_r }");
             }
             "contains_key" => {
                 self.emit_expr(out, eff[0])?;

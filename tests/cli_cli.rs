@@ -1358,6 +1358,47 @@ fn build_native_asignacion_autoreferente_no_hace_doble_borrow_del_refcell() {
 }
 
 #[test]
+fn build_native_map_autoreferente_no_hace_doble_borrow_del_refcell() {
+    // H4, la CLASE completa (revisión post-lote): la misma auto-referencia sobre un Map —
+    // `m.insert(k, m.get_or(k,0)+1)`, `m.add_to(k, m.get_or(k,0))`, `m.remove(m.keys()[0])` —
+    // evaluaba clave/valor/delta DENTRO del borrow_mut() → panic de RefCell donde la VM funciona.
+    // Ahora se izan a temporales `__rt_*` antes del borrow, en el orden de la VM. Oráculo: nativo ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native map doble-borrow: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_map_double_borrow");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+           var m: Map<string, int> = Map.new();\n\
+           m.insert(\"a\", 1);\n\
+           m.insert(\"a\", m.get_or(\"a\", 0) + 1);   // clave/valor leen el mismo map -> 2\n\
+           m.add_to(\"a\", m.get_or(\"a\", 0));       // el delta lee el mismo map -> 4\n\
+           print(to_string(m.get_or(\"a\", 0)));\n\
+           let r = m.remove(m.keys()[0]);         // la clave lee el mismo map\n\
+           match (r) {\n\
+             Option.Some(v) => print(to_string(v)),\n\
+             Option.None => print(\"none\"),\n\
+           }\n\
+           print(to_string(m.len()));\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("mdb_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native map doble-borrow sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert!(native.status.success(), "el binario no panica: {}", String::from_utf8_lossy(&native.stderr));
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "Map autoreferente nativo ≡ VM");
+    assert_eq!(native_out, "4\n4\n0\n", "los valores esperados\n{native_out}");
+}
+
+#[test]
 fn build_native_ffi_libc_libm_coincide_con_la_vm() {
     // `ray build --native` con FFI (M41): `extern "m"/"c" { … }` → declaraciones `extern "C"` + wrappers
     // que marshalan (string→char*, etc.). rustc enlaza libm (`#[link(name="m")]`) y libc (implícita). Las

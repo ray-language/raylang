@@ -691,7 +691,7 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     if transpiled.rt_features.is_empty() {
         build_native_rustc(&transpiled.source, stem, &out_bin, release, target);
     } else {
-        build_native_cargo(&transpiled.source, &transpiled.rt_features, stem, &out_bin, release, target);
+        build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target);
     }
 }
 
@@ -772,11 +772,24 @@ const RT_SQLITE_RS: &str = include_str!("../crates/ray-runtime/src/sqlite.rs");
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
 /// `cargo build`, activando SOLO las features detectadas. Un `CARGO_TARGET_DIR` compartido compila los
 /// crates (ring…) una vez por máquina; builds siguientes solo recompilan `main.rs`.
-fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &str, release: bool, target: Option<&str>) {
+fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>) {
     // Nombre de paquete Cargo válido (letras/dígitos/`_`/`-`, no empieza por dígito): el stem saneado.
     let mut pkg: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     if pkg.is_empty() || pkg.chars().next().map_or(true, |c| c.is_ascii_digit()) {
         pkg.insert(0, 'p');
+    }
+    // H14: la caché de target es COMPARTIDA y persistente → el artefacto vive en `<caché>/<profile>/<pkg>`.
+    // Con solo el stem, dos programas DISTINTOS llamados `prog.ray` (o `a.b.ray` vs `a_b.ray`, que el saneado
+    // colapsa) compartirían la ruta: el build B pisa el binario y A copiaría el de B (carrera silenciosa de
+    // corrección). El pkg incorpora un hash corto de la ruta CANÓNICA del fuente → artefactos disjuntos por
+    // programa. (DefaultHasher no está garantizado entre versiones de Rust: si cambia, el coste es una
+    // recompilación, nunca corrección.)
+    {
+        use std::hash::{Hash, Hasher};
+        let canon = std::fs::canonicalize(src_path).unwrap_or_else(|_| std::path::PathBuf::from(src_path));
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        canon.hash(&mut h);
+        pkg.push_str(&format!("_{:08x}", h.finish() as u32));
     }
     let proj = std::env::temp_dir().join(format!("ray_native_{stem}_{}", process::id()));
     let write = |rel: &str, content: &str| -> std::io::Result<()> {

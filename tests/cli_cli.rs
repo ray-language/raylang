@@ -498,6 +498,47 @@ fn build_native_crypto_de_produccion_via_ray_runtime_coincide_con_la_vm() {
 }
 
 #[test]
+fn build_native_dos_programas_con_el_mismo_stem_no_comparten_artefacto() {
+    // H14 (revisión post-lote): el artefacto del camino Cargo vive en `<caché>/<profile>/<pkg>` con la
+    // caché COMPARTIDA por máquina; con pkg = solo el stem, dos programas distintos llamados `prog.ray`
+    // colisionaban (un build concurrente podía copiar el binario del otro). Ahora el pkg incorpora un
+    // hash de la ruta canónica del fuente. Este test fija el mecanismo de punta a punta: dos `prog.ray`
+    // DISTINTOS (en dirs distintos) por el camino Cargo producen cada uno SU binario con SU salida.
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native mismo stem: cargo no disponible");
+        return;
+    }
+    let base_a = tmp("build_native_stem_a");
+    let base_b = tmp("build_native_stem_b");
+    let prog = |texto: &str| {
+        format!(
+            "import std/crypto;\n\
+             fn main() -> int {{\n\
+               print(to_string(crypto.sha256(\"{texto}\".to_bytes())));\n\
+               0\n\
+             }}\n"
+        )
+    };
+    std::fs::write(base_a.join("prog.ray"), prog("soy A")).unwrap();
+    std::fs::write(base_b.join("prog.ray"), prog("soy B")).unwrap();
+    let bin_a = base_a.join("a_bin");
+    let bin_b = base_b.join("b_bin");
+    let (_o, err, code) = ray(&base_a, &["build", "prog.ray", "--native", "-o", bin_a.to_str().unwrap()]);
+    assert_eq!(code, 0, "build A ok\n{err}");
+    let (_o, err, code) = ray(&base_b, &["build", "prog.ray", "--native", "-o", bin_b.to_str().unwrap()]);
+    assert_eq!(code, 0, "build B ok\n{err}");
+    let out_a = Command::new(&bin_a).output().expect("corre A");
+    let out_b = Command::new(&bin_b).output().expect("corre B");
+    let (vm_a, _e, _c) = ray(&base_a, &["run", "prog.ray"]);
+    let (vm_b, _e, _c) = ray(&base_b, &["run", "prog.ray"]);
+    let na = String::from_utf8_lossy(&out_a.stdout).into_owned();
+    let nb = String::from_utf8_lossy(&out_b.stdout).into_owned();
+    assert_eq!(na, vm_a, "A nativo ≡ VM");
+    assert_eq!(nb, vm_b, "B nativo ≡ VM");
+    assert_ne!(na, nb, "dos programas distintos con el mismo stem no comparten binario");
+}
+
+#[test]
 fn build_native_sqlite_via_ray_runtime_coincide_con_la_vm() {
     // Paso 2 del crate ray-runtime: SQLite embebido (db/sqlite → rusqlite) transpila a nativo. build_native
     // detecta la feature `sqlite`, genera un proyecto Cargo con ray-runtime (rusqlite bundled) y compila con

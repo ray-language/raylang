@@ -548,7 +548,7 @@ fn build_native_without_rechaza_un_subsistema_desconocido() {
     let (_out, err, code) =
         ray(&base, &["build", "prog.ray", "--native", "--without", "foo", "-o", "x"]);
     assert_eq!(code, 64, "nombre inválido → exit 64\n{err}");
-    assert!(err.contains("unknown subsystem in --without"), "mensaje claro: {err}");
+    assert!(err.contains("unknown subsystem to exclude"), "mensaje claro: {err}");
 }
 
 #[test]

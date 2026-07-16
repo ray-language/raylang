@@ -926,6 +926,57 @@ fn build_native_iteradores_coinciden_con_la_vm() {
 }
 
 #[test]
+fn build_native_identificadores_palabra_clave_de_rust_no_rompen_rustc() {
+    // H5: un identificador LEGAL de raylang puede ser palabra reservada de Rust (`type`, `loop`, `move`,
+    // `mut`, `ref`, `where`) como variable, parámetro o CAMPO de struct. Antes generaba Rust inválido
+    // (`let loop = …`, `struct Cfg { type: i64 }`) → rustc rechazaba código raylang perfectamente válido.
+    // Ahora `mangle` los emite como raw identifiers (`r#type`) de forma consistente. Oráculo: nativo ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native keywords: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_kw");
+    std::fs::write(
+        base.join("prog.ray"),
+        "struct Cfg { type: int, ref: int }\n\
+         @derive(Show)\n\
+         enum St { type, ref(int) }\n\
+         fn twice(move: int) -> int {\n\
+           let loop = move + move;\n\
+           loop\n\
+         }\n\
+         fn val_of(s: St) -> int {\n\
+           match (s) {\n\
+             St.type => 0,\n\
+             St.ref(n) => n,\n\
+           }\n\
+         }\n\
+         fn main() -> int {\n\
+           let where = 5;\n\
+           var mut = twice(where);        // 10\n\
+           let c = Cfg { type: 3, ref: 4 };\n\
+           mut = mut + c.type + c.ref;     // 10 + 3 + 4 = 17\n\
+           let plus1 = fn(loop: int) -> int { loop + 1 };  // closure con param keyword\n\
+           mut = plus1(mut);               // 18\n\
+           let e = St.ref(7);\n\
+           print(to_string(mut + val_of(e)));  // 18 + 7 = 25\n\
+           print(e.show());                // '@derive(Show)': 'St.ref(7)' (nombre ORIGINAL, no r#ref)\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("kw_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native con keywords sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "keywords de Rust como identificadores nativo ≡ VM");
+    assert_eq!(native_out, "25\nSt.ref(7)\n", "el valor esperado (incl. show con nombre original)\n{native_out}");
+}
+
+#[test]
 fn build_native_asignacion_autoreferente_no_hace_doble_borrow_del_refcell() {
     // H4/H8: una asignación indexada/de campo cuyo índice, receptor o RHS lee la MISMA colección
     // (`a[a.len()-1] = a[0]`, `p.x = p.x + 1`, `w.push(w[0]+w[1])`) generaba antes

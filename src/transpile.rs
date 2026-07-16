@@ -31,14 +31,50 @@ struct FnSig {
 
 /// Convierte un nombre de raylang en un identificador Rust válido: los métodos de trait bajados por el
 /// checker llevan `#` (`Punto#show`) y los módulos `::` (`m::f`), ilegales en Rust. Identidad para los
-/// nombres normales. Los traits son ERASURE (M9): los métodos son funciones ordinarias tras el bajado.
+/// nombres normales (salvo keywords de Rust → raw identifiers). Los traits son ERASURE (M9): los métodos
+/// son funciones ordinarias tras el bajado.
+///
+/// NOTA sobre temporales: el transpilador emite temporales sintéticos con el prefijo **reservado `__rt_`**
+/// (`__rt_arr`, `__rt_rhs`, `__rt_v`, …). Un identificador de usuario que empiece por `__rt_` PODRÍA
+/// colisionar (raylang permite `_` inicial); es una convención reservada, como el `#`/`::`/`$` que el
+/// checker ya reserva para nombres sintetizados. La des-colisión total exigiría prefijar TODOS los
+/// nombres de usuario (namespace disjunto) — diferido por no justificar el churn.
 fn mangle(name: &str) -> String {
     if name == "self" {
         return "__self".to_string(); // `self` es palabra reservada de Rust fuera de un método
     }
     // `$` lo usan los temporales sintéticos del checker (p. ej. el bind del `?` con From-conversion,
     // `$to`/`$te`) → no es identificador Rust válido.
-    name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_").replace('$', "_D_")
+    let base = name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_").replace('$', "_D_");
+    // Un identificador LEGAL de raylang puede ser palabra RESERVADA de Rust (`type`, `loop`, `mod`,
+    // `move`, `ref`, `where`, `use`, `unsafe`, `async`, …) → generaría Rust inválido. Se emite como raw
+    // identifier `r#type`, válido en posición de variable/param/función/campo. Las cuatro que NO admiten
+    // `r#` (`crate`/`self`/`Self`/`super`) se escapan con sufijo. (Las palabras clave COMPARTIDAS con
+    // raylang —`fn`/`let`/`if`/`struct`/…— no llegan aquí: no son identificadores en raylang.) Solo se
+    // aplica a nombres "limpios" (sin `::`/`#`, que marcan nombres ya sintetizados por el checker).
+    if base == name {
+        if matches!(base.as_str(), "crate" | "Self" | "super") {
+            return format!("{base}_");
+        }
+        if is_rust_keyword(&base) {
+            return format!("r#{base}");
+        }
+    }
+    base
+}
+
+/// ¿Es `s` una palabra reservada de Rust (estricta o reservada-para-el-futuro) que un identificador
+/// de raylang podría llevar? Excluye las compartidas con raylang (no llegan como identificadores).
+fn is_rust_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        // Estrictas de Rust que SON identificadores legales en raylang (raylang no las reserva):
+        "as" | "const" | "extern" | "loop" | "mod" | "move" | "mut" | "ref" | "static" | "type"
+            | "unsafe" | "use" | "where" | "async" | "await" | "dyn"
+            // Reservadas de Rust para el futuro:
+            | "abstract" | "become" | "box" | "do" | "final" | "macro" | "override" | "priv"
+            | "typeof" | "unsized" | "virtual" | "yield" | "try"
+    )
 }
 
 /// ¿Es un método de un impl del PRELUDE sobre un tipo builtin (`[]#len`, `string#trim`, `int#show`)?
@@ -528,16 +564,16 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     // Map: `Map{k: v, …}` con los pares (renderizados) ordenados como cadena, como el Display del
     // runtime (`Value::Map`): determinista pese al HashMap. `print(map)` directo lo veta el checker,
     // pero un struct/enum que CONTENGA un Map (p. ej. `Json.JObject`) sí se renderiza recursivamente.
-    out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>> { fn ray_show(&self) -> String { let __m = self.borrow(); let mut __parts: Vec<String> = __m.iter().map(|(__k, __v)| format!(\"{}: {}\", __k.ray_show(), __v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
-    out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__v) => format!(\"Option.Some({})\", __v.ray_show()), None => \"Option.None\".to_string() } } }\n");
-    out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__v) => format!(\"Result.Ok({})\", __v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
+    out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>> { fn ray_show(&self) -> String { let __rt_m = self.borrow(); let mut __parts: Vec<String> = __rt_m.iter().map(|(__k, __rt_v)| format!(\"{}: {}\", __k.ray_show(), __rt_v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
+    out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__rt_v) => format!(\"Option.Some({})\", __rt_v.ray_show()), None => \"Option.None\".to_string() } } }\n");
+    out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__rt_v) => format!(\"Result.Ok({})\", __rt_v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
     // Tuplas (2 y 3 elementos): `(a, b)`. El checker no deja `print`ar una tupla, así que esto rara vez
     // se llama; hace falta para satisfacer el bound `T: RayShow` de un `Iter<(k, v)>` (los adaptadores
     // `enumerate`/`zip` generados por el trait Iterator, aun cuando queden como stubs).
     out.push_str("impl<A: RayShow, B: RayShow> RayShow for (A, B) { fn ray_show(&self) -> String { format!(\"({}, {})\", self.0.ray_show(), self.1.ray_show()) } }\n");
     out.push_str("impl<A: RayShow, B: RayShow, C: RayShow> RayShow for (A, B, C) { fn ray_show(&self) -> String { format!(\"({}, {}, {})\", self.0.ray_show(), self.1.ray_show(), self.2.ray_show()) } }\n");
     // bytes → hex minúsculas sin separador ({:02x} por octeto), como la VM (bytes_to_hex).
-    out.push_str("impl RayShow for Rc<[u8]> { fn ray_show(&self) -> String { let mut __s = String::with_capacity(self.len() * 2); for __b in self.iter() { __s.push_str(&format!(\"{:02x}\", __b)); } __s } }\n\n");
+    out.push_str("impl RayShow for Rc<[u8]> { fn ray_show(&self) -> String { let mut __rt_s = String::with_capacity(self.len() * 2); for __rt_b in self.iter() { __rt_s.push_str(&format!(\"{:02x}\", __rt_b)); } __rt_s } }\n\n");
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
@@ -560,14 +596,16 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
                     .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", fname))?;
                 let atys: Vec<String> =
                     args.iter().map(|a| rust_ty(a, &t.enums, &t.tparams)).collect::<Result<_, _>>()?;
-                writeln!(out, "    {}: Rc<dyn Fn({}) -> {}>,", fname, atys.join(", "), rust_ty(ret, &t.enums, &t.tparams)?).unwrap();
+                writeln!(out, "    {}: Rc<dyn Fn({}) -> {}>,", mangle(fname), atys.join(", "), rust_ty(ret, &t.enums, &t.tparams)?).unwrap();
             }
             out.push_str("}\n");
             continue;
         }
         writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", mangle(&s.name), generic_decl(&s.type_params)).unwrap();
         for (fname, fty) in &s.fields {
-            writeln!(out, "    {}: {},", fname, rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
+            // El nombre de campo puede ser palabra reservada de Rust (`type`, `ref`, …): mismo mangle
+            // que en literal/acceso/asignación → consistente.
+            writeln!(out, "    {}: {},", mangle(fname), rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
         }
         out.push_str("}\n");
     }
@@ -579,11 +617,11 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         writeln!(out, "#[derive(Clone)]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params)).unwrap();
         for v in &e.variants {
             if v.payload.is_empty() {
-                writeln!(out, "    {},", v.name).unwrap();
+                writeln!(out, "    {},", mangle(&v.name)).unwrap(); // la variante puede ser keyword de Rust
             } else {
                 let tys: Vec<String> =
                     v.payload.iter().map(|t2| rust_ty(t2, &t.enums, &t.tparams)).collect::<Result<_, _>>()?;
-                writeln!(out, "    {}({}),", v.name, tys.join(", ")).unwrap();
+                writeln!(out, "    {}({}),", mangle(&v.name), tys.join(", ")).unwrap();
             }
         }
         out.push_str("}\n");
@@ -597,7 +635,9 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         if c.name.starts_with("std::math::") {
             continue;
         }
-        write!(out, "fn {}() -> {} {{ ", c.name, rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
+        // La DEFINICIÓN debe usar el mismo `mangle` que el uso (línea ~1605): una constante namespacada
+        // de un módulo importado llega como `geo::PI` → `fn geo::PI()` sería Rust inválido.
+        write!(out, "fn {}() -> {} {{ ", mangle(&c.name), rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
         t.emit_expr(&mut out, &c.value)?;
         out.push_str(" }\n");
     }
@@ -1111,30 +1151,30 @@ impl Transpiler {
                     Type::Int | Type::Float => passes.push(format!("__p{}", i)),
                     Type::Bool => passes.push(format!("(__p{} as std::os::raw::c_int)", i)),
                     Type::String => {
-                        writeln!(out, "    let __c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"FFI: el string tiene un NUL interno\");", i, i).unwrap();
-                        passes.push(format!("__c{}.as_ptr()", i));
+                        writeln!(out, "    let __rt_c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"FFI: el string tiene un NUL interno\");", i, i).unwrap();
+                        passes.push(format!("__rt_c{}.as_ptr()", i));
                     }
                     Type::Bytes => passes.push(format!("__p{}.as_ptr()", i)),
                     Type::Ptr => passes.push(format!("(__p{} as *mut std::ffi::c_void)", i)),
                     other => return Err(format!("spike: FFI arg no marshalable: {:?}", other)),
                 }
             }
-            writeln!(out, "    let __r = unsafe {{ __ffi_{}({}) }};", mangle(&e.name), passes.join(", ")).unwrap();
+            writeln!(out, "    let __rt_r = unsafe {{ __ffi_{}({}) }};", mangle(&e.name), passes.join(", ")).unwrap();
             // Marshalling del retorno C → valor raylang.
             let ret_expr = match normalize_type(&e.return_type) {
-                // `__r` es `c_int` (i32) para Int → extiende el signo a i64 (como la VM).
-                Type::Int => "__r as i64".to_string(),
-                Type::Float => "__r".to_string(),
-                Type::Bool => "__r != 0".to_string(),
+                // `__rt_r` es `c_int` (i32) para Int → extiende el signo a i64 (como la VM).
+                Type::Int => "__rt_r as i64".to_string(),
+                Type::Float => "__rt_r".to_string(),
+                Type::Bool => "__rt_r != 0".to_string(),
                 Type::Unit => "()".to_string(),
-                Type::Ptr => "__r as i64".to_string(),
+                Type::Ptr => "__rt_r as i64".to_string(),
                 Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
                     // char* → Option<bytes>: NULL→None; si no, copia los bytes hasta el NUL (nunca libera).
-                    Type::Bytes => "if __r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__r) }.to_bytes())) }".to_string(),
+                    Type::Bytes => "if __rt_r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes())) }".to_string(),
                     // char* → Option<string>: como bytes, validando UTF-8 (inválido → error de ejecución).
-                    Type::String => "if __r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__r) }.to_bytes()).expect(\"FFI: el char* devuelto no es UTF-8 válido\"))) }".to_string(),
+                    Type::String => "if __rt_r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes()).expect(\"FFI: el char* devuelto no es UTF-8 válido\"))) }".to_string(),
                     // ptr fallible → Option<ptr>: NULL→None; si no, la dirección opaca.
-                    Type::Ptr => "if __r.is_null() { None } else { Some(__r as i64) }".to_string(),
+                    Type::Ptr => "if __rt_r.is_null() { None } else { Some(__rt_r as i64) }".to_string(),
                     other => return Err(format!("spike: FFI retorno Option<{:?}> no soportado", other)),
                 },
                 other => return Err(format!("spike: FFI retorno no marshalable: {:?}", other)),
@@ -1265,9 +1305,9 @@ impl Transpiler {
                         if self.cells.contains(name) {
                             // Var-celda (B1): `n = e` → `*n.borrow_mut() = e`. El RHS va a un temp ANTES del
                             // borrow_mut: si lee la MISMA celda (`n = n + 1`), evita el doble borrow.
-                            out.push_str("{ let __v = ");
+                            out.push_str("{ let __rt_v = ");
                             self.emit_typed(out, value, &tty)?;
-                            write!(out, "; *{}.borrow_mut() = __v; }}\n", mangle(name)).unwrap();
+                            write!(out, "; *{}.borrow_mut() = __rt_v; }}\n", mangle(name)).unwrap();
                         } else {
                             out.push_str(&mangle(name));
                             out.push_str(" = ");
@@ -1280,23 +1320,23 @@ impl Transpiler {
                         // orden): izquierda→derecha. Los TRES van a temporales ANTES del borrow_mut: el
                         // índice o el valor pueden leer el MISMO arreglo (`a[a.len()-1] = a[0]`) →
                         // izarlos evita el doble borrow del RefCell (leer + mutar a la vez = panic).
-                        out.push_str("{ let __arr = ");
+                        out.push_str("{ let __rt_arr = ");
                         self.emit_expr(out, array)?;
-                        out.push_str("; let __idx = ");
+                        out.push_str("; let __rt_idx = ");
                         self.emit_expr(out, index)?;
-                        out.push_str("; let __rhs = ");
+                        out.push_str("; let __rt_rhs = ");
                         self.emit_expr(out, value)?;
-                        out.push_str("; __arr.borrow_mut()[__idx as usize] = __rhs; }\n");
+                        out.push_str("; __rt_arr.borrow_mut()[__rt_idx as usize] = __rt_rhs; }\n");
                     }
                     ExprKind::Field { object, name } => {
                         // Orden de la VM (SetField consume objeto, valor): objeto ANTES que el valor.
                         // Ambos a temporales antes del borrow_mut (el RHS puede leer el mismo campo,
                         // `p.x = p.x + 1`) → evita el doble borrow.
-                        out.push_str("{ let __obj = ");
+                        out.push_str("{ let __rt_obj = ");
                         self.emit_expr(out, object)?;
-                        out.push_str("; let __rhs = ");
+                        out.push_str("; let __rt_rhs = ");
                         self.emit_expr(out, value)?;
-                        write!(out, "; __obj.borrow_mut().{} = __rhs; }}\n", name).unwrap();
+                        write!(out, "; __rt_obj.borrow_mut().{} = __rt_rhs; }}\n", mangle(name)).unwrap();
                     }
                     _ => return Err("spike: lvalue no soportado".into()),
                 }
@@ -1337,9 +1377,9 @@ impl Transpiler {
                     };
                     let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
                     let binders: Vec<String> = names.iter().map(binder).collect();
-                    out.push_str("{ let __it = ");
+                    out.push_str("{ let __rt_it = ");
                     self.emit_expr(out, expr)?;
-                    write!(out, "; loop {{ match {}(__it.clone()) {{ Some((", mangle(next_fn)).unwrap();
+                    write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some((", mangle(next_fn)).unwrap();
                     out.push_str(&binders.join(", "));
                     out.push_str(")) => ");
                     self.scopes.push(HashMap::new());
@@ -1416,7 +1456,7 @@ impl Transpiler {
                     }
                     // `for x in <it>` sobre un Iterator<T> de usuario (M40.2): el checker guarda el método
                     // `next(self) -> Option<T>` manglado. Se baja a un `loop`: llamar `next(it)` hasta `None`,
-                    // ligando cada `Some(x)`. El iterador se liga a `__it` UNA vez; `next` recibe un clon del
+                    // ligando cada `Some(x)`. El iterador se liga a `__rt_it` UNA vez; `next` recibe un clon del
                     // Rc → su estado (campos mutados por referencia) persiste entre iteraciones.
                     ForIter::Iter { expr, next_fn } => {
                         // T del elemento = el `T` de `Option<T>` de la firma de `next`, tras unificar el tipo
@@ -1435,9 +1475,9 @@ impl Transpiler {
                             Type::Enum(n, args) if n == "Option" && args.len() == 1 => args[0].clone(),
                             other => return Err(format!("spike: next de '{}' no devuelve Option<T> ({:?})", next_fn, other)),
                         };
-                        out.push_str("{ let __it = ");
+                        out.push_str("{ let __rt_it = ");
                         self.emit_expr(out, expr)?;
-                        write!(out, "; loop {{ match {}(__it.clone()) {{ Some(", mangle(next_fn)).unwrap();
+                        write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some(", mangle(next_fn)).unwrap();
                         out.push_str(&mangle(&var));
                         out.push_str(") => ");
                         self.scopes.push(HashMap::new());
@@ -1611,11 +1651,11 @@ impl Transpiler {
                 } else if matches!(op, BinaryOp::Add) && matches!(self.type_of(left)?, Type::Array(_)) {
                     // arreglos (M11.7b): `a + b` es un arreglo NUEVO con los elementos (clonados) de ambos.
                     // Dos `.borrow()` compartidos coexisten (incl. `a + a`); el `clone()` libera el primero.
-                    out.push_str("{ let mut __v = ");
+                    out.push_str("{ let mut __rt_v = ");
                     self.emit_expr(out, left)?;
-                    out.push_str(".borrow().clone(); __v.extend(");
+                    out.push_str(".borrow().clone(); __rt_v.extend(");
                     self.emit_expr(out, right)?;
-                    out.push_str(".borrow().iter().cloned()); Rc::new(std::cell::RefCell::new(__v)) }");
+                    out.push_str(".borrow().iter().cloned()); Rc::new(std::cell::RefCell::new(__rt_v)) }");
                 } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                     && matches!(self.type_of(left)?, Type::UInt(_))
                 {
@@ -1721,11 +1761,11 @@ impl Transpiler {
             }
             // Coerción concreto→`dyn Trait` (M9.3b): el checker la baja a `__dyn_T { data: <concreto>,
             // m: <método>, … }`. Aquí → un struct de closures que CAPTURAN el concreto: cada método
-            // `m: { let __c = <concreto>; move |args| m_concreto(__c.clone(), args) }` (sin `data`).
+            // `m: { let __rt_c = <concreto>; move |args| m_concreto(__rt_c.clone(), args) }` (sin `data`).
             ExprKind::StructLit { name, fields } if name.starts_with("__dyn_") => {
                 // fields[0] = ("data", <concreto>); el resto = (método, <valor-vtable>).
                 let concrete = &fields[0].1;
-                out.push_str("{ let __c = ");
+                out.push_str("{ let __rt_c = ");
                 self.emit_expr(out, concrete)?;
                 write!(out, "; Rc::new(std::cell::RefCell::new({} {{ ", mangle(name)).unwrap();
                 for (i, (mname, mval)) in fields.iter().enumerate().skip(1) {
@@ -1745,8 +1785,10 @@ impl Transpiler {
                         }
                         write!(params, "__a{}: {}", j, rust_ty(aty, &self.enums, &self.tparams)?).unwrap();
                     }
-                    write!(out, "{}: {{ let __c = __c.clone(); Rc::new(move |{}| ", mname, params).unwrap();
-                    // llamada al método concreto: m_concreto(__c.clone(), __a0, …).
+                    // el NOMBRE del campo-vtable se mangla (mismo que la def 592 y el acceso 2476); la clave
+                    // del mapa `trait_method_sigs` sigue siendo el nombre original de raylang (arriba).
+                    write!(out, "{}: {{ let __rt_c = __rt_c.clone(); Rc::new(move |{}| ", mangle(mname), params).unwrap();
+                    // llamada al método concreto: m_concreto(__rt_c.clone(), __a0, …).
                     match &mval.kind {
                         ExprKind::Ident(fname) => write!(out, "{}(", mangle(fname)).unwrap(),
                         _ => {
@@ -1755,7 +1797,7 @@ impl Transpiler {
                             out.push_str(")(");
                         }
                     }
-                    out.push_str("__c.clone()");
+                    out.push_str("__rt_c.clone()");
                     for j in 0..args.len() {
                         write!(out, ", __a{}", j).unwrap();
                     }
@@ -1770,7 +1812,7 @@ impl Transpiler {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    write!(out, "{}: ", fname).unwrap();
+                    write!(out, "{}: ", mangle(fname)).unwrap(); // el campo puede ser keyword de Rust
                     self.emit_expr(out, val)?;
                 }
                 out.push_str(" }))");
@@ -1780,10 +1822,10 @@ impl Transpiler {
             ExprKind::Field { object, name } => {
                 if matches!(self.type_of(object)?, Type::Tuple(_)) {
                     self.emit_expr(out, object)?;
-                    write!(out, ".{}", name).unwrap();
+                    write!(out, ".{}", name).unwrap(); // índice numérico de tupla: NO manglar
                 } else {
                     self.emit_expr(out, object)?;
-                    write!(out, ".borrow().{}.clone()", name).unwrap();
+                    write!(out, ".borrow().{}.clone()", mangle(name)).unwrap();
                 }
             }
             // Construcción de variante de enum. Option/Result → Some/None/Ok/Err NATIVOS de Rust (sin Rc);
@@ -1793,7 +1835,7 @@ impl Transpiler {
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err
                 } else {
-                    write!(out, "Rc::new({}::{}", mangle(enum_name), variant).unwrap();
+                    write!(out, "Rc::new({}::{}", mangle(enum_name), mangle(variant)).unwrap();
                 }
                 if !args.is_empty() {
                     out.push('(');
@@ -1831,7 +1873,9 @@ impl Transpiler {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    write!(out, "{}: {}", p.name, rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
+                    // el param de la closure se mangla (igual que su uso en el cuerpo vía `mangle`): puede
+                    // ser palabra reservada de Rust.
+                    write!(out, "{}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
                 }
                 write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?).unwrap();
                 self.scopes.push(HashMap::new());
@@ -1921,17 +1965,17 @@ impl Transpiler {
                 if i > 0 {
                     fmt.push_str(", ");
                 }
-                write!(fmt, "{}: {{}}", fname).unwrap();
+                write!(fmt, "{}: {{}}", fname).unwrap(); // el NOMBRE mostrado es el original (`type`, no `r#type`)
                 // Un campo de tipo función se muestra como `<fn>` (como el Display del runtime): los tipos
                 // función tienen firmas variadas → no hay un `impl RayShow` único; se renderiza el literal.
                 if matches!(normalize_type(fty), Type::Fn(_, _)) {
                     write!(args, ", \"<fn>\"").unwrap();
                 } else {
-                    write!(args, ", __b.{}.ray_show()", fname).unwrap();
+                    write!(args, ", __rt_b.{}.ray_show()", mangle(fname)).unwrap(); // el ACCESO sí mangla
                 }
             }
             fmt.push_str(" }}");
-            writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __b = self.borrow(); format!(\"{}\"{}) }} }}", gens, sm, sfx, fmt, args).unwrap();
+            writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __rt_b = self.borrow(); format!(\"{}\"{}) }} }}", gens, sm, sfx, fmt, args).unwrap();
         }
         for e in &prog.enums {
             if e.name == "Option" || e.name == "Result" {
@@ -1944,7 +1988,8 @@ impl Transpiler {
             writeln!(out, "impl{} RayShow for Rc<{}{}> {{ fn ray_show(&self) -> String {{ match &**self {{", gens, em, sfx).unwrap();
             for v in &e.variants {
                 if v.payload.is_empty() {
-                    writeln!(out, "{}::{} => \"{}.{}\".to_string(),", em, v.name, e.name, v.name).unwrap();
+                    // patrón Rust: variante manglada; display: nombre ORIGINAL (`E.loop`, no `E.r#loop`).
+                    writeln!(out, "{}::{} => \"{}.{}\".to_string(),", em, mangle(&v.name), e.name, v.name).unwrap();
                 } else {
                     let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__p{}", i)).collect();
                     let mut fmt = format!("{}.{}(", e.name, v.name);
@@ -1962,7 +2007,7 @@ impl Transpiler {
                         }
                     }
                     fmt.push(')');
-                    writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", em, v.name, binds.join(", "), fmt, args).unwrap();
+                    writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", em, mangle(&v.name), binds.join(", "), fmt, args).unwrap();
                 }
             }
             out.push_str("} } }\n");
@@ -2046,7 +2091,7 @@ impl Transpiler {
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err (nativos, sin `EnumName::`)
                 } else {
-                    write!(out, "{}::{}", mangle(enum_name), variant).unwrap();
+                    write!(out, "{}::{}", mangle(enum_name), mangle(variant)).unwrap();
                 }
                 if !subpatterns.is_empty() {
                     // Payload: user enum → tabla de variantes; Option/Result → los args del tipo esperado
@@ -2156,7 +2201,7 @@ impl Transpiler {
                 out.push_str("(match std::fs::read_to_string(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(
-                    ") { Ok(__c) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__c)), \
+                    ") { Ok(__rt_c) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__rt_c)), \
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
             }
@@ -2268,7 +2313,7 @@ impl Transpiler {
                 out.push_str("(match std::fs::read(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(
-                    ") { Ok(__b) => Ok::<Rc<[u8]>, Rc<str>>(Rc::<[u8]>::from(__b)), \
+                    ") { Ok(__rt_b) => Ok::<Rc<[u8]>, Rc<str>>(Rc::<[u8]>::from(__rt_b)), \
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
             }
@@ -2286,7 +2331,7 @@ impl Transpiler {
                     "(match std::fs::OpenOptions::new().create(true).append(true).open(&*",
                 );
                 self.emit_expr(out, eff[0])?;
-                out.push_str(").and_then(|mut __f| { use std::io::Write; __f.write_all(&*");
+                out.push_str(").and_then(|mut __rt_f| { use std::io::Write; __rt_f.write_all(&*");
                 self.emit_expr(out, eff[1])?;
                 out.push_str(") }) { Ok(()) => Ok::<i64, Rc<str>>(");
                 self.emit_expr(out, eff[1])?;
@@ -2440,7 +2485,7 @@ impl Transpiler {
             if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
                 out.push('(');
                 self.emit_expr(out, r)?;
-                write!(out, ".borrow().{}.clone())(", name).unwrap();
+                write!(out, ".borrow().{}.clone())(", mangle(name)).unwrap(); // campo-vtable: mismo mangle que 592
                 for (i, a) in args.iter().skip(1).enumerate() {
                     if i > 0 {
                         out.push_str(", ");
@@ -2466,7 +2511,7 @@ impl Transpiler {
                 if is_fn_field {
                     out.push('(');
                     self.emit_expr(out, r)?;
-                    write!(out, ".borrow().{}.clone())(", name).unwrap();
+                    write!(out, ".borrow().{}.clone())(", mangle(name)).unwrap(); // campo-función: mismo mangle que 599
                     for (i, a) in args.iter().enumerate() {
                         if i > 0 {
                             out.push_str(", ");
@@ -2605,7 +2650,7 @@ impl Transpiler {
             "bytes_of" => {
                 out.push_str("Rc::<[u8]>::from(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().map(|__x| *__x as u8).collect::<Vec<u8>>())");
+                out.push_str(".borrow().iter().map(|__rt_x| *__rt_x as u8).collect::<Vec<u8>>())");
             }
             // Más builtins de string (→ métodos de `str`/`String` de Rust, misma semántica que la VM).
             "trim" => {
@@ -2635,11 +2680,11 @@ impl Transpiler {
             }
             // repeat(s, n): n<=0 → "" (como la VM).
             "repeat" => {
-                out.push_str("{ let __n = ");
+                out.push_str("{ let __rt_n = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str("; if __n <= 0 { Rc::<str>::from(\"\") } else { Rc::<str>::from(");
+                out.push_str("; if __rt_n <= 0 { Rc::<str>::from(\"\") } else { Rc::<str>::from(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".repeat(__n as usize)) } }");
+                out.push_str(".repeat(__rt_n as usize)) } }");
             }
             "replace" => {
                 out.push_str("Rc::<str>::from(");
@@ -2652,13 +2697,13 @@ impl Transpiler {
             }
             // substring(s, i, j): corte por CARÁCTER con clamp (nunca falla), como la VM.
             "substring" => {
-                out.push_str("{ let __c: Vec<char> = ");
+                out.push_str("{ let __rt_c: Vec<char> = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".chars().collect(); let __n = __c.len() as i64; let __lo = (");
+                out.push_str(".chars().collect(); let __rt_n = __rt_c.len() as i64; let __rt_lo = (");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(").clamp(0, __n); let __hi = (");
+                out.push_str(").clamp(0, __rt_n); let __rt_hi = (");
                 self.emit_expr(out, eff[2])?;
-                out.push_str(").clamp(__lo, __n); Rc::<str>::from(__c[__lo as usize..__hi as usize].iter().collect::<String>()) }");
+                out.push_str(").clamp(__rt_lo, __rt_n); Rc::<str>::from(__rt_c[__rt_lo as usize..__rt_hi as usize].iter().collect::<String>()) }");
             }
             // to_string(x) → Rc<str>. Vía show_expr (maneja struct→borrow, arreglo→[…], escalar/enum).
             "to_string" => {
@@ -2684,11 +2729,11 @@ impl Transpiler {
                 // Orden de la VM: arreglo, luego valor. Ambos a temporales ANTES del borrow_mut: si el
                 // valor lee del MISMO arreglo (p. ej. `w.push(w[i] + w[j])`, típico en cripto), evita el
                 // doble borrow del RefCell (panic). El receptor también se iza por si borrowea.
-                out.push_str("{ let __arr = ");
+                out.push_str("{ let __rt_arr = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str("; let __v = ");
+                out.push_str("; let __rt_v = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str("; __arr.borrow_mut().push(__v); }");
+                out.push_str("; __rt_arr.borrow_mut().push(__rt_v); }");
             }
             // chars(s) → [char]: los caracteres del string como arreglo.
             "chars" => {
@@ -2819,18 +2864,18 @@ impl Transpiler {
                     out.push(')');
                 }
                 Type::Bytes => {
-                    out.push_str("{ let __s = ");
+                    out.push_str("{ let __rt_s = ");
                     self.emit_expr(out, eff[1])?;
-                    out.push_str("; __s.is_empty() || ");
+                    out.push_str("; __rt_s.is_empty() || ");
                     self.emit_expr(out, eff[0])?;
-                    out.push_str(".windows(__s.len().max(1)).any(|__w| __w == &*__s) }");
+                    out.push_str(".windows(__rt_s.len().max(1)).any(|__w| __w == &*__rt_s) }");
                 }
                 Type::Array(_) => {
-                    out.push_str("{ let __x = ");
+                    out.push_str("{ let __rt_x = ");
                     self.emit_expr(out, eff[1])?;
                     out.push_str("; ");
                     self.emit_expr(out, eff[0])?;
-                    out.push_str(".borrow().iter().any(|__e| *__e == __x) }");
+                    out.push_str(".borrow().iter().any(|__e| *__e == __rt_x) }");
                 }
                 other => return Err(format!("spike: contains sobre {:?}", other)),
             },
@@ -2845,25 +2890,25 @@ impl Transpiler {
                 out.push_str("(match std::str::from_utf8(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(
-                    ") { Ok(__s) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__s)), \
+                    ") { Ok(__rt_s) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__rt_s)), \
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
             }
             "sub_bytes" => {
-                out.push_str("{ let __b = ");
+                out.push_str("{ let __rt_b = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str("; let __n = __b.len() as i64; let __lo = (");
+                out.push_str("; let __rt_n = __rt_b.len() as i64; let __rt_lo = (");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(").clamp(0, __n); let __hi = (");
+                out.push_str(").clamp(0, __rt_n); let __rt_hi = (");
                 self.emit_expr(out, eff[2])?;
-                out.push_str(").clamp(__lo, __n); Rc::<[u8]>::from(&__b[__lo as usize..__hi as usize]) }");
+                out.push_str(").clamp(__rt_lo, __rt_n); Rc::<[u8]>::from(&__rt_b[__rt_lo as usize..__rt_hi as usize]) }");
             }
             // I/O de ENTRADA (no determinista → sin oráculo; probado por subproceso, como tests/io_cli.rs).
             // `input() -> Option<string>`: una línea de stdin, sin '\n'/'\r' finales (como la VM); None en EOF.
             "input" => {
                 out.push_str(
-                    "{ let mut __s = String::new(); match std::io::stdin().read_line(&mut __s) \
-                     { Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(__s.trim_end_matches(['\\n', '\\r']))) } }",
+                    "{ let mut __rt_s = String::new(); match std::io::stdin().read_line(&mut __rt_s) \
+                     { Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(__rt_s.trim_end_matches(['\\n', '\\r']))) } }",
                 );
             }
             // `env(name) -> Option<string>`: variable de entorno; None si no está (como la VM).
@@ -2875,8 +2920,8 @@ impl Transpiler {
             // `read_int() -> Option<int>` = input() + parse_int (composición del prelude).
             "read_int" => {
                 out.push_str(
-                    "{ let mut __s = String::new(); match std::io::stdin().read_line(&mut __s) \
-                     { Ok(0) | Err(_) => None, Ok(_) => __s.trim_end_matches(['\\n', '\\r']).parse::<i64>().ok() } }",
+                    "{ let mut __rt_s = String::new(); match std::io::stdin().read_line(&mut __rt_s) \
+                     { Ok(0) | Err(_) => None, Ok(_) => __rt_s.trim_end_matches(['\\n', '\\r']).parse::<i64>().ok() } }",
                 );
             }
             // `close(h) -> int` (builtin pelado, ad-hoc): un handle de archivo (int) → lo quita del registro
@@ -3016,32 +3061,32 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
-            // Orden superior (prelude map/filter/fold SOBRE ARREGLOS) → iteradores de Rust. `__f` liga la
-            // closure una vez; `__x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
+            // Orden superior (prelude map/filter/fold SOBRE ARREGLOS) → iteradores de Rust. `__rt_f` liga la
+            // closure una vez; `__rt_x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
             // distingue la función libre `map`/`filter`/`fold` (sobre `[T]`) del MÉTODO `Iter#map`/… (sobre
             // un iterador de primera clase), que cae al despacho de método ordinario (`_ =>`).
             "map" if !name.contains('#') => {
-                out.push_str("{ let __f = ");
+                out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().map(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
+                out.push_str(".borrow().iter().map(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
             "filter" if !name.contains('#') => {
-                out.push_str("{ let __f = ");
+                out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().cloned().filter(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
+                out.push_str(".borrow().iter().cloned().filter(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
             "fold" if !name.contains('#') => {
-                out.push_str("{ let __f = ");
+                out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().iter().fold(");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(", |__acc, __x| __f(__acc, __x.clone())) }");
+                out.push_str(", |__acc, __rt_x| __rt_f(__acc, __rt_x.clone())) }");
             }
             // Cripto de producción (M43): los primitivos `__*` se interceptan a `ray_runtime::crypto::*`
             // (el MISMO código que la VM → oráculo byte-idéntico) y activan la feature `crypto` de
@@ -3089,7 +3134,7 @@ impl Transpiler {
                     "ed25519_sign" => 2,
                     _ => 4, // chacha seal/open: clave, nonce, aad, dato
                 };
-                write!(out, "{{ let __r = ray_runtime::crypto::{}(", method).unwrap();
+                write!(out, "{{ let __rt_r = ray_runtime::crypto::{}(", method).unwrap();
                 for i in 0..argc {
                     if i > 0 {
                         out.push_str(", ");
@@ -3097,7 +3142,7 @@ impl Transpiler {
                     out.push('&');
                     self.emit_expr(out, eff[i])?;
                 }
-                out.push_str("); Rc::new(std::cell::RefCell::new(match __r { Some(__v) => vec![Rc::<[u8]>::from(__v)], None => Vec::new() })) }");
+                out.push_str("); Rc::new(std::cell::RefCell::new(match __rt_r { Some(__rt_v) => vec![Rc::<[u8]>::from(__rt_v)], None => Vec::new() })) }");
             }
             // TLS de producción (Paso 1): los primitivos `__tls_*` → helpers `__ray_tls_*` (I/O bloqueante
             // vía ray_runtime::tls) y activan `needs_rt_tls`. Devuelven arreglos ETIQUETADOS (`["ok",h]`/
@@ -3752,12 +3797,12 @@ fn send_type(t: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
     }
 }
 
-/// El sufijo `.map(|__x| Rc::…::from(&*__x))` para convertir la repr SEND recibida (Arc) de vuelta a la
+/// El sufijo `.map(|__rt_x| Rc::…::from(&*__rt_x))` para convertir la repr SEND recibida (Arc) de vuelta a la
 /// del programa (Rc). Vacío para primitivos (sin conversión).
 fn from_send_map(t: &Type) -> &'static str {
     match normalize_type(t) {
-        Type::String => ".map(|__x| Rc::<str>::from(&*__x))",
-        Type::Bytes => ".map(|__x| Rc::<[u8]>::from(&*__x))",
+        Type::String => ".map(|__rt_x| Rc::<str>::from(&*__rt_x))",
+        Type::Bytes => ".map(|__rt_x| Rc::<[u8]>::from(&*__rt_x))",
         _ => "",
     }
 }
@@ -4111,7 +4156,7 @@ mod tests {
         );
         assert!(rust.contains("Rc<dyn Fn(i64) -> i64>"), "{}", rust); // función-valor
         assert!(rust.contains("Rc::new(move |n: i64| -> i64"), "{}", rust); // anónima → closure move
-        assert!(rust.contains(".iter().map(|__x| __f(__x.clone()))"), "{}", rust); // map → iterador
+        assert!(rust.contains(".iter().map(|__rt_x| __rt_f(__rt_x.clone()))"), "{}", rust); // map → iterador
     }
 
     #[test]
@@ -4179,7 +4224,7 @@ mod tests {
         // dyn → struct de closures que capturan el concreto (sin Box<dyn Any>, sin data).
         assert!(rust.contains("struct __dyn_Figura"), "{}", rust);
         assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
-        assert!(rust.contains("let __c = "), "{}", rust); // captura del concreto en la coerción
+        assert!(rust.contains("let __rt_c = "), "{}", rust); // captura del concreto en la coerción
         assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
     }
 
@@ -4242,7 +4287,7 @@ mod tests {
              fn main() { print(0); }",
         );
         assert!(rust.contains("-> std::os::raw::c_int;"), "retorno c_int: {}", rust);
-        assert!(rust.contains("__r as i64"), "sign-extiende a i64: {}", rust);
+        assert!(rust.contains("__rt_r as i64"), "sign-extiende a i64: {}", rust);
         // libc no lleva #[link] (ya enlazada).
         assert!(!rust.contains("#[link(name = \"c\")]"), "libc implícita: {}", rust);
     }
@@ -4250,15 +4295,15 @@ mod tests {
     #[test]
     fn for_sobre_iterador_de_usuario_baja_a_un_loop_con_next() {
         // B2: `for x in it` sobre un `impl Iterator<T>` de usuario baja a un `loop` que llama `next(it)`
-        // hasta `None`, ligando cada `Some(x)`. El iterador se liga a `__it` una vez (estado persistente).
+        // hasta `None`, ligando cada `Some(x)`. El iterador se liga a `__rt_it` una vez (estado persistente).
         let rust = transpile_src(
             "struct R { a: int, b: int }\n\
              impl Iterator<int> for R { fn next(self) -> Option<int> { if (self.a >= self.b) { Option.None } else { let v: int = self.a; self.a = self.a + 1; Option.Some(v) } } }\n\
              fn r(a: int, b: int) -> R { R { a: a, b: b } }\n\
              fn main() { for n in r(1, 4) { print(n); } }",
         );
-        assert!(rust.contains("let __it = "), "liga el iterador a __it: {}", rust);
-        assert!(rust.contains("(__it.clone()) { Some("), "loop match next(__it): {}", rust);
+        assert!(rust.contains("let __rt_it = "), "liga el iterador a __rt_it: {}", rust);
+        assert!(rust.contains("(__rt_it.clone()) { Some("), "loop match next(__rt_it): {}", rust);
         assert!(rust.contains("None => break"), "corta en None: {}", rust);
     }
 
@@ -4315,7 +4360,7 @@ mod tests {
         let ar = transpile_src(
             "fn main() { let a = [1, 2]; let b = [3]; let c = a + b; print(c.len()); }",
         );
-        assert!(ar.contains(".borrow().clone(); __v.extend("), "concat de arreglos: {}", ar);
+        assert!(ar.contains(".borrow().clone(); __rt_v.extend("), "concat de arreglos: {}", ar);
     }
 
     #[test]
@@ -4415,7 +4460,7 @@ mod tests {
              let m = xs.contains(2); match (parse_float(\"1.5\")) { Option.Some(f) => { if (ok && m) { 1 } else { 0 } }, Option.None => 0 } }",
         );
         assert!(rust.contains(".contains(&*"), "string contains: {}", rust);
-        assert!(rust.contains(".iter().any(|__e| *__e == __x)"), "array contains: {}", rust);
+        assert!(rust.contains(".iter().any(|__e| *__e == __rt_x)"), "array contains: {}", rust);
         assert!(rust.contains(".parse::<f64>().ok()"), "parse_float: {}", rust);
     }
 
@@ -4463,9 +4508,9 @@ mod tests {
         let rust = transpile_src(
             "fn main() -> int { var w: [int] = [1, 2, 3]; w.push(w[0] + w[2]); w[3] }",
         );
-        // el valor se saca a __v antes del borrow_mut().push.
-        assert!(rust.contains("{ let __v = "), "push evalúa el valor a un temp: {}", rust);
-        assert!(rust.contains(".borrow_mut().push(__v);"), "push del temp: {}", rust);
+        // el valor se saca a __rt_v antes del borrow_mut().push.
+        assert!(rust.contains("{ let __rt_v = "), "push evalúa el valor a un temp: {}", rust);
+        assert!(rust.contains(".borrow_mut().push(__rt_v);"), "push del temp: {}", rust);
     }
 
     #[test]
@@ -4557,7 +4602,7 @@ mod tests {
         assert!(rust.contains(".trim()") && rust.contains(".to_uppercase()"), "trim/to_upper: {}", rust);
         assert!(rust.contains(".repeat(") && rust.contains(".replace(&*"), "repeat/replace: {}", rust);
         assert!(rust.contains(".starts_with(&*"), "starts_with: {}", rust);
-        assert!(rust.contains("*__x as u8"), "bytes_of: {}", rust);
+        assert!(rust.contains("*__rt_x as u8"), "bytes_of: {}", rust);
     }
 
     #[test]
@@ -4570,7 +4615,7 @@ mod tests {
         );
         assert!(rust.contains("__RayChan<std::sync::Arc<str>>"), "canal de Arc<str>: {}", rust);
         assert!(rust.contains("std::sync::Arc::<str>::from(&*"), "send convierte a Arc<str>: {}", rust);
-        assert!(rust.contains(".map(|__x| Rc::<str>::from(&*__x))"), "recv convierte de vuelta a Rc<str>: {}", rust);
+        assert!(rust.contains(".map(|__rt_x| Rc::<str>::from(&*__rt_x))"), "recv convierte de vuelta a Rc<str>: {}", rust);
     }
 
     #[test]

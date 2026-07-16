@@ -2586,6 +2586,25 @@ impl Transpiler {
                 }
             }
         }
+        // H3: un OVERRIDE del usuario gana sobre el builtin homónimo interceptado, como en la VM (M7.3).
+        // `self.funcs` solo contiene funciones NO saltadas por `skip_fn_def` = las que el usuario definió y
+        // cuya def SÍ se emite (las de prelude se saltan) → su llamada debe ir a esa def, nunca a un builtin.
+        // También gana un `let f = fn(){…}` local que sombree el nombre (closure en ámbito). Un nombre con
+        // `::`/`#` lo sintetizó el checker (módulo/método) → nunca colisiona con un builtin de nombre pelado.
+        let shadows_builtin = matches!(self.lookup(name), Some(Type::Fn(_, _)))
+            || (!name.contains("::") && !name.contains('#') && self.funcs.contains_key(name));
+        if shadows_builtin {
+            out.push_str(&mangle(name));
+            out.push('(');
+            for (i, a) in eff.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                self.emit_expr(out, a)?;
+            }
+            out.push(')');
+            return Ok(());
+        }
         match method {
             // args() → [string]: los argumentos de línea de comandos tras el binario. La VM devuelve
             // argv tras el `.ray`; el nativo, tras el binario (`skip(1)`) → equivalen. Repr = arreglo.

@@ -926,6 +926,48 @@ fn build_native_iteradores_coinciden_con_la_vm() {
 }
 
 #[test]
+fn build_native_override_de_prelude_gana_sobre_el_builtin() {
+    // H3: si el usuario redefine una función del prelude (`sort`), su versión GANA sobre el builtin
+    // interceptado, como en la VM (M7.3). Antes el sitio de llamada bajaba a `__ray_sort` (el builtin)
+    // aunque la def del usuario se emitiera → divergencia silenciosa. Se prueban ambas formas: llamada
+    // prefija `sort(a)` y UFCS `a.sort()` (el receptor va como primer arg). Oráculo: nativo ≡ VM.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native override: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_override");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn sort(xs: [int]) -> [int] {\n\
+           // 'sort' del usuario: NADA que ver con el orden; devuelve un arreglo marcador.\n\
+           var ys: [int] = [];\n\
+           ys.push(7);\n\
+           ys.push(8);\n\
+           ys\n\
+         }\n\
+         fn main() -> int {\n\
+           let a = [3, 1, 2];\n\
+           let b = sort(a);      // prefija\n\
+           let c = a.sort();     // UFCS (receptor primer arg) → misma función del usuario\n\
+           print(to_string(b[0]));   // 7 (del usuario), no 1 (el sort real)\n\
+           print(to_string(c[1]));   // 8\n\
+           print(to_string(b.len())); // 2, no 3\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("ovr_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native override sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "override del prelude nativo ≡ VM");
+    assert_eq!(native_out, "7\n8\n2\n", "usa la 'sort' del usuario, no el builtin\n{native_out}");
+}
+
+#[test]
 fn build_native_identificadores_palabra_clave_de_rust_no_rompen_rustc() {
     // H5: un identificador LEGAL de raylang puede ser palabra reservada de Rust (`type`, `loop`, `move`,
     // `mut`, `ref`, `where`) como variable, parámetro o CAMPO de struct. Antes generaba Rust inválido

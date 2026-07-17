@@ -36,11 +36,14 @@ fn render(titulo: string, saludo: string, popular: bool, lenguajes: [string]) ->
 }
 
 fn pagina(req: webserver.Request) -> webserver.Response {
-    // Los assets van MONTADOS bajo /static/ (M56.9): el prefijo se recorta (sirve static/app.css),
-    // cada 200 lleva ETag y un If-None-Match que casa responde 304 sin reenviar el archivo.
-    if (req.path.starts_with("/static/")) {
-        return webserver.static_mount("/static/", "static", req);
+    // Los assets van MONTADOS bajo el prefijo de URL /assets/ (M56.9), servidos desde la carpeta
+    // static/ EN DISCO — a propósito distintos, para ver los dos roles: static_mount(prefijo_URL,
+    // carpeta, req) RECORTA el prefijo y busca el resto bajo la carpeta (/assets/app.css →
+    // static/app.css). Cada 200 lleva ETag y un If-None-Match que casa responde 304 sin cuerpo.
+    if (req.path.starts_with("/assets/")) {
+        return webserver.static_mount("/assets/", "static", req);
     }
+
     if (req.path == "/") {
         let html = render(
             "raylang SSR",

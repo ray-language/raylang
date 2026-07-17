@@ -8,7 +8,7 @@ pub fn render_vista_inicio(titulo: string, saludo: string, popular: bool, lengua
     var out: [string] = [];
     out.push("<!DOCTYPE html>\n<html>\n<head>\n    <meta charset=\"utf-8\">\n    <title>");
     out.push(escape_html(to_string(titulo)));
-    out.push("</title>\n    <link rel=\"stylesheet\" href=\"/static/app.css\">\n</head>\n<body>\n");
+    out.push("</title>\n    <link rel=\"stylesheet\" href=\"/assets/app.css\">\n</head>\n<body>\n");
     out.push("\n    <h1>");
     out.push(escape_html(to_string(titulo)));
     out.push("</h1>\n    <p>");

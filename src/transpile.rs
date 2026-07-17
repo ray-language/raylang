@@ -31,14 +31,51 @@ struct FnSig {
 
 /// Convierte un nombre de raylang en un identificador Rust válido: los métodos de trait bajados por el
 /// checker llevan `#` (`Punto#show`) y los módulos `::` (`m::f`), ilegales en Rust. Identidad para los
-/// nombres normales. Los traits son ERASURE (M9): los métodos son funciones ordinarias tras el bajado.
+/// nombres normales (salvo keywords de Rust → raw identifiers). Los traits son ERASURE (M9): los métodos
+/// son funciones ordinarias tras el bajado.
+///
+/// NOTA sobre temporales: el transpilador emite temporales sintéticos con el prefijo **reservado `__rt_`**
+/// (`__rt_arr`, `__rt_rhs`, `__rt_v`, …). Un identificador de usuario que empiece por `__rt_` PODRÍA
+/// colisionar (raylang permite `_` inicial); es una convención reservada, como el `#`/`::`/`$` que el
+/// checker ya reserva para nombres sintetizados. La des-colisión total exigiría prefijar TODOS los
+/// nombres de usuario (namespace disjunto) — diferido por no justificar el churn.
 fn mangle(name: &str) -> String {
     if name == "self" {
         return "__self".to_string(); // `self` es palabra reservada de Rust fuera de un método
     }
     // `$` lo usan los temporales sintéticos del checker (p. ej. el bind del `?` con From-conversion,
     // `$to`/`$te`) → no es identificador Rust válido.
-    name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_").replace('$', "_D_")
+    let base = name.replace('#', "_HH_").replace("::", "_CC_").replace('+', "_P_").replace('$', "_D_");
+    // Un identificador LEGAL de raylang puede ser palabra RESERVADA de Rust (`type`, `loop`, `mod`,
+    // `move`, `ref`, `where`, `use`, `unsafe`, `async`, …) → generaría Rust inválido. Se emite como raw
+    // identifier `r#type`, válido en posición de variable/param/función/campo. Las cuatro que NO admiten
+    // `r#` (`crate`/`self`/`Self`/`super`) se escapan con sufijo. (Las palabras clave COMPARTIDAS con
+    // raylang —`fn`/`let`/`if`/`struct`/…— no llegan aquí: no son identificadores en raylang.) Solo se
+    // aplica a nombres "limpios" (sin `::`/`#`, que marcan nombres ya sintetizados por el checker).
+    if base == name {
+        if matches!(base.as_str(), "crate" | "Self" | "super") {
+            return format!("{base}_");
+        }
+        if is_rust_keyword(&base) {
+            return format!("r#{base}");
+        }
+    }
+    base
+}
+
+/// ¿Es `s` una palabra reservada de Rust (estricta o reservada-para-el-futuro) que un identificador
+/// de raylang podría llevar? Excluye las compartidas con raylang (no llegan como identificadores).
+fn is_rust_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        // Estrictas de Rust que SON identificadores legales en raylang (raylang no las reserva):
+        "as" | "const" | "extern" | "loop" | "mod" | "move" | "mut" | "ref" | "static" | "type"
+            | "unsafe" | "use" | "where" | "async" | "await" | "dyn"
+            // Reservadas de Rust para el futuro (y `gen`, keyword desde la edition 2024 — la que
+            // usan AMBOS caminos de build, rustc pelado y el proyecto Cargo generado):
+            | "abstract" | "become" | "box" | "do" | "final" | "macro" | "override" | "priv"
+            | "typeof" | "unsized" | "virtual" | "yield" | "try" | "gen"
+    )
 }
 
 /// ¿Es un método de un impl del PRELUDE sobre un tipo builtin (`[]#len`, `string#trim`, `int#show`)?
@@ -88,7 +125,7 @@ fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
     match &callee.kind {
         ExprKind::Ident(n) => Ok((n, None)),
         ExprKind::Field { object, name } => Ok((name, Some(object))),
-        _ => Err("spike: llamada a expresión (no nombre ni método) no soportada".into()),
+        _ => Err("call to an expression (neither a name nor a method) is not supported".into()),
     }
 }
 
@@ -130,6 +167,54 @@ fn is_handled_builtin(name: &str) -> bool {
             | "panic"
     )
 }
+
+/// **Guardia de la triple implementación (H11).** Cada builtin vive en 4 sitios (checker, VM,
+/// intérprete, y ESTE backend nativo). Sin esta lista, un builtin nuevo añadido a los otros tres caía
+/// en nativo en `emit_stub`/`Err("… no soportada")` **sin que ningún test lo detectara**. El test
+/// `todos_los_builtins_estan_clasificados_para_nativo` exige que `builtins::names()` == esta lista: al
+/// añadir un builtin a la tabla `BUILTINS`, el test FALLA hasta que se decide conscientemente su soporte
+/// nativo (implementarlo en `emit_call`/`type_of`, o marcarlo stubbeado en `NATIVE_STUBBED_BUILTINS`).
+/// No es la *implementación* (eso son las ramas de `emit_call`), sino el **checklist** que la obliga.
+#[cfg(test)]
+const NATIVE_TRACKED_BUILTINS: &[&str] = &[
+    // Primitivos de string/bytes/map/arreglo (interceptados en emit_call por su nombre pelado).
+    "__chars", "__contains", "__contains_key", "__ends_with", "__from_utf8", "__get_or", "__index_of",
+    "__insert", "__keys", "__len", "__map_get", "__map_remove", "__pop", "__position", "__push",
+    "__repeat", "__replace", "__reverse", "__split", "__starts_with", "__sub_bytes", "__substring",
+    "__to_bytes", "__to_lower", "__to_upper", "__trim", "__values", "__char_from_code",
+    // Math (interceptados vía `std::math::*` en el sitio del wrapper).
+    "__acos", "__asin", "__atan", "__atan2", "__ceil", "__cos", "__exp", "__floor", "__float_bits",
+    "__float_from_bits", "__ln", "__log10", "__log2", "__pow", "__round", "__sin", "__sqrt", "__tan",
+    "__trunc",
+    // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
+    "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
+    "__is_dir", "__is_file", "__list_dir", "__mkdir", "__open", "__parse_float", "__parse_int",
+    "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__remove_dir",
+    "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
+    // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
+    "__monotonic", "__now", "__random", "__random_int", "__random_seed", "__sleep",
+    // Sockets TCP/UDP (interceptados vía `std::net::*`).
+    "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_read_timeout",
+    "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_listen",
+    "__udp_bind", "__udp_recv_from", "__udp_send_to",
+    // Cripto/TLS/SQLite (interceptados → `ray_runtime::*`, features bajo demanda).
+    "__chacha20poly1305_open", "__chacha20poly1305_seal", "__crypto_random_bytes",
+    "__ed25519_public_key", "__ed25519_sign", "__ed25519_verify", "__hmac_sha256", "__sha1",
+    "__sha256", "__sha512", "__sqlite_exec", "__sqlite_open", "__sqlite_query", "__tls_accept",
+    "__tls_connect", "__tls_connect_h2", "__tls_upgrade",
+    // Concurrencia + canales + varios públicos (ramas de emit_call). Las funciones ASOCIADAS `Map.new`/
+    // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
+    "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
+    "panic", "print", "scope", "select", "send", "signals", "spawn", "to_string",
+    // H21-N2: `__task_failed` (el primitivo tras `try_join`) YA está portado (sobre `wait()` de N1).
+    "__task_failed",
+];
+
+/// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que
+/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Vacío desde
+/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1).
+#[cfg(test)]
+const NATIVE_STUBBED_BUILTINS: &[&str] = &[];
 
 /// ¿Se salta la DEFINICIÓN de esta función al registrarla/emitirla? Sí para las sintéticas (`__`),
 /// los impls del prelude (`int#eq`…) y los builtins manejados. Matiz del override: un builtin con `::`
@@ -177,6 +262,166 @@ fn is_to_string(callee: &Expr) -> bool {
 // `cell_vars(body)` = { `var` declaradas en `body` } ∩ { idents referenciados dentro de alguna closure
 // de `body` }. No desciende a los cuerpos de closures anidadas (esos son ámbitos propios, con su
 // propio análisis al emitirlos).
+
+/// H21-N5c: marca los PARAMS de tipo función que "cruzan un spawn" — directamente (el closure de un
+/// `spawn` en el cuerpo captura el param) o transitivamente (el param se pasa a un param ya marcado
+/// de otra función). Punto fijo sobre el grafo de llamadas. Un param marcado se emite como GENÉRICO
+/// de Rust con bound `Fn(..) + Send + Sync + Clone + 'static`: una función NOMBRADA lo satisface
+/// (monomorfización → el spawn compila); un closure con capturas no-Send que llegue ahí lo rechaza
+/// rustc (honesto — ese programa sí cruzaría un valor no enviable).
+fn spawn_fn_param_marks(prog: &Program) -> HashMap<String, std::collections::HashSet<usize>> {
+    use std::collections::HashSet;
+    // params de tipo fn por función: (índice, nombre)
+    let mut fn_params: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    for f in &prog.functions {
+        if skip_fn_def(f) {
+            continue;
+        }
+        let fps: Vec<(usize, String)> = f
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matches!(normalize_type(&p.ty), Type::Fn(..)))
+            .map(|(i, p)| (i, p.name.clone()))
+            .collect();
+        if !fps.is_empty() {
+            fn_params.insert(f.name.clone(), fps);
+        }
+    }
+    let mut marks: HashMap<String, HashSet<usize>> = HashMap::new();
+    loop {
+        let mut changed = false;
+        for f in &prog.functions {
+            if skip_fn_def(f) {
+                continue;
+            }
+            let Some(fps) = fn_params.get(&f.name) else { continue };
+            let mut hits: HashSet<usize> = HashSet::new();
+            visit_exprs_block(&f.body, &mut |e: &Expr| {
+                if let ExprKind::Call { callee, args } = &e.kind {
+                    if let ExprKind::Ident(cn) = &callee.kind {
+                        if cn == "spawn" {
+                            if let Some(arg0) = args.first() {
+                                if let ExprKind::Func(fx) = &arg0.kind {
+                                    let mut ids = std::collections::HashSet::new();
+                                    idents_of_block(&fx.body, &mut ids);
+                                    for (i, pname) in fps {
+                                        if ids.contains(pname) {
+                                            hits.insert(*i);
+                                        }
+                                    }
+                                }
+                            }
+                        } else if let Some(cm) = marks.get(cn) {
+                            for (j, a) in args.iter().enumerate() {
+                                if cm.contains(&j) {
+                                    if let ExprKind::Ident(an) = &a.kind {
+                                        for (i, pname) in fps {
+                                            if an == pname {
+                                                hits.insert(*i);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let entry = marks.entry(f.name.clone()).or_default();
+            for h in hits {
+                if entry.insert(h) {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    marks
+}
+
+/// Visita cada Expr de un bloque (sentencias + cola), descendiendo a sub-exprs y cuerpos de closures.
+fn visit_exprs_block(b: &Block, f: &mut impl FnMut(&Expr)) {
+    for st in &b.statements {
+        match &st.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } | StmtKind::Expr(value) => {
+                visit_exprs_expr(value, f)
+            }
+            StmtKind::Assign { target, value } => {
+                visit_exprs_expr(target, f);
+                visit_exprs_expr(value, f);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    visit_exprs_expr(v, f);
+                }
+            }
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => {
+                        visit_exprs_expr(start, f);
+                        visit_exprs_expr(end, f);
+                    }
+                    ForIter::In(e) => visit_exprs_expr(e, f),
+                    ForIter::Iter { expr, .. } => visit_exprs_expr(expr, f),
+                }
+                visit_exprs_block(body, f);
+            }
+        }
+    }
+    if let Some(t) = &b.tail {
+        visit_exprs_expr(t, f);
+    }
+}
+
+fn visit_exprs_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(e);
+    match &e.kind {
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } | ExprKind::Try(expr) => {
+            visit_exprs_expr(expr, f)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            visit_exprs_expr(left, f);
+            visit_exprs_expr(right, f);
+        }
+        ExprKind::Call { callee, args } => {
+            visit_exprs_expr(callee, f);
+            args.iter().for_each(|a| visit_exprs_expr(a, f));
+        }
+        ExprKind::ArrayLit(es) | ExprKind::TupleLit(es) => es.iter().for_each(|x| visit_exprs_expr(x, f)),
+        ExprKind::MapLit(ps) => ps.iter().for_each(|(k, v)| {
+            visit_exprs_expr(k, f);
+            visit_exprs_expr(v, f);
+        }),
+        ExprKind::Index { array, index } => {
+            visit_exprs_expr(array, f);
+            visit_exprs_expr(index, f);
+        }
+        ExprKind::StructLit { fields, .. } => fields.iter().for_each(|(_, v)| visit_exprs_expr(v, f)),
+        ExprKind::Field { object, .. } => visit_exprs_expr(object, f),
+        ExprKind::EnumLit { args, .. } => args.iter().for_each(|a| visit_exprs_expr(a, f)),
+        ExprKind::Func(fx) => visit_exprs_block(&fx.body, f),
+        ExprKind::Match { scrutinee, arms } => {
+            visit_exprs_expr(scrutinee, f);
+            arms.iter().for_each(|a| visit_exprs_expr(&a.body, f));
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            visit_exprs_expr(cond, f);
+            visit_exprs_block(then_branch, f);
+            if let Some(eb) = else_branch {
+                visit_exprs_expr(eb, f);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            visit_exprs_expr(cond, f);
+            visit_exprs_block(body, f);
+        }
+        ExprKind::Block(b) => visit_exprs_block(b, f),
+        _ => {}
+    }
+}
 
 /// Recoge TODOS los nombres de identificador que aparecen en `e` (descendiendo también a los cuerpos
 /// de closures) → lo que una closure "referencia" (candidatos a captura).
@@ -342,6 +587,16 @@ struct Transpiler {
     enum_variants: HashMap<String, HashMap<String, Vec<Type>>>,
     /// Contador para nombres de temporales de escrutinio de `match` (evita colisiones al anidar).
     match_temp: usize,
+    /// Marcas H21-N5c: función → índices de sus params de tipo fn que cruzan un spawn (se emiten
+    /// como genéricos de Rust con bound Send+Sync).
+    fn_marks: HashMap<String, std::collections::HashSet<usize>>,
+    /// Nombres de los params marcados de la FUNCIÓN EN CURSO (para las capturas de spawn: se clonan,
+    /// no se convierten — su bound ya garantiza Send).
+    send_fn_params: std::collections::HashSet<String>,
+    /// Conversores Send generados bajo demanda (H21-N5a): (tipo concreto, su rust_ty como clave única).
+    /// El índice en el Vec es el id de las fns `__to_send_N`/`__from_send_N`; se emiten al final
+    /// (worklist: generar el cuerpo de uno puede registrar otros — tipos anidados).
+    send_convs: Vec<(Type, String)>,
     /// Constantes de nivel superior (nombre → tipo). Se bajan a funciones `NAME()` (uniforme para
     /// escalares y strings, que no pueden ser `const` en Rust por el `Rc`); una referencia `NAME` → `NAME()`.
     consts: HashMap<String, Type>,
@@ -395,6 +650,10 @@ struct Transpiler {
 pub struct Transpiled {
     pub source: String,
     pub rt_features: Vec<&'static str>,
+    /// Funciones cuyo CUERPO cayó fuera del subconjunto → se emitieron como STUB que panica (u omitieron):
+    /// `(nombre, motivo)`. El binario COMPILA, pero llamarlas panica. `build_native` lo AVISA al usuario
+    /// (antes solo con `RAYLANG_TRANSPILE_DEBUG`) para que el "ok" no oculte una divergencia en runtime (H7).
+    pub stubbed: Vec<(String, String)>,
 }
 
 /// Transpila sin excluir ningún subsistema (el caso común; lo usan `ray emit-rust` y los tests).
@@ -407,6 +666,16 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
 /// binario compila por la vía rápida (`rustc` pelada) si no queda otro subsistema con-crate. Escape hatch
 /// para builds herméticos/cross-compile/policy (docs/transpilador-nativo.md §3.3).
 pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, String> {
+    transpile_with_opts(prog, exclude, false)
+}
+
+/// Como [`transpile_with`], con opciones. `fast = true` (flag `--fast` de `ray build --native`) emite
+/// la aritmética de `int` ENVOLVENTE (wrapping) en vez de checked: renuncia a la paridad de overflow
+/// con la VM a cambio del último tramo de rendimiento (medido: ~2× en un bucle de puro int, ~20 % en
+/// código de llamadas calientes tipo fib, ~0 en código idiomático con arrays/strings). Div/mod por
+/// cero SIGUEN siendo error (Rust los chequea igual; no cuestan nada). Solo cambia el PREÁMBULO
+/// (los cuerpos de `__ray_add`/…); los sitios de llamada son idénticos.
+pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
@@ -453,6 +722,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
             trait_method_sigs.insert(m.name.clone(), (args, m.return_type.clone()));
         }
     }
+    let marks = spawn_fn_param_marks(prog);
     let mut t = Transpiler {
         funcs,
         scopes: Vec::new(),
@@ -462,6 +732,9 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         enum_variants,
         enum_tparams,
         match_temp: 0,
+        fn_marks: marks,
+        send_fn_params: std::collections::HashSet::new(),
+        send_convs: Vec::new(),
         consts,
         trait_method_sigs,
         tparams: std::collections::HashSet::new(),
@@ -481,6 +754,51 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
     out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables)]\n");
     out.push_str("use std::rc::Rc;\n");
+    // H6 + H21-N1: errores de EJECUCIÓN como la VM — mensaje `runtime error: <msg>` (sin posición: el
+    // nativo no lleva el AST) y exit 70 (EX_SOFTWARE, el de la VM). El error viaja como PANIC con
+    // payload propio (`__RayErr`), no como exit directo: así el fallo de una TAREA lo captura su
+    // `catch_unwind` (→ `TaskState::Failed`, como la VM guarda el fallo en la Task) y el proceso solo
+    // muere cuando el fallo llega a `main` sin observarse. El hook de panic calla los `__RayErr` (el
+    // mensaje limpio lo imprime quien lo observa); los panics ajenos (índice fuera de rango…) siguen
+    // con el hook de Rust.
+    out.push_str("struct __RayErr(String);\n");
+    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    out.push_str("fn __ray_panic_msg(e: &(dyn std::any::Any + Send)) -> String {\n");
+    out.push_str("    if let Some(r) = e.downcast_ref::<__RayErr>() { r.0.clone() }\n");
+    out.push_str("    else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }\n");
+    out.push_str("    else if let Some(s) = e.downcast_ref::<String>() { s.clone() }\n");
+    out.push_str("    else { \"panic\".to_string() }\n}\n");
+    // H21-N5a: la repr SEND universal — un árbol de datos `Send` al que se CONVIERTE cualquier valor
+    // de heap que cruce un hilo (capturas de spawn, elementos de canal, retorno de Task) y del que se
+    // reconstruye al otro lado. Es la semántica de la VM (M38, actores de heap aislado: lo que cruza
+    // se COPIA entre heaps — la mutación no se comparte; los canales/Tasks son el único conducto).
+    // Los conversores por tipo (`__to_send_N`/`__from_send_N`) se generan bajo demanda.
+    out.push_str(concat!(
+        "#[derive(Clone)]\n",
+        "enum __RaySend { I(i64), F(f64), B(bool), C(char), U, UI(u64), S(std::sync::Arc<str>), ",
+        "By(std::sync::Arc<[u8]>), A(Vec<__RaySend>), M(Vec<(__RaySend, __RaySend)>), ",
+        "T(Vec<__RaySend>), E(usize, Vec<__RaySend>) }\n",
+    ));
+    // Aritmética de `int` CHECKED por defecto, como la VM (overflow/div-cero → runtime error, no
+    // wrapping silencioso). Mismos textos que interpreter.rs/vm.rs. Con `--fast` (opt-out medido:
+    // ~2× en puro int-loop, ~20 % en fib, ~0 en código idiomático), wrapping — pero div/mod por
+    // cero SIGUEN chequeados (Rust lo hace igual; gratis). Solo cambia este preámbulo: los sitios
+    // de llamada emiten `__ray_add(...)` idéntico en ambos modos.
+    if fast {
+        out.push_str("#[inline(always)] fn __ray_add(a: i64, b: i64) -> i64 { a.wrapping_add(b) }\n");
+        out.push_str("#[inline(always)] fn __ray_sub(a: i64, b: i64) -> i64 { a.wrapping_sub(b) }\n");
+        out.push_str("#[inline(always)] fn __ray_mul(a: i64, b: i64) -> i64 { a.wrapping_mul(b) }\n");
+        out.push_str("#[inline(always)] fn __ray_neg(a: i64) -> i64 { a.wrapping_neg() }\n");
+        out.push_str("#[inline(always)] fn __ray_div(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"integer division by zero\") } else { a.wrapping_div(b) } }\n");
+        out.push_str("#[inline(always)] fn __ray_mod(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"modulo by zero\") } else { a.wrapping_rem(b) } }\n");
+    } else {
+        out.push_str("#[inline(always)] fn __ray_add(a: i64, b: i64) -> i64 { a.checked_add(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_sub(a: i64, b: i64) -> i64 { a.checked_sub(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_mul(a: i64, b: i64) -> i64 { a.checked_mul(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_neg(a: i64) -> i64 { a.checked_neg().unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_div(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"integer division by zero\") } else { a.checked_div(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) } }\n");
+        out.push_str("#[inline(always)] fn __ray_mod(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"modulo by zero\") } else { a.checked_rem(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) } }\n");
+    }
     // Preámbulo: helpers de runtime para operaciones de arreglo/string que no son 1:1 con Rust.
     out.push_str("fn __ray_split(s: &str, sep: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
     out.push_str("    Rc::new(std::cell::RefCell::new(s.split(sep).map(Rc::<str>::from).collect()))\n}\n");
@@ -528,16 +846,16 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     // Map: `Map{k: v, …}` con los pares (renderizados) ordenados como cadena, como el Display del
     // runtime (`Value::Map`): determinista pese al HashMap. `print(map)` directo lo veta el checker,
     // pero un struct/enum que CONTENGA un Map (p. ej. `Json.JObject`) sí se renderiza recursivamente.
-    out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>> { fn ray_show(&self) -> String { let __m = self.borrow(); let mut __parts: Vec<String> = __m.iter().map(|(__k, __v)| format!(\"{}: {}\", __k.ray_show(), __v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
-    out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__v) => format!(\"Option.Some({})\", __v.ray_show()), None => \"Option.None\".to_string() } } }\n");
-    out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__v) => format!(\"Result.Ok({})\", __v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
+    out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>> { fn ray_show(&self) -> String { let __rt_m = self.borrow(); let mut __parts: Vec<String> = __rt_m.iter().map(|(__k, __rt_v)| format!(\"{}: {}\", __k.ray_show(), __rt_v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
+    out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__rt_v) => format!(\"Option.Some({})\", __rt_v.ray_show()), None => \"Option.None\".to_string() } } }\n");
+    out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__rt_v) => format!(\"Result.Ok({})\", __rt_v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
     // Tuplas (2 y 3 elementos): `(a, b)`. El checker no deja `print`ar una tupla, así que esto rara vez
     // se llama; hace falta para satisfacer el bound `T: RayShow` de un `Iter<(k, v)>` (los adaptadores
     // `enumerate`/`zip` generados por el trait Iterator, aun cuando queden como stubs).
     out.push_str("impl<A: RayShow, B: RayShow> RayShow for (A, B) { fn ray_show(&self) -> String { format!(\"({}, {})\", self.0.ray_show(), self.1.ray_show()) } }\n");
     out.push_str("impl<A: RayShow, B: RayShow, C: RayShow> RayShow for (A, B, C) { fn ray_show(&self) -> String { format!(\"({}, {}, {})\", self.0.ray_show(), self.1.ray_show(), self.2.ray_show()) } }\n");
     // bytes → hex minúsculas sin separador ({:02x} por octeto), como la VM (bytes_to_hex).
-    out.push_str("impl RayShow for Rc<[u8]> { fn ray_show(&self) -> String { let mut __s = String::with_capacity(self.len() * 2); for __b in self.iter() { __s.push_str(&format!(\"{:02x}\", __b)); } __s } }\n\n");
+    out.push_str("impl RayShow for Rc<[u8]> { fn ray_show(&self) -> String { let mut __rt_s = String::with_capacity(self.len() * 2); for __rt_b in self.iter() { __rt_s.push_str(&format!(\"{:02x}\", __rt_b)); } __rt_s } }\n\n");
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
@@ -557,17 +875,19 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
                 let (args, ret) = t
                     .trait_method_sigs
                     .get(fname)
-                    .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", fname))?;
+                    .ok_or_else(|| format!("unknown dyn method '{}'", fname))?;
                 let atys: Vec<String> =
                     args.iter().map(|a| rust_ty(a, &t.enums, &t.tparams)).collect::<Result<_, _>>()?;
-                writeln!(out, "    {}: Rc<dyn Fn({}) -> {}>,", fname, atys.join(", "), rust_ty(ret, &t.enums, &t.tparams)?).unwrap();
+                writeln!(out, "    {}: Rc<dyn Fn({}) -> {}>,", mangle(fname), atys.join(", "), rust_ty(ret, &t.enums, &t.tparams)?).unwrap();
             }
             out.push_str("}\n");
             continue;
         }
         writeln!(out, "#[derive(Clone)]\nstruct {}{} {{", mangle(&s.name), generic_decl(&s.type_params)).unwrap();
         for (fname, fty) in &s.fields {
-            writeln!(out, "    {}: {},", fname, rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
+            // El nombre de campo puede ser palabra reservada de Rust (`type`, `ref`, …): mismo mangle
+            // que en literal/acceso/asignación → consistente.
+            writeln!(out, "    {}: {},", mangle(fname), rust_ty(fty, &t.enums, &t.tparams)?).unwrap();
         }
         out.push_str("}\n");
     }
@@ -579,11 +899,11 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         writeln!(out, "#[derive(Clone)]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params)).unwrap();
         for v in &e.variants {
             if v.payload.is_empty() {
-                writeln!(out, "    {},", v.name).unwrap();
+                writeln!(out, "    {},", mangle(&v.name)).unwrap(); // la variante puede ser keyword de Rust
             } else {
                 let tys: Vec<String> =
                     v.payload.iter().map(|t2| rust_ty(t2, &t.enums, &t.tparams)).collect::<Result<_, _>>()?;
-                writeln!(out, "    {}({}),", v.name, tys.join(", ")).unwrap();
+                writeln!(out, "    {}({}),", mangle(&v.name), tys.join(", ")).unwrap();
             }
         }
         out.push_str("}\n");
@@ -597,7 +917,9 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         if c.name.starts_with("std::math::") {
             continue;
         }
-        write!(out, "fn {}() -> {} {{ ", c.name, rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
+        // La DEFINICIÓN debe usar el mismo `mangle` que el uso (línea ~1605): una constante namespacada
+        // de un módulo importado llega como `geo::PI` → `fn geo::PI()` sería Rust inválido.
+        write!(out, "fn {}() -> {} {{ ", mangle(&c.name), rust_ty(&c.ty, &t.enums, &t.tparams)?).unwrap();
         t.emit_expr(&mut out, &c.value)?;
         out.push_str(" }\n");
     }
@@ -607,6 +929,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
 
     let mut main_ret_int = false;
     let mut main_seen = false;
+    let mut stubbed: Vec<(String, String)> = Vec::new();
     for f in &prog.functions {
         if skip_fn_def(f) {
             continue;
@@ -624,7 +947,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
             }
             Err(e) => {
                 if f.name == "main" {
-                    return Err(format!("spike: main fuera del subconjunto: {}", e));
+                    return Err(format!("main is outside the supported subset: {}", e));
                 }
                 // Una función no-main cuyo CUERPO no transpila se emite como STUB que panica (con su firma):
                 // el programa COMPILA y, si el flujo real no la llama, corre igual que la VM. Si ni la firma
@@ -635,11 +958,13 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
                     Ok(()) => {
                         out.push_str(&sbuf);
                         out.push('\n');
+                        stubbed.push((f.name.clone(), e.clone()));
                         if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
                             eprintln!("[transpile stub] {} — {}", f.name, e);
                         }
                     }
                     Err(se) => {
+                        stubbed.push((f.name.clone(), format!("{e} (signature: {se})")));
                         if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
                             eprintln!("[transpile skip] {} — cuerpo: {} — firma: {}", f.name, e, se);
                         }
@@ -649,16 +974,32 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         }
     }
     if !main_seen {
-        return Err("spike: `main` no está en el subconjunto soportado".into());
+        return Err("`main` is not in the supported subset".into());
     }
 
+    // H6 + H21-N1: `main` instala el hook (calla los `__RayErr`: su mensaje limpio se imprime aquí,
+    // al observarlos) y captura todo unwind → los errores de ejecución propios dan `runtime error:
+    // <msg>` + exit 70; los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) dan
+    // exit 70 con el texto de Rust (paridad de código, no de texto, para esa cola).
     out.push_str("fn main() {\n");
+    out.push_str("    let __rt_hook = std::panic::take_hook();\n");
+    out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
+    out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
     if main_ret_int {
-        out.push_str("    std::process::exit(ray_main() as i32);\n");
+        out.push_str("        Ok(code) => std::process::exit(code as i32),\n");
     } else {
-        out.push_str("    ray_main();\n");
+        out.push_str("        Ok(_) => std::process::exit(0),\n");
     }
+    out.push_str("        Err(e) => {\n");
+    out.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+    out.push_str("            std::process::exit(70)\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
     out.push_str("}\n");
+    // H21-N5a: los conversores Send registrados durante la emisión (tipos que cruzan hilos). Worklist:
+    // generar uno puede registrar tipos anidados. Va antes de los bloques de runtime (orden top-level
+    // libre en Rust; solo importa que TODA la emisión de cuerpos ya pasó).
+    t.emit_send_convs(&mut out)?;
     // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) → implica net.
     if t.needs_rt_tls {
         t.needs_net = true;
@@ -835,62 +1176,150 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     // backpressure (bounded) y cierre. FIFO como la VM. `T: Send` (primitivos en v1).
     if t.needs_concurrency {
         out.push_str(concat!(
-            "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize> }\n",
+            // `taken` cuenta los valores CONSUMIDOS (para el handshake rendezvous por generación) y
+            // `senders` los emisores bloqueados (para que `close` los detecte, como la VM). Los panics
+            // llevan el MISMO texto que el error de ejecución de la VM (exit code ≠ 70: diferido a H6).
+            "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize>, taken: u64, senders: usize }\n",
             "struct __RayChan<T> { inner: std::sync::Arc<(std::sync::Mutex<__ChanState<T>>, std::sync::Condvar)> }\n",
             "impl<T> Clone for __RayChan<T> { fn clone(&self) -> Self { __RayChan { inner: self.inner.clone() } } }\n",
             "impl<T: Send> __RayChan<T> {\n",
-            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap }), std::sync::Condvar::new())) } }\n",
+            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0 }), std::sync::Condvar::new())) } }\n",
             "    fn send(&self, v: T) {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = cv.wait(st).unwrap(); }\n",
-            "        if st.closed { return; }\n",
-            "        st.q.push_back(v); cv.notify_all();\n",
+            // `send` sobre un canal cerrado = error de ejecución, como la VM (antes: descarte silencioso).
+            // El guard se suelta antes del panic para no envenenar el Mutex (los otros hilos verían
+            // PoisonError en vez del mensaje real). Toda espera bloqueante usa `__ray_cv_wait` (timeout
+            // corto) + chequeo de cancelación (H21-N3): una tarea cancelada aborta en su siguiente punto
+            // bloqueante, deshaciendo su rastro (contador `senders`, su valor en cola).
+            "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
+            // Rendezvous (cap 0): la VM entrega el valor directamente y el emisor no continúa hasta que SU
+            // valor se consume (M12.2). El handshake es por GENERACIÓN (`taken`), no por cola-vacía: con
+            // ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse para siempre aunque el
+            // suyo ya se consumió. `my` = el ordinal que consumirá su valor; A retorna cuando `taken >= my`.
+            "        if st.cap == Some(0) {\n",
+            "            st.senders += 1;\n",
+            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            if st.closed { st.senders -= 1; drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
+            "            st.q.push_back(v);\n",
+            "            let my = st.taken + 1; cv.notify_all(); __ray_bump();\n",
+            "            while !st.closed && st.taken < my { st = __ray_cv_wait(cv, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            st.senders -= 1;\n",
+            "            if st.taken < my { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
+            "            return;\n",
+            "        }\n",
+            "        st.senders += 1;\n",
+            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        st.senders -= 1;\n",
+            "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
+            "        st.q.push_back(v); cv.notify_all(); drop(st); __ray_bump();\n",
             "    }\n",
             "    fn recv(&self) -> Option<T> {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        while st.q.is_empty() && !st.closed { st = cv.wait(st).unwrap(); }\n",
-            "        let v = st.q.pop_front(); if v.is_some() { cv.notify_all(); } v\n",
+            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; cv.notify_all(); } v\n",
             "    }\n",
-            "    fn close(&self) { let (m, cv) = &*self.inner; m.lock().unwrap().closed = true; cv.notify_all(); }\n",
+            // `close` con un emisor bloqueado = error de ejecución en el sitio del close, como la VM
+            // (M12.2; antes el emisor hacía return silencioso y su valor quedaba consumible).
+            "    fn close(&self) {\n",
+            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        if st.senders > 0 { drop(st); __ray_rt_err(\"close on a channel with a blocked sender\"); }\n",
+            "        st.closed = true; cv.notify_all(); drop(st); __ray_bump();\n",
+            "    }\n",
             "}\n",
-            // Structured concurrency (M12.3): Task<T> = un JoinHandle envuelto (Arc<Mutex>) que cachea el
-            // resultado (join una vez ejecuta el hilo; joins posteriores devuelven el clon cacheado → una
-            // tarea puede unirse explícitamente O por el scope, no dos veces).
-            "struct __TaskState<T> { handle: Option<std::thread::JoinHandle<T>>, result: Option<T> }\n",
-            "struct __RayTask<T> { inner: std::sync::Arc<std::sync::Mutex<__TaskState<T>>> }\n",
-            "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone() } } }\n",
+            // Condvar-wait con timeout corto: el despertar normal sigue llegando por `notify` (sin
+            // latencia añadida); el timeout solo acota cuánto tarda una tarea bloqueada en NOTAR su
+            // cancelación (cooperativa, H21-N3) → sin busy-wait.
+            "fn __ray_cv_wait<'a, T>(cv: &std::sync::Condvar, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> { cv.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0 }\n",
+            // Token de cancelación del hilo actual (lo instala `__ray_spawn`; `main` no tiene → false).
+            "thread_local! { static __RAY_CANCEL: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> = std::cell::RefCell::new(None); }\n",
+            "fn __ray_cancelled() -> bool { __RAY_CANCEL.with(|c| c.borrow().as_ref().map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))) }\n",
+            // Condvar GLOBAL de actividad (H21-N4): send/close/fin-de-tarea la notifican (generación
+            // monótona); `select` y la salida del scope esperan en ella en vez de hacer poll con sleep.
+            // Orden de locks: canal/tarea → actividad (nunca al revés) → sin ciclos.
+            "static __RAY_ACT_M: std::sync::Mutex<u64> = std::sync::Mutex::new(0);\n",
+            "static __RAY_ACT_CV: std::sync::Condvar = std::sync::Condvar::new();\n",
+            "fn __ray_bump() { *__RAY_ACT_M.lock().unwrap() += 1; __RAY_ACT_CV.notify_all(); }\n",
+            "fn __ray_wait_activity(act: u64) {\n",
+            "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
+            "    while *g == act { g = __ray_cv_wait(&__RAY_ACT_CV, g); if __ray_cancelled() { drop(g); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "}\n",
+            // Structured concurrency (M12.3) + contención de fallos (H21-N1) + cancelación de hermanas
+            // (M12.5, H21-N3): Task<T> = estado compartido (resultado + condvar) que el HILO HIJO rellena
+            // al terminar (push, no join) + un token de cancelación. El cuerpo corre bajo `catch_unwind`
+            // → un fallo queda CAPTURADO en la Task (`Err(msg)`, como el `Failed` de la VM) y NO mata el
+            // proceso; se re-lanza cuando alguien lo OBSERVA (`join`/salida del scope) y encadena hacia
+            // arriba hasta main. `wait` es la observación sin re-lanzar (base de `try_join`, H21-N2).
+            // La cancelación es COOPERATIVA (como la VM, que solo cancela en los yields del scheduler
+            // M:1): una tarea cancelada termina en su siguiente punto BLOQUEANTE (send/recv/join/select/
+            // scope); código que corre sin bloquearse no se interrumpe (divergencia menor documentada).
+            "struct __TaskState<T> { result: Option<Result<T, String>> }\n",
+            "struct __RayTask<T> { inner: std::sync::Arc<(std::sync::Mutex<__TaskState<T>>, std::sync::Condvar)>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
+            "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone(), cancel: self.cancel.clone() } } }\n",
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
-            "    fn join(&self) -> T {\n",
-            "        let mut st = self.inner.lock().unwrap();\n",
-            "        if let Some(h) = st.handle.take() { let r = h.join().unwrap(); st.result = Some(r); }\n",
+            "    fn wait(&self) -> Result<T, String> {\n",
+            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        while st.result.is_none() { st = __ray_cv_wait(cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.result.clone().unwrap()\n",
             "    }\n",
+            "    fn join(&self) -> T { match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
             "}\n",
-            // Cada scope activo (por hilo) acumula clausuras que unen las tareas lanzadas dentro; al salir
-            // el scope las ejecuta (une todas). `spawn` registra su tarea en el scope más interno, si hay.
-            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<Box<dyn FnOnce()>>>> = std::cell::RefCell::new(Vec::new()); }\n",
+            // La cara borrada-de-tipo que un scope guarda de cada hija: sondear su estado SIN bloquear
+            // (el hilo hijo escribe su resultado al terminar) y cancelarla.
+            "trait __RayScopeChild { fn failed(&self) -> Option<String>; fn done(&self) -> bool; fn cancel_task(&self); }\n",
+            "impl<T> __RayScopeChild for __RayTask<T> {\n",
+            "    fn failed(&self) -> Option<String> { match &self.inner.0.lock().unwrap().result { Some(Err(m)) => Some(m.clone()), _ => None } }\n",
+            "    fn done(&self) -> bool { self.inner.0.lock().unwrap().result.is_some() }\n",
+            "    fn cancel_task(&self) { self.cancel.store(true, std::sync::atomic::Ordering::Relaxed); __ray_bump(); }\n",
+            "}\n",
+            // Cada scope activo (por hilo) acumula las tareas lanzadas dentro; `spawn` registra la suya
+            // en el scope más interno, si hay.
+            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>> = std::cell::RefCell::new(Vec::new()); }\n",
             "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
-            "    let task = __RayTask { inner: std::sync::Arc::new(std::sync::Mutex::new(__TaskState { handle: Some(std::thread::spawn(f)), result: None })) };\n",
+            "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
             "    let t = task.clone();\n",
-            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(Box::new(move || { let _ = t.join(); })); } });\n",
+            "    std::thread::spawn(move || {\n",
+            "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
+            "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
+            // Una hija que falla con tareas en vuelo cancela los hijos de sus scopes sin cerrar (el
+            // unwinding se saltó los pops de __SCOPES) → transitiva, sin nietos huérfanos (M12.5).
+            "        if r.is_err() { let frames = __SCOPES.with(|s| std::mem::take(&mut *s.borrow_mut())); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
+            "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
+            "    });\n",
+            "    let t2 = task.clone();\n",
+            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
             "    task\n}\n",
+            // Salida del scope (ScopeEnd, M12.3+M12.5): espera a las hijas SIN orden fijo; si alguna
+            // falló, cancela a las hermanas pendientes y propaga el fallo observado DE INMEDIATO (antes:
+            // unión en orden de registro → un fallo podía esperar para siempre detrás de una hermana
+            // bloqueada). La generación se lee ANTES de escanear: un cambio entre escaneo y espera
+            // despierta al instante.
             "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R {\n",
             "    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n",
             "    let r = body();\n",
             "    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n",
-            "    for j in frame { j(); }\n",
+            "    loop {\n",
+            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
+            "        if let Some(m) = frame.iter().find_map(|c| c.failed()) {\n",
+            "            for c in &frame { c.cancel_task(); }\n",
+            "            __ray_rt_err(&m);\n",
+            "        }\n",
+            "        if frame.iter().all(|c| c.done()) { break; }\n",
+            "        __ray_wait_activity(act);\n",
+            "    }\n",
             "    r\n}\n",
             // select (M12.4): espera a que algún canal de la lista esté LISTO para recibir (cola no vacía
             // ∨ cerrado) y devuelve el índice del PRIMERO listo (menor índice → determinista en el índice;
             // el ORDEN entre canales listos a la vez depende del scheduling, como la VM multicore por
-            // default). Poll con backoff (std no tiene un select multi-condvar; el resultado es correcto).
+            // default). Sin busy-wait (H21-N4): si ninguno está listo, espera en la condvar global de
+            // actividad (la generación leída antes del escaneo evita perder un send concurrente).
             "fn __ray_select<T>(chs: &[__RayChan<T>]) -> i64 {\n",
             "    loop {\n",
+            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
             "        for (i, ch) in chs.iter().enumerate() {\n",
             "            let (m, _) = &*ch.inner; let st = m.lock().unwrap();\n",
             "            if !st.q.is_empty() || st.closed { return i as i64; }\n",
             "        }\n",
-            "        std::thread::sleep(std::time::Duration::from_micros(50));\n",
+            "        __ray_wait_activity(act);\n",
             "    }\n}\n",
         ));
     }
@@ -958,7 +1387,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     if t.needs_rt_sqlite {
         rt_features.push("sqlite");
     }
-    Ok(Transpiled { source: out, rt_features })
+    Ok(Transpiled { source: out, rt_features, stubbed })
 }
 
 impl Transpiler {
@@ -989,11 +1418,49 @@ impl Transpiler {
         let base_scopes = self.scopes.len();
         let prev_tparams = std::mem::take(&mut self.tparams);
         let prev_cells = std::mem::take(&mut self.cells);
+        let prev_marked = std::mem::take(&mut self.send_fn_params);
         let r = self.emit_function_inner(out, rust_name, f);
         self.scopes.truncate(base_scopes);
         self.tparams = prev_tparams;
         self.cells = prev_cells;
+        self.send_fn_params = prev_marked;
         r
+    }
+
+    /// H21-N5c: genéricos extra + tipos de param para los params fn MARCADOS de `f` (cruzan un
+    /// spawn). Devuelve (declaración de genéricos combinada, tipo por param con los marcados como
+    /// `__F{i}`) y deja los nombres marcados en `self.send_fn_params`.
+    fn fn_generics(&mut self, f: &Function) -> Result<(String, Vec<String>), String> {
+        let marked = self.fn_marks.get(&f.name).cloned().unwrap_or_default();
+        let mut gens: Vec<String> = f
+            .type_params
+            .iter()
+            .map(|t| format!("{}: Clone + RayShow + 'static", t))
+            .collect();
+        let mut ptys = Vec::new();
+        self.send_fn_params.clear();
+        for (i, p) in f.params.iter().enumerate() {
+            if marked.contains(&i) {
+                let Type::Fn(ats, rt) = normalize_type(&p.ty) else {
+                    return Err(format!("marked param {} of '{}' is not a fn type", i, f.name));
+                };
+                let mut sig = Vec::new();
+                for at in &ats {
+                    sig.push(rust_ty(at, &self.enums, &self.tparams)?);
+                }
+                gens.push(format!(
+                    "__F{i}: Fn({}) -> {} + Send + Sync + Clone + 'static",
+                    sig.join(", "),
+                    rust_ty(&rt, &self.enums, &self.tparams)?
+                ));
+                ptys.push(format!("__F{i}"));
+                self.send_fn_params.insert(p.name.clone());
+            } else {
+                ptys.push(rust_ty(&p.ty, &self.enums, &self.tparams)?);
+            }
+        }
+        let gdecl = if gens.is_empty() { String::new() } else { format!("<{}>", gens.join(", ")) };
+        Ok((gdecl, ptys))
     }
 
     fn emit_function_inner(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
@@ -1003,11 +1470,11 @@ impl Transpiler {
         // se imprime/`to_string`). rustc los monomorfiza → nativo. Los bounds de raylang (Eq/Ord/traits de
         // usuario) los realiza el **paso de diccionarios** del checker: sus params ocultos (`T#Trait#m`,
         // valores función) y el impl manglado (`Tipo#m`) se emiten tal cual (como funciones ordinarias).
-        let generics = generic_decl(&f.type_params);
+        let (generics, ptys) = self.fn_generics(f)?;
         self.scopes.push(HashMap::new());
         let mut params = Vec::new();
-        for p in &f.params {
-            params.push(format!("mut {}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?));
+        for (p, pty) in f.params.iter().zip(&ptys) {
+            params.push(format!("mut {}: {}", mangle(&p.name), pty));
             self.declare(&p.name, p.ty.clone());
         }
         write!(
@@ -1037,15 +1504,16 @@ impl Transpiler {
     /// firma. Devuelve Err solo si ni la FIRMA es representable (raro) → el llamador vuelve a omitirla.
     fn emit_stub(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
         self.tparams = f.type_params.iter().cloned().collect();
-        let generics = generic_decl(&f.type_params);
+        let (generics, ptys) = self.fn_generics(f)?;
+        self.send_fn_params.clear(); // el stub no emite cuerpo: no hay capturas que mirar
         let mut params = Vec::new();
-        for p in &f.params {
-            params.push(format!("mut {}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?));
+        for (p, pty) in f.params.iter().zip(&ptys) {
+            params.push(format!("mut {}: {}", mangle(&p.name), pty));
         }
         let ret = rust_ty(&f.return_type, &self.enums, &self.tparams)?;
         write!(
             out,
-            "fn {}{}({}) -> {} {{ panic!(\"'{}' no está soportada en el binario nativo (transpilación a Rust)\") }}\n",
+            "fn {}{}({}) -> {} {{ __ray_rt_err(\"'{}' is not supported in the native binary (Rust transpilation)\") }}\n",
             rust_name, generics, params.join(", "), ret, f.name
         )
         .unwrap();
@@ -1071,8 +1539,11 @@ impl Transpiler {
         }
         for (lib, fns) in &by_lib {
             // libc ya está enlazada (símbolos disponibles); otras librerías (`m`, …) llevan `#[link]`.
+            // `{:?}` produce un literal de string Rust ESCAPADO: un nombre de librería con comillas no puede
+            // inyectar ítems en el fuente generado (no es frontera de seguridad —el usuario compila su
+            // propio código— pero evita que un `extern "..."` raro genere Rust arbitrario).
             if *lib != "c" {
-                writeln!(out, "#[link(name = \"{}\")]", lib).unwrap();
+                writeln!(out, "#[link(name = {:?})]", lib).unwrap();
             }
             out.push_str("unsafe extern \"C\" {\n");
             for e in fns {
@@ -1082,7 +1553,7 @@ impl Transpiler {
                     .enumerate()
                     .map(|(i, p)| ffi_c_arg_ty(&p.ty).map(|c| format!("__a{}: {}", i, c)))
                     .collect::<Result<_, _>>()?;
-                writeln!(out, "    #[link_name = \"{}\"]", e.name).unwrap();
+                writeln!(out, "    #[link_name = {:?}]", e.name).unwrap(); // escapado (ver #[link] arriba)
                 writeln!(
                     out,
                     "    fn __ffi_{}({}) -> {};",
@@ -1111,37 +1582,58 @@ impl Transpiler {
                     Type::Int | Type::Float => passes.push(format!("__p{}", i)),
                     Type::Bool => passes.push(format!("(__p{} as std::os::raw::c_int)", i)),
                     Type::String => {
-                        writeln!(out, "    let __c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"FFI: el string tiene un NUL interno\");", i, i).unwrap();
-                        passes.push(format!("__c{}.as_ptr()", i));
+                        // mismo texto que la VM (src/ffi.rs; allí es error de ejecución, aquí panic).
+                        writeln!(out, "    let __rt_c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"the string argument of '{}' contains an interior NUL\");", i, i, e.name).unwrap();
+                        passes.push(format!("__rt_c{}.as_ptr()", i));
                     }
                     Type::Bytes => passes.push(format!("__p{}.as_ptr()", i)),
                     Type::Ptr => passes.push(format!("(__p{} as *mut std::ffi::c_void)", i)),
-                    other => return Err(format!("spike: FFI arg no marshalable: {:?}", other)),
+                    other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
                 }
             }
-            writeln!(out, "    let __r = unsafe {{ __ffi_{}({}) }};", mangle(&e.name), passes.join(", ")).unwrap();
+            writeln!(out, "    let __rt_r = unsafe {{ __ffi_{}({}) }};", mangle(&e.name), passes.join(", ")).unwrap();
             // Marshalling del retorno C → valor raylang.
             let ret_expr = match normalize_type(&e.return_type) {
-                // `__r` es `c_int` (i32) para Int → extiende el signo a i64 (como la VM).
-                Type::Int => "__r as i64".to_string(),
-                Type::Float => "__r".to_string(),
-                Type::Bool => "__r != 0".to_string(),
+                // `__rt_r` es `c_int` (i32) para Int → extiende el signo a i64 (como la VM).
+                Type::Int => "__rt_r as i64".to_string(),
+                Type::Float => "__rt_r".to_string(),
+                Type::Bool => "__rt_r != 0".to_string(),
                 Type::Unit => "()".to_string(),
-                Type::Ptr => "__r as i64".to_string(),
+                Type::Ptr => "__rt_r as i64".to_string(),
                 Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
                     // char* → Option<bytes>: NULL→None; si no, copia los bytes hasta el NUL (nunca libera).
-                    Type::Bytes => "if __r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__r) }.to_bytes())) }".to_string(),
-                    // char* → Option<string>: como bytes, validando UTF-8 (inválido → error de ejecución).
-                    Type::String => "if __r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__r) }.to_bytes()).expect(\"FFI: el char* devuelto no es UTF-8 válido\"))) }".to_string(),
+                    Type::Bytes => "if __rt_r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes())) }".to_string(),
+                    // char* → Option<string>: como bytes, validando UTF-8. Mismo texto que la VM
+                    // (src/interpreter.rs, ffi_to_value; allí es error de ejecución, aquí panic).
+                    Type::String => "if __rt_r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes()).expect(\"the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)\"))) }".to_string(),
                     // ptr fallible → Option<ptr>: NULL→None; si no, la dirección opaca.
-                    Type::Ptr => "if __r.is_null() { None } else { Some(__r as i64) }".to_string(),
-                    other => return Err(format!("spike: FFI retorno Option<{:?}> no soportado", other)),
+                    Type::Ptr => "if __rt_r.is_null() { None } else { Some(__rt_r as i64) }".to_string(),
+                    other => return Err(format!("FFI return type Option<{:?}> is not supported", other)),
                 },
-                other => return Err(format!("spike: FFI retorno no marshalable: {:?}", other)),
+                other => return Err(format!("FFI return type is not marshalable: {:?}", other)),
             };
             writeln!(out, "    {}\n}}", ret_expr).unwrap();
         }
         Ok(())
+    }
+
+    /// Normaliza + reclasifica RECURSIVAMENTE los `Struct(n)` que son enums del usuario (el parser
+    /// no distingue; `declare` solo reclasifica el nivel superior). Lo usan los conversores Send y
+    /// `type_of` de join/try_join, donde el tipo anida (Task<Forma>, campos, payloads).
+    fn classify(&self, t: &Type) -> Type {
+        match normalize_type(t) {
+            Type::Struct(n, a) => {
+                let a: Vec<Type> = a.iter().map(|x| self.classify(x)).collect();
+                if self.enums.contains(&n) { Type::Enum(n, a) } else { Type::Struct(n, a) }
+            }
+            Type::Enum(n, a) => Type::Enum(n, a.iter().map(|x| self.classify(x)).collect()),
+            Type::Array(e) => Type::Array(Box::new(self.classify(&e))),
+            Type::Map(k, v) => Type::Map(Box::new(self.classify(&k)), Box::new(self.classify(&v))),
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|x| self.classify(x)).collect()),
+            Type::Task(e) => Type::Task(Box::new(self.classify(&e))),
+            Type::Channel(e) => Type::Channel(Box::new(self.classify(&e))),
+            other => other,
+        }
     }
 
     fn declare(&mut self, name: &str, ty: Type) {
@@ -1162,6 +1654,42 @@ impl Transpiler {
     /// Nombres de las variables en ámbito cuyo tipo es `Channel`/`Task` (los valores compartibles entre
     /// hilos). Se clonan antes de un `spawn` para que el closure `move` no consuma el original. Dedup:
     /// el nombre más interno (shadowing) gana, y no se repite.
+    /// Capturas de HEAP de un closure de `spawn` (H21-N5b): variables libres del cuerpo que son
+    /// locales del ámbito envolvente y cuyo tipo debe cruzar por deep copy. Excluye canales/Tasks
+    /// (se clonan: son el conducto compartido) y los escalares Copy (el move los copia). Una captura
+    /// de tipo FUNCIÓN no puede cruzar (aún, N5c) → error claro en vez del E0277 de rustc.
+    fn spawn_captures(&mut self, body: &Block) -> Result<(Vec<(String, Type, bool)>, Vec<String>), String> {
+        let mut ids = std::collections::HashSet::new();
+        idents_of_block(body, &mut ids);
+        let mut names: Vec<String> = ids.into_iter().collect();
+        names.sort(); // orden determinista de emisión
+        let mut out = Vec::new();
+        let mut clones: Vec<String> = Vec::new();
+        for name in names {
+            let Some(ty) = self.lookup(&name) else { continue }; // global/función/builtin → no es local
+            let ty = ty.clone();
+            match normalize_type(&ty) {
+                Type::Channel(_) | Type::Task(_) => {}
+                Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) | Type::Unit => {}
+                // H21-N5c: un param fn MARCADO es un genérico `__F: ... + Send + Sync + Clone` → se
+                // pre-clona como los canales (el bound ya garantiza que cruza). Uno NO marcado no
+                // debería llegar aquí (el marcado por punto fijo lo habría marcado) — defensivo.
+                Type::Fn(..) if self.send_fn_params.contains(&name) => clones.push(name),
+                Type::Fn(..) => {
+                    return Err(format!(
+                        "'{}': a function value captured by 'spawn' cannot cross threads in the native backend yet",
+                        name
+                    ))
+                }
+                _ => {
+                    let is_cell = self.cells.contains(&name);
+                    out.push((name, ty, is_cell));
+                }
+            }
+        }
+        Ok((out, clones))
+    }
+
     fn in_scope_channels(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut names = Vec::new();
@@ -1229,7 +1757,7 @@ impl Transpiler {
             StmtKind::LetTuple { names, value, mutable } => {
                 let elems = match self.type_of(value)? {
                     Type::Tuple(ts) => ts,
-                    other => return Err(format!("spike: let-tupla sobre {:?}", other)),
+                    other => return Err(format!("tuple let over {:?} is not supported", other)),
                 };
                 out.push_str("let (");
                 for (i, nm) in names.iter().enumerate() {
@@ -1265,9 +1793,9 @@ impl Transpiler {
                         if self.cells.contains(name) {
                             // Var-celda (B1): `n = e` → `*n.borrow_mut() = e`. El RHS va a un temp ANTES del
                             // borrow_mut: si lee la MISMA celda (`n = n + 1`), evita el doble borrow.
-                            out.push_str("{ let __v = ");
+                            out.push_str("{ let __rt_v = ");
                             self.emit_typed(out, value, &tty)?;
-                            write!(out, "; *{}.borrow_mut() = __v; }}\n", mangle(name)).unwrap();
+                            write!(out, "; *{}.borrow_mut() = __rt_v; }}\n", mangle(name)).unwrap();
                         } else {
                             out.push_str(&mangle(name));
                             out.push_str(" = ");
@@ -1276,22 +1804,29 @@ impl Transpiler {
                         }
                     }
                     ExprKind::Index { array, index } => {
-                        out.push_str("{ let __rhs = ");
-                        self.emit_expr(out, value)?;
-                        out.push_str("; ");
+                        // Orden de la VM (compiler.rs: SetIndex consume arreglo, índice, valor en ese
+                        // orden): izquierda→derecha. Los TRES van a temporales ANTES del borrow_mut: el
+                        // índice o el valor pueden leer el MISMO arreglo (`a[a.len()-1] = a[0]`) →
+                        // izarlos evita el doble borrow del RefCell (leer + mutar a la vez = panic).
+                        out.push_str("{ let __rt_arr = ");
                         self.emit_expr(out, array)?;
-                        out.push_str(".borrow_mut()[");
+                        out.push_str("; let __rt_idx = ");
                         self.emit_expr(out, index)?;
-                        out.push_str(" as usize] = __rhs; }\n");
+                        out.push_str("; let __rt_rhs = ");
+                        self.emit_expr(out, value)?;
+                        out.push_str("; __rt_arr.borrow_mut()[__rt_idx as usize] = __rt_rhs; }\n");
                     }
                     ExprKind::Field { object, name } => {
-                        out.push_str("{ let __rhs = ");
-                        self.emit_expr(out, value)?;
-                        out.push_str("; ");
+                        // Orden de la VM (SetField consume objeto, valor): objeto ANTES que el valor.
+                        // Ambos a temporales antes del borrow_mut (el RHS puede leer el mismo campo,
+                        // `p.x = p.x + 1`) → evita el doble borrow.
+                        out.push_str("{ let __rt_obj = ");
                         self.emit_expr(out, object)?;
-                        write!(out, ".borrow_mut().{} = __rhs; }}\n", name).unwrap();
+                        out.push_str("; let __rt_rhs = ");
+                        self.emit_expr(out, value)?;
+                        write!(out, "; __rt_obj.borrow_mut().{} = __rt_rhs; }}\n", mangle(name)).unwrap();
                     }
-                    _ => return Err("spike: lvalue no soportado".into()),
+                    _ => return Err("unsupported lvalue".into()),
                 }
             }
             StmtKind::Return { value } => {
@@ -1314,8 +1849,7 @@ impl Transpiler {
                     let sig = self
                         .funcs
                         .get(next_fn)
-                        .ok_or_else(|| format!("spike: iterador sin método next '{}'", next_fn))?
-                        .clone();
+                        .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?;
                     let it_ty = self.type_of(expr)?;
                     let mut subst = HashMap::new();
                     if let Some(p0) = sig.params.first() {
@@ -1324,15 +1858,15 @@ impl Transpiler {
                     let elems = match subst_type(&normalize_type(&sig.ret), &subst) {
                         Type::Enum(n, args) if n == "Option" && args.len() == 1 => match &args[0] {
                             Type::Tuple(ts) if ts.len() == names.len() => ts.clone(),
-                            other => return Err(format!("spike: for de tupla sobre next que da {:?}", other)),
+                            other => return Err(format!("tuple for over a next that yields {:?}", other)),
                         },
-                        other => return Err(format!("spike: next de '{}' no da Option<tupla> ({:?})", next_fn, other)),
+                        other => return Err(format!("next of '{}' does not yield Option<tuple> ({:?})", next_fn, other)),
                     };
                     let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
                     let binders: Vec<String> = names.iter().map(binder).collect();
-                    out.push_str("{ let __it = ");
+                    out.push_str("{ let __rt_it = ");
                     self.emit_expr(out, expr)?;
-                    write!(out, "; loop {{ match {}(__it.clone()) {{ Some((", mangle(next_fn)).unwrap();
+                    write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some((", mangle(next_fn)).unwrap();
                     out.push_str(&binders.join(", "));
                     out.push_str(")) => ");
                     self.scopes.push(HashMap::new());
@@ -1348,11 +1882,11 @@ impl Transpiler {
                 if let ForPat::Tuple(names) = pat {
                     let expr = match iter {
                         ForIter::In(e) => e,
-                        _ => return Err("spike: for de tupla solo sobre Map".into()),
+                        _ => return Err("tuple for is only supported over a Map".into()),
                     };
                     let (kt, vt) = match self.type_of(expr)? {
                         Type::Map(k, v) => ((*k).clone(), (*v).clone()),
-                        other => return Err(format!("spike: for (k,v) sobre {:?}", other)),
+                        other => return Err(format!("for (k, v) over {:?} is not supported", other)),
                     };
                     let binder = |n: &Option<String>| n.clone().unwrap_or_else(|| "_".into());
                     let (kn, vn) = (binder(&names[0]), binder(&names[1]));
@@ -1395,7 +1929,7 @@ impl Transpiler {
                         let ety = match self.type_of(expr)? {
                             Type::Array(t) => (*t).clone(),
                             Type::String => Type::Char,
-                            other => return Err(format!("spike: for sobre {:?} no soportado", other)),
+                            other => return Err(format!("for over {:?} is not supported", other)),
                         };
                         write!(out, "for {} in ", var).unwrap();
                         self.emit_expr(out, expr)?;
@@ -1409,7 +1943,7 @@ impl Transpiler {
                     }
                     // `for x in <it>` sobre un Iterator<T> de usuario (M40.2): el checker guarda el método
                     // `next(self) -> Option<T>` manglado. Se baja a un `loop`: llamar `next(it)` hasta `None`,
-                    // ligando cada `Some(x)`. El iterador se liga a `__it` UNA vez; `next` recibe un clon del
+                    // ligando cada `Some(x)`. El iterador se liga a `__rt_it` UNA vez; `next` recibe un clon del
                     // Rc → su estado (campos mutados por referencia) persiste entre iteraciones.
                     ForIter::Iter { expr, next_fn } => {
                         // T del elemento = el `T` de `Option<T>` de la firma de `next`, tras unificar el tipo
@@ -1417,8 +1951,7 @@ impl Transpiler {
                         let sig = self
                             .funcs
                             .get(next_fn)
-                            .ok_or_else(|| format!("spike: iterador sin método next '{}'", next_fn))?
-                            .clone();
+                            .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?;
                         let it_ty = self.type_of(expr)?;
                         let mut subst = HashMap::new();
                         if let Some(p0) = sig.params.first() {
@@ -1426,11 +1959,11 @@ impl Transpiler {
                         }
                         let elem = match subst_type(&normalize_type(&sig.ret), &subst) {
                             Type::Enum(n, args) if n == "Option" && args.len() == 1 => args[0].clone(),
-                            other => return Err(format!("spike: next de '{}' no devuelve Option<T> ({:?})", next_fn, other)),
+                            other => return Err(format!("next of '{}' does not return Option<T> ({:?})", next_fn, other)),
                         };
-                        out.push_str("{ let __it = ");
+                        out.push_str("{ let __rt_it = ");
                         self.emit_expr(out, expr)?;
-                        write!(out, "; loop {{ match {}(__it.clone()) {{ Some(", mangle(next_fn)).unwrap();
+                        write!(out, "; loop {{ match {}(__rt_it.clone()) {{ Some(", mangle(next_fn)).unwrap();
                         out.push_str(&mangle(&var));
                         out.push_str(") => ");
                         self.scopes.push(HashMap::new());
@@ -1486,6 +2019,114 @@ impl Transpiler {
 
     /// Emite `e` convertido a la repr SEND de un `Channel<T>`/`Task<T>` (para cruzar el hilo): string→
     /// Arc<str>, bytes→Arc<[u8]> (copia al borde, seguro por ser inmutables); primitivos sin cambio.
+    /// H21-N5c: emite UN argumento de llamada; si la posición está MARCADA en el callee (param fn
+    /// genérico Send), lo emite en su forma enviable (fn item pelado / closure sin Rc::new).
+    fn emit_call_arg(&mut self, out: &mut String, a: &Expr, marked: bool) -> Result<(), String> {
+        if marked {
+            match &a.kind {
+                ExprKind::Ident(n) if self.funcs.contains_key(n) && self.lookup(n).is_none() => {
+                    out.push_str(&mangle(n)); // fn item: Send+Sync+Clone gratis
+                    return Ok(());
+                }
+                ExprKind::Func(fx) => return self.emit_func_literal(out, fx, false),
+                _ => {}
+            }
+        }
+        self.emit_expr(out, a)
+    }
+
+    /// Emite un literal de función. `boxed` = envuelto en `Rc::new(...)` (la repr ordinaria de un
+    /// valor-función); `false` (H21-N5c) = el closure PELADO, para un argumento a un param MARCADO
+    /// (genérico `__F: Fn + Send + ...`) — si sus capturas no son Send, rustc lo rechaza (honesto).
+    fn emit_func_literal(&mut self, out: &mut String, fnexpr: &crate::ast::FnExpr, boxed: bool) -> Result<(), String> {
+        // Celdas que ESTA closure captura (var-celda en ámbito referenciadas en su cuerpo): se
+        // PRE-CLONAN antes del `move` (`{ let c = c.clone(); Rc::new(move || …) }`), para que el
+        // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
+        let mut refd = std::collections::HashSet::new();
+        idents_of_block(&fnexpr.body, &mut refd);
+        let captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
+        // H21-N5c: una closure NO-boxed va a un param marcado (genérico Send) → cruzará hilos. Sus
+        // capturas de heap se convierten a __RaySend FUERA y se reconstruyen DENTRO en cada llamada
+        // (`.clone()` del árbol: la closure es Fn, no FnOnce) — deep copy, semántica M38. Los
+        // canales/Tasks y los params fn marcados se pre-clonan (son Send de por sí).
+        let mut send_caps: Vec<(String, Type, bool)> = Vec::new();
+        if !boxed {
+            let (caps, clones) = self.spawn_captures(&fnexpr.body)?;
+            send_caps = caps;
+            out.push_str("{ ");
+            for n in self.in_scope_channels() {
+                if refd.contains(&n) {
+                    write!(out, "let {n} = {n}.clone(); ", n = mangle(&n)).unwrap();
+                }
+            }
+            for n in &clones {
+                write!(out, "let {n} = {n}.clone(); ", n = mangle(n)).unwrap();
+            }
+            for (i, (name, ty, is_cell)) in send_caps.iter().enumerate() {
+                let src = if *is_cell {
+                    format!("{}.borrow().clone()", mangle(name))
+                } else {
+                    format!("{}.clone()", mangle(name))
+                };
+                let conv = self.to_send_expr(ty, &src)?;
+                write!(out, "let __snd_{i} = {conv}; ").unwrap();
+            }
+        }
+        let wrap = !captured.is_empty();
+        if wrap {
+            out.push_str("{ ");
+            for c in &captured {
+                write!(out, "let {} = {}.clone(); ", mangle(c), mangle(c)).unwrap();
+            }
+        }
+        if boxed {
+            out.push_str("Rc::new(");
+        }
+        out.push_str("move |");
+        for (i, p) in fnexpr.params.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            // el param de la closure se mangla (igual que su uso en el cuerpo vía `mangle`): puede
+            // ser palabra reservada de Rust.
+            write!(out, "{}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
+        }
+        write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?).unwrap();
+        self.scopes.push(HashMap::new());
+        for p in &fnexpr.params {
+            self.declare(&p.name, p.ty.clone());
+        }
+        if !send_caps.is_empty() {
+            out.push_str("{ ");
+            for (i, (name, ty, is_cell)) in send_caps.iter().enumerate() {
+                let conv = self.from_send_expr(ty, &format!("__snd_{i}.clone()"))?;
+                if *is_cell {
+                    write!(out, "let {} = Rc::new(std::cell::RefCell::new({conv})); ", mangle(name)).unwrap();
+                } else {
+                    write!(out, "let {} = {conv}; ", mangle(name)).unwrap();
+                }
+            }
+        }
+        // Las celdas propias de esta closure (una var suya capturada por una closure aún más interna).
+        let added = self.enter_cells(&fnexpr.body);
+        self.emit_block(out, &fnexpr.body)?;
+        self.exit_cells(added);
+        self.scopes.pop();
+        if !send_caps.is_empty() {
+            out.push_str(" }");
+        }
+        if boxed {
+            out.push(')');
+        }
+        if wrap {
+            out.push_str(" }");
+        }
+        if !boxed {
+            out.push_str(" }");
+        }
+        Ok(())
+    }
+
     fn emit_to_send(&mut self, out: &mut String, e: &Expr, t: &Type) -> Result<(), String> {
         match normalize_type(t) {
             Type::String => {
@@ -1498,7 +2139,249 @@ impl Transpiler {
                 self.emit_expr(out, e)?;
                 out.push(')');
             }
+            // H21-N5a: los tipos COMPUESTOS cruzan como `__RaySend` (deep copy, semántica M38).
+            ty if send_is_tree(&ty) => {
+                let mut tmp = String::new();
+                self.emit_expr(&mut tmp, e)?;
+                let conv = self.to_send_expr(&ty, &tmp)?;
+                out.push_str(&conv);
+            }
             _ => self.emit_expr(out, e)?,
+        }
+        Ok(())
+    }
+
+    /// Id del conversor con nombre para un tipo NOMINAL concreto (struct/enum de usuario); lo registra
+    /// si es nuevo (los cuerpos se generan al final, en `emit_send_convs`).
+    fn send_conv_id(&mut self, t: &Type) -> Result<usize, String> {
+        let key = rust_ty(t, &self.enums, &self.tparams)?;
+        if let Some(i) = self.send_convs.iter().position(|(_, k)| *k == key) {
+            return Ok(i);
+        }
+        self.send_convs.push((normalize_type(t), key));
+        Ok(self.send_convs.len() - 1)
+    }
+
+    /// Expresión Rust que convierte `expr` (repr del PROGRAMA, owned) a `__RaySend` (deep copy).
+    fn to_send_expr(&mut self, t: &Type, expr: &str) -> Result<String, String> {
+        Ok(match self.classify(t) {
+            Type::Int => format!("__RaySend::I({expr})"),
+            Type::Float => format!("__RaySend::F({expr})"),
+            Type::Bool => format!("__RaySend::B({expr})"),
+            Type::Char => format!("__RaySend::C({expr})"),
+            Type::Unit => format!("{{ let _ = {expr}; __RaySend::U }}"),
+            Type::UInt(_) => format!("__RaySend::UI(({expr}) as u64)"),
+            Type::String => format!("__RaySend::S(std::sync::Arc::<str>::from(&*({expr})))"),
+            Type::Bytes => format!("__RaySend::By(std::sync::Arc::<[u8]>::from(&*({expr})))"),
+            Type::Array(el) => {
+                let inner = self.to_send_expr(&el, "__sx")?;
+                format!(
+                    "__RaySend::A(({expr}).borrow().iter().map(|__sr| {{ let __sx = __sr.clone(); {inner} }}).collect())"
+                )
+            }
+            Type::Map(k, v) => {
+                let ik = self.to_send_expr(&k, "__sk")?;
+                let iv = self.to_send_expr(&v, "__sv")?;
+                format!(
+                    "__RaySend::M(({expr}).borrow().iter().map(|(__kr, __vr)| {{ let __sk = __kr.clone(); let __sv = __vr.clone(); ({ik}, {iv}) }}).collect())"
+                )
+            }
+            Type::Tuple(ts) => {
+                let mut parts = Vec::new();
+                for (i, et) in ts.iter().enumerate() {
+                    parts.push(self.to_send_expr(et, &format!("__st.{}.clone()", i))?);
+                }
+                format!("{{ let __st = {expr}; __RaySend::T(vec![{}]) }}", parts.join(", "))
+            }
+            // Option/Result: repr nativa de Rust → E(0/1, payload) (índices propios; solo han de
+            // cuadrar entre to y from, no con la VM).
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
+                let inner = self.to_send_expr(&args[0], "__sx")?;
+                format!("match {expr} {{ Some(__sx) => __RaySend::E(0, vec![{inner}]), None => __RaySend::E(1, vec![]) }}")
+            }
+            Type::Enum(n, args) if n == "Result" && args.len() == 2 => {
+                let iok = self.to_send_expr(&args[0], "__sx")?;
+                let ierr = self.to_send_expr(&args[1], "__sx")?;
+                format!("match {expr} {{ Ok(__sx) => __RaySend::E(0, vec![{iok}]), Err(__sx) => __RaySend::E(1, vec![{ierr}]) }}")
+            }
+            t @ (Type::Struct(..) | Type::Enum(..)) => {
+                let id = self.send_conv_id(&t)?;
+                format!("__to_send_{id}({expr})")
+            }
+            Type::Fn(..) => {
+                return Err(
+                    "a function value cannot cross a thread boundary (spawn capture / channel / Task) in the native backend"
+                        .into(),
+                )
+            }
+            other => return Err(format!("type {:?} cannot cross a thread boundary in the native backend", other)),
+        })
+    }
+
+    /// Expresión Rust que reconstruye la repr del PROGRAMA desde `expr` (un `__RaySend` owned).
+    fn from_send_expr(&mut self, t: &Type, expr: &str) -> Result<String, String> {
+        let un = "_ => unreachable!()";
+        Ok(match self.classify(t) {
+            Type::Int => format!("match {expr} {{ __RaySend::I(__sx) => __sx, {un} }}"),
+            Type::Float => format!("match {expr} {{ __RaySend::F(__sx) => __sx, {un} }}"),
+            Type::Bool => format!("match {expr} {{ __RaySend::B(__sx) => __sx, {un} }}"),
+            Type::Char => format!("match {expr} {{ __RaySend::C(__sx) => __sx, {un} }}"),
+            Type::Unit => format!("{{ let _ = {expr}; }}"),
+            Type::UInt(_) => {
+                let rty = rust_ty(t, &self.enums, &self.tparams)?;
+                format!("match {expr} {{ __RaySend::UI(__sx) => __sx as {rty}, {un} }}")
+            }
+            Type::String => format!("match {expr} {{ __RaySend::S(__sx) => Rc::<str>::from(&*__sx), {un} }}"),
+            Type::Bytes => format!("match {expr} {{ __RaySend::By(__sx) => Rc::<[u8]>::from(&*__sx), {un} }}"),
+            Type::Array(el) => {
+                let inner = self.from_send_expr(&el, "__sx")?;
+                format!(
+                    "match {expr} {{ __RaySend::A(__sa) => Rc::new(std::cell::RefCell::new(__sa.into_iter().map(|__sx| {inner}).collect::<Vec<_>>())), {un} }}"
+                )
+            }
+            Type::Map(k, v) => {
+                let ik = self.from_send_expr(&k, "__sk")?;
+                let iv = self.from_send_expr(&v, "__sv2")?;
+                format!(
+                    "match {expr} {{ __RaySend::M(__sm) => Rc::new(std::cell::RefCell::new(__sm.into_iter().map(|(__sk, __sv2)| ({ik}, {iv})).collect::<__RayMap<_, _>>())), {un} }}"
+                )
+            }
+            Type::Tuple(ts) => {
+                let mut parts = Vec::new();
+                for et in ts.iter() {
+                    parts.push(self.from_send_expr(et, "__si.next().unwrap()")?);
+                }
+                format!(
+                    "match {expr} {{ __RaySend::T(__st) => {{ let mut __si = __st.into_iter(); ({},) }}, {un} }}",
+                    parts.join(", ")
+                )
+            }
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
+                let inner = self.from_send_expr(&args[0], "__sp.remove(0)")?;
+                format!(
+                    "match {expr} {{ __RaySend::E(0, mut __sp) => Some({inner}), __RaySend::E(_, _) => None, {un} }}"
+                )
+            }
+            Type::Enum(n, args) if n == "Result" && args.len() == 2 => {
+                let iok = self.from_send_expr(&args[0], "__sp.remove(0)")?;
+                let ierr = self.from_send_expr(&args[1], "__sp.remove(0)")?;
+                format!(
+                    "match {expr} {{ __RaySend::E(0, mut __sp) => Ok({iok}), __RaySend::E(_, mut __sp) => Err({ierr}), {un} }}"
+                )
+            }
+            t @ (Type::Struct(..) | Type::Enum(..)) => {
+                let id = self.send_conv_id(&t)?;
+                format!("__from_send_{id}({expr})")
+            }
+            other => return Err(format!("type {:?} cannot cross a thread boundary in the native backend", other)),
+        })
+    }
+
+    /// Genera (al final de la transpilación) las fns `__to_send_N`/`__from_send_N` de los tipos
+    /// NOMINALES registrados. Worklist: generar un cuerpo puede registrar tipos anidados nuevos.
+    fn emit_send_convs(&mut self, out: &mut String) -> Result<(), String> {
+        let mut done = 0;
+        while done < self.send_convs.len() {
+            let (t, _) = self.send_convs[done].clone();
+            let id = done;
+            done += 1;
+            let rty = rust_ty(&t, &self.enums, &self.tparams)?;
+            match normalize_type(&t) {
+                Type::Struct(n, args) => {
+                    let fields = self
+                        .struct_fields
+                        .get(&n)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown struct '{}' in send conversion", n))?;
+                    // Sustituye los params de tipo del struct por los args concretos (Caja<int>).
+                    let tps = self.struct_tparams.get(&n).cloned().unwrap_or_default();
+                    let subst: HashMap<String, Type> =
+                        tps.iter().cloned().zip(args.iter().cloned()).collect();
+                    let mut tos = Vec::new();
+                    let mut froms = Vec::new();
+                    for (fname, fty) in &fields {
+                        let cty = subst_type(fty, &subst);
+                        tos.push(self.to_send_expr(&cty, &format!("__sb.{}.clone()", mangle(fname)))?);
+                        froms.push(format!(
+                            "{}: {}",
+                            mangle(fname),
+                            self.from_send_expr(&cty, "__si.next().unwrap()")?
+                        ));
+                    }
+                    writeln!(
+                        out,
+                        "fn __to_send_{id}(__sv: {rty}) -> __RaySend {{ let __sb = __sv.borrow(); __RaySend::T(vec![{}]) }}",
+                        tos.join(", ")
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "fn __from_send_{id}(__ss: __RaySend) -> {rty} {{ match __ss {{ __RaySend::T(__st) => {{ let mut __si = __st.into_iter(); Rc::new(std::cell::RefCell::new({} {{ {} }})) }}, _ => unreachable!() }} }}",
+                        mangle(&n),
+                        froms.join(", ")
+                    )
+                    .unwrap();
+                }
+                Type::Enum(n, args) => {
+                    let variants = self
+                        .enum_variants
+                        .get(&n)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown enum '{}' in send conversion", n))?;
+                    // Orden DETERMINISTA de variantes (HashMap no lo garantiza): por nombre. Los índices
+                    // solo han de cuadrar entre to y from (mismo orden en ambos).
+                    let mut vnames: Vec<String> = variants.keys().cloned().collect();
+                    vnames.sort();
+                    let tps = self.enum_tparams.get(&n).cloned().unwrap_or_default();
+                    let subst: HashMap<String, Type> =
+                        tps.iter().cloned().zip(args.iter().cloned()).collect();
+                    let ename = mangle(&n);
+                    let mut to_arms = Vec::new();
+                    let mut from_arms = Vec::new();
+                    for (vi, vname) in vnames.iter().enumerate() {
+                        let payload = &variants[vname];
+                        if payload.is_empty() {
+                            to_arms.push(format!("{}::{} => __RaySend::E({vi}, vec![])", ename, mangle(vname)));
+                            from_arms.push(format!("({vi}, _) => Rc::new({}::{})", ename, mangle(vname)));
+                        } else {
+                            let binds: Vec<String> = (0..payload.len()).map(|i| format!("__sp{i}")).collect();
+                            let mut tos = Vec::new();
+                            let mut froms = Vec::new();
+                            for (i, pty) in payload.iter().enumerate() {
+                                let cty = subst_type(pty, &subst);
+                                tos.push(self.to_send_expr(&cty, &format!("__sp{i}.clone()"))?);
+                                froms.push(self.from_send_expr(&cty, "__si.next().unwrap()")?);
+                            }
+                            to_arms.push(format!(
+                                "{}::{}({}) => __RaySend::E({vi}, vec![{}])",
+                                ename,
+                                mangle(vname),
+                                binds.join(", "),
+                                tos.join(", ")
+                            ));
+                            from_arms.push(format!(
+                                "({vi}, __sp) => {{ let mut __si = __sp.into_iter(); Rc::new({}::{}({})) }}",
+                                ename,
+                                mangle(vname),
+                                froms.join(", ")
+                            ));
+                        }
+                    }
+                    writeln!(
+                        out,
+                        "fn __to_send_{id}(__sv: {rty}) -> __RaySend {{ match &*__sv {{ {} }} }}",
+                        to_arms.join(", ")
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "#[allow(unused_variables)] fn __from_send_{id}(__ss: __RaySend) -> {rty} {{ match __ss {{ __RaySend::E(__svi, __sp) => match (__svi, __sp) {{ {}, _ => unreachable!() }}, _ => unreachable!() }} }}",
+                        from_arms.join(", ")
+                    )
+                    .unwrap();
+                }
+                other => unreachable!("solo tipos nominales llevan conversor con nombre: {:?}", other),
+            }
         }
         Ok(())
     }
@@ -1506,7 +2389,17 @@ impl Transpiler {
     fn emit_expr(&mut self, out: &mut String, e: &Expr) -> Result<(), String> {
         match &e.kind {
             ExprKind::Int(n) => write!(out, "{}i64", n).unwrap(),
-            ExprKind::Float(x) => write!(out, "{:?}f64", x).unwrap(),
+            ExprKind::Float(x) => {
+                // `{:?}` de un f64 no finito da `inf`/`-inf`/`NaN` → `inff64` es Rust INVÁLIDO. Un literal
+                // como `1e999` parsea a infinito: se emite la constante de Rust correspondiente.
+                if x.is_nan() {
+                    out.push_str("f64::NAN");
+                } else if x.is_infinite() {
+                    out.push_str(if *x < 0.0 { "f64::NEG_INFINITY" } else { "f64::INFINITY" });
+                } else {
+                    write!(out, "{:?}f64", x).unwrap();
+                }
+            }
             ExprKind::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             ExprKind::Char(c) => write!(out, "{:?}", c).unwrap(), // `{:?}` de char → literal Rust escapado
             ExprKind::Str(s) => write!(out, "Rc::<str>::from({:?})", s).unwrap(),
@@ -1554,7 +2447,7 @@ impl Transpiler {
                         self.emit_expr(out, expr)?;
                         write!(out, " as u{})", w).unwrap();
                     }
-                    _ => return Err(format!("spike: cast {:?}→{:?} no soportado", src, target)),
+                    _ => return Err(format!("cast {:?} -> {:?} is not supported", src, target)),
                 }
             }
             ExprKind::Ident(name) if name == "std::math::PI" => out.push_str("std::f64::consts::PI"),
@@ -1581,10 +2474,17 @@ impl Transpiler {
                 }
             }
             ExprKind::Unary { op, expr } => {
-                out.push('(');
-                out.push_str(match op { UnaryOp::Neg => "-", UnaryOp::Not => "!", UnaryOp::BitNot => "!" });
-                self.emit_expr(out, expr)?;
-                out.push(')');
+                // H6: `-x` sobre int es checked (`-i64::MIN` desborda), como la VM.
+                if matches!(op, UnaryOp::Neg) && matches!(self.type_of(expr)?, Type::Int) {
+                    out.push_str("__ray_neg(");
+                    self.emit_expr(out, expr)?;
+                    out.push(')');
+                } else {
+                    out.push('(');
+                    out.push_str(match op { UnaryOp::Neg => "-", UnaryOp::Not => "!", UnaryOp::BitNot => "!" });
+                    self.emit_expr(out, expr)?;
+                    out.push(')');
+                }
             }
             ExprKind::Binary { op, left, right } => {
                 // `string + string` → concatenación. Se APLANA toda la cadena `a + b + c + …` en un solo
@@ -1604,11 +2504,11 @@ impl Transpiler {
                 } else if matches!(op, BinaryOp::Add) && matches!(self.type_of(left)?, Type::Array(_)) {
                     // arreglos (M11.7b): `a + b` es un arreglo NUEVO con los elementos (clonados) de ambos.
                     // Dos `.borrow()` compartidos coexisten (incl. `a + a`); el `clone()` libera el primero.
-                    out.push_str("{ let mut __v = ");
+                    out.push_str("{ let mut __rt_v = ");
                     self.emit_expr(out, left)?;
-                    out.push_str(".borrow().clone(); __v.extend(");
+                    out.push_str(".borrow().clone(); __rt_v.extend(");
                     self.emit_expr(out, right)?;
-                    out.push_str(".borrow().iter().cloned()); Rc::new(std::cell::RefCell::new(__v)) }");
+                    out.push_str(".borrow().iter().cloned()); Rc::new(std::cell::RefCell::new(__rt_v)) }");
                 } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                     && matches!(self.type_of(left)?, Type::UInt(_))
                 {
@@ -1622,6 +2522,24 @@ impl Transpiler {
                     out.push('(');
                     self.emit_expr(out, left)?;
                     write!(out, ").{}(", m).unwrap();
+                    self.emit_expr(out, right)?;
+                    out.push(')');
+                } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem)
+                    && matches!(self.type_of(left)?, Type::Int)
+                {
+                    // H6: aritmética de `int` CHECKED como la VM (overflow → runtime error + exit 70,
+                    // no wrapping silencioso; div/mod por cero con el texto de la VM). Los helpers
+                    // `__ray_*` van inline; el coste medido en release es ~0.
+                    let f = match op {
+                        BinaryOp::Add => "__ray_add",
+                        BinaryOp::Sub => "__ray_sub",
+                        BinaryOp::Mul => "__ray_mul",
+                        BinaryOp::Div => "__ray_div",
+                        _ => "__ray_mod",
+                    };
+                    write!(out, "{}(", f).unwrap();
+                    self.emit_expr(out, left)?;
+                    out.push_str(", ");
                     self.emit_expr(out, right)?;
                     out.push(')');
                 } else {
@@ -1682,7 +2600,7 @@ impl Transpiler {
                 self.emit_expr(out, array)?;
                 match &index.kind {
                     ExprKind::Int(n) => write!(out, ".{}", n).unwrap(),
-                    _ => return Err("spike: índice de tupla no literal".into()),
+                    _ => return Err("non-literal tuple index".into()),
                 }
             }
             ExprKind::Index { array, index } => {
@@ -1714,11 +2632,11 @@ impl Transpiler {
             }
             // Coerción concreto→`dyn Trait` (M9.3b): el checker la baja a `__dyn_T { data: <concreto>,
             // m: <método>, … }`. Aquí → un struct de closures que CAPTURAN el concreto: cada método
-            // `m: { let __c = <concreto>; move |args| m_concreto(__c.clone(), args) }` (sin `data`).
+            // `m: { let __rt_c = <concreto>; move |args| m_concreto(__rt_c.clone(), args) }` (sin `data`).
             ExprKind::StructLit { name, fields } if name.starts_with("__dyn_") => {
                 // fields[0] = ("data", <concreto>); el resto = (método, <valor-vtable>).
                 let concrete = &fields[0].1;
-                out.push_str("{ let __c = ");
+                out.push_str("{ let __rt_c = ");
                 self.emit_expr(out, concrete)?;
                 write!(out, "; Rc::new(std::cell::RefCell::new({} {{ ", mangle(name)).unwrap();
                 for (i, (mname, mval)) in fields.iter().enumerate().skip(1) {
@@ -1728,7 +2646,7 @@ impl Transpiler {
                     let (args, _) = self
                         .trait_method_sigs
                         .get(mname)
-                        .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", mname))?
+                        .ok_or_else(|| format!("unknown dyn method '{}'", mname))?
                         .clone();
                     // params de la closure: __a0: T0, __a1: T1, …
                     let mut params = String::new();
@@ -1738,8 +2656,10 @@ impl Transpiler {
                         }
                         write!(params, "__a{}: {}", j, rust_ty(aty, &self.enums, &self.tparams)?).unwrap();
                     }
-                    write!(out, "{}: {{ let __c = __c.clone(); Rc::new(move |{}| ", mname, params).unwrap();
-                    // llamada al método concreto: m_concreto(__c.clone(), __a0, …).
+                    // el NOMBRE del campo-vtable se mangla (mismo que la def 592 y el acceso 2476); la clave
+                    // del mapa `trait_method_sigs` sigue siendo el nombre original de raylang (arriba).
+                    write!(out, "{}: {{ let __rt_c = __rt_c.clone(); Rc::new(move |{}| ", mangle(mname), params).unwrap();
+                    // llamada al método concreto: m_concreto(__rt_c.clone(), __a0, …).
                     match &mval.kind {
                         ExprKind::Ident(fname) => write!(out, "{}(", mangle(fname)).unwrap(),
                         _ => {
@@ -1748,7 +2668,7 @@ impl Transpiler {
                             out.push_str(")(");
                         }
                     }
-                    out.push_str("__c.clone()");
+                    out.push_str("__rt_c.clone()");
                     for j in 0..args.len() {
                         write!(out, ", __a{}", j).unwrap();
                     }
@@ -1763,7 +2683,7 @@ impl Transpiler {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    write!(out, "{}: ", fname).unwrap();
+                    write!(out, "{}: ", mangle(fname)).unwrap(); // el campo puede ser keyword de Rust
                     self.emit_expr(out, val)?;
                 }
                 out.push_str(" }))");
@@ -1773,10 +2693,10 @@ impl Transpiler {
             ExprKind::Field { object, name } => {
                 if matches!(self.type_of(object)?, Type::Tuple(_)) {
                     self.emit_expr(out, object)?;
-                    write!(out, ".{}", name).unwrap();
+                    write!(out, ".{}", name).unwrap(); // índice numérico de tupla: NO manglar
                 } else {
                     self.emit_expr(out, object)?;
-                    write!(out, ".borrow().{}.clone()", name).unwrap();
+                    write!(out, ".borrow().{}.clone()", mangle(name)).unwrap();
                 }
             }
             // Construcción de variante de enum. Option/Result → Some/None/Ok/Err NATIVOS de Rust (sin Rc);
@@ -1786,7 +2706,7 @@ impl Transpiler {
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err
                 } else {
-                    write!(out, "Rc::new({}::{}", mangle(enum_name), variant).unwrap();
+                    write!(out, "Rc::new({}::{}", mangle(enum_name), mangle(variant)).unwrap();
                 }
                 if !args.is_empty() {
                     out.push('(');
@@ -1805,42 +2725,7 @@ impl Transpiler {
             // Función anónima → closure `move` de Rust envuelto en Rc (captura por valor: para los
             // `Rc<RefCell>` comparte el estado, como las celdas del intérprete; los escalares se copian —
             // la captura MUTABLE de un escalar diverge, diferida).
-            ExprKind::Func(fnexpr) => {
-                // Celdas que ESTA closure captura (var-celda en ámbito referenciadas en su cuerpo): se
-                // PRE-CLONAN antes del `move` (`{ let c = c.clone(); Rc::new(move || …) }`), para que el
-                // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
-                let mut refd = std::collections::HashSet::new();
-                idents_of_block(&fnexpr.body, &mut refd);
-                let captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
-                let wrap = !captured.is_empty();
-                if wrap {
-                    out.push_str("{ ");
-                    for c in &captured {
-                        write!(out, "let {} = {}.clone(); ", mangle(c), mangle(c)).unwrap();
-                    }
-                }
-                out.push_str("Rc::new(move |");
-                for (i, p) in fnexpr.params.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    write!(out, "{}: {}", p.name, rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
-                }
-                write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?).unwrap();
-                self.scopes.push(HashMap::new());
-                for p in &fnexpr.params {
-                    self.declare(&p.name, p.ty.clone());
-                }
-                // Las celdas propias de esta closure (una var suya capturada por una closure aún más interna).
-                let added = self.enter_cells(&fnexpr.body);
-                self.emit_block(out, &fnexpr.body)?;
-                self.exit_cells(added);
-                self.scopes.pop();
-                out.push(')');
-                if wrap {
-                    out.push_str(" }");
-                }
-            }
+            ExprKind::Func(fnexpr) => self.emit_func_literal(out, fnexpr, true)?,
             ExprKind::Match { scrutinee, arms } => self.emit_match(out, scrutinee, arms)?,
             // Operador `?`: sobre Option/Result nativos de Rust → el `?` de Rust (la fn envolvente
             // devuelve un Option/Result compatible, garantizado por el checker).
@@ -1914,17 +2799,17 @@ impl Transpiler {
                 if i > 0 {
                     fmt.push_str(", ");
                 }
-                write!(fmt, "{}: {{}}", fname).unwrap();
+                write!(fmt, "{}: {{}}", fname).unwrap(); // el NOMBRE mostrado es el original (`type`, no `r#type`)
                 // Un campo de tipo función se muestra como `<fn>` (como el Display del runtime): los tipos
                 // función tienen firmas variadas → no hay un `impl RayShow` único; se renderiza el literal.
                 if matches!(normalize_type(fty), Type::Fn(_, _)) {
                     write!(args, ", \"<fn>\"").unwrap();
                 } else {
-                    write!(args, ", __b.{}.ray_show()", fname).unwrap();
+                    write!(args, ", __rt_b.{}.ray_show()", mangle(fname)).unwrap(); // el ACCESO sí mangla
                 }
             }
             fmt.push_str(" }}");
-            writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __b = self.borrow(); format!(\"{}\"{}) }} }}", gens, sm, sfx, fmt, args).unwrap();
+            writeln!(out, "impl{} RayShow for Rc<std::cell::RefCell<{}{}>> {{ fn ray_show(&self) -> String {{ let __rt_b = self.borrow(); format!(\"{}\"{}) }} }}", gens, sm, sfx, fmt, args).unwrap();
         }
         for e in &prog.enums {
             if e.name == "Option" || e.name == "Result" {
@@ -1937,7 +2822,8 @@ impl Transpiler {
             writeln!(out, "impl{} RayShow for Rc<{}{}> {{ fn ray_show(&self) -> String {{ match &**self {{", gens, em, sfx).unwrap();
             for v in &e.variants {
                 if v.payload.is_empty() {
-                    writeln!(out, "{}::{} => \"{}.{}\".to_string(),", em, v.name, e.name, v.name).unwrap();
+                    // patrón Rust: variante manglada; display: nombre ORIGINAL (`E.loop`, no `E.r#loop`).
+                    writeln!(out, "{}::{} => \"{}.{}\".to_string(),", em, mangle(&v.name), e.name, v.name).unwrap();
                 } else {
                     let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__p{}", i)).collect();
                     let mut fmt = format!("{}.{}(", e.name, v.name);
@@ -1955,7 +2841,7 @@ impl Transpiler {
                         }
                     }
                     fmt.push(')');
-                    writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", em, v.name, binds.join(", "), fmt, args).unwrap();
+                    writeln!(out, "{}::{}({}) => format!(\"{}\"{}),", em, mangle(&v.name), binds.join(", "), fmt, args).unwrap();
                 }
             }
             out.push_str("} } }\n");
@@ -1971,7 +2857,7 @@ impl Transpiler {
         // Option/Result son NATIVOS de Rust (no `Rc<E>`): se matchea sobre `&opt`, no `&*Rc`.
         let native = match &scrut_ty {
             Type::Enum(n, _) => n == "Option" || n == "Result",
-            other => return Err(format!("spike: match sobre {:?} (se esperaba un enum)", other)),
+            other => return Err(format!("match over {:?} (an enum was expected)", other)),
         };
         let temp = format!("__scrut{}", self.match_temp);
         self.match_temp += 1;
@@ -1984,7 +2870,7 @@ impl Transpiler {
         out.push_str(" {\n");
         for arm in arms {
             if arm.guard.is_some() {
-                return Err("spike: guardas de match (`if`) no soportadas".into());
+                return Err("match guards (`if`) are not supported".into());
             }
             self.scopes.push(HashMap::new());
             let mut binds: Vec<(String, Type)> = Vec::new();
@@ -2039,7 +2925,7 @@ impl Transpiler {
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err (nativos, sin `EnumName::`)
                 } else {
-                    write!(out, "{}::{}", mangle(enum_name), variant).unwrap();
+                    write!(out, "{}::{}", mangle(enum_name), mangle(variant)).unwrap();
                 }
                 if !subpatterns.is_empty() {
                     // Payload: user enum → tabla de variantes; Option/Result → los args del tipo esperado
@@ -2051,14 +2937,14 @@ impl Transpiler {
                                 "Err" => vec![args[1].clone()],
                                 _ => vec![],
                             },
-                            _ => return Err("spike: patrón Option/Result sin tipo esperado".into()),
+                            _ => return Err("Option/Result pattern without an expected type".into()),
                         }
                     } else {
                         let raw = self
                             .enum_variants
                             .get(enum_name)
                             .and_then(|m| m.get(variant))
-                            .ok_or_else(|| format!("spike: variante desconocida {}.{}", enum_name, variant))?
+                            .ok_or_else(|| format!("unknown variant {}.{}", enum_name, variant))?
                             .clone();
                         // Sustituir los params de tipo del enum por los args del tipo esperado
                         // (`Caja<int>` → T=int), para el tipo de cada binding del payload.
@@ -2076,7 +2962,7 @@ impl Transpiler {
                 }
             }
             PatternKind::Struct { .. } => {
-                return Err("spike: patrón de destructuración de struct no soportado".into())
+                return Err("struct destructuring pattern is not supported".into())
             }
         }
         Ok(())
@@ -2149,7 +3035,7 @@ impl Transpiler {
                 out.push_str("(match std::fs::read_to_string(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(
-                    ") { Ok(__c) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__c)), \
+                    ") { Ok(__rt_c) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__rt_c)), \
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
             }
@@ -2261,7 +3147,7 @@ impl Transpiler {
                 out.push_str("(match std::fs::read(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(
-                    ") { Ok(__b) => Ok::<Rc<[u8]>, Rc<str>>(Rc::<[u8]>::from(__b)), \
+                    ") { Ok(__rt_b) => Ok::<Rc<[u8]>, Rc<str>>(Rc::<[u8]>::from(__rt_b)), \
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
             }
@@ -2279,13 +3165,13 @@ impl Transpiler {
                     "(match std::fs::OpenOptions::new().create(true).append(true).open(&*",
                 );
                 self.emit_expr(out, eff[0])?;
-                out.push_str(").and_then(|mut __f| { use std::io::Write; __f.write_all(&*");
+                out.push_str(").and_then(|mut __rt_f| { use std::io::Write; __rt_f.write_all(&*");
                 self.emit_expr(out, eff[1])?;
                 out.push_str(") }) { Ok(()) => Ok::<i64, Rc<str>>(");
                 self.emit_expr(out, eff[1])?;
                 out.push_str(".len() as i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })");
             }
-            _ => return Err(format!("spike: std::fs::{} no soportada", ffn)),
+            _ => return Err(format!("std::fs::{} is not supported", ffn)),
         }
         Ok(())
     }
@@ -2306,7 +3192,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").max(0) as u64))");
             }
-            _ => return Err(format!("spike: std::time::{} no soportada", tfn)),
+            _ => return Err(format!("std::time::{} is not supported", tfn)),
         }
         Ok(())
     }
@@ -2327,7 +3213,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            _ => return Err(format!("spike: std::random::{} no soportada", rfn)),
+            _ => return Err(format!("std::random::{} is not supported", rfn)),
         }
         Ok(())
     }
@@ -2383,7 +3269,7 @@ impl Transpiler {
                 }
                 out.push(')');
             }
-            _ => return Err(format!("spike: std::net::{} no soportada", nfn)),
+            _ => return Err(format!("std::net::{} is not supported", nfn)),
         }
         Ok(())
     }
@@ -2419,7 +3305,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").abs()");
             }
-            _ => return Err(format!("spike: std::math::{} no soportada", mfn)),
+            _ => return Err(format!("std::math::{} is not supported", mfn)),
         }
         Ok(())
     }
@@ -2433,7 +3319,7 @@ impl Transpiler {
             if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
                 out.push('(');
                 self.emit_expr(out, r)?;
-                write!(out, ".borrow().{}.clone())(", name).unwrap();
+                write!(out, ".borrow().{}.clone())(", mangle(name)).unwrap(); // campo-vtable: mismo mangle que 592
                 for (i, a) in args.iter().skip(1).enumerate() {
                     if i > 0 {
                         out.push_str(", ");
@@ -2459,7 +3345,7 @@ impl Transpiler {
                 if is_fn_field {
                     out.push('(');
                     self.emit_expr(out, r)?;
-                    write!(out, ".borrow().{}.clone())(", name).unwrap();
+                    write!(out, ".borrow().{}.clone())(", mangle(name)).unwrap(); // campo-función: mismo mangle que 599
                     for (i, a) in args.iter().enumerate() {
                         if i > 0 {
                             out.push_str(", ");
@@ -2534,6 +3420,36 @@ impl Transpiler {
                 }
             }
         }
+        // H3: un OVERRIDE del usuario gana sobre el builtin homónimo interceptado, como en la VM (M7.3).
+        // `self.funcs` solo contiene funciones NO saltadas por `skip_fn_def` = las que el usuario definió y
+        // cuya def SÍ se emite (las de prelude se saltan) → su llamada debe ir a esa def, nunca a un builtin.
+        // También gana un `let f = fn(){…}` local que sombree el nombre (closure en ámbito). Un nombre con
+        // `::`/`#` lo sintetizó el checker (módulo/método) → nunca colisiona con un builtin de nombre pelado.
+        // OJO: la regla del override solo vale para funciones del PRELUDE (sort/map/get_or…, escritas en
+        // raylang). Un builtin REAL de la tabla `BUILTINS` (print/to_string/`__*`…) NO se tapa: el checker
+        // lo RECHAZA en la definición ("is a language builtin and cannot be redefined"), así que
+        // `self.funcs` nunca debería traer uno — la guarda `lookup(name).is_none()` es defensiva, por si
+        // la tabla crece o esa regla cambia: mantiene al nativo alineado con el compilador de la VM (que
+        // emite el opcode del builtin antes de mirar `indices`). Una VARIABLE local sí puede taparlo y
+        // gana en ambos motores (el compilador de la VM mira `name_is_variable` primero).
+        let shadows_builtin = matches!(self.lookup(name), Some(Type::Fn(_, _)))
+            || (!name.contains("::")
+                && !name.contains('#')
+                && self.funcs.contains_key(name)
+                && crate::builtins::lookup(name).is_none());
+        if shadows_builtin {
+            let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
+            out.push_str(&mangle(name));
+            out.push('(');
+            for (i, a) in eff.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                self.emit_call_arg(out, a, marked.contains(&i))?;
+            }
+            out.push(')');
+            return Ok(());
+        }
         match method {
             // args() → [string]: los argumentos de línea de comandos tras el binario. La VM devuelve
             // argv tras el `.ray`; el nativo, tras el binario (`skip(1)`) → equivalen. Repr = arreglo.
@@ -2598,7 +3514,7 @@ impl Transpiler {
             "bytes_of" => {
                 out.push_str("Rc::<[u8]>::from(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().map(|__x| *__x as u8).collect::<Vec<u8>>())");
+                out.push_str(".borrow().iter().map(|__rt_x| *__rt_x as u8).collect::<Vec<u8>>())");
             }
             // Más builtins de string (→ métodos de `str`/`String` de Rust, misma semántica que la VM).
             "trim" => {
@@ -2628,11 +3544,11 @@ impl Transpiler {
             }
             // repeat(s, n): n<=0 → "" (como la VM).
             "repeat" => {
-                out.push_str("{ let __n = ");
+                out.push_str("{ let __rt_n = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str("; if __n <= 0 { Rc::<str>::from(\"\") } else { Rc::<str>::from(");
+                out.push_str("; if __rt_n <= 0 { Rc::<str>::from(\"\") } else { Rc::<str>::from(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".repeat(__n as usize)) } }");
+                out.push_str(".repeat(__rt_n as usize)) } }");
             }
             "replace" => {
                 out.push_str("Rc::<str>::from(");
@@ -2645,13 +3561,13 @@ impl Transpiler {
             }
             // substring(s, i, j): corte por CARÁCTER con clamp (nunca falla), como la VM.
             "substring" => {
-                out.push_str("{ let __c: Vec<char> = ");
+                out.push_str("{ let __rt_c: Vec<char> = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".chars().collect(); let __n = __c.len() as i64; let __lo = (");
+                out.push_str(".chars().collect(); let __rt_n = __rt_c.len() as i64; let __rt_lo = (");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(").clamp(0, __n); let __hi = (");
+                out.push_str(").clamp(0, __rt_n); let __rt_hi = (");
                 self.emit_expr(out, eff[2])?;
-                out.push_str(").clamp(__lo, __n); Rc::<str>::from(__c[__lo as usize..__hi as usize].iter().collect::<String>()) }");
+                out.push_str(").clamp(__rt_lo, __rt_n); Rc::<str>::from(__rt_c[__rt_lo as usize..__rt_hi as usize].iter().collect::<String>()) }");
             }
             // to_string(x) → Rc<str>. Vía show_expr (maneja struct→borrow, arreglo→[…], escalar/enum).
             "to_string" => {
@@ -2659,28 +3575,41 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".ray_show())");
             }
-            // len(x) → i64. String: nº de octetos; arreglo: nº de elementos (vía borrow()).
+            // len(x) → i64. String: nº de CARACTERES; arreglo/map: nº de elementos (vía borrow()).
             "len" => {
-                out.push('(');
-                self.emit_expr(out, eff[0])?;
                 match self.type_of(eff[0])? {
-                    Type::Array(_) | Type::Map(_, _) => out.push_str(".borrow().len() as i64)"),
-                    // string: `len` cuenta CARACTERES (como la VM), no bytes — clave con UTF-8 multibyte
-                    // (`más`, `ñ`): usar `.len()` (bytes) haría que `while i < len` sobre-itere `s[i]`.
-                    Type::String => out.push_str(".chars().count() as i64)"),
+                    Type::Array(_) | Type::Map(_, _) => {
+                        out.push('(');
+                        self.emit_expr(out, eff[0])?;
+                        out.push_str(".borrow().len() as i64)");
+                    }
+                    // string: `len` cuenta CARACTERES, no octetos — clave con UTF-8 multibyte (`más`, `ñ`).
+                    // Fast-path ASCII (H19, como la VM en vm.rs:960): para un string ASCII, nº de octetos ==
+                    // nº de chars → `.len()` (escaneo `is_ascii` con SIMD) es mucho más rápido que
+                    // `.chars().count()` (decodifica char a char). Cierra la brecha O(n²) de `while i < s.len()`.
+                    Type::String => {
+                        out.push_str("{ let __rt_s = ");
+                        self.emit_expr(out, eff[0])?;
+                        out.push_str("; if __rt_s.is_ascii() { __rt_s.len() as i64 } else { __rt_s.chars().count() as i64 } }");
+                    }
                     // bytes: `len` es el nº de octetos → `.len()` es correcto.
-                    _ => out.push_str(".len() as i64)"),
+                    _ => {
+                        out.push('(');
+                        self.emit_expr(out, eff[0])?;
+                        out.push_str(".len() as i64)");
+                    }
                 }
             }
             // push(a, v) → a.borrow_mut().push(v) (muta en el sitio, devuelve unit).
             "push" => {
-                // El valor se evalúa a un TEMP ANTES del borrow_mut: si lee del MISMO arreglo (p. ej.
-                // `w.push(w[i] + w[j])`, típico en cripto), evita el doble borrow del RefCell (panic).
-                out.push_str("{ let __v = ");
-                self.emit_expr(out, eff[1])?;
-                out.push_str("; ");
+                // Orden de la VM: arreglo, luego valor. Ambos a temporales ANTES del borrow_mut: si el
+                // valor lee del MISMO arreglo (p. ej. `w.push(w[i] + w[j])`, típico en cripto), evita el
+                // doble borrow del RefCell (panic). El receptor también se iza por si borrowea.
+                out.push_str("{ let __rt_arr = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().push(__v); }");
+                out.push_str("; let __rt_v = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; __rt_arr.borrow_mut().push(__rt_v); }");
             }
             // chars(s) → [char]: los caracteres del string como arreglo.
             "chars" => {
@@ -2699,11 +3628,19 @@ impl Transpiler {
             // join(t) → t.join() (Task, structured concurrency); join(arr, sep) → __ray_join (string). El
             // `join` es ad-hoc: se distingue por el tipo del primer arg (Task vs arreglo).
             "join" if matches!(self.type_of(eff[0])?, Type::Task(_)) => {
-                // t.join() da la repr SEND; se convierte de vuelta a la del programa (string/bytes → Rc).
+                // t.join() da la repr SEND; se convierte de vuelta a la del programa (string/bytes → Rc;
+                // compuestos → desde el árbol __RaySend, N5a).
                 let elem = match self.type_of(eff[0])? {
                     Type::Task(t) => (*t).clone(),
                     _ => unreachable!("guard garantiza Task"),
                 };
+                if send_is_tree(&elem) {
+                    let mut tmp = String::new();
+                    self.emit_expr(&mut tmp, eff[0])?;
+                    let conv = self.from_send_expr(&elem, &format!("({tmp}).join()"))?;
+                    out.push_str(&conv);
+                    return Ok(());
+                }
                 let (pre, post): (&str, &str) = match normalize_type(&elem) {
                     Type::String => ("Rc::<str>::from(&*", ")"),
                     Type::Bytes => ("Rc::<[u8]>::from(&*", ")"),
@@ -2714,6 +3651,34 @@ impl Transpiler {
                 out.push_str(".join()");
                 out.push_str(post);
             }
+            // try_join(t) → Result<T, string> (H21-N2): une SIN re-lanzar — el fallo de la tarea como
+            // VALOR (M56.5). Sobre `wait()` (N1); el Ok se convierte de la repr Send a la del programa,
+            // como `join`.
+            "try_join" if matches!(self.type_of(eff[0])?, Type::Task(_)) => {
+                let elem = match self.type_of(eff[0])? {
+                    Type::Task(t) => (*t).clone(),
+                    _ => unreachable!("guard garantiza Task"),
+                };
+                let okconv = if send_is_tree(&elem) {
+                    self.from_send_expr(&elem, "__rt_v")?
+                } else {
+                    match normalize_type(&elem) {
+                        Type::String => "Rc::<str>::from(&*__rt_v)".to_string(),
+                        Type::Bytes => "Rc::<[u8]>::from(&*__rt_v)".to_string(),
+                        _ => "__rt_v".to_string(),
+                    }
+                };
+                out.push_str("match (");
+                self.emit_expr(out, eff[0])?;
+                write!(out, ").wait() {{ Ok(__rt_v) => Ok({}), Err(__rt_m) => Err(Rc::<str>::from(__rt_m)) }}", okconv).unwrap();
+            }
+            // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
+            // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
+            "__task_failed" => {
+                out.push_str("Rc::new(std::cell::RefCell::new(match (");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").wait() { Ok(_) => Vec::<Rc<str>>::new(), Err(__rt_m) => vec![Rc::<str>::from(__rt_m)] }))");
+            }
             "join" => {
                 out.push_str("__ray_join(&");
                 self.emit_expr(out, eff[0])?;
@@ -2722,15 +3687,19 @@ impl Transpiler {
                 out.push(')');
             }
             // --- Map ---
+            // H4 (la clase completa): igual que en las asignaciones indexadas, la clave/valor/delta
+            // pueden LEER el mismo map (`m.insert(k, m.get_or(k,0)+1)`) → van a temporales `__rt_*`
+            // ANTES del borrow_mut, en el orden de la VM (map, clave, valor), o el RefCell panica
+            // donde la VM funciona.
             "insert" => {
                 // devuelve unit → bloque con `;` (HashMap::insert de Rust devuelve Option).
-                out.push('{');
+                out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().insert(");
+                out.push_str("; let __rt_k = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(", ");
+                out.push_str("; let __rt_v = ");
                 self.emit_expr(out, eff[2])?;
-                out.push_str(");}");
+                out.push_str("; __rt_m.borrow_mut().insert(__rt_k, __rt_v); }");
             }
             // add_to(m, k, delta): `*m.entry(k).or_insert(0) += delta` (upsert acumulativo, como la VM).
             "add_to" => {
@@ -2738,13 +3707,14 @@ impl Transpiler {
                     Type::Map(_, v) if matches!(*v, Type::Float) => "0.0",
                     _ => "0i64",
                 };
-                out.push_str("(*");
+                out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().entry(");
+                out.push_str("; let __rt_k = ");
                 self.emit_expr(out, eff[1])?;
-                write!(out, ").or_insert({}) += ", zero).unwrap();
+                out.push_str("; let __rt_d = ");
                 self.emit_expr(out, eff[2])?;
-                out.push(')');
+                write!(out, "; *__rt_m.borrow_mut().entry(__rt_k).or_insert({}) += __rt_d; }}", zero)
+                    .unwrap();
             }
             // get_or(m, k, default) — el del prelude lleva 3 args; un `get_or` con otra aridad no es este
             // builtin → cae al fallback (evita el pánico por `eff[2]` inexistente).
@@ -2763,12 +3733,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str(").cloned()");
             }
-            // remove(m, k) → Option<V> (quita y devuelve). Fusionado con unwrap_or.
+            // remove(m, k) → Option<V> (quita y devuelve). Fusionado con unwrap_or. La clave se iza
+            // antes del borrow_mut (puede leer el mismo map: `m.remove(m.keys()[0])`).
             "remove" => {
+                out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow_mut().remove(&");
+                out.push_str("; let __rt_k = ");
                 self.emit_expr(out, eff[1])?;
-                out.push(')');
+                // el resultado se liga a un temporal: el RefMut de una expr de cola sobreviviría
+                // a los locales del bloque (E0597).
+                out.push_str("; let __rt_r = __rt_m.borrow_mut().remove(&__rt_k); __rt_r }");
             }
             "contains_key" => {
                 self.emit_expr(out, eff[0])?;
@@ -2811,20 +3785,20 @@ impl Transpiler {
                     out.push(')');
                 }
                 Type::Bytes => {
-                    out.push_str("{ let __s = ");
+                    out.push_str("{ let __rt_s = ");
                     self.emit_expr(out, eff[1])?;
-                    out.push_str("; __s.is_empty() || ");
+                    out.push_str("; __rt_s.is_empty() || ");
                     self.emit_expr(out, eff[0])?;
-                    out.push_str(".windows(__s.len().max(1)).any(|__w| __w == &*__s) }");
+                    out.push_str(".windows(__rt_s.len().max(1)).any(|__w| __w == &*__rt_s) }");
                 }
                 Type::Array(_) => {
-                    out.push_str("{ let __x = ");
+                    out.push_str("{ let __rt_x = ");
                     self.emit_expr(out, eff[1])?;
                     out.push_str("; ");
                     self.emit_expr(out, eff[0])?;
-                    out.push_str(".borrow().iter().any(|__e| *__e == __x) }");
+                    out.push_str(".borrow().iter().any(|__e| *__e == __rt_x) }");
                 }
-                other => return Err(format!("spike: contains sobre {:?}", other)),
+                other => return Err(format!("contains on {:?} is not supported", other)),
             },
             // Bytes: to_bytes(s) codifica un string a UTF-8; from_utf8(b) decodifica (Result); sub_bytes
             // corta [i,j) por octeto con clamp (nunca falla). Repr = Rc<[u8]>.
@@ -2837,25 +3811,25 @@ impl Transpiler {
                 out.push_str("(match std::str::from_utf8(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(
-                    ") { Ok(__s) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__s)), \
+                    ") { Ok(__rt_s) => Ok::<Rc<str>, Rc<str>>(Rc::<str>::from(__rt_s)), \
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
             }
             "sub_bytes" => {
-                out.push_str("{ let __b = ");
+                out.push_str("{ let __rt_b = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str("; let __n = __b.len() as i64; let __lo = (");
+                out.push_str("; let __rt_n = __rt_b.len() as i64; let __rt_lo = (");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(").clamp(0, __n); let __hi = (");
+                out.push_str(").clamp(0, __rt_n); let __rt_hi = (");
                 self.emit_expr(out, eff[2])?;
-                out.push_str(").clamp(__lo, __n); Rc::<[u8]>::from(&__b[__lo as usize..__hi as usize]) }");
+                out.push_str(").clamp(__rt_lo, __rt_n); Rc::<[u8]>::from(&__rt_b[__rt_lo as usize..__rt_hi as usize]) }");
             }
             // I/O de ENTRADA (no determinista → sin oráculo; probado por subproceso, como tests/io_cli.rs).
             // `input() -> Option<string>`: una línea de stdin, sin '\n'/'\r' finales (como la VM); None en EOF.
             "input" => {
                 out.push_str(
-                    "{ let mut __s = String::new(); match std::io::stdin().read_line(&mut __s) \
-                     { Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(__s.trim_end_matches(['\\n', '\\r']))) } }",
+                    "{ let mut __rt_s = String::new(); match std::io::stdin().read_line(&mut __rt_s) \
+                     { Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(__rt_s.trim_end_matches(['\\n', '\\r']))) } }",
                 );
             }
             // `env(name) -> Option<string>`: variable de entorno; None si no está (como la VM).
@@ -2867,8 +3841,8 @@ impl Transpiler {
             // `read_int() -> Option<int>` = input() + parse_int (composición del prelude).
             "read_int" => {
                 out.push_str(
-                    "{ let mut __s = String::new(); match std::io::stdin().read_line(&mut __s) \
-                     { Ok(0) | Err(_) => None, Ok(_) => __s.trim_end_matches(['\\n', '\\r']).parse::<i64>().ok() } }",
+                    "{ let mut __rt_s = String::new(); match std::io::stdin().read_line(&mut __rt_s) \
+                     { Ok(0) | Err(_) => None, Ok(_) => __rt_s.trim_end_matches(['\\n', '\\r']).parse::<i64>().ok() } }",
                 );
             }
             // `close(h) -> int` (builtin pelado, ad-hoc): un handle de archivo (int) → lo quita del registro
@@ -2889,7 +3863,7 @@ impl Transpiler {
                 // El valor se convierte a la repr SEND del canal (string/bytes → Arc; primitivos igual).
                 let elem = match self.type_of(eff[0])? {
                     Type::Channel(t) => (*t).clone(),
-                    other => return Err(format!("spike: send sobre {:?}", other)),
+                    other => return Err(format!("send on {:?} is not supported", other)),
                 };
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".send(");
@@ -2900,11 +3874,16 @@ impl Transpiler {
                 // recv devuelve Option<repr-send>; se convierte de vuelta a la repr del programa (Rc).
                 let elem = match self.type_of(eff[0])? {
                     Type::Channel(t) => (*t).clone(),
-                    other => return Err(format!("spike: recv sobre {:?}", other)),
+                    other => return Err(format!("recv on {:?} is not supported", other)),
                 };
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".recv()");
-                out.push_str(from_send_map(&elem));
+                if send_is_tree(&elem) {
+                    let inner = self.from_send_expr(&elem, "__rt_x")?;
+                    write!(out, ".map(|__rt_x| {})", inner).unwrap();
+                } else {
+                    out.push_str(from_send_map(&elem));
+                }
             }
             // signals() -> Channel<int>: canal de señales del SO (SIGTERM/SIGINT), singleton (self-pipe).
             "signals" => {
@@ -2919,7 +3898,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow()[..])");
             }
-            // spawn(f) → __ray_spawn(move || {...}) → Task<T> (JoinHandle envuelto, registrado en el scope
+            // spawn(f) → __ray_spawn(move || {...}) → Task<T> (estado compartido, registrado en el scope
             // activo). scope(f) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro. `f`
             // es una función anónima literal `fn(){}` (captura valores Send, p. ej. canales) O el NOMBRE de
             // una función de nivel superior de aridad 0 (`spawn(worker)` → `move || worker()`; sin captura).
@@ -2929,13 +3908,13 @@ impl Transpiler {
                     ExprKind::Func(_) => None,
                     ExprKind::Ident(n) if self.funcs.contains_key(n) => {
                         if !self.funcs[n].params.is_empty() {
-                            return Err(format!("spike: {} de una función con parámetros ('{}')", method, n));
+                            return Err(format!("{} of a function with parameters ('{}')", method, n));
                         }
                         Some(n.clone())
                     }
                     _ => {
                         return Err(format!(
-                            "spike: {} solo acepta una función anónima literal o el nombre de una función",
+                            "{} only accepts a literal anonymous function or a function name",
                             method
                         ))
                     }
@@ -2945,29 +3924,81 @@ impl Transpiler {
                     _ => normalize_type(&self.funcs[named.as_ref().unwrap()].ret),
                 };
                 out.push_str("{ ");
-                // El literal captura por `move` los canales del ámbito (compartidos → se CLONAN antes; el
-                // closure mueve un clon, el original sigue). Una fn nombrada es top-level y no captura nada.
+                // El literal captura por `move` los canales/Tasks del ámbito (el CONDUCTO compartido →
+                // se CLONAN antes; el closure mueve un clon, el original sigue). Una fn nombrada es
+                // top-level y no captura nada.
+                let mut captures: Vec<(String, Type, bool)> = Vec::new();
                 if named.is_none() {
                     for name in self.in_scope_channels() {
                         write!(out, "let {n} = {n}.clone(); ", n = mangle(&name)).unwrap();
                     }
+                    // H21-N5b (solo spawn: cruza de hilo): las demás capturas de HEAP se convierten a
+                    // la repr Send FUERA (deep copy) y se reconstruyen DENTRO — la semántica de heap
+                    // aislado de la VM (M38): la mutación no se comparte; los canales son el conducto.
+                    if method == "spawn" {
+                        let mut fn_clones: Vec<String> = Vec::new();
+                        if let ExprKind::Func(fnexpr) = &eff[0].kind {
+                            let (caps, cls) = self.spawn_captures(&fnexpr.body)?;
+                            captures = caps;
+                            fn_clones = cls;
+                        }
+                        for n in &fn_clones {
+                            write!(out, "let {n} = {n}.clone(); ", n = mangle(n)).unwrap();
+                        }
+                        for (i, (name, ty, is_cell)) in captures.iter().enumerate() {
+                            let src = if *is_cell {
+                                format!("{}.borrow().clone()", mangle(name))
+                            } else {
+                                format!("{}.clone()", mangle(name))
+                            };
+                            let conv = self.to_send_expr(ty, &src)?;
+                            write!(out, "let __snd_{i} = {conv}; ").unwrap();
+                        }
+                    }
                 }
                 let runtime = if method == "spawn" { "__ray_spawn" } else { "__ray_scope" };
                 write!(out, "{}(move || ", runtime).unwrap();
-                // spawn: el closure corre en OTRO hilo → devuelve la repr SEND (string/bytes → Arc); el
-                // cuerpo produce la repr del programa, se envuelve. scope corre en el hilo actual → sin conv.
-                let wrap = if method == "spawn" { ret } else { Type::Unit };
-                let (pre, suf) = match wrap {
-                    Type::String => ("std::sync::Arc::<str>::from(&*", ")"),
-                    Type::Bytes => ("std::sync::Arc::<[u8]>::from(&*", ")"),
-                    _ => ("", ""),
-                };
-                out.push_str(pre);
-                match &eff[0].kind {
-                    ExprKind::Func(fnexpr) => self.emit_block(out, &fnexpr.body)?,
-                    _ => write!(out, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
+                if !captures.is_empty() {
+                    out.push_str("{ ");
+                    for (i, (name, ty, is_cell)) in captures.iter().enumerate() {
+                        let conv = self.from_send_expr(ty, &format!("__snd_{i}"))?;
+                        if *is_cell {
+                            // la var era una CELDA (mutable capturada): se reconstruye como celda local
+                            // — la mutación queda AISLADA en la tarea, como en la VM.
+                            write!(out, "let {} = Rc::new(std::cell::RefCell::new({conv})); ", mangle(name)).unwrap();
+                        } else {
+                            write!(out, "let {} = {conv}; ", mangle(name)).unwrap();
+                        }
+                    }
                 }
-                out.push_str(suf);
+                // spawn: el closure corre en OTRO hilo → devuelve la repr SEND (string/bytes → Arc;
+                // compuestos → __RaySend); el cuerpo produce la repr del programa, se envuelve. scope
+                // corre en el hilo actual → sin conversión.
+                let wrap = if method == "spawn" { ret } else { Type::Unit };
+                if send_is_tree(&wrap) && method == "spawn" {
+                    let mut tmp = String::new();
+                    match &eff[0].kind {
+                        ExprKind::Func(fnexpr) => self.emit_block(&mut tmp, &fnexpr.body)?,
+                        _ => write!(tmp, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
+                    }
+                    let conv = self.to_send_expr(&wrap, "__rt_r")?;
+                    write!(out, "{{ let __rt_r = {tmp}; {conv} }}").unwrap();
+                } else {
+                    let (pre, suf) = match wrap {
+                        Type::String => ("std::sync::Arc::<str>::from(&*", ")"),
+                        Type::Bytes => ("std::sync::Arc::<[u8]>::from(&*", ")"),
+                        _ => ("", ""),
+                    };
+                    out.push_str(pre);
+                    match &eff[0].kind {
+                        ExprKind::Func(fnexpr) => self.emit_block(out, &fnexpr.body)?,
+                        _ => write!(out, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
+                    }
+                    out.push_str(suf);
+                }
+                if !captures.is_empty() {
+                    out.push_str(" }");
+                }
                 out.push_str(") }");
             }
             "unwrap_or" => {
@@ -2990,50 +4021,52 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // H6: panic/assert abortan como la VM — `runtime error: <msg>` + exit 70 (antes: panic de
+            // Rust, texto distinto y exit 101).
             "panic" => {
-                out.push_str("panic!(\"{}\", ");
+                out.push_str("__ray_rt_err(&*(");
                 self.emit_expr(out, eff[0])?;
-                out.push(')');
+                out.push_str("))");
             }
-            // Aserciones (prelude): assert(c) → assert!(c); assert_eq(a, b) → assert_eq!(a, b).
+            // Aserciones (prelude): mismos MENSAJES que los cuerpos de src/prelude.ray (que la VM ejecuta).
             "assert" => {
-                out.push_str("assert!(");
+                out.push_str("if !(");
                 self.emit_expr(out, eff[0])?;
-                out.push(')');
+                out.push_str(") { __ray_rt_err(\"assertion failed\") }");
             }
             "assert_eq" => {
-                out.push_str("assert_eq!(");
+                out.push_str("{ let __rt_a = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(", ");
+                out.push_str("; let __rt_b = ");
                 self.emit_expr(out, eff[1])?;
-                out.push(')');
+                out.push_str("; if !(__rt_a == __rt_b) { __ray_rt_err(&format!(\"assert_eq failed: {} != {}\", __rt_a.ray_show(), __rt_b.ray_show())) } }");
             }
-            // Orden superior (prelude map/filter/fold SOBRE ARREGLOS) → iteradores de Rust. `__f` liga la
-            // closure una vez; `__x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
+            // Orden superior (prelude map/filter/fold SOBRE ARREGLOS) → iteradores de Rust. `__rt_f` liga la
+            // closure una vez; `__rt_x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
             // distingue la función libre `map`/`filter`/`fold` (sobre `[T]`) del MÉTODO `Iter#map`/… (sobre
             // un iterador de primera clase), que cae al despacho de método ordinario (`_ =>`).
             "map" if !name.contains('#') => {
-                out.push_str("{ let __f = ");
+                out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().map(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
+                out.push_str(".borrow().iter().map(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
             "filter" if !name.contains('#') => {
-                out.push_str("{ let __f = ");
+                out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().cloned().filter(|__x| __f(__x.clone())).collect::<Vec<_>>())) }");
+                out.push_str(".borrow().iter().cloned().filter(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
             "fold" if !name.contains('#') => {
-                out.push_str("{ let __f = ");
+                out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().iter().fold(");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(", |__acc, __x| __f(__acc, __x.clone())) }");
+                out.push_str(", |__acc, __rt_x| __rt_f(__acc, __rt_x.clone())) }");
             }
             // Cripto de producción (M43): los primitivos `__*` se interceptan a `ray_runtime::crypto::*`
             // (el MISMO código que la VM → oráculo byte-idéntico) y activan la feature `crypto` de
@@ -3081,7 +4114,7 @@ impl Transpiler {
                     "ed25519_sign" => 2,
                     _ => 4, // chacha seal/open: clave, nonce, aad, dato
                 };
-                write!(out, "{{ let __r = ray_runtime::crypto::{}(", method).unwrap();
+                write!(out, "{{ let __rt_r = ray_runtime::crypto::{}(", method).unwrap();
                 for i in 0..argc {
                     if i > 0 {
                         out.push_str(", ");
@@ -3089,7 +4122,7 @@ impl Transpiler {
                     out.push('&');
                     self.emit_expr(out, eff[i])?;
                 }
-                out.push_str("); Rc::new(std::cell::RefCell::new(match __r { Some(__v) => vec![Rc::<[u8]>::from(__v)], None => Vec::new() })) }");
+                out.push_str("); Rc::new(std::cell::RefCell::new(match __rt_r { Some(__rt_v) => vec![Rc::<[u8]>::from(__rt_v)], None => Vec::new() })) }");
             }
             // TLS de producción (Paso 1): los primitivos `__tls_*` → helpers `__ray_tls_*` (I/O bloqueante
             // vía ray_runtime::tls) y activan `needs_rt_tls`. Devuelven arreglos ETIQUETADOS (`["ok",h]`/
@@ -3145,15 +4178,19 @@ impl Transpiler {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));
                 if !self.funcs.contains_key(name) && !is_closure {
-                    return Err(format!("spike: builtin/función '{}' no soportada", name));
+                    return Err(format!("builtin/function '{}' is not supported in the native backend", name));
                 }
+                // H21-N5c: los args a params MARCADOS del callee (genéricos Send) se emiten en su
+                // forma "enviable": fn nombrada → el fn item pelado; closure literal → sin Rc::new;
+                // variable → tal cual (si es un param marcado del llamador, su genérico ya es Send).
+                let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
                 out.push_str(&mangle(name));
                 out.push('(');
                 for (i, a) in eff.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    self.emit_expr(out, a)?;
+                    self.emit_call_arg(out, a, marked.contains(&i))?;
                 }
                 out.push(')');
             }
@@ -3179,7 +4216,7 @@ impl Transpiler {
                     // Función como valor → su tipo Fn.
                     Type::Fn(s.params.clone(), Box::new(s.ret.clone()))
                 } else {
-                    return Err(format!("spike: variable '{}' sin tipo conocido", n));
+                    return Err(format!("variable '{}' has no known type", n));
                 }
             }
             ExprKind::Unary { op, expr } => match op {
@@ -3198,7 +4235,7 @@ impl Transpiler {
                 if let Some(r) = recv {
                     if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
                         return Ok(self.trait_method_sigs.get(n).map(|(_, ret)| ret.clone())
-                            .ok_or_else(|| format!("spike: método de dyn desconocido '{}'", n))?);
+                            .ok_or_else(|| format!("unknown dyn method '{}'", n))?);
                     }
                 }
                 // `std::math::*`: abs/min/max preservan el tipo del primer arg (int|float); el resto
@@ -3206,7 +4243,7 @@ impl Transpiler {
                 // que no sabríamos tipar: el arg es `int#less`, un impl del prelude que no emitimos).
                 if let Some(mfn) = n.strip_prefix("std::math::") {
                     return Ok(match mfn {
-                        "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("spike: math sin arg")?)?,
+                        "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("math without an argument")?)?,
                         _ => Type::Float,
                     });
                 }
@@ -3226,7 +4263,7 @@ impl Transpiler {
                             vec![Type::Array(Box::new(Type::String)), Type::String],
                         ),
                         "exists" | "is_dir" | "is_file" => Type::Bool,
-                        other => return Err(format!("spike: std::fs::{} no soportada", other)),
+                        other => return Err(format!("std::fs::{} is not supported", other)),
                     });
                 }
                 // std::time: now/monotonic → int; sleep → unit. std::random: next → float; below → int;
@@ -3258,9 +4295,15 @@ impl Transpiler {
                     "to_string" => Type::String,
                     // join(t) → T de la Task; join(arr, sep) → String (ad-hoc por el tipo del primer arg).
                     "join" => match recv0.map(|e| self.type_of(e)).transpose()? {
-                        Some(Type::Task(t)) => *t,
+                        Some(Type::Task(t)) => self.classify(&t),
                         _ => Type::String,
                     },
+                    // try_join(t) → Result<T, string> (H21-N2); __task_failed(t) → [string].
+                    "try_join" => match recv0.map(|e| self.type_of(e)).transpose()? {
+                        Some(Type::Task(t)) => Type::Enum("Result".into(), vec![self.classify(&t), Type::String]),
+                        other => return Err(format!("try_join expects a Task, got {:?}", other)),
+                    },
+                    "__task_failed" => Type::Array(Box::new(Type::String)),
                     "show" if n.contains('#') => Type::String,
                     "eq" | "less" if n.contains('#') => Type::Bool,
                     "len" => Type::Int,
@@ -3274,9 +4317,9 @@ impl Transpiler {
                     "input" | "env" => opt_of(Type::String),
                     "read_int" => opt_of(Type::Int),
                     // Concurrencia: recv(ch) → Option<T> (T = elemento del canal); send/spawn → unit.
-                    "recv" => match self.type_of(recv0.ok_or("spike: recv sin canal")?)? {
+                    "recv" => match self.type_of(recv0.ok_or("recv without a channel")?)? {
                         Type::Channel(t) => opt_of(*t),
-                        other => return Err(format!("spike: recv sobre {:?}", other)),
+                        other => return Err(format!("recv on {:?} is not supported", other)),
                     },
                     "send" => Type::Unit,
                     "select" => Type::Int, // índice del canal listo
@@ -3288,7 +4331,7 @@ impl Transpiler {
                             Some(ExprKind::Ident(n)) if self.funcs.contains_key(n) => {
                                 normalize_type(&self.funcs[n].ret)
                             }
-                            _ => return Err(format!("spike: {} sin función anónima ni nombre de función", method)),
+                            _ => return Err(format!("{} without an anonymous function or function name", method)),
                         };
                         if method == "spawn" {
                             Type::Task(Box::new(ret))
@@ -3319,23 +4362,23 @@ impl Transpiler {
                     "chars" => Type::Array(Box::new(Type::Char)),
                     "contains_key" => Type::Bool,
                     // get_or → V (desenvuelto); get/remove → Option<V> (para match/`?`); keys→[K]; values→[V].
-                    "get_or" => match self.type_of(recv0.ok_or("spike: get_or sin receptor")?)? {
+                    "get_or" => match self.type_of(recv0.ok_or("get_or without a receiver")?)? {
                         Type::Map(_, v) => *v,
-                        other => return Err(format!("spike: get_or sobre {:?}", other)),
+                        other => return Err(format!("get_or on {:?} is not supported", other)),
                     },
-                    "get" | "remove" => match self.type_of(recv0.ok_or("spike: get sin receptor")?)? {
+                    "get" | "remove" => match self.type_of(recv0.ok_or("get without a receiver")?)? {
                         Type::Map(_, v) => opt_of(*v),
-                        other => return Err(format!("spike: get sobre {:?}", other)),
+                        other => return Err(format!("get on {:?} is not supported", other)),
                     },
-                    "keys" => match self.type_of(recv0.ok_or("spike: keys sin receptor")?)? {
+                    "keys" => match self.type_of(recv0.ok_or("keys without a receiver")?)? {
                         Type::Map(k, _) => Type::Array(k),
-                        other => return Err(format!("spike: keys sobre {:?}", other)),
+                        other => return Err(format!("keys on {:?} is not supported", other)),
                     },
-                    "values" => match self.type_of(recv0.ok_or("spike: values sin receptor")?)? {
+                    "values" => match self.type_of(recv0.ok_or("values without a receiver")?)? {
                         Type::Map(_, v) => Type::Array(v),
-                        other => return Err(format!("spike: values sobre {:?}", other)),
+                        other => return Err(format!("values on {:?} is not supported", other)),
                     },
-                    "sort" => self.type_of(recv0.ok_or("spike: sort sin receptor")?)?,
+                    "sort" => self.type_of(recv0.ok_or("sort without a receiver")?)?,
                     // Cripto (M43): hash/hmac/csprng → bytes; verify → bool; los fallibles (ed25519
                     // pk/sign, chacha seal/open) → `[bytes]` etiquetado (el prelude → Option<bytes>). `method`
                     // ya viene sin `__` (ver emit_call); guarda `n` empieza por `__`.
@@ -3361,18 +4404,18 @@ impl Transpiler {
                     }
                     // unwrap_or/unwrap desenvuelven un Option<T>/Result<T,E> → T.
                     "unwrap_or" | "unwrap" => {
-                        unwrapped(&self.type_of(recv0.ok_or("spike: unwrap sin receptor")?)?)
+                        unwrapped(&self.type_of(recv0.ok_or("unwrap without a receiver")?)?)
                     }
                     // Orden superior: map(xs,f) → [ret(f)]; filter(xs,f) → [elem(xs)]; fold(xs,init,f) → ret(f).
                     // Guarda `!n.contains('#')`: la función libre sobre `[T]`; `Iter#map`/… (método) cae al `_`.
                     "map" if !n.contains('#') => match self.type_of(effargs(recv, args, 1)?)? {
                         Type::Fn(_, r) => Type::Array(r),
-                        other => return Err(format!("spike: map con f no-función {:?}", other)),
+                        other => return Err(format!("map with a non-function f {:?}", other)),
                     },
                     "filter" if !n.contains('#') => self.type_of(effargs(recv, args, 0)?)?,
                     "fold" if !n.contains('#') => match self.type_of(effargs(recv, args, 2)?)? {
                         Type::Fn(_, r) => *r,
-                        other => return Err(format!("spike: fold con f no-función {:?}", other)),
+                        other => return Err(format!("fold with a non-function f {:?}", other)),
                     },
                     _ => {
                         // Función de usuario (quizá genérica), o llamada a un closure en ámbito.
@@ -3395,7 +4438,7 @@ impl Transpiler {
                         } else if let Some(Type::Fn(_, r)) = self.lookup(n) {
                             (**r).clone()
                         } else {
-                            return Err(format!("spike: no sé el tipo de retorno de '{}'", n));
+                            return Err(format!("unknown return type of '{}'", n));
                         }
                     }
                 }
@@ -3412,7 +4455,7 @@ impl Transpiler {
             ExprKind::ArrayLit(elems) => {
                 let elem = match elems.first() {
                     Some(e) => self.type_of(e)?,
-                    None => return Err("spike: literal de arreglo vacío sin anotación".into()),
+                    None => return Err("empty array literal without an annotation".into()),
                 };
                 Type::Array(Box::new(elem))
             }
@@ -3423,16 +4466,40 @@ impl Transpiler {
                 Type::Tuple(ts) => {
                     let i = match &index.kind {
                         ExprKind::Int(n) => *n as usize,
-                        _ => return Err("spike: índice de tupla no literal".into()),
+                        _ => return Err("non-literal tuple index".into()),
                     };
-                    ts.get(i).cloned().ok_or("spike: índice de tupla fuera de rango")?
+                    ts.get(i).cloned().ok_or("tuple index out of range")?
                 }
-                other => return Err(format!("spike: indexar {:?} no soportado", other)),
+                other => return Err(format!("indexing {:?} is not supported", other)),
             },
             ExprKind::TupleLit(elems) => {
                 Type::Tuple(elems.iter().map(|e| self.type_of(e)).collect::<Result<_, _>>()?)
             }
-            ExprKind::StructLit { name, .. } => Type::Struct(name.clone(), vec![]),
+            ExprKind::StructLit { name, fields } => {
+                // Inferir los ARGS DE TIPO desde los campos (como el checker): unificar cada tipo de campo
+                // declarado (con params) contra el tipo del valor → fija los params. Sin esto, un literal
+                // genérico daba args vacíos y un acceso anidado (`b.v.v` con `Box<Box<[int]>>`) no podía
+                // sustituir el param → "campo desconocido en T" (H9).
+                let tparams = self.struct_tparams.get(name).cloned().unwrap_or_default();
+                if tparams.is_empty() {
+                    Type::Struct(name.clone(), vec![])
+                } else {
+                    let decl = self.struct_fields.get(name).cloned().unwrap_or_default();
+                    let mut subst = HashMap::new();
+                    for (fname, fval) in fields {
+                        if let Some((_, fty)) = decl.iter().find(|(n, _)| n == fname) {
+                            if let Ok(vty) = self.type_of(fval) {
+                                unify(&normalize_type(fty), &vty, &tparams, &mut subst);
+                            }
+                        }
+                    }
+                    let args = tparams
+                        .iter()
+                        .map(|p| subst.get(p).cloned().unwrap_or_else(|| Type::Var(p.clone())))
+                        .collect();
+                    Type::Struct(name.clone(), args)
+                }
+            }
             ExprKind::EnumLit { enum_name, variant, args } => {
                 if enum_name == "Option" {
                     // Some(x) → Option<tipo(x)>; None → Option<Unit> (placeholder; lo fija el contexto).
@@ -3445,7 +4512,29 @@ impl Transpiler {
                         _ => Type::Enum("Result".into(), vec![Type::Unit, Type::Unit]),
                     }
                 } else {
-                    Type::Enum(enum_name.clone(), vec![])
+                    // Enum de usuario: inferir los args de tipo desde el payload (análogo a StructLit, H9).
+                    let tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
+                    if tparams.is_empty() {
+                        Type::Enum(enum_name.clone(), vec![])
+                    } else {
+                        let payload = self
+                            .enum_variants
+                            .get(enum_name)
+                            .and_then(|vs| vs.get(variant))
+                            .cloned()
+                            .unwrap_or_default();
+                        let mut subst = HashMap::new();
+                        for (pty, aval) in payload.iter().zip(args) {
+                            if let Ok(vty) = self.type_of(aval) {
+                                unify(&normalize_type(pty), &vty, &tparams, &mut subst);
+                            }
+                        }
+                        let targs = tparams
+                            .iter()
+                            .map(|p| subst.get(p).cloned().unwrap_or_else(|| Type::Var(p.clone())))
+                            .collect();
+                        Type::Enum(enum_name.clone(), targs)
+                    }
                 }
             }
             ExprKind::Try(inner) => unwrapped(&self.type_of(inner)?),
@@ -3457,18 +4546,18 @@ impl Transpiler {
                 let obj_ty = self.type_of(object)?;
                 // Tupla: `t.0` → el tipo del i-ésimo elemento.
                 if let Type::Tuple(ts) = &obj_ty {
-                    let i: usize = name.parse().map_err(|_| "spike: campo de tupla no numérico")?;
-                    return ts.get(i).cloned().ok_or_else(|| "spike: campo de tupla fuera de rango".into());
+                    let i: usize = name.parse().map_err(|_| "non-numeric tuple field")?;
+                    return ts.get(i).cloned().ok_or_else(|| "tuple field out of range".into());
                 }
                 let sn = match &obj_ty {
                     Type::Struct(n, _) => n.clone(),
-                    other => return Err(format!("spike: acceso a campo sobre {:?}", other)),
+                    other => return Err(format!("field access on {:?} is not supported", other)),
                 };
                 let fty = self
                     .struct_fields
                     .get(&sn)
                     .and_then(|fs| fs.iter().find(|(f, _)| f == name))
-                    .ok_or_else(|| format!("spike: campo '{}' desconocido en {}", name, sn))?
+                    .ok_or_else(|| format!("unknown field '{}' on {}", name, sn))?
                     .1
                     .clone();
                 // Sustituir los params de tipo del struct por los args (`Par<int,bool>` → A=int, B=bool).
@@ -3484,11 +4573,11 @@ impl Transpiler {
                 let scrut_ty = self.type_of(scrutinee).ok();
                 arms.iter()
                     .find_map(|a| self.arm_type(scrut_ty.as_ref(), a))
-                    .ok_or("spike: no pude inferir el tipo del match")?
+                    .ok_or("could not infer the type of the match")?
             }
             ExprKind::Cast { ty, .. } => normalize_type(ty),
             ExprKind::MapLit(pairs) => {
-                let (k, v) = pairs.first().ok_or("spike: Map literal vacío sin anotación")?;
+                let (k, v) = pairs.first().ok_or("empty Map literal without an annotation")?;
                 Type::Map(Box::new(self.type_of(k)?), Box::new(self.type_of(v)?))
             }
             // (Exhaustivo sobre ExprKind, como emit_expr: una variante nueva rompe la compilación aquí.)
@@ -3605,7 +4694,7 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         // (`send_type`): primitivos tal cual, string→Arc<str>, bytes→Arc<[u8]> (se convierte al borde);
         // structs/arreglos (mutables) → diferido, requerirían el modelo de valores thread-safe.
         Type::Channel(t) => return Ok(format!("__RayChan<{}>", send_type(t, enums, tparams)?)),
-        // Task<T> (structured concurrency): handle al resultado futuro de un `spawn` (JoinHandle envuelto).
+        // Task<T> (structured concurrency): handle al resultado futuro de un `spawn` (estado compartido).
         Type::Task(t) => return Ok(format!("__RayTask<{}>", send_type(t, enums, tparams)?)),
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),
@@ -3666,7 +4755,7 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
             let ps: Vec<String> = params.iter().map(|p| rust_ty(p, enums, tparams)).collect::<Result<_, _>>()?;
             return Ok(format!("Rc<dyn Fn({}) -> {}>", ps.join(", "), rust_ty(ret, enums, tparams)?));
         }
-        other => return Err(format!("spike: tipo no soportado {:?}", other)),
+        other => return Err(format!("unsupported type {:?}", other)),
     }
     .to_string())
 }
@@ -3737,19 +4826,30 @@ fn send_type(t: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         Type::String => Ok("std::sync::Arc<str>".to_string()),
         Type::Bytes => Ok("std::sync::Arc<[u8]>".to_string()),
         Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) => rust_ty(t, enums, tparams),
+        // H21-N5a: los compuestos cruzan como el árbol Send universal (deep copy, semántica M38).
+        ty if send_is_tree(&ty) => Ok("__RaySend".to_string()),
         other => Err(format!(
-            "spike: canal/tarea de tipo no-Send {:?} — soportados: int/float/bool/char/string/bytes",
+            "channel/task of type {:?} cannot cross a thread boundary in the native backend",
             other
         )),
     }
 }
 
-/// El sufijo `.map(|__x| Rc::…::from(&*__x))` para convertir la repr SEND recibida (Arc) de vuelta a la
+/// ¿Este tipo cruza los hilos como `__RaySend` (árbol Send universal, deep copy)? Los primitivos y
+/// string/bytes tienen repr Send directa; las funciones NO cruzan (error claro en los conversores).
+fn send_is_tree(t: &Type) -> bool {
+    matches!(
+        normalize_type(t),
+        Type::Array(_) | Type::Map(..) | Type::Struct(..) | Type::Enum(..) | Type::Tuple(_) | Type::Unit
+    )
+}
+
+/// El sufijo `.map(|__rt_x| Rc::…::from(&*__rt_x))` para convertir la repr SEND recibida (Arc) de vuelta a la
 /// del programa (Rc). Vacío para primitivos (sin conversión).
 fn from_send_map(t: &Type) -> &'static str {
     match normalize_type(t) {
-        Type::String => ".map(|__x| Rc::<str>::from(&*__x))",
-        Type::Bytes => ".map(|__x| Rc::<[u8]>::from(&*__x))",
+        Type::String => ".map(|__rt_x| Rc::<str>::from(&*__rt_x))",
+        Type::Bytes => ".map(|__rt_x| Rc::<[u8]>::from(&*__rt_x))",
         _ => "",
     }
 }
@@ -3788,7 +4888,7 @@ fn ffi_c_arg_ty(t: &Type) -> Result<&'static str, String> {
         Type::String => "*const std::os::raw::c_char",   // char* (NUL-terminado)
         Type::Bytes => "*const u8",                      // buffer crudo
         Type::Ptr => "*mut std::ffi::c_void",            // void* opaco
-        other => return Err(format!("spike: FFI arg no marshalable: {:?}", other)),
+        other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
     })
 }
 
@@ -3807,9 +4907,9 @@ fn ffi_c_ret_ty(t: &Type) -> Result<&'static str, String> {
         Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
             Type::Bytes | Type::String => "*const std::os::raw::c_char",
             Type::Ptr => "*mut std::ffi::c_void",
-            other => return Err(format!("spike: FFI retorno Option<{:?}> no soportado", other)),
+            other => return Err(format!("FFI return type Option<{:?}> is not supported", other)),
         },
-        other => return Err(format!("spike: FFI retorno no marshalable: {:?}", other)),
+        other => return Err(format!("FFI return type is not marshalable: {:?}", other)),
     })
 }
 
@@ -3916,7 +5016,7 @@ fn subst_type(t: &Type, subst: &HashMap<String, Type>) -> Type {
 
 /// El i-ésimo argumento EFECTIVO de una llamada (el receptor de UFCS va primero, luego los args).
 fn effargs<'a>(recv: Option<&'a Expr>, args: &'a [Expr], i: usize) -> Result<&'a Expr, String> {
-    recv.into_iter().chain(args.iter()).nth(i).ok_or_else(|| "spike: falta un argumento".to_string())
+    recv.into_iter().chain(args.iter()).nth(i).ok_or_else(|| "missing an argument".to_string())
 }
 
 /// `Option<t>` (usando el Option nativo de Rust).
@@ -4007,6 +5107,36 @@ mod tests {
         transpile(&prog).expect("transpile").source
     }
 
+    /// H11 — Guardia de la triple implementación. Cada builtin de la tabla `BUILTINS` debe estar
+    /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
+    /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.
+    #[test]
+    fn todos_los_builtins_estan_clasificados_para_nativo() {
+        use std::collections::BTreeSet;
+        let tabla: BTreeSet<&str> = crate::builtins::names().collect();
+        let clasificados: BTreeSet<&str> = super::NATIVE_TRACKED_BUILTINS.iter().copied().collect();
+
+        // (1) Todo builtin de la tabla está clasificado. Si esto falla: añadiste un builtin — impleméntalo
+        //     en `emit_call`/`type_of` (o, si el backend nativo no lo soportará, márcalo stubbeado) y
+        //     añade su nombre a `NATIVE_TRACKED_BUILTINS` en src/transpile.rs.
+        let sin_clasificar: Vec<&str> = tabla.difference(&clasificados).copied().collect();
+        assert!(
+            sin_clasificar.is_empty(),
+            "builtins de BUILTINS sin clasificar para el backend nativo: {sin_clasificar:?}\n\
+             → decidí su soporte nativo y añádelos a NATIVE_TRACKED_BUILTINS (marca stubbeados los que no soporte)."
+        );
+        // (2) Sin entradas obsoletas (un builtin que se quitó de la tabla pero quedó en la lista).
+        let obsoletos: Vec<&str> = clasificados.difference(&tabla).copied().collect();
+        assert!(
+            obsoletos.is_empty(),
+            "entradas obsoletas en NATIVE_TRACKED_BUILTINS (ya no están en BUILTINS): {obsoletos:?}"
+        );
+        // (3) Los stubbeados son un subconjunto de los clasificados (coherencia interna).
+        for s in super::NATIVE_STUBBED_BUILTINS {
+            assert!(clasificados.contains(s), "'{s}' está en STUBBED pero no en TRACKED");
+        }
+    }
+
     #[test]
     fn transpila_fib_recursivo() {
         let rust = transpile_src(
@@ -4014,7 +5144,8 @@ mod tests {
              fn main() { print(fib(10)); }",
         );
         assert!(rust.contains("fn fib(mut n: i64) -> i64"), "{}", rust);
-        assert!(rust.contains("fib((n - 1i64))"), "{}", rust);
+        // H6: la resta de int baja al helper CHECKED (overflow → runtime error, como la VM).
+        assert!(rust.contains("fib(__ray_sub(n, 1i64))"), "{}", rust);
         assert!(rust.contains("fib(10i64).ray_show()"), "{}", rust);
     }
 
@@ -4103,7 +5234,7 @@ mod tests {
         );
         assert!(rust.contains("Rc<dyn Fn(i64) -> i64>"), "{}", rust); // función-valor
         assert!(rust.contains("Rc::new(move |n: i64| -> i64"), "{}", rust); // anónima → closure move
-        assert!(rust.contains(".iter().map(|__x| __f(__x.clone()))"), "{}", rust); // map → iterador
+        assert!(rust.contains(".iter().map(|__rt_x| __rt_f(__rt_x.clone()))"), "{}", rust); // map → iterador
     }
 
     #[test]
@@ -4171,7 +5302,7 @@ mod tests {
         // dyn → struct de closures que capturan el concreto (sin Box<dyn Any>, sin data).
         assert!(rust.contains("struct __dyn_Figura"), "{}", rust);
         assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
-        assert!(rust.contains("let __c = "), "{}", rust); // captura del concreto en la coerción
+        assert!(rust.contains("let __rt_c = "), "{}", rust); // captura del concreto en la coerción
         assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
     }
 
@@ -4234,7 +5365,7 @@ mod tests {
              fn main() { print(0); }",
         );
         assert!(rust.contains("-> std::os::raw::c_int;"), "retorno c_int: {}", rust);
-        assert!(rust.contains("__r as i64"), "sign-extiende a i64: {}", rust);
+        assert!(rust.contains("__rt_r as i64"), "sign-extiende a i64: {}", rust);
         // libc no lleva #[link] (ya enlazada).
         assert!(!rust.contains("#[link(name = \"c\")]"), "libc implícita: {}", rust);
     }
@@ -4242,15 +5373,15 @@ mod tests {
     #[test]
     fn for_sobre_iterador_de_usuario_baja_a_un_loop_con_next() {
         // B2: `for x in it` sobre un `impl Iterator<T>` de usuario baja a un `loop` que llama `next(it)`
-        // hasta `None`, ligando cada `Some(x)`. El iterador se liga a `__it` una vez (estado persistente).
+        // hasta `None`, ligando cada `Some(x)`. El iterador se liga a `__rt_it` una vez (estado persistente).
         let rust = transpile_src(
             "struct R { a: int, b: int }\n\
              impl Iterator<int> for R { fn next(self) -> Option<int> { if (self.a >= self.b) { Option.None } else { let v: int = self.a; self.a = self.a + 1; Option.Some(v) } } }\n\
              fn r(a: int, b: int) -> R { R { a: a, b: b } }\n\
              fn main() { for n in r(1, 4) { print(n); } }",
         );
-        assert!(rust.contains("let __it = "), "liga el iterador a __it: {}", rust);
-        assert!(rust.contains("(__it.clone()) { Some("), "loop match next(__it): {}", rust);
+        assert!(rust.contains("let __rt_it = "), "liga el iterador a __rt_it: {}", rust);
+        assert!(rust.contains("(__rt_it.clone()) { Some("), "loop match next(__rt_it): {}", rust);
         assert!(rust.contains("None => break"), "corta en None: {}", rust);
     }
 
@@ -4278,18 +5409,17 @@ mod tests {
 
     #[test]
     fn una_funcion_no_transpilable_queda_como_stub_que_panica() {
-        // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí un canal de un struct no-Send,
-        // como el real de metrics_server) se emite como STUB que panica, con su firma → el programa
-        // COMPILA; si el flujo real no la llama, corre igual que la VM. Antes se OMITÍA y una llamada
-        // colgante hacía fallar rustc.
+        // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí una GUARDA de match; el
+        // canal de struct que usaba este test se soporta desde H21-N5a) se emite como STUB que
+        // panica, con su firma → el programa COMPILA; si el flujo real no la llama, corre igual que
+        // la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
         let rust = transpile_src(
-            "struct Msg { x: int }\n\
-             fn arranca() -> int { let c: Channel<Msg> = Channel.new(); send(c, Msg { x: 1 }); 1 }\n\
+            "fn arranca() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }\n\
              fn main() -> int { print(42); 0 }",
         );
         assert!(
-            rust.contains("fn arranca() -> i64 { panic!("),
-            "arranca es un stub que panica: {}",
+            rust.contains("fn arranca() -> i64 { __ray_rt_err("),
+            "arranca es un stub que aborta (runtime error + exit 70, H6): {}",
             rust
         );
         // main y worker SÍ se transpilan normalmente.
@@ -4307,14 +5437,16 @@ mod tests {
         let ar = transpile_src(
             "fn main() { let a = [1, 2]; let b = [3]; let c = a + b; print(c.len()); }",
         );
-        assert!(ar.contains(".borrow().clone(); __v.extend("), "concat de arreglos: {}", ar);
+        assert!(ar.contains(".borrow().clone(); __rt_v.extend("), "concat de arreglos: {}", ar);
     }
 
     #[test]
     fn len_de_string_cuenta_caracteres() {
-        // `len(string)` = nº de CARACTERES (como la VM), no bytes → `.chars().count()` (clave con UTF-8).
+        // `len(string)` = nº de CARACTERES (como la VM), no bytes. Fast-path ASCII (H19): `is_ascii()` →
+        // `.len()` (octetos == chars, escaneo SIMD); si no, `.chars().count()` (UTF-8, decodifica).
         let rust = transpile_src("fn main() { let s = \"ab\"; print(s.len()); }");
-        assert!(rust.contains(".chars().count() as i64"), "len de string por caracteres: {}", rust);
+        assert!(rust.contains("is_ascii()"), "len de string con fast-path ASCII: {}", rust);
+        assert!(rust.contains(".chars().count() as i64"), "fallback no-ASCII por caracteres: {}", rust);
     }
 
     #[test]
@@ -4407,7 +5539,7 @@ mod tests {
              let m = xs.contains(2); match (parse_float(\"1.5\")) { Option.Some(f) => { if (ok && m) { 1 } else { 0 } }, Option.None => 0 } }",
         );
         assert!(rust.contains(".contains(&*"), "string contains: {}", rust);
-        assert!(rust.contains(".iter().any(|__e| *__e == __x)"), "array contains: {}", rust);
+        assert!(rust.contains(".iter().any(|__e| *__e == __rt_x)"), "array contains: {}", rust);
         assert!(rust.contains(".parse::<f64>().ok()"), "parse_float: {}", rust);
     }
 
@@ -4455,9 +5587,9 @@ mod tests {
         let rust = transpile_src(
             "fn main() -> int { var w: [int] = [1, 2, 3]; w.push(w[0] + w[2]); w[3] }",
         );
-        // el valor se saca a __v antes del borrow_mut().push.
-        assert!(rust.contains("{ let __v = "), "push evalúa el valor a un temp: {}", rust);
-        assert!(rust.contains(".borrow_mut().push(__v);"), "push del temp: {}", rust);
+        // el valor se saca a __rt_v antes del borrow_mut().push.
+        assert!(rust.contains("{ let __rt_v = "), "push evalúa el valor a un temp: {}", rust);
+        assert!(rust.contains(".borrow_mut().push(__rt_v);"), "push del temp: {}", rust);
     }
 
     #[test]
@@ -4549,7 +5681,7 @@ mod tests {
         assert!(rust.contains(".trim()") && rust.contains(".to_uppercase()"), "trim/to_upper: {}", rust);
         assert!(rust.contains(".repeat(") && rust.contains(".replace(&*"), "repeat/replace: {}", rust);
         assert!(rust.contains(".starts_with(&*"), "starts_with: {}", rust);
-        assert!(rust.contains("*__x as u8"), "bytes_of: {}", rust);
+        assert!(rust.contains("*__rt_x as u8"), "bytes_of: {}", rust);
     }
 
     #[test]
@@ -4562,19 +5694,18 @@ mod tests {
         );
         assert!(rust.contains("__RayChan<std::sync::Arc<str>>"), "canal de Arc<str>: {}", rust);
         assert!(rust.contains("std::sync::Arc::<str>::from(&*"), "send convierte a Arc<str>: {}", rust);
-        assert!(rust.contains(".map(|__x| Rc::<str>::from(&*__x))"), "recv convierte de vuelta a Rc<str>: {}", rust);
+        assert!(rust.contains(".map(|__rt_x| Rc::<str>::from(&*__rt_x))"), "recv convierte de vuelta a Rc<str>: {}", rust);
     }
 
     #[test]
-    fn rechaza_canal_de_struct() {
-        // Un canal de struct (mutable, no-Send) → error claro (diferido).
-        let tokens = crate::lexer::lex(
+    fn transpila_canal_de_struct() {
+        // H21-N5a: un canal de struct cruza como __RaySend (deep copy, semántica M38) — antes era
+        // un error ("channel/task of non-Send type").
+        let rust = transpile_src(
             "struct P { x: int } fn main() { let ch: Channel<P> = Channel.new(); send(ch, P { x: 1 }); }",
-        )
-        .unwrap();
-        let mut prog = crate::parser::parse(tokens).unwrap();
-        crate::checker::check(&mut prog).unwrap();
-        assert!(super::transpile(&prog).is_err());
+        );
+        assert!(rust.contains("__RayChan<__RaySend>"), "el canal lleva la repr Send universal: {}", rust);
+        assert!(rust.contains("__to_send_0("), "el send convierte el struct: {}", rust);
     }
 
     #[test]
@@ -4739,14 +5870,24 @@ mod tests {
 
     #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `try_join` (une una Task devolviendo Result; aún fuera) → no transpilable.
+        // Una GUARDA de match (`Option.Some(n) if n > 0 =>`) sigue fuera del subconjunto → no
+        // transpilable. (try_join, que era el caso de este test, se portó en H21-N2 — ver abajo.)
         let tokens = crate::lexer::lex(
-            "fn main() { let t: Task<int> = spawn(fn() -> int { 1 }); match (try_join(t)) { Result.Ok(v) => print(v), Result.Err(e) => print(0) } }",
+            "fn main() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }",
         )
         .unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());
+    }
+
+    #[test]
+    fn transpila_try_join() {
+        // H21-N2: try_join une SIN re-lanzar (el fallo como valor) → transpila sobre `wait()` (N1).
+        let rust = transpile_src(
+            "fn main() { let t: Task<int> = spawn(fn() -> int { 1 }); match (try_join(t)) { Result.Ok(v) => print(v), Result.Err(e) => print(0) } }",
+        );
+        assert!(rust.contains(".wait()"), "try_join baja a wait(): {}", rust);
     }
 
     #[test]

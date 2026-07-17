@@ -85,7 +85,7 @@ Usage: ray <subcommand> [options]
   new <name>      create a new project (ray.toml + src/main.ray)
   run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--without crypto,tls,sqlite]]
+  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite]]
   test [file]    run the @test functions [filter]
   add <name>[@req]  add a dependency from the index to ray.toml and download it
   remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
@@ -317,10 +317,13 @@ fn spawn_dev_child(
             cmd.pre_exec(move || {
                 unsafe extern "C" {
                     fn dup2(oldfd: i32, newfd: i32) -> i32;
-                    fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
+                    // VARIÁDICA, como la declaración de builtins.rs (aridad fija = UB en arm64 y
+                    // `clashing_extern_declarations` entre ambas).
+                    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
                 }
                 const F_SETFD: i32 = 2; // limpiar los flags del descriptor (quita FD_CLOEXEC)
-                if unsafe { dup2(fd, TARGET_FD) } < 0 || unsafe { fcntl(TARGET_FD, F_SETFD, 0) } < 0 {
+                // (sin `unsafe` interior: el closure ya corre dentro del bloque unsafe de pre_exec)
+                if dup2(fd, TARGET_FD) < 0 || fcntl(TARGET_FD, F_SETFD, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
@@ -580,41 +583,55 @@ fn cmd_build(args: &[String]) {
     // nativo. El resto de flags/archivo se pasan igual; el archivo es el primer no-flag.
     let native = args.iter().any(|a| a == "--native");
     let release = args.iter().any(|a| a == "--release");
+    // `--fast` (H6): aritmética de int ENVOLVENTE (wrapping) en vez de checked — renuncia a la paridad
+    // de overflow con la VM a cambio del último tramo de rendimiento (div/mod por cero siguen chequeados).
+    let fast = args.iter().any(|a| a == "--fast");
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
+    // `--target <triple>` (P2.b, H20): cross-compilation. Se pasa tal cual a rustc/cargo (el usuario debe
+    // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa
+    // `target-cpu=native` (sería la CPU del host, no la del target) → binario release PORTABLE al target.
+    let target = args.iter().position(|a| a == "--target").and_then(|i| args.get(i + 1)).cloned();
     // `--without <lista>` (P2.b): excluye subsistemas con-crate (crypto/tls/sqlite) del binario nativo. Su
     // uso cae en un stub que panica → el binario compila por la vía rápida (rustc pelado, sin cargo/red) si
     // no queda ningún otro subsistema con-crate. Escape hatch para builds herméticos/cross-compile/policy.
     // Se UNE a la política estable del proyecto (`[native] without` en ray.toml).
+    // Cada exclusión rastrea su ORIGEN (`--without` de CLI vs `ray.toml`) para que un typo apunte al sitio
+    // que hay que corregir: un error en un ray.toml versionado afecta a todo el equipo.
     let without_arg = args.iter().position(|a| a == "--without").and_then(|i| args.get(i + 1)).cloned();
-    let mut exclude: Vec<String> = without_arg
+    let mut exclude: Vec<(String, &'static str)> = without_arg
         .as_deref()
-        .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect())
+        .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(|p| (p.to_string(), "--without")).collect())
         .unwrap_or_default();
     // Une la política del ray.toml ([native] without): la exclusión versionada con el repo + la ad-hoc de
     // CLI. `load_manifest` sale con error si el ray.toml está mal formado; `None` = sin proyecto (solo CLI).
     if native {
         if let Some(m) = load_manifest() {
             for dep in m.native_without {
-                if !exclude.contains(&dep) {
-                    exclude.push(dep);
+                if !exclude.iter().any(|(d, _)| d == &dep) {
+                    exclude.push((dep, "ray.toml"));
                 }
             }
         }
     }
-    // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`.
+    // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
     const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite"];
-    for dep in &exclude {
+    for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
-            eprintln!("unknown subsystem to exclude: '{dep}' (valid: {})", RT_SUBSYSTEMS.join(", "));
+            eprintln!(
+                "unknown subsystem in {origin}: '{dep}' (valid: {})",
+                RT_SUBSYSTEMS.join(", ")
+            );
             process::exit(64);
         }
     }
+    let exclude: Vec<String> = exclude.into_iter().map(|(d, _)| d).collect();
     let file = args
         .iter()
         .find(|a| {
             !a.starts_with('-')
                 && Some(a.as_str()) != output.as_deref()
                 && Some(a.as_str()) != without_arg.as_deref()
+                && Some(a.as_str()) != target.as_deref()
         })
         .map(String::as_str);
     let path = resolve_entry(file, true);
@@ -622,11 +639,11 @@ fn cmd_build(args: &[String]) {
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
-        build_native(&path, output.as_deref(), release, &exclude);
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast);
         return;
     }
     match compiler::compile_program(&program) {
-        Ok(_) => println!("ok: '{path}' compila"),
+        Ok(_) => println!("ok: '{path}' compiles"),
         Err(mut e) => {
             let (source, name, local) = locate(e.line);
             e.line = local;
@@ -648,16 +665,29 @@ fn cmd_build(args: &[String]) {
 ///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String]) {
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_with(&program, exclude) {
+    let transpiled = match crate::transpile::transpile_with_opts(&program, exclude, fast) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");
             process::exit(65);
         }
     };
+    // AVISO de stubs (H7): funciones cuyo cuerpo cayó fuera del subconjunto se emitieron como stub que
+    // panica. El binario compila, pero llamarlas aborta → sin este aviso el "ok" ocultaría una divergencia
+    // en runtime. Se listan (nombre + motivo) para que el usuario sepa qué NO se soporta.
+    if !transpiled.stubbed.is_empty() {
+        eprintln!(
+            "native build: warning: {} function(s) not supported in the native subset — emitted as stubs \
+             that panic if called at runtime:",
+            transpiled.stubbed.len()
+        );
+        for (name, reason) in &transpiled.stubbed {
+            eprintln!("  · {name}: {reason}");
+        }
+    }
     // Nombre de salida: `-o`, o el stem del archivo de entrada.
     let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
     let out_bin = output.map(String::from).unwrap_or_else(|| stem.to_string());
@@ -665,40 +695,75 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     // (el caso común) → `rustc` pelado, rápido y sin red (camino de siempre). Con features (el programa usa
     // cripto/…) → un proyecto Cargo generado que enlaza `ray-runtime` (mismo código que la VM).
     if transpiled.rt_features.is_empty() {
-        build_native_rustc(&transpiled.source, stem, &out_bin, release);
+        build_native_rustc(&transpiled.source, stem, &out_bin, release, target);
     } else {
-        build_native_cargo(&transpiled.source, &transpiled.rt_features, stem, &out_bin, release);
+        build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target);
+    }
+}
+
+/// Directorio de caché de builds nativos, PERSISTENTE entre sesiones (`~/.ray/native-cache/`, decidido en
+/// docs/transpilador-nativo.md §3.3). Sobrevive a la purga de `/tmp` (macOS: 3 días sin uso; Linux: reboot)
+/// → el target compartido (ring/rustls compilados una vez por máquina) NO se pierde periódicamente. Si no
+/// hay HOME/USERPROFILE, cae al temporal (comportamiento anterior).
+fn native_cache_dir() -> std::path::PathBuf {
+    match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        Some(home) => Path::new(&home).join(".ray").join("native-cache"),
+        None => std::env::temp_dir().join("ray_native_cache"),
     }
 }
 
 /// Camino rápido: transpila a un `.rs` autocontenido y lo compila con `rustc` directo (sin Cargo). Para
 /// programas que no usan ningún crate externo — el 90 % de los casos. `-O` (dev) / opt3+lto+native (release).
-fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool) {
+fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>) {
     // El `.rs` temporal incluye el PID para que dos `ray build --native` CONCURRENTES (o con el mismo stem)
     // no colisionen sobre el mismo temporal.
     let rs_path = std::env::temp_dir().join(format!("ray_native_{stem}_{}.rs", process::id()));
     if let Err(e) = std::fs::write(&rs_path, rust) {
-        eprintln!("native build: no se pudo escribir el Rust temporal: {e}");
+        eprintln!("native build: could not write the temporary Rust file: {e}");
         process::exit(65);
     }
     // Flags de rustc según el tier (`-A warnings` silencia los warnings de estilo del código generado).
-    let flags: &[&str] = if release {
-        &["-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1", "-C", "target-cpu=native", "-A", "warnings"]
+    // Con `--target` (cross-compile), `target-cpu=native` no aplica (sería la CPU del host) → release
+    // PORTABLE al target.
+    let flags: Vec<&str> = if release && target.is_none() {
+        vec!["-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1", "-C", "target-cpu=native", "-A", "warnings"]
+    } else if release {
+        vec!["-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1", "-A", "warnings"]
     } else {
-        &["-O", "-A", "warnings"]
+        vec!["-O", "-A", "warnings"]
     };
-    let status = process::Command::new("rustc").args(flags).arg(&rs_path).arg("-o").arg(out_bin).status();
+    let mut cmd = process::Command::new("rustc");
+    cmd.args(&flags);
+    // MISMA edition que el proyecto Cargo generado (edition 2024 en su Cargo.toml). Sin el flag, rustc
+    // pelado caía a la 2015 → los dos caminos compilaban el MISMO Rust generado bajo reglas distintas
+    // (p. ej. `gen` es keyword solo en 2024: un identificador podía pasar por un tier y romper por el otro).
+    cmd.arg("--edition").arg("2024");
+    if let Some(t) = target {
+        cmd.arg("--target").arg(t);
+    }
+    let status = cmd.arg(&rs_path).arg("-o").arg(out_bin).status();
     match status {
         Ok(s) if s.success() => {
-            let tier = if release { " (release: opt3+lto+native)" } else { "" };
-            println!("ok: binario nativo '{out_bin}'{tier}");
+            let _ = std::fs::remove_file(&rs_path); // build ok → no dejar el `.rs` temporal (sin fugas)
+            let tier = match (release, target) {
+                (true, Some(t)) => format!(" (release: opt3+lto, target: {t})"),
+                (true, None) => " (release: opt3+lto+native)".to_string(),
+                (false, Some(t)) => format!(" (target: {t})"),
+                (false, None) => String::new(),
+            };
+            println!("ok: native binary '{out_bin}'{tier}");
         }
         Ok(s) => {
-            eprintln!("native build: rustc falló (código {})", s.code().unwrap_or(-1));
+            // Falló: se CONSERVA el `.rs` y se nombra su ruta, para poder inspeccionar el Rust generado.
+            eprintln!(
+                "native build: rustc failed (code {}); generated Rust at {}",
+                s.code().unwrap_or(-1),
+                rs_path.display()
+            );
             process::exit(65);
         }
         Err(e) => {
-            eprintln!("native build: no se pudo ejecutar rustc (¿está en el PATH?): {e}");
+            eprintln!("native build: could not run rustc (is it on PATH?): {e}");
             process::exit(65);
         }
     }
@@ -717,11 +782,24 @@ const RT_SQLITE_RS: &str = include_str!("../crates/ray-runtime/src/sqlite.rs");
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
 /// `cargo build`, activando SOLO las features detectadas. Un `CARGO_TARGET_DIR` compartido compila los
 /// crates (ring…) una vez por máquina; builds siguientes solo recompilan `main.rs`.
-fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &str, release: bool) {
+fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>) {
     // Nombre de paquete Cargo válido (letras/dígitos/`_`/`-`, no empieza por dígito): el stem saneado.
     let mut pkg: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     if pkg.is_empty() || pkg.chars().next().map_or(true, |c| c.is_ascii_digit()) {
         pkg.insert(0, 'p');
+    }
+    // H14: la caché de target es COMPARTIDA y persistente → el artefacto vive en `<caché>/<profile>/<pkg>`.
+    // Con solo el stem, dos programas DISTINTOS llamados `prog.ray` (o `a.b.ray` vs `a_b.ray`, que el saneado
+    // colapsa) compartirían la ruta: el build B pisa el binario y A copiaría el de B (carrera silenciosa de
+    // corrección). El pkg incorpora un hash corto de la ruta CANÓNICA del fuente → artefactos disjuntos por
+    // programa. (DefaultHasher no está garantizado entre versiones de Rust: si cambia, el coste es una
+    // recompilación, nunca corrección.)
+    {
+        use std::hash::{Hash, Hasher};
+        let canon = std::fs::canonicalize(src_path).unwrap_or_else(|_| std::path::PathBuf::from(src_path));
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        canon.hash(&mut h);
+        pkg.push_str(&format!("_{:08x}", h.finish() as u32));
     }
     let proj = std::env::temp_dir().join(format!("ray_native_{stem}_{}", process::id()));
     let write = |rel: &str, content: &str| -> std::io::Result<()> {
@@ -751,36 +829,69 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], stem: &str, out_bin: &st
     ];
     for (rel, content) in files {
         if let Err(e) = write(rel, content) {
-            eprintln!("native build: no se pudo escribir el proyecto Cargo ({rel}): {e}");
+            eprintln!("native build: could not write the Cargo project ({rel}): {e}");
             process::exit(65);
         }
     }
-    // Caché de target COMPARTIDA entre builds → ring/… se compilan una vez por máquina.
-    let target_dir = std::env::temp_dir().join("ray_native_cache");
+    // Caché de target COMPARTIDA entre builds y PERSISTENTE (`~/.ray/native-cache/`) → ring/rustls se
+    // compilan una vez por máquina y no se pierden con la purga de /tmp.
+    let target_dir = native_cache_dir();
+    // Reproducibilidad (H20): las deps de ray-runtime son rangos (`0.23`/`0.17`) → sin un lock, dos builds
+    // podrían resolver versiones distintas. Se PERSISTE el `Cargo.lock` resuelto en la caché y se reusa: los
+    // builds siguientes en esta máquina fijan las MISMAS versiones (y se saltan la re-resolución).
+    let cached_lock = target_dir.join("ray-native.Cargo.lock");
+    if cached_lock.is_file() {
+        let _ = std::fs::copy(&cached_lock, proj.join("Cargo.lock")); // proj ya existe (files escritos arriba)
+    }
     let mut cmd = process::Command::new("cargo");
     cmd.arg("build").current_dir(&proj).env("CARGO_TARGET_DIR", &target_dir);
-    if release {
+    if let Some(t) = target {
+        cmd.arg("--target").arg(t);
+    }
+    // `target-cpu=native` solo en release SIN cross-compile (con `--target` sería la CPU del host → no
+    // portable al target).
+    if release && target.is_none() {
         cmd.arg("--release").env("RUSTFLAGS", "-C target-cpu=native -A warnings");
+    } else if release {
+        cmd.arg("--release").env("RUSTFLAGS", "-A warnings");
     } else {
         cmd.env("RUSTFLAGS", "-A warnings");
     }
     match cmd.status() {
         Ok(s) if s.success() => {
             let sub = if release { "release" } else { "debug" };
-            let produced = target_dir.join(sub).join(&pkg);
-            if let Err(e) = std::fs::copy(&produced, out_bin) {
-                eprintln!("native build: no se pudo copiar el binario ({}): {e}", produced.display());
+            // Con `--target`, cargo pone el binario en `target/<triple>/<profile>/<pkg>`.
+            let produced = match target {
+                Some(t) => target_dir.join(t).join(sub).join(&pkg),
+                None => target_dir.join(sub).join(&pkg),
+            };
+            let copied = std::fs::copy(&produced, out_bin);
+            let _ = std::fs::copy(proj.join("Cargo.lock"), &cached_lock); // persiste el lock resuelto (H20)
+            let _ = std::fs::remove_dir_all(&proj); // build ok → borrar el proyecto Cargo temporal (el binario
+                                                    // ya vive en la caché compartida, no en `proj/target`)
+            if let Err(e) = copied {
+                eprintln!("native build: could not copy the binary ({}): {e}", produced.display());
                 process::exit(65);
             }
-            let tier = if release { " (release: opt3+lto+native)" } else { "" };
-            println!("ok: binario nativo '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
+            let tier = match (release, target) {
+                (true, Some(t)) => format!(" (release: opt3+lto, target: {t})"),
+                (true, None) => " (release: opt3+lto+native)".to_string(),
+                (false, Some(t)) => format!(" (target: {t})"),
+                (false, None) => String::new(),
+            };
+            println!("ok: native binary '{out_bin}'{tier} [ray-runtime: {}]", rt_features.join("+"));
         }
         Ok(s) => {
-            eprintln!("native build: cargo falló (código {})", s.code().unwrap_or(-1));
+            // Falló: se CONSERVA el proyecto y se nombra su ruta, para inspeccionar el Rust generado.
+            eprintln!(
+                "native build: cargo failed (code {}); project at {}",
+                s.code().unwrap_or(-1),
+                proj.display()
+            );
             process::exit(65);
         }
         Err(e) => {
-            eprintln!("native build: no se pudo ejecutar cargo (¿está en el PATH?): {e}");
+            eprintln!("native build: could not run cargo (is it on PATH?): {e}");
             process::exit(65);
         }
     }
@@ -1679,7 +1790,7 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
     let manifest = load_manifest();
     if let Some(m) = &manifest {
         if banner {
-            eprintln!("compilando {} v{}", m.name, m.version);
+            eprintln!("compiling {} v{}", m.name, m.version);
         }
         // Auto-descarga (M39c-2a, estilo cargo): asegura que las dependencias declaradas estén en
         // `.ray-deps/` antes de cargar el programa. Las presentes se saltan (sin red); si falta

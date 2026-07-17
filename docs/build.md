@@ -112,16 +112,27 @@ a un binario de código máquina (24–61× la VM, byte-idéntico; ver el capít
 ```sh
 ray build --native prog.ray            # rustc -O (opt2), ~0,2 s, portable
 ray build --native prog.ray --release  # opt3+lto+cu1+target-cpu=native (no portable)
+ray build --native prog.ray --fast     # int wrapping (sin check de overflow; div/0 sí se chequea)
 ray build --native prog.ray -o bin/app # nombre de salida
+ray build --native prog.ray --target x86_64-unknown-linux-gnu   # cross-compile (H20)
 ```
+
+**Cross-compilation** (`--target <triple>`). El triple se pasa tal cual a `rustc`/`cargo`;
+el target debe estar instalado (`rustup target add <triple>`) y, para targets con
+linker cruzado (p. ej. Linux desde macOS), el linker configurado (`~/.cargo/config.toml`).
+Con `--target`, `--release` omite `target-cpu=native` (release **portable** al target).
 
 **Crates de producción bajo demanda.** El código de TLS/cripto/SQLite vive en el crate
 del workspace `crates/ray-runtime` (features `tls`/`crypto`/`sqlite`), del que dependen
 **tanto la VM como el binario transpilado** → paridad por construcción. Si el programa
 usa uno de esos subsistemas, `build --native` genera un proyecto Cargo temporal con
 `ray-runtime` (fuentes incrustadas vía `include_str!`) + la feature detectada y compila
-con `cargo` (caché de target compartida en `$TMP/ray_native_cache`); si no toca ninguno,
-compila con `rustc` pelado (rápido, sin red).
+con `cargo`; si no toca ninguno, compila con `rustc` pelado (rápido, sin red). La caché
+de target es compartida y **persistente** (`~/.ray/native-cache/`, H14): ring/rustls se
+compilan una vez por máquina. Ahí también se persiste el **`Cargo.lock` resuelto**
+(`ray-native.Cargo.lock`, H20): los builds siguientes de esta máquina fijan las mismas
+versiones de deps (reproducibilidad por máquina; entre máquinas puede variar dentro de
+los rangos declarados).
 
 **Exclusión.** `--without crypto,tls,sqlite` fuerza el *stub* que panica (→ vía rápida
 `rustc`); `[native] without = [...]` en el `ray.toml` fija la política estable del

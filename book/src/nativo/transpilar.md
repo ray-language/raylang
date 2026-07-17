@@ -74,9 +74,9 @@ necesitas:
 
 ```sh
 ray build --native servicio.ray     # usa std/crypto → enlaza `ring` (vía cargo)
-                                     # ok: binario nativo 'servicio' [ray-runtime: crypto]
+                                     # ok: native binary 'servicio' [ray-runtime: crypto]
 ray build --native hola.ray         # no toca crates → rustc pelado, ~0,2 s
-                                     # ok: binario nativo 'hola'
+                                     # ok: native binary 'hola'
 ```
 
 El código de esos subsistemas vive en un crate compartido, **`ray-runtime`**, del que dependen

@@ -538,6 +538,35 @@ fn main() -> int {
 }
 
 #[test]
+fn scope_ve_el_fallo_aunque_espere_a_otra_hermana() {
+    // Regresión (17 jul 2026, destapada por el port nativo H21-N3): `ScopeEnd` aparca sobre la PRIMERA
+    // hija pendiente; si la que falla es OTRA (aquí la bloqueada se registra primero), nadie despertaba
+    // al scope para re-escanear → deadlock en vez de propagar. Ahora un fallo despierta a TODOS los
+    // Join-waiters (despertar espurio seguro: re-escanean y se re-aparcan).
+    let src = r#"
+fn main() -> int {
+    scope(fn() -> int {
+        spawn(fn() -> int {
+            let ch: Channel<int> = Channel.new();
+            recv(ch);
+            print(777);
+            0
+        });
+        spawn(fn() -> int { panic("boom") });
+        0
+    });
+    print(999);
+    0
+}
+"#;
+    let (out, err, code) = run("conc_cancel_hermana_orden_inverso", src, true);
+    assert_eq!(out, ""); // ni 777 (cancelada) ni 999 (el scope propagó)
+    assert!(err.contains("boom"), "stderr no propagates el failure original: {err}");
+    assert!(!err.contains("deadlock"), "no debería haber deadlock: {err}");
+    assert_eq!(code, 70);
+}
+
+#[test]
 fn fiber_what_fails_cancela_sus_propias_tasks() {
     // Una tarea externa abre su scope; su cuerpo hace panic con una sub-tarea en vuelo. Al fallar, esa
     // fibra cancela sus hijos (la sub-tarea no llega a imprimir), y join re-lanza el panic.

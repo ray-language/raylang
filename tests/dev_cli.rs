@@ -319,3 +319,45 @@ fn dev_no_reinicia_si_el_cambio_no_compila() {
     let _ = dev.kill();
     let _ = dev.wait();
 }
+
+#[test]
+fn dev_ignora_un_guardado_sin_cambios() {
+    // Confirmación por contenido: un mtime tocado con los MISMOS bytes (guardado sin editar, un
+    // formateador idempotente, `touch`) no debe reiniciar el programa ni emitir reload. Solo una
+    // edición real (otros bytes) reinicia.
+    let base = std::env::temp_dir().join("ray_dev_touch");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+    let v1 = "fn main() -> int { print(\"v1\"); 0 }\n";
+    std::fs::write(base.join("src/main.ray"), v1).unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev");
+
+    esperar_contenido(&out_path, "v1", 10);
+    esperar_contenido(&out_path, "waiting for changes", 10);
+
+    // 1) Reescribir el MISMO contenido (bump de mtime, cero bytes cambiados): se ignora sin reiniciar.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/main.ray"), v1).unwrap();
+    let output = esperar_contenido(&out_path, "contents unchanged", 10);
+    assert!(!output.contains("restarting"), "un guardado sin cambios no reinicia:\n{output}");
+
+    // 2) Una edición real posterior SÍ reinicia.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
+    let output = esperar_contenido(&out_path, "v2", 10);
+    assert!(output.contains("restarting"), "la edición real reinició:\n{output}");
+
+    let _ = dev.kill();
+    let _ = dev.wait();
+}

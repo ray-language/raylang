@@ -240,6 +240,7 @@ fn cmd_dev(args: &[String]) {
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
+    let mut hashes = content_hashes(&snapshot);
     let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
     let mut running = true;
     loop {
@@ -259,6 +260,14 @@ fn cmd_dev(args: &[String]) {
         // Debounce: coalesce una ráfaga (un guardado + el formateador del editor = varios eventos)
         // esperando a que los fuentes se estabilicen antes de actuar → un solo reinicio.
         dev_debounce(&root, &mut snapshot);
+        // Confirmación por contenido: un mtime tocado con los MISMOS bytes (guardado sin editar,
+        // formateador idempotente, `touch`) no reinicia ni recarga nada.
+        let actual_hashes = content_hashes(&snapshot);
+        if actual_hashes == hashes {
+            eprintln!("[dev] change in {change}: contents unchanged — ignoring");
+            continue;
+        }
+        hashes = actual_hashes;
         // Check-before-restart: compila primero (ms). Si NO compila, mantén el programa en marcha e
         // imprime el diagnóstico — no mates un servidor que funciona por un error a medio escribir.
         if let Err(diag) = dev_check_compiles(&exe, &entry) {
@@ -464,6 +473,22 @@ fn dev_debounce(root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)
         }
         *snapshot = actual;
     }
+}
+
+/// Huella de CONTENIDO de los fuentes vigilados (ruta → hash de los bytes). Distingue un guardado
+/// real de un mtime tocado sin cambios (Cmd+S sin editar, formateador idempotente, `touch`, un
+/// checkout que restaura lo mismo): el polling sigue siendo por metadatos (barato); esto solo se
+/// computa cuando el mtime acusa un cambio, para confirmarlo antes de reiniciar.
+fn content_hashes(snapshot: &[(PathBuf, std::time::SystemTime)]) -> std::collections::HashMap<PathBuf, u64> {
+    use std::hash::{Hash, Hasher};
+    snapshot
+        .iter()
+        .map(|(p, _)| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            fs::read(p).unwrap_or_default().hash(&mut h);
+            (p.clone(), h.finish())
+        })
+        .collect()
 }
 
 /// Los fuentes vigilados bajo `root`: `(ruta, mtime)` de cada `.ray`/`.ray.html`/`ray.toml`,

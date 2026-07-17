@@ -545,17 +545,7 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
     let Some(dir) = dir else {
         return Err(TplError { line: eline, msg: "'{% extends %}' requires generating from a file (the layout path is resolved from the project root)".into() });
     };
-    // La ruta del layout se resuelve COMO LOS IMPORTS/INCLUDES: desde la **raíz del proyecto**
-    // (el directorio con `ray.toml` más cercano por encima del template) — una sola convención
-    // de rutas en los templates. Fallback: relativa al directorio del template (proyectos sin
-    // manifiesto, o un layout hermano).
-    let file = {
-        let from_root = project_root_of(dir).map(|r| r.join(format!("{lpath}.ray.html")));
-        match from_root {
-            Some(p) if p.is_file() => p,
-            _ => dir.join(format!("{lpath}.ray.html")),
-        }
-    };
+    let file = resolve_layout_path(&lpath, dir);
     let lsrc = std::fs::read_to_string(&file)
         .map_err(|e| TplError { line: eline, msg: format!("could not read layout '{}': {e}", file.display()) })?;
     let ltoks = tokenize(&lsrc)
@@ -582,6 +572,42 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
         }
     }
     merge_layout(imports, blocks, it.collect(), &lpath, eline)
+}
+
+// La ruta del layout se resuelve COMO LOS IMPORTS/INCLUDES: desde la **raíz del proyecto**
+// (el directorio con `ray.toml` más cercano por encima del template) — una sola convención
+// de rutas en los templates. Fallback: relativa al directorio del template (proyectos sin
+// manifiesto, o un layout hermano).
+fn resolve_layout_path(lpath: &str, dir: &Path) -> PathBuf {
+    let from_root = project_root_of(dir).map(|r| r.join(format!("{lpath}.ray.html")));
+    match from_root {
+        Some(p) if p.is_file() => p,
+        _ => dir.join(format!("{lpath}.ray.html")),
+    }
+}
+
+/// The layout template this template inherits from (`{% extends path %}`), resolved like at
+/// generation time (project root, falling back to the template's directory). `None` if the
+/// template does not inherit or does not tokenize (generation will report that). Used by the
+/// stale-check of the auto-regeneration: `{% extends %}` fuses the layout at COMPILE time, so a
+/// child's generated `.ray` also goes stale when the layout changes.
+pub fn extends_target(tpl: &str, dir: &Path) -> Option<PathBuf> {
+    let toks = tokenize(tpl).ok()?;
+    for t in &toks {
+        if let Tok::Tag(s, _) = t {
+            let mut it = s.split_whitespace();
+            let kw = it.next()?;
+            if kw == "params" {
+                continue; // la firma va primero; el extends (si lo hay) es la siguiente etiqueta
+            }
+            if kw == "extends" {
+                let lpath = it.next()?;
+                return Some(resolve_layout_path(lpath, dir));
+            }
+            return None; // cualquier otra etiqueta primero → no hereda (extends debe ir primero)
+        }
+    }
+    None
 }
 
 // La raíz del proyecto: el directorio con `ray.toml` más cercano por encima de `dir` (inclusive).

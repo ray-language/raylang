@@ -1687,7 +1687,9 @@ fn regen_stale_templates(entry: &Path) {
         let generated = PathBuf::from(t.to_string_lossy().trim_end_matches(".html").to_string());
         let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified());
         let stale = match (mtime(&t), mtime(&generated)) {
-            (Ok(tm), Ok(gm)) => gm < tm,
+            // El `.ray` también caduca si el LAYOUT del que hereda es más nuevo: `{% extends %}`
+            // fusiona el layout en compilación, así que su HTML vive dentro del generado del hijo.
+            (Ok(tm), Ok(gm)) => gm < tm || layout_mtime_of(&t).is_some_and(|lm| gm < lm),
             (_, Err(_)) => true,  // no hay generado
             (Err(_), _) => false, // el template ni se puede leer: lo reportará quien lo importe
         };
@@ -1702,6 +1704,14 @@ fn regen_stale_templates(entry: &Path) {
             }
         }
     }
+}
+
+// El mtime del layout del que hereda el template `t` (`{% extends %}`), si hereda.
+fn layout_mtime_of(t: &Path) -> Option<std::time::SystemTime> {
+    let src = fs::read_to_string(t).ok()?;
+    let dir = t.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let layout = crate::templ::extends_target(&src, dir)?;
+    fs::metadata(&layout).and_then(|m| m.modified()).ok()
 }
 
 fn cmd_doc(args: &[String]) {

@@ -135,6 +135,42 @@ fn run_y_build_regeneran_templates_desactualizados() {
 }
 
 #[test]
+fn editar_el_layout_regenera_las_vistas_que_lo_extienden() {
+    // `{% extends %}` fusiona el layout EN COMPILACIÓN: su HTML vive dentro del `.ray` generado
+    // del hijo. Editar solo el layout debe dejar VIEJO también el generado del hijo (antes solo
+    // se comparaba cada template contra su propio `.ray` → el hijo servía el layout viejo).
+    let base = std::env::temp_dir().join("ray_templ_layout_stale");
+    let _ = std::fs::remove_dir_all(&base);
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("vistas")).unwrap();
+    std::fs::write(app.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(app.join("vistas/base.ray.html"),
+        "{% params titulo: string %}<html><head><title>{{ titulo }}</title></head><body>{% block body %}{% endblock %}</body></html>\n").unwrap();
+    std::fs::write(app.join("vistas/pagina.ray.html"),
+        "{% params titulo: string %}\n{% extends vistas/base %}\n{% block body %}<h1>{{ titulo }}</h1>{% endblock %}\n").unwrap();
+    std::fs::write(app.join("main.ray"),
+        "import vistas/pagina;\n\nfn main() -> int {\n    print(pagina.render_pagina(\"hola\"));\n    0\n}\n").unwrap();
+
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("<title>hola</title>"));
+
+    // Editar SOLO el layout (añade un <style> al head) → el hijo debe regenerarse y servirlo.
+    std::thread::sleep(std::time::Duration::from_millis(30)); // mtime estrictamente posterior
+    std::fs::write(app.join("vistas/base.ray.html"),
+        "{% params titulo: string %}<html><head><title>{{ titulo }}</title><style>body { margin: 0; }</style></head><body>{% block body %}{% endblock %}</body></html>\n").unwrap();
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("<style>body { margin: 0; }</style>"), "el hijo sirve el layout NUEVO:\n{stdout}");
+
+    // Sin cambios: nada que regenerar.
+    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("regenerated"), "al día → silencio");
+}
+
+#[test]
 fn include_e_import_componen_vistas_y_layout() {
     // Composición M55: una página {% import %}a un partial y lo {% include %}; un layout es un
     // template más con param `contenido: string` que envuelve lo ya renderizado.

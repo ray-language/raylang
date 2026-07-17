@@ -1,7 +1,15 @@
 {% params titulo: string %}
 <!DOCTYPE html>
 <html>
-<head><title>{{ titulo }}</title></head>
+<head>
+    <meta charset="utf-8">
+    <title>{{ titulo }}</title>
+    <style>
+        body { font-family: sans-serif; margin: 2rem; }
+        .tarjeta { border: 1px solid #ccc; padding: 0.25rem 0.5rem; margin: 0.25rem 0; list-style: none; }
+        footer { color: #888; }
+    </style>
+</head>
 <body>
 {% block cuerpo %}
 {% endblock %}

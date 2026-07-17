@@ -263,6 +263,166 @@ fn is_to_string(callee: &Expr) -> bool {
 // de `body` }. No desciende a los cuerpos de closures anidadas (esos son ámbitos propios, con su
 // propio análisis al emitirlos).
 
+/// H21-N5c: marca los PARAMS de tipo función que "cruzan un spawn" — directamente (el closure de un
+/// `spawn` en el cuerpo captura el param) o transitivamente (el param se pasa a un param ya marcado
+/// de otra función). Punto fijo sobre el grafo de llamadas. Un param marcado se emite como GENÉRICO
+/// de Rust con bound `Fn(..) + Send + Sync + Clone + 'static`: una función NOMBRADA lo satisface
+/// (monomorfización → el spawn compila); un closure con capturas no-Send que llegue ahí lo rechaza
+/// rustc (honesto — ese programa sí cruzaría un valor no enviable).
+fn spawn_fn_param_marks(prog: &Program) -> HashMap<String, std::collections::HashSet<usize>> {
+    use std::collections::HashSet;
+    // params de tipo fn por función: (índice, nombre)
+    let mut fn_params: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    for f in &prog.functions {
+        if skip_fn_def(f) {
+            continue;
+        }
+        let fps: Vec<(usize, String)> = f
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| matches!(normalize_type(&p.ty), Type::Fn(..)))
+            .map(|(i, p)| (i, p.name.clone()))
+            .collect();
+        if !fps.is_empty() {
+            fn_params.insert(f.name.clone(), fps);
+        }
+    }
+    let mut marks: HashMap<String, HashSet<usize>> = HashMap::new();
+    loop {
+        let mut changed = false;
+        for f in &prog.functions {
+            if skip_fn_def(f) {
+                continue;
+            }
+            let Some(fps) = fn_params.get(&f.name) else { continue };
+            let mut hits: HashSet<usize> = HashSet::new();
+            visit_exprs_block(&f.body, &mut |e: &Expr| {
+                if let ExprKind::Call { callee, args } = &e.kind {
+                    if let ExprKind::Ident(cn) = &callee.kind {
+                        if cn == "spawn" {
+                            if let Some(arg0) = args.first() {
+                                if let ExprKind::Func(fx) = &arg0.kind {
+                                    let mut ids = std::collections::HashSet::new();
+                                    idents_of_block(&fx.body, &mut ids);
+                                    for (i, pname) in fps {
+                                        if ids.contains(pname) {
+                                            hits.insert(*i);
+                                        }
+                                    }
+                                }
+                            }
+                        } else if let Some(cm) = marks.get(cn) {
+                            for (j, a) in args.iter().enumerate() {
+                                if cm.contains(&j) {
+                                    if let ExprKind::Ident(an) = &a.kind {
+                                        for (i, pname) in fps {
+                                            if an == pname {
+                                                hits.insert(*i);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let entry = marks.entry(f.name.clone()).or_default();
+            for h in hits {
+                if entry.insert(h) {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    marks
+}
+
+/// Visita cada Expr de un bloque (sentencias + cola), descendiendo a sub-exprs y cuerpos de closures.
+fn visit_exprs_block(b: &Block, f: &mut impl FnMut(&Expr)) {
+    for st in &b.statements {
+        match &st.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } | StmtKind::Expr(value) => {
+                visit_exprs_expr(value, f)
+            }
+            StmtKind::Assign { target, value } => {
+                visit_exprs_expr(target, f);
+                visit_exprs_expr(value, f);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    visit_exprs_expr(v, f);
+                }
+            }
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => {
+                        visit_exprs_expr(start, f);
+                        visit_exprs_expr(end, f);
+                    }
+                    ForIter::In(e) => visit_exprs_expr(e, f),
+                    ForIter::Iter { expr, .. } => visit_exprs_expr(expr, f),
+                }
+                visit_exprs_block(body, f);
+            }
+        }
+    }
+    if let Some(t) = &b.tail {
+        visit_exprs_expr(t, f);
+    }
+}
+
+fn visit_exprs_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(e);
+    match &e.kind {
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } | ExprKind::Try(expr) => {
+            visit_exprs_expr(expr, f)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            visit_exprs_expr(left, f);
+            visit_exprs_expr(right, f);
+        }
+        ExprKind::Call { callee, args } => {
+            visit_exprs_expr(callee, f);
+            args.iter().for_each(|a| visit_exprs_expr(a, f));
+        }
+        ExprKind::ArrayLit(es) | ExprKind::TupleLit(es) => es.iter().for_each(|x| visit_exprs_expr(x, f)),
+        ExprKind::MapLit(ps) => ps.iter().for_each(|(k, v)| {
+            visit_exprs_expr(k, f);
+            visit_exprs_expr(v, f);
+        }),
+        ExprKind::Index { array, index } => {
+            visit_exprs_expr(array, f);
+            visit_exprs_expr(index, f);
+        }
+        ExprKind::StructLit { fields, .. } => fields.iter().for_each(|(_, v)| visit_exprs_expr(v, f)),
+        ExprKind::Field { object, .. } => visit_exprs_expr(object, f),
+        ExprKind::EnumLit { args, .. } => args.iter().for_each(|a| visit_exprs_expr(a, f)),
+        ExprKind::Func(fx) => visit_exprs_block(&fx.body, f),
+        ExprKind::Match { scrutinee, arms } => {
+            visit_exprs_expr(scrutinee, f);
+            arms.iter().for_each(|a| visit_exprs_expr(&a.body, f));
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            visit_exprs_expr(cond, f);
+            visit_exprs_block(then_branch, f);
+            if let Some(eb) = else_branch {
+                visit_exprs_expr(eb, f);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            visit_exprs_expr(cond, f);
+            visit_exprs_block(body, f);
+        }
+        ExprKind::Block(b) => visit_exprs_block(b, f),
+        _ => {}
+    }
+}
+
 /// Recoge TODOS los nombres de identificador que aparecen en `e` (descendiendo también a los cuerpos
 /// de closures) → lo que una closure "referencia" (candidatos a captura).
 fn idents_of_expr(e: &Expr, out: &mut std::collections::HashSet<String>) {
@@ -427,6 +587,16 @@ struct Transpiler {
     enum_variants: HashMap<String, HashMap<String, Vec<Type>>>,
     /// Contador para nombres de temporales de escrutinio de `match` (evita colisiones al anidar).
     match_temp: usize,
+    /// Marcas H21-N5c: función → índices de sus params de tipo fn que cruzan un spawn (se emiten
+    /// como genéricos de Rust con bound Send+Sync).
+    fn_marks: HashMap<String, std::collections::HashSet<usize>>,
+    /// Nombres de los params marcados de la FUNCIÓN EN CURSO (para las capturas de spawn: se clonan,
+    /// no se convierten — su bound ya garantiza Send).
+    send_fn_params: std::collections::HashSet<String>,
+    /// Conversores Send generados bajo demanda (H21-N5a): (tipo concreto, su rust_ty como clave única).
+    /// El índice en el Vec es el id de las fns `__to_send_N`/`__from_send_N`; se emiten al final
+    /// (worklist: generar el cuerpo de uno puede registrar otros — tipos anidados).
+    send_convs: Vec<(Type, String)>,
     /// Constantes de nivel superior (nombre → tipo). Se bajan a funciones `NAME()` (uniforme para
     /// escalares y strings, que no pueden ser `const` en Rust por el `Rc`); una referencia `NAME` → `NAME()`.
     consts: HashMap<String, Type>,
@@ -552,6 +722,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             trait_method_sigs.insert(m.name.clone(), (args, m.return_type.clone()));
         }
     }
+    let marks = spawn_fn_param_marks(prog);
     let mut t = Transpiler {
         funcs,
         scopes: Vec::new(),
@@ -561,6 +732,9 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         enum_variants,
         enum_tparams,
         match_temp: 0,
+        fn_marks: marks,
+        send_fn_params: std::collections::HashSet::new(),
+        send_convs: Vec::new(),
         consts,
         trait_method_sigs,
         tparams: std::collections::HashSet::new(),
@@ -594,6 +768,17 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     out.push_str("    else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }\n");
     out.push_str("    else if let Some(s) = e.downcast_ref::<String>() { s.clone() }\n");
     out.push_str("    else { \"panic\".to_string() }\n}\n");
+    // H21-N5a: la repr SEND universal — un árbol de datos `Send` al que se CONVIERTE cualquier valor
+    // de heap que cruce un hilo (capturas de spawn, elementos de canal, retorno de Task) y del que se
+    // reconstruye al otro lado. Es la semántica de la VM (M38, actores de heap aislado: lo que cruza
+    // se COPIA entre heaps — la mutación no se comparte; los canales/Tasks son el único conducto).
+    // Los conversores por tipo (`__to_send_N`/`__from_send_N`) se generan bajo demanda.
+    out.push_str(concat!(
+        "#[derive(Clone)]\n",
+        "enum __RaySend { I(i64), F(f64), B(bool), C(char), U, UI(u64), S(std::sync::Arc<str>), ",
+        "By(std::sync::Arc<[u8]>), A(Vec<__RaySend>), M(Vec<(__RaySend, __RaySend)>), ",
+        "T(Vec<__RaySend>), E(usize, Vec<__RaySend>) }\n",
+    ));
     // Aritmética de `int` CHECKED por defecto, como la VM (overflow/div-cero → runtime error, no
     // wrapping silencioso). Mismos textos que interpreter.rs/vm.rs. Con `--fast` (opt-out medido:
     // ~2× en puro int-loop, ~20 % en fib, ~0 en código idiomático), wrapping — pero div/mod por
@@ -798,7 +983,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // exit 70 con el texto de Rust (paridad de código, no de texto, para esa cola).
     out.push_str("fn main() {\n");
     out.push_str("    let __rt_hook = std::panic::take_hook();\n");
-    out.push_str("    std::panic::set_hook(Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
+    out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
     if main_ret_int {
         out.push_str("        Ok(code) => std::process::exit(code as i32),\n");
@@ -811,6 +996,10 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n");
+    // H21-N5a: los conversores Send registrados durante la emisión (tipos que cruzan hilos). Worklist:
+    // generar uno puede registrar tipos anidados. Va antes de los bloques de runtime (orden top-level
+    // libre en Rust; solo importa que TODA la emisión de cuerpos ya pasó).
+    t.emit_send_convs(&mut out)?;
     // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) → implica net.
     if t.needs_rt_tls {
         t.needs_net = true;
@@ -1055,12 +1244,12 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // Cada scope activo (por hilo) acumula clausuras que unen las tareas lanzadas dentro; al salir
             // el scope las ejecuta (une todas; un fallo de una hija se re-lanza al unirla → propaga, como
             // ScopeEnd de la VM). `spawn` registra su tarea en el scope más interno, si hay.
-            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<Box<dyn FnOnce()>>>> = std::cell::RefCell::new(Vec::new()); }\n",
+            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<std::boxed::Box<dyn FnOnce()>>>> = std::cell::RefCell::new(Vec::new()); }\n",
             "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
             "    let h = std::thread::spawn(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e)));\n",
             "    let task = __RayTask { inner: std::sync::Arc::new(std::sync::Mutex::new(__TaskState { handle: Some(h), result: None })) };\n",
             "    let t = task.clone();\n",
-            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(Box::new(move || { let _ = t.join(); })); } });\n",
+            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(move || { let _ = t.join(); })); } });\n",
             "    task\n}\n",
             "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R {\n",
             "    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n",
@@ -1177,11 +1366,49 @@ impl Transpiler {
         let base_scopes = self.scopes.len();
         let prev_tparams = std::mem::take(&mut self.tparams);
         let prev_cells = std::mem::take(&mut self.cells);
+        let prev_marked = std::mem::take(&mut self.send_fn_params);
         let r = self.emit_function_inner(out, rust_name, f);
         self.scopes.truncate(base_scopes);
         self.tparams = prev_tparams;
         self.cells = prev_cells;
+        self.send_fn_params = prev_marked;
         r
+    }
+
+    /// H21-N5c: genéricos extra + tipos de param para los params fn MARCADOS de `f` (cruzan un
+    /// spawn). Devuelve (declaración de genéricos combinada, tipo por param con los marcados como
+    /// `__F{i}`) y deja los nombres marcados en `self.send_fn_params`.
+    fn fn_generics(&mut self, f: &Function) -> Result<(String, Vec<String>), String> {
+        let marked = self.fn_marks.get(&f.name).cloned().unwrap_or_default();
+        let mut gens: Vec<String> = f
+            .type_params
+            .iter()
+            .map(|t| format!("{}: Clone + RayShow + 'static", t))
+            .collect();
+        let mut ptys = Vec::new();
+        self.send_fn_params.clear();
+        for (i, p) in f.params.iter().enumerate() {
+            if marked.contains(&i) {
+                let Type::Fn(ats, rt) = normalize_type(&p.ty) else {
+                    return Err(format!("marked param {} of '{}' is not a fn type", i, f.name));
+                };
+                let mut sig = Vec::new();
+                for at in &ats {
+                    sig.push(rust_ty(at, &self.enums, &self.tparams)?);
+                }
+                gens.push(format!(
+                    "__F{i}: Fn({}) -> {} + Send + Sync + Clone + 'static",
+                    sig.join(", "),
+                    rust_ty(&rt, &self.enums, &self.tparams)?
+                ));
+                ptys.push(format!("__F{i}"));
+                self.send_fn_params.insert(p.name.clone());
+            } else {
+                ptys.push(rust_ty(&p.ty, &self.enums, &self.tparams)?);
+            }
+        }
+        let gdecl = if gens.is_empty() { String::new() } else { format!("<{}>", gens.join(", ")) };
+        Ok((gdecl, ptys))
     }
 
     fn emit_function_inner(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
@@ -1191,11 +1418,11 @@ impl Transpiler {
         // se imprime/`to_string`). rustc los monomorfiza → nativo. Los bounds de raylang (Eq/Ord/traits de
         // usuario) los realiza el **paso de diccionarios** del checker: sus params ocultos (`T#Trait#m`,
         // valores función) y el impl manglado (`Tipo#m`) se emiten tal cual (como funciones ordinarias).
-        let generics = generic_decl(&f.type_params);
+        let (generics, ptys) = self.fn_generics(f)?;
         self.scopes.push(HashMap::new());
         let mut params = Vec::new();
-        for p in &f.params {
-            params.push(format!("mut {}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?));
+        for (p, pty) in f.params.iter().zip(&ptys) {
+            params.push(format!("mut {}: {}", mangle(&p.name), pty));
             self.declare(&p.name, p.ty.clone());
         }
         write!(
@@ -1225,10 +1452,11 @@ impl Transpiler {
     /// firma. Devuelve Err solo si ni la FIRMA es representable (raro) → el llamador vuelve a omitirla.
     fn emit_stub(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
         self.tparams = f.type_params.iter().cloned().collect();
-        let generics = generic_decl(&f.type_params);
+        let (generics, ptys) = self.fn_generics(f)?;
+        self.send_fn_params.clear(); // el stub no emite cuerpo: no hay capturas que mirar
         let mut params = Vec::new();
-        for p in &f.params {
-            params.push(format!("mut {}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?));
+        for (p, pty) in f.params.iter().zip(&ptys) {
+            params.push(format!("mut {}: {}", mangle(&p.name), pty));
         }
         let ret = rust_ty(&f.return_type, &self.enums, &self.tparams)?;
         write!(
@@ -1337,6 +1565,25 @@ impl Transpiler {
         Ok(())
     }
 
+    /// Normaliza + reclasifica RECURSIVAMENTE los `Struct(n)` que son enums del usuario (el parser
+    /// no distingue; `declare` solo reclasifica el nivel superior). Lo usan los conversores Send y
+    /// `type_of` de join/try_join, donde el tipo anida (Task<Forma>, campos, payloads).
+    fn classify(&self, t: &Type) -> Type {
+        match normalize_type(t) {
+            Type::Struct(n, a) => {
+                let a: Vec<Type> = a.iter().map(|x| self.classify(x)).collect();
+                if self.enums.contains(&n) { Type::Enum(n, a) } else { Type::Struct(n, a) }
+            }
+            Type::Enum(n, a) => Type::Enum(n, a.iter().map(|x| self.classify(x)).collect()),
+            Type::Array(e) => Type::Array(Box::new(self.classify(&e))),
+            Type::Map(k, v) => Type::Map(Box::new(self.classify(&k)), Box::new(self.classify(&v))),
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|x| self.classify(x)).collect()),
+            Type::Task(e) => Type::Task(Box::new(self.classify(&e))),
+            Type::Channel(e) => Type::Channel(Box::new(self.classify(&e))),
+            other => other,
+        }
+    }
+
     fn declare(&mut self, name: &str, ty: Type) {
         let t = normalize_type(&ty);
         // Un `Struct(n)` cuyo `n` es un enum del usuario → `Enum(n)` (el parser no distingue; el checker
@@ -1355,6 +1602,42 @@ impl Transpiler {
     /// Nombres de las variables en ámbito cuyo tipo es `Channel`/`Task` (los valores compartibles entre
     /// hilos). Se clonan antes de un `spawn` para que el closure `move` no consuma el original. Dedup:
     /// el nombre más interno (shadowing) gana, y no se repite.
+    /// Capturas de HEAP de un closure de `spawn` (H21-N5b): variables libres del cuerpo que son
+    /// locales del ámbito envolvente y cuyo tipo debe cruzar por deep copy. Excluye canales/Tasks
+    /// (se clonan: son el conducto compartido) y los escalares Copy (el move los copia). Una captura
+    /// de tipo FUNCIÓN no puede cruzar (aún, N5c) → error claro en vez del E0277 de rustc.
+    fn spawn_captures(&mut self, body: &Block) -> Result<(Vec<(String, Type, bool)>, Vec<String>), String> {
+        let mut ids = std::collections::HashSet::new();
+        idents_of_block(body, &mut ids);
+        let mut names: Vec<String> = ids.into_iter().collect();
+        names.sort(); // orden determinista de emisión
+        let mut out = Vec::new();
+        let mut clones: Vec<String> = Vec::new();
+        for name in names {
+            let Some(ty) = self.lookup(&name) else { continue }; // global/función/builtin → no es local
+            let ty = ty.clone();
+            match normalize_type(&ty) {
+                Type::Channel(_) | Type::Task(_) => {}
+                Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) | Type::Unit => {}
+                // H21-N5c: un param fn MARCADO es un genérico `__F: ... + Send + Sync + Clone` → se
+                // pre-clona como los canales (el bound ya garantiza que cruza). Uno NO marcado no
+                // debería llegar aquí (el marcado por punto fijo lo habría marcado) — defensivo.
+                Type::Fn(..) if self.send_fn_params.contains(&name) => clones.push(name),
+                Type::Fn(..) => {
+                    return Err(format!(
+                        "'{}': a function value captured by 'spawn' cannot cross threads in the native backend yet",
+                        name
+                    ))
+                }
+                _ => {
+                    let is_cell = self.cells.contains(&name);
+                    out.push((name, ty, is_cell));
+                }
+            }
+        }
+        Ok((out, clones))
+    }
+
     fn in_scope_channels(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut names = Vec::new();
@@ -1684,6 +1967,114 @@ impl Transpiler {
 
     /// Emite `e` convertido a la repr SEND de un `Channel<T>`/`Task<T>` (para cruzar el hilo): string→
     /// Arc<str>, bytes→Arc<[u8]> (copia al borde, seguro por ser inmutables); primitivos sin cambio.
+    /// H21-N5c: emite UN argumento de llamada; si la posición está MARCADA en el callee (param fn
+    /// genérico Send), lo emite en su forma enviable (fn item pelado / closure sin Rc::new).
+    fn emit_call_arg(&mut self, out: &mut String, a: &Expr, marked: bool) -> Result<(), String> {
+        if marked {
+            match &a.kind {
+                ExprKind::Ident(n) if self.funcs.contains_key(n) && self.lookup(n).is_none() => {
+                    out.push_str(&mangle(n)); // fn item: Send+Sync+Clone gratis
+                    return Ok(());
+                }
+                ExprKind::Func(fx) => return self.emit_func_literal(out, fx, false),
+                _ => {}
+            }
+        }
+        self.emit_expr(out, a)
+    }
+
+    /// Emite un literal de función. `boxed` = envuelto en `Rc::new(...)` (la repr ordinaria de un
+    /// valor-función); `false` (H21-N5c) = el closure PELADO, para un argumento a un param MARCADO
+    /// (genérico `__F: Fn + Send + ...`) — si sus capturas no son Send, rustc lo rechaza (honesto).
+    fn emit_func_literal(&mut self, out: &mut String, fnexpr: &crate::ast::FnExpr, boxed: bool) -> Result<(), String> {
+        // Celdas que ESTA closure captura (var-celda en ámbito referenciadas en su cuerpo): se
+        // PRE-CLONAN antes del `move` (`{ let c = c.clone(); Rc::new(move || …) }`), para que el
+        // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
+        let mut refd = std::collections::HashSet::new();
+        idents_of_block(&fnexpr.body, &mut refd);
+        let captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
+        // H21-N5c: una closure NO-boxed va a un param marcado (genérico Send) → cruzará hilos. Sus
+        // capturas de heap se convierten a __RaySend FUERA y se reconstruyen DENTRO en cada llamada
+        // (`.clone()` del árbol: la closure es Fn, no FnOnce) — deep copy, semántica M38. Los
+        // canales/Tasks y los params fn marcados se pre-clonan (son Send de por sí).
+        let mut send_caps: Vec<(String, Type, bool)> = Vec::new();
+        if !boxed {
+            let (caps, clones) = self.spawn_captures(&fnexpr.body)?;
+            send_caps = caps;
+            out.push_str("{ ");
+            for n in self.in_scope_channels() {
+                if refd.contains(&n) {
+                    write!(out, "let {n} = {n}.clone(); ", n = mangle(&n)).unwrap();
+                }
+            }
+            for n in &clones {
+                write!(out, "let {n} = {n}.clone(); ", n = mangle(n)).unwrap();
+            }
+            for (i, (name, ty, is_cell)) in send_caps.iter().enumerate() {
+                let src = if *is_cell {
+                    format!("{}.borrow().clone()", mangle(name))
+                } else {
+                    format!("{}.clone()", mangle(name))
+                };
+                let conv = self.to_send_expr(ty, &src)?;
+                write!(out, "let __snd_{i} = {conv}; ").unwrap();
+            }
+        }
+        let wrap = !captured.is_empty();
+        if wrap {
+            out.push_str("{ ");
+            for c in &captured {
+                write!(out, "let {} = {}.clone(); ", mangle(c), mangle(c)).unwrap();
+            }
+        }
+        if boxed {
+            out.push_str("Rc::new(");
+        }
+        out.push_str("move |");
+        for (i, p) in fnexpr.params.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            // el param de la closure se mangla (igual que su uso en el cuerpo vía `mangle`): puede
+            // ser palabra reservada de Rust.
+            write!(out, "{}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
+        }
+        write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?).unwrap();
+        self.scopes.push(HashMap::new());
+        for p in &fnexpr.params {
+            self.declare(&p.name, p.ty.clone());
+        }
+        if !send_caps.is_empty() {
+            out.push_str("{ ");
+            for (i, (name, ty, is_cell)) in send_caps.iter().enumerate() {
+                let conv = self.from_send_expr(ty, &format!("__snd_{i}.clone()"))?;
+                if *is_cell {
+                    write!(out, "let {} = Rc::new(std::cell::RefCell::new({conv})); ", mangle(name)).unwrap();
+                } else {
+                    write!(out, "let {} = {conv}; ", mangle(name)).unwrap();
+                }
+            }
+        }
+        // Las celdas propias de esta closure (una var suya capturada por una closure aún más interna).
+        let added = self.enter_cells(&fnexpr.body);
+        self.emit_block(out, &fnexpr.body)?;
+        self.exit_cells(added);
+        self.scopes.pop();
+        if !send_caps.is_empty() {
+            out.push_str(" }");
+        }
+        if boxed {
+            out.push(')');
+        }
+        if wrap {
+            out.push_str(" }");
+        }
+        if !boxed {
+            out.push_str(" }");
+        }
+        Ok(())
+    }
+
     fn emit_to_send(&mut self, out: &mut String, e: &Expr, t: &Type) -> Result<(), String> {
         match normalize_type(t) {
             Type::String => {
@@ -1696,7 +2087,249 @@ impl Transpiler {
                 self.emit_expr(out, e)?;
                 out.push(')');
             }
+            // H21-N5a: los tipos COMPUESTOS cruzan como `__RaySend` (deep copy, semántica M38).
+            ty if send_is_tree(&ty) => {
+                let mut tmp = String::new();
+                self.emit_expr(&mut tmp, e)?;
+                let conv = self.to_send_expr(&ty, &tmp)?;
+                out.push_str(&conv);
+            }
             _ => self.emit_expr(out, e)?,
+        }
+        Ok(())
+    }
+
+    /// Id del conversor con nombre para un tipo NOMINAL concreto (struct/enum de usuario); lo registra
+    /// si es nuevo (los cuerpos se generan al final, en `emit_send_convs`).
+    fn send_conv_id(&mut self, t: &Type) -> Result<usize, String> {
+        let key = rust_ty(t, &self.enums, &self.tparams)?;
+        if let Some(i) = self.send_convs.iter().position(|(_, k)| *k == key) {
+            return Ok(i);
+        }
+        self.send_convs.push((normalize_type(t), key));
+        Ok(self.send_convs.len() - 1)
+    }
+
+    /// Expresión Rust que convierte `expr` (repr del PROGRAMA, owned) a `__RaySend` (deep copy).
+    fn to_send_expr(&mut self, t: &Type, expr: &str) -> Result<String, String> {
+        Ok(match self.classify(t) {
+            Type::Int => format!("__RaySend::I({expr})"),
+            Type::Float => format!("__RaySend::F({expr})"),
+            Type::Bool => format!("__RaySend::B({expr})"),
+            Type::Char => format!("__RaySend::C({expr})"),
+            Type::Unit => format!("{{ let _ = {expr}; __RaySend::U }}"),
+            Type::UInt(_) => format!("__RaySend::UI(({expr}) as u64)"),
+            Type::String => format!("__RaySend::S(std::sync::Arc::<str>::from(&*({expr})))"),
+            Type::Bytes => format!("__RaySend::By(std::sync::Arc::<[u8]>::from(&*({expr})))"),
+            Type::Array(el) => {
+                let inner = self.to_send_expr(&el, "__sx")?;
+                format!(
+                    "__RaySend::A(({expr}).borrow().iter().map(|__sr| {{ let __sx = __sr.clone(); {inner} }}).collect())"
+                )
+            }
+            Type::Map(k, v) => {
+                let ik = self.to_send_expr(&k, "__sk")?;
+                let iv = self.to_send_expr(&v, "__sv")?;
+                format!(
+                    "__RaySend::M(({expr}).borrow().iter().map(|(__kr, __vr)| {{ let __sk = __kr.clone(); let __sv = __vr.clone(); ({ik}, {iv}) }}).collect())"
+                )
+            }
+            Type::Tuple(ts) => {
+                let mut parts = Vec::new();
+                for (i, et) in ts.iter().enumerate() {
+                    parts.push(self.to_send_expr(et, &format!("__st.{}.clone()", i))?);
+                }
+                format!("{{ let __st = {expr}; __RaySend::T(vec![{}]) }}", parts.join(", "))
+            }
+            // Option/Result: repr nativa de Rust → E(0/1, payload) (índices propios; solo han de
+            // cuadrar entre to y from, no con la VM).
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
+                let inner = self.to_send_expr(&args[0], "__sx")?;
+                format!("match {expr} {{ Some(__sx) => __RaySend::E(0, vec![{inner}]), None => __RaySend::E(1, vec![]) }}")
+            }
+            Type::Enum(n, args) if n == "Result" && args.len() == 2 => {
+                let iok = self.to_send_expr(&args[0], "__sx")?;
+                let ierr = self.to_send_expr(&args[1], "__sx")?;
+                format!("match {expr} {{ Ok(__sx) => __RaySend::E(0, vec![{iok}]), Err(__sx) => __RaySend::E(1, vec![{ierr}]) }}")
+            }
+            t @ (Type::Struct(..) | Type::Enum(..)) => {
+                let id = self.send_conv_id(&t)?;
+                format!("__to_send_{id}({expr})")
+            }
+            Type::Fn(..) => {
+                return Err(
+                    "a function value cannot cross a thread boundary (spawn capture / channel / Task) in the native backend"
+                        .into(),
+                )
+            }
+            other => return Err(format!("type {:?} cannot cross a thread boundary in the native backend", other)),
+        })
+    }
+
+    /// Expresión Rust que reconstruye la repr del PROGRAMA desde `expr` (un `__RaySend` owned).
+    fn from_send_expr(&mut self, t: &Type, expr: &str) -> Result<String, String> {
+        let un = "_ => unreachable!()";
+        Ok(match self.classify(t) {
+            Type::Int => format!("match {expr} {{ __RaySend::I(__sx) => __sx, {un} }}"),
+            Type::Float => format!("match {expr} {{ __RaySend::F(__sx) => __sx, {un} }}"),
+            Type::Bool => format!("match {expr} {{ __RaySend::B(__sx) => __sx, {un} }}"),
+            Type::Char => format!("match {expr} {{ __RaySend::C(__sx) => __sx, {un} }}"),
+            Type::Unit => format!("{{ let _ = {expr}; }}"),
+            Type::UInt(_) => {
+                let rty = rust_ty(t, &self.enums, &self.tparams)?;
+                format!("match {expr} {{ __RaySend::UI(__sx) => __sx as {rty}, {un} }}")
+            }
+            Type::String => format!("match {expr} {{ __RaySend::S(__sx) => Rc::<str>::from(&*__sx), {un} }}"),
+            Type::Bytes => format!("match {expr} {{ __RaySend::By(__sx) => Rc::<[u8]>::from(&*__sx), {un} }}"),
+            Type::Array(el) => {
+                let inner = self.from_send_expr(&el, "__sx")?;
+                format!(
+                    "match {expr} {{ __RaySend::A(__sa) => Rc::new(std::cell::RefCell::new(__sa.into_iter().map(|__sx| {inner}).collect::<Vec<_>>())), {un} }}"
+                )
+            }
+            Type::Map(k, v) => {
+                let ik = self.from_send_expr(&k, "__sk")?;
+                let iv = self.from_send_expr(&v, "__sv2")?;
+                format!(
+                    "match {expr} {{ __RaySend::M(__sm) => Rc::new(std::cell::RefCell::new(__sm.into_iter().map(|(__sk, __sv2)| ({ik}, {iv})).collect::<__RayMap<_, _>>())), {un} }}"
+                )
+            }
+            Type::Tuple(ts) => {
+                let mut parts = Vec::new();
+                for et in ts.iter() {
+                    parts.push(self.from_send_expr(et, "__si.next().unwrap()")?);
+                }
+                format!(
+                    "match {expr} {{ __RaySend::T(__st) => {{ let mut __si = __st.into_iter(); ({},) }}, {un} }}",
+                    parts.join(", ")
+                )
+            }
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
+                let inner = self.from_send_expr(&args[0], "__sp.remove(0)")?;
+                format!(
+                    "match {expr} {{ __RaySend::E(0, mut __sp) => Some({inner}), __RaySend::E(_, _) => None, {un} }}"
+                )
+            }
+            Type::Enum(n, args) if n == "Result" && args.len() == 2 => {
+                let iok = self.from_send_expr(&args[0], "__sp.remove(0)")?;
+                let ierr = self.from_send_expr(&args[1], "__sp.remove(0)")?;
+                format!(
+                    "match {expr} {{ __RaySend::E(0, mut __sp) => Ok({iok}), __RaySend::E(_, mut __sp) => Err({ierr}), {un} }}"
+                )
+            }
+            t @ (Type::Struct(..) | Type::Enum(..)) => {
+                let id = self.send_conv_id(&t)?;
+                format!("__from_send_{id}({expr})")
+            }
+            other => return Err(format!("type {:?} cannot cross a thread boundary in the native backend", other)),
+        })
+    }
+
+    /// Genera (al final de la transpilación) las fns `__to_send_N`/`__from_send_N` de los tipos
+    /// NOMINALES registrados. Worklist: generar un cuerpo puede registrar tipos anidados nuevos.
+    fn emit_send_convs(&mut self, out: &mut String) -> Result<(), String> {
+        let mut done = 0;
+        while done < self.send_convs.len() {
+            let (t, _) = self.send_convs[done].clone();
+            let id = done;
+            done += 1;
+            let rty = rust_ty(&t, &self.enums, &self.tparams)?;
+            match normalize_type(&t) {
+                Type::Struct(n, args) => {
+                    let fields = self
+                        .struct_fields
+                        .get(&n)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown struct '{}' in send conversion", n))?;
+                    // Sustituye los params de tipo del struct por los args concretos (Caja<int>).
+                    let tps = self.struct_tparams.get(&n).cloned().unwrap_or_default();
+                    let subst: HashMap<String, Type> =
+                        tps.iter().cloned().zip(args.iter().cloned()).collect();
+                    let mut tos = Vec::new();
+                    let mut froms = Vec::new();
+                    for (fname, fty) in &fields {
+                        let cty = subst_type(fty, &subst);
+                        tos.push(self.to_send_expr(&cty, &format!("__sb.{}.clone()", mangle(fname)))?);
+                        froms.push(format!(
+                            "{}: {}",
+                            mangle(fname),
+                            self.from_send_expr(&cty, "__si.next().unwrap()")?
+                        ));
+                    }
+                    writeln!(
+                        out,
+                        "fn __to_send_{id}(__sv: {rty}) -> __RaySend {{ let __sb = __sv.borrow(); __RaySend::T(vec![{}]) }}",
+                        tos.join(", ")
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "fn __from_send_{id}(__ss: __RaySend) -> {rty} {{ match __ss {{ __RaySend::T(__st) => {{ let mut __si = __st.into_iter(); Rc::new(std::cell::RefCell::new({} {{ {} }})) }}, _ => unreachable!() }} }}",
+                        mangle(&n),
+                        froms.join(", ")
+                    )
+                    .unwrap();
+                }
+                Type::Enum(n, args) => {
+                    let variants = self
+                        .enum_variants
+                        .get(&n)
+                        .cloned()
+                        .ok_or_else(|| format!("unknown enum '{}' in send conversion", n))?;
+                    // Orden DETERMINISTA de variantes (HashMap no lo garantiza): por nombre. Los índices
+                    // solo han de cuadrar entre to y from (mismo orden en ambos).
+                    let mut vnames: Vec<String> = variants.keys().cloned().collect();
+                    vnames.sort();
+                    let tps = self.enum_tparams.get(&n).cloned().unwrap_or_default();
+                    let subst: HashMap<String, Type> =
+                        tps.iter().cloned().zip(args.iter().cloned()).collect();
+                    let ename = mangle(&n);
+                    let mut to_arms = Vec::new();
+                    let mut from_arms = Vec::new();
+                    for (vi, vname) in vnames.iter().enumerate() {
+                        let payload = &variants[vname];
+                        if payload.is_empty() {
+                            to_arms.push(format!("{}::{} => __RaySend::E({vi}, vec![])", ename, mangle(vname)));
+                            from_arms.push(format!("({vi}, _) => Rc::new({}::{})", ename, mangle(vname)));
+                        } else {
+                            let binds: Vec<String> = (0..payload.len()).map(|i| format!("__sp{i}")).collect();
+                            let mut tos = Vec::new();
+                            let mut froms = Vec::new();
+                            for (i, pty) in payload.iter().enumerate() {
+                                let cty = subst_type(pty, &subst);
+                                tos.push(self.to_send_expr(&cty, &format!("__sp{i}.clone()"))?);
+                                froms.push(self.from_send_expr(&cty, "__si.next().unwrap()")?);
+                            }
+                            to_arms.push(format!(
+                                "{}::{}({}) => __RaySend::E({vi}, vec![{}])",
+                                ename,
+                                mangle(vname),
+                                binds.join(", "),
+                                tos.join(", ")
+                            ));
+                            from_arms.push(format!(
+                                "({vi}, __sp) => {{ let mut __si = __sp.into_iter(); Rc::new({}::{}({})) }}",
+                                ename,
+                                mangle(vname),
+                                froms.join(", ")
+                            ));
+                        }
+                    }
+                    writeln!(
+                        out,
+                        "fn __to_send_{id}(__sv: {rty}) -> __RaySend {{ match &*__sv {{ {} }} }}",
+                        to_arms.join(", ")
+                    )
+                    .unwrap();
+                    writeln!(
+                        out,
+                        "#[allow(unused_variables)] fn __from_send_{id}(__ss: __RaySend) -> {rty} {{ match __ss {{ __RaySend::E(__svi, __sp) => match (__svi, __sp) {{ {}, _ => unreachable!() }}, _ => unreachable!() }} }}",
+                        from_arms.join(", ")
+                    )
+                    .unwrap();
+                }
+                other => unreachable!("solo tipos nominales llevan conversor con nombre: {:?}", other),
+            }
         }
         Ok(())
     }
@@ -2040,44 +2673,7 @@ impl Transpiler {
             // Función anónima → closure `move` de Rust envuelto en Rc (captura por valor: para los
             // `Rc<RefCell>` comparte el estado, como las celdas del intérprete; los escalares se copian —
             // la captura MUTABLE de un escalar diverge, diferida).
-            ExprKind::Func(fnexpr) => {
-                // Celdas que ESTA closure captura (var-celda en ámbito referenciadas en su cuerpo): se
-                // PRE-CLONAN antes del `move` (`{ let c = c.clone(); Rc::new(move || …) }`), para que el
-                // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
-                let mut refd = std::collections::HashSet::new();
-                idents_of_block(&fnexpr.body, &mut refd);
-                let captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
-                let wrap = !captured.is_empty();
-                if wrap {
-                    out.push_str("{ ");
-                    for c in &captured {
-                        write!(out, "let {} = {}.clone(); ", mangle(c), mangle(c)).unwrap();
-                    }
-                }
-                out.push_str("Rc::new(move |");
-                for (i, p) in fnexpr.params.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    // el param de la closure se mangla (igual que su uso en el cuerpo vía `mangle`): puede
-                    // ser palabra reservada de Rust.
-                    write!(out, "{}: {}", mangle(&p.name), rust_ty(&p.ty, &self.enums, &self.tparams)?).unwrap();
-                }
-                write!(out, "| -> {} ", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?).unwrap();
-                self.scopes.push(HashMap::new());
-                for p in &fnexpr.params {
-                    self.declare(&p.name, p.ty.clone());
-                }
-                // Las celdas propias de esta closure (una var suya capturada por una closure aún más interna).
-                let added = self.enter_cells(&fnexpr.body);
-                self.emit_block(out, &fnexpr.body)?;
-                self.exit_cells(added);
-                self.scopes.pop();
-                out.push(')');
-                if wrap {
-                    out.push_str(" }");
-                }
-            }
+            ExprKind::Func(fnexpr) => self.emit_func_literal(out, fnexpr, true)?,
             ExprKind::Match { scrutinee, arms } => self.emit_match(out, scrutinee, arms)?,
             // Operador `?`: sobre Option/Result nativos de Rust → el `?` de Rust (la fn envolvente
             // devuelve un Option/Result compatible, garantizado por el checker).
@@ -2790,13 +3386,14 @@ impl Transpiler {
                 && self.funcs.contains_key(name)
                 && crate::builtins::lookup(name).is_none());
         if shadows_builtin {
+            let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
             out.push_str(&mangle(name));
             out.push('(');
             for (i, a) in eff.iter().enumerate() {
                 if i > 0 {
                     out.push_str(", ");
                 }
-                self.emit_expr(out, a)?;
+                self.emit_call_arg(out, a, marked.contains(&i))?;
             }
             out.push(')');
             return Ok(());
@@ -2979,11 +3576,19 @@ impl Transpiler {
             // join(t) → t.join() (Task, structured concurrency); join(arr, sep) → __ray_join (string). El
             // `join` es ad-hoc: se distingue por el tipo del primer arg (Task vs arreglo).
             "join" if matches!(self.type_of(eff[0])?, Type::Task(_)) => {
-                // t.join() da la repr SEND; se convierte de vuelta a la del programa (string/bytes → Rc).
+                // t.join() da la repr SEND; se convierte de vuelta a la del programa (string/bytes → Rc;
+                // compuestos → desde el árbol __RaySend, N5a).
                 let elem = match self.type_of(eff[0])? {
                     Type::Task(t) => (*t).clone(),
                     _ => unreachable!("guard garantiza Task"),
                 };
+                if send_is_tree(&elem) {
+                    let mut tmp = String::new();
+                    self.emit_expr(&mut tmp, eff[0])?;
+                    let conv = self.from_send_expr(&elem, &format!("({tmp}).join()"))?;
+                    out.push_str(&conv);
+                    return Ok(());
+                }
                 let (pre, post): (&str, &str) = match normalize_type(&elem) {
                     Type::String => ("Rc::<str>::from(&*", ")"),
                     Type::Bytes => ("Rc::<[u8]>::from(&*", ")"),
@@ -3002,14 +3607,18 @@ impl Transpiler {
                     Type::Task(t) => (*t).clone(),
                     _ => unreachable!("guard garantiza Task"),
                 };
-                let (pre, post): (&str, &str) = match normalize_type(&elem) {
-                    Type::String => ("Rc::<str>::from(&*__rt_v", ")"),
-                    Type::Bytes => ("Rc::<[u8]>::from(&*__rt_v", ")"),
-                    _ => ("__rt_v", ""),
+                let okconv = if send_is_tree(&elem) {
+                    self.from_send_expr(&elem, "__rt_v")?
+                } else {
+                    match normalize_type(&elem) {
+                        Type::String => "Rc::<str>::from(&*__rt_v)".to_string(),
+                        Type::Bytes => "Rc::<[u8]>::from(&*__rt_v)".to_string(),
+                        _ => "__rt_v".to_string(),
+                    }
                 };
                 out.push_str("match (");
                 self.emit_expr(out, eff[0])?;
-                write!(out, ").wait() {{ Ok(__rt_v) => Ok({}{}), Err(__rt_m) => Err(Rc::<str>::from(__rt_m)) }}", pre, post).unwrap();
+                write!(out, ").wait() {{ Ok(__rt_v) => Ok({}), Err(__rt_m) => Err(Rc::<str>::from(__rt_m)) }}", okconv).unwrap();
             }
             // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
             // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
@@ -3217,7 +3826,12 @@ impl Transpiler {
                 };
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".recv()");
-                out.push_str(from_send_map(&elem));
+                if send_is_tree(&elem) {
+                    let inner = self.from_send_expr(&elem, "__rt_x")?;
+                    write!(out, ".map(|__rt_x| {})", inner).unwrap();
+                } else {
+                    out.push_str(from_send_map(&elem));
+                }
             }
             // signals() -> Channel<int>: canal de señales del SO (SIGTERM/SIGINT), singleton (self-pipe).
             "signals" => {
@@ -3258,29 +3872,81 @@ impl Transpiler {
                     _ => normalize_type(&self.funcs[named.as_ref().unwrap()].ret),
                 };
                 out.push_str("{ ");
-                // El literal captura por `move` los canales del ámbito (compartidos → se CLONAN antes; el
-                // closure mueve un clon, el original sigue). Una fn nombrada es top-level y no captura nada.
+                // El literal captura por `move` los canales/Tasks del ámbito (el CONDUCTO compartido →
+                // se CLONAN antes; el closure mueve un clon, el original sigue). Una fn nombrada es
+                // top-level y no captura nada.
+                let mut captures: Vec<(String, Type, bool)> = Vec::new();
                 if named.is_none() {
                     for name in self.in_scope_channels() {
                         write!(out, "let {n} = {n}.clone(); ", n = mangle(&name)).unwrap();
                     }
+                    // H21-N5b (solo spawn: cruza de hilo): las demás capturas de HEAP se convierten a
+                    // la repr Send FUERA (deep copy) y se reconstruyen DENTRO — la semántica de heap
+                    // aislado de la VM (M38): la mutación no se comparte; los canales son el conducto.
+                    if method == "spawn" {
+                        let mut fn_clones: Vec<String> = Vec::new();
+                        if let ExprKind::Func(fnexpr) = &eff[0].kind {
+                            let (caps, cls) = self.spawn_captures(&fnexpr.body)?;
+                            captures = caps;
+                            fn_clones = cls;
+                        }
+                        for n in &fn_clones {
+                            write!(out, "let {n} = {n}.clone(); ", n = mangle(n)).unwrap();
+                        }
+                        for (i, (name, ty, is_cell)) in captures.iter().enumerate() {
+                            let src = if *is_cell {
+                                format!("{}.borrow().clone()", mangle(name))
+                            } else {
+                                format!("{}.clone()", mangle(name))
+                            };
+                            let conv = self.to_send_expr(ty, &src)?;
+                            write!(out, "let __snd_{i} = {conv}; ").unwrap();
+                        }
+                    }
                 }
                 let runtime = if method == "spawn" { "__ray_spawn" } else { "__ray_scope" };
                 write!(out, "{}(move || ", runtime).unwrap();
-                // spawn: el closure corre en OTRO hilo → devuelve la repr SEND (string/bytes → Arc); el
-                // cuerpo produce la repr del programa, se envuelve. scope corre en el hilo actual → sin conv.
-                let wrap = if method == "spawn" { ret } else { Type::Unit };
-                let (pre, suf) = match wrap {
-                    Type::String => ("std::sync::Arc::<str>::from(&*", ")"),
-                    Type::Bytes => ("std::sync::Arc::<[u8]>::from(&*", ")"),
-                    _ => ("", ""),
-                };
-                out.push_str(pre);
-                match &eff[0].kind {
-                    ExprKind::Func(fnexpr) => self.emit_block(out, &fnexpr.body)?,
-                    _ => write!(out, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
+                if !captures.is_empty() {
+                    out.push_str("{ ");
+                    for (i, (name, ty, is_cell)) in captures.iter().enumerate() {
+                        let conv = self.from_send_expr(ty, &format!("__snd_{i}"))?;
+                        if *is_cell {
+                            // la var era una CELDA (mutable capturada): se reconstruye como celda local
+                            // — la mutación queda AISLADA en la tarea, como en la VM.
+                            write!(out, "let {} = Rc::new(std::cell::RefCell::new({conv})); ", mangle(name)).unwrap();
+                        } else {
+                            write!(out, "let {} = {conv}; ", mangle(name)).unwrap();
+                        }
+                    }
                 }
-                out.push_str(suf);
+                // spawn: el closure corre en OTRO hilo → devuelve la repr SEND (string/bytes → Arc;
+                // compuestos → __RaySend); el cuerpo produce la repr del programa, se envuelve. scope
+                // corre en el hilo actual → sin conversión.
+                let wrap = if method == "spawn" { ret } else { Type::Unit };
+                if send_is_tree(&wrap) && method == "spawn" {
+                    let mut tmp = String::new();
+                    match &eff[0].kind {
+                        ExprKind::Func(fnexpr) => self.emit_block(&mut tmp, &fnexpr.body)?,
+                        _ => write!(tmp, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
+                    }
+                    let conv = self.to_send_expr(&wrap, "__rt_r")?;
+                    write!(out, "{{ let __rt_r = {tmp}; {conv} }}").unwrap();
+                } else {
+                    let (pre, suf) = match wrap {
+                        Type::String => ("std::sync::Arc::<str>::from(&*", ")"),
+                        Type::Bytes => ("std::sync::Arc::<[u8]>::from(&*", ")"),
+                        _ => ("", ""),
+                    };
+                    out.push_str(pre);
+                    match &eff[0].kind {
+                        ExprKind::Func(fnexpr) => self.emit_block(out, &fnexpr.body)?,
+                        _ => write!(out, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
+                    }
+                    out.push_str(suf);
+                }
+                if !captures.is_empty() {
+                    out.push_str(" }");
+                }
                 out.push_str(") }");
             }
             "unwrap_or" => {
@@ -3462,13 +4128,17 @@ impl Transpiler {
                 if !self.funcs.contains_key(name) && !is_closure {
                     return Err(format!("builtin/function '{}' is not supported in the native backend", name));
                 }
+                // H21-N5c: los args a params MARCADOS del callee (genéricos Send) se emiten en su
+                // forma "enviable": fn nombrada → el fn item pelado; closure literal → sin Rc::new;
+                // variable → tal cual (si es un param marcado del llamador, su genérico ya es Send).
+                let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
                 out.push_str(&mangle(name));
                 out.push('(');
                 for (i, a) in eff.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    self.emit_expr(out, a)?;
+                    self.emit_call_arg(out, a, marked.contains(&i))?;
                 }
                 out.push(')');
             }
@@ -3573,12 +4243,12 @@ impl Transpiler {
                     "to_string" => Type::String,
                     // join(t) → T de la Task; join(arr, sep) → String (ad-hoc por el tipo del primer arg).
                     "join" => match recv0.map(|e| self.type_of(e)).transpose()? {
-                        Some(Type::Task(t)) => *t,
+                        Some(Type::Task(t)) => self.classify(&t),
                         _ => Type::String,
                     },
                     // try_join(t) → Result<T, string> (H21-N2); __task_failed(t) → [string].
                     "try_join" => match recv0.map(|e| self.type_of(e)).transpose()? {
-                        Some(Type::Task(t)) => Type::Enum("Result".into(), vec![*t, Type::String]),
+                        Some(Type::Task(t)) => Type::Enum("Result".into(), vec![self.classify(&t), Type::String]),
                         other => return Err(format!("try_join expects a Task, got {:?}", other)),
                     },
                     "__task_failed" => Type::Array(Box::new(Type::String)),
@@ -4104,11 +4774,22 @@ fn send_type(t: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         Type::String => Ok("std::sync::Arc<str>".to_string()),
         Type::Bytes => Ok("std::sync::Arc<[u8]>".to_string()),
         Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) => rust_ty(t, enums, tparams),
+        // H21-N5a: los compuestos cruzan como el árbol Send universal (deep copy, semántica M38).
+        ty if send_is_tree(&ty) => Ok("__RaySend".to_string()),
         other => Err(format!(
-            "channel/task of non-Send type {:?} — supported: int/float/bool/char/string/bytes",
+            "channel/task of type {:?} cannot cross a thread boundary in the native backend",
             other
         )),
     }
+}
+
+/// ¿Este tipo cruza los hilos como `__RaySend` (árbol Send universal, deep copy)? Los primitivos y
+/// string/bytes tienen repr Send directa; las funciones NO cruzan (error claro en los conversores).
+fn send_is_tree(t: &Type) -> bool {
+    matches!(
+        normalize_type(t),
+        Type::Array(_) | Type::Map(..) | Type::Struct(..) | Type::Enum(..) | Type::Tuple(_) | Type::Unit
+    )
 }
 
 /// El sufijo `.map(|__rt_x| Rc::…::from(&*__rt_x))` para convertir la repr SEND recibida (Arc) de vuelta a la
@@ -4676,13 +5357,12 @@ mod tests {
 
     #[test]
     fn una_funcion_no_transpilable_queda_como_stub_que_panica() {
-        // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí un canal de un struct no-Send,
-        // como el real de metrics_server) se emite como STUB que panica, con su firma → el programa
-        // COMPILA; si el flujo real no la llama, corre igual que la VM. Antes se OMITÍA y una llamada
-        // colgante hacía fallar rustc.
+        // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí una GUARDA de match; el
+        // canal de struct que usaba este test se soporta desde H21-N5a) se emite como STUB que
+        // panica, con su firma → el programa COMPILA; si el flujo real no la llama, corre igual que
+        // la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
         let rust = transpile_src(
-            "struct Msg { x: int }\n\
-             fn arranca() -> int { let c: Channel<Msg> = Channel.new(); send(c, Msg { x: 1 }); 1 }\n\
+            "fn arranca() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }\n\
              fn main() -> int { print(42); 0 }",
         );
         assert!(
@@ -4966,15 +5646,14 @@ mod tests {
     }
 
     #[test]
-    fn rechaza_canal_de_struct() {
-        // Un canal de struct (mutable, no-Send) → error claro (diferido).
-        let tokens = crate::lexer::lex(
+    fn transpila_canal_de_struct() {
+        // H21-N5a: un canal de struct cruza como __RaySend (deep copy, semántica M38) — antes era
+        // un error ("channel/task of non-Send type").
+        let rust = transpile_src(
             "struct P { x: int } fn main() { let ch: Channel<P> = Channel.new(); send(ch, P { x: 1 }); }",
-        )
-        .unwrap();
-        let mut prog = crate::parser::parse(tokens).unwrap();
-        crate::checker::check(&mut prog).unwrap();
-        assert!(super::transpile(&prog).is_err());
+        );
+        assert!(rust.contains("__RayChan<__RaySend>"), "el canal lleva la repr Send universal: {}", rust);
+        assert!(rust.contains("__to_send_0("), "el send convierte el struct: {}", rust);
     }
 
     #[test]

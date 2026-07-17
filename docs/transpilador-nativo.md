@@ -510,8 +510,27 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > close (`close on a channel with a blocked sender`, contador `senders`; antes: return silencioso del
 > emisor y su valor quedaba consumible). Los panics llevan el MISMO texto que el error de ejecución de
 > la VM; el exit code (101 vs 70) queda con H6. Tests: multi-emisor ×10, send-cerrado y
-> close-bloqueado en `tests/cli_cli.rs`. Lo que QUEDA de H21 es solo el port de semántica de
-> scheduler (cancelación M12.5, `try_join`, select sin busy-wait) — sin bugs de corrección conocidos.
+> close-bloqueado en `tests/cli_cli.rs`.
+
+> **Port H21 N1/N2/N5 (17 jul 2026)**: tres piezas grandes del port de scheduler, HECHAS.
+> **N1 — contención de fallos**: el error de ejecución viaja como panic con payload (`__RayErr`);
+> el `catch_unwind` de cada tarea lo captura en su Task (`Err(msg)`, como el `Failed` de la VM) y el
+> proceso solo muere cuando el fallo llega a `main` sin observarse; `join` re-lanza, el scope propaga.
+> **N2 — `try_join`**: el fallo como VALOR (`Result<T, string>`), sobre `wait()`;
+> `NATIVE_STUBBED_BUILTINS` queda VACÍO. **N5 — valores de heap y funciones cruzando hilos**:
+> (a) structs/enums/Map/arrays/tuplas cruzan canales/Tasks/capturas de spawn por DEEP COPY — la repr
+> Send universal `__RaySend` + conversores `__to_send_N`/`__from_send_N` generados bajo demanda
+> (semántica de heap aislado M38: lo que cruza se copia; los canales son el conducto); las capturas
+> del closure de spawn se convierten fuera y se reconstruyen dentro (una `var`-celda se re-crea como
+> celda local → mutación aislada, como la VM). (b) un param de tipo fn que cruza un spawn (directa o
+> transitivamente — punto fijo sobre el grafo de llamadas) se emite como GENÉRICO de Rust
+> (`__F: Fn(..) + Send + Sync + Clone`): una función NOMBRADA o un closure de capturas enviables
+> sirven de handler a través de la cadena serve→loop→handle→spawn; las capturas de heap de esos
+> closures también cruzan por deep copy (reconstrucción por llamada). **Resultado**: el patrón
+> webserver COMPLETO transpila sin stubs — el demo SSR (webserver + templates + handler puro) corre
+> NATIVO byte-idéntico a la VM (`/`, `/lang/rust`, 404). QUEDAN del port: N3 (cancelación de
+> hermanas M12.5) y N4 (select sin busy-wait) — semántica de scheduler pura, sin bugs de corrección
+> conocidos ni features bloqueadas.
 
 ### 6.1 P0 — Roto en el momento de la auditoría
 

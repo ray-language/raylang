@@ -371,6 +371,74 @@ fn build_native_fast_envuelve_overflow_pero_chequea_div_cero() {
 }
 
 #[test]
+fn build_native_valores_de_heap_y_funciones_cruzan_los_hilos() {
+    // H21-N5: (a) structs/enums/Map/arrays cruzan canales/Tasks/capturas de spawn por DEEP COPY
+    // (repr __RaySend, semántica de heap aislado M38); (b) un param de tipo fn que cruza un spawn
+    // se emite como genérico Send de Rust (marcado por punto fijo) → una función NOMBRADA o un
+    // closure con capturas enviables sirven de handler a través de la cadena de llamadas (el patrón
+    // webserver: serve → loop → handle → spawn por conexión). Antes: E0277 de rustc o stub.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native heap cruza hilos: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_send_heap");
+    std::fs::write(
+        base.join("prog.ray"),
+        "struct Punto { x: int, etiqueta: string, tags: [string] }\n\
+         enum Forma { Circulo(float), Caja(Punto) }\n\
+         struct Msg { texto: string }\n\
+         fn procesa(m: Msg) -> string { \"eco: \" + m.texto }\n\
+         fn corre(handler: fn(Msg) -> string) -> string {\n\
+           // el param fn CRUZA el spawn → genérico Send (N5c)\n\
+           let t = spawn(fn() -> string { handler(Msg { texto: \"hola\" }) });\n\
+           join(t)\n\
+         }\n\
+         fn indirecto(h: fn(Msg) -> string) -> string { corre(h) }\n\
+         fn main() -> int {\n\
+           let ch: Channel<Punto> = Channel.new();\n\
+           let p = Punto { x: 7, etiqueta: \"hola\", tags: [\"a\", \"b\"] };\n\
+           spawn(fn() { send(ch, Punto { x: 1, etiqueta: \"desde la tarea\", tags: [\"t\"] }); });\n\
+           match (recv(ch)) {\n\
+             Option.Some(q) => print(q.etiqueta + \" x=\" + to_string(q.x)),\n\
+             Option.None => print(\"nada\"),\n\
+           }\n\
+           let t = spawn(fn() -> Forma { Forma.Caja(Punto { x: 9, etiqueta: \"caja\", tags: [] }) });\n\
+           match (join(t)) {\n\
+             Forma.Circulo(r) => print(\"circulo\"),\n\
+             Forma.Caja(q) => print(\"caja x=\" + to_string(q.x)),\n\
+           }\n\
+           let t2 = spawn(fn() -> int { print(\"capturado: \" + p.etiqueta + \"/\" + p.tags[0]); p.x });\n\
+           print(join(t2));\n\
+           let t3 = spawn(fn() -> Map<string, int> {\n\
+             var m: Map<string, int> = Map.new();\n\
+             m.insert(\"k\", 42);\n\
+             m\n\
+           });\n\
+           print(join(t3).get_or(\"k\", 0));\n\
+           print(corre(procesa));                                  // fn nombrada como handler\n\
+           print(indirecto(procesa));                              // …transitivo por la cadena\n\
+           print(corre(fn(m: Msg) -> string { \"anon: \" + m.texto })); // closure enviable\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("sh_bin");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native heap-cruza-hilos ok\nstdout={out}\nstderr={err}");
+    assert!(!err.contains("stub"), "sin stubs\n{err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "heap/funciones cruzando hilos nativo ≡ VM");
+    assert_eq!(
+        native_out,
+        "desde la tarea x=1\ncaja x=9\ncapturado: hola/a\n7\n42\neco: hola\neco: hola\nanon: hola\n",
+        "los valores esperados\n{native_out}"
+    );
+}
+
+#[test]
 fn build_native_fallo_de_tarea_contenido_y_try_join() {
     // H21-N1/N2: el fallo de una tarea queda CAPTURADO en su Task (como el Failed de la VM) y solo
     // mata el programa cuando se OBSERVA (join/scope lo re-lanzan → runtime error + exit 70);

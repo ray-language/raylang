@@ -371,6 +371,97 @@ fn build_native_fast_envuelve_overflow_pero_chequea_div_cero() {
 }
 
 #[test]
+fn build_native_fallo_de_tarea_contenido_y_try_join() {
+    // H21-N1/N2: el fallo de una tarea queda CAPTURADO en su Task (como el Failed de la VM) y solo
+    // mata el programa cuando se OBSERVA (join/scope lo re-lanzan → runtime error + exit 70);
+    // try_join lo devuelve como VALOR (Result). Antes: un panic en la hija mataba el proceso al
+    // instante (post-H6) o moría con exit 101 de Rust (pre-H6), y try_join era un stub.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native fallo de tarea: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_task_fail");
+    // (nombre, programa, exit esperado, fragmento de stderr o "" si no aplica, stdout esperado)
+    let casos: &[(&str, &str, i32, &str, &str)] = &[
+        (
+            "contenido",
+            "import std/time;\n\
+             fn main() -> int {\n\
+               spawn(fn() { panic(\"hija falla\"); });\n\
+               time.sleep(100);\n\
+               print(\"main sigue\");\n\
+               0\n\
+             }\n",
+            0,
+            "",
+            "main sigue\n",
+        ),
+        (
+            "join_relanza",
+            "fn main() -> int {\n\
+               let t = spawn(fn() -> int { panic(\"hija falla\"); 1 });\n\
+               print(join(t));\n\
+               0\n\
+             }\n",
+            70,
+            "hija falla",
+            "",
+        ),
+        (
+            "scope_propaga",
+            "fn main() -> int {\n\
+               scope(fn() { spawn(fn() { panic(\"dentro del scope\"); }); });\n\
+               print(\"inalcanzable\");\n\
+               0\n\
+             }\n",
+            70,
+            "dentro del scope",
+            "",
+        ),
+        (
+            "try_join",
+            "fn main() -> int {\n\
+               let ok = spawn(fn() -> int { 42 });\n\
+               let mal = spawn(fn() -> int { panic(\"se rompe\"); 1 });\n\
+               match (try_join(ok)) {\n\
+                 Result.Ok(v) => print(\"ok: \" + to_string(v)),\n\
+                 Result.Err(e) => print(\"err: \" + e),\n\
+               }\n\
+               match (try_join(mal)) {\n\
+                 Result.Ok(v) => print(\"ok: \" + to_string(v)),\n\
+                 Result.Err(e) => print(\"err: \" + e),\n\
+               }\n\
+               0\n\
+             }\n",
+            0,
+            "",
+            "ok: 42\nerr: se rompe\n",
+        ),
+    ];
+    for (nombre, prog, exit, err_frag, stdout_esp) in casos {
+        let src = format!("{nombre}.ray");
+        std::fs::write(base.join(&src), prog).unwrap();
+        let bin = base.join(format!("{nombre}_bin"));
+        let (_o, err, code) = ray(&base, &["build", &src, "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native {nombre} ok\n{err}");
+        let (vm_out, vm_err, vm_code) = ray(&base, &["run", &src]);
+        assert_eq!(vm_code, *exit, "VM exit en {nombre}\n{vm_err}");
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+        let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
+        assert_eq!(native.status.code(), Some(*exit), "exit nativo = VM en {nombre}\n{native_err}");
+        if !stdout_esp.is_empty() {
+            assert_eq!(native_out, *stdout_esp, "stdout nativo en {nombre}");
+            assert_eq!(native_out, vm_out, "stdout nativo ≡ VM en {nombre}");
+        }
+        if !err_frag.is_empty() {
+            assert!(native_err.contains(err_frag), "mensaje en {nombre}\n{native_err}");
+            assert!(vm_err.contains(err_frag), "mensaje VM en {nombre}\n{vm_err}");
+        }
+    }
+}
+
+#[test]
 fn build_native_rendezvous_multi_emisor_no_se_cuelga() {
     // Slice de canales (revisión post-H2/H21): el handshake rendezvous esperaba "cola vacía", no "MI
     // valor consumido" — con ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse

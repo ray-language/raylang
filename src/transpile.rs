@@ -206,16 +206,15 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
     "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
     "panic", "print", "scope", "select", "send", "signals", "spawn", "to_string",
-    // STUBBED (ver NATIVE_STUBBED_BUILTINS): reconocido pero SIN soporte nativo → stub/error.
+    // H21-N2: `__task_failed` (el primitivo tras `try_join`) YA está portado (sobre `wait()` de N1).
     "__task_failed",
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que
-/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). `__task_failed` (el
-/// primitivo tras la unión estructurada `try_join`/cancelación M12.5) aún no está portado a hilos reales
-/// (deuda declarada, §2.4). Si se implementa, quitarlo de aquí (no de la lista de arriba).
+/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Vacío desde
+/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1).
 #[cfg(test)]
-const NATIVE_STUBBED_BUILTINS: &[&str] = &["__task_failed"];
+const NATIVE_STUBBED_BUILTINS: &[&str] = &[];
 
 /// ¿Se salta la DEFINICIÓN de esta función al registrarla/emitirla? Sí para las sintéticas (`__`),
 /// los impls del prelude (`int#eq`…) y los builtins manejados. Matiz del override: un builtin con `::`
@@ -581,10 +580,20 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
     out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables)]\n");
     out.push_str("use std::rc::Rc;\n");
-    // H6: errores de EJECUCIÓN como la VM — mensaje `runtime error: <msg>` (sin posición: el nativo no
-    // lleva el AST) y exit 70 (EX_SOFTWARE, el de la VM). `process::exit` (no panic) → sin el ruido de
-    // Rust y aborta el proceso entero desde cualquier hilo (como el abort de la VM).
-    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { eprintln!(\"runtime error: {}\", msg); std::process::exit(70) }\n");
+    // H6 + H21-N1: errores de EJECUCIÓN como la VM — mensaje `runtime error: <msg>` (sin posición: el
+    // nativo no lleva el AST) y exit 70 (EX_SOFTWARE, el de la VM). El error viaja como PANIC con
+    // payload propio (`__RayErr`), no como exit directo: así el fallo de una TAREA lo captura su
+    // `catch_unwind` (→ `TaskState::Failed`, como la VM guarda el fallo en la Task) y el proceso solo
+    // muere cuando el fallo llega a `main` sin observarse. El hook de panic calla los `__RayErr` (el
+    // mensaje limpio lo imprime quien lo observa); los panics ajenos (índice fuera de rango…) siguen
+    // con el hook de Rust.
+    out.push_str("struct __RayErr(String);\n");
+    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    out.push_str("fn __ray_panic_msg(e: &(dyn std::any::Any + Send)) -> String {\n");
+    out.push_str("    if let Some(r) = e.downcast_ref::<__RayErr>() { r.0.clone() }\n");
+    out.push_str("    else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }\n");
+    out.push_str("    else if let Some(s) = e.downcast_ref::<String>() { s.clone() }\n");
+    out.push_str("    else { \"panic\".to_string() }\n}\n");
     // Aritmética de `int` CHECKED por defecto, como la VM (overflow/div-cero → runtime error, no
     // wrapping silencioso). Mismos textos que interpreter.rs/vm.rs. Con `--fast` (opt-out medido:
     // ~2× en puro int-loop, ~20 % en fib, ~0 en código idiomático), wrapping — pero div/mod por
@@ -783,21 +792,24 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         return Err("`main` is not in the supported subset".into());
     }
 
-    // H6: los errores de ejecución que emitimos nosotros salen por `__ray_rt_err` (exit 70 limpio);
-    // los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) se capturan aquí para
-    // dar también exit 70 como la VM (el mensaje sigue siendo el de Rust — paridad de código, no
-    // de texto, para esa cola).
+    // H6 + H21-N1: `main` instala el hook (calla los `__RayErr`: su mensaje limpio se imprime aquí,
+    // al observarlos) y captura todo unwind → los errores de ejecución propios dan `runtime error:
+    // <msg>` + exit 70; los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) dan
+    // exit 70 con el texto de Rust (paridad de código, no de texto, para esa cola).
     out.push_str("fn main() {\n");
+    out.push_str("    let __rt_hook = std::panic::take_hook();\n");
+    out.push_str("    std::panic::set_hook(Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
+    out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
     if main_ret_int {
-        out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
         out.push_str("        Ok(code) => std::process::exit(code as i32),\n");
-        out.push_str("        Err(_) => std::process::exit(70),\n");
-        out.push_str("    }\n");
     } else {
-        out.push_str("    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)).is_err() {\n");
-        out.push_str("        std::process::exit(70);\n");
-        out.push_str("    }\n");
+        out.push_str("        Ok(_) => std::process::exit(0),\n");
     }
+    out.push_str("        Err(e) => {\n");
+    out.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+    out.push_str("            std::process::exit(70)\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
     out.push_str("}\n");
     // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) → implica net.
     if t.needs_rt_tls {
@@ -1023,24 +1035,30 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "        st.closed = true; cv.notify_all();\n",
             "    }\n",
             "}\n",
-            // Structured concurrency (M12.3): Task<T> = un JoinHandle envuelto (Arc<Mutex>) que cachea el
-            // resultado (join una vez ejecuta el hilo; joins posteriores devuelven el clon cacheado → una
-            // tarea puede unirse explícitamente O por el scope, no dos veces).
-            "struct __TaskState<T> { handle: Option<std::thread::JoinHandle<T>>, result: Option<T> }\n",
+            // Structured concurrency (M12.3) + contención de fallos (H21-N1): Task<T> = un JoinHandle
+            // envuelto (Arc<Mutex>) que cachea el resultado. El cuerpo corre bajo `catch_unwind` → un
+            // fallo de la hija queda CAPTURADO en la Task (`Err(msg)`, como el `Failed` de la VM) y NO
+            // mata el proceso; se re-lanza cuando alguien lo OBSERVA (`join`/salida del scope) y
+            // encadena hacia arriba hasta main (M12.3). `wait` es la observación sin re-lanzar (la
+            // base de `try_join`, H21-N2).
+            "struct __TaskState<T> { handle: Option<std::thread::JoinHandle<Result<T, String>>>, result: Option<Result<T, String>> }\n",
             "struct __RayTask<T> { inner: std::sync::Arc<std::sync::Mutex<__TaskState<T>>> }\n",
             "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone() } } }\n",
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
-            "    fn join(&self) -> T {\n",
+            "    fn wait(&self) -> Result<T, String> {\n",
             "        let mut st = self.inner.lock().unwrap();\n",
-            "        if let Some(h) = st.handle.take() { let r = h.join().unwrap(); st.result = Some(r); }\n",
+            "        if let Some(h) = st.handle.take() { let r = h.join().unwrap_or(Err(\"task panicked\".to_string())); st.result = Some(r); }\n",
             "        st.result.clone().unwrap()\n",
             "    }\n",
+            "    fn join(&self) -> T { match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
             "}\n",
             // Cada scope activo (por hilo) acumula clausuras que unen las tareas lanzadas dentro; al salir
-            // el scope las ejecuta (une todas). `spawn` registra su tarea en el scope más interno, si hay.
+            // el scope las ejecuta (une todas; un fallo de una hija se re-lanza al unirla → propaga, como
+            // ScopeEnd de la VM). `spawn` registra su tarea en el scope más interno, si hay.
             "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<Box<dyn FnOnce()>>>> = std::cell::RefCell::new(Vec::new()); }\n",
             "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
-            "    let task = __RayTask { inner: std::sync::Arc::new(std::sync::Mutex::new(__TaskState { handle: Some(std::thread::spawn(f)), result: None })) };\n",
+            "    let h = std::thread::spawn(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e)));\n",
+            "    let task = __RayTask { inner: std::sync::Arc::new(std::sync::Mutex::new(__TaskState { handle: Some(h), result: None })) };\n",
             "    let t = task.clone();\n",
             "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(Box::new(move || { let _ = t.join(); })); } });\n",
             "    task\n}\n",
@@ -2976,6 +2994,30 @@ impl Transpiler {
                 out.push_str(".join()");
                 out.push_str(post);
             }
+            // try_join(t) → Result<T, string> (H21-N2): une SIN re-lanzar — el fallo de la tarea como
+            // VALOR (M56.5). Sobre `wait()` (N1); el Ok se convierte de la repr Send a la del programa,
+            // como `join`.
+            "try_join" if matches!(self.type_of(eff[0])?, Type::Task(_)) => {
+                let elem = match self.type_of(eff[0])? {
+                    Type::Task(t) => (*t).clone(),
+                    _ => unreachable!("guard garantiza Task"),
+                };
+                let (pre, post): (&str, &str) = match normalize_type(&elem) {
+                    Type::String => ("Rc::<str>::from(&*__rt_v", ")"),
+                    Type::Bytes => ("Rc::<[u8]>::from(&*__rt_v", ")"),
+                    _ => ("__rt_v", ""),
+                };
+                out.push_str("match (");
+                self.emit_expr(out, eff[0])?;
+                write!(out, ").wait() {{ Ok(__rt_v) => Ok({}{}), Err(__rt_m) => Err(Rc::<str>::from(__rt_m)) }}", pre, post).unwrap();
+            }
+            // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
+            // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
+            "__task_failed" => {
+                out.push_str("Rc::new(std::cell::RefCell::new(match (");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").wait() { Ok(_) => Vec::<Rc<str>>::new(), Err(__rt_m) => vec![Rc::<str>::from(__rt_m)] }))");
+            }
             "join" => {
                 out.push_str("__ray_join(&");
                 self.emit_expr(out, eff[0])?;
@@ -3534,6 +3576,12 @@ impl Transpiler {
                         Some(Type::Task(t)) => *t,
                         _ => Type::String,
                     },
+                    // try_join(t) → Result<T, string> (H21-N2); __task_failed(t) → [string].
+                    "try_join" => match recv0.map(|e| self.type_of(e)).transpose()? {
+                        Some(Type::Task(t)) => Type::Enum("Result".into(), vec![*t, Type::String]),
+                        other => return Err(format!("try_join expects a Task, got {:?}", other)),
+                    },
+                    "__task_failed" => Type::Array(Box::new(Type::String)),
                     "show" if n.contains('#') => Type::String,
                     "eq" | "less" if n.contains('#') => Type::Bool,
                     "len" => Type::Int,
@@ -5091,14 +5139,24 @@ mod tests {
 
     #[test]
     fn rechaza_fuera_del_subconjunto() {
-        // un `main` con `try_join` (une una Task devolviendo Result; aún fuera) → no transpilable.
+        // Una GUARDA de match (`Option.Some(n) if n > 0 =>`) sigue fuera del subconjunto → no
+        // transpilable. (try_join, que era el caso de este test, se portó en H21-N2 — ver abajo.)
         let tokens = crate::lexer::lex(
-            "fn main() { let t: Task<int> = spawn(fn() -> int { 1 }); match (try_join(t)) { Result.Ok(v) => print(v), Result.Err(e) => print(0) } }",
+            "fn main() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }",
         )
         .unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         assert!(super::transpile(&prog).is_err());
+    }
+
+    #[test]
+    fn transpila_try_join() {
+        // H21-N2: try_join une SIN re-lanzar (el fallo como valor) → transpila sobre `wait()` (N1).
+        let rust = transpile_src(
+            "fn main() { let t: Task<int> = spawn(fn() -> int { 1 }); match (try_join(t)) { Result.Ok(v) => print(v), Result.Err(e) => print(0) } }",
+        );
+        assert!(rust.contains(".wait()"), "try_join baja a wait(): {}", rust);
     }
 
     #[test]

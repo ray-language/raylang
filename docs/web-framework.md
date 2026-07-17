@@ -130,8 +130,10 @@ app.listen_limits("0.0.0.0", 8080, mis_limits);     // webserver.Limits explíci
 
 Todas las variantes heredan de `net/webserver`: keep-alive HTTP/1.1, límites de seguridad
 (cabeceras/cuerpo/conexiones/timeout de lectura), y un handler que hace `panic` responde 500 sin
-tumbar el servidor. Con `ray dev` (M92) tienes watch+restart con drenado y el socket retenido por
-el supervisor (cero conexiones rechazadas al reiniciar).
+tumbar el servidor. Con `ray dev` (M92) tienes watch+restart con drenado y **live-reload del
+navegador** (la página se refresca sola al reiniciar; el snippet reintenta hasta que el servidor
+vuelve). Con `--port N` además el supervisor retiene el socket (cero conexiones rechazadas al
+reiniciar) y la app puede leer el puerto con `env("RAY_LISTEN_ADDR")` (`"host:puerto"`).
 
 Nota de diseño: raylang usa actores de heap aislado — cada conexión ve su propia copia del estado.
 Lo idiomático es el **handler puro** (la respuesta como función de la petición); el estado

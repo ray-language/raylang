@@ -234,6 +234,50 @@ fn dev_live_reload_inyecta_el_snippet_y_emite_reload() {
     let _ = dev.wait();
 }
 
+#[cfg(unix)]
+#[test]
+fn dev_live_reload_sin_port_tambien_inyecta() {
+    // El hub arranca SIEMPRE (no solo con `--port`): "es una app web" lo decide el webserver al servir
+    // HTML, no el supervisor. Sin socket-activation el snippet reintenta el fetch hasta que el hijo
+    // re-binde (aquí solo se verifica la inyección; el reinicio lo cubre el test con `--port`).
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let base = std::env::temp_dir().join("ray_dev_livereload_noport");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("net")).unwrap();
+    let pkg = format!("{}/packages/net", env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(format!("{pkg}/webserver.ray"), base.join("webserver.ray")).unwrap();
+    std::fs::copy(format!("{pkg}/trace.ray"), base.join("net/trace.ray")).unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        format!(
+            "from webserver import serve, html_response, Request, Response;\n\
+             fn h(req: Request) -> Response {{ html_response(200, \"<html><body>solo</body></html>\") }}\n\
+             fn main() -> int {{ let _ = serve(\"127.0.0.1\", {port}, h); 0 }}\n"
+        ),
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .arg("main.ray")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev sin --port");
+
+    let hub = leer_hub_port(&out_path, 10);
+    let resp = http_get(port, 15);
+    assert!(resp.contains("EventSource"), "el HTML lleva el snippet inyectado sin --port:\n{resp}");
+    assert!(resp.contains(&format!(":{hub}/")), "el snippet apunta al hub {hub}:\n{resp}");
+
+    let _ = dev.kill();
+    let _ = dev.wait();
+}
+
 #[test]
 fn dev_no_reinicia_si_el_cambio_no_compila() {
     // Check-before-restart (M92.2): un cambio que NO compila NO debe reiniciar el programa; el

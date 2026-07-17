@@ -222,9 +222,12 @@ fn cmd_dev(args: &[String]) {
     let listen_pair: Option<(i32, &str)> = None;
     let _ = &dev_sock; // se retiene por su lado (el fd vive mientras `dev_sock` no se dropee)
 
-    // Live-reload del navegador (M92.4): solo en una sesión web (hay `--port`/`--listen`/`[dev] listen`).
-    // El hub SSE emite `reload` en cada reinicio; el webserver, viendo `RAY_DEV_RELOAD`, inyecta el snippet.
-    let reload = if listen_addr.is_some() { start_reload_hub() } else { None };
+    // Live-reload del navegador (M92.4): el hub SSE emite `reload` en cada reinicio; el webserver,
+    // viendo `RAY_DEV_RELOAD`, inyecta el snippet en las respuestas HTML. Arranca SIEMPRE: detectar
+    // "es una app web" no es asunto del supervisor — la inyección ya vive en el webserver (solo dispara
+    // al servir text/html; un programa CLI nunca inyecta nada y el hub ocioso cuesta un hilo). Sin
+    // `--port` no hay socket retenido, así que el snippet reintenta hasta que el hijo re-binde.
+    let reload = start_reload_hub();
     let reload_port = reload.as_ref().map(|(_, p)| *p);
     if let Some(p) = reload_port {
         eprintln!("[dev] live-reload on http://127.0.0.1:{p} (browser refresh on restart)");

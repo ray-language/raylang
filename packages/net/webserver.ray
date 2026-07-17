@@ -674,7 +674,10 @@ fn inject_live_reload(r: Response) -> Response {
             if (is_html_response(r)) {
                 match (from_utf8(r.body)) {
                     Result.Ok(html) => {
-                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){location.reload()}</script>";
+                        // Al recibir el evento reintenta un fetch hasta que el servidor responda y solo
+                        // entonces recarga: sin socket-activation (`ray dev` sin `--port`) el hijo nuevo
+                        // tarda unos ms en re-bindear y un reload inmediato daría "connection refused".
+                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){var t=function(){fetch(location.href,{cache:\"no-store\"}).then(function(){location.reload()}).catch(function(){setTimeout(t,200)})};t()}</script>";
                         Response { status: r.status, headers: r.headers, set_cookie: r.set_cookie, body: inject_before_body_end(html, snippet).to_bytes() }
                     },
                     Result.Err(e) => r, // cuerpo no-UTF8 → intacto

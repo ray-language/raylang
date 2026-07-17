@@ -4513,10 +4513,6 @@ impl Transpiler {
                 }
             }
             ExprKind::Try(inner) => unwrapped(&self.type_of(inner)?),
-            ExprKind::Func(fnexpr) => Type::Fn(
-                fnexpr.params.iter().map(|p| p.ty.clone()).collect(),
-                Box::new(fnexpr.return_type.clone()),
-            ),
             ExprKind::Field { object, name } => {
                 let obj_ty = self.type_of(object)?;
                 // Tupla: `t.0` → el tipo del i-ésimo elemento.

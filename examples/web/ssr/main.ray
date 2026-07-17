@@ -36,6 +36,11 @@ fn render(titulo: string, saludo: string, popular: bool, lenguajes: [string]) ->
 }
 
 fn pagina(req: webserver.Request) -> webserver.Response {
+    // Los assets van MONTADOS bajo /static/ (M56.9): el prefijo se recorta (sirve static/app.css),
+    // cada 200 lleva ETag y un If-None-Match que casa responde 304 sin reenviar el archivo.
+    if (req.path.starts_with("/static/")) {
+        return webserver.static_mount("/static/", "static", req);
+    }
     if (req.path == "/") {
         let html = render(
             "raylang SSR",

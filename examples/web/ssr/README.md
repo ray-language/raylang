@@ -12,11 +12,18 @@ el UTF-8 como Latin-1 y estropea los acentos.
 ssr/
 ├── ray.toml                          # dependencia por ruta a packages/net
 ├── main.ray                          # el servidor (handler puro: petición → HTML)
+├── static/                           # assets servidos con static_mount (M56.9)
+│   └── app.css                       # el CSS que enlaza el layout (<link href="/static/app.css">)
 └── vistas/                           # los TEMPLATES (fuente de verdad) + sus .ray GENERADOS
     ├── layout.ray.html               # el layout: la estructura, con {% block cuerpo %} como hueco
     ├── vista_inicio.ray.html         # la vista: {% extends layout %} + su bloque; incluye el partial
     └── tarjeta.ray.html              # el partial: un <li> por lenguaje
 ```
+
+Los **assets estáticos** van montados bajo `/static/` con `webserver.static_mount("/static/",
+"static", req)` (M56.9): el prefijo de la URL se recorta (sirve `static/app.css`), cada 200 lleva
+un `ETag` (tamaño+mtime) y una petición con `If-None-Match` que casa recibe `304 Not Modified` sin
+reenviar el archivo — el navegador cachea y revalida gratis.
 
 Cada template declara su firma en la primera línea:
 

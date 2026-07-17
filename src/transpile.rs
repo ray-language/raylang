@@ -154,6 +154,12 @@ fn is_handled_builtin(name: &str) -> bool {
     ) {
         return true;
     }
+    // Un builtin público de la tabla `BUILTINS` (print/join/spawn/…) siempre está manejado — H16: la
+    // tabla es la fuente de verdad, no una lista repetida aquí. (Un nombre de la tabla nunca es una
+    // función de usuario: el checker prohíbe redefinir un builtin.)
+    if crate::builtins::lookup(name).is_some() {
+        return true;
+    }
     matches!(
         name,
         // --- funciones del prelude (src/prelude.ray) ---
@@ -161,10 +167,10 @@ fn is_handled_builtin(name: &str) -> bool {
             | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "input" | "map" | "max" | "min"
             | "parse_float" | "parse_int" | "pop" | "position" | "read_int" | "recv"
             | "remove" | "sort" | "try_join"
-        // --- builtins públicos manejados en emit_call ---
-            | "len" | "push" | "split" | "join" | "chars" | "to_string" | "print" | "eprint"
-            | "contains_key" | "keys" | "values" | "insert" | "add_to" | "unwrap" | "unwrap_or"
-            | "panic"
+        // --- builtins públicos manejados en emit_call que NO son filas de la tabla (bajan a
+        // primitivos `__len`/`__push`/… o son azúcar del prelude) ---
+            | "len" | "push" | "split" | "chars" | "contains_key" | "keys" | "values" | "insert"
+            | "unwrap" | "unwrap_or"
     )
 }
 
@@ -4219,6 +4225,12 @@ impl Transpiler {
                     return Err(format!("variable '{}' has no known type", n));
                 }
             }
+            // Función anónima → su firma declarada (los params van anotados). Habilita que la regla
+            // de tabla de `spawn`/`scope` (H16) reciba el `Type::Fn` del literal.
+            ExprKind::Func(f) => Type::Fn(
+                f.params.iter().map(|p| normalize_type(&p.ty)).collect(),
+                Box::new(normalize_type(&f.return_type)),
+            ),
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Type::Bool,
                 UnaryOp::BitNot => Type::Int,
@@ -4291,19 +4303,32 @@ impl Transpiler {
                 let method = n.rsplit('#').next().unwrap_or(n).trim_start_matches("__");
                 // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
                 let recv0 = recv.or_else(|| args.first());
+                // H16: el tipo de retorno de un builtin lo aporta su regla `check` de la tabla
+                // `BUILTINS` (L1) — un solo lugar de verdad, como checker/VM/intérprete. Se consulta
+                // por nombre EXACTO (público `join`/`spawn`/… o primitivo `__sha256`/… tal como llega
+                // el sitio) y, para un método manglado `Tipo#m`, por el nombre pelado (`int#to_string`
+                // → `to_string`). Guardas: un nombre definido por el USUARIO (override, método de
+                // trait: vive en `funcs`) o un closure local en ámbito ganan sobre la tabla; y si la
+                // regla no casa (colisión de nombre de método), se sigue por el camino manual. Los
+                // WRAPPERS del prelude (get/recv/parse_int/try_join…, que reenvasan `[T]` →
+                // Option/Result) no están en la tabla → brazos manuales de abajo.
+                if !self.funcs.contains_key(n) && self.lookup(n).is_none() {
+                    let table_name = if n.contains('#') { method } else { n };
+                    if let Some(b) = crate::builtins::lookup(table_name) {
+                        let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+                        if let Ok(ats) = eff.iter().map(|a| self.type_of(a)).collect::<Result<Vec<_>, _>>()
+                            && let Ok(ret) = (b.check)(&ats)
+                        {
+                            return Ok(self.classify(&ret));
+                        }
+                    }
+                }
                 match method {
-                    "to_string" => Type::String,
-                    // join(t) → T de la Task; join(arr, sep) → String (ad-hoc por el tipo del primer arg).
-                    "join" => match recv0.map(|e| self.type_of(e)).transpose()? {
-                        Some(Type::Task(t)) => self.classify(&t),
-                        _ => Type::String,
-                    },
-                    // try_join(t) → Result<T, string> (H21-N2); __task_failed(t) → [string].
+                    // try_join(t) → Result<T, string> (H21-N2; wrapper sobre `__task_failed`).
                     "try_join" => match recv0.map(|e| self.type_of(e)).transpose()? {
                         Some(Type::Task(t)) => Type::Enum("Result".into(), vec![self.classify(&t), Type::String]),
                         other => return Err(format!("try_join expects a Task, got {:?}", other)),
                     },
-                    "__task_failed" => Type::Array(Box::new(Type::String)),
                     "show" if n.contains('#') => Type::String,
                     "eq" | "less" if n.contains('#') => Type::Bool,
                     "len" => Type::Int,
@@ -4316,49 +4341,20 @@ impl Transpiler {
                     // env → Option<string> (variable de entorno).
                     "input" | "env" => opt_of(Type::String),
                     "read_int" => opt_of(Type::Int),
-                    // Concurrencia: recv(ch) → Option<T> (T = elemento del canal); send/spawn → unit.
+                    // recv(ch) → Option<T>: wrapper del prelude sobre `__recv` (que devuelve `[T]`).
                     "recv" => match self.type_of(recv0.ok_or("recv without a channel")?)? {
                         Type::Channel(t) => opt_of(*t),
                         other => return Err(format!("recv on {:?} is not supported", other)),
                     },
-                    "send" => Type::Unit,
-                    "select" => Type::Int, // índice del canal listo
-                    "signals" => Type::Channel(Box::new(Type::Int)), // canal de señales del SO
-                    // spawn(f)→Task<T>; scope(f)→R. `f` es un literal `fn()->T` o el nombre de una función.
-                    "spawn" | "scope" => {
-                        let ret = match recv0.map(|e| &e.kind) {
-                            Some(ExprKind::Func(f)) => normalize_type(&f.return_type),
-                            Some(ExprKind::Ident(n)) if self.funcs.contains_key(n) => {
-                                normalize_type(&self.funcs[n].ret)
-                            }
-                            _ => return Err(format!("{} without an anonymous function or function name", method)),
-                        };
-                        if method == "spawn" {
-                            Type::Task(Box::new(ret))
-                        } else {
-                            ret
-                        }
-                    }
-                    // close ad-hoc: canal → unit; handle de archivo (int) → 0.
-                    "close" => match recv0.map(|e| self.type_of(e)).transpose()? {
-                        Some(Type::Channel(_)) => Type::Unit,
-                        _ => Type::Int,
-                    },
-                    "print" | "eprint" | "push" | "insert" | "add_to" | "assert" | "assert_eq" | "panic" => Type::Unit,
-                    "bytes_of" => Type::Bytes,
-                    "char_code" => Type::Int,
+                    "push" | "insert" | "assert" | "assert_eq" => Type::Unit,
                     "char_from_code" => opt_of(Type::Char),
-                    // UDP primitivos: bind/send → [string] etiquetado; recv → [bytes] etiquetado.
-                    "udp_bind" | "udp_send_to" => Type::Array(Box::new(Type::String)),
-                    "udp_recv_from" => Type::Array(Box::new(Type::Bytes)),
-                    // Más string builtins: trim/to_upper/to_lower/repeat/replace/substring → string;
-                    // starts_with/ends_with → bool.
+                    // Más string builtins como métodos manglados (`string#trim` → "trim"; sus filas de
+                    // tabla son los primitivos `__trim`/…, que no reenvasan pero cambian de nombre).
                     "trim" | "to_upper" | "to_lower" | "repeat" | "replace" | "substring" => Type::String,
                     "starts_with" | "ends_with" | "contains" => Type::Bool,
                     "index_of" => opt_of(Type::Int), // índice de subcadena → Option<int>
 
                     "split" => Type::Array(Box::new(Type::String)),
-                    "args" => Type::Array(Box::new(Type::String)),
                     "chars" => Type::Array(Box::new(Type::Char)),
                     "contains_key" => Type::Bool,
                     // get_or → V (desenvuelto); get/remove → Option<V> (para match/`?`); keys→[K]; values→[V].
@@ -4379,29 +4375,8 @@ impl Transpiler {
                         other => return Err(format!("values on {:?} is not supported", other)),
                     },
                     "sort" => self.type_of(recv0.ok_or("sort without a receiver")?)?,
-                    // Cripto (M43): hash/hmac/csprng → bytes; verify → bool; los fallibles (ed25519
-                    // pk/sign, chacha seal/open) → `[bytes]` etiquetado (el prelude → Option<bytes>). `method`
-                    // ya viene sin `__` (ver emit_call); guarda `n` empieza por `__`.
-                    "sha256" | "sha512" | "sha1" | "hmac_sha256" | "crypto_random_bytes"
-                        if n.starts_with("__") =>
-                    {
-                        Type::Bytes
-                    }
-                    "ed25519_verify" if n.starts_with("__") => Type::Bool,
-                    "ed25519_public_key" | "ed25519_sign" | "chacha20poly1305_seal"
-                    | "chacha20poly1305_open"
-                        if n.starts_with("__") =>
-                    {
-                        Type::Array(Box::new(Type::Bytes))
-                    }
-                    // TLS (Paso 1) y SQLite (Paso 2): los primitivos devuelven `[string]` etiquetado
-                    // (["ok",…]/["err",msg]; sqlite_query aplana ncols + celdas).
-                    "tls_connect" | "tls_connect_h2" | "tls_accept" | "tls_upgrade" | "sqlite_open"
-                    | "sqlite_exec" | "sqlite_query"
-                        if n.starts_with("__") =>
-                    {
-                        Type::Array(Box::new(Type::String))
-                    }
+                    // (Cripto/TLS/SQLite/UDP: sus sitios llegan con el nombre primitivo `__sha256`/… y
+                    // los tipa la tabla en el fast-path de arriba.)
                     // unwrap_or/unwrap desenvuelven un Option<T>/Result<T,E> → T.
                     "unwrap_or" | "unwrap" => {
                         unwrapped(&self.type_of(recv0.ok_or("unwrap without a receiver")?)?)

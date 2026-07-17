@@ -481,10 +481,11 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > divergencia muda de cancelación queda documentada). **Estructural:** **H13** (error-paths de
 > SQLite/TLS byte-idénticos nativo≡VM), **H20** (`--target` cross-compile + `Cargo.lock` cacheado),
 > **H19** (medido: el nativo ya gana a la VM en código idiomático; fast-path ASCII en `len` aplicado).
-> **⏸️ DIFERIDOS por decisión del usuario:** **H16** (dedup de builtins — la guardia H11 ya evita la deriva; queda deuda
-> de mantenibilidad de bajo ROI), **H21** (cancelación M12.5 en hilos reales — 3-5 días, su propia
-> sesión). **Auditoría cerrada salvo H16 (dedup, bajo ROI); H6 se resolvió el 16 jul (paridad por
-> defecto + `--fast`) y el port H21 se completó el 17 jul (N1–N5).** Los ítems marcados abajo con ✅ ya están hechos.
+> **AUDITORÍA CERRADA (17 jul 2026): los 21 hallazgos resueltos.** Los tres que quedaban se
+> cerraron en orden: **H6** (16 jul: paridad de errores de ejecución por defecto + `--fast`),
+> **H21** (17 jul: port de scheduler completo, N1–N5) y **H16** (17 jul: `type_of` e
+> `is_handled_builtin` consultan la tabla `BUILTINS`; las ramas de `emit_call` son implementación
+> por motor, no duplicación). Los ítems marcados abajo con ✅ ya están hechos.
 
 > **Revisión post-lote (16 jul 2026)**: un análisis crítico de los cuatro lotes cerró seis huecos que
 > los fixes originales dejaron (patrón común: cada fix cubría los sitios enumerados, no la clase):
@@ -721,20 +722,27 @@ desambigua el stem, p. ej. hash de la ruta).
 Cargo generado (`cli.rs:726`) se borran tras compilar — se acumulan en `$TMP` uno por PID. Choca
 con la política del proyecto de cero fugas de artefactos. **Esfuerzo: ~30 min.**
 
-**H16. ⏸️ DIFERIDO (decisión del usuario, 16 jul 2026). Duplicación interna del registro de builtins
+**H16. ✅ RESUELTO (17 jul 2026, alcance acotado). Duplicación interna del registro de builtins
 (deuda estructural).** El conocimiento de
 los builtins está repetido a mano en ≥4 sitios de `transpile.rs` — `emit_call` (~735 líneas),
 `type_of` (~330 líneas de match paralelo), `is_handled_builtin` (`:98`) e `is_prelude_impl`
 (`:47`) — sin apoyarse en la tabla `BUILTINS` (la limpieza L1 hizo exactamente esto para
 checker/VM/intérprete). Cada builtin nuevo exige 3–4 ediciones sincronizadas; H3 y la guarda
 ad-hoc de `get_or` son síntomas. Al menos la regla `check` de L1 debería aportar el tipo de
-retorno y matar el `type_of` paralelo. **Esfuerzo: 2–3 días** (refactor estructural del archivo
-más grande del repo; convierte la guardia H11 en permanente).
-> **Diferido:** el RIESGO real (un builtin nuevo cae en un stub silencioso en nativo) ya lo
-> neutraliza la **guardia H11** (`NATIVE_TRACKED_BUILTINS` + test): un builtin nuevo falla el test
-> hasta clasificarlo. Lo que queda es deuda de MANTENIBILIDAD (menos ediciones sincronizadas), no
-> visible al usuario, con alto churn en el archivo más grande del repo → bajo ROI ahora. Retomar
-> como limpieza dedicada si el `type_of`/`emit_call` paralelos se vuelven un estorbo recurrente.
+retorno y matar el `type_of` paralelo.
+> **Resolución (la sugerencia del propio hallazgo):** `type_of` ahora consulta la regla `check` de
+> la tabla `BUILTINS` como caso general — por nombre exacto (público `join`/`spawn`/… o primitivo
+> `__sha256`/… tal como llega el sitio) y por nombre pelado para métodos manglados (`int#to_string`)
+> — con dos guardas (una definición de USUARIO o un closure local ganan; si la regla no casa, cae al
+> camino manual). Eso mató ~25 brazos del match paralelo, incluidos los polimórficos (`join`
+> Task-vs-string, `close` canal-vs-handle, `spawn`/`scope` — habilitado por un brazo `Func` nuevo
+> que tipa el literal de función) y TODOS los de cripto/TLS/SQLite/UDP. `is_handled_builtin` deriva
+> los públicos de `builtins::lookup` en vez de repetirlos. Quedan a mano, a sabiendas: los WRAPPERS
+> del prelude que reenvasan `[T]` → Option/Result (get/recv/parse_int/try_join/…, no son filas de la
+> tabla) y los métodos manglados cuyo primitivo cambia de nombre (`#len` → `__len`). Las ramas de
+> **`emit_call` NO son duplicación**: son la *implementación* por motor (como el match de opcodes de
+> la VM y el `eval_builtin` del intérprete, que L1 dejó como código a propósito). La guardia H11
+> (`NATIVE_TRACKED_BUILTINS`) sigue siendo el checklist de clasificación.
 
 **H17. ✅ RESUELTO. Mensajes en español y jerga interna de cara al usuario.** Contra la convención del
 proyecto (diagnósticos en INGLÉS): el panic del stub `"'f' no está soportada en el binario
@@ -780,7 +788,8 @@ portable"; el proyecto Cargo generado no fija `Cargo.lock` (las deps de `ray-run
 "paridad por construcción" **entre instalaciones**. `docs/build.md` no menciona ninguna de las
 dos cosas. **Esfuerzo: 1–2 días.**
 
-**H21. Flecos de concurrencia conocidos (contexto, no acción inmediata).** Deuda ya declarada en
+**H21. ✅ RESUELTO (17 jul 2026, port N1–N5; ver la nota "Port H21" arriba). Flecos de concurrencia
+conocidos (contexto, no acción inmediata).** Deuda ya declarada en
 §2.4 que la auditoría confirma: canales/Task solo de primitivos+string/bytes (`send_type`
 `transpile.rs:3740`); `spawn`/`scope` solo con literal anónimo o función nombrada nularia — no un
 closure en variable (`:2926-2942`); `Rc<dyn Fn>` no-`Send` bloquea `webserver`/`framework`/
@@ -792,11 +801,14 @@ con sleep de 50µs (busy-wait); **`send` sobre canal cerrado se descarta en sile
 (`transpile.rs:846`) donde la VM tiene semántica propia — este último sí merece fix junto a H2.
 La implementación real de cancelación M12.5/`try_join` en hilos reales es el ítem más difícil de
 toda la lista: **3–5 días**, diferible si H7 los rechaza en compilación.
-> **⏸️ DIFERIDO (decisión del usuario, 16 jul 2026):** la cancelación M12.5 en hilos reales es un
-> port de semántica de scheduler (su propia sesión), no un bug; ya documentada como límite del
-> backend (§2.4) y ahora los stubs (p. ej. `try_join`) se AVISAN al compilar (H7). Pieza pequeña
-> que sí conviene junto a un futuro H2-bis: **`send` sobre canal cerrado se descarta en silencio**
-> (`transpile.rs:846`) — la VM tiene semántica propia; anotado aquí para no perderlo.
+> **Resuelto en tres tandas (la parte de CONCURRENCIA quedó cerrada):** el slice de canales
+> (16 jul: rendezvous multi-emisor, `send` sobre cerrado y `close` con emisor bloqueado ≡ VM) y el
+> port de scheduler N1–N5 (17 jul: contención de fallos, `try_join`, cancelación M12.5, select por
+> condvar sin busy-wait, y heap/funciones cruzando hilos — `Rc<dyn Fn>`/webserver incluidos). Los
+> flecos que SIGUEN siendo límites documentados del backend (§2.4), fuera del alcance de la
+> concurrencia: guardas de `match` y patrones de struct fuera del subconjunto, `signals()` solo
+> Unix, scheduling con hilos reales vs VM determinista (se testea el subconjunto determinista), y
+> la cancelación cooperativa solo en puntos bloqueantes (la VM cancela en los yields M:1).
 
 ### 6.5 Plan de ataque sugerido (por lotes)
 

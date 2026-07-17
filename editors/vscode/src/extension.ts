@@ -70,7 +70,10 @@ export function activate(context: vscode.ExtensionContext): void {
       { scheme: "file", language: "raylang" },
       // M55: los templates compilados (.ray.html) reciben diagnósticos del mismo servidor
       // (errores del template + errores de tipos del módulo generado, mapeados a sus líneas).
-      { scheme: "file", language: "raylang-template" },
+      // Desde v0.17 los .ray.html abren como lenguaje `html` (IntelliSense nativo de HTML/CSS/JS
+      // de VSCode) y el servidor raylang se conecta por PATRÓN, solo a los .ray.html — el server
+      // distingue templates por el sufijo del URI, no por el languageId.
+      { scheme: "file", language: "html", pattern: "**/*.ray.html" },
     ],
   };
 

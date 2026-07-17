@@ -190,9 +190,11 @@ capítulo "El LSP" del libro).
 
 ## Templates compilados (`.ray.html`, M55)
 
-Los archivos `*.ray.html` se colorean como **raylang template** (HTML + los delimitadores
-`{{ }}`/`{% %}` con la expresión embebida coloreada como raylang) y reciben **diagnósticos en
-vivo** del mismo Language Server: errores del propio template (etiquetas sin cerrar, `params` mal
+Los archivos `*.ray.html` abren como **HTML** (desde v0.17): el IntelliSense **nativo de VSCode
+para HTML, CSS (`<style>`) y JavaScript (`<script>`) — tags, propiedades, Emmet — funciona
+completo**, y encima una *injection grammar* colorea los delimitadores `{{ }}`/`{% %}` con la
+expresión embebida coloreada como raylang. Además reciben **diagnósticos en vivo** del Language
+Server de raylang (conectado por patrón `**/*.ray.html`): errores del propio template (etiquetas sin cerrar, `params` mal
 formados) y errores de tipos del módulo generado, **mapeados a la línea del template** (un typo en
 `{{ variable }}` se subraya en el HTML). Dentro de `{{ }}`/`{% %}` hay además **autocompletado**
 (los parámetros tipados de la cabecera `{% params %}`, las variables de los `{% for %}` que

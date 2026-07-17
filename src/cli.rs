@@ -317,10 +317,13 @@ fn spawn_dev_child(
             cmd.pre_exec(move || {
                 unsafe extern "C" {
                     fn dup2(oldfd: i32, newfd: i32) -> i32;
-                    fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
+                    // VARIÁDICA, como la declaración de builtins.rs (aridad fija = UB en arm64 y
+                    // `clashing_extern_declarations` entre ambas).
+                    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
                 }
                 const F_SETFD: i32 = 2; // limpiar los flags del descriptor (quita FD_CLOEXEC)
-                if unsafe { dup2(fd, TARGET_FD) } < 0 || unsafe { fcntl(TARGET_FD, F_SETFD, 0) } < 0 {
+                // (sin `unsafe` interior: el closure ya corre dentro del bloque unsafe de pre_exec)
+                if dup2(fd, TARGET_FD) < 0 || fcntl(TARGET_FD, F_SETFD, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())

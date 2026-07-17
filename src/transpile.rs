@@ -1496,8 +1496,7 @@ impl Transpiler {
                     let sig = self
                         .funcs
                         .get(next_fn)
-                        .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?
-                        .clone();
+                        .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?;
                     let it_ty = self.type_of(expr)?;
                     let mut subst = HashMap::new();
                     if let Some(p0) = sig.params.first() {
@@ -1599,8 +1598,7 @@ impl Transpiler {
                         let sig = self
                             .funcs
                             .get(next_fn)
-                            .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?
-                            .clone();
+                            .ok_or_else(|| format!("iterator without a next method '{}'", next_fn))?;
                         let it_ty = self.type_of(expr)?;
                         let mut subst = HashMap::new();
                         if let Some(p0) = sig.params.first() {

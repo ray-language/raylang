@@ -1207,12 +1207,21 @@ fn struct_literal_completion_items(uri: Option<&str>, src: &str, line0: usize, c
     while start > 0 && is_ident_char(cs[start - 1]) { start -= 1; }
     if start == end { return None; } // no hay identificador antes del `{` → es un bloque, no un literal
     let name: String = cs[start..end].iter().collect();
+    // El nombre puede venir CALIFICADO (`webserver.Response {`, M11.3c-3): retrocede sobre los
+    // segmentos `ident.` para que las guardas de abajo vean lo que precede al nombre COMPLETO
+    // (con `qstart = start`, un `-> M.Tipo {` vería el `.` y no el `->` → cuerpo de función
+    // confundido con literal, campos del tipo de RETORNO sugeridos dentro del cuerpo).
+    let mut qstart = start;
+    while qstart > 1 && cs[qstart - 1] == '.' && is_ident_char(cs[qstart - 2]) {
+        qstart -= 1; // el `.`
+        while qstart > 0 && is_ident_char(cs[qstart - 1]) { qstart -= 1; }
+    }
     // Guarda: descartar posiciones que NO son un literal aunque lleven un nombre de tipo antes del `{`
     // — cuerpo de función (`-> T {`), impl (`for T {`), definición (`struct/enum/trait T {`).
-    let mut k = start;
+    let mut k = qstart;
     while k > 0 && cs[k - 1].is_whitespace() { k -= 1; }
     if k >= 2 && cs[k - 1] == '>' && cs[k - 2] == '-' { return None; } // `-> T {`
-    if let Some((prev, _)) = ident_before(&cs, start) {
+    if let Some((prev, _)) = ident_before(&cs, qstart) {
         if matches!(prev.as_str(), "for" | "struct" | "enum" | "trait" | "impl") { return None; }
     }
     // ¿El struct existe (en el archivo o el cierre de imports)?
@@ -1461,10 +1470,26 @@ fn pipeline_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: 
     repaired_lines[line0] = new_line;
     let repaired = repaired_lines.join("\n");
 
-    let tokens = lexer::lex(&repaired).ok()?;
-    let (mut program, _errs) = parser::parse_all(tokens);
-    let members = checker::member_completion(&mut program);
+    let members = member_completion_of(uri, &repaired);
     Some(Json::Arr(members_to_completion_items(members, src, uri, insert_prefix)))
+}
+
+/// Corre `checker::member_completion` sobre la fuente reparada (con el centinela), **módulo-aware**
+/// si el documento es un archivo: el loader fusiona sus imports desde disco —el módulo de entrada
+/// queda en delta 0, así el centinela no se mueve— y `recv.` resuelve también los tipos de otros
+/// módulos (`webserver.Request`, un `from M import Tipo`). Si no es un archivo o el loader falla
+/// (buffer suelto, otro error a medio escribir, import roto), cae al buffer aislado con
+/// recuperación de errores (el comportamiento previo). Misma idea que `index_for` (hover/def).
+fn member_completion_of(uri: Option<&str>, repaired: &str) -> Vec<checker::MemberItem> {
+    if let Some(path) = uri.and_then(uri_to_path)
+        && let Ok(loaded) = load(&path, repaired)
+    {
+        let mut program = loaded.program;
+        return checker::member_completion(&mut program);
+    }
+    let Ok(tokens) = lexer::lex(repaired) else { return Vec::new() };
+    let (mut program, _errs) = parser::parse_all(tokens);
+    checker::member_completion(&mut program)
 }
 
 fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
@@ -1511,10 +1536,8 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
     repaired_lines[line0] = new_line;
     let repaired = repaired_lines.join("\n");
 
-    // Corre el front-end sobre la fuente reparada (con recuperación de errores) y enumera.
-    let tokens = lexer::lex(&repaired).ok()?;
-    let (mut program, _errs) = parser::parse_all(tokens);
-    let members = checker::member_completion(&mut program);
+    // Corre el front-end sobre la fuente reparada (módulo-aware si es un archivo) y enumera.
+    let members = member_completion_of(uri, &repaired);
 
     let items = members_to_completion_items(members, src, uri, "");
     let _ = docs;

@@ -147,6 +147,55 @@ fn completion_de_members_de_modulo() {
 }
 
 #[test]
+fn completion_de_miembros_de_tipo_importado() {
+    // La completion de miembros es módulo-aware: `p.` con `p: Punto` importado de otro módulo
+    // ofrece sus campos (antes: buffer aislado → el tipo no resolvía → nada).
+    let dir = std::env::temp_dir().join("ray_lsp_memimport");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lib.ray"), "pub struct Punto { x: int, y: int }\n").unwrap();
+    let file = dir.join("m.ray");
+    let src = "from lib import Punto;\nfn f(p: Punto) -> int {\n    p.\n    0\n}\nfn main() -> int { 0 }";
+    std::fs::write(&file, src).unwrap();
+    let uri = format!("file://{}", file.display());
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"from lib import Punto;\nfn f(p: Punto) -> int {{\n    p.\n    0\n}}\nfn main() -> int {{ 0 }}"}}}}}}"#
+    );
+    let comp = format!(
+        r#"{{"jsonrpc":"2.0","id":21,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":6}}}}}}"#
+    );
+    let entry = frame(&open) + &frame(&comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entry);
+    assert!(out.contains("\"id\":21"), "responde a la completion\n{out}");
+    assert!(out.contains("\"label\":\"x\"") && out.contains("\"label\":\"y\""),
+        "offers los campos del struct importado\n{out}");
+}
+
+#[test]
+fn cuerpo_con_retorno_calificado_no_es_literal_de_struct() {
+    // Regresión: `fn f(...) -> m.Tipo {` — la guarda de `-> T {` debe cubrir el nombre CALIFICADO;
+    // antes el cuerpo entero se confundía con un literal `Tipo { … }` y `recv.` dentro del cuerpo
+    // ofrecía los CAMPOS DEL TIPO DE RETORNO en vez de los miembros del receptor.
+    let dir = std::env::temp_dir().join("ray_lsp_retcalif");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lib.ray"), "pub struct Caja { valor: int }\npub struct Otro { cosa: bool }\n").unwrap();
+    let file = dir.join("m.ray");
+    let src = "import lib;\nfn f(o: lib.Otro) -> lib.Caja {\n    o.\n    lib.Caja { valor: 1 }\n}\nfn main() -> int { 0 }";
+    std::fs::write(&file, src).unwrap();
+    let uri = format!("file://{}", file.display());
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import lib;\nfn f(o: lib.Otro) -> lib.Caja {{\n    o.\n    lib.Caja {{ valor: 1 }}\n}}\nfn main() -> int {{ 0 }}"}}}}}}"#
+    );
+    let comp = format!(
+        r#"{{"jsonrpc":"2.0","id":22,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":6}}}}}}"#
+    );
+    let entry = frame(&open) + &frame(&comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entry);
+    assert!(out.contains("\"id\":22"), "responde a la completion\n{out}");
+    assert!(!out.contains("\"label\":\"valor\""), "NO ofrece los campos del tipo de RETORNO\n{out}");
+    assert!(out.contains("\"label\":\"cosa\""), "ofrece los miembros del receptor `o`\n{out}");
+}
+
+#[test]
 fn public_diagnostic_ante_un_error() {
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int { 1 + true }"}}}"#;
     let entry = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);

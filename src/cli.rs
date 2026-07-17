@@ -271,13 +271,14 @@ fn cmd_dev(args: &[String]) {
         if running {
             terminate_gracefully(&mut child);
         }
+        // Arma la recarga ANTES de relanzar: el hub la emitirá cuando el hijo avise `/ready` (el
+        // webserver, al bindear) → el navegador recarga justo cuando el servidor nuevo ya escucha,
+        // sin un fetch de sondeo que falle mientras re-binde.
+        if let Some((hub, _)) = &reload {
+            hub.arm();
+        }
         child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
         running = true;
-        // Avisa a los navegadores conectados (con socket-activation la recarga se encola en el backlog
-        // hasta que el hijo nuevo la sirve → refresca con el código nuevo, sin conexión rechazada).
-        if let Some((hub, _)) = &reload {
-            hub.broadcast();
-        }
     }
 }
 
@@ -368,6 +369,10 @@ fn take_listen(args: &[String]) -> (Option<String>, Vec<String>) {
 /// cero cambios en la VM; se apoya en que el webserver ya habla SSE.
 struct ReloadHub {
     clients: std::sync::Mutex<Vec<std::net::TcpStream>>,
+    /// Recarga ARMADA a la espera del `/ready` del hijo (el webserver avisa al bindear). Emitir al
+    /// armar competiría con el re-bind del hijo → el navegador vería "connection refused"; retenerla
+    /// hasta el aviso hace que la recarga llegue justo cuando el servidor ya escucha.
+    pending: std::sync::atomic::AtomicBool,
 }
 
 impl ReloadHub {
@@ -377,6 +382,21 @@ impl ReloadHub {
         let mut clients = self.clients.lock().unwrap();
         clients.retain_mut(|c| c.write_all(b"data: reload\n\n").and_then(|_| c.flush()).is_ok());
     }
+
+    /// Arma la recarga del próximo reinicio: se emitirá al recibir el `/ready` del hijo. Fallback: si
+    /// en 2 s nadie avisa (la app no usa `net/webserver`, o murió al arrancar), se emite igualmente —
+    /// mejor una recarga que puede fallar que un navegador congelado en la versión vieja.
+    fn arm(self: &std::sync::Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        self.pending.store(true, Ordering::SeqCst);
+        let hub = self.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if hub.pending.swap(false, Ordering::SeqCst) {
+                hub.broadcast();
+            }
+        });
+    }
 }
 
 /// Arranca el hub SSE en un puerto libre (hilo de fondo que acepta navegadores y los registra tras
@@ -385,17 +405,29 @@ fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
-    let hub = std::sync::Arc::new(ReloadHub { clients: std::sync::Mutex::new(Vec::new()) });
+    let hub = std::sync::Arc::new(ReloadHub {
+        clients: std::sync::Mutex::new(Vec::new()),
+        pending: std::sync::atomic::AtomicBool::new(false),
+    });
     let hub_bg = hub.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let mut s = stream;
             let _ = s.set_nodelay(true);
-            // Descarta la petición (solo interesa que sea un GET del EventSource); un read basta.
+            // Lee la petición: `GET /ready` es el aviso del hijo (ya escucha → suelta la recarga
+            // armada); cualquier otra cosa es un `EventSource` de un navegador.
             let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(200)));
             let mut buf = [0u8; 1024];
-            let _ = s.read(&mut buf);
+            let n = s.read(&mut buf).unwrap_or(0);
             let _ = s.set_read_timeout(None);
+            if buf[..n].starts_with(b"GET /ready") {
+                use std::sync::atomic::Ordering;
+                if hub_bg.pending.swap(false, Ordering::SeqCst) {
+                    hub_bg.broadcast();
+                }
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
+                continue;
+            }
             // Cabeceras SSE + un comentario inicial para establecer el stream (CORS abierto: dev local).
             let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n: connected\n\n";
             if s.write_all(head.as_bytes()).and_then(|_| s.flush()).is_ok() {

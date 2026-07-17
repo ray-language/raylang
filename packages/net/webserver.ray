@@ -667,6 +667,29 @@ fn inject_before_body_end(html: string, snippet: string) -> string {
 // M92.4: bajo `ray dev` con live-reload (`RAY_DEV_RELOAD=<puerto>`), inyecta en las respuestas text/html
 // un `EventSource` que recarga la página cuando el supervisor emite `reload` al reiniciar. En producción
 // (sin la variable) no hace nada: un solo `env()` por respuesta y retorno inmediato.
+// M92.4: bajo `ray dev`, avisa al hub de live-reload (`GET /ready`) que este servidor YA escucha.
+// El hub retiene el evento `reload` del reinicio hasta este aviso → el navegador recarga justo
+// cuando el servidor nuevo está listo, sin sondear (cero fetch fallidos). Fuera de dev es un no-op.
+fn dev_notify_ready() {
+    match (env("RAY_DEV_RELOAD")) {
+        Option.None => { },
+        Option.Some(p) => {
+            match (parse_int(p)) {
+                Option.None => { },
+                Option.Some(hub_port) => {
+                    match (net.tcp_connect("127.0.0.1", hub_port)) {
+                        Result.Ok(c) => {
+                            let _ = net.socket_write(c, "GET /ready HTTP/1.0\r\n\r\n");
+                            close(c);
+                        },
+                        Result.Err(e) => { }, // el hub murió → sin live-reload, el servidor sigue
+                    }
+                },
+            }
+        },
+    }
+}
+
 fn inject_live_reload(r: Response) -> Response {
     return match (env("RAY_DEV_RELOAD")) {
         Option.None => r,
@@ -674,10 +697,9 @@ fn inject_live_reload(r: Response) -> Response {
             if (is_html_response(r)) {
                 match (from_utf8(r.body)) {
                     Result.Ok(html) => {
-                        // Al recibir el evento reintenta un fetch hasta que el servidor responda y solo
-                        // entonces recarga: sin socket-activation (`ray dev` sin `--port`) el hijo nuevo
-                        // tarda unos ms en re-bindear y un reload inmediato daría "connection refused".
-                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){var t=function(){fetch(location.href,{cache:\"no-store\"}).then(function(){location.reload()}).catch(function(){setTimeout(t,200)})};t()}</script>";
+                        // Recarga directa: el hub retiene el evento hasta el `/ready` de este servidor
+                        // (dev_notify_ready, emitido al bindear) → cuando llega, el servidor ya escucha.
+                        let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){location.reload()}</script>";
                         Response { status: r.status, headers: r.headers, set_cookie: r.set_cookie, body: inject_before_body_end(html, snippet).to_bytes() }
                     },
                     Result.Err(e) => r, // cuerpo no-UTF8 → intacto
@@ -886,6 +908,7 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("listening on port " + to_string(net.local_port(srv)));
+            dev_notify_ready();
             let bounded: bool = limits.max_conns > 0;
             let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
             var errors: int = 0;
@@ -947,6 +970,7 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("listening on port " + to_string(net.local_port(srv)));
+            dev_notify_ready();
             let bounded: bool = limits.max_conns > 0;
             let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
             let conns: Channel<int> = Channel.new();

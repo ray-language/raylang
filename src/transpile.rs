@@ -194,7 +194,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__trunc",
     // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
-    "__is_dir", "__is_file", "__list_dir", "__mkdir", "__open", "__parse_float", "__parse_int",
+    "__is_dir", "__is_file", "__list_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
@@ -3148,6 +3148,19 @@ impl Transpiler {
                      Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
                 );
             }
+            // mtime(path) -> Result<int,string>: última modificación en epoch-ms UTC (mensajes
+            // byte-idénticos a la VM, incl. "mtime before epoch").
+            "mtime" => {
+                out.push_str("(match std::fs::metadata(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ").and_then(|__md| __md.modified()) { \
+                     Ok(__t) => match __t.duration_since(std::time::UNIX_EPOCH) { \
+                       Ok(__d) => Ok::<i64, Rc<str>>(__d.as_millis() as i64), \
+                       Err(_) => Err(Rc::<str>::from(\"mtime before epoch\")) }, \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) })",
+                );
+            }
             // I/O binaria: read_file_bytes -> Result<bytes,string>; write/append_file_bytes -> Result<int,string>.
             "read_file_bytes" => {
                 out.push_str("(match std::fs::read(&*");
@@ -4265,7 +4278,7 @@ impl Transpiler {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                         "read_file_bytes" => Type::Enum("Result".into(), vec![Type::Bytes, Type::String]),
                         "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir"
-                        | "rename" | "copy_file" | "file_size" | "write_file_bytes"
+                        | "rename" | "copy_file" | "file_size" | "mtime" | "write_file_bytes"
                         | "append_file_bytes" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }

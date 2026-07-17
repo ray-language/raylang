@@ -396,6 +396,17 @@ pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
                 Err(e) => vec!["err".to_string(), e.to_string()],
             };
         }
+        FsOp::Mtime => {
+            // ["ok", epoch_ms] — la última modificación en la MONEDA del tiempo (epoch-ms UTC,
+            // como `now()`). Vale para archivos y directorios.
+            return match std::fs::metadata(&args[0]).and_then(|md| md.modified()) {
+                Ok(t) => match t.duration_since(std::time::UNIX_EPOCH) {
+                    Ok(d) => vec!["ok".to_string(), d.as_millis().to_string()],
+                    Err(_) => vec!["err".to_string(), "mtime before epoch".to_string()],
+                },
+                Err(e) => vec!["err".to_string(), e.to_string()],
+            };
+        }
     };
     match r {
         Ok(()) => vec!["ok".to_string()],
@@ -2176,6 +2187,11 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__file_size", opcode: OpCode::FsTagged(FsOp::FileSize), check: |a| {
         arity(a, 1, "__file_size", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__file_size expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__mtime", opcode: OpCode::FsTagged(FsOp::Mtime), check: |a| {
+        arity(a, 1, "__mtime", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__mtime expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__rename", opcode: OpCode::FsTagged(FsOp::Rename), check: |a| {

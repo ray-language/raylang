@@ -22,13 +22,14 @@ pub enum FsOp {
     FileSize,
     Rename,
     CopyFile,
+    Mtime,
 }
 
 impl FsOp {
     /// Nº de argumentos string (rutas) que saca de la pila.
     pub fn argc(self) -> usize {
         match self {
-            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize => 1,
+            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime => 1,
             FsOp::Rename | FsOp::CopyFile => 2,
         }
     }

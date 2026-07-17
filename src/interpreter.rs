@@ -1509,12 +1509,13 @@ impl<'a> Interpreter<'a> {
             }
             // M67: operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file) —
             // el helper compartido monta el ["ok"(, dato)]/["err", msg]; aquí solo se convierte.
-            "__mkdir" | "__remove_dir" | "__file_size" | "__rename" | "__copy_file" => {
+            "__mkdir" | "__remove_dir" | "__file_size" | "__mtime" | "__rename" | "__copy_file" => {
                 use crate::bytecode::FsOp;
                 let op = match name {
                     "__mkdir" => FsOp::Mkdir,
                     "__remove_dir" => FsOp::RemoveDir,
                     "__file_size" => FsOp::FileSize,
+                    "__mtime" => FsOp::Mtime,
                     "__rename" => FsOp::Rename,
                     "__copy_file" => FsOp::CopyFile,
                     _ => unreachable!(),

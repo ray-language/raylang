@@ -131,6 +131,20 @@ pub fn file_size(path: string) -> Result<int, string> {
     }
 }
 
+/// Last-modification time of a file or directory as epoch **milliseconds** UTC (the same
+/// currency as `time.now()`); `Ok(epoch_ms)` or `Err(message)` if the path does not exist.
+pub fn mtime(path: string) -> Result<int, string> {
+    let r = __mtime(path);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(n) => Result.Ok(n),
+            Option.None => Result.Err("mtime inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 /// Appends raw bytes to the end of the file (creating it if needed); `Ok(byte count)` or
 /// `Err(message)`. Binary twin of `append_file`.
 pub fn append_file_bytes(path: string, data: bytes) -> Result<int, string> {

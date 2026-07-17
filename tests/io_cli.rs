@@ -353,6 +353,12 @@ fn main() -> int {
   let _ = fs.write_file(base + "/sub/a.txt", "hello");
   print("size: " + tag(fs.file_size(base + "/sub/a.txt")));
   print("size de dir: " + tag(fs.file_size(base + "/sub")));
+  let plausible = match (fs.mtime(base + "/sub/a.txt")) {
+    Result.Ok(ms) => ms > 1577836800000,
+    Result.Err(_) => false,
+  };
+  print("mtime plausible: " + to_string(plausible));
+  print("mtime nonexistent: " + tag(fs.mtime(base + "/nope")));
   print("append_bytes: " + tag(fs.append_file_bytes(base + "/sub/a.txt", b"\x00\x01")));
   print("size after append: " + tag(fs.file_size(base + "/sub/a.txt")));
   print("copy: " + tag(fs.copy_file(base + "/sub/a.txt", base + "/sub/a2.bin")));
@@ -368,6 +374,7 @@ fn main() -> int {
 }
 "#;
     let expected = "mkdir: ok 0\nis_dir: true is_file: false\nsize: ok 5\nsize de dir: err\n\
+        mtime plausible: true\nmtime nonexistent: err\n\
         append_bytes: ok 2\nsize after append: ok 7\ncopy: ok 0\nrename: ok 0\n\
         old: false new: true\nrmdir no empty: err\nrmdir: ok 0\nrmdir base: ok 0\n\
         base existe: false\n";

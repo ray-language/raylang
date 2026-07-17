@@ -112,6 +112,7 @@ a un binario de código máquina (24–61× la VM, byte-idéntico; ver el capít
 ```sh
 ray build --native prog.ray            # rustc -O (opt2), ~0,2 s, portable
 ray build --native prog.ray --release  # opt3+lto+cu1+target-cpu=native (no portable)
+ray build --native prog.ray --fast     # int wrapping (sin check de overflow; div/0 sí se chequea)
 ray build --native prog.ray -o bin/app # nombre de salida
 ray build --native prog.ray --target x86_64-unknown-linux-gnu   # cross-compile (H20)
 ```

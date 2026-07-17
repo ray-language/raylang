@@ -85,7 +85,7 @@ Usage: ray <subcommand> [options]
   new <name>      create a new project (ray.toml + src/main.ray)
   run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--target triple] [--without crypto,tls,sqlite]]
+  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite]]
   test [file]    run the @test functions [filter]
   add <name>[@req]  add a dependency from the index to ray.toml and download it
   remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
@@ -580,6 +580,9 @@ fn cmd_build(args: &[String]) {
     // nativo. El resto de flags/archivo se pasan igual; el archivo es el primer no-flag.
     let native = args.iter().any(|a| a == "--native");
     let release = args.iter().any(|a| a == "--release");
+    // `--fast` (H6): aritmética de int ENVOLVENTE (wrapping) en vez de checked — renuncia a la paridad
+    // de overflow con la VM a cambio del último tramo de rendimiento (div/mod por cero siguen chequeados).
+    let fast = args.iter().any(|a| a == "--fast");
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
     // `--target <triple>` (P2.b, H20): cross-compilation. Se pasa tal cual a rustc/cargo (el usuario debe
     // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa
@@ -633,7 +636,7 @@ fn cmd_build(args: &[String]) {
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
-        build_native(&path, output.as_deref(), release, &exclude, target.as_deref());
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast);
         return;
     }
     match compiler::compile_program(&program) {
@@ -659,10 +662,10 @@ fn cmd_build(args: &[String]) {
 ///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>) {
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_with(&program, exclude) {
+    let transpiled = match crate::transpile::transpile_with_opts(&program, exclude, fast) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");

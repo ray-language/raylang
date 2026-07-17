@@ -273,6 +273,104 @@ fn build_native_canal_rendezvous_no_se_deadlockea() {
 }
 
 #[test]
+fn build_native_errores_de_ejecucion_exit_70_como_la_vm() {
+    // H6: la VM aborta los errores de ejecución con `runtime error at L:C: <msg>` y EXIT 70; el nativo
+    // hacía wrapping silencioso en overflow y panics de Rust (texto distinto, exit 101). Ahora: aritmética
+    // de int CHECKED (helpers __ray_add/sub/mul/div/mod/neg), panic/assert/assert_eq con los mensajes del
+    // prelude, todo por `__ray_rt_err` → `runtime error: <msg>` (sin posición: el nativo no lleva el AST)
+    // y exit 70. Para cada caso: MISMO exit code que la VM y el mensaje contenido en ambos stderr.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native exit-70: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_exit70");
+    // (programa, fragmento de mensaje esperado). `input()`-opacidad: valores vía args no hace falta —
+    // el checker no const-evalúa, así que el overflow con literales llega al runtime.
+    let casos: &[(&str, &str, &str)] = &[
+        ("divzero", "fn main() -> int { let a = 10; let b = 0; a / b }", "integer division by zero"),
+        ("modzero", "fn main() -> int { let a = 10; let b = 0; a % b }", "modulo by zero"),
+        (
+            "overflow",
+            "fn main() -> int { var x = 9223372036854775807; x = x + 1; 0 }",
+            "arithmetic overflow on int",
+        ),
+        ("panic", "fn main() -> int { panic(\"boom custom\"); 0 }", "boom custom"),
+        ("assert", "fn main() -> int { assert(1 == 2); 0 }", "assertion failed"),
+        (
+            "asserteq",
+            "fn main() -> int { assert_eq(3, 4); 0 }",
+            "assert_eq failed: 3 != 4",
+        ),
+    ];
+    for (nombre, prog, msg) in casos {
+        let src = format!("{nombre}.ray");
+        std::fs::write(base.join(&src), prog).unwrap();
+        let bin = base.join(format!("{nombre}_bin"));
+        let (_o, err, code) = ray(&base, &["build", &src, "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native {nombre} ok\n{err}");
+        let (_vo, vm_err, vm_code) = ray(&base, &["run", &src]);
+        assert_eq!(vm_code, 70, "la VM sale 70 en {nombre}\n{vm_err}");
+        assert!(vm_err.contains(msg), "la VM da el mensaje en {nombre}\n{vm_err}");
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
+        assert_eq!(native.status.code(), Some(70), "el nativo sale 70 en {nombre} (= VM)\n{native_err}");
+        assert!(
+            native_err.contains(msg),
+            "el nativo da el mensaje de la VM en {nombre}\n{native_err}"
+        );
+    }
+    // La cola de panics de RUST (índice fuera de rango, etc.) también sale 70 (catch_unwind en main);
+    // ahí la paridad es de EXIT CODE, no de texto (el mensaje sigue siendo el de Rust).
+    std::fs::write(base.join("oob.ray"), "fn main() -> int { let a = [1, 2]; a[5] }").unwrap();
+    let bin = base.join("oob_bin");
+    let (_o, err, code) = ray(&base, &["build", "oob.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native oob ok\n{err}");
+    let (_vo, _ve, vm_code) = ray(&base, &["run", "oob.ray"]);
+    assert_eq!(vm_code, 70, "la VM sale 70 en oob");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(native.status.code(), Some(70), "el índice fuera de rango también sale 70");
+}
+
+#[test]
+fn build_native_fast_envuelve_overflow_pero_chequea_div_cero() {
+    // H6, opt-out `--fast`: la aritmética de int vuelve a ser ENVOLVENTE (wrapping — renuncia
+    // deliberada a la paridad de overflow, para el último tramo de rendimiento), pero div/mod por
+    // cero SIGUEN siendo runtime error + exit 70 (Rust los chequea igual: gratis).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native --fast: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_fast");
+    std::fs::write(
+        base.join("ovf.ray"),
+        "fn main() -> int { var x = 9223372036854775807; x = x + 1; print(x); 0 }",
+    )
+    .unwrap();
+    let bin = base.join("ovf_bin");
+    let (_o, err, code) =
+        ray(&base, &["build", "ovf.ray", "--native", "--fast", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --fast ok\n{err}");
+    let native = Command::new(&bin).output().expect("corre el binario --fast");
+    assert_eq!(native.status.code(), Some(0), "con --fast el overflow envuelve, no aborta");
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        "-9223372036854775808\n",
+        "wrapping de i64::MAX + 1"
+    );
+    std::fs::write(base.join("dz.ray"), "fn main() -> int { let a = 1; let b = 0; a / b }").unwrap();
+    let bin = base.join("dz_bin");
+    let (_o, err, code) =
+        ray(&base, &["build", "dz.ray", "--native", "--fast", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --fast div-cero ok\n{err}");
+    let native = Command::new(&bin).output().expect("corre el binario --fast");
+    assert_eq!(native.status.code(), Some(70), "div por cero sigue abortando con 70 bajo --fast");
+    assert!(
+        String::from_utf8_lossy(&native.stderr).contains("integer division by zero"),
+        "y con el texto de la VM"
+    );
+}
+
+#[test]
 fn build_native_rendezvous_multi_emisor_no_se_cuelga() {
     // Slice de canales (revisión post-H2/H21): el handshake rendezvous esperaba "cola vacía", no "MI
     // valor consumido" — con ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse
@@ -321,7 +419,7 @@ fn build_native_rendezvous_multi_emisor_no_se_cuelga() {
 fn build_native_send_sobre_canal_cerrado_es_error_como_la_vm() {
     // Slice de canales: `send` sobre un canal cerrado se DESCARTABA en silencio en nativo; la VM da
     // "send on a closed channel" (error de ejecución). Ahora el nativo aborta con el MISMO texto.
-    // (El exit code difiere aún — 101 panic vs 70 VM — diferido a H6.)
+    // (H6: el exit code también casa — 70 por __ray_rt_err, como la VM.)
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando build_native send-cerrado: rustc no disponible");
         return;
@@ -348,7 +446,7 @@ fn build_native_send_sobre_canal_cerrado_es_error_como_la_vm() {
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
     assert!(native_err.contains("send on a closed channel"), "el nativo aborta con el texto de la VM\n{native_err}");
-    assert_ne!(native.status.code(), Some(0), "el send sobre cerrado no continúa");
+    assert_eq!(native.status.code(), Some(70), "el send sobre cerrado sale 70, como la VM");
     assert!(!String::from_utf8_lossy(&native.stdout).contains("inalcanzable"));
 }
 
@@ -388,7 +486,7 @@ fn build_native_close_con_emisor_bloqueado_es_error_como_la_vm() {
         native_err.contains("close on a channel with a blocked sender"),
         "el nativo aborta con el texto de la VM\n{native_err}"
     );
-    assert_ne!(native.status.code(), Some(0));
+    assert_eq!(native.status.code(), Some(70), "el close con emisor bloqueado sale 70, como la VM");
     assert!(!String::from_utf8_lossy(&native.stdout).contains("inalcanzable"));
 }
 

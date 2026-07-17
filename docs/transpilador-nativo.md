@@ -481,10 +481,9 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > divergencia muda de cancelación queda documentada). **Estructural:** **H13** (error-paths de
 > SQLite/TLS byte-idénticos nativo≡VM), **H20** (`--target` cross-compile + `Cargo.lock` cacheado),
 > **H19** (medido: el nativo ya gana a la VM en código idiomático; fast-path ASCII en `len` aplicado).
-> **⏸️ DIFERIDOS por decisión del usuario:** **H6** (overflow checked + exit 70 — tradeoff
-> paridad-vs-rendimiento), **H16** (dedup de builtins — la guardia H11 ya evita la deriva; queda deuda
+> **⏸️ DIFERIDOS por decisión del usuario:** **H16** (dedup de builtins — la guardia H11 ya evita la deriva; queda deuda
 > de mantenibilidad de bajo ROI), **H21** (cancelación M12.5 en hilos reales — 3-5 días, su propia
-> sesión). **Auditoría cerrada salvo los tres diferidos.** Los ítems marcados abajo con ✅ ya están hechos.
+> sesión). **Auditoría cerrada salvo los dos diferidos (H16, H21-port; H6 se resolvió el 16 jul con paridad por defecto + `--fast`).** Los ítems marcados abajo con ✅ ya están hechos.
 
 > **Revisión post-lote (16 jul 2026)**: un análisis crítico de los cuatro lotes cerró seis huecos que
 > los fixes originales dejaron (patrón común: cada fix cubría los sitios enumerados, no la clase):
@@ -571,8 +570,20 @@ receptor en `push`) a temporales, igual que ya se hace con el RHS. **Esfuerzo: 1
 prefijo imposible `__ray_tmp_` para todos los temporales sintéticos. **Esfuerzo: 2–4 h**
 (mecánico pero toca muchos sitios de emisión; la constante de módulo cae junto, ~30 min).
 
-**H6. ⏸️ DIFERIDO (decisión del usuario, 16 jul 2026). Overflow y rutas de error: wrapping + exit 101
-vs checked + exit 70.** La VM hace
+**H6. ✅ RESUELTO (16 jul 2026, enfoque 1 del menú: paridad por defecto + `--fast` opt-out).**
+La aritmética de `int` es **CHECKED por defecto** (helpers inline `__ray_add/sub/mul/div/mod/neg`,
+mismos textos que la VM: `arithmetic overflow on int`, `integer division by zero`, `modulo by zero`);
+`panic`/`assert`/`assert_eq` abortan con los mensajes de los cuerpos del prelude; TODO error de
+ejecución sale por `__ray_rt_err` → **`runtime error: <msg>` + exit 70** (sin posición: el nativo no
+lleva el AST — paridad de código y de mensaje, no de `L:C`). La cola de panics de Rust (índice fuera
+de rango, expects FFI) se captura con `catch_unwind` en `main` → **también exit 70** (texto de Rust).
+**`--fast`**: wrapping (renuncia deliberada al check de overflow); div/mod por cero SIGUEN chequeados
+(Rust lo hace gratis). **Medición** (release, aarch64): checked cuesta ~2× en un bucle de puro int
+(0,50s vs 0,24s / 500M iter), ~20 % en fib(42) recursivo (0,85s vs 0,71s), ~0 en código idiomático
+(el corpus de 54 no se mueve). Se eligió paridad por defecto porque el overflow silencioso era el
+único riesgo de corrección real del backend; quien quiera el último tramo, `--fast` explícito.
+Test: `build_native_errores_de_ejecucion_exit_70_como_la_vm` (7 casos, exit + mensaje ≡ VM) y
+`build_native_fast_envuelve_overflow_pero_chequea_div_cero`. — *Ficha original:* La VM hace
 `checked_add` → `"arithmetic overflow on int"` + **exit 70** (`vm.rs:579,632`; `cli.rs:338`);
 el nativo (rustc con `-O` en ambos tiers, `cli.rs:685-689`) **envuelve en silencio**. Div-por-cero
 e `i64::MIN / -1` panican en Rust (mensaje inglés de Rust, **exit 101**) vs error raylang +

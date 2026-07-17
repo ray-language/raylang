@@ -497,6 +497,16 @@ pub fn transpile(prog: &Program) -> Result<Transpiled, String> {
 /// binario compila por la vía rápida (`rustc` pelada) si no queda otro subsistema con-crate. Escape hatch
 /// para builds herméticos/cross-compile/policy (docs/transpilador-nativo.md §3.3).
 pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, String> {
+    transpile_with_opts(prog, exclude, false)
+}
+
+/// Como [`transpile_with`], con opciones. `fast = true` (flag `--fast` de `ray build --native`) emite
+/// la aritmética de `int` ENVOLVENTE (wrapping) en vez de checked: renuncia a la paridad de overflow
+/// con la VM a cambio del último tramo de rendimiento (medido: ~2× en un bucle de puro int, ~20 % en
+/// código de llamadas calientes tipo fib, ~0 en código idiomático con arrays/strings). Div/mod por
+/// cero SIGUEN siendo error (Rust los chequea igual; no cuestan nada). Solo cambia el PREÁMBULO
+/// (los cuerpos de `__ray_add`/…); los sitios de llamada son idénticos.
+pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
@@ -571,6 +581,30 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
     out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables)]\n");
     out.push_str("use std::rc::Rc;\n");
+    // H6: errores de EJECUCIÓN como la VM — mensaje `runtime error: <msg>` (sin posición: el nativo no
+    // lleva el AST) y exit 70 (EX_SOFTWARE, el de la VM). `process::exit` (no panic) → sin el ruido de
+    // Rust y aborta el proceso entero desde cualquier hilo (como el abort de la VM).
+    out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { eprintln!(\"runtime error: {}\", msg); std::process::exit(70) }\n");
+    // Aritmética de `int` CHECKED por defecto, como la VM (overflow/div-cero → runtime error, no
+    // wrapping silencioso). Mismos textos que interpreter.rs/vm.rs. Con `--fast` (opt-out medido:
+    // ~2× en puro int-loop, ~20 % en fib, ~0 en código idiomático), wrapping — pero div/mod por
+    // cero SIGUEN chequeados (Rust lo hace igual; gratis). Solo cambia este preámbulo: los sitios
+    // de llamada emiten `__ray_add(...)` idéntico en ambos modos.
+    if fast {
+        out.push_str("#[inline(always)] fn __ray_add(a: i64, b: i64) -> i64 { a.wrapping_add(b) }\n");
+        out.push_str("#[inline(always)] fn __ray_sub(a: i64, b: i64) -> i64 { a.wrapping_sub(b) }\n");
+        out.push_str("#[inline(always)] fn __ray_mul(a: i64, b: i64) -> i64 { a.wrapping_mul(b) }\n");
+        out.push_str("#[inline(always)] fn __ray_neg(a: i64) -> i64 { a.wrapping_neg() }\n");
+        out.push_str("#[inline(always)] fn __ray_div(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"integer division by zero\") } else { a.wrapping_div(b) } }\n");
+        out.push_str("#[inline(always)] fn __ray_mod(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"modulo by zero\") } else { a.wrapping_rem(b) } }\n");
+    } else {
+        out.push_str("#[inline(always)] fn __ray_add(a: i64, b: i64) -> i64 { a.checked_add(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_sub(a: i64, b: i64) -> i64 { a.checked_sub(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_mul(a: i64, b: i64) -> i64 { a.checked_mul(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_neg(a: i64) -> i64 { a.checked_neg().unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) }\n");
+        out.push_str("#[inline(always)] fn __ray_div(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"integer division by zero\") } else { a.checked_div(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) } }\n");
+        out.push_str("#[inline(always)] fn __ray_mod(a: i64, b: i64) -> i64 { if b == 0 { __ray_rt_err(\"modulo by zero\") } else { a.checked_rem(b).unwrap_or_else(|| __ray_rt_err(\"arithmetic overflow on int\")) } }\n");
+    }
     // Preámbulo: helpers de runtime para operaciones de arreglo/string que no son 1:1 con Rust.
     out.push_str("fn __ray_split(s: &str, sep: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
     out.push_str("    Rc::new(std::cell::RefCell::new(s.split(sep).map(Rc::<str>::from).collect()))\n}\n");
@@ -749,11 +783,20 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
         return Err("`main` is not in the supported subset".into());
     }
 
+    // H6: los errores de ejecución que emitimos nosotros salen por `__ray_rt_err` (exit 70 limpio);
+    // los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) se capturan aquí para
+    // dar también exit 70 como la VM (el mensaje sigue siendo el de Rust — paridad de código, no
+    // de texto, para esa cola).
     out.push_str("fn main() {\n");
     if main_ret_int {
-        out.push_str("    std::process::exit(ray_main() as i32);\n");
+        out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
+        out.push_str("        Ok(code) => std::process::exit(code as i32),\n");
+        out.push_str("        Err(_) => std::process::exit(70),\n");
+        out.push_str("    }\n");
     } else {
-        out.push_str("    ray_main();\n");
+        out.push_str("    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)).is_err() {\n");
+        out.push_str("        std::process::exit(70);\n");
+        out.push_str("    }\n");
     }
     out.push_str("}\n");
     // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) → implica net.
@@ -945,7 +988,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
             // `send` sobre un canal cerrado = error de ejecución, como la VM (antes: descarte silencioso).
             // El guard se suelta antes del panic para no envenenar el Mutex (los otros hilos verían
             // PoisonError en vez del mensaje real).
-            "        if st.closed { drop(st); panic!(\"send on a closed channel\"); }\n",
+            "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             // Rendezvous (cap 0): la VM entrega el valor directamente y el emisor no continúa hasta que SU
             // valor se consume (M12.2). El handshake es por GENERACIÓN (`taken`), no por cola-vacía: con
             // ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse para siempre aunque el
@@ -953,18 +996,18 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
             "        if st.cap == Some(0) {\n",
             "            st.senders += 1;\n",
             "            while !st.closed && !st.q.is_empty() { st = cv.wait(st).unwrap(); }\n",
-            "            if st.closed { st.senders -= 1; drop(st); panic!(\"send on a closed channel\"); }\n",
+            "            if st.closed { st.senders -= 1; drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            st.q.push_back(v);\n",
             "            let my = st.taken + 1; cv.notify_all();\n",
             "            while !st.closed && st.taken < my { st = cv.wait(st).unwrap(); }\n",
             "            st.senders -= 1;\n",
-            "            if st.taken < my { drop(st); panic!(\"send on a closed channel\"); }\n",
+            "            if st.taken < my { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            return;\n",
             "        }\n",
             "        st.senders += 1;\n",
             "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = cv.wait(st).unwrap(); }\n",
             "        st.senders -= 1;\n",
-            "        if st.closed { drop(st); panic!(\"send on a closed channel\"); }\n",
+            "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "        st.q.push_back(v); cv.notify_all();\n",
             "    }\n",
             "    fn recv(&self) -> Option<T> {\n",
@@ -976,7 +1019,7 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
             // (M12.2; antes el emisor hacía return silencioso y su valor quedaba consumible).
             "    fn close(&self) {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        if st.senders > 0 { drop(st); panic!(\"close on a channel with a blocked sender\"); }\n",
+            "        if st.senders > 0 { drop(st); __ray_rt_err(\"close on a channel with a blocked sender\"); }\n",
             "        st.closed = true; cv.notify_all();\n",
             "    }\n",
             "}\n",
@@ -1172,7 +1215,7 @@ impl Transpiler {
         let ret = rust_ty(&f.return_type, &self.enums, &self.tparams)?;
         write!(
             out,
-            "fn {}{}({}) -> {} {{ panic!(\"'{}' is not supported in the native binary (Rust transpilation)\") }}\n",
+            "fn {}{}({}) -> {} {{ __ray_rt_err(\"'{}' is not supported in the native binary (Rust transpilation)\") }}\n",
             rust_name, generics, params.join(", "), ret, f.name
         )
         .unwrap();
@@ -1730,10 +1773,17 @@ impl Transpiler {
                 }
             }
             ExprKind::Unary { op, expr } => {
-                out.push('(');
-                out.push_str(match op { UnaryOp::Neg => "-", UnaryOp::Not => "!", UnaryOp::BitNot => "!" });
-                self.emit_expr(out, expr)?;
-                out.push(')');
+                // H6: `-x` sobre int es checked (`-i64::MIN` desborda), como la VM.
+                if matches!(op, UnaryOp::Neg) && matches!(self.type_of(expr)?, Type::Int) {
+                    out.push_str("__ray_neg(");
+                    self.emit_expr(out, expr)?;
+                    out.push(')');
+                } else {
+                    out.push('(');
+                    out.push_str(match op { UnaryOp::Neg => "-", UnaryOp::Not => "!", UnaryOp::BitNot => "!" });
+                    self.emit_expr(out, expr)?;
+                    out.push(')');
+                }
             }
             ExprKind::Binary { op, left, right } => {
                 // `string + string` → concatenación. Se APLANA toda la cadena `a + b + c + …` en un solo
@@ -1771,6 +1821,24 @@ impl Transpiler {
                     out.push('(');
                     self.emit_expr(out, left)?;
                     write!(out, ").{}(", m).unwrap();
+                    self.emit_expr(out, right)?;
+                    out.push(')');
+                } else if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem)
+                    && matches!(self.type_of(left)?, Type::Int)
+                {
+                    // H6: aritmética de `int` CHECKED como la VM (overflow → runtime error + exit 70,
+                    // no wrapping silencioso; div/mod por cero con el texto de la VM). Los helpers
+                    // `__ray_*` van inline; el coste medido en release es ~0.
+                    let f = match op {
+                        BinaryOp::Add => "__ray_add",
+                        BinaryOp::Sub => "__ray_sub",
+                        BinaryOp::Mul => "__ray_mul",
+                        BinaryOp::Div => "__ray_div",
+                        _ => "__ray_mod",
+                    };
+                    write!(out, "{}(", f).unwrap();
+                    self.emit_expr(out, left)?;
+                    out.push_str(", ");
                     self.emit_expr(out, right)?;
                     out.push(')');
                 } else {
@@ -3195,23 +3263,25 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // H6: panic/assert abortan como la VM — `runtime error: <msg>` + exit 70 (antes: panic de
+            // Rust, texto distinto y exit 101).
             "panic" => {
-                out.push_str("panic!(\"{}\", ");
+                out.push_str("__ray_rt_err(&*(");
                 self.emit_expr(out, eff[0])?;
-                out.push(')');
+                out.push_str("))");
             }
-            // Aserciones (prelude): assert(c) → assert!(c); assert_eq(a, b) → assert_eq!(a, b).
+            // Aserciones (prelude): mismos MENSAJES que los cuerpos de src/prelude.ray (que la VM ejecuta).
             "assert" => {
-                out.push_str("assert!(");
+                out.push_str("if !(");
                 self.emit_expr(out, eff[0])?;
-                out.push(')');
+                out.push_str(") { __ray_rt_err(\"assertion failed\") }");
             }
             "assert_eq" => {
-                out.push_str("assert_eq!(");
+                out.push_str("{ let __rt_a = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(", ");
+                out.push_str("; let __rt_b = ");
                 self.emit_expr(out, eff[1])?;
-                out.push(')');
+                out.push_str("; if !(__rt_a == __rt_b) { __ray_rt_err(&format!(\"assert_eq failed: {} != {}\", __rt_a.ray_show(), __rt_b.ray_show())) } }");
             }
             // Orden superior (prelude map/filter/fold SOBRE ARREGLOS) → iteradores de Rust. `__rt_f` liga la
             // closure una vez; `__rt_x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
@@ -4295,7 +4365,8 @@ mod tests {
              fn main() { print(fib(10)); }",
         );
         assert!(rust.contains("fn fib(mut n: i64) -> i64"), "{}", rust);
-        assert!(rust.contains("fib((n - 1i64))"), "{}", rust);
+        // H6: la resta de int baja al helper CHECKED (overflow → runtime error, como la VM).
+        assert!(rust.contains("fib(__ray_sub(n, 1i64))"), "{}", rust);
         assert!(rust.contains("fib(10i64).ray_show()"), "{}", rust);
     }
 
@@ -4569,8 +4640,8 @@ mod tests {
              fn main() -> int { print(42); 0 }",
         );
         assert!(
-            rust.contains("fn arranca() -> i64 { panic!("),
-            "arranca es un stub que panica: {}",
+            rust.contains("fn arranca() -> i64 { __ray_rt_err("),
+            "arranca es un stub que aborta (runtime error + exit 70, H6): {}",
             rust
         );
         // main y worker SÍ se transpilan normalmente.

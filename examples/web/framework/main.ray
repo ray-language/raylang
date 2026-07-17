@@ -1,0 +1,79 @@
+// Demo del framework web `web/framework` (M93), estilo Express — este proyecto es un CONSUMIDOR
+// del paquete (dependencia por ruta en ray.toml), como lo usaría un usuario del lenguaje. Los
+// atajos `app.GET(...)`, `r.text(...)`, `c.param(...)` funcionan con UFCS sobre las funciones
+// importadas. **Solo VM** (servidor concurrente).
+//
+//   cd examples/web/framework
+//   ray run
+// y prueba:
+//   curl http://127.0.0.1:8080/
+//   curl http://127.0.0.1:8080/users/42
+//   curl -X POST -d 'eco esto' http://127.0.0.1:8080/echo
+//   curl 'http://127.0.0.1:8080/saluda?nombre=Ada'
+//   curl -i http://127.0.0.1:8080/assets/style.css   (estático con ETag; repite con If-None-Match → 304)
+//   curl -i http://127.0.0.1:8080/teapot             (responde 418)
+//   curl -i http://127.0.0.1:8080/antigua            (302 → /)
+//   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
+from web/framework import new_app, use_mw, GET, POST, listen, static_files, not_found,
+    log_requests, param, query, body, text, json, html, status, cookie, header, redirect, Ctx, Res;
+
+fn main() -> int {
+    var app = new_app();
+
+    // Logging JSON por petición (net/log): método, ruta, status y duración en ms, a stdout.
+    app.log_requests();
+
+    // Archivos estáticos (M56.9): /assets/* se sirve desde static/ con ETag + 304.
+    app.static_files("/assets/", "static");
+
+    app.GET("/", fn(c: Ctx, r: Res) {
+        r.html("<h1>¡Hola desde el framework web de raylang!</h1>\n<link rel=\"stylesheet\" href=\"/assets/style.css\">");
+    });
+
+    // Parámetro de ruta: /users/:id → c.param("id").
+    app.GET("/users/:id", fn(c: Ctx, r: Res) {
+        let id: string = c.param("id");
+        r.json("{\"id\": \"" + id + "\", \"nombre\": \"usuario-" + id + "\"}");
+    });
+
+    // Eco del cuerpo de la petición.
+    app.POST("/echo", fn(c: Ctx, r: Res) {
+        r.text(c.body());
+    });
+
+    // Parámetro de la query string: /saluda?nombre=Ada → c.query("nombre").
+    app.GET("/saluda", fn(c: Ctx, r: Res) {
+        var quien: string = c.query("nombre");
+        if (quien == "") { quien = "mundo"; }
+        r.text("hola, " + quien);
+    });
+
+    // Estado a medida + header custom, encadenados.
+    app.GET("/teapot", fn(c: Ctx, r: Res) {
+        r.status(418).header("X-Tetera", "si").text("Soy una tetera");
+    });
+
+    // Redirección: la ruta vieja manda a la raíz con 302.
+    app.GET("/antigua", fn(c: Ctx, r: Res) {
+        r.redirect("/");
+    });
+
+    // Cookies (M56.7): varias líneas Set-Cookie en una respuesta, encadenadas.
+    app.GET("/entra", fn(c: Ctx, r: Res) {
+        r.cookie("sesion=abc123; Path=/; HttpOnly").cookie("flash=hola");
+        r.text("sesión iniciada");
+    });
+
+    // 404 personalizado (si no se registra, responde "Not Found" plano).
+    app.not_found(fn(c: Ctx, r: Res) {
+        r.json("{\"error\": \"no existe\", \"path\": \"" + c.path + "\"}");
+    });
+
+    match (app.listen("127.0.0.1", 8080)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}

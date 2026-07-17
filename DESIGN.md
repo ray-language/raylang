@@ -6650,8 +6650,8 @@ a un paquete, o retirarse), lo que en `std/` exige un cambio de versión mayor d
 - **`packages/net` (adicional):** `http`/`http2`/`webserver`, `websocket`(+cliente), `dns`/`dns_cache`, `udp`,
   `redis`, `postgres`, `grpc_client`, `oauth2`, `jwt`/`jwt_eddsa`, `sigv4`, `scram`, `cookie`, `hpack`, `metrics`,
   `log`, `time`, `crypto` (respaldo `ring`).
-- **Solo `examples/` (aún sin promover):** `framework` (mini-framework web) — candidato natural a un futuro
-  paquete `web` (o a `packages/net`); los servidores de eco (`websocket_echo`, `wss_echo`) **se quedan** como
+- **`packages/web` (adicional, M93):** `framework` — el framework de aplicación estilo Express (PROMOVIDO
+  de examples en jul 2026; ver §85). Los servidores de eco (`websocket_echo`, `wss_echo`) **se quedan** como
   demos (son aplicaciones, no librerías). Las impls de cripto puro (`sha*`, `hmac`, `ed25519`, `chacha20`,
   `poly1305`, `base64`) permanecen como demos: su versión de producción es `net/crypto`.
 
@@ -8196,3 +8196,35 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   infiere T → materializar con `var nada: Option<T> = Option.None`.
 - Diferido: backreferences (exigen backtracking — rompen la garantía lineal, descartado),
   clases Unicode, referencias `$1` en `replace_all`.
+
+## 85. M93 — el paquete `web`: el framework de aplicación (promoción de examples)
+
+> Jul 2026, decidido con el usuario (rama `feature/packages-web`). Cierra el pendiente de §53.4
+> ("`framework` — candidato natural a un futuro paquete `web`"): el micro-framework tipo Express
+> de `examples/web/framework.ray` se **promueve** a `packages/web/framework.ray`, instalable por
+> los usuarios (`web = "path:…"` en ray.toml; `from web/framework import …`). Guía de uso:
+> `docs/web-framework.md`.
+
+- **Re-base**: deja el espejo histórico `examples/web/webserver.ray` (M19) y pasa a `net/webserver`
+  (el de producción, M56) → keep-alive, límites, panic→500, TLS y graceful heredados. La
+  resolución transitiva sale gratis del gestor: una path-dep añade el PADRE del directorio como
+  raíz (`deps::dependency_roots_for`), así `web = "path:…/packages/web"` hace resolubles también
+  `net/*`; por claridad los consumidores declaran ambas.
+- **API nueva sobre la existente** (paridad Express, cero runtime): `static_files(prefix, dir)`
+  (mounts sobre `static_mount` M56.9, chequeados antes de las rutas, solo GET/HEAD),
+  `not_found(handler)` (404 custom), `PATCH` + `route(método, …)` genérico, `Res.headers` +
+  `header(k, v)` encadenable (gana sobre el Content-Type derivado), `html()` (casa con
+  `ray templ`), `redirect(url)` (302 + Location), `log_requests()` (una línea JSON por petición
+  vía `net/log`: method/path/status/ms, medido con `time.monotonic`), y los arranques
+  `listen_tls(cert, key)` / `listen_graceful(drain_ms)` / `listen_limits(Limits)` sobre los
+  `serve_*` de M56. Gotcha: UFCS no resuelve métodos de un módulo importado calificado
+  (`entry.field(...)` sobre `net::log::LogEntry`) → el logging se escribe con llamadas
+  calificadas explícitas.
+- **Consumidores**: `examples/web/framework/` es un PROYECTO consumidor real (ray.toml con
+  path-deps, `from web/framework import …`) que sustituye a `framework.ray` + `framework_demo.ray`;
+  `tests/framework_cli.rs` monta ese mismo proyecto en un temporal (rutas absolutas al repo) y lo
+  lanza con `ray run` — cubre enrutado/params/query/cookies/404-custom + estáticos con ETag→304,
+  traversal, redirect, header custom y método-que-no-casa.
+- **Diferido**: middleware por-ruta / grupos de rutas (`app.group("/api", …)`), body parsers
+  (JSON→Map tipado), `listen_graceful_tls`, sesiones/CSRF. La publicación en el registro (M51)
+  cuando el registro tenga paquetes de terceros.

@@ -1,41 +1,52 @@
-//! Prueba del micro-framework web (`examples/web/framework.ray`): enrutado, parámetros de ruta, middleware
-//! y respuestas. El servidor es concurrente (cede fibras) → **solo VM** y no determinista para el
-//! oráculo, así que se prueba por subproceso + un cliente HTTP en Rust (como `webserver_cli`). Se copia
-//! el framework (con puerto efímero) y su dependencia `webserver.ray` a un temporal y se lanza con `--vm`.
+//! Prueba del framework web `packages/web/framework.ray` (M93, promovido de examples): enrutado,
+//! parámetros de ruta, middleware/logging, estáticos con ETag/304, redirect, headers y 404 custom.
+//! El servidor es concurrente (cede fibras) → **solo VM** y no determinista para el oráculo, así
+//! que se prueba por subproceso + un cliente HTTP en Rust (como `webserver_cli`). El test monta un
+//! PROYECTO CONSUMIDOR real en un temporal (ray.toml con path-deps a packages/web y packages/net,
+//! como haría un usuario) a partir del demo `examples/web/framework/`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-/// Copia `framework.ray` (puerto 8080 → 0, efímero) y `webserver.ray` a un temporal, lo lanza con `--vm`
-/// y devuelve el proceso + el puerto que imprime ("escuchando en el puerto N").
+/// Copia el proyecto demo (`examples/web/framework/`) a un temporal con el puerto 8080 → 0
+/// (efímero) y ray.toml apuntando a los paquetes del repo (rutas absolutas), lo lanza con
+/// `ray run` y devuelve el proceso + el puerto que imprime ("listening on port N").
 fn launch() -> (Child, u16) {
     let root = env!("CARGO_MANIFEST_DIR");
-    let mut dir = std::env::temp_dir();
-    dir.push("ray_framework");
-    std::fs::create_dir_all(&dir).expect("crea dir");
-    // El framework es una librería (sin `main`): se prueba a través de su demo, que lo IMPORTA. Se
-    // copian los tres archivos (webserver ← framework ← framework_demo) al temporal.
-    std::fs::copy(format!("{root}/examples/web/webserver.ray"), dir.join("webserver.ray")).expect("copia webserver");
-    std::fs::copy(format!("{root}/examples/web/framework.ray"), dir.join("framework.ray")).expect("copia framework");
-    let demo = std::fs::read_to_string(format!("{root}/examples/web/framework_demo.ray")).expect("lee demo");
-    std::fs::write(dir.join("framework_demo.ray"), demo.replace("8080", "0")).expect("escribe demo");
+    let dir = std::env::temp_dir().join("ray_framework_pkg");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("static")).expect("crea dir");
+    let demo = std::fs::read_to_string(format!("{root}/examples/web/framework/main.ray")).expect("lee demo");
+    std::fs::write(dir.join("main.ray"), demo.replace("8080", "0")).expect("escribe main");
+    std::fs::copy(
+        format!("{root}/examples/web/framework/static/style.css"),
+        dir.join("static/style.css"),
+    ).expect("copia css");
+    std::fs::write(
+        dir.join("ray.toml"),
+        format!(
+            "[package]\nname = \"framework-test\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n\n\
+             [dependencies]\nweb = \"path:{root}/packages/web\"\nnet = \"path:{root}/packages/net\"\n"
+        ),
+    ).expect("escribe ray.toml");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("--vm").arg(dir.join("framework_demo.ray"))
+        .args(["run", "main.ray"])
+        .current_dir(&dir)
         .stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().expect("lanza framework");
 
     let mut reader = BufReader::new(child.stdout.take().unwrap());
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee port");
-    // "escuchando en el puerto N" → el último token es el puerto.
-    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("no se pudo leer el port de: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee port");
+    // "listening on port N" → el último token es el puerto.
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no se pudo leer el port de: {line:?}"));
 
-    // El framework loguea cada petición a stdout (middleware). Hay que DRENAR ese stdout en un hilo: si
-    // no, al cerrarse el read-end del pipe el `println` del servidor falla con "broken pipe" y aborta.
+    // El framework loguea cada petición a stdout (log_requests). Hay que DRENAR ese stdout en un
+    // hilo: si no, al cerrarse el read-end del pipe el `print` del servidor aborta con broken pipe.
     std::thread::spawn(move || {
         let mut sink = Vec::new();
         let _ = reader.read_to_end(&mut sink);
@@ -57,10 +68,11 @@ fn ask(port: u16, req: &str) -> String {
 fn framework_enruta_params_middleware_y_404() {
     let (mut child, port) = launch();
 
-    // Ruta raíz.
+    // Ruta raíz (HTML).
     let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("200 OK"), "GET /: {r}");
-    assert!(r.contains("micro-framework"), "GET / body: {r}");
+    assert!(r.contains("framework web de raylang"), "GET / body: {r}");
+    assert!(r.contains("Content-Type: text/html"), "html(): {r}");
 
     // Parámetro de ruta + JSON.
     let r = ask(port, "GET /users/42 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
@@ -88,14 +100,49 @@ fn framework_enruta_params_middleware_y_404() {
     assert!(r.contains("Set-Cookie: sesion=abc123; Path=/; HttpOnly"), "1ª cookie: {r}");
     assert!(r.contains("Set-Cookie: flash=hola"), "2ª cookie: {r}");
 
-    // Estado a medida encadenado.
+    // Estado a medida + header custom, encadenados.
     let r = ask(port, "GET /teapot HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("418"), "GET /teapot estado: {r}");
+    assert!(r.contains("X-Tetera: si"), "header custom: {r}");
     assert!(r.contains("tetera"), "GET /teapot body: {r}");
 
-    // Ruta inexistente → 404.
+    // Ruta inexistente → el 404 PERSONALIZADO (JSON con la ruta).
     let r = ask(port, "GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("404"), "GET /nope: {r}");
+    assert!(r.contains("\"path\": \"/nope\""), "404 custom con la ruta: {r}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn framework_estaticos_redirect_y_metodos() {
+    let (mut child, port) = launch();
+
+    // Estáticos (M56.9) montados bajo /assets/ desde static/: 200 + mime + ETag.
+    let r = ask(port, "GET /assets/style.css HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("200 OK") && r.contains("sans-serif"), "css: {r}");
+    assert!(r.contains("Content-Type: text/css"), "mime css: {r}");
+    let etag = r.lines().find_map(|l| l.strip_prefix("ETag: "))
+        .unwrap_or_else(|| panic!("sin ETag: {r}")).trim().to_string();
+
+    // Revalidación: If-None-Match que casa → 304 sin cuerpo.
+    let c = ask(port, &format!("GET /assets/style.css HTTP/1.1\r\nHost: x\r\nIf-None-Match: {etag}\r\nConnection: close\r\n\r\n"));
+    assert!(c.contains("304 Not Modified"), "304: {c}");
+    assert!(!c.contains("sans-serif"), "el 304 no lleva cuerpo: {c}");
+
+    // Traversal bajo el mount → 404 (saneo de M56.9).
+    let t = ask(port, "GET /assets/../main.ray HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(t.contains("404"), "traversal: {t}");
+
+    // Redirect: 302 + Location.
+    let r = ask(port, "GET /antigua HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("302"), "redirect estado: {r}");
+    assert!(r.contains("Location: /"), "redirect Location: {r}");
+
+    // Un POST a una ruta GET no casa → 404 (los métodos se distinguen).
+    let r = ask(port, "POST /teapot HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("404"), "POST a ruta GET: {r}");
 
     let _ = child.kill();
     let _ = child.wait();

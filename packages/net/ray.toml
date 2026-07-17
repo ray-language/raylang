@@ -1,0 +1,5 @@
+# Manifiesto del paquete-librería `net` (sin entry: los imports `net/…` se resuelven
+# contra el directorio padre — ver deps::dependency_roots_for).
+[package]
+name = "net"
+version = "0.1.0"

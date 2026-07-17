@@ -1,0 +1,8 @@
+# Manifiesto del paquete-librería `web` (sin entry: los imports `web/…` y los de sus
+# hermanas (`net/…`) se resuelven contra el directorio padre — deps::dependency_roots_for).
+[package]
+name = "web"
+version = "0.1.0"
+
+[dependencies]
+net = "path:../net"

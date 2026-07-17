@@ -196,6 +196,43 @@ fn cuerpo_con_retorno_calificado_no_es_literal_de_struct() {
 }
 
 #[test]
+fn archivo_de_paquete_diagnostica_limpio() {
+    // Un archivo DENTRO de un paquete-librería (ray.toml sin entry) resuelve sus imports por el
+    // nombre del paquete y sus hermanas del monorepo (deps::dependency_roots_for añade el padre):
+    // packages/web/framework.ray importa net/webserver y net/log → sin diagnósticos en el editor.
+    let file = format!("{}/packages/web/framework.ray", env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(&file).unwrap();
+    let uri = format!("file://{file}");
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":{}}}}}}}"#,
+        serde_json_string(&src)
+    );
+    let entry = frame(&open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entry);
+    assert!(out.contains("publishDiagnostics"), "publica diagnósticos\n{out}");
+    assert!(out.contains("\"diagnostics\":[]"), "el paquete diagnostica LIMPIO\n{out}");
+}
+
+// Serializa un string a literal JSON (escapes mínimos) sin dependencias.
+fn serde_json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[test]
 fn public_diagnostic_ante_un_error() {
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int { 1 + true }"}}}"#;
     let entry = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);

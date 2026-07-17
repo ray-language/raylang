@@ -1,0 +1,5 @@
+# Manifiesto del paquete-librería `tz` (sin entry: los imports `tz/…` se resuelven
+# contra el directorio padre — ver deps::dependency_roots_for).
+[package]
+name = "tz"
+version = "0.1.0"

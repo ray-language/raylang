@@ -483,7 +483,8 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > **H19** (medido: el nativo ya gana a la VM en código idiomático; fast-path ASCII en `len` aplicado).
 > **⏸️ DIFERIDOS por decisión del usuario:** **H16** (dedup de builtins — la guardia H11 ya evita la deriva; queda deuda
 > de mantenibilidad de bajo ROI), **H21** (cancelación M12.5 en hilos reales — 3-5 días, su propia
-> sesión). **Auditoría cerrada salvo los dos diferidos (H16, H21-port; H6 se resolvió el 16 jul con paridad por defecto + `--fast`).** Los ítems marcados abajo con ✅ ya están hechos.
+> sesión). **Auditoría cerrada salvo H16 (dedup, bajo ROI); H6 se resolvió el 16 jul (paridad por
+> defecto + `--fast`) y el port H21 se completó el 17 jul (N1–N5).** Los ítems marcados abajo con ✅ ya están hechos.
 
 > **Revisión post-lote (16 jul 2026)**: un análisis crítico de los cuatro lotes cerró seis huecos que
 > los fixes originales dejaron (patrón común: cada fix cubría los sitios enumerados, no la clase):
@@ -528,9 +529,30 @@ cubiertos (hoy ninguno). Diferido opcional: leer la exclusión de una política 
 > sirven de handler a través de la cadena serve→loop→handle→spawn; las capturas de heap de esos
 > closures también cruzan por deep copy (reconstrucción por llamada). **Resultado**: el patrón
 > webserver COMPLETO transpila sin stubs — el demo SSR (webserver + templates + handler puro) corre
-> NATIVO byte-idéntico a la VM (`/`, `/lang/rust`, 404). QUEDAN del port: N3 (cancelación de
-> hermanas M12.5) y N4 (select sin busy-wait) — semántica de scheduler pura, sin bugs de corrección
-> conocidos ni features bloqueadas.
+> NATIVO byte-idéntico a la VM (`/`, `/lang/rust`, 404).
+>
+> **Port H21 N3/N4 (17 jul 2026): HECHOS — port de scheduler COMPLETO.**
+> **N3 — cancelación de hermanas (M12.5)**: cada Task lleva un token `Arc<AtomicBool>`; el hilo hijo
+> ESCRIBE su resultado al terminar (push + condvar, ya no `JoinHandle.join`) y el scope, al salir,
+> espera a sus hijas SIN orden fijo: si alguna falló, cancela a las pendientes y propaga el fallo
+> ORIGINAL de inmediato (antes: unión en orden de registro → un fallo podía colgar para siempre
+> detrás de una hermana bloqueada). La cancelación es COOPERATIVA como en la VM (que solo cancela en
+> los yields M:1): toda espera bloqueante (send/recv/join/select/scope) usa `wait_timeout` de 10 ms +
+> chequeo del token y aborta deshaciendo su rastro (contador `senders`, valor en cola del rendezvous);
+> código que corre sin bloquearse no se interrumpe (divergencia menor documentada). Transitiva: una
+> hija que falla con scopes sin cerrar (unwinding) cancela a sus nietos. Texto de cancelación
+> idéntico a la VM (`task cancelled (a sibling failed)`).
+> **N4 — select sin busy-wait**: condvar GLOBAL de actividad (generación monótona `__RAY_ACT_*`);
+> `send`/`close`/fin-de-tarea la notifican y `select`/salida-del-scope esperan en ella (la generación
+> se lee ANTES de escanear → un send concurrente no se pierde). Antes: poll de 50µs; ahora 0.00s de
+> CPU esperando. Orden de locks canal/tarea → actividad, sin ciclos.
+> **Bonus — bug REAL de la VM destapado por el port**: `ScopeEnd` aparca sobre la PRIMERA hija
+> pendiente y `fail_current_fiber` solo despertaba a los joiners de la tarea que falló → si fallaba
+> OTRA hermana, el scope nunca re-escaneaba: **deadlock en vez de propagar** (violaba M12.5; el test
+> existente pasaba porque registraba la que falla primero). Fix en tándem en `src/vm.rs`:
+> `wake_all_join_waiters` al fallar una tarea (despertar espurio seguro: re-escanean y se re-aparcan)
+> + `cancel_task` despierta a los joiners de la cancelada. Test de regresión con el orden inverso en
+> `tests/concurrency_cli.rs`. **El port H21 está CERRADO.**
 
 ### 6.1 P0 — Roto en el momento de la auditoría
 

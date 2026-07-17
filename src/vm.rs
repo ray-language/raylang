@@ -2889,6 +2889,12 @@ impl<'a> Vm<'a> {
                 let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
                 sh.tasks[task].state = TaskState::Failed(msg);
                 Self::wake_task_waiters(&mut sh, task);
+                // M12.5: un `ScopeEnd` puede estar aparcado sobre OTRA hija pendiente (aparca sobre la
+                // primera que encuentra); si no se le despierta, nunca re-escanea y no ve este fallo →
+                // deadlock en vez de propagar. Despertar a TODOS los Join-waiters es seguro: re-ejecutan
+                // su opcode (ip rebobinado) y se re-aparcan si su tarea sigue pendiente (despertar
+                // espurio, como en select). Solo pasa al fallar una tarea (raro).
+                Self::wake_all_join_waiters(&mut sh);
             }
             // M12.5: si esta fibra poseía tareas (scopes activos cuyo cuerpo hizo panic), cancélalas en vez de
             // dejarlas huérfanas. (En `main` el programa aborta, así que esto importa para fibras hijas.)
@@ -3035,6 +3041,21 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Despierta a TODAS las fibras aparcadas en `join`/`ScopeEnd`, sobre cualquier tarea (M12.5): se usa
+    /// al FALLAR una tarea, porque un `ScopeEnd` aparcado sobre una hermana pendiente también debe
+    /// observar el fallo (re-escanea al re-ejecutarse; las que no les toque se re-aparcan).
+    fn wake_all_join_waiters(shared: &mut Shared) {
+        let mut i = 0;
+        while i < shared.parked.len() {
+            if matches!(shared.parked[i].waiting, Waiting::Join) {
+                let parked = shared.parked.remove(i);
+                shared.ready.push_back(parked.fiber);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     /// Despierta a los `select` aparcados cuyo arreglo de canales contiene `chan`, porque acaba de pasar a
     /// estar listo para recibir (M12.4). Re-ejecutarán el `select` y verán el canal listo (o, si otro lo
     /// consumió antes, se volverán a bloquear). No empuja nada (el opcode rebobinó su `ip`).
@@ -3072,6 +3093,10 @@ impl<'a> Vm<'a> {
             }
             _ => return, // ya terminó (Done/Failed) → nada que cancelar
         }
+        // Un joiner de la tarea cancelada (aparcado en `join` sobre ella) debe despertar y observar el
+        // `Failed` — si es hija del mismo scope ya la retira el bucle de cancelación, pero un joiner
+        // externo (handle cruzado por canal) quedaría aparcado para siempre.
+        Self::wake_task_waiters(shared, task);
         let mut grandchildren: Vec<usize> = Vec::new();
         if let Some(pos) = shared.ready.iter().position(|f| f.task == Some(task)) {
             let f = shared.ready.remove(pos).unwrap();

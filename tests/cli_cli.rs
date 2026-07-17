@@ -530,6 +530,71 @@ fn build_native_fallo_de_tarea_contenido_y_try_join() {
 }
 
 #[test]
+fn build_native_cancelacion_de_hermanas_y_select_sin_busy_wait() {
+    // H21-N3/N4: (a) el scope observa el fallo de una hija aunque OTRA hermana (registrada antes) siga
+    // bloqueada — cancela a las pendientes y propaga el fallo ORIGINAL (antes: unión en orden de
+    // registro → colgaba para siempre detrás de la bloqueada); (b) `select` espera en la condvar global
+    // de actividad (antes: poll de 50µs) — despierta con un send retrasado sin quemar CPU. La misma
+    // fuente corre por la VM (que tenía el MISMO bug de orden en ScopeEnd, arreglado en tándem).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native cancelación/select: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_cancel_select");
+    // (a) hermana bloqueada PRIMERO, la que falla después (el orden que colgaba).
+    std::fs::write(
+        base.join("cancel.ray"),
+        "import std/time;\n\
+         fn main() -> int {\n\
+           scope(fn() {\n\
+             let ch: Channel<int> = Channel.new();\n\
+             spawn(fn() -> int { recv(ch); print(777); 0 });\n\
+             spawn(fn() -> int { time.sleep(50); panic(\"la hija falla\"); 0 });\n\
+           });\n\
+           print(\"inalcanzable\");\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("cancel_bin");
+    let (_o, err, code) =
+        ray(&base, &["build", "cancel.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native cancelación ok\n{err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_err = String::from_utf8_lossy(&native.stderr).into_owned();
+    assert_eq!(native.status.code(), Some(70), "exit 70 al propagar\n{native_err}");
+    assert!(native_err.contains("la hija falla"), "propaga el fallo original\n{native_err}");
+    assert_eq!(String::from_utf8_lossy(&native.stdout), "", "la hermana cancelada no imprime");
+    let (vm_out, vm_err, vm_code) = ray(&base, &["run", "cancel.ray"]);
+    assert_eq!(vm_code, 70, "VM también propaga\n{vm_err}");
+    assert!(vm_err.contains("la hija falla"), "mismo fallo en la VM\n{vm_err}");
+    assert_eq!(vm_out, "", "la VM tampoco imprime");
+    // (b) select se despierta con un send que llega tarde (y elige el índice correcto).
+    std::fs::write(
+        base.join("sel.ray"),
+        "import std/time;\n\
+         fn main() -> int {\n\
+           let a: Channel<int> = Channel.new();\n\
+           let b: Channel<int> = Channel.new();\n\
+           spawn(fn() { time.sleep(80); send(b, 7); });\n\
+           let chs: [Channel<int>] = [a, b];\n\
+           let i = select(chs);\n\
+           print(i);\n\
+           match (recv(chs[i])) { Option.Some(v) => print(v), Option.None => print(-1), }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let sbin = base.join("sel_bin");
+    let (_o2, err2, code2) =
+        ray(&base, &["build", "sel.ray", "--native", "-o", sbin.to_str().unwrap()]);
+    assert_eq!(code2, 0, "build --native select ok\n{err2}");
+    let native2 = Command::new(&sbin).output().expect("corre el binario nativo");
+    assert_eq!(native2.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&native2.stdout), "1\n7\n", "select despierta y elige b");
+}
+
+#[test]
 fn build_native_rendezvous_multi_emisor_no_se_cuelga() {
     // Slice de canales (revisión post-H2/H21): el handshake rendezvous esperaba "cola vacía", no "MI
     // valor consumido" — con ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse

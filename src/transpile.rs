@@ -1188,7 +1188,9 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
             // `send` sobre un canal cerrado = error de ejecución, como la VM (antes: descarte silencioso).
             // El guard se suelta antes del panic para no envenenar el Mutex (los otros hilos verían
-            // PoisonError en vez del mensaje real).
+            // PoisonError en vez del mensaje real). Toda espera bloqueante usa `__ray_cv_wait` (timeout
+            // corto) + chequeo de cancelación (H21-N3): una tarea cancelada aborta en su siguiente punto
+            // bloqueante, deshaciendo su rastro (contador `senders`, su valor en cola).
             "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             // Rendezvous (cap 0): la VM entrega el valor directamente y el emisor no continúa hasta que SU
             // valor se consume (M12.2). El handshake es por GENERACIÓN (`taken`), no por cola-vacía: con
@@ -1196,24 +1198,24 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // suyo ya se consumió. `my` = el ordinal que consumirá su valor; A retorna cuando `taken >= my`.
             "        if st.cap == Some(0) {\n",
             "            st.senders += 1;\n",
-            "            while !st.closed && !st.q.is_empty() { st = cv.wait(st).unwrap(); }\n",
+            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "            if st.closed { st.senders -= 1; drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            st.q.push_back(v);\n",
-            "            let my = st.taken + 1; cv.notify_all();\n",
-            "            while !st.closed && st.taken < my { st = cv.wait(st).unwrap(); }\n",
+            "            let my = st.taken + 1; cv.notify_all(); __ray_bump();\n",
+            "            while !st.closed && st.taken < my { st = __ray_cv_wait(cv, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "            st.senders -= 1;\n",
             "            if st.taken < my { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            return;\n",
             "        }\n",
             "        st.senders += 1;\n",
-            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = cv.wait(st).unwrap(); }\n",
+            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.senders -= 1;\n",
             "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
-            "        st.q.push_back(v); cv.notify_all();\n",
+            "        st.q.push_back(v); cv.notify_all(); drop(st); __ray_bump();\n",
             "    }\n",
             "    fn recv(&self) -> Option<T> {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        while st.q.is_empty() && !st.closed { st = cv.wait(st).unwrap(); }\n",
+            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; cv.notify_all(); } v\n",
             "    }\n",
             // `close` con un emisor bloqueado = error de ejecución en el sitio del close, como la VM
@@ -1221,53 +1223,103 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    fn close(&self) {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
             "        if st.senders > 0 { drop(st); __ray_rt_err(\"close on a channel with a blocked sender\"); }\n",
-            "        st.closed = true; cv.notify_all();\n",
+            "        st.closed = true; cv.notify_all(); drop(st); __ray_bump();\n",
             "    }\n",
             "}\n",
-            // Structured concurrency (M12.3) + contención de fallos (H21-N1): Task<T> = un JoinHandle
-            // envuelto (Arc<Mutex>) que cachea el resultado. El cuerpo corre bajo `catch_unwind` → un
-            // fallo de la hija queda CAPTURADO en la Task (`Err(msg)`, como el `Failed` de la VM) y NO
-            // mata el proceso; se re-lanza cuando alguien lo OBSERVA (`join`/salida del scope) y
-            // encadena hacia arriba hasta main (M12.3). `wait` es la observación sin re-lanzar (la
-            // base de `try_join`, H21-N2).
-            "struct __TaskState<T> { handle: Option<std::thread::JoinHandle<Result<T, String>>>, result: Option<Result<T, String>> }\n",
-            "struct __RayTask<T> { inner: std::sync::Arc<std::sync::Mutex<__TaskState<T>>> }\n",
-            "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone() } } }\n",
+            // Condvar-wait con timeout corto: el despertar normal sigue llegando por `notify` (sin
+            // latencia añadida); el timeout solo acota cuánto tarda una tarea bloqueada en NOTAR su
+            // cancelación (cooperativa, H21-N3) → sin busy-wait.
+            "fn __ray_cv_wait<'a, T>(cv: &std::sync::Condvar, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> { cv.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0 }\n",
+            // Token de cancelación del hilo actual (lo instala `__ray_spawn`; `main` no tiene → false).
+            "thread_local! { static __RAY_CANCEL: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> = std::cell::RefCell::new(None); }\n",
+            "fn __ray_cancelled() -> bool { __RAY_CANCEL.with(|c| c.borrow().as_ref().map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))) }\n",
+            // Condvar GLOBAL de actividad (H21-N4): send/close/fin-de-tarea la notifican (generación
+            // monótona); `select` y la salida del scope esperan en ella en vez de hacer poll con sleep.
+            // Orden de locks: canal/tarea → actividad (nunca al revés) → sin ciclos.
+            "static __RAY_ACT_M: std::sync::Mutex<u64> = std::sync::Mutex::new(0);\n",
+            "static __RAY_ACT_CV: std::sync::Condvar = std::sync::Condvar::new();\n",
+            "fn __ray_bump() { *__RAY_ACT_M.lock().unwrap() += 1; __RAY_ACT_CV.notify_all(); }\n",
+            "fn __ray_wait_activity(act: u64) {\n",
+            "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
+            "    while *g == act { g = __ray_cv_wait(&__RAY_ACT_CV, g); if __ray_cancelled() { drop(g); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "}\n",
+            // Structured concurrency (M12.3) + contención de fallos (H21-N1) + cancelación de hermanas
+            // (M12.5, H21-N3): Task<T> = estado compartido (resultado + condvar) que el HILO HIJO rellena
+            // al terminar (push, no join) + un token de cancelación. El cuerpo corre bajo `catch_unwind`
+            // → un fallo queda CAPTURADO en la Task (`Err(msg)`, como el `Failed` de la VM) y NO mata el
+            // proceso; se re-lanza cuando alguien lo OBSERVA (`join`/salida del scope) y encadena hacia
+            // arriba hasta main. `wait` es la observación sin re-lanzar (base de `try_join`, H21-N2).
+            // La cancelación es COOPERATIVA (como la VM, que solo cancela en los yields del scheduler
+            // M:1): una tarea cancelada termina en su siguiente punto BLOQUEANTE (send/recv/join/select/
+            // scope); código que corre sin bloquearse no se interrumpe (divergencia menor documentada).
+            "struct __TaskState<T> { result: Option<Result<T, String>> }\n",
+            "struct __RayTask<T> { inner: std::sync::Arc<(std::sync::Mutex<__TaskState<T>>, std::sync::Condvar)>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
+            "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone(), cancel: self.cancel.clone() } } }\n",
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
             "    fn wait(&self) -> Result<T, String> {\n",
-            "        let mut st = self.inner.lock().unwrap();\n",
-            "        if let Some(h) = st.handle.take() { let r = h.join().unwrap_or(Err(\"task panicked\".to_string())); st.result = Some(r); }\n",
+            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        while st.result.is_none() { st = __ray_cv_wait(cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.result.clone().unwrap()\n",
             "    }\n",
             "    fn join(&self) -> T { match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
             "}\n",
-            // Cada scope activo (por hilo) acumula clausuras que unen las tareas lanzadas dentro; al salir
-            // el scope las ejecuta (une todas; un fallo de una hija se re-lanza al unirla → propaga, como
-            // ScopeEnd de la VM). `spawn` registra su tarea en el scope más interno, si hay.
-            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<std::boxed::Box<dyn FnOnce()>>>> = std::cell::RefCell::new(Vec::new()); }\n",
+            // La cara borrada-de-tipo que un scope guarda de cada hija: sondear su estado SIN bloquear
+            // (el hilo hijo escribe su resultado al terminar) y cancelarla.
+            "trait __RayScopeChild { fn failed(&self) -> Option<String>; fn done(&self) -> bool; fn cancel_task(&self); }\n",
+            "impl<T> __RayScopeChild for __RayTask<T> {\n",
+            "    fn failed(&self) -> Option<String> { match &self.inner.0.lock().unwrap().result { Some(Err(m)) => Some(m.clone()), _ => None } }\n",
+            "    fn done(&self) -> bool { self.inner.0.lock().unwrap().result.is_some() }\n",
+            "    fn cancel_task(&self) { self.cancel.store(true, std::sync::atomic::Ordering::Relaxed); __ray_bump(); }\n",
+            "}\n",
+            // Cada scope activo (por hilo) acumula las tareas lanzadas dentro; `spawn` registra la suya
+            // en el scope más interno, si hay.
+            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>> = std::cell::RefCell::new(Vec::new()); }\n",
             "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
-            "    let h = std::thread::spawn(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e)));\n",
-            "    let task = __RayTask { inner: std::sync::Arc::new(std::sync::Mutex::new(__TaskState { handle: Some(h), result: None })) };\n",
+            "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
             "    let t = task.clone();\n",
-            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(move || { let _ = t.join(); })); } });\n",
+            "    std::thread::spawn(move || {\n",
+            "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
+            "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
+            // Una hija que falla con tareas en vuelo cancela los hijos de sus scopes sin cerrar (el
+            // unwinding se saltó los pops de __SCOPES) → transitiva, sin nietos huérfanos (M12.5).
+            "        if r.is_err() { let frames = __SCOPES.with(|s| std::mem::take(&mut *s.borrow_mut())); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
+            "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
+            "    });\n",
+            "    let t2 = task.clone();\n",
+            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
             "    task\n}\n",
+            // Salida del scope (ScopeEnd, M12.3+M12.5): espera a las hijas SIN orden fijo; si alguna
+            // falló, cancela a las hermanas pendientes y propaga el fallo observado DE INMEDIATO (antes:
+            // unión en orden de registro → un fallo podía esperar para siempre detrás de una hermana
+            // bloqueada). La generación se lee ANTES de escanear: un cambio entre escaneo y espera
+            // despierta al instante.
             "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R {\n",
             "    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n",
             "    let r = body();\n",
             "    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n",
-            "    for j in frame { j(); }\n",
+            "    loop {\n",
+            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
+            "        if let Some(m) = frame.iter().find_map(|c| c.failed()) {\n",
+            "            for c in &frame { c.cancel_task(); }\n",
+            "            __ray_rt_err(&m);\n",
+            "        }\n",
+            "        if frame.iter().all(|c| c.done()) { break; }\n",
+            "        __ray_wait_activity(act);\n",
+            "    }\n",
             "    r\n}\n",
             // select (M12.4): espera a que algún canal de la lista esté LISTO para recibir (cola no vacía
             // ∨ cerrado) y devuelve el índice del PRIMERO listo (menor índice → determinista en el índice;
             // el ORDEN entre canales listos a la vez depende del scheduling, como la VM multicore por
-            // default). Poll con backoff (std no tiene un select multi-condvar; el resultado es correcto).
+            // default). Sin busy-wait (H21-N4): si ninguno está listo, espera en la condvar global de
+            // actividad (la generación leída antes del escaneo evita perder un send concurrente).
             "fn __ray_select<T>(chs: &[__RayChan<T>]) -> i64 {\n",
             "    loop {\n",
+            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
             "        for (i, ch) in chs.iter().enumerate() {\n",
             "            let (m, _) = &*ch.inner; let st = m.lock().unwrap();\n",
             "            if !st.q.is_empty() || st.closed { return i as i64; }\n",
             "        }\n",
-            "        std::thread::sleep(std::time::Duration::from_micros(50));\n",
+            "        __ray_wait_activity(act);\n",
             "    }\n}\n",
         ));
     }
@@ -3846,7 +3898,7 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow()[..])");
             }
-            // spawn(f) → __ray_spawn(move || {...}) → Task<T> (JoinHandle envuelto, registrado en el scope
+            // spawn(f) → __ray_spawn(move || {...}) → Task<T> (estado compartido, registrado en el scope
             // activo). scope(f) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro. `f`
             // es una función anónima literal `fn(){}` (captura valores Send, p. ej. canales) O el NOMBRE de
             // una función de nivel superior de aridad 0 (`spawn(worker)` → `move || worker()`; sin captura).
@@ -4642,7 +4694,7 @@ fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tparams: &std:
         // (`send_type`): primitivos tal cual, string→Arc<str>, bytes→Arc<[u8]> (se convierte al borde);
         // structs/arreglos (mutables) → diferido, requerirían el modelo de valores thread-safe.
         Type::Channel(t) => return Ok(format!("__RayChan<{}>", send_type(t, enums, tparams)?)),
-        // Task<T> (structured concurrency): handle al resultado futuro de un `spawn` (JoinHandle envuelto).
+        // Task<T> (structured concurrency): handle al resultado futuro de un `spawn` (estado compartido).
         Type::Task(t) => return Ok(format!("__RayTask<{}>", send_type(t, enums, tparams)?)),
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),

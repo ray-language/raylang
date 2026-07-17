@@ -7503,9 +7503,27 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   SIN el cuerpo (RFC 9110 §9.3.2; `omit_body` en la escritura); el framework enruta HEAD como GET.
   Tests: `head_devuelve_cabeceras_sin_cuerpo`, `cuerpo_chunked_se_decodifica` (con extensión de
   chunk), `archivos_estaticos_con_saneo` (index + traversal + 404). **M56 COMPLETO** (56.1–56.8;
-  webserver_cli pasa de 3 a 11 tests). Diferidos menores: trailers de chunked, pipelining
+  webserver_cli pasa de 3 a 11 tests).
+- **56.9 — estáticos de producción: mount con prefijo + caching HTTP** (jul 2026; cierra el
+  diferido "cache de estáticos"). (a) **`static_mount(prefix, dir, req) -> Response`**: monta un
+  directorio bajo un prefijo de URL (`static_mount("/static/", "assets", req)` sirve
+  `/static/app.css` desde `assets/app.css` — el disco ya no tiene que espejar la URL); método que
+  no sea GET/HEAD → 405 con `Allow: GET, HEAD`; fuera del prefijo → 404; mismo saneo de traversal
+  que `static_response` (helper compartido `static_file_of`). (b) **Caching**: cada 200 lleva un
+  **`ETag` fuerte `"<tamaño>-<mtime_ms>"`** (estilo nginx: 2 stats, sin hashear el archivo por
+  petición) y un `If-None-Match` que contiene el ETag responde **`304 Not Modified`** sin releer
+  ni reenviar el cuerpo; el `Cache-Control` lo pone el llamador sobre la Response si lo quiere.
+  Habilitador: builtin **`fs.mtime(path) -> Result<int,string>`** (epoch-ms UTC, la moneda de
+  `time.now()`; patrón `FsOp` de M67, tres motores). (c) `mime_of` pasa a **`pub`** y la tabla
+  crece (~26 tipos: webp/avif/mp4/webm/mp3/wav/xml/csv/woff/ttf/otf/gz/map…). `static_response`
+  queda como primitivo camino-solo (compat). Espejo `examples/web/webserver.ray` en tándem. Test:
+  `static_mount_prefix_method_and_etag_304` (prefijo, mime, ETag→304, ETag viejo→200, 405,
+  fuera-de-prefijo y traversal→404). Diferidos menores del arco: trailers de chunked, pipelining
   HTTP/1.1 (los navegadores no lo usan; los octetos de una petición adelantada se descartan),
-  Range/cache de estáticos, tope de peticiones por conexión keep-alive.
+  tope de peticiones por conexión keep-alive, y de estáticos: **`Range`/206** (vídeo, descargas
+  reanudables; sin streaming seguiría cargando el archivo en memoria), **streaming por trozos**
+  (pediría tocar `send_response` o documentar el camino `serve_raw`) y **precomprimidos** (servir
+  `x.css.gz` si existe y el cliente manda `Accept-Encoding: gzip` — evita escribir un compresor).
 
 ## 61. M57 — Tiempo y fechas de producción
 

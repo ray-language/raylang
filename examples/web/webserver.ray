@@ -89,59 +89,132 @@ pub fn request_text(req: Request) -> Result<string, string> {
     from_utf8(req.body)
 }
 
-// --- Archivos estáticos (M56.8) ---
-// El Content-Type por extensión (tipos comunes; el resto, octet-stream).
-fn mime_of(file: string) -> string {
+// --- Archivos estáticos (M56.8; M56.9: mount con prefijo + caching ETag/304) ---
+// El Content-Type por extensión (tipos comunes; el resto, octet-stream). Pub: lo reusan handlers propios.
+pub fn mime_of(file: string) -> string {
     let f = file.to_lower();
     if (f.ends_with(".html") || f.ends_with(".htm")) { return "text/html; charset=utf-8"; }
     if (f.ends_with(".css")) { return "text/css; charset=utf-8"; }
     if (f.ends_with(".js") || f.ends_with(".mjs")) { return "text/javascript; charset=utf-8"; }
-    if (f.ends_with(".json")) { return "application/json; charset=utf-8"; }
+    if (f.ends_with(".json") || f.ends_with(".map")) { return "application/json; charset=utf-8"; }
     if (f.ends_with(".txt")) { return "text/plain; charset=utf-8"; }
+    if (f.ends_with(".csv")) { return "text/csv; charset=utf-8"; }
+    if (f.ends_with(".xml")) { return "application/xml; charset=utf-8"; }
     if (f.ends_with(".svg")) { return "image/svg+xml"; }
     if (f.ends_with(".png")) { return "image/png"; }
     if (f.ends_with(".jpg") || f.ends_with(".jpeg")) { return "image/jpeg"; }
     if (f.ends_with(".gif")) { return "image/gif"; }
+    if (f.ends_with(".webp")) { return "image/webp"; }
+    if (f.ends_with(".avif")) { return "image/avif"; }
     if (f.ends_with(".ico")) { return "image/x-icon"; }
     if (f.ends_with(".pdf")) { return "application/pdf"; }
     if (f.ends_with(".wasm")) { return "application/wasm"; }
     if (f.ends_with(".woff2")) { return "font/woff2"; }
+    if (f.ends_with(".woff")) { return "font/woff"; }
+    if (f.ends_with(".ttf")) { return "font/ttf"; }
+    if (f.ends_with(".otf")) { return "font/otf"; }
+    if (f.ends_with(".mp4")) { return "video/mp4"; }
+    if (f.ends_with(".webm")) { return "video/webm"; }
+    if (f.ends_with(".mp3")) { return "audio/mpeg"; }
+    if (f.ends_with(".wav")) { return "audio/wav"; }
+    if (f.ends_with(".gz")) { return "application/gzip"; }
     "application/octet-stream"
 }
 
-// Sirve un archivo estático de `dir` con SANEO (`..`/`.` = 404; la ruta llega percent-decodificada
-// → `%2e%2e` cae aquí también); una ruta que termina en `/` sirve su `index.html`.
-pub fn static_response(dir: string, path: string) -> Response {
-    var ruta: string = path;
-    if (ruta.ends_with("/")) {
-        ruta = ruta + "index.html";
+// El SANEO compartido: ruta de la petición → ruta de archivo bajo `dir`, o None (= 404).
+// `..`/`.` = rechazo directo (la ruta llega percent-decodificada → `%2e%2e` cae también);
+// `/` final sirve su `index.html`.
+fn static_file_of(dir: string, path: string) -> Option<string> {
+    var path: string = path;
+    if (path.ends_with("/") || path == "") {
+        path = path + "index.html";
     }
-    let segs: [string] = ruta.split("/");
-    var limpio: [string] = [];
+    let segs: [string] = path.split("/");
+    var clean: [string] = [];
     var i: int = 0;
     while (i < segs.len()) {
         let s: string = segs[i];
         if (s == ".." || s == ".") {
-            return not_found();
+            return Option.None;
         }
         if (s != "") {
-            limpio.push(s);
+            clean.push(s);
         }
         i = i + 1;
     }
     var file: string = dir;
     var j: int = 0;
-    while (j < limpio.len()) {
-        file = file + "/" + limpio[j];
+    while (j < clean.len()) {
+        file = file + "/" + clean[j];
         j = j + 1;
     }
-    match (fs.read_file_bytes(file)) {
-        Result.Ok(datos) => {
-            let r: Response = bytes_response(200, datos);
-            r.headers.insert("Content-Type", mime_of(file));
-            r
+    Option.Some(file)
+}
+
+// Sirve un archivo estático de `dir` con SANEO. Para mount con prefijo, filtro de método y
+// caching HTTP (ETag/304), usa `static_mount`.
+pub fn static_response(dir: string, path: string) -> Response {
+    match (static_file_of(dir, path)) {
+        Option.Some(file) => {
+            match (fs.read_file_bytes(file)) {
+                Result.Ok(data) => {
+                    let r: Response = bytes_response(200, data);
+                    r.headers.insert("Content-Type", mime_of(file));
+                    r
+                },
+                Result.Err(_) => not_found(),
+            }
         },
-        Result.Err(_) => not_found(),
+        Option.None => not_found(),
+    }
+}
+
+// M56.9: mount de estáticos con prefijo + caching HTTP. ETag fuerte "<tamaño>-<mtime_ms>"
+// (estilo nginx: sin hashear el archivo por petición); If-None-Match que casa → 304 sin cuerpo.
+// 405 (Allow: GET, HEAD) para otros métodos; fuera del prefijo → 404. Cache-Control lo pone el
+// llamador si lo quiere: r.headers.insert("Cache-Control", "max-age=3600").
+pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
+    if (req.method != "GET" && req.method != "HEAD") {
+        let r: Response = text(405, "method not allowed\n");
+        r.headers.insert("Allow", "GET, HEAD");
+        return r;
+    }
+    if (!req.path.starts_with(prefix)) {
+        return not_found();
+    }
+    let rest: string = req.path.substring(prefix.len(), req.path.len());
+    match (static_file_of(dir, rest)) {
+        Option.Some(file) => {
+            let size: int = match (fs.file_size(file)) {
+                Result.Ok(n) => n,
+                Result.Err(_) => { return not_found(); },
+            };
+            let mtime: int = match (fs.mtime(file)) {
+                Result.Ok(ms) => ms,
+                Result.Err(_) => { return not_found(); },
+            };
+            let etag: string = "\"" + to_string(size) + "-" + to_string(mtime) + "\"";
+            match (get(req.headers, "if-none-match")) {
+                Option.Some(inm) => {
+                    if (inm.contains(etag)) {
+                        let r: Response = bytes_response(304, b"");
+                        r.headers.insert("ETag", etag);
+                        return r;
+                    }
+                },
+                Option.None => { },
+            }
+            match (fs.read_file_bytes(file)) {
+                Result.Ok(data) => {
+                    let r: Response = bytes_response(200, data);
+                    r.headers.insert("Content-Type", mime_of(file));
+                    r.headers.insert("ETag", etag);
+                    r
+                },
+                Result.Err(_) => not_found(),
+            }
+        },
+        Option.None => not_found(),
     }
 }
 

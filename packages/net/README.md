@@ -96,7 +96,14 @@ fn main() -> int {
   con `Response.set_cookie`/`with_cookie` (M56.7: una línea `Set-Cookie` por cookie). Cuerpos
   `Transfer-Encoding: chunked` entrantes decodificados, archivos estáticos con
   `static_response(dir, req.path)` (saneo de `..`, mime por extensión, `index.html`), y HEAD
-  responde cabeceras sin cuerpo (M56.8). **Apagado ordenado** (M88.1b):
+  responde cabeceras sin cuerpo (M56.8). **Estáticos de producción** (M56.9):
+  `static_mount(prefix, dir, req)` monta un directorio bajo un prefijo de URL
+  (`static_mount("/static/", "assets", req)` sirve `/static/app.css` desde `assets/app.css`) y
+  añade **caching HTTP** — cada 200 lleva un `ETag` fuerte (tamaño+mtime del archivo, sin hashear
+  por petición) y un `If-None-Match` que casa responde `304 Not Modified` sin releer ni reenviar
+  el cuerpo — más 405 (`Allow: GET, HEAD`) para otros métodos y 404 fuera del prefijo. El
+  `Cache-Control` lo pone el llamador si lo quiere (`r.headers.insert("Cache-Control", …)`);
+  `mime_of(file)` es `pub` para handlers propios. **Apagado ordenado** (M88.1b):
   `serve_graceful(host, port, drain_ms, handler)` — con SIGTERM/SIGINT (vía `signals()`, M88.1)
   deja de aceptar, drena las conexiones en vuelo con plazo y devuelve 0 (cero peticiones perdidas
   al desplegar); la forma general `serve_shutdown[_limits]` apaga con cualquier canal `stop`

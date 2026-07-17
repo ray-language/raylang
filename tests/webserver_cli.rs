@@ -680,6 +680,116 @@ fn files_estaticos_con_saneo() {
     let _ = child.wait();
 }
 
+// Driver: mount de estáticos con caching (M56.9). La raíz llega por RAY_STATIC_DIR; sirve 6
+// conexiones bajo el prefijo /static/.
+const SRV_MOUNT: &str = r#"
+import webserver;
+import std/net;
+fn handle(conn: int, dir: string) {
+    match (webserver.read_request(conn)) {
+        Result.Ok(req) => {
+            match (webserver.send_response(conn, webserver.static_mount("/static/", dir, req))) {
+                Result.Ok(_) => {}, Result.Err(e) => eprint(e),
+            }
+        },
+        Result.Err(e) => eprint(e),
+    }
+    close(conn);
+}
+fn main() -> int {
+    var dir: string = "";
+    match (env("RAY_STATIC_DIR")) {
+        Option.Some(d) => { dir = d; },
+        Option.None => {
+            eprint("falta RAY_STATIC_DIR");
+            return 1;
+        },
+    }
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(srv) => {
+            print(net.local_port(srv));
+            scope(fn() {
+                var i: int = 0;
+                while (i < 6) {
+                    match (net.tcp_accept(srv)) {
+                        Result.Ok(conn) => { spawn(fn() { handle(conn, dir) }); },
+                        Result.Err(e) => { eprint(e); i = 6; },
+                    }
+                    i = i + 1;
+                }
+            });
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn static_mount_prefix_method_and_etag_304() {
+    // Raíz estática: assets/app.css (el disco NO espeja el prefijo /static/ de la URL).
+    let base = std::env::temp_dir().join("ray_web_mount_root");
+    let _ = std::fs::remove_dir_all(&base);
+    let assets = base.join("assets");
+    std::fs::create_dir_all(&assets).expect("crea assets");
+    std::fs::write(assets.join("app.css"), "body { margin: 0; }").expect("escribe css");
+    std::fs::write(base.join("secreto.txt"), "no debe salir").expect("escribe secreto");
+
+    let dir = std::env::temp_dir().join("ray_web_mount");
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let src = format!("{}/examples/web/webserver.ray", env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(&src, dir.join("webserver.ray")).expect("copia webserver.ray");
+    let driver_path = dir.join("main.ray");
+    std::fs::write(&driver_path, SRV_MOUNT).expect("escribe driver");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("--vm")
+        .arg(&driver_path)
+        .env("RAY_STATIC_DIR", assets.to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lanza servidor mount");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut linea = String::new();
+    reader.read_line(&mut linea).expect("lee el port");
+    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
+
+    // 1) El prefijo se recorta: /static/app.css sale de assets/app.css, con mime + ETag.
+    let r = ask(port, "GET /static/app.css HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(r.contains("200 OK") && r.contains("body { margin: 0; }"), "css: {r}");
+    assert!(r.contains("Content-Type: text/css"), "mime: {r}");
+    let etag = r
+        .lines()
+        .find_map(|l| l.strip_prefix("ETag: "))
+        .unwrap_or_else(|| panic!("sin ETag: {r}"))
+        .trim()
+        .to_string();
+    assert!(etag.starts_with('"') && etag.ends_with('"'), "ETag fuerte entrecomillado: {etag}");
+
+    // 2) If-None-Match que casa → 304 sin cuerpo (no se reenvía el archivo).
+    let c = ask(port, &format!("GET /static/app.css HTTP/1.1\r\nHost: x\r\nIf-None-Match: {etag}\r\n\r\n"));
+    assert!(c.contains("304 Not Modified"), "304: {c}");
+    assert!(!c.contains("margin"), "el 304 no lleva cuerpo: {c}");
+
+    // 3) If-None-Match viejo → 200 con el cuerpo.
+    let v = ask(port, "GET /static/app.css HTTP/1.1\r\nHost: x\r\nIf-None-Match: \"0-0\"\r\n\r\n");
+    assert!(v.contains("200 OK") && v.contains("margin"), "etag viejo → 200: {v}");
+
+    // 4) Un método que no es GET/HEAD → 405 con Allow.
+    let p = ask(port, "POST /static/app.css HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n");
+    assert!(p.contains("405") && p.contains("Allow: GET, HEAD"), "405: {p}");
+
+    // 5) Fuera del prefijo → 404; traversal → 404 (el secreto vive fuera de assets/).
+    let f = ask(port, "GET /otra HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(f.contains("404 Not Found"), "fuera del prefijo: {f}");
+    let t = ask(port, "GET /static/../secreto.txt HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(t.contains("404 Not Found") && !t.contains("no debe salir"), "traversal: {t}");
+
+    let _ = child.wait();
+}
+
 #[test]
 fn servidor_echo_body_binary_intacto() {
     let (mut child, port) = launch_servidor("ecobin", SRV_ECO_BIN);

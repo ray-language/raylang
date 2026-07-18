@@ -16,7 +16,9 @@
 //   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
 from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, ALL, GET_re,
     mount, listen, static_files, not_found, log_requests, param, query, body, put_local, local,
-    text, json, html, status, cookie, header, redirect, Ctx, Res, Step;
+    header_of, cookie_of, form_field, json_body, text, json, html, status, cookie, header,
+    redirect, Ctx, Res, Step;
+import std/json as jsonlib;
 
 // Middleware (M93.2a): corre antes del enrutado; Step.Done corta la cadena y se responde lo
 // construido en `r`. Este exige `?token=secreto` y deja el usuario en los locals por-petición.
@@ -92,6 +94,38 @@ fn main() -> int {
     app.GET("/entra", fn(c: Ctx, r: Res) {
         r.cookie("sesion=abc123; Path=/; HttpOnly").cookie("flash=hola");
         r.text("sesión iniciada");
+    });
+
+    // Formulario (M93.2c): cuerpo x-www-form-urlencoded → c.form_field (std/url por debajo).
+    app.POST("/login", fn(c: Ctx, r: Res) {
+        r.cookie("sid=" + c.form_field("user") + "; Path=/");
+        r.text("bienvenido, " + c.form_field("user"));
+    });
+
+    // Cookie de la petición (M93.2c): cabecera Cookie → net/cookie por debajo.
+    app.GET("/quien", fn(c: Ctx, r: Res) {
+        let sid: string = c.cookie_of("sid");
+        if (sid == "") { r.status(401).text("sin sesión"); } else { r.text("sesión de " + sid); }
+    });
+
+    // Cabecera de la petición (M93.2c).
+    app.GET("/ua", fn(c: Ctx, r: Res) {
+        r.text("navegador: " + c.header_of("user-agent"));
+    });
+
+    // Cuerpo JSON (M93.2c): Result<Json, string> — errores como valores; se recorre con
+    // los get_* de std/json.
+    app.POST("/suma", fn(c: Ctx, r: Res) {
+        match (c.json_body()) {
+            Result.Ok(j) => {
+                let a: int = match (jsonlib.get_int(j, "a")) { Option.Some(n) => n, Option.None => 0 };
+                let b: int = match (jsonlib.get_int(j, "b")) { Option.Some(n) => n, Option.None => 0 };
+                r.json("{\"total\": " + to_string(a + b) + "}");
+            },
+            Result.Err(e) => {
+                r.status(400).json("{\"error\": \"" + e + "\"}");
+            },
+        }
     });
 
     // Catch-all (M93.2b): `*resto` FINAL captura el resto de la ruta, con las "/".

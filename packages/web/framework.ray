@@ -14,6 +14,10 @@ import net/webserver;
 import net/log;
 import std/time;
 import std/regex;
+import std/url;
+// Alias (M11.5): los leaf `json`/`cookie` chocarían con las funciones homónimas del framework.
+import std/json as jsonlib;
+import net/cookie as cookielib;
 
 // --- Tipos ---
 /// What a middleware decides: continue the chain (`Step.Next`), or stop here (`Step.Done` — the
@@ -317,6 +321,44 @@ pub fn body(ctx: Ctx) -> string {
         Result.Ok(s) => s,
         Result.Err(_) => "",
     }
+}
+
+/// The value of a request header (`c.header_of("user-agent")`; names arrive lowercased);
+/// `""` if absent.
+pub fn header_of(ctx: Ctx, name: string) -> string {
+    match (get(ctx.req.headers, name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// The value of a request cookie (parsed from the `Cookie:` header via `net/cookie`);
+/// `""` if absent.
+pub fn cookie_of(ctx: Ctx, name: string) -> string {
+    match (get(cookielib.parse_cookies(header_of(ctx, "cookie")), name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// The body parsed as an `application/x-www-form-urlencoded` form (`std/url.parse_query`,
+/// URL-decoded). Empty map if the body is not text or not a form.
+pub fn form(ctx: Ctx) -> Map<string, string> {
+    url.parse_query(body(ctx))
+}
+
+/// One form field (`c.form_field("user")`); `""` if absent.
+pub fn form_field(ctx: Ctx, name: string) -> string {
+    match (get(form(ctx), name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// The body parsed as JSON (`std/json`): `Ok(Json)` to walk with `jsonlib.get_*`, or
+/// `Err(message)` — errors as values, composable with `?`.
+pub fn json_body(ctx: Ctx) -> Result<jsonlib.Json, string> {
+    jsonlib.parse(body(ctx))
 }
 
 // --- Helpers de la respuesta (mutan `res`; encadenables con UFCS) ---

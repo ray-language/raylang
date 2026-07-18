@@ -69,6 +69,21 @@ app.GET_re("^/v(\\d+)/estado$", handler);  // regex sobre el path entero (ancla 
 - El cuerpo llega con `c.body()` (texto UTF-8; `""` si no es texto) o crudo en `c.req.body`
   (`bytes`). El resto de la petición está en `c.req` (`webserver.Request`: `headers`, `version`…).
 
+### El contexto conecta la stdlib (M93.2c)
+
+```raylang
+c.header_of("user-agent")      // cabecera ("" si falta; nombres en minúscula)
+c.cookie_of("sid")             // cookie de la petición (net/cookie por debajo)
+c.form()                       // cuerpo x-www-form-urlencoded → Map (std/url, decodificado)
+c.form_field("user")           // un campo del form ("" si falta)
+c.json_body()                  // Result<Json, string> (std/json) — errores como valores;
+                               // recórrelo con jsonlib.get_int/get_string/… (importa
+                               // `import std/json as jsonlib;`: el leaf `json` choca con json())
+```
+
+Convención: los *lookups* devuelven `""` si falta (como `param`/`query`); lo falible de verdad
+(parsear JSON) devuelve `Result`.
+
 ## La respuesta
 
 Los handlers **mutan** `r` (semántica de referencia); los helpers que devuelven `Res` se encadenan:

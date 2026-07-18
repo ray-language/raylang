@@ -180,6 +180,44 @@ fn framework_estaticos_redirect_y_metodos() {
 }
 
 #[test]
+fn framework_contexto_form_json_cookies_y_headers() {
+    // M93.2c: form_field (urlencoded), json_body (std/json), cookie_of y header_of.
+    let (mut child, port) = launch();
+
+    // Form urlencoded: el campo llega decodificado y la respuesta planta la cookie de sesión.
+    let form = "user=ada+lovelace";
+    let r = ask(port, &format!(
+        "POST /login HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{form}",
+        form.len()
+    ));
+    assert!(r.contains("bienvenido, ada lovelace"), "form_field decodificado: {r}");
+    assert!(r.contains("Set-Cookie: sid=ada"), "cookie plantada: {r}");
+
+    // Cookie de la petición: sin ella 401, con ella la sesión.
+    let r = ask(port, "GET /quien HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("401"), "sin cookie → 401: {r}");
+    let r = ask(port, "GET /quien HTTP/1.1\r\nHost: x\r\nCookie: sid=ada; otro=1\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("sesión de ada"), "cookie_of lee la Cookie: {r}");
+
+    // Header de la petición (los nombres llegan en minúscula).
+    let r = ask(port, "GET /ua HTTP/1.1\r\nHost: x\r\nUser-Agent: prueba/1.0\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("navegador: prueba/1.0"), "header_of: {r}");
+
+    // Cuerpo JSON válido → suma; malformado → 400 con el error del parser como valor.
+    let json = "{\"a\": 2, \"b\": 40}";
+    let r = ask(port, &format!(
+        "POST /suma HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+        json.len()
+    ));
+    assert!(r.contains("\"total\": 42"), "json_body + get_int: {r}");
+    let r = ask(port, "POST /suma HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nConnection: close\r\n\r\n{a:");
+    assert!(r.contains("400"), "JSON malformado → 400: {r}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn framework_catchall_all_regex_y_mount() {
     // M93.2b: `*resto`, ALL (método comodín), rutas regex compiladas y sub-apps con mount.
     let (mut child, port) = launch();

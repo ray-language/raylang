@@ -71,19 +71,38 @@ r.redirect("/nueva");                     // 302 + Location (permanente: r.redir
 
 ## Middleware
 
+Un middleware devuelve un **`Step`** (M93.2a): `Step.Next` sigue la cadena, `Step.Done` la corta
+y se responde lo construido en `r`.
+
 ```raylang
-fn auth(c: Ctx, r: Res) -> bool {
+fn auth(c: Ctx, r: Res) -> Step {
     if (c.query("token") != "secreto") {
         r.status(401).text("no autorizado");
-        return false;                     // corta la cadena: se responde lo dejado en `r`
+        return Step.Done;                 // corta: se responde lo dejado en `r`
     }
-    true                                  // sigue (middlewares restantes → enrutado)
+    c.put_local("user", "ada");           // dato por-petición para el handler y los `after`
+    Step.Next
 }
-app.use_mw(auth);
+
+app.use_mw(auth);                         // global: antes del enrutado, en orden de registro
+app.use_on("/api/", auth);                // global restringido a un prefijo de URL
+app.GET("/admin", with_mw([auth], h));    // POR RUTA: envuelve el handler (combinador);
+                                          // la cadena corre con los params YA capturados
 ```
 
-Corren **antes del enrutado**, en orden de registro, para todas las rutas (no hay middleware
-por-ruta; componlo dentro del handler).
+El "después" (cabeceras comunes, página de error propia, logging a medida) no es un envoltorio
+estilo `next()` de Express sino una **segunda cadena explícita** que corre tras el enrutado —
+siempre, también en 404 o con la cadena pre cortada:
+
+```raylang
+app.after(fn(c: Ctx, r: Res) {
+    r.header("X-Frame-Options", "DENY");
+    if (r.code >= 500) { r.html(pagina_error()); }
+});
+```
+
+Datos por-petición entre fases: `c.put_local("k", "v")` / `c.local("k")` (`""` si falta) — `Ctx`
+viaja por referencia, lo que escribe un middleware lo ven el handler y los `after`.
 
 ## Archivos estáticos
 

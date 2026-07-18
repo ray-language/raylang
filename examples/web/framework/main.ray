@@ -14,14 +14,44 @@
 //   curl -i http://127.0.0.1:8080/teapot             (responde 418)
 //   curl -i http://127.0.0.1:8080/antigua            (302 → /)
 //   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
-from web/framework import new_app, use_mw, GET, POST, listen, static_files, not_found,
-    log_requests, param, query, body, text, json, html, status, cookie, header, redirect, Ctx, Res;
+from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, listen,
+    static_files, not_found, log_requests, param, query, body, put_local, local, text, json,
+    html, status, cookie, header, redirect, Ctx, Res, Step;
+
+// Middleware (M93.2a): corre antes del enrutado; Step.Done corta la cadena y se responde lo
+// construido en `r`. Este exige `?token=secreto` y deja el usuario en los locals por-petición.
+fn auth(c: Ctx, r: Res) -> Step {
+    if (c.query("token") != "secreto") {
+        r.status(401).text("no autorizado");
+        return Step.Done;
+    }
+    c.put_local("user", "ada");
+    Step.Next
+}
 
 fn main() -> int {
     var app = new_app();
 
     // Logging JSON por petición (net/log): método, ruta, status y duración en ms, a stdout.
     app.log_requests();
+
+    // Hook `after` (M93.2a): corre tras el enrutado (también en 404) y puede mutar la respuesta —
+    // aquí, una cabecera común a todo.
+    app.after(fn(c: Ctx, r: Res) {
+        r.header("X-Framework", "raylang");
+    });
+
+    // Middleware por PREFIJO (M93.2a): protege todo /privado/* sin tocar cada ruta.
+    app.use_on("/privado/", auth);
+    app.GET("/privado/perfil", fn(c: Ctx, r: Res) {
+        r.text("perfil de " + c.local("user"));
+    });
+
+    // Middleware POR RUTA (M93.2a): `with_mw` envuelve el handler; la cadena corre con los
+    // params de la ruta ya capturados.
+    app.GET("/admin", with_mw([auth], fn(c: Ctx, r: Res) {
+        r.text("panel de " + c.local("user"));
+    }));
 
     // Archivos estáticos (M56.9): /assets/* se sirve desde static/ con ETag + 304.
     app.static_files("/assets/", "static");

@@ -116,6 +116,36 @@ fn framework_enruta_params_middleware_y_404() {
 }
 
 #[test]
+fn framework_step_locals_after_y_middleware_por_ruta() {
+    // M93.2a: Step.Next/Done, use_on (prefijo), with_mw (por ruta), locals y hooks after.
+    let (mut child, port) = launch();
+
+    // use_on("/privado/") corta con Step.Done sin token…
+    let r = ask(port, "GET /privado/perfil HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("401"), "sin token → 401: {r}");
+    // …y con token sigue (Step.Next); el handler lee el local que dejó el middleware.
+    let r = ask(port, "GET /privado/perfil?token=secreto HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("perfil de ada"), "local user visible en el handler: {r}");
+
+    // with_mw: la misma auth como cadena POR RUTA.
+    let r = ask(port, "GET /admin HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("401"), "with_mw corta sin token: {r}");
+    let r = ask(port, "GET /admin?token=secreto HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("panel de ada"), "with_mw deja pasar con token: {r}");
+
+    // after: la cabecera común está en una ruta normal, en un corte de middleware y en el 404.
+    let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("X-Framework: raylang"), "after en ruta normal: {r}");
+    let r = ask(port, "GET /privado/perfil HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("X-Framework: raylang"), "after con cadena cortada: {r}");
+    let r = ask(port, "GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("X-Framework: raylang"), "after en el 404: {r}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn framework_estaticos_redirect_y_metodos() {
     let (mut child, port) = launch();
 

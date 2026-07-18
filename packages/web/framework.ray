@@ -15,6 +15,13 @@ import net/log;
 import std/time;
 
 // --- Tipos ---
+/// What a middleware decides: continue the chain (`Step.Next`), or stop here (`Step.Done` — the
+/// response built so far in `Res` is sent as-is).
+pub enum Step {
+    Next,
+    Done,
+}
+
 // Un parámetro de ruta capturado (`:id` → ("id", "42")). Lista de asociación (pocos por ruta) en
 // vez de un Map, para no chocar con el `get` del prelude al definir helpers en este módulo.
 struct Param {
@@ -23,12 +30,14 @@ struct Param {
 }
 
 /// The context a handler sees: the HTTP method, the request path, the captured route parameters
-/// (see `param`) and the underlying `webserver.Request` (headers, body, query).
+/// (see `param`), the underlying `webserver.Request` (headers, body, query) and the per-request
+/// `locals` written by middlewares (see `put_local`/`local`).
 pub struct Ctx {
     method: string,
     path: string,
     params: [Param],
     req: webserver.Request,
+    locals: Map<string, string>,
 }
 
 // La respuesta que el handler construye mutando (por referencia). El campo se llama `code` (no
@@ -57,12 +66,14 @@ struct Mount {
     dir: string,
 }
 
-/// The application: routes, middlewares (run before routing; return `false` to stop the chain),
-/// static mounts, an optional custom 404 handler and the request-logging switch. Build one with
-/// `new_app()` and register everything through the UFCS helpers (`app.GET(...)`, etc.).
+/// The application: routes, middlewares (run before routing; `Step.Done` stops the chain),
+/// `after` hooks (run after routing, always), static mounts, an optional custom 404 handler and
+/// the request-logging switch. Build one with `new_app()` and register everything through the
+/// UFCS helpers (`app.GET(...)`, etc.).
 pub struct App {
     routes: [Route],
-    middlewares: [fn(Ctx, Res) -> bool],
+    middlewares: [fn(Ctx, Res) -> Step],
+    afters: [fn(Ctx, Res)],
     mounts: [Mount],
     nf_handlers: [fn(Ctx, Res)],
     log_on: bool,
@@ -71,10 +82,11 @@ pub struct App {
 /// Creates an empty application.
 pub fn new_app() -> App {
     var rs: [Route] = [];
-    var ms: [fn(Ctx, Res) -> bool] = [];
+    var ms: [fn(Ctx, Res) -> Step] = [];
+    var af: [fn(Ctx, Res)] = [];
     var mounts: [Mount] = [];
     var nf: [fn(Ctx, Res)] = [];
-    App { routes: rs, middlewares: ms, mounts: mounts, nf_handlers: nf, log_on: false }
+    App { routes: rs, middlewares: ms, afters: af, mounts: mounts, nf_handlers: nf, log_on: false }
 }
 
 // --- Registro de rutas (con UFCS: `app.GET("/", handler)`) ---
@@ -115,10 +127,43 @@ pub fn DELETE(app: App, pattern: string, handler: fn(Ctx, Res)) {
     route(app, "DELETE", pattern, handler);
 }
 
-/// Registers a middleware: it runs before routing, in registration order; return `false` to stop
-/// the chain (the response built so far is sent as-is).
-pub fn use_mw(app: App, mw: fn(Ctx, Res) -> bool) {
+/// Registers a middleware: it runs before routing, in registration order; return `Step.Done` to
+/// stop the chain (the response built so far is sent as-is), `Step.Next` to continue.
+pub fn use_mw(app: App, mw: fn(Ctx, Res) -> Step) {
     app.middlewares.push(mw);
+}
+
+/// Like `use_mw`, restricted to a URL prefix: the middleware only runs when the request path
+/// starts with `prefix` (`app.use_on("/api/", require_token)`).
+pub fn use_on(app: App, prefix: string, mw: fn(Ctx, Res) -> Step) {
+    app.middlewares.push(fn(c: Ctx, r: Res) -> Step {
+        if (c.path.starts_with(prefix)) { mw(c, r) } else { Step.Next }
+    });
+}
+
+/// Registers an `after` hook: it runs AFTER routing (also on 404), in registration order, and can
+/// still mutate the response — common headers, custom error pages for `r.code >= 500`, own logging.
+/// With `locals` it covers the pre/post pattern without Express-style `next()` wrapping.
+pub fn after(app: App, hook: fn(Ctx, Res)) {
+    app.afters.push(hook);
+}
+
+/// Wraps a handler with a per-route middleware chain: `app.GET("/admin/:id", with_mw([auth], h))`.
+/// The chain runs with the route parameters ALREADY captured (unlike the global chain);
+/// `Step.Done` stops it and the response built so far is sent. Composes with itself.
+pub fn with_mw(mws: [fn(Ctx, Res) -> Step], handler: fn(Ctx, Res)) -> fn(Ctx, Res) {
+    fn(c: Ctx, r: Res) {
+        var i: int = 0;
+        while (i < mws.len()) {
+            let mw: fn(Ctx, Res) -> Step = mws[i];
+            match (mw(c, r)) {
+                Step.Next => { },
+                Step.Done => { return; },
+            }
+            i = i + 1;
+        }
+        handler(c, r);
+    }
 }
 
 /// Mounts a static directory (M56.9): requests under the URL `prefix` are served from `dir` on
@@ -157,6 +202,20 @@ pub fn param(ctx: Ctx, name: string) -> string {
 /// The value of a query-string parameter (`?name=Ada`, URL-decoded), or `""` if absent.
 pub fn query(ctx: Ctx, name: string) -> string {
     match (get(webserver.query_params(ctx.req), name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// Stores a per-request value (`Ctx.locals`): what a middleware writes here, the handler and the
+/// `after` hooks can read (`Ctx` travels by reference). E.g. `auth` leaves the user id.
+pub fn put_local(ctx: Ctx, name: string, value: string) {
+    ctx.locals.insert(name, value);
+}
+
+/// Reads a per-request value written with `put_local`; `""` if absent.
+pub fn local(ctx: Ctx, name: string) -> string {
+    match (get(ctx.locals, name)) {
         Option.Some(v) => v,
         Option.None => "",
     }
@@ -277,26 +336,39 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
     }
 
     let res: Res = Res { code: 200, body: b"", content_type: "text/plain; charset=utf-8", headers: Map.new(), set_cookie: [] };
-    var ctx: Ctx = Ctx { method: req.method, path: req.path, params: [], req: req };
+    var ctx: Ctx = Ctx { method: req.method, path: req.path, params: [], req: req, locals: Map.new() };
 
-    // Middlewares: si alguno devuelve false, se corta y se responde lo que haya dejado.
+    // Middlewares (pre): Step.Done corta la cadena y salta el enrutado (los `after` SÍ corren).
     var keep_going: bool = true;
     var m: int = 0;
     while (keep_going && m < app.middlewares.len()) {
-        let mw: fn(Ctx, Res) -> bool = app.middlewares[m];
-        if (!mw(ctx, res)) {
-            keep_going = false;
+        let mw: fn(Ctx, Res) -> Step = app.middlewares[m];
+        match (mw(ctx, res)) {
+            Step.Next => { },
+            Step.Done => { keep_going = false; },
         }
         m = m + 1;
     }
-    if (!keep_going) {
-        return build_response(res);
+    if (keep_going) {
+        route_request(app, ctx, res);
     }
 
-    // Enrutado: primera ruta cuyo método y patrón casan. Un HEAD enruta como GET (M56.8: el
-    // webserver ya le quita el cuerpo a la respuesta; RFC 9110 §9.3.2).
-    let method: string = if (req.method == "HEAD") { "GET" } else { req.method };
-    let path_segs: [string] = split_path(req.path);
+    // Hooks `after`: siempre (también en 404 y con la cadena pre cortada); pueden mutar `res`.
+    var a: int = 0;
+    while (a < app.afters.len()) {
+        let hook: fn(Ctx, Res) = app.afters[a];
+        hook(ctx, res);
+        a = a + 1;
+    }
+    build_response(res)
+}
+
+// El enrutado en sí (muta `res`; `ctx` viaja por referencia y recibe los params capturados):
+// primera ruta cuyo método y patrón casan → handler; ninguna → 404 (custom o default).
+fn route_request(app: App, ctx: Ctx, res: Res) {
+    // Un HEAD enruta como GET (M56.8: el webserver ya le quita el cuerpo; RFC 9110 §9.3.2).
+    let method: string = if (ctx.method == "HEAD") { "GET" } else { ctx.method };
+    let path_segs: [string] = split_path(ctx.path);
     var j: int = 0;
     while (j < app.routes.len()) {
         let rt: Route = app.routes[j];
@@ -305,7 +377,7 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
                 Option.Some(ps) => {
                     ctx.params = ps;
                     rt.handler(ctx, res);
-                    return build_response(res);
+                    return;
                 },
                 Option.None => { },
             }
@@ -321,7 +393,6 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
     } else {
         res.text("Not Found");
     }
-    build_response(res)
 }
 
 // El handler completo: despacha y, con `log_requests` activo, emite la línea JSON (método, ruta,

@@ -1052,7 +1052,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         let sqlite_variant = if t.needs_rt_sqlite { ", Sqlite(ray_runtime::sqlite::Conn)" } else { "" };
         writeln!(
             out,
-            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant} }}"
+            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant} }}"
         )
         .unwrap();
         out.push_str(concat!(
@@ -1093,17 +1093,20 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // bloqueante (como la VM). read lee ≤64KiB (lossy UTF-8; EOF → ""); write escribe todo (Ok(nº bytes)).
     if t.needs_net {
         out.push_str(concat!(
-            "fn __ray_sock_clone(h: i64) -> Result<std::net::TcpStream, Rc<str>> {\n",
+            // M96b: la sección crítica es un Arc::clone (ns). Antes hacía try_clone() = un syscall
+            // dup() BAJO el lock global → convoyes de ~100 ms (158 stalls medidos en 12 s de wrk;
+            // cada uno arrastraba a las peticiones en vuelo → la cola p99 de ~80 ms).
+            "fn __ray_sock_clone(h: i64) -> Result<std::sync::Arc<std::net::TcpStream>, Rc<str>> {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.try_clone().map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => Ok(std::sync::Arc::clone(s)),\n",
             "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
             "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
-            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(s))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
             "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
             "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
             "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
             "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
-            "    match l.accept() { Ok((s, _)) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(s))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "    match l.accept() { Ok((s, _)) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
         ));
         // socket_read/read_bytes/write DESPACHAN a TLS si el handle es una conexión TLS (solo si el
         // programa usa TLS): se clona el `Arc<Mutex<TlsStream>>` del registro y se hace I/O tras SU lock
@@ -1120,9 +1123,9 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         } else {
             ("", "")
         };
-        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536]; match s.read(&mut buf) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
-        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536]; match s.read(&mut buf) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
-        write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let mut s = __ray_sock_clone(h)?; let mut off = 0; while off < bytes.len() {{ match s.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
+        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; let mut buf = [0u8; 65536]; match r.read(&mut buf) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
+        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; let mut buf = [0u8; 65536]; match r.read(&mut buf) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
+        write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
         out.push_str(concat!(
             "fn __ray_local_port(h: i64) -> i64 {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
@@ -1170,7 +1173,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // Saca el TcpStream del handle `h` (debe ser TCP), lo deja fuera del registro y lo devuelve.
             "fn __ray_tls_take_tcp(h: i64) -> Result<std::net::TcpStream, String> {\n",
             "    let mut reg = __ray_reg().lock().unwrap(); match reg.open.remove(&h) {\n",
-            "        Some(__RayHandle::Tcp(s)) => Ok(s),\n",
+            "        Some(__RayHandle::Tcp(s)) => match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) },\n",
             "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} is not an accepted TCP socket\", h)) }\n",
             "        None => Err(format!(\"invalid handle: {}\", h)) } }\n",
             "fn __ray_tls_accept(h: i64, cert: &str, key: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",

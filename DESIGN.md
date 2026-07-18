@@ -8390,6 +8390,19 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   (socket_read/write clonan el stream bajo ese lock, 2-3 veces por petición ≈ 250k locks/s;
   los mutex psynch de macOS son unfair → un esperador aparcado puede ayunar decenas de ms) y el
   mutex del pool. Siguiente paso: trazas de latencia dentro del runtime, no sampling.
+- **Fix 3 — `Arc<TcpStream>` en el registro de handles (LA pistola humeante)**: la
+  instrumentación de latencia por lock (build diagnóstico, umbral 5 ms) cazó 158 adquisiciones
+  del lock del registro con stalls de hasta **112 ms** en 12 s de wrk — cada `socket_read`/
+  `write` clonaba el stream con `try_clone()` = un **syscall `dup()` DENTRO de la sección
+  crítica** del mutex global; un titular preemptado a mitad de syscall convoyaba a todas las
+  peticiones en vuelo (→ la cola del 1%). El handle TCP pasa a `Arc<TcpStream>`: clonar es un
+  bump de puntero (ns) y el I/O va por `&*arc` (`Read`/`Write` para `&TcpStream`); el upgrade
+  TLS deshace el Arc con `try_unwrap` (dup una sola vez si un lector concurrente retiene un
+  clon). Resultado: `__psynch_mutexwait` 23k → **3k muestras**, throughput pelado 94.4k →
+  **107.1k req/s (+13.5%)**, p50 en c=50 de 387 → **235 µs**. La cola p99 restante bajo wrk es
+  **saturación** (wrk es open-loop: a plena CPU el p99 mide profundidad de cola, no stalls;
+  medir latencia de SLO exigiría tasa fija, p. ej. wrk2 -R al 60%). El mismo patrón
+  try_clone-bajo-lock existe en la VM (`builtins.rs::socket_clone`) → anotado como candidata.
 - **La teoría del framework, REFUTADA por descomposición**: sin las rutas `GET_re` el
   throughput NO cambia (61.5k vs 62.4k) → compilar regex por petición no es el coste. Sin
   `log_requests` sube a **80.8k** → el LOGGING es el 31% del gap (formatear `now_utc`/ISO-8601

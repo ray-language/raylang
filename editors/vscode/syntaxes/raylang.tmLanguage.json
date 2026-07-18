@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#byte-strings" },
+    { "include": "#template-strings" },
     { "include": "#strings" },
     { "include": "#characters" },
     { "include": "#annotation" },
@@ -30,6 +31,16 @@
     "comments": {
       "name": "comment.line.double-slash.raylang",
       "match": "//.*$"
+    },
+    "template-strings": {
+      "comment": "Backticks (M95): string donde la comilla doble es literal, multil\u00ednea, con la misma interpolaci\u00f3n ${}. Escapes: \\` y \\$.",
+      "name": "string.quoted.other.template.raylang",
+      "begin": "`",
+      "end": "`",
+      "patterns": [
+        { "name": "constant.character.escape.raylang", "match": "\\\\." },
+        { "include": "#interpolation" }
+      ]
     },
     "strings": {
       "name": "string.quoted.double.raylang",

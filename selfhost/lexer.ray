@@ -255,17 +255,21 @@ fn classify(text: string) -> TokKind {
 }
 
 // Lee una cadena "..." (la comilla de apertura ya fue consumida), resolviendo escapes.
-fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
+// Espejo del host (M95): un solo cuerpo por DELIMITADOR — `"` ordinaria (sin saltos de línea)
+// o `` ` `` template (la `"` es literal y el salto de línea está permitido, multilínea). Mismo
+// token Str. Escapes: n t r \\ " ` $ (el `\$` del host, M27.3; la interpolación `${}` sigue
+// DIFERIDA en este lexer — un `${` queda literal, y el corpus del oráculo la excluye).
+fn string_delim(lx: Lexer, delim: char) -> Result<TokKind, LexError> {
     var value = "";
     while (true) {
         if (at_end(lx)) {
             return Result.Err(lex_error(lx, "unterminated string"));
         }
         let c = cur(lx);
-        if (c == '"') {
+        if (c == delim) {
             advance(lx);
             return Result.Ok(TokKind.Str(value));
-        } else if (c == '\n') {
+        } else if (c == '\n' && delim == '"') {
             return Result.Err(lex_error(lx, "newline inside an unterminated string"));
         } else if (c == '\\') {
             advance(lx);  // la barra invertida
@@ -283,6 +287,10 @@ fn string_lit(lx: Lexer) -> Result<TokKind, LexError> {
                 value = value + to_string('\\');
             } else if (e == '"') {
                 value = value + to_string('"');
+            } else if (e == '`') {
+                value = value + to_string('`');
+            } else if (e == '$') {
+                value = value + to_string('$');
             } else {
                 return Result.Err(lex_error(lx, "invalid escape sequence '\\" + to_string(e) + "'"));
             }
@@ -356,7 +364,7 @@ fn next_token(lx: Lexer) -> Result<TokKind, LexError> {
         if (match_char(lx, '&')) { Result.Ok(TokKind.AmpAmp) } else { Result.Err(lex_error(lx, "expected '&&' (did you forget a '&'?)")) }
     } else if (c == '|') {
         if (match_char(lx, '|')) { Result.Ok(TokKind.PipePipe) } else if (match_char(lx, '>')) { Result.Ok(TokKind.PipeArrow) } else { Result.Err(lex_error(lx, "expected '||' or '|>' (did you forget a '|'?)")) }
-    } else if (c == '"') { string_lit(lx) } else if (c == '\'') { char_lit(lx) } else if (is_digit(c)) { number(lx) } else if (is_alpha(c)) { Result.Ok(identifier(lx)) } else { Result.Err(lex_error(lx, "unexpected character '" + to_string(c) + "'")) }
+    } else if (c == '"') { string_delim(lx, '"') } else if (c == '`') { string_delim(lx, '`') } else if (c == '\'') { char_lit(lx) } else if (is_digit(c)) { number(lx) } else if (is_alpha(c)) { Result.Ok(identifier(lx)) } else { Result.Err(lex_error(lx, "unexpected character '" + to_string(c) + "'")) }
 }
 
 // --- El bucle principal: produce los tokens, cerrando con Eof ---

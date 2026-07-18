@@ -39,10 +39,15 @@ caracteres. **Ningún token cruza líneas.**
     (`1e21`, `1.5e-3`, `2E+10`); un exponente hace el literal flotante aunque no lleve punto.
     Un `.` sin dígito decimal no es flotante; un `e` sin dígito (o sin dígito tras el signo) no
     es exponente (`1eabc` = entero `1` + identificador).
-  - *Cadena*: `"…"` con escapes `\n \t \r \\ \" \$`. No admite saltos de línea literales.
-  - *Cadena interpolada*: cualquier cadena `"…${expr}…"`. `${expr}` contiene **una** expresión; el
-    `$` solo es especial seguido de `{` (`"$5"`, `"{n}"` son literales; `\${` es un `${` literal).
-    Azúcar: se desazucara a concatenación con `to_string(expr)` (§6.6).
+  - *Cadena*: `"…"` con escapes `\n \t \r \\ \" \` \$`. No admite saltos de línea literales.
+  - *Cadena plantilla* (M95): `` `…` `` — mismo valor y mismo token que `"…"`, con dos
+    diferencias: la comilla doble `"` es **literal** (no se escapa) y los **saltos de línea**
+    están permitidos (multilínea, literales). El backtick literal se escapa `` \` ``. Interpola
+    igual que cualquier cadena.
+  - *Cadena interpolada*: cualquier cadena (`"…"` o `` `…` ``) con `…${expr}…`. `${expr}`
+    contiene **una** expresión; el `$` solo es especial seguido de `{` (`"$5"`, `"{n}"` son
+    literales; `\${` es un `${` literal). Azúcar: se desazucara a concatenación con
+    `to_string(expr)` (§6.6).
   - *Carácter*: `'a'` con escapes `\n \t \r \\ \'`. Un code point Unicode.
   - *Bytes*: `b"…"` con los escapes de cadena más `\xNN` (octeto arbitrario, dos dígitos hex).
   - *Booleano*: `true` / `false`.

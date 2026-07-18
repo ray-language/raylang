@@ -42,6 +42,30 @@ contexts:
       scope: comment.line.double-slash.raylang
 
   strings:
+    # Backticks (M95): string donde la comilla doble es literal, multilínea, misma interpolación.
+    - match: '`'
+      scope: punctuation.definition.string.begin.raylang
+      push:
+        - meta_scope: string.quoted.other.template.raylang
+        - match: '\\.'
+          scope: constant.character.escape.raylang
+        - match: '\$\{'
+          scope: punctuation.section.interpolation.begin.raylang support.function.builtin.raylang
+          push:
+            - clear_scopes: 1
+            - meta_scope: meta.interpolation.raylang
+            - match: '\}'
+              scope: punctuation.section.interpolation.end.raylang support.function.builtin.raylang
+              pop: true
+            - match: '\{'
+              push:
+                - match: '\}'
+                  pop: true
+                - include: main
+            - include: main
+        - match: '`'
+          scope: punctuation.definition.string.end.raylang
+          pop: true
     # Una cadena con escapes e interpolación `${expr}` (M27.3); contexto propio hasta la comilla.
     - match: '"'
       scope: punctuation.definition.string.begin.raylang

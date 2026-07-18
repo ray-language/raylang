@@ -748,9 +748,22 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
             eprintln!("  · {name}: {reason}");
         }
     }
-    // Nombre de salida: `-o`, o el stem del archivo de entrada.
+    // Nombre de salida: `-o` > el `name` del ray.toml del proyecto (si la entrada ES la del
+    // proyecto, como Cargo) > el stem del archivo de entrada (archivo suelto).
     let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
-    let out_bin = output.map(String::from).unwrap_or_else(|| stem.to_string());
+    let out_bin = output.map(String::from).unwrap_or_else(|| {
+        let entry_dir = match Path::new(path).parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        Manifest::load(entry_dir)
+            .ok()
+            .flatten()
+            .filter(|m| canon(&m.entry_path()) == canon(Path::new(path)))
+            .map(|m| m.name)
+            .unwrap_or_else(|| stem.to_string())
+    });
     // **Bifurcación bajo demanda** (P2.b, docs/transpilador-nativo.md §4.5): sin features de `ray-runtime`
     // (el caso común) → `rustc` pelado, rápido y sin red (camino de siempre). Con features (el programa usa
     // cripto/…) → un proyecto Cargo generado que enlaza `ray-runtime` (mismo código que la VM).

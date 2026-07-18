@@ -45,10 +45,24 @@ app.PUT("/users/:id", handler);
 app.PATCH("/users/:id", handler);
 app.DELETE("/users/:id", handler);
 app.route("OPTIONS", "/users", handler);   // cualquier método, en mayúscula
+app.ALL("/ping", handler);                 // TODOS los métodos (M93.2b)
+app.GET("/files/*path", handler);          // catch-all FINAL: captura el resto, "/" incluidas
+app.GET_re("^/v(\\d+)/estado$", handler);  // regex sobre el path entero (ancla tú); capturas
+                                           // numeradas: c.param("1"). route_re(m, pat, h) para
+                                           // otros métodos.
 ```
 
 - El patrón casa **por segmentos**; `:name` captura un parámetro (`c.param("name")`, `""` si no
   existe). Gana la **primera** ruta registrada que casa (método + patrón).
+- Las rutas **regex** se compilan **una vez al registrar** (`std/regex`, Pike VM de tiempo
+  lineal → inmunes a ReDoS, a diferencia del `path-to-regexp` de Express); un patrón malformado
+  hace `panic` al arrancar con el error del compilador de regex.
+- Método con patrón de OTRA ruta → **`405 Method Not Allowed` + `Allow`** (RFC 9110; Express
+  responde 404). El `not_found` custom sigue siendo solo para 404.
+- **Sub-aplicaciones** (M93.2b): un "router" ES una `App` que no escucha —
+  `app.mount("/api", api)` re-prefija sus rutas y estáticos y envuelve sus handlers con los
+  middlewares del grupo (corren solo para sus rutas). Su `not_found`/`after` se ignoran; una
+  ruta regex no se puede re-prefijar (panic al montar).
 - La query string no forma parte del path: `/users/42?x=1` casa `/users/:id`; léela con
   `c.query("x")` (URL-decodificada, `""` si falta).
 - Un **HEAD** enruta como GET; el servidor responde las cabeceras sin el cuerpo (RFC 9110).

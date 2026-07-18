@@ -14,9 +14,9 @@
 //   curl -i http://127.0.0.1:8080/teapot             (responde 418)
 //   curl -i http://127.0.0.1:8080/antigua            (302 → /)
 //   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
-from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, listen,
-    static_files, not_found, log_requests, param, query, body, put_local, local, text, json,
-    html, status, cookie, header, redirect, Ctx, Res, Step;
+from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, ALL, GET_re,
+    mount, listen, static_files, not_found, log_requests, param, query, body, put_local, local,
+    text, json, html, status, cookie, header, redirect, Ctx, Res, Step;
 
 // Middleware (M93.2a): corre antes del enrutado; Step.Done corta la cadena y se responde lo
 // construido en `r`. Este exige `?token=secreto` y deja el usuario en los locals por-petición.
@@ -93,6 +93,31 @@ fn main() -> int {
         r.cookie("sesion=abc123; Path=/; HttpOnly").cookie("flash=hola");
         r.text("sesión iniciada");
     });
+
+    // Catch-all (M93.2b): `*resto` FINAL captura el resto de la ruta, con las "/".
+    app.GET("/files/*path", fn(c: Ctx, r: Res) {
+        r.text("archivo: " + c.param("path"));
+    });
+
+    // Cualquier método (M93.2b).
+    app.ALL("/ping", fn(c: Ctx, r: Res) {
+        r.text("pong " + c.method);
+    });
+
+    // Ruta REGEX (M93.2b): compilada UNA vez al registrar (std/regex, tiempo lineal — sin ReDoS);
+    // las capturas son params numerados.
+    app.GET_re("^/v(\\d+)/estado$", fn(c: Ctx, r: Res) {
+        r.json("{\"version\": " + c.param("1") + ", \"ok\": true}");
+    });
+
+    // Sub-aplicación (M93.2b): un "router" ES una App que no escucha; `mount` la re-prefija y
+    // envuelve sus handlers con los middlewares del grupo (aquí, auth para toda /api/*).
+    var api = new_app();
+    api.use_mw(auth);
+    api.GET("/users/:id/rol", fn(c: Ctx, r: Res) {
+        r.json("{\"id\": \"" + c.param("id") + "\", \"rol\": \"admin\"}");
+    });
+    app.mount("/api", api);
 
     // 404 personalizado (si no se registra, responde "Not Found" plano).
     app.not_found(fn(c: Ctx, r: Res) {

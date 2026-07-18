@@ -13,6 +13,7 @@
 import net/webserver;
 import net/log;
 import std/time;
+import std/regex;
 
 // --- Tipos ---
 /// What a middleware decides: continue the chain (`Step.Next`), or stop here (`Step.Done` — the
@@ -53,10 +54,18 @@ pub struct Res {
     set_cookie: [string],
 }
 
-// Una ruta registrada: método HTTP + segmentos del patrón (un segmento ":x" captura un parámetro).
+// Un patrón de ruta (M93.2b): por segmentos (":x" captura uno; "*resto" FINAL captura el resto,
+// con las "/") o una regex COMPILADA al registrar (std/regex, Pike VM → tiempo lineal, sin ReDoS;
+// las capturas se exponen como params numerados "1", "2", …).
+enum Pattern {
+    Segments([string]),
+    Re(regex.Regex),
+}
+
+// Una ruta registrada: método HTTP ("*" = cualquiera, de `ALL`) + patrón + handler.
 struct Route {
     method: string,
-    segments: [string],
+    pattern: Pattern,
     handler: fn(Ctx, Res),
 }
 
@@ -96,9 +105,39 @@ pub fn new_app() -> App {
 // entrada taparía el `get` de Map para todo el programa.
 
 /// Registers a route for an arbitrary HTTP method (uppercase: "GET", "OPTIONS", …). The pattern
-/// is segment-based; a `:name` segment captures a route parameter (read it with `c.param("name")`).
+/// is segment-based; a `:name` segment captures a route parameter (read it with `c.param("name")`)
+/// and a FINAL `*name` segment captures the rest of the path, slashes included (M93.2b).
 pub fn route(app: App, method: string, pattern: string, handler: fn(Ctx, Res)) {
-    app.routes.push(Route { method: method, segments: split_path(pattern), handler: handler });
+    let segs: [string] = split_path(pattern);
+    // Un segmento `*` solo puede ser el último (error de programación → panic al registrar).
+    var i: int = 0;
+    while (i < segs.len()) {
+        if (segs[i].starts_with("*") && i != segs.len() - 1) {
+            panic("route pattern '" + pattern + "': a '*' capture must be the last segment");
+        }
+        i = i + 1;
+    }
+    app.routes.push(Route { method: method, pattern: Pattern.Segments(segs), handler: handler });
+}
+
+/// Registers a route whose pattern is a REGEX over the whole request path (anchor it yourself:
+/// `"^/files/(.+)\\.png$"`). Compiled ONCE here (`std/regex`, linear-time Pike VM — ReDoS-immune,
+/// unlike Express); a malformed pattern panics at startup with the regex compiler's error.
+/// Captures become numbered route params: `c.param("1")`, `c.param("2")`, …
+pub fn route_re(app: App, method: string, pattern: string, handler: fn(Ctx, Res)) {
+    match (regex.compile(pattern)) {
+        Result.Ok(re) => {
+            app.routes.push(Route { method: method, pattern: Pattern.Re(re), handler: handler });
+        },
+        Result.Err(e) => {
+            panic("route_re pattern '" + pattern + "': " + e);
+        },
+    }
+}
+
+/// Registers a GET regex route (`app.GET_re("^/v(\\d+)/status$", h)`); see `route_re`.
+pub fn GET_re(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route_re(app, "GET", pattern, handler);
 }
 
 /// Registers a GET route (`app.GET("/users/:id", handler)`). HEAD requests route as GET (the
@@ -125,6 +164,56 @@ pub fn PATCH(app: App, pattern: string, handler: fn(Ctx, Res)) {
 /// Registers a DELETE route.
 pub fn DELETE(app: App, pattern: string, handler: fn(Ctx, Res)) {
     route(app, "DELETE", pattern, handler);
+}
+
+/// Registers a route for ANY HTTP method (`app.ALL("/ping", h)`).
+pub fn ALL(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route(app, "*", pattern, handler);
+}
+
+/// Mounts a sub-application under a URL prefix — a "router" IS an `App` that never listens
+/// (M93.2e): `app.mount("/api", api)` re-prefixes the sub-app's routes and static mounts, and
+/// wraps each handler with the sub-app's middleware chain (`with_mw` — they run only for its
+/// routes, with params captured). The sub-app's `not_found` and `after` hooks are ignored (the
+/// root app owns the response cycle). A regex route cannot be re-prefixed: panic at mount time.
+pub fn mount(app: App, prefix: string, sub: App) {
+    // "/api" y "/api/" son el mismo mount; la base va sin "/" final para concatenar limpio.
+    let base: string = if (prefix.ends_with("/")) { prefix.substring(0, prefix.len() - 1) } else { prefix };
+    let pre: [string] = split_path(base);        // "/api" → ["", "api"]
+    var i: int = 0;
+    while (i < sub.routes.len()) {
+        let rt: Route = sub.routes[i];
+        match (rt.pattern) {
+            Pattern.Segments(segs) => {
+                var joined: [string] = [];
+                var a: int = 0;
+                while (a < pre.len()) {
+                    joined.push(pre[a]);
+                    a = a + 1;
+                }
+                var b: int = 1;                  // salta el "" inicial del patrón del sub-app
+                while (b < segs.len()) {
+                    joined.push(segs[b]);
+                    b = b + 1;
+                }
+                app.routes.push(Route {
+                    method: rt.method,
+                    pattern: Pattern.Segments(joined),
+                    handler: with_mw(sub.middlewares, rt.handler),
+                });
+            },
+            Pattern.Re(_) => {
+                panic("mount '" + prefix + "': a regex route cannot be re-prefixed; register it on the root app");
+            },
+        }
+        i = i + 1;
+    }
+    var m: int = 0;
+    while (m < sub.mounts.len()) {
+        let mt: Mount = sub.mounts[m];
+        app.mounts.push(Mount { prefix: base + mt.prefix, dir: mt.dir });
+        m = m + 1;
+    }
 }
 
 /// Registers a middleware: it runs before routing, in registration order; return `Step.Done` to
@@ -283,13 +372,22 @@ pub fn cookie(res: Res, line: string) -> Res {
 fn split_path(p: string) -> [string] { p.split("/") }
 
 // ¿Casan los segmentos del patrón con los de la ruta? Si sí, devuelve los parámetros capturados.
+// Un último segmento `*nombre` (M93.2b) captura el RESTO de la ruta (las "/" incluidas).
 fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
-    if (pat.len() != path.len()) {
-        return Option.None;
+    let star: bool = pat.len() > 0 && pat[pat.len() - 1].starts_with("*");
+    if (star) {
+        if (path.len() < pat.len()) {
+            return Option.None;
+        }
+    } else {
+        if (pat.len() != path.len()) {
+            return Option.None;
+        }
     }
+    let fixed: int = if (star) { pat.len() - 1 } else { pat.len() };
     var ps: [Param] = [];
     var i: int = 0;
-    while (i < pat.len()) {
+    while (i < fixed) {
         let seg: string = pat[i];
         if (seg.starts_with(":")) {
             ps.push(Param { name: seg.substring(1, seg.len()), value: path[i] });
@@ -300,7 +398,43 @@ fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
         }
         i = i + 1;
     }
+    if (star) {
+        let name: string = pat[pat.len() - 1];
+        var rest: string = "";
+        var k: int = fixed;
+        while (k < path.len()) {
+            rest = if (k == fixed) { path[k] } else { rest + "/" + path[k] };
+            k = k + 1;
+        }
+        ps.push(Param { name: name.substring(1, name.len()), value: rest });
+    }
     Option.Some(ps)
+}
+
+// ¿Casa el patrón (segmentos o regex) con la ruta? La regex corre sobre el path entero (el
+// usuario ancla con ^/$); sus capturas son params numerados desde "1" (grupo 0 = el match).
+fn match_pattern(pat: Pattern, path: string, path_segs: [string]) -> Option<[Param]> {
+    match (pat) {
+        Pattern.Segments(segs) => match_route(segs, path_segs),
+        Pattern.Re(re) => {
+            match (re.captures_str(path)) {
+                Option.Some(groups) => {
+                    var ps: [Param] = [];
+                    var i: int = 1;
+                    while (i < groups.len()) {
+                        let v: string = match (groups[i]) {
+                            Option.Some(s) => s,
+                            Option.None => "",
+                        };
+                        ps.push(Param { name: to_string(i), value: v });
+                        i = i + 1;
+                    }
+                    Option.Some(ps)
+                },
+                Option.None => Option.None,
+            }
+        },
+    }
 }
 
 // Construye la `webserver.Response` final a partir de la `Res` que rellenó el handler: el
@@ -364,7 +498,8 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
 }
 
 // El enrutado en sí (muta `res`; `ctx` viaja por referencia y recibe los params capturados):
-// primera ruta cuyo método y patrón casan → handler; ninguna → 404 (custom o default).
+// primera ruta cuyo método y patrón casan → handler; el patrón casa con OTRO método → 405 +
+// `Allow` (RFC 9110 — Express responde 404, incorrecto); ninguna → 404 (custom o default).
 fn route_request(app: App, ctx: Ctx, res: Res) {
     // Un HEAD enruta como GET (M56.8: el webserver ya le quita el cuerpo; RFC 9110 §9.3.2).
     let method: string = if (ctx.method == "HEAD") { "GET" } else { ctx.method };
@@ -372,8 +507,8 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
     var j: int = 0;
     while (j < app.routes.len()) {
         let rt: Route = app.routes[j];
-        if (rt.method == method) {
-            match (match_route(rt.segments, path_segs)) {
+        if (rt.method == method || rt.method == "*") {
+            match (match_pattern(rt.pattern, ctx.path, path_segs)) {
                 Option.Some(ps) => {
                     ctx.params = ps;
                     rt.handler(ctx, res);
@@ -383,6 +518,29 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
             }
         }
         j = j + 1;
+    }
+
+    // 405 (M93.2b): el path existe bajo otros métodos → Method Not Allowed + Allow con la lista.
+    var allow: [string] = [];
+    var k: int = 0;
+    while (k < app.routes.len()) {
+        let rt: Route = app.routes[k];
+        if (rt.method != "*" && rt.method != method && !allow.contains(rt.method)) {
+            match (match_pattern(rt.pattern, ctx.path, path_segs)) {
+                Option.Some(unused) => { allow.push(rt.method); },
+                Option.None => { },
+            }
+        }
+        k = k + 1;
+    }
+    if (allow.len() > 0) {
+        if (allow.contains("GET")) {
+            allow.push("HEAD");          // un GET siempre atiende HEAD (M56.8)
+        }
+        res.code = 405;
+        res.headers.insert("Allow", join(allow, ", "));
+        res.text("Method Not Allowed");
+        return;
     }
 
     // Ninguna ruta casó: el 404 custom si lo hay, o el default.

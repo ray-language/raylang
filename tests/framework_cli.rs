@@ -170,9 +170,43 @@ fn framework_estaticos_redirect_y_metodos() {
     assert!(r.contains("302"), "redirect estado: {r}");
     assert!(r.contains("Location: /"), "redirect Location: {r}");
 
-    // Un POST a una ruta GET no casa → 404 (los métodos se distinguen).
+    // M93.2b: un POST a una ruta que existe como GET → 405 + Allow (RFC 9110; antes era 404).
     let r = ask(port, "POST /teapot HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-    assert!(r.contains("404"), "POST a ruta GET: {r}");
+    assert!(r.contains("405"), "POST a ruta GET → 405: {r}");
+    assert!(r.contains("Allow: GET, HEAD"), "Allow con los métodos: {r}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn framework_catchall_all_regex_y_mount() {
+    // M93.2b: `*resto`, ALL (método comodín), rutas regex compiladas y sub-apps con mount.
+    let (mut child, port) = launch();
+
+    // Catch-all: captura el resto del path, con las "/".
+    let r = ask(port, "GET /files/docs/a.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("archivo: docs/a.txt"), "catch-all multi-segmento: {r}");
+    let r = ask(port, "GET /files/solo.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("archivo: solo.txt"), "catch-all un segmento: {r}");
+
+    // ALL: la misma ruta atiende GET y POST.
+    let r = ask(port, "GET /ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("pong GET"), "ALL con GET: {r}");
+    let r = ask(port, "POST /ping HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("pong POST"), "ALL con POST: {r}");
+
+    // Regex: captura numerada; un path que no casa la regex cae al 404.
+    let r = ask(port, "GET /v2/estado HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("\"version\": 2"), "captura regex: {r}");
+    let r = ask(port, "GET /vx/estado HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("404"), "regex no casa letras: {r}");
+
+    // Mount: la ruta del sub-app queda bajo el prefijo, con los middlewares del grupo (auth).
+    let r = ask(port, "GET /api/users/7/rol HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("401"), "mount aplica el middleware del grupo: {r}");
+    let r = ask(port, "GET /api/users/7/rol?token=secreto HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("\"id\": \"7\""), "mount re-prefija y captura params: {r}");
 
     let _ = child.kill();
     let _ = child.wait();

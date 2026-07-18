@@ -15,10 +15,23 @@
 //   curl -i http://127.0.0.1:8080/antigua            (302 → /)
 //   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
 from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, ALL, GET_re,
-    mount, listen, static_files, not_found, log_requests, param, query, body, put_local, local,
-    header_of, cookie_of, form_field, json_body, text, json, html, status, cookie, header,
-    redirect, Ctx, Res, Step;
+    mount, listen, static_files_cached, not_found, log_requests, cors, param, query, body,
+    put_local, local, header_of, cookie_of, form_field, json_body, text, json, json_of, html,
+    status, cookie, header, redirect, Ctx, Res, Step, ToJson;
 import std/json as jsonlib;
+
+// Un tipo propio que sabe serializarse (M93.2d): `impl ToJson` + `r.json_of(v)` — despacho
+// estático por bounds, sin reflexión. El string se escapa vía std/json.
+struct User {
+    id: int,
+    name: string,
+}
+
+impl ToJson for User {
+    fn to_json(self) -> string {
+        "{\"id\": " + to_string(self.id) + ", \"name\": " + jsonlib.stringify(jsonlib.Json.JStr(self.name)) + "}"
+    }
+}
 
 // Middleware (M93.2a): corre antes del enrutado; Step.Done corta la cadena y se responde lo
 // construido en `r`. Este exige `?token=secreto` y deja el usuario en los locals por-petición.
@@ -55,8 +68,17 @@ fn main() -> int {
         r.text("panel de " + c.local("user"));
     }));
 
-    // Archivos estáticos (M56.9): /assets/* se sirve desde static/ con ETag + 304.
-    app.static_files("/assets/", "static");
+    // CORS en una línea (M93.2d): responde el preflight OPTIONS y estampa Allow-Origin en todo.
+    app.cors("*");
+
+    // Archivos estáticos (M56.9 + M93.2d): /assets/* desde static/, con ETag + 304 y
+    // Cache-Control (1 h) — la historia de caching completa.
+    app.static_files_cached("/assets/", "static", 3600);
+
+    // json_of (M93.2d): responde el JSON de cualquier valor ToJson.
+    app.GET("/yo", fn(c: Ctx, r: Res) {
+        r.json_of(User { id: 7, name: "Ada" });
+    });
 
     app.GET("/", fn(c: Ctx, r: Res) {
         r.html("<h1>¡Hola desde el framework web de raylang!</h1>\n<link rel=\"stylesheet\" href=\"/assets/style.css\">");

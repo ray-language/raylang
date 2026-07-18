@@ -74,9 +74,11 @@ struct Route {
 }
 
 // Un mount de estáticos: prefijo de URL → directorio en disco (servido por M56.9).
+// `max_age` > 0 añade `Cache-Control: public, max-age=N` a los 200/304 (M93.2d).
 struct Mount {
     prefix: string,
     dir: string,
+    max_age: int,
 }
 
 /// The application: routes, middlewares (run before routing; `Step.Done` stops the chain),
@@ -215,7 +217,7 @@ pub fn mount(app: App, prefix: string, sub: App) {
     var m: int = 0;
     while (m < sub.mounts.len()) {
         let mt: Mount = sub.mounts[m];
-        app.mounts.push(Mount { prefix: base + mt.prefix, dir: mt.dir });
+        app.mounts.push(Mount { prefix: base + mt.prefix, dir: mt.dir, max_age: mt.max_age });
         m = m + 1;
     }
 }
@@ -264,7 +266,14 @@ pub fn with_mw(mws: [fn(Ctx, Res) -> Step], handler: fn(Ctx, Res)) -> fn(Ctx, Re
 /// with `Content-Type` by extension, path-traversal sanitizing, strong `ETag` and `304 Not
 /// Modified` revalidation. Mounts are checked before routes, for GET/HEAD only.
 pub fn static_files(app: App, prefix: string, dir: string) {
-    app.mounts.push(Mount { prefix: prefix, dir: dir });
+    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: 0 });
+}
+
+/// Like `static_files`, adding `Cache-Control: public, max-age=<max_age_s>` to every 200/304 —
+/// with the strong ETag + 304 revalidation of M56.9 this is the complete caching story for
+/// production static assets (M93.2d).
+pub fn static_files_cached(app: App, prefix: string, dir: string, max_age_s: int) {
+    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: max_age_s });
 }
 
 /// Replaces the default `404 Not Found` with a custom handler (runs when no route matches).
@@ -273,9 +282,29 @@ pub fn not_found(app: App, handler: fn(Ctx, Res)) {
 }
 
 /// Enables JSON request logging (`net/log`): one line per request to stdout with method, path,
-/// status and duration in milliseconds.
+/// status, duration in milliseconds and the request's `trace_id` (M93.2d: adopts an incoming
+/// W3C `traceparent`, or starts a fresh trace — correlation behind a gateway for free).
 pub fn log_requests(app: App) {
     app.log_on = true;
+}
+
+/// Enables CORS for `origin` (`"*"` or a concrete origin) in one line (M93.2d): answers the
+/// `OPTIONS` preflight (204 + Allow-Origin/Methods/Headers, `Step.Done`) and stamps
+/// `Access-Control-Allow-Origin` on every routed response via an `after` hook. Note: static
+/// mounts bypass the after chain (assets are usually same-origin).
+pub fn cors(app: App, origin: string) {
+    app.middlewares.push(fn(c: Ctx, r: Res) -> Step {
+        if (c.method == "OPTIONS" && c.header_of("access-control-request-method") != "") {
+            r.status(204).header("Access-Control-Allow-Origin", origin)
+                .header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+                .header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            return Step.Done;
+        }
+        Step.Next
+    });
+    app.afters.push(fn(c: Ctx, r: Res) {
+        r.header("Access-Control-Allow-Origin", origin);
+    });
 }
 
 // --- Helpers del contexto (handler) ---
@@ -408,6 +437,34 @@ pub fn cookie(res: Res, line: string) -> Res {
     res
 }
 
+/// A value that knows its JSON representation (M93.2d). Implement it for your own types
+/// (compose with `std/json.stringify` for correct string escaping) and respond with
+/// `r.json_of(v)`. A `@derive(ToJson)` is a candidate compiler feature (IDEAS.md).
+pub trait ToJson {
+    /// The value serialized as a JSON document.
+    fn to_json(self) -> string;
+}
+
+impl ToJson for int {
+    fn to_json(self) -> string { to_string(self) }
+}
+impl ToJson for float {
+    fn to_json(self) -> string { to_string(self) }
+}
+impl ToJson for bool {
+    fn to_json(self) -> string { to_string(self) }
+}
+impl ToJson for string {
+    // Con comillas y escapes correctos: se delega en el serializador de std/json.
+    fn to_json(self) -> string { jsonlib.stringify(jsonlib.Json.JStr(self)) }
+}
+
+/// Responds with the JSON of any `ToJson` value: `r.json_of(user)` (static dispatch via
+/// bounds, M9.2 — no reflection, no magic).
+pub fn json_of<T: ToJson>(res: Res, v: T) {
+    json(res, v.to_json());
+}
+
 // --- Enrutado ---
 // Parte una ruta en segmentos por "/". Mantiene el vacío inicial (de la "/" inicial) en ambos
 // lados, así el patrón y la ruta se alinean posición a posición ("/u/:id" y "/u/7" → 3 segmentos).
@@ -505,7 +562,12 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
         while (s < app.mounts.len()) {
             let mt: Mount = app.mounts[s];
             if (req.path.starts_with(mt.prefix)) {
-                return webserver.static_mount(mt.prefix, mt.dir, req);
+                let sr: webserver.Response = webserver.static_mount(mt.prefix, mt.dir, req);
+                // M93.2d: Cache-Control del mount cacheado, solo en 200/304 (no en 404/405).
+                if (mt.max_age > 0 && (sr.status == 200 || sr.status == 304)) {
+                    sr.headers.insert("Cache-Control", "public, max-age=" + to_string(mt.max_age));
+                }
+                return sr;
             }
             s = s + 1;
         }
@@ -596,14 +658,16 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
 }
 
 // El handler completo: despacha y, con `log_requests` activo, emite la línea JSON (método, ruta,
-// status, duración ms) vía net/log.
+// status, duración ms y trace_id — M93.2d: adopta el `traceparent` entrante vía webserver/trace,
+// o estrena trace) vía net/log.
 fn handle(app: App, req: webserver.Request) -> webserver.Response {
     if (!app.log_on) {
         return dispatch(app, req);
     }
     let t0: int = time.monotonic();
     let resp: webserver.Response = dispatch(app, req);
-    var e = log.info(log.logger("web"), "request");
+    let tid: string = webserver.trace_of(req).trace_id;
+    var e = log.info(log.with_trace(log.logger("web"), tid), "request");
     e = log.field(e, "method", req.method);
     e = log.field(e, "path", req.path);
     e = log.field_int(e, "status", resp.status);

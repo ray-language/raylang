@@ -137,6 +137,7 @@ viaja por referencia, lo que escribe un middleware lo ven el handler y los `afte
 
 ```raylang
 app.static_files("/assets/", "static");
+app.static_files_cached("/assets/", "static", 3600);   // + Cache-Control: public, max-age=3600
 ```
 
 Monta el directorio `static/` (relativo al directorio de trabajo del servidor) bajo el prefijo de
@@ -162,10 +163,30 @@ El código ya viene puesto a 404 (cámbialo con `r.status(...)` si quieres otro)
 app.log_requests();
 ```
 
-Una línea **JSON por petición** a stdout vía `net/log`, con `method`, `path`, `status` y `ms`
-(duración): `{"ts":"…","level":"INFO","service":"web","msg":"request","method":"GET","path":"/",
-"status":200,"ms":0}`. Para logging propio (otros campos, niveles, trace-id) usa `net/log`
-directamente en tus handlers o un middleware.
+Una línea **JSON por petición** a stdout vía `net/log`, con `method`, `path`, `status`, `ms`
+(duración) y **`trace_id`** (M93.2d: adopta el `traceparent` W3C entrante vía `net/trace`, o
+estrena uno — correlación detrás de un gateway gratis). Para logging propio (otros campos,
+niveles) usa `net/log` directamente en tus handlers o un middleware.
+
+## CORS y respuestas JSON tipadas (M93.2d)
+
+```raylang
+app.cors("*");                 // preflight OPTIONS (204) + Access-Control-Allow-Origin en todo
+
+struct User { id: int, name: string }
+impl ToJson for User {
+    fn to_json(self) -> string {
+        "{\"id\": " + to_string(self.id) + ", \"name\": " + jsonlib.stringify(jsonlib.Json.JStr(self.name)) + "}"
+    }
+}
+app.GET("/yo", fn(c: Ctx, r: Res) { r.json_of(User { id: 7, name: "Ada" }); });
+```
+
+`json_of<T: ToJson>` despacha estático por bounds (M9.2) — sin reflexión. Los primitivos ya
+traen `impl ToJson`; para el escapado de strings delega en `std/json.stringify`. (Un
+`@derive(ToJson)` queda anotado como candidata de compilador en IDEAS.md.) Nota: los mounts
+estáticos responden antes de la cadena `after`, así que no llevan las cabeceras CORS (los
+assets suelen ser same-origin).
 
 ## Despliegue
 
@@ -192,14 +213,23 @@ compartido va por canales a una fibra que lo posee (ver `examples/web/ssr/README
 | Función | Qué hace |
 |---|---|
 | `new_app() -> App` | crea la aplicación |
-| `route/GET/POST/PUT/PATCH/DELETE(app, patrón, handler)` | registra rutas (`:x` captura) |
-| `use_mw(app, fn(Ctx, Res) -> bool)` | middleware pre-enrutado (`false` corta) |
-| `static_files(app, prefijo_url, dir)` | estáticos con ETag/304 (M56.9) |
-| `not_found(app, handler)` | 404 personalizado |
-| `log_requests(app)` | JSON por petición (net/log) |
+| `route/GET/POST/PUT/PATCH/DELETE/ALL(app, patrón, handler)` | rutas (`:x` captura; `*resto` final; `ALL` = cualquier método) |
+| `route_re/GET_re(app, regex, handler)` | rutas regex (compiladas al registrar; capturas → `param("1")`) |
+| `mount(app, prefijo, sub_app)` | sub-aplicación re-prefijada con sus middlewares |
+| `use_mw(app, fn(Ctx, Res) -> Step)` | middleware pre-enrutado (`Step.Done` corta) |
+| `use_on(app, prefijo, mw)` | middleware global restringido a un prefijo |
+| `with_mw([mws], handler) -> handler` | cadena POR RUTA (combinador; params ya capturados) |
+| `after(app, hook)` | corre tras el enrutado, siempre; puede mutar `res` |
+| `static_files[_cached](app, prefijo, dir[, max_age])` | estáticos con ETag/304 (+ Cache-Control) |
+| `not_found(app, handler)` | 404 personalizado (405+Allow es automático) |
+| `log_requests(app)` | JSON por petición con `trace_id` (net/log + net/trace) |
+| `cors(app, origin)` | preflight + Allow-Origin en las respuestas enrutadas |
 | `param/query/body(ctx, …)` | parámetro de ruta / query / cuerpo texto |
+| `header_of/cookie_of/form/form_field/json_body(ctx, …)` | cabecera / cookie / form urlencoded / JSON (`Result`) |
+| `put_local/local(ctx, …)` | datos por-petición entre middleware, handler y after |
 | `status/header/cookie(res, …) -> Res` | encadenables |
 | `text/json/html/redirect(res, …)` | fijan cuerpo y Content-Type / 302 |
+| `json_of(res, v: T: ToJson)` | el JSON de un valor tipado (trait `ToJson`) |
 | `listen[_tls|_graceful|_limits](app, …)` | arranca el servidor (solo VM) |
 
 Demo completo: `examples/web/framework/` (`ray run` y los curl de su README).

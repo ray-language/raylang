@@ -146,6 +146,36 @@ fn framework_step_locals_after_y_middleware_por_ruta() {
 }
 
 #[test]
+fn framework_cors_cache_y_json_of() {
+    // M93.2d: cors (preflight + Allow-Origin), Cache-Control en estáticos y json_of (ToJson).
+    let (mut child, port) = launch();
+
+    // Preflight CORS: OPTIONS con Access-Control-Request-Method → 204 con las Allow-*.
+    let r = ask(port, "OPTIONS /suma HTTP/1.1\r\nHost: x\r\nOrigin: http://otro\r\nAccess-Control-Request-Method: POST\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("204"), "preflight → 204: {r}");
+    assert!(r.contains("Access-Control-Allow-Origin: *"), "preflight Allow-Origin: {r}");
+    assert!(r.contains("Access-Control-Allow-Methods:"), "preflight Allow-Methods: {r}");
+
+    // Toda respuesta enrutada lleva el Allow-Origin (hook after), también el 404.
+    let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("Access-Control-Allow-Origin: *"), "Allow-Origin en ruta: {r}");
+    let r = ask(port, "GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("Access-Control-Allow-Origin: *"), "Allow-Origin en 404: {r}");
+
+    // Estáticos cacheados: Cache-Control junto al ETag/304 de M56.9.
+    let r = ask(port, "GET /assets/style.css HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("Cache-Control: public, max-age=3600"), "Cache-Control del mount: {r}");
+
+    // json_of: el JSON de un valor ToJson, con el string escapado por std/json.
+    let r = ask(port, "GET /yo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("application/json"), "json_of content-type: {r}");
+    assert!(r.contains("{\"id\": 7, \"name\": \"Ada\"}"), "json_of cuerpo: {r}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn framework_estaticos_redirect_y_metodos() {
     let (mut child, port) = launch();
 

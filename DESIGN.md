@@ -8225,6 +8225,33 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   `tests/framework_cli.rs` monta ese mismo proyecto en un temporal (rutas absolutas al repo) y lo
   lanza con `ray run` — cubre enrutado/params/query/cookies/404-custom + estáticos con ETag→304,
   traversal, redirect, header custom y método-que-no-casa.
-- **Diferido**: middleware por-ruta / grupos de rutas (`app.group("/api", …)`), body parsers
-  (JSON→Map tipado), `listen_graceful_tls`, sesiones/CSRF. La publicación en el registro (M51)
-  cuando el registro tenga paquetes de terceros.
+- **M93.2 — "a lo raylang" (COMPLETO, jul 2026)**: cierre de la paridad Express SIN igualar
+  firmas 1:1 — cada idea con los medios del lenguaje (espec: `docs/M93.2-framework-a-lo-raylang.md`).
+  Cuatro fases, todo raylang puro en el paquete (cero cambios de runtime/webserver):
+  - **a (composición)**: el middleware pasa de `-> bool` a **`-> Step`** (`Next`/`Done`, enum
+    match-able; ruptura aceptada, paquete no publicado). Middleware POR RUTA como **combinador**
+    `with_mw([mws], handler) -> handler` (corre con los params ya capturados), `use_on(prefix, mw)`
+    (global por prefijo), cadena **`after`** explícita (corre SIEMPRE tras el enrutado — el
+    "después" sin el `next()` CPS de Express) y **`locals`** por-petición en `Ctx`
+    (`put_local`/`local`; `Ctx` viaja por referencia → lo que escribe un middleware lo ven handler
+    y afters).
+  - **b (enrutado)**: catch-all final `*resto` (captura el resto con las `/`), `ALL` (método
+    comodín `"*"`), **405 + `Allow` automático** (patrón casa con otro método; RFC 9110 — Express
+    responde 404), **`mount(prefix, sub)`** (un "router" ES una `App` que no escucha: fusión
+    estática re-prefijando rutas/estáticos y envolviendo handlers con `with_mw(sub.middlewares)`;
+    su `not_found`/`after` se ignoran) y **rutas regex** `route_re`/`GET_re` (`Pattern` pasa a
+    enum `Segments | Re`; compiladas UNA vez al registrar con `std/regex` —Pike VM lineal, sin
+    ReDoS, ventaja real sobre el `path-to-regexp` de Express—; capturas = params numerados).
+  - **c (contexto)**: `header_of`, `cookie_of` (`net/cookie`), `form`/`form_field`
+    (`std/url.parse_query`) y `json_body -> Result<Json, string>` (`std/json`) — conectan la
+    stdlib, no la reimplementan. Convención: lookups devuelven `""`; lo falible, `Result`.
+    Gotcha: los leaf `json`/`cookie` chocan con funciones homónimas → `import … as jsonlib/cookielib`.
+  - **d (presets)**: `cors(origin)` (preflight 204 + `Allow-Origin` vía after), `log_requests`
+    con **`trace_id`** (adopta el `traceparent` W3C vía `webserver.trace_of`), `static_files_cached`
+    (Cache-Control sobre el ETag/304) y **`trait ToJson` + `json_of<T: ToJson>`** (respuestas JSON
+    tipadas por bounds; impls de primitivos; `@derive(ToJson)` anotado en IDEAS.md).
+- **Diferido**: middleware envolvente estilo `next()` (dos cadenas explícitas cubren los casos),
+  `req.ip`/protocolo (exige peer-addr en `std/net` + `Request`), hook para el 500 de un `panic`
+  (vive en el `try_join` del webserver), `r.file(path)`/download, SSE por el framework,
+  `/metrics` integrado (estado entre peticiones → actor propio), sesiones/CSRF,
+  `listen_graceful_tls`. La publicación en el registro (M51) cuando haya terceros.

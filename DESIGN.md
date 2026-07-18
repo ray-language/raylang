@@ -8410,3 +8410,25 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   cuesta solo ~14% (80.8k vs 94.4k pelado). El handler-por-conexión (`catch_unwind`) baja de
   prioridad; la palanca real es abaratar el emit (cachear el timestamp formateado, stdout
   bufferizado).
+
+### 87c. M96b-cierre — la latencia de SLO a tasa fija (la medición correcta)
+
+> El barrido que valida toda la ronda. Herramienta: `oha -q <tasa> --latency-correction`
+> (equivalente a wrk2 -R: tasa constante + corrección de *coordinated omission* — la latencia se
+> mide desde el instante en que la petición DEBIÓ salir, no desde que el cliente pudo enviarla).
+> Webserver pelado nativo `--release`, M3 Pro, capacidad saturada medida ~107k req/s.
+
+| tasa (% capacidad) | sostenida | p50 | p90 | p99 | p99.9 |
+|---|---|---|---|---|---|
+| 32k (30%) | ✓ | 0.47 ms | 0.71 ms | **0.86 ms** | 1.6 ms |
+| 64k (60%) | ✓ | 0.96 ms | 1.53 ms | **2.23 ms** | 6.8 ms |
+| 85k (80%) | ✓ | 1.09 ms | 2.09 ms | 4.0 ms | 8.8 ms |
+| 96k (90%) | ✓ | 1.49 ms | 3.99 ms | 10.9 ms | 18.4 ms |
+
+- **El p99 de ~80 ms de wrk era 100% artefacto de saturación** (open-loop a plena CPU = medir
+  profundidad de cola). A carga real el servidor da **p99 sub-milisegundo al 30% y 2.2 ms al
+  60%**, sostiene TODAS las tasas pedidas, y la curva degrada suave (sin rodilla patológica
+  hasta el 90%). Números de clase producción.
+- **Metodología fijada para el proyecto**: throughput de pico → wrk (open-loop saturante);
+  latencia de SLO → tasa fija con corrección (`oha -q`/wrk2). Reportar el p99 de wrk como
+  latencia del servicio es un error de medición, no un dato.

@@ -1306,17 +1306,54 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // Cada scope activo (por hilo) acumula las tareas lanzadas dentro; `spawn` registra la suya
             // en el scope más interno, si hay.
             "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>> = std::cell::RefCell::new(Vec::new()); }\n",
+            // Pool de hilos (M96): `spawn` REUSA un worker ocioso en vez de crear un hilo del SO por
+            // tarea (el webserver spawn-ea por PETICIÓN → miles de creaciones/s bajo carga). Es un
+            // thread-cache CRECIENTE (nunca bloquea al spawner: sin worker ocioso → hilo nuevo), porque
+            // hay tareas que bloquean indefinidamente (fibras de conexión) y un pool fijo se moriría de
+            // deadlock. Protocolo sin pérdida: un worker que agota su ocio solo SALE si logra quitarse
+            // de la pila él mismo; si ya no está, es que un spawner lo pop-eó y su job llega (o llegó)
+            // → recv bloqueante. El estado THREAD-LOCAL por tarea (token de cancelación, scopes) se
+            // resetea entre jobs. El spawner recupera el job de un SendError (worker justo muerto).
+            "type __RayJob = std::boxed::Box<dyn FnOnce() + Send + 'static>;\n",
+            "static __RAY_POOL: std::sync::Mutex<Vec<(u64, std::sync::mpsc::Sender<__RayJob>)>> = std::sync::Mutex::new(Vec::new());\n",
+            "static __RAY_POOL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+            "fn __ray_pool_exec(job: __RayJob) {\n",
+            "    let mut job = job;\n",
+            "    while let Some((_, tx)) = { let w = __RAY_POOL.lock().unwrap().pop(); w } {\n",
+            "        match tx.send(job) { Ok(()) => return, Err(e) => job = e.0 }\n",
+            "    }\n",
+            "    std::thread::spawn(move || {\n",
+            "        let mut job = job;\n",
+            "        loop {\n",
+            "            job();\n",
+            "            __RAY_CANCEL.with(|c| *c.borrow_mut() = None);\n",
+            "            __SCOPES.with(|s| s.borrow_mut().clear());\n",
+            "            let (tx, rx) = std::sync::mpsc::channel::<__RayJob>();\n",
+            "            let id = __RAY_POOL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+            "            __RAY_POOL.lock().unwrap().push((id, tx));\n",
+            "            match rx.recv_timeout(std::time::Duration::from_secs(10)) {\n",
+            "                Ok(next) => job = next,\n",
+            "                Err(_) => {\n",
+            "                    let mut pool = __RAY_POOL.lock().unwrap();\n",
+            "                    if let Some(pos) = pool.iter().position(|(i, _)| *i == id) { pool.remove(pos); return; }\n",
+            "                    drop(pool);\n",
+            "                    match rx.recv() { Ok(next) => job = next, Err(_) => return }\n",
+            "                }\n",
+            "            }\n",
+            "        }\n",
+            "    });\n",
+            "}\n",
             "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
             "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
             "    let t = task.clone();\n",
-            "    std::thread::spawn(move || {\n",
+            "    __ray_pool_exec(std::boxed::Box::new(move || {\n",
             "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
             "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
             // Una hija que falla con tareas en vuelo cancela los hijos de sus scopes sin cerrar (el
             // unwinding se saltó los pops de __SCOPES) → transitiva, sin nietos huérfanos (M12.5).
             "        if r.is_err() { let frames = __SCOPES.with(|s| std::mem::take(&mut *s.borrow_mut())); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
             "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
-            "    });\n",
+            "    }));\n",
             "    let t2 = task.clone();\n",
             "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
             "    task\n}\n",

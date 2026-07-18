@@ -8338,3 +8338,31 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
 - **Corpus**: demo `examples/basics/plantillas.ray` (multilínea + JSON + `\$`), byte-idéntico
   VM↔nativo. Excluido del corpus del parser auto-alojado (mismo estado que la interpolación
   M27.3: el lexer espejo aún no la produce; diferido documentado en `tests/selfhost_lexer.rs`).
+
+## 87. M96 — pool de hilos para `__ray_spawn` (backend nativo)
+
+> Jul 2026. Nace de medir el webserver nativo bajo `wrk -c500` (M93.6): el backend nativo creaba
+> un HILO del SO por `spawn`, y el webserver spawn-ea una tarea por PETICIÓN (el aislamiento
+> panic→500 de M56.5) → ~17k creaciones de hilo/s; el throughput CAÍA con la concurrencia
+> (17k req/s con 500 conexiones vs 31k con 250) y aparecía cola de latencia >2 s.
+
+- **Diseño: thread-cache CRECIENTE, no pool fijo.** Hay tareas que bloquean indefinidamente
+  (las fibras de conexión del webserver viven bloqueadas en I/O): un pool de tamaño fijo se
+  moriría de deadlock (N conexiones agotan los workers y las tareas por-petición no corren
+  jamás). `__ray_pool_exec(job)`: pop de un worker OCIOSO de la pila global y le manda el job;
+  sin ociosos → hilo nuevo (el spawner NUNCA bloquea). Un worker, al acabar su job, se apunta a
+  la pila y espera el siguiente con timeout de ocio (10 s) → tras una ráfaga el recuento de
+  hilos vuelve a bajar.
+- **Protocolo sin pérdida de jobs** (la carrera timeout-vs-pop): un worker cuyo ocio expira solo
+  SALE si logra quitarse de la pila él mismo (nadie lo tomó); si su entrada ya no está, es que
+  un spawner lo pop-eó y su job llega (o llegó) → `recv` bloqueante, garantizado por el orden
+  de los drops. El spawner, simétricamente, recupera el job de un `SendError` (worker que murió
+  justo antes) y cae al siguiente ocioso o a un hilo nuevo.
+- **Estado thread-local por tarea**: el token de cancelación (`__RAY_CANCEL`) y la pila de
+  scopes (`__SCOPES`) se RESETEAN entre jobs — un hilo reusado no puede heredar la cancelación
+  ni los scopes de la tarea anterior. La semántica de M12 (structured concurrency, cancelación
+  cooperativa, catch_unwind por tarea) es idéntica: solo cambia QUIÉN presta el hilo.
+- **Medido** (M2 Max, framework demo `--release`, `wrk -t4 -c500 -d15s` contra `/yo`, logging
+  activo): 18,001 → **58,333 req/s (3.24×)**; p50 14.9 ms → **2.4 ms**; p99 1.24 s → **231 ms**;
+  timeouts 172 → **0**. Verificación de semántica: cli_cli 88/88 (spawn/señales/graceful/CSP
+  nativos), corpus nativo byte-idéntico, concurrency_cli 26/26.

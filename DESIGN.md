@@ -8362,7 +8362,7 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   scopes (`__SCOPES`) se RESETEAN entre jobs — un hilo reusado no puede heredar la cancelación
   ni los scopes de la tarea anterior. La semántica de M12 (structured concurrency, cancelación
   cooperativa, catch_unwind por tarea) es idéntica: solo cambia QUIÉN presta el hilo.
-- **Medido** (M2 Max, framework demo `--release`, `wrk -t4 -c500 -d15s` contra `/yo`, logging
+- **Medido** (M3 Pro, framework demo `--release`, `wrk -t4 -c500 -d15s` contra `/yo`, logging
   activo): 18,001 → **58,333 req/s (3.24×)**; p50 14.9 ms → **2.4 ms**; p99 1.24 s → **231 ms**;
   timeouts 172 → **0**. Verificación de semántica: cli_cli 88/88 (spawn/señales/graceful/CSP
   nativos), corpus nativo byte-idéntico, concurrency_cli 26/26.

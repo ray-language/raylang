@@ -253,7 +253,7 @@ El runtime (VM y binarios nativos) **sube solo** el límite blando de fds al dur
 (macOS hereda 256 por defecto — un `wrk -c500` lo agotaba sin culpa del programa). Y el
 agotamiento real de descriptores (EMFILE) es **transitorio** para el accept: pausa y reintenta
 sin contar para la rendición por error persistente (antes, 100 EMFILE consecutivos —milisegundos
-bajo tormenta— apagaban el servidor). Medido (M2 Max, binario nativo debug, `log_requests`
+bajo tormenta— apagaban el servidor). Medido (M3 Pro, binario nativo debug, `log_requests`
 activo): `wrk -t4 -c500 -d15s` → ~17.6k req/s, cero errores, servidor vivo. Con el **pool de
 hilos** del backend nativo (M96, DESIGN §87): **~58.3k req/s**, p50 2.4 ms, p99 231 ms, cero
 timeouts — mismo hardware y protocolo, binario `--release`. Con `ray dev` (M92) tienes watch+restart con drenado y **live-reload del

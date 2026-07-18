@@ -8276,6 +8276,11 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   la misma local no-Copy — los dos de `cors(origin)` — daban E0382). Corpus nativo intacto.
   Gotcha operativo (macOS): re-emitir el binario sobre la MISMA ruta invalida la firma ad-hoc
   cacheada → SIGKILL silencioso al ejecutar; usar ruta nueva o borrar antes.
+- **M93.4 — `ToJson` sube a `std/json` (jul 2026)**: el trait (+ impls de int/float/bool/string,
+  el de string vía `stringify(Json.JStr(…))`) pasa de `web/framework` a la stdlib — así un futuro
+  `@derive(ToJson)` (IDEAS) no dependería de un paquete. El framework lo REEXPORTA
+  (`pub from std/json import ToJson;`, M11.6a) y conserva `json_of<T: ToJson>`: los consumidores
+  (`from web/framework import ToJson`) no cambian. std embebida → recompilar el binario.
 - **Diferido**: middleware envolvente estilo `next()` (dos cadenas explícitas cubren los casos),
   `req.ip`/protocolo (exige peer-addr en `std/net` + `Request`), hook para el 500 de un `panic`
   (vive en el `try_join` del webserver), `r.file(path)`/download, SSE por el framework,

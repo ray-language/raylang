@@ -17,6 +17,9 @@ import std/url;
 // Alias (M11.5): los leaf `json`/`cookie` chocarían con las funciones homónimas del framework.
 import std/json as jsonlib;
 import net/cookie as cookielib;
+// Reexport (M11.6a): el trait vive en std/json (M93.4); los consumidores pueden seguir haciendo
+// `from web/framework import ToJson`.
+pub from std/json import ToJson;
 
 // --- Tipos ---
 /// What a middleware decides: continue the chain (`Step.Next`), or stop here (`Step.Done` — the
@@ -436,30 +439,9 @@ pub fn cookie(res: Res, line: string) -> Res {
     res
 }
 
-/// A value that knows its JSON representation (M93.2d). Implement it for your own types
-/// (compose with `std/json.stringify` for correct string escaping) and respond with
-/// `r.json_of(v)`. A `@derive(ToJson)` is a candidate compiler feature (IDEAS.md).
-pub trait ToJson {
-    /// The value serialized as a JSON document.
-    fn to_json(self) -> string;
-}
-
-impl ToJson for int {
-    fn to_json(self) -> string { to_string(self) }
-}
-impl ToJson for float {
-    fn to_json(self) -> string { to_string(self) }
-}
-impl ToJson for bool {
-    fn to_json(self) -> string { to_string(self) }
-}
-impl ToJson for string {
-    // Con comillas y escapes correctos: se delega en el serializador de std/json.
-    fn to_json(self) -> string { jsonlib.stringify(jsonlib.Json.JStr(self)) }
-}
-
 /// Responds with the JSON of any `ToJson` value: `r.json_of(user)` (static dispatch via
-/// bounds, M9.2 — no reflection, no magic).
+/// bounds, M9.2 — no reflection, no magic). The `ToJson` trait lives in `std/json` (M93.4,
+/// with impls for the primitives) and is re-exported here for convenience.
 pub fn json_of<T: ToJson>(res: Res, v: T) {
     json(res, v.to_json());
 }

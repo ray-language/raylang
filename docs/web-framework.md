@@ -190,9 +190,11 @@ impl ToJson for User {
 app.GET("/yo", fn(c: Ctx, r: Res) { r.json_of(User { id: 7, name: "Ada" }); });
 ```
 
-`json_of<T: ToJson>` despacha estático por bounds (M9.2) — sin reflexión. Los primitivos ya
-traen `impl ToJson`; para el escapado de strings delega en `std/json.stringify`. (Un
-`@derive(ToJson)` queda anotado como candidata de compilador en IDEAS.md.) Nota: los mounts
+`json_of<T: ToJson>` despacha estático por bounds (M9.2) — sin reflexión. El trait **vive en
+`std/json`** (M93.4, con impls para los primitivos; el framework lo reexporta, así que
+`from web/framework import ToJson` sigue valiendo) y para el escapado de strings delega en
+`std/json.stringify`. (Un `@derive(ToJson)` queda anotado como candidata de compilador en
+IDEAS.md — con el trait en la stdlib, el derive no dependería de ningún paquete.) Nota: los mounts
 estáticos responden antes de la cadena `after`, así que no llevan las cabeceras CORS (los
 assets suelen ser same-origin).
 

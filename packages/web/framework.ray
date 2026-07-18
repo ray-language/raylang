@@ -1,0 +1,703 @@
+// El framework web de aplicación de raylang (M93), estilo Express, PROMOVIDO desde
+// examples/web/framework.ray y reescrito sobre `net/webserver` (el servidor de producción, M56):
+// enrutado por método + patrón con parámetros (`/users/:id`), query, middleware, archivos
+// estáticos con caching ETag/304 (M56.9), cookies, headers custom, redirect, 404 personalizable,
+// logging JSON opcional (`net/log`), TLS, límites y apagado ordenado. Cero runtime nuevo: puro
+// raylang. **Solo VM** (el servidor cede fibras).
+//
+// Uso (ver `examples/web/framework/` y docs/web-framework.md):
+//   from web/framework import new_app, GET, listen, text, App, Ctx, Res;
+//   fn build_app() -> App { var app = new_app(); app.GET("/", fn(c: Ctx, r: Res) { r.text("hola"); }); app }
+//   fn main() -> int { match (listen(build_app, "127.0.0.1", 8080)) { ... } }
+import net/webserver;
+import net/log;
+import std/time;
+import std/regex;
+import std/url;
+// Alias (M11.5): los leaf `json`/`cookie` chocarían con las funciones homónimas del framework.
+import std/json as jsonlib;
+import net/cookie as cookielib;
+// Reexport (M11.6a): el trait vive en std/json (M93.4); los consumidores pueden seguir haciendo
+// `from web/framework import ToJson`.
+pub from std/json import ToJson;
+
+// --- Tipos ---
+/// What a middleware decides: continue the chain (`Step.Next`), or stop here (`Step.Done` — the
+/// response built so far in `Res` is sent as-is).
+pub enum Step {
+    Next,
+    Done,
+}
+
+// Un parámetro de ruta capturado (`:id` → ("id", "42")). Lista de asociación (pocos por ruta) en
+// vez de un Map, para no chocar con el `get` del prelude al definir helpers en este módulo.
+struct Param {
+    name: string,
+    value: string,
+}
+
+/// The context a handler sees: the HTTP method, the request path, the captured route parameters
+/// (see `param`), the underlying `webserver.Request` (headers, body, query) and the per-request
+/// `locals` written by middlewares (see `put_local`/`local`).
+pub struct Ctx {
+    method: string,
+    path: string,
+    params: [Param],
+    req: webserver.Request,
+    locals: Map<string, string>,
+}
+
+// La respuesta que el handler construye mutando (por referencia). El campo se llama `code` (no
+// `status`) para no chocar con la función `status` (un campo gana sobre una función libre en UFCS).
+/// The mutable response a handler fills in: status `code`, `body`, `content_type`, extra
+/// `headers` and the `Set-Cookie` lines. Use the chainable helpers (`status`/`text`/`json`/
+/// `html`/`header`/`cookie`/`redirect`) instead of touching the fields directly.
+pub struct Res {
+    code: int,
+    body: bytes,
+    content_type: string,
+    headers: Map<string, string>,
+    set_cookie: [string],
+}
+
+// Un patrón de ruta (M93.2b): por segmentos (":x" captura uno; "*resto" FINAL captura el resto,
+// con las "/") o una regex COMPILADA al registrar (std/regex, Pike VM → tiempo lineal, sin ReDoS;
+// las capturas se exponen como params numerados "1", "2", …).
+enum Pattern {
+    Segments([string]),
+    Re(regex.Regex),
+}
+
+// Una ruta registrada: método HTTP ("*" = cualquiera, de `ALL`) + patrón + handler.
+struct Route {
+    method: string,
+    pattern: Pattern,
+    handler: fn(Ctx, Res),
+}
+
+// Un mount de estáticos: prefijo de URL → directorio en disco (servido por M56.9).
+// `max_age` > 0 añade `Cache-Control: public, max-age=N` a los 200/304 (M93.2d).
+struct Mount {
+    prefix: string,
+    dir: string,
+    max_age: int,
+}
+
+/// The application: routes, middlewares (run before routing; `Step.Done` stops the chain),
+/// `after` hooks (run after routing, always), static mounts, an optional custom 404 handler and
+/// the request-logging switch. Build one with `new_app()` and register everything through the
+/// UFCS helpers (`app.GET(...)`, etc.).
+pub struct App {
+    routes: [Route],
+    middlewares: [fn(Ctx, Res) -> Step],
+    afters: [fn(Ctx, Res)],
+    mounts: [Mount],
+    nf_handlers: [fn(Ctx, Res)],
+    log_on: bool,
+}
+
+/// Creates an empty application.
+pub fn new_app() -> App {
+    var rs: [Route] = [];
+    var ms: [fn(Ctx, Res) -> Step] = [];
+    var af: [fn(Ctx, Res)] = [];
+    var mounts: [Mount] = [];
+    var nf: [fn(Ctx, Res)] = [];
+    App { routes: rs, middlewares: ms, afters: af, mounts: mounts, nf_handlers: nf, log_on: false }
+}
+
+// --- Registro de rutas (con UFCS: `app.GET("/", handler)`) ---
+//
+// Los verbos van en MAYÚSCULA (`GET`/`POST`/…) por dos razones: se leen como el método HTTP, y
+// evitan el choque de `get` con el `get` del prelude (de Map) — definir `fn get` en el módulo de
+// entrada taparía el `get` de Map para todo el programa.
+
+/// Registers a route for an arbitrary HTTP method (uppercase: "GET", "OPTIONS", …). The pattern
+/// is segment-based; a `:name` segment captures a route parameter (read it with `c.param("name")`)
+/// and a FINAL `*name` segment captures the rest of the path, slashes included (M93.2b).
+pub fn route(app: App, method: string, pattern: string, handler: fn(Ctx, Res)) {
+    let segs: [string] = split_path(pattern);
+    // Un segmento `*` solo puede ser el último (error de programación → panic al registrar).
+    var i: int = 0;
+    while (i < segs.len()) {
+        if (segs[i].starts_with("*") && i != segs.len() - 1) {
+            panic("route pattern '" + pattern + "': a '*' capture must be the last segment");
+        }
+        i = i + 1;
+    }
+    app.routes.push(Route { method: method, pattern: Pattern.Segments(segs), handler: handler });
+}
+
+/// Registers a route whose pattern is a REGEX over the whole request path (anchor it yourself:
+/// `"^/files/(.+)\\.png$"`). Compiled ONCE here (`std/regex`, linear-time Pike VM — ReDoS-immune,
+/// unlike Express); a malformed pattern panics at startup with the regex compiler's error.
+/// Captures become numbered route params: `c.param("1")`, `c.param("2")`, …
+pub fn route_re(app: App, method: string, pattern: string, handler: fn(Ctx, Res)) {
+    match (regex.compile(pattern)) {
+        Result.Ok(re) => {
+            app.routes.push(Route { method: method, pattern: Pattern.Re(re), handler: handler });
+        },
+        Result.Err(e) => {
+            panic("route_re pattern '" + pattern + "': " + e);
+        },
+    }
+}
+
+/// Registers a GET regex route (`app.GET_re("^/v(\\d+)/status$", h)`); see `route_re`.
+pub fn GET_re(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route_re(app, "GET", pattern, handler);
+}
+
+/// Registers a GET route (`app.GET("/users/:id", handler)`). HEAD requests route as GET (the
+/// server strips the body per RFC 9110).
+pub fn GET(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route(app, "GET", pattern, handler);
+}
+
+/// Registers a POST route.
+pub fn POST(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route(app, "POST", pattern, handler);
+}
+
+/// Registers a PUT route.
+pub fn PUT(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route(app, "PUT", pattern, handler);
+}
+
+/// Registers a PATCH route.
+pub fn PATCH(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route(app, "PATCH", pattern, handler);
+}
+
+/// Registers a DELETE route.
+pub fn DELETE(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route(app, "DELETE", pattern, handler);
+}
+
+/// Registers a route for ANY HTTP method (`app.ALL("/ping", h)`).
+pub fn ALL(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    route(app, "*", pattern, handler);
+}
+
+/// Mounts a sub-application under a URL prefix — a "router" IS an `App` that never listens
+/// (M93.2e): `app.mount("/api", api)` re-prefixes the sub-app's routes and static mounts, and
+/// wraps each handler with the sub-app's middleware chain (`with_mw` — they run only for its
+/// routes, with params captured). The sub-app's `not_found` and `after` hooks are ignored (the
+/// root app owns the response cycle). A regex route cannot be re-prefixed: panic at mount time.
+pub fn mount(app: App, prefix: string, sub: App) {
+    // "/api" y "/api/" son el mismo mount; la base va sin "/" final para concatenar limpio.
+    let base: string = if (prefix.ends_with("/")) { prefix.substring(0, prefix.len() - 1) } else { prefix };
+    let pre: [string] = split_path(base);        // "/api" → ["", "api"]
+    var i: int = 0;
+    while (i < sub.routes.len()) {
+        let rt: Route = sub.routes[i];
+        match (rt.pattern) {
+            Pattern.Segments(segs) => {
+                var joined: [string] = [];
+                var a: int = 0;
+                while (a < pre.len()) {
+                    joined.push(pre[a]);
+                    a = a + 1;
+                }
+                var b: int = 1;                  // salta el "" inicial del patrón del sub-app
+                while (b < segs.len()) {
+                    joined.push(segs[b]);
+                    b = b + 1;
+                }
+                app.routes.push(Route {
+                    method: rt.method,
+                    pattern: Pattern.Segments(joined),
+                    handler: with_mw(sub.middlewares, rt.handler),
+                });
+            },
+            Pattern.Re(_) => {
+                panic("mount '" + prefix + "': a regex route cannot be re-prefixed; register it on the root app");
+            },
+        }
+        i = i + 1;
+    }
+    var m: int = 0;
+    while (m < sub.mounts.len()) {
+        let mt: Mount = sub.mounts[m];
+        app.mounts.push(Mount { prefix: base + mt.prefix, dir: mt.dir, max_age: mt.max_age });
+        m = m + 1;
+    }
+}
+
+/// Registers a middleware: it runs before routing, in registration order; return `Step.Done` to
+/// stop the chain (the response built so far is sent as-is), `Step.Next` to continue.
+pub fn use_mw(app: App, mw: fn(Ctx, Res) -> Step) {
+    app.middlewares.push(mw);
+}
+
+/// Like `use_mw`, restricted to a URL prefix: the middleware only runs when the request path
+/// starts with `prefix` (`app.use_on("/api/", require_token)`).
+pub fn use_on(app: App, prefix: string, mw: fn(Ctx, Res) -> Step) {
+    app.middlewares.push(fn(c: Ctx, r: Res) -> Step {
+        if (c.path.starts_with(prefix)) { mw(c, r) } else { Step.Next }
+    });
+}
+
+/// Registers an `after` hook: it runs AFTER routing (also on 404), in registration order, and can
+/// still mutate the response — common headers, custom error pages for `r.code >= 500`, own logging.
+/// With `locals` it covers the pre/post pattern without Express-style `next()` wrapping.
+pub fn after(app: App, hook: fn(Ctx, Res)) {
+    app.afters.push(hook);
+}
+
+/// Wraps a handler with a per-route middleware chain: `app.GET("/admin/:id", with_mw([auth], h))`.
+/// The chain runs with the route parameters ALREADY captured (unlike the global chain);
+/// `Step.Done` stops it and the response built so far is sent. Composes with itself.
+pub fn with_mw(mws: [fn(Ctx, Res) -> Step], handler: fn(Ctx, Res)) -> fn(Ctx, Res) {
+    fn(c: Ctx, r: Res) {
+        var i: int = 0;
+        while (i < mws.len()) {
+            let mw: fn(Ctx, Res) -> Step = mws[i];
+            match (mw(c, r)) {
+                Step.Next => { },
+                Step.Done => { return; },
+            }
+            i = i + 1;
+        }
+        handler(c, r);
+    }
+}
+
+/// Mounts a static directory (M56.9): requests under the URL `prefix` are served from `dir` on
+/// disk (`app.static_files("/assets/", "static")` serves `/assets/app.css` from `static/app.css`),
+/// with `Content-Type` by extension, path-traversal sanitizing, strong `ETag` and `304 Not
+/// Modified` revalidation. Mounts are checked before routes, for GET/HEAD only.
+pub fn static_files(app: App, prefix: string, dir: string) {
+    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: 0 });
+}
+
+/// Like `static_files`, adding `Cache-Control: public, max-age=<max_age_s>` to every 200/304 —
+/// with the strong ETag + 304 revalidation of M56.9 this is the complete caching story for
+/// production static assets (M93.2d).
+pub fn static_files_cached(app: App, prefix: string, dir: string, max_age_s: int) {
+    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: max_age_s });
+}
+
+/// Replaces the default `404 Not Found` with a custom handler (runs when no route matches).
+pub fn not_found(app: App, handler: fn(Ctx, Res)) {
+    app.nf_handlers.push(handler);
+}
+
+/// Enables JSON request logging (`net/log`): one line per request to stdout with method, path,
+/// status, duration in milliseconds and the request's `trace_id` (M93.2d: adopts an incoming
+/// W3C `traceparent`, or starts a fresh trace — correlation behind a gateway for free).
+pub fn log_requests(app: App) {
+    app.log_on = true;
+}
+
+/// Enables CORS for `origin` (`"*"` or a concrete origin) in one line (M93.2d): answers the
+/// `OPTIONS` preflight (204 + Allow-Origin/Methods/Headers, `Step.Done`) and stamps
+/// `Access-Control-Allow-Origin` on every routed response via an `after` hook. Note: static
+/// mounts bypass the after chain (assets are usually same-origin).
+pub fn cors(app: App, origin: string) {
+    app.middlewares.push(fn(c: Ctx, r: Res) -> Step {
+        if (c.method == "OPTIONS" && c.header_of("access-control-request-method") != "") {
+            r.status(204).header("Access-Control-Allow-Origin", origin)
+                .header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+                .header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            return Step.Done;
+        }
+        Step.Next
+    });
+    app.afters.push(fn(c: Ctx, r: Res) {
+        r.header("Access-Control-Allow-Origin", origin);
+    });
+}
+
+// --- Helpers del contexto (handler) ---
+
+/// The value of the `:name` route parameter, or `""` if the pattern did not capture it.
+pub fn param(ctx: Ctx, name: string) -> string {
+    var i: int = 0;
+    while (i < ctx.params.len()) {
+        if (ctx.params[i].name == name) {
+            return ctx.params[i].value;
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+/// The value of a query-string parameter (`?name=Ada`, URL-decoded), or `""` if absent.
+pub fn query(ctx: Ctx, name: string) -> string {
+    match (get(webserver.query_params(ctx.req), name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// Stores a per-request value (`Ctx.locals`): what a middleware writes here, the handler and the
+/// `after` hooks can read (`Ctx` travels by reference). E.g. `auth` leaves the user id.
+pub fn put_local(ctx: Ctx, name: string, value: string) {
+    ctx.locals.insert(name, value);
+}
+
+/// Reads a per-request value written with `put_local`; `""` if absent.
+pub fn local(ctx: Ctx, name: string) -> string {
+    match (get(ctx.locals, name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// The request body decoded as UTF-8 text; `""` if the body is not valid text (for binary
+/// bodies use `ctx.req.body` directly).
+pub fn body(ctx: Ctx) -> string {
+    match (from_utf8(ctx.req.body)) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
+}
+
+/// The value of a request header (`c.header_of("user-agent")`; names arrive lowercased);
+/// `""` if absent.
+pub fn header_of(ctx: Ctx, name: string) -> string {
+    match (get(ctx.req.headers, name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// The value of a request cookie (parsed from the `Cookie:` header via `net/cookie`);
+/// `""` if absent.
+pub fn cookie_of(ctx: Ctx, name: string) -> string {
+    match (get(cookielib.parse_cookies(header_of(ctx, "cookie")), name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// The body parsed as an `application/x-www-form-urlencoded` form (`std/url.parse_query`,
+/// URL-decoded). Empty map if the body is not text or not a form.
+pub fn form(ctx: Ctx) -> Map<string, string> {
+    url.parse_query(body(ctx))
+}
+
+/// One form field (`c.form_field("user")`); `""` if absent.
+pub fn form_field(ctx: Ctx, name: string) -> string {
+    match (get(form(ctx), name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// The body parsed as JSON (`std/json`): `Ok(Json)` to walk with `jsonlib.get_*`, or
+/// `Err(message)` — errors as values, composable with `?`.
+pub fn json_body(ctx: Ctx) -> Result<jsonlib.Json, string> {
+    jsonlib.parse(body(ctx))
+}
+
+// --- Helpers de la respuesta (mutan `res`; encadenables con UFCS) ---
+
+/// Sets the status code and returns `res` (chainable: `r.status(404).text("...")`).
+pub fn status(res: Res, n: int) -> Res {
+    res.code = n;
+    res
+}
+
+/// Responds with plain text (`text/plain`).
+pub fn text(res: Res, txt: string) {
+    res.body = txt.to_bytes();
+    res.content_type = "text/plain; charset=utf-8";
+}
+
+/// Responds with JSON (the caller passes the already-serialized JSON; compose with `std/json`).
+pub fn json(res: Res, txt: string) {
+    res.body = txt.to_bytes();
+    res.content_type = "application/json";
+}
+
+/// Responds with HTML (`text/html`; pairs with the compiled templates of `ray templ`).
+pub fn html(res: Res, markup: string) {
+    res.body = markup.to_bytes();
+    res.content_type = "text/html; charset=utf-8";
+}
+
+/// Sets an extra response header and returns `res` (chainable). A header set here wins over the
+/// `Content-Type` derived from `text`/`json`/`html`.
+pub fn header(res: Res, name: string, value: string) -> Res {
+    res.headers.insert(name, value);
+    res
+}
+
+/// Responds with a `302 Found` redirect to `url` (use `r.status(301)` after it for a permanent one).
+pub fn redirect(res: Res, url: string) {
+    res.code = 302;
+    res.headers.insert("Location", url);
+    res.body = b"";
+    res.content_type = "text/plain; charset=utf-8";
+}
+
+/// Adds a `Set-Cookie` line and returns `res` (chainable; one line per cookie, M56.7).
+pub fn cookie(res: Res, line: string) -> Res {
+    res.set_cookie.push(line);
+    res
+}
+
+/// Responds with the JSON of any `ToJson` value: `r.json_of(user)` (static dispatch via
+/// bounds, M9.2 — no reflection, no magic). The `ToJson` trait lives in `std/json` (M93.4,
+/// with impls for the primitives) and is re-exported here for convenience.
+pub fn json_of<T: ToJson>(res: Res, v: T) {
+    json(res, v.to_json());
+}
+
+// --- Enrutado ---
+// Parte una ruta en segmentos por "/". Mantiene el vacío inicial (de la "/" inicial) en ambos
+// lados, así el patrón y la ruta se alinean posición a posición ("/u/:id" y "/u/7" → 3 segmentos).
+fn split_path(p: string) -> [string] { p.split("/") }
+
+// ¿Casan los segmentos del patrón con los de la ruta? Si sí, devuelve los parámetros capturados.
+// Un último segmento `*nombre` (M93.2b) captura el RESTO de la ruta (las "/" incluidas).
+fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
+    let star: bool = pat.len() > 0 && pat[pat.len() - 1].starts_with("*");
+    if (star) {
+        if (path.len() < pat.len()) {
+            return Option.None;
+        }
+    } else {
+        if (pat.len() != path.len()) {
+            return Option.None;
+        }
+    }
+    let fixed: int = if (star) { pat.len() - 1 } else { pat.len() };
+    var ps: [Param] = [];
+    var i: int = 0;
+    while (i < fixed) {
+        let seg: string = pat[i];
+        if (seg.starts_with(":")) {
+            ps.push(Param { name: seg.substring(1, seg.len()), value: path[i] });
+        } else {
+            if (seg != path[i]) {
+                return Option.None;
+            }
+        }
+        i = i + 1;
+    }
+    if (star) {
+        let name: string = pat[pat.len() - 1];
+        var rest: string = "";
+        var k: int = fixed;
+        while (k < path.len()) {
+            rest = if (k == fixed) { path[k] } else { rest + "/" + path[k] };
+            k = k + 1;
+        }
+        ps.push(Param { name: name.substring(1, name.len()), value: rest });
+    }
+    Option.Some(ps)
+}
+
+// ¿Casa el patrón (segmentos o regex) con la ruta? La regex corre sobre el path entero (el
+// usuario ancla con ^/$); sus capturas son params numerados desde "1" (grupo 0 = el match).
+fn match_pattern(pat: Pattern, path: string, path_segs: [string]) -> Option<[Param]> {
+    match (pat) {
+        Pattern.Segments(segs) => match_route(segs, path_segs),
+        Pattern.Re(re) => {
+            match (re.captures_str(path)) {
+                Option.Some(groups) => {
+                    var ps: [Param] = [];
+                    var i: int = 1;
+                    while (i < groups.len()) {
+                        let v: string = match (groups[i]) {
+                            Option.Some(s) => s,
+                            Option.None => "",
+                        };
+                        ps.push(Param { name: to_string(i), value: v });
+                        i = i + 1;
+                    }
+                    Option.Some(ps)
+                },
+                Option.None => Option.None,
+            }
+        },
+    }
+}
+
+// Construye la `webserver.Response` final a partir de la `Res` que rellenó el handler: el
+// Content-Type derivado primero y los headers custom encima (un header explícito gana).
+fn build_response(res: Res) -> webserver.Response {
+    var h: Map<string, string> = Map.new();
+    h.insert("Content-Type", res.content_type);
+    let ks: [string] = res.headers.keys();
+    var i: int = 0;
+    while (i < ks.len()) {
+        match (get(res.headers, ks[i])) {
+            Option.Some(v) => { h.insert(ks[i], v); },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    webserver.Response { status: res.code, headers: h, set_cookie: res.set_cookie, body: res.body }
+}
+
+// Atiende una petición ya parseada: estáticos → middlewares → enrutado → 404 (custom o default).
+fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
+    // Estáticos (M56.9), solo GET/HEAD: primero, así un mount no puede ser tapado por una ruta
+    // genérica (y una ruta POST bajo el prefijo sigue llegando al enrutado).
+    if (req.method == "GET" || req.method == "HEAD") {
+        var s: int = 0;
+        while (s < app.mounts.len()) {
+            let mt: Mount = app.mounts[s];
+            if (req.path.starts_with(mt.prefix)) {
+                let sr: webserver.Response = webserver.static_mount(mt.prefix, mt.dir, req);
+                // M93.2d: Cache-Control del mount cacheado, solo en 200/304 (no en 404/405).
+                if (mt.max_age > 0 && (sr.status == 200 || sr.status == 304)) {
+                    sr.headers.insert("Cache-Control", "public, max-age=" + to_string(mt.max_age));
+                }
+                return sr;
+            }
+            s = s + 1;
+        }
+    }
+
+    let res: Res = Res { code: 200, body: b"", content_type: "text/plain; charset=utf-8", headers: Map.new(), set_cookie: [] };
+    var ctx: Ctx = Ctx { method: req.method, path: req.path, params: [], req: req, locals: Map.new() };
+
+    // Middlewares (pre): Step.Done corta la cadena y salta el enrutado (los `after` SÍ corren).
+    var keep_going: bool = true;
+    var m: int = 0;
+    while (keep_going && m < app.middlewares.len()) {
+        let mw: fn(Ctx, Res) -> Step = app.middlewares[m];
+        match (mw(ctx, res)) {
+            Step.Next => { },
+            Step.Done => { keep_going = false; },
+        }
+        m = m + 1;
+    }
+    if (keep_going) {
+        route_request(app, ctx, res);
+    }
+
+    // Hooks `after`: siempre (también en 404 y con la cadena pre cortada); pueden mutar `res`.
+    var a: int = 0;
+    while (a < app.afters.len()) {
+        let hook: fn(Ctx, Res) = app.afters[a];
+        hook(ctx, res);
+        a = a + 1;
+    }
+    build_response(res)
+}
+
+// El enrutado en sí (muta `res`; `ctx` viaja por referencia y recibe los params capturados):
+// primera ruta cuyo método y patrón casan → handler; el patrón casa con OTRO método → 405 +
+// `Allow` (RFC 9110 — Express responde 404, incorrecto); ninguna → 404 (custom o default).
+fn route_request(app: App, ctx: Ctx, res: Res) {
+    // Un HEAD enruta como GET (M56.8: el webserver ya le quita el cuerpo; RFC 9110 §9.3.2).
+    let method: string = if (ctx.method == "HEAD") { "GET" } else { ctx.method };
+    let path_segs: [string] = split_path(ctx.path);
+    var j: int = 0;
+    while (j < app.routes.len()) {
+        let rt: Route = app.routes[j];
+        if (rt.method == method || rt.method == "*") {
+            match (match_pattern(rt.pattern, ctx.path, path_segs)) {
+                Option.Some(ps) => {
+                    ctx.params = ps;
+                    rt.handler(ctx, res);
+                    return;
+                },
+                Option.None => { },
+            }
+        }
+        j = j + 1;
+    }
+
+    // 405 (M93.2b): el path existe bajo otros métodos → Method Not Allowed + Allow con la lista.
+    var allow: [string] = [];
+    var k: int = 0;
+    while (k < app.routes.len()) {
+        let rt: Route = app.routes[k];
+        if (rt.method != "*" && rt.method != method && !allow.contains(rt.method)) {
+            match (match_pattern(rt.pattern, ctx.path, path_segs)) {
+                Option.Some(unused) => { allow.push(rt.method); },
+                Option.None => { },
+            }
+        }
+        k = k + 1;
+    }
+    if (allow.len() > 0) {
+        if (allow.contains("GET")) {
+            allow.push("HEAD");          // un GET siempre atiende HEAD (M56.8)
+        }
+        res.code = 405;
+        res.headers.insert("Allow", join(allow, ", "));
+        res.text("Method Not Allowed");
+        return;
+    }
+
+    // Ninguna ruta casó: el 404 custom si lo hay, o el default.
+    res.code = 404;
+    if (app.nf_handlers.len() > 0) {
+        let nf: fn(Ctx, Res) = app.nf_handlers[app.nf_handlers.len() - 1];
+        nf(ctx, res);
+    } else {
+        res.text("Not Found");
+    }
+}
+
+// El handler completo: despacha y, con `log_requests` activo, emite la línea JSON (método, ruta,
+// status, duración ms y trace_id — M93.2d: adopta el `traceparent` entrante vía webserver/trace,
+// o estrena trace) vía net/log.
+fn handle(app: App, req: webserver.Request) -> webserver.Response {
+    if (!app.log_on) {
+        return dispatch(app, req);
+    }
+    let t0: int = time.monotonic();
+    let resp: webserver.Response = dispatch(app, req);
+    let tid: string = webserver.trace_of(req).trace_id;
+    var e = log.info(log.with_trace(log.logger("web"), tid), "request");
+    e = log.field(e, "method", req.method);
+    e = log.field(e, "path", req.path);
+    e = log.field_int(e, "status", resp.status);
+    e = log.field_int(e, "ms", time.monotonic() - t0);
+    log.emit(e);
+    resp
+}
+
+// --- Arranque (M93.3: UNA sola familia, sobre el patrón builder) ---
+// `listen(build_app, host, port)`: el builder es una función TOP-LEVEL que construye la App. La
+// fibra de cada conexión la llama UNA vez (vía `webserver.serve_with`) y atiende con esa App
+// todas sus peticiones keep-alive. Así ningún valor-función cruza hilos (actores de heap
+// aislado): el mismo fuente corre en la VM y compila con `ray build --native`. Consecuencia: el
+// estado del builder es POR CONEXIÓN; el estado compartido va por canales a una fibra dueña.
+
+/// Starts the server: `listen(build_app, "0.0.0.0", 8080)` with a TOP-LEVEL `fn build_app() ->
+/// App`. Each connection's fiber builds its own App once and serves all its keep-alive requests
+/// with it — no function value crosses a thread boundary, so the same source runs on the VM and
+/// compiles with `ray build --native` (M93.3). Keep-alive, safety limits and panic→500 are
+/// inherited from `net/webserver`. Blocks forever (`Err` only if the socket cannot bind).
+pub fn listen(build: fn() -> App, host: string, port: int) -> Result<int, string> {
+    webserver.serve_with(host, port, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
+    })
+}
+
+/// Like `listen`, over HTTPS: `cert`/`key` are the PEM certificate chain and private key (M56.3).
+pub fn listen_tls(build: fn() -> App, host: string, port: int, cert: string, key: string) -> Result<int, string> {
+    webserver.serve_with_tls(host, port, cert, key, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
+    })
+}
+
+/// Like `listen`, with graceful shutdown (M88.1b): on SIGTERM/SIGINT it stops accepting, drains
+/// in-flight connections for up to `drain_ms` and returns 0 — zero requests lost on deploy.
+pub fn listen_graceful(build: fn() -> App, host: string, port: int, drain_ms: int) -> Result<int, string> {
+    webserver.serve_with_graceful(host, port, drain_ms, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
+    })
+}
+
+/// Like `listen`, with explicit safety limits (`webserver.Limits`: max header/body bytes, max
+/// connections, read timeout) instead of `webserver.default_limits()`.
+pub fn listen_limits(build: fn() -> App, host: string, port: int, limits: webserver.Limits) -> Result<int, string> {
+    webserver.serve_with_limits(host, port, limits, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
+    })
+}

@@ -132,5 +132,6 @@ fn main() -> int {
   de exposición. Hoja.
 
 Los que dependen de **sockets vivos** (http/http2/websocket/dns/udp/redis/postgres/oauth2) se prueban con
-servidores de juguete, no en el oráculo. Pendiente: `framework` (micro-framework web) — una interacción
-de UFCS con imports calificados por resolver.
+servidores de juguete, no en el oráculo. El micro-framework web vive en **`packages/web`** (M93,
+promovido de examples): enrutado, estáticos con ETag/304, logging JSON, TLS y graceful sobre
+`net/webserver` — ver `docs/web-framework.md`.

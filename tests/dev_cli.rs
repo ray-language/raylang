@@ -234,6 +234,50 @@ fn dev_live_reload_inyecta_el_snippet_y_emite_reload() {
     let _ = dev.wait();
 }
 
+#[cfg(unix)]
+#[test]
+fn dev_live_reload_sin_port_tambien_inyecta() {
+    // El hub arranca SIEMPRE (no solo con `--port`): "es una app web" lo decide el webserver al servir
+    // HTML, no el supervisor. Sin socket-activation el snippet reintenta el fetch hasta que el hijo
+    // re-binde (aquí solo se verifica la inyección; el reinicio lo cubre el test con `--port`).
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let base = std::env::temp_dir().join("ray_dev_livereload_noport");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("net")).unwrap();
+    let pkg = format!("{}/packages/net", env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(format!("{pkg}/webserver.ray"), base.join("webserver.ray")).unwrap();
+    std::fs::copy(format!("{pkg}/trace.ray"), base.join("net/trace.ray")).unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        format!(
+            "from webserver import serve, html_response, Request, Response;\n\
+             fn h(req: Request) -> Response {{ html_response(200, \"<html><body>solo</body></html>\") }}\n\
+             fn main() -> int {{ let _ = serve(\"127.0.0.1\", {port}, h); 0 }}\n"
+        ),
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .arg("main.ray")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev sin --port");
+
+    let hub = leer_hub_port(&out_path, 10);
+    let resp = http_get(port, 15);
+    assert!(resp.contains("EventSource"), "el HTML lleva el snippet inyectado sin --port:\n{resp}");
+    assert!(resp.contains(&format!(":{hub}/")), "el snippet apunta al hub {hub}:\n{resp}");
+
+    let _ = dev.kill();
+    let _ = dev.wait();
+}
+
 #[test]
 fn dev_no_reinicia_si_el_cambio_no_compila() {
     // Check-before-restart (M92.2): un cambio que NO compila NO debe reiniciar el programa; el
@@ -271,6 +315,48 @@ fn dev_no_reinicia_si_el_cambio_no_compila() {
     assert!(output.contains("restarting"), "reinició con el cambio verde:\n{output}");
     // El código roto nunca corrió (no imprimió "roto").
     assert!(!output.contains("roto"), "el cambio roto no llegó a ejecutarse:\n{output}");
+
+    let _ = dev.kill();
+    let _ = dev.wait();
+}
+
+#[test]
+fn dev_ignora_un_guardado_sin_cambios() {
+    // Confirmación por contenido: un mtime tocado con los MISMOS bytes (guardado sin editar, un
+    // formateador idempotente, `touch`) no debe reiniciar el programa ni emitir reload. Solo una
+    // edición real (otros bytes) reinicia.
+    let base = std::env::temp_dir().join("ray_dev_touch");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+    let v1 = "fn main() -> int { print(\"v1\"); 0 }\n";
+    std::fs::write(base.join("src/main.ray"), v1).unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev");
+
+    esperar_contenido(&out_path, "v1", 10);
+    esperar_contenido(&out_path, "waiting for changes", 10);
+
+    // 1) Reescribir el MISMO contenido (bump de mtime, cero bytes cambiados): se ignora sin reiniciar.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/main.ray"), v1).unwrap();
+    let output = esperar_contenido(&out_path, "contents unchanged", 10);
+    assert!(!output.contains("restarting"), "un guardado sin cambios no reinicia:\n{output}");
+
+    // 2) Una edición real posterior SÍ reinicia.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
+    let output = esperar_contenido(&out_path, "v2", 10);
+    assert!(output.contains("restarting"), "la edición real reinició:\n{output}");
 
     let _ = dev.kill();
     let _ = dev.wait();

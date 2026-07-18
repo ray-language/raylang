@@ -667,6 +667,29 @@ fn inject_before_body_end(html: string, snippet: string) -> string {
 // M92.4: bajo `ray dev` con live-reload (`RAY_DEV_RELOAD=<puerto>`), inyecta en las respuestas text/html
 // un `EventSource` que recarga la página cuando el supervisor emite `reload` al reiniciar. En producción
 // (sin la variable) no hace nada: un solo `env()` por respuesta y retorno inmediato.
+// M92.4: bajo `ray dev`, avisa al hub de live-reload (`GET /ready`) que este servidor YA escucha.
+// El hub retiene el evento `reload` del reinicio hasta este aviso → el navegador recarga justo
+// cuando el servidor nuevo está listo, sin sondear (cero fetch fallidos). Fuera de dev es un no-op.
+fn dev_notify_ready() {
+    match (env("RAY_DEV_RELOAD")) {
+        Option.None => { },
+        Option.Some(p) => {
+            match (parse_int(p)) {
+                Option.None => { },
+                Option.Some(hub_port) => {
+                    match (net.tcp_connect("127.0.0.1", hub_port)) {
+                        Result.Ok(c) => {
+                            let _ = net.socket_write(c, "GET /ready HTTP/1.0\r\n\r\n");
+                            close(c);
+                        },
+                        Result.Err(e) => { }, // el hub murió → sin live-reload, el servidor sigue
+                    }
+                },
+            }
+        },
+    }
+}
+
 fn inject_live_reload(r: Response) -> Response {
     return match (env("RAY_DEV_RELOAD")) {
         Option.None => r,
@@ -674,6 +697,8 @@ fn inject_live_reload(r: Response) -> Response {
             if (is_html_response(r)) {
                 match (from_utf8(r.body)) {
                     Result.Ok(html) => {
+                        // Recarga directa: el hub retiene el evento hasta el `/ready` de este servidor
+                        // (dev_notify_ready, emitido al bindear) → cuando llega, el servidor ya escucha.
                         let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){location.reload()}</script>";
                         Response { status: r.status, headers: r.headers, set_cookie: r.set_cookie, body: inject_before_body_end(html, snippet).to_bytes() }
                     },
@@ -883,6 +908,7 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("listening on port " + to_string(net.local_port(srv)));
+            dev_notify_ready();
             let bounded: bool = limits.max_conns > 0;
             let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
             var errors: int = 0;
@@ -911,9 +937,18 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
                     },
                     Result.Err(e) => {
                         eprint("accept: " + e);
-                        errors = errors + 1;
-                        if (errors >= 100) {
-                            follow = false;
+                        // Fds agotados (EMFILE/ENFILE): TRANSITORIO — las conexiones en vuelo van
+                        // cerrando y liberan descriptores. Pausar (cede la fibra: las conexiones
+                        // avanzan y el bucle no hot-spinea) y NO contar para la rendición: antes un
+                        // `wrk -c500` sumaba 100 errores consecutivos en ms y APAGABA el servidor.
+                        if (e.contains("Too many open files")) {
+                            time.sleep(20);
+                        } else {
+                            errors = errors + 1;
+                            if (errors >= 100) {
+                                follow = false;
+                            }
+                            time.sleep(10);
                         }
                     },
                 }
@@ -944,6 +979,7 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("listening on port " + to_string(net.local_port(srv)));
+            dev_notify_ready();
             let bounded: bool = limits.max_conns > 0;
             let sem: Channel<int> = if (bounded) { Channel.bounded(limits.max_conns) } else { Channel.new() };
             let conns: Channel<int> = Channel.new();
@@ -964,7 +1000,11 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
                             send(conns, c);
                         },
                         Result.Err(e) => {
-                            errors = errors + 1;
+                            // EMFILE/ENFILE no cuenta para la rendición (transitorio; ver el bucle
+                            // no-drenable). La pausa de abajo ya cede la fibra en ambos casos.
+                            if (!e.contains("Too many open files")) {
+                                errors = errors + 1;
+                            }
                             if (errors >= 100) {
                                 // Error persistente: rendir el servidor (cerrar `conns` se lo
                                 // comunica al bucle principal, que devuelve como bucle_servidor).
@@ -1112,6 +1152,45 @@ pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Resul
 pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
     loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle_http(c, handler, limits);
+    })
+}
+
+// --- serve_with (M93.3): el handler viene de una FACTORÍA ---
+// La factoría cruza los hilos como función plana (Send) y el handler (con sus closures/estado)
+// nace DENTRO de la tarea de cada petición — compatible con el backend nativo (actores de heap
+// aislado): el framework web arranca por aquí. Se construye POR PETICIÓN, no por conexión: el
+// aislamiento panic→500 (M56.5) corre cada petición en su propia tarea, así que el handler
+// cruzaría OTRO hilo igualmente. Handler por conexión (construir una vez y reusar en el
+// keep-alive) queda diferido: exigiría catch_unwind en el nativo o defuncionalización.
+/// Like `serve`, but takes a handler FACTORY: each request builds its handler via
+/// `make_handler()` inside its own task. The factory crosses threads as a plain function while
+/// the handler (closures, state) never does — the form that also compiles with
+/// `ray build --native` (M93.3). Blocks forever.
+pub fn serve_with(host: string, port: int, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_with_limits(host, port, default_limits(), make_handler)
+}
+
+/// Like `serve_with`, with explicit safety limits (see `Limits`).
+pub fn serve_with_limits(host: string, port: int, limits: Limits, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_limits(host, port, limits, fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
+    })
+}
+
+/// Like `serve_tls`, from a handler factory (see `serve_with`). Uses `default_limits()`.
+pub fn serve_with_tls(host: string, port: int, cert: string, key: string, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_tls_limits(host, port, cert, key, default_limits(), fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
+    })
+}
+
+/// Like `serve_graceful`, from a handler factory (see `serve_with`). Uses `default_limits()`.
+pub fn serve_with_graceful(host: string, port: int, drain_ms: int, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_graceful(host, port, drain_ms, fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
     })
 }
 

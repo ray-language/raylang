@@ -700,3 +700,96 @@ fn pretty_into(b: sb.StringBuilder, j: Json, indent: int, depth: int) {
         },
     }
 }
+
+// --- ToJson (M93.4, subido desde web/framework): un valor que sabe su representación JSON ---
+// El trait vive en la stdlib para que cualquier librería (y un futuro `@derive(ToJson)`) lo use
+// sin depender de un paquete. Los impls de primitivos delegan en el serializador del módulo
+// (comillas y escapes correctos para string).
+/// A value that knows its JSON representation. Implement it for your own types (compose with
+/// `stringify` for correct string escaping); the web framework responds with `r.json_of(v)`.
+pub trait ToJson {
+    /// The value serialized as a JSON document.
+    fn to_json(self) -> string;
+}
+
+impl ToJson for int {
+    fn to_json(self) -> string { to_string(self) }
+}
+impl ToJson for float {
+    fn to_json(self) -> string { to_string(self) }
+}
+impl ToJson for bool {
+    fn to_json(self) -> string { to_string(self) }
+}
+impl ToJson for string {
+    fn to_json(self) -> string { stringify(Json.JStr(self)) }
+}
+
+// --- Builders de objeto/arreglo (M93.5): JSON ad-hoc con escapado por construcción ---
+// Para el JSON que no espeja un struct (claves calculadas, payloads compuestos):
+//   obj().field("id", 7).field("name", name).render()
+// Cada valor pasa por su `to_json()` (bound ToJson) → imposible olvidar el escapado. El orden de
+// inserción se PRESERVA (a diferencia de JObject, cuyo Map ordena las claves). `Obj`/`Arr`
+// implementan ToJson → los builders anidan y `r.json_of(o)` del framework los acepta.
+/// A JSON object under construction: `obj().field("k", v)…` (insertion order preserved; values
+/// go through their `to_json()` — escaping by construction). Render with `render`/`to_json`.
+pub struct Obj {
+    parts: [string],
+}
+
+/// A JSON array under construction: `arr().item(v)…` or `list(values)`.
+pub struct Arr {
+    items: [string],
+}
+
+/// Starts an empty JSON object.
+pub fn obj() -> Obj {
+    var ps: [string] = [];
+    Obj { parts: ps }
+}
+
+/// Adds a field (any `ToJson` value: primitives, derived structs, nested `Obj`/`Arr`). Chainable.
+pub fn field<T: ToJson>(o: Obj, key: string, v: T) -> Obj {
+    o.parts.push(stringify(Json.JStr(key)) + ": " + v.to_json());
+    o
+}
+
+/// The object as a JSON document.
+pub fn render(o: Obj) -> string {
+    "{" + join(o.parts, ", ") + "}"
+}
+
+/// Starts an empty JSON array.
+pub fn arr() -> Arr {
+    var vs: [string] = [];
+    Arr { items: vs }
+}
+
+/// Appends one `ToJson` value. Chainable.
+pub fn item<T: ToJson>(a: Arr, v: T) -> Arr {
+    a.items.push(v.to_json());
+    a
+}
+
+/// A JSON array from a whole `[T]` of `ToJson` values.
+pub fn list<T: ToJson>(vs: [T]) -> Arr {
+    var a = arr();
+    var i = 0;
+    while (i < vs.len()) {
+        a = item(a, vs[i]);
+        i = i + 1;
+    }
+    a
+}
+
+/// The array as a JSON document.
+pub fn render_arr(a: Arr) -> string {
+    "[" + join(a.items, ", ") + "]"
+}
+
+impl ToJson for Obj {
+    fn to_json(self) -> string { render(self) }
+}
+impl ToJson for Arr {
+    fn to_json(self) -> string { render_arr(self) }
+}

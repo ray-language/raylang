@@ -181,7 +181,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // argumentos correspondientes en cada sitio de llamada. Diccionarios = valores función;
     // el runtime no cambia.
     append_dict_params(program);
-    lower_dict_calls(program, &checker.dict_calls);
+    lower_dict_calls(program, &mut checker.dict_calls);
     // Paso 6 (M9.3b): bajar los trait objects — coerciones concreto→objeto a la
     // construcción del struct sintetizado, y los despachos dinámicos a `(r.m)(r.data, ...)`.
     lower_dyn(program, &checker.dyn_coercions, &checker.dyn_dispatch, &checker.dyn_upcasts);
@@ -2976,7 +2976,7 @@ impl Checker {
                 }
                 // `hover_directo = true`: `(line, col)` es la posición del nombre → registra el hover
                 // del builtin ahí (`print`/`pow`/`abs`… muestran su firma con los tipos de la llamada).
-                self.check_named_call_impl(&n, args, line, col, None, true)
+                self.check_named_call_impl(&n, args, line, col, None, true, None)
             }
 
             // UFCS (M7.1): `recv.f(args)`. Si `f` es un **campo** del struct receptor,
@@ -3012,7 +3012,7 @@ impl Checker {
                     let mut all = Vec::with_capacity(args.len() + 1);
                     all.push((**object).clone());
                     all.extend_from_slice(args);
-                    let ty = self.check_named_call(&mangled, &all, line, col, None)?;
+                    let ty = self.check_named_call_recv(&mangled, &all, line, col, None, &recv_ty)?;
                     // M10.2g: hover del **método de trait** en su nombre (su firma incluye el receptor).
                     let mty = self.functions.get(&mangled)
                         .map(|s| Type::Fn(s.params.clone(), Box::new(s.ret.clone())));
@@ -3185,7 +3185,7 @@ impl Checker {
         let mut all_args = Vec::with_capacity(args.len() + 1);
         all_args.push(object.clone());
         all_args.extend_from_slice(args);
-        let ty = self.check_named_call(&target, &all_args, line, col, None)?;
+        let ty = self.check_named_call_recv(&target, &all_args, line, col, None, recv_ty)?;
         // M10.2g: hover del **método UFCS** en su nombre — la firma de la función libre resuelta
         // (map/filter/fold, funciones propias). Los builtins (len/trim/…) no tienen FnSig → se omiten.
         let mty = self.functions.get(&target)
@@ -3212,19 +3212,33 @@ impl Checker {
     /// variable local que tape una función global, función de nivel superior (directa o
     /// genérica). Compartida por la llamada directa y por UFCS.
     fn check_named_call(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>) -> Result<Type, TypeError> {
-        self.check_named_call_impl(name, args, line, col, expected, false)
+        self.check_named_call_impl(name, args, line, col, expected, false, None)
+    }
+
+    /// Como [`check_named_call`], con el TIPO del primer argumento (el receptor de una reescritura
+    /// UFCS/método) ya calculado: NO se re-verifica su expresión. Sin esto, el receptor se
+    /// chequeaba dos veces (una al resolver, otra como argumento) y sus registros de lowering por
+    /// posición (diccionarios M9.2) se duplicaban — una cadena del mismo método acotado
+    /// (`obj().field(a).field(b)`) desencolaba diccionarios corridos → despacho roto (M93.5).
+    fn check_named_call_recv(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>, recv: &Type) -> Result<Type, TypeError> {
+        self.check_named_call_impl(name, args, line, col, expected, false, Some(recv))
     }
 
     /// Como [`check_named_call`], pero `hover_directo` indica que `(line, col)` es la posición del
     /// **nombre** llamado (llamada directa `f(...)`), no una reescritura (UFCS/método). Solo entonces
     /// se registra el hover del builtin ahí (M10.2i): así `print`/`pow`/`abs`… muestran su firma.
-    fn check_named_call_impl(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>, hover_direct: bool) -> Result<Type, TypeError> {
+    #[allow(clippy::too_many_arguments)]
+    fn check_named_call_impl(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>, hover_direct: bool, recv: Option<&Type>) -> Result<Type, TypeError> {
         // Builtins (DESIGN.md §7): su firma vive en el **registro único** (`src/builtins.rs`), no
         // dispersa aquí. Se comprueban antes que una local/función homónima (un builtin no se tapa).
         // Se tipan los argumentos por el camino normal y la regla del builtin valida y da el tipo.
         if let Some(b) = crate::builtins::lookup(name) {
             let mut arg_types = Vec::with_capacity(args.len());
-            for a in args {
+            for (i, a) in args.iter().enumerate() {
+                if i == 0 && let Some(r) = recv {
+                    arg_types.push(r.clone()); // receptor ya tipado: no re-verificar
+                    continue;
+                }
                 arg_types.push(self.check_expr(a)?);
             }
             return match (b.check)(&arg_types) {
@@ -3253,7 +3267,7 @@ impl Checker {
         // (Tapa a una función global con el mismo nombre.)
         if let Some(v) = self.lookup(name) {
             let ty = v.ty.clone();
-            return self.call_type(ty, args, false, line, col);
+            return self.call_type_recv(ty, args, false, line, col, recv);
         }
 
         // Función de nivel superior: llamada directa.
@@ -3263,11 +3277,11 @@ impl Checker {
             let label = format!("'{}'", name);
             if type_params.is_empty() {
                 // No genérica: aridad y tipos exactos.
-                return self.check_args(&params, ret, args, &label, line, col);
+                return self.check_args_recv(&params, ret, args, &label, line, col, recv);
             }
             // Genérica: inferir los argumentos de tipo unificando con los argumentos.
             let (ret_ty, sigma) =
-                self.check_generic_call(&type_params, &params, &ret, args, &label, line, col, expected)?;
+                self.check_generic_call(&type_params, &params, &ret, args, &label, line, col, expected, recv)?;
             // M9.2: si la función tiene bounds, registrar los diccionarios a pasar en este
             // sitio (verificando que cada tipo inferido cumple su bound).
             if !bounds.is_empty() {
@@ -3284,8 +3298,13 @@ impl Checker {
     /// M87: `pista` = el callee es una expresión de BLOQUE (if/match/while/bloque) —
     /// casi siempre el gotcha §55 (la cola con '(' tras una sentencia) → el error lo dice.
     fn call_type(&mut self, ty: Type, args: &[Expr], pista: bool, line: usize, col: usize) -> Result<Type, TypeError> {
+        self.call_type_recv(ty, args, pista, line, col, None)
+    }
+
+    /// Como [`call_type`], con el tipo del primer argumento ya calculado (ver `check_named_call_recv`).
+    fn call_type_recv(&mut self, ty: Type, args: &[Expr], pista: bool, line: usize, col: usize, recv: Option<&Type>) -> Result<Type, TypeError> {
         match ty {
-            Type::Fn(params, ret) => self.check_args(&params, *ret, args, "the function", line, col),
+            Type::Fn(params, ret) => self.check_args_recv(&params, *ret, args, "the function", line, col, recv),
             other => {
                 let mut msg = format!(
                     "cannot call a value of type {} (not a function)",
@@ -3312,7 +3331,10 @@ impl Checker {
 
     /// Comprueba aridad y tipos de los argumentos contra una firma `(params -> ret)`
     /// y devuelve `ret`. Compartido por las llamadas directas y las indirectas.
-    fn check_args(&mut self, params: &[Type], ret: Type, args: &[Expr], label: &str, line: usize, col: usize) -> Result<Type, TypeError> {
+    /// Con `recv`, el tipo del primer argumento llega YA calculado y su expresión no se
+    /// re-verifica (ver `check_named_call_recv`).
+    #[allow(clippy::too_many_arguments)]
+    fn check_args_recv(&mut self, params: &[Type], ret: Type, args: &[Expr], label: &str, line: usize, col: usize, recv: Option<&Type>) -> Result<Type, TypeError> {
         if args.len() != params.len() {
             return Err(self.err(line, col, format!(
                 "{} expects {} argument(s), received {}",
@@ -3322,7 +3344,11 @@ impl Checker {
         for (i, (arg, expected)) in args.iter().zip(params.iter()).enumerate() {
             // El tipo del parámetro es el esperado del argumento (propaga a `None`,
             // `[]`, `Caja.Vacia`...).
-            let at = self.check_expr_expected(arg, expected)?;
+            let at = if i == 0 && let Some(r) = recv {
+                r.clone() // receptor ya tipado: no re-verificar (ver check_named_call_recv)
+            } else {
+                self.check_expr_expected(arg, expected)?
+            };
             if at != *expected {
                 return Err(self.err(arg.line, arg.col, format!(
                     "argument {} of {}: expected {}, got {}",
@@ -3348,6 +3374,7 @@ impl Checker {
         line: usize,
         col: usize,
         expected: Option<&Type>,
+        recv: Option<&Type>,
     ) -> Result<(Type, HashMap<String, Type>), TypeError> {
         if args.len() != params.len() {
             return Err(self.err(line, col, format!(
@@ -3358,7 +3385,11 @@ impl Checker {
         // σ: parámetro de tipo → tipo concreto inferido.
         let mut sigma: HashMap<String, Type> = HashMap::new();
         for (i, (arg, param)) in args.iter().zip(params.iter()).enumerate() {
-            let at = self.check_expr(arg)?;
+            let at = if i == 0 && let Some(r) = recv {
+                r.clone() // receptor ya tipado: no re-verificar (ver check_named_call_recv)
+            } else {
+                self.check_expr(arg)?
+            };
             unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
                 "argument {} of {}: {}", i + 1, label, reason
             )))?;
@@ -3504,7 +3535,7 @@ impl Checker {
                 dicts.push(self.dict_for(&concrete, trait_name, &m.name, line, col)?);
             }
         }
-        self.dict_calls.insert((line, col, callee.to_string()), dicts);
+        self.dict_calls.entry((line, col, callee.to_string())).or_default().push_back(dicts);
         Ok(())
     }
 
@@ -4201,11 +4232,18 @@ pub fn member_completion(program: &mut Program) -> Vec<MemberItem> {
 /// no se podrían re-lexar) y, gracias a la idempotencia, **salta** los ya generados —sin intentar
 /// generar fuente con `::`—. Los caminos sin loader (REPL, runner de `@test`) la usan normal.
 pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
-    // Pares (trait, nombre-de-tipo) ya implementados, para no regenerar.
+    // Pares (trait, nombre-de-tipo) ya implementados, para no regenerar. El trait se compara por
+    // su LEAF (`std::json::ToJson` → `ToJson`): un trait derivable puede vivir en un módulo
+    // namespacado (ToJson, M93.5) y el impl que el loader ya expandió llega con el nombre global —
+    // sin normalizar, la re-ejecución idempotente del checker lo regeneraría con el nombre local
+    // sin resolver ("trait 'ToJson' not declared").
+    fn trait_leaf(name: &str) -> &str {
+        name.rsplit("::").next().unwrap_or(name)
+    }
     let mut existentes: HashSet<(String, String)> = program
         .impls
         .iter()
-        .filter_map(|i| impl_target_name(&i.target).map(|n| (i.trait_name.clone(), n.to_string())))
+        .filter_map(|i| impl_target_name(&i.target).map(|n| (trait_leaf(&i.trait_name).to_string(), n.to_string())))
         .collect();
     let mut new_impls: Vec<ImplBlock> = Vec::new();
     for s in &program.structs {
@@ -4222,6 +4260,9 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     "Eq" => new_impls.push(parse_derived_impl("Eq", &s.name, "fn eq(self, other: Self) -> bool", &struct_eq_body(&s.fields))),
                     "Show" => new_impls.push(parse_derived_impl("Show", &s.name, "fn show(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
                     "Hash" => new_impls.push(parse_derived_impl("Hash", &s.name, "fn hash(self) -> int", &struct_hash_body(&s.fields))),
+                    // M93.5: el trait ToJson vive en std/json → el módulo debe tenerlo en ámbito
+                    // (`from std/json import ToJson;`); si no, el impl generado da "unknown trait".
+                    "ToJson" => new_impls.push(parse_derived_impl("ToJson", &s.name, "fn to_json(self) -> string", &struct_tojson_body(a, &s.fields)?)),
                     _ => crate::ice!("validate_derive guarantees a known trait"),
                 }
             }
@@ -4241,6 +4282,10 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     "Eq" => new_impls.push(parse_derived_impl("Eq", &e.name, "fn eq(self, other: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
                     "Show" => new_impls.push(parse_derived_impl("Show", &e.name, "fn show(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
                     "Hash" => new_impls.push(parse_derived_impl("Hash", &e.name, "fn hash(self) -> int", &enum_hash_body(&e.name, &e.variants))),
+                    // M93.5: la representación JSON de un enum es una decisión abierta → diferido.
+                    "ToJson" => {
+                        return Err(TypeError { msg: "cannot derive ToJson for an enum (only structs for now)".into(), line: a.line, col: a.col, len: 1 });
+                    }
                     _ => crate::ice!("validate_derive guarantees a known trait"),
                 }
             }
@@ -4281,8 +4326,8 @@ fn validate_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result
         return Err(TypeError { msg: "'@derive' requires at least one trait (e.g. @derive(Eq))".into(), line: a.line, col: a.col, len: 1 });
     }
     for arg in &a.args {
-        if arg != "Eq" && arg != "Show" && arg != "Hash" {
-            return Err(TypeError { msg: format!("cannot derive '{}' (for now Eq, Show and Hash)", arg), line: a.line, col: a.col, len: 1 });
+        if arg != "Eq" && arg != "Show" && arg != "Hash" && arg != "ToJson" {
+            return Err(TypeError { msg: format!("cannot derive '{}' (for now Eq, Show, Hash and ToJson)", arg), line: a.line, col: a.col, len: 1 });
         }
     }
     if !type_params.is_empty() {
@@ -4343,6 +4388,36 @@ fn enum_show_body(a: &Annotation, name: &str, variants: &[VariantDef]) -> Result
         }
     }
     Ok(format!("        match (self) {{\n{arms}        }}"))
+}
+
+/// Cómo serializar un campo a JSON (M93.5): primitivos vía su `.to_json()` de std/json (char
+/// pasa por `to_string` — JSON no tiene char); struct/enum vía `.to_json()` recursivo (deben
+/// implementar ToJson, p. ej. con su propio derive). Arrays/Map/funciones no derivables aún.
+fn render_to_json(a: &Annotation, expr: &str, ty: &Type) -> Result<String, TypeError> {
+    match ty {
+        Type::Int | Type::Float | Type::Bool | Type::String => Ok(format!("{expr}.to_json()")),
+        Type::Char => Ok(format!("to_string({expr}).to_json()")),
+        Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.to_json()")),
+        other => Err(TypeError {
+            msg: format!("cannot derive ToJson for a field of type {} (for now primitives, struct and enum)", other),
+            line: a.line,
+            col: a.col,
+            len: 1,
+        }),
+    }
+}
+
+/// Cuerpo de `to_json` para un struct: `{"campo": <v>, …}` (claves = nombres de campo; los
+/// valores se serializan con su `to_json`, escapado por construcción). Sin campos → `{}`.
+fn struct_tojson_body(a: &Annotation, fields: &[(String, Type)]) -> Result<String, TypeError> {
+    if fields.is_empty() {
+        return Ok("        \"{}\"".to_string());
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (n, ty) in fields {
+        parts.push(format!("\"\\\"{n}\\\": \" + {}", render_to_json(a, &format!("self.{n}"), ty)?));
+    }
+    Ok(format!("        \"{{\" + {} + \"}}\"", parts.join(" + \", \" + ")))
 }
 
 /// Construye y parsea `impl Trait for <name> {{ <firma> {{ body }} }}` para un derive.
@@ -5690,12 +5765,18 @@ fn append_dict_params(program: &mut Program) {
 /// Sitios de llamada a funciones con bounds → **expresiones**-diccionario a añadir como
 /// argumentos (M9.2b). En M9.2 eran simples nombres (`Ident`); con impls genéricos acotados un
 /// diccionario puede ser un **closure** que captura los diccionarios internos (anidados).
-type DictSites = HashMap<(usize, usize, String), Vec<Expr>>;
+// COLA por sitio (M93.5): una cadena del MISMO método acotado (`obj().field(a).field(b)`)
+// comparte (línea, col, nombre) — el parser arranca cada Call en el callee, o sea en el inicio
+// de la cadena. Con un valor único, el último registro pisaba a los anteriores y todas las
+// llamadas recibían el diccionario de la última (T equivocado → despacho roto). El checker
+// registra en orden de evaluación (receptor primero) y la bajada es post-orden (hijos primero):
+// mismos órdenes → encolar/desencolar empareja cada llamada con SUS diccionarios.
+type DictSites = HashMap<(usize, usize, String), std::collections::VecDeque<Vec<Expr>>>;
 
 /// Añade en cada **sitio de llamada** a una función con bounds los argumentos-diccionario
 /// registrados (M9.2). Reescribe `f(args)` → `f(args, dicts...)`. Corre **tras** `lower_ufcs`
 /// (el callee ya es un `Ident`), reusando la clave `(línea, col, nombre)`.
-fn lower_dict_calls(program: &mut Program, sites: &DictSites) {
+fn lower_dict_calls(program: &mut Program, sites: &mut DictSites) {
     if sites.is_empty() {
         return;
     }
@@ -5704,7 +5785,7 @@ fn lower_dict_calls(program: &mut Program, sites: &DictSites) {
     }
 }
 
-fn lower_dict_calls_block(block: &mut Block, sites: &DictSites) {
+fn lower_dict_calls_block(block: &mut Block, sites: &mut DictSites) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_dict_calls_expr(value, sites),
@@ -5733,7 +5814,7 @@ fn lower_dict_calls_block(block: &mut Block, sites: &DictSites) {
     }
 }
 
-fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
+fn lower_dict_calls_expr(expr: &mut Expr, sites: &mut DictSites) {
     // Recorrer primero los hijos (el receptor y los argumentos pueden ser otras llamadas).
     match &mut expr.kind {
         ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_dict_calls_expr(inner, sites),
@@ -5797,7 +5878,9 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
     let (line, col) = (expr.line, expr.col);
     let dicts: Option<Vec<Expr>> = match &expr.kind {
         ExprKind::Call { callee, .. } => match &callee.kind {
-            ExprKind::Ident(name) => sites.get(&(line, col, name.clone())).cloned(),
+            // Desencola: la PRIMERA entrada pendiente de este sitio (ver el comentario de
+            // DictSites — las cadenas del mismo método comparten la clave).
+            ExprKind::Ident(name) => sites.get_mut(&(line, col, name.clone())).and_then(|q| q.pop_front()),
             _ => None,
         },
         _ => None,

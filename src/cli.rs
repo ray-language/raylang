@@ -222,9 +222,12 @@ fn cmd_dev(args: &[String]) {
     let listen_pair: Option<(i32, &str)> = None;
     let _ = &dev_sock; // se retiene por su lado (el fd vive mientras `dev_sock` no se dropee)
 
-    // Live-reload del navegador (M92.4): solo en una sesión web (hay `--port`/`--listen`/`[dev] listen`).
-    // El hub SSE emite `reload` en cada reinicio; el webserver, viendo `RAY_DEV_RELOAD`, inyecta el snippet.
-    let reload = if listen_addr.is_some() { start_reload_hub() } else { None };
+    // Live-reload del navegador (M92.4): el hub SSE emite `reload` en cada reinicio; el webserver,
+    // viendo `RAY_DEV_RELOAD`, inyecta el snippet en las respuestas HTML. Arranca SIEMPRE: detectar
+    // "es una app web" no es asunto del supervisor — la inyección ya vive en el webserver (solo dispara
+    // al servir text/html; un programa CLI nunca inyecta nada y el hub ocioso cuesta un hilo). Sin
+    // `--port` no hay socket retenido, así que el snippet reintenta hasta que el hijo re-binde.
+    let reload = start_reload_hub();
     let reload_port = reload.as_ref().map(|(_, p)| *p);
     if let Some(p) = reload_port {
         eprintln!("[dev] live-reload on http://127.0.0.1:{p} (browser refresh on restart)");
@@ -237,6 +240,7 @@ fn cmd_dev(args: &[String]) {
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
+    let mut hashes = content_hashes(&snapshot);
     let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
     let mut running = true;
     loop {
@@ -256,6 +260,14 @@ fn cmd_dev(args: &[String]) {
         // Debounce: coalesce una ráfaga (un guardado + el formateador del editor = varios eventos)
         // esperando a que los fuentes se estabilicen antes de actuar → un solo reinicio.
         dev_debounce(&root, &mut snapshot);
+        // Confirmación por contenido: un mtime tocado con los MISMOS bytes (guardado sin editar,
+        // formateador idempotente, `touch`) no reinicia ni recarga nada.
+        let actual_hashes = content_hashes(&snapshot);
+        if actual_hashes == hashes {
+            eprintln!("[dev] change in {change}: contents unchanged — ignoring");
+            continue;
+        }
+        hashes = actual_hashes;
         // Check-before-restart: compila primero (ms). Si NO compila, mantén el programa en marcha e
         // imprime el diagnóstico — no mates un servidor que funciona por un error a medio escribir.
         if let Err(diag) = dev_check_compiles(&exe, &entry) {
@@ -268,13 +280,14 @@ fn cmd_dev(args: &[String]) {
         if running {
             terminate_gracefully(&mut child);
         }
+        // Arma la recarga ANTES de relanzar: el hub la emitirá cuando el hijo avise `/ready` (el
+        // webserver, al bindear) → el navegador recarga justo cuando el servidor nuevo ya escucha,
+        // sin un fetch de sondeo que falle mientras re-binde.
+        if let Some((hub, _)) = &reload {
+            hub.arm();
+        }
         child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
         running = true;
-        // Avisa a los navegadores conectados (con socket-activation la recarga se encola en el backlog
-        // hasta que el hijo nuevo la sirve → refresca con el código nuevo, sin conexión rechazada).
-        if let Some((hub, _)) = &reload {
-            hub.broadcast();
-        }
     }
 }
 
@@ -365,6 +378,10 @@ fn take_listen(args: &[String]) -> (Option<String>, Vec<String>) {
 /// cero cambios en la VM; se apoya en que el webserver ya habla SSE.
 struct ReloadHub {
     clients: std::sync::Mutex<Vec<std::net::TcpStream>>,
+    /// Recarga ARMADA a la espera del `/ready` del hijo (el webserver avisa al bindear). Emitir al
+    /// armar competiría con el re-bind del hijo → el navegador vería "connection refused"; retenerla
+    /// hasta el aviso hace que la recarga llegue justo cuando el servidor ya escucha.
+    pending: std::sync::atomic::AtomicBool,
 }
 
 impl ReloadHub {
@@ -374,6 +391,21 @@ impl ReloadHub {
         let mut clients = self.clients.lock().unwrap();
         clients.retain_mut(|c| c.write_all(b"data: reload\n\n").and_then(|_| c.flush()).is_ok());
     }
+
+    /// Arma la recarga del próximo reinicio: se emitirá al recibir el `/ready` del hijo. Fallback: si
+    /// en 2 s nadie avisa (la app no usa `net/webserver`, o murió al arrancar), se emite igualmente —
+    /// mejor una recarga que puede fallar que un navegador congelado en la versión vieja.
+    fn arm(self: &std::sync::Arc<Self>) {
+        use std::sync::atomic::Ordering;
+        self.pending.store(true, Ordering::SeqCst);
+        let hub = self.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if hub.pending.swap(false, Ordering::SeqCst) {
+                hub.broadcast();
+            }
+        });
+    }
 }
 
 /// Arranca el hub SSE en un puerto libre (hilo de fondo que acepta navegadores y los registra tras
@@ -382,17 +414,29 @@ fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
     let port = listener.local_addr().ok()?.port();
-    let hub = std::sync::Arc::new(ReloadHub { clients: std::sync::Mutex::new(Vec::new()) });
+    let hub = std::sync::Arc::new(ReloadHub {
+        clients: std::sync::Mutex::new(Vec::new()),
+        pending: std::sync::atomic::AtomicBool::new(false),
+    });
     let hub_bg = hub.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let mut s = stream;
             let _ = s.set_nodelay(true);
-            // Descarta la petición (solo interesa que sea un GET del EventSource); un read basta.
+            // Lee la petición: `GET /ready` es el aviso del hijo (ya escucha → suelta la recarga
+            // armada); cualquier otra cosa es un `EventSource` de un navegador.
             let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(200)));
             let mut buf = [0u8; 1024];
-            let _ = s.read(&mut buf);
+            let n = s.read(&mut buf).unwrap_or(0);
             let _ = s.set_read_timeout(None);
+            if buf[..n].starts_with(b"GET /ready") {
+                use std::sync::atomic::Ordering;
+                if hub_bg.pending.swap(false, Ordering::SeqCst) {
+                    hub_bg.broadcast();
+                }
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
+                continue;
+            }
             // Cabeceras SSE + un comentario inicial para establecer el stream (CORS abierto: dev local).
             let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n: connected\n\n";
             if s.write_all(head.as_bytes()).and_then(|_| s.flush()).is_ok() {
@@ -429,6 +473,22 @@ fn dev_debounce(root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)
         }
         *snapshot = actual;
     }
+}
+
+/// Huella de CONTENIDO de los fuentes vigilados (ruta → hash de los bytes). Distingue un guardado
+/// real de un mtime tocado sin cambios (Cmd+S sin editar, formateador idempotente, `touch`, un
+/// checkout que restaura lo mismo): el polling sigue siendo por metadatos (barato); esto solo se
+/// computa cuando el mtime acusa un cambio, para confirmarlo antes de reiniciar.
+fn content_hashes(snapshot: &[(PathBuf, std::time::SystemTime)]) -> std::collections::HashMap<PathBuf, u64> {
+    use std::hash::{Hash, Hasher};
+    snapshot
+        .iter()
+        .map(|(p, _)| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            fs::read(p).unwrap_or_default().hash(&mut h);
+            (p.clone(), h.finish())
+        })
+        .collect()
 }
 
 /// Los fuentes vigilados bajo `root`: `(ruta, mtime)` de cada `.ray`/`.ray.html`/`ray.toml`,
@@ -688,9 +748,22 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
             eprintln!("  · {name}: {reason}");
         }
     }
-    // Nombre de salida: `-o`, o el stem del archivo de entrada.
+    // Nombre de salida: `-o` > el `name` del ray.toml del proyecto (si la entrada ES la del
+    // proyecto, como Cargo) > el stem del archivo de entrada (archivo suelto).
     let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
-    let out_bin = output.map(String::from).unwrap_or_else(|| stem.to_string());
+    let out_bin = output.map(String::from).unwrap_or_else(|| {
+        let entry_dir = match Path::new(path).parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        Manifest::load(entry_dir)
+            .ok()
+            .flatten()
+            .filter(|m| canon(&m.entry_path()) == canon(Path::new(path)))
+            .map(|m| m.name)
+            .unwrap_or_else(|| stem.to_string())
+    });
     // **Bifurcación bajo demanda** (P2.b, docs/transpilador-nativo.md §4.5): sin features de `ray-runtime`
     // (el caso común) → `rustc` pelado, rápido y sin red (camino de siempre). Con features (el programa usa
     // cripto/…) → un proyecto Cargo generado que enlaza `ray-runtime` (mismo código que la VM).

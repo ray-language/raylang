@@ -644,6 +644,18 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
                 }
             }
         }
+        // Un ray.toml cuyo `entry` NO existe es un PAQUETE-LIBRERÍA (packages/net, packages/web…):
+        // sus archivos se importan por el nombre del paquete (`import net/trace` desde dentro de
+        // packages/net) y entre hermanas del monorepo (`import net/webserver` desde packages/web).
+        // Se resuelven añadiendo el PADRE del paquete como raíz — la misma forma que ya tiene la
+        // caché `.ray-deps/` (raíz que contiene los paquetes por nombre). Un proyecto-aplicación
+        // (entry presente) no se ensancha.
+        if !m.entry_path().is_file()
+            && let Some(parent) = m.root.parent().map(Path::to_path_buf)
+            && !roots.contains(&parent)
+        {
+            roots.push(parent);
+        }
     }
     roots
 }

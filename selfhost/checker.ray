@@ -3109,19 +3109,19 @@ fn generate_derives(c: Checker, prog: Program) -> Result<int, TypeError> {
     var si = 0;
     while (si < prog.structs.len()) {
         let s = prog.structs[si];
-        generate_derives_for(c, s.annotations, s.name, s.type_params)?;
+        generate_derives_for(c, s.annotations, s.name, s.type_params, false)?;
         si = si + 1;
     }
     var ei = 0;
     while (ei < prog.enums.len()) {
         let e = prog.enums[ei];
-        generate_derives_for(c, e.annotations, e.name, e.type_params)?;
+        generate_derives_for(c, e.annotations, e.name, e.type_params, true)?;
         ei = ei + 1;
     }
     Result.Ok(0)
 }
 
-fn generate_derives_for(c: Checker, annotations: [Annotation], name: string, type_params: [string]) -> Result<int, TypeError> {
+fn generate_derives_for(c: Checker, annotations: [Annotation], name: string, type_params: [string], is_enum: bool) -> Result<int, TypeError> {
     var i = 0;
     while (i < annotations.len()) {
         let a = annotations[i];
@@ -3129,6 +3129,10 @@ fn generate_derives_for(c: Checker, annotations: [Annotation], name: string, typ
             validate_derive(a, name, type_params)?;
             var j = 0;
             while (j < a.args.len()) {
+                // M93.5 (espejo de Rust): la representación JSON de un enum está diferida.
+                if (is_enum && a.args[j] == "ToJson") {
+                    return Result.Err(terr(a.line, a.col, "cannot derive ToJson for an enum (only structs for now)"));
+                }
                 register_derived_impl(c, name, a.args[j]);
                 j = j + 1;
             }
@@ -3145,8 +3149,8 @@ fn validate_derive(a: Annotation, name: string, type_params: [string]) -> Result
     }
     var i = 0;
     while (i < a.args.len()) {
-        if (a.args[i] != "Eq" && a.args[i] != "Show" && a.args[i] != "Hash") {
-            return Result.Err(terr(a.line, a.col, "cannot derive '" + a.args[i] + "' (for now Eq, Show and Hash)"));
+        if (a.args[i] != "Eq" && a.args[i] != "Show" && a.args[i] != "Hash" && a.args[i] != "ToJson") {
+            return Result.Err(terr(a.line, a.col, "cannot derive '" + a.args[i] + "' (for now Eq, Show, Hash and ToJson)"));
         }
         i = i + 1;
     }
@@ -3168,6 +3172,9 @@ fn register_derived_impl(c: Checker, type_name: string, trait_name: string) {
     }
     if (trait_name == "Show") {
         c.methods.insert(mangle(type_name, "show"), FnSig { params: [target], ret: Type.TString, type_params: no_tparams(), bounds: no_bounds() });
+    }
+    if (trait_name == "ToJson") {
+        c.methods.insert(mangle(type_name, "to_json"), FnSig { params: [target], ret: Type.TString, type_params: no_tparams(), bounds: no_bounds() });
     }
     c.impl_traits.insert(mangle(type_name, trait_name), true);
 }

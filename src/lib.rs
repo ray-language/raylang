@@ -101,11 +101,50 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    raise_fd_limit();
     std::thread::Builder::new()
         .stack_size(STACK_SIZE)
         .spawn(f)
         .unwrap_or_else(|e| ice!("could not create the large-stack worker thread: {e}"))
         .join()
+}
+
+/// Sube el límite BLANDO de descriptores de archivo al duro (acotado) al arrancar — lo que hace
+/// todo servidor de producción. El default de macOS es 256: un `wrk -c500` contra un webserver
+/// raylang agotaba los fds ("Too many open files") sin que el programa tuviera culpa ni remedio.
+/// Best-effort (si falla, se sigue con el límite heredado); también lo llama el preámbulo de los
+/// binarios nativos (`ray build --native`).
+pub fn raise_fd_limit() {
+    #[cfg(unix)]
+    {
+        #[repr(C)]
+        struct RLimit {
+            cur: u64,
+            max: u64,
+        }
+        // RLIMIT_NOFILE: 7 en Linux, 8 en macOS/BSD.
+        #[cfg(target_os = "linux")]
+        const RLIMIT_NOFILE: i32 = 7;
+        #[cfg(not(target_os = "linux"))]
+        const RLIMIT_NOFILE: i32 = 8;
+        unsafe extern "C" {
+            fn getrlimit(resource: i32, rlim: *mut RLimit) -> i32;
+            fn setrlimit(resource: i32, rlim: *const RLimit) -> i32;
+        }
+        // Tope prudente: macOS rechaza cur > OPEN_MAX (10240) cuando el duro es "unlimited".
+        let cap: u64 = if cfg!(target_os = "macos") { 10240 } else { 65536 };
+        unsafe {
+            let mut r = RLimit { cur: 0, max: 0 };
+            if getrlimit(RLIMIT_NOFILE, &mut r) != 0 {
+                return;
+            }
+            let objetivo = r.max.min(cap);
+            if objetivo > r.cur {
+                let nuevo = RLimit { cur: objetivo, max: r.max };
+                let _ = setrlimit(RLIMIT_NOFILE, &nuevo);
+            }
+        }
+    }
 }
 
 /// Ejecuta `f` en un hilo dedicado con una pila grande (`STACK_SIZE`) y devuelve su

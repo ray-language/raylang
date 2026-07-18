@@ -1,0 +1,27 @@
+// Plantillas de texto (M95): los BACKTICKS delimitan un string donde la comilla doble es
+// LITERAL (adiós \") y que puede abarcar varias líneas. La interpolación `${expr}` (M27.3)
+// funciona igual que en las comillas normales; escapes: \` para un backtick literal y \$ para
+// un `${` sin interpolar (más los \n \t \r \\ de siempre).
+//
+// ⚠ Para JSON con valores NO controlados, interpola `.to_json()` (std/json): un string crudo
+// con comillas dentro rompería el documento. Aquí los valores son literales del programa.
+fn main() -> int {
+    let name = "Ada";
+    let id = 7;
+
+    // El caso estrella: escribir JSON legible sin escapar cada comilla.
+    print(`{"id": ${id}, "name": "${name}"}`);
+
+    // Multilínea: los saltos de línea son literales.
+    let doc = `linea 1
+linea 2 con "comillas" y un backtick: \`
+fin`;
+    print(doc);
+
+    // La interpolación admite cualquier expresión (llaves balanceadas).
+    print(`suma: ${id + 35}`);
+
+    // Un ${ literal, sin interpolar.
+    print(`precio: \${USD}`);
+    0
+}

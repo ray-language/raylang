@@ -321,12 +321,27 @@ fn spawn_fn_param_marks(prog: &Program) -> HashMap<String, std::collections::Has
                         } else if let Some(cm) = marks.get(cn) {
                             for (j, a) in args.iter().enumerate() {
                                 if cm.contains(&j) {
-                                    if let ExprKind::Ident(an) = &a.kind {
-                                        for (i, pname) in fps {
-                                            if an == pname {
-                                                hits.insert(*i);
+                                    match &a.kind {
+                                        ExprKind::Ident(an) => {
+                                            for (i, pname) in fps {
+                                                if an == pname {
+                                                    hits.insert(*i);
+                                                }
                                             }
                                         }
+                                        // Un CLOSURE pasado a una posición marcada cruzará el hilo;
+                                        // los fn-params del llamador que capture cruzan con él (el
+                                        // patrón builder: serve(h, p, fn(req){ handle(build(), req) })).
+                                        ExprKind::Func(fx) => {
+                                            let mut ids = std::collections::HashSet::new();
+                                            idents_of_block(&fx.body, &mut ids);
+                                            for (i, pname) in fps {
+                                                if ids.contains(pname) {
+                                                    hits.insert(*i);
+                                                }
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
@@ -988,6 +1003,17 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // <msg>` + exit 70; los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) dan
     // exit 70 con el texto de Rust (paridad de código, no de texto, para esa cola).
     out.push_str("fn main() {\n");
+    // Sube el límite blando de fds al duro (acotado) — espejo de `lib::raise_fd_limit` del host:
+    // el default de macOS (256) tumbaba un webserver nativo bajo `wrk -c500` sin culpa del programa.
+    out.push_str("    #[cfg(unix)] unsafe {\n");
+    out.push_str("        #[repr(C)] struct RL { cur: u64, max: u64 }\n");
+    out.push_str("        #[cfg(target_os = \"linux\")] const NOFILE: i32 = 7;\n");
+    out.push_str("        #[cfg(not(target_os = \"linux\"))] const NOFILE: i32 = 8;\n");
+    out.push_str("        unsafe extern \"C\" { fn getrlimit(r: i32, l: *mut RL) -> i32; fn setrlimit(r: i32, l: *const RL) -> i32; }\n");
+    out.push_str("        let cap: u64 = if cfg!(target_os = \"macos\") { 10240 } else { 65536 };\n");
+    out.push_str("        let mut r = RL { cur: 0, max: 0 };\n");
+    out.push_str("        if getrlimit(NOFILE, &mut r) == 0 { let o = r.max.min(cap); if o > r.cur { let n = RL { cur: o, max: r.max }; let _ = setrlimit(NOFILE, &n); } }\n");
+    out.push_str("    }\n");
     out.push_str("    let __rt_hook = std::panic::take_hook();\n");
     out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
@@ -2050,7 +2076,30 @@ impl Transpiler {
         // ámbito exterior pueda seguir usándolas y la mutación se comparta (M4).
         let mut refd = std::collections::HashSet::new();
         idents_of_block(&fnexpr.body, &mut refd);
-        let captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
+        let mut captured: Vec<String> = self.cells.iter().filter(|c| refd.contains(*c)).cloned().collect();
+        // Toda captura de HEAP (no solo las celdas) se PRE-CLONA antes del `move`: dos closures
+        // hermanos que capturan la misma local no-Copy (p. ej. los dos de `cors(origin)`) movían
+        // la primera y el segundo veía E0382. Clonar un Rc comparte el valor inmutable — misma
+        // semántica que el move (las capturas mutables ya son celdas).
+        if boxed {
+            let pnames: std::collections::HashSet<&str> =
+                fnexpr.params.iter().map(|p| p.name.as_str()).collect();
+            let mut extra: Vec<String> = refd
+                .iter()
+                .filter(|n| !pnames.contains(n.as_str()) && !captured.contains(n))
+                .filter(|n| {
+                    self.lookup(n).is_some_and(|ty| {
+                        !matches!(
+                            normalize_type(ty),
+                            Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_) | Type::Unit
+                        )
+                    })
+                })
+                .cloned()
+                .collect();
+            extra.sort();
+            captured.extend(extra);
+        }
         // H21-N5c: una closure NO-boxed va a un param marcado (genérico Send) → cruzará hilos. Sus
         // capturas de heap se convierten a __RaySend FUERA y se reconstruyen DENTRO en cada llamada
         // (`.clone()` del árbol: la closure es Fn, no FnOnce) — deep copy, semántica M38. Los
@@ -2285,6 +2334,9 @@ impl Transpiler {
 
     /// Genera (al final de la transpilación) las fns `__to_send_N`/`__from_send_N` de los tipos
     /// NOMINALES registrados. Worklist: generar un cuerpo puede registrar tipos anidados nuevos.
+    /// Un conversor NO generable (p. ej. un struct con campos de tipo función, como la `App` del
+    /// framework web) degrada a un STUB que panica — misma filosofía que las funciones: el programa
+    /// COMPILA y solo falla en runtime si el flujo real cruza ese valor por un hilo.
     fn emit_send_convs(&mut self, out: &mut String) -> Result<(), String> {
         let mut done = 0;
         while done < self.send_convs.len() {
@@ -2292,7 +2344,33 @@ impl Transpiler {
             let id = done;
             done += 1;
             let rty = rust_ty(&t, &self.enums, &self.tparams)?;
-            match normalize_type(&t) {
+            let mut cbuf = String::new();
+            if let Err(e) = self.emit_send_conv_one(&mut cbuf, id, &t, &rty) {
+                if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
+                    eprintln!("[transpile send-stub] {rty} — {e}");
+                }
+                let msg = format!("value of a type holding functions cannot cross a thread boundary in the native backend ({e}); rebuild it inside the fiber (e.g. web/framework's listen_app)");
+                writeln!(
+                    out,
+                    "#[allow(unused_variables)] fn __to_send_{id}(__sv: {rty}) -> __RaySend {{ panic!(\"{{}}\", {msg:?}) }}"
+                )
+                .unwrap();
+                writeln!(
+                    out,
+                    "#[allow(unused_variables)] fn __from_send_{id}(__ss: __RaySend) -> {rty} {{ panic!(\"{{}}\", {msg:?}) }}"
+                )
+                .unwrap();
+                continue;
+            }
+            out.push_str(&cbuf);
+        }
+        Ok(())
+    }
+
+    /// El cuerpo de UN par de conversores (`__to_send_id`/`__from_send_id`) para el tipo nominal `t`.
+    fn emit_send_conv_one(&mut self, out: &mut String, id: usize, t: &Type, rty: &str) -> Result<(), String> {
+        {
+            match normalize_type(t) {
                 Type::Struct(n, args) => {
                     let fields = self
                         .struct_fields
@@ -2859,7 +2937,12 @@ impl Transpiler {
     /// `&*temp` (matchea `&E`). Los bindings del patrón quedan como `&campo`; al inicio de cada brazo se
     /// **clonan a valores propios** (`let b = b.clone();`) → el cuerpo los usa como cualquier variable.
     fn emit_match(&mut self, out: &mut String, scrutinee: &Expr, arms: &[MatchArm]) -> Result<(), String> {
-        let scrut_ty = normalize_type(&self.type_of(scrutinee)?);
+        // `classify` (no `normalize_type` pelado): el tipo puede llegar como Struct("E") sin resolver
+        // cuando viene del RETORNO de una anotación de tipo función (`fn(..) -> E` de un param/campo).
+        let scrut_ty = {
+            let t = self.type_of(scrutinee)?;
+            self.classify(&t)
+        };
         // Option/Result son NATIVOS de Rust (no `Rc<E>`): se matchea sobre `&opt`, no `&*Rc`.
         let native = match &scrut_ty {
             Type::Enum(n, _) => n == "Option" || n == "Result",

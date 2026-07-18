@@ -1343,6 +1343,7 @@ fn build_native_signals_apagado_ordenado() {
         "fn main() -> int {\n\
            let work: Channel<int> = Channel.new();\n\
            let sig = signals();\n\
+           print(\"ready\");\n\
            spawn(fn() { var i = 0; while (i < 3) { send(work, i); i = i + 1; } });\n\
            let chs: [Channel<int>] = [work, sig];\n\
            var go = true;\n\
@@ -1359,14 +1360,30 @@ fn build_native_signals_apagado_ordenado() {
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native signals ok\n{err}");
 
-    // Corre el binario y le da tiempo de sobra a arrancar e instalar los handlers de señal (bajo carga
-    // paralela de tests el arranque puede tardar), luego envía SIGTERM (15) y comprueba el apagado ordenado.
+    // Corre el binario y ESPERA su "ready" (impreso tras instalar los handlers de señal) antes de
+    // mandar SIGTERM: un sleep fijo era flaky bajo la carga paralela de la suite (la señal llegaba
+    // antes del handler → acción por defecto → el proceso moría sin el apagado ordenado).
     let mut child = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el nativo");
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    use std::io::{BufRead, Read as _};
+    let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut s = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            break; // EOF prematuro: el proceso murió; las aserciones de abajo lo reportan
+        }
+        let listo = line.contains("ready");
+        s.push_str(&line);
+        if listo {
+            break;
+        }
+    }
     let pid = child.id().to_string();
     let _ = Command::new("kill").args(["-TERM", &pid]).status();
-    let out = child.wait_with_output().expect("espera al proceso");
-    let s = String::from_utf8_lossy(&out.stdout);
+    let mut rest = String::new();
+    let _ = reader.read_to_string(&mut rest);
+    s.push_str(&rest);
+    let _ = child.wait();
     assert!(s.contains("signal 15: shutdown"), "SIGTERM → apagado ordenado\nsalida:\n{s}");
     assert!(s.contains("work 0"), "procesó al menos un item de trabajo\n{s}");
 }

@@ -6650,8 +6650,8 @@ a un paquete, o retirarse), lo que en `std/` exige un cambio de versión mayor d
 - **`packages/net` (adicional):** `http`/`http2`/`webserver`, `websocket`(+cliente), `dns`/`dns_cache`, `udp`,
   `redis`, `postgres`, `grpc_client`, `oauth2`, `jwt`/`jwt_eddsa`, `sigv4`, `scram`, `cookie`, `hpack`, `metrics`,
   `log`, `time`, `crypto` (respaldo `ring`).
-- **Solo `examples/` (aún sin promover):** `framework` (mini-framework web) — candidato natural a un futuro
-  paquete `web` (o a `packages/net`); los servidores de eco (`websocket_echo`, `wss_echo`) **se quedan** como
+- **`packages/web` (adicional, M93):** `framework` — el framework de aplicación estilo Express (PROMOVIDO
+  de examples en jul 2026; ver §85). Los servidores de eco (`websocket_echo`, `wss_echo`) **se quedan** como
   demos (son aplicaciones, no librerías). Las impls de cripto puro (`sha*`, `hmac`, `ed25519`, `chacha20`,
   `poly1305`, `base64`) permanecen como demos: su versión de producción es `net/crypto`.
 
@@ -8196,3 +8196,145 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   infiere T → materializar con `var nada: Option<T> = Option.None`.
 - Diferido: backreferences (exigen backtracking — rompen la garantía lineal, descartado),
   clases Unicode, referencias `$1` en `replace_all`.
+
+## 85. M93 — el paquete `web`: el framework de aplicación (promoción de examples)
+
+> Jul 2026, decidido con el usuario (rama `feature/packages-web`). Cierra el pendiente de §53.4
+> ("`framework` — candidato natural a un futuro paquete `web`"): el micro-framework tipo Express
+> de `examples/web/framework.ray` se **promueve** a `packages/web/framework.ray`, instalable por
+> los usuarios (`web = "path:…"` en ray.toml; `from web/framework import …`). Guía de uso:
+> `docs/web-framework.md`.
+
+- **Re-base**: deja el espejo histórico `examples/web/webserver.ray` (M19) y pasa a `net/webserver`
+  (el de producción, M56) → keep-alive, límites, panic→500, TLS y graceful heredados. La
+  resolución transitiva sale gratis del gestor: una path-dep añade el PADRE del directorio como
+  raíz (`deps::dependency_roots_for`), así `web = "path:…/packages/web"` hace resolubles también
+  `net/*`; por claridad los consumidores declaran ambas.
+- **API nueva sobre la existente** (paridad Express, cero runtime): `static_files(prefix, dir)`
+  (mounts sobre `static_mount` M56.9, chequeados antes de las rutas, solo GET/HEAD),
+  `not_found(handler)` (404 custom), `PATCH` + `route(método, …)` genérico, `Res.headers` +
+  `header(k, v)` encadenable (gana sobre el Content-Type derivado), `html()` (casa con
+  `ray templ`), `redirect(url)` (302 + Location), `log_requests()` (una línea JSON por petición
+  vía `net/log`: method/path/status/ms, medido con `time.monotonic`), y los arranques
+  `listen_tls(cert, key)` / `listen_graceful(drain_ms)` / `listen_limits(Limits)` sobre los
+  `serve_*` de M56. Gotcha: UFCS no resuelve métodos de un módulo importado calificado
+  (`entry.field(...)` sobre `net::log::LogEntry`) → el logging se escribe con llamadas
+  calificadas explícitas.
+- **Consumidores**: `examples/web/framework/` es un PROYECTO consumidor real (ray.toml con
+  path-deps, `from web/framework import …`) que sustituye a `framework.ray` + `framework_demo.ray`;
+  `tests/framework_cli.rs` monta ese mismo proyecto en un temporal (rutas absolutas al repo) y lo
+  lanza con `ray run` — cubre enrutado/params/query/cookies/404-custom + estáticos con ETag→304,
+  traversal, redirect, header custom y método-que-no-casa.
+- **M93.2 — "a lo raylang" (COMPLETO, jul 2026)**: cierre de la paridad Express SIN igualar
+  firmas 1:1 — cada idea con los medios del lenguaje (espec: `docs/M93.2-framework-a-lo-raylang.md`).
+  Cuatro fases, todo raylang puro en el paquete (cero cambios de runtime/webserver):
+  - **a (composición)**: el middleware pasa de `-> bool` a **`-> Step`** (`Next`/`Done`, enum
+    match-able; ruptura aceptada, paquete no publicado). Middleware POR RUTA como **combinador**
+    `with_mw([mws], handler) -> handler` (corre con los params ya capturados), `use_on(prefix, mw)`
+    (global por prefijo), cadena **`after`** explícita (corre SIEMPRE tras el enrutado — el
+    "después" sin el `next()` CPS de Express) y **`locals`** por-petición en `Ctx`
+    (`put_local`/`local`; `Ctx` viaja por referencia → lo que escribe un middleware lo ven handler
+    y afters).
+  - **b (enrutado)**: catch-all final `*resto` (captura el resto con las `/`), `ALL` (método
+    comodín `"*"`), **405 + `Allow` automático** (patrón casa con otro método; RFC 9110 — Express
+    responde 404), **`mount(prefix, sub)`** (un "router" ES una `App` que no escucha: fusión
+    estática re-prefijando rutas/estáticos y envolviendo handlers con `with_mw(sub.middlewares)`;
+    su `not_found`/`after` se ignoran) y **rutas regex** `route_re`/`GET_re` (`Pattern` pasa a
+    enum `Segments | Re`; compiladas UNA vez al registrar con `std/regex` —Pike VM lineal, sin
+    ReDoS, ventaja real sobre el `path-to-regexp` de Express—; capturas = params numerados).
+  - **c (contexto)**: `header_of`, `cookie_of` (`net/cookie`), `form`/`form_field`
+    (`std/url.parse_query`) y `json_body -> Result<Json, string>` (`std/json`) — conectan la
+    stdlib, no la reimplementan. Convención: lookups devuelven `""`; lo falible, `Result`.
+    Gotcha: los leaf `json`/`cookie` chocan con funciones homónimas → `import … as jsonlib/cookielib`.
+  - **d (presets)**: `cors(origin)` (preflight 204 + `Allow-Origin` vía after), `log_requests`
+    con **`trace_id`** (adopta el `traceparent` W3C vía `webserver.trace_of`), `static_files_cached`
+    (Cache-Control sobre el ETag/304) y **`trait ToJson` + `json_of<T: ToJson>`** (respuestas JSON
+    tipadas por bounds; impls de primitivos; `@derive(ToJson)` anotado en IDEAS.md).
+- **M93.3 — el framework compila NATIVO (jul 2026)**: `ray build --native` del demo fallaba
+  ("a function value cannot cross a thread boundary") porque una `App` construida contiene
+  closures y el handler cruza al hilo de cada conexión. Solución en dos planos. (1) **Framework**:
+  el patrón builder, y tras probarlo, **unificación de la API de arranque** (decidida con el
+  usuario; el paquete no está publicado): la familia `listen[_tls|_graceful|_limits]` toma
+  `build: fn() -> App` (función top-level) en vez de una `App` construida — las formas con `App`
+  y el `listen_app` transitorio se ELIMINARON (una sola manera, sin footgun VM-vs-nativo).
+  Debajo, `net/webserver` gana **`serve_with[_limits|_tls|_graceful]`**: el handler viene de una
+  FACTORÍA que cruza como fn plana; la App y sus closures nacen DENTRO de la tarea de cada
+  PETICIÓN. Por petición y no por conexión a propósito: el aislamiento panic→500 (M56.5) corre
+  cada petición en su propia tarea, así que un handler por-conexión volvería a cruzar un hilo
+  (el intento con `handle_http(c, h_construido, …)` no compila: su param está marcado Send por
+  ese spawn interno). Diferidos anotados: handler por conexión (catch_unwind nativo) y
+  defuncionalización de closures (que un valor-función cruce hilos en nativo).
+  Consecuencia documentada: el estado del builder es POR PETICIÓN; compartido → canales.
+  (2) **Transpilador**, tres arreglos generales: el marcado H21-N5c cubre el caso
+  "closure pasado a un param marcado que captura un fn-param del llamador" (antes solo ident
+  directo); un conversor send NO generable (struct con campos función, p. ej. `App`) degrada a
+  **stub que panica** en runtime en vez de abortar el build (misma filosofía que las funciones
+  stub — `app.listen` en nativo compila y solo falla si de verdad cruza); `emit_match` clasifica
+  el escrutinio con `classify` (el retorno de una anotación `fn(..) -> E` llegaba como
+  `Struct("E")` sin resolver → los `match` sobre `Step`/`Pattern` no transpilaban); y las
+  capturas de heap de un closure boxed se **pre-clonan** todas (dos closures hermanos capturando
+  la misma local no-Copy — los dos de `cors(origin)` — daban E0382). Corpus nativo intacto.
+  Gotcha operativo (macOS): re-emitir el binario sobre la MISMA ruta invalida la firma ad-hoc
+  cacheada → SIGKILL silencioso al ejecutar; usar ruta nueva o borrar antes.
+- **M93.4 — `ToJson` sube a `std/json` (jul 2026)**: el trait (+ impls de int/float/bool/string,
+  el de string vía `stringify(Json.JStr(…))`) pasa de `web/framework` a la stdlib — así un futuro
+  `@derive(ToJson)` (IDEAS) no dependería de un paquete. El framework lo REEXPORTA
+  (`pub from std/json import ToJson;`, M11.6a) y conserva `json_of<T: ToJson>`: los consumidores
+  (`from web/framework import ToJson`) no cambian. std embebida → recompilar el binario.
+- **M93.5 — escribir JSON "a lo raylang" (jul 2026, decidido con el usuario)**: tres capas que
+  COMPONEN (guía de decisión en docs/web-framework.md). (1) **`@derive(ToJson)`** sobre structs
+  no genéricos (checker, junto a Eq/Show/Hash; campos primitivos —char vía to_string— o tipos
+  ToJson anidados; enums/arrays/Map diferidos con error claro; requiere el trait en ámbito).
+  Primer trait derivable que vive en un módulo NAMESPACADO → el dedup idempotente de
+  `generate_derives` compara el trait por su LEAF (`std::json::ToJson` ≡ `ToJson`), si no el
+  checker regeneraba el impl del loader con el nombre local sin resolver. (2) **Builder** en
+  `std/json`: `obj().field(k, v)`/`arr()`/`item`/`list` con `field<T: ToJson>` — escapado por
+  construcción, orden de claves preservado (a diferencia de JObject/Map), `Obj`/`Arr` son ToJson
+  (anidan y `r.json_of` los acepta). (3) La **interpolación `${…}` ya existía** (M27.3);
+  documentado que en JSON solo es segura interpolando `.to_json()`. Los backticks (delimitador
+  sin escapar `"`) quedan como M95.
+  **BUG DE LENGUAJE cazado por el builder (M9.2, latente desde entonces)**: una cadena del MISMO
+  método genérico acotado (`obj().field(a).field(b)`) comparte `(línea, col, nombre)` en las
+  tablas de lowering (el parser arranca cada Call en el callee = inicio de la cadena) → los
+  diccionarios del último sitio pisaban a los demás (T equivocado → ICE/valor corrupto). Fix
+  doble: (a) `DictSites` pasa a **cola por sitio** (el registro encola en orden de evaluación y
+  la bajada post-orden desencola — mismos órdenes = emparejado correcto); (b) el **doble-check
+  del receptor** (una vez al resolver campo/método/UFCS y otra como argumento 0 de la llamada
+  reescrita, exponencial en cadenas) se elimina: `check_named_call_recv` recibe el tipo YA
+  calculado del receptor y no re-verifica su expresión (enhebrado por check_args/
+  check_generic_call/call_type) → cada nodo registra sus diccionarios exactamente UNA vez.
+  Pendiente de auditar la misma familia en `ufcs_sites`/`dyn_*` (hoy sobrescriben; inocuo salvo
+  cadenas del mismo nombre con destinos distintos).
+- **Diferido**: middleware envolvente estilo `next()` (dos cadenas explícitas cubren los casos),
+  `req.ip`/protocolo (exige peer-addr en `std/net` + `Request`), hook para el 500 de un `panic`
+  (vive en el `try_join` del webserver), `r.file(path)`/download, SSE por el framework,
+  `/metrics` integrado (estado entre peticiones → actor propio), sesiones/CSRF,
+  `listen_graceful_tls`. La publicación en el registro (M51) cuando haya terceros.
+
+## 86. M95 — cadenas plantilla (backticks)
+
+> Jul 2026, decidido con el usuario a partir de la discusión "escribir JSON sin escapar"
+> (M93.5). La interpolación `${expr}` ya existía para TODA cadena (M27.3); lo único que faltaba
+> era un DELIMITADOR donde la comilla doble fuera literal. Es una feature general (JSON legible,
+> SQL, logs, texto compuesto), no una feature de JSON: para JSON con valores no controlados lo
+> seguro sigue siendo interpolar `.to_json()` (std/json) o usar derive/builder (M93.5).
+
+- **Sintaxis**: `` `…` `` — mismo VALOR y mismo token (`Str`/`InterpStr`) que `"…"`, con dos
+  diferencias: `"` es literal (adiós `\"`) y los saltos de línea están permitidos (multilínea,
+  literales). Escapes: los de siempre más `` \` `` (backtick literal) y `\$` (un `${` sin
+  interpolar). La interpolación `${expr}` es idéntica (una expresión, llaves balanceadas, en
+  una sola línea).
+- **Implementación mínima por diseño**: el lexer generaliza `string()` por delimitador
+  (`src/lexer.rs`); como ambos delimitadores emiten el MISMO token, el parser, el checker, los
+  dos motores y el transpilador nativo NI SE ENTERAN (el desugar de M27.3 cubre todo). La
+  longitud de token (M33a) degrada a 1 si el literal cruza líneas (solo afecta al subrayado LSP).
+- **Formateador**: el token no guarda el delimitador → `ray fmt` lo HUELE en el fuente
+  (`Cur.is_template`: ¿hay un `` ` `` en la posición del literal?) y reemite backticks como
+  backticks (multilínea literal, `"` sin escapar). De la auditoría salió un **fix**: un `\${`
+  literal en un string PLANO perdía el escape al reformatear (`fmt_string_lit` no re-escapaba
+  `$`+`{`) → una pasada de `ray fmt` lo convertía en interpolación real. Corregido.
+- **Editores**: regla `template-strings` en la gramática de VSCode y contexto backtick en la de
+  Sublime (mismo resaltado de `${…}` como código embebido).
+- **Corpus**: demo `examples/basics/plantillas.ray` (multilínea + JSON + `\$`), byte-idéntico
+  VM↔nativo. Excluido del corpus del parser auto-alojado (mismo estado que la interpolación
+  M27.3: el lexer espejo aún no la produce; diferido documentado en `tests/selfhost_lexer.rs`).

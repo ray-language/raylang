@@ -738,6 +738,9 @@ fn parses_files_reales_equal_what_el_oracle() {
         "libm.ray",     // M41: bloques `extern "lib" { … }` (FFI), aún no en el parser auto-alojado.
         "cstrings.ray", // M41: idem.
         "mapa_literal.ray", // M48.2: literal de Map `[k: v]`/`[:]`, aún no en el parser auto-alojado.
+        "plantillas.ray", // M95: backticks + interpolación `${}` (M27.3), aún no en el lexer auto-alojado.
+        "main.ray", // demo del framework web (examples/web/framework): usa `${…}` (M27.3), ídem. (Los
+                    // demás main.ray de módulos ya quedan fuera por directorio.)
     ];
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,

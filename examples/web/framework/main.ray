@@ -1,0 +1,202 @@
+// Demo del framework web `web/framework` (M93), estilo Express — este proyecto es un CONSUMIDOR
+// del paquete (dependencia por ruta en ray.toml), como lo usaría un usuario del lenguaje. Los
+// atajos `app.GET(...)`, `r.text(...)`, `c.param(...)` funcionan con UFCS sobre las funciones
+// importadas. **Solo VM** (servidor concurrente).
+//
+//   cd examples/web/framework
+//   ray run
+// y prueba:
+//   curl http://127.0.0.1:8080/
+//   curl http://127.0.0.1:8080/users/42
+//   curl -X POST -d 'eco esto' http://127.0.0.1:8080/echo
+//   curl 'http://127.0.0.1:8080/saluda?nombre=Ada'
+//   curl -i http://127.0.0.1:8080/assets/style.css   (estático con ETag; repite con If-None-Match → 304)
+//   curl -i http://127.0.0.1:8080/teapot             (responde 418)
+//   curl -i http://127.0.0.1:8080/antigua            (302 → /)
+//   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
+from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, ALL, GET_re,
+    mount, listen, static_files_cached, not_found, log_requests, cors, param, query, body,
+    put_local, local, header_of, cookie_of, form_field, json_body, text, json, json_of, html,
+    status, cookie, header, redirect, App, Ctx, Res, Step, ToJson;
+import std/json as jsonlib;
+from std/json import obj, field, list;
+
+// Un tipo propio que sabe serializarse (M93.5): `@derive(ToJson)` genera el impl (campos →
+// claves, strings escapados) — cero escritura manual. `r.json_of(v)` lo sirve.
+@derive(ToJson)
+struct User {
+    id: int,
+    name: string,
+}
+
+// Middleware (M93.2a): corre antes del enrutado; Step.Done corta la cadena y se responde lo
+// construido en `r`. Este exige `?token=secreto` y deja el usuario en los locals por-petición.
+fn auth(c: Ctx, r: Res) -> Step {
+    if (c.query("token") != "secreto") {
+        r.status(401).text("no autorizado");
+        return Step.Done;
+    }
+    c.put_local("user", "ada");
+    Step.Next
+}
+
+// La app se construye en una función TOP-LEVEL (patrón builder, M93.3): la fibra de cada
+// conexión la llama UNA vez y NINGÚN valor-función cruza hilos — el mismo fuente corre en la
+// VM (`ray run`/`ray dev`) y compila con `ray build --native`.
+fn build_app() -> App {
+    var app = new_app();
+
+    // Logging JSON por petición (net/log): método, ruta, status y duración en ms, a stdout.
+    app.log_requests();
+
+    // Hook `after` (M93.2a): corre tras el enrutado (también en 404) y puede mutar la respuesta —
+    // aquí, una cabecera común a todo.
+    app.after(fn(c: Ctx, r: Res) {
+        r.header("X-Framework", "raylang");
+    });
+
+    // Middleware por PREFIJO (M93.2a): protege todo /privado/* sin tocar cada ruta.
+    app.use_on("/privado/", auth);
+    app.GET("/privado/perfil", fn(c: Ctx, r: Res) {
+        r.text("perfil de " + c.local("user"));
+    });
+
+    // Middleware POR RUTA (M93.2a): `with_mw` envuelve el handler; la cadena corre con los
+    // params de la ruta ya capturados.
+    app.GET("/admin", with_mw([auth], fn(c: Ctx, r: Res) {
+        r.text("panel de " + c.local("user"));
+    }));
+
+    // CORS en una línea (M93.2d): responde el preflight OPTIONS y estampa Allow-Origin en todo.
+    app.cors("*");
+
+    // Archivos estáticos (M56.9 + M93.2d): /assets/* desde static/, con ETag + 304 y
+    // Cache-Control (1 h) — la historia de caching completa.
+    app.static_files_cached("/assets/", "static", 3600);
+
+    // json_of (M93.2d): responde el JSON de cualquier valor ToJson (aquí, el derivado).
+    app.GET("/yo", fn(c: Ctx, r: Res) {
+        r.json_of(User { id: 7, name: "Ada" });
+    });
+
+    // Builder de std/json (M93.5): JSON ad-hoc — orden de claves preservado, escapado por
+    // construcción (mira el motto con comillas) y anidando valores ToJson (el User derivado).
+    app.GET("/perfil", fn(c: Ctx, r: Res) {
+        r.json_of(obj()
+            .field("user", User { id: 7, name: "Ada" })
+            .field("motto", `di "hola"`)
+            .field("tags", list(["admin", "dev"])));
+    });
+
+    app.GET("/", fn(c: Ctx, r: Res) {
+        r.html(`<h1>¡Hola desde el framework web de raylang!</h1><link rel="stylesheet" href="/assets/style.css">`);
+    });
+
+    // Parámetro de ruta: /users/:id → c.param("id").
+    app.GET("/users/:id", fn(c: Ctx, r: Res) {
+        let id: string = c.param("id");
+        r.json(`{"id": "${id}", "nombre": "usuario-${id}"}`);
+    });
+
+    // Eco del cuerpo de la petición.
+    app.POST("/echo", fn(c: Ctx, r: Res) {
+        r.text(c.body());
+    });
+
+    // Parámetro de la query string: /saluda?nombre=Ada → c.query("nombre").
+    app.GET("/saluda", fn(c: Ctx, r: Res) {
+        var quien: string = c.query("nombre");
+        if (quien == "") { quien = "mundo"; }
+        r.text("hola, " + quien);
+    });
+
+    // Estado a medida + header custom, encadenados.
+    app.GET("/teapot", fn(c: Ctx, r: Res) {
+        r.status(418).header("X-Tetera", "si").text("Soy una tetera");
+    });
+
+    // Redirección: la ruta vieja manda a la raíz con 302.
+    app.GET("/antigua", fn(c: Ctx, r: Res) {
+        r.redirect("/");
+    });
+
+    // Cookies (M56.7): varias líneas Set-Cookie en una respuesta, encadenadas.
+    app.GET("/entra", fn(c: Ctx, r: Res) {
+        r.cookie("sesion=abc123; Path=/; HttpOnly").cookie("flash=hola");
+        r.text("sesión iniciada");
+    });
+
+    // Formulario (M93.2c): cuerpo x-www-form-urlencoded → c.form_field (std/url por debajo).
+    app.POST("/login", fn(c: Ctx, r: Res) {
+        r.cookie("sid=" + c.form_field("user") + "; Path=/");
+        r.text("bienvenido, " + c.form_field("user"));
+    });
+
+    // Cookie de la petición (M93.2c): cabecera Cookie → net/cookie por debajo.
+    app.GET("/quien", fn(c: Ctx, r: Res) {
+        let sid: string = c.cookie_of("sid");
+        if (sid == "") { r.status(401).text("sin sesión"); } else { r.text("sesión de " + sid); }
+    });
+
+    // Cabecera de la petición (M93.2c).
+    app.GET("/ua", fn(c: Ctx, r: Res) {
+        r.text("navegador: " + c.header_of("user-agent"));
+    });
+
+    // Cuerpo JSON (M93.2c): Result<Json, string> — errores como valores; se recorre con
+    // los get_* de std/json.
+    app.POST("/suma", fn(c: Ctx, r: Res) {
+        match (c.json_body()) {
+            Result.Ok(j) => {
+                let a: int = match (jsonlib.get_int(j, "a")) { Option.Some(n) => n, Option.None => 0 };
+                let b: int = match (jsonlib.get_int(j, "b")) { Option.Some(n) => n, Option.None => 0 };
+                r.json(`{"total": ${to_string(a + b)}}`);
+            },
+            Result.Err(e) => {
+                r.status(400).json(`{"error": "${e}"}`);
+            },
+        }
+    });
+
+    // Catch-all (M93.2b): `*resto` FINAL captura el resto de la ruta, con las "/".
+    app.GET("/files/*path", fn(c: Ctx, r: Res) {
+        r.text("archivo: ${c.param("path")}");
+    });
+
+    // Cualquier método (M93.2b).
+    app.ALL("/ping", fn(c: Ctx, r: Res) {
+        r.text("pong " + c.method);
+    });
+
+    // Ruta REGEX (M93.2b): compilada UNA vez al registrar (std/regex, tiempo lineal — sin ReDoS);
+    // las capturas son params numerados.
+    app.GET_re("^/v(\\d+)/estado$", fn(c: Ctx, r: Res) {
+        r.json(`{"version": ${c.param("1")}, "ok": true}`);
+    });
+
+    // Sub-aplicación (M93.2b): un "router" ES una App que no escucha; `mount` la re-prefija y
+    // envuelve sus handlers con los middlewares del grupo (aquí, auth para toda /api/*).
+    var api = new_app();
+    api.use_mw(auth);
+    api.GET("/users/:id/rol", fn(c: Ctx, r: Res) {
+        r.json(`{"id": "${c.param("id")}", "rol": "admin"}`);
+    });
+    app.mount("/api", api);
+
+    // 404 personalizado (si no se registra, responde "Not Found" plano).
+    app.not_found(fn(c: Ctx, r: Res) {
+        r.json(`{"error": "no existe", "path": "${c.path}"}`);
+    });
+
+    app
+}
+
+fn main() -> int {
+    match (listen(build_app, "127.0.0.1", 8080)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}

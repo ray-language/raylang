@@ -1,0 +1,7 @@
+# Manifiesto del paquete-librería `db` (sin entry; usa net/scram y net/time).
+[package]
+name = "db"
+version = "0.1.0"
+
+[dependencies]
+net = "path:../net"

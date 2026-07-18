@@ -147,6 +147,9 @@ fn collect_comments(src: &str) -> Vec<Comment> {
 /// las **líneas en blanco** de la fuente, para preservar la separación visual entre sentencias.
 struct Cur {
     items: Vec<Comment>,
+    /// Las líneas del fuente como chars (M95): para saber si un literal de string era un
+    /// BACKTICK (el token no guarda el delimitador; se mira el carácter en su posición).
+    srclines: Vec<Vec<char>>,
     i: usize,
     /// Líneas (1-basadas) que en la fuente están **en blanco** (vacías o solo espacios). Una línea que
     /// es solo un comentario NO cuenta como blanco (tiene contenido).
@@ -172,12 +175,18 @@ impl Cur {
             .collect();
         Cur {
             items: collect_comments(src),
+            srclines: src.lines().map(|l| l.chars().collect()).collect(),
             i: 0,
             blanks,
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
             base: 0,
         }
+    }
+
+    /// ¿Era un BACKTICK el literal que empieza en `(line, col)`? (M95: se mira el fuente.)
+    fn is_template(&self, line: usize, col: usize) -> bool {
+        self.srclines.get(line.wrapping_sub(1)).and_then(|l| l.get(col.wrapping_sub(1))) == Some(&'`')
     }
 
     /// ¿Emitir una línea en blanco antes del constructo que empieza en `line` (con sus comentarios
@@ -783,7 +792,8 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
     // posiciones) se sigue preservando.
     let pos = (e.line, e.col);
     if let Some(segs) = cur.interp.remove(&pos) {
-        let s = fmt_interp(cur, &segs); // una cadena interpolada es primaria → sin paréntesis
+        let template = cur.is_template(e.line, e.col);
+        let s = fmt_interp(cur, &segs, template); // una cadena interpolada es primaria → sin paréntesis
         cur.interp.insert(pos, segs);
         return s;
     }
@@ -807,22 +817,27 @@ const PIPE_PREC: u8 = 0;
 /// Reemite una cadena interpolada desde sus segmentos de superficie (M29.3): `"a${x}b"`. Las partes
 /// literales se re-escapan como un string; cada `${e}` formatea su expresión (recursivo → interpolación
 /// anidada funciona). Un `${` literal en el texto se re-escapa como `\${`.
-fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg]) -> String {
-    let mut out = String::from("\"");
+fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool) -> String {
+    let delim = if template { '`' } else { '"' };
+    let mut out = String::from(delim);
     for seg in segs {
         match seg {
             InterpSeg::Lit(s) => {
                 // Igual que `fmt_string_lit`, salvo que un `$` seguido de `{` en el TEXTO literal se
                 // escapa `\${` para que no reabra una interpolación al re-lexar (`"\${x}"` es un `${x}`
                 // literal). Un `$` que no precede a `{` es literal por sí solo → no se escapa.
+                // M95 (backticks): la `"` es literal, el `` ` `` se escapa y los saltos de línea
+                // se reemiten LITERALES (multilínea).
                 let chars: Vec<char> = s.chars().collect();
                 for (i, &c) in chars.iter().enumerate() {
                     match c {
                         '\\' => out.push_str("\\\\"),
+                        '\n' if template => out.push('\n'),
                         '\n' => out.push_str("\\n"),
                         '\t' => out.push_str("\\t"),
                         '\r' => out.push_str("\\r"),
-                        '"' => out.push_str("\\\""),
+                        '"' if !template => out.push_str("\\\""),
+                        '`' if template => out.push_str("\\`"),
                         '$' if chars.get(i + 1) == Some(&'{') => out.push_str("\\$"),
                         other => out.push(other),
                     }
@@ -835,7 +850,7 @@ fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg]) -> String {
             }
         }
     }
-    out.push('"');
+    out.push(delim);
     out
 }
 
@@ -870,7 +885,9 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
         ExprKind::Int(n) => n.to_string(),
         ExprKind::Float(f) => fmt_float(*f),
         ExprKind::Bool(b) => b.to_string(),
-        ExprKind::Str(s) => fmt_string_lit(s),
+        ExprKind::Str(s) => {
+            if cur.is_template(e.line, e.col) { fmt_template_lit(s) } else { fmt_string_lit(s) }
+        }
         ExprKind::Char(c) => fmt_char_lit(*c),
         ExprKind::Bytes(b) => fmt_bytes_lit(b),
         ExprKind::Ident(n) => n.clone(),
@@ -1063,10 +1080,37 @@ fn escape_char(c: char, out: &mut String, in_double_quotes: bool) {
 
 fn fmt_string_lit(s: &str) -> String {
     let mut out = String::from("\"");
-    for c in s.chars() {
-        escape_char(c, &mut out, true);
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        // Un `$` seguido de `{` en el VALOR debe re-escaparse `\$` — si no, el roundtrip del
+        // formateador convertiría un `\${x}` literal en una interpolación real (fix M95).
+        if c == '$' && chars.get(i + 1) == Some(&'{') {
+            out.push_str("\\$");
+        } else {
+            escape_char(c, &mut out, true);
+        }
     }
     out.push('"');
+    out
+}
+
+/// Reemite un string cuyo literal original era un BACKTICK (M95): la `"` es literal, el
+/// `` ` `` se escapa y los saltos de línea se conservan literales (multilínea).
+fn fmt_template_lit(s: &str) -> String {
+    let mut out = String::from("`");
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '`' => out.push_str("\\`"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push('\n'),
+            '$' if chars.get(i + 1) == Some(&'{') => out.push_str("\\$"),
+            other => out.push(other),
+        }
+    }
+    out.push('`');
     out
 }
 
@@ -1122,6 +1166,16 @@ mod tests {
 
     fn fmt(src: &str) -> String {
         format_source(src).expect("formatea")
+    }
+
+    #[test]
+    fn backticks_se_preservan() {
+        // M95: el fmt reemite un backtick como backtick (comillas literales, multilínea, `${}`).
+        let src = "fn main() -> int {\n    print(`{\"id\": ${1 + 2}}`);\n    let d = `a\nb`;\n    print(d);\n    0\n}\n";
+        assert_eq!(fmt(src), src);
+        // Y un `\${` literal en un string PLANO sobrevive al roundtrip (fix M95).
+        let plano = "fn main() -> int {\n    print(\"precio \\${USD}\");\n    0\n}\n";
+        assert_eq!(fmt(plano), plano);
     }
 
     #[test]

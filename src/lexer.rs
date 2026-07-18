@@ -97,9 +97,9 @@ impl Lexer {
                 }
                 Some(_) => {
                     let kind = self.next_token()?;
-                    // La longitud del lexema (M33a): la emisión está centralizada y ningún
-                    // token cruza líneas, así que basta restar columnas al terminar.
-                    let len = (self.col - self.start_col).max(1);
+                    // La longitud del lexema (M33a): restar columnas al terminar. Un backtick
+                    // multilínea (M95) cruza líneas → degrada a 1 (solo afecta al subrayado LSP).
+                    let len = if self.line > self.start_line { 1 } else { (self.col - self.start_col).max(1) };
                     tokens.push(Token::new(kind, self.start_line, self.start_col, len));
                 }
             }
@@ -203,7 +203,10 @@ impl Lexer {
             '^' => TokenKind::Caret, // ^ (XOR bit a bit, M19.3a)
             '~' => TokenKind::Tilde, // ~ (NOT bit a bit, M19.3a)
 
-            '"' => self.string()?,
+            '"' => self.string('"')?,
+            // M95: backticks — un string donde `"` es literal y los saltos de línea están
+            // permitidos (multilínea); la interpolación `${}` funciona igual (M27.3).
+            '`' => self.string('`')?,
             '\'' => self.char_literal()?,
             // M16.1a: literal de bytes `b"..."`. Se distingue de un identificador que empiece por 'b'
             // mirando si la comilla sigue inmediatamente. Va ANTES del caso de identificador.
@@ -288,23 +291,25 @@ impl Lexer {
         keyword(&text).unwrap_or(TokenKind::Ident(text))
     }
 
-    /// Lee una cadena `"..."` (ya consumida la comilla de apertura). Toda cadena puede **interpolar**
-    /// (M27.3, rediseñado): `${expr}` inserta el valor de `expr` (balanceando llaves anidadas). El `$`
-    /// solo es especial seguido de `{`; en cualquier otro sitio es literal (`"$5"`, `"$PATH"` no
-    /// necesitan escape). Las llaves `{` `}` son **siempre literales**. Escapes: `\n \t \r \\ \"` y
-    /// **`\$`** (para un `${` literal, p. ej. al generar shell/plantillas). Sin ningún `${…}`, la
-    /// cadena degrada a un `Str` normal → toda cadena preexistente sin `${` lexea byte-idéntico.
-    fn string(&mut self) -> Result<TokenKind, LexError> {
+    /// Lee una cadena (ya consumido el delimitador de apertura: `"` ordinaria, `` ` `` template
+    /// M95). Toda cadena puede **interpolar** (M27.3, rediseñado): `${expr}` inserta el valor de
+    /// `expr` (balanceando llaves anidadas). El `$` solo es especial seguido de `{`; en cualquier
+    /// otro sitio es literal (`"$5"`, `"$PATH"` no necesitan escape). Las llaves `{` `}` son
+    /// **siempre literales**. Escapes: `\n \t \r \\ \" \\`` y **`\$`** (para un `${` literal).
+    /// Diferencias del backtick: la `"` es LITERAL (adiós `\"`) y los saltos de línea están
+    /// permitidos (multilínea). Sin ningún `${…}`, la cadena degrada a un `Str` normal → toda
+    /// cadena preexistente lexea byte-idéntico; ambos delimitadores producen el MISMO token.
+    fn string(&mut self, delim: char) -> Result<TokenKind, LexError> {
         let mut parts: Vec<InterpPart> = Vec::new();
         let mut cur = String::new();
         loop {
             match self.peek() {
                 None => return Err(self.error("unterminated string".into())),
-                Some('\n') => {
+                Some('\n') if delim == '"' => {
                     return Err(self.error("newline inside an unterminated string".into()))
                 }
-                Some('"') => {
-                    self.advance(); // comilla de cierre
+                Some(c) if c == delim => {
+                    self.advance(); // el delimitador de cierre
                     break;
                 }
                 Some('\\') => {
@@ -315,6 +320,7 @@ impl Lexer {
                         Some('r') => cur.push('\r'),
                         Some('\\') => cur.push('\\'),
                         Some('"') => cur.push('"'),
+                        Some('`') => cur.push('`'),
                         Some('$') => cur.push('$'), // `\$` → un `$` literal (para un `${` sin interpolar)
                         Some(other) => {
                             return Err(self.error(format!("invalid escape sequence '\\{}'", other)))
@@ -614,6 +620,25 @@ mod tests {
         );
         // Un exponente que desborda f64 no es error: satura a infinito (semántica de f64).
         assert_eq!(kinds("1e999"), vec![TokenKind::Float(f64::INFINITY), TokenKind::Eof]);
+    }
+
+    #[test]
+    fn backticks_template_strings() {
+        use crate::token::InterpPart::{Expr, Lit};
+        // M95: el backtick delimita un string donde `"` es LITERAL — mismo token que `"…"`.
+        assert_eq!(kinds("`di \"hola\"`"), vec![TokenKind::Str("di \"hola\"".into()), TokenKind::Eof]);
+        // Multilínea: el salto de línea es literal (y las posiciones siguen avanzando).
+        assert_eq!(kinds("`a\nb`"), vec![TokenKind::Str("a\nb".into()), TokenKind::Eof]);
+        // Interpolación idéntica a la de comillas (M27.3).
+        assert_eq!(
+            kinds("`x=${n}`"),
+            vec![TokenKind::InterpStr(vec![Lit("x=".into()), Expr("n".into(), 1, 6)]), TokenKind::Eof]
+        );
+        // Escapes: `\`` → backtick literal; `\$` → `${` sin interpolar.
+        assert_eq!(kinds("`un \\` tick`"), vec![TokenKind::Str("un ` tick".into()), TokenKind::Eof]);
+        assert_eq!(kinds("`\\${x}`"), vec![TokenKind::Str("${x}".into()), TokenKind::Eof]);
+        // Sin cerrar → error (mismo mensaje que un string normal).
+        assert!(matches!(Lexer::new("`abc").tokenize(), Err(e) if e.msg == "unterminated string"));
     }
 
     #[test]

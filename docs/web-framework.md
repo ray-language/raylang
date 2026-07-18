@@ -192,9 +192,33 @@ app.GET("/yo", fn(c: Ctx, r: Res) { r.json_of(User { id: 7, name: "Ada" }); });
 
 `json_of<T: ToJson>` despacha estático por bounds (M9.2) — sin reflexión. El trait **vive en
 `std/json`** (M93.4, con impls para los primitivos; el framework lo reexporta, así que
-`from web/framework import ToJson` sigue valiendo) y para el escapado de strings delega en
-`std/json.stringify`. (Un `@derive(ToJson)` queda anotado como candidata de compilador en
-IDEAS.md — con el trait en la stdlib, el derive no dependería de ningún paquete.) Nota: los mounts
+`from web/framework import ToJson` sigue valiendo).
+
+### Escribir JSON (M93.5): la guía de decisión
+
+```raylang
+// 1) El JSON espeja un struct → DERÍVALO (cero escritura, escapado garantizado):
+@derive(ToJson)
+struct User { id: int, name: string }
+r.json_of(User { id: 7, name: "Ada" });          // {"id": 7, "name": "Ada"}
+
+// 2) JSON ad-hoc (claves calculadas, payloads compuestos) → el BUILDER de std/json
+//    (orden de claves preservado; cada valor pasa por su to_json → imposible olvidar escapar):
+from std/json import obj, field, list;
+r.json_of(obj()
+    .field("user", User { id: 7, name: "Ada" })  // anida cualquier ToJson
+    .field("motto", "di \"hola\"")               // escapado por construcción
+    .field("tags", list(["admin", "dev"])));
+
+// 3) Texto libre con BACKTICKS (M95: la comilla doble es literal, multilínea) e interpolación
+//    (`${…}`, M27.3) → SOLO con valores serializados:
+let linea = `{"id": ${user.id.to_json()}, "name": ${user.name.to_json()}}`;
+// ⚠ interpolar un string SIN .to_json() produce JSON inválido/inyectable si trae comillas.
+```
+
+`@derive(ToJson)`: structs no genéricos, campos primitivos o tipos que implementen `ToJson`
+(anidando derives); requiere `ToJson` en ámbito (`from std/json import ToJson;` o vía el
+framework). Enums, arrays y Map como campo → diferidos (impl manual mientras tanto). Nota: los mounts
 estáticos responden antes de la cadena `after`, así que no llevan las cabeceras CORS (los
 assets suelen ser same-origin).
 

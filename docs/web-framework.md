@@ -245,7 +245,16 @@ es **por petición**; el estado compartido va por canales a una fibra que lo pos
 
 Todas las variantes heredan de `net/webserver`: keep-alive HTTP/1.1, límites de seguridad
 (cabeceras/cuerpo/conexiones/timeout de lectura), y un handler que hace `panic` responde 500 sin
-tumbar el servidor. Con `ray dev` (M92) tienes watch+restart con drenado y **live-reload del
+tumbar el servidor.
+
+### Carga y descriptores de archivo (M93.6)
+
+El runtime (VM y binarios nativos) **sube solo** el límite blando de fds al duro al arrancar
+(macOS hereda 256 por defecto — un `wrk -c500` lo agotaba sin culpa del programa). Y el
+agotamiento real de descriptores (EMFILE) es **transitorio** para el accept: pausa y reintenta
+sin contar para la rendición por error persistente (antes, 100 EMFILE consecutivos —milisegundos
+bajo tormenta— apagaban el servidor). Medido (M2 Max, binario nativo debug, `log_requests`
+activo): `wrk -t4 -c500 -d15s` → ~17.6k req/s, cero errores, servidor vivo. Con `ray dev` (M92) tienes watch+restart con drenado y **live-reload del
 navegador** (la página se refresca sola al reiniciar; el snippet reintenta hasta que el servidor
 vuelve). Con `--port N` además el supervisor retiene el socket (cero conexiones rechazadas al
 reiniciar) y la app puede leer el puerto con `env("RAY_LISTEN_ADDR")` (`"host:puerto"`).

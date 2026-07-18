@@ -1003,6 +1003,17 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // <msg>` + exit 70; los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) dan
     // exit 70 con el texto de Rust (paridad de código, no de texto, para esa cola).
     out.push_str("fn main() {\n");
+    // Sube el límite blando de fds al duro (acotado) — espejo de `lib::raise_fd_limit` del host:
+    // el default de macOS (256) tumbaba un webserver nativo bajo `wrk -c500` sin culpa del programa.
+    out.push_str("    #[cfg(unix)] unsafe {\n");
+    out.push_str("        #[repr(C)] struct RL { cur: u64, max: u64 }\n");
+    out.push_str("        #[cfg(target_os = \"linux\")] const NOFILE: i32 = 7;\n");
+    out.push_str("        #[cfg(not(target_os = \"linux\"))] const NOFILE: i32 = 8;\n");
+    out.push_str("        unsafe extern \"C\" { fn getrlimit(r: i32, l: *mut RL) -> i32; fn setrlimit(r: i32, l: *const RL) -> i32; }\n");
+    out.push_str("        let cap: u64 = if cfg!(target_os = \"macos\") { 10240 } else { 65536 };\n");
+    out.push_str("        let mut r = RL { cur: 0, max: 0 };\n");
+    out.push_str("        if getrlimit(NOFILE, &mut r) == 0 { let o = r.max.min(cap); if o > r.cur { let n = RL { cur: o, max: r.max }; let _ = setrlimit(NOFILE, &n); } }\n");
+    out.push_str("    }\n");
     out.push_str("    let __rt_hook = std::panic::take_hook();\n");
     out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");

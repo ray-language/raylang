@@ -937,9 +937,18 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
                     },
                     Result.Err(e) => {
                         eprint("accept: " + e);
-                        errors = errors + 1;
-                        if (errors >= 100) {
-                            follow = false;
+                        // Fds agotados (EMFILE/ENFILE): TRANSITORIO — las conexiones en vuelo van
+                        // cerrando y liberan descriptores. Pausar (cede la fibra: las conexiones
+                        // avanzan y el bucle no hot-spinea) y NO contar para la rendición: antes un
+                        // `wrk -c500` sumaba 100 errores consecutivos en ms y APAGABA el servidor.
+                        if (e.contains("Too many open files")) {
+                            time.sleep(20);
+                        } else {
+                            errors = errors + 1;
+                            if (errors >= 100) {
+                                follow = false;
+                            }
+                            time.sleep(10);
                         }
                     },
                 }
@@ -991,7 +1000,11 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
                             send(conns, c);
                         },
                         Result.Err(e) => {
-                            errors = errors + 1;
+                            // EMFILE/ENFILE no cuenta para la rendición (transitorio; ver el bucle
+                            // no-drenable). La pausa de abajo ya cede la fibra en ambos casos.
+                            if (!e.contains("Too many open files")) {
+                                errors = errors + 1;
+                            }
                             if (errors >= 100) {
                                 // Error persistente: rendir el servidor (cerrar `conns` se lo
                                 // comunica al bucle principal, que devuelve como bucle_servidor).

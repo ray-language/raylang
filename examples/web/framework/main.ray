@@ -15,9 +15,9 @@
 //   curl -i http://127.0.0.1:8080/antigua            (302 → /)
 //   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
 from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, ALL, GET_re,
-    mount, listen, static_files_cached, not_found, log_requests, cors, param, query, body,
+    mount, listen_app, static_files_cached, not_found, log_requests, cors, param, query, body,
     put_local, local, header_of, cookie_of, form_field, json_body, text, json, json_of, html,
-    status, cookie, header, redirect, Ctx, Res, Step, ToJson;
+    status, cookie, header, redirect, App, Ctx, Res, Step, ToJson;
 import std/json as jsonlib;
 
 // Un tipo propio que sabe serializarse (M93.2d): `impl ToJson` + `r.json_of(v)` — despacho
@@ -44,7 +44,11 @@ fn auth(c: Ctx, r: Res) -> Step {
     Step.Next
 }
 
-fn main() -> int {
+// La app se construye en una función TOP-LEVEL (patrón builder, M93.3): así `listen_app` la
+// reconstruye dentro del hilo de cada conexión y NINGÚN valor-función cruza hilos — la forma
+// que compila también con `ray build --native`. (Con `app.listen(...)` sobre una App ya
+// construida, solo VM.)
+fn build_app() -> App {
     var app = new_app();
 
     // Logging JSON por petición (net/log): método, ruta, status y duración en ms, a stdout.
@@ -180,7 +184,11 @@ fn main() -> int {
         r.json("{\"error\": \"no existe\", \"path\": \"" + c.path + "\"}");
     });
 
-    match (app.listen("127.0.0.1", 8080)) {
+    app
+}
+
+fn main() -> int {
+    match (listen_app(build_app, "127.0.0.1", 8080)) {
         Result.Ok(_) => 0,
         Result.Err(e) => {
             eprint(e);

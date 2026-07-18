@@ -8250,6 +8250,22 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
     con **`trace_id`** (adopta el `traceparent` W3C vía `webserver.trace_of`), `static_files_cached`
     (Cache-Control sobre el ETag/304) y **`trait ToJson` + `json_of<T: ToJson>`** (respuestas JSON
     tipadas por bounds; impls de primitivos; `@derive(ToJson)` anotado en IDEAS.md).
+- **M93.3 — el framework compila NATIVO (jul 2026)**: `ray build --native` del demo fallaba
+  ("a function value cannot cross a thread boundary") porque una `App` construida contiene
+  closures y el handler cruza al hilo de cada conexión. Solución en dos planos. (1) **Framework**:
+  `listen_app(build: fn() -> App, host, port)` — el patrón builder: la función top-level cruza
+  como fn item (Send) y cada petición construye su `App` DENTRO del hilo (VM idéntica; el demo
+  migrado). (2) **Transpilador**, tres arreglos generales: el marcado H21-N5c cubre el caso
+  "closure pasado a un param marcado que captura un fn-param del llamador" (antes solo ident
+  directo); un conversor send NO generable (struct con campos función, p. ej. `App`) degrada a
+  **stub que panica** en runtime en vez de abortar el build (misma filosofía que las funciones
+  stub — `app.listen` en nativo compila y solo falla si de verdad cruza); `emit_match` clasifica
+  el escrutinio con `classify` (el retorno de una anotación `fn(..) -> E` llegaba como
+  `Struct("E")` sin resolver → los `match` sobre `Step`/`Pattern` no transpilaban); y las
+  capturas de heap de un closure boxed se **pre-clonan** todas (dos closures hermanos capturando
+  la misma local no-Copy — los dos de `cors(origin)` — daban E0382). Corpus nativo intacto.
+  Gotcha operativo (macOS): re-emitir el binario sobre la MISMA ruta invalida la firma ad-hoc
+  cacheada → SIGKILL silencioso al ejecutar; usar ruta nueva o borrar antes.
 - **Diferido**: middleware envolvente estilo `next()` (dos cadenas explícitas cubren los casos),
   `req.ip`/protocolo (exige peer-addr en `std/net` + `Request`), hook para el 500 de un `panic`
   (vive en el `try_join` del webserver), `r.file(path)`/download, SSE por el framework,

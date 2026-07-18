@@ -689,6 +689,19 @@ pub fn listen(app: App, host: string, port: int) -> Result<int, string> {
     })
 }
 
+/// Starts the server from a TOP-LEVEL builder function instead of a built `App` (M93.3):
+/// `listen_app(build_app, "0.0.0.0", 8080)`. The builder crosses threads as a plain function
+/// item and each request builds its `App` INSIDE the connection's thread, so no function value
+/// ever crosses a thread boundary → this is the form that compiles with `ray build --native`
+/// (an `App` holds handler closures, which the native backend cannot deep-copy across actors).
+/// Same behavior on the VM; registration is cheap, but if you build heavy state in the builder,
+/// move it to its own fiber and talk over channels (see the SSR example).
+pub fn listen_app(build: fn() -> App, host: string, port: int) -> Result<int, string> {
+    webserver.serve(host, port, fn(req: webserver.Request) -> webserver.Response {
+        handle(build(), req)
+    })
+}
+
 /// Like `listen`, over HTTPS: `cert`/`key` are paths to the PEM certificate and private key (M56.3).
 pub fn listen_tls(app: App, host: string, port: int, cert: string, key: string) -> Result<int, string> {
     webserver.serve_tls(host, port, cert, key, fn(req: webserver.Request) -> webserver.Response {

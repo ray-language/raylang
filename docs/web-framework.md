@@ -190,6 +190,30 @@ assets suelen ser same-origin).
 
 ## Despliegue
 
+### Binario nativo: el patrón builder (M93.3)
+
+Para compilar con `ray build --native`, construye la app en una **función top-level** y arranca
+con `listen_app`:
+
+```raylang
+fn build_app() -> App {
+    var app = new_app();
+    app.GET("/", fn(c: Ctx, r: Res) { r.text("hola"); });
+    app
+}
+
+fn main() -> int {
+    match (listen_app(build_app, "0.0.0.0", 8080)) { … }
+}
+```
+
+Motivo: una `App` ya construida contiene **closures** (handlers), y el backend nativo no puede
+copiarlos entre los hilos de las conexiones (actores de heap aislado). El builder cruza como
+función plana y cada petición construye su `App` **dentro** del hilo — cero valores-función
+cruzando. En la VM `listen_app` se comporta igual (el registro es barato); `app.listen(app_ya_
+construida)` sigue disponible pero es **solo VM** (en nativo panica con un mensaje claro si
+llega a cruzar). El demo `examples/web/framework/` usa el patrón y compila nativo.
+
 ```raylang
 app.listen("0.0.0.0", 8080);                        // keep-alive + límites por defecto
 app.listen_tls("0.0.0.0", 8443, "cert.pem", "key.pem");  // HTTPS (M56.3, rustls)

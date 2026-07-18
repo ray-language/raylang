@@ -6,10 +6,9 @@
 // raylang. **Solo VM** (el servidor cede fibras).
 //
 // Uso (ver `examples/web/framework/` y docs/web-framework.md):
-//   from web/framework import new_app, GET, listen, text, Ctx, Res;
-//   var app = new_app();
-//   app.GET("/", fn(c: Ctx, r: Res) { r.text("hola"); });
-//   app.listen("127.0.0.1", 8080);
+//   from web/framework import new_app, GET, listen, text, App, Ctx, Res;
+//   fn build_app() -> App { var app = new_app(); app.GET("/", fn(c: Ctx, r: Res) { r.text("hola"); }); app }
+//   fn main() -> int { match (listen(build_app, "127.0.0.1", 8080)) { ... } }
 import net/webserver;
 import net/log;
 import std/time;
@@ -676,51 +675,47 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
     resp
 }
 
-// --- Arranque ---
-// Todas las variantes montan el mismo handler (middlewares + enrutado) sobre el `serve`
-// correspondiente de net/webserver → keep-alive, límites de seguridad y panic-del-handler→500
-// gratis. **Solo VM.**
+// --- Arranque (M93.3: UNA sola familia, sobre el patrón builder) ---
+// `listen(build_app, host, port)`: el builder es una función TOP-LEVEL que construye la App. La
+// fibra de cada conexión la llama UNA vez (vía `webserver.serve_with`) y atiende con esa App
+// todas sus peticiones keep-alive. Así ningún valor-función cruza hilos (actores de heap
+// aislado): el mismo fuente corre en la VM y compila con `ray build --native`. Consecuencia: el
+// estado del builder es POR CONEXIÓN; el estado compartido va por canales a una fibra dueña.
 
-/// Starts the server on `host:port`. Each connection runs in its own fiber through middlewares +
-/// routing. Blocks forever (`Err` only if the socket cannot bind). VM only.
-pub fn listen(app: App, host: string, port: int) -> Result<int, string> {
-    webserver.serve(host, port, fn(req: webserver.Request) -> webserver.Response {
-        handle(app, req)
+/// Starts the server: `listen(build_app, "0.0.0.0", 8080)` with a TOP-LEVEL `fn build_app() ->
+/// App`. Each connection's fiber builds its own App once and serves all its keep-alive requests
+/// with it — no function value crosses a thread boundary, so the same source runs on the VM and
+/// compiles with `ray build --native` (M93.3). Keep-alive, safety limits and panic→500 are
+/// inherited from `net/webserver`. Blocks forever (`Err` only if the socket cannot bind).
+pub fn listen(build: fn() -> App, host: string, port: int) -> Result<int, string> {
+    webserver.serve_with(host, port, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
     })
 }
 
-/// Starts the server from a TOP-LEVEL builder function instead of a built `App` (M93.3):
-/// `listen_app(build_app, "0.0.0.0", 8080)`. The builder crosses threads as a plain function
-/// item and each request builds its `App` INSIDE the connection's thread, so no function value
-/// ever crosses a thread boundary → this is the form that compiles with `ray build --native`
-/// (an `App` holds handler closures, which the native backend cannot deep-copy across actors).
-/// Same behavior on the VM; registration is cheap, but if you build heavy state in the builder,
-/// move it to its own fiber and talk over channels (see the SSR example).
-pub fn listen_app(build: fn() -> App, host: string, port: int) -> Result<int, string> {
-    webserver.serve(host, port, fn(req: webserver.Request) -> webserver.Response {
-        handle(build(), req)
-    })
-}
-
-/// Like `listen`, over HTTPS: `cert`/`key` are paths to the PEM certificate and private key (M56.3).
-pub fn listen_tls(app: App, host: string, port: int, cert: string, key: string) -> Result<int, string> {
-    webserver.serve_tls(host, port, cert, key, fn(req: webserver.Request) -> webserver.Response {
-        handle(app, req)
+/// Like `listen`, over HTTPS: `cert`/`key` are the PEM certificate chain and private key (M56.3).
+pub fn listen_tls(build: fn() -> App, host: string, port: int, cert: string, key: string) -> Result<int, string> {
+    webserver.serve_with_tls(host, port, cert, key, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
     })
 }
 
 /// Like `listen`, with graceful shutdown (M88.1b): on SIGTERM/SIGINT it stops accepting, drains
 /// in-flight connections for up to `drain_ms` and returns 0 — zero requests lost on deploy.
-pub fn listen_graceful(app: App, host: string, port: int, drain_ms: int) -> Result<int, string> {
-    webserver.serve_graceful(host, port, drain_ms, fn(req: webserver.Request) -> webserver.Response {
-        handle(app, req)
+pub fn listen_graceful(build: fn() -> App, host: string, port: int, drain_ms: int) -> Result<int, string> {
+    webserver.serve_with_graceful(host, port, drain_ms, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
     })
 }
 
 /// Like `listen`, with explicit safety limits (`webserver.Limits`: max header/body bytes, max
 /// connections, read timeout) instead of `webserver.default_limits()`.
-pub fn listen_limits(app: App, host: string, port: int, limits: webserver.Limits) -> Result<int, string> {
-    webserver.serve_limits(host, port, limits, fn(req: webserver.Request) -> webserver.Response {
-        handle(app, req)
+pub fn listen_limits(build: fn() -> App, host: string, port: int, limits: webserver.Limits) -> Result<int, string> {
+    webserver.serve_with_limits(host, port, limits, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
     })
 }

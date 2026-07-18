@@ -4,8 +4,10 @@ Framework de aplicación estilo **Express**, escrito en raylang puro sobre `net/
 servidor HTTP de producción, M56). Este documento es la guía de uso; el diseño y su historia viven
 en DESIGN.md (M56 §60, M93 §85).
 
-> **Solo VM** (el runner por defecto): el servidor es concurrente — cada conexión corre en su
-> propia fibra sobre el scheduler de M12/M15.5. El intérprete (`--interp`) da un error limpio.
+> **VM o binario nativo** (M93.3): el servidor es concurrente — cada conexión corre en su
+> propia fibra (VM: scheduler M12/M15.5; nativo: hilos con heap aislado). El mismo fuente corre
+> con `ray run`/`ray dev` y compila con `ray build --native`. El intérprete (`--interp`) da un
+> error limpio.
 
 ## Arranque rápido
 
@@ -17,14 +19,20 @@ net = "path:../raylang/packages/net"   # web se apoya en net/webserver y net/log
 ```
 
 ```raylang
-from web/framework import new_app, GET, listen, text, Ctx, Res;
+from web/framework import new_app, GET, listen, text, App, Ctx, Res;
 
-fn main() -> int {
+// La app se construye en una función TOP-LEVEL (patrón builder): la fibra de cada conexión la
+// llama UNA vez — el mismo fuente corre en la VM y compila con `ray build --native` (M93.3).
+fn build_app() -> App {
     var app = new_app();
     app.GET("/", fn(c: Ctx, r: Res) {
         r.text("hola");
     });
-    match (app.listen("127.0.0.1", 8080)) {
+    app
+}
+
+fn main() -> int {
+    match (listen(build_app, "127.0.0.1", 8080)) {
         Result.Ok(_) => 0,
         Result.Err(e) => { eprint(e); 1 },
     }
@@ -190,36 +198,24 @@ assets suelen ser same-origin).
 
 ## Despliegue
 
-### Binario nativo: el patrón builder (M93.3)
-
-Para compilar con `ray build --native`, construye la app en una **función top-level** y arranca
-con `listen_app`:
+Una **única** familia de arranque (M93.3), siempre sobre el builder top-level:
 
 ```raylang
-fn build_app() -> App {
-    var app = new_app();
-    app.GET("/", fn(c: Ctx, r: Res) { r.text("hola"); });
-    app
-}
-
-fn main() -> int {
-    match (listen_app(build_app, "0.0.0.0", 8080)) { … }
-}
+listen(build_app, "0.0.0.0", 8080);                        // keep-alive + límites por defecto
+listen_tls(build_app, "0.0.0.0", 8443, cert_pem, key_pem); // HTTPS (M56.3, rustls)
+listen_graceful(build_app, "0.0.0.0", 8080, 5000);         // SIGTERM/SIGINT → drena 5 s, sale 0
+listen_limits(build_app, "0.0.0.0", 8080, mis_limits);     // webserver.Limits explícitos
 ```
 
-Motivo: una `App` ya construida contiene **closures** (handlers), y el backend nativo no puede
-copiarlos entre los hilos de las conexiones (actores de heap aislado). El builder cruza como
-función plana y cada petición construye su `App` **dentro** del hilo — cero valores-función
-cruzando. En la VM `listen_app` se comporta igual (el registro es barato); `app.listen(app_ya_
-construida)` sigue disponible pero es **solo VM** (en nativo panica con un mensaje claro si
-llega a cruzar). El demo `examples/web/framework/` usa el patrón y compila nativo.
-
-```raylang
-app.listen("0.0.0.0", 8080);                        // keep-alive + límites por defecto
-app.listen_tls("0.0.0.0", 8443, "cert.pem", "key.pem");  // HTTPS (M56.3, rustls)
-app.listen_graceful("0.0.0.0", 8080, 5000);         // SIGTERM/SIGINT → drena 5 s y sale 0 (M88.1b)
-app.listen_limits("0.0.0.0", 8080, mis_limits);     // webserver.Limits explícitos
-```
+Por qué el builder y no una `App` construida: una `App` contiene **closures** (los handlers) y
+el modelo de actores de heap aislado no deja que un closure cruce hilos en el backend nativo. El
+builder cruza como función plana y la `App` se construye **dentro de la tarea de cada petición**
+(`webserver.serve_with`; cada petición corre aislada en su tarea por el panic→500 de M56.5) —
+el mismo fuente corre en la VM y compila con `ray build --native`. El registro es barato;
+construir la App una vez por conexión (reusarla en el keep-alive) queda diferido (exigiría
+`catch_unwind` en nativo o defuncionalización). Consecuencia del modelo: el estado del builder
+es **por petición**; el estado compartido va por canales a una fibra que lo posee (ver
+`examples/web/ssr/README.md`).
 
 Todas las variantes heredan de `net/webserver`: keep-alive HTTP/1.1, límites de seguridad
 (cabeceras/cuerpo/conexiones/timeout de lectura), y un handler que hace `panic` responde 500 sin
@@ -254,6 +250,6 @@ compartido va por canales a una fibra que lo posee (ver `examples/web/ssr/README
 | `status/header/cookie(res, …) -> Res` | encadenables |
 | `text/json/html/redirect(res, …)` | fijan cuerpo y Content-Type / 302 |
 | `json_of(res, v: T: ToJson)` | el JSON de un valor tipado (trait `ToJson`) |
-| `listen[_tls|_graceful|_limits](app, …)` | arranca el servidor (solo VM) |
+| `listen[_tls|_graceful|_limits](build_app, …)` | arranca el servidor desde el builder (VM y nativo) |
 
 Demo completo: `examples/web/framework/` (`ray run` y los curl de su README).

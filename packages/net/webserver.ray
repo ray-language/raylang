@@ -1142,6 +1142,45 @@ pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request
     })
 }
 
+// --- serve_with (M93.3): el handler viene de una FACTORÍA ---
+// La factoría cruza los hilos como función plana (Send) y el handler (con sus closures/estado)
+// nace DENTRO de la tarea de cada petición — compatible con el backend nativo (actores de heap
+// aislado): el framework web arranca por aquí. Se construye POR PETICIÓN, no por conexión: el
+// aislamiento panic→500 (M56.5) corre cada petición en su propia tarea, así que el handler
+// cruzaría OTRO hilo igualmente. Handler por conexión (construir una vez y reusar en el
+// keep-alive) queda diferido: exigiría catch_unwind en el nativo o defuncionalización.
+/// Like `serve`, but takes a handler FACTORY: each request builds its handler via
+/// `make_handler()` inside its own task. The factory crosses threads as a plain function while
+/// the handler (closures, state) never does — the form that also compiles with
+/// `ray build --native` (M93.3). Blocks forever.
+pub fn serve_with(host: string, port: int, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_with_limits(host, port, default_limits(), make_handler)
+}
+
+/// Like `serve_with`, with explicit safety limits (see `Limits`).
+pub fn serve_with_limits(host: string, port: int, limits: Limits, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_limits(host, port, limits, fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
+    })
+}
+
+/// Like `serve_tls`, from a handler factory (see `serve_with`). Uses `default_limits()`.
+pub fn serve_with_tls(host: string, port: int, cert: string, key: string, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_tls_limits(host, port, cert, key, default_limits(), fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
+    })
+}
+
+/// Like `serve_graceful`, from a handler factory (see `serve_with`). Uses `default_limits()`.
+pub fn serve_with_graceful(host: string, port: int, drain_ms: int, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+    serve_graceful(host, port, drain_ms, fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
+    })
+}
+
 // --- HTTPS (M56.3): el mismo servidor sobre TLS ---
 // Cierra el hueco "tls_accept existe pero serve_raw no deja insertarlo": el upgrade TLS es el
 // paso `preparar` del bucle compartido, dentro de la fibra de cada conexión. `cert`/`key` son los

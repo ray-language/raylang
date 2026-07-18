@@ -15,7 +15,7 @@
 //   curl -i http://127.0.0.1:8080/antigua            (302 → /)
 //   curl -i http://127.0.0.1:8080/nope               (el 404 personalizado)
 from web/framework import new_app, use_mw, use_on, after, with_mw, GET, POST, ALL, GET_re,
-    mount, listen_app, static_files_cached, not_found, log_requests, cors, param, query, body,
+    mount, listen, static_files_cached, not_found, log_requests, cors, param, query, body,
     put_local, local, header_of, cookie_of, form_field, json_body, text, json, json_of, html,
     status, cookie, header, redirect, App, Ctx, Res, Step, ToJson;
 import std/json as jsonlib;
@@ -44,10 +44,9 @@ fn auth(c: Ctx, r: Res) -> Step {
     Step.Next
 }
 
-// La app se construye en una función TOP-LEVEL (patrón builder, M93.3): así `listen_app` la
-// reconstruye dentro del hilo de cada conexión y NINGÚN valor-función cruza hilos — la forma
-// que compila también con `ray build --native`. (Con `app.listen(...)` sobre una App ya
-// construida, solo VM.)
+// La app se construye en una función TOP-LEVEL (patrón builder, M93.3): la fibra de cada
+// conexión la llama UNA vez y NINGÚN valor-función cruza hilos — el mismo fuente corre en la
+// VM (`ray run`/`ray dev`) y compila con `ray build --native`.
 fn build_app() -> App {
     var app = new_app();
 
@@ -188,7 +187,7 @@ fn build_app() -> App {
 }
 
 fn main() -> int {
-    match (listen_app(build_app, "127.0.0.1", 8080)) {
+    match (listen(build_app, "127.0.0.1", 8080)) {
         Result.Ok(_) => 0,
         Result.Err(e) => {
             eprint(e);

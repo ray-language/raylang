@@ -8253,9 +8253,19 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
 - **M93.3 — el framework compila NATIVO (jul 2026)**: `ray build --native` del demo fallaba
   ("a function value cannot cross a thread boundary") porque una `App` construida contiene
   closures y el handler cruza al hilo de cada conexión. Solución en dos planos. (1) **Framework**:
-  `listen_app(build: fn() -> App, host, port)` — el patrón builder: la función top-level cruza
-  como fn item (Send) y cada petición construye su `App` DENTRO del hilo (VM idéntica; el demo
-  migrado). (2) **Transpilador**, tres arreglos generales: el marcado H21-N5c cubre el caso
+  el patrón builder, y tras probarlo, **unificación de la API de arranque** (decidida con el
+  usuario; el paquete no está publicado): la familia `listen[_tls|_graceful|_limits]` toma
+  `build: fn() -> App` (función top-level) en vez de una `App` construida — las formas con `App`
+  y el `listen_app` transitorio se ELIMINARON (una sola manera, sin footgun VM-vs-nativo).
+  Debajo, `net/webserver` gana **`serve_with[_limits|_tls|_graceful]`**: el handler viene de una
+  FACTORÍA que cruza como fn plana; la App y sus closures nacen DENTRO de la tarea de cada
+  PETICIÓN. Por petición y no por conexión a propósito: el aislamiento panic→500 (M56.5) corre
+  cada petición en su propia tarea, así que un handler por-conexión volvería a cruzar un hilo
+  (el intento con `handle_http(c, h_construido, …)` no compila: su param está marcado Send por
+  ese spawn interno). Diferidos anotados: handler por conexión (catch_unwind nativo) y
+  defuncionalización de closures (que un valor-función cruce hilos en nativo).
+  Consecuencia documentada: el estado del builder es POR PETICIÓN; compartido → canales.
+  (2) **Transpilador**, tres arreglos generales: el marcado H21-N5c cubre el caso
   "closure pasado a un param marcado que captura un fn-param del llamador" (antes solo ident
   directo); un conversor send NO generable (struct con campos función, p. ej. `App`) degrada a
   **stub que panica** en runtime en vez de abortar el build (misma filosofía que las funciones

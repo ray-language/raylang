@@ -1098,12 +1098,12 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.try_clone().map_err(|e| Rc::<str>::from(e.to_string())),\n",
             "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
             "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
-            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => Ok(__ray_reg_insert(__RayHandle::Tcp(s))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(s))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
             "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
             "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
             "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
             "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
-            "    match l.accept() { Ok((s, _)) => Ok(__ray_reg_insert(__RayHandle::Tcp(s))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "    match l.accept() { Ok((s, _)) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(s))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
         ));
         // socket_read/read_bytes/write DESPACHAN a TLS si el handle es una conexión TLS (solo si el
         // programa usa TLS): se clona el `Arc<Mutex<TlsStream>>` del registro y se hace I/O tras SU lock
@@ -1268,12 +1268,29 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // Condvar GLOBAL de actividad (H21-N4): send/close/fin-de-tarea la notifican (generación
             // monótona); `select` y la salida del scope esperan en ella en vez de hacer poll con sleep.
             // Orden de locks: canal/tarea → actividad (nunca al revés) → sin ciclos.
-            "static __RAY_ACT_M: std::sync::Mutex<u64> = std::sync::Mutex::new(0);\n",
+            // M96b (perfilado bajo `wrk -c500`): la generación es un ATÓMICO y el mutex+notify solo
+            // se tocan si HAY esperadores (`select`/salida de scope). Antes, cada send/close/fin-de-
+            // tarea (~120k/s en el webserver) tomaba este mutex GLOBAL para notificar a nadie →
+            // contención medible (23k muestras en __psynch_mutexwait). Sin esperadores, `bump` es un
+            // fetch_add. Protocolo sin despertar perdido: el esperador se registra ANTES de releer la
+            // generación bajo el lock; `bump` publica la generación ANTES de mirar el contador.\n
+            "static __RAY_ACT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+            "static __RAY_ACT_WAITERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
+            "static __RAY_ACT_M: std::sync::Mutex<()> = std::sync::Mutex::new(());\n",
             "static __RAY_ACT_CV: std::sync::Condvar = std::sync::Condvar::new();\n",
-            "fn __ray_bump() { *__RAY_ACT_M.lock().unwrap() += 1; __RAY_ACT_CV.notify_all(); }\n",
+            "fn __ray_bump() {\n",
+            "    __RAY_ACT_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
+            "    if __RAY_ACT_WAITERS.load(std::sync::atomic::Ordering::SeqCst) > 0 { let _g = __RAY_ACT_M.lock().unwrap(); __RAY_ACT_CV.notify_all(); }\n",
+            "}\n",
             "fn __ray_wait_activity(act: u64) {\n",
+            "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
-            "    while *g == act { g = __ray_cv_wait(&__RAY_ACT_CV, g); if __ray_cancelled() { drop(g); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "    while __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
+            "        g = __ray_cv_wait(&__RAY_ACT_CV, g);\n",
+            "        if __ray_cancelled() { drop(g); __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+            "    }\n",
+            "    drop(g);\n",
+            "    __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
             "}\n",
             // Structured concurrency (M12.3) + contención de fallos (H21-N1) + cancelación de hermanas
             // (M12.5, H21-N3): Task<T> = estado compartido (resultado + condvar) que el HILO HIJO rellena
@@ -1367,7 +1384,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    let r = body();\n",
             "    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n",
             "    loop {\n",
-            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
+            "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
             "        if let Some(m) = frame.iter().find_map(|c| c.failed()) {\n",
             "            for c in &frame { c.cancel_task(); }\n",
             "            __ray_rt_err(&m);\n",
@@ -1383,7 +1400,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // actividad (la generación leída antes del escaneo evita perder un send concurrente).
             "fn __ray_select<T>(chs: &[__RayChan<T>]) -> i64 {\n",
             "    loop {\n",
-            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
+            "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
             "        for (i, ch) in chs.iter().enumerate() {\n",
             "            let (m, _) = &*ch.inner; let st = m.lock().unwrap();\n",
             "            if !st.q.is_empty() || st.closed { return i as i64; }\n",

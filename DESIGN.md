@@ -8366,3 +8366,34 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   activo): 18,001 → **58,333 req/s (3.24×)**; p50 14.9 ms → **2.4 ms**; p99 1.24 s → **231 ms**;
   timeouts 172 → **0**. Verificación de semántica: cli_cli 88/88 (spawn/señales/graceful/CSP
   nativos), corpus nativo byte-idéntico, concurrency_cli 26/26.
+
+### 87b. M96b — la investigación del p99 (y dos fixes de paso)
+
+> 18 jul 2026, rama `feature/native-perf-p99`. Mandato de la fila de IDEAS: perfilar antes de
+> tocar. Resultado: dos fixes correctos que se quedan, una teoría refutada y una cola que sigue
+> abierta con los sospechosos acotados.
+
+- **Fix 1 — bump sin mutex**: `__ray_bump` (cada send/close/fin-de-tarea, ~120k/s bajo carga)
+  tomaba el mutex GLOBAL de actividad para notificar a esperadores que en el webserver no
+  existen (23k muestras en `__psynch_mutexwait` al perfilar). Ahora la generación es un
+  `AtomicU64` y el mutex+`notify_all` solo se tocan si hay esperadores registrados
+  (`__RAY_ACT_WAITERS`); sin despertar perdido (el esperador se registra ANTES de releer la
+  generación bajo el lock). En el webserver no movió el p99 (los esperadores ya eran 0) pero
+  elimina contención real en programas con `select`/scopes calientes.
+- **Fix 2 — `TCP_NODELAY`**: NADIE lo ponía (VM ni nativo, accept ni connect) → Nagle +
+  delayed-ACK. Aplicado en los cuatro puntos. Mejora p90 (13.6 → 4.7 ms en c=50); el p99 no era
+  esto.
+- **La cola p99, acotada pero ABIERTA**: es CONSTANTE (~80 ms al 1%) e independiente de la
+  concurrencia — c=50 da p50 387 µs y p99 86 ms. Descartados por experimento: estampida del
+  condvar (fix 1), Nagle (fix 2), sobresuscripción (c=50), latidos del `cv_wait` (bajarlo a
+  1 ms no cambia nada). Sospechosos restantes: el **Mutex global del registro de handles**
+  (socket_read/write clonan el stream bajo ese lock, 2-3 veces por petición ≈ 250k locks/s;
+  los mutex psynch de macOS son unfair → un esperador aparcado puede ayunar decenas de ms) y el
+  mutex del pool. Siguiente paso: trazas de latencia dentro del runtime, no sampling.
+- **La teoría del framework, REFUTADA por descomposición**: sin las rutas `GET_re` el
+  throughput NO cambia (61.5k vs 62.4k) → compilar regex por petición no es el coste. Sin
+  `log_requests` sube a **80.8k** → el LOGGING es el 31% del gap (formatear `now_utc`/ISO-8601
+  + armar el JSON + `print` con lock de stdout, POR PETICIÓN); el rebuild de App + enrutado
+  cuesta solo ~14% (80.8k vs 94.4k pelado). El handler-por-conexión (`catch_unwind`) baja de
+  prioridad; la palanca real es abaratar el emit (cachear el timestamp formateado, stdout
+  bufferizado).

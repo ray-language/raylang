@@ -787,6 +787,7 @@ pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, V
 /// Conecta a `host:port` (resuelve el nombre vía `std::net`) y devuelve un handle (M15.2).
 pub fn tcp_connect(host: &str, port: i64) -> Result<i64, String> {
     let stream = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
+    let _ = stream.set_nodelay(true); // Nagle+delayed-ACK = stalls fijos de 40-100 ms (M96b)
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
@@ -1333,6 +1334,7 @@ pub fn tcp_accept_nb(h: i64) -> Result<Option<i64>, String> {
     };
     match listener.accept() {
         Ok((stream, _)) => {
+            let _ = stream.set_nodelay(true); // Nagle+delayed-ACK (M96b)
             stream.set_nonblocking(true).map_err(|e| e.to_string())?;
             let mut reg = registry().lock().unwrap();
             let id = reg.next;
@@ -1396,6 +1398,7 @@ pub fn tcp_accept(h: i64) -> Result<i64, String> {
         }
     };
     let (stream, _addr) = listener.accept().map_err(|e| e.to_string())?;
+    let _ = stream.set_nodelay(true); // Nagle+delayed-ACK (M96b)
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;

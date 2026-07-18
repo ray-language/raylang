@@ -1052,7 +1052,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         let sqlite_variant = if t.needs_rt_sqlite { ", Sqlite(ray_runtime::sqlite::Conn)" } else { "" };
         writeln!(
             out,
-            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::net::TcpStream), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant} }}"
+            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant} }}"
         )
         .unwrap();
         out.push_str(concat!(
@@ -1093,17 +1093,20 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // bloqueante (como la VM). read lee ≤64KiB (lossy UTF-8; EOF → ""); write escribe todo (Ok(nº bytes)).
     if t.needs_net {
         out.push_str(concat!(
-            "fn __ray_sock_clone(h: i64) -> Result<std::net::TcpStream, Rc<str>> {\n",
+            // M96b: la sección crítica es un Arc::clone (ns). Antes hacía try_clone() = un syscall
+            // dup() BAJO el lock global → convoyes de ~100 ms (158 stalls medidos en 12 s de wrk;
+            // cada uno arrastraba a las peticiones en vuelo → la cola p99 de ~80 ms).
+            "fn __ray_sock_clone(h: i64) -> Result<std::sync::Arc<std::net::TcpStream>, Rc<str>> {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.try_clone().map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => Ok(std::sync::Arc::clone(s)),\n",
             "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
             "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
-            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => Ok(__ray_reg_insert(__RayHandle::Tcp(s))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
             "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
             "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
             "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
             "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
-            "    match l.accept() { Ok((s, _)) => Ok(__ray_reg_insert(__RayHandle::Tcp(s))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "    match l.accept() { Ok((s, _)) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
         ));
         // socket_read/read_bytes/write DESPACHAN a TLS si el handle es una conexión TLS (solo si el
         // programa usa TLS): se clona el `Arc<Mutex<TlsStream>>` del registro y se hace I/O tras SU lock
@@ -1120,9 +1123,9 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         } else {
             ("", "")
         };
-        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536]; match s.read(&mut buf) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
-        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let mut s = __ray_sock_clone(h)?; let mut buf = [0u8; 65536]; match s.read(&mut buf) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
-        write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let mut s = __ray_sock_clone(h)?; let mut off = 0; while off < bytes.len() {{ match s.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
+        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; let mut buf = [0u8; 65536]; match r.read(&mut buf) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
+        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; let mut buf = [0u8; 65536]; match r.read(&mut buf) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
+        write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
         out.push_str(concat!(
             "fn __ray_local_port(h: i64) -> i64 {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
@@ -1170,7 +1173,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // Saca el TcpStream del handle `h` (debe ser TCP), lo deja fuera del registro y lo devuelve.
             "fn __ray_tls_take_tcp(h: i64) -> Result<std::net::TcpStream, String> {\n",
             "    let mut reg = __ray_reg().lock().unwrap(); match reg.open.remove(&h) {\n",
-            "        Some(__RayHandle::Tcp(s)) => Ok(s),\n",
+            "        Some(__RayHandle::Tcp(s)) => match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) },\n",
             "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} is not an accepted TCP socket\", h)) }\n",
             "        None => Err(format!(\"invalid handle: {}\", h)) } }\n",
             "fn __ray_tls_accept(h: i64, cert: &str, key: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
@@ -1268,12 +1271,29 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // Condvar GLOBAL de actividad (H21-N4): send/close/fin-de-tarea la notifican (generación
             // monótona); `select` y la salida del scope esperan en ella en vez de hacer poll con sleep.
             // Orden de locks: canal/tarea → actividad (nunca al revés) → sin ciclos.
-            "static __RAY_ACT_M: std::sync::Mutex<u64> = std::sync::Mutex::new(0);\n",
+            // M96b (perfilado bajo `wrk -c500`): la generación es un ATÓMICO y el mutex+notify solo
+            // se tocan si HAY esperadores (`select`/salida de scope). Antes, cada send/close/fin-de-
+            // tarea (~120k/s en el webserver) tomaba este mutex GLOBAL para notificar a nadie →
+            // contención medible (23k muestras en __psynch_mutexwait). Sin esperadores, `bump` es un
+            // fetch_add. Protocolo sin despertar perdido: el esperador se registra ANTES de releer la
+            // generación bajo el lock; `bump` publica la generación ANTES de mirar el contador.\n
+            "static __RAY_ACT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+            "static __RAY_ACT_WAITERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
+            "static __RAY_ACT_M: std::sync::Mutex<()> = std::sync::Mutex::new(());\n",
             "static __RAY_ACT_CV: std::sync::Condvar = std::sync::Condvar::new();\n",
-            "fn __ray_bump() { *__RAY_ACT_M.lock().unwrap() += 1; __RAY_ACT_CV.notify_all(); }\n",
+            "fn __ray_bump() {\n",
+            "    __RAY_ACT_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
+            "    if __RAY_ACT_WAITERS.load(std::sync::atomic::Ordering::SeqCst) > 0 { let _g = __RAY_ACT_M.lock().unwrap(); __RAY_ACT_CV.notify_all(); }\n",
+            "}\n",
             "fn __ray_wait_activity(act: u64) {\n",
+            "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
-            "    while *g == act { g = __ray_cv_wait(&__RAY_ACT_CV, g); if __ray_cancelled() { drop(g); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "    while __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
+            "        g = __ray_cv_wait(&__RAY_ACT_CV, g);\n",
+            "        if __ray_cancelled() { drop(g); __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+            "    }\n",
+            "    drop(g);\n",
+            "    __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
             "}\n",
             // Structured concurrency (M12.3) + contención de fallos (H21-N1) + cancelación de hermanas
             // (M12.5, H21-N3): Task<T> = estado compartido (resultado + condvar) que el HILO HIJO rellena
@@ -1367,7 +1387,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    let r = body();\n",
             "    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n",
             "    loop {\n",
-            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
+            "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
             "        if let Some(m) = frame.iter().find_map(|c| c.failed()) {\n",
             "            for c in &frame { c.cancel_task(); }\n",
             "            __ray_rt_err(&m);\n",
@@ -1383,7 +1403,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // actividad (la generación leída antes del escaneo evita perder un send concurrente).
             "fn __ray_select<T>(chs: &[__RayChan<T>]) -> i64 {\n",
             "    loop {\n",
-            "        let act = *__RAY_ACT_M.lock().unwrap();\n",
+            "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
             "        for (i, ch) in chs.iter().enumerate() {\n",
             "            let (m, _) = &*ch.inner; let st = m.lock().unwrap();\n",
             "            if !st.q.is_empty() || st.closed { return i as i64; }\n",

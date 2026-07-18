@@ -8362,7 +8362,73 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   scopes (`__SCOPES`) se RESETEAN entre jobs — un hilo reusado no puede heredar la cancelación
   ni los scopes de la tarea anterior. La semántica de M12 (structured concurrency, cancelación
   cooperativa, catch_unwind por tarea) es idéntica: solo cambia QUIÉN presta el hilo.
-- **Medido** (M2 Max, framework demo `--release`, `wrk -t4 -c500 -d15s` contra `/yo`, logging
+- **Medido** (M3 Pro, framework demo `--release`, `wrk -t4 -c500 -d15s` contra `/yo`, logging
   activo): 18,001 → **58,333 req/s (3.24×)**; p50 14.9 ms → **2.4 ms**; p99 1.24 s → **231 ms**;
   timeouts 172 → **0**. Verificación de semántica: cli_cli 88/88 (spawn/señales/graceful/CSP
   nativos), corpus nativo byte-idéntico, concurrency_cli 26/26.
+
+### 87b. M96b — la investigación del p99 (y dos fixes de paso)
+
+> 18 jul 2026, rama `feature/native-perf-p99`. Mandato de la fila de IDEAS: perfilar antes de
+> tocar. Resultado: dos fixes correctos que se quedan, una teoría refutada y una cola que sigue
+> abierta con los sospechosos acotados.
+
+- **Fix 1 — bump sin mutex**: `__ray_bump` (cada send/close/fin-de-tarea, ~120k/s bajo carga)
+  tomaba el mutex GLOBAL de actividad para notificar a esperadores que en el webserver no
+  existen (23k muestras en `__psynch_mutexwait` al perfilar). Ahora la generación es un
+  `AtomicU64` y el mutex+`notify_all` solo se tocan si hay esperadores registrados
+  (`__RAY_ACT_WAITERS`); sin despertar perdido (el esperador se registra ANTES de releer la
+  generación bajo el lock). En el webserver no movió el p99 (los esperadores ya eran 0) pero
+  elimina contención real en programas con `select`/scopes calientes.
+- **Fix 2 — `TCP_NODELAY`**: NADIE lo ponía (VM ni nativo, accept ni connect) → Nagle +
+  delayed-ACK. Aplicado en los cuatro puntos. Mejora p90 (13.6 → 4.7 ms en c=50); el p99 no era
+  esto.
+- **La cola p99, acotada pero ABIERTA**: es CONSTANTE (~80 ms al 1%) e independiente de la
+  concurrencia — c=50 da p50 387 µs y p99 86 ms. Descartados por experimento: estampida del
+  condvar (fix 1), Nagle (fix 2), sobresuscripción (c=50), latidos del `cv_wait` (bajarlo a
+  1 ms no cambia nada). Sospechosos restantes: el **Mutex global del registro de handles**
+  (socket_read/write clonan el stream bajo ese lock, 2-3 veces por petición ≈ 250k locks/s;
+  los mutex psynch de macOS son unfair → un esperador aparcado puede ayunar decenas de ms) y el
+  mutex del pool. Siguiente paso: trazas de latencia dentro del runtime, no sampling.
+- **Fix 3 — `Arc<TcpStream>` en el registro de handles (LA pistola humeante)**: la
+  instrumentación de latencia por lock (build diagnóstico, umbral 5 ms) cazó 158 adquisiciones
+  del lock del registro con stalls de hasta **112 ms** en 12 s de wrk — cada `socket_read`/
+  `write` clonaba el stream con `try_clone()` = un **syscall `dup()` DENTRO de la sección
+  crítica** del mutex global; un titular preemptado a mitad de syscall convoyaba a todas las
+  peticiones en vuelo (→ la cola del 1%). El handle TCP pasa a `Arc<TcpStream>`: clonar es un
+  bump de puntero (ns) y el I/O va por `&*arc` (`Read`/`Write` para `&TcpStream`); el upgrade
+  TLS deshace el Arc con `try_unwrap` (dup una sola vez si un lector concurrente retiene un
+  clon). Resultado: `__psynch_mutexwait` 23k → **3k muestras**, throughput pelado 94.4k →
+  **107.1k req/s (+13.5%)**, p50 en c=50 de 387 → **235 µs**. La cola p99 restante bajo wrk es
+  **saturación** (wrk es open-loop: a plena CPU el p99 mide profundidad de cola, no stalls;
+  medir latencia de SLO exigiría tasa fija, p. ej. wrk2 -R al 60%). El mismo patrón
+  try_clone-bajo-lock existe en la VM (`builtins.rs::socket_clone`) → anotado como candidata.
+- **La teoría del framework, REFUTADA por descomposición**: sin las rutas `GET_re` el
+  throughput NO cambia (61.5k vs 62.4k) → compilar regex por petición no es el coste. Sin
+  `log_requests` sube a **80.8k** → el LOGGING es el 31% del gap (formatear `now_utc`/ISO-8601
+  + armar el JSON + `print` con lock de stdout, POR PETICIÓN); el rebuild de App + enrutado
+  cuesta solo ~14% (80.8k vs 94.4k pelado). El handler-por-conexión (`catch_unwind`) baja de
+  prioridad; la palanca real es abaratar el emit (cachear el timestamp formateado, stdout
+  bufferizado).
+
+### 87c. M96b-cierre — la latencia de SLO a tasa fija (la medición correcta)
+
+> El barrido que valida toda la ronda. Herramienta: `oha -q <tasa> --latency-correction`
+> (equivalente a wrk2 -R: tasa constante + corrección de *coordinated omission* — la latencia se
+> mide desde el instante en que la petición DEBIÓ salir, no desde que el cliente pudo enviarla).
+> Webserver pelado nativo `--release`, M3 Pro, capacidad saturada medida ~107k req/s.
+
+| tasa (% capacidad) | sostenida | p50 | p90 | p99 | p99.9 |
+|---|---|---|---|---|---|
+| 32k (30%) | ✓ | 0.47 ms | 0.71 ms | **0.86 ms** | 1.6 ms |
+| 64k (60%) | ✓ | 0.96 ms | 1.53 ms | **2.23 ms** | 6.8 ms |
+| 85k (80%) | ✓ | 1.09 ms | 2.09 ms | 4.0 ms | 8.8 ms |
+| 96k (90%) | ✓ | 1.49 ms | 3.99 ms | 10.9 ms | 18.4 ms |
+
+- **El p99 de ~80 ms de wrk era 100% artefacto de saturación** (open-loop a plena CPU = medir
+  profundidad de cola). A carga real el servidor da **p99 sub-milisegundo al 30% y 2.2 ms al
+  60%**, sostiene TODAS las tasas pedidas, y la curva degrada suave (sin rodilla patológica
+  hasta el 90%). Números de clase producción.
+- **Metodología fijada para el proyecto**: throughput de pico → wrk (open-loop saturante);
+  latencia de SLO → tasa fija con corrección (`oha -q`/wrk2). Reportar el p99 de wrk como
+  latencia del servicio es un error de medición, no un dato.

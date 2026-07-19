@@ -203,9 +203,11 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
   auto-alojados.
 - **Multicore por actores.** Heap por fibra + transferencia de propiedad en `send` → *data-race freedom*
   sin *ownership* en el tipo. Scheduler M:N con speedup real medido; `--deterministic` para tests.
-- **Dos motores que coinciden.** Un oráculo VM↔intérprete blinda cada cambio de runtime.
-- **Casi cero dependencias.** Todo (JSON, TOML, HTTP/2, HPACK, LSP, `dlopen`, `kqueue`/`epoll`, SHA en el
-  gestor de paquetes…) está escrito a mano; la única excepción es TLS/`ring`.
+- **Tres motores que coinciden.** Un oráculo VM↔intérprete blinda cada cambio de runtime, y el binario
+  nativo (`ray build --native`) verifica salida **byte-idéntica a la VM**.
+- **Casi cero dependencias.** La pila de red y formatos (HTTP/2, HPACK, JSON, TOML…) está **escrita en
+  raylang** (`packages/`), y el runtime (LSP, `dlopen`, `kqueue`/`epoll`, SHA del gestor de paquetes) en
+  el propio Rust del proyecto, sin crates; la única excepción es TLS/`ring`.
 - **Robusto ante entrada arbitraria.** Compilador sin pánicos + **fuzzing continuo** del front-end.
 
 ## Documentación

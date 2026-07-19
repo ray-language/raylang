@@ -147,23 +147,27 @@ fn json_escape(s: string) -> string {
 /// Key order is fixed: ts, level, service, trace_id (only when set via `with_trace`), msg, then
 /// fields in insertion order; strings are escaped.
 pub fn render(e: LogEntry, ts: string) -> string {
-    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\"";
+    // Igual que `json_escape`: acumula partes + join al final (no `out = out + ...` repetido,
+    // O(n²) — cada `+` de string es una asignación de heap nueva, no in-place).
+    var parts: [string] = [];
+    parts.push("{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\"");
     if (e.lg.trace_id != "") {
-        out = out + ",\"trace_id\":\"" + json_escape(e.lg.trace_id) + "\"";
+        parts.push(",\"trace_id\":\"" + json_escape(e.lg.trace_id) + "\"");
     }
-    out = out + ",\"msg\":\"" + json_escape(e.msg) + "\"";
+    parts.push(",\"msg\":\"" + json_escape(e.msg) + "\"");
     var i = 0;
     while (i < e.fields.len()) {
         let f = e.fields[i];
-        out = out + ",\"" + json_escape(f.key) + "\":";
+        parts.push(",\"" + json_escape(f.key) + "\":");
         if (f.quoted) {
-            out = out + "\"" + json_escape(f.value) + "\"";
+            parts.push("\"" + json_escape(f.value) + "\"");
         } else {
-            out = out + f.value;
+            parts.push(f.value);
         }
         i = i + 1;
     }
-    out + "}"
+    parts.push("}");
+    join(parts, "")
 }
 
 // Emite la entrada (a stdout) si su nivel alcanza el mínimo del logger. La marca de tiempo es la actual

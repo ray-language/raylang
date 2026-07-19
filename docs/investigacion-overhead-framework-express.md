@@ -166,3 +166,37 @@ Empezar por el ítem 1 (seguro, sin decisiones de diseño pendientes, ataca la p
 microbenchmark — el logging), medir, documentar. Ítem 2 (regex thread-local) requiere primero
 resolver si se justifica el builtin nuevo — se plantea junto con el ítem 3 como una sola decisión
 de diseño a consultar, ya que comparten la misma pieza de lenguaje (`once_per_thread` o similar).
+
+## 8. Ítem 1 implementado — mejora real, pero por debajo del piso de medición de `oha`
+
+`net/log.ray`'s `render()` pasó de `out = out + …` repetido a `parts.push(...)` + `join` (mismo
+patrón que ya usaba `json_escape` en el mismo archivo, con un comentario propio advirtiendo el
+O(n²) — `render` simplemente no lo había recibido en su momento).
+
+**Microbenchmark aislado** (200 000 iteraciones): `log: new_trace + with_trace + 4 fields +
+render` bajó de **7.7 µs a 7.1 µs** (~8%, ~0.6 µs/llamada). Verificado: `log_cli`/`trace_cli`
+verdes, línea JSON idéntica (`{"ts":...,"trace_id":...}` bien formada, probado con `curl`).
+
+**Medición end-to-end (`oha`, ABBA, `-c 200 -q 15000`)**: sin diferencia distinguible del ruido
+(p50 ~0.78–0.83 ms para ambos binarios, dentro del rango de variación normal entre corridas). Es
+un resultado ESPERADO y honesto: 0.6 µs de ahorro está muy por debajo del piso de ruido de
+medición de este harness (decenas de µs) — el mismo patrón que M96e/M96g en la ronda anterior
+(fix correcto y verificado, ganancia real pero no discernible en `oha` a esta escala). Se
+mantiene por ser la práctica ya establecida en el propio archivo, no por una promesa de
+performance medible.
+
+## 9. Decisión pendiente — ítems 2/3 (regex/`build_app` cacheados thread-local)
+
+Antes de tocar código: estos dos ítems comparten la misma pieza de lenguaje nueva
+(`once_per_thread<T>(f: fn() -> T) -> T` o equivalente) — un builtin que no existe hoy en
+raylang. A diferencia de M96c-g (glue interno del backend nativo, invisible a cualquier programa
+raylang) y del ítem 1 de esta ronda (una función de stdlib reescrita, misma firma), esto agrega
+**superficie nueva al lenguaje**: nueva regla en el checker, nueva semántica que la VM y el
+nativo deben implementar DISTINTO (nativo: `thread_local!` real; VM: debe ser un no-op — "llamar
+siempre" — porque sus fibras M:1 comparten hilo de SO pero NO deben compartir estado entre sí).
+
+Es la hipótesis de mayor impacto de esta investigación (elimina el 100% de `build_app()`, ~7 µs,
+para la inmensa mayoría de los requests — el pool reusa hilos entre miles de conexiones). Antes
+de implementarla hace falta decidir: ¿se justifica agregar este builtin al lenguaje por esta
+ganancia, o se prefiere no crecer la superficie del lenguaje y aceptar el costo de reconstrucción
+como el precio del modelo de actores de heap-aislado?

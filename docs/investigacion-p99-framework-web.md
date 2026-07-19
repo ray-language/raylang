@@ -468,3 +468,56 @@ la pena revisar `ps`/`lsof` de procesos ajenos a la prueba antes de descartar un
 3. Re-correr el barrido de concurrencia (`-c 150–300`, varias repeticiones por punto) con la
    máquina en reposo para ver si el umbral de contención del §9 se movió, se aplanó, o
    simplemente cambió de mecanismo (de `__ray_reg` a `__ray_rng`/`__RAY_POOL`).
+
+## 12. Tercera ronda — `__RAY_POOL` shardeado, y un caso de manual de sesgo de medición
+
+Con la máquina ya en reposo (§11), se perfiló el binario M96c+d bajo `-c 200 -q 15000` y se
+repitió el conteo de apariciones detrás de `__psynch_mutexwait`:
+
+| función | apariciones |
+|---|---|
+| `net::log::emit` | 208 |
+| `__ray_pool_exec` (`__RAY_POOL`) | 113 |
+| `__ray_tls_get` | 34 |
+
+Sorpresa: **`net::log::emit`** (escritura del log JSON a stdout, activado por `log_requests()`)
+pasó a ser el mayor contribuyente, por encima de `__RAY_POOL` — queda anotado para una cuarta
+ronda (no se tocó en esta). Se siguió con `__RAY_POOL` por ser el pedido explícito de esta
+ronda.
+
+**Fix implementado** (`src/transpile.rs`, M96e): `__RAY_POOL` pasa de un único
+`Mutex<Vec<(u64,Sender)>>` global a **N listas independientes** ("shards"), `N =
+available_parallelism() × 2` (acotado a `[4, 64]`); cada `spawn` (pop) y cada retorno-a-pool de
+un worker ocioso (push) eligen su shard por un contador round-robin atómico, sin relación entre
+sí. Preserva el invariante "sin worker ocioso → hilo nuevo" (ahora por shard). Verificado:
+`cargo test --release` sobre 9 suites de red/tiempo/trace (todas verdes) + un programa de
+humo dedicado (`spawn`/`try_join`/`scope`/`panic` en 200 tareas + 50 en un scope) corrido 5
+veces seguidas, resultado idéntico a la VM en las 5 — el sharding no rompe la semántica.
+
+**Medición — un caso de manual de sesgo por timing.** La primera comparación (3 repeticiones,
+gaps de 0.3-0.4 s entre matar un binario y levantar el otro) dio al sharding como CLARAMENTE
+PEOR (hasta 7× peor en p99.9) en las 3 repeticiones. Invertir el orden de las 3 repeticiones
+dio el resultado CONTRARIO: el sharding CLARAMENTE MEJOR en las 3. Es decir, **lo que
+determinaba el resultado no era qué binario se probaba, sino el ORDEN** — el que corría
+SEGUNDO en cada par salía sistemáticamente peor, sin importar cuál fuera. Causa probable (no
+confirmada): estado de sockets en `TIME_WAIT`/limpieza del kernel tras matar el proceso anterior
+con gaps demasiado cortos para asentarse.
+
+Con gaps de 1.5 s (en vez de 0.3-0.4 s) y un patrón **ABBA×2** (8 corridas: A-B-B-A-A-B-B-A, que
+cancela el sesgo de orden por construcción — cada variante corre igual de veces en 1ª y 2ª
+posición de su par), el resultado fue: sharded (B) típico ~2.1-2.3 ms de p99.9 en 3 de 4
+corridas (con un outlier de 10.4 ms); sin shardear (A) típico ~3.3-3.4 ms en 2 de 4 corridas
+(con dos outliers de 9.9 y 15.0 ms). **Lectura**: el sharding parece dar una mejora modesta y
+real en el caso típico, con menos outliers severos que la versión sin shardear — pero la señal
+es más débil y ruidosa que la de M96c (§10, 6.8×-18×) o M96d (§11, 1.6×-20.8×), consistente con
+que `__RAY_POOL` cargaba menos peticiones-por-lock (2 por request) que el registro o el PRNG.
+
+**Lección metodológica** (la más importante de esta ronda, más que el propio fix): con gaps
+cortos entre corridas A/B, el orden de la prueba puede dominar el resultado por completo y
+producir una conclusión con el signo EQUIVOCADO — invertir el orden una sola vez ya la habría
+revelado como sospechosa; el diseño robusto es ABBA (o más largo) con gaps generosos, no "correr
+tres veces y promediar" si esas tres corridas comparten el mismo sesgo de orden.
+
+**Pendiente**: `net::log::emit` (el nuevo mayor contribuyente, 208 apariciones) y `__ray_tls_get`
+(34, ya bajó bastante respecto al §11 posiblemente por variación de la propia medición) quedan
+para una cuarta ronda.

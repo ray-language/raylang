@@ -1357,11 +1357,30 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // → recv bloqueante. El estado THREAD-LOCAL por tarea (token de cancelación, scopes) se
             // resetea entre jobs. El spawner recupera el job de un SendError (worker justo muerto).
             "type __RayJob = std::boxed::Box<dyn FnOnce() + Send + 'static>;\n",
-            "static __RAY_POOL: std::sync::Mutex<Vec<(u64, std::sync::mpsc::Sender<__RayJob>)>> = std::sync::Mutex::new(Vec::new());\n",
+            "type __RayPoolShard = std::sync::Mutex<Vec<(u64, std::sync::mpsc::Sender<__RayJob>)>>;\n",
+            // M96e: el pool se SHARDEA (antes: un único Mutex<Vec<...>> global para TODO el proceso).
+            // Cada request hace un spawn+retorno-a-pool (M56.5, panic→500), 2 adquisiciones del
+            // mismo lock; bajo carga alta eso compite fuerte. Con N listas independientes
+            // (round-robin atómico, sin relación entre el shard que elige el spawner y el que
+            // elige el worker) la contención cae ~N× — a costa de que un pop puede fallar si el
+            // único worker ocioso está en OTRO shard (crea un hilo nuevo de más; desperdicio
+            // acotado, nunca deadlock: el invariante "sin worker ocioso → hilo nuevo" se preserva
+            // igual, ahora por shard). N escala con los núcleos disponibles.
+            "fn __ray_pool_shards() -> &'static [__RayPoolShard] {\n",
+            "    static P: std::sync::OnceLock<Vec<__RayPoolShard>> = std::sync::OnceLock::new();\n",
+            "    P.get_or_init(|| {\n",
+            "        let n = std::thread::available_parallelism().map(|c| c.get()).unwrap_or(4).saturating_mul(2).clamp(4, 64);\n",
+            "        (0..n).map(|_| std::sync::Mutex::new(Vec::new())).collect()\n",
+            "    })\n}\n",
             "static __RAY_POOL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+            "static __RAY_POOL_RR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
+            "fn __ray_pool_next_shard(shards: &[__RayPoolShard]) -> usize {\n",
+            "    __RAY_POOL_RR.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % shards.len()\n}\n",
             "fn __ray_pool_exec(job: __RayJob) {\n",
             "    let mut job = job;\n",
-            "    while let Some((_, tx)) = { let w = __RAY_POOL.lock().unwrap().pop(); w } {\n",
+            "    let shards = __ray_pool_shards();\n",
+            "    let idx = __ray_pool_next_shard(shards);\n",
+            "    while let Some((_, tx)) = { let w = shards[idx].lock().unwrap().pop(); w } {\n",
             "        match tx.send(job) { Ok(()) => return, Err(e) => job = e.0 }\n",
             "    }\n",
             "    std::thread::spawn(move || {\n",
@@ -1372,11 +1391,13 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "            __SCOPES.with(|s| s.borrow_mut().clear());\n",
             "            let (tx, rx) = std::sync::mpsc::channel::<__RayJob>();\n",
             "            let id = __RAY_POOL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
-            "            __RAY_POOL.lock().unwrap().push((id, tx));\n",
+            "            let shards = __ray_pool_shards();\n",
+            "            let shard_idx = __ray_pool_next_shard(shards);\n",
+            "            shards[shard_idx].lock().unwrap().push((id, tx));\n",
             "            match rx.recv_timeout(std::time::Duration::from_secs(10)) {\n",
             "                Ok(next) => job = next,\n",
             "                Err(_) => {\n",
-            "                    let mut pool = __RAY_POOL.lock().unwrap();\n",
+            "                    let mut pool = shards[shard_idx].lock().unwrap();\n",
             "                    if let Some(pos) = pool.iter().position(|(i, _)| *i == id) { pool.remove(pos); return; }\n",
             "                    drop(pool);\n",
             "                    match rx.recv() { Ok(next) => job = next, Err(_) => return }\n",

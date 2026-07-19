@@ -436,19 +436,28 @@ competían por orden de llegada, no determinista). 28 tests verdes (incluida
 `seed_reproducible_y_kit`, que solo corre en intérprete/VM de un solo hilo — no ejercía este
 camino nativo antes ni ahora, pero confirma que el algoritmo SplitMix64 no se tocó).
 
-**Medición — inconclusa por ruido del entorno.** Tres repeticiones a `-c 200` A/B contra el
-binario del §10 (solo fix de registro) dieron resultados contradictorios — a veces mejor, a
-veces peor, incluso invirtiendo el orden de las pruebas dentro de cada repetición (para
-descartar sesgo de "lo segundo que corre ya encontró el sistema más caliente"). La varianza
-corrida-a-corrida (p99 entre 0.68 ms y 43 ms para el MISMO binario en corridas sucesivas) es
-demasiado alta para separar limpiamente el efecto del fix del ruido de fondo de esta sesión
-—`load average` de la máquina venía inusualmente alto (~9.8) sin que `pmset -g therm` reportara
-throttling térmico, así que la causa del ruido queda sin diagnosticar—. **Se optó por
-mantener el fix igual**: está justificado por evidencia directa y estática (conteo de
-apariciones en el perfil, la aritmética de 48 locks/request de `log_requests`, cero riesgo de
-soundness, tests verdes) aunque no se pudo demostrar limpiamente su ganancia incremental de
-wall-clock en esta sesión. Recomendación: re-medir en una sesión con la máquina en reposo antes
-de reportar un número de mejora para este fix específico.
+**Medición — primero inconclusa, luego confirmada con la máquina más calma.** Tres repeticiones
+iniciales a `-c 200` A/B (M96c solo vs M96c+M96d) dieron resultados contradictorios — a veces
+mejor, a veces peor, incluso invirtiendo el orden de las pruebas dentro de cada repetición (para
+descartar sesgo de "lo segundo que corre ya encontró el sistema más caliente"). El `load
+average` de la máquina venía alto (~9.8, con 8 sesiones de usuario abiertas y, se descubrió
+después, un servidor de pruebas TLS huérfano de 5 días corriendo de fondo desde una sesión
+anterior — sin uso pero acumulando estado del sistema). Tras identificar y cerrar ese proceso
+huérfano (y con el `load average` bajando a ~5.5–7), se repitió la comparación (3 repeticiones,
+`-c 200 -q 15000 --latency-correction`, reinicio limpio de ambos binarios en cada una):
+
+| repetición | p99.9 solo M96c | p99.9 M96c+M96d | mejora | p99.99 solo M96c | p99.99 M96c+M96d | mejora |
+|---|---|---|---|---|---|---|
+| 1 | 7.54 ms | 4.62 ms | 1.6× | 12.47 ms | 6.27 ms | 2.0× |
+| 2 | 62.06 ms | 7.66 ms | 8.1× | 68.63 ms | 15.03 ms | 4.6× |
+| 3 | 58.97 ms | 2.84 ms | 20.8× | 66.32 ms | 4.69 ms | 14.1× |
+
+Con la máquina más calma la señal salió consistente: el fix del PRNG (M96d) mejora sobre el fix
+del registro solo (M96c) en las tres repeticiones, entre 1.6× y 20.8× en p99.9. **Lección
+metodológica reforzada**: en esta clase de medición, un proceso huérfano de otra sesión —aunque
+esté inactivo (0% CPU)— puede ser suficiente para enmascarar la señal que se busca medir; vale
+la pena revisar `ps`/`lsof` de procesos ajenos a la prueba antes de descartar un resultado como
+"solo ruido".
 
 **Pendiente para una próxima ronda** (en orden sugerido):
 1. Cachear también `__ray_tls_get` (91 apariciones) — mismo patrón que el §10, con el cuidado

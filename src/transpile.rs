@@ -1114,15 +1114,20 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::new() }))\n}\n",
             "fn __ray_reg_insert(h: __RayHandle) -> i64 { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); id }\n",
         ));
-        // M96c: `close` corre en el mismo hilo dueño de la conexión (fin de `handle_http`) → borra
-        // también la entrada de ESE hilo en la caché de sockets, para que un worker del pool
-        // reusado miles de veces (M96) no acumule handles muertos indefinidamente.
+        // M96c/M96g: `close` corre en el mismo hilo dueño de la conexión (fin de `handle_http`) →
+        // borra también la(s) entrada(s) de ESE hilo en las cachés de socket/TLS, para que un
+        // worker del pool reusado miles de veces (M96) no acumule handles muertos indefinidamente.
         let sock_evict = if t.needs_net {
             "__RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
         } else {
             ""
         };
-        write!(out, "fn __ray_close(h: i64) -> i64 {{ __ray_reg().lock().unwrap().open.remove(&h); {sock_evict}0 }}\n").unwrap();
+        let tls_evict = if t.needs_rt_tls {
+            "__RAY_TLS_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
+        } else {
+            ""
+        };
+        write!(out, "fn __ray_close(h: i64) -> i64 {{ __ray_reg().lock().unwrap().open.remove(&h); {sock_evict}{tls_evict}0 }}\n").unwrap();
     }
     // Ops de archivo (open/read_line/write) — solo si se usan handles de archivo.
     if t.needs_handles {
@@ -1234,9 +1239,26 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // `TcpStream` del registro y reinsertan la conexión TLS con el MISMO handle (como la VM).
     if t.needs_rt_tls {
         out.push_str(concat!(
-            // Clona el Arc<Mutex<TlsStream>> del handle (si es TLS) → la I/O va tras su lock, no el global.
+            // M96g: mismo fast-path que M96c, aplicado al chequeo "¿es TLS este handle?" — se
+            // consulta en CADA lectura/escritura de socket (incluso sobre una conexión plana,
+            // para saber si despachar a TLS antes de la vía TCP), y era el mayor contribuyente
+            // del profiling de la ronda anterior (339 apariciones — ver §13). Mismo argumento de
+            // solidez que M96c: una conexión la sirve siempre el mismo hilo. La única diferencia
+            // con M96c: un handle SÍ puede cambiar de tipo en vivo (STARTTLS, `tls_accept`/
+            // `tls_upgrade` insertan `Tls` donde antes había `Tcp`, mismo id) — por eso, a
+            // diferencia del registro puro, esta caché se ACTUALIZA explícitamente en el sitio
+            // del upgrade (mismo hilo que hizo el upgrade → mismo thread_local), en vez de solo
+            // rellenarse perezosa en el primer acceso; así nunca queda una entrada "no es TLS"
+            // stale tras un upgrade. Se cachea el resultado POSITIVO y el NEGATIVO (None) — el
+            // caso caliente de un programa sin TLS en absoluto es que TODA lectura dé None.
+            "thread_local! { static __RAY_TLS_CACHE: std::cell::RefCell<std::collections::HashMap<i64, Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
             "fn __ray_tls_get(h: i64) -> Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>> {\n",
-            "    let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None } }\n",
+            "    if let Some(v) = __RAY_TLS_CACHE.with(|c| c.borrow().get(&h).cloned()) { return v; }\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    let v = match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None };\n",
+            "    drop(reg);\n",
+            "    __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, v.clone()); });\n",
+            "    v\n}\n",
             "fn __ray_tls_tag_ok(id: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
             "fn __ray_tls_tag_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(msg)])) }\n",
             "fn __ray_tls_wrap(s: ray_runtime::tls::TlsStream) -> i64 { __ray_reg_insert(__RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))) }\n",
@@ -1245,17 +1267,35 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
             // Saca el TcpStream del handle `h` (debe ser TCP), lo deja fuera del registro y lo devuelve.
-            "fn __ray_tls_take_tcp(h: i64) -> Result<std::net::TcpStream, String> {\n",
+            // También lo saca de la caché M96c (M96g): dejó de ser Tcp, una lectura futura no debe
+            // reusar el Arc<TcpStream> viejo (aunque hoy nunca se llegaría a consultar: __ray_tls_get,
+            // ya actualizado, despacha antes — esto es higiene, no un fix de un bug observable).
+            // El mensaje del handle-no-Tcp difiere entre `accept`/`upgrade` en la VM (dos funciones
+            // separadas, cada una con su texto — src/builtins.rs `tls_accept`/`tls_upgrade`); nativo
+            // comparte esta única función, así que el mensaje viene por parámetro para dar el mismo
+            // texto byte-a-byte según quién llame (cazado por `starttls_upgrade_native`, M96g).
+            "fn __ray_tls_take_tcp(h: i64, not_tcp_msg: &str) -> Result<std::net::TcpStream, String> {\n",
             "    let mut reg = __ray_reg().lock().unwrap(); match reg.open.remove(&h) {\n",
-            "        Some(__RayHandle::Tcp(s)) => match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) },\n",
-            "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} is not an accepted TCP socket\", h)) }\n",
+            "        Some(__RayHandle::Tcp(s)) => { drop(reg); __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); });\n",
+            "            match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) } }\n",
+            "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} {}\", h, not_tcp_msg)) }\n",
             "        None => Err(format!(\"invalid handle: {}\", h)) } }\n",
             "fn __ray_tls_accept(h: i64, cert: &str, key: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let sock = match __ray_tls_take_tcp(h) { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
-            "    match ray_runtime::tls::accept(sock, cert, key) { Ok(s) => { __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))); __ray_tls_tag_ok(h) } Err(e) => __ray_tls_tag_err(e) } }\n",
+            "    let sock = match __ray_tls_take_tcp(h, \"is not an accepted TCP socket\") { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
+            "    match ray_runtime::tls::accept(sock, cert, key) {\n",
+            "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
+            "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
+            "            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n",
+            "            __ray_tls_tag_ok(h) }\n",
+            "        Err(e) => __ray_tls_tag_err(e) } }\n",
             "fn __ray_tls_upgrade(h: i64, host: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let sock = match __ray_tls_take_tcp(h) { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
-            "    match ray_runtime::tls::upgrade(sock, host) { Ok(s) => { __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))); __ray_tls_tag_ok(h) } Err(e) => __ray_tls_tag_err(e) } }\n",
+            "    let sock = match __ray_tls_take_tcp(h, \"is not a plain TCP socket\") { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
+            "    match ray_runtime::tls::upgrade(sock, host) {\n",
+            "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
+            "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
+            "            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n",
+            "            __ray_tls_tag_ok(h) }\n",
+            "        Err(e) => __ray_tls_tag_err(e) } }\n",
         ));
     }
     // Helpers de SQLite (P2.b Paso 2), solo si el programa usa SQLite. Los primitivos devuelven arreglos

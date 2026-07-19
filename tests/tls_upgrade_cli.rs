@@ -139,3 +139,48 @@ fn starttls_upgrade_vm() {
     let port = launch_servidor_starttls();
     assert_eq!(run(port, &["--vm"]), ESPERADO);
 }
+
+/// M96g: STARTTLS en el backend NATIVO — el handle pasa de Tcp a Tls a mitad de conexión
+/// (`tls_upgrade`). Cubre exactamente el caso que la caché thread-local de `__ray_tls_get`
+/// (M96g) debe manejar bien: lecturas EN CLARO antes del upgrade (caché negativa: "no es TLS"),
+/// el upgrade (debe actualizar la caché al vuelo, no dejarla stale), y lecturas TLS después
+/// (deben usar la sesión TLS nueva, no la caché negativa de antes). Sin esto, el corpus nativo
+/// no ejercía `tls_upgrade` en absoluto (`starttls_upgrade_{interpreter,vm}` son los únicos
+/// tests de este archivo, ninguno nativo).
+#[test]
+fn starttls_upgrade_native() {
+    if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando starttls_upgrade_native: cargo no disponible");
+        return;
+    }
+    let port = launch_servidor_starttls();
+    let dir = std::env::temp_dir().join("ray_tls_upgrade_native");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let main = dir.join("main.ray");
+    std::fs::write(&main, CLIENTE).unwrap();
+    let bin = dir.join("client_bin");
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", main.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("lanza build --native");
+    assert!(
+        build.status.success(),
+        "build --native starttls ok\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(&bin)
+        .arg(port.to_string())
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("corre el binario nativo");
+    assert!(
+        out.status.success(),
+        "corre sin error\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), ESPERADO, "STARTTLS nativo ≡ VM/intérprete");
+}

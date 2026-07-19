@@ -598,3 +598,50 @@ que en su primer intento rompió una garantía de corrección real (no solo un n
 performance) — vale la pena, para cualquier cambio de concurrencia en el backend nativo, correr
 `tests/native_corpus.rs` (el oráculo de equivalencia nativo↔VM más amplio) ANTES de medir
 performance, no después; hubiera cazado el bug sin necesitar la vuelta de `oha`.
+
+## 14. Quinta ronda — `__ray_tls_get`: correcto, pero sin ganancia medible
+
+**Fix implementado (M96g)**: mismo patrón que M96c, aplicado al chequeo "¿es TLS este handle?"
+que corre en CADA lectura/escritura de socket (incluso sobre una conexión que nunca será TLS,
+porque el binario linkea el soporte TLS aunque `main.ray` no lo use). Diferencia con M96c: un
+handle SÍ puede cambiar de tipo en vivo (STARTTLS, `tls_accept`/`tls_upgrade` insertan `Tls`
+donde antes había `Tcp`, mismo id) — la caché thread-local se ACTUALIZA explícitamente en el
+sitio del upgrade (mismo hilo que hizo el upgrade), en vez de solo rellenarse perezosa, para no
+dejar nunca una entrada "no es TLS" stale tras un upgrade real.
+
+**Cobertura de tests — un hueco real, cerrado.** Los tests existentes de STARTTLS
+(`tls_upgrade_cli.rs`) solo cubrían VM e intérprete; **ningún test ejercía `tls_upgrade` en el
+backend nativo**, justo el camino más delicado de este fix (el momento exacto de la
+actualización de caché). Se agregó `starttls_upgrade_native` (mismo servidor de prueba, mismo
+cliente raylang, compilado con `ray build --native`) — cazó de inmediato un mismatch de texto
+preexistente, **no introducido por este fix**: el error de un segundo `tls_upgrade` sobre un
+handle ya-TLS decía "is not an accepted TCP socket" en nativo vs "is not a plain TCP socket" en
+la VM (dos funciones separadas en `src/builtins.rs`, cada una con su texto, colapsadas en
+`__ray_tls_take_tcp` en el nativo con un solo mensaje hardcodeado). Se corrigió pasando el
+mensaje como parámetro — desde entonces nativo ≡ VM byte a byte también en ese error.
+Verificado: el test nuevo + 88 `cli_cli` + 26 `net_cli`+co + el corpus nativo completo (todos
+verdes).
+
+**Medición — sin ganancia clara.** ABBA×2 (`-c 200 -q 15000`, máquina en reposo, 8 corridas
+totales): p99.9 sin el fix, ordenado: [2.16, 2.42, 2.60, 5.99] ms (mediana 2.51 ms); con el fix:
+[2.48, 2.52, 2.56, 2.89] ms (mediana 2.54 ms) — **prácticamente empatados**; el único corrida
+donde "sin fix" se veía peor (5.99 ms) fue un outlier aislado, no una tendencia — con más
+repeticiones el patrón se sostiene parejo. A diferencia de M96c/d/f (mejoras de 5×-20×, claras
+desde la primera corrida), acá no hay señal de wall-clock que reportar como ganancia.
+
+**Por qué, siendo el mismo patrón que sí funcionó en M96c**: la contención de `__ray_tls_get`
+(339 apariciones en el profile de la ronda anterior) era real, pero pequeña en comparación con
+lo que ya se arregló — el registro (2-3 locks/request), el PRNG (48/request) y `Stdout`
+(1/request pero con escritura+formato bajo el lock) dominaban tanto que, una vez fuera de la
+ecuación, la latencia base ya bajó a 2-3 ms; en ese régimen, el costo de una consulta a un
+`HashMap` que casi siempre devuelve `None` rápido (sin este fix) es chico frente al ruido de
+medición del propio entorno. El fix sigue siendo correcto y deseable (menos trabajo real es
+menos trabajo real, y en un programa que SÍ use TLS con muchas conexiones concurrentes la
+ganancia debería notarse más), pero no hay caso de negocio urgente para priorizarlo por
+performance en el caso general.
+
+**Estado de la rama tras 5 rondas**: los tres primeros fixes (M96c registro, M96d PRNG, M96f
+`print`) tienen ganancia grande y clara, cada uno verificado y reproducible. Los dos últimos
+(M96e pool, M96g tls_get) son correctos y atacan contención real medida, pero con ganancia
+marginal o no discernible del ruido en este workload — vale la pena mantenerlos por corrección/
+limpieza de arquitectura, sin prometer un número de mejora que no se pudo demostrar.

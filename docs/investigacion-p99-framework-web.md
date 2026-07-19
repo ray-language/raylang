@@ -521,3 +521,80 @@ tres veces y promediar" si esas tres corridas comparten el mismo sesgo de orden.
 **Pendiente**: `net::log::emit` (el nuevo mayor contribuyente, 208 apariciones) y `__ray_tls_get`
 (34, ya bajó bastante respecto al §11 posiblemente por variación de la propia medición) quedan
 para una cuarta ronda.
+
+## 13. Cuarta ronda — `net::log::emit` (el lock de `Stdout` de Rust), y un fix que casi rompe algo
+
+Se confirmó con el mismo método (`grep` del stack bajo `net_CC_log_CC_emit` en el `sample`):
+
+```
+main_…::net_CC_log_CC_emit → std::io::stdio::__print → pthread_mutex_firstfit_lock_wait
+    → __psynch_mutexwait
+```
+
+`log_requests()` llama a `print(...)` (línea JSON) UNA vez por petición, que transpila
+DIRECTAMENTE a `println!("{}", …)` (`src/transpile.rs`, caso `"print"`) — y `println!` en Rust
+toma el `Mutex` **interno de `std::io::Stdout`, compartido por TODO el proceso**, en cada
+llamada. Con `log_requests()` activo eso es 1 adquisición más por petición (menos que las 48
+del PRNG, pero un lock GLOBAL nuevo distinto al del registro/pool que ya se habían atacado).
+
+**Primer intento (revertido): buffer independiente por hilo.** Cada hilo acumulaba líneas en su
+propio buffer, vaciado por tamaño (4 KiB) o por tiempo (un hilo aparte cada 5 ms). Compiló, pasó
+el smoke manual… y **rompió un test real**:
+`build_native_valores_de_heap_y_funciones_cruzan_los_hilos` (`tests/cli_cli.rs`) espera que una
+tarea que `spawn`-ea, imprime y devuelve un valor, y el padre que la `join`-ea e imprime
+DESPUÉS, se vean en ESE orden — una relación CAUSAL real (el `join` bloquea hasta que la tarea
+termina, así que su `print` interno pasa-antes-que el `print` del padre). Con buffers
+independientes por hilo y flush por tiempo, el orden de intercalado entre hilos podía salir
+distinto: `cargo test` lo cazó de inmediato (diff de string exacto, no ambiguo). Esto viola el
+principio del proyecto de que nativo y VM deben dar la MISMA salida (`tests/native_corpus.rs`,
+"Dos motores que deben coincidir").
+
+**Fix correcto (M96f, mantenido): un único hilo escritor + canal `mpsc`.** Cada `print` solo
+hace `send(línea)` a un canal (std, sin dependencias) — NUNCA toca `stdout` directamente. Un
+único hilo de fondo (arrancado perezosamente al primer `print`) drena el canal y hace el
+`write_all` real, agrupando lo que haya llegado junto (una espera de hasta 5 ms + drenado no
+bloqueante de lo que ya esté en cola) en una sola escritura. **Por qué esto SÍ preserva el
+orden causal** (a diferencia del intento anterior): si el envío A pasa-antes-que el envío B por
+una sincronización real externa (`join`, canal), la cola FIFO del `mpsc` los entrega en ESE
+mismo orden — es la MISMA garantía que daba el lock de `Stdout` hoy (dos hilos sin relación
+causal entre sí ya competían en un orden no-determinista antes también; eso no cambia). El
+`__ray_flush_prints()` de antes del `std::process::exit()` ahora espera (con un contador
+enviado/escrito, tope de 500 ms de salvavidas) a que el escritor haya vaciado TODO lo que se
+mandó antes de la salida — necesario porque `process::exit` no corre destructores.
+
+**Verificación**: el test que había fallado con el intento 1 pasa con el diseño de canal +
+88 tests de `cli_cli` + 16 de `io_cli` + 9 suites de red/tiempo/trace/webserver/concurrencia
+(todas verdes) + **el corpus nativo completo** (`native_corpus.rs`, 35 ejemplos deterministas
+transpilados comparados byte a byte contra la VM, incluido código con concurrencia real) + un
+programa de humo dedicado (50 `print` en bucle, exit inmediato → las 50 líneas aparecen, el
+flush de salida funciona incluso con el proceso terminando en microsegundos tras el último
+print).
+
+**Medición** (`-c 200 -q 15000 --latency-correction`, máquina en reposo, ABBA×2, gaps de 1.5s):
+
+| corrida | p99.9 sin fix (M96c+d+e) | p99.9 con fix (M96c+d+e+f) | p99.99 sin fix | p99.99 con fix |
+|---|---|---|---|---|
+| 1 | 16.37 ms | 2.49 ms | 23.92 ms | 3.80 ms |
+| 2 | 18.03 ms | 2.70 ms | 25.99 ms | 4.09 ms |
+| 3 | 23.25 ms | 3.35 ms | 33.30 ms | 4.63 ms |
+| 4 | 48.81 ms | 2.58 ms | 59.31 ms | 4.27 ms |
+
+Consistente y grande en las 4 corridas (7×–15× en p99.9), con el "con fix" mucho más estable
+(2.49–3.35 ms) que el "sin fix" (16.4–48.8 ms) — el mismo patrón de "menos ruidoso, no solo más
+rápido" que M96c/M96d.
+
+Re-perfilando con este fix: `net::log::emit` desaparece del top (era 208, ahora las llamadas a
+`__ray_buffered_print` —el `send` al canal, mucho más barato— aparecen solo 60 veces). **El
+nuevo dominante es `__ray_tls_get` con 339 apariciones** — sube de posición porque los dos locks
+más grandes (PRNG, log) ya no compiten por CPU/tiempo de muestreo con él, no porque haya
+empeorado en términos absolutos. Es exactamente el pendiente que quedaba anotado desde el §11:
+el binario linkea soporte TLS (aunque `main.ray` no lo use) y `socket_read_bytes` consulta "¿es
+TLS este handle?" contra el registro `__ray_reg()` SIN cachear, en cada lectura — candidato
+directo para una quinta ronda, con el cuidado ya anotado de invalidar la caché si hay un
+`tls_upgrade` (STARTTLS) a mitad de conexión.
+
+**Lección reforzada**: de los cuatro fixes de esta investigación (M96c/d/e/f), este es el único
+que en su primer intento rompió una garantía de corrección real (no solo un número de
+performance) — vale la pena, para cualquier cambio de concurrencia en el backend nativo, correr
+`tests/native_corpus.rs` (el oráculo de equivalencia nativo↔VM más amplio) ANTES de medir
+performance, no después; hubiera cazado el bug sin necesitar la vuelta de `oha`.

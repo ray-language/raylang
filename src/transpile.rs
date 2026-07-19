@@ -1018,16 +1018,68 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
     if main_ret_int {
-        out.push_str("        Ok(code) => std::process::exit(code as i32),\n");
+        out.push_str("        Ok(code) => { __ray_flush_prints(); std::process::exit(code as i32) },\n");
     } else {
-        out.push_str("        Ok(_) => std::process::exit(0),\n");
+        out.push_str("        Ok(_) => { __ray_flush_prints(); std::process::exit(0) },\n");
     }
     out.push_str("        Err(e) => {\n");
     out.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+    out.push_str("            __ray_flush_prints();\n");
     out.push_str("            std::process::exit(70)\n");
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n");
+    // M96f: `print` deja de tomar el lock GLOBAL de `Stdout` en cada llamada — bajo impresión
+    // concurrente intensiva (p. ej. `log_requests()`) era el mayor cuello de contención medido
+    // (docs/investigacion-p99-framework-web.md §12). Diseño: un ÚNICO hilo escritor consume un
+    // canal mpsc (std, sin dependencias); cada `print` solo hace `send`, nunca toca stdout
+    // directo. **Por qué no un buffer por hilo** (primer intento, revertido): rompía el orden
+    // CAUSAL entre hilos sincronizados por `join`/canales — un test lo cazó
+    // (`build_native_valores_de_heap_y_funciones_cruzan_los_hilos`: una tarea que imprime y
+    // luego el padre que la `join`-ea e imprime después deben verse en ESE orden; con buffers
+    // independientes por hilo y flush por tiempo, podían intercalarse distinto). Un solo canal
+    // preserva la MISMA garantía que el lock de hoy dan: si el envío A pasa-antes-que el envío B
+    // (por una sincronización externa real, como `join`), la cola FIFO los entrega en ese orden;
+    // entre hilos sin relación causal, el orden ya era no-determinista antes también (competían
+    // por el lock de Stdout en el orden que tocara el scheduler) — nada cambia ahí.
+    // `std::process::exit` no corre destructores de ningún hilo → `__ray_flush_prints()` espera
+    // (con un tope de 500 ms de salvavidas) a que el escritor haya vaciado TODO lo enviado hasta
+    // ese instante, antes de cada uno de los 3 sitios que llaman `std::process::exit`.
+    out.push_str(concat!(
+        "static __RAY_PRINT_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+        "static __RAY_PRINT_WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+        "static __RAY_PRINT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<String>> = std::sync::OnceLock::new();\n",
+        "fn __ray_print_tx() -> &'static std::sync::mpsc::Sender<String> {\n",
+        "    __RAY_PRINT_TX.get_or_init(|| {\n",
+        "        let (tx, rx) = std::sync::mpsc::channel::<String>();\n",
+        "        std::thread::spawn(move || {\n",
+        "            use std::io::Write;\n",
+        "            let mut out = std::io::stdout();\n",
+        "            loop {\n",
+        "                match rx.recv_timeout(std::time::Duration::from_millis(5)) {\n",
+        "                    Ok(line) => {\n",
+        "                        let mut buf = line; buf.push('\\n'); let mut n: u64 = 1;\n",
+        "                        while let Ok(more) = rx.try_recv() { buf.push_str(&more); buf.push('\\n'); n += 1; }\n",
+        "                        let _ = out.write_all(buf.as_bytes());\n",
+        "                        let _ = out.flush();\n",
+        "                        __RAY_PRINT_WRITTEN.fetch_add(n, std::sync::atomic::Ordering::Release);\n",
+        "                    }\n",
+        "                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}\n",
+        "                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,\n",
+        "                }\n            }\n        });\n",
+        "        tx\n    })\n}\n",
+        "fn __ray_buffered_print(line: String) {\n",
+        "    __RAY_PRINT_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+        "    let _ = __ray_print_tx().send(line);\n}\n",
+        "fn __ray_flush_prints() {\n",
+        "    if __RAY_PRINT_TX.get().is_none() { return; }\n",
+        "    let target = __RAY_PRINT_SENT.load(std::sync::atomic::Ordering::Relaxed);\n",
+        "    let start = std::time::Instant::now();\n",
+        "    while __RAY_PRINT_WRITTEN.load(std::sync::atomic::Ordering::Acquire) < target {\n",
+        "        if start.elapsed() > std::time::Duration::from_millis(500) { break; }\n",
+        "        std::thread::sleep(std::time::Duration::from_micros(100));\n",
+        "    }\n}\n",
+    ));
     // H21-N5a: los conversores Send registrados durante la emisión (tipos que cruzan hilos). Worklist:
     // generar uno puede registrar tipos anidados. Va antes de los bloques de runtime (orden top-level
     // libre en Rust; solo importa que TODA la emisión de cuerpos ya pasó).
@@ -3673,13 +3725,27 @@ impl Transpiler {
                      .map(|__a| Rc::<str>::from(__a)).collect::<Vec<Rc<str>>>()))",
                 );
             }
-            "print" | "eprint" => {
-                // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos). eprint → stderr.
-                let macro_name = if method == "eprint" { "eprintln" } else { "println" };
+            "eprint" => {
+                // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos). Sin
+                // buffering (a diferencia de `print`, ver más abajo): stderr es tpicamente para
+                // errores, baja frecuencia, y se espera visible de inmediato.
                 if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
-                    write!(out, "{}!(\"<fn>\")", macro_name).unwrap(); // una función se muestra como <fn>
+                    out.push_str("eprintln!(\"<fn>\")"); // una función se muestra como <fn>
                 } else {
-                    write!(out, "{}!(\"{{}}\", ", macro_name).unwrap();
+                    out.push_str("eprintln!(\"{}\", ");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(".ray_show())");
+                }
+            }
+            "print" => {
+                // M96f: bufferizado (ver `__ray_buffered_print`/`__ray_flush_prints`, emitidos siempre
+                // en el preámbulo) — bajo impresión concurrente intensiva (p. ej. `log_requests()`),
+                // el lock global de `Stdout` en CADA `println!` era el mayor cuello de contención
+                // medido (docs/investigacion-p99-framework-web.md §12).
+                if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
+                    out.push_str("__ray_buffered_print(\"<fn>\".to_string())");
+                } else {
+                    out.push_str("__ray_buffered_print(");
                     self.emit_expr(out, eff[0])?;
                     out.push_str(".ray_show())");
                 }

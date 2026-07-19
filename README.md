@@ -1,8 +1,9 @@
 <div align="center">
 
+<!-- PNG y no SVG: la app móvil de GitHub no renderiza SVGs del repo (y menos en privados) -->
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/raylang-lockup-horizontal-dark.svg">
-  <img src="assets/raylang-lockup-horizontal.svg" alt="raylang" width="380">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/raylang-lockup-horizontal-dark.png">
+  <img src="assets/raylang-lockup-horizontal.png" alt="raylang" width="380">
 </picture>
 
 **Un lenguaje de programación estáticamente tipado, orientado a expresiones y auto-alojado — escrito en Rust, con casi cero dependencias.**
@@ -252,7 +253,7 @@ Doble licencia, a tu elección:
 ---
 
 <div align="center">
-<img src="assets/raylang-mascot.svg" alt="la mascota de raylang: una manta raya sonriente" width="130">
+<img src="assets/raylang-mascot.png" alt="la mascota de raylang: una manta raya sonriente" width="130">
 <br>
 <sub>La identidad de marca (logo, variaciones, colores) vive en <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">libro de marca</a>.</sub>
 </div>

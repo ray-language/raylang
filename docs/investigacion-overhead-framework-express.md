@@ -200,3 +200,12 @@ para la inmensa mayoría de los requests — el pool reusa hilos entre miles de 
 de implementarla hace falta decidir: ¿se justifica agregar este builtin al lenguaje por esta
 ganancia, o se prefiere no crecer la superficie del lenguaje y aceptar el costo de reconstrucción
 como el precio del modelo de actores de heap-aislado?
+
+**Decisión (19 jul 2026)**: NO se implementa. El costo de reconstrucción (~7 µs de `build_app()`
++ ~7 µs de logging, frente a un piso de latencia de ~0.7 ms de mediana tras M96c-g) se considera
+aceptable — no se justifica agregar `once_per_thread` (o equivalente) al lenguaje, con el costo
+de mantenimiento de una semántica distinta VM-vs-nativo, por esta ganancia. **Investigación
+cerrada** con el ítem 1 (§8) implementado y los ítems 2-4 documentados como diferidos, sin
+decisión de implementarlos pendiente — si en el futuro el costo de reconstrucción vuelve a ser
+el cuello de botella dominante (p. ej. apps con muchas más rutas/regex que este demo), retomar
+desde acá.

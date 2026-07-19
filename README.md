@@ -60,6 +60,10 @@ fn main() -> int {
   (`map`/`filter`/`take`/`zip`/`fold`/`collect`/…).
 - **Concurrencia de verdad.** Modelo de **actores con aislamiento de heap** + canales tipados, sobre un
   scheduler **M:N multicore** con *data-race freedom* por construcción.
+- **Web de producción.** Un **framework estilo Express** (`web/framework`: rutas con parámetros,
+  middleware, CORS, estáticos con ETag, cookies, JSON tipado vía `ToJson`) sobre un servidor HTTP/1.1
+  concurrente con keep-alive, TLS y apagado ordenado — el webserver nativo da **~107k req/s** (M3 Pro,
+  p99 = 2,2 ms al 60% de capacidad). Guía: [`docs/web-framework.md`](docs/web-framework.md).
 - **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable: **24–61× más rápido que la VM**, y en cómputo puro **le gana a node (V8) por 5,4×**. Modelo
@@ -93,14 +97,30 @@ cargo build --release          # target/release/ray
 ray new hola           # crea un proyecto (ray.toml + src/main.ray)
 cd hola
 ray run                # ejecuta src/main.ray en la VM
+ray dev                # modo desarrollo: recompila y reinicia ante cambios (+ live-reload del navegador)
 ray build              # chequea y compila sin ejecutar
 ray build --native     # transpila a Rust y compila un binario nativo (24–61× la VM)
 ray test               # corre las funciones @test
 ray fmt src/main.ray   # formatea
 ray doc src/main.ray   # genera documentación desde /// 
+ray templ vistas/      # compila templates .ray.html a funciones raylang tipadas (SSR)
 ray repl               # REPL interactivo
 ray lsp                # servidor LSP (diagnósticos, hover, definición, refs, rename, completado, formateo, símbolos…)
 ```
+
+**Gestor de paquetes** (manifiesto `ray.toml` + lockfile `ray.lock` con hashes SHA-256):
+
+```sh
+ray add textutils@^1.2 # añade una dependencia del registro y la descarga
+ray search json        # busca en el registro
+ray update             # re-resuelve a las más nuevas compatibles
+ray publish            # publica TU paquete (valida + chequea + hashea; --sign lo firma)
+```
+
+**Modo desarrollo** (`ray dev`): vigila los fuentes, recompila en ms y **solo reinicia si el cambio
+compila** (un error a medio escribir no tira el servidor que funciona). Con `--port 8080` el supervisor
+**retiene el socket** entre reinicios (cero conexiones rechazadas) e inyecta **live-reload** en el
+navegador. Detalle en [`MANUAL.md`](MANUAL.md#17-herramientas).
 
 El código de salida de `ray run` es el `int` que devuelve `main` (0 si es `unit`). Para embeber raylang
 confinado: `ray run --fuel N` (límite de instrucciones) y `--heap N` (tope de objetos). Concurrencia
@@ -160,7 +180,7 @@ fn main() -> int {
 }
 ```
 
-Hay **156 ejemplos** en [`examples/`](examples/): desde `fib`/`fizzbuzz` hasta trait objects, structured
+Hay **171 ejemplos** en [`examples/`](examples/): desde `fib`/`fizzbuzz` hasta trait objects, structured
 concurrency, un servidor web, WebSockets, y el propio compilador auto-alojado en [`selfhost/`](selfhost/).
 
 ## Playground web
@@ -194,6 +214,9 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
 | [`REFERENCIA.md`](REFERENCIA.md) | El **catálogo exhaustivo**: palabras clave, operadores, builtins, prelude, `std/` y CLI, con firmas. |
 | [`PUBLICAR.md`](PUBLICAR.md) | La guía del **publicador**: empaquetar, versionar y publicar en el registro. |
 | [`SPEC.md`](SPEC.md) | La **especificación normativa** del lenguaje (gramática + semántica). |
+| [`docs/web-framework.md`](docs/web-framework.md) | La guía del **framework web** (estilo Express): rutas, middleware, SSR, deploy. |
+| [`docs/build.md`](docs/build.md) | La guía de **builds**: features slim, PGO, binario nativo. |
+| [`PERFORMANCE.md`](PERFORMANCE.md) | La **crónica de rendimiento**: cada arco de optimización, medido. |
 | [`book/`](book/) | El **libro** (mdBook): cómo se **construyó** el lenguaje, fase a fase. |
 | [`DESIGN.md`](DESIGN.md) | La **crónica de diseño**: cada decisión y su porqué. |
 | [`IDEAS.md`](IDEAS.md) | Backlog de features y su clasificación de impacto. |
@@ -206,8 +229,8 @@ y config para Neovim/Helix (usan `ray lsp` directo).
 ## Estado
 
 **raylang 1.0.0.** Motor de producto = la VM; el intérprete es el oráculo de desarrollo. La suite tiene
-**442 tests unitarios** + **72 archivos de tests de integración** (incluido un fuzzer del front-end y los
-oráculos VM↔intérprete). Ver [`CHANGELOG.md`](CHANGELOG.md).
+**610 tests unitarios** + **95 archivos de tests de integración** (incluido un fuzzer del front-end, los
+oráculos VM↔intérprete y el corpus de paridad del binario nativo). Ver [`CHANGELOG.md`](CHANGELOG.md).
 
 Es un **proyecto de aprendizaje**: real y cuidado, pero no pensado para producción crítica.
 

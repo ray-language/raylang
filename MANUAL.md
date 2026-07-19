@@ -844,6 +844,42 @@ fn main() -> int {
 }
 ```
 
+### El framework web (`packages/web`, dependencia)
+
+Sobre el `webserver` de `net`, el paquete `web` trae un **framework de aplicación estilo Express**
+(`web/framework`): rutas por método con parámetros (`/users/:id`), catch-all (`*resto`) y regex,
+middleware (global, por prefijo o por ruta), hooks `after`, CORS en una línea, archivos estáticos
+con ETag/304 y `Cache-Control`, cookies, redirects, 404 personalizable, sub-aplicaciones (`mount`),
+logging JSON por petición con trace-id, y respuestas JSON tipadas vía el trait `ToJson`:
+
+```rust
+from web/framework import new_app, listen, GET, json_of, text, App, Ctx, Res, ToJson;
+
+fn build_app() -> App {
+    var app = new_app();
+    app.GET("/hola/:nombre", fn(c: Ctx, r: Res) {
+        r.text("hola, " + c.param("nombre"));
+    });
+    app.GET("/yo", fn(c: Ctx, r: Res) {
+        r.json_of(User { id: 7, name: "Ada" });   // User implementa ToJson
+    });
+    app
+}
+
+fn main() -> int {
+    match (listen(build_app, "127.0.0.1", 8080)) {   // keep-alive + límites + panic→500 heredados
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+```
+
+El mismo fuente corre en la VM (`ray run`/`ray dev`) y compila a binario nativo (`ray build
+--native`). Variantes: `listen_tls` (HTTPS), `listen_graceful` (drena al recibir SIGTERM),
+`listen_limits`. La **guía completa** (composición de middleware, formularios, `json_body`,
+SSR con templates, estado compartido, deploy) está en [`docs/web-framework.md`](docs/web-framework.md);
+el demo en [`examples/web/framework/`](examples/web/framework/).
+
 ### RPC entre servicios (`packages/rpc`, dependencia)
 
 La comunicación **nativa** servicio-a-servicio (M88.4), sin el peso de HTTP: framing con prefijo
@@ -1068,6 +1104,7 @@ ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (s
 ray fmt archivo.ray      # formatea (canónico e idempotente)
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
 ray doc archivo.ray      # documentación Markdown desde ///
+ray templ vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
 ray repl                 # REPL interactivo
 ray lsp                  # servidor LSP (diagnósticos, hover, definición, rename, completion…)
 ray build                # chequea + compila sin ejecutar (para CI: 0 ok / 65 error)

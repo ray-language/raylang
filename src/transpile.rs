@@ -1061,8 +1061,16 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
             "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::new() }))\n}\n",
             "fn __ray_reg_insert(h: __RayHandle) -> i64 { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); id }\n",
-            "fn __ray_close(h: i64) -> i64 { __ray_reg().lock().unwrap().open.remove(&h); 0 }\n",
         ));
+        // M96c: `close` corre en el mismo hilo dueño de la conexión (fin de `handle_http`) → borra
+        // también la entrada de ESE hilo en la caché de sockets, para que un worker del pool
+        // reusado miles de veces (M96) no acumule handles muertos indefinidamente.
+        let sock_evict = if t.needs_net {
+            "__RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
+        } else {
+            ""
+        };
+        write!(out, "fn __ray_close(h: i64) -> i64 {{ __ray_reg().lock().unwrap().open.remove(&h); {sock_evict}0 }}\n").unwrap();
     }
     // Ops de archivo (open/read_line/write) — solo si se usan handles de archivo.
     if t.needs_handles {
@@ -1093,12 +1101,22 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // bloqueante (como la VM). read lee ≤64KiB (lossy UTF-8; EOF → ""); write escribe todo (Ok(nº bytes)).
     if t.needs_net {
         out.push_str(concat!(
-            // M96b: la sección crítica es un Arc::clone (ns). Antes hacía try_clone() = un syscall
-            // dup() BAJO el lock global → convoyes de ~100 ms (158 stalls medidos en 12 s de wrk;
-            // cada uno arrastraba a las peticiones en vuelo → la cola p99 de ~80 ms).
+            // M96c: caché thread-local del Arc<TcpStream> por handle. Una conexión aceptada la
+            // maneja SIEMPRE el mismo hilo durante toda su vida (`handle_http` corre en el hilo
+            // dueño de la conexión, keep-alive incluido — el pool M96 solo reusa hilos ENTRE
+            // conexiones distintas, nunca concurrentemente dentro de una); así que el primer
+            // acceso paga el lock global (como antes) y los siguientes de ESA conexión, en ESE
+            // hilo, no lo tocan más. Sonoro: el Arc cacheado nunca cruza de hilo (vive en un
+            // `thread_local!`), así que clonarlo no es una carrera en su contador de referencias.
+            // Los ids del registro NUNCA se reasignan (`reg.next` solo crece) → una entrada
+            // vieja en la caché tras un `close` es inerte, no ambigua; igual se borra en
+            // `__ray_close` para no crecer sin límite en un hilo del pool reusado miles de veces.
+            "thread_local! { static __RAY_SOCK_CACHE: std::cell::RefCell<std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
             "fn __ray_sock_clone(h: i64) -> Result<std::sync::Arc<std::net::TcpStream>, Rc<str>> {\n",
+            "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { return Ok(s); }\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => Ok(std::sync::Arc::clone(s)),\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => { let s = std::sync::Arc::clone(s); drop(reg);\n",
+            "            __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, std::sync::Arc::clone(&s)); }); Ok(s) },\n",
             "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
             "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
             "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
@@ -1132,8 +1150,12 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Udp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
             "fn __ray_set_read_timeout(h: i64, ms: i64) {\n",
             "    let d = if ms <= 0 { None } else { Some(std::time::Duration::from_millis(ms as u64)) };\n",
+            // M96c: mismo fast-path que __ray_sock_clone — si ya está en la caché de ESTE hilo, ni
+            // toca el lock global (es el llamador más frecuente: una vez por ciclo de lectura).
+            "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { let _ = s.set_read_timeout(d); return; }\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let _ = s.set_read_timeout(d); } }\n",
+            "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let s2 = std::sync::Arc::clone(s); let _ = s2.set_read_timeout(d); drop(reg);\n",
+            "        __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, s2); }); } }\n",
             // UDP: los primitivos devuelven ARREGLOS ETIQUETADOS (bind/send → [\"ok\"/\"err\", ...]; recv →
             // [b\"ok\"/b\"err\", host, port, data]) que los wrappers de raylang (udp.ray) parsean. recv es
             // BLOQUEANTE (con hilos de SO reales; la VM usa no-bloqueante + scheduler → mismo efecto).

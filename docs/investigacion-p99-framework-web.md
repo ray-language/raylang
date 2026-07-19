@@ -207,12 +207,21 @@ de concurrencia; A simplemente llega ahí antes porque cada request es un poco m
 
 En orden de menor a mayor invasividad:
 
-1. **Cachear la regex compilada entre requests.** Es la pieza individual más cara del
-   microbenchmark (2.16 µs, ~29% del extra de A) y es puro desperdicio: el patrón de
-   `GET_re("^/v(\\d+)/estado$", ...)` es un literal, idéntico en cada compilación. Un
-   `OnceLock`/caché por patrón (keyed por el string del patrón) en `std/regex` o en
-   `route_re` evitaría recompilar en cada petición. Bajo riesgo, gasto acotado, no toca el
-   registro de handles ni la concurrencia.
+1. **Cachear la regex compilada entre requests.** *(Reevaluada, no implementada — ver nota.)*
+   Es la pieza individual más cara del microbenchmark (2.16 µs, ~29% del extra de A) y en
+   principio es puro desperdicio: el patrón de `GET_re("^/v(\\d+)/estado$", ...)` es un literal,
+   idéntico en cada compilación. Pero al intentar implementarla surgieron dos problemas que la
+   sacan de "bajo riesgo": (a) los valores raylang (`Regex`/`Prog`/`[Inst]`) usan `Rc`/`RefCell`
+   internamente (semántica de referencia, M3) — clonar un `Rc` concurrentemente desde varios
+   hilos sin sincronización es una carrera de datos en su contador de referencias (UB), así que
+   NO se puede compartir directamente vía un `Mutex`/`OnceLock` global entre las conexiones
+   (que corren en hilos de SO reales en el backend nativo); haría falta reconstruir el valor a
+   partir de una copia "plana" (sin `Rc`) en cada request, o (b) esa caché tampoco ataca la causa
+   confirmada (§5–§9): el costo de `build_app()` NO es el mecanismo real de la cola, es el mutex
+   del registro. Se **pospuso** a favor del ítem 4 (mismo problema, causa confirmada, sin el
+   riesgo de soundness) — queda como candidato de una sesión futura si se quiere apurar el
+   último ~29% del costo de CPU de `build_app()`, ya con el mutex del registro fuera de la
+   ecuación.
 
 2. **Reducir las adquisiciones del lock global por lectura.** Si `leer_con_plazo` llama a
    `set_read_timeout` en cada ciclo de lectura (no solo al aceptar la conexión) pese a que el
@@ -309,3 +318,78 @@ degradación** que motivó esta investigación. Esto respalda directamente las h
 §8 (reducir adquisiciones del lock, shardear el registro, camino rápido sin registro para el
 socket ya aceptado) como las de mayor impacto por esfuerzo: atacan el umbral en sí, no el
 síntoma de A.
+
+## 10. Implementación — caché thread-local del socket (hipótesis 2+4 fusionadas)
+
+Rama `perf/registro-handles-contencion`. Cambio en `src/transpile.rs`, generador del backend
+nativo — no toca `checker`/`interpreter`/VM ni ningún archivo `.ray`.
+
+**Idea**: una conexión aceptada la sirve SIEMPRE el mismo hilo de SO durante toda su vida
+(`handle_http`, línea 827 de `webserver.ray`, corre en el hilo que `loop_iter_servidor` le
+asignó al aceptar — el pool M96 solo reasigna ESE hilo a otra conexión distinta cuando la
+actual termina y se cierra, nunca lo comparte concurrentemente). Eso hace válido cachear el
+`Arc<TcpStream>` ya resuelto en un `thread_local!` por handle: el primer acceso de esa
+conexión paga el `Mutex` global (como antes), y todos los accesos siguientes — que son la
+mayoría, dado el ciclo de lectura de `leer_con_plazo` y el keep-alive — lo resuelven sin tocar
+el lock. Es sano (no hay UB): el `Arc` cacheado nunca cruza de hilo, así que clonarlo no compite
+por su contador de referencias con nadie.
+
+Tres funciones tocadas: `__ray_sock_clone` (de la que cuelgan `socket_read`/`_bytes`/`write`),
+`__ray_set_read_timeout` (el otro llamador frecuente de `__ray_reg()`) y `__ray_close` (evict de
+la entrada, para que un worker del pool reusado miles de veces no acumule handles muertos).
+Verificación funcional: `cargo test --release` sobre `net_cli`/`http_cli`/`dev_cli`/`tls_cli`/
+`tls_upgrade_cli`/`bytes_io_cli` (22 tests, todos verdes) + smoke manual (keep-alive
+multi-request en una sola conexión, POST/echo, burst de `oha` con 100% success rate).
+
+### 10.1 Medición — **cuidado con el proceso de larga vida**
+
+La primera comparación (A/B recompilados, mismo proceso reutilizado para TODO el barrido de
+concurrencia de la sesión) dio resultados contradictorios y ruidosos — en algunos casos el fix
+se veía PEOR que el baseline. Sospecha: el pool de hilos (M96) reusa hilos entre conexiones
+distintas a lo largo de TODA la vida del proceso; si la caché thread-local no se vacía siempre
+(p. ej. un panic salta el `close(conn)` normal) o simplemente por el volumen de miles de
+conexiones servidas en una sesión de pruebas larga, el estado acumulado contamina las
+mediciones posteriores dentro del MISMO proceso — un artefacto metodológico, no necesariamente
+un bug del fix. **Lección**: medir siempre con reinicio limpio del proceso entre corridas
+cuando se sospecha de estado acumulado; no reusar el mismo servidor para un barrido largo.
+
+Con reinicio limpio antes de cada corrida (baseline y fixed en puertos distintos, 8080 y 8083,
+compilados del mismo commit salvo el fix), 3 repeticiones a `-c 200 -q 15000
+--latency-correction`:
+
+| repetición | p99.9 baseline | p99.9 fixed | p99.99 baseline | p99.99 fixed |
+|---|---|---|---|---|
+| 1 | 26.67 ms | **1.47 ms** (18×) | 34.58 ms | **3.48 ms** (10×) |
+| 2 | 69.84 ms | **4.14 ms** (17×) | 78.47 ms | **10.39 ms** (7.5×) |
+| 3 | 11.80 ms | **1.73 ms** (6.8×) | 20.47 ms | **3.65 ms** (5.6×) |
+
+Mejora consistente y sustancial en las tres repeticiones (6.8×–18× en p99.9), y notablemente
+**el baseline es mucho más ruidoso entre corridas** (11.8–69.8 ms) que el fixed (1.5–4.1 ms) —
+el fix no solo baja la cola, la hace más predecible, que para un SLO importa tanto como el
+número puntual.
+
+### 10.2 Lo que NO se cerró — sigue habiendo algo de umbral
+
+Un barrido de concurrencia con reinicio limpio (`-c 150/175/200/250/300`, una corrida cada uno)
+sobre el binario CON el fix mostró que el umbral **no desapareció del todo**: `-c 150` calmo
+(p99.9 1.7 ms), pero `-c 175/200/250` volvieron a mostrar picos (21–35 ms de p99.9) antes de
+calmarse de nuevo en `-c 300` (1.5 ms) — un patrón no monótono, con una sola corrida por punto
+(no se repitió por presupuesto de tiempo de esta sesión), así que no se puede separar limpiamente
+señal de ruido/deriva térmica aquí. Lo que SÍ es sólido es la comparación directa baseline-vs-
+fixed a `-c 200` con reinicio limpio y 3 repeticiones (§10.1): ahí la mejora es clara y
+reproducible.
+
+**Hipótesis para el remanente**: el mutex del registro (§5) no es el único lock global de la
+ruta caliente. `__RAY_POOL` (`transpile.rs`, el pool de hilos de M96) es OTRO
+`Mutex<Vec<(u64, Sender)>>` global, tomado en cada `spawn`/retorno-a-pool — y **cada request**
+hace un spawn+join para aislar panics (`handle_http`, línea 835), tanto en el baseline como en
+el binario con este fix (no se tocó). Es un candidato directo para la siguiente ronda: mismo
+patrón de diagnóstico (§5, `sample` bajo carga) aplicado a `__RAY_POOL` en vez de `__ray_reg`.
+
+### 10.3 Próximo paso
+
+Perfilar (`sample`) el binario CON este fix bajo el mismo régimen de `-c 175–250` para ver si el
+`__psynch_mutexwait` remanente ahora aparece detrás de `__ray_pool_exec`/`__RAY_POOL` en vez de
+`__ray_reg()` — confirmaría que el pool de hilos es el siguiente cuello de botella y motivaría
+aplicarle el mismo tipo de tratamiento (sharding, o evitar la vuelta al pool para hilos que van
+a servir la MISMA conexión otra vez).

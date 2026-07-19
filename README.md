@@ -67,7 +67,8 @@ fn main() -> int {
   p99 = 2,2 ms al 60% de capacidad). Guía: [`docs/web-framework.md`](docs/web-framework.md).
 - **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
-  ejecutable: **24–61× más rápido que la VM**, y en cómputo puro **le gana a node (V8) por 5,4×**. Modelo
+  ejecutable: **24–61× más rápido que la VM**, y en cómputo puro **le gana a node (V8) por 4,2×**
+  (5,1× con `--fast`, que cambia la aritmética chequeada por envolvente; medido 19 jul 2026). Modelo
   *dev = VM / deploy = nativo*, con paridad byte-idéntica.
 - **Corre en el navegador.** La VM compilada a WebAssembly, sin `wasm-bindgen`.
 

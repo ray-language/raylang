@@ -153,6 +153,12 @@ El nativo es **24–61× más rápido que la propia VM** y en fib **le gana a no
 pasa de peor-de-la-clase (fib 12.5× tras node) a **mejor-de-la-clase** — un giro de ~68×. `rustc -O` de
 un programa pequeño: **0.03 s** (el modelo dev=VM / deploy=nativo, como Rust). Es código máquina real.
 
+> **Re-medido 19 jul 2026 (post-H6)**: la auditoría hizo la aritmética de int **checked por defecto**
+> (paridad de semántica con la VM; commit e76c332) y eso cuesta ~25% justo en fib (una suma y dos restas
+> por llamada). Hoy (hyperfine, M3 Pro, `ray build --native --release`): default **21.5 ms = 4.2× sobre
+> node** (89.3 ms); con `--fast` (aritmética envolvente, la semántica del spike) **17.6 ms = 5.1×**. La
+> tabla de arriba queda como registro del spike; la cifra vigente para el build por defecto es **4.2×**.
+
 **Conclusión**: P2.b es EL camino, validado. La tesis "raylang mapea a Rust → velocidad nativa" es cierta
 y espectacular para el núcleo de cómputo. Confirma el veredicto de P0/P1: lo único que el HW cobra es el
 bucle de despacho, y P2.b lo **borra**.

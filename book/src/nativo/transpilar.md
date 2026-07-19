@@ -38,7 +38,8 @@ Medido en un M3 Pro:
 | loopsum | **33 ms** | 808 ms (24×) | 93 ms |
 
 El binario nativo va **24–61× más rápido que la propia VM**, y en cómputo puro (fib) **le gana
-a node (V8 con JIT) por 5,4×**. raylang pasa de peor-de-la-clase en el arranque del proyecto a
+a node (V8 con JIT) por 4,2×** (5,1× con `--fast`, que cambia la aritmética chequeada por
+envolvente). raylang pasa de peor-de-la-clase en el arranque del proyecto a
 mejor-de-la-clase, sin cambiar el lenguaje: el mismo programa, otro backend.
 
 ## Qué se transpila

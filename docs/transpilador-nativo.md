@@ -12,7 +12,8 @@ El transpilador (`src/transpile.rs`) es el **tercer backend** de raylang: traduc
 **ya chequeado** a código Rust y lo compila a un **binario nativo**. El modelo es
 **dev = VM / deploy = nativo** (como el ciclo dev/release de Rust): la VM da el arranque
 instantáneo y el REPL; el binario nativo da la velocidad (24–61× sobre la VM; fib gana a node
-5.4×). El contrato de corrección es el mismo del proyecto: **salida byte-idéntica a la VM**,
+4.2× — 5.1× con `--fast`, que cambia la aritmética chequeada de H6 por envolvente). El contrato
+de corrección es el mismo del proyecto: **salida byte-idéntica a la VM**,
 verificada con oráculos, nunca asumida.
 
 ```

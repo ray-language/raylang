@@ -1018,16 +1018,68 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
     if main_ret_int {
-        out.push_str("        Ok(code) => std::process::exit(code as i32),\n");
+        out.push_str("        Ok(code) => { __ray_flush_prints(); std::process::exit(code as i32) },\n");
     } else {
-        out.push_str("        Ok(_) => std::process::exit(0),\n");
+        out.push_str("        Ok(_) => { __ray_flush_prints(); std::process::exit(0) },\n");
     }
     out.push_str("        Err(e) => {\n");
     out.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+    out.push_str("            __ray_flush_prints();\n");
     out.push_str("            std::process::exit(70)\n");
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n");
+    // M96f: `print` deja de tomar el lock GLOBAL de `Stdout` en cada llamada — bajo impresión
+    // concurrente intensiva (p. ej. `log_requests()`) era el mayor cuello de contención medido
+    // (docs/investigacion-p99-framework-web.md §12). Diseño: un ÚNICO hilo escritor consume un
+    // canal mpsc (std, sin dependencias); cada `print` solo hace `send`, nunca toca stdout
+    // directo. **Por qué no un buffer por hilo** (primer intento, revertido): rompía el orden
+    // CAUSAL entre hilos sincronizados por `join`/canales — un test lo cazó
+    // (`build_native_valores_de_heap_y_funciones_cruzan_los_hilos`: una tarea que imprime y
+    // luego el padre que la `join`-ea e imprime después deben verse en ESE orden; con buffers
+    // independientes por hilo y flush por tiempo, podían intercalarse distinto). Un solo canal
+    // preserva la MISMA garantía que el lock de hoy dan: si el envío A pasa-antes-que el envío B
+    // (por una sincronización externa real, como `join`), la cola FIFO los entrega en ese orden;
+    // entre hilos sin relación causal, el orden ya era no-determinista antes también (competían
+    // por el lock de Stdout en el orden que tocara el scheduler) — nada cambia ahí.
+    // `std::process::exit` no corre destructores de ningún hilo → `__ray_flush_prints()` espera
+    // (con un tope de 500 ms de salvavidas) a que el escritor haya vaciado TODO lo enviado hasta
+    // ese instante, antes de cada uno de los 3 sitios que llaman `std::process::exit`.
+    out.push_str(concat!(
+        "static __RAY_PRINT_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+        "static __RAY_PRINT_WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+        "static __RAY_PRINT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<String>> = std::sync::OnceLock::new();\n",
+        "fn __ray_print_tx() -> &'static std::sync::mpsc::Sender<String> {\n",
+        "    __RAY_PRINT_TX.get_or_init(|| {\n",
+        "        let (tx, rx) = std::sync::mpsc::channel::<String>();\n",
+        "        std::thread::spawn(move || {\n",
+        "            use std::io::Write;\n",
+        "            let mut out = std::io::stdout();\n",
+        "            loop {\n",
+        "                match rx.recv_timeout(std::time::Duration::from_millis(5)) {\n",
+        "                    Ok(line) => {\n",
+        "                        let mut buf = line; buf.push('\\n'); let mut n: u64 = 1;\n",
+        "                        while let Ok(more) = rx.try_recv() { buf.push_str(&more); buf.push('\\n'); n += 1; }\n",
+        "                        let _ = out.write_all(buf.as_bytes());\n",
+        "                        let _ = out.flush();\n",
+        "                        __RAY_PRINT_WRITTEN.fetch_add(n, std::sync::atomic::Ordering::Release);\n",
+        "                    }\n",
+        "                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}\n",
+        "                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,\n",
+        "                }\n            }\n        });\n",
+        "        tx\n    })\n}\n",
+        "fn __ray_buffered_print(line: String) {\n",
+        "    __RAY_PRINT_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+        "    let _ = __ray_print_tx().send(line);\n}\n",
+        "fn __ray_flush_prints() {\n",
+        "    if __RAY_PRINT_TX.get().is_none() { return; }\n",
+        "    let target = __RAY_PRINT_SENT.load(std::sync::atomic::Ordering::Relaxed);\n",
+        "    let start = std::time::Instant::now();\n",
+        "    while __RAY_PRINT_WRITTEN.load(std::sync::atomic::Ordering::Acquire) < target {\n",
+        "        if start.elapsed() > std::time::Duration::from_millis(500) { break; }\n",
+        "        std::thread::sleep(std::time::Duration::from_micros(100));\n",
+        "    }\n}\n",
+    ));
     // H21-N5a: los conversores Send registrados durante la emisión (tipos que cruzan hilos). Worklist:
     // generar uno puede registrar tipos anidados. Va antes de los bloques de runtime (orden top-level
     // libre en Rust; solo importa que TODA la emisión de cuerpos ya pasó).
@@ -1061,8 +1113,21 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
             "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::new() }))\n}\n",
             "fn __ray_reg_insert(h: __RayHandle) -> i64 { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); id }\n",
-            "fn __ray_close(h: i64) -> i64 { __ray_reg().lock().unwrap().open.remove(&h); 0 }\n",
         ));
+        // M96c/M96g: `close` corre en el mismo hilo dueño de la conexión (fin de `handle_http`) →
+        // borra también la(s) entrada(s) de ESE hilo en las cachés de socket/TLS, para que un
+        // worker del pool reusado miles de veces (M96) no acumule handles muertos indefinidamente.
+        let sock_evict = if t.needs_net {
+            "__RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
+        } else {
+            ""
+        };
+        let tls_evict = if t.needs_rt_tls {
+            "__RAY_TLS_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
+        } else {
+            ""
+        };
+        write!(out, "fn __ray_close(h: i64) -> i64 {{ __ray_reg().lock().unwrap().open.remove(&h); {sock_evict}{tls_evict}0 }}\n").unwrap();
     }
     // Ops de archivo (open/read_line/write) — solo si se usan handles de archivo.
     if t.needs_handles {
@@ -1093,12 +1158,22 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // bloqueante (como la VM). read lee ≤64KiB (lossy UTF-8; EOF → ""); write escribe todo (Ok(nº bytes)).
     if t.needs_net {
         out.push_str(concat!(
-            // M96b: la sección crítica es un Arc::clone (ns). Antes hacía try_clone() = un syscall
-            // dup() BAJO el lock global → convoyes de ~100 ms (158 stalls medidos en 12 s de wrk;
-            // cada uno arrastraba a las peticiones en vuelo → la cola p99 de ~80 ms).
+            // M96c: caché thread-local del Arc<TcpStream> por handle. Una conexión aceptada la
+            // maneja SIEMPRE el mismo hilo durante toda su vida (`handle_http` corre en el hilo
+            // dueño de la conexión, keep-alive incluido — el pool M96 solo reusa hilos ENTRE
+            // conexiones distintas, nunca concurrentemente dentro de una); así que el primer
+            // acceso paga el lock global (como antes) y los siguientes de ESA conexión, en ESE
+            // hilo, no lo tocan más. Sonoro: el Arc cacheado nunca cruza de hilo (vive en un
+            // `thread_local!`), así que clonarlo no es una carrera en su contador de referencias.
+            // Los ids del registro NUNCA se reasignan (`reg.next` solo crece) → una entrada
+            // vieja en la caché tras un `close` es inerte, no ambigua; igual se borra en
+            // `__ray_close` para no crecer sin límite en un hilo del pool reusado miles de veces.
+            "thread_local! { static __RAY_SOCK_CACHE: std::cell::RefCell<std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
             "fn __ray_sock_clone(h: i64) -> Result<std::sync::Arc<std::net::TcpStream>, Rc<str>> {\n",
+            "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { return Ok(s); }\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => Ok(std::sync::Arc::clone(s)),\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => { let s = std::sync::Arc::clone(s); drop(reg);\n",
+            "            __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, std::sync::Arc::clone(&s)); }); Ok(s) },\n",
             "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
             "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
             "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
@@ -1132,8 +1207,12 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Udp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
             "fn __ray_set_read_timeout(h: i64, ms: i64) {\n",
             "    let d = if ms <= 0 { None } else { Some(std::time::Duration::from_millis(ms as u64)) };\n",
+            // M96c: mismo fast-path que __ray_sock_clone — si ya está en la caché de ESTE hilo, ni
+            // toca el lock global (es el llamador más frecuente: una vez por ciclo de lectura).
+            "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { let _ = s.set_read_timeout(d); return; }\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let _ = s.set_read_timeout(d); } }\n",
+            "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let s2 = std::sync::Arc::clone(s); let _ = s2.set_read_timeout(d); drop(reg);\n",
+            "        __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, s2); }); } }\n",
             // UDP: los primitivos devuelven ARREGLOS ETIQUETADOS (bind/send → [\"ok\"/\"err\", ...]; recv →
             // [b\"ok\"/b\"err\", host, port, data]) que los wrappers de raylang (udp.ray) parsean. recv es
             // BLOQUEANTE (con hilos de SO reales; la VM usa no-bloqueante + scheduler → mismo efecto).
@@ -1160,9 +1239,26 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // `TcpStream` del registro y reinsertan la conexión TLS con el MISMO handle (como la VM).
     if t.needs_rt_tls {
         out.push_str(concat!(
-            // Clona el Arc<Mutex<TlsStream>> del handle (si es TLS) → la I/O va tras su lock, no el global.
+            // M96g: mismo fast-path que M96c, aplicado al chequeo "¿es TLS este handle?" — se
+            // consulta en CADA lectura/escritura de socket (incluso sobre una conexión plana,
+            // para saber si despachar a TLS antes de la vía TCP), y era el mayor contribuyente
+            // del profiling de la ronda anterior (339 apariciones — ver §13). Mismo argumento de
+            // solidez que M96c: una conexión la sirve siempre el mismo hilo. La única diferencia
+            // con M96c: un handle SÍ puede cambiar de tipo en vivo (STARTTLS, `tls_accept`/
+            // `tls_upgrade` insertan `Tls` donde antes había `Tcp`, mismo id) — por eso, a
+            // diferencia del registro puro, esta caché se ACTUALIZA explícitamente en el sitio
+            // del upgrade (mismo hilo que hizo el upgrade → mismo thread_local), en vez de solo
+            // rellenarse perezosa en el primer acceso; así nunca queda una entrada "no es TLS"
+            // stale tras un upgrade. Se cachea el resultado POSITIVO y el NEGATIVO (None) — el
+            // caso caliente de un programa sin TLS en absoluto es que TODA lectura dé None.
+            "thread_local! { static __RAY_TLS_CACHE: std::cell::RefCell<std::collections::HashMap<i64, Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
             "fn __ray_tls_get(h: i64) -> Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>> {\n",
-            "    let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None } }\n",
+            "    if let Some(v) = __RAY_TLS_CACHE.with(|c| c.borrow().get(&h).cloned()) { return v; }\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    let v = match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None };\n",
+            "    drop(reg);\n",
+            "    __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, v.clone()); });\n",
+            "    v\n}\n",
             "fn __ray_tls_tag_ok(id: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
             "fn __ray_tls_tag_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(msg)])) }\n",
             "fn __ray_tls_wrap(s: ray_runtime::tls::TlsStream) -> i64 { __ray_reg_insert(__RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))) }\n",
@@ -1171,17 +1267,35 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
             // Saca el TcpStream del handle `h` (debe ser TCP), lo deja fuera del registro y lo devuelve.
-            "fn __ray_tls_take_tcp(h: i64) -> Result<std::net::TcpStream, String> {\n",
+            // También lo saca de la caché M96c (M96g): dejó de ser Tcp, una lectura futura no debe
+            // reusar el Arc<TcpStream> viejo (aunque hoy nunca se llegaría a consultar: __ray_tls_get,
+            // ya actualizado, despacha antes — esto es higiene, no un fix de un bug observable).
+            // El mensaje del handle-no-Tcp difiere entre `accept`/`upgrade` en la VM (dos funciones
+            // separadas, cada una con su texto — src/builtins.rs `tls_accept`/`tls_upgrade`); nativo
+            // comparte esta única función, así que el mensaje viene por parámetro para dar el mismo
+            // texto byte-a-byte según quién llame (cazado por `starttls_upgrade_native`, M96g).
+            "fn __ray_tls_take_tcp(h: i64, not_tcp_msg: &str) -> Result<std::net::TcpStream, String> {\n",
             "    let mut reg = __ray_reg().lock().unwrap(); match reg.open.remove(&h) {\n",
-            "        Some(__RayHandle::Tcp(s)) => match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) },\n",
-            "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} is not an accepted TCP socket\", h)) }\n",
+            "        Some(__RayHandle::Tcp(s)) => { drop(reg); __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); });\n",
+            "            match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) } }\n",
+            "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} {}\", h, not_tcp_msg)) }\n",
             "        None => Err(format!(\"invalid handle: {}\", h)) } }\n",
             "fn __ray_tls_accept(h: i64, cert: &str, key: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let sock = match __ray_tls_take_tcp(h) { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
-            "    match ray_runtime::tls::accept(sock, cert, key) { Ok(s) => { __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))); __ray_tls_tag_ok(h) } Err(e) => __ray_tls_tag_err(e) } }\n",
+            "    let sock = match __ray_tls_take_tcp(h, \"is not an accepted TCP socket\") { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
+            "    match ray_runtime::tls::accept(sock, cert, key) {\n",
+            "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
+            "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
+            "            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n",
+            "            __ray_tls_tag_ok(h) }\n",
+            "        Err(e) => __ray_tls_tag_err(e) } }\n",
             "fn __ray_tls_upgrade(h: i64, host: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let sock = match __ray_tls_take_tcp(h) { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
-            "    match ray_runtime::tls::upgrade(sock, host) { Ok(s) => { __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))); __ray_tls_tag_ok(h) } Err(e) => __ray_tls_tag_err(e) } }\n",
+            "    let sock = match __ray_tls_take_tcp(h, \"is not a plain TCP socket\") { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
+            "    match ray_runtime::tls::upgrade(sock, host) {\n",
+            "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
+            "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
+            "            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n",
+            "            __ray_tls_tag_ok(h) }\n",
+            "        Err(e) => __ray_tls_tag_err(e) } }\n",
         ));
     }
     // Helpers de SQLite (P2.b Paso 2), solo si el programa usa SQLite. Los primitivos devuelven arreglos
@@ -1335,11 +1449,30 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // → recv bloqueante. El estado THREAD-LOCAL por tarea (token de cancelación, scopes) se
             // resetea entre jobs. El spawner recupera el job de un SendError (worker justo muerto).
             "type __RayJob = std::boxed::Box<dyn FnOnce() + Send + 'static>;\n",
-            "static __RAY_POOL: std::sync::Mutex<Vec<(u64, std::sync::mpsc::Sender<__RayJob>)>> = std::sync::Mutex::new(Vec::new());\n",
+            "type __RayPoolShard = std::sync::Mutex<Vec<(u64, std::sync::mpsc::Sender<__RayJob>)>>;\n",
+            // M96e: el pool se SHARDEA (antes: un único Mutex<Vec<...>> global para TODO el proceso).
+            // Cada request hace un spawn+retorno-a-pool (M56.5, panic→500), 2 adquisiciones del
+            // mismo lock; bajo carga alta eso compite fuerte. Con N listas independientes
+            // (round-robin atómico, sin relación entre el shard que elige el spawner y el que
+            // elige el worker) la contención cae ~N× — a costa de que un pop puede fallar si el
+            // único worker ocioso está en OTRO shard (crea un hilo nuevo de más; desperdicio
+            // acotado, nunca deadlock: el invariante "sin worker ocioso → hilo nuevo" se preserva
+            // igual, ahora por shard). N escala con los núcleos disponibles.
+            "fn __ray_pool_shards() -> &'static [__RayPoolShard] {\n",
+            "    static P: std::sync::OnceLock<Vec<__RayPoolShard>> = std::sync::OnceLock::new();\n",
+            "    P.get_or_init(|| {\n",
+            "        let n = std::thread::available_parallelism().map(|c| c.get()).unwrap_or(4).saturating_mul(2).clamp(4, 64);\n",
+            "        (0..n).map(|_| std::sync::Mutex::new(Vec::new())).collect()\n",
+            "    })\n}\n",
             "static __RAY_POOL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+            "static __RAY_POOL_RR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
+            "fn __ray_pool_next_shard(shards: &[__RayPoolShard]) -> usize {\n",
+            "    __RAY_POOL_RR.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % shards.len()\n}\n",
             "fn __ray_pool_exec(job: __RayJob) {\n",
             "    let mut job = job;\n",
-            "    while let Some((_, tx)) = { let w = __RAY_POOL.lock().unwrap().pop(); w } {\n",
+            "    let shards = __ray_pool_shards();\n",
+            "    let idx = __ray_pool_next_shard(shards);\n",
+            "    while let Some((_, tx)) = { let w = shards[idx].lock().unwrap().pop(); w } {\n",
             "        match tx.send(job) { Ok(()) => return, Err(e) => job = e.0 }\n",
             "    }\n",
             "    std::thread::spawn(move || {\n",
@@ -1350,11 +1483,13 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "            __SCOPES.with(|s| s.borrow_mut().clear());\n",
             "            let (tx, rx) = std::sync::mpsc::channel::<__RayJob>();\n",
             "            let id = __RAY_POOL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
-            "            __RAY_POOL.lock().unwrap().push((id, tx));\n",
+            "            let shards = __ray_pool_shards();\n",
+            "            let shard_idx = __ray_pool_next_shard(shards);\n",
+            "            shards[shard_idx].lock().unwrap().push((id, tx));\n",
             "            match rx.recv_timeout(std::time::Duration::from_secs(10)) {\n",
             "                Ok(next) => job = next,\n",
             "                Err(_) => {\n",
-            "                    let mut pool = __RAY_POOL.lock().unwrap();\n",
+            "                    let mut pool = shards[shard_idx].lock().unwrap();\n",
             "                    if let Some(pos) = pool.iter().position(|(i, _)| *i == id) { pool.remove(pos); return; }\n",
             "                    drop(pool);\n",
             "                    match rx.recv() { Ok(next) => job = next, Err(_) => return }\n",
@@ -1444,25 +1579,37 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         ));
     }
     // PRNG (SplitMix64, mismo que la VM) + reloj monotónico, solo si el programa usa monotonic/random.
-    // Estado global tras un Mutex/OnceLock; sembrado del reloj. No determinista → casa por propiedades.
+    // M96d: estado THREAD-LOCAL (antes: un único Mutex<u64> global). Bajo `log_requests` cada
+    // request genera un trace_id/span_id vía `random.below` (net/trace.ray: 32+16 dígitos hex =
+    // 48 llamadas) — con el estado global eso son 48 adquisiciones de lock POR PETICIÓN sobre un
+    // único mutex, muchas más que las del registro de handles (M96c) y, medido bajo carga, el
+    // cuello de botella dominante. Como el uso documentado es "identifican, no autentican — no
+    // necesitan cripto" (net/trace.ray), no hace falta coordinación entre hilos: cada hilo lleva
+    // su propia secuencia SplitMix64, sembrada distinto (reloj + un contador atómico) para que dos
+    // hilos no repitan la misma secuencia. `random_seed` fija la semilla del hilo LLAMADOR
+    // (semántica más simple que antes, no peor: ya no había reproducibilidad entre hilos con el
+    // Mutex global tampoco, un `send`/mutación concurrente entre hilos competía igual por orden).
     if t.needs_time_rng {
         out.push_str(concat!(
             "fn __ray_monotonic() -> i64 {\n",
             "    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();\n",
             "    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as i64\n}\n",
-            "fn __ray_rng() -> &'static std::sync::Mutex<u64> {\n",
-            "    static R: std::sync::OnceLock<std::sync::Mutex<u64>> = std::sync::OnceLock::new();\n",
-            "    R.get_or_init(|| std::sync::Mutex::new(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9E37_79B9_7F4A_7C15)))\n}\n",
+            "fn __ray_rng_seed() -> u64 {\n",
+            "    static CTR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+            "    let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+            "    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9E37_79B9_7F4A_7C15);\n",
+            "    t ^ c.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1)\n}\n",
+            "thread_local! { static __RAY_RNG: std::cell::Cell<u64> = std::cell::Cell::new(__ray_rng_seed()); }\n",
             "fn __ray_next_u64() -> u64 {\n",
-            "    let mut s = __ray_rng().lock().unwrap();\n",
-            "    *s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);\n",
-            "    let mut z = *s;\n",
-            "    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);\n",
-            "    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);\n",
-            "    z ^ (z >> 31)\n}\n",
+            "    __RAY_RNG.with(|c| {\n",
+            "        let s = c.get().wrapping_add(0x9E37_79B9_7F4A_7C15); c.set(s);\n",
+            "        let mut z = s;\n",
+            "        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);\n",
+            "        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);\n",
+            "        z ^ (z >> 31)\n    })\n}\n",
             "fn __ray_random_f64() -> f64 { (__ray_next_u64() >> 11) as f64 / (1u64 << 53) as f64 }\n",
             "fn __ray_random_int(n: i64) -> i64 { if n <= 0 { 0 } else { (__ray_next_u64() % (n as u64)) as i64 } }\n",
-            "fn __ray_random_seed(n: i64) { *__ray_rng().lock().unwrap() = n as u64; }\n",
+            "fn __ray_random_seed(n: i64) { __RAY_RNG.with(|c| c.set(n as u64)); }\n",
         ));
     }
     // Features de `ray-runtime` a activar (bajo demanda). Vacío → `build_native` usa `rustc` pelado.
@@ -3618,13 +3765,27 @@ impl Transpiler {
                      .map(|__a| Rc::<str>::from(__a)).collect::<Vec<Rc<str>>>()))",
                 );
             }
-            "print" | "eprint" => {
-                // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos). eprint → stderr.
-                let macro_name = if method == "eprint" { "eprintln" } else { "println" };
+            "eprint" => {
+                // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos). Sin
+                // buffering (a diferencia de `print`, ver más abajo): stderr es tpicamente para
+                // errores, baja frecuencia, y se espera visible de inmediato.
                 if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
-                    write!(out, "{}!(\"<fn>\")", macro_name).unwrap(); // una función se muestra como <fn>
+                    out.push_str("eprintln!(\"<fn>\")"); // una función se muestra como <fn>
                 } else {
-                    write!(out, "{}!(\"{{}}\", ", macro_name).unwrap();
+                    out.push_str("eprintln!(\"{}\", ");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(".ray_show())");
+                }
+            }
+            "print" => {
+                // M96f: bufferizado (ver `__ray_buffered_print`/`__ray_flush_prints`, emitidos siempre
+                // en el preámbulo) — bajo impresión concurrente intensiva (p. ej. `log_requests()`),
+                // el lock global de `Stdout` en CADA `println!` era el mayor cuello de contención
+                // medido (docs/investigacion-p99-framework-web.md §12).
+                if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
+                    out.push_str("__ray_buffered_print(\"<fn>\".to_string())");
+                } else {
+                    out.push_str("__ray_buffered_print(");
                     self.emit_expr(out, eff[0])?;
                     out.push_str(".ray_show())");
                 }

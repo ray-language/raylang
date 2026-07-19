@@ -393,3 +393,69 @@ Perfilar (`sample`) el binario CON este fix bajo el mismo régimen de `-c 175–
 `__ray_reg()` — confirmaría que el pool de hilos es el siguiente cuello de botella y motivaría
 aplicarle el mismo tipo de tratamiento (sharding, o evitar la vuelta al pool para hilos que van
 a servir la MISMA conexión otra vez).
+
+## 11. Segunda ronda — el PRNG global (`__ray_random_int`), y los límites de medir en esta sesión
+
+Se perfiló (`sample`, mismo método del §5) el binario CON el fix del §10 bajo `-c 200 -q 15000`,
+buscando específicamente si `__RAY_POOL` (la hipótesis del §10.3) aparecía detrás del
+`__psynch_mutexwait` remanente. En vez de eso, contando cuántas veces cada función de
+`framework-demo` aparece como ancestro más cercano de una instancia de `__psynch_mutexwait` en
+el árbol de llamadas del `sample`:
+
+| función | apariciones como origen del bloqueo |
+|---|---|
+| **`__ray_random_int`** | **400** |
+| `net::log::emit` | 200 |
+| `__ray_pool_exec` (`__RAY_POOL`, la hipótesis del §10.3) | 107 |
+| `__ray_tls_get` | 91 |
+
+Dos hallazgos, ninguno el que se esperaba:
+
+- **`__ray_random_int`domina, muy por encima del pool.** Causa: `app.log_requests()` (activo en
+  el demo) hace que cada petición pase por `webserver.trace_of(req)` → si no hay `traceparent`
+  entrante, `trace.new_trace()` genera un `trace_id` de 32 dígitos hex + un `span_id` de 16 —
+  **48 llamadas a `random.below(16)`** (`net/trace.ray:27-44`), cada una un `__ray_random_int`,
+  cada una tomando el **mismo patrón de mutex global** que `__ray_reg()` pero muchas más veces
+  por petición (48 contra las 2-3 del registro). `__ray_rng()` era un único
+  `Mutex<u64>` (estado del SplitMix64) compartido por TODO el proceso.
+- **`__ray_tls_get` sigue ahí (91)**: el binario linkea soporte TLS (`net/webserver.ray` lo
+  define aunque `main.ray` nunca lo llame) y `socket_read_bytes` consulta "¿es TLS este
+  handle?" ANTES de mi caché del §10 — esa consulta también toma `__ray_reg()`, sin cachear.
+  Documentado, no arreglado en esta ronda (ver "Pendiente" más abajo).
+
+**Fix implementado** (`src/transpile.rs`, M96d): el PRNG pasa de un `Mutex<u64>` global a
+**estado thread-local** (`thread_local! { static __RAY_RNG: Cell<u64> }`), sembrado distinto por
+hilo (reloj + contador atómico, para que dos hilos no repitan la misma secuencia — importante
+para no emitir trace_ids duplicados entre requests concurrentes en hilos distintos). Es sano
+(el estado nunca cruza de hilo) y no necesita coordinación: el propio comentario de
+`net/trace.ray:11-12` ya documenta que estos ids "identifican, no autentican — no necesitan
+cripto", por lo que no hay contrato de aleatoriedad criptográfica ni de secuencia global que
+preservar. `random_seed` pasa a sembrar el hilo llamador (antes ya no había reproducibilidad
+entre hilos distintos con el mutex global tampoco — dos hilos consumiendo la misma secuencia
+competían por orden de llegada, no determinista). 28 tests verdes (incluida
+`seed_reproducible_y_kit`, que solo corre en intérprete/VM de un solo hilo — no ejercía este
+camino nativo antes ni ahora, pero confirma que el algoritmo SplitMix64 no se tocó).
+
+**Medición — inconclusa por ruido del entorno.** Tres repeticiones a `-c 200` A/B contra el
+binario del §10 (solo fix de registro) dieron resultados contradictorios — a veces mejor, a
+veces peor, incluso invirtiendo el orden de las pruebas dentro de cada repetición (para
+descartar sesgo de "lo segundo que corre ya encontró el sistema más caliente"). La varianza
+corrida-a-corrida (p99 entre 0.68 ms y 43 ms para el MISMO binario en corridas sucesivas) es
+demasiado alta para separar limpiamente el efecto del fix del ruido de fondo de esta sesión
+—`load average` de la máquina venía inusualmente alto (~9.8) sin que `pmset -g therm` reportara
+throttling térmico, así que la causa del ruido queda sin diagnosticar—. **Se optó por
+mantener el fix igual**: está justificado por evidencia directa y estática (conteo de
+apariciones en el perfil, la aritmética de 48 locks/request de `log_requests`, cero riesgo de
+soundness, tests verdes) aunque no se pudo demostrar limpiamente su ganancia incremental de
+wall-clock en esta sesión. Recomendación: re-medir en una sesión con la máquina en reposo antes
+de reportar un número de mejora para este fix específico.
+
+**Pendiente para una próxima ronda** (en orden sugerido):
+1. Cachear también `__ray_tls_get` (91 apariciones) — mismo patrón que el §10, con el cuidado
+   extra de invalidar la entrada cacheada si la conexión hace un STARTTLS `tls_upgrade` a mitad
+   de vida (el handle pasa de Tcp a Tls con el mismo id).
+2. Confirmar o descartar `__RAY_POOL` (107 apariciones, la hipótesis original de esta ronda)
+   con el mismo método de conteo, en una sesión sin el ruido de fondo actual.
+3. Re-correr el barrido de concurrencia (`-c 150–300`, varias repeticiones por punto) con la
+   máquina en reposo para ver si el umbral de contención del §9 se movió, se aplanó, o
+   simplemente cambió de mecanismo (de `__ray_reg` a `__ray_rng`/`__RAY_POOL`).

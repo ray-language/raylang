@@ -1466,25 +1466,37 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         ));
     }
     // PRNG (SplitMix64, mismo que la VM) + reloj monotónico, solo si el programa usa monotonic/random.
-    // Estado global tras un Mutex/OnceLock; sembrado del reloj. No determinista → casa por propiedades.
+    // M96d: estado THREAD-LOCAL (antes: un único Mutex<u64> global). Bajo `log_requests` cada
+    // request genera un trace_id/span_id vía `random.below` (net/trace.ray: 32+16 dígitos hex =
+    // 48 llamadas) — con el estado global eso son 48 adquisiciones de lock POR PETICIÓN sobre un
+    // único mutex, muchas más que las del registro de handles (M96c) y, medido bajo carga, el
+    // cuello de botella dominante. Como el uso documentado es "identifican, no autentican — no
+    // necesitan cripto" (net/trace.ray), no hace falta coordinación entre hilos: cada hilo lleva
+    // su propia secuencia SplitMix64, sembrada distinto (reloj + un contador atómico) para que dos
+    // hilos no repitan la misma secuencia. `random_seed` fija la semilla del hilo LLAMADOR
+    // (semántica más simple que antes, no peor: ya no había reproducibilidad entre hilos con el
+    // Mutex global tampoco, un `send`/mutación concurrente entre hilos competía igual por orden).
     if t.needs_time_rng {
         out.push_str(concat!(
             "fn __ray_monotonic() -> i64 {\n",
             "    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();\n",
             "    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as i64\n}\n",
-            "fn __ray_rng() -> &'static std::sync::Mutex<u64> {\n",
-            "    static R: std::sync::OnceLock<std::sync::Mutex<u64>> = std::sync::OnceLock::new();\n",
-            "    R.get_or_init(|| std::sync::Mutex::new(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9E37_79B9_7F4A_7C15)))\n}\n",
+            "fn __ray_rng_seed() -> u64 {\n",
+            "    static CTR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+            "    let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+            "    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0x9E37_79B9_7F4A_7C15);\n",
+            "    t ^ c.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1)\n}\n",
+            "thread_local! { static __RAY_RNG: std::cell::Cell<u64> = std::cell::Cell::new(__ray_rng_seed()); }\n",
             "fn __ray_next_u64() -> u64 {\n",
-            "    let mut s = __ray_rng().lock().unwrap();\n",
-            "    *s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);\n",
-            "    let mut z = *s;\n",
-            "    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);\n",
-            "    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);\n",
-            "    z ^ (z >> 31)\n}\n",
+            "    __RAY_RNG.with(|c| {\n",
+            "        let s = c.get().wrapping_add(0x9E37_79B9_7F4A_7C15); c.set(s);\n",
+            "        let mut z = s;\n",
+            "        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);\n",
+            "        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);\n",
+            "        z ^ (z >> 31)\n    })\n}\n",
             "fn __ray_random_f64() -> f64 { (__ray_next_u64() >> 11) as f64 / (1u64 << 53) as f64 }\n",
             "fn __ray_random_int(n: i64) -> i64 { if n <= 0 { 0 } else { (__ray_next_u64() % (n as u64)) as i64 } }\n",
-            "fn __ray_random_seed(n: i64) { *__ray_rng().lock().unwrap() = n as u64; }\n",
+            "fn __ray_random_seed(n: i64) { __RAY_RNG.with(|c| c.set(n as u64)); }\n",
         ));
     }
     // Features de `ray-runtime` a activar (bajo demanda). Vacío → `build_native` usa `rustc` pelado.

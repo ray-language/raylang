@@ -5912,7 +5912,8 @@ mod tests {
         let mut prog = loaded.program;
         crate::checker::check(&mut prog).expect("check");
         let rust = transpile(&prog).expect("transpile").source;
-        assert!(rust.contains("Tcp(std::net::TcpStream)"), "handle Tcp: {}", rust);
+        // M96b: el registro guarda Arc<TcpStream> (la sección crítica es un Arc::clone, sin dup()).
+        assert!(rust.contains("Tcp(std::sync::Arc<std::net::TcpStream>)"), "handle Tcp: {}", rust);
         assert!(rust.contains("__ray_tcp_listen(") && rust.contains("__ray_tcp_accept("), "listen/accept: {}", rust);
         assert!(rust.contains("__ray_socket_read(") && rust.contains("__ray_socket_write("), "read/write: {}", rust);
         assert!(rust.contains("__ray_local_port("), "local_port: {}", rust);

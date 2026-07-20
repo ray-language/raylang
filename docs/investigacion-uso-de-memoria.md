@@ -170,6 +170,11 @@ Orden por severidad; cada paso con su verificación. Los pasos de código van po
 > drenado**; el handle stale responde como cerrado+vacío (cero semántica nueva). `chan_churn` 100k
 > canales: 45.4 MB → **7.0 MB** (línea base). Límite documentado: un canal abierto cuyos handles se
 > pierden sigue retenido (liberarlo exigiría GC global de referencias entre fibras).
+> ✅ **M98.4** (rama `feature/m98-banco-memoria`): el banco de regresión gana el **gate de memoria** —
+> `regress.py` mide el pico de RSS (`os.wait4` → `ru_maxrss`, cero deps) de `task_churn`/`chan_churn`/
+> `arr_while` (ahora en `benchmarks/`) contra `baseline.json` con umbral propio del 15% (el RSS midió
+> ±0.0% de ruido entre corridas); `measure.py` gana la columna de memoria. Verificado que caza fugas
+> (baseline simulado a la mitad → GORDO, exit 1).
 
 - **M98.1 — liberar el almacén de tareas de la VM** (bug #1, prioridad máxima).
   *Decisión de semántica primero* (DESIGN): **`join`/`try_join` consumen la tarea** (precedente:

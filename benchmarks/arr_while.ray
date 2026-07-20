@@ -1,0 +1,12 @@
+// M98.4: arreglo de 1M de ints + suma con while — el coste de residencia de los datos escalares
+// en la VM (32 B/elemento del HeapValue + transitorios de crecimiento del Vec; ver
+// docs/investigacion-uso-de-memoria.md §4). Vigila que el coste no EMPEORE; bajarlo es M98.5.
+fn main() -> int {
+    var xs: [int] = [];
+    var i = 0;
+    while (i < 1000000) { xs.push(i); i = i + 1; }
+    var acc = 0;
+    var j = 0;
+    while (j < xs.len()) { acc = acc + xs[j]; j = j + 1; }
+    acc % 251
+}

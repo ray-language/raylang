@@ -1,7 +1,7 @@
-# Gate de regresión de rendimiento (M35c). Mide los casos del banco sobre la VM de release
-# (mejor-de-N para filtrar el ruido del planificador) y los compara contra un baseline
-# COMMITEADO (`benchmarks/baseline.json`). Falla (exit 1) si algún caso es más de THRESHOLD
-# más lento. Solo necesita python3 (invariante cero-deps).
+# Gate de regresión de rendimiento (M35c) y de MEMORIA (M98.4). Mide los casos del banco sobre
+# la VM de release (tiempo: mejor-de-N; memoria: pico de RSS por hijo vía os.wait4/ru_maxrss) y
+# los compara contra un baseline COMMITEADO (`benchmarks/baseline.json`). Falla (exit 1) si algún
+# caso excede su umbral (tiempo >5%, memoria >15%). Solo necesita python3 (invariante cero-deps).
 #
 # Uso:
 #   python3 benchmarks/regress.py --record     # graba el baseline en esta máquina
@@ -34,6 +34,46 @@ CASES = [
     ("arrays",   [BIN, "--vm", "benchmarks/arrays.ray"]),
     ("gcnested", [BIN, "--vm", "benchmarks/gcnested.ray"]),
 ]
+
+# M98.4: los casos de MEMORIA — pico de RSS (ru_maxrss del hijo, vía os.wait4; cero deps).
+# Vigilan las fugas cazadas en docs/investigacion-uso-de-memoria.md: el churn de tareas (M98.1),
+# el de canales (M98.3) y el coste de residencia de los arreglos de escalares (§4 / M98.5).
+# Concurrencia → --deterministic (RSS reproducible; el orden de fibras no cambia la residencia
+# pero sí el ruido). Umbral propio MEM_THRESHOLD: el RSS es estable pero cuantizado en páginas
+# y sensible al allocator → 15% (una fuga real lo revienta por múltiplos, no por porcentajes).
+MEM_CASES = [
+    ("task_churn", [BIN, "--vm", "--deterministic", "benchmarks/task_churn.ray"]),
+    ("chan_churn", [BIN, "--vm", "--deterministic", "benchmarks/chan_churn.ray"]),
+    ("arr_1M",     [BIN, "--vm", "benchmarks/arr_while.ray"]),
+]
+MEM_THRESHOLD = 0.15
+MEM_N = 3  # el RSS varía poco entre corridas; mejor-de-3 basta
+
+
+def rss_child(cmd):
+    """Corre `cmd` y devuelve su pico de RSS en BYTES (ru_maxrss por hijo, vía os.wait4).
+    macOS lo reporta en bytes; Linux en KiB → se normaliza."""
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _, status, ru = os.wait4(p.pid, 0)
+    p.returncode = status  # evita el warning de Popen sin wait
+    if os.WIFSIGNALED(status):
+        sys.exit(f"'{' '.join(cmd)}' murió por señal {os.WTERMSIG(status)}")
+    maxrss = ru.ru_maxrss
+    return maxrss if sys.platform == "darwin" else maxrss * 1024
+
+
+def medir_mem():
+    """Mejor-de-MEM_N (mínimo) por caso de memoria; devuelve {nombre: bytes}."""
+    if not os.path.exists(BIN):
+        sys.exit(f"no existe {BIN}; compila primero: cargo build --release")
+    picos = {}
+    for nombre, cmd in MEM_CASES:
+        picos[nombre] = min(rss_child(cmd) for _ in range(MEM_N))
+    return picos
+
+
+def mb(n):
+    return f"{n / 1048576:.1f} MB"
 
 
 def fingerprint():
@@ -76,13 +116,15 @@ def medir():
 
 
 def record():
-    datos = {"fingerprint": fingerprint(), "n": N, "cases": medir()}
+    datos = {"fingerprint": fingerprint(), "n": N, "cases": medir(), "mem": medir_mem()}
     with open(BASELINE, "w") as f:
         json.dump(datos, f, indent=2)
         f.write("\n")
     print(f"baseline grabado en {BASELINE} ({datos['fingerprint']})")
     for nombre, seg in datos["cases"].items():
         print(f"  {nombre:10s} {seg:.4f} s")
+    for nombre, b in datos["mem"].items():
+        print(f"  {nombre:10s} {mb(b)}")
 
 
 def check(threshold, strict):
@@ -111,12 +153,30 @@ def check(threshold, strict):
         print(f"  {nombre:10s} {seg:.4f} s  vs {ref:.4f} s  ({delta:+.1%})  {marca}")
         if delta > threshold:
             regresiones.append((nombre, delta))
+    # M98.4: el gate de MEMORIA (pico de RSS vs baseline; umbral propio, más ancho).
+    base_mem = base.get("mem")
+    if base_mem is None:
+        print("\n(baseline sin sección 'mem' — re-graba con --record para activar el gate de memoria)")
+    else:
+        actual_mem = medir_mem()
+        print(f"=== regresión de memoria (umbral {MEM_THRESHOLD:.0%}, pico de RSS, mejor de {MEM_N}) ===")
+        for nombre, b in actual_mem.items():
+            ref = base_mem.get(nombre)
+            if ref is None:
+                print(f"  {nombre:10s} {mb(b)}   (nuevo; sin referencia)")
+                continue
+            delta = b / ref - 1.0
+            peor = max(peor, delta)
+            marca = "OK  " if delta <= MEM_THRESHOLD else "GORDO"
+            print(f"  {nombre:10s} {mb(b)}  vs {mb(ref)}  ({delta:+.1%})  {marca}")
+            if delta > MEM_THRESHOLD:
+                regresiones.append((nombre, delta))
     # Veredicto: el gate solo es duro si la máquina casa (o --strict).
     if regresiones and (misma_maquina or strict):
-        print(f"\nREGRESIÓN: {len(regresiones)} caso(s) >{threshold:.0%} más lentos → falla.")
+        print(f"\nREGRESIÓN: {len(regresiones)} caso(s) fuera de umbral (tiempo o memoria) → falla.")
         sys.exit(1)
     if regresiones:
-        print(f"\n(informativo) {len(regresiones)} caso(s) más lentos, pero la máquina no casa.")
+        print(f"\n(informativo) {len(regresiones)} caso(s) fuera de umbral, pero la máquina no casa.")
     else:
         print(f"\nsin regresión (peor caso {peor:+.1%}).")
     sys.exit(0)

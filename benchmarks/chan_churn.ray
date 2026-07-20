@@ -1,0 +1,18 @@
+// M98.4: churn de canales efímeros — 20k crear/enviar/cerrar/drenar con un valor de ~1 KB.
+// Vigila la fuga del almacén de canales (M98.3): sin liberación, ~450 B retenidos por canal;
+// con el free-list (liberado al quedar cerrado y drenado), RSS plano en la línea base.
+fn main() -> int {
+    var total = 0;
+    var i = 0;
+    while (i < 20000) {
+        let ch: Channel<string> = Channel.new();
+        send(ch, "x".repeat(1000));
+        close(ch);
+        match (recv(ch)) {
+            Option.Some(s) => { total = total + s.len(); },
+            Option.None => {},
+        }
+        i = i + 1;
+    }
+    total % 251
+}

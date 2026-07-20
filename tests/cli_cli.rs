@@ -371,6 +371,46 @@ fn build_native_fast_envuelve_overflow_pero_chequea_div_cero() {
 }
 
 #[test]
+fn build_native_try_join_en_scope_cuenta_como_manejado() {
+    // M97.1 (paridad con la VM): un fallo observado con try_join dentro de un scope cuenta como
+    // MANEJADO — el cierre del scope no cancela hermanas ni re-lanza. En el runtime nativo lo
+    // implementa `wait_observed` (marca la Task) + `failed()` que salta las observadas.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native try_join en scope: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_tryjoin_scope");
+    std::fs::write(
+        base.join("tj.ray"),
+        "fn main() -> int {\n\
+             let r = scope(fn() -> int {\n\
+                 let bad = spawn(fn() -> int { panic(\"boom\"); 0 });\n\
+                 let good = spawn(fn() -> int { 42 });\n\
+                 match (try_join(bad)) {\n\
+                     Result.Ok(v) => print(\"bad ok: \" + to_string(v)),\n\
+                     Result.Err(msg) => print(\"bad manejado: \" + msg),\n\
+                 }\n\
+                 print(\"good: \" + to_string(join(good)));\n\
+                 7\n\
+             });\n\
+             print(\"scope devolvio: \" + to_string(r));\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("tj_bin");
+    let (_o, err, code) = ray(&base, &["build", "tj.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native try_join-en-scope ok\n{err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(native.status.code(), Some(0), "el scope nativo NO re-lanza el fallo observado");
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        "bad manejado: boom\ngood: 42\nscope devolvio: 7\n",
+        "nativo ≡ VM (misma semántica observado=manejado)"
+    );
+}
+
+#[test]
 fn build_native_valores_de_heap_y_funciones_cruzan_los_hilos() {
     // H21-N5: (a) structs/enums/Map/arrays cruzan canales/Tasks/capturas de spawn por DEEP COPY
     // (repr __RaySend, semántica de heap aislado M38); (b) un param de tipo fn que cruza un spawn

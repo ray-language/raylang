@@ -1145,7 +1145,7 @@ impl<'a> Vm<'a> {
                     let task = {
                         let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                         let task = sh.tasks.len();
-                        sh.tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new() });
+                        sh.tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new(), observed: false });
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), heap: new_heap, is_main: false,
                             task: Some(task), scopes: Vec::new(),
@@ -1353,6 +1353,11 @@ impl<'a> Vm<'a> {
                     };
                     match outcome {
                         Some(failed) => {
+                            // M97.1: observar un fallo lo marca MANEJADO — el ScopeEnd del scope
+                            // dueño ya no cancela hermanas ni re-lanza por esta tarea.
+                            if failed.is_some() {
+                                sh.tasks[t].observed = true;
+                            }
                             drop(sh);
                             let elems = match failed {
                                 None => Vec::new(),
@@ -1387,8 +1392,10 @@ impl<'a> Vm<'a> {
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
+                    // M97.1: un fallo ya OBSERVADO con `try_join` cuenta como manejado → se salta
+                    // (la tarea se trata como terminada; ni cancelación ni re-lanzamiento).
                     let failure = children.iter().find_map(|&c| match &sh.tasks[c].state {
-                        TaskState::Failed(msg) => Some(msg.clone()),
+                        TaskState::Failed(msg) if !sh.tasks[c].observed => Some(msg.clone()),
                         _ => None,
                     });
                     if let Some(msg) = failure {

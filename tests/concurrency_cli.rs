@@ -631,6 +631,34 @@ fn main() -> int {
 }
 
 #[test]
+fn try_join_dentro_de_scope_cuenta_como_manejado() {
+    // M97.1 (semántica FIJADA con el usuario): un fallo OBSERVADO con try_join dentro de un scope
+    // cuenta como MANEJADO — el ScopeEnd lo trata como tarea terminada: NO cancela a las hermanas
+    // ni re-lanza el fallo (antes: try_join observaba pero ScopeEnd re-lanzaba igual → try_join
+    // era inútil dentro de scopes). `join` en cambio SIGUE re-lanzando (observar ≠ unir); y un
+    // fallo NO observado conserva la cancelación de M12.5 (test scope_cancela_a_las_hermanas...).
+    let src = r#"
+fn main() -> int {
+    let r = scope(fn() -> int {
+        let bad = spawn(fn() -> int { panic("boom"); 0 });
+        let good = spawn(fn() -> int { 42 });
+        match (try_join(bad)) {
+            Result.Ok(v) => print("bad ok: " + to_string(v)),
+            Result.Err(msg) => print("bad manejado: " + msg),
+        }
+        print("good: " + to_string(join(good)));
+        7
+    });
+    print("scope devolvio: " + to_string(r));
+    0
+}
+"#;
+    let (stdout, stderr, code) = run("try_join_en_scope", src, true);
+    assert_eq!(code, 0, "el scope NO debe re-lanzar el fallo observado; stderr: {stderr}");
+    assert_eq!(stdout, "bad manejado: boom\ngood: 42\nscope devolvio: 7\n");
+}
+
+#[test]
 fn sleep_cede_la_fiber() {
     // M57.2: `time.sleep` es cooperativo en la VM — aparca la fibra con deadline (sin fd) y las
     // demás siguen corriendo. Antes bloqueaba el worker entero (en M:1, TODAS las fibras): la

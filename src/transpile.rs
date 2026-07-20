@@ -1419,13 +1419,21 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // M:1): una tarea cancelada termina en su siguiente punto BLOQUEANTE (send/recv/join/select/
             // scope); código que corre sin bloquearse no se interrumpe (divergencia menor documentada).
             "struct __TaskState<T> { result: Option<Result<T, String>> }\n",
-            "struct __RayTask<T> { inner: std::sync::Arc<(std::sync::Mutex<__TaskState<T>>, std::sync::Condvar)>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
-            "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone(), cancel: self.cancel.clone() } } }\n",
+            // M97.1: `observed` = el fallo ya fue OBSERVADO con try_join/__task_failed → cuenta como
+            // manejado (el scope dueño lo trata como terminado; ni cancelación ni re-lanzamiento).
+            // `join` NO lo marca (observar ≠ unir), igual que el opcode TaskFailed de la VM.
+            "struct __RayTask<T> { inner: std::sync::Arc<(std::sync::Mutex<__TaskState<T>>, std::sync::Condvar)>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, observed: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
+            "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone(), cancel: self.cancel.clone(), observed: self.observed.clone() } } }\n",
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
             "    fn wait(&self) -> Result<T, String> {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
             "        while st.result.is_none() { st = __ray_cv_wait(cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.result.clone().unwrap()\n",
+            "    }\n",
+            "    fn wait_observed(&self) -> Result<T, String> {\n",
+            "        let r = self.wait();\n",
+            "        if r.is_err() { self.observed.store(true, std::sync::atomic::Ordering::SeqCst); }\n",
+            "        r\n",
             "    }\n",
             "    fn join(&self) -> T { match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
             "}\n",
@@ -1433,7 +1441,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             // (el hilo hijo escribe su resultado al terminar) y cancelarla.
             "trait __RayScopeChild { fn failed(&self) -> Option<String>; fn done(&self) -> bool; fn cancel_task(&self); }\n",
             "impl<T> __RayScopeChild for __RayTask<T> {\n",
-            "    fn failed(&self) -> Option<String> { match &self.inner.0.lock().unwrap().result { Some(Err(m)) => Some(m.clone()), _ => None } }\n",
+            "    fn failed(&self) -> Option<String> { if self.observed.load(std::sync::atomic::Ordering::SeqCst) { return None; } match &self.inner.0.lock().unwrap().result { Some(Err(m)) => Some(m.clone()), _ => None } }\n",
             "    fn done(&self) -> bool { self.inner.0.lock().unwrap().result.is_some() }\n",
             "    fn cancel_task(&self) { self.cancel.store(true, std::sync::atomic::Ordering::Relaxed); __ray_bump(); }\n",
             "}\n",
@@ -1499,7 +1507,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
             "    });\n",
             "}\n",
             "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
-            "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
+            "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), observed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
             "    let t = task.clone();\n",
             "    __ray_pool_exec(std::boxed::Box::new(move || {\n",
             "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
@@ -3990,14 +3998,14 @@ impl Transpiler {
                 };
                 out.push_str("match (");
                 self.emit_expr(out, eff[0])?;
-                write!(out, ").wait() {{ Ok(__rt_v) => Ok({}), Err(__rt_m) => Err(Rc::<str>::from(__rt_m)) }}", okconv).unwrap();
+                write!(out, ").wait_observed() {{ Ok(__rt_v) => Ok({}), Err(__rt_m) => Err(Rc::<str>::from(__rt_m)) }}", okconv).unwrap();
             }
             // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
             // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
             "__task_failed" => {
                 out.push_str("Rc::new(std::cell::RefCell::new(match (");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(").wait() { Ok(_) => Vec::<Rc<str>>::new(), Err(__rt_m) => vec![Rc::<str>::from(__rt_m)] }))");
+                out.push_str(").wait_observed() { Ok(_) => Vec::<Rc<str>>::new(), Err(__rt_m) => vec![Rc::<str>::from(__rt_m)] }))");
             }
             "join" => {
                 out.push_str("__ray_join(&");

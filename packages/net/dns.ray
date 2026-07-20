@@ -131,11 +131,11 @@ fn read_name(data: bytes, pos: int) -> Result<NameResult, string> {
             if (p + 1 + lenb > data.len()) {
                 return Result.Err("truncated DNS name label");
             }
-            let etiqueta = match (from_utf8(data.sub_bytes(p + 1, p + 1 + lenb))) {
+            let label = match (from_utf8(data.sub_bytes(p + 1, p + 1 + lenb))) {
                 Result.Ok(s) => s,
                 Result.Err(_) => "?",
             };
-            labels.push(etiqueta);
+            labels.push(label);
             p = p + 1 + lenb;
         }
     }

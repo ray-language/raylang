@@ -51,12 +51,12 @@ fn entry_size(name: string, value: string) -> int {
 // Evicta entradas (de la más antigua) hasta que el tamaño no supere el máximo.
 fn evict(h: Hpack) {
     while (h.size > h.max_size && h.dyn_names.len() > 0) {
-        let ultimo = h.dyn_names.len() - 1;
-        h.size = h.size - entry_size(h.dyn_names[ultimo], h.dyn_values[ultimo]);
+        let last = h.dyn_names.len() - 1;
+        h.size = h.size - entry_size(h.dyn_names[last], h.dyn_values[last]);
         var nn: [string] = [];
         var nv: [string] = [];
         var i = 0;
-        while (i < ultimo) {
+        while (i < last) {
             nn.push(h.dyn_names[i]);
             nv.push(h.dyn_values[i]);
             i = i + 1;

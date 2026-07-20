@@ -46,9 +46,9 @@ fn find_header(hs: [HEntry], name: string) -> string {
 // Hace una llamada gRPC unaria a `host:port` con la ruta `/paquete.Servicio/Metodo` y el `mensaje`
 // protobuf ya serializado. Devuelve el mensaje de respuesta + el grpc-status.
 /// Performs a unary gRPC call to `host:port` (TLS + ALPN `h2`, blocking I/O): POSTs the
-/// gRPC-framed `mensaje` to `path` ("/package.Service/Method") and reads until END_STREAM.
+/// gRPC-framed `message` to `path` ("/package.Service/Method") and reads until END_STREAM.
 /// Err on connect/I-O/HPACK errors, GOAWAY, a non-200 `:status`, or a malformed gRPC frame.
-pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Result<GrpcResponse, string> {
+pub fn grpc_call(host: string, port: int, path: string, message: bytes) -> Result<GrpcResponse, string> {
     let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
         Result.Err(e) => {
@@ -61,7 +61,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
     let reqhdrs = [header(":method", "POST"), header(":path", path), header(":scheme", "https"), header(":authority", host), header("te", "trailers"), header("content-type", "application/grpc"), header("user-agent", "grpc-raylang/1")];
     let block = encode(enc, reqhdrs);
     let hframe = encode_frame(ft_headers(), fl_end_headers(), 1, block);
-    let dframe = encode_frame(ft_data(), fl_end_stream(), 1, grpc_frame(mensaje));
+    let dframe = encode_frame(ft_data(), fl_end_stream(), 1, grpc_frame(message));
     match (net.socket_write_bytes(h, preface() + settings_empty() + hframe + dframe)) {
         Result.Ok(n) => { },
         Result.Err(e) => {
@@ -76,7 +76,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
     var body = b"";  // acumulado de los DATA (mensaje gRPC-framed)
     var status = 0;
     var grpc_status = 0;
-    var tuvo_grpc_status = false;
+    var has_grpc_status = false;
     var done = false;
     while (!done) {
         match (net.socket_read_bytes(h)) {
@@ -129,7 +129,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                                 }
                                 let gs = find_header(hs, "grpc-status");
                                 if (gs != "") {
-                                    tuvo_grpc_status = true;
+                                    has_grpc_status = true;
                                     match (parse_int(gs)) {
                                         Option.Some(n) => {
                                             grpc_status = n;
@@ -199,7 +199,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
     // M73: un servidor gRPC SIEMPRE cierra con `grpc-status` en los trailers. Su ausencia
     // (protocolo violado, trailers truncados) era indistinguible de un OK (`tuvo_grpc_status`
     // se computaba pero no se leía) → ahora es un error explícito.
-    if (!tuvo_grpc_status) {
+    if (!has_grpc_status) {
         return Result.Err("gRPC response without grpc-status in the trailers");
     }
     // Desenmarca el mensaje gRPC de la respuesta.

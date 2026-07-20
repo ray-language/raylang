@@ -74,8 +74,8 @@ fn max_message() -> int {
 // Lee un mensaje COMPLETO del servidor (acumulando en el buffer lo que haga falta).
 fn pg_read(c: PgConn) -> Result<PgMsg, string> {
     var out = PgMsg { mtype: 0, payload: b"" };
-    var listo = false;
-    while (!listo) {
+    var ready = false;
+    while (!ready) {
         if (c.buf.len() >= 5) {
             let mlen = be32(c.buf, 1);  // longitud (incluye sus 4 octetos)
             if (mlen < 4) {
@@ -88,10 +88,10 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
             if (c.buf.len() >= total) {
                 out = PgMsg { mtype: c.buf[0], payload: c.buf.sub_bytes(5, total) };
                 c.buf = c.buf.sub_bytes(total, c.buf.len());
-                listo = true;
+                ready = true;
             }
         }
-        if (!listo) {
+        if (!ready) {
             match (net.socket_read_bytes(c.handle)) {
                 Result.Ok(chunk) => {
                     if (chunk.len() == 0) {
@@ -205,7 +205,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
     let sc = scram_first(user, nonce);
     var query_sent = false;
     var row: [string] = [];
-    var tengo_row = false;
+    var has_row = false;
     var done = false;
     while (!done) {
         let msg = match (pg_read(c)) {
@@ -305,9 +305,9 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
             }
         } else if (msg.mtype == 68) {
             // 'D' DataRow
-            if (!tengo_row) {
+            if (!has_row) {
                 row = parse_datarow(msg.payload)?;
-                tengo_row = true;
+                has_row = true;
             }
         } else if (msg.mtype == 69) {
             // 'E' ErrorResponse

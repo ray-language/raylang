@@ -75,13 +75,13 @@ pub fn scram_client_first_message(sc: Scram) -> string {
 }
 
 // Devuelve el valor de un atributo `k=valor` en un mensaje `a=..,b=..,..` separado por comas.
-fn attr(msg: string, clave: string) -> string {
+fn attr(msg: string, key: string) -> string {
     let parts = msg.split(",");
     var v = "";
     var i = 0;
     while (i < parts.len()) {
         let p = parts[i];
-        if (p.len() >= 2 && p[0] == clave[0] && p[1] == '=') {
+        if (p.len() >= 2 && p[0] == key[0] && p[1] == '=') {
             v = p.substring(2, p.len());
         }
         i = i + 1;

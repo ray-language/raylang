@@ -29,21 +29,21 @@ pub fn accept_key(key: string) -> string {
 /// (header name matched case-insensitively). Returns the trimmed key, or "" if missing.
 pub fn extract_key(request: string) -> string {
     let lines = request.split("\r\n");
-    var clave = "";
+    var key = "";
     var i = 0;
     while (i < lines.len()) {
-        let linea = lines[i];
-        if (linea.to_lower().starts_with("sec-websocket-key:")) {
-            match (index_of(linea, ":")) {
+        let line = lines[i];
+        if (line.to_lower().starts_with("sec-websocket-key:")) {
+            match (index_of(line, ":")) {
                 Option.Some(idx) => {
-                    clave = linea.substring(idx + 1, linea.len()).trim();
+                    key = line.substring(idx + 1, line.len()).trim();
                 },
                 Option.None => { },
             }
         }
         i = i + 1;
     }
-    clave
+    key
 }
 
 // La respuesta HTTP 101 que completa el handshake para la clave dada.
@@ -118,17 +118,17 @@ pub fn decode_frame(data: bytes) -> Frame {
         off = off + 4;
     }
     // Des-enmascara la carga: payload[i] = data[off+i] XOR mask[i % 4].
-    var octetos: [int] = [];
+    var bytes_out: [int] = [];
     var i = 0;
     while (i < plen) {
         if (masked) {
-            octetos.push(data[off + i] ^ mask[i % 4]);
+            bytes_out.push(data[off + i] ^ mask[i % 4]);
         } else {
-            octetos.push(data[off + i]);
+            bytes_out.push(data[off + i]);
         }
         i = i + 1;
     }
-    Frame { opcode: opcode, payload: bytes_of(octetos), fin: fin }
+    Frame { opcode: opcode, payload: bytes_of(bytes_out), fin: fin }
 }
 
 // Codifica una trama del **servidor** (sin máscara, FIN activo) con el opcode y la carga dados.

@@ -1350,12 +1350,14 @@ magia posicional de `recover` es lo menos elegante de Go). La forma raylang es *
 
 **Fases**:
 
-- **M97.1 — nombrar y documentar lo que existe** (solo doc, coste bajo): `try_join` no aparece NI UNA
-  vez en el MANUAL. Sección "Recuperación de errores fatales" en el MANUAL (§ concurrencia): el patrón
-  `spawn` + `try_join`, el caso webserver (panic→500 gratis), batch tolerante a fallos, y las reglas de
-  qué captura (todo error de ejecución de la tarea) y qué no (deadlock). Verificar y documentar la
-  interacción con la cancelación de hermanas (M12.5): ¿un `Failed` observado con `try_join` dispara
-  igual la cancelación del scope? Fijar la semántica con un test.
+- ✅ **M97.1 — nombrar y documentar lo que existe** (COMPLETA, 20 jul 2026): la verificación destapó
+  que `try_join` dentro de un `scope` era INÚTIL (observabas el fallo y `ScopeEnd` lo re-lanzaba igual,
+  cancelando hermanas). **Semántica fijada con el usuario: un fallo observado es un fallo manejado**
+  (estilo errgroup de Go, no el fail-fast incondicional de coroutineScope de Kotlin) — flag `observed`
+  en `VmTask` (lo pone el opcode `TaskFailed`), `ScopeEnd` salta los observados; `join` re-lanza
+  siempre; el no-observado conserva M12.5 íntegra. Paridad en el nativo (`wait_observed`). Tests VM +
+  nativo con salida exacta; espec en DESIGN §21.6 (refinamiento); MANUAL §15 "Recuperación de errores
+  fatales" (patrón `spawn`+`try_join`, reglas, batch tolerante, el webserver como caso real).
 - **M97.2 — `try_call(f: fn() -> T) -> Result<T, string>`** (recuperación en la MISMA fibra, sin
   `spawn`): el recover general. Por motor: **intérprete** trivial (interceptar `Flow::Error`) — y a
   diferencia de `try_join` (solo-VM, porque `spawn` no corre en el intérprete), `try_call` tendría

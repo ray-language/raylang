@@ -1054,6 +1054,39 @@ fn main() -> int {
 }
 ```
 
+### Recuperación de errores fatales (`try_join`)
+
+Un error fatal (`panic`, división por cero, índice fuera de rango, overflow) aborta el programa… salvo
+que ocurra **dentro de una tarea**: ahí queda capturado en su `Task<T>` y raylang te deja decidir. `join`
+lo **re-lanza** (propagación por defecto: un fallo no se pierde en silencio); **`try_join` lo devuelve
+como valor** — `Result<T, string>` con el mensaje del fallo — y el programa sigue. Es el `recover` de Go,
+pero sin magia posicional: el fallo es un `Result` ordinario que se maneja con `match`/`?`.
+
+```rust
+fn main() -> int {
+    let t = spawn(fn() -> int { procesar_entrada_dudosa() });
+    match (try_join(t)) {
+        Result.Ok(v) => print("resultado: " + to_string(v)),
+        Result.Err(msg) => eprint("fallo, sigo con el resto: " + msg),
+    }
+    0
+}
+```
+
+Reglas:
+
+- `try_join` captura **cualquier** error de ejecución de la tarea, no solo `panic` explícito.
+- **Un fallo observado es un fallo manejado**: dentro de un `scope`, una tarea cuyo fallo ya
+  observaste con `try_join` cuenta como terminada — el scope no cancela a sus hermanas ni re-lanza.
+  Un fallo **no** observado conserva el comportamiento estructurado: cancela hermanas y propaga.
+- `join` re-lanza siempre (observar ≠ unir). Un deadlock del scheduler no es recuperable (no queda
+  ninguna fibra viva que pueda observarlo).
+- Para lotes tolerantes a fallos: lanza una tarea por ítem y acumula los `Err` — un ítem corrupto no
+  aborta el lote. El webserver ya usa este mecanismo por dentro: un handler que revienta responde
+  500 (con su `trace_id` en el log) y el servidor sigue sirviendo.
+- La tarea aísla el fallo también en memoria: su heap es propio (modelo de actores) y se descarta
+  entero al fallar — no hay estado compartido a medio mutar que quede visible.
+
 ### Determinismo y límites
 
 - `ray run --deterministic` (o `RAYLANG_THREADS=1`): un solo hilo, orden FIFO — salida reproducible

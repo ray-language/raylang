@@ -2473,6 +2473,17 @@ ejecución, ni a una hermana que esté corriendo CPU sin ceder—; solo retira a
 aparcadas. El caso patológico "el `ScopeEnd` espera a una hija que se bloquea para siempre mientras otra
 falla" degrada a **deadlock** (termina con error, no cuelga), no a propagación del fallo.
 
+**Refinamiento M97.1 (20 jul 2026, semántica fijada con el usuario): un fallo OBSERVADO es un fallo
+MANEJADO.** El escaneo de `ScopeEnd` **salta** a las hijas cuyo `Failed` ya fue observado con `try_join`
+(`__task_failed`, M56.5): la tarea cuenta como terminada — ni cancelación de hermanas ni re-lanzamiento.
+(Antes `try_join` dentro de un `scope` era inútil: observabas el fallo y el scope lo re-lanzaba igual.)
+`join` NO marca la observación (observar ≠ unir: re-lanza siempre), y un fallo **no** observado conserva
+íntegra la cancelación de arriba. Implementación: flag `observed` en `VmTask` (lo pone el opcode
+`TaskFailed`); paridad en el nativo (`wait_observed` + `failed()` que salta observadas). Tests con salida
+exacta en `tests/concurrency_cli.rs` (VM) y `tests/cli_cli.rs` (nativo). Es la pieza de semántica del
+arco **M97 — recuperación de errores fatales** (IDEAS §49; estilo *errgroup* de Go, no el fail-fast
+incondicional de `coroutineScope` de Kotlin).
+
 **M12.5 — estado: COMPLETO.** Runtime intacto salvo la VM (cero opcodes nuevos; reusa `TaskState::Failed`).
 Tests en `tests/concurrency_cli.rs`. Con M12.5, **M12 (concurrencia) queda COMPLETO**. Diferido:
 cancelación **preemptiva** (interrumpir el cuerpo / una hermana en CPU), `Selected<T>`, `select` de send,

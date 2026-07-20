@@ -244,10 +244,10 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
     // las que el usuario ya definió con ese nombre —permite override y hace la inyección
     // idempotente si se vuelve a verificar—. Como los enums, quedan en el AST que
     // también compilan/ejecutan el intérprete y la VM.
-    let definidas: HashSet<String> = program.functions.iter().map(|f| f.name.clone()).collect();
+    let defined: HashSet<String> = program.functions.iter().map(|f| f.name.clone()).collect();
     let mut prelude_fns: Vec<Function> = crate::prelude::functions()
         .into_iter()
-        .filter(|f| !definidas.contains(&f.name))
+        .filter(|f| !defined.contains(&f.name))
         .collect();
     if !prelude_fns.is_empty() {
         prelude_fns.append(&mut program.functions);
@@ -2221,8 +2221,8 @@ impl Checker {
                 // Cubre la variante si todos sus sub-patrones son **irrefutables** (siempre casan):
                 // `_`/binding o un struct de campos irrefutables (`Punto { x, y }`). Una variante
                 // anidada es refutable → no cubre (conservador; hace falta un fallback).
-                let cubre_todo = subpatterns.iter().all(is_irrefutable);
-                if cubre_todo {
+                let covers_all = subpatterns.iter().all(is_irrefutable);
+                if covers_all {
                     if !covered.insert(variant.clone()) {
                         return Err(self.err(pat.line, pat.col, format!(
                             "the variant '{}' is already covered by a previous arm", variant
@@ -2433,12 +2433,12 @@ impl Checker {
     /// es un `dyn Trait` del mismo trait, no hay coerción. Registra el sitio y devuelve
     /// `dyn Trait` como tipo.
     fn coerce_to_dyn(&mut self, expr: &Expr, traits: &[String], line: usize, col: usize) -> Result<Type, TypeError> {
-        let actual = self.check_expr(expr)?;
+        let current = self.check_expr(expr)?;
         // El origen ya es un trait object: misma identidad (nada que hacer) o **upcasting** a un
         // subconjunto (M9.5b: olvidar traits, `dyn S1` → `dyn S2` con S2 ⊆ S1).
-        if let Type::Dyn(source) = &actual {
+        if let Type::Dyn(source) = &current {
             if source.as_slice() == traits {
-                return Ok(actual);
+                return Ok(current);
             }
             if traits.iter().all(|t| source.contains(t)) {
                 self.dyn_upcasts.insert((line, col), traits.to_vec());
@@ -2449,14 +2449,14 @@ impl Checker {
                 source.join(" + "), traits.join(" + ")
             )));
         }
-        let key = type_key_of(&actual).ok_or_else(|| self.err(line, col, format!(
-            "cannot convert {} into 'dyn {}'", actual, traits.join(" + ")
+        let key = type_key_of(&current).ok_or_else(|| self.err(line, col, format!(
+            "cannot convert {} into 'dyn {}'", current, traits.join(" + ")
         )))?;
         // El tipo concreto debe implementar **todos** los traits del conjunto.
         for tr in traits {
             if !self.impl_traits.contains(&(key.clone(), tr.clone())) {
                 return Err(self.err(line, col, format!(
-                    "{} does not implement '{}': it cannot be used as 'dyn {}'", actual, tr, traits.join(" + ")
+                    "{} does not implement '{}': it cannot be used as 'dyn {}'", current, tr, traits.join(" + ")
                 )));
             }
         }
@@ -2467,7 +2467,7 @@ impl Checker {
         for tr in traits {
             let methods = self.traits.get(tr).cloned().unwrap_or_default();
             for m in &methods {
-                vtable.push(self.dict_for(&actual, tr, &m.name, line, col)?);
+                vtable.push(self.dict_for(&current, tr, &m.name, line, col)?);
             }
         }
         self.dyn_coercions.insert((line, col), (traits.to_vec(), vtable));
@@ -2925,13 +2925,13 @@ impl Checker {
                 Some(e) => Err(self.err(line, col, format!(
                     "'{}.{}' produces a {}, but the context expects {}", tn, name, tn, e))),
                 None => {
-                    let ejemplo = if tn == "Map" {
+                    let example = if tn == "Map" {
                         "let m: Map<string, int> = Map.new()"
                     } else {
                         "let c: Channel<int> = Channel.new()"
                     };
                     Err(self.err(line, col, format!(
-                        "cannot infer the type of '{}.{}'; annotate it, e.g. '{}'", tn, name, ejemplo)))
+                        "cannot infer the type of '{}.{}'; annotate it, e.g. '{}'", tn, name, example)))
                 }
             }
         })())
@@ -3250,8 +3250,8 @@ impl Checker {
                     // desazucarar una interpolación `${e}` comparte la posición de su argumento (ambos en
                     // `(el, ec)`); su hover solaparía —y taparía por menor `len`— al del propio `e`. Una
                     // llamada escrita a mano nunca tiene el argumento en la misma columna que el callee.
-                    let wrapper_sintetico = args.len() == 1 && args[0].line == line && args[0].col == col;
-                    if hover_direct && self.gather && !name.starts_with("__") && !wrapper_sintetico {
+                    let synthetic_wrapper = args.len() == 1 && args[0].line == line && args[0].col == col;
+                    if hover_direct && self.gather && !name.starts_with("__") && !synthetic_wrapper {
                         let fn_ty = Type::Fn(arg_types.clone(), Box::new(t.clone()));
                         self.record_ident(line, col, name, &fn_ty, None);
                     }
@@ -3295,14 +3295,14 @@ impl Checker {
 
     /// Verifica una llamada cuyo *callee* es un valor (no un nombre directo): su
     /// tipo debe ser una función, y los argumentos deben encajar con su firma.
-    /// M87: `pista` = el callee es una expresión de BLOQUE (if/match/while/bloque) —
+    /// M87: `hint` = el callee es una expresión de BLOQUE (if/match/while/bloque) —
     /// casi siempre el gotcha §55 (la cola con '(' tras una sentencia) → el error lo dice.
-    fn call_type(&mut self, ty: Type, args: &[Expr], pista: bool, line: usize, col: usize) -> Result<Type, TypeError> {
-        self.call_type_recv(ty, args, pista, line, col, None)
+    fn call_type(&mut self, ty: Type, args: &[Expr], hint: bool, line: usize, col: usize) -> Result<Type, TypeError> {
+        self.call_type_recv(ty, args, hint, line, col, None)
     }
 
     /// Como [`call_type`], con el tipo del primer argumento ya calculado (ver `check_named_call_recv`).
-    fn call_type_recv(&mut self, ty: Type, args: &[Expr], pista: bool, line: usize, col: usize, recv: Option<&Type>) -> Result<Type, TypeError> {
+    fn call_type_recv(&mut self, ty: Type, args: &[Expr], hint: bool, line: usize, col: usize, recv: Option<&Type>) -> Result<Type, TypeError> {
         match ty {
             Type::Fn(params, ret) => self.check_args_recv(&params, *ret, args, "the function", line, col, recv),
             other => {
@@ -3310,7 +3310,7 @@ impl Checker {
                     "cannot call a value of type {} (not a function)",
                     other
                 );
-                if pista {
+                if hint {
                     msg.push_str(
                         "; note: a tail starting with '(' after an if/while/match/block parses as a call of its value — separate it with 'return' or 'let'",
                     );
@@ -4377,13 +4377,13 @@ fn enum_show_body(a: &Annotation, name: &str, variants: &[VariantDef]) -> Result
             arms.push_str(&format!("            {name}.{v} => \"{name}.{v}\",\n", v = v.name));
         } else {
             let binds: Vec<String> = (0..k).map(|i| format!("a{i}")).collect();
-            let mut piezas: Vec<String> = Vec::new();
+            let mut pieces: Vec<String> = Vec::new();
             for (i, ty) in v.payload.iter().enumerate() {
-                piezas.push(render_to_string(a, &format!("a{i}"), ty)?);
+                pieces.push(render_to_string(a, &format!("a{i}"), ty)?);
             }
             arms.push_str(&format!(
                 "            {name}.{v}({b}) => \"{name}.{v}(\" + {p} + \")\",\n",
-                v = v.name, b = binds.join(", "), p = piezas.join(" + \", \" + ")
+                v = v.name, b = binds.join(", "), p = pieces.join(" + \", \" + ")
             ));
         }
     }

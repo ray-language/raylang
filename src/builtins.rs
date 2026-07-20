@@ -91,9 +91,9 @@ fn rng() -> &'static std::sync::Mutex<u64> {
 
 /// Avanza el generador y devuelve los siguientes 64 bits (SplitMix64).
 fn next_u64() -> u64 {
-    let mut estado = rng().lock().expect("RNG not poisoned");
-    *estado = estado.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *estado;
+    let mut state = rng().lock().expect("RNG not poisoned");
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
@@ -1506,10 +1506,10 @@ pub fn repeat_str(s: &str, n: i64) -> String {
 // --- Helpers de las reglas ---
 
 /// Error de aridad "espera N argumento(s), se le pasaron M".
-fn arity(a: &[Type], n: usize, name: &str, detalle: &str) -> Result<(), BuiltinError> {
+fn arity(a: &[Type], n: usize, name: &str, detail: &str) -> Result<(), BuiltinError> {
     if a.len() != n {
         let plural = if n == 1 { "argument" } else { "arguments" };
-        return Err((None, format!("{} expects {} {}{}, received {}", name, n, plural, detalle, a.len())));
+        return Err((None, format!("{} expects {} {}{}, received {}", name, n, plural, detail, a.len())));
     }
     Ok(())
 }

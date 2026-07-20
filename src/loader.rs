@@ -778,16 +778,16 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
         for m in modules {
             for fi in m.program.from_imports.iter().filter(|f| f.is_pub) {
                 let from = surfaces.get(&fi.module);
-                let actual = surfaces.get(&m.name);
+                let current = surfaces.get(&m.name);
                 for n in &fi.names {
                     let local = n.local().to_string();
                     let Some(fs) = from else { continue };
                     if let Some(g) = fs.values.get(&n.name)
-                        && actual.is_none_or(|s| !s.values.contains_key(&local))
+                        && current.is_none_or(|s| !s.values.contains_key(&local))
                     {
                         additions.push((m.name.clone(), local, g.clone(), false));
                     } else if let Some(g) = fs.types.get(&n.name)
-                        && actual.is_none_or(|s| !s.types.contains_key(&local))
+                        && current.is_none_or(|s| !s.types.contains_key(&local))
                     {
                         additions.push((m.name.clone(), local, g.clone(), true));
                     }

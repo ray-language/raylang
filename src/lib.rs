@@ -138,10 +138,10 @@ pub fn raise_fd_limit() {
             if getrlimit(RLIMIT_NOFILE, &mut r) != 0 {
                 return;
             }
-            let objetivo = r.max.min(cap);
-            if objetivo > r.cur {
-                let nuevo = RLimit { cur: objetivo, max: r.max };
-                let _ = setrlimit(RLIMIT_NOFILE, &nuevo);
+            let target = r.max.min(cap);
+            if target > r.cur {
+                let new = RLimit { cur: target, max: r.max };
+                let _ = setrlimit(RLIMIT_NOFILE, &new);
             }
         }
     }

@@ -1107,3 +1107,11 @@ vivo
 voz
 vuelta
 vueltas
+juntos
+_y_
+es
+sin
+operators
+de
+dos
+caracteres

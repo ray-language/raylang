@@ -702,6 +702,47 @@ fn main() -> int {
 }
 
 #[test]
+fn canal_liberado_se_comporta_como_cerrado_y_vacio() {
+    // M98.3: un canal cerrado y drenado se LIBERA (su slot se reusa; antes quedaba retenido para
+    // siempre, ~450 B/canal). La liberación es INVISIBLE: el handle stale responde exactamente como
+    // un canal cerrado y vacío — recv → None (una y otra vez), close → no-op (idempotente como
+    // siempre), select → listo (el gotcha documentado del canal cerrado), send → el error de cerrado.
+    let src = r#"
+fn main() -> int {
+    let ch: Channel<int> = Channel.new();
+    send(ch, 7);
+    close(ch);
+    match (recv(ch)) {
+        Option.Some(v) => print("drenado: " + to_string(v)),
+        Option.None => print("vacio"),
+    }
+    // A partir de aquí el canal está liberado: todo debe responder como cerrado+vacío.
+    match (recv(ch)) {
+        Option.Some(v) => print("? " + to_string(v)),
+        Option.None => print("recv tras drenar: None"),
+    }
+    match (recv(ch)) {
+        Option.Some(v) => print("? " + to_string(v)),
+        Option.None => print("recv de nuevo: None"),
+    }
+    close(ch); // doble close: no-op, como siempre
+    print("doble close ok");
+    let listo = select([ch]); // cerrado → listo para siempre (gotcha documentado)
+    print("select: " + to_string(listo));
+    send(ch, 8); // send sobre cerrado → error de ejecución
+    0
+}
+"#;
+    let (out, err, code) = run("canal_liberado", src, true);
+    assert_eq!(
+        out,
+        "drenado: 7\nrecv tras drenar: None\nrecv de nuevo: None\ndoble close ok\nselect: 0\n"
+    );
+    assert!(err.contains("send on a closed channel"), "stderr: {err}");
+    assert_eq!(code, 70);
+}
+
+#[test]
 fn las_hijas_no_sobreviven_al_scope() {
     // M98.1: el scope CONSUME a sus hijas al cerrar (es su dueño). Un handle que escapa del scope
     // y se une después → el mismo error del doble join (la tarea ya fue consumida).

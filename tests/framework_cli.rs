@@ -15,7 +15,12 @@ use std::time::Duration;
 /// `ray run` y devuelve el proceso + el puerto que imprime ("listening on port N").
 fn launch() -> (Child, u16) {
     let root = env!("CARGO_MANIFEST_DIR");
-    let dir = std::env::temp_dir().join("ray_framework_pkg");
+    // Directorio ÚNICO por lanzamiento (pid + contador): los tests corren en paralelo y un dir fijo
+    // compartido hacía carrera en remove/create (fallos intermitentes AlreadyExists/NotFound).
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir()
+        .join(format!("ray_framework_pkg_{}_{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("static")).expect("crea dir");
     let demo = std::fs::read_to_string(format!("{root}/examples/web/framework/main.ray")).expect("lee demo");

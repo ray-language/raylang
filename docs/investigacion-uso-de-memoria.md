@@ -166,6 +166,10 @@ Orden por severidad; cada paso con su verificación. Los pasos de código van po
 > webserver sobre la VM a c=100: 343→924 MB creciendo → **~31 MB plano**. Semántica fijada:
 > **una tarea es de un solo consumidor** (`join`/`try_join` consumen; el scope consume a sus hijas;
 > doble join = `task already consumed`, byte-idéntico en VM y nativo). Espec en DESIGN §21.7.
+> ✅ **M98.3** (rama `feature/m98-canales`): el almacén de canales libera al quedar **cerrado y
+> drenado**; el handle stale responde como cerrado+vacío (cero semántica nueva). `chan_churn` 100k
+> canales: 45.4 MB → **7.0 MB** (línea base). Límite documentado: un canal abierto cuyos handles se
+> pierden sigue retenido (liberarlo exigiría GC global de referencias entre fibras).
 
 - **M98.1 — liberar el almacén de tareas de la VM** (bug #1, prioridad máxima).
   *Decisión de semántica primero* (DESIGN): **`join`/`try_join` consumen la tarea** (precedente:

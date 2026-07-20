@@ -4174,10 +4174,10 @@ mod tests {
                 let v = x + fails()? * 2; // el `?` retorna con `x` pendiente en la pila
                 Result.Ok(v)
             }
-            fn case(etiqueta: string, r: Result<int, string>) -> string {
+            fn case(label: string, r: Result<int, string>) -> string {
                 match (r) {
-                    Result.Ok(v) => etiqueta + ": ok",
-                    Result.Err(e) => etiqueta + ": " + e,
+                    Result.Ok(v) => label + ": ok",
+                    Result.Err(e) => label + ": " + e,
                 }
             }
             fn main() -> int {
@@ -4300,8 +4300,8 @@ mod tests {
             fn main() -> int {\n\
             \x20 var s = 0;\n\
             \x20 if let Option.Some(n) = Option.Some(10) { s = s + n; }\n\
-            \x20 let nada: Option<int> = Option.None;\n\
-            \x20 if let Option.Some(n) = nada { s = s + 1000; }\n\
+            \x20 let none_val: Option<int> = Option.None;\n\
+            \x20 if let Option.Some(n) = none_val { s = s + 1000; }\n\
             \x20 s\n\
             }"); // 10
     }
@@ -4342,18 +4342,18 @@ mod tests {
     #[test]
     fn patterns_struct_oracle() {
         oracle_program("\
-            struct Punto { x: int, y: int }\n\
-            fn f(o: Option<Punto>) -> int {\n\
+            struct Point { x: int, y: int }\n\
+            fn f(o: Option<Point>) -> int {\n\
             \x20 match (o) {\n\
-            \x20   Option.Some(Punto { x, y }) if x > 0 => x + y,\n\
-            \x20   Option.Some(Punto { x: n, y: _ }) => n,\n\
+            \x20   Option.Some(Point { x, y }) if x > 0 => x + y,\n\
+            \x20   Option.Some(Point { x: n, y: _ }) => n,\n\
             \x20   Option.None => 0 - 1,\n\
             \x20 }\n\
             }\n\
             fn main() -> int {\n\
-            \x20 let a = Option.Some(Punto { x: 3, y: 4 });\n\
-            \x20 let b = Option.Some(Punto { x: 0 - 9, y: 0 });\n\
-            \x20 let c: Option<Punto> = Option.None;\n\
+            \x20 let a = Option.Some(Point { x: 3, y: 4 });\n\
+            \x20 let b = Option.Some(Point { x: 0 - 9, y: 0 });\n\
+            \x20 let c: Option<Point> = Option.None;\n\
             \x20 f(a) * 1000 + (f(b) + 100) * 10 + (f(c) + 10)\n\
             }"); // 7*1000 + (-9+100)*10 + (-1+10) = 7000 + 910 + 9 = 7919
     }
@@ -4364,8 +4364,8 @@ mod tests {
     #[test]
     fn iterator_for_oracle() {
         oracle_program("\
-            struct Rango { actual: int, fin: int }\n\
-            impl Iterator<int> for Rango {\n\
+            struct Range { actual: int, fin: int }\n\
+            impl Iterator<int> for Range {\n\
             \x20 fn next(self) -> Option<int> {\n\
             \x20   if (self.actual < self.fin) {\n\
             \x20     let v = self.actual;\n\
@@ -4375,7 +4375,7 @@ mod tests {
             \x20 }\n\
             }\n\
             fn main() -> int {\n\
-            \x20 let r = Rango { actual: 1, fin: 6 };\n\
+            \x20 let r = Range { actual: 1, fin: 6 };\n\
             \x20 var sum = 0;\n\
             \x20 for n in r {\n\
             \x20   sum = sum + n * n;\n\
@@ -4488,15 +4488,15 @@ mod tests {
     fn hash_derive_oracle() {
         oracle_program("\
             @derive(Hash, Eq)\n\
-            struct Punto { x: int, y: int }\n\
+            struct Point { x: int, y: int }\n\
             @derive(Hash)\n\
-            struct Persona { name: string, edad: int }\n\
+            struct Persona { name: string, age: int }\n\
             @derive(Hash)\n\
             enum Color { Rojo, Verde, RGB(int, int, int) }\n\
             fn main() -> int {\n\
-            \x20 let p = Punto { x: 3, y: 4 };\n\
-            \x20 let a = Persona { name: \"Ada\", edad: 36 };\n\
-            \x20 let same = if (p.hash() == (Punto { x: 3, y: 4 }).hash()) { 1 } else { 0 };\n\
+            \x20 let p = Point { x: 3, y: 4 };\n\
+            \x20 let a = Persona { name: \"Ada\", age: 36 };\n\
+            \x20 let same = if (p.hash() == (Point { x: 3, y: 4 }).hash()) { 1 } else { 0 };\n\
             \x20 p.hash() + a.hash() * 7 + Color.RGB(1, 2, 3).hash() * 13 + char_code('Z') + same * 100000\n\
             }");
     }
@@ -5375,14 +5375,14 @@ mod tests {
     #[test]
     fn trait_push_reverse_contains_oracle() {
         oracle_stress(
-            "struct Cola { items: [int] }
-             impl Push<int> for Cola { fn push(self, x: int) { self.items.push(x) } }
+            "struct Queue { items: [int] }
+             impl Push<int> for Queue { fn push(self, x: int) { self.items.push(x) } }
              fn main() -> int {
                 var a: [int] = [];
                 var i = 0;
                 while (i < 30) { a.push(i * 2); i = i + 1; }   // Push
                 let r = a.reverse();                            // Reverse: [58, 56, …]
-                let c = Cola { items: [7] };
+                let c = Queue { items: [7] };
                 c.push(9);                                      // Push sobre tipo de usuario
                 var sum = 0;
                 if (a.contains(58)) { sum = sum + 1000; }     // Contains en arreglo
@@ -5398,12 +5398,12 @@ mod tests {
     #[test]
     fn trait_len_oracle() {
         oracle_program(
-            "struct Pila { d: [int] }
-             impl Len for Pila { fn len(self) -> int { self.d.len() } }
+            "struct Stack { d: [int] }
+             impl Len for Stack { fn len(self) -> int { self.d.len() } }
              fn describe<T: Len>(x: T) -> int { x.len() }
              fn main() -> int {
                 let m: Map<int, int> = [1: 10, 2: 20, 3: 30];
-                let p = Pila { d: [7, 8, 9] };
+                let p = Stack { d: [7, 8, 9] };
                 \"hello\".len() + [1,2,3,4,5].len() + m.len() + \"ab\".to_bytes().len()
                     + p.len() + describe([1,2]) + describe(p)
              }",
@@ -5493,17 +5493,17 @@ mod tests {
     fn map_keys_variadas_oracle() {
         oracle_program(
             "fn main() -> int {
-                let porInt: Map<int, int> = Map.new();
-                porInt.insert(7, 70);
-                let porChar: Map<char, int> = Map.new();
-                porChar.insert('z', 100);
-                let porBool: Map<bool, int> = Map.new();
-                porBool.insert(true, 1);
-                porBool.insert(false, 2);
-                let a = match (porInt.get(7)) { Option.Some(v) => v, Option.None => 0 };
-                let b = match (porChar.get('z')) { Option.Some(v) => v, Option.None => 0 };
-                let c = match (porBool.get(true)) { Option.Some(v) => v, Option.None => 0 };
-                a + b + c + porBool.len()
+                let byInt: Map<int, int> = Map.new();
+                byInt.insert(7, 70);
+                let byChar: Map<char, int> = Map.new();
+                byChar.insert('z', 100);
+                let byBool: Map<bool, int> = Map.new();
+                byBool.insert(true, 1);
+                byBool.insert(false, 2);
+                let a = match (byInt.get(7)) { Option.Some(v) => v, Option.None => 0 };
+                let b = match (byChar.get('z')) { Option.Some(v) => v, Option.None => 0 };
+                let c = match (byBool.get(true)) { Option.Some(v) => v, Option.None => 0 };
+                a + b + c + byBool.len()
              }",
         );
     }
@@ -5556,8 +5556,8 @@ mod tests {
                 m.insert(2, 20);
                 let ks = m.keys();              // [1, 2, 3]
                 let vs = m.values();            // [10, 20, 30]
-                let quitado = match (remove(m, 2)) { Option.Some(v) => v, Option.None => 0 };
-                ks[0] * 100 + ks[2] + sum(vs) + quitado + m.len()
+                let removed = match (remove(m, 2)) { Option.Some(v) => v, Option.None => 0 };
+                ks[0] * 100 + ks[2] + sum(vs) + removed + m.len()
              }",
         );
     }
@@ -5705,8 +5705,8 @@ mod tests {
              fn main() -> int { dx(L { a: P { x: 1, y: 0 }, b: P { x: 5, y: 0 } }) }",
         );
         oracle_program(
-            "struct Pila { data: [int] }
-             fn main() -> int { let s: Pila = Pila { data: [10, 20] }; s.data.push(30); s.data[2] }",
+            "struct Stack { data: [int] }
+             fn main() -> int { let s: Stack = Stack { data: [10, 20] }; s.data.push(30); s.data[2] }",
         );
     }
 
@@ -5853,8 +5853,8 @@ mod tests {
     #[test]
     fn enum_recursive_oracle() {
         oracle_program(
-            "enum Lista { Cons(int, Lista), Nil }
-             fn main() -> int { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 0 }",
+            "enum List { Cons(int, List), Nil }
+             fn main() -> int { let xs: List = List.Cons(1, List.Cons(2, List.Nil)); print(xs); 0 }",
         );
     }
 
@@ -5866,9 +5866,9 @@ mod tests {
             "@derive(Show)
              enum Color { Rojo, RGB(int, int, int) }
              @derive(Show)
-             struct Punto { x: int, y: int }
+             struct Point { x: int, y: int }
              fn main() -> int {
-                 let p = Punto { x: 3, y: 40 };
+                 let p = Point { x: 3, y: 40 };
                  print(p.show());
                  print(Color.RGB(1, 2, 3).show());
                  p.show().len() + Color.RGB(1, 2, 3).show().len()
@@ -5881,11 +5881,11 @@ mod tests {
         // Construir enums (incl. recursivos) con el GC recolectando en cada punto
         // seguro: si el trazado del payload faltara, un valor vivo se liberaría.
         oracle_stress(
-            "enum Lista { Cons(int, Lista), Nil }
-             fn build(n: int) -> Lista {
-                 if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) }
+            "enum List { Cons(int, List), Nil }
+             fn build(n: int) -> List {
+                 if (n == 0) { List.Nil } else { List.Cons(n, build(n - 1)) }
              }
-             fn main() -> int { let xs: Lista = build(20); print(xs); 0 }",
+             fn main() -> int { let xs: List = build(20); print(xs); 0 }",
         );
     }
 
@@ -5895,13 +5895,13 @@ mod tests {
         // retornar. El mark-and-sweep debe barrer esos objetos de enum: el heap
         // queda acotado en vez de crecer sin parar.
         let src = r#"
-            enum Lista { Cons(int, Lista), Nil }
-            fn build(n: int) -> Lista {
-                if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) }
+            enum List { Cons(int, List), Nil }
+            fn build(n: int) -> List {
+                if (n == 0) { List.Nil } else { List.Cons(n, build(n - 1)) }
             }
             fn main() -> int {
                 var i: int = 0;
-                while (i < 50) { let xs: Lista = build(10); i = i + 1; }
+                while (i < 50) { let xs: List = build(10); i = i + 1; }
                 0
             }
         "#;
@@ -5921,11 +5921,11 @@ mod tests {
     fn match_traversal_oracle() {
         // Recorrer un enum recursivo con match: longitud y suma, en ambos motores.
         oracle_program(
-            "enum Lista { Cons(int, Lista), Nil }
-             fn length(xs: Lista) -> int { match (xs) { Lista.Cons(_, t) => 1 + length(t), Lista.Nil => 0 } }
-             fn sum(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 } }
+            "enum List { Cons(int, List), Nil }
+             fn length(xs: List) -> int { match (xs) { List.Cons(_, t) => 1 + length(t), List.Nil => 0 } }
+             fn sum(xs: List) -> int { match (xs) { List.Cons(h, t) => h + sum(t), List.Nil => 0 } }
              fn main() -> int {
-                 let xs: Lista = Lista.Cons(10, Lista.Cons(20, Lista.Cons(30, Lista.Nil)));
+                 let xs: List = List.Cons(10, List.Cons(20, List.Cons(30, List.Nil)));
                  length(xs) * 100 + sum(xs)
              }",
         );
@@ -5935,11 +5935,11 @@ mod tests {
     fn match_selects_branch_oracle() {
         // Variantes con distinta aridad de payload; cada brazo liga lo suyo.
         oracle_program(
-            "enum Figura { Circulo(int), Rect(int, int), Punto }
-             fn area(f: Figura) -> int {
-                 match (f) { Figura.Circulo(r) => 3 * r * r, Figura.Rect(w, h) => w * h, Figura.Punto => 0 }
+            "enum Shape { Circulo(int), Rect(int, int), Punto }
+             fn area(f: Shape) -> int {
+                 match (f) { Shape.Circulo(r) => 3 * r * r, Shape.Rect(w, h) => w * h, Shape.Punto => 0 }
              }
-             fn main() -> int { area(Figura.Rect(4, 5)) + area(Figura.Circulo(2)) + area(Figura.Punto) }",
+             fn main() -> int { area(Shape.Rect(4, 5)) + area(Shape.Circulo(2)) + area(Shape.Punto) }",
         );
     }
 
@@ -5959,9 +5959,9 @@ mod tests {
         // escrutinio guardado en el local temporal y el payload extraído deben seguir
         // rooteados. Si faltara una raíz, recorrer la lista reventaría o cambiaría.
         oracle_stress(
-            "enum Lista { Cons(int, Lista), Nil }
-             fn build(n: int) -> Lista { if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) } }
-             fn sum(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 } }
+            "enum List { Cons(int, List), Nil }
+             fn build(n: int) -> List { if (n == 0) { List.Nil } else { List.Cons(n, build(n - 1)) } }
+             fn sum(xs: List) -> int { match (xs) { List.Cons(h, t) => h + sum(t), List.Nil => 0 } }
              fn main() -> int { sum(build(15)) }",
         );
     }
@@ -6034,11 +6034,11 @@ mod tests {
     #[test]
     fn enum_generic_oracle() {
         oracle_program(
-            "enum Caja<T> { Llena(T), Vacia }
-             fn val(c: Caja<int>, def: int) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => def } }
+            "enum Box<T> { Llena(T), Vacia }
+             fn val(c: Box<int>, def: int) -> int { match (c) { Box.Llena(v) => v, Box.Vacia => def } }
              fn main() -> int {
-                 let a: Caja<int> = Caja.Llena(7);
-                 let b: Caja<int> = Caja.Vacia;
+                 let a: Box<int> = Box.Llena(7);
+                 let b: Box<int> = Box.Vacia;
                  val(a, 0) + val(b, 35)
              }",
         );
@@ -6047,10 +6047,10 @@ mod tests {
     #[test]
     fn struct_generic_oracle() {
         oracle_program(
-            "struct Par<A, B> { primero: A, segundo: B }
+            "struct Par<A, B> { first: A, second: B }
              fn main() -> int {
-                 let p: Par<int, bool> = Par { primero: 10, segundo: true };
-                 if (p.segundo) { p.primero } else { 0 }
+                 let p: Par<int, bool> = Par { first: 10, second: true };
+                 if (p.second) { p.first } else { 0 }
              }",
         );
     }
@@ -6094,9 +6094,9 @@ mod tests {
         // Lista genérica construida con un tipo concreto, recorrida con match, bajo el
         // GC en modo estrés: los valores de enum genérico se trazan como cualquier enum.
         oracle_stress(
-            "enum Lista<T> { Cons(T, Lista<T>), Nil }
-             fn sum(xs: Lista<int>) -> int { match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 } }
-             fn build(n: int) -> Lista<int> { if (n == 0) { Lista.Nil } else { Lista.Cons(n, build(n - 1)) } }
+            "enum List<T> { Cons(T, List<T>), Nil }
+             fn sum(xs: List<int>) -> int { match (xs) { List.Cons(h, t) => h + sum(t), List.Nil => 0 } }
+             fn build(n: int) -> List<int> { if (n == 0) { List.Nil } else { List.Cons(n, build(n - 1)) } }
              fn main() -> int { sum(build(15)) }",
         );
     }
@@ -6185,10 +6185,10 @@ mod tests {
     fn ufcs_about_struct_oracle() {
         // 'norma1' no es campo de Punto -> UFCS; 'p.x' sigue siendo acceso a campo.
         oracle_program(r#"
-            struct Punto { x: int, y: int }
-            fn norma1(p: Punto) -> int { p.x + p.y }
+            struct Point { x: int, y: int }
+            fn norma1(p: Point) -> int { p.x + p.y }
             fn main() -> int {
-                let p: Punto = Punto { x: 7, y: 6 };
+                let p: Point = Point { x: 7, y: 6 };
                 p.norma1() + p.x             // 13 + 7 = 20
             }
         "#);
@@ -6198,9 +6198,9 @@ mod tests {
     fn ufcs_field_function_oracle() {
         // 'op' ES un campo de tipo función: c.op(x) llama al campo, no es UFCS.
         oracle_program(r#"
-            struct Caja { op: fn(int) -> int }
+            struct Box { op: fn(int) -> int }
             fn main() -> int {
-                let c: Caja = Caja { op: fn(x: int) -> int { x + 100 } };
+                let c: Box = Box { op: fn(x: int) -> int { x + 100 } };
                 c.op(41)                     // (c.op)(41) = 141
             }
         "#);
@@ -6309,8 +6309,8 @@ mod tests {
         oracle_program(r#"
             fn main() -> int {
                 let xs: [int] = [1, 2, 3, 4];
-                let cuadrados: [int] = xs |> map(fn(x: int) -> int { x * x });  // [1,4,9,16]
-                cuadrados.fold(0, fn(a: int, x: int) -> int { a + x })           // 30
+                let squares: [int] = xs |> map(fn(x: int) -> int { x * x });  // [1,4,9,16]
+                squares.fold(0, fn(a: int, x: int) -> int { a + x })           // 30
             }
         "#);
     }
@@ -6337,17 +6337,17 @@ mod tests {
         // Variables inferidas (int, [int], struct, enum genérico) deben dar el mismo
         // resultado en ambos motores: la inferencia se borra antes de ejecutar.
         oracle_program(r#"
-            struct Punto { x: int, y: int }
-            enum Caja<T> { Llena(T), Vacia }
+            struct Point { x: int, y: int }
+            enum Box<T> { Llena(T), Vacia }
             fn double(x: int) -> int { x * 2 }
             fn main() -> int {
                 let x = 3;
                 let xs = [10, 20, 30];
-                let p = Punto { x: 7, y: 6 };
-                let c = Caja.Llena(5);
+                let p = Point { x: 7, y: 6 };
+                let c = Box.Llena(5);
                 var total = 0;
                 total = total + x.double();
-                let inside = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };
+                let inside = match (c) { Box.Llena(v) => v, Box.Vacia => 0 };
                 total + xs[0] + p.x + p.y + inside   // 6 + 10 + 7 + 6 + 5 = 34
             }
         "#);
@@ -6361,17 +6361,17 @@ mod tests {
         // bajan a funciones mangladas y las llamadas por punto a llamadas ordinarias,
         // así que la VM y el intérprete deben coincidir sin tocar el runtime.
         oracle_program(r#"
-            trait Valor { fn value(self) -> int; }
-            struct Punto { x: int, y: int }
-            enum Moneda { Cara, Cruz }
-            impl Valor for Punto { fn value(self) -> int { self.x + self.y } }
-            impl Valor for Moneda {
-                fn value(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } }
+            trait Value { fn value(self) -> int; }
+            struct Point { x: int, y: int }
+            enum Coin { Cara, Cruz }
+            impl Value for Point { fn value(self) -> int { self.x + self.y } }
+            impl Value for Coin {
+                fn value(self) -> int { match (self) { Coin.Cara => 1, Coin.Cruz => 0 } }
             }
-            impl Valor for int { fn value(self) -> int { self } }
+            impl Value for int { fn value(self) -> int { self } }
             fn main() -> int {
-                let p = Punto { x: 3, y: 4 };
-                p.value() + Moneda.Cara.value() + 10.value()   // 7 + 1 + 10 = 18
+                let p = Point { x: 3, y: 4 };
+                p.value() + Coin.Cara.value() + 10.value()   // 7 + 1 + 10 = 18
             }
         "#);
     }
@@ -6382,18 +6382,18 @@ mod tests {
         // impl (`self.sumar(self)`): bajo estrés del GC para validar las raíces.
         oracle_stress(r#"
             trait Punteable {
-                fn add(self, other: Punto) -> Punto;
+                fn add(self, other: Point) -> Point;
                 fn double(self) -> Self;
                 fn norma(self) -> int;
             }
-            struct Punto { x: int, y: int }
-            impl Punteable for Punto {
-                fn add(self, other: Punto) -> Punto { Punto { x: self.x + other.x, y: self.y + other.y } }
+            struct Point { x: int, y: int }
+            impl Punteable for Point {
+                fn add(self, other: Point) -> Point { Point { x: self.x + other.x, y: self.y + other.y } }
                 fn double(self) -> Self { self.add(self) }
                 fn norma(self) -> int { self.x * self.x + self.y * self.y }
             }
             fn main() -> int {
-                let p = Punto { x: 3, y: 4 };
+                let p = Point { x: 3, y: 4 };
                 p.double().norma()   // (6,8) -> 36 + 64 = 100
             }
         "#);
@@ -6406,16 +6406,16 @@ mod tests {
         // Genérico acotado sobre struct y primitivo + reenvío entre genéricos. Los
         // diccionarios son valores función; ambos motores deben coincidir.
         oracle_program(r#"
-            trait Valor { fn value(self) -> int; }
-            struct Punto { x: int, y: int }
-            impl Valor for Punto { fn value(self) -> int { self.x + self.y } }
-            impl Valor for int { fn value(self) -> int { self } }
-            fn double_value<T: Valor>(x: T) -> int { x.value() + x.value() }
-            fn sum_three<T: Valor>(a: T, b: T, c: T) -> int {
+            trait Value { fn value(self) -> int; }
+            struct Point { x: int, y: int }
+            impl Value for Point { fn value(self) -> int { self.x + self.y } }
+            impl Value for int { fn value(self) -> int { self } }
+            fn double_value<T: Value>(x: T) -> int { x.value() + x.value() }
+            fn sum_three<T: Value>(a: T, b: T, c: T) -> int {
                 double_value(a) + b.value() + c.value()   // reenvío del diccionario
             }
             fn main() -> int {
-                let p = Punto { x: 3, y: 4 };
+                let p = Point { x: 3, y: 4 };
                 double_value(p) + double_value(10) + sum_three(p, p, p)   // 14 + 20 + 28 = 62
             }
         "#);
@@ -6425,14 +6425,14 @@ mod tests {
     fn bounds_multiples_oracle() {
         // T: A + B — dos diccionarios. Bajo estrés del GC.
         oracle_stress(r#"
-            trait Nombre { fn largo(self) -> int; }
-            trait Doble { fn double(self) -> int; }
-            struct Cosa { n: int }
-            impl Nombre for Cosa { fn largo(self) -> int { self.n } }
-            impl Doble for Cosa { fn double(self) -> int { self.n + self.n } }
-            fn usar<T: Nombre + Doble>(x: T) -> int { x.largo() + x.double() }
+            trait Name { fn largo(self) -> int; }
+            trait Double { fn double(self) -> int; }
+            struct Thing { n: int }
+            impl Name for Thing { fn largo(self) -> int { self.n } }
+            impl Double for Thing { fn double(self) -> int { self.n + self.n } }
+            fn usar<T: Name + Double>(x: T) -> int { x.largo() + x.double() }
             fn main() -> int {
-                let c = Cosa { n: 5 };
+                let c = Thing { n: 5 };
                 usar(c)   // 5 + 10 = 15
             }
         "#);
@@ -6445,12 +6445,12 @@ mod tests {
         // `impl<T> Trait for Caja<T>` cuyo método no usa T: el método manglado es genérico
         // pero sin diccionarios. Despacha igual para Caja<int> y Caja<string>.
         oracle_program(r#"
-            struct Caja<T> { contenido: T }
-            trait Contar { fn count(self) -> int; }
-            impl<T> Contar for Caja<T> { fn count(self) -> int { 1 } }
+            struct Box<T> { contenido: T }
+            trait Count { fn count(self) -> int; }
+            impl<T> Count for Box<T> { fn count(self) -> int { 1 } }
             fn main() -> int {
-                let c = Caja { contenido: 42 };
-                let s = Caja { contenido: "hello" };
+                let c = Box { contenido: 42 };
+                let s = Box { contenido: "hello" };
                 c.count() + s.count()   // 1 + 1 = 2
             }
         "#);
@@ -6462,12 +6462,12 @@ mod tests {
         // diccionario interno). Llamada directa sobre Caja<int> → el dict interno es el de
         // int (plano). Es M9.2b-1: el caso anidado (pasar Caja a otro genérico) es -2.
         oracle_stress(r#"
-            struct Caja<T> { contenido: T }
-            trait Medir { fn measure(self) -> int; }
-            impl Medir for int { fn measure(self) -> int { self } }
-            impl<T: Medir> Medir for Caja<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
+            struct Box<T> { contenido: T }
+            trait Measure { fn measure(self) -> int; }
+            impl Measure for int { fn measure(self) -> int { self } }
+            impl<T: Measure> Measure for Box<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
             fn main() -> int {
-                let c = Caja { contenido: 41 };
+                let c = Box { contenido: 41 };
                 c.measure()   // 41 + 1 = 42
             }
         "#);
@@ -6478,13 +6478,13 @@ mod tests {
         // M9.2b-2: pasar un Caja<int> a otro genérico acotado. El diccionario de Caja<int> es
         // un **closure** que captura el de int. Ambos motores deben coincidir.
         oracle_program(r#"
-            struct Caja<T> { contenido: T }
-            trait Medir { fn measure(self) -> int; }
-            impl Medir for int { fn measure(self) -> int { self } }
-            impl<T: Medir> Medir for Caja<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
-            fn measure_dos<X: Medir>(a: X, b: X) -> int { a.measure() + b.measure() }
+            struct Box<T> { contenido: T }
+            trait Measure { fn measure(self) -> int; }
+            impl Measure for int { fn measure(self) -> int { self } }
+            impl<T: Measure> Measure for Box<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
+            fn measure_dos<X: Measure>(a: X, b: X) -> int { a.measure() + b.measure() }
             fn main() -> int {
-                let c = Caja { contenido: 10 };
+                let c = Box { contenido: 10 };
                 measure_dos(c, c)   // (10+1) * 2 = 22
             }
         "#);
@@ -6495,13 +6495,13 @@ mod tests {
         // Caja<Caja<int>>: un diccionario anidado que contiene otro. Bajo estrés del GC,
         // porque los closures-diccionario son objetos del heap (sus raíces deben trazarse).
         oracle_stress(r#"
-            struct Caja<T> { contenido: T }
-            trait Medir { fn measure(self) -> int; }
-            impl Medir for int { fn measure(self) -> int { self } }
-            impl<T: Medir> Medir for Caja<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
-            fn measure_one<X: Medir>(x: X) -> int { x.measure() }
+            struct Box<T> { contenido: T }
+            trait Measure { fn measure(self) -> int; }
+            impl Measure for int { fn measure(self) -> int { self } }
+            impl<T: Measure> Measure for Box<T> { fn measure(self) -> int { self.contenido.measure() + 1 } }
+            fn measure_one<X: Measure>(x: X) -> int { x.measure() }
             fn main() -> int {
-                let c2 = Caja { contenido: Caja { contenido: 100 } };
+                let c2 = Box { contenido: Box { contenido: 100 } };
                 c2.measure() + measure_one(c2)   // 102 + 102 = 204
             }
         "#);
@@ -6515,8 +6515,8 @@ mod tests {
         oracle_program(r#"
             fn main() -> int {
                 let s = "hello, " + "mundo";       // concat
-                let etiqueta = "n=" + to_string(s.len());
-                print(etiqueta);                   // n=11
+                let label = "n=" + to_string(s.len());
+                print(label);                   // n=11
                 s.len() + "123".len()               // 11 + 3 = 14
             }
         "#);
@@ -6564,7 +6564,7 @@ mod tests {
         // M11.4c-1: literal de char, anotación, ==, to_string, y @derive(Eq, Show) con campo char.
         oracle_program(r#"
             @derive(Eq, Show)
-            struct Tecla { c: char, repetida: bool }
+            struct Tecla { c: char, repeated: bool }
             fn class(c: char) -> int {
                 if (c == 'a') { 1 } else { if (c == '\n') { 2 } else { 0 } }
             }
@@ -6573,9 +6573,9 @@ mod tests {
                 print(c);                              // z
                 print(to_string('x') + "!");           // x!
                 print('a' == 'a');                     // true
-                let t = Tecla { c: 'q', repetida: false };
-                print(t.show());                    // Tecla { c: q, repetida: false }
-                print(t.eq(Tecla { c: 'q', repetida: false }));  // true
+                let t = Tecla { c: 'q', repeated: false };
+                print(t.show());                    // Tecla { c: q, repeated: false }
+                print(t.eq(Tecla { c: 'q', repeated: false }));  // true
                 class('a') + class('\n') + class('z')  // 1 + 2 + 0 = 3
             }
         "#);
@@ -6728,11 +6728,11 @@ mod tests {
                     if (sig_arr.len() == 0) { 0 } else {
                         let sig = sig_arr[0];
                         let ok = __ed25519_verify(pk, msg, sig);                       // true
-                        let alterado = __ed25519_verify(pk, "mensaje alterad".to_bytes(), sig); // false
+                        let altered = __ed25519_verify(pk, "mensaje alterad".to_bytes(), sig); // false
                         let other = __ed25519_sign(seed, msg);                          // determinista
                         let det = other.len() > 0 && to_string(other[0]) == to_string(sig);
                         let corta = __ed25519_public_key("corta".to_bytes()).len() == 0; // no 32 → vacío
-                        if (ok && !alterado && det && corta) { 1 } else { 0 }
+                        if (ok && !altered && det && corta) { 1 } else { 0 }
                     }
                 }
             }
@@ -6764,10 +6764,10 @@ mod tests {
                 if (ct_arr.len() == 0) { 0 } else {
                     let ct = ct_arr[0];
                     let rec = __chacha20poly1305_open(key, nonce, aad, ct);
-                    let recuperado = rec.len() > 0 && to_string(rec[0]) == to_string(pt);
-                    let manipulado = __chacha20poly1305_open(key, nonce, "other cab".to_bytes(), ct).len() == 0;
+                    let recovered = rec.len() > 0 && to_string(rec[0]) == to_string(pt);
+                    let tampered = __chacha20poly1305_open(key, nonce, "other cab".to_bytes(), ct).len() == 0;
                     let corta = __chacha20poly1305_seal("corta".to_bytes(), nonce, aad, pt).len() == 0;
-                    if (recuperado && manipulado && corta) { 1 } else { 0 }
+                    if (recovered && tampered && corta) { 1 } else { 0 }
                 }
             }
         "#;
@@ -6843,19 +6843,19 @@ mod tests {
         // M11.7d: sort<T: Ord> (bound → diccionarios M9.2) sobre primitivos y un tipo de usuario
         // que implementa Ord. Asigna arreglos en el heap → estrés del GC.
         oracle_stress(r#"
-            struct Caja { peso: int }
-            impl Ord for Caja {
-                fn less(self, other: Caja) -> bool { self.peso < other.peso }
+            struct Box { peso: int }
+            impl Ord for Box {
+                fn less(self, other: Box) -> bool { self.peso < other.peso }
             }
             fn main() -> int {
                 let xs = sort([3, 1, 4, 1, 5, 9, 2, 6]);
                 print(xs[0]); print(xs[7]);             // 1 ... 9
                 let cs = sort(['c', 'a', 'b']);
                 print(cs[0]);                            // a
-                let cajas = sort([Caja { peso: 30 }, Caja { peso: 10 }, Caja { peso: 20 }]);
-                print(cajas[0].peso);                    // 10
-                print(cajas[2].peso);                    // 30
-                xs[0] + xs[7] + cajas[0].peso            // 1 + 9 + 10 = 20
+                let boxes = sort([Box { peso: 30 }, Box { peso: 10 }, Box { peso: 20 }]);
+                print(boxes[0].peso);                    // 10
+                print(boxes[2].peso);                    // 30
+                xs[0] + xs[7] + boxes[0].peso            // 1 + 9 + 10 = 20
             }
         "#);
     }
@@ -7024,15 +7024,15 @@ mod tests {
         // Defecto heredado, defecto que llama a otro método, y redefinición. El método
         // sintetizado es una función ordinaria: ambos motores deben coincidir.
         oracle_program(r#"
-            trait Valor {
+            trait Value {
                 fn base(self) -> int;
                 fn double(self) -> int { self.base() + self.base() }   // defecto usa otro
                 fn ten(self) -> int { 10 }                            // defecto constante
             }
             struct A { n: int }
-            impl Valor for A { fn base(self) -> int { self.n } }       // hereda doble y diez
+            impl Value for A { fn base(self) -> int { self.n } }       // hereda doble y diez
             struct B { n: int }
-            impl Valor for B {
+            impl Value for B {
                 fn base(self) -> int { self.n }
                 fn double(self) -> int { self.n * 100 }                 // redefine doble
             }
@@ -7048,13 +7048,13 @@ mod tests {
     fn default_methods_via_bound_oracle() {
         // Un método por defecto invocado desde un genérico acotado (M9.2 + M9.3a).
         oracle_stress(r#"
-            trait Saludo {
+            trait Greeting {
                 fn name(self) -> int;
                 fn double_name(self) -> int { self.name() + self.name() }
             }
             struct P { v: int }
-            impl Saludo for P { fn name(self) -> int { self.v } }
-            fn usar<T: Saludo>(x: T) -> int { x.double_name() }
+            impl Greeting for P { fn name(self) -> int { self.v } }
+            fn usar<T: Greeting>(x: T) -> int { x.double_name() }
             fn main() -> int { let p = P { v: 21 }; usar(p) }   // 42
         "#);
     }
@@ -7066,19 +7066,19 @@ mod tests {
         // Arreglo heterogéneo de trait objects + despacho por valor. El trait object se
         // realiza como un struct sintetizado (la vtable); ambos motores deben coincidir.
         oracle_program(r#"
-            trait Figura { fn area(self) -> int; }
-            struct Cuadrado { lado: int }
-            impl Figura for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
+            trait Shape { fn area(self) -> int; }
+            struct Square { lado: int }
+            impl Shape for Square { fn area(self) -> int { self.lado * self.lado } }
             struct Rect { ancho: int, alto: int }
-            impl Figura for Rect { fn area(self) -> int { self.ancho * self.alto } }
-            fn total(xs: [dyn Figura]) -> int {
+            impl Shape for Rect { fn area(self) -> int { self.ancho * self.alto } }
+            fn total(xs: [dyn Shape]) -> int {
                 var s = 0; var i = 0;
                 while (i < xs.len()) { s = s + xs[i].area(); i = i + 1; }
                 s
             }
             fn main() -> int {
-                let figuras: [dyn Figura] = [Cuadrado{lado:3}, Rect{ancho:4,alto:5}, Cuadrado{lado:2}];
-                total(figuras)   // 9 + 20 + 4 = 33
+                let shapes: [dyn Shape] = [Square{lado:3}, Rect{ancho:4,alto:5}, Square{lado:2}];
+                total(shapes)   // 9 + 20 + 4 = 33
             }
         "#);
     }
@@ -7089,16 +7089,16 @@ mod tests {
         // El orden del conjunto es canónico (dyn Nombre + Area == dyn Area + Nombre).
         oracle_program(r#"
             trait Area { fn area(self) -> int; }
-            trait Nombre { fn name(self) -> string; }
-            struct Cuadrado { lado: int }
-            impl Area for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
-            impl Nombre for Cuadrado { fn name(self) -> string { "cuad" } }
+            trait Name { fn name(self) -> string; }
+            struct Square { lado: int }
+            impl Area for Square { fn area(self) -> int { self.lado * self.lado } }
+            impl Name for Square { fn name(self) -> string { "cuad" } }
             struct Circ { r: int }
             impl Area for Circ { fn area(self) -> int { 3 * self.r * self.r } }
-            impl Nombre for Circ { fn name(self) -> string { "circ" } }
-            fn describe(x: dyn Nombre + Area) -> int { x.name().len() + x.area() }
+            impl Name for Circ { fn name(self) -> string { "circ" } }
+            fn describe(x: dyn Name + Area) -> int { x.name().len() + x.area() }
             fn main() -> int {
-                let xs: [dyn Area + Nombre] = [Cuadrado{lado:4}, Circ{r:2}];
+                let xs: [dyn Area + Name] = [Square{lado:4}, Circ{r:2}];
                 var s = 0; var i = 0;
                 while (i < xs.len()) { s = s + describe(xs[i]); i = i + 1; }
                 // (4 + 16) + (4 + 12) = 20 + 16 = 36
@@ -7113,13 +7113,13 @@ mod tests {
         // struct menor proyectando los campos del mayor.
         oracle_program(r#"
             trait Area { fn area(self) -> int; }
-            trait Nombre { fn name(self) -> string; }
-            struct Cuadrado { lado: int }
-            impl Area for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
-            impl Nombre for Cuadrado { fn name(self) -> string { "cuad" } }
+            trait Name { fn name(self) -> string; }
+            struct Square { lado: int }
+            impl Area for Square { fn area(self) -> int { self.lado * self.lado } }
+            impl Name for Square { fn name(self) -> string { "cuad" } }
             fn solo_area(a: dyn Area) -> int { a.area() }
             fn main() -> int {
-                let ab: dyn Area + Nombre = Cuadrado { lado: 5 };
+                let ab: dyn Area + Name = Square { lado: 5 };
                 let v1 = solo_area(ab);        // upcast en el argumento: 25
                 let a: dyn Area = ab;          // upcast en el let
                 v1 + a.area()                  // 25 + 25 = 50
@@ -7133,19 +7133,19 @@ mod tests {
         // lleva un closure anidado (como un diccionario), no el método manglado plano. Incluye
         // anidamiento Caja<Caja<N>> y un impl concreto en el mismo arreglo heterogéneo.
         oracle_program(r#"
-            trait Mostrar { fn show(self) -> string; }
+            trait Show { fn show(self) -> string; }
             struct N { x: int }
-            impl Mostrar for N { fn show(self) -> string { "N" } }
-            struct Caja<T> { v: T }
-            impl<T: Mostrar> Mostrar for Caja<T> {
-                fn show(self) -> string { "Caja(" + self.v.show() + ")" }
+            impl Show for N { fn show(self) -> string { "N" } }
+            struct Box<T> { v: T }
+            impl<T: Show> Show for Box<T> {
+                fn show(self) -> string { "Box(" + self.v.show() + ")" }
             }
-            fn describe(d: dyn Mostrar) -> string { d.show() }
+            fn describe(d: dyn Show) -> string { d.show() }
             fn main() -> int {
-                let xs: [dyn Mostrar] = [N{x:1}, Caja{v:N{x:2}}, Caja{v:Caja{v:N{x:3}}}];
+                let xs: [dyn Show] = [N{x:1}, Box{v:N{x:2}}, Box{v:Box{v:N{x:3}}}];
                 var total = 0; var i = 0;
                 while (i < xs.len()) { total = total + describe(xs[i]).len(); i = i + 1; }
-                // len("N")=1, len("Caja(N)")=7, len("Caja(Caja(N))")=13 -> 21
+                // len("N")=1, len("Box(N)")=6, len("Box(Box(N))")=11 -> 18
                 total
             }
         "#);
@@ -7160,13 +7160,13 @@ mod tests {
                 fn sound(self) -> int;
                 fn double_sound(self) -> int { self.sound() + self.sound() }   // defecto
             }
-            struct Perro { v: int }
-            impl Animal for Perro { fn sound(self) -> int { self.v } }            // hereda
-            struct Gato { v: int }
-            impl Animal for Gato { fn sound(self) -> int { self.v * 10 } }        // hereda
+            struct Dog { v: int }
+            impl Animal for Dog { fn sound(self) -> int { self.v } }            // hereda
+            struct Cat { v: int }
+            impl Animal for Cat { fn sound(self) -> int { self.v * 10 } }        // hereda
             fn main() -> int {
-                let p = Perro { v: 3 };
-                let g = Gato { v: 4 };
+                let p = Dog { v: 3 };
+                let g = Cat { v: 4 };
                 p.double_sound() + g.double_sound()   // (3+3) + (40+40) = 6 + 80 = 86
             }
         "#);
@@ -7178,15 +7178,15 @@ mod tests {
         // trazar ambos. Bajo estrés (recolecta en cada punto seguro), un fallo de raíz
         // cambiaría el resultado o reventaría.
         oracle_stress(r#"
-            trait Valor { fn value(self) -> int; fn double(self) -> int { self.value() + self.value() } }
+            trait Value { fn value(self) -> int; fn double(self) -> int { self.value() + self.value() } }
             struct A { n: int }
-            impl Valor for A { fn value(self) -> int { self.n } }
+            impl Value for A { fn value(self) -> int { self.n } }
             struct B { n: int }
-            impl Valor for B { fn value(self) -> int { self.n + 1 } fn double(self) -> int { self.n } }
-            fn usar(x: dyn Valor) -> int { x.value() + x.double() }
+            impl Value for B { fn value(self) -> int { self.n + 1 } fn double(self) -> int { self.n } }
+            fn usar(x: dyn Value) -> int { x.value() + x.double() }
             fn main() -> int {
-                let a: dyn Valor = A { n: 10 };
-                let b: dyn Valor = B { n: 20 };
+                let a: dyn Value = A { n: 10 };
+                let b: dyn Value = B { n: 20 };
                 usar(a) + usar(b)   // (10+20) + (21+20) = 30 + 41 = 71
             }
         "#);
@@ -7200,20 +7200,20 @@ mod tests {
         // deben coincidir, para struct, enum unit y enum con payload.
         oracle_program(r#"
             @derive(Eq)
-            struct Punto { x: int, y: int }
+            struct Point { x: int, y: int }
             @derive(Eq)
             enum Color { Rojo, Verde, Azul }
             @derive(Eq)
-            enum Forma { Circulo(int), Rect(int, int) }
+            enum Form { Circulo(int), Rect(int, int) }
             fn b2i(b: bool) -> int { if (b) { 1 } else { 0 } }
             fn main() -> int {
-                let p = Punto { x: 1, y: 2 };
-                let q = Punto { x: 1, y: 2 };
-                let r = Punto { x: 9, y: 2 };
+                let p = Point { x: 1, y: 2 };
+                let q = Point { x: 1, y: 2 };
+                let r = Point { x: 9, y: 2 };
                 let e1 = b2i(p.eq(q)) + b2i(p.eq(r));               // 1 + 0
                 let e2 = b2i(Color.Verde.eq(Color.Verde)) + b2i(Color.Rojo.eq(Color.Azul)); // 1 + 0
-                let f = Forma.Rect(3, 4);
-                let e3 = b2i(f.eq(Forma.Rect(3, 4))) + b2i(f.eq(Forma.Circulo(3)));         // 1 + 0
+                let f = Form.Rect(3, 4);
+                let e3 = b2i(f.eq(Form.Rect(3, 4))) + b2i(f.eq(Form.Circulo(3)));         // 1 + 0
                 e1 + e2 + e3   // 3
             }
         "#);

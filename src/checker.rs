@@ -6477,22 +6477,22 @@ struct Q { n: int }
 
     #[test]
     fn bound_struct_ok_con_impl() {
-        let src = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Caja {{ v: P {{ n: 1 }} }}; c.v.see(); 0 }}\n", BOUND_PRELUDE);
+        let src = format!("{}struct Box<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Box {{ v: P {{ n: 1 }} }}; c.v.see(); 0 }}\n", BOUND_PRELUDE);
         check_src(&src).expect("P implementa Show2");
     }
 
     #[test]
     fn bound_struct_fails_sin_impl() {
-        let src = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Caja {{ v: Q {{ n: 1 }} }}; 0 }}\n", BOUND_PRELUDE);
+        let src = format!("{}struct Box<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Box {{ v: Q {{ n: 1 }} }}; 0 }}\n", BOUND_PRELUDE);
         err_contains(&src, "requires that 'T' be 'Show2'");
     }
 
     #[test]
     fn bound_struct_propagates_a_function_generic() {
-        // Construir Caja<U> exige que U lleve el bound: sin él, error; con él, OK.
-        let bad = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
+        // Construir Box<U> exige que U lleve el bound: sin él, error; con él, OK.
+        let bad = format!("{}struct Box<T: Show2> {{ v: T }}\nfn env<U>(x: U) -> Box<U> {{ Box {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
         err_contains(&bad, "requires that 'T' be 'Show2'");
-        let good = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U: Show2>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
+        let good = format!("{}struct Box<T: Show2> {{ v: T }}\nfn env<U: Show2>(x: U) -> Box<U> {{ Box {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
         check_src(&good).expect("con U: Show2 la propagación se satisface");
     }
 
@@ -6504,7 +6504,7 @@ struct Q { n: int }
 
     #[test]
     fn bound_struct_trait_nonexistent_es_error() {
-        err_contains("struct Caja<T: NoExiste> { v: T }\nfn main() -> int { 0 }\n", "trait 'NoExiste' not declared");
+        err_contains("struct Box<T: NoExiste> { v: T }\nfn main() -> int { 0 }\n", "trait 'NoExiste' not declared");
     }
 
     #[test]
@@ -6775,12 +6775,12 @@ fn main() -> int {
     #[test]
     fn enum_construction_validates() {
         let src = r#"
-enum Figura { Circulo(float), Rect(float, float), Punto }
-fn area(f: Figura) -> Figura { f }
+enum Shape { Circulo(float), Rect(float, float), Punto }
+fn area(f: Shape) -> Shape { f }
 fn main() {
-    let a: Figura = Figura.Circulo(2.0);
-    let b: Figura = Figura.Rect(3.0, 4.0);
-    let c: Figura = Figura.Punto;
+    let a: Shape = Shape.Circulo(2.0);
+    let b: Shape = Shape.Rect(3.0, 4.0);
+    let c: Shape = Shape.Punto;
     print(a); print(b); print(c); print(area(a));
 }
 "#;
@@ -6791,8 +6791,8 @@ fn main() {
     fn enum_recursive_es_valid() {
         // Un enum puede portar su propio tipo: el norte de M5 (listas, árboles).
         let src = r#"
-enum Lista { Cons(int, Lista), Nil }
-fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); }
+enum List { Cons(int, List), Nil }
+fn main() { let xs: List = List.Cons(1, List.Cons(2, List.Nil)); print(xs); }
 "#;
         assert!(check_src(src).is_ok());
     }
@@ -6846,14 +6846,14 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
     #[test]
     fn match_exhaustive_es_valid() {
         let src = r#"
-enum Lista { Cons(int, Lista), Nil }
-fn sum(xs: Lista) -> int {
+enum List { Cons(int, List), Nil }
+fn sum(xs: List) -> int {
     match (xs) {
-        Lista.Cons(h, t) => h + sum(t),
-        Lista.Nil => 0,
+        List.Cons(h, t) => h + sum(t),
+        List.Nil => 0,
     }
 }
-fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
+fn main() -> int { sum(List.Cons(1, List.Nil)) }
 "#;
         assert!(check_src(src).is_ok());
     }
@@ -6923,7 +6923,7 @@ fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
     #[test]
     fn match_binds_payload_for_the_body() {
         // El binding del payload debe estar disponible (y bien tipado) en el cuerpo.
-        let src = "enum Caja { Con(int), Vacia } fn val(c: Caja) -> int { match (c) { Caja.Con(n) => n + 1, Caja.Vacia => 0 } } fn main() {}";
+        let src = "enum Box { Con(int), Vacia } fn val(c: Box) -> int { match (c) { Box.Con(n) => n + 1, Box.Vacia => 0 } } fn main() {}";
         assert!(check_src(src).is_ok());
     }
 
@@ -7000,13 +7000,13 @@ fn main() -> int { apply(double, 21) }
     #[test]
     fn generic_enum_construction_and_match() {
         let src = r#"
-enum Caja<T> { Llena(T), Vacia }
-fn val(c: Caja<int>, def: int) -> int {
-    match (c) { Caja.Llena(v) => v, Caja.Vacia => def }
+enum Box<T> { Llena(T), Vacia }
+fn val(c: Box<int>, def: int) -> int {
+    match (c) { Box.Llena(v) => v, Box.Vacia => def }
 }
 fn main() -> int {
-    let a: Caja<int> = Caja.Llena(7);   // T=int del argumento
-    let b: Caja<int> = Caja.Vacia;       // T=int del tipo esperado
+    let a: Box<int> = Box.Llena(7);   // T=int del argumento
+    let b: Box<int> = Box.Vacia;       // T=int del tipo esperado
     val(a, 0) + val(b, 35)
 }
 "#;
@@ -7016,10 +7016,10 @@ fn main() -> int {
     #[test]
     fn generic_struct_field_substituted() {
         let src = r#"
-struct Par<A, B> { primero: A, segundo: B }
+struct Par<A, B> { primero: A, second: B }
 fn main() -> int {
-    let p: Par<int, bool> = Par { primero: 10, segundo: true };
-    if (p.segundo) { p.primero } else { 0 }
+    let p: Par<int, bool> = Par { primero: 10, second: true };
+    if (p.second) { p.primero } else { 0 }
 }
 "#;
         assert!(check_src(src).is_ok());
@@ -7028,7 +7028,7 @@ fn main() -> int {
     #[test]
     fn generic_ty_argument_mismatch() {
         err_contains(
-            "enum Caja<T> { Llena(T), Vacia } fn main() { let b: Caja<bool> = Caja.Llena(7); print(b); }",
+            "enum Box<T> { Llena(T), Vacia } fn main() { let b: Box<bool> = Box.Llena(7); print(b); }",
             "cannot be bool and int",
         );
     }
@@ -7036,7 +7036,7 @@ fn main() -> int {
     #[test]
     fn generic_arity_de_args_de_ty() {
         err_contains(
-            "enum Caja<T> { Llena(T), Vacia } fn main() { let b: Caja<int, bool> = Caja.Vacia; print(b); }",
+            "enum Box<T> { Llena(T), Vacia } fn main() { let b: Box<int, bool> = Box.Vacia; print(b); }",
             "expects 1 type argument(s)",
         );
     }
@@ -7045,7 +7045,7 @@ fn main() -> int {
     fn generic_empty_not_inferable_without_context() {
         // Sin tipo esperado ni argumentos, T queda sin determinar.
         err_contains(
-            "enum Caja<T> { Llena(T), Vacia } fn main() { print(Caja.Vacia); }",
+            "enum Box<T> { Llena(T), Vacia } fn main() { print(Box.Vacia); }",
             "could not infer",
         );
     }
@@ -7137,12 +7137,12 @@ fn main() -> int {
 
     #[test]
     fn ufcs_non_field_uses_free_function() {
-        // 'doble' no es campo de Punto: se resuelve como UFCS doble(p).
+        // 'doble' no es campo de Point: se resuelve como UFCS doble(p).
         let src = r#"
-struct Punto { x: int, y: int }
-fn double(p: Punto) -> int { (p.x + p.y) * 2 }
+struct Point { x: int, y: int }
+fn double(p: Point) -> int { (p.x + p.y) * 2 }
 fn main() -> int {
-    let p: Punto = Punto { x: 3, y: 4 };
+    let p: Point = Point { x: 3, y: 4 };
     p.double()
 }
 "#;
@@ -7155,9 +7155,9 @@ fn main() -> int {
         // exista una función libre 'op' homónima con otra firma.
         let src = r#"
 fn op(a: int, b: int) -> int { a - b }
-struct Caja { op: fn(int) -> int }
+struct Box { op: fn(int) -> int }
 fn main() -> int {
-    let c: Caja = Caja { op: fn(x: int) -> int { x + 1 } };
+    let c: Box = Box { op: fn(x: int) -> int { x + 1 } };
     c.op(41)                     // (c.op)(41) = 42, NO op(c, 41)
 }
 "#;
@@ -7263,18 +7263,18 @@ fn main() -> int { map(41) }
     #[test]
     fn infers_primitives_and_compounds() {
         let src = r#"
-struct Punto { x: int, y: int }
-enum Caja<T> { Llena(T), Vacia }
+struct Point { x: int, y: int }
+enum Box<T> { Llena(T), Vacia }
 fn main() -> int {
     let x = 3;                      // int
     let f = 2.5;                    // float
     let b = x > 1;                  // bool
     let s = "hello";                 // string
     let xs = [10, 20, 30];          // [int]
-    let p = Punto { x: 7, y: 6 };   // Punto
-    let c = Caja.Llena(5);          // Caja<int> (genéricos M6)
+    let p = Point { x: 7, y: 6 };   // Point
+    let c = Box.Llena(5);          // Box<int> (genéricos M6)
     let cv = p.x + p.y;             // int, del campo inferido
-    let inside = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };  // int
+    let inside = match (c) { Box.Llena(v) => v, Box.Vacia => 0 };  // int
     x + xs[0] + cv + inside
 }
 "#;
@@ -7332,34 +7332,34 @@ fn main() -> int {
     #[test]
     fn trait_e_impl_valid_vals() {
         check_src(r#"
-            trait Mostrable { fn show(self) -> string; }
-            struct Punto { x: int, y: int }
-            impl Mostrable for Punto { fn show(self) -> string { "p" } }
-            fn main() -> int { let p = Punto { x: 1, y: 2 }; print(p.show()); 0 }
+            trait Showable { fn show(self) -> string; }
+            struct Point { x: int, y: int }
+            impl Showable for Point { fn show(self) -> string { "p" } }
+            fn main() -> int { let p = Point { x: 1, y: 2 }; print(p.show()); 0 }
         "#).expect("trait/impl válidos");
     }
 
     #[test]
     fn trait_for_enum_and_primitive() {
         check_src(r#"
-            trait Valor { fn value(self) -> int; }
-            enum Moneda { Cara, Cruz }
-            impl Valor for Moneda { fn value(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } } }
-            impl Valor for int { fn value(self) -> int { self } }
-            fn main() -> int { Moneda.Cara.value() + 5.value() }
+            trait Value { fn value(self) -> int; }
+            enum Coin { Cara, Cruz }
+            impl Value for Coin { fn value(self) -> int { match (self) { Coin.Cara => 1, Coin.Cruz => 0 } } }
+            impl Value for int { fn value(self) -> int { self } }
+            fn main() -> int { Coin.Cara.value() + 5.value() }
         "#).expect("impl para enum y primitivo");
     }
 
     #[test]
     fn self_en_return_val_y_method_internal() {
         check_src(r#"
-            trait P { fn add(self, o: Punto) -> Punto; fn double(self) -> Self; }
-            struct Punto { x: int, y: int }
-            impl P for Punto {
-                fn add(self, o: Punto) -> Punto { Punto { x: self.x + o.x, y: self.y + o.y } }
+            trait P { fn add(self, o: Point) -> Point; fn double(self) -> Self; }
+            struct Point { x: int, y: int }
+            impl P for Point {
+                fn add(self, o: Point) -> Point { Point { x: self.x + o.x, y: self.y + o.y } }
                 fn double(self) -> Self { self.add(self) }
             }
-            fn main() -> int { let p = Punto { x: 1, y: 2 }; let q = p.double(); q.x }
+            fn main() -> int { let p = Point { x: 1, y: 2 }; let q = p.double(); q.x }
         "#).expect("Self en return_val y self.method() internal");
     }
 
@@ -7422,12 +7422,12 @@ fn main() -> int {
 
     #[test]
     fn concrete_impl_over_generic_ty_is_error() {
-        // `impl T for Caja` sin declarar los parámetros de tipo: M9.2b pide `impl<A> T for
-        // Caja<A>`. El error guía hacia esa forma.
+        // `impl T for Box` sin declarar los parámetros de tipo: M9.2b pide `impl<A> T for
+        // Box<A>`. El error guía hacia esa forma.
         err_contains(
             r#"trait T { fn f(self) -> int; }
-               struct Caja<A> { v: A }
-               impl T for Caja { fn f(self) -> int { 1 } }
+               struct Box<A> { v: A }
+               impl T for Box { fn f(self) -> int { 1 } }
                fn main() -> int { 0 }"#,
             "is generic: declare its parameters in the impl",
         );
@@ -7452,15 +7452,15 @@ fn main() -> int {
     fn semantic_index_hover_of_ty() {
         // M10.2f: el índice registra el uso de un nombre de tipo en un literal de struct y la
         // construcción de un enum, con su posición de declaración (ir-a-definición).
-        let src = "struct Punto { x: int }\nenum Color { Rojo }\nfn main() -> int {\n  let p = Punto { x: 1 };\n  let c = Color.Rojo;\n  p.x\n}";
+        let src = "struct Point { x: int }\nenum Color { Rojo }\nfn main() -> int {\n  let p = Point { x: 1 };\n  let c = Color.Rojo;\n  p.x\n}";
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         let idx = semantic_index(&mut prog);
-        // Hover del nombre `Punto` en el literal (línea 4, col 11).
-        let h = idx.hovers.iter().find(|h| h.line == 4 && h.col == 11).expect("hover de Punto");
-        assert_eq!(h.text, "struct Punto");
+        // Hover del nombre `Point` en el literal (línea 4, col 11).
+        let h = idx.hovers.iter().find(|h| h.line == 4 && h.col == 11).expect("hover de Point");
+        assert_eq!(h.text, "struct Point");
         // Def → la declaración del struct (línea 1).
-        let d = idx.defs.iter().find(|d| d.line == 4 && d.col == 11).expect("def de Punto");
+        let d = idx.defs.iter().find(|d| d.line == 4 && d.col == 11).expect("def de Point");
         assert_eq!(d.def_line, 1);
         // Hover del enum `Color` en la construcción (línea 5).
         let he = idx.hovers.iter().find(|h| h.line == 5 && h.text == "enum Color").expect("hover de Color");
@@ -7506,37 +7506,37 @@ fn main() -> int {
     fn semantic_index_hover_in_match() {
         // M10.2f: dentro de un `match` el índice registra el escrutinio, el enum y la variante del
         // patrón, y los bindings que liga (tanto en el patrón como en el cuerpo).
-        let src = "enum Figura { Circulo(float), Punto }\nfn area(f: Figura) -> float {\n  match (f) {\n    Figura.Circulo(r) => r,\n    Figura.Punto => 0.0,\n  }\n}\nfn main() -> int { 0 }";
+        let src = "enum Shape { Circulo(float), Punto }\nfn area(f: Shape) -> float {\n  match (f) {\n    Shape.Circulo(r) => r,\n    Shape.Punto => 0.0,\n  }\n}\nfn main() -> int { 0 }";
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         let idx = semantic_index(&mut prog);
         // Enum y variante en el patrón (línea 4).
-        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "enum Figura"), "hover enum en patrón");
-        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "Figura.Circulo(float)"), "hover variant en patrón");
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "enum Shape"), "hover enum en patrón");
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "Shape.Circulo(float)"), "hover variant en patrón");
         // Binding `r` del patrón → su tipo.
         assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "r: float"), "hover binding en patrón");
     }
 
     #[test]
     fn impl_generic_valid() {
-        // M9.2b-1: `impl<A> T for Caja<A>` con un método que no usa A.
+        // M9.2b-1: `impl<A> T for Box<A>` con un método que no usa A.
         assert!(check_src(
             r#"trait T { fn f(self) -> int; }
-               struct Caja<A> { v: A }
-               impl<A> T for Caja<A> { fn f(self) -> int { 1 } }
-               fn main() -> int { let c = Caja { v: 9 }; c.f() }"#,
+               struct Box<A> { v: A }
+               impl<A> T for Box<A> { fn f(self) -> int { 1 } }
+               fn main() -> int { let c = Box { v: 9 }; c.f() }"#,
         ).is_ok());
     }
 
     #[test]
     fn generic_impl_malformed_target_is_error() {
-        // El objetivo de un impl genérico debe ser `Caja<A>` con sus propios parámetros.
+        // El objetivo de un impl genérico debe ser `Box<A>` con sus propios parámetros.
         err_contains(
             r#"trait T { fn f(self) -> int; }
-               struct Caja<A> { v: A }
-               impl<A> T for Caja<int> { fn f(self) -> int { 1 } }
+               struct Box<A> { v: A }
+               impl<A> T for Box<int> { fn f(self) -> int { 1 } }
                fn main() -> int { 0 }"#,
-            "must apply to 'Caja<A>'",
+            "must apply to 'Box<A>'",
         );
     }
 
@@ -7562,14 +7562,14 @@ fn main() -> int {
     #[test]
     fn concrete_bound_and_forwarding() {
         check_src(r#"
-            trait Valor { fn value(self) -> int; }
-            struct Punto { x: int }
-            impl Valor for Punto { fn value(self) -> int { self.x } }
-            impl Valor for int { fn value(self) -> int { self } }
-            fn double<T: Valor>(x: T) -> int { x.value() + x.value() }
-            fn forward<T: Valor>(x: T) -> int { double(x) }
+            trait Value { fn value(self) -> int; }
+            struct Point { x: int }
+            impl Value for Point { fn value(self) -> int { self.x } }
+            impl Value for int { fn value(self) -> int { self } }
+            fn double<T: Value>(x: T) -> int { x.value() + x.value() }
+            fn forward<T: Value>(x: T) -> int { double(x) }
             fn main() -> int {
-                let p = Punto { x: 5 };
+                let p = Point { x: 5 };
                 double(p) + double(9) + forward(p)
             }
         "#).expect("bound concreto + reenvío");
@@ -7591,19 +7591,19 @@ fn main() -> int {
     #[test]
     fn bound_ty_does_not_implement() {
         err_contains(
-            r#"trait Valor { fn value(self) -> int; }
-               struct Punto { x: int }
-               fn usar<T: Valor>(x: T) -> int { x.value() }
-               fn main() -> int { let p = Punto { x: 1 }; usar(p) }"#,
-            "Punto does not implement 'Valor'",
+            r#"trait Value { fn value(self) -> int; }
+               struct Point { x: int }
+               fn usar<T: Value>(x: T) -> int { x.value() }
+               fn main() -> int { let p = Point { x: 1 }; usar(p) }"#,
+            "Point does not implement 'Value'",
         );
     }
 
     #[test]
     fn bound_method_outside_del_trait() {
         err_contains(
-            r#"trait Valor { fn value(self) -> int; }
-               fn usar<T: Valor>(x: T) -> int { x.other() }
+            r#"trait Value { fn value(self) -> int; }
+               fn usar<T: Value>(x: T) -> int { x.other() }
                fn main() -> int { 0 }"#,
             "no field or function 'other'",
         );
@@ -7612,11 +7612,11 @@ fn main() -> int {
     #[test]
     fn forwarding_without_bound_is_error() {
         err_contains(
-            r#"trait Valor { fn value(self) -> int; }
-               fn usar<T: Valor>(x: T) -> int { x.value() }
+            r#"trait Value { fn value(self) -> int; }
+               fn usar<T: Value>(x: T) -> int { x.value() }
                fn forwarder<U>(y: U) -> int { usar(y) }
                fn main() -> int { 0 }"#,
-            "is not bounded by 'Valor'",
+            "is not bounded by 'Value'",
         );
     }
 
@@ -7633,14 +7633,14 @@ fn main() -> int {
     #[test]
     fn default_method_inherited_and_overridden() {
         check_src(r#"
-            trait Valor {
+            trait Value {
                 fn base(self) -> int;
                 fn double(self) -> int { self.base() + self.base() }
             }
             struct A { n: int }
-            impl Valor for A { fn base(self) -> int { self.n } }
+            impl Value for A { fn base(self) -> int { self.n } }
             struct B { n: int }
-            impl Valor for B { fn base(self) -> int { self.n } fn double(self) -> int { 0 } }
+            impl Value for B { fn base(self) -> int { self.n } fn double(self) -> int { 0 } }
             fn main() -> int {
                 let a = A { n: 1 };
                 let b = B { n: 2 };
@@ -7663,13 +7663,13 @@ fn main() -> int {
     #[test]
     fn default_method_via_bound() {
         check_src(r#"
-            trait Saludo {
+            trait Greeting {
                 fn name(self) -> int;
                 fn double(self) -> int { self.name() + self.name() }
             }
             struct P { v: int }
-            impl Saludo for P { fn name(self) -> int { self.v } }
-            fn usar<T: Saludo>(x: T) -> int { x.double() }
+            impl Greeting for P { fn name(self) -> int { self.v } }
+            fn usar<T: Greeting>(x: T) -> int { x.double() }
             fn main() -> int { let p = P { v: 1 }; usar(p) }
         "#).expect("default invocado vía bound");
     }
@@ -7679,18 +7679,18 @@ fn main() -> int {
     #[test]
     fn trait_object_coercion_y_dispatch() {
         check_src(r#"
-            trait Figura { fn area(self) -> int; }
-            struct Cuadrado { lado: int }
-            impl Figura for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
+            trait Shape { fn area(self) -> int; }
+            struct Square { lado: int }
+            impl Shape for Square { fn area(self) -> int { self.lado * self.lado } }
             struct Rect { ancho: int, alto: int }
-            impl Figura for Rect { fn area(self) -> int { self.ancho * self.alto } }
-            fn total(xs: [dyn Figura]) -> int {
+            impl Shape for Rect { fn area(self) -> int { self.ancho * self.alto } }
+            fn total(xs: [dyn Shape]) -> int {
                 var s = 0; var i = 0;
                 while (i < xs.len()) { s = s + xs[i].area(); i = i + 1; }
                 s
             }
             fn main() -> int {
-                let fs: [dyn Figura] = [Cuadrado { lado: 2 }, Rect { ancho: 3, alto: 4 }];
+                let fs: [dyn Shape] = [Square { lado: 2 }, Rect { ancho: 3, alto: 4 }];
                 total(fs)
             }
         "#).expect("array heterogéneo de trait objects + dispatch");
@@ -7699,22 +7699,22 @@ fn main() -> int {
     #[test]
     fn trait_object_ty_does_not_implement() {
         err_contains(
-            r#"trait Figura { fn area(self) -> int; }
+            r#"trait Shape { fn area(self) -> int; }
                struct P { x: int }
-               fn main() -> int { let f: dyn Figura = P { x: 1 }; 0 }"#,
-            "does not implement 'Figura'",
+               fn main() -> int { let f: dyn Shape = P { x: 1 }; 0 }"#,
+            "does not implement 'Shape'",
         );
     }
 
     #[test]
     fn trait_object_object_safety() {
         err_contains(
-            r#"trait Clon { fn copy(self) -> Self; }
+            r#"trait Clone { fn copy(self) -> Self; }
                struct P { x: int }
-               impl Clon for P { fn copy(self) -> Self { P { x: self.x } } }
-               fn usar(p: dyn Clon) -> int { let q = p.copy(); 0 }
+               impl Clone for P { fn copy(self) -> Self { P { x: self.x } } }
+               fn usar(p: dyn Clone) -> int { let q = p.copy(); 0 }
                fn main() -> int { 0 }"#,
-            "uses 'Self': it is not callable on 'dyn Clon'",
+            "uses 'Self': it is not callable on 'dyn Clone'",
         );
     }
 
@@ -7773,15 +7773,15 @@ fn main() -> int {
     fn derive_eq_struct_y_enum() {
         check_src(r#"
             @derive(Eq)
-            struct Punto { x: int, y: int }
+            struct Point { x: int, y: int }
             @derive(Eq)
             enum Color { Rojo, Verde, Azul }
             @derive(Eq)
-            enum Forma { Circulo(int), Rect(int, int) }
+            enum Form { Circulo(int), Rect(int, int) }
             fn main() -> int {
-                let p = Punto { x: 1, y: 2 };
+                let p = Point { x: 1, y: 2 };
                 let c = Color.Rojo;
-                let f = Forma.Rect(1, 2);
+                let f = Form.Rect(1, 2);
                 if (p.eq(p)) { 0 } else { 1 }
             }
         "#).expect("@derive(Eq) para struct y enum (unit y con payload)");
@@ -7808,7 +7808,7 @@ fn main() -> int {
     #[test]
     fn derive_en_ty_generic_es_error() {
         err_contains(
-            "@derive(Eq) struct Caja<T> { v: T } fn main() -> int { 0 }",
+            "@derive(Eq) struct Box<T> { v: T } fn main() -> int { 0 }",
             "generic type",
         );
     }
@@ -7817,13 +7817,13 @@ fn main() -> int {
     fn derive_show_struct_y_enum() {
         check_src(r#"
             @derive(Show)
-            struct Punto { x: int, y: int }
+            struct Point { x: int, y: int }
             @derive(Show)
             enum Color { Rojo, RGB(int, int, int) }
             @derive(Show)
-            struct Etiqueta { name: string, donde: Punto, color: Color }
+            struct Label { name: string, location: Point, color: Color }
             fn main() -> int {
-                let e = Etiqueta { name: "o", donde: Punto { x: 1, y: 2 }, color: Color.Rojo };
+                let e = Label { name: "o", location: Point { x: 1, y: 2 }, color: Color.Rojo };
                 print(e.show());
                 0
             }

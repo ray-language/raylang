@@ -2274,10 +2274,10 @@ mod tests {
     #[test]
     fn enum_se_parses() {
         // Variantes con payload posicional, con un solo tipo y unit; coma final ok.
-        let prog = parse_prog("enum Figura { Circulo(float), Rect(float, float), Punto, } fn main() {}");
+        let prog = parse_prog("enum Shape { Circulo(float), Rect(float, float), Punto, } fn main() {}");
         assert_eq!(prog.enums.len(), 1);
         let e = &prog.enums[0];
-        assert_eq!(e.name, "Figura");
+        assert_eq!(e.name, "Shape");
         assert_eq!(e.variants.len(), 3);
         assert_eq!(e.variants[0].name, "Circulo");
         assert_eq!(e.variants[0].payload, vec![Type::Float]);
@@ -2478,9 +2478,9 @@ fn main() -> int {
     #[test]
     fn parse_trait_y_impl() {
         let prog = parse_prog(r#"
-            trait Mostrable { fn show(self) -> string; fn n(self, k: int) -> int; }
-            struct Punto { x: int }
-            impl Mostrable for Punto {
+            trait Showable { fn show(self) -> string; fn n(self, k: int) -> int; }
+            struct Point { x: int }
+            impl Showable for Point {
                 fn show(self) -> string { "p" }
                 fn n(self, k: int) -> int { k }
             }
@@ -2489,16 +2489,16 @@ fn main() -> int {
         // El trait quedó con dos firmas; la primera tiene un solo parámetro: self.
         assert_eq!(prog.traits.len(), 1);
         let t = &prog.traits[0];
-        assert_eq!(t.name, "Mostrable");
+        assert_eq!(t.name, "Showable");
         assert_eq!(t.methods.len(), 2);
         assert_eq!(t.methods[0].params.len(), 1);
         assert_eq!(t.methods[0].params[0].name, "self");
         assert_eq!(t.methods[0].params[0].ty, Type::SelfType);
-        // El impl apunta a Punto y replica los métodos como funciones con cuerpo.
+        // El impl apunta a Point y replica los métodos como funciones con cuerpo.
         assert_eq!(prog.impls.len(), 1);
         let im = &prog.impls[0];
-        assert_eq!(im.trait_name, "Mostrable");
-        assert_eq!(im.target, Type::Struct("Punto".into(), vec![]));
+        assert_eq!(im.trait_name, "Showable");
+        assert_eq!(im.target, Type::Struct("Point".into(), vec![]));
         assert_eq!(im.methods.len(), 2);
         assert_eq!(im.methods[1].params[0].ty, Type::SelfType);
         assert_eq!(im.methods[1].params[1].name, "k");
@@ -2541,13 +2541,13 @@ fn main() -> int {
     #[test]
     fn parse_dyn_trait_object() {
         let prog = parse_prog(r#"
-            trait Figura { fn area(self) -> int; }
-            fn f(x: dyn Figura) -> int { 0 }
+            trait Shape { fn area(self) -> int; }
+            fn f(x: dyn Shape) -> int { 0 }
             fn main() -> int { 0 }
         "#);
-        // El parámetro x tiene tipo Type::Dyn(["Figura"]).
+        // El parámetro x tiene tipo Type::Dyn(["Shape"]).
         let f = &prog.functions[0];
-        assert_eq!(f.params[0].ty, Type::Dyn(vec!["Figura".to_string()]));
+        assert_eq!(f.params[0].ty, Type::Dyn(vec!["Shape".to_string()]));
     }
 
     #[test]

@@ -2357,15 +2357,15 @@ fn main() -> int {
     #[test]
     fn match_traverses_recursive_list() {
         let src = r#"
-enum Lista { Cons(int, Lista), Nil }
-fn length(xs: Lista) -> int {
-    match (xs) { Lista.Cons(_, t) => 1 + length(t), Lista.Nil => 0 }
+enum List { Cons(int, List), Nil }
+fn length(xs: List) -> int {
+    match (xs) { List.Cons(_, t) => 1 + length(t), List.Nil => 0 }
 }
-fn sum(xs: Lista) -> int {
-    match (xs) { Lista.Cons(h, t) => h + sum(t), Lista.Nil => 0 }
+fn sum(xs: List) -> int {
+    match (xs) { List.Cons(h, t) => h + sum(t), List.Nil => 0 }
 }
 fn main() -> int {
-    let xs: Lista = Lista.Cons(10, Lista.Cons(20, Lista.Cons(30, Lista.Nil)));
+    let xs: List = List.Cons(10, List.Cons(20, List.Cons(30, List.Nil)));
     length(xs) * 100 + sum(xs)
 }
 "#;
@@ -2375,15 +2375,15 @@ fn main() -> int {
     #[test]
     fn match_selects_correct_branch() {
         let src = r#"
-enum Figura { Circulo(int), Rect(int, int), Punto }
-fn area(f: Figura) -> int {
+enum Shape { Circulo(int), Rect(int, int), Punto }
+fn area(f: Shape) -> int {
     match (f) {
-        Figura.Circulo(r) => 3 * r * r,
-        Figura.Rect(w, h) => w * h,
-        Figura.Punto => 0,
+        Shape.Circulo(r) => 3 * r * r,
+        Shape.Rect(w, h) => w * h,
+        Shape.Punto => 0,
     }
 }
-fn main() -> int { area(Figura.Rect(4, 5)) + area(Figura.Circulo(2)) + area(Figura.Punto) }
+fn main() -> int { area(Shape.Rect(4, 5)) + area(Shape.Circulo(2)) + area(Shape.Punto) }
 "#;
         assert_eq!(run_ok(src), Value::Int(32)); // 20 + 12 + 0
     }

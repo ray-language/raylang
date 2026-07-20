@@ -213,7 +213,7 @@ pub fn method_takes_args(name: &str) -> bool {
 /// Categorías: `string`/`bytes`/`char`/`int`/`float`/`bool`/`array`/`map`. Tras M48.4e-3 varios de
 /// estos nombres (len/push/trim/split/…) ya NO son builtins de función libre sino **métodos de los
 /// traits del prelude** (`Len`/`Push`/`StrOps`/`MapOps`/…); el test-guardián
-/// `methods_for_solo_nombra_builtins_reales` verifica que cada nombre sea un builtin O un método
+/// `methods_for_only_names_real_builtins` verifica que cada nombre sea un builtin O un método
 /// conocido con `signature()`.
 pub fn methods_for(category: &str) -> &'static [&'static str] {
     match category {
@@ -2486,7 +2486,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn membresia() {
+    fn membership() {
         assert!(is_builtin("print"));
         assert!(is_builtin("args"));
         assert!(!is_builtin("noexiste"));
@@ -2507,7 +2507,7 @@ mod tests {
     }
 
     #[test]
-    fn methods_for_solo_nombra_builtins_reales() {
+    fn methods_for_only_names_real_builtins() {
         // M45: cada nombre listado por categoría debe ser un builtin real (evita que un
         // rename de builtin deje `methods_for` ofreciendo un método inexistente).
         for cat in ["string", "bytes", "char", "int", "float", "bool", "array", "map"] {
@@ -2529,7 +2529,7 @@ mod tests {
     }
 
     #[test]
-    fn regla_ok_y_errors() {
+    fn rule_ok_and_errors() {
         // M48.4e-3: `split` público se retiró; su gemelo interno `__split` conserva la misma regla.
         let split = lookup("__split").unwrap();
         // Firma correcta → tipo de retorno.
@@ -2545,7 +2545,7 @@ mod tests {
     /// M89: solo con la feature `sqlite` (el build slim compila los stubs).
     #[cfg(feature = "sqlite")]
     #[test]
-    fn sqlite_abre_ejecuta_y_query() {
+    fn sqlite_opens_executes_and_queries() {
         let h = sqlite_open(":memory:").unwrap();
         sqlite_exec(h, "CREATE TABLE t (id INTEGER, name TEXT, nota REAL)", &[]).unwrap();
         let n = sqlite_exec(h, "INSERT INTO t VALUES (?1, ?2, ?3)", &["1".into(), "ada".into(), "9.5".into()]).unwrap();
@@ -2561,7 +2561,7 @@ mod tests {
     }
 
     #[test]
-    fn push_es_homogeneo() {
+    fn push_is_homogeneous() {
         // M48.4e-3: `push` público se retiró; su gemelo interno `__push` conserva la misma regla.
         let push = lookup("__push").unwrap();
         let xs_int = Type::Array(Box::new(Type::Int));

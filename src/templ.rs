@@ -885,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn genera_one_function_tipada() {
+    fn generates_typed_function() {
         let tpl = "{% params titulo: string, n: int %}\n<h1>{{ titulo }}</h1>{% if n > 0 %}<p>{{ n }}</p>{% endif %}";
         let code = generate(tpl, "vista").unwrap();
         assert!(code.contains("pub fn render_vista(titulo: string, n: int) -> string {"), "{code}");
@@ -897,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn escapa_los_literals_del_html() {
+    fn escapes_html_literals() {
         // Un `${` o una comilla del HTML no deben romper (ni interpolar) el string generado.
         let tpl = "{% params x: int %}precio: \"${simbolo}\" y \\ raro {{ x }}";
         let code = generate(tpl, "t").unwrap();
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_del_template_con_linea() {
+    fn template_errors_with_line() {
         assert!(generate("<html>", "t").unwrap_err().msg.contains("params"));
         let e = generate("{% params x: int %}\n\n{% if x %}", "t").unwrap_err();
         assert!(e.msg.contains("endif"));
@@ -920,13 +920,13 @@ mod tests {
     }
 
     #[test]
-    fn split_params_respects_los_nested_vars() {
+    fn split_params_respects_nested_vars() {
         let ps = split_params("m: Map<string, int>, xs: [string], f: fn(int) -> int");
         assert_eq!(ps, vec!["m: Map<string, int>", "xs: [string]", "f: fn(int) -> int"]);
     }
 
     #[test]
-    fn include_por_path_no_expone_el_name_generado() {
+    fn include_by_path_does_not_expose_generated_name() {
         // `{% include ruta/al/template(args) %}`: quien escribe el template NO conoce el
         // `render_<x>` generado — el generador importa el módulo solo (dedup con un import
         // explícito) y llama a la función por él.
@@ -945,7 +945,7 @@ mod tests {
     }
 
     #[test]
-    fn import_e_include_componen_templates() {
+    fn import_and_include_compose_templates() {
         // `{% import %}` se hoistea a la cabecera (con su línea en el map) y el `{% include %}`
         // de EXPRESIÓN empalma sin escapar (HTML ya renderizado, p. ej. el `contenido` de un
         // layout o una llamada explícita).
@@ -969,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn let_declara_locals() {
+    fn let_declares_locals() {
         let tpl = "{% params precios: [int] %}\n{% let total = precios.len() %}\n<p>{{ total }}</p>\n";
         let code = generate(tpl, "v").unwrap();
         assert!(code.contains("let total = precios.len();"), "{code}");
@@ -980,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn extends_y_block_heredan_el_layout() {
+    fn extends_and_block_inherit_layout() {
         let base = std::env::temp_dir().join("ray_templ_extends_unit");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
@@ -1035,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn formatea_el_template() {
+    fn formats_the_template() {
         // Cada `{% %}` en su línea, indentación por bloques, `{{ }}` inline, delimitadores
         // normalizados, blancos conservados.
         let tpl = "{% params xs: [string], ok: bool %}\n\
@@ -1068,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn el_line_map_traduce_al_template() {
+    fn line_map_translates_to_template() {
         let tpl = "{% params t: string %}\n<h1>{{ t }}</h1>\n{% if t != \"\" %}\n<p>{{ t }}</p>\n{% endif %}\n";
         let (code, map) = generate_with_map(tpl, "v").unwrap();
         let lines: Vec<&str> = code.lines().collect();

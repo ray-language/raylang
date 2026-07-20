@@ -94,7 +94,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn glob_basico() {
+    fn basic_glob() {
         assert!(glob_matches("*", "main.ray"));
         assert!(glob_matches("*.ray", "main.ray"));
         assert!(!glob_matches("*.rs", "main.ray"));
@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_secciones_y_root() {
+    fn parses_sections_and_root() {
         let src = "root = true\n\n[*]\nindent_style = space\nindent_size = 2\n\n[*.ray]\nindent_size = 4\n";
         // Para un .ray, la última sección que casa (`[*.ray]`) fija size=4; `[*]` fija style=space.
         let (style, size, root) = parse(src, "main.ray");

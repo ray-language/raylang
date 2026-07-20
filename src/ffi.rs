@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn simbolo_nonexistent_es_error() {
+    fn nonexistent_symbol_is_an_error() {
         let d = desc("no_existe_este_simbolo_xyz", vec![], CKind::Int);
         assert!(call(&d, &[]).is_err());
     }
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn strlen_marshala_bytes_nul_terminados() {
+    fn strlen_marshals_nul_terminated_bytes() {
         let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Bytes], ret_kind: CKind::Int };
         match call(&d, &[FfiVal::Bytes(b"abcde\x00")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 5),
@@ -441,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn strstr_returns_char_ptr_como_optbytes() {
+    fn strstr_returns_char_ptr_as_optbytes() {
         let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes };
         // Encontrado → Some(bytes desde la coincidencia).
         match call(&d, &[FfiVal::Str("hello world"), FfiVal::Str("world")]).unwrap() {

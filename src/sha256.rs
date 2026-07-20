@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_los_bloques() {
+    fn crosses_blocks() {
         // Una entrada > 55 bytes fuerza un segundo bloque (el padding no cabe en el primero).
         let a_million_a = vec![b'a'; 1_000_000];
         assert_eq!(

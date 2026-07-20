@@ -58,6 +58,11 @@ web2 no trae (payload/enums/callee…), pero con españoles reales intercalados 
 este arqueo ya promovió al cubo confirmado en su mayoría; una pasada final de curación va incluida
 en el lote D del plan.
 
+> **Decisión del usuario (20 jul 2026)**: el directorio **`tests/` queda excluido del arqueo** — sus
+> 537 declaraciones confirmadas (404 fn + fixtures) no se tocan en ningún lote. El total accionable
+> baja de 1219 a **682** declaraciones (163 archivos → los de `tests/` salen del recuento). La wordlist
+> del futuro `naming_policy.rs` (lote E) tampoco debe exigir inglés ahí.
+
 ## 3. Inconsistencias en las reglas y su enforcement
 
 1. **CLAUDE.md §Convenciones dice "limpieza … COMPLETA"** (y `docs/limpieza-nombres-en-ingles.md`
@@ -99,9 +104,11 @@ Ordenado por riesgo/beneficio; cada lote compila y pasa la suite. Los renombres 
   (helpers privados). *Esfuerzo: bajo.*
 - **Lote B — helpers privados de `packages/` (75) + selfhost (6) + benchmarks (3)**: raylang
   interno, sin API pública. Verificación: suites de red + oráculo. *Esfuerzo: bajo.*
-- **Lote C — nombres de funciones de test (`src/` mod tests + `tests/`, ~800 fn)**: mecánico y de
-  cero riesgo de runtime (gotcha 2 aparte). Es el lote GRANDE en volumen. *Esfuerzo: medio por
-  volumen; ideal para hacerse por archivo con la suite en verde tras cada uno.*
+- **Lote C — nombres de funciones de test en `src/` mod tests (~397 fn)**: mecánico y de cero riesgo
+  de runtime (gotcha 2 aparte). *Esfuerzo: medio por volumen; ideal para hacerse por archivo con la
+  suite en verde tras cada uno.* **Decisión del usuario (20 jul 2026): `tests/` (404 fn) queda FUERA
+  del alcance del arqueo** — no se toca en ningún lote; el directorio de integración se excluye de
+  la política de naming en español/inglés por ahora.
 - **Lote D — fixtures raylang embebidas (`Caja`/`Punto`/`Figura`/… ~200 sitios)**: el delicado
   (gotcha 1: asserts de mensajes + espejos selfhost + goldens). Hacerlo archivo a archivo con el
   oráculo como juez. Incluye la pasada final de curación del residuo "sospechoso". *Esfuerzo:

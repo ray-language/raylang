@@ -5426,7 +5426,7 @@ mod tests {
     /// clasificado para el backend nativo (`NATIVE_TRACKED_BUILTINS`): así un builtin nuevo añadido a
     /// checker/VM/intérprete no puede caer en nativo en un stub silencioso sin que este test lo cace.
     #[test]
-    fn todos_los_builtins_estan_clasificados_para_nativo() {
+    fn all_builtins_are_classified_for_native() {
         use std::collections::BTreeSet;
         let tabla: BTreeSet<&str> = crate::builtins::names().collect();
         let clasificados: BTreeSet<&str> = super::NATIVE_TRACKED_BUILTINS.iter().copied().collect();
@@ -5453,7 +5453,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_fib_recursivo() {
+    fn transpiles_recursive_fib() {
         let rust = transpile_src(
             "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\n\
              fn main() { print(fib(10)); }",
@@ -5465,7 +5465,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_bucle_for_rango() {
+    fn transpiles_for_range_loop() {
         let rust = transpile_src(
             "fn main() { var acc: int = 0; for i in 0..100 { acc = acc + i; } print(acc); }",
         );
@@ -5474,7 +5474,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_strings_concat_y_clon() {
+    fn transpiles_string_concat_and_clone() {
         let rust = transpile_src(
             "fn greet(name: string) -> string { \"hi \" + name }\n\
              fn main() -> int { let g = greet(\"bob\"); print(g); g.len() }",
@@ -5486,7 +5486,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_arreglos_split_join() {
+    fn transpiles_array_split_join() {
         let rust = transpile_src(
             "fn main() -> int { var xs: [string] = []; xs.push(\"a\"); \
              let parts = \"a,b,c\".split(\",\"); parts.join(\"-\").len() }",
@@ -5498,7 +5498,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_map_add_to_get() {
+    fn transpiles_map_add_to_get() {
         let rust = transpile_src(
             "fn main() -> int { var m: Map<string, int> = Map.new(); m.add_to(\"a\", 1); \
              m.add_to(\"a\", 2); m.get(\"a\").unwrap_or(0) }",
@@ -5510,7 +5510,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_struct_y_enum_match() {
+    fn transpiles_struct_and_enum_match() {
         let rust = transpile_src(
             "struct P { x: int, y: int }\n\
              enum Shape { Circle(float), Dot }\n\
@@ -5526,7 +5526,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_option_match_y_try() {
+    fn transpiles_option_match_and_try() {
         let rust = transpile_src(
             "fn f(s: string) -> Option<int> { let n = parse_int(s)?; Option.Some(n + 1) }\n\
              fn main() -> int { match (f(\"7\")) { Option.Some(v) => v, Option.None => 0 } }",
@@ -5539,7 +5539,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_closures_y_map() {
+    fn transpiles_closures_and_map() {
         let rust = transpile_src(
             "fn apply(f: fn(int) -> int, x: int) -> int { f(x) }\n\
              fn main() -> int { \
@@ -5553,7 +5553,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_funciones_genericas() {
+    fn transpiles_generic_functions() {
         let rust = transpile_src(
             "fn id<T>(x: T) -> T { x }\n\
              fn apply<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }\n\
@@ -5566,12 +5566,12 @@ mod tests {
     }
 
     #[test]
-    fn transpila_tipos_genericos() {
+    fn transpiles_generic_types() {
         let rust = transpile_src(
             "struct Par<A, B> { a: A, b: B }\n\
              enum Caja<T> { Llena(T), Vacia }\n\
-             fn saca(c: Caja<int>) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 } }\n\
-             fn main() -> int { let p = Par { a: 1, b: true }; saca(Caja.Llena(9)) }",
+             fn extract(c: Caja<int>) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 } }\n\
+             fn main() -> int { let p = Par { a: 1, b: true }; extract(Caja.Llena(9)) }",
         );
         assert!(rust.contains("struct Par<A: Clone"), "{}", rust);
         assert!(rust.contains("enum Caja<T: Clone"), "{}", rust);
@@ -5580,22 +5580,22 @@ mod tests {
     }
 
     #[test]
-    fn transpila_traits_despacho_estatico() {
+    fn transpiles_static_trait_dispatch() {
         let rust = transpile_src(
-            "trait Valor { fn valor(self) -> int; }\n\
+            "trait Valor { fn value(self) -> int; }\n\
              struct P { x: int }\n\
-             impl Valor for P { fn valor(self) -> int { self.x } }\n\
-             fn main() -> int { let p = P { x: 7 }; p.valor() }",
+             impl Valor for P { fn value(self) -> int { self.x } }\n\
+             fn main() -> int { let p = P { x: 7 }; p.value() }",
         );
-        // El método de trait se baja a una función manglada `P#valor` → `P_HH_valor` (erasure, M9).
-        assert!(rust.contains("fn P_HH_valor(mut __self: Rc<std::cell::RefCell<P>>) -> i64"), "{}", rust);
-        assert!(rust.contains("P_HH_valor("), "{}", rust);
+        // El método de trait se baja a una función manglada `P#value` → `P_HH_value` (erasure, M9).
+        assert!(rust.contains("fn P_HH_value(mut __self: Rc<std::cell::RefCell<P>>) -> i64"), "{}", rust);
+        assert!(rust.contains("P_HH_value("), "{}", rust);
         // Trait propio RayShow para el `Show` de raylang (Display no sirve con Rc<RefCell>).
         assert!(rust.contains("trait RayShow"), "{}", rust);
     }
 
     #[test]
-    fn transpila_tuplas() {
+    fn transpiles_tuples() {
         let rust = transpile_src(
             "fn divmod(a: int, b: int) -> (int, int) { (a / b, a % b) }\n\
              fn main() -> int { let d = divmod(17, 5); let (q, r) = divmod(23, 4); d.0 + q + r }",
@@ -5606,7 +5606,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_trait_objects_dyn() {
+    fn transpiles_dyn_trait_objects() {
         let rust = transpile_src(
             "trait Figura { fn area(self) -> int; }\n\
              struct Cuad { lado: int }\n\
@@ -5622,7 +5622,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_bytes() {
+    fn transpiles_bytes() {
         // bytes → Rc<[u8]>; literal b"..."; to_bytes/sub_bytes/from_utf8; render en hex (como la VM).
         let rust = transpile_src(
             "fn main() -> int { let b = \"Hi\".to_bytes(); let l = b\"xy\"; \
@@ -5636,12 +5636,12 @@ mod tests {
     }
 
     #[test]
-    fn var_capturada_y_mutada_por_closure_va_en_una_celda() {
+    fn var_captured_and_mutated_by_closure_goes_in_a_cell() {
         // B1: una `var` capturada+mutada por una closure (patrón contador) vive en `Rc<RefCell<T>>`; se
         // lee con `.borrow()`, se escribe con `.borrow_mut()`, y la closure captura un clon del Rc.
         let rust = transpile_src(
-            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }\n\
-             fn main() { let c = contador(); print(c()); }",
+            "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }\n\
+             fn main() { let c = counter(); print(c()); }",
         );
         assert!(rust.contains("let n = Rc::new(std::cell::RefCell::new("), "n es una celda: {}", rust);
         assert!(rust.contains("*n.borrow_mut() ="), "escritura por borrow_mut: {}", rust);
@@ -5650,7 +5650,7 @@ mod tests {
     }
 
     #[test]
-    fn var_mutable_no_capturada_sigue_siendo_local_normal() {
+    fn var_uncaptured_mutable_stays_plain_local() {
         // Una `var` mutada pero NO capturada por ninguna closure NO va en celda (sin coste): `let mut`.
         let rust = transpile_src("fn main() { var x: int = 0; x = x + 1; print(x); }");
         assert!(rust.contains("let mut x: i64 = 0i64;"), "x es local normal: {}", rust);
@@ -5658,7 +5658,7 @@ mod tests {
     }
 
     #[test]
-    fn ffi_emite_extern_c_y_wrapper_con_marshalling() {
+    fn ffi_emits_extern_c_and_wrapper_with_marshalling() {
         // FFI (M41): `extern "m" { fn sqrt(x: float) -> float; }` → una decl `extern "C"` del símbolo C
         // (`__ffi_sqrt` con `#[link_name]`, bajo `#[link(name = "m")]`) + un wrapper que llama en `unsafe`.
         let rust = transpile_src(
@@ -5672,7 +5672,7 @@ mod tests {
     }
 
     #[test]
-    fn ffi_retorno_int_es_c_int_de_32_bits() {
+    fn ffi_int_return_is_a_32_bit_c_int() {
         // El retorno `int` de una extern es C `int` (32 bits, sign-extendido), NO `long`: declararlo i64
         // rompería el ABI (el EOF -1 de `fgetc` se vería positivo). Debe ir por `c_int` + `as i64`.
         let rust = transpile_src(
@@ -5686,7 +5686,7 @@ mod tests {
     }
 
     #[test]
-    fn for_sobre_iterador_de_usuario_baja_a_un_loop_con_next() {
+    fn for_over_user_iterator_lowers_to_a_loop_with_next() {
         // B2: `for x in it` sobre un `impl Iterator<T>` de usuario baja a un `loop` que llama `next(it)`
         // hasta `None`, ligando cada `Some(x)`. El iterador se liga a `__rt_it` una vez (estado persistente).
         let rust = transpile_src(
@@ -5701,7 +5701,7 @@ mod tests {
     }
 
     #[test]
-    fn for_sobre_enumerate_destructura_la_tupla() {
+    fn for_over_enumerate_destructures_the_tuple() {
         // `for (i, x) in it.enumerate()`: `next` da `Option<(int, T)>`; el `T` se resuelve unificando el
         // tipo del iterador con el `self` de `next` a TRAVÉS de la cadena de adaptadores (unify/subst_type
         // recurren en structs genéricos y tuplas). Baja a `match … { Some((i, x)) => …, None => break }`.
@@ -5712,29 +5712,29 @@ mod tests {
     }
 
     #[test]
-    fn campo_closure_se_llama_desenvolviendolo() {
+    fn function_field_call_unwraps_it() {
         // Llamar un campo de tipo función (`self.step()`, como en `Iter#next`) → `(r.borrow().step.clone())()`.
         let rust = transpile_src(
             "struct Caja { f: fn() -> int }\n\
-             fn tira(c: Caja) -> int { c.f() }\n\
-             fn main() { print(tira(Caja { f: fn() -> int { 7 } })); }",
+             fn call(c: Caja) -> int { c.f() }\n\
+             fn main() { print(call(Caja { f: fn() -> int { 7 } })); }",
         );
         assert!(rust.contains(".borrow().f.clone())("), "llama el campo-closure: {}", rust);
     }
 
     #[test]
-    fn una_funcion_no_transpilable_queda_como_stub_que_panica() {
+    fn an_untranspilable_function_becomes_a_panicking_stub() {
         // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí una GUARDA de match; el
         // canal de struct que usaba este test se soporta desde H21-N5a) se emite como STUB que
         // panica, con su firma → el programa COMPILA; si el flujo real no la llama, corre igual que
         // la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
         let rust = transpile_src(
-            "fn arranca() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }\n\
+            "fn start() -> int { let x: Option<int> = Option.Some(3); match (x) { Option.Some(n) if n > 0 => 1, Option.Some(n) => 0, Option.None => 0 } }\n\
              fn main() -> int { print(42); 0 }",
         );
         assert!(
-            rust.contains("fn arranca() -> i64 { __ray_rt_err("),
-            "arranca es un stub que aborta (runtime error + exit 70, H6): {}",
+            rust.contains("fn start() -> i64 { __ray_rt_err("),
+            "start es un stub que aborta (runtime error + exit 70, H6): {}",
             rust
         );
         // main y worker SÍ se transpilan normalmente.
@@ -5742,7 +5742,7 @@ mod tests {
     }
 
     #[test]
-    fn concat_de_bytes_y_arreglos() {
+    fn concat_of_bytes_and_arrays() {
         // `a + b` para bytes → concat de slices en un Rc<[u8]> nuevo; para arreglos → arreglo nuevo con
         // los elementos de ambos. Antes caían al `+` genérico, que Rust rechaza (Rc<[u8]>/Vec no tienen Add).
         let by = transpile_src(
@@ -5756,7 +5756,7 @@ mod tests {
     }
 
     #[test]
-    fn len_de_string_cuenta_caracteres() {
+    fn string_len_counts_characters() {
         // `len(string)` = nº de CARACTERES (como la VM), no bytes. Fast-path ASCII (H19): `is_ascii()` →
         // `.len()` (octetos == chars, escaneo SIMD); si no, `.chars().count()` (UTF-8, decodifica).
         let rust = transpile_src("fn main() { let s = \"ab\"; print(s.len()); }");
@@ -5765,7 +5765,7 @@ mod tests {
     }
 
     #[test]
-    fn una_funcion_de_usuario_gana_a_un_builtin_del_prelude() {
+    fn a_user_function_wins_over_a_prelude_builtin() {
         // Si el usuario define su propio `get_or` (aquí 2 args), NO se descarta como el builtin del prelude
         // (que está en LINE_BASE): se emite y su llamada baja a `get_or(...)` ordinario (override).
         let rust = transpile_src(
@@ -5776,7 +5776,7 @@ mod tests {
     }
 
     #[test]
-    fn campo_funcion_se_muestra_como_marcador() {
+    fn function_field_shows_as_a_placeholder() {
         // Un campo/payload de tipo función se renderiza `<fn>` (como el Display del runtime), no vía
         // `.ray_show()` (que no existe para `Rc<dyn Fn…>`).
         let rust = transpile_src(
@@ -5787,7 +5787,7 @@ mod tests {
     }
 
     #[test]
-    fn emite_rayshow_para_map() {
+    fn emits_rayshow_for_map() {
         // Un enum con una variante que lleva un Map (patrón `Json.JObject(Map<string, Json>)`): el
         // RayShow generado para el enum recurre al del Map. Debe existir el impl de Map (`Map{k: v}`,
         // pares ordenados) o rustc no compila el (posiblemente muerto) RayShow del enum.
@@ -5804,7 +5804,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_multi_modulo_mangla_los_tipos() {
+    fn transpiles_multi_module_mangles_types() {
         // Un proyecto multi-módulo: el loader namespaca los tipos a `modulo::Tipo`. El transpilador debe
         // manglarlos a un identificador Rust válido (`figuras_CC_Rect`), no dejar el `::`; en las cadenas
         // de Display de RayShow debe usar el nombre LOCAL (`Rect`), como la VM.
@@ -5825,7 +5825,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_std_math() {
+    fn transpiles_std_math() {
         // `import std/math` necesita el loader; cargamos el ejemplo real y comprobamos el mapeo a los
         // métodos de `f64` de Rust (misma impl que la VM → mismo resultado; verificado byte a byte aparte).
         let loaded = match crate::loader::load(std::path::Path::new("examples/basics/matematicas.ray")) {
@@ -5847,7 +5847,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_contains_y_parse_float() {
+    fn transpiles_contains_and_parse_float() {
         // contains ad-hoc (string subcadena / arreglo pertenencia) + parse_float → Option<float>.
         let rust = transpile_src(
             "fn main() -> int { let ok = \"abc\".contains(\"b\"); let xs: [int] = [1, 2]; \
@@ -5875,7 +5875,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_index_of() {
+    fn transpiles_index_of() {
         // index_of(s, sub) -> Option<int>: índice por CARÁCTER de la subcadena (helper __ray_index_of).
         let rust = transpile_src(
             "fn main() -> int { match (index_of(\"hello\", \"ll\")) { Option.Some(i) => i, Option.None => 0 - 1 } }",
@@ -5885,7 +5885,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_char_code() {
+    fn transpiles_char_code() {
         // char_code(c) -> int (code point); char_from_code(n) -> Option<char>.
         let rust = transpile_src(
             "fn main() -> int { let n = char_code('A'); \
@@ -5896,7 +5896,7 @@ mod tests {
     }
 
     #[test]
-    fn push_que_lee_el_mismo_arreglo_no_doble_borra() {
+    fn push_reading_the_same_array_does_not_double_borrow() {
         // `w.push(w[i] + w[j])` (típico en cripto): el valor debe evaluarse a un TEMP antes del borrow_mut,
         // si no el RefCell entra en doble borrow y PANICA en runtime. Regresión de sha256/hmac.
         let rust = transpile_src(
@@ -5908,7 +5908,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_udp() {
+    fn transpiles_udp() {
         // Primitivos __udp_* (los llaman los wrappers de udp.ray): bind/send → [string]; recv → [bytes].
         let rust = transpile_src(
             "fn main() -> int { let b = __udp_bind(\"127.0.0.1\", 0); \
@@ -5923,7 +5923,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_sockets_tcp() {
+    fn transpiles_tcp_sockets() {
         // std::net::{tcp_connect,tcp_listen,tcp_accept,socket_read,socket_write,local_port} → std::net.
         let dir = std::env::temp_dir().join(format!("ray_net_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
@@ -5951,7 +5951,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_time_y_random() {
+    fn transpiles_time_and_random() {
         // std::time::{now,monotonic,sleep} + std::random::{next,below,seed} (necesitan el loader por el
         // `import`). No deterministas → aquí solo se comprueba la ESTRUCTURA del Rust emitido.
         let dir = std::env::temp_dir().join(format!("ray_tr_test_{}", std::process::id()));
@@ -5975,7 +5975,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_indexar_bytes() {
+    fn transpiles_byte_indexing() {
         // b[i] sobre bytes → el octeto como int (Rc<[u8]>, sin borrow; envuelto en () por el `as i64`).
         let rust = transpile_src(
             "fn main() -> int { let b = \"Hi\".to_bytes(); print(to_string(b[0])); b[1] }",
@@ -5985,7 +5985,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_mas_builtins_string_y_eprint() {
+    fn transpiles_more_string_builtins_and_eprint() {
         // eprint (stderr), bytes_of, y el resto de builtins de string (→ métodos de str de Rust).
         let rust = transpile_src(
             "fn main() -> int { eprint(\"e\"); let b = bytes_of([1, 2]); \
@@ -6001,7 +6001,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_canal_de_string() {
+    fn transpiles_string_channel() {
         // Channel<string>: el elemento viaja como repr SEND (Arc<str>), convertido al borde (send/recv).
         let rust = transpile_src(
             "fn main() -> int { let ch: Channel<string> = Channel.new(); \
@@ -6014,7 +6014,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_canal_de_struct() {
+    fn transpiles_struct_channel() {
         // H21-N5a: un canal de struct cruza como __RaySend (deep copy, semántica M38) — antes era
         // un error ("channel/task of non-Send type").
         let rust = transpile_src(
@@ -6025,7 +6025,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_signals() {
+    fn transpiles_signals() {
         // signals() -> Channel<int> (M88.1): canal de señales del SO (self-pipe + FFI a libc).
         let rust = transpile_src(
             "fn main() -> int { let sig: Channel<int> = signals(); \
@@ -6038,7 +6038,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_select() {
+    fn transpiles_select() {
         // select([chs]) -> int (M12.4): índice del primer canal listo (poll del índice menor).
         let rust = transpile_src(
             "fn main() -> int { let a: Channel<int> = Channel.new(); let b: Channel<int> = Channel.new(); \
@@ -6049,7 +6049,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_structured_concurrency() {
+    fn transpiles_structured_concurrency() {
         // Task/join/scope (M12.3): spawn → __ray_spawn (devuelve Task); join(t) → t.join(); scope → __ray_scope.
         let rust = transpile_src(
             "fn sq(n: int) -> int { n * n }\n\
@@ -6065,7 +6065,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_concurrencia_csp() {
+    fn transpiles_csp_concurrency() {
         // spawn + canales (M12.1/M12.2): Channel.new/bounded → __RayChan; send/recv/close; spawn → thread.
         let rust = transpile_src(
             "fn prod(c: Channel<int>) { send(c, 1); close(c); }\n\
@@ -6084,7 +6084,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_env() {
+    fn transpiles_env() {
         // env(name) -> Option<string>: variable de entorno vía std::env::var(...).ok().
         let rust = transpile_src(
             "fn main() -> int { match (env(\"HOME\")) { Option.Some(v) => v.len(), Option.None => 0 } }",
@@ -6094,7 +6094,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_args() {
+    fn transpiles_args() {
         // args() → arreglo de string (argv tras el binario); a[i] indexa, a.len() cuenta.
         let rust = transpile_src(
             "fn main() -> int { let a = args(); \
@@ -6107,7 +6107,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_operator_overloading_y_show_custom() {
+    fn transpiles_operator_overloading_and_custom_show() {
         // `a + b` con `impl Add for Vec2` → llamada al método (`Vec2#add`); un `impl Show` CUSTOM se
         // respeta en `.show()` (llama a `Vec2#show`), mientras `print(x)` usaría el render default (RayShow).
         let rust = transpile_src(
@@ -6123,7 +6123,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_enteros_con_tamano() {
+    fn transpiles_sized_integers() {
         // u8/u32/u64 → nativos de Rust; literal tipado por contexto (200u8, elementos de [u8]); aritmética
         // envolvente (wrapping_*) entre valores sized para no chocar con el deny de overflow constante de
         // Rust; cast `as uN`/`as int`. Aritmética con vars sized (no literales) → dispara wrapping.
@@ -6143,28 +6143,28 @@ mod tests {
     }
 
     #[test]
-    fn transpila_from_conversion() {
+    fn transpiles_from_conversion() {
         // `?` con From-conversion: el checker baja a un match con temps `$to`/`$te` y una llamada a la
         // conversión `AppError#from#string`. Verificamos que los `$` se manglan y la conversión se emite.
         let rust = transpile_src(
             "enum AppError { Lectura(string), Vacio }\n\
              impl From<string> for AppError { fn convert(o: string) -> AppError { AppError.Lectura(o) } }\n\
-             fn leer(ok: bool) -> Result<int, string> { if (ok) { Result.Ok(1) } else { Result.Err(\"x\") } }\n\
-             fn cargar(ok: bool) -> Result<int, AppError> { let v = leer(ok)?; Result.Ok(v) }\n\
-             fn main() -> int { match (cargar(true)) { Result.Ok(v) => v, Result.Err(_) => 0 } }",
+             fn read(ok: bool) -> Result<int, string> { if (ok) { Result.Ok(1) } else { Result.Err(\"x\") } }\n\
+             fn load(ok: bool) -> Result<int, AppError> { let v = read(ok)?; Result.Ok(v) }\n\
+             fn main() -> int { match (load(true)) { Result.Ok(v) => v, Result.Err(_) => 0 } }",
         );
         assert!(rust.contains("AppError_HH_from_HH_string"), "{}", rust); // la conversión se emite
         assert!(!rust.contains('$'), "los temps $ deben manglarse: {}", rust);
     }
 
     #[test]
-    fn transpila_derive_eq() {
+    fn transpiles_derive_eq() {
         // @derive(Eq) + bound T: Eq → paso de diccionarios (como los traits de usuario): el impl derivado
         // `Tipo#eq` se emite como función ordinaria, y `x.eq(y)` con x: T acotado llama al dict param.
         let rust = transpile_src(
             "@derive(Eq)\nstruct Punto { x: int, y: int }\n\
-             fn iguales<T: Eq>(a: T, b: T) -> bool { a.eq(b) }\n\
-             fn main() -> int { if (iguales(Punto { x: 1, y: 2 }, Punto { x: 1, y: 2 })) { 1 } else { 0 } }",
+             fn equal<T: Eq>(a: T, b: T) -> bool { a.eq(b) }\n\
+             fn main() -> int { if (equal(Punto { x: 1, y: 2 }, Punto { x: 1, y: 2 })) { 1 } else { 0 } }",
         );
         // el impl derivado se emite manglado (Punto#eq → Punto_HH_eq), no se salta.
         assert!(rust.contains("Punto_HH_eq"), "{}", rust);
@@ -6174,7 +6174,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_for_sobre_map() {
+    fn transpiles_for_over_map() {
         // for (k, v) in map → pares ordenados por clave (helper __ray_pairs), determinista como la VM.
         let rust = transpile_src(
             "fn main() { var m: Map<string, int> = Map.new(); m.insert(\"a\", 1); \
@@ -6185,7 +6185,7 @@ mod tests {
     }
 
     #[test]
-    fn rechaza_fuera_del_subconjunto() {
+    fn rejects_outside_the_subset() {
         // Una GUARDA de match (`Option.Some(n) if n > 0 =>`) sigue fuera del subconjunto → no
         // transpilable. (try_join, que era el caso de este test, se portó en H21-N2 — ver abajo.)
         let tokens = crate::lexer::lex(
@@ -6198,7 +6198,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_try_join() {
+    fn transpiles_try_join() {
         // H21-N2: try_join une SIN re-lanzar (el fallo como valor) → transpila sobre `wait()` (N1).
         let rust = transpile_src(
             "fn main() { let t: Task<int> = spawn(fn() -> int { 1 }); match (try_join(t)) { Result.Ok(v) => print(v), Result.Err(e) => print(0) } }",
@@ -6207,7 +6207,7 @@ mod tests {
     }
 
     #[test]
-    fn transpila_io_de_entrada() {
+    fn transpiles_input_io() {
         // input()/read_int() (prelude) → stdin; read_file/write_file/exists (std/fs, cualificados) → std::fs.
         let rust = transpile_src(
             "fn main() -> int { \

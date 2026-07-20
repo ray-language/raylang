@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_minimo() {
+    fn minimal_manifest() {
         let m = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\n").unwrap();
         assert_eq!(m.name, "demo");
         assert_eq!(m.version, "0.1.0");
@@ -347,7 +347,7 @@ util = \"git+https://ejemplo/util@v2.1\"
     }
 
     #[test]
-    fn remove_quita_la_dep_y_preserves_el_rest() {
+    fn remove_removes_the_dep_and_preserves_the_rest() {
         // Quita solo la línea de la dep pedida, sin tocar otras secciones (M51f).
         let src = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^1.2\"\nutil = \"1.0.0\"\n\n[fmt]\nindent_size = 2\n";
         let out = remove_dependency(src, "geo").unwrap();

@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn let_persiste_between_lines() {
+    fn let_persists_between_lines() {
         let mut s = Session::new();
         assert_eq!(s.eval("let x = 3").unwrap(), Outcome::Printed);
         assert_eq!(s.eval("x + 1").unwrap(), Outcome::Printed);
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn var_y_asignacion_persisten() {
+    fn var_and_assignment_persist() {
         let mut s = Session::new();
         assert_eq!(s.eval("var t = 0").unwrap(), Outcome::Printed);
         assert!(s.eval("t = t + 5").is_ok());
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn definiciones_y_su_usage() {
+    fn definitions_and_their_usage() {
         let mut s = Session::new();
         assert_eq!(s.eval("fn double(n: int) -> int { n * 2 }").unwrap(), Outcome::Defined("double".into()));
         assert!(s.eval("let x = 21").is_ok());
@@ -372,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn redefine_one_variable() {
+    fn redefine_a_variable() {
         let mut s = Session::new();
         s.eval("let x = 3").unwrap();
         assert!(s.eval("let x = true").is_ok()); // la última gana (shadowing al re-ejecutar)
@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn one_entry_con_error_no_contamina_el_estado() {
+    fn an_entry_with_error_does_not_contaminate_state() {
         let mut s = Session::new();
         s.eval("let x = 3").unwrap();
         assert!(s.eval("let y = x + true").is_err()); // error de tipos
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn lo_indeterminado_asks_annotation() {
+    fn the_indeterminate_type_asks_for_annotation() {
         let mut s = Session::new();
         let e = s.eval("let xs = []").unwrap_err();
         assert!(e.contains("cannot infer"), "mensaje: {}", e);

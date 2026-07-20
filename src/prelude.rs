@@ -78,7 +78,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn el_prelude_va_en_su_banda_de_lineas_disjunta() {
+    fn the_prelude_lives_in_its_own_disjoint_line_band() {
         // Guarda el fix de la colisión de posiciones: el prelude se inyecta en el programa fusionado
         // y varias lowerings del checker (uint literals, UFCS/dicts/`dyn`) indexan por (línea, col).
         // Debe vivir por encima de LINE_BASE para no chocar con módulos de usuario desplazados.

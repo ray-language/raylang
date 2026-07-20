@@ -668,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn los_tokens_llevan_su_length() {
+    fn tokens_carry_their_length() {
         // M33a: cada token mide su lexema en caracteres (col..col+len es el span).
         let toks = lex("let foo = 12345 + \"ab\\n\";").expect("tokeniza");
         let lens: Vec<(TokenKind, usize)> =
@@ -685,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn el_error_lexico_lleva_su_extension() {
+    fn lex_error_carries_its_extent() {
         // M33a: "cadena sin cerrar" subraya desde la comilla hasta donde se rompió.
         let e = lex("let s = \"hello").unwrap_err();
         assert_eq!((e.line, e.col), (1, 9));
@@ -696,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_produce_solo_eof() {
+    fn empty_produces_only_eof() {
         assert_eq!(kinds(""), vec![TokenKind::Eof]);
         assert_eq!(kinds("   \n\t  "), vec![TokenKind::Eof]);
     }
@@ -714,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn punto_sin_decimal_no_es_flotante() {
+    fn dot_without_decimal_is_not_a_float() {
         // El número no se traga el punto si no le sigue un dígito: "1.x" debe ser
         // Int(1), Dot, Ident("x") (acceso a campo), no un flotante.
         assert_eq!(
@@ -751,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_de_caracter_invalido_es_error() {
+    fn invalid_char_literal_is_error() {
         // Vacío, multi-carácter y sin cerrar son errores de lexado.
         assert!(crate::lexer::lex("''").is_err(), "'' vacío");
         assert!(crate::lexer::lex("'ab'").is_err(), "más de un carácter");
@@ -759,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn words_clave_vs_identificadores() {
+    fn keywords_vs_identifiers() {
         assert_eq!(
             kinds("let x int while123 ifx"),
             vec![
@@ -774,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn words_clave_de_m5() {
+    fn keywords_of_m5() {
         // `enum` y `match` son palabras clave (M5); `=>` es un token propio.
         assert_eq!(
             kinds("enum match => enumx"),
@@ -789,12 +789,12 @@ mod tests {
     }
 
     #[test]
-    fn token_de_interrogacion() {
+    fn question_token() {
         assert_eq!(kinds("x?"), vec![TokenKind::Ident("x".into()), TokenKind::Question, TokenKind::Eof]);
     }
 
     #[test]
-    fn token_arroba_reservado() {
+    fn reserved_at_token() {
         // '@' se lexea como token (reservado para anotaciones, M10); ya no es error.
         assert_eq!(kinds("@test"), vec![TokenKind::At, TokenKind::Ident("test".into()), TokenKind::Eof]);
     }
@@ -861,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn comments_se_ignoran() {
+    fn comments_are_ignored() {
         assert_eq!(
             kinds("let // esto se ignora\n x"),
             vec![TokenKind::Let, TokenKind::Ident("x".into()), TokenKind::Eof]
@@ -869,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn positions_son_correctas() {
+    fn positions_are_correct() {
         // fuente:
         //   let x      (línea 1)
         //     42       (línea 2, con 2 espacios de sangría)
@@ -886,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_lexicos() {
+    fn lex_errors() {
         // carácter inesperado ('@' ya está reservado para anotaciones; usamos '#')
         let e = lex("#").unwrap_err();
         assert_eq!((e.line, e.col), (1, 1));

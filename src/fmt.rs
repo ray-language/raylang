@@ -1169,7 +1169,7 @@ mod tests {
     }
 
     #[test]
-    fn backticks_se_preservan() {
+    fn backticks_are_preserved() {
         // M95: el fmt reemite un backtick como backtick (comillas literales, multilínea, `${}`).
         let src = "fn main() -> int {\n    print(`{\"id\": ${1 + 2}}`);\n    let d = `a\nb`;\n    print(d);\n    0\n}\n";
         assert_eq!(fmt(src), src);
@@ -1179,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_doc_trailing_y_sueltos() {
+    fn preserves_doc_trailing_and_standalone() {
         let src = "/// Documenta.\nfn f(x: int) -> int {\n  let y = x * 2;   // el double\n  // resultado\n  y\n}\n";
         let out = fmt(src);
         assert!(out.contains("/// Documenta."), "doc comment: {out}");
@@ -1188,7 +1188,7 @@ mod tests {
     }
 
     #[test]
-    fn fn_anonymous_como_argumento_indenta_el_body() {
+    fn fn_anonymous_as_argument_indents_body() {
         // Regresión: `spawn(fn() { … })` como sentencia — el cuerpo va un nivel más adentro que la
         // llamada y el `});` alinea con ella (antes el cuerpo se quedaba al nivel de la llamada y el
         // cierre en la columna 0).
@@ -1217,7 +1217,7 @@ mod tests {
     }
 
     #[test]
-    fn ningun_comment_se_pierde() {
+    fn no_comment_is_lost() {
         // Cuenta las líneas de comentario de entrada y de salida: no debe faltar ninguna.
         let src = "// a\n// b\nfn f() -> int {\n  // c\n  let x = 1;  // d\n  x\n}\n// e\n";
         let out = fmt(src);
@@ -1229,14 +1229,14 @@ mod tests {
     }
 
     #[test]
-    fn idempotente_con_comments() {
+    fn idempotent_with_comments() {
         let src = "// header\n\n/// doc\nfn f(x: int) -> int {\n  let y = x;  // t\n  // suelto\n  y\n}\n";
         let a = fmt(src);
         assert_eq!(a, fmt(&a), "fmt(fmt(x)) == fmt(x)");
     }
 
     #[test]
-    fn imports_consecutivos_sin_linea_en_blanco() {
+    fn consecutive_imports_without_blank_line() {
         let src = "import a/b;\nimport c/d as x;\nfrom e import f;\nfn main() -> int { 0 }\n";
         let out = fmt(src);
         // Los tres imports quedan agrupados (sin blancos entre ellos)…
@@ -1246,7 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn comment_antes_del_cierre_queda_inside() {
+    fn comment_before_close_stays_inside() {
         // Un comentario tras la última sentencia, antes del `}`, se acota al bloque (ya no se reubica
         // tras el `}`). Con blanco previo, se conserva. Y un bloque vacío con solo un comentario lo mantiene.
         let src = "fn g() -> int {\n  let z = 1;\n  z\n\n  // final\n}\nfn empty() {\n  // solo comment\n}\nfn main() -> int { 0 }\n";
@@ -1257,7 +1257,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_lines_en_blanco_between_statements() {
+    fn preserves_blank_lines_between_statements() {
         // Un blanco entre grupos de sentencias se conserva; 2+ se colapsan a uno; sin blanco al inicio.
         let src = "fn main() -> int {\n  let a = 1;\n  let b = 2;\n\n\n  // grupo 2\n  let c = 3;\n  c\n}\n";
         let out = fmt(src);
@@ -1268,7 +1268,7 @@ mod tests {
     }
 
     #[test]
-    fn function_inline_se_conserva() {
+    fn inline_function_is_preserved() {
         // Cuerpo de una línea en la fuente → se mantiene inline; multilínea → se mantiene multilínea.
         let src = "fn square(n: int) -> int { n * n }\nfn largo(x: int) -> int {\n  let y = x;\n  y\n}\n";
         let out = fmt(src);
@@ -1282,7 +1282,7 @@ mod tests {
     }
 
     #[test]
-    fn indent_configurable_y_canonical() {
+    fn configurable_and_canonical_indent() {
         let src = "fn f(x: int) -> int {\n  if (x > 0) {\n    x\n  } else {\n    0\n  }\n}\n";
         // Canónico = 4 espacios.
         assert!(fmt(src).contains("\n    if ("), "canónico 4 espacios");
@@ -1312,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn forma_con_block_como_subexpresion_se_indenta() {
+    fn form_with_block_as_subexpression_indents() {
         // Regresión: un `match`/bloque como ARGUMENTO de llamada (u otra sub-expresión no-valor) se
         // indentaba desde la columna 0 (`fmt_expr` no llevaba la indentación). Debe indentarse relativo
         // a su línea: brazos a base+1, cierre a base.
@@ -1330,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_punto_y_coma_en_block_form_final() {
+    fn preserves_semicolon_in_final_block_form() {
         // Regresión (grave: cambiaba semántica): un `match`/`if`/bloque como sentencia-expresión ÚLTIMA de
         // un bloque sin tail se emitía SIN `;`; al re-parsear, un block-form final sin `;` es el **tail**,
         // así que el bloque pasaba de producir `unit` a producir el valor del block-form. El `;` debe
@@ -1355,7 +1355,7 @@ mod tests {
     }
 
     #[test]
-    fn ty_function_what_retorna_unit_omite_el_return_val() {
+    fn fn_type_returning_unit_omits_return_val() {
         // Un tipo `fn(...) -> unit` (retorno implícito) NO debe emitirse con `-> unit` (no es escribible).
         // Antes se emitía por el `Display` de Type, corrompiendo el archivo.
         let src = "struct R { h: fn(int, string) }\nfn f(cb: fn(int)) -> int { 0 }\nfn g(xs: [fn(int)]) -> int { 0 }\nfn main() -> int { 0 }\n";
@@ -1388,7 +1388,7 @@ mod tests {
     // antes de correrlo—, el diff resultante toca **solo** los sitios migrados. En e-2 los builtins siguen
     // vivos: `recv.metodo()` resuelve por el trait (coexistencia), así que el corpus corre igual.
     //
-    //   cargo test --lib fmt::tests::migrar_builtins_prefijos -- --ignored --nocapture
+    //   cargo test --lib fmt::tests::migrate_prefix_builtins -- --ignored --nocapture
 
     const RETIRED: &[&str] = &[
         "len", "push", "reverse", "contains", "insert", "contains_key", "keys", "values", "trim", "split",
@@ -1571,7 +1571,7 @@ mod tests {
 
     #[test]
     #[ignore = "codemod de un solo use (M48.4e-2); runs con --ignored"]
-    fn migrar_builtins_prefijos() {
+    fn migrate_prefix_builtins() {
         let root = env!("CARGO_MANIFEST_DIR");
         let mut files = Vec::new();
         for d in ["examples", "std", "packages", "selfhost", "benchmarks"] {

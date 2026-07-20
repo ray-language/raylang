@@ -227,6 +227,7 @@ impl<'a> Compiler<'a> {
         fuse_superinstructions(&mut self.cur().chunk);
         fuse_round2(&mut self.cur().chunk); // A4: guardas y aritmética local-const
         fuse_guard_round3(&mut self.cur().chunk); // P0.6: GetLocalConst;CmpJump → guarda en 1 opcode
+        discard_spawn_results(&mut self.cur().chunk); // M98.1: spawn fire-and-forget sin Task retenida
 
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
@@ -1356,6 +1357,20 @@ fn fuse_round2(chunk: &mut Chunk) {
 ///
 ///   - `[GetLocalConst(s, c), CmpJump(op, t)]` → `GetLocalConstCmpJump(s, c, op, t)`.
 ///
+/// M98.1: peephole `[Spawn, Pop]` → `[SpawnDiscard, Pop]` — un `spawn(f);` como sentencia descarta el
+/// `Task<T>`; sin este pase la entrada del almacén de tareas quedaría retenida para siempre (nadie la
+/// consume: la fuga de ~1 KB/tarea de la investigación de memoria). Reemplazo IN SITU (no borra
+/// instrucciones → cero remapeo de saltos) y con efecto de pila idéntico (`SpawnDiscard` empuja `unit`
+/// y el `Pop` que sigue lo tira) → seguro aunque un salto caiga en el `Pop`.
+fn discard_spawn_results(chunk: &mut Chunk) {
+    let n = chunk.code.len();
+    for i in 0..n.saturating_sub(1) {
+        if matches!(chunk.code[i], OpCode::Spawn) && matches!(chunk.code[i + 1], OpCode::Pop) {
+            chunk.code[i] = OpCode::SpawnDiscard;
+        }
+    }
+}
+
 /// Es el par MÁS ejecutado en fib/bucles (`n < 2`, `i < N`): en fib(34), 18.5M veces. El `GetLocalConst`
 /// SÍ puede ser destino de salto (la vuelta de un `while` apunta al inicio de la condición) → un salto a
 /// él remapea a la fusión; solo se exige que el `CmpJump` (i+1) NO sea destino (nada salta a mitad de

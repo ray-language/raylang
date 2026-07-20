@@ -2489,6 +2489,45 @@ Tests en `tests/concurrency_cli.rs`. Con M12.5, **M12 (concurrencia) queda COMPL
 cancelación **preemptiva** (interrumpir el cuerpo / una hermana en CPU), `Selected<T>`, `select` de send,
 y un primitivo de cancelación **explícito** (`cancel(t)`).
 
+### 21.7 M98.1/M98.2 — ciclo de vida de una Task: `join` consume (especificación)
+
+La investigación de memoria (docs/investigacion-uso-de-memoria.md, 20 jul 2026) destapó que los
+almacenes `tasks`/`channels` de la VM solo crecían (el handle era el índice del Vec; ninguna entrada
+se retiraba) y una tarea `Done(v)` retenía su resultado para siempre → el webserver sobre la VM fugaba
+~1 KB/request (924 MB en 30 s de carga). M98.1 fija el **ciclo de vida**:
+
+- **Una `Task<T>` es de UN solo consumidor.** `join`/`try_join` la **consumen** (liberan su entrada y
+  el heap del resultado). Un segundo `join`/`try_join` sobre el mismo handle → error de ejecución
+  `task already consumed (join/try_join takes the task)` (precedente: `JoinHandle::join` de Rust toma
+  `self`). `__task_failed` (la base de `try_join`) consume solo al observar un **fallo**; en éxito el
+  `join` del envoltorio consume.
+- **El `scope` es el dueño de sus hijas y las consume al cerrar** (en éxito y en fallo). Un handle que
+  escapa del scope y se une después → el mismo error (las hijas no sobreviven al scope). Esto subsume
+  el flag `observed` de M97.1: un fallo consumido por `try_join` desaparece del almacén y el `ScopeEnd`
+  lo salta por handle stale — misma semántica "observado = manejado", cero estado extra.
+- **Fire-and-forget** (`spawn(f);` como sentencia): el peephole `[Spawn, Pop] → [SpawnDiscard, Pop]`
+  (compilador) hace que fuera de un scope la fibra corra **sin Task** (nada que retener; un panic se
+  descarta en silencio, como antes quedaba en un `Failed` que nadie leía). Dentro de un scope se
+  comporta como `Spawn` (el scope la rastrea y consume).
+- **Implementación (VM)**: el almacén pasa a **slots con generación + free-list** (`TaskSlot`;
+  handle = `gen << 32 | idx`, el `HeapValue::Task(usize)` no cambia) — un handle stale no colisiona con
+  el slot reusado (ABA). Los caminos de fibra (`on_fiber_done`/`fail_current_fiber`/`cancel_task`) son
+  tolerantes a slot consumido (una hija cancelada cuyo scope ya cerró descarta su resultado).
+- **Paridad nativa**: `__RayTask` gana el flag `consumed` (la memoria ya la liberaba el `Arc`; el flag
+  da el MISMO error byte-idéntico en doble join y el consumo del scope). **M98.2** además arregla la
+  **trampa de paridad** del pool shardeado (M96e): spawner y worker usaban el mismo contador
+  round-robin; en churn secuencial `join(spawn(f))` los pops caen en valores pares y los parks en
+  impares → con N shards par (siempre: cores×2) nunca se encontraban → un hilo del SO por spawn →
+  EAGAIN y crash en ~20k tareas. Fix: el spawner **sondea todos los shards** antes de crear un hilo
+  (el primer probe conserva la baja contención; el barrido solo corre en el miss).
+- **Resultados**: `task_churn` 100k tareas: VM 123.8 MB → **6.9 MB** (línea base); nativo crash →
+  **2.1 MB**. Webserver sobre la VM a c=100: 343→924 MB creciendo → **~31 MB plano**.
+- **Diferido**: los **canales** tienen la misma anatomía (M98.3, misma cura); entradas de tareas
+  canceladas-huérfanas en caminos de fallo sin scope vivo (fuga menor, solo en rutas de error).
+
+Tests: `tests/concurrency_cli.rs` (doble join, reuso de slots 10k, hijas no sobreviven al scope) y
+`tests/cli_cli.rs` (paridad nativa del doble join + churn 20k sin EAGAIN).
+
 ## 22. M13 — Habilitadores de self-hosting
 
 > **Orden de ejecución: M13 va ANTES que M12.** El capstone del proyecto es el self-hosting (§7

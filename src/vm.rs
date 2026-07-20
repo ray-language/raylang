@@ -88,7 +88,7 @@ fn num_workers(program: &CompiledProgram) -> usize {
 /// M44a: solo lo usa la rama no-wasm de `num_workers` (en wasm siempre es 1).
 #[cfg(not(target_arch = "wasm32"))]
 fn program_uses_spawn(program: &CompiledProgram) -> bool {
-    program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn)))
+    program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn | OpCode::SpawnDiscard)))
 }
 
 /// M38.3b paso 3: una referencia al programa compilado **compartible entre hilos worker**. `CompiledProgram`
@@ -246,6 +246,18 @@ struct PendingWrite {
     remaining: Vec<u8>,
 }
 
+/// M98.1: un slot del almacén de tareas. `task: None` = libre (en `free_tasks`); `gen` se incrementa
+/// al liberar, así un handle viejo (`gen<<32 | idx`) sobre un slot reusado NO colisiona (ABA).
+#[derive(Default)]
+struct TaskSlot {
+    generation: u32,
+    task: Option<VmTask>,
+}
+
+/// M98.1: mensaje del doble-join (una tarea es de un solo consumidor: `join`/`try_join` la consumen,
+/// y el `scope` consume a sus hijas al cerrar). Byte-idéntico en el runtime nativo.
+const TASK_CONSUMED: &str = "task already consumed (join/try_join takes the task)";
+
 /// M38.3a: el estado del scheduler que N hilos compartirían (M38.3b: tras `Arc<Mutex<Shared>>`). Con los
 /// heaps aislados por fibra (M38.1), es lo ÚNICO compartido: las colas de fibras listas/aparcadas y los
 /// almacenes del host de canales/tareas. La ejecución de cada fibra (frames/stack/heap/…) es thread-local.
@@ -270,7 +282,13 @@ struct Shared {
     channels: Vec<VmChannel>,
     /// Tareas `Task<T>` (M12.3): compartidas entre la fibra hija y quien la une, fuera del GC. Se
     /// referencian por id vía `HeapValue::Task(id)`. El GC rootea el valor de `Done`.
-    tasks: Vec<VmTask>,
+    /// M98.1: almacén de **slots con generación** + free-list — las entradas se LIBERAN (antes solo
+    /// crecía: el webserver fugaba ~1 KB/request). El handle codifica `gen << 32 | idx`; un handle
+    /// stale (slot liberado/reusado) no colisiona: la generación no casa. Libera: `join`/`try_join`
+    /// (consumen la tarea, semántica M98.1) y el `ScopeEnd` (consume a sus hijas al cerrar).
+    tasks: Vec<TaskSlot>,
+    /// M98.1: índices de slots libres de `tasks`, para reuso.
+    free_tasks: Vec<usize>,
     /// M38.3b paso 3: nº de workers que **están ejecutando** una fibra ahora mismo (no ociosos). Invariante
     /// clave del scheduler M:N: un worker que toma una fibra de `ready` hace `running += 1`; cuando la aparca
     /// o termina, `running -= 1`. Un worker ocioso sólo puede declarar **deadlock** cuando `running == 0` (si
@@ -280,6 +298,53 @@ struct Shared {
     /// el programa termina; o un error fatal / deadlock). Su presencia es la **señal de apagado**: los demás
     /// workers, al verla, se detienen. El orquestador lo lee tras unir a los hilos.
     outcome: Option<Result<HeapValue, RuntimeError>>,
+}
+
+impl Shared {
+    /// M98.1: aloja una tarea nueva (reusa un slot libre si hay) y devuelve su handle
+    /// (`gen << 32 | idx`). El `HeapValue::Task(usize)` transporta el handle tal cual.
+    fn alloc_task(&mut self) -> usize {
+        let vt = VmTask { state: TaskState::Pending, heap: Heap::new() };
+        if let Some(idx) = self.free_tasks.pop() {
+            let slot = &mut self.tasks[idx];
+            slot.task = Some(vt);
+            (slot.generation as usize) << 32 | idx
+        } else {
+            self.tasks.push(TaskSlot { generation: 0, task: Some(vt) });
+            self.tasks.len() - 1
+        }
+    }
+
+    /// La tarea viva de un handle, o `None` si el handle es stale (slot liberado o reusado).
+    fn task(&self, h: usize) -> Option<&VmTask> {
+        let slot = self.tasks.get(h & 0xFFFF_FFFF)?;
+        if slot.generation as usize != h >> 32 {
+            return None;
+        }
+        slot.task.as_ref()
+    }
+
+    /// Versión mutable de `task`.
+    fn task_mut(&mut self, h: usize) -> Option<&mut VmTask> {
+        let slot = self.tasks.get_mut(h & 0xFFFF_FFFF)?;
+        if slot.generation as usize != h >> 32 {
+            return None;
+        }
+        slot.task.as_mut()
+    }
+
+    /// M98.1: **consume** la tarea — saca el `VmTask` (con su heap: al soltarlo se libera la memoria
+    /// del resultado), incrementa la generación (mata handles viejos) y encola el slot como libre.
+    fn take_task(&mut self, h: usize) -> Option<VmTask> {
+        let idx = h & 0xFFFF_FFFF;
+        let slot = self.tasks.get_mut(idx)?;
+        if slot.generation as usize != h >> 32 || slot.task.is_none() {
+            return None;
+        }
+        slot.generation = slot.generation.wrapping_add(1);
+        self.free_tasks.push(idx);
+        slot.task.take()
+    }
 }
 
 struct Vm<'a> {
@@ -1119,9 +1184,12 @@ impl<'a> Vm<'a> {
                 }
 
                 // --- Concurrencia: CSP sobre la VM (M12.1) ---
-                OpCode::Spawn => {
+                OpCode::Spawn | OpCode::SpawnDiscard => {
                     // Saca el valor-función; crea una fibra nueva que lo ejecuta (0 args), le asigna una
                     // Task<T> (M12.3) y la encola. Si hay un scope activo, adscribe la tarea a él.
+                    // M98.1: `SpawnDiscard` (fire-and-forget fuera de scope) NO aloja Task — no hay
+                    // quién la consuma y la entrada quedaría retenida para siempre (la fuga de M98).
+                    let discard = matches!(instr, OpCode::SpawnDiscard);
                     let (fn_idx, upvalues) = match self.pop() {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
@@ -1142,20 +1210,30 @@ impl<'a> Vm<'a> {
                     let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues, stack_base: 0 };
                     // M38.3b paso 3: alojar la Task y encolar la fibra hija en UN solo lock (bajo M:N real,
                     // dos `self.sched()` —len y push— tendrían un TOCTOU en el id de la tarea).
+                    // M98.1: fire-and-forget fuera de scope → fibra sin Task (nada que retener).
+                    // Dentro de un scope, SpawnDiscard aloja igual (el scope la rastrea y consume).
+                    let needs_task = !discard || !self.cur.scopes.is_empty();
                     let task = {
                         let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-                        let task = sh.tasks.len();
-                        sh.tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new(), observed: false });
+                        let task = if needs_task {
+                            Some(sh.alloc_task()) // M98.1: slot con generación (reusa libres)
+                        } else {
+                            None
+                        };
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), heap: new_heap, is_main: false,
-                            task: Some(task), scopes: Vec::new(),
+                            task, scopes: Vec::new(),
                         });
                         task
                     };
-                    if let Some(scope) = self.cur.scopes.last_mut() {
+                    if let (Some(task), Some(scope)) = (task, self.cur.scopes.last_mut()) {
                         scope.children.push(task); // M12.3: adscribe la tarea al scope activo
                     }
-                    self.push(HeapValue::Task(task)); // el Task<T> es el resultado de spawn
+                    if discard {
+                        self.push(HeapValue::Unit); // el Pop que sigue lo descarta
+                    } else {
+                        self.push(HeapValue::Task(task.expect("Spawn always allocates")));
+                    }
                 }
                 OpCode::Signals => {
                     // M88.1: el canal de señales del SO — SINGLETON del proceso (la primera
@@ -1310,21 +1388,33 @@ impl<'a> Vm<'a> {
                     // medio → cuelgue).
                     let t = self.pop_task();
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-                    let outcome = match &sh.tasks[t].state {
-                        TaskState::Done(v) => Some(Ok(v.clone())),
-                        TaskState::Failed(msg) => Some(Err(msg.clone())),
-                        TaskState::Pending => None,
+                    // M98.1: `join` CONSUME la tarea (libera su slot y el heap del resultado). Un handle
+                    // stale (ya consumida por otro join/try_join, o por el cierre de su scope) → error.
+                    let outcome = match sh.task(t) {
+                        None => {
+                            drop(sh);
+                            return Err(runtime_error(pos!().0, pos!().1, TASK_CONSUMED));
+                        }
+                        Some(vt) => match &vt.state {
+                            TaskState::Done(v) => Some(Ok(v.clone())),
+                            TaskState::Failed(msg) => Some(Err(msg.clone())),
+                            TaskState::Pending => None,
+                        },
                     };
                     match outcome {
                         Some(Ok(v)) => {
-                            // M38.1b-2: el valor de Done vive en el heap de la tarea → al heap del que la une.
-                            let t_heap = std::mem::take(&mut sh.tasks[t].heap);
-                            let v2 = transfer_value(&t_heap, &mut self.cur.heap, &v, &mut HashMap::new());
-                            sh.tasks[t].heap = t_heap;
+                            // M38.1b-2: el valor de Done vive en el heap de la tarea → al heap del que
+                            // la une. M98.1: se consume el slot; su heap se suelta al salir del bloque.
+                            let vt = sh.take_task(t).expect("just read as Done");
+                            let v2 = transfer_value(&vt.heap, &mut self.cur.heap, &v, &mut HashMap::new());
                             drop(sh);
                             self.push(v2);
                         }
-                        Some(Err(msg)) => return Err(runtime_error(pos!().0, pos!().1, &msg)),
+                        Some(Err(msg)) => {
+                            sh.take_task(t); // consumida también al re-lanzar
+                            drop(sh);
+                            return Err(runtime_error(pos!().0, pos!().1, &msg));
+                        }
                         None => {
                             // Bloquear: re-empuja el id (lo sacamos arriba) y rebobina el ip al
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
@@ -1346,17 +1436,25 @@ impl<'a> Vm<'a> {
                     // guard único + park que TaskJoin.
                     let t = self.pop_task();
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-                    let outcome = match &sh.tasks[t].state {
-                        TaskState::Done(_) => Some(None),
-                        TaskState::Failed(msg) => Some(Some(msg.clone())),
-                        TaskState::Pending => None,
+                    let outcome = match sh.task(t) {
+                        None => {
+                            drop(sh);
+                            return Err(runtime_error(pos!().0, pos!().1, TASK_CONSUMED));
+                        }
+                        Some(vt) => match &vt.state {
+                            TaskState::Done(_) => Some(None),
+                            TaskState::Failed(msg) => Some(Some(msg.clone())),
+                            TaskState::Pending => None,
+                        },
                     };
                     match outcome {
                         Some(failed) => {
-                            // M97.1: observar un fallo lo marca MANEJADO — el ScopeEnd del scope
-                            // dueño ya no cancela hermanas ni re-lanza por esta tarea.
+                            // M97.1/M98.1: observar un fallo lo CONSUME (libera el slot) → queda
+                            // manejado: el ScopeEnd del scope dueño lo salta (handle stale), ni
+                            // cancela hermanas ni re-lanza. En Done NO se consume: el envoltorio
+                            // `try_join` del prelude hace `join(t)` a continuación para el valor.
                             if failed.is_some() {
-                                sh.tasks[t].observed = true;
+                                sh.take_task(t);
                             }
                             drop(sh);
                             let elems = match failed {
@@ -1392,15 +1490,20 @@ impl<'a> Vm<'a> {
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
-                    // M97.1: un fallo ya OBSERVADO con `try_join` cuenta como manejado → se salta
-                    // (la tarea se trata como terminada; ni cancelación ni re-lanzamiento).
-                    let failure = children.iter().find_map(|&c| match &sh.tasks[c].state {
-                        TaskState::Failed(msg) if !sh.tasks[c].observed => Some(msg.clone()),
+                    // M97.1/M98.1: un fallo ya OBSERVADO con `try_join` fue CONSUMIDO (slot liberado) →
+                    // el handle es stale y `sh.task` da None → se salta (manejado, ni cancela ni re-lanza).
+                    let failure = children.iter().find_map(|&c| match sh.task(c).map(|vt| &vt.state) {
+                        Some(TaskState::Failed(msg)) => Some(msg.clone()),
                         _ => None,
                     });
                     if let Some(msg) = failure {
                         for &c in &children {
                             Self::cancel_task(&mut sh, c); // ignora las no-pendientes (la que falló, las Done)
+                        }
+                        // M98.1: el scope CONSUME a sus hijas al cerrar (también en el camino de fallo;
+                        // las canceladas-aún-corriendo escriben luego sobre un handle stale y se ignora).
+                        for &c in &children {
+                            sh.take_task(c);
                         }
                         drop(sh);
                         self.cur.scopes.pop();
@@ -1408,7 +1511,7 @@ impl<'a> Vm<'a> {
                     }
                     // (2) ¿Alguna pendiente? Rebobina a ScopeEnd y bloquéate (al despertar re-escanea).
                     let pending = children.iter().copied().find(|&c|
-                        matches!(sh.tasks[c].state, TaskState::Pending));
+                        matches!(sh.task(c).map(|vt| &vt.state), Some(TaskState::Pending)));
                     if let Some(c) = pending {
                         self.cur.frames.last_mut().unwrap().ip -= 1;
                         let fiber = Self::take_current_fiber(&mut self.cur);
@@ -1418,7 +1521,13 @@ impl<'a> Vm<'a> {
                         let (l, c2) = pos!();
                         if !self.poll_next(l, c2)? { self.stop = true; }
                     } else {
-                        // (3) Todas terminaron con éxito: desapila el scope.
+                        // (3) Todas terminaron con éxito: desapila el scope. M98.1: el scope es el DUEÑO
+                        // de sus hijas → consume las que nadie unió (fire-and-forget), liberando su slot
+                        // y el heap del resultado descartado. Un `join` posterior sobre un handle que
+                        // escapó del scope da el error TASK_CONSUMED (las hijas no sobreviven al scope).
+                        for &c in &children {
+                            sh.take_task(c);
+                        }
                         drop(sh);
                         self.cur.scopes.pop();
                     }
@@ -2872,12 +2981,17 @@ impl<'a> Vm<'a> {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             if let Some(task) = self.cur.task.take() {
                 // M38.1b-2: el resultado vive en el heap de ESTA fibra (que se descarta al terminar) → se
-                // transfiere al heap de la tarea, donde `join` lo recogerá.
-                let mut t_heap = std::mem::take(&mut sh.tasks[task].heap);
-                let r2 = transfer_value(&self.cur.heap, &mut t_heap, &result, &mut HashMap::new());
-                sh.tasks[task].heap = t_heap;
-                sh.tasks[task].state = TaskState::Done(r2);
-                Self::wake_task_waiters(&mut sh, task);
+                // transfiere al heap de la tarea, donde `join` lo recogerá. M98.1: si el slot ya fue
+                // consumido (el scope cerró en su camino de fallo con esta hija aún corriendo tras ser
+                // cancelada), el handle es stale → el resultado se descarta (semántica de cancelación).
+                if let Some(vt) = sh.task_mut(task) {
+                    let mut t_heap = std::mem::take(&mut vt.heap);
+                    let r2 = transfer_value(&self.cur.heap, &mut t_heap, &result, &mut HashMap::new());
+                    let vt = sh.task_mut(task).expect("just seen live");
+                    vt.heap = t_heap;
+                    vt.state = TaskState::Done(r2);
+                    Self::wake_task_waiters(&mut sh, task);
+                }
             }
             sh.running -= 1; // esta fibra terminó → este worker queda ocioso
         }
@@ -2894,7 +3008,10 @@ impl<'a> Vm<'a> {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             if let Some(task) = self.cur.task.take() {
                 let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
-                sh.tasks[task].state = TaskState::Failed(msg);
+                // M98.1: slot ya consumido (scope cerrado con esta hija cancelada) → fallo descartado.
+                if let Some(vt) = sh.task_mut(task) {
+                    vt.state = TaskState::Failed(msg);
+                }
                 Self::wake_task_waiters(&mut sh, task);
                 // M12.5: un `ScopeEnd` puede estar aparcado sobre OTRA hija pendiente (aparca sobre la
                 // primera que encuentra); si no se le despierta, nunca re-escanea y no ve este fallo →
@@ -3094,11 +3211,11 @@ impl<'a> Vm<'a> {
     /// Es trivial porque el scheduler es cooperativo M:1: una fibra solo corre en los puntos de yield, así
     /// que "cancelar" = "retirar de las colas". No es preemptiva: no interrumpe código que corra sin ceder.
     fn cancel_task(shared: &mut Shared, task: usize) {
-        match &mut shared.tasks[task].state {
-            estado @ TaskState::Pending => {
+        match shared.task_mut(task).map(|vt| &mut vt.state) {
+            Some(estado @ TaskState::Pending) => {
                 *estado = TaskState::Failed("task cancelled (a sibling failed)".to_string());
             }
-            _ => return, // ya terminó (Done/Failed) → nada que cancelar
+            _ => return, // ya terminó (Done/Failed) o fue consumida (M98.1) → nada que cancelar
         }
         // Un joiner de la tarea cancelada (aparcado en `join` sobre ella) debe despertar y observar el
         // `Failed` — si es hija del mismo scope ya la retira el bucle de cancelación, pero un joiner

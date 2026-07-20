@@ -133,10 +133,9 @@ pub enum TaskState {
 /// traza el valor de `Done` (las fibras que esperan a la tarea viven en el scheduler de la VM).
 pub struct VmTask {
     pub state: TaskState,
-    /// M97.1: un `Failed` **observado** con `try_join` (`__task_failed`) cuenta como MANEJADO: el
-    /// `ScopeEnd` del scope dueño lo trata como terminado (no cancela hermanas ni re-lanza). `join`
-    /// en cambio siempre re-lanza (observar ≠ unir). Solo lo pone en true el opcode `TaskFailed`.
-    pub observed: bool,
+    /// M97.1/M98.1: la semántica "un fallo observado es un fallo manejado" la implementa ahora la
+    /// LIBERACIÓN del slot (M98.1): `try_join` consume la entrada de una tarea fallida y el
+    /// `ScopeEnd` la salta por handle stale — ya no hace falta un flag `observed`.
     /// M38.1b-2: heap propio de la tarea para su valor de `Done` (producido por la fibra hija, cuyo heap
     /// se descarta al terminar; se **transfiere** aquí en `on_fiber_done` y de aquí al heap del que la
     /// une en `join`).

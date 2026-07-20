@@ -366,6 +366,12 @@ pub enum OpCode {
     /// la encola en el scheduler, y empuja un **`Task<T>`** (M12.3; en M12.1/M12.2 era unit). Si hay un
     /// `scope` activo en la fibra que llama, adscribe la tarea a él. Builtin `spawn`. Solo la VM.
     Spawn,
+    /// M98.1: `Spawn` **fire-and-forget** — un `spawn(f);` como sentencia cuyo handle se descarta
+    /// (peephole `[Spawn, Pop]` → `[SpawnDiscard, Pop]`). Fuera de un `scope` no aloja entrada en el
+    /// almacén de tareas (la fibra corre con `task: None` → nada que retener ni liberar); dentro de un
+    /// scope se comporta como `Spawn` (el scope necesita rastrear a la hija y la consume al cerrar).
+    /// Empuja `unit` (el `Pop` que sigue lo tira). Solo la VM.
+    SpawnDiscard,
     /// Saca un `Task<T>`; **une** la tarea: si terminó, empuja su valor; si falló (panic), re-lanza ese
     /// fallo; si sigue pendiente, **bloquea** la fibra hasta que termine (M12.3). Builtin `join` de 1
     /// argumento (el de 2 args es el `Join` de strings); el compilador elige por aridad. Solo VM.

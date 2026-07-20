@@ -3718,10 +3718,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
         std::fs::write(dir.join("main.ray"),
-            "import geo/formas/circle;\nfn main() -> int { circle.area(circle.Circulo { radio: 4 }) }\n").unwrap();
+            "import geo/formas/circle;\nfn main() -> int { circle.area(circle.Circle { radio: 4 }) }\n").unwrap();
         let util_src = "pub fn square(n: int) -> int { n * n }\n";
         std::fs::write(dir.join("geo/util.ray"), util_src).unwrap();
-        let circle_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.square(c.radio) }\n";
+        let circle_src = "import geo/util;\npub struct Circle { radio: int }\npub fn area(c: Circle) -> int { 3 * util.square(c.radio) }\n";
         std::fs::write(dir.join("geo/formas/circle.ray"), circle_src).unwrap();
 
         // La raíz del proyecto se detecta como el ancestro con `main.ray`, desde un submódulo profundo.
@@ -3741,7 +3741,7 @@ mod tests {
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
         // (3) Un error de tipos REAL en el submódulo sí se reporta (no se traga por el modo módulo).
-        let circle_malo = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.square(c) }\n";
+        let circle_malo = "import geo/util;\npub struct Circle { radio: int }\npub fn area(c: Circle) -> int { 3 * util.square(c) }\n";
         let ds = analyze_modular(&uri_circ, circle_malo).expect("modular");
         assert_eq!(ds.len(), 1, "el error real del body must verse: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
@@ -3761,11 +3761,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
         std::fs::write(dir.join("main.ray"),
-            "import geo;\nfn main() -> int { geo.area(geo.Circulo { radio: 4 }) }\n").unwrap();
+            "import geo;\nfn main() -> int { geo.area(geo.Circle { radio: 4 }) }\n").unwrap();
         std::fs::write(dir.join("geo/mod.ray"),
-            "pub from geo/formas/circle import Circulo, area;\n").unwrap();
+            "pub from geo/formas/circle import Circle, area;\n").unwrap();
         std::fs::write(dir.join("geo/util.ray"), "pub fn square(n: int) -> int { n * n }\n").unwrap();
-        let circle_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.square(c.radio) }\n";
+        let circle_src = "import geo/util;\npub struct Circle { radio: int }\npub fn area(c: Circle) -> int { 3 * util.square(c.radio) }\n";
         std::fs::write(dir.join("geo/formas/circle.ray"), circle_src).unwrap();
 
         // La identidad real del submódulo es "geo/formas/circulo" → está bajo la cápsula "geo".
@@ -3780,9 +3780,9 @@ mod tests {
 
         // Hover DENTRO del submódulo (sin `main`): antes no daba nada porque el chequeo de main
         // cortaba antes de recorrer los cuerpos. `circulo_src` línea 3 (0-based 2):
-        //   `pub fn area(c: Circulo) -> int { 3 * util.square(c.radio) }`  — uso de `c` en col 49.
-        let (t, _, _) = hover_at(Some(&uri), circle_src, 2, 49).expect("hover about use de 'c'");
-        assert_eq!(t, "c: Circulo", "hover de un use inside de un submódulo sin main");
+        //   `pub fn area(c: Circle) -> int { 3 * util.square(c.radio) }`  — uso de `c` en col 48.
+        let (t, _, _) = hover_at(Some(&uri), circle_src, 2, 48).expect("hover about use de 'c'");
+        assert_eq!(t, "c: Circle", "hover de un use inside de un submódulo sin main");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3820,14 +3820,14 @@ mod tests {
     fn document_symbol_list_el_outline() {
         let mut docs = HashMap::new();
         let uri = "file:///t.ray".to_string();
-        let src = "const K: int = 3;\nstruct Punto { x: int, y: int }\nenum Color { Rojo, Verde }\ntrait Show { fn show(self) -> string; }\nimpl Show for Punto { fn show(self) -> string { \"p\" } }\nfn main() -> int { 0 }\n";
+        let src = "const K: int = 3;\nstruct Point { x: int, y: int }\nenum Color { Rojo, Verde }\ntrait Show { fn show(self) -> string; }\nimpl Show for Point { fn show(self) -> string { \"p\" } }\nfn main() -> int { 0 }\n";
         docs.insert(uri.clone(), src.to_string());
         let msg = obj(vec![("params", obj(vec![("textDocument", obj(vec![("uri", text(&uri))]))]))]);
         let syms = document_symbol_result(&msg, &docs);
         let arr = syms.as_array().expect("array");
         let names: Vec<&str> = arr.iter().filter_map(|s| s.get("name").and_then(Json::as_str)).collect();
         // Todos los ítems de nivel superior, en orden de archivo.
-        assert_eq!(names, vec!["K", "Punto", "Color", "Show", "impl Show for Punto", "main"], "{names:?}");
+        assert_eq!(names, vec!["K", "Point", "Color", "Show", "impl Show for Point", "main"], "{names:?}");
         // El enum lleva sus variantes como hijos.
         let color = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Color")).unwrap();
         let vars: Vec<&str> = color.get("children").unwrap().as_array().unwrap().iter()
@@ -3836,10 +3836,10 @@ mod tests {
         // El trait lleva su método como hijo; el kind del struct es 23 (Struct).
         let show = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Show")).unwrap();
         assert_eq!(show.get("children").unwrap().as_array().unwrap().len(), 1);
-        let punto = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Punto")).unwrap();
-        assert_eq!(punto.get("kind"), Some(&Json::Num(23.0)));
-        // El selectionRange del struct apunta a su NOMBRE (col 7 0-based en "struct Punto").
-        let sel = punto.get("selectionRange").unwrap().get("start").unwrap();
+        let point = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Point")).unwrap();
+        assert_eq!(point.get("kind"), Some(&Json::Num(23.0)));
+        // El selectionRange del struct apunta a su NOMBRE (col 7 0-based en "struct Point").
+        let sel = point.get("selectionRange").unwrap().get("start").unwrap();
         assert_eq!(sel.get("line"), Some(&Json::Num(1.0)));
         assert_eq!(sel.get("character"), Some(&Json::Num(7.0)));
     }
@@ -3998,7 +3998,7 @@ mod tests {
     #[test]
     fn hover_de_fields_y_methods() {
         // Campo de struct: `p.x` → el tipo del campo, en la posición del nombre tras el `.`.
-        let src = "struct Punto { x: int, y: int }\nfn main() -> int {\n  let p = Punto { x: 3, y: 4 };\n  p.x + p.y\n}\n";
+        let src = "struct Point { x: int, y: int }\nfn main() -> int {\n  let p = Point { x: 3, y: 4 };\n  p.x + p.y\n}\n";
         let (t, _, _) = hover_at(None, src, 3, 4).expect("hover del campo x");
         assert_eq!(t, "x: int");
 
@@ -4175,7 +4175,7 @@ mod tests {
 
     #[test]
     fn completion_offers_symbols_builtins_y_keywords() {
-        let src = "struct Punto { x: int }\nfn double(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
+        let src = "struct Point { x: int }\nfn double(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
         let msg = json::parse(
             r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":0}}}"#
         ).unwrap();
@@ -4185,7 +4185,7 @@ mod tests {
         let items = res.as_array().unwrap();
         let labels: Vec<&str> = items.iter().filter_map(|i| i.get("label").and_then(|l| l.as_str())).collect();
         assert!(labels.contains(&"double"), "función propia\n{labels:?}");
-        assert!(labels.contains(&"Punto"), "type propio");
+        assert!(labels.contains(&"Point"), "type propio");
         assert!(labels.contains(&"print"), "builtin");
         assert!(labels.contains(&"map"), "función del prelude");
         assert!(labels.contains(&"while"), "palabra clave");
@@ -4371,7 +4371,7 @@ mod tests {
         std::fs::create_dir_all(base.join("util")).unwrap();
         let w = |rel: &str, txt: &str| std::fs::write(base.join(rel), txt).unwrap();
         w("main.ray", "fn main() -> int { 0 }\n");
-        w("geo.ray", "pub struct Circulo { r: int }\npub fn area(c: Circulo) -> int { c.r }\nfn internal() -> int { 0 }\n");
+        w("geo.ray", "pub struct Circle { r: int }\npub fn area(c: Circle) -> int { c.r }\nfn internal() -> int { 0 }\n");
         w("geo/formas/circle.ray", "pub fn dibujar() -> int { 0 }\n");
         w("util/mod.ray", "pub fn publico() -> int { 0 }\n"); // cápsula
         w("util/internal.ray", "pub fn oculto() -> int { 0 }\n"); // interno a la cápsula
@@ -4390,7 +4390,7 @@ mod tests {
 
         // from geo import <cursor> → símbolos `pub` (no `interno`).
         let syms = labels("from geo import ", 16);
-        assert!(syms.contains(&"Circulo".to_string()) && syms.contains(&"area".to_string()), "pub de geo: {syms:?}");
+        assert!(syms.contains(&"Circle".to_string()) && syms.contains(&"area".to_string()), "pub de geo: {syms:?}");
         assert!(!syms.contains(&"internal".to_string()), "no expone lo private: {syms:?}");
         assert!(!syms.contains(&"print".to_string()), "no cae al completion de file: {syms:?}");
 
@@ -4413,7 +4413,7 @@ mod tests {
                 .filter_map(|i| i.get("label").and_then(|l| l.as_str()).map(|s| s.to_string())).collect()
         };
         let by_alias = qualified("    u.", 3, 6); // `import geo as u` → símbolos pub de geo
-        assert!(by_alias.contains(&"Circulo".to_string()) && by_alias.contains(&"area".to_string()), "alias u.: {by_alias:?}");
+        assert!(by_alias.contains(&"Circle".to_string()) && by_alias.contains(&"area".to_string()), "alias u.: {by_alias:?}");
         assert!(!by_alias.contains(&"internal".to_string()), "no expone lo private del módulo: {by_alias:?}");
         let by_leaf = qualified("    circle.", 3, 12); // leaf `circulo` (geo/formas/circulo.ray)
         assert!(by_leaf.contains(&"dibujar".to_string()), "leaf circle.: {by_leaf:?}");
@@ -4423,7 +4423,7 @@ mod tests {
         std::fs::write(base.join("util/mod.ray"),
             "pub from util/internal import greet;\npub fn publico() -> int { 0 }\n").unwrap();
         std::fs::write(base.join("util/internal.ray"),
-            "pub fn greet(name: string, veces: int) -> string { name }\n").unwrap();
+            "pub fn greet(name: string, times: int) -> string { name }\n").unwrap();
         let items_at = |body: &str, line: usize, ch: usize| -> Json {
             let src = format!("import util;\nfn main() -> int {{\n{body}\n0\n}}\n");
             let mut docs = HashMap::new();
@@ -4437,7 +4437,7 @@ mod tests {
             .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label)).cloned();
         let items = items_at("    util.", 2, 9);
         let greet = it(&items, "greet").expect("re-export greet");
-        assert_eq!(greet.get("insertText").and_then(Json::as_str), Some("greet(${1:name}, ${2:veces})"),
+        assert_eq!(greet.get("insertText").and_then(Json::as_str), Some("greet(${1:name}, ${2:times})"),
                    "signature del re-export resuelta en el módulo origen + placeholders");
 
         let _ = std::fs::remove_dir_all(&base);
@@ -4452,10 +4452,10 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("main.ray"), "fn main() -> int { 0 }\n").unwrap();
         std::fs::write(base.join("figuras.ray"),
-            "pub fn area(a: int, b: int) -> int { a * b }\npub struct Rect { ancho: int }\npub enum Orientacion { Horizontal, Vertical }\n").unwrap();
+            "pub fn area(a: int, b: int) -> int { a * b }\npub struct Rect { ancho: int }\npub enum Orientation { Horizontal, Vertical }\n").unwrap();
         let uri = format!("file://{}/main.ray", base.display());
         let items = |body: &str, line: usize, ch: usize| -> Vec<(String, i64)> {
-            let src = format!("import figuras;\nfrom figuras import Orientacion, area;\nfn main() -> int {{\n{body}\n0\n}}\n");
+            let src = format!("import figuras;\nfrom figuras import Orientation, area;\nfn main() -> int {{\n{body}\n0\n}}\n");
             let mut docs = HashMap::new();
             docs.insert(uri.clone(), src);
             let msg = json::parse(&format!(
@@ -4468,20 +4468,20 @@ mod tests {
         // Completion de archivo: el nombre de módulo `figuras` (kind 9) y los from-imports.
         let file_items = items("    x", 3, 5);
         assert!(file_items.iter().any(|(l, k)| l == "figuras" && *k == 9), "módulo figuras (kind Module): {file_items:?}");
-        assert!(file_items.iter().any(|(l, _)| l == "Orientacion"), "from-import Orientacion: {file_items:?}");
+        assert!(file_items.iter().any(|(l, _)| l == "Orientation"), "from-import Orientation: {file_items:?}");
         assert!(file_items.iter().any(|(l, _)| l == "area"), "from-import area: {file_items:?}");
-        // `Orientacion.` → sus variantes (kind 20 = EnumMember).
-        let vars = items("    Orientacion.", 3, 16);
+        // `Orientation.` → sus variantes (kind 20 = EnumMember).
+        let vars = items("    Orientation.", 3, 16);
         assert!(vars.iter().any(|(l, k)| l == "Horizontal" && *k == 20), "variant Horizontal: {vars:?}");
         assert!(vars.iter().any(|(l, _)| l == "Vertical"), "variant Vertical: {vars:?}");
         assert!(!vars.iter().any(|(l, _)| l == "figuras"), "after el punto NO sale la completion de file: {vars:?}");
 
         // Una variante con payload muestra los tipos en el popup (`labelDetails.detail`).
-        let src = "enum Figura { Circulo(float), Rect(float, float), Punto }\nfn main() -> int {\n    Figura.\n0\n}\n";
+        let src = "enum Shape { Circulo(float), Rect(float, float), Punto }\nfn main() -> int {\n    Shape.\n0\n}\n";
         let mut docs = HashMap::new();
         docs.insert(uri.clone(), src.to_string());
         let msg = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":11}}}}}}"#
+            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":10}}}}}}"#
         )).unwrap();
         let vs = completion_result(&msg, &docs);
         let rect = vs.as_array().unwrap().iter()
@@ -4548,10 +4548,10 @@ mod tests {
         // Builtin: pow(.
         assert_eq!(sig("fn main() -> int {\n    let x = pow(\n    0\n}\n", 1, 16),
                    Some(("fn pow(base: float, exp: float) -> float".into(), 0)));
-        // Construcción de variante de enum: `Figura.Rect(1.0, ` → firma con los tipos del payload,
+        // Construcción de variante de enum: `Shape.Rect(1.0, ` → firma con los tipos del payload,
         // param activo 1. No es una `fn`, pero el receptor es un enum con esa variante.
-        let e = "enum Figura { Circulo(float), Rect(float, float) }\nfn main() -> int {\n    let r: Figura = Figura.Rect(1.0, \n    0\n}\n";
-        assert_eq!(sig(e, 2, 36), Some(("Figura.Rect(float, float)".into(), 1)));
+        let e = "enum Shape { Circulo(float), Rect(float, float) }\nfn main() -> int {\n    let r: Shape = Shape.Rect(1.0, \n    0\n}\n";
+        assert_eq!(sig(e, 2, 34), Some(("Shape.Rect(float, float)".into(), 1)));
     }
 
     #[test]
@@ -4582,7 +4582,7 @@ mod tests {
     fn completion_de_fields_de_literal_de_struct() {
         // M47a: dentro de `Nombre { … }` (posición de nombre de campo), los campos del struct.
         let labels = |body: &str, line: usize, ch: usize| -> Vec<(String, i64, Option<String>)> {
-            let src = format!("struct Punto {{ x: int, y: int }}\nfn dobla(n: int) -> int {{ n }}\nfn main() -> int {{\n{body}\n0\n}}\n");
+            let src = format!("struct Point {{ x: int, y: int }}\nfn dobla(n: int) -> int {{ n }}\nfn main() -> int {{\n{body}\n0\n}}\n");
             let mut docs = HashMap::new();
             docs.insert("file:///t.ray".to_string(), src);
             let msg = json::parse(&format!(
@@ -4594,25 +4594,25 @@ mod tests {
                           i.get("insertText").and_then(Json::as_str).map(|s| s.to_string())))
                 .collect()
         };
-        // `Punto { |` → ambos campos, kind Field (5), insertText `campo: `.
-        let empty = labels("    let p = Punto { ", 3, 20);
+        // `Point { |` → ambos campos, kind Field (5), insertText `campo: `.
+        let empty = labels("    let p = Point { ", 3, 20);
         assert!(empty.iter().any(|(l, k, ins)| l == "x" && *k == 5 && ins.as_deref() == Some("x: ")), "campo x: {empty:?}");
         assert!(empty.iter().any(|(l, _, _)| l == "y"), "campo y: {empty:?}");
         assert!(!empty.iter().any(|(l, _, _)| l == "print"), "no cae a la completion de file: {empty:?}");
-        // `Punto { x: 1, |` → solo el campo que falta.
-        let one = labels("    let p = Punto { x: 1, ", 3, 26);
+        // `Point { x: 1, |` → solo el campo que falta.
+        let one = labels("    let p = Point { x: 1, ", 3, 26);
         assert!(one.iter().any(|(l, _, _)| l == "y") && !one.iter().any(|(l, _, _)| l == "x"),
                 "excluye el campo ya escrito: {one:?}");
-        // `Punto { x: dob|` (posición de VALOR) → cae a la completion de archivo (dobla), no campos.
-        let value_labels = labels("    let p = Punto { x: dob", 3, 26);
+        // `Point { x: dob|` (posición de VALOR) → cae a la completion de archivo (dobla), no campos.
+        let value_labels = labels("    let p = Point { x: dob", 3, 26);
         assert!(value_labels.iter().any(|(l, _, _)| l == "dobla"), "en posición de valor, completion de file: {value_labels:?}");
 
-        // M47b: al teclear el TIPO, un ítem extra `Punto {…}` que inserta el literal con placeholders,
-        // aparte del tipo pelado `Punto`.
-        let type_labels = labels("    let p = Pun", 3, 15);
-        assert!(type_labels.iter().any(|(l, k, _)| l == "Punto" && *k == 22), "el type pelado follows: {type_labels:?}");
-        assert!(type_labels.iter().any(|(l, k, ins)| l == "Punto {…}" && *k == 15
-            && ins.as_deref() == Some("Punto { x: ${1:int}, y: ${2:int} }")), "el literal-snippet: {type_labels:?}");
+        // M47b: al teclear el TIPO, un ítem extra `Point {…}` que inserta el literal con placeholders,
+        // aparte del tipo pelado `Point`.
+        let type_labels = labels("    let p = Poi", 3, 15);
+        assert!(type_labels.iter().any(|(l, k, _)| l == "Point" && *k == 22), "el type pelado follows: {type_labels:?}");
+        assert!(type_labels.iter().any(|(l, k, ins)| l == "Point {…}" && *k == 15
+            && ins.as_deref() == Some("Point { x: ${1:int}, y: ${2:int} }")), "el literal-snippet: {type_labels:?}");
     }
 
     #[test]
@@ -4774,9 +4774,9 @@ mod tests {
         // M55: dentro de `{{ }}` se ofrecen los params tipados de la cabecera; dentro de un
         // `{% for %}` abierto, también la variable de bucle (con su tipo inferido del `[T]`);
         // en contexto de etiqueta `{%`, además las keywords; fuera de los delimitadores, nada.
-        let tpl = "{% params titulo: string, filas: [string], total: int %}\n\
+        let tpl = "{% params titulo: string, rows: [string], total: int %}\n\
                    <h1>{{ ti }}</h1>\n\
-                   {% for row in filas %}<li>{{ f }}</li>{% endfor %}\n\
+                   {% for row in rows %}<li>{{ f }}</li>{% endfor %}\n\
                    {% if total > 0 %}<p>hay</p>{% endif %}\n\
                    <p>outside</p>\n";
         let labels = |line0: usize, char0: usize| -> Vec<(String, Option<String>)> {
@@ -4790,12 +4790,12 @@ mod tests {
         // Dentro de `{{ ti| }}` (línea 2): los tres params con su tipo; sin keywords de etiqueta.
         let en_expr = labels(1, 10);
         assert!(en_expr.contains(&("titulo".into(), Some("string".into()))), "{en_expr:?}");
-        assert!(en_expr.contains(&("filas".into(), Some("[string]".into()))), "{en_expr:?}");
+        assert!(en_expr.contains(&("rows".into(), Some("[string]".into()))), "{en_expr:?}");
         assert!(en_expr.contains(&("total".into(), Some("int".into()))), "{en_expr:?}");
         assert!(!en_expr.iter().any(|(l, _)| l == "endif"), "sin keywords de tag en {{{{ }}}}: {en_expr:?}");
         assert!(!en_expr.iter().any(|(l, _)| l == "row"), "el for aún no está abierto: {en_expr:?}");
         // Dentro del for (línea 3, `{{ f| }}`): la variable de bucle con el tipo del elemento.
-        let en_for = labels(2, 31);
+        let en_for = labels(2, 30);
         assert!(en_for.contains(&("row".into(), Some("string".into()))), "{en_for:?}");
         // En una etiqueta `{% if |` (línea 4): params + keywords.
         let en_tag = labels(3, 6);
@@ -4846,10 +4846,10 @@ mod tests {
         assert!(items.get("items").unwrap().as_array().unwrap().iter()
             .any(|i| i.get("label").and_then(Json::as_str) == Some("titulo")));
 
-        // Hover: sobre `ti` de `{{ ti }}`... no hay símbolo; sobre `filas` del for (línea 3,
-        // "{% for fila in filas %}" → `filas` empieza en col 15) → `filas: [string]`; sobre la
-        // variable de bucle usada dentro (no cubierta aquí: `f` no es `fila`); y sobre HTML, nada.
-        assert_eq!(template_hover_at(tpl, 2, 16), Some(("filas: [string]".into(), 14, 19)));
+        // Hover: sobre `ti` de `{{ ti }}`... no hay símbolo; sobre `rows` del for (línea 3,
+        // "{% for row in rows %}" → `rows` empieza en col 15) → `rows: [string]`; sobre la
+        // variable de bucle usada dentro (no cubierta aquí: `f` no es `row`); y sobre HTML, nada.
+        assert_eq!(template_hover_at(tpl, 2, 16), Some(("rows: [string]".into(), 14, 18)));
         assert_eq!(template_hover_at(tpl, 3, 7), Some(("total: int".into(), 6, 11))); // {% if total
         assert!(template_hover_at(tpl, 4, 4).is_none(), "about el HTML no hay hover");
         // Y el enrutado por hover_result con URI .ray.html.
@@ -4872,9 +4872,9 @@ mod tests {
         std::fs::write(base.join("std/template.ray"),
             "pub fn escape_html(s: string) -> string { s }\n").unwrap();
         let uri = format!("file://{}/vista.ray.html", base.display());
-        let tpl = "{% params titulo: string, filas: [string] %}\n\
+        let tpl = "{% params titulo: string, rows: [string] %}\n\
                    <h1>{{ titulo }}</h1>\n\
-                   {% for row in filas %}<li>{{ row.trim() }}</li>{% endfor %}\n";
+                   {% for row in rows %}<li>{{ row.trim() }}</li>{% endfor %}\n";
 
         // Hover semántico: sobre `row` dentro de `{{ row.trim() }}` → su tipo REAL (string,
         // inferido por el checker del `for` sobre `[string]`); el rango es el del template.
@@ -4925,9 +4925,9 @@ mod tests {
         // binding (param / var de for, con shadowing) y sobre él corren references / rename /
         // highlight / outline. El HTML de fuera de los delimitadores NUNCA se toca.
         let uri = "file:///tmp/list.ray.html".to_string();
-        let tpl = "{% params row: string, filas: [string] %}\n\
+        let tpl = "{% params row: string, rows: [string] %}\n\
                    <p>row {{ row }}</p>\n\
-                   {% for row in filas %}<li>{{ row.trim() }}</li>{% endfor %}\n\
+                   {% for row in rows %}<li>{{ row.trim() }}</li>{% endfor %}\n\
                    <i>{{ row }}</i>\n";
         let occs = template_occurrences(tpl);
         // El `fila` del texto HTML (línea 2, "fila " literal) NO es ocurrencia.

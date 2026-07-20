@@ -355,11 +355,11 @@ mod tests {
     #[test]
     fn struct_y_enum_en_repl() {
         let mut s = Session::new();
-        assert_eq!(s.eval("struct Punto { x: int, y: int }").unwrap(), Outcome::Defined("Punto".into()));
-        assert!(s.eval("let p = Punto { x: 7, y: 6 }").is_ok());
+        assert_eq!(s.eval("struct Point { x: int, y: int }").unwrap(), Outcome::Defined("Point".into()));
+        assert!(s.eval("let p = Point { x: 7, y: 6 }").is_ok());
         assert!(s.eval("p.x + p.y").is_ok());
-        assert_eq!(s.eval("enum Caja<T> { Llena(T), Vacia }").unwrap(), Outcome::Defined("Caja".into()));
-        assert!(s.eval("Caja.Llena(5)").is_ok());
+        assert_eq!(s.eval("enum Box<T> { Llena(T), Vacia }").unwrap(), Outcome::Defined("Box".into()));
+        assert!(s.eval("Box.Llena(5)").is_ok());
     }
 
     #[test]

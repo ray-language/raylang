@@ -1174,8 +1174,8 @@ mod tests {
         let src = "fn main() -> int {\n    print(`{\"id\": ${1 + 2}}`);\n    let d = `a\nb`;\n    print(d);\n    0\n}\n";
         assert_eq!(fmt(src), src);
         // Y un `\${` literal en un string PLANO sobrevive al roundtrip (fix M95).
-        let plano = "fn main() -> int {\n    print(\"precio \\${USD}\");\n    0\n}\n";
-        assert_eq!(fmt(plano), plano);
+        let plain = "fn main() -> int {\n    print(\"precio \\${USD}\");\n    0\n}\n";
+        assert_eq!(fmt(plain), plain);
     }
 
     #[test]

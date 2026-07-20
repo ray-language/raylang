@@ -886,10 +886,10 @@ mod tests {
 
     #[test]
     fn generates_typed_function() {
-        let tpl = "{% params titulo: string, n: int %}\n<h1>{{ titulo }}</h1>{% if n > 0 %}<p>{{ n }}</p>{% endif %}";
+        let tpl = "{% params title: string, n: int %}\n<h1>{{ title }}</h1>{% if n > 0 %}<p>{{ n }}</p>{% endif %}";
         let code = generate(tpl, "vista").unwrap();
-        assert!(code.contains("pub fn render_vista(titulo: string, n: int) -> string {"), "{code}");
-        assert!(code.contains("out.push(escape_html(to_string(titulo)));"), "{code}");
+        assert!(code.contains("pub fn render_vista(title: string, n: int) -> string {"), "{code}");
+        assert!(code.contains("out.push(escape_html(to_string(title)));"), "{code}");
         assert!(code.contains("if (n > 0) {"), "{code}");
         // Y el generado parsea como raylang válido.
         let tokens = crate::lexer::lex(&code).unwrap();
@@ -985,11 +985,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("base.ray.html"),
-            "{% params titulo: string %}\n<html><title>{{ titulo }}</title><body>\n{% block body %}<p>default</p>{% endblock %}\n<footer>{% block pie %}pie común{% endblock %}</footer>\n</body></html>\n").unwrap();
+            "{% params title: string %}\n<html><title>{{ title }}</title><body>\n{% block body %}<p>default</p>{% endblock %}\n<footer>{% block pie %}pie común{% endblock %}</footer>\n</body></html>\n").unwrap();
         // El hijo solo aporta bloques; hereda la estructura (y el bloque `pie` queda con su defecto).
-        let child = "{% params titulo: string, n: int %}\n{% extends base %}\n{% block body %}<b>{{ n }}</b>{% endblock %}\n";
+        let child = "{% params title: string, n: int %}\n{% extends base %}\n{% block body %}<b>{{ n }}</b>{% endblock %}\n";
         let (code, map) = generate_with_map_at(child, "pagina", Some(&base)).unwrap();
-        assert!(code.contains("pub fn render_pagina(titulo: string, n: int) -> string"), "la signature es la del HIJO\n{code}");
+        assert!(code.contains("pub fn render_pagina(title: string, n: int) -> string"), "la signature es la del HIJO\n{code}");
         assert!(code.contains("out.push(escape_html(to_string(n)));"), "el block del child\n{code}");
         assert!(code.contains("pie com"), "el default del layout queda\n{code}");
         assert!(!code.contains("default"), "el block sobreescrito NO deja su default\n{code}");
@@ -999,7 +999,7 @@ mod tests {
         let lines: Vec<&str> = code.lines().collect();
         let (i, _) = lines.iter().enumerate().find(|(_, l)| l.contains("to_string(n)")).unwrap();
         assert_eq!(map[i], 3, "{code}");
-        let (j, _) = lines.iter().enumerate().find(|(_, l)| l.contains("titulo")).unwrap();
+        let (j, _) = lines.iter().enumerate().find(|(_, l)| l.contains("title")).unwrap();
         let _ = j; // la firma mapea a params; el <title> del layout:
         let (k, _) = lines.iter().enumerate().find(|(_, l)| l.contains("<title>")).unwrap();
         assert_eq!(map[k], 2, "las líneas del layout se atribuyen al extends\n{code}");

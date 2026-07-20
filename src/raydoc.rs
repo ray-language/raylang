@@ -190,7 +190,7 @@ mod tests {
         let src = "\
 /// Un punto.
 /// En 2D.
-pub struct Punto { x: int, y: int }
+pub struct Point { x: int, y: int }
 
 /// Suma dos.
 pub fn sum(a: int, b: int) -> int { a + b }
@@ -200,7 +200,7 @@ fn privada() -> int { 0 }
 ";
         let md = generate(src, "m.ray").unwrap();
         assert!(md.contains("# m.ray"));
-        assert!(md.contains("### `struct Punto { x: int, y: int }`"));
+        assert!(md.contains("### `struct Point { x: int, y: int }`"));
         assert!(md.contains("Un punto. En 2D.")); // multi-línea unida
         assert!(md.contains("### `fn sum(a: int, b: int) -> int`"));
         assert!(md.contains("Suma dos."));
@@ -213,12 +213,12 @@ fn privada() -> int { 0 }
         let src = "\
 pub trait Med { fn measure(self) -> int; }
 pub fn maxi<T: Ord>(xs: [T]) -> T { xs[0] }
-pub enum Caja<T> { Llena(T), Vacia }
+pub enum Box<T> { Llena(T), Vacia }
 ";
         let md = generate(src, "g.ray").unwrap();
         assert!(md.contains("`fn measure(self) -> int`"), "self sin type:\n{md}");
         assert!(md.contains("`fn maxi<T: Ord>(xs: [T]) -> T`"), "generics+bound:\n{md}");
-        assert!(md.contains("`enum Caja<T> { Llena(T), Vacia }`"), "enum:\n{md}");
+        assert!(md.contains("`enum Box<T> { Llena(T), Vacia }`"), "enum:\n{md}");
     }
 
     #[test]

@@ -5428,27 +5428,27 @@ mod tests {
     #[test]
     fn all_builtins_are_classified_for_native() {
         use std::collections::BTreeSet;
-        let tabla: BTreeSet<&str> = crate::builtins::names().collect();
-        let clasificados: BTreeSet<&str> = super::NATIVE_TRACKED_BUILTINS.iter().copied().collect();
+        let table: BTreeSet<&str> = crate::builtins::names().collect();
+        let classified: BTreeSet<&str> = super::NATIVE_TRACKED_BUILTINS.iter().copied().collect();
 
         // (1) Todo builtin de la tabla está clasificado. Si esto falla: añadiste un builtin — impleméntalo
         //     en `emit_call`/`type_of` (o, si el backend nativo no lo soportará, márcalo stubbeado) y
         //     añade su nombre a `NATIVE_TRACKED_BUILTINS` en src/transpile.rs.
-        let sin_clasificar: Vec<&str> = tabla.difference(&clasificados).copied().collect();
+        let unclassified: Vec<&str> = table.difference(&classified).copied().collect();
         assert!(
-            sin_clasificar.is_empty(),
-            "builtins de BUILTINS sin clasificar para el backend nativo: {sin_clasificar:?}\n\
+            unclassified.is_empty(),
+            "builtins de BUILTINS sin clasificar para el backend nativo: {unclassified:?}\n\
              → decidí su soporte nativo y añádelos a NATIVE_TRACKED_BUILTINS (marca stubbeados los que no soporte)."
         );
         // (2) Sin entradas obsoletas (un builtin que se quitó de la tabla pero quedó en la lista).
-        let obsoletos: Vec<&str> = clasificados.difference(&tabla).copied().collect();
+        let stale: Vec<&str> = classified.difference(&table).copied().collect();
         assert!(
-            obsoletos.is_empty(),
-            "entradas obsoletas en NATIVE_TRACKED_BUILTINS (ya no están en BUILTINS): {obsoletos:?}"
+            stale.is_empty(),
+            "entradas obsoletas en NATIVE_TRACKED_BUILTINS (ya no están en BUILTINS): {stale:?}"
         );
         // (3) Los stubbeados son un subconjunto de los clasificados (coherencia interna).
         for s in super::NATIVE_STUBBED_BUILTINS {
-            assert!(clasificados.contains(s), "'{s}' está en STUBBED pero no en TRACKED");
+            assert!(classified.contains(s), "'{s}' está en STUBBED pero no en TRACKED");
         }
     }
 
@@ -5569,22 +5569,22 @@ mod tests {
     fn transpiles_generic_types() {
         let rust = transpile_src(
             "struct Par<A, B> { a: A, b: B }\n\
-             enum Caja<T> { Llena(T), Vacia }\n\
-             fn extract(c: Caja<int>) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 } }\n\
-             fn main() -> int { let p = Par { a: 1, b: true }; extract(Caja.Llena(9)) }",
+             enum Box<T> { Llena(T), Vacia }\n\
+             fn extract(c: Box<int>) -> int { match (c) { Box.Llena(v) => v, Box.Vacia => 0 } }\n\
+             fn main() -> int { let p = Par { a: 1, b: true }; extract(Box.Llena(9)) }",
         );
         assert!(rust.contains("struct Par<A: Clone"), "{}", rust);
-        assert!(rust.contains("enum Caja<T: Clone"), "{}", rust);
-        assert!(rust.contains("Caja::Llena(v)"), "{}", rust); // match de enum genérico
-        assert!(rust.contains("Rc::new(Caja::Llena(9i64))"), "{}", rust);
+        assert!(rust.contains("enum Box<T: Clone"), "{}", rust);
+        assert!(rust.contains("Box::Llena(v)"), "{}", rust); // match de enum genérico
+        assert!(rust.contains("Rc::new(Box::Llena(9i64))"), "{}", rust);
     }
 
     #[test]
     fn transpiles_static_trait_dispatch() {
         let rust = transpile_src(
-            "trait Valor { fn value(self) -> int; }\n\
+            "trait Value { fn value(self) -> int; }\n\
              struct P { x: int }\n\
-             impl Valor for P { fn value(self) -> int { self.x } }\n\
+             impl Value for P { fn value(self) -> int { self.x } }\n\
              fn main() -> int { let p = P { x: 7 }; p.value() }",
         );
         // El método de trait se baja a una función manglada `P#value` → `P_HH_value` (erasure, M9).
@@ -5608,14 +5608,14 @@ mod tests {
     #[test]
     fn transpiles_dyn_trait_objects() {
         let rust = transpile_src(
-            "trait Figura { fn area(self) -> int; }\n\
+            "trait Shape { fn area(self) -> int; }\n\
              struct Cuad { lado: int }\n\
-             impl Figura for Cuad { fn area(self) -> int { self.lado * self.lado } }\n\
-             fn total(f: dyn Figura) -> int { f.area() }\n\
+             impl Shape for Cuad { fn area(self) -> int { self.lado * self.lado } }\n\
+             fn total(f: dyn Shape) -> int { f.area() }\n\
              fn main() -> int { total(Cuad { lado: 3 }) }",
         );
         // dyn → struct de closures que capturan el concreto (sin Box<dyn Any>, sin data).
-        assert!(rust.contains("struct __dyn_Figura"), "{}", rust);
+        assert!(rust.contains("struct __dyn_Shape"), "{}", rust);
         assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
         assert!(rust.contains("let __rt_c = "), "{}", rust); // captura del concreto en la coerción
         assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
@@ -5715,9 +5715,9 @@ mod tests {
     fn function_field_call_unwraps_it() {
         // Llamar un campo de tipo función (`self.step()`, como en `Iter#next`) → `(r.borrow().step.clone())()`.
         let rust = transpile_src(
-            "struct Caja { f: fn() -> int }\n\
-             fn call(c: Caja) -> int { c.f() }\n\
-             fn main() { print(call(Caja { f: fn() -> int { 7 } })); }",
+            "struct Box { f: fn() -> int }\n\
+             fn call(c: Box) -> int { c.f() }\n\
+             fn main() { print(call(Box { f: fn() -> int { 7 } })); }",
         );
         assert!(rust.contains(".borrow().f.clone())("), "llama el campo-closure: {}", rust);
     }

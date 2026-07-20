@@ -130,8 +130,8 @@ fn build_request_conn(method: string, u: Url, body: bytes, extra: Map<string, st
     while (i < names.len()) {
         let name: string = names[i];
         match (get(extra, name)) {
-            Option.Some(valor) => {
-                req = req + name + ": " + valor + "\r\n";
+            Option.Some(value) => {
+                req = req + name + ": " + value + "\r\n";
             },
             Option.None => { },
         }
@@ -143,24 +143,24 @@ fn build_request_conn(method: string, u: Url, body: bytes, extra: Map<string, st
 
 // Una lectura respetando el plazo TOTAL (monotónico; 0 = sin plazo): antes de cada lectura se
 // fija el timeout del socket a lo que RESTA (M56.4/M58.2 — el goteo no renueva el plazo).
-fn leer_con_plazo(h: int, plazo_fin: int) -> Result<bytes, string> {
-    if (plazo_fin > 0) {
-        let restante: int = plazo_fin - time.monotonic();
-        if (restante <= 0) {
+fn read_with_deadline(h: int, deadline: int) -> Result<bytes, string> {
+    if (deadline > 0) {
+        let remaining: int = deadline - time.monotonic();
+        if (remaining <= 0) {
             return Result.Err("read timeout");
         }
-        net.set_read_timeout(h, restante);
+        net.set_read_timeout(h, remaining);
     }
     net.socket_read_bytes(h)
 }
 
 // Lee del socket hasta que el servidor cierra (o vence el plazo), acumulando bytes (binario intacto).
-fn leer_todo(h: int, plazo_fin: int) -> Result<bytes, string> {
+fn read_all(h: int, deadline: int) -> Result<bytes, string> {
     var acc: bytes = b"";
     var follow: bool = true;
     var err: string = "";
     while (follow) {
-        match (leer_con_plazo(h, plazo_fin)) {
+        match (read_with_deadline(h, deadline)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
                     follow = false;
@@ -298,12 +298,12 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             var headers: Map<string, string> = Map.new();
             var i: int = 1;
             while (i < lines.len()) {
-                let linea: string = lines[i];
-                match (index_of(linea, ":")) {
+                let line: string = lines[i];
+                match (index_of(line, ":")) {
                     Option.Some(c) => {
-                        let name: string = linea.substring(0, c).trim().to_lower();
-                        let valor: string = linea.substring(c + 1, linea.len()).trim();
-                        headers.insert(name, valor);
+                        let name: string = line.substring(0, c).trim().to_lower();
+                        let value: string = line.substring(c + 1, line.len()).trim();
+                        headers.insert(name, value);
                     },
                     Option.None => { },
                 }
@@ -330,14 +330,14 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             // M58.2: con Content-Length declarado (y sin chunked), verificar la longitud: menos
             // octetos = respuesta truncada (el servidor cayó a mitad) → Err, no un cuerpo a
             // medias en silencio; de más (basura tras el cierre) se recorta a lo declarado.
-            var fue_chunked: bool = false;
+            var was_chunked: bool = false;
             match (get(headers, "transfer-encoding")) {
                 Option.Some(te2) => {
-                    fue_chunked = te2.to_lower().contains("chunked");
+                    was_chunked = te2.to_lower().contains("chunked");
                 },
                 Option.None => { },
             }
-            if (!fue_chunked) {
+            if (!was_chunked) {
                 match (get(headers, "content-length")) {
                     Option.Some(cl) => {
                         match (parse_int(cl)) {
@@ -392,7 +392,7 @@ pub fn body_text(r: Response) -> Result<string, string> {
 }
 
 // Abre la conexión adecuada al esquema: TLS para https, TCP en claro para http (M19.4a).
-fn conectar(u: Url) -> Result<int, string> {
+fn connect(u: Url) -> Result<int, string> {
     if (u.tls) {
         net.tls_connect(u.host, u.port)
     } else {
@@ -449,17 +449,17 @@ pub fn request_bytes(method: string, url: string, body: bytes, headers: Map<stri
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (conectar(u)) {
+            match (connect(u)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
-                    let plazo_fin: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
+                    let deadline: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
                     match (net.socket_write_bytes(h, build_request_h(method, u, body, headers))) {
                         Result.Err(e) => {
                             close(h);
                             Result.Err("error sending: " + e)
                         },
                         Result.Ok(_) => {
-                            let r = leer_todo(h, plazo_fin);
+                            let r = read_all(h, deadline);
                             close(h);
                             match (r) {
                                 Result.Err(e) => Result.Err("error reading: " + e),
@@ -474,7 +474,7 @@ pub fn request_bytes(method: string, url: string, body: bytes, headers: Map<stri
 }
 
 // ¿Es `status` una redirección con cabecera Location (301/302/303/307/308)?
-fn es_redireccion(status: int) -> bool {
+fn is_redirect(status: int) -> bool {
     status == 301 || status == 302 || status == 303 || status == 307 || status == 308
 }
 
@@ -484,15 +484,15 @@ fn es_redireccion(status: int) -> bool {
 /// Returns the final response; Err if the hop limit is exceeded (possible loop) or a request fails.
 /// A redirect without a Location header is returned as-is.
 pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
-    var actual: string = url;
+    var current: string = url;
     var restantes: int = max;
     while (true) {
-        match (fetch(actual)) {
+        match (fetch(current)) {
             Result.Err(e) => {
                 return Result.Err(e);
             },
             Result.Ok(resp) => {
-                if (!es_redireccion(resp.status)) {
+                if (!is_redirect(resp.status)) {
                     return Result.Ok(resp);
                 }
                 if (restantes <= 0) {
@@ -500,7 +500,7 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
                 }
                 match (header(resp, "location")) {
                     Option.Some(loc) => {
-                        actual = absolutizar(actual, loc);
+                        current = absolutize(current, loc);
                     },
                     Option.None => {
                         return Result.Ok(resp);  // redirección sin Location: se devuelve
@@ -516,16 +516,16 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
 // Resuelve una Location que puede ser absoluta (`http://…`) o relativa al host actual (`/otra`).
 // M58.2: una relativa SIN `/` inicial (rara; la RFC pide absolutas o absolute-path) se ancla a la
 // raíz — antes se concatenaba sin separador y salía una URL malformada.
-fn absolutizar(base: string, loc: string) -> string {
+fn absolutize(base: string, loc: string) -> string {
     if (loc.starts_with("http://") || loc.starts_with("https://")) {
         loc
     } else {
         match (parse_url(base)) {
             Result.Ok(u) => {
-                let esquema: string = if (u.tls) { "https://" } else { "http://" };
+                let scheme: string = if (u.tls) { "https://" } else { "http://" };
                 let port: string = ":" + to_string(u.port);
                 let path: string = if (loc.starts_with("/")) { loc } else { "/" + loc };
-                esquema + u.host + port + path
+                scheme + u.host + port + path
             },
             Result.Err(_) => loc,
         }
@@ -571,7 +571,7 @@ pub fn connect(base_url: string) -> Result<Conn, string> {
     match (parse_url(base_url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (conectar(u)) {
+            match (connect(u)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => Result.Ok(Conn { h: h, buf: b"", host: u.host, port: u.port, tls: u.tls, open: true }),
             }
@@ -590,8 +590,8 @@ pub fn conn_close(c: Conn) {
 }
 
 // Reabre el socket de una Conn cerrada (reconexión perezosa).
-fn conn_reabrir(c: Conn) -> Result<int, string> {
-    match (conectar(Url { host: c.host, port: c.port, path: "/", tls: c.tls })) {
+fn conn_reopen(c: Conn) -> Result<int, string> {
+    match (connect(Url { host: c.host, port: c.port, path: "/", tls: c.tls })) {
         Result.Err(e) => Result.Err("could not connect: " + e),
         Result.Ok(h) => {
             c.h = h;
@@ -610,7 +610,7 @@ pub fn conn_request(c: Conn, method: string, path: string, body: string, headers
 
 // El marcador de "la conexión reutilizada estaba caída" (el servidor la cerró en el ocio,
 // sin entregar ningún octeto): dispara el reintento transparente sobre una conexión fresca.
-fn err_caida() -> string {
+fn err_dropped() -> string {
     "the persistent connection closed"
 }
 
@@ -619,13 +619,13 @@ fn err_caida() -> string {
 /// server closed it while idle, before delivering any response byte — it reconnects and
 /// retries ONCE transparently.
 pub fn conn_request_bytes(c: Conn, method: string, path: string, body: bytes, headers: Map<string, string>, timeout_millis: int) -> Result<Response, string> {
-    let reutilizada: bool = c.open;
-    match (conn_intento(c, method, path, body, headers, timeout_millis)) {
+    let reused: bool = c.open;
+    match (conn_attempt(c, method, path, body, headers, timeout_millis)) {
         Result.Ok(r) => Result.Ok(r),
         Result.Err(e) => {
-            if (reutilizada && e == err_caida()) {
+            if (reused && e == err_dropped()) {
                 conn_close(c);
-                conn_intento(c, method, path, body, headers, timeout_millis)
+                conn_attempt(c, method, path, body, headers, timeout_millis)
             } else {
                 Result.Err(e)
             }
@@ -635,20 +635,20 @@ pub fn conn_request_bytes(c: Conn, method: string, path: string, body: bytes, he
 
 // Un intento de petición sobre la conexión (sin reintento): asegura el socket, escribe la
 // request y lee UNA respuesta delimitada. Honra un `Connection: close` de la respuesta.
-fn conn_intento(c: Conn, method: string, path: string, body: bytes, headers: Map<string, string>, timeout_millis: int) -> Result<Response, string> {
+fn conn_attempt(c: Conn, method: string, path: string, body: bytes, headers: Map<string, string>, timeout_millis: int) -> Result<Response, string> {
     if (!c.open) {
-        let _ = conn_reabrir(c)?;
+        let _ = conn_reopen(c)?;
     }
     let u = Url { host: c.host, port: c.port, path: path, tls: c.tls };
-    let plazo_fin: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
+    let deadline: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
     match (net.socket_write_bytes(c.h, build_request_conn(method, u, body, headers, "keep-alive"))) {
         Result.Err(_) => {
             // Escribir en una conexión que el servidor ya cerró falla aquí o en la lectura.
             conn_close(c);
-            Result.Err(err_caida())
+            Result.Err(err_dropped())
         },
         Result.Ok(_) => {
-            match (conn_leer_response(c, method, plazo_fin)) {
+            match (conn_read_response(c, method, deadline)) {
                 Result.Err(e) => Result.Err(e),
                 Result.Ok(raw) => {
                     match (parse_response(raw)) {
@@ -673,8 +673,8 @@ fn conn_intento(c: Conn, method: string, path: string, body: bytes, headers: Map
 }
 
 // Lee un trozo más del socket a `c.buf`. Ok(false) = EOF (el servidor cerró su lado).
-fn conn_leer_mas(c: Conn, plazo_fin: int) -> Result<bool, string> {
-    match (leer_con_plazo(c.h, plazo_fin)) {
+fn conn_read_more(c: Conn, deadline: int) -> Result<bool, string> {
+    match (read_with_deadline(c.h, deadline)) {
         Result.Err(e) => {
             conn_close(c);
             Result.Err("error reading: " + e)
@@ -691,9 +691,9 @@ fn conn_leer_mas(c: Conn, plazo_fin: int) -> Result<bool, string> {
 }
 
 // Asegura que `c.buf` tenga al menos `n` octetos (leyendo del socket lo que falte).
-fn conn_asegurar(c: Conn, n: int, plazo_fin: int) -> Result<int, string> {
+fn conn_ensure(c: Conn, n: int, deadline: int) -> Result<int, string> {
     while (c.buf.len() < n) {
-        match (conn_leer_mas(c, plazo_fin)) {
+        match (conn_read_more(c, deadline)) {
             Result.Err(e) => {
                 return Result.Err(e);
             },
@@ -710,7 +710,7 @@ fn conn_asegurar(c: Conn, n: int, plazo_fin: int) -> Result<int, string> {
 
 // Saca los primeros `n` octetos de `c.buf` (la respuesta completa) dejando el resto en el
 // buffer (pertenecen a la SIGUIENTE respuesta).
-fn tomar(c: Conn, n: int) -> bytes {
+fn take(c: Conn, n: int) -> bytes {
     let r: bytes = c.buf.sub_bytes(0, n);
     c.buf = c.buf.sub_bytes(n, c.buf.len());
     r
@@ -719,12 +719,12 @@ fn tomar(c: Conn, n: int) -> bytes {
 // Lee UNA respuesta completa y delimitada: cabeceras enteras y cuerpo por Content-Length /
 // chunked / sin-cuerpo (HEAD, 1xx, 204, 304, RFC 9112). Sin longitud declarada, cae a leer
 // hasta EOF (delimitación de una petición suelta) y la conexión deja de ser reutilizable.
-fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, string> {
+fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, string> {
     // 1. Cabeceras completas ("\r\n\r\n").
     var sep: int = find_fin_headers(c.buf);
     while (sep < 0) {
-        let habia: int = c.buf.len();
-        match (conn_leer_mas(c, plazo_fin)) {
+        let had: int = c.buf.len();
+        match (conn_read_more(c, deadline)) {
             Result.Err(e) => {
                 return Result.Err(e);
             },
@@ -733,7 +733,7 @@ fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, 
                     // EOF antes de completar las cabeceras. Si no había llegado NADA, es la
                     // carrera del keep-alive ocioso → reintentable; si llegó algo, truncada.
                     conn_close(c);
-                    return if (habia == 0) { Result.Err(err_caida()) } else { Result.Err("error reading: incomplete response") };
+                    return if (had == 0) { Result.Err(err_dropped()) } else { Result.Err("error reading: incomplete response") };
                 }
             },
         }
@@ -772,19 +772,19 @@ fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, 
             }
             // Sin cuerpo por definición (RFC 9112 §6.3): HEAD, 1xx, 204 y 304.
             if (method == "HEAD" || status == 204 || status == 304 || (status >= 100 && status < 200)) {
-                return Result.Ok(tomar(c, fin_cab));
+                return Result.Ok(take(c, fin_cab));
             }
             if (chunked) {
-                return conn_leer_chunked(c, fin_cab, plazo_fin);
+                return conn_read_chunked(c, fin_cab, deadline);
             }
             if (content_len >= 0) {
-                let _ = conn_asegurar(c, fin_cab + content_len, plazo_fin)?;
-                return Result.Ok(tomar(c, fin_cab + content_len));
+                let _ = conn_ensure(c, fin_cab + content_len, deadline)?;
+                return Result.Ok(take(c, fin_cab + content_len));
             }
             // Sin longitud declarada: el EOF delimita, y la conexión no se puede reusar.
             var follow: bool = true;
             while (follow) {
-                match (conn_leer_mas(c, plazo_fin)) {
+                match (conn_read_more(c, deadline)) {
                     Result.Err(e) => {
                         return Result.Err(e);
                     },
@@ -803,13 +803,13 @@ fn conn_leer_response(c: Conn, method: string, plazo_fin: int) -> Result<bytes, 
 // Delimita un cuerpo chunked leyendo del socket lo que falte: recorre chunk a chunk desde
 // `desde` hasta el chunk 0 y su línea vacía final (tolerando trailers). Devuelve la
 // respuesta cruda (cabeceras + cuerpo chunked intacto; `parse_response` lo decodifica).
-fn conn_leer_chunked(c: Conn, start: int, plazo_fin: int) -> Result<bytes, string> {
+fn conn_read_chunked(c: Conn, start: int, deadline: int) -> Result<bytes, string> {
     var pos: int = start;
     while (true) {
         // La línea hex de tamaño del chunk.
         var line_end: int = find_crlf(c.buf, pos);
         while (line_end < 0) {
-            let _ = conn_asegurar(c, c.buf.len() + 1, plazo_fin)?;
+            let _ = conn_ensure(c, c.buf.len() + 1, deadline)?;
             line_end = find_crlf(c.buf, pos);
         }
         let size: int = parse_chunk_size(c.buf, pos, line_end);
@@ -819,16 +819,16 @@ fn conn_leer_chunked(c: Conn, start: int, plazo_fin: int) -> Result<bytes, strin
             while (true) {
                 var te: int = find_crlf(c.buf, pos);
                 while (te < 0) {
-                    let _ = conn_asegurar(c, c.buf.len() + 1, plazo_fin)?;
+                    let _ = conn_ensure(c, c.buf.len() + 1, deadline)?;
                     te = find_crlf(c.buf, pos);
                 }
                 if (te == pos) {
-                    return Result.Ok(tomar(c, pos + 2));  // línea vacía: fin de la respuesta
+                    return Result.Ok(take(c, pos + 2));  // línea vacía: fin de la respuesta
                 }
                 pos = te + 2;
             }
         }
-        let _ = conn_asegurar(c, pos + size + 2, plazo_fin)?;
+        let _ = conn_ensure(c, pos + size + 2, deadline)?;
         pos = pos + size + 2;  // datos + su \r\n
     }
     Result.Err("unreachable")

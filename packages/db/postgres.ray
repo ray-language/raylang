@@ -112,7 +112,7 @@ fn read_msg(c: Conn) -> Result<PgMsg, string> {
 fn error_text(payload: bytes) -> string {
     var i = 0;
     while (i < payload.len() && payload[i] != 0) {
-        let campo = payload[i];
+        let field = payload[i];
         i = i + 1;
         var val: [int] = [];
         while (i < payload.len() && payload[i] != 0) {
@@ -120,7 +120,7 @@ fn error_text(payload: bytes) -> string {
             i = i + 1;
         }
         i = i + 1; // NUL
-        if (campo == 77) {
+        if (field == 77) {
             // 'M'
             return match (from_utf8(bytes_of(val))) {
                 Result.Ok(s) => "postgres: " + s,

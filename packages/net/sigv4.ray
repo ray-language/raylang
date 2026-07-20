@@ -35,7 +35,7 @@ fn canonical_query(raw: string) -> string {
         return "";
     }
     let pares: [string] = raw.split("&");
-    var codificados: [string] = [];
+    var encoded: [string] = [];
     var i: int = 0;
     while (i < pares.len()) {
         let p: string = pares[i];
@@ -43,15 +43,15 @@ fn canonical_query(raw: string) -> string {
             Option.Some(eq) => {
                 let k: string = url_encode(p.substring(0, eq));
                 let v: string = url_encode(p.substring(eq + 1, p.len()));
-                codificados.push(k + "=" + v);
+                encoded.push(k + "=" + v);
             },
             Option.None => {
-                codificados.push(url_encode(p) + "=");
+                encoded.push(url_encode(p) + "=");
             },
         }
         i = i + 1;
     }
-    join(sort(codificados), "&")
+    join(sort(encoded), "&")
 }
 
 // Un HMAC-SHA256 cuyo resultado se reusa como clave del siguiente (la derivación de la *signing key*).

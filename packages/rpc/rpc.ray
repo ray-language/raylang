@@ -254,8 +254,8 @@ fn handle_rpc(conn: int, handler: fn(Req) -> Result<Json, string>, limits: Limit
 /// Prints "rpc escuchando en el puerto N". Blocks forever; VM only.
 pub fn serve(host: string, port: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
     // Un canal al que nunca llega nada = servir para siempre (un solo bucle drenable).
-    let nunca: Channel<int> = Channel.new();
-    serve_shutdown(host, port, nunca, 0, handler)
+    let never: Channel<int> = Channel.new();
+    serve_shutdown(host, port, never, 0, handler)
 }
 
 /// Like `serve`, with graceful shutdown (the M88.1b pattern): when a value arrives on `stop`
@@ -301,15 +301,15 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
                                 close(conns);
                                 follow = false;
                             } else {
-                                let pausa: Channel<int> = Channel.new();
+                                let pause: Channel<int> = Channel.new();
                                 spawn(fn() {
                                     time.sleep(10);
-                                    send(pausa, 1);
+                                    send(pause, 1);
                                 });
-                                if (select([off, pausa]) == 0) {
+                                if (select([off, pause]) == 0) {
                                     follow = false;
                                 } else {
-                                    let _ = recv(pausa);
+                                    let _ = recv(pause);
                                     eprint("rpc accept: " + e);
                                 }
                             }
@@ -317,63 +317,63 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
                     }
                 }
             });
-            var activos = 0;
-            var conns_abierta = true;
-            var sirviendo = true;
-            while (sirviendo) {
+            var active = 0;
+            var conns_open = true;
+            var serving = true;
+            while (serving) {
                 let which = select([stop, conns, done]);
                 if (which == 0) {
                     let _ = recv(stop);
-                    sirviendo = false;
+                    serving = false;
                 } else if (which == 1) {
                     match (recv(conns)) {
                         Option.Some(conn) => {
-                            activos = activos + 1;
+                            active = active + 1;
                             spawn(fn() {
                                 handle_rpc(conn, handler, limits);
                                 send(done, 1);
                             });
                         },
                         Option.None => {
-                            conns_abierta = false;
-                            sirviendo = false;
+                            conns_open = false;
+                            serving = false;
                         },
                     }
                 } else {
                     let _ = recv(done);
-                    activos = activos - 1;
+                    active = active - 1;
                 }
             }
             close(off);
             close(srv);
-            print("rpc shutting down: " + to_string(activos) + " connection(s) in flight");
-            if (activos > 0 && drain_ms > 0) {
-                let plazo: Channel<int> = Channel.new();
+            print("rpc shutting down: " + to_string(active) + " connection(s) in flight");
+            if (active > 0 && drain_ms > 0) {
+                let deadline_ch: Channel<int> = Channel.new();
                 spawn(fn() {
                     time.sleep(drain_ms);
-                    send(plazo, 1);
+                    send(deadline_ch, 1);
                 });
-                var esperando = true;
-                while (esperando && activos > 0) {
-                    let which = if (conns_abierta) { select([plazo, done, conns]) } else { select([plazo, done]) };
+                var waiting = true;
+                while (waiting && active > 0) {
+                    let which = if (conns_open) { select([deadline_ch, done, conns]) } else { select([deadline_ch, done]) };
                     if (which == 0) {
-                        esperando = false;
+                        waiting = false;
                     } else if (which == 1) {
                         let _ = recv(done);
-                        activos = activos - 1;
+                        active = active - 1;
                     } else {
                         match (recv(conns)) {
                             Option.Some(c) => {
                                 close(c);
                             },
                             Option.None => {
-                                conns_abierta = false;
+                                conns_open = false;
                             },
                         }
                     }
                 }
-                if (activos > 0) {
-                    eprint("rpc off: " + to_string(activos) + " connection(s) in flight when the deadline expired");
+                if (active > 0) {
+                    eprint("rpc off: " + to_string(active) + " connection(s) in flight when the deadline expired");
                 }
             }
             Result.Ok(0)

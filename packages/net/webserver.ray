@@ -348,7 +348,7 @@ pub fn read_request(conn: int) -> Result<Request, string> {
 
 // --- Cuerpo chunked entrante (M56.8, Transfer-Encoding: chunked) ---
 // El índice del primer "\r\n" en `b` desde `desde`, o -1 (escaneo por octetos, como el fin de cabeceras).
-fn buscar_crlf(b: bytes, start: int) -> int {
+fn find_crlf(b: bytes, start: int) -> int {
     var i: int = start;
     while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
@@ -360,7 +360,7 @@ fn buscar_crlf(b: bytes, start: int) -> int {
 }
 
 // El valor de un dígito hexadecimal (octeto ASCII), o -1.
-fn hex_digito(b: int) -> int {
+fn hex_digit(b: int) -> int {
     if (b >= 48 && b <= 57) { return b - 48; }        // 0-9
     if (b >= 97 && b <= 102) { return b - 97 + 10; }  // a-f
     if (b >= 65 && b <= 70) { return b - 65 + 10; }   // A-F
@@ -372,35 +372,35 @@ fn hex_digito(b: int) -> int {
 fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
     var n: int = 0;
     var i: int = ini;
-    var alguno: bool = false;
+    var any_found: bool = false;
     while (i < fin) {
         if (b[i] == 59) {  // ';' → extensión de chunk: ignorar el resto
             i = fin;
         } else {
-            let d: int = hex_digito(b[i]);
+            let d: int = hex_digit(b[i]);
             if (d < 0) {
                 return 0 - 1;
             }
             n = n * 16 + d;
-            alguno = true;
+            any_found = true;
             i = i + 1;
         }
     }
-    if (alguno) { n } else { 0 - 1 }
+    if (any_found) { n } else { 0 - 1 }
 }
 
 // Decodifica un cuerpo `Transfer-Encoding: chunked`: líneas `tamaño-hex\r\n` + datos + `\r\n`,
 // terminado por el chunk 0 (los trailers, raros, no se soportan: tras el 0 se exige `\r\n`).
-// `inicial` son los octetos que llegaron pegados a las cabeceras; el tamaño DECODIFICADO acumulado
+// `initial` son los octetos que llegaron pegados a las cabeceras; el tamaño DECODIFICADO acumulado
 // respeta `max` y toda la lectura el plazo total.
-fn leer_body_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Result<bytes, string> {
-    var acc: bytes = inicial;
+fn read_body_chunked(conn: int, initial: bytes, deadline: int, max: int) -> Result<bytes, string> {
+    var acc: bytes = initial;
     var out: bytes = b"";
     var follow: bool = true;
     while (follow) {
-        let nl: int = buscar_crlf(acc, 0);
+        let nl: int = find_crlf(acc, 0);
         if (nl < 0) {
-            match (leer_con_plazo(conn, plazo_fin)) {
+            match (read_with_deadline(conn, deadline)) {
                 Result.Ok(t) => {
                     if (t.len() == 0) {
                         return Result.Err("incomplete chunked body (the connection closed)");
@@ -423,15 +423,15 @@ fn leer_body_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Res
                     return Result.Err("body too large (chunked > " + to_string(max) + ")");
                 }
                 // Asegurar el chunk completo + su \r\n final.
-                var falta: bool = acc.len() < nl + 2 + n + 2;
-                while (falta) {
-                    match (leer_con_plazo(conn, plazo_fin)) {
+                var missing: bool = acc.len() < nl + 2 + n + 2;
+                while (missing) {
+                    match (read_with_deadline(conn, deadline)) {
                         Result.Ok(t) => {
                             if (t.len() == 0) {
                                 return Result.Err("incomplete chunked body (the connection closed)");
                             }
                             acc = acc + t;
-                            falta = acc.len() < nl + 2 + n + 2;
+                            missing = acc.len() < nl + 2 + n + 2;
                         },
                         Result.Err(e) => {
                             return Result.Err("error reading the chunked body: " + e);
@@ -446,16 +446,16 @@ fn leer_body_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Res
     Result.Ok(out)
 }
 
-// M56.4: una lectura respetando el plazo TOTAL de la petición (`plazo_fin` en el reloj monotónico;
+// M56.4: una lectura respetando el plazo TOTAL de la petición (`deadline` en el reloj monotónico;
 // 0 = sin plazo). El primitivo del timeout es por-lectura (`net.set_read_timeout`), así que antes
 // de cada lectura se fija a lo que RESTA del plazo — un cliente que gotea octetos no lo renueva.
-fn leer_con_plazo(conn: int, plazo_fin: int) -> Result<bytes, string> {
-    if (plazo_fin > 0) {
-        let restante: int = plazo_fin - time.monotonic();
-        if (restante <= 0) {
+fn read_with_deadline(conn: int, deadline: int) -> Result<bytes, string> {
+    if (deadline > 0) {
+        let remaining: int = deadline - time.monotonic();
+        if (remaining <= 0) {
             return Result.Err("read timeout");
         }
-        net.set_read_timeout(conn, restante);
+        net.set_read_timeout(conn, remaining);
     }
     net.socket_read_bytes(conn)
 }
@@ -471,7 +471,7 @@ fn leer_con_plazo(conn: int, plazo_fin: int) -> Result<bytes, string> {
 /// takes longer than `read_timeout_millis`.
 pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string> {
     // El plazo total: instante monotónico en que la lectura de ESTA petición vence (0 = sin plazo).
-    let plazo_fin: int = if (limits.read_timeout_millis > 0) { time.monotonic() + limits.read_timeout_millis } else { 0 };
+    let deadline: int = if (limits.read_timeout_millis > 0) { time.monotonic() + limits.read_timeout_millis } else { 0 };
     var acc: bytes = b"";
     var sep: int = 0 - 1;
     var start: int = 0;
@@ -487,7 +487,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             if (acc.len() > limits.max_header_bytes) {
                 return Result.Err("headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)");
             }
-            match (leer_con_plazo(conn, plazo_fin)) {
+            match (read_with_deadline(conn, deadline)) {
                 Result.Ok(trozo) => {
                     if (trozo.len() == 0) {
                         follow = false;
@@ -559,8 +559,8 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                 match (index_of(lines[i], ":")) {
                     Option.Some(c) => {
                         let name: string = lines[i].substring(0, c).trim().to_lower();
-                        let valor: string = lines[i].substring(c + 1, lines[i].len()).trim();
-                        headers.insert(name, valor);
+                        let value: string = lines[i].substring(c + 1, lines[i].len()).trim();
+                        headers.insert(name, value);
                     },
                     Option.None => { },
                 }
@@ -577,7 +577,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                 Option.None => { },
             }
             if (chunked) {
-                match (leer_body_chunked(conn, body, plazo_fin, limits.max_body_bytes)) {
+                match (read_body_chunked(conn, body, deadline, limits.max_body_bytes)) {
                     Result.Ok(b2) => {
                         body = b2;
                     },
@@ -598,7 +598,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                                 return Result.Err("body too large (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
                             }
                             while (body.len() < n) {
-                                match (leer_con_plazo(conn, plazo_fin)) {
+                                match (read_with_deadline(conn, deadline)) {
                                     Result.Ok(trozo) => {
                                         if (trozo.len() == 0) {
                                             return Result.Err("incomplete body: the connection closed with " + to_string(body.len()) + " de " + to_string(n) + " bytes");
@@ -622,7 +622,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
 
             // Petición leída: quitar el timeout (el handler puede retener la conexión — SSE — o un
             // handler crudo leer más; que no herede un plazo casi vencido).
-            if (plazo_fin > 0) {
+            if (deadline > 0) {
                 net.set_read_timeout(conn, 0);
             }
             Result.Ok(Request { method: method, path: path, query: query, version: version, headers: headers, body: body })
@@ -808,7 +808,7 @@ fn handle(conn: int, handler: fn(Request, int), limits: Limits) {
 
 // ¿La petición pide cerrar la conexión tras responder? Cerramos si no es HTTP/1.1 (el keep-alive
 // de 1.0 es opt-in y declinarlo siempre es válido) o si trae `Connection: close`.
-fn quiere_close(req: Request) -> bool {
+fn wants_close(req: Request) -> bool {
     if (req.version != "HTTP/1.1") {
         return true;
     }
@@ -829,7 +829,7 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     while (follow) {
         match (read_request_limits(conn, limits)) {
             Result.Ok(req) => {
-                let close: bool = quiere_close(req);
+                let close: bool = wants_close(req);
                 // M56.8: a un HEAD se le responden las cabeceras del GET equivalente SIN el cuerpo.
                 let es_head: bool = req.method == "HEAD";
                 let t = spawn(fn() -> Response { handler(req) });
@@ -892,18 +892,18 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 /// and caps simultaneous connections (accept pauses while at the cap; `max_conns <= 0` = unbounded).
 /// Transient accept errors are logged and retried; only persistent failure stops the server.
 pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
-    // TCP plano: la conexión aceptada se atiende tal cual (preparar = identidad).
-    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+    // TCP plano: la conexión aceptada se atiende tal cual (prepare = identidad).
+    loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle(c, handler, limits);
     })
 }
 
-// El bucle de accept compartido por TCP plano y TLS (M56.3). `preparar` transforma la conexión
+// El bucle de accept compartido por TCP plano y TLS (M56.3). `prepare` transforma la conexión
 // recién aceptada antes de atenderla (identidad para HTTP; `net.tls_accept` para HTTPS) y corre
 // DENTRO de la fibra de la conexión: un handshake TLS lento no frena el accept de las demás.
 // M56.6: `atender_conn` es quien atiende la conexión preparada (una petición y cerrar —crudo— o
 // el bucle keep-alive —ergonómico—); debe CERRAR la conexión al terminar.
-fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
+fn loop_iter_server(host: string, port: int, limits: Limits, prepare: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
@@ -921,7 +921,7 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
                             send(sem, 1);
                         }
                         spawn(fn() {
-                            match (preparar(conn)) {
+                            match (prepare(conn)) {
                                 Result.Ok(c) => {
                                     handle_conn(c);
                                 },
@@ -974,7 +974,7 @@ fn loop_iter_servidor(host: string, port: int, limits: Limits, preparar: fn(int)
 // Keep-alive: el drenaje espera a que las conexiones CIERREN; una ociosa muere por
 // `read_timeout_millis`, así que un `drain_ms` menor puede vencer con ociosas vivas (se cierran
 // al salir el proceso). Solo VM, como serve.
-fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, preparar: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
+fn loop_iter_server_drainable(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, prepare: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
@@ -1012,15 +1012,15 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
                                 close(conns);
                                 follow = false;
                             } else {
-                                let pausa: Channel<int> = Channel.new();
+                                let pause: Channel<int> = Channel.new();
                                 spawn(fn() {
                                     time.sleep(10);
-                                    send(pausa, 1);
+                                    send(pause, 1);
                                 });
-                                if (select([off, pausa]) == 0) {
+                                if (select([off, pause]) == 0) {
                                     follow = false;
                                 } else {
-                                    let _ = recv(pausa);
+                                    let _ = recv(pause);
                                     eprint("accept: " + e);
                                 }
                             }
@@ -1028,23 +1028,23 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
                     }
                 }
             });
-            var activos = 0;
-            var conns_abierta = true;
-            var sirviendo = true;
-            while (sirviendo) {
+            var active = 0;
+            var conns_open = true;
+            var serving = true;
+            while (serving) {
                 let which = select([stop, conns, done]);
                 if (which == 0) {
                     let _ = recv(stop);
-                    sirviendo = false;
+                    serving = false;
                 } else if (which == 1) {
                     match (recv(conns)) {
                         Option.Some(conn) => {
                             if (bounded) {
                                 send(sem, 1);
                             }
-                            activos = activos + 1;
+                            active = active + 1;
                             spawn(fn() {
-                                match (preparar(conn)) {
+                                match (prepare(conn)) {
                                     Result.Ok(c) => {
                                         handle_conn(c);
                                     },
@@ -1061,50 +1061,50 @@ fn loop_iter_servidor_drenable(host: string, port: int, limits: Limits, stop: Ch
                         },
                         Option.None => {
                             // La bomba murió por error persistente: rendirse (como bucle_servidor).
-                            conns_abierta = false;
-                            sirviendo = false;
+                            conns_open = false;
+                            serving = false;
                         },
                     }
                 } else {
                     let _ = recv(done);
-                    activos = activos - 1;
+                    active = active - 1;
                 }
             }
             // Apagado: avisar a la bomba y dejar de aceptar (los clientes nuevos ven rechazo).
             close(off);
             close(srv);
-            print("shutting down: " + to_string(activos) + " connection(s) in flight");
+            print("shutting down: " + to_string(active) + " connection(s) in flight");
             // Drenar con plazo. Una conexión aceptada y aún no atendida (ventana mínima entre el
             // accept de la bomba y este select) se cierra sin respuesta según asoma por `conns`.
-            if (activos > 0 && drain_ms > 0) {
-                let plazo: Channel<int> = Channel.new();
+            if (active > 0 && drain_ms > 0) {
+                let deadline_ch: Channel<int> = Channel.new();
                 spawn(fn() {
                     time.sleep(drain_ms);
-                    send(plazo, 1);
+                    send(deadline_ch, 1);
                 });
-                var esperando = true;
-                while (esperando && activos > 0) {
+                var waiting = true;
+                while (waiting && active > 0) {
                     // Un canal CERRADO siempre está "listo" → si la bomba cerró `conns`, sacarlo
                     // de la lista del select (el gotcha de M12.4).
-                    let which = if (conns_abierta) { select([plazo, done, conns]) } else { select([plazo, done]) };
+                    let which = if (conns_open) { select([deadline_ch, done, conns]) } else { select([deadline_ch, done]) };
                     if (which == 0) {
-                        esperando = false;
+                        waiting = false;
                     } else if (which == 1) {
                         let _ = recv(done);
-                        activos = activos - 1;
+                        active = active - 1;
                     } else {
                         match (recv(conns)) {
                             Option.Some(c) => {
                                 close(c);
                             },
                             Option.None => {
-                                conns_abierta = false;
+                                conns_open = false;
                             },
                         }
                     }
                 }
-                if (activos > 0) {
-                    eprint("off: " + to_string(activos) + " connection(s) in flight when the deadline expired");
+                if (active > 0) {
+                    eprint("off: " + to_string(active) + " connection(s) in flight when the deadline expired");
                 }
             }
             Result.Ok(0)
@@ -1122,7 +1122,7 @@ pub fn serve_shutdown(host: string, port: int, stop: Channel<int>, drain_ms: int
 
 /// Like `serve_shutdown`, with explicit safety limits (see `Limits`).
 pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
-    loop_iter_servidor_drenable(host, port, limits, stop, drain_ms, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+    loop_iter_server_drainable(host, port, limits, stop, drain_ms, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle_http(c, handler, limits);
     })
 }
@@ -1150,7 +1150,7 @@ pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Resul
 
 /// Like `serve`, with explicit safety limits (see `Limits`/`serve_raw_limits`).
 pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+    loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle_http(c, handler, limits);
     })
 }
@@ -1196,7 +1196,7 @@ pub fn serve_with_graceful(host: string, port: int, drain_ms: int, make_handler:
 
 // --- HTTPS (M56.3): el mismo servidor sobre TLS ---
 // Cierra el hueco "tls_accept existe pero serve_raw no deja insertarlo": el upgrade TLS es el
-// paso `preparar` del bucle compartido, dentro de la fibra de cada conexión. `cert`/`key` son los
+// paso `prepare` del bucle compartido, dentro de la fibra de cada conexión. `cert`/`key` son los
 // PEM (contenido, no ruta), como `net.tls_accept`. El handshake real ocurre en la primera I/O
 // (cede al scheduler, M19.4b); un cliente que habla HTTP plano contra el puerto TLS falla su
 // conexión con error logueado, sin tocar a las demás.
@@ -1209,7 +1209,7 @@ pub fn serve_tls(host: string, port: int, cert: string, key: string, handler: fn
 
 /// Like `serve_tls`, with explicit safety limits (see `Limits`).
 pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
+    loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {
         handle_http(c, handler, limits);
@@ -1224,7 +1224,7 @@ pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler
 
 /// Like `serve_raw_tls`, with explicit safety limits (see `Limits`).
 pub fn serve_raw_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
-    loop_iter_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
+    loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {
         handle(c, handler, limits);

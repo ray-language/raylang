@@ -324,8 +324,8 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
     let _ = write_packet(c, out)?;
 
     // 3. Resultado de la autenticación (con posibles vueltas extra).
-    var vueltas = 0;
-    while (vueltas < 4) {
+    var rounds = 0;
+    while (rounds < 4) {
         let r = read_packet(c)?;
         if (r[0] == 0) {
             return Result.Ok(c); // OK
@@ -366,7 +366,7 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
                 return Result.Err("mysql: unexpected authentication response");
             }
         }
-        vueltas = vueltas + 1;
+        rounds = rounds + 1;
     }
     Result.Err("mysql: authentication did not converge")
 }

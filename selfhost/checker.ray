@@ -2292,15 +2292,15 @@ fn check_values(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, 
     }
 }
 
-// M87: `pista` = el callee es una expresión de BLOQUE (if/match/while/bloque) — casi
+// M87: `hint` = el callee es una expresión de BLOQUE (if/match/while/bloque) — casi
 // siempre el gotcha §55 (la cola con '(' tras una sentencia); el mensaje, byte-idéntico
 // al del checker de Rust.
-fn call_type(c: Checker, ty: Type, cargs: [Expr], pista: bool, line: int, col: int) -> Result<Type, TypeError> {
+fn call_type(c: Checker, ty: Type, cargs: [Expr], hint: bool, line: int, col: int) -> Result<Type, TypeError> {
     match (ty) {
         Type.TFn(params, ret) => check_args(c, params, ret, cargs, "the function", line, col),
         _ => {
             var msg = "cannot call a value of type " + type_str(ty) + " (not a function)";
-            if (pista) {
+            if (hint) {
                 msg = msg + "; note: a tail starting with '(' after an if/while/match/block parses as a call of its value — separate it with 'return' or 'let'";
             }
             Result.Err(terr(line, col, msg))

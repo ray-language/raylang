@@ -1,9 +1,9 @@
 // Benchmark string-heavy: pasa una cadena por locales/argumentos y la procesa en un bucle.
 // Mide el coste de clonar strings (GetLocal/Constant/paso de argumentos) en la VM.
-fn procesa(s: string, veces: int) -> int {
+fn process(s: string, times: int) -> int {
     var i = 0;
     var total = 0;
-    while (i < veces) {
+    while (i < times) {
         let u = s.to_upper();  // crea string
         let t = u.to_lower();  // crea string
         let c = t.len();  // recorre
@@ -15,6 +15,6 @@ fn procesa(s: string, veces: int) -> int {
 
 fn main() -> int {
     let base = "el veloz murcielago hindu comia feliz cardillo y kiwi";
-    procesa(base, 300000);
+    process(base, 300000);
     0
 }

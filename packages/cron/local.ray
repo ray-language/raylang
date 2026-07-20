@@ -43,25 +43,25 @@ pub fn next_after_in(s: cron.Schedule, z: tz.Zone, ms: int) -> Result<int, strin
                 // La hora civil no existe: dispara al acabar el hueco (el primer minuto
                 // civil válido después; un hueco real dura minutos u horas, acotamos).
                 var c2 = cand + 60000;
-                var salto = 0;
-                while (salto < 240) {
+                var step = 0;
+                while (step < 240) {
                     match (tz.to_utc(z, time.from_epoch_millis(c2))) {
                         tz.LocalResult.Single(t2) => {
                             if (t2 > ms) {
                                 return Result.Ok(t2);
                             }
-                            salto = 240;  // válido pero pasado: fuera del hueco, aborta el escaneo
+                            step = 240;  // válido pero pasado: fuera del hueco, aborta el escaneo
                         },
                         tz.LocalResult.Ambiguous(a2, b2) => {
                             if (a2 > ms) {
                                 return Result.Ok(a2);
                             }
-                            salto = 240;
+                            step = 240;
                         },
                         tz.LocalResult.Gap => { },
                     }
                     c2 = c2 + 60000;
-                    salto = salto + 1;
+                    step = step + 1;
                 }
             },
         }

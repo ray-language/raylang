@@ -2,7 +2,7 @@
 // trabajo; su suma es DETERMINISTA (no depende del scheduling). Con RAYLANG_THREADS=1
 // corren en serie; con =4, en paralelo (~4× más rápido en 4 núcleos). El resultado
 // es idéntico en ambos casos → valida corrección multicore además de medir speedup.
-fn trabajo(iters: int) -> int {
+fn work(iters: int) -> int {
     var sum = 0;
     var i = 0;
     while (i < iters) {
@@ -14,10 +14,10 @@ fn trabajo(iters: int) -> int {
 
 fn main() -> int {
     let n = 40000000;
-    let t0 = spawn(fn() -> int { trabajo(n) });
-    let t1 = spawn(fn() -> int { trabajo(n) });
-    let t2 = spawn(fn() -> int { trabajo(n) });
-    let t3 = spawn(fn() -> int { trabajo(n) });
+    let t0 = spawn(fn() -> int { work(n) });
+    let t1 = spawn(fn() -> int { work(n) });
+    let t2 = spawn(fn() -> int { work(n) });
+    let t3 = spawn(fn() -> int { work(n) });
     let s = join(t0) + join(t1) + join(t2) + join(t3);
     print(s);
     0

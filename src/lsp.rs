@@ -605,9 +605,9 @@ fn decl_name_range(lines: &[&str], def_line: usize, def_col: usize, name: &str) 
     let nm: Vec<char> = name.chars().collect();
     let mut i = def_col.saturating_sub(1);
     while i + nm.len() <= chars.len() {
-        let antes = i == 0 || !is_ident_char(chars[i - 1]);
-        let despues = i + nm.len() == chars.len() || !is_ident_char(chars[i + nm.len()]);
-        if antes && despues && chars[i..i + nm.len()] == nm[..] {
+        let before = i == 0 || !is_ident_char(chars[i - 1]);
+        let after = i + nm.len() == chars.len() || !is_ident_char(chars[i + nm.len()]);
+        if before && after && chars[i..i + nm.len()] == nm[..] {
             return Some((def_line - 1, i, nm.len()));
         }
         i += 1;
@@ -1776,7 +1776,7 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     items.dedup();
     let ctx = SigCtx::new(src, entry_path.as_deref()); // M46a: firmas para el detalle
     // M47b: los structs ofrecibles (kind 22) para el ítem-extra del literal, más abajo.
-    let structs_ofrecibles: Vec<String> = items.iter()
+    let offerable_structs: Vec<String> = items.iter()
         .filter(|(_, k)| *k == 22).map(|(l, _)| l.clone()).collect();
     let mut list: Vec<Json> = items.into_iter()
         .map(|(label, kind)| {
@@ -1815,7 +1815,7 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     // con un placeholder por campo (`Nombre { c1: ${1:T1}, … }`), al estilo rust-analyzer. Va aparte
     // del tipo pelado (que sigue para las posiciones de tipo, `let x: Nombre`); `filterText` = el
     // nombre, así aparece al teclear el tipo. Solo para structs con campos conocidos.
-    for label in structs_ofrecibles {
+    for label in offerable_structs {
         if let Some(fields) = ctx.struct_fields(&label).filter(|c| !c.is_empty()) {
             list.push(item_struct_literal(&label, &fields));
         }

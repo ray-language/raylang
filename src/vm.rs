@@ -3189,17 +3189,17 @@ impl<'a> Vm<'a> {
             //    (M57.2: fd/handle = -1, sin re-ejecución) simplemente continúa tras dormir.
             //    Si expiró alguna, ya hay una fibra lista → volver.
             let now = std::time::Instant::now();
-            let mut expiradas: Vec<IoParked> = Vec::new();
+            let mut expired: Vec<IoParked> = Vec::new();
             let mut i = 0;
             while i < shared.io_parked.len() {
                 if shared.io_parked[i].deadline.is_some_and(|d| d <= now) {
-                    expiradas.push(shared.io_parked.remove(i));
+                    expired.push(shared.io_parked.remove(i));
                 } else {
                     i += 1;
                 }
             }
-            if !expiradas.is_empty() {
-                for p in expiradas {
+            if !expired.is_empty() {
+                for p in expired {
                     if p.handle >= 0 {
                         crate::builtins::mark_read_timeout(p.handle);
                     }

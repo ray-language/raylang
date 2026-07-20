@@ -145,12 +145,12 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
             }
             let tok_line = line;
             let es_tag = cs[i + 1] == '%';
-            let cierre = if es_tag { '%' } else { '}' };
+            let close = if es_tag { '%' } else { '}' };
             let ini = i + 2;
             let mut fin = None;
             let mut j = ini;
             while fin.is_none() && j + 1 < n {
-                if cs[j] == cierre && cs[j + 1] == '}' {
+                if cs[j] == close && cs[j + 1] == '}' {
                     fin = Some(j);
                 } else {
                     j += 1;
@@ -241,7 +241,7 @@ pub fn format_template(tpl: &str, unit: &str) -> Option<String> {
                 buf.clear();
                 let kw = t.split_whitespace().next().unwrap_or("");
                 let at = match kw {
-                    // El cierre y los intermedios se alinean con su abridor.
+                    // El close y los intermedios se alinean con su abridor.
                     "endfor" | "endif" | "endblock" => {
                         depth = depth.saturating_sub(1);
                         depth
@@ -331,11 +331,11 @@ fn valid_import(s: &str) -> bool {
 /// paréntesis EXTERIORES (`a/b(f(x), y)` → `("a/b", "f(x), y")`).
 pub fn template_ref(s: &str) -> Option<(&str, &str)> {
     let s = s.trim();
-    let abre = s.find('(')?;
+    let opens = s.find('(')?;
     if !s.ends_with(')') {
         return None;
     }
-    let path = s[..abre].trim_end();
+    let path = s[..opens].trim_end();
     let seg_ok = |x: &str| {
         !x.is_empty()
             && x.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
@@ -344,10 +344,10 @@ pub fn template_ref(s: &str) -> Option<(&str, &str)> {
     if path.is_empty() || !path.split('/').all(seg_ok) {
         return None;
     }
-    Some((path, s[abre + 1..s.len() - 1].trim()))
+    Some((path, s[opens + 1..s.len() - 1].trim()))
 }
 
-// Qué abre/cierra cada etiqueta (para validar el anidamiento y cuadrar las llaves).
+// Qué opens/cierra cada etiqueta (para validar el anidamiento y cuadrar las llaves).
 enum Marco {
     If,
     For,
@@ -438,14 +438,14 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
         }
     };
     // ¿Modo herencia? La primera etiqueta debe ser `{% extends %}` (como en Jinja).
-    let hereda = toks.iter()
+    let inherits = toks.iter()
         .find_map(|t| match t {
             Tok::Tag(s, _) => Some(s.starts_with("extends")),
             Tok::Text(s, _) if s.trim().is_empty() => None,
             _ => Some(false),
         })
         .unwrap_or(false);
-    if !hereda {
+    if !inherits {
         // Sin herencia: quitar los marcadores de bloque (validando el anidamiento); el contenido
         // por defecto queda en su sitio. Un `{% extends %}` tardío es error (debe ir primero).
         let mut out = Vec::new();
@@ -541,7 +541,7 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
     if let Some((n, l)) = cur {
         return Err(TplError { line: l, msg: format!("'{{% block {n} %}}' without '{{% endblock %}}'") });
     }
-    let (lpath, eline) = layout_ref.expect("hereda");
+    let (lpath, eline) = layout_ref.expect("inherits");
     let Some(dir) = dir else {
         return Err(TplError { line: eline, msg: "'{% extends %}' requires generating from a file (the layout path is resolved from the project root)".into() });
     };
@@ -604,7 +604,7 @@ pub fn extends_target(tpl: &str, dir: &Path) -> Option<PathBuf> {
                 let lpath = it.next()?;
                 return Some(resolve_layout_path(lpath, dir));
             }
-            return None; // cualquier otra etiqueta primero → no hereda (extends debe ir primero)
+            return None; // cualquier otra etiqueta primero → no inherits (extends debe ir primero)
         }
     }
     None
@@ -634,7 +634,7 @@ fn merge_layout(
     eline: usize,
 ) -> Result<Vec<Tok>, TplError> {
     let mut out = imports; // los del hijo (se hoistean en la cabecera igualmente)
-    let mut usados: Vec<&str> = Vec::new();
+    let mut used: Vec<&str> = Vec::new();
     let mut in_block = false;
     let mut skip_default = false;
     for tok in ltoks {
@@ -654,7 +654,7 @@ fn merge_layout(
                     in_block = true;
                     if let Some((n, _, body)) = blocks.iter().find(|(n, _, _)| n == rest) {
                         out.extend(body.iter().cloned()); // líneas del HIJO: mapean exactas
-                        usados.push(n);
+                        used.push(n);
                         skip_default = true;
                     } else {
                         skip_default = false; // queda el contenido por defecto del layout
@@ -675,7 +675,7 @@ fn merge_layout(
         out.push(tok.at_line(eline));
     }
     for (n, l, _) in &blocks {
-        if !usados.contains(&n.as_str()) {
+        if !used.contains(&n.as_str()) {
             return Err(TplError { line: *l, msg: format!("the layout '{lpath}' does not declare a '{{% block {n} %}}'") });
         }
     }
@@ -694,7 +694,7 @@ fn generate_body(
     let mut depth = 1usize; // dentro de la función
     let mut stack: Vec<Marco> = Vec::new();
     let mut last_line = params_line;
-    let linea = |body: &mut Vec<(usize, String)>, depth: usize, tpl_line: usize, s: String| {
+    let emit_line = |body: &mut Vec<(usize, String)>, depth: usize, tpl_line: usize, s: String| {
         body.push((tpl_line, format!("{}{s}", "    ".repeat(depth))));
     };
 
@@ -703,20 +703,20 @@ fn generate_body(
         match tok {
             Tok::Text(t, l) => {
                 if !t.is_empty() {
-                    linea(&mut body, depth, l, format!("out.push(\"{}\");", lit(&t)));
+                    emit_line(&mut body, depth, l, format!("out.push(\"{}\");", lit(&t)));
                 }
             }
             Tok::Var(e, l) => {
                 if e.is_empty() {
                     return Err(TplError { line: l, msg: "empty '{{ }}'".into() });
                 }
-                linea(&mut body, depth, l, format!("out.push(escape_html(to_string({e})));"));
+                emit_line(&mut body, depth, l, format!("out.push(escape_html(to_string({e})));"));
             }
             Tok::Raw(e, l) => {
                 if e.is_empty() {
                     return Err(TplError { line: l, msg: "empty '{{& }}'".into() });
                 }
-                linea(&mut body, depth, l, format!("out.push(to_string({e}));"));
+                emit_line(&mut body, depth, l, format!("out.push(to_string({e}));"));
             }
             // (Los casos `import`/`include` de composición van en el match de etiquetas, abajo.)
             Tok::Tag(t, l) => {
@@ -729,7 +729,7 @@ fn generate_body(
                         if rest.is_empty() {
                             return Err(TplError { line: l, msg: "'{% if %}' without condition".into() });
                         }
-                        linea(&mut body, depth, l, format!("if ({rest}) {{"));
+                        emit_line(&mut body, depth, l, format!("if ({rest}) {{"));
                         depth += 1;
                         stack.push(Marco::If);
                     }
@@ -740,13 +740,13 @@ fn generate_body(
                         if rest.is_empty() {
                             return Err(TplError { line: l, msg: "'{% elif %}' without condition".into() });
                         }
-                        linea(&mut body, depth - 1, l, format!("}} else if ({rest}) {{"));
+                        emit_line(&mut body, depth - 1, l, format!("}} else if ({rest}) {{"));
                     }
                     "else" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
                             return Err(TplError { line: l, msg: "'{% else %}' outside an '{% if %}'".into() });
                         }
-                        linea(&mut body, depth - 1, l, "} else {".to_string());
+                        emit_line(&mut body, depth - 1, l, "} else {".to_string());
                     }
                     "endif" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
@@ -754,7 +754,7 @@ fn generate_body(
                         }
                         stack.pop();
                         depth -= 1;
-                        linea(&mut body, depth, l, "}".to_string());
+                        emit_line(&mut body, depth, l, "}".to_string());
                     }
                     "for" => {
                         // `for <patrón> in <expr>`: el patrón puede ser `x` o `(k, v)`.
@@ -766,7 +766,7 @@ fn generate_body(
                         if patron.is_empty() || expr.is_empty() {
                             return Err(TplError { line: l, msg: "malformed '{% for %}' (expected 'for x in expr')".into() });
                         }
-                        linea(&mut body, depth, l, format!("for {patron} in {expr} {{"));
+                        emit_line(&mut body, depth, l, format!("for {patron} in {expr} {{"));
                         depth += 1;
                         stack.push(Marco::For);
                     }
@@ -776,7 +776,7 @@ fn generate_body(
                         }
                         stack.pop();
                         depth -= 1;
-                        linea(&mut body, depth, l, "}".to_string());
+                        emit_line(&mut body, depth, l, "}".to_string());
                     }
                     // `{% let name = expr %}`: una local inmutable del template. Alcance = el
                     // bloque raylang generado (dentro de un for/if vive hasta su endfor/endif).
@@ -793,7 +793,7 @@ fn generate_body(
                         }
                         // Se empalma tal cual (espaciado incluido): el LSP localiza el fragmento
                         // del template como subcadena de la línea generada.
-                        linea(&mut body, depth, l, format!("let {rest};"));
+                        emit_line(&mut body, depth, l, format!("let {rest};"));
                     }
                     // Composición de templates: `{% import vistas/tarjeta [as t] %}` trae otro
                     // módulo (otro template compilado, o cualquier módulo del proyecto) al ámbito
@@ -821,9 +821,9 @@ fn generate_body(
                             if !imports.iter().any(|(p, _)| p == path) {
                                 imports.push((path.to_string(), l));
                             }
-                            linea(&mut body, depth, l, format!("out.push(to_string({leaf}.render_{f}({args})));"));
+                            emit_line(&mut body, depth, l, format!("out.push(to_string({leaf}.render_{f}({args})));"));
                         } else {
-                            linea(&mut body, depth, l, format!("out.push(to_string({rest}));"));
+                            emit_line(&mut body, depth, l, format!("out.push(to_string({rest}));"));
                         }
                     }
                     "params" => {
@@ -837,11 +837,11 @@ fn generate_body(
         }
     }
     if !stack.is_empty() {
-        let falta = match stack.last() {
+        let missing = match stack.last() {
             Some(Marco::If) => "endif",
             _ => "endfor",
         };
-        return Err(TplError { line: last_line, msg: format!("missing a '{{% {falta} %}}' at the end of the template") });
+        return Err(TplError { line: last_line, msg: format!("missing a '{{% {missing} %}}' at the end of the template") });
     }
 
     // Ensamblado + line map. La cabecera son 3 líneas fijas + un `import` por cada `{% import %}`

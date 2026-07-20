@@ -247,9 +247,9 @@ fn cmd_dev(args: &[String]) {
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
         let change = loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
-            let actual = scan_sources(&root);
-            if let Some(c) = first_change(&snapshot, &actual) {
-                snapshot = actual;
+            let current = scan_sources(&root);
+            if let Some(c) = first_change(&snapshot, &current) {
+                snapshot = current;
                 break c;
             }
             if running && let Ok(Some(status)) = child.try_wait() {
@@ -262,12 +262,12 @@ fn cmd_dev(args: &[String]) {
         dev_debounce(&root, &mut snapshot);
         // Confirmación por contenido: un mtime tocado con los MISMOS bytes (guardado sin editar,
         // formateador idempotente, `touch`) no reinicia ni recarga nada.
-        let actual_hashes = content_hashes(&snapshot);
-        if actual_hashes == hashes {
+        let current_hashes = content_hashes(&snapshot);
+        if current_hashes == hashes {
             eprintln!("[dev] change in {change}: contents unchanged — ignoring");
             continue;
         }
-        hashes = actual_hashes;
+        hashes = current_hashes;
         // Check-before-restart: compila primero (ms). Si NO compila, mantén el programa en marcha e
         // imprime el diagnóstico — no mates un servidor que funciona por un error a medio escribir.
         if let Err(diag) = dev_check_compiles(&exe, &entry) {
@@ -467,11 +467,11 @@ fn dev_check_compiles(exe: &Path, entry: &Option<String>) -> Result<(), String> 
 fn dev_debounce(root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>) {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(120));
-        let actual = scan_sources(root);
-        if actual == *snapshot {
+        let current = scan_sources(root);
+        if current == *snapshot {
             break;
         }
-        *snapshot = actual;
+        *snapshot = current;
     }
 }
 
@@ -533,23 +533,23 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
 /// El primer archivo que difiere entre dos snapshots (nuevo, borrado o con otro mtime), para el
 /// mensaje de reinicio. `None` si son idénticos.
 fn first_change(
-    antes: &[(PathBuf, std::time::SystemTime)],
-    ahora: &[(PathBuf, std::time::SystemTime)],
+    before: &[(PathBuf, std::time::SystemTime)],
+    after: &[(PathBuf, std::time::SystemTime)],
 ) -> Option<String> {
-    if antes == ahora {
+    if before == after {
         return None;
     }
-    let viejos: std::collections::HashMap<_, _> = antes.iter().cloned().collect();
-    for (p, m) in ahora {
-        if viejos.get(p) != Some(m) {
+    let old: std::collections::HashMap<_, _> = before.iter().cloned().collect();
+    for (p, m) in after {
+        if old.get(p) != Some(m) {
             return Some(p.display().to_string());
         }
     }
     // Nada nuevo ni tocado pero difieren → algo se borró.
-    let nuevos: std::collections::HashMap<_, _> = ahora.iter().cloned().collect();
-    antes
+    let new: std::collections::HashMap<_, _> = after.iter().cloned().collect();
+    before
         .iter()
-        .find(|(p, _)| !nuevos.contains_key(p))
+        .find(|(p, _)| !new.contains_key(p))
         .map(|(p, _)| format!("{} (borrado)", p.display()))
 }
 
@@ -1321,7 +1321,7 @@ fn cmd_index_verify(args: &[String]) {
     let mut packages = 0usize;
     let mut versions = 0usize;
     let mut signed = 0usize;
-    let mut problemas: Vec<String> = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
@@ -1339,22 +1339,22 @@ fn cmd_index_verify(args: &[String]) {
                         signed += 1;
                     }
                     if let Err(err) = crate::index::check_signature(&dir, name, e) {
-                        problemas.push(err);
+                        problems.push(err);
                     }
                 }
             }
-            Err(e) => problemas.push(e),
+            Err(e) => problems.push(e),
         }
     }
-    if problemas.is_empty() {
+    if problems.is_empty() {
         println!(
             "index OK: {packages} packages, {versions} versions ({signed} signed and verified)"
         );
     } else {
-        for p in &problemas {
+        for p in &problems {
             eprintln!("FALLO: {p}");
         }
-        eprintln!("index with {} problem(s)", problemas.len());
+        eprintln!("index with {} problem(s)", problems.len());
         process::exit(65);
     }
 }

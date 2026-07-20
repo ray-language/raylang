@@ -161,6 +161,12 @@ lotes: `while … { join(spawn(f)) }`) muere hoy. Es un regresión funcional int
 
 Orden por severidad; cada paso con su verificación. Los pasos de código van por rama + PR.
 
+> **Progreso (20 jul 2026, rama `feature/m98-memoria`)**: ✅ **M98.1** y ✅ **M98.2** implementados y
+> verificados — `task_churn` 100k: VM 123.8 MB → **6.9 MB** (línea base), nativo crash → **2.1 MB**;
+> webserver sobre la VM a c=100: 343→924 MB creciendo → **~31 MB plano**. Semántica fijada:
+> **una tarea es de un solo consumidor** (`join`/`try_join` consumen; el scope consume a sus hijas;
+> doble join = `task already consumed`, byte-idéntico en VM y nativo). Espec en DESIGN §21.7.
+
 - **M98.1 — liberar el almacén de tareas de la VM** (bug #1, prioridad máxima).
   *Decisión de semántica primero* (DESIGN): **`join`/`try_join` consumen la tarea** (precedente:
   `JoinHandle::join` de Rust toma `self`; hoy re-unir una tarea ya unida es un caso sin especificar).

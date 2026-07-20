@@ -658,6 +658,70 @@ fn main() -> int {
     assert_eq!(stdout, "bad manejado: boom\ngood: 42\nscope devolvio: 7\n");
 }
 
+// --- M98.1: el almacén de tareas libera (join/try_join consumen; el scope consume a sus hijas) ---
+
+#[test]
+fn join_consume_la_tarea_y_el_doble_join_es_error() {
+    // M98.1 (semántica FIJADA): una tarea es de UN solo consumidor — `join`/`try_join` la toman
+    // (liberan su slot y el heap del resultado; antes quedaba retenida para siempre: la fuga de
+    // ~1 KB/request del webserver). Un segundo join sobre el mismo handle → error claro.
+    let src = r#"
+fn main() -> int {
+    let t = spawn(fn() -> int { 42 });
+    print(join(t));
+    print(join(t));
+    0
+}
+"#;
+    let (out, err, code) = run("doble_join", src, true);
+    assert_eq!(out, "42\n", "el primer join funciona; el segundo no imprime");
+    assert!(err.contains("task already consumed"), "stderr debe explicar el doble join: {err}");
+    assert_eq!(code, 70);
+}
+
+#[test]
+fn spawn_join_en_bucle_reusa_slots_sin_corromper() {
+    // M98.1: el free-list reusa slots liberados. 10k ciclos spawn+join con valores distintos:
+    // si el reuso confundiera generaciones (ABA) o mezclara heaps, la suma no cuadraría.
+    let src = r#"
+fn main() -> int {
+    var acc = 0;
+    var i = 0;
+    while (i < 10000) {
+        let t = spawn(fn() -> int { i * 2 });
+        acc = acc + join(t);
+        i = i + 1;
+    }
+    print(acc);
+    0
+}
+"#;
+    let (out, err, code) = run("churn_reusa_slots", src, true);
+    assert_eq!(code, 0, "stderr: {stderr}", stderr = err);
+    assert_eq!(out, "99990000\n"); // 2 * (0 + 1 + … + 9999)
+}
+
+#[test]
+fn las_hijas_no_sobreviven_al_scope() {
+    // M98.1: el scope CONSUME a sus hijas al cerrar (es su dueño). Un handle que escapa del scope
+    // y se une después → el mismo error del doble join (la tarea ya fue consumida).
+    let src = r#"
+fn main() -> int {
+    var fuera: Task<int> = spawn(fn() -> int { 0 });
+    join(fuera);
+    scope(fn() {
+        fuera = spawn(fn() -> int { 7 });
+    });
+    print(join(fuera));
+    0
+}
+"#;
+    let (out, err, code) = run("hija_no_sobrevive", src, true);
+    assert_eq!(out, "", "el join tras el scope no debe producir valor");
+    assert!(err.contains("task already consumed"), "stderr: {err}");
+    assert_eq!(code, 70);
+}
+
 #[test]
 fn sleep_cede_la_fiber() {
     // M57.2: `time.sleep` es cooperativo en la VM — aparca la fibra con deadline (sin fd) y las

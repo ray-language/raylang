@@ -1076,6 +1076,9 @@ fn main() -> int {
 Reglas:
 
 - `try_join` captura **cualquier** error de ejecución de la tarea, no solo `panic` explícito.
+- **Una tarea es de un solo consumidor**: `join`/`try_join` la *consumen* (liberan su resultado — así
+  un servidor de larga vida no acumula memoria por tarea terminada). Unirla dos veces, o unir una
+  tarea cuyo `scope` ya cerró, es un error de ejecución (`task already consumed`).
 - **Un fallo observado es un fallo manejado**: dentro de un `scope`, una tarea cuyo fallo ya
   observaste con `try_join` cuenta como terminada — el scope no cancela a sus hermanas ni re-lanza.
   Un fallo **no** observado conserva el comportamiento estructurado: cancela hermanas y propaga.

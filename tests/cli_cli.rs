@@ -411,6 +411,61 @@ fn build_native_try_join_en_scope_cuenta_como_manejado() {
 }
 
 #[test]
+fn build_native_doble_join_es_error_y_el_churn_no_explota() {
+    // M98.1 (paridad): una tarea es de un solo consumidor — doble join → mismo error que la VM.
+    // M98.2: churn secuencial de 20k spawn+join — antes la trampa de paridad del pool shardeado
+    // (M96e) creaba un hilo del SO por spawn → EAGAIN y crash; ahora el spawner sondea todos los
+    // shards antes de crear un hilo.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native doble join/churn: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_m98");
+    std::fs::write(
+        base.join("doble.ray"),
+        "fn main() -> int {\n\
+             let t = spawn(fn() -> int { 42 });\n\
+             print(join(t));\n\
+             print(join(t));\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("doble_bin");
+    let (_o, err, code) = ray(&base, &["build", "doble.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native doble join ok\n{err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(native.status.code(), Some(70), "doble join aborta con 70 como la VM");
+    assert!(
+        String::from_utf8_lossy(&native.stderr).contains("task already consumed"),
+        "y con el mensaje de la VM"
+    );
+
+    std::fs::write(
+        base.join("churn.ray"),
+        "fn main() -> int {\n\
+             var acc = 0;\n\
+             var i = 0;\n\
+             while (i < 20000) {\n\
+                 let v = i;\n\
+                 let t = spawn(fn() -> int { v * 2 });\n\
+                 acc = acc + join(t);\n\
+                 i = i + 1;\n\
+             }\n\
+             print(acc);\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin2 = base.join("churn_bin");
+    let (_o2, err2, code2) = ray(&base, &["build", "churn.ray", "--native", "-o", bin2.to_str().unwrap()]);
+    assert_eq!(code2, 0, "build --native churn ok\n{err2}");
+    let churn = Command::new(&bin2).output().expect("corre el churn nativo");
+    assert_eq!(churn.status.code(), Some(0), "20k spawn+join secuenciales terminan (antes: EAGAIN)");
+    assert_eq!(String::from_utf8_lossy(&churn.stdout).trim(), "399980000", "2 * (0+…+19999)");
+}
+
+#[test]
 fn build_native_valores_de_heap_y_funciones_cruzan_los_hilos() {
     // H21-N5: (a) structs/enums/Map/arrays cruzan canales/Tasks/capturas de spawn por DEEP COPY
     // (repr __RaySend, semántica de heap aislado M38); (b) un param de tipo fn que cruza un spawn

@@ -88,7 +88,7 @@ en el lote D del plan.
    español nuevo… añádelo") — proceso manual que en la práctica nadie ejecuta; conviene que la
    wordlist del test absorba la lista curada del arqueo.
 
-## 4. Plan por lotes (NO aplicado — pendiente de decisión del usuario)
+## 4. Plan por lotes (COMPLETO — lotes A–E aplicados, ver §6)
 
 Ordenado por riesgo/beneficio; cada lote compila y pasa la suite. Los renombres son mecánicos
 (regex/`tools/spanglish.py` como en la migración original), el riesgo vive en dos gotchas:
@@ -100,24 +100,31 @@ Ordenado por riesgo/beneficio; cada lote compila y pasa la suite. Los renombres 
 > ⚠️ **Gotcha 2 — nombres de test**: `cargo test <filtro>` y scripts/documentación que filtren por
 > nombre dejan de casar. Barrido de referencias antes de cada lote.
 
-- **Lote A — producción `src/` (39 sitios)**: el único lote que toca código real. Bajo riesgo
-  (helpers privados). *Esfuerzo: bajo.*
-- **Lote B — helpers privados de `packages/` (75) + selfhost (6) + benchmarks (3)**: raylang
-  interno, sin API pública. Verificación: suites de red + oráculo. *Esfuerzo: bajo.*
-- **Lote C — nombres de funciones de test en `src/` mod tests (~397 fn)**: mecánico y de cero riesgo
-  de runtime (gotcha 2 aparte). *Esfuerzo: medio por volumen; ideal para hacerse por archivo con la
-  suite en verde tras cada uno.* **Decisión del usuario (20 jul 2026): `tests/` (404 fn) queda FUERA
-  del alcance del arqueo** — no se toca en ningún lote; el directorio de integración se excluye de
-  la política de naming en español/inglés por ahora.
-- **Lote D — fixtures raylang embebidas (`Caja`/`Punto`/`Figura`/… ~200 sitios)**: el delicado
-  (gotcha 1: asserts de mensajes + espejos selfhost + goldens). Hacerlo archivo a archivo con el
-  oráculo como juez. Incluye la pasada final de curación del residuo "sospechoso". *Esfuerzo:
-  medio-alto.*
-- **Lote E — endurecer el enforcement** (puede ir primero): (1) `naming_policy.rs` gana los
-  declaradores que faltan (struct/enum/trait/param/campo) y absorbe la wordlist curada del arqueo;
-  (2) el usuario **reactiva el billing de Actions** (sin eso no hay gate que valga); (3) CLAUDE.md
-  y `docs/limpieza-nombres-en-ingles.md` se corrigen ("COMPLETA" → estado real + referencia a este
-  arqueo). *Esfuerzo: bajo; es lo que evita recaer.*
+- **Lote A COMPLETO (PR #28)** — producción `src/` (39 sitios, 33 renombrados + 6 falsos positivos
+  documentados: `indices`/`variable` en compiler.rs, `regen` en cli.rs — jerga inglesa válida).
+- **Lote B COMPLETO (PR #29)** — helpers privados de `packages/` (75) + selfhost (6) + benchmarks
+  (3). Verificado con suites de red + oráculo.
+- **Lote C COMPLETO (PR #30)** — nombres de funciones de test en `src/` mod tests (~395 fn),
+  ejecutado por 6 agentes en paralelo sobre archivos disjuntos. **`tests/` (404 fn) quedó FUERA del
+  alcance** por decisión del usuario (20 jul 2026) — no se toca en ningún lote.
+- **Lote D COMPLETO (PR #31)** — fixtures raylang embebidas (`Caja`→`Box`, `Punto`→`Point`,
+  `Figura`→`Shape`, `Valor`→`Value`, `Lista`→`List`… 164 sitios en 10 archivos), ejecutado por 3
+  agentes. Gotcha 1 (mensajes byte-idénticos) resuelto propagando cada rename a construcciones,
+  impls, match y strings de assert dentro del mismo fixture; se recalcularon offsets de columna en
+  tests de hover del LSP cuando el nuevo nombre cambió de longitud.
+- **Lote E COMPLETO** — (1) `naming_policy.rs` reescrito: gana los declaradores que faltaban
+  (struct/enum/trait/const/static/param/campo), **enmascara comentarios y contenido de strings/raw
+  strings** antes de buscar declaraciones (la causa raíz de varios falsos positivos: fixtures
+  raylang embebidas y mensajes de assert se leían como código real), y absorbe la wordlist curada
+  completa del arqueo (`wordlist` + `expansion` + `curados` de `tools/arqueo_spanglish.py`, 248→1109
+  tokens) más un set `FALSOS_AMIGOS` (`variable`, `indices`, `regen`, `configurable`, `bitops`,
+  `ancount`, `saslname` — palabras iguales en inglés y español que el propio arqueo había
+  clasificado mal). (2) `docs/limpieza-nombres-en-ingles.md` corregido en este lote: ya no afirma
+  "COMPLETA" sin acotar a qué lotes aplica; `CLAUDE.md` ya se había corregido en el lote C (su
+  claim "L1+L2+L3 está COMPLETA" es correcto tal cual — está acotado a ese alcance original — y el
+  bullet "Alcance del inglés" ya documenta la exclusión de `tests/` y enlaza este arqueo). (3)
+  **Reactivar el billing de GitHub Actions queda pendiente — es acción del usuario** (Settings →
+  Billing); sin eso el gate de CI no corre pese a estar arreglado.
 
 **Sobre el costo en tokens** (preocupación explícita del usuario): los lotes B–D son puro
 find/replace dirigido por `docs/arqueo-spanglish-detalle.txt` — se pueden ejecutar con scripts

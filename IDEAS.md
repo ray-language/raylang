@@ -64,6 +64,7 @@
 | **Clientes y formatos** (PostgreSQL · TOML/CSV · plantillas) | Librería raylang | **M32** | 🚧 DESIGN §36. **M32.1** cliente PostgreSQL (protocolo wire + SCRAM-SHA-256, reusa M20); **M32.2** TOML/YAML/CSV; **M32.3** motor de plantillas HTML sobre M27 |
 | **Webserver de producción** (límites/timeouts · query · TLS · keep-alive · cookies · estáticos) | Librería `packages/net/webserver.ray` (casi todo) + 2 toques de runtime aditivos (deadline de E/S en el scheduler, `try_join`) | **M56** | ✅ **COMPLETO** (DESIGN §60, detalle en §17 abajo): 56.1 frontera de seguridad (Limits: cabeceras/cuerpo/conexiones vía semáforo `Channel.bounded`) · 56.2 query string separada + percent-decoding (`std/url.percent_decode`) · 56.3 `serve_tls` · 56.4 timeouts de lectura (`net.set_read_timeout`, deadline en `io_parked`) · 56.5 `try_join` + panic del handler→500 sin fugas · 56.6 keep-alive HTTP/1.1 (el framework se sube gratis) · 56.7 `set_cookie: [string]`+`with_cookie` (decisión con el usuario) · 56.8 chunked entrante + `static_response` con saneo + HEAD sin cuerpo · 56.9 estáticos de producción (`static_mount(prefix, dir, req)`: prefijo de URL + 405 + **ETag/304** por tamaño+mtime —builtin `fs.mtime` nuevo—; `mime_of` pub con ~26 tipos). Diferidos menores en DESIGN §60 (de estáticos: `Range`/206, streaming por trozos, precomprimidos `.gz`) |
 | **Framework web `packages/web`** (estilo Express, promoción de examples) | Librería raylang pura sobre `net/webserver` + `net/log` | **M93** | ✅ **COMPLETO** (DESIGN §85, rama `feature/packages-web`): promovido de `examples/web/framework.ray` y re-basado en el webserver de producción; API express-parity — `static_files` (M56.9, ETag/304), `not_found` custom, `PATCH`+`route` genérico, `header`/`html`/`redirect`, `log_requests` (JSON por petición), `listen_tls`/`listen_graceful`/`listen_limits`. Consumidores: `examples/web/framework/` (proyecto con ray.toml) + `tests/framework_cli.rs` sobre el paquete; guía en `docs/web-framework.md`. Diferido: middleware por-ruta/grupos, body parsers tipados, sesiones/CSRF |
+| **Recuperación de errores fatales** (panic → valor, estilo `recover` de Go) | Builtin nuevo (`try_call`) + doc; la base ya existe (`try_join` M56.5, tres motores) | **M97** | 📌 **PLAN FIJADO** (§49 abajo): 97.1 documentar `try_join` como el "recover" del proyecto (hoy 0 menciones en el MANUAL) + fijar semántica con la cancelación de hermanas · 97.2 `try_call` (misma fibra; intérprete trivial → oráculo completo; VM desenrolla marcos al marcador; nativo `catch_unwind`) · 97.3 supervisión de actores (librería pura sobre spawn+try_join) · 97.4 💤 limpieza en unwind (defer/with_file), solo si 97.2 lo destapa. Aditivo, no bloquea nada |
 
 ---
 
@@ -1321,6 +1322,64 @@ debounce; Windows-graceful aparcado) · **92.3** ✅ D (herencia de fd: `--port`
 + ✅ G (patrón de estado sqlite-de-archivo, documentado en el MANUAL) · **92.4** ✅ F (live-reload SSE
 desde el supervisor). **ARCO M92 COMPLETO** (A+ + D + F + G; B y C aparcados con criterio — C revive solo
 si la VM gana cancelación preemptiva/teardown fiable).
+
+## 49. Recuperación de errores fatales (panic → valor, estilo `recover` de Go) — arco M97 (jul 2026)
+
+**La pregunta**: ¿puede un programa raylang sobrevivir a un error fatal (`panic`, división por cero,
+índice fuera de rango, overflow) y seguir corriendo, como hace Go con `panic`/`recover`?
+
+**Estado real (auditado 19 jul 2026): el 80% YA EXISTE, en la frontera de tarea.** La infraestructura
+se construyó por partes y nunca se nombró como "recover":
+
+- **M12.3**: el error de una fibra hija NO aborta el proceso — se captura en su `Task` como
+  `Failed(msg)` y se re-lanza recién en el `join`/`ScopeEnd` que lo observa. `fail_current_fiber`
+  (`vm.rs`) captura **cualquier** `RuntimeError` (no solo `panic` explícito), con traza (M79).
+- **M56.5**: **`try_join(t: Task<T>) -> Result<T, string>`** — el `join` que observa el fallo **sin
+  re-lanzar**: el error fatal como valor. Existe en la VM (primitivo `__task_failed` + envoltorio del
+  prelude) **y en el nativo** (H21-N2, sobre la contención de fallos de N1). El webserver lo usa:
+  un handler que revienta → 500 + log, el servidor sigue (el caso `net/http` de Go, ya en producción).
+- **M38** (heap por fibra/actor): recuperar es *sano* — el heap del actor fallido se descarta entero
+  (estilo Erlang), sin estado compartido a medio mutar.
+
+En esto raylang está **por delante de Go**: una goroutine sin recover mata el proceso; una tarea
+raylang no. Lo que falta no es la maquinaria, es superficie, doc y el caso misma-fibra.
+
+**Decisión de diseño (norte)**: NO copiar `panic`/`recover`/`defer` (raylang no tiene `defer` y la
+magia posicional de `recover` es lo menos elegante de Go). La forma raylang es **el fallo como
+`Result` en una frontera explícita** — compone con `?`/`match`/UFCS y respeta "errores como valores".
+
+**Fases**:
+
+- **M97.1 — nombrar y documentar lo que existe** (solo doc, coste bajo): `try_join` no aparece NI UNA
+  vez en el MANUAL. Sección "Recuperación de errores fatales" en el MANUAL (§ concurrencia): el patrón
+  `spawn` + `try_join`, el caso webserver (panic→500 gratis), batch tolerante a fallos, y las reglas de
+  qué captura (todo error de ejecución de la tarea) y qué no (deadlock). Verificar y documentar la
+  interacción con la cancelación de hermanas (M12.5): ¿un `Failed` observado con `try_join` dispara
+  igual la cancelación del scope? Fijar la semántica con un test.
+- **M97.2 — `try_call(f: fn() -> T) -> Result<T, string>`** (recuperación en la MISMA fibra, sin
+  `spawn`): el recover general. Por motor: **intérprete** trivial (interceptar `Flow::Error`) — y a
+  diferencia de `try_join` (solo-VM, porque `spawn` no corre en el intérprete), `try_call` tendría
+  **oráculo VM↔intérprete completo**; **VM**: desenrollar los marcos de la fibra hasta el marcador
+  (guardar `frames.len()`/altura de pila al entrar, restaurar al fallar — la mecánica que
+  `fail_current_fiber` ya hace con la fibra entera, acotada a un tramo); **nativo**: el cuerpo bajo
+  `catch_unwind` y `__ray_rt_err` haciendo `panic!` en vez de `exit(70)` dentro de ese dynamic scope
+  (paridad de mensaje byte-idéntica, como siempre). ⚠️ Sharp edge a documentar: recupera con el heap
+  de la PROPIA fibra posiblemente a medio mutar (mismo trade-off que `catch_unwind` de Rust); para
+  aislamiento real, `spawn`+`try_join`.
+- **M97.3 — supervisión de actores** (estilo Erlang/OTP, sobre M38): `supervise(f)` / política de
+  reinicio (N reintentos, backoff) para workers de larga vida. Probablemente **librería raylang pura**
+  (`packages/`): `loop { match (try_join(spawn(f))) { Err → log+reintentar } }` ya casi se escribe
+  solo; la fase es el paquete + el patrón documentado, no runtime nuevo.
+- **M97.4 (diferido, solo si 97.2 lo destapa como dolor real) — limpieza en unwind**: sin `defer`, un
+  `try_call` que recupera deja recursos huérfanos (handles de archivo/socket viven en el registro
+  global del host → fugan hasta el fin del proceso). Opciones: `defer`/`ensure` (gramática nueva) o
+  recursos con ámbito (`with_file(ruta, fn(h) {...})`, librería pura). No construir hasta tener el
+  caso de uso real.
+
+**Impacto en el diseño actual**: aditivo, no bloquea nada. 97.1 es doc; 97.2 es un builtin (fila en
+`BUILTINS` + opcode + impl por motor, patrón M11.4); 97.3 librería. **Restricción hoy**: ninguna —
+la única decisión que conviene fijar pronto es la semántica de 97.1 (try_join vs cancelación de
+hermanas), porque el webserver ya depende de ella en producción.
 
 ## Cómo usar este archivo
 

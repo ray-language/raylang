@@ -145,6 +145,13 @@ pub struct VmTask {
 /// Un objeto del heap. Las formas compuestas que el GC gestiona.
 pub enum Obj {
     Array(Vec<HeapValue>),
+    /// M98.5: arreglo **homogéneo de ints** (*storage strategy*, estilo V8/PyPy): 8 B/elemento en
+    /// vez de los 32 B del `HeapValue` (docs/investigacion-uso-de-memoria.md §4) y trazado O(1)
+    /// (sin handles). Nace en `MakeArray` con todos los elementos `Int`, o al hacer `push` de un
+    /// `Int` sobre un arreglo genérico VACÍO (el patrón `var xs = []; while … push`). Cualquier
+    /// operación no especializada lo **degrada** in place a `Array` (`Heap::degrade_int_array`,
+    /// invisible para el programa); las calientes (push/index/set/len/pop) lo manejan nativo.
+    IntArray(Vec<i64>),
     Struct(VmStruct),
     Closure(VmClosure),
     /// Un enum: variante + payload (M5). El GC traza su payload.
@@ -234,6 +241,17 @@ impl Heap {
         &mut self.slots[h].as_mut().expect("valid handle (live object)").obj
     }
 
+    /// M98.5: **degrada** un `IntArray` a `Array` genérico in place (mismo handle → el aliasing se
+    /// preserva). Lo llama toda operación no especializada antes de tratar el objeto como `Array`;
+    /// es un no-op sobre cualquier otra forma. Invisible para el programa (mismos valores).
+    pub fn degrade_int_array(&mut self, h: Handle) {
+        let obj = self.get_mut(h);
+        if let Obj::IntArray(v) = obj {
+            let elems: Vec<HeapValue> = v.iter().map(|&i| HeapValue::Int(i)).collect();
+            *obj = Obj::Array(elems);
+        }
+    }
+
     /// ¿Conviene recolectar? (En modo estrés, siempre.) M42.2: también al alcanzar el tope de
     /// heap, para forzar un GC antes de rebasarlo (si tras recolectar sigue por encima, `over_cap`).
     pub fn should_collect(&self) -> bool {
@@ -292,6 +310,7 @@ impl Heap {
     fn trace_cost(&self, h: Handle) -> usize {
         1 + match self.get(h) {
             Obj::Array(v) => v.len(),
+            Obj::IntArray(_) => 0, // M98.5: sin handles → nada que escanear (coste constante)
             Obj::Struct(s) => s.fields.len(),
             Obj::Closure(c) => c.upvalues.len(),
             Obj::Enum(e) => e.payload.len(),
@@ -304,6 +323,7 @@ impl Heap {
     fn children(&self, h: Handle) -> Vec<Handle> {
         match self.get(h) {
             Obj::Array(v) => v.iter().filter_map(HeapValue::handle).collect(),
+            Obj::IntArray(_) => Vec::new(), // M98.5: los ints son inline, sin hijos
             Obj::Struct(s) => s.fields.iter().filter_map(|(_, v)| v.handle()).collect(),
             Obj::Closure(c) => c.upvalues.clone(),
             Obj::Enum(e) => e.payload.iter().filter_map(HeapValue::handle).collect(),

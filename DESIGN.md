@@ -2522,8 +2522,20 @@ se retiraba) y una tarea `Done(v)` retenía su resultado para siempre → el web
   (el primer probe conserva la baja contención; el barrido solo corre en el miss).
 - **Resultados**: `task_churn` 100k tareas: VM 123.8 MB → **6.9 MB** (línea base); nativo crash →
   **2.1 MB**. Webserver sobre la VM a c=100: 343→924 MB creciendo → **~31 MB plano**.
-- **Diferido**: los **canales** tienen la misma anatomía (M98.3, misma cura); entradas de tareas
-  canceladas-huérfanas en caminos de fallo sin scope vivo (fuga menor, solo en rutas de error).
+- **M98.3 — canales (misma anatomía, misma cura)**: el almacén `channels` pasa también a slots con
+  generación + free-list. Un canal se libera al quedar **cerrado y drenado**: en el `close` si la cola
+  ya está vacía, o en el `recv` que la vacía (también el `recv` que encuentra cerrado+vacío). La
+  liberación es **invisible**: un handle stale responde EXACTAMENTE como un canal cerrado y vacío —
+  `recv` → `None` (siempre), `send` → `send on a closed channel`, `close` → no-op (el doble close ya
+  era idempotente), `select` → listo (el gotcha documentado del canal cerrado). Por eso, a diferencia
+  de las tareas, **cero semántica nueva** (no hay error de "canal consumido"). No puede haber emisores
+  bloqueados en un canal liberado (close con emisor bloqueado es error) ni receptores aparcados (el
+  close los despierta con None). Un canal **abierto** cuyos handles se pierden sigue retenido
+  (liberarlo exigiría rastrear referencias entre fibras: GC global; documentado como límite). El canal
+  de señales (singleton, nunca se cierra) no se ve afectado. Medido: `chan_churn` 100k canales
+  efímeros 45.4 MB → **7.0 MB** (línea base). Test `canal_liberado_se_comporta_como_cerrado_y_vacio`.
+- **Diferido**: entradas de tareas canceladas-huérfanas en caminos de fallo sin scope vivo (fuga
+  menor, solo en rutas de error); canales abiertos cuyos handles se pierden (ver arriba).
 
 Tests: `tests/concurrency_cli.rs` (doble join, reuso de slots 10k, hijas no sobreviven al scope) y
 `tests/cli_cli.rs` (paridad nativa del doble join + churn 20k sin EAGAIN).

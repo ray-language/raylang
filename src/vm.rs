@@ -258,6 +258,15 @@ struct TaskSlot {
 /// y el `scope` consume a sus hijas al cerrar). Byte-idéntico en el runtime nativo.
 const TASK_CONSUMED: &str = "task already consumed (join/try_join takes the task)";
 
+/// M98.3: un slot del almacén de canales. `chan: None` = libre (en `free_channels`); `generation`
+/// se incrementa al liberar → un handle viejo sobre un slot reusado NO colisiona (ABA), y las
+/// operaciones sobre él responden como sobre un canal cerrado y vacío (indistinguible).
+#[derive(Default)]
+struct ChanSlot {
+    generation: u32,
+    chan: Option<VmChannel>,
+}
+
 /// M38.3a: el estado del scheduler que N hilos compartirían (M38.3b: tras `Arc<Mutex<Shared>>`). Con los
 /// heaps aislados por fibra (M38.1), es lo ÚNICO compartido: las colas de fibras listas/aparcadas y los
 /// almacenes del host de canales/tareas. La ejecución de cada fibra (frames/stack/heap/…) es thread-local.
@@ -279,7 +288,13 @@ struct Shared {
     signal_fd: i32,
     /// Canales `Channel<T>` (M12.1): sincronización COMPARTIDA entre actores, fuera del GC de las fibras
     /// (§46.2). Se referencian por id vía `HeapValue::Channel(id)`. El GC rootea sus valores en tránsito.
-    channels: Vec<VmChannel>,
+    /// M98.3: slots con generación + free-list, como las tareas (M98.1) — un canal se LIBERA al quedar
+    /// **cerrado y drenado** (en el `close` si la cola está vacía; si no, en el `recv` que la vacía).
+    /// Es seguro porque un canal liberado se comporta IDÉNTICO a uno cerrado y vacío: `recv` → None,
+    /// `send` → "send on a closed channel", `close` → no-op (ya era idempotente), `select` → listo.
+    channels: Vec<ChanSlot>,
+    /// M98.3: índices de slots libres de `channels`, para reuso.
+    free_channels: Vec<usize>,
     /// Tareas `Task<T>` (M12.3): compartidas entre la fibra hija y quien la une, fuera del GC. Se
     /// referencian por id vía `HeapValue::Task(id)`. El GC rootea el valor de `Done`.
     /// M98.1: almacén de **slots con generación** + free-list — las entradas se LIBERAN (antes solo
@@ -344,6 +359,52 @@ impl Shared {
         slot.generation = slot.generation.wrapping_add(1);
         self.free_tasks.push(idx);
         slot.task.take()
+    }
+
+    // --- M98.3: el almacén de canales, misma anatomía que el de tareas ---
+
+    /// Aloja un canal nuevo (reusa un slot libre si hay) y devuelve su handle (`gen << 32 | idx`).
+    fn alloc_channel(&mut self, cap: Option<usize>) -> usize {
+        let vc = VmChannel { queue: VecDeque::new(), closed: false, cap, heap: Heap::new() };
+        if let Some(idx) = self.free_channels.pop() {
+            let slot = &mut self.channels[idx];
+            slot.chan = Some(vc);
+            (slot.generation as usize) << 32 | idx
+        } else {
+            self.channels.push(ChanSlot { generation: 0, chan: Some(vc) });
+            self.channels.len() - 1
+        }
+    }
+
+    /// El canal vivo de un handle, o `None` si es stale (liberado: se comporta como cerrado y vacío).
+    fn chan(&self, h: usize) -> Option<&VmChannel> {
+        let slot = self.channels.get(h & 0xFFFF_FFFF)?;
+        if slot.generation as usize != h >> 32 {
+            return None;
+        }
+        slot.chan.as_ref()
+    }
+
+    /// Versión mutable de `chan`.
+    fn chan_mut(&mut self, h: usize) -> Option<&mut VmChannel> {
+        let slot = self.channels.get_mut(h & 0xFFFF_FFFF)?;
+        if slot.generation as usize != h >> 32 {
+            return None;
+        }
+        slot.chan.as_mut()
+    }
+
+    /// M98.3: libera el canal (cerrado y drenado): suelta su heap, incrementa la generación y
+    /// encola el slot como libre. Idempotente sobre handles stale.
+    fn free_channel(&mut self, h: usize) {
+        let idx = h & 0xFFFF_FFFF;
+        if let Some(slot) = self.channels.get_mut(idx) {
+            if slot.generation as usize == h >> 32 && slot.chan.is_some() {
+                slot.chan = None;
+                slot.generation = slot.generation.wrapping_add(1);
+                self.free_channels.push(idx);
+            }
+        }
     }
 }
 
@@ -1245,8 +1306,7 @@ impl<'a> Vm<'a> {
                             Ok(fd) => fd,
                             Err(e) => return Err(runtime_error(pos!().0, pos!().1, &e)),
                         };
-                        let id = sh.channels.len();
-                        sh.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None, heap: Heap::new() });
+                        let id = sh.alloc_channel(None); // M98.3: slot con generación
                         sh.signal_chan = Some(id);
                         sh.signal_fd = fd;
                     }
@@ -1259,8 +1319,7 @@ impl<'a> Vm<'a> {
                     // M38.3b paso 3: id + push en UN solo lock (TOCTOU bajo M:N real).
                     let id = {
                         let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-                        let id = sh.channels.len();
-                        sh.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None, heap: Heap::new() });
+                        let id = sh.alloc_channel(None); // M98.3: slot con generación
                         id
                     };
                     self.push(HeapValue::Channel(id));
@@ -1276,8 +1335,7 @@ impl<'a> Vm<'a> {
                     }
                     let id = {
                         let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-                        let id = sh.channels.len();
-                        sh.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: Some(n as usize), heap: Heap::new() });
+                        let id = sh.alloc_channel(Some(n as usize)); // M98.3
                         id
                     };
                     self.push(HeapValue::Channel(id));
@@ -1290,8 +1348,11 @@ impl<'a> Vm<'a> {
                     // preste solo el campo `self.shared`; así `self.cur.*` (campo disjunto) sigue accesible
                     // bajo el guard sostenido.
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-                    let c = &sh.channels[h];
-                    let (closed, len, cap) = (c.closed, c.queue.len(), c.cap);
+                    // M98.3: un handle stale (canal liberado = cerrado y drenado) responde como cerrado.
+                    let (closed, len, cap) = match sh.chan(h) {
+                        Some(c) => (c.closed, c.queue.len(), c.cap),
+                        None => (true, 0, None),
+                    };
                     if closed {
                         return Err(runtime_error(pos!().0, pos!().1, "send on a closed channel"));
                     }
@@ -1305,11 +1366,14 @@ impl<'a> Vm<'a> {
                         self.cur.stack.push(HeapValue::Unit);
                     } else if cap.is_none() || len < cap.unwrap() {
                         // (2) Hay hueco (no acotado, o len < cap) → encola y sigue. M38.1b-2: el valor se
-                        // transfiere del heap de la fibra al heap del canal (en tránsito).
-                        let mut ch_heap = std::mem::take(&mut sh.channels[h].heap);
+                        // transfiere del heap de la fibra al heap del canal (en tránsito). (El canal está
+                        // vivo: si fuera stale habríamos errado arriba como cerrado.)
+                        let ch = sh.chan_mut(h).expect("live: stale handles error above as closed");
+                        let mut ch_heap = std::mem::take(&mut ch.heap);
                         let v2 = transfer_value(&self.cur.heap, &mut ch_heap, &v, &mut HashMap::new());
-                        sh.channels[h].heap = ch_heap;
-                        sh.channels[h].queue.push_back(v2);
+                        let ch = sh.chan_mut(h).expect("live: stale handles error above as closed");
+                        ch.heap = ch_heap;
+                        ch.queue.push_back(v2);
                         Self::wake_select_waiters(&mut sh, h); // M12.4: el canal ya tiene valor → listo para un select
                         self.cur.stack.push(HeapValue::Unit);
                     } else {
@@ -1331,18 +1395,35 @@ impl<'a> Vm<'a> {
                     let h = self.pop_channel();
                     // M38.3b paso 2: lock-once (ver ChanSend).
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                    // M98.3: un handle stale (canal liberado = cerrado y drenado) responde como
+                    // cerrado y vacío → None ([]).
+                    if sh.chan(h).is_none() {
+                        drop(sh);
+                        let arr = self.cur.heap.allocate(Obj::Array(Vec::new()));
+                        self.cur.stack.push(HeapValue::Obj(arr));
+                        return Ok(None);
+                    }
                     // (1) ¿Valor en la cola? Sácalo; al liberar un hueco, si hay un emisor bloqueado en este
                     // canal, su valor entra a la cola (ya hay sitio) y se le despierta.
-                    let from_queue = sh.channels[h].queue.pop_front();
+                    let from_queue = sh.chan_mut(h).expect("just checked live").queue.pop_front();
                     if let Some(v) = from_queue {
                         // M38.1b-2: el valor viene del heap del canal → se transfiere al heap del receptor.
                         // Si la cola queda vacía, el heap del canal se limpia (nadie referencia sus objetos).
-                        let ch_heap = std::mem::take(&mut sh.channels[h].heap);
+                        let ch = sh.chan_mut(h).expect("just checked live");
+                        let ch_heap = std::mem::take(&mut ch.heap);
                         let v2 = transfer_value(&ch_heap, &mut self.cur.heap, &v, &mut HashMap::new());
-                        if !sh.channels[h].queue.is_empty() {
-                            sh.channels[h].heap = ch_heap; // aún hay valores en tránsito → conserva el heap
+                        let ch = sh.chan_mut(h).expect("just checked live");
+                        if !ch.queue.is_empty() {
+                            ch.heap = ch_heap; // aún hay valores en tránsito → conserva el heap
                         } // si no, `ch_heap` se descarta (limpieza)
-                        Self::wake_blocked_sender(&mut sh, h);
+                        // M98.3: este recv acaba de DRENAR un canal ya cerrado → libéralo (nadie puede
+                        // volver a encolar: send sobre cerrado es error; los recv futuros ven el handle
+                        // stale y devuelven None, indistinguible de cerrado+vacío).
+                        if ch.closed && ch.queue.is_empty() {
+                            sh.free_channel(h);
+                        } else {
+                            Self::wake_blocked_sender(&mut sh, h);
+                        }
                         let arr = self.cur.heap.allocate(Obj::Array(vec![v2]));
                         self.cur.stack.push(HeapValue::Obj(arr));
                         return Ok(None);
@@ -1366,8 +1447,10 @@ impl<'a> Vm<'a> {
                         return Ok(None);
                     }
                     // (3) Cola vacía y sin emisores: cerrado → None ([]); abierto → bloquear (Recv).
-                    let closed = sh.channels[h].closed;
+                    let closed = sh.chan(h).expect("just checked live").closed;
                     if closed {
+                        // M98.3: cerrado y vacío → liberable (los recv futuros ven stale → mismo None).
+                        sh.free_channel(h);
                         let arr = self.cur.heap.allocate(Obj::Array(Vec::new()));
                         self.cur.stack.push(HeapValue::Obj(arr));
                     } else {
@@ -1551,8 +1634,12 @@ impl<'a> Vm<'a> {
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     let mut ready_idx = None;
                     for (i, &c) in chans.iter().enumerate() {
-                        let ch = &sh.channels[c];
-                        let buffered_or_closed = !ch.queue.is_empty() || ch.closed;
+                        // M98.3: un handle stale (canal liberado) responde como cerrado → listo,
+                        // igual que el canal cerrado de siempre (gotcha documentado de select).
+                        let buffered_or_closed = match sh.chan(c) {
+                            Some(ch) => !ch.queue.is_empty() || ch.closed,
+                            None => true,
+                        };
                         let has_sender = sh.parked.iter()
                             .any(|p| p.on == c && matches!(p.waiting, Waiting::Send(_)));
                         if buffered_or_closed || has_sender {
@@ -2593,13 +2680,20 @@ impl<'a> Vm<'a> {
                             // hacía dos `self.sched()` en la misma condición con guards solapados → doble-lock
                             // del Mutex no reentrante = DEADLOCK cuando el canal tenía un receptor aparcado.
                             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                            // M98.3: close sobre un handle stale (canal liberado = ya cerrado y drenado)
+                            // es no-op, igual que el doble close de siempre (idempotente).
+                            if sh.chan(ch).is_none() {
+                                drop(sh);
+                                self.cur.stack.push(HeapValue::Unit);
+                                return Ok(None);
+                            }
                             if sh.parked.iter().any(
                                 |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
                             {
                                 return Err(runtime_error(pos!().0, pos!().1,
                                     "close on a channel with a blocked sender"));
                             }
-                            sh.channels[ch].closed = true;
+                            sh.chan_mut(ch).expect("just checked live").closed = true;
                             let mut i = 0;
                             while i < sh.parked.len() {
                                 if sh.parked[i].on == ch && matches!(sh.parked[i].waiting, Waiting::Recv) {
@@ -2610,6 +2704,11 @@ impl<'a> Vm<'a> {
                                 }
                             }
                             Self::wake_select_waiters(&mut sh, ch); // M12.4: un canal cerrado está "listo" para un select
+                            // M98.3: cerrado y ya drenado (cola vacía) → liberable de inmediato; si aún
+                            // hay valores en tránsito, lo libera el recv que lo vacíe.
+                            if sh.chan(ch).expect("just checked live").queue.is_empty() {
+                                sh.free_channel(ch);
+                            }
                             self.cur.stack.push(HeapValue::Unit);
                         }
                         _ => unreachable!("the checker guarantees a handle (int) or a Channel"),
@@ -3272,8 +3371,9 @@ impl<'a> Vm<'a> {
             {
                 let parked = shared.parked.remove(pos);
                 Self::wake_recv_primitive(shared, parked.fiber, v);
-            } else {
-                shared.channels[chan].queue.push_back(v);
+            } else if let Some(ch) = shared.chan_mut(chan) {
+                // M98.3: acceso tolerante (el canal de señales nunca se cierra → siempre vivo).
+                ch.queue.push_back(v);
                 Self::wake_select_waiters(shared, chan);
             }
         }
@@ -3312,10 +3412,14 @@ impl<'a> Vm<'a> {
                 _ => unreachable!(),
             };
             // M38.1b-2: el valor del emisor (heap de su fibra) entra a la cola → al heap del canal.
-            let mut ch_heap = std::mem::take(&mut shared.channels[chan].heap);
+            // M98.3: solo hay emisores bloqueados en canales VIVOS y abiertos (close con emisor
+            // bloqueado es error; un canal liberado estaba cerrado) → el acceso no puede ser stale.
+            let ch = shared.chan_mut(chan).expect("blocked senders imply a live open channel");
+            let mut ch_heap = std::mem::take(&mut ch.heap);
             let sv2 = transfer_value(&parked.fiber.heap, &mut ch_heap, &sv, &mut HashMap::new());
-            shared.channels[chan].heap = ch_heap;
-            shared.channels[chan].queue.push_back(sv2);
+            let ch = shared.chan_mut(chan).expect("blocked senders imply a live open channel");
+            ch.heap = ch_heap;
+            ch.queue.push_back(sv2);
             Self::wake_sender(shared, parked.fiber);
         }
     }

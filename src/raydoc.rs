@@ -175,7 +175,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn doc_lines_arriba_no_desborda_con_linea_outside_de_range() {
+    fn doc_lines_above_does_not_overflow_with_a_line_outside_of_range() {
         // Regresión (crash del LSP): `linea` puede caer fuera de `lineas` (símbolo cuya declaración
         // vive en otra fuente —prelude/wrapper inyectado—). No debe desbordar; devuelve `None`.
         let lines = vec!["/// doc", "fn f() {}"];
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn documenta_superficie_public() {
+    fn documents_the_public_surface() {
         let src = "\
 /// Un punto.
 /// En 2D.
@@ -222,7 +222,7 @@ pub enum Caja<T> { Llena(T), Vacia }
     }
 
     #[test]
-    fn sin_pub_documenta_todo() {
+    fn without_pub_documents_everything() {
         // Un programa suelto (sin `pub`) documenta todos sus ítems.
         let src = "/// La entry.\nfn main() -> int { 0 }\n";
         let md = generate(src, "p.ray").unwrap();

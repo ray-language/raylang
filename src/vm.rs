@@ -4166,7 +4166,7 @@ mod tests {
     /// desalineaban los argumentos de la siguiente llamada del llamador (aquí: `caso("b", …)` recibía
     /// basura como `etiqueta` → ICE "combinación operador/operandos" o divergencia con el intérprete).
     #[test]
-    fn try_err_con_operandos_pendientes_oracle() {
+    fn pending_operands_after_try_err_oracle() {
         oracle_program(
             r#"
             fn fails() -> Result<int, string> { Result.Err("boom") }
@@ -4261,7 +4261,7 @@ mod tests {
     /// M40.1a: **guardas** en los brazos del match (`patrón if <cond> => …`). El brazo casa solo si
     /// el patrón liga Y la guarda es true; si no, se sigue al siguiente. Oráculo VM↔intérprete.
     #[test]
-    fn guardas_oracle() {
+    fn match_guards_oracle() {
         // clasificar por rango: 3=grande, 2=positivo, 1=neg/cero, 0=nada. Un dígito por caso.
         let prog = "\
             fn c(o: Option<int>) -> int {\n\
@@ -4408,7 +4408,7 @@ mod tests {
     /// map cambia de tipo de elemento, filter avanza el origen, y el encadenamiento se evalúa al
     /// recorrer. Ejercita métodos genéricos + captura mutable en closures + despacho por receptor.
     #[test]
-    fn adaptadores_perezosos_oracle() {
+    fn lazy_adapters_oracle() {
         oracle_program("\
             fn main() -> int {\n\
             \x20 var a = 0;\n\
@@ -4531,7 +4531,7 @@ mod tests {
     }
 
     #[test]
-    fn comparaciones_y_bools() {
+    fn comparisons_and_bools() {
         assert_eq!(run_vm("3 < 5"), Value::Bool(true));
         assert_eq!(run_vm("3 == 5"), Value::Bool(false));
         assert_eq!(run_vm("!(2 > 1)"), Value::Bool(false));
@@ -4545,13 +4545,13 @@ mod tests {
     }
 
     #[test]
-    fn division_por_cero_es_error() {
+    fn division_by_zero_is_error() {
         let chunk = compile_expr(&expr_of("10 / 0")).unwrap();
         assert!(run(&chunk).unwrap_err().msg.contains("division"));
     }
 
     #[test]
-    fn if_como_expression_coincide_con_el_interpreter() {
+    fn if_as_expression_matches_interpreter() {
         oracle_int("if (3 < 5) { 10 } else { 20 }");
         oracle_int("if (3 > 5) { 10 } else { 20 }");
         oracle_int("if (1 < 2) { if (2 < 3) { 1 } else { 2 } } else { 3 }");
@@ -4565,7 +4565,7 @@ mod tests {
     }
 
     #[test]
-    fn logicos_y_su_cortocircuito() {
+    fn logical_operators_short_circuit() {
         assert_eq!(run_vm("true && true"), Value::Bool(true));
         assert_eq!(run_vm("true && false"), Value::Bool(false));
         assert_eq!(run_vm("false || true"), Value::Bool(true));
@@ -4574,7 +4574,7 @@ mod tests {
     }
 
     #[test]
-    fn block_con_statements_y_valor_final() {
+    fn block_with_statements_and_final_value() {
         assert_eq!(run_vm("{ 1; 2; 3 }"), Value::Int(3));
         assert_eq!(run_vm("{ 1; }"), Value::Unit);
     }
@@ -4624,7 +4624,7 @@ mod tests {
     /// (`1 + bucle(...)`): la de cola, con el TCO de M13.3b, sería un bucle infinito
     /// legítimo (O(1) marcos) y nunca desbordaría —ese es justo el punto del TCO—.
     #[test]
-    fn overflow_aritmetico_oracle() {
+    fn arithmetic_overflow_oracle() {
         // M34 (SPEC §8): el desbordamiento de int es ERROR de ejecución idéntico en ambos
         // motores (antes: panic en debug / wrap silencioso en release — dependía del build).
         let cases = [
@@ -4658,7 +4658,7 @@ mod tests {
     /// M42.1: **fuel** — límite de instrucciones de la VM. Un bucle infinito aborta con fuel finito
     /// (no cuelga); un programa que termina dentro del presupuesto da su resultado normal.
     #[test]
-    fn fuel_limita_la_execution() {
+    fn fuel_limits_execution() {
         fn compile(src: &str) -> CompiledProgram {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
@@ -4728,7 +4728,7 @@ mod tests {
     /// M42.2: **tope de heap** — límite de objetos vivos de la VM. Un programa que retiene un montón
     /// de objetos (aquí, un arreglo que crece sin cesar) aborta al rebasar el tope; uno frugal, no.
     #[test]
-    fn tope_de_heap_limita_los_objetos_vivos() {
+    fn heap_cap_limits_live_objects() {
         fn compile(src: &str) -> CompiledProgram {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
@@ -4768,7 +4768,7 @@ mod tests {
 
     /// M13.2a: aserciones que pasan no alteran el resultado (oráculo normal).
     #[test]
-    fn assert_pasa_oracle() {
+    fn assert_passes_oracle() {
         oracle_program(
             "fn main() -> int {
                 assert(1 + 1 == 2);
@@ -4783,7 +4783,7 @@ mod tests {
     /// de bytes y arreglos. Los MISMOS nombres (`unwrap_or`/`expect`/`unwrap`) existen para
     /// Option y Result: el despacho por punto resuelve por el tipo del receptor.
     #[test]
-    fn option_result_ergonomia_oracle() {
+    fn option_result_ergonomics_oracle() {
         oracle_program(
             "fn half(x: int) -> Option<int> {\n\
              \x20 if (x % 2 == 0) { Option.Some(x / 2) } else { Option.None }\n\
@@ -4890,7 +4890,7 @@ mod tests {
     /// (b) Lo que puede trapear (división por cero, overflow) NO se pliega: sigue
     /// dando el MISMO error de runtime en ambos motores, con su posición.
     #[test]
-    fn plegado_de_constantes() {
+    fn constant_folding() {
         let src = "fn main() -> int { 1 + 2 * 3 - 4 / 2 }";
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
@@ -5000,7 +5000,7 @@ mod tests {
     /// directamente); abs/min/max sobre `int` devuelven `int`. El último caso fija la semántica de
     /// **borde** de `f64`: `sqrt(-1.0)` da `NaN` en ambos motores → `NaN == NaN` es `false` → `0`.
     #[test]
-    fn matematicas_oracle() {
+    fn math_oracle() {
         // M49: abs/min/max/pi/e se movieron a `std/math` (funciones puras en raylang; las cubre la
         // integración `math_cli`, en ambos motores). El ORÁCULO prueba solo los primitivos internos `__x`
         // —el que computa, aún builtin, sin necesidad del loader—; el envoltorio `math.sqrt` lo cierra el
@@ -5034,7 +5034,7 @@ mod tests {
     /// M27.1: tuplas — retorno múltiple, acceso `.N`, desestructuración (`_`), heterogéneas. Erasure a
     /// arreglos → ambos motores coinciden.
     #[test]
-    fn tuplas_oracle() {
+    fn tuples_oracle() {
         oracle_program("fn dm(a: int, b: int) -> (int, int) { (a / b, a % b) } fn main() -> int { let t = dm(17, 5); t.0 + t.1 * 10 }"); // 3 + 20 = 23
         oracle_program("fn main() -> int { let (q, r) = (7, 3); q * r }"); // 21
         oracle_program("fn main() -> int { let (_, b, _) = (1, 42, 9); b }"); // 42 (descarta con _)
@@ -5128,14 +5128,14 @@ mod tests {
     fn conversion_error_oracle() {
         let base = "enum MiErr { Io(string) } \
             impl From<string> for MiErr { fn convert(o: string) -> MiErr { MiErr.Io(o) } } \
-            fn leer(f: bool) -> Result<int, string> { if (f) { Result.Err(\"x\") } else { Result.Ok(7) } } \
-            fn proc(f: bool) -> Result<int, MiErr> { let x = leer(f)?; Result.Ok(x + 1) } ";
+            fn read(f: bool) -> Result<int, string> { if (f) { Result.Err(\"x\") } else { Result.Ok(7) } } \
+            fn proc(f: bool) -> Result<int, MiErr> { let x = read(f)?; Result.Ok(x + 1) } ";
         // Camino Ok: proc(false) = Ok(8); code = 8.
         oracle_program(&format!("{base} fn main() -> int {{ match (proc(false)) {{ Result.Ok(v) => v, Result.Err(e) => 0 - 1 }} }}"));
         // Camino Err convertido: proc(true) = Err(MiErr.Io(\"x\")); se detecta la conversión → 99.
         oracle_program(&format!("{base} fn main() -> int {{ match (proc(true)) {{ Result.Ok(v) => v, Result.Err(e) => match (e) {{ MiErr.Io(s) => 99 }} }} }}"));
         // El `?` SIN conversión (mismo tipo de error) sigue intacto.
-        oracle_program("fn leer() -> Result<int, string> { Result.Ok(5) } fn proc() -> Result<int, string> { let x = leer()?; Result.Ok(x * 2) } fn main() -> int { match (proc()) { Result.Ok(v) => v, Result.Err(e) => 0 } }");
+        oracle_program("fn read() -> Result<int, string> { Result.Ok(5) } fn proc() -> Result<int, string> { let x = read()?; Result.Ok(x * 2) } fn main() -> int { match (proc()) { Result.Ok(v) => v, Result.Err(e) => 0 } }");
     }
 
     /// Un `match` con TODOS los brazos divergentes (`return`) type-checkea (antes hacía panic el checker,
@@ -5173,7 +5173,7 @@ mod tests {
         // for anidado.
         oracle_program("fn main() -> int { var s = 0; for i in 0..3 { for j in 0..3 { s = s + 1; } } s }"); // 9
         // `for` sobre un valor con return dentro (propaga).
-        oracle_program("fn buscar(xs: [int], t: int) -> int { for x in xs { if (x == t) { return 1; } } 0 } fn main() -> int { buscar([3, 7, 9], 7) }"); // 1
+        oracle_program("fn find(xs: [int], t: int) -> int { for x in xs { if (x == t) { return 1; } } 0 } fn main() -> int { find([3, 7, 9], 7) }"); // 1
     }
 
     #[test]
@@ -5275,7 +5275,7 @@ mod tests {
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.
     #[test]
-    fn map_basico_oracle() {
+    fn map_basic_oracle() {
         oracle_program(
             "fn main() -> int {
                 let m: Map<string, int> = Map.new();
@@ -5400,12 +5400,12 @@ mod tests {
         oracle_program(
             "struct Pila { d: [int] }
              impl Len for Pila { fn len(self) -> int { self.d.len() } }
-             fn describir<T: Len>(x: T) -> int { x.len() }
+             fn describe<T: Len>(x: T) -> int { x.len() }
              fn main() -> int {
                 let m: Map<int, int> = [1: 10, 2: 20, 3: 30];
                 let p = Pila { d: [7, 8, 9] };
                 \"hello\".len() + [1,2,3,4,5].len() + m.len() + \"ab\".to_bytes().len()
-                    + p.len() + describir([1,2]) + describir(p)
+                    + p.len() + describe([1,2]) + describe(p)
              }",
         );
     }
@@ -5469,11 +5469,11 @@ mod tests {
     #[test]
     fn map_stress_gc_oracle() {
         oracle_stress(
-            "fn celda(n: int) -> [int] { [n, n * 2] }
+            "fn cell(n: int) -> [int] { [n, n * 2] }
              fn main() -> int {
                 let m: Map<int, [int]> = Map.new();
                 var i = 0;
-                while (i < 30) { m.insert(i, celda(i)); i = i + 1; }
+                while (i < 30) { m.insert(i, cell(i)); i = i + 1; }
                 var sum = 0;
                 var j = 0;
                 while (j < 30) {
@@ -5509,7 +5509,7 @@ mod tests {
     }
 
     #[test]
-    fn map_clave_bytes_oracle() {
+    fn map_bytes_key_oracle() {
         // M16 (diferido): `bytes` como clave de Map. Incluye octetos crudos (\x00/\xff).
         oracle_program(
             "fn main() -> int {
@@ -5526,7 +5526,7 @@ mod tests {
     }
 
     #[test]
-    fn map_clave_bytes_keys_oracle() {
+    fn map_bytes_key_keys_oracle() {
         // keys/values con clave bytes: orden determinista (MapKey::Bytes es Ord lexicográfico).
         oracle_program(
             "fn main() -> int {
@@ -5589,7 +5589,7 @@ mod tests {
     /// M13.3b: recursión de cola PROFUNDA (más allá de MAX_FRAMES) funciona en ambos motores
     /// gracias al TCO, y coinciden. Sin TCO, ambos cortarían en 1024 con desbordamiento.
     #[test]
-    fn tco_recursion_de_cola_profunda_oracle() {
+    fn tco_deep_tail_recursion_oracle() {
         // 5000 > MAX_FRAMES (1024): solo pasa si la llamada en cola reutiliza el marco.
         oracle_program(
             "fn account(n: int, acc: int) -> int {
@@ -5601,7 +5601,7 @@ mod tests {
 
     /// M13.3b: recursión mutua en cola + `return` en cola, también profunda.
     #[test]
-    fn tco_mutua_y_return_en_cola_oracle() {
+    fn tco_mutual_and_return_in_tail_oracle() {
         oracle_program(
             "fn par(n: int) -> bool { if (n == 0) { true } else { return impar(n - 1); } }
              fn impar(n: int) -> bool { if (n == 0) { false } else { par(n - 1) } }
@@ -5615,7 +5615,7 @@ mod tests {
     /// binario real corre con pila grande, M13.3a). Que la recursión de cola SÍ se optimiza lo
     /// prueban `tco_recursion_de_cola_profunda_oraculo` (5000) y `tco_mutua_*` (4000).
     #[test]
-    fn tco_no_applies_a_llamada_no_en_cola_oracle() {
+    fn tco_does_not_apply_to_non_tail_call_oracle() {
         oracle_program(
             "fn sum_hasta(n: int) -> int { if (n == 0) { 0 } else { n + sum_hasta(n - 1) } }
              fn main() -> int { sum_hasta(30) }",
@@ -5623,7 +5623,7 @@ mod tests {
     }
 
     #[test]
-    fn variables_locals_y_shadowing() {
+    fn local_variables_and_shadowing() {
         oracle_program("fn main() -> int { let x: int = 1; { let x: int = 99; } x }");
         oracle_program(
             "fn main() -> int { var s: int = 0; var i: int = 0; while (i < 5) { s = s + i; i = i + 1; } s }",
@@ -5652,7 +5652,7 @@ mod tests {
     }
 
     #[test]
-    fn arrays_son_por_reference() {
+    fn arrays_are_by_reference() {
         oracle_program("fn main() -> int { let a: [int] = [1, 2, 3]; let b: [int] = a; b[0] = 9; a[0] }");
     }
 
@@ -5687,12 +5687,12 @@ mod tests {
     }
 
     #[test]
-    fn structs_mutation_de_campo() {
+    fn structs_field_mutation() {
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1, y: 2 }; p.x = 9; p.x + p.y }");
     }
 
     #[test]
-    fn structs_son_por_reference() {
+    fn structs_are_by_reference() {
         oracle_program("struct C { v: int } fn main() -> int { let a: C = C { v: 1 }; let b: C = a; b.v = 9; a.v }");
     }
 
@@ -5713,12 +5713,12 @@ mod tests {
     // ----- M4.1: funciones de primera clase -----
 
     #[test]
-    fn function_anonymous_en_variable() {
+    fn anonymous_function_in_variable() {
         oracle_program("fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x * x }; f(9) }");
     }
 
     #[test]
-    fn de_order_superior_recibe_function() {
+    fn higher_order_receives_function() {
         oracle_program(
             "fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
              fn main() -> int { apply(fn(n: int) -> int { n + 1 }, 41) }",
@@ -5726,7 +5726,7 @@ mod tests {
     }
 
     #[test]
-    fn name_de_function_como_valor() {
+    fn function_name_as_value() {
         oracle_program(
             "fn inc(n: int) -> int { n + 1 }
              fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
@@ -5735,22 +5735,22 @@ mod tests {
     }
 
     #[test]
-    fn devolver_one_function() {
+    fn returning_a_function() {
         oracle_program(
-            "fn elegir(b: bool) -> fn(int) -> int {
+            "fn choose(b: bool) -> fn(int) -> int {
                  if (b) { fn(n: int) -> int { n + n } } else { fn(n: int) -> int { n * n } }
              }
-             fn main() -> int { let f: fn(int) -> int = elegir(true); f(21) }",
+             fn main() -> int { let f: fn(int) -> int = choose(true); f(21) }",
         );
     }
 
     #[test]
-    fn llamar_un_literal_de_function_direct() {
+    fn call_a_function_literal_directly() {
         oracle_program("fn main() -> int { (fn(x: int) -> int { x + x })(21) }");
     }
 
     #[test]
-    fn variable_tapa_a_function_global() {
+    fn variable_shadows_global_function() {
         oracle_program(
             "fn f(x: int) -> int { x * 100 }
              fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x + 1 }; f(41) }",
@@ -5786,7 +5786,7 @@ mod tests {
     }
 
     #[test]
-    fn counter_con_estado_mutable() {
+    fn counter_with_mutable_state() {
         oracle_program(
             "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
              fn main() -> int { let c: fn() -> int = counter(); c(); c(); c() }",
@@ -5794,7 +5794,7 @@ mod tests {
     }
 
     #[test]
-    fn instancias_de_closure_son_independientes() {
+    fn closure_instances_are_independent() {
         oracle_program(
             "fn counter() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
              fn main() -> int {
@@ -5808,7 +5808,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_transitiva_dos_niveles() {
+    fn transitive_capture_two_levels() {
         oracle_program(
             "fn adder(x: int) -> fn(int) -> int { fn(y: int) -> int { x + y } }
              fn main() -> int { let add5: fn(int) -> int = adder(5); add5(10) + add5(100) }",
@@ -5816,14 +5816,14 @@ mod tests {
     }
 
     #[test]
-    fn closures_hermanas_comparten_celda() {
+    fn sibling_closures_share_cell() {
         oracle_program(
             "struct Par { inc: fn(), get: fn() -> int }
-             fn hacer() -> Par {
+             fn make() -> Par {
                  var n: int = 0;
                  Par { inc: fn() { n = n + 1; }, get: fn() -> int { n } }
              }
-             fn main() -> int { let p: Par = hacer(); p.inc(); p.inc(); p.inc(); p.get() }",
+             fn main() -> int { let p: Par = make(); p.inc(); p.inc(); p.inc(); p.get() }",
         );
     }
 
@@ -5841,7 +5841,7 @@ mod tests {
     // ----- M5.1: enums (tipos suma) y construcción -----
 
     #[test]
-    fn enum_construccion_oracle() {
+    fn enum_construction_oracle() {
         // Ambos motores construyen variantes (con y sin payload) y coinciden en el
         // resultado. El payload se evalúa en orden antes de MakeEnum.
         oracle_program(
@@ -5890,7 +5890,7 @@ mod tests {
     }
 
     #[test]
-    fn el_gc_libera_enums_inalcanzables() {
+    fn gc_frees_unreachable_enums() {
         // Cada llamada construye una lista enlazada que queda inalcanzable al
         // retornar. El mark-and-sweep debe barrer esos objetos de enum: el heap
         // queda acotado en vez de crecer sin parar.
@@ -5918,7 +5918,7 @@ mod tests {
     // ----- M5.3: match en la VM (oráculo VM<->intérprete) -----
 
     #[test]
-    fn match_recorrido_oracle() {
+    fn match_traversal_oracle() {
         // Recorrer un enum recursivo con match: longitud y suma, en ambos motores.
         oracle_program(
             "enum Lista { Cons(int, Lista), Nil }
@@ -5932,7 +5932,7 @@ mod tests {
     }
 
     #[test]
-    fn match_selecciona_branch_oracle() {
+    fn match_selects_branch_oracle() {
         // Variantes con distinta aridad de payload; cada brazo liga lo suyo.
         oracle_program(
             "enum Figura { Circulo(int), Rect(int, int), Punto }
@@ -5944,7 +5944,7 @@ mod tests {
     }
 
     #[test]
-    fn match_comodin_y_binding_oracle() {
+    fn match_wildcard_and_binding_oracle() {
         // Comodín `_` (dentro de variante y suelto) y binding catch-all.
         oracle_program(
             "enum E { Uno, Dos, Otro }
@@ -5967,7 +5967,7 @@ mod tests {
     }
 
     #[test]
-    fn match_binding_capturado_por_closure_oracle() {
+    fn match_binding_captured_by_closure_oracle() {
         // Interacción fina: un binding de match capturado por una closure debe
         // BOXEARSE (vivir en una celda). InitLocal sobre el slot del binding lo
         // maneja, igual que con un `let`. Ambos motores deben coincidir.
@@ -5989,14 +5989,14 @@ mod tests {
     }
 
     #[test]
-    fn match_nested_en_expresiones_oracle() {
+    fn match_nested_in_expressions_oracle() {
         // match como expresión: su valor alimenta otra operación, y el cuerpo de un
         // brazo construye otra variante (resolución dentro del brazo).
         oracle_program(
             "enum Sem { Rojo, Verde }
-             fn opuesto(s: Sem) -> Sem { match (s) { Sem.Rojo => Sem.Verde, Sem.Verde => Sem.Rojo } }
+             fn opposite(s: Sem) -> Sem { match (s) { Sem.Rojo => Sem.Verde, Sem.Verde => Sem.Rojo } }
              fn a_int(s: Sem) -> int { match (s) { Sem.Rojo => 0, Sem.Verde => 1 } }
-             fn main() -> int { a_int(opuesto(Sem.Rojo)) + a_int(opuesto(Sem.Verde)) * 10 }",
+             fn main() -> int { a_int(opposite(Sem.Rojo)) + a_int(opposite(Sem.Verde)) * 10 }",
         );
     }
 
@@ -6062,18 +6062,18 @@ mod tests {
         oracle_program(
             "fn d(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } }
              fn calc(x: int, y: int, z: int) -> Result<int, string> { let q1: int = d(x, y)?; let q2: int = d(q1, z)?; Result.Ok(q1 + q2) }
-             fn desemp(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
-             fn main() -> int { desemp(calc(100, 5, 2)) * 100 + desemp(calc(100, 0, 2)) }",
+             fn unwrap(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
+             fn main() -> int { unwrap(calc(100, 5, 2)) * 100 + unwrap(calc(100, 0, 2)) }",
         );
     }
 
     #[test]
     fn try_option_oracle() {
         oracle_program(
-            "fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
-             fn mas_one(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
-             fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
-             fn main() -> int { desemp(mas_one([41])) * 100 + desemp(mas_one([])) }",
+            "fn first(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
+             fn mas_one(xs: [int]) -> Option<int> { let v: int = first(xs)?; Option.Some(v + 1) }
+             fn unwrap(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
+             fn main() -> int { unwrap(mas_one([41])) * 100 + unwrap(mas_one([])) }",
         );
     }
 
@@ -6084,8 +6084,8 @@ mod tests {
         oracle_stress(
             "fn d(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } }
              fn chain(n: int) -> Result<int, string> { let a: int = d(n, 2)?; let b: int = d(a, 1)?; Result.Ok(a + b) }
-             fn desemp(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
-             fn main() -> int { desemp(chain(40)) }",
+             fn unwrap(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
+             fn main() -> int { unwrap(chain(40)) }",
         );
     }
 
@@ -6128,7 +6128,7 @@ mod tests {
     }
 
     #[test]
-    fn el_gc_libera_ciclos() {
+    fn gc_frees_cycles() {
         // Cada 'make_cycle' crea un ciclo (celda <-> closure) que queda inalcanzable
         // al retornar. Con conteo de referencias se filtrarían (~200 objetos); el
         // mark-and-sweep los libera, así que el heap queda acotado.
@@ -6195,7 +6195,7 @@ mod tests {
     }
 
     #[test]
-    fn ufcs_campo_function_oracle() {
+    fn ufcs_field_function_oracle() {
         // 'op' ES un campo de tipo función: c.op(x) llama al campo, no es UFCS.
         oracle_program(r#"
             struct Caja { op: fn(int) -> int }
@@ -6212,7 +6212,7 @@ mod tests {
         // romper la llamada UFCS bajada.
         oracle_stress(r#"
             fn head(xs: [int]) -> int { xs[0] }
-            fn cola_sum(xs: [int]) -> int {
+            fn tail_sum(xs: [int]) -> int {
                 var s: int = 0;
                 var i: int = 1;
                 while (i < xs.len()) { s = s + xs[i]; i = i + 1; }
@@ -6220,7 +6220,7 @@ mod tests {
             }
             fn main() -> int {
                 let xs: [int] = [10, 20, 30, 40];
-                xs.head() + xs.cola_sum()   // 10 + 90 = 100
+                xs.head() + xs.tail_sum()   // 10 + 90 = 100
             }
         "#);
     }
@@ -6333,7 +6333,7 @@ mod tests {
     // ----- M8.1: inferencia local (solo checker; el runtime no cambia) -----
 
     #[test]
-    fn inferencia_local_oracle() {
+    fn local_inference_oracle() {
         // Variables inferidas (int, [int], struct, enum genérico) deben dar el mismo
         // resultado en ambos motores: la inferencia se borra antes de ejecutar.
         oracle_program(r#"
@@ -6356,28 +6356,28 @@ mod tests {
     // ----- M9.1: traits (erasure; ambos motores ven funciones y llamadas ordinarias) -----
 
     #[test]
-    fn traits_dispatch_estatico_oracle() {
+    fn traits_static_dispatch_oracle() {
         // Un trait implementado para un struct, un enum y un primitivo: los métodos se
         // bajan a funciones mangladas y las llamadas por punto a llamadas ordinarias,
         // así que la VM y el intérprete deben coincidir sin tocar el runtime.
         oracle_program(r#"
-            trait Valor { fn valor(self) -> int; }
+            trait Valor { fn value(self) -> int; }
             struct Punto { x: int, y: int }
             enum Moneda { Cara, Cruz }
-            impl Valor for Punto { fn valor(self) -> int { self.x + self.y } }
+            impl Valor for Punto { fn value(self) -> int { self.x + self.y } }
             impl Valor for Moneda {
-                fn valor(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } }
+                fn value(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } }
             }
-            impl Valor for int { fn valor(self) -> int { self } }
+            impl Valor for int { fn value(self) -> int { self } }
             fn main() -> int {
                 let p = Punto { x: 3, y: 4 };
-                p.valor() + Moneda.Cara.valor() + 10.valor()   // 7 + 1 + 10 = 18
+                p.value() + Moneda.Cara.value() + 10.value()   // 7 + 1 + 10 = 18
             }
         "#);
     }
 
     #[test]
-    fn traits_self_y_methods_internos_oracle() {
+    fn traits_self_and_internal_methods_oracle() {
         // `Self` en el retorno, parámetros extra, y un método que llama a otro del mismo
         // impl (`self.sumar(self)`): bajo estrés del GC para validar las raíces.
         oracle_stress(r#"
@@ -6402,21 +6402,21 @@ mod tests {
     // ----- M9.2: bounds vía paso de diccionarios -----
 
     #[test]
-    fn bounds_diccionarios_oracle() {
+    fn bounds_dictionaries_oracle() {
         // Genérico acotado sobre struct y primitivo + reenvío entre genéricos. Los
         // diccionarios son valores función; ambos motores deben coincidir.
         oracle_program(r#"
-            trait Valor { fn valor(self) -> int; }
+            trait Valor { fn value(self) -> int; }
             struct Punto { x: int, y: int }
-            impl Valor for Punto { fn valor(self) -> int { self.x + self.y } }
-            impl Valor for int { fn valor(self) -> int { self } }
-            fn double_valor<T: Valor>(x: T) -> int { x.valor() + x.valor() }
-            fn sum_tres<T: Valor>(a: T, b: T, c: T) -> int {
-                double_valor(a) + b.valor() + c.valor()   // reenvío del diccionario
+            impl Valor for Punto { fn value(self) -> int { self.x + self.y } }
+            impl Valor for int { fn value(self) -> int { self } }
+            fn double_value<T: Valor>(x: T) -> int { x.value() + x.value() }
+            fn sum_three<T: Valor>(a: T, b: T, c: T) -> int {
+                double_value(a) + b.value() + c.value()   // reenvío del diccionario
             }
             fn main() -> int {
                 let p = Punto { x: 3, y: 4 };
-                double_valor(p) + double_valor(10) + sum_tres(p, p, p)   // 14 + 20 + 28 = 62
+                double_value(p) + double_value(10) + sum_three(p, p, p)   // 14 + 20 + 28 = 62
             }
         "#);
     }
@@ -6457,7 +6457,7 @@ mod tests {
     }
 
     #[test]
-    fn impl_generic_bounded_llamada_directa_oracle() {
+    fn impl_generic_bounded_direct_call_oracle() {
         // `impl<T: Mostrable> Mostrable for Caja<T>`: el cuerpo usa T.show() (vía el
         // diccionario interno). Llamada directa sobre Caja<int> → el dict interno es el de
         // int (plano). Es M9.2b-1: el caso anidado (pasar Caja a otro genérico) es -2.
@@ -6474,7 +6474,7 @@ mod tests {
     }
 
     #[test]
-    fn impl_generic_diccionario_nested_oracle() {
+    fn impl_generic_nested_dictionary_oracle() {
         // M9.2b-2: pasar un Caja<int> a otro genérico acotado. El diccionario de Caja<int> es
         // un **closure** que captura el de int. Ambos motores deben coincidir.
         oracle_program(r#"
@@ -6491,7 +6491,7 @@ mod tests {
     }
 
     #[test]
-    fn impl_generic_nested_profundo_stress() {
+    fn impl_generic_deeply_nested_stress() {
         // Caja<Caja<int>>: un diccionario anidado que contiene otro. Bajo estrés del GC,
         // porque los closures-diccionario son objetos del heap (sus raíces deben trazarse).
         oracle_stress(r#"
@@ -6879,16 +6879,16 @@ mod tests {
         // parse_int es determinista (no toca stdin) → oráculo VM↔intérprete. Construye Option
         // en el prelude (raylang); el resultado debe coincidir en ambos motores.
         oracle_program(r#"
-            fn valor(o: Option<int>, def: int) -> int {
+            fn value_or(o: Option<int>, def: int) -> int {
                 match (o) {
                     Option.Some(n) => n,
                     Option.None => def,
                 }
             }
             fn main() -> int {
-                let a = valor(parse_int("42"), 0);        // 42
-                let b = valor(parse_int("  -7 "), 0);     // -7 (trim)
-                let c = valor(parse_int("xyz"), 100);     // 100 (None)
+                let a = value_or(parse_int("42"), 0);        // 42
+                let b = value_or(parse_int("  -7 "), 0);     // -7 (trim)
+                let c = value_or(parse_int("xyz"), 100);     // 100 (None)
                 a + b + c                                 // 135
             }
         "#);
@@ -7020,14 +7020,14 @@ mod tests {
     // ----- M9.3a: métodos por defecto -----
 
     #[test]
-    fn methods_por_default_oracle() {
+    fn default_methods_oracle() {
         // Defecto heredado, defecto que llama a otro método, y redefinición. El método
         // sintetizado es una función ordinaria: ambos motores deben coincidir.
         oracle_program(r#"
             trait Valor {
                 fn base(self) -> int;
                 fn double(self) -> int { self.base() + self.base() }   // defecto usa otro
-                fn diez(self) -> int { 10 }                            // defecto constante
+                fn ten(self) -> int { 10 }                            // defecto constante
             }
             struct A { n: int }
             impl Valor for A { fn base(self) -> int { self.n } }       // hereda doble y diez
@@ -7039,13 +7039,13 @@ mod tests {
             fn main() -> int {
                 let a = A { n: 3 };
                 let b = B { n: 4 };
-                a.double() + a.diez() + b.double() + b.diez()   // 6 + 10 + 400 + 10 = 426
+                a.double() + a.ten() + b.double() + b.ten()   // 6 + 10 + 400 + 10 = 426
             }
         "#);
     }
 
     #[test]
-    fn methods_por_default_via_bound_oracle() {
+    fn default_methods_via_bound_oracle() {
         // Un método por defecto invocado desde un genérico acotado (M9.2 + M9.3a).
         oracle_stress(r#"
             trait Saludo {
@@ -7152,22 +7152,22 @@ mod tests {
     }
 
     #[test]
-    fn default_con_self_heredado_por_dos_impls() {
+    fn default_with_self_inherited_by_two_impls() {
         // Regresión: un método por defecto que llama a `self.m()` y es heredado por DOS
         // impls. Cada cuerpo clonado debe resolver a SUS métodos (no compartir destino).
         oracle_program(r#"
             trait Animal {
-                fn sonido(self) -> int;
-                fn double_sonido(self) -> int { self.sonido() + self.sonido() }   // defecto
+                fn sound(self) -> int;
+                fn double_sound(self) -> int { self.sound() + self.sound() }   // defecto
             }
             struct Perro { v: int }
-            impl Animal for Perro { fn sonido(self) -> int { self.v } }            // hereda
+            impl Animal for Perro { fn sound(self) -> int { self.v } }            // hereda
             struct Gato { v: int }
-            impl Animal for Gato { fn sonido(self) -> int { self.v * 10 } }        // hereda
+            impl Animal for Gato { fn sound(self) -> int { self.v * 10 } }        // hereda
             fn main() -> int {
                 let p = Perro { v: 3 };
                 let g = Gato { v: 4 };
-                p.double_sonido() + g.double_sonido()   // (3+3) + (40+40) = 6 + 80 = 86
+                p.double_sound() + g.double_sound()   // (3+3) + (40+40) = 6 + 80 = 86
             }
         "#);
     }
@@ -7178,12 +7178,12 @@ mod tests {
         // trazar ambos. Bajo estrés (recolecta en cada punto seguro), un fallo de raíz
         // cambiaría el resultado o reventaría.
         oracle_stress(r#"
-            trait Valor { fn valor(self) -> int; fn double(self) -> int { self.valor() + self.valor() } }
+            trait Valor { fn value(self) -> int; fn double(self) -> int { self.value() + self.value() } }
             struct A { n: int }
-            impl Valor for A { fn valor(self) -> int { self.n } }
+            impl Valor for A { fn value(self) -> int { self.n } }
             struct B { n: int }
-            impl Valor for B { fn valor(self) -> int { self.n + 1 } fn double(self) -> int { self.n } }
-            fn usar(x: dyn Valor) -> int { x.valor() + x.double() }
+            impl Valor for B { fn value(self) -> int { self.n + 1 } fn double(self) -> int { self.n } }
+            fn usar(x: dyn Valor) -> int { x.value() + x.double() }
             fn main() -> int {
                 let a: dyn Valor = A { n: 10 };
                 let b: dyn Valor = B { n: 20 };

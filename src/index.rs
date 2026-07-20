@@ -404,7 +404,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn distingue_specs_de_registro() {
+    fn distinguishes_registry_specs() {
         assert!(is_registry_spec("1.2.0"));
         assert!(is_registry_spec("^1.2"));
         assert!(is_registry_spec("*"));
@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn lee_y_resolves_del_index() {
+    fn reads_and_resolves_from_the_index() {
         let dir = std::env::temp_dir().join("ray_index_test_unit");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -438,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn append_version_es_inmutable() {
+    fn append_version_is_immutable() {
         let dir = std::env::temp_dir().join("ray_index_test_append");
         let _ = std::fs::remove_dir_all(&dir);
         // Publica 1.0.0 en un índice nuevo (se crea el archivo).

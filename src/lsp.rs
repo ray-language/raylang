@@ -3612,7 +3612,7 @@ mod json {
         use super::*;
 
         #[test]
-        fn parses_objeto_nested() {
+        fn parses_nested_object() {
             let v = parse(r#"{"a":1,"b":[true,null,"x"],"c":{"d":-2.5}}"#).unwrap();
             assert_eq!(v.get("a"), Some(&Json::Num(1.0)));
             assert_eq!(v.get("b").unwrap().as_array().unwrap().len(), 3);
@@ -3620,7 +3620,7 @@ mod json {
         }
 
         #[test]
-        fn desescapa_strings() {
+        fn unescapes_strings() {
             let v = parse(r#""línea\n\t\"fin\"""#).unwrap();
             assert_eq!(v.as_str(), Some("línea\n\t\"fin\""));
             // \uXXXX (BMP) y pareja sustituta (emoji).
@@ -3629,7 +3629,7 @@ mod json {
         }
 
         #[test]
-        fn serializa_y_reparsea_equal() {
+        fn serialize_and_reparse_equal() {
             let original = obj_from(vec![
                 ("jsonrpc", Json::Str("2.0".into())),
                 ("id", Json::Num(7.0)),
@@ -3653,7 +3653,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn analizar_all_public_various_errors() {
+    fn analyze_all_public_various_errors() {
         // M33c: dos errores de tipos → dos diagnósticos.
         let ds = analyze_all("fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { 0 }");
         assert_eq!(ds.len(), 2, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
@@ -3669,7 +3669,7 @@ mod tests {
     }
 
         #[test]
-    fn analiza_program_valid_sin_errors() {
+    fn analyzes_valid_program_without_errors() {
         assert!(analyze("fn main() -> int { 1 + 2 }").is_none());
     }
 
@@ -3705,7 +3705,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_submodule_sin_main_y_import_por_path() {
+    fn diagnostics_submodule_without_main_and_import_by_path() {
         // Reproduce dos problemas al abrir un ARCHIVO DE MÓDULO (no la entrada) en el editor:
         //   1. Un submódulo `pub` sin `main` marcaba "falta la función de entrada 'main'".
         //   2. Un `import geo/util;` (ruta absoluta desde la raíz) no resolvía, porque el loader
@@ -3788,7 +3788,7 @@ mod tests {
     }
 
     #[test]
-    fn formatting_reemplaza_el_documento() {
+    fn formatting_replaces_the_document() {
         let mut docs = HashMap::new();
         let uri = "file:///t.ray".to_string();
         // Código mal formateado (espaciado irregular) → un edit que cubre todo el buffer.
@@ -3949,7 +3949,7 @@ mod tests {
     }
 
     #[test]
-    fn document_highlight_resalta_ocurrencias() {
+    fn document_highlight_highlights_occurrences() {
         let mut docs = HashMap::new();
         let uri = "file:///t.ray".to_string();
         // `x` se declara y se usa dos veces.
@@ -4026,7 +4026,7 @@ mod tests {
     }
 
     #[test]
-    fn name_fachada_colapsa_namespaces() {
+    fn facade_name_collapses_namespaces() {
         // Sin imports conocidos → fallback `primer.último` (respeta la cápsula, sin `::`).
         assert_eq!(facade_name("geo::formas::circle::Circulo", &[]), "geo.Circulo");
         assert_eq!(facade_name("geo::area: fn(geo::formas::circle::Circulo) -> int", &[]),
@@ -4045,7 +4045,7 @@ mod tests {
     }
 
     #[test]
-    fn definicion_cross_modules() {
+    fn definition_cross_modules() {
         let dir = std::env::temp_dir().join("ray_lsp_def_mod");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -4066,7 +4066,7 @@ mod tests {
     }
 
     #[test]
-    fn references_cruzan_modules() {
+    fn references_cross_modules() {
         let dir = std::env::temp_dir().join("ray_lsp_refs_mod");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -4115,14 +4115,14 @@ mod tests {
     }
 
     #[test]
-    fn uri_a_path_decodifica() {
+    fn uri_to_path_decodes() {
         assert_eq!(uri_to_path("file:///a/b/c.ray"), Some(PathBuf::from("/a/b/c.ray")));
         assert_eq!(uri_to_path("file:///a/mi%20carpeta/x.ray"), Some(PathBuf::from("/a/mi carpeta/x.ray")));
         assert_eq!(uri_to_path("untitled:Untitled-1"), None); // buffer sin archivo → single-file
     }
 
     #[test]
-    fn references_de_variable_local() {
+    fn references_of_local_variable() {
         // `let x = 1; x + x` → declaración + 2 usos.
         let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
         // Cursor sobre el primer uso de `x` (línea 3 → 0-based 2, col 2).
@@ -4137,7 +4137,7 @@ mod tests {
     }
 
     #[test]
-    fn references_distinguen_ambitos() {
+    fn references_distinguish_scopes() {
         // Dos `x` en funciones distintas no se mezclan (claves de declaración distintas).
         let src = "fn f(a: int) -> int {\n  let x = a;\n  x + x\n}\nfn main() -> int {\n  let x = 9;\n  x\n}\n";
         // El `x` de `f` (línea 3 → 0-based 2): 2 usos.
@@ -4160,7 +4160,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_produce_workspace_edit() {
+    fn rename_produces_workspace_edit() {
         let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
         let msg = json::parse(
             r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2},"newName":"y"}}"#
@@ -4194,7 +4194,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_offers_snippet_de_closure_para_spawn_y_scope() {
+    fn completion_offers_closure_snippet_for_spawn_and_scope() {
         // `spawn`/`scope` toman una función anónima → un ítem-extra inserta `name(fn() { … });`.
         let src = "fn main() -> int { 0 }\n";
         let msg = json::parse(
@@ -4314,7 +4314,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_after_pipe_inserta_con_espacio_y_espacio_dispara() {
+    fn completion_after_pipe_inserts_with_space_and_space_triggers() {
         let src = "fn duplicate(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |>\n    0\n}\n";
         // (a) Pegado al `|>` (cursor tras `>`): el insertText lleva un espacio inicial → `|> duplicar()`.
         let msg = json::parse(
@@ -4444,7 +4444,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_symbols_importados_y_variantes_de_enum() {
+    fn completion_imported_symbols_and_enum_variants() {
         // Proyecto: un módulo `figuras` con una función `pub`, un struct y un enum; el archivo de
         // entrada los importa.
         let base = std::env::temp_dir().join("ray_lsp_import_syms_test");
@@ -4493,7 +4493,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_y_signature_de_functions_asociadas() {
+    fn completion_and_signature_of_associated_functions() {
         // M48.1: `Channel.` completa `new`/`bounded` (kind 3); el sig help de `Channel.bounded(` sale
         // del registro de asociadas.
         let uri = "file:///t.ray";
@@ -4555,7 +4555,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_snippet_con_placeholders_por_parameter() {
+    fn completion_snippet_with_placeholders_per_parameter() {
         // M46c: el insertText usa un placeholder por parámetro (nombre), navegable con Tab.
         let insert = |src: &str, line: usize, ch: usize, label: &str| -> Option<String> {
             let mut docs = HashMap::new();
@@ -4632,7 +4632,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_de_const_y_ty_incorporado() {
+    fn hover_of_const_and_builtin_type() {
         let hover_of = |src: &str, line: usize, ch: usize| -> String {
             let mut docs = HashMap::new();
             docs.insert("file:///t.ray".to_string(), src.to_string());
@@ -4651,7 +4651,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_offers_consts_y_types_incorporados() {
+    fn completion_offers_builtin_consts_and_types() {
         let comp = |src: &str, line: usize, ch: usize| -> Vec<String> {
             let mut docs = HashMap::new();
             docs.insert("file:///t.ray".to_string(), src.to_string());
@@ -4671,7 +4671,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_shows_la_signature_en_el_detalle() {
+    fn completion_shows_signature_in_detail() {
         // M46a: los ítems invocables llevan `labelDetails` con params y retorno.
         let detail_of = |src: &str, line: usize, ch: usize, label: &str| -> Option<(String, String)> {
             let mut docs = HashMap::new();
@@ -4699,7 +4699,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_sin_punto_follows_siendo_de_file() {
+    fn completion_without_dot_stays_file_completion() {
         // Sin `.` delante, la completion es la de archivo (regresión de M10.2e).
         let src = "fn double(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
         let labels = completion_labels(src, 1, 19);
@@ -4707,7 +4707,7 @@ mod tests {
     }
 
     #[test]
-    fn analiza_error_de_types() {
+    fn analyzes_type_error() {
         let d = analyze("fn main() -> int { 1 + true }").expect("debería haber error");
         assert_eq!(d.line, 1);
         assert!(d.col >= 1);
@@ -4715,7 +4715,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_uses_coordenadas_0_basadas() {
+    fn diagnostic_uses_0_based_coordinates() {
         // Error en la línea 2: la fase reporta 1-basado; LSP debe verlo 0-basado.
         let src = "fn main() -> int {\n    1 + true\n}";
         let d = analyze(src).unwrap();
@@ -4861,7 +4861,7 @@ mod tests {
     }
 
     #[test]
-    fn inteligencia_semantica_en_templates() {
+    fn semantic_intelligence_in_templates() {
         // M55: hover con tipos REALES, completion de miembros tras `.`, ir-a-definición y
         // signature help DENTRO de las expresiones del template — todo vía el módulo generado +
         // el line map (la posición del cursor se traduce al generado y de vuelta).

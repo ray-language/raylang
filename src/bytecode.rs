@@ -718,7 +718,7 @@ mod tests {
 
     /// M29.3: `add_constant` deduplica — una constante idéntica reutiliza su índice.
     #[test]
-    fn add_constant_deduplica() {
+    fn add_constant_deduplicates() {
         let mut c = Chunk::new();
         let i0 = c.add_constant(Value::Int(7));
         let i1 = c.add_constant(Value::Int(7)); // duplicado → mismo índice

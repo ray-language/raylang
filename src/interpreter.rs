@@ -2234,7 +2234,7 @@ mod tests {
     }
 
     #[test]
-    fn booleanos_y_comparaciones() {
+    fn booleans_and_comparisons() {
         assert_eq!(eval_as("bool", "3 < 5"), Value::Bool(true));
         assert_eq!(eval_as("bool", "3 == 5"), Value::Bool(false));
         assert_eq!(eval_as("bool", "!(2 > 1)"), Value::Bool(false));
@@ -2243,7 +2243,7 @@ mod tests {
     }
 
     #[test]
-    fn cortocircuito_no_evalua_la_derecha() {
+    fn short_circuit_does_not_evaluate_right() {
         // Si '&&' NO cortocircuitara, evaluaría '1 / 0' y reventaría. Como la
         // izquierda es false, ni lo toca → resultado false, sin error.
         assert_eq!(eval_as("bool", "false && (1 / 0 == 0)"), Value::Bool(false));
@@ -2252,7 +2252,7 @@ mod tests {
     }
 
     #[test]
-    fn if_como_expression() {
+    fn if_as_expression() {
         assert_eq!(run_ok("fn main() -> int { if (true) { 1 } else { 2 } }"), Value::Int(1));
         assert_eq!(
             run_ok("fn main() -> int { let x: int = -4; if (x < 0) { -x } else { x } }"),
@@ -2261,7 +2261,7 @@ mod tests {
     }
 
     #[test]
-    fn variables_mutation_y_while() {
+    fn variables_mutation_and_while() {
         // Suma 0+1+2+3+4 = 10.
         let src = r#"
 fn main() -> int {
@@ -2278,7 +2278,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn factorial_iterativo() {
+    fn iterative_factorial() {
         let src = r#"
 fn main() -> int {
     var n: int = 5;
@@ -2319,7 +2319,7 @@ fn main() -> int { sign(-7) + sign(0) + sign(42) }
     }
 
     #[test]
-    fn scoping_lexico_la_function_no_ve_al_llamador() {
+    fn lexical_scoping_function_does_not_see_caller() {
         // 'g' usa su propio parámetro 'x'; no ve el 'x' de 'main'. Si hubiera
         // scoping dinámico, esto daría otro resultado.
         let src = r#"
@@ -2333,7 +2333,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn shadowing_restaura_el_valor_exterior() {
+    fn shadowing_restores_outer_value() {
         let src = r#"
 fn main() -> int {
     let x: int = 1;
@@ -2345,7 +2345,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn division_por_cero_es_error_de_execution() {
+    fn division_by_zero_is_execution_error() {
         let e = run_err("fn main() -> int { 10 / 0 }");
         assert!(e.msg.contains("division"));
         let e = run_err("fn main() -> int { 10 % 0 }");
@@ -2355,7 +2355,7 @@ fn main() -> int {
     // ----- M5.2: match (ejecución en el intérprete) -----
 
     #[test]
-    fn match_recorre_list_recursiva() {
+    fn match_traverses_recursive_list() {
         let src = r#"
 enum Lista { Cons(int, Lista), Nil }
 fn length(xs: Lista) -> int {
@@ -2373,7 +2373,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn match_selecciona_el_branch_correcto() {
+    fn match_selects_correct_branch() {
         let src = r#"
 enum Figura { Circulo(int), Rect(int, int), Punto }
 fn area(f: Figura) -> int {
@@ -2400,7 +2400,7 @@ fn main() -> int { n(E.Dos) * 100 + n(E.Otro) }
     }
 
     #[test]
-    fn try_propagates_y_desempaqueta() {
+    fn try_propagates_and_unwraps() {
         let src = r#"
 fn d(a: int, b: int) -> Result<int, string> {
     if (b == 0) { Result.Err("cero") } else { Result.Ok(a / b) }
@@ -2430,7 +2430,7 @@ fn main() -> int { desemp(mas_one([41])) * 100 + desemp(mas_one([])) }
     }
 
     #[test]
-    fn match_body_construye_enum() {
+    fn match_body_constructs_enum() {
         // El cuerpo de un brazo puede construir otra variante (resolución dentro del
         // brazo): comprobamos la cadena completa devolviendo un int derivado.
         let src = r#"

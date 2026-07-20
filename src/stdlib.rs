@@ -72,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn modules_conocidos_resuelven() {
+    fn known_modules_resolve() {
         assert!(embedded("std/math").is_some());
         assert!(embedded("std/text").is_some());
         assert!(embedded("std/sort").is_some());
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn la_source_embebida_no_esta_empty() {
+    fn the_embedded_source_is_not_empty() {
         assert!(embedded("std/math").unwrap().contains("pub fn gcd"));
         assert!(embedded("std/text").unwrap().contains("pub fn capitalize"));
     }

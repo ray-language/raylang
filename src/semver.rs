@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_requisitos() {
+    fn parses_requirements() {
         assert_eq!(VersionReq::parse("1.2.0").unwrap(), VersionReq::Exact(v(1, 2, 0)));
         assert_eq!(VersionReq::parse("=1.2.0").unwrap(), VersionReq::Exact(v(1, 2, 0)));
         assert_eq!(VersionReq::parse("1.2").unwrap(), VersionReq::Exact(v(1, 2, 0)));
@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn casa_requisitos() {
+    fn matches_requirements() {
         assert!(VersionReq::parse("^1.2.0").unwrap().matches(&v(1, 5, 0)));
         assert!(!VersionReq::parse("^1.2.0").unwrap().matches(&v(2, 0, 0)));
         assert!(!VersionReq::parse("^1.2.0").unwrap().matches(&v(1, 1, 0)));
@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn ordena_y_casa_pre_releases() {
+    fn orders_and_matches_pre_releases() {
         // Orden semver §11: pre-release < final; identificadores numéricos por valor.
         assert!(vpre(1, 0, 0, "rc1") < v(1, 0, 0));
         assert!(v(0, 9, 9) < vpre(1, 0, 0, "rc1"));

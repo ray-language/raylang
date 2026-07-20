@@ -1,8 +1,10 @@
 //! La convención de nombres (CLAUDE.md §Convenciones) se auto-defiende: los
-//! IDENTIFICADORES van en inglés en todo el código del proyecto — `src/`,
-//! `tests/`, `selfhost/`, `packages/` y `benchmarks/` (incluidos los nombres de
-//! tests y los snippets raylang embebidos). `examples/` y `book/` quedan fuera
-//! (código de usuario / material didáctico, más flexible).
+//! IDENTIFICADORES van en inglés en `src/`, `selfhost/`, `packages/` y
+//! `benchmarks/` (incluidos los nombres de test dentro de `#[cfg(test)] mod
+//! tests` y los snippets raylang embebidos ahí). **`tests/` (integración) queda
+//! FUERA de la política** (decisión 20 jul 2026, ver `docs/arqueo-spanglish.md`):
+//! sus nombres de test pueden estar en español. `examples/` y `book/` también
+//! quedan fuera (código de usuario / material didáctico, más flexible).
 //!
 //! Detección pragmática: se extraen los identificadores DECLARADOS (`fn`,
 //! `let [mut]`, `var`) de los `.rs`/`.ray`, se parten por `_` y se comparan
@@ -14,8 +16,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Directorios bajo la política.
-const EN_POLITICA: &[&str] = &["src", "tests", "selfhost", "packages", "benchmarks"];
+/// Directorios bajo la política. `tests/` queda excluido deliberadamente.
+const EN_POLITICA: &[&str] = &["src", "selfhost", "packages", "benchmarks"];
 
 /// Palabras clave que introducen una declaración con nombre.
 const DECLARADORES: &[&str] = &["fn ", "let mut ", "let ", "var "];

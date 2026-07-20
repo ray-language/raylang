@@ -1894,7 +1894,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_all_se_recupera_y_acumula() {
+    fn parse_all_recovers_and_accumulates() {
         // M33c: dos ítems rotos → dos errores; los ítems sanos entre medias sobreviven.
         let src = "fn f() -> int { let = 1; 0 }\nfn buena() -> int { 42 }\nstruct P { x int }\nfn main() -> int { buena() }";
         let toks = crate::lexer::lex(src).expect("lex ok");
@@ -1909,7 +1909,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_all_acota_la_cascada() {
+    fn parse_all_bounds_the_cascade() {
         // Un fuente patológico no produce errores sin fin: el tope corta.
         let src = "fn ( fn ( fn ( fn ( fn ( fn (".repeat(20);
         let toks = crate::lexer::lex(&src).expect("lex ok");
@@ -1918,7 +1918,7 @@ mod tests {
     }
 
         #[test]
-    fn el_nesting_hostil_se_corta_con_error() {
+    fn hostile_nesting_cuts_off_with_error() {
         // M33d: sin límite, 100k niveles desbordan la pila y ABORTAN el proceso.
         // Con pila grande para que el guard (y no la pila del hilo de test) sea el límite.
         crate::with_big_stack(|| {
@@ -1935,7 +1935,7 @@ mod tests {
     }
 
         #[test]
-    fn el_error_sintactico_underscores_el_token_ofensor() {
+    fn syntax_error_underlines_the_offending_token() {
         // M33a: el error lleva la extensión del token que lo provocó.
         let tokens = crate::lexer::lex("fn main() -> int { let x = enum; x }").expect("lex ok");
         let e = parse(tokens).unwrap_err();
@@ -1968,14 +1968,14 @@ mod tests {
     }
 
     #[test]
-    fn from_import_admite_path_de_directories() {
+    fn from_import_admits_directory_path() {
         let prog = parse_prog("from geo/formas import area;\nfn main() -> int { 0 }\n");
         assert_eq!(prog.from_imports[0].module, "geo/formas");
         assert!(!prog.from_imports[0].is_pub, "un 'from' normal no es reexport");
     }
 
     #[test]
-    fn pub_from_marca_reexport() {
+    fn pub_from_marks_reexport() {
         // M11.6a: `pub from M import …` es un reexport (cara pública de un mod.ray).
         let prog = parse_prog("pub from geo/formas/circle import area, Circulo;\nfn main() -> int { 0 }\n");
         assert_eq!(prog.from_imports.len(), 1);
@@ -1999,7 +1999,7 @@ mod tests {
     }
 
     #[test]
-    fn ty_qualified_por_modulo_keeps_el_punto() {
+    fn qualified_type_by_module_keeps_the_dot() {
         // M11.3c-3: `M.Tipo` en posición de tipo → `Struct("M.Tipo")` (el loader resuelve el `.`).
         let prog = parse_prog("fn f(p: geo.Punto) -> mods.Color { p }\nfn main() -> int { 0 }\n");
         assert_eq!(prog.functions[0].params[0].ty, Type::Struct("geo.Punto".into(), vec![]));
@@ -2007,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_de_struct_qualified_keeps_el_punto() {
+    fn qualified_struct_literal_keeps_the_dot() {
         // `M.Tipo { ... }` → `StructLit { name: "M.Tipo", ... }`.
         let e = parse_expr("geo.Punto { x: 1, y: 2 }");
         match &e.kind {
@@ -2020,7 +2020,7 @@ mod tests {
     }
 
     #[test]
-    fn patron_de_variant_qualified_keeps_el_punto() {
+    fn qualified_variant_pattern_keeps_the_dot() {
         // `M.Enum.Variante` en un patrón → `enum_name: "M.Enum"`, `variant: "Variante"`.
         let e = parse_expr("match (c) { geo.Color.Verde(n) => n, _ => 0, }");
         let ExprKind::Match { arms, .. } = &e.kind else { panic!("se esperaba match") };
@@ -2176,7 +2176,7 @@ mod tests {
     }
 
     #[test]
-    fn precedence_multiplicacion_about_sum() {
+    fn precedence_multiplication_over_sum() {
         assert_eq!(sx(&parse_expr("1 + 2 * 3")), "(+ 1 (* 2 3))");
         assert_eq!(sx(&parse_expr("1 * 2 + 3")), "(+ (* 1 2) 3)");
     }
@@ -2193,13 +2193,13 @@ mod tests {
     }
 
     #[test]
-    fn asociatividad_izquierda() {
+    fn left_associativity() {
         assert_eq!(sx(&parse_expr("1 - 2 - 3")), "(- (- 1 2) 3)");
         assert_eq!(sx(&parse_expr("10 / 2 / 5")), "(/ (/ 10 2) 5)");
     }
 
     #[test]
-    fn parentesis_cambian_el_order() {
+    fn parentheses_change_the_order() {
         assert_eq!(sx(&parse_expr("(1 + 2) * 3")), "(* (+ 1 2) 3)");
     }
 
@@ -2213,14 +2213,14 @@ mod tests {
     }
 
     #[test]
-    fn unarios() {
+    fn unary_operators() {
         assert_eq!(sx(&parse_expr("-x + 1")), "(+ (- x) 1)");
         assert_eq!(sx(&parse_expr("!a && b")), "(&& (! a) b)");
         assert_eq!(sx(&parse_expr("--5")), "(- (- 5))");
     }
 
     #[test]
-    fn calls_con_y_sin_argumentos() {
+    fn calls_with_and_without_arguments() {
         assert_eq!(sx(&parse_expr("f()")), "(call f [])");
         assert_eq!(sx(&parse_expr("f(1, 2 + 3)")), "(call f [1 (+ 2 3)])");
         assert_eq!(sx(&parse_expr("g(h(x))")), "(call g [(call h [x])])");
@@ -2236,7 +2236,7 @@ mod tests {
     }
 
     #[test]
-    fn asignacion_a_index() {
+    fn assignment_to_index() {
         assert_eq!(
             sx(&parse_expr("{ a[0] = 9; a[0] }")),
             "{(index a 0) = 9; (index a 0)}"
@@ -2244,7 +2244,7 @@ mod tests {
     }
 
     #[test]
-    fn structs_literal_y_campo() {
+    fn struct_literal_and_field() {
         assert_eq!(sx(&parse_expr("Punto { x: 1, y: 2 }")), "Punto {x: 1, y: 2}");
         assert_eq!(sx(&parse_expr("p.x")), "(field p x)");
         assert_eq!(sx(&parse_expr("p.pos.x")), "(field (field p pos) x)");
@@ -2252,7 +2252,7 @@ mod tests {
     }
 
     #[test]
-    fn operador_try_se_parses() {
+    fn try_operator_parses() {
         // `?` es postfijo y se encadena con llamadas/campos.
         assert_eq!(sx(&parse_expr("f(x)?")), "(try (call f [x]))");
         assert_eq!(sx(&parse_expr("a?.b")), "(field (try a) b)");
@@ -2322,7 +2322,7 @@ mod tests {
     }
 
     #[test]
-    fn if_como_expression() {
+    fn if_as_expression() {
         assert_eq!(
             sx(&parse_expr("if (x < 0) { -x } else { x }")),
             "(if (< x 0) {(- x)} {x})"
@@ -2338,7 +2338,7 @@ mod tests {
     }
 
     #[test]
-    fn block_distingue_statements_de_valor_final() {
+    fn block_distinguishes_statements_from_final_value() {
         // 'x = 1;' es sentencia; 'x + 1' (sin ';') es el valor del bloque.
         let s = sx(&parse_expr("{ var x: int = 0; x = 1; x + 1 }"));
         assert_eq!(s, "{var x = 0; x = 1; (+ x 1)}");
@@ -2406,7 +2406,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn positions_se_propagan() {
+    fn positions_propagate() {
         // El '+' hereda la posición de su operando izquierdo '1' (col 1).
         let e = parse_expr("1 + 2");
         assert_eq!((e.line, e.col), (1, 1));
@@ -2439,7 +2439,7 @@ fn main() -> int {
     // ----- M7.2: pipelines (desugaring a Call) -----
 
     #[test]
-    fn pipeline_inserta_receptor_como_primer_arg() {
+    fn pipeline_inserts_receiver_as_first_arg() {
         // `x |> f` ≡ f(x); `x |> f(a)` ≡ f(x, a).
         assert_eq!(sx(&parse_expr("x |> f")), "(call f [x])");
         assert_eq!(sx(&parse_expr("x |> f(a)")), "(call f [x a])");
@@ -2447,7 +2447,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn pipeline_es_asociativo_a_la_izquierda() {
+    fn pipeline_is_left_associative() {
         // `x |> f |> g` ≡ g(f(x)).
         assert_eq!(sx(&parse_expr("x |> f |> g")), "(call g [(call f [x])])");
         assert_eq!(
@@ -2563,7 +2563,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn parse_method_por_default() {
+    fn parse_default_method() {
         let prog = parse_prog(r#"
             trait T {
                 fn req(self) -> int;

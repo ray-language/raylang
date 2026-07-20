@@ -90,7 +90,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dibuja_la_linea_y_el_cursor() {
+    fn draws_the_line_and_the_cursor() {
         let src = "fn main() -> int {\n    let x = 1 + true;\n    x\n}\n";
         let out = render(src, 2, 13, 1, "error de types en 2:13: no se pueden add int y bool");
         let expected = "\
@@ -113,7 +113,7 @@ error de syntax en 1:13: se esperaba one expresión, se encontró While
     }
 
     #[test]
-    fn el_subrayado_se_acota_a_la_linea() {
+    fn the_underline_is_clamped_to_the_line() {
         // Una extensión que se pasa del final de la línea se recorta (nunca desborda).
         let src = "let x\n";
         let out = render(src, 1, 5, 99, "err");
@@ -124,14 +124,14 @@ error de syntax en 1:13: se esperaba one expresión, se encontró While
     }
 
     #[test]
-    fn el_cursor_apunta_a_la_columna_1() {
+    fn the_cursor_points_at_column_1() {
         let src = "let x = 5\n";
         let out = render(src, 1, 1, 1, "err");
         assert_eq!(out, "err\n  1 | let x = 5\n    | ^");
     }
 
     #[test]
-    fn one_linea_larguisima_se_recorta_a_one_ventana() {
+    fn a_very_long_line_is_trimmed_to_a_window() {
         // M33d: la línea se acota alrededor de la columna del error, con `…` en los bordes.
         let line = format!("{}AQUI{}", "x".repeat(500), "y".repeat(500));
         let out = render(&line, 1, 501, 4, "err");
@@ -148,7 +148,7 @@ error de syntax en 1:13: se esperaba one expresión, se encontró While
     }
 
     #[test]
-    fn ice_panica_con_el_prefijo() {
+    fn ice_panics_with_the_prefix() {
         // M33b: el payload de `ice!` lleva el prefijo distinguible.
         let r = std::panic::catch_unwind(|| crate::ice!("mapa sin la clave '{}'", "x"));
         let payload = r.unwrap_err();
@@ -161,7 +161,7 @@ error de syntax en 1:13: se esperaba one expresión, se encontró While
     }
 
     #[test]
-    fn el_banner_asks_reporte() {
+    fn the_banner_asks_to_report() {
         let b = ice_banner("ICE: algo se rompió");
         assert!(b.starts_with("internal compiler error (ICE): ICE: algo se rompió"));
         assert!(b.contains("bug in raylang"), "{b}");
@@ -169,7 +169,7 @@ error de syntax en 1:13: se esperaba one expresión, se encontró While
     }
 
     #[test]
-    fn sin_ubicacion_util_solo_la_header() {
+    fn without_a_usable_location_only_the_header() {
         // Línea fuera de rango: se devuelve solo la cabecera, sin reventar.
         assert_eq!(render("one línea\n", 99, 1, 1, "err"), "err");
         assert_eq!(render("x", 0, 0, 1, "err"), "err");

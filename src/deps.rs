@@ -697,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn reescribe_url_al_mirror() {
+    fn rewrites_url_to_the_mirror() {
         // M90.1: `prefijo/<url-sin-esquema>`; el prefijo puede llevar `/` final y la URL puede no
         // tener esquema (se usa tal cual).
         assert_eq!(
@@ -761,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn mvs_elige_o_fails() {
+    fn mvs_picks_or_fails() {
         let a = GitSpec { url: "u".into(), git_ref: "v1.0.0".into() };
         let b = GitSpec { url: "u".into(), git_ref: "v2.1.0".into() };
         // Misma URL, semver → gana el mayor.

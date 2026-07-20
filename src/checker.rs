@@ -6218,7 +6218,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_forwarders_baja_push_y_len_al_builtin() {
+    fn inline_forwarders_lower_push_and_len_to_builtin() {
         // M52: `a.push(i)` / `a.len()` (métodos de trait forwarder de M48.4) deben quedar
         // reescritos a la llamada al builtin (`__push`/`__len`), no al método manglado.
         let targets =
@@ -6230,7 +6230,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_forwarders_respects_un_local_homonimo() {
+    fn inline_forwarders_respects_a_shadowing_local() {
         // M52 (guarda de sonoridad): si el programa liga una variable `__push`, el inlining hacia
         // ese nombre se desactiva (el compilador resuelve local antes que builtin) y la llamada
         // sigue yendo al método manglado. `__len` no está ligado → sí se inlinea.
@@ -6254,7 +6254,7 @@ mod tests {
     }
 
     #[test]
-    fn trait_len_para_types_incorporados() {
+    fn trait_len_for_builtin_types() {
         // M48.4a: el trait `Len` (prelude) se implementa para string/[T]/Map/bytes → `.len()` despacha
         // por trait; funciona con un bound `T: Len` y con un tipo de usuario que lo implemente.
         assert!(check_src("fn main() -> int { \"hello\".len() + [1,2,3].len() + \"a\".to_bytes().len() }").is_ok());
@@ -6307,7 +6307,7 @@ mod tests {
     }
 
     #[test]
-    fn impl_para_ty_incorporado_must_ser_generic() {
+    fn impl_for_builtin_ty_must_be_generic() {
         // M48.4a: `impl X for [int]` (no plenamente genérico) se rechaza, como `impl X for Caja<int>`.
         let e = check_src("trait X { fn m(self) -> int; }\nimpl X for [int] { fn m(self) -> int { 0 } }\nfn main() -> int { 0 }").unwrap_err();
         assert!(format!("{e}").contains("distinct type parameters") || format!("{e}").contains("expects 1 type parameter"), "{e}");
@@ -6357,7 +6357,7 @@ mod tests {
     }
 
     #[test]
-    fn functions_asociadas_de_ty() {
+    fn associated_functions_of_ty() {
         // M48.1: `Map.new()`/`Channel.new()`/`Channel.bounded(n)` — el tipo lo fija el esperado.
         assert!(check_src("fn main() -> int { let m: Map<string, int> = Map.new(); m.len() }").is_ok());
         assert!(check_src("fn main() { let c: Channel<int> = Channel.new(); }").is_ok());
@@ -6409,7 +6409,7 @@ mod tests {
     }
 
     #[test]
-    fn asignar_a_posicion_de_tupla_es_error() {
+    fn assigning_to_tuple_position_is_error() {
         // M34 (SPEC §5): las posiciones de tupla son de solo lectura. Antes esto era
         // un ICE (pasaba el checker sin bajarse y reventaba ambos motores).
         err_contains(
@@ -6422,7 +6422,7 @@ mod tests {
     }
 
         #[test]
-    fn check_all_acumula_por_function() {
+    fn check_all_accumulates_per_function() {
         // M33c: un error por cuerpo, todos reportados; el primero idéntico al fail-fast.
         let src = "fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { f() + g() }";
         let toks = crate::lexer::lex(src).expect("lex ok");
@@ -6437,7 +6437,7 @@ mod tests {
     }
 
     #[test]
-    fn check_all_con_pasada_temprana_rota_da_un_error() {
+    fn check_all_with_broken_early_pass_gives_one_error() {
         // Un error de la pre-pasada (función duplicada) es fail-fast → exactamente uno,
         // aunque haya además errores de cuerpo más abajo.
         let src = "fn f() -> int { 0 }\nfn f() -> int { 1 }\nfn g() -> int { 1 + true }\nfn main() -> int { 0 }";
@@ -6526,13 +6526,13 @@ fn main() -> int {
     }
 
     #[test]
-    fn arithmetic_mezclada_fails() {
+    fn mixed_arithmetic_fails() {
         err_contains("fn main() -> int { 1 + true }", "requires both operands");
         err_contains("fn main() { let x: float = 1 + 2.0; }", "requires both operands");
     }
 
     #[test]
-    fn condicion_must_ser_bool() {
+    fn condition_must_be_bool() {
         err_contains("fn main() { if (1) { } }", "if condition must be bool");
         err_contains("fn main() { while (1) { } }", "while condition must be bool");
     }
@@ -6551,7 +6551,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn asignar_a_let_fails_pero_a_var_ok() {
+    fn assigning_to_let_fails_but_to_var_ok() {
         err_contains(
             "fn main() { let x: int = 0; x = 1; }",
             "it is immutable",
@@ -6560,13 +6560,13 @@ fn main() -> int {
     }
 
     #[test]
-    fn variable_no_declarada() {
+    fn undeclared_variable() {
         err_contains("fn main() -> int { x }", "not declared");
         err_contains("fn main() { y = 1; }", "not declared");
     }
 
     #[test]
-    fn ty_de_declaracion_must_coincidir() {
+    fn declaration_ty_must_match() {
         err_contains("fn main() { let x: int = true; }", "initialized with bool");
     }
 
@@ -6577,7 +6577,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn return_val_early_sin_valor_final_es_valid() {
+    fn early_return_without_final_value_is_valid() {
         // Gracias al análisis de divergencia, esto es válido aunque no tenga
         // expresión final: todos los caminos retornan.
         let src = r#"
@@ -6610,7 +6610,7 @@ fn main() -> int { sign(3) }
     }
 
     #[test]
-    fn main_obligatoria_y_bien_formada() {
+    fn main_is_mandatory_and_well_formed() {
         err_contains("fn other() -> int { 0 }", "missing entry function 'main'");
         err_contains("fn main(x: int) -> int { x }", "must not take parameters");
         err_contains("fn main() -> bool { true }", "must return int or unit");
@@ -6630,7 +6630,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn function_no_declarada_dos_veces() {
+    fn function_not_declared_twice() {
         err_contains("fn f() {} fn f() {} fn main() {}", "declared twice");
     }
 
@@ -6736,7 +6736,7 @@ fn main() -> int {
     // ----- M4.2: closures (captura de entorno) -----
 
     #[test]
-    fn closures_capturan_el_entorno() {
+    fn closures_capture_the_environment() {
         // Captura de un `let` externo (lectura).
         assert!(check_src(
             "fn main() -> int { let b: int = 10; let f: fn(int) -> int = fn(x: int) -> int { x + b }; f(1) }"
@@ -6754,7 +6754,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn closure_no_can_reasignar_un_let_capturado() {
+    fn closure_cannot_reassign_a_captured_let() {
         // Capturar no reata: asignar a un `let` externo sigue siendo error.
         err_contains(
             "fn main() { let b: int = 1; let f: fn() = fn() { b = 2; }; f() }",
@@ -6773,7 +6773,7 @@ fn main() -> int {
     // ----- M5.1: enums (tipos suma) y construcción -----
 
     #[test]
-    fn enum_construccion_validates() {
+    fn enum_construction_validates() {
         let src = r#"
 enum Figura { Circulo(float), Rect(float, float), Punto }
 fn area(f: Figura) -> Figura { f }
@@ -6821,22 +6821,22 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
     }
 
     #[test]
-    fn enum_y_struct_no_comparten_name() {
+    fn enum_and_struct_cannot_share_a_name() {
         err_contains("enum E { A } struct E { x: int } fn main() {}", "cannot also be a struct");
     }
 
     #[test]
-    fn enum_variant_repetida() {
+    fn enum_variant_repeated() {
         err_contains("enum E { A, A } fn main() {}", "variant 'A' repeated");
     }
 
     #[test]
-    fn enum_declarado_dos_veces() {
+    fn enum_declared_twice() {
         err_contains("enum E { A } enum E { B } fn main() {}", "declared twice");
     }
 
     #[test]
-    fn enum_como_ty_unknown() {
+    fn enum_as_unknown_ty() {
         // Anotar con un nombre que no es ni struct ni enum.
         err_contains("fn main() { let x: NoExiste = 1; print(x); }", "not declared");
     }
@@ -6859,7 +6859,7 @@ fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_con_comodin_es_exhaustive() {
+    fn match_with_wildcard_is_exhaustive() {
         let src = "enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, _ => 0 } } fn main() {}";
         assert!(check_src(src).is_ok());
     }
@@ -6873,7 +6873,7 @@ fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_brazos_de_types_distintos() {
+    fn match_arms_of_different_types() {
         err_contains(
             "enum E { A, B } fn f(e: E) -> int { match (e) { E.A => 1, E.B => true } } fn main() {}",
             "different types",
@@ -6881,7 +6881,7 @@ fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_variant_repetida() {
+    fn match_variant_repeated() {
         err_contains(
             "enum E { A, B } fn f(e: E) -> int { match (e) { E.A => 1, E.A => 2, E.B => 3 } } fn main() {}",
             "is already covered",
@@ -6889,7 +6889,7 @@ fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_branch_inalcanzable_after_catchall() {
+    fn match_branch_unreachable_after_catchall() {
         err_contains(
             "enum E { A, B } fn f(e: E) -> int { match (e) { other => 0, E.A => 1 } } fn main() {}",
             "unreachable",
@@ -6921,7 +6921,7 @@ fn main() -> int { sum(Lista.Cons(1, Lista.Nil)) }
     }
 
     #[test]
-    fn match_liga_payload_para_el_body() {
+    fn match_binds_payload_for_the_body() {
         // El binding del payload debe estar disponible (y bien tipado) en el cuerpo.
         let src = "enum Caja { Con(int), Vacia } fn val(c: Caja) -> int { match (c) { Caja.Con(n) => n + 1, Caja.Vacia => 0 } } fn main() {}";
         assert!(check_src(src).is_ok());
@@ -6943,7 +6943,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn generic_infers_de_various_argumentos() {
+    fn generic_infers_from_several_arguments() {
         // [T] y fn(T)->U determinan T y U a la vez.
         let src = r#"
 fn apply<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
@@ -6954,7 +6954,7 @@ fn main() -> int { apply(double, 21) }
     }
 
     #[test]
-    fn generic_t_inconsistente() {
+    fn generic_t_inconsistent() {
         err_contains(
             "fn par<T>(a: T, b: T) -> T { a } fn main() -> int { par(1, true) }",
             "cannot be int and bool",
@@ -6962,7 +6962,7 @@ fn main() -> int { apply(double, 21) }
     }
 
     #[test]
-    fn generic_t_no_inferible() {
+    fn generic_t_not_inferable() {
         err_contains(
             "fn empty<T>() -> int { 0 } fn main() -> int { empty() }",
             "could not infer the type parameter 'T'",
@@ -6970,7 +6970,7 @@ fn main() -> int { apply(double, 21) }
     }
 
     #[test]
-    fn generic_como_valor_es_error() {
+    fn generic_as_value_is_error() {
         err_contains(
             "fn id<T>(x: T) -> T { x } fn main() -> int { let f: fn(int) -> int = id; f(3) }",
             "generic function 'id' as a value",
@@ -6986,7 +6986,7 @@ fn main() -> int { apply(double, 21) }
     }
 
     #[test]
-    fn parameter_de_ty_repetido() {
+    fn repeated_ty_parameter() {
         err_contains("fn f<T, T>(x: T) -> T { x } fn main() {}", "type parameter 'T' repeated");
     }
 
@@ -6998,7 +6998,7 @@ fn main() -> int { apply(double, 21) }
     // ----- M6.2: tipos genéricos del usuario y chequeo bidireccional -----
 
     #[test]
-    fn enum_generic_construccion_y_match() {
+    fn generic_enum_construction_and_match() {
         let src = r#"
 enum Caja<T> { Llena(T), Vacia }
 fn val(c: Caja<int>, def: int) -> int {
@@ -7014,7 +7014,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn struct_generic_campo_sustituido() {
+    fn generic_struct_field_substituted() {
         let src = r#"
 struct Par<A, B> { primero: A, segundo: B }
 fn main() -> int {
@@ -7026,7 +7026,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn generic_mismatch_de_argumento_de_ty() {
+    fn generic_ty_argument_mismatch() {
         err_contains(
             "enum Caja<T> { Llena(T), Vacia } fn main() { let b: Caja<bool> = Caja.Llena(7); print(b); }",
             "cannot be bool and int",
@@ -7042,7 +7042,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn generic_empty_no_inferible_sin_context() {
+    fn generic_empty_not_inferable_without_context() {
         // Sin tipo esperado ni argumentos, T queda sin determinar.
         err_contains(
             "enum Caja<T> { Llena(T), Vacia } fn main() { print(Caja.Vacia); }",
@@ -7051,12 +7051,12 @@ fn main() -> int {
     }
 
     #[test]
-    fn parameter_de_ty_de_enum_repetido() {
+    fn repeated_enum_ty_parameter() {
         err_contains("enum E<T, T> { A(T) } fn main() {}", "type parameter 'T' repeated");
     }
 
     #[test]
-    fn array_empty_adopta_el_ty_expected() {
+    fn empty_array_adopts_the_expected_ty() {
         // El chequeo bidireccional arregla la aspereza histórica del [] vacío.
         assert!(check_src("fn main() -> int { let xs: [int] = []; xs.len() }").is_ok());
     }
@@ -7064,7 +7064,7 @@ fn main() -> int {
     // ----- M6.3: Option/Result (prelude) y el operador ? -----
 
     #[test]
-    fn prelude_option_result_disponibles() {
+    fn prelude_option_result_available() {
         // Sin declararlos, Option y Result existen (vienen del prelude).
         let src = r#"
 fn f() -> Result<int, string> { Result.Ok(1) }
@@ -7085,7 +7085,7 @@ fn calc(x: int, y: int) -> Result<int, string> {
     Result.Ok(q + 1)
 }
 fn raw(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
-fn primero(xs: [int]) -> Option<int> {
+fn first(xs: [int]) -> Option<int> {
     let v: int = raw(xs)?;
     Option.Some(v)
 }
@@ -7095,7 +7095,7 @@ fn main() {}
     }
 
     #[test]
-    fn try_requiere_result_u_option() {
+    fn try_requires_result_or_option() {
         err_contains(
             "fn f() -> Result<int, string> { let x: int = 5?; Result.Ok(x) } fn main() {}",
             "requires a Result or an Option",
@@ -7103,7 +7103,7 @@ fn main() {}
     }
 
     #[test]
-    fn try_function_must_devolver_compatible() {
+    fn try_function_must_return_compatible_type() {
         err_contains(
             "fn d() -> Result<int, string> { Result.Ok(1) } fn g() -> int { let x: int = d()?; x } fn main() {}",
             "requires the function to return Result",
@@ -7111,7 +7111,7 @@ fn main() {}
     }
 
     #[test]
-    fn try_result_con_e_distinto() {
+    fn try_result_with_different_e() {
         err_contains(
             "fn d() -> Result<int, string> { Result.Ok(1) } fn f() -> Result<int, bool> { let x: int = d()?; Result.Ok(x) } fn main() {}",
             "Result<_, string>",
@@ -7121,7 +7121,7 @@ fn main() {}
     // ----- UFCS (M7.1) -----
 
     #[test]
-    fn ufcs_function_libre_como_method() {
+    fn ufcs_free_function_as_method() {
         // recv.f(args) ≡ f(recv, args). Builtin (len) y función del usuario (suma).
         let src = r#"
 fn sum(a: int, b: int) -> int { a + b }
@@ -7136,7 +7136,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn ufcs_no_es_campo_uses_function() {
+    fn ufcs_non_field_uses_free_function() {
         // 'doble' no es campo de Punto: se resuelve como UFCS doble(p).
         let src = r#"
 struct Punto { x: int, y: int }
@@ -7150,7 +7150,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn ufcs_campo_function_gana_about_libre() {
+    fn ufcs_field_function_wins_over_free_function() {
         // 'op' ES un campo (de tipo función): c.op(x) llama al campo, no es UFCS, aunque
         // exista una función libre 'op' homónima con otra firma.
         let src = r#"
@@ -7198,10 +7198,10 @@ fn main() -> int {
     fn ufcs_generic_infers_from_receptor() {
         // El receptor cuenta para la inferencia de genéricos (M6) como cualquier arg.
         let src = r#"
-fn primero<T>(xs: [T]) -> T { xs[0] }
+fn first<T>(xs: [T]) -> T { xs[0] }
 fn main() -> int {
     let xs: [int] = [7, 8, 9];
-    xs.primero()                 // primero(xs) con T = int
+    xs.first()                 // first(xs) con T = int
 }
 "#;
         assert!(check_src(src).is_ok());
@@ -7210,7 +7210,7 @@ fn main() -> int {
     // ----- M7.3: stdlib (prelude de orden superior: map/filter/fold) -----
 
     #[test]
-    fn prelude_map_filter_fold_tipan() {
+    fn prelude_map_filter_fold_type_check() {
         // Disponibles sin declararlas; se infieren los genéricos en cada uso.
         let src = r#"
 fn double(x: int) -> int { x * 2 }
@@ -7226,7 +7226,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn prelude_fold_a_ty_distinto() {
+    fn prelude_fold_to_different_ty() {
         // fold<T, A>: el acumulador A puede diferir del elemento T (aquí bool).
         let src = r#"
 fn main() -> int {
@@ -7239,7 +7239,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn prelude_map_exige_function_compatible() {
+    fn prelude_map_requires_compatible_function() {
         // map<T,U>(xs:[T], f:fn(T)->U): una f con dominio incompatible hace que el
         // parámetro de tipo T se exija int (por xs) y bool (por f) a la vez: error.
         err_contains(
@@ -7261,7 +7261,7 @@ fn main() -> int { map(41) }
     // ----- M8.1: inferencia local (let/var sin anotación) -----
 
     #[test]
-    fn infers_primitivos_y_compuestos() {
+    fn infers_primitives_and_compounds() {
         let src = r#"
 struct Punto { x: int, y: int }
 enum Caja<T> { Llena(T), Vacia }
@@ -7282,7 +7282,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn variable_inferred_conserva_su_ty() {
+    fn inferred_variable_keeps_its_ty() {
         // Una inferida como int no puede luego usarse como bool.
         err_contains(
             "fn main() -> int { let x = 3; if (x) { 0 } else { 1 } }",
@@ -7291,7 +7291,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn var_inferred_es_mutable_y_tipada() {
+    fn inferred_var_is_mutable_and_typed() {
         // 'var t = 0' infiere int y es mutable; asignarle bool falla.
         assert!(check_src("fn main() -> int { var t = 0; t = t + 1; t }").is_ok());
         err_contains(
@@ -7301,7 +7301,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn let_inferred_follows_siendo_inmutable() {
+    fn inferred_let_stays_immutable() {
         // La inferencia no cambia la mutabilidad: un 'let' inferido no se puede reasignar.
         err_contains(
             "fn main() -> int { let x = 3; x = 4; x }",
@@ -7310,7 +7310,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn inferencia_no_applies_a_lo_indeterminado() {
+    fn inference_does_not_apply_to_the_indeterminate() {
         // Sin anotación, '[]' no se puede inferir: pide la anotación.
         err_contains(
             "fn main() -> int { let xs = []; xs.len() }",
@@ -7340,13 +7340,13 @@ fn main() -> int {
     }
 
     #[test]
-    fn trait_para_enum_y_primitivo() {
+    fn trait_for_enum_and_primitive() {
         check_src(r#"
-            trait Valor { fn valor(self) -> int; }
+            trait Valor { fn value(self) -> int; }
             enum Moneda { Cara, Cruz }
-            impl Valor for Moneda { fn valor(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } } }
-            impl Valor for int { fn valor(self) -> int { self } }
-            fn main() -> int { Moneda.Cara.valor() + 5.valor() }
+            impl Valor for Moneda { fn value(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } } }
+            impl Valor for int { fn value(self) -> int { self } }
+            fn main() -> int { Moneda.Cara.value() + 5.value() }
         "#).expect("impl para enum y primitivo");
     }
 
@@ -7364,7 +7364,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn campo_gana_about_method_de_trait() {
+    fn field_wins_over_trait_method() {
         // Un campo función del struct tiene prioridad sobre un método de trait homónimo.
         check_src(r#"
             trait T { fn f(self) -> int; }
@@ -7376,7 +7376,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_no_cubre_all_los_methods() {
+    fn impl_does_not_cover_all_methods() {
         err_contains(
             r#"trait T { fn a(self) -> int; fn b(self) -> int; }
                struct S { x: int }
@@ -7387,7 +7387,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_con_signature_distinta() {
+    fn impl_with_different_signature() {
         err_contains(
             r#"trait T { fn a(self) -> int; }
                struct S { x: int }
@@ -7398,7 +7398,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn method_ambiguo_between_dos_traits() {
+    fn method_ambiguous_between_two_traits() {
         err_contains(
             r#"trait A { fn f(self) -> int; }
                trait B { fn f(self) -> int; }
@@ -7421,7 +7421,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_concreto_about_ty_generic_es_error() {
+    fn concrete_impl_over_generic_ty_is_error() {
         // `impl T for Caja` sin declarar los parámetros de tipo: M9.2b pide `impl<A> T for
         // Caja<A>`. El error guía hacia esa forma.
         err_contains(
@@ -7434,7 +7434,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn index_semantico_hover_de_variable() {
+    fn semantic_index_hover_of_variable() {
         // M10.2b: el índice registra el tipo de un uso de identificador.
         let src = "fn main() -> int {\n  let x = 5;\n  x\n}";
         let tokens = crate::lexer::lex(src).expect("lex ok");
@@ -7449,7 +7449,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn index_semantico_hover_de_ty() {
+    fn semantic_index_hover_of_ty() {
         // M10.2f: el índice registra el uso de un nombre de tipo en un literal de struct y la
         // construcción de un enum, con su posición de declaración (ir-a-definición).
         let src = "struct Punto { x: int }\nenum Color { Rojo }\nfn main() -> int {\n  let p = Punto { x: 1 };\n  let c = Color.Rojo;\n  p.x\n}";
@@ -7471,7 +7471,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn index_semantico_hover_en_interpolation() {
+    fn semantic_index_hover_in_interpolation() {
         // El `to_string(e)` sintético de `${e}` comparte posición con `e`; su hover NO debe taparlo.
         // Hover sobre `area` dentro de `${area(3.0)}` → la función, nunca `to_string`.
         let src = "fn area(r: float) -> float { r * r }\nfn main() {\n  print(\"x: ${area(3.0)}\");\n}";
@@ -7487,7 +7487,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn index_semantico_hover_en_string_ufcs() {
+    fn semantic_index_hover_in_string_ufcs() {
         // En una cadena `v.doble().inc().doble()` todos los eslabones comparten la posición del
         // receptor: las dos `.doble()` colisionaban en `field_name_pos` y la primera perdía su hover.
         // Ahora se registran ambas posiciones.
@@ -7503,7 +7503,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn index_semantico_hover_en_match() {
+    fn semantic_index_hover_in_match() {
         // M10.2f: dentro de un `match` el índice registra el escrutinio, el enum y la variante del
         // patrón, y los bindings que liga (tanto en el patrón como en el cuerpo).
         let src = "enum Figura { Circulo(float), Punto }\nfn area(f: Figura) -> float {\n  match (f) {\n    Figura.Circulo(r) => r,\n    Figura.Punto => 0.0,\n  }\n}\nfn main() -> int { 0 }";
@@ -7529,7 +7529,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_generic_objetivo_mal_formado_es_error() {
+    fn generic_impl_malformed_target_is_error() {
         // El objetivo de un impl genérico debe ser `Caja<A>` con sus propios parámetros.
         err_contains(
             r#"trait T { fn f(self) -> int; }
@@ -7549,7 +7549,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn method_nonexistent_no_es_campo_ni_function() {
+    fn nonexistent_method_is_not_field_or_function() {
         err_contains(
             r#"struct S { x: int }
                fn main() -> int { let s = S { x: 1 }; s.noexiste() }"#,
@@ -7560,17 +7560,17 @@ fn main() -> int {
     // ----- M9.2: bounds de genéricos -----
 
     #[test]
-    fn bound_concreto_y_reenvio() {
+    fn concrete_bound_and_forwarding() {
         check_src(r#"
-            trait Valor { fn valor(self) -> int; }
+            trait Valor { fn value(self) -> int; }
             struct Punto { x: int }
-            impl Valor for Punto { fn valor(self) -> int { self.x } }
-            impl Valor for int { fn valor(self) -> int { self } }
-            fn double<T: Valor>(x: T) -> int { x.valor() + x.valor() }
-            fn pasar<T: Valor>(x: T) -> int { double(x) }
+            impl Valor for Punto { fn value(self) -> int { self.x } }
+            impl Valor for int { fn value(self) -> int { self } }
+            fn double<T: Valor>(x: T) -> int { x.value() + x.value() }
+            fn forward<T: Valor>(x: T) -> int { double(x) }
             fn main() -> int {
                 let p = Punto { x: 5 };
-                double(p) + double(9) + pasar(p)
+                double(p) + double(9) + forward(p)
             }
         "#).expect("bound concreto + reenvío");
     }
@@ -7589,11 +7589,11 @@ fn main() -> int {
     }
 
     #[test]
-    fn bound_ty_no_implementa() {
+    fn bound_ty_does_not_implement() {
         err_contains(
-            r#"trait Valor { fn valor(self) -> int; }
+            r#"trait Valor { fn value(self) -> int; }
                struct Punto { x: int }
-               fn usar<T: Valor>(x: T) -> int { x.valor() }
+               fn usar<T: Valor>(x: T) -> int { x.value() }
                fn main() -> int { let p = Punto { x: 1 }; usar(p) }"#,
             "Punto does not implement 'Valor'",
         );
@@ -7602,7 +7602,7 @@ fn main() -> int {
     #[test]
     fn bound_method_outside_del_trait() {
         err_contains(
-            r#"trait Valor { fn valor(self) -> int; }
+            r#"trait Valor { fn value(self) -> int; }
                fn usar<T: Valor>(x: T) -> int { x.other() }
                fn main() -> int { 0 }"#,
             "no field or function 'other'",
@@ -7610,11 +7610,11 @@ fn main() -> int {
     }
 
     #[test]
-    fn reenvio_sin_bound_es_error() {
+    fn forwarding_without_bound_is_error() {
         err_contains(
-            r#"trait Valor { fn valor(self) -> int; }
-               fn usar<T: Valor>(x: T) -> int { x.valor() }
-               fn intermediario<U>(y: U) -> int { usar(y) }
+            r#"trait Valor { fn value(self) -> int; }
+               fn usar<T: Valor>(x: T) -> int { x.value() }
+               fn forwarder<U>(y: U) -> int { usar(y) }
                fn main() -> int { 0 }"#,
             "is not bounded by 'Valor'",
         );
@@ -7631,7 +7631,7 @@ fn main() -> int {
     // ----- M9.3a: métodos por defecto -----
 
     #[test]
-    fn method_por_default_heredado_y_redefinido() {
+    fn default_method_inherited_and_overridden() {
         check_src(r#"
             trait Valor {
                 fn base(self) -> int;
@@ -7650,7 +7650,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn method_requerido_sin_default_follows_obligatorio() {
+    fn required_method_without_default_stays_mandatory() {
         err_contains(
             r#"trait T { fn req(self) -> int; fn opt(self) -> int { 0 } }
                struct S { x: int }
@@ -7661,7 +7661,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn method_por_default_via_bound() {
+    fn default_method_via_bound() {
         check_src(r#"
             trait Saludo {
                 fn name(self) -> int;
@@ -7697,7 +7697,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn trait_object_ty_no_implementa() {
+    fn trait_object_ty_does_not_implement() {
         err_contains(
             r#"trait Figura { fn area(self) -> int; }
                struct P { x: int }
@@ -7709,10 +7709,10 @@ fn main() -> int {
     #[test]
     fn trait_object_object_safety() {
         err_contains(
-            r#"trait Clon { fn copia(self) -> Self; }
+            r#"trait Clon { fn copy(self) -> Self; }
                struct P { x: int }
-               impl Clon for P { fn copia(self) -> Self { P { x: self.x } } }
-               fn usar(p: dyn Clon) -> int { let q = p.copia(); 0 }
+               impl Clon for P { fn copy(self) -> Self { P { x: self.x } } }
+               fn usar(p: dyn Clon) -> int { let q = p.copy(); 0 }
                fn main() -> int { 0 }"#,
             "uses 'Self': it is not callable on 'dyn Clon'",
         );
@@ -7746,7 +7746,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn test_con_parametros() {
+    fn test_with_parameters() {
         err_contains(
             "@test fn malo(x: int) -> bool { true } fn main() -> int { 0 }",
             "must not take parameters",
@@ -7754,7 +7754,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn annotation_desconocida() {
+    fn unknown_annotation() {
         err_contains(
             "@magia fn f() -> bool { true } fn main() -> int { 0 }",
             "unknown annotation: '@magia'",
@@ -7792,13 +7792,13 @@ fn main() -> int {
         check_src(r#"
             @derive(Eq)
             enum Color { Rojo, Verde }
-            fn iguales<T: Eq>(a: T, b: T) -> bool { a.eq(b) }
-            fn main() -> int { if (iguales(Color.Rojo, Color.Rojo)) { 0 } else { 1 } }
+            fn equal<T: Eq>(a: T, b: T) -> bool { a.eq(b) }
+            fn main() -> int { if (equal(Color.Rojo, Color.Rojo)) { 0 } else { 1 } }
         "#).expect("un type derivado satisface el bound T: Eq");
     }
 
     #[test]
-    fn derive_trait_no_soportado() {
+    fn derive_trait_not_supported() {
         err_contains(
             "@derive(Ord) struct P { x: int } fn main() -> int { 0 }",
             "cannot derive 'Ord'",
@@ -7840,7 +7840,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn derive_show_campo_no_soportado_es_error() {
+    fn derive_show_unsupported_field_is_error() {
         err_contains(
             "@derive(Show) struct S { xs: [int] } fn main() -> int { 0 }",
             "cannot derive Show for a field of type [int]",

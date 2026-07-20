@@ -1,10 +1,16 @@
-# Limpieza: identificadores en inglés (COMPLETA — L1+L2+L3)
+# Limpieza: identificadores en inglés (L1+L2+L3 COMPLETA — alcance ampliado luego, ver abajo)
 
-> **Estado: COMPLETA.** L1 (Rust `src/`, 7 clústeres), L2 (core raylang: prelude SOURCE +
-> `std/` + `selfhost/`) y L3 (métodos `Eq`/`Show`/`Ord`: `igual`/`mostrar`/`menor` →
-> `eq`/`show`/`less`, param `otro`→`other`) están hechos. Suite completa verde (871) +
-> oráculos VM↔intérprete + self-hosting byte-idéntico. El resto del documento es el plan
-> histórico.
+> **Estado: L1+L2+L3 completas** (su alcance original, detallado abajo): L1 (Rust `src/`, 7
+> clústeres), L2 (core raylang: prelude SOURCE + `std/` + `selfhost/`) y L3 (métodos
+> `Eq`/`Show`/`Ord`: `igual`/`mostrar`/`menor` → `eq`/`show`/`less`, param `otro`→`other`).
+> Suite completa verde (871) + oráculos VM↔intérprete + self-hosting byte-idéntico en su momento.
+> **NO es una afirmación general de que el repo esté libre de español**: el arqueo del 20 jul 2026
+> (`docs/arqueo-spanglish.md`) encontró 1219 declaraciones adicionales en español —sobre todo
+> nombres de test y fixtures raylang embebidas, fuera del alcance A/B/C que cubrió este documento—
+> y los lotes A–D de ese arqueo ya las limpiaron (identificadores de producción, helpers de
+> `packages/`, nombres de test en `src/` y fixtures embebidas). El resto del documento es el plan
+> histórico de L1–L3; para el estado actual de la política y su enforcement, ver
+> `docs/arqueo-spanglish.md` y `tests/naming_policy.rs`.
 
 
 **Regla** (ya en `CLAUDE.md` § Convenciones): los **identificadores** —nombres de funciones/métodos,

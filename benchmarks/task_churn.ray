@@ -1,0 +1,13 @@
+// M98.4: churn de tareas efímeras — 20k spawn+join que devuelven un string de ~1 KB.
+// Vigila la fuga del almacén de tareas (M98.1): sin liberación, ~1.2 KB retenidos por tarea
+// (aquí serían ~24 MB); con el free-list, RSS plano en la línea base.
+fn main() -> int {
+    var total = 0;
+    var i = 0;
+    while (i < 20000) {
+        let t = spawn(fn() -> string { "x".repeat(1000) });
+        total = total + join(t).len();
+        i = i + 1;
+    }
+    total % 251
+}

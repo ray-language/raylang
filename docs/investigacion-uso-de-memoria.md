@@ -170,6 +170,16 @@ Orden por severidad; cada paso con su verificación. Los pasos de código van po
 > drenado**; el handle stale responde como cerrado+vacío (cero semántica nueva). `chan_churn` 100k
 > canales: 45.4 MB → **7.0 MB** (línea base). Límite documentado: un canal abierto cuyos handles se
 > pierden sigue retenido (liberarlo exigiría GC global de referencias entre fibras).
+> ✅ **M98.5** (rama `feature/m98-coste-elemento`): **arreglos homogéneos de ints** (`Obj::IntArray`,
+> *storage strategy* estilo V8/PyPy) — 8 B/elemento en vez de 32. Nace en el literal todo-ints o al
+> primer `push` de un int sobre un arreglo vacío; las operaciones calientes (push/index/set/len/pop)
+> van nativas y cualquier otra **degrada** in place a genérico (invisible; mismo handle → aliasing
+> intacto). El GC traza un IntArray en O(1) (sin hijos). Medido (A/B misma sesión): `arr_1M`
+> **69.0 → 22.1 MB (−68%)**, `iter` 85.9 → 23.2 MB (−73%); CPU **neutra o mejor** (fib35 +0.3%
+> ruido, arrays −2.7%, gcnested −4.8%). El candidato (a) HeapValue 32→16 B queda descartado sin
+> re-medir: (b) da −75% en el caso objetivo sin el riesgo de CPU del boxing de Str. Gotcha de
+> medición: el baseline de TIEMPO de ayer midió +6–10% hoy en AMBAS ramas (estado térmico de la
+> máquina) — el veredicto de CPU exige A/B de la misma sesión, no gate-contra-baseline.
 > ✅ **M98.4** (rama `feature/m98-banco-memoria`): el banco de regresión gana el **gate de memoria** —
 > `regress.py` mide el pico de RSS (`os.wait4` → `ru_maxrss`, cero deps) de `task_churn`/`chan_churn`/
 > `arr_while` (ahora en `benchmarks/`) contra `baseline.json` con umbral propio del 15% (el RSS midió

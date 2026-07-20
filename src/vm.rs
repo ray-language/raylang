@@ -1029,19 +1029,27 @@ impl<'a> Vm<'a> {
                         elems.push(self.pop());
                     }
                     elems.reverse(); // se sacaron en orden inverso
-                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    // M98.5: un literal con TODOS los elementos int nace especializado (8 B/elem).
+                    let h = self.cur.heap.allocate(specialize_array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Index => {
                     let i = self.pop_int();
                     match self.pop() {
                         HeapValue::Obj(h) => {
-                            let idx = {
-                                let arr = self.as_array(h);
-                                bounds_check(i, arr.len(), pos!().0, pos!().1)?
-                            };
-                            let v = self.as_array(h)[idx].clone();
-                            self.push(v);
+                            // M98.5: camino nativo del IntArray (sin degradar).
+                            if let Obj::IntArray(v) = self.cur.heap.get(h) {
+                                let idx = bounds_check(i, v.len(), pos!().0, pos!().1)?;
+                                let n = v[idx];
+                                self.push(HeapValue::Int(n));
+                            } else {
+                                let idx = {
+                                    let arr = self.as_array(h);
+                                    bounds_check(i, arr.len(), pos!().0, pos!().1)?
+                                };
+                                let v = self.as_array(h)[idx].clone();
+                                self.push(v);
+                            }
                         }
                         // M11.4c-2: indexar un string → el carácter en esa posición.
                         // M90.6 (superset de Opt.16): sin materializar los chars (antes un
@@ -1075,8 +1083,15 @@ impl<'a> Vm<'a> {
                     let v = self.pop();
                     let i = self.pop_int();
                     let h = self.pop_obj();
-                    let idx = bounds_check(i, self.as_array(h).len(), pos!().0, pos!().1)?;
-                    self.as_array_mut(h)[idx] = v;
+                    // M98.5: camino nativo del IntArray si el valor es Int (el checker lo garantiza
+                    // para [int]; cualquier otra cosa degrada y sigue por el genérico).
+                    if let (Obj::IntArray(xs), HeapValue::Int(n)) = (self.cur.heap.get_mut(h), &v) {
+                        let idx = bounds_check(i, xs.len(), pos!().0, pos!().1)?;
+                        xs[idx] = *n;
+                    } else {
+                        let idx = bounds_check(i, self.as_array(h).len(), pos!().0, pos!().1)?;
+                        self.as_array_mut(h)[idx] = v;
+                    }
                 }
                 OpCode::Len => {
                     // M11.1a: len de arreglo o string; M13.1: len de Map (nº de entradas).
@@ -1089,6 +1104,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Bytes(b) => b.len() as i64,
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Array(v) => v.len() as i64,
+                            Obj::IntArray(v) => v.len() as i64, // M98.5
                             Obj::Map(m) => m.len() as i64,
                             _ => unreachable!("the checker guarantees an array or Map"),
                         },
@@ -1240,7 +1256,16 @@ impl<'a> Vm<'a> {
                 OpCode::Push => {
                     let v = self.pop();
                     let h = self.pop_obj();
-                    self.as_array_mut(h).push(v);
+                    // M98.5: caminos nativos — push de Int sobre IntArray, y PROMOCIÓN del arreglo
+                    // genérico VACÍO al recibir su primer Int (el patrón `var xs = []; … push`).
+                    // Cualquier otra combinación degrada (si hace falta) y sigue por el genérico.
+                    match (self.cur.heap.get_mut(h), &v) {
+                        (Obj::IntArray(xs), HeapValue::Int(n)) => xs.push(*n),
+                        (Obj::Array(xs), HeapValue::Int(n)) if xs.is_empty() => {
+                            *self.cur.heap.get_mut(h) = Obj::IntArray(vec![*n]);
+                        }
+                        _ => self.as_array_mut(h).push(v),
+                    }
                     self.push(HeapValue::Unit);
                 }
 
@@ -1961,7 +1986,11 @@ impl<'a> Vm<'a> {
                         (HeapValue::Str(s), HeapValue::Str(sub)) => s.contains(sub.as_str()),
                         // M11.7b: arreglo → pertenencia por igualdad estructural.
                         (HeapValue::Obj(h), _) => {
-                            self.as_array(*h).iter().any(|e| values_equal(&self.cur.heap, e, &x))
+                            self.cur.heap.degrade_int_array(*h); // M98.5 (préstamo inmutable después)
+                            match self.cur.heap.get(*h) {
+                                Obj::Array(v) => v.iter().any(|e| values_equal(&self.cur.heap, e, &x)),
+                                _ => unreachable!("the checker guarantees an array"),
+                            }
                         }
                         _ => unreachable!("the checker guarantees string+string or array+element"),
                     };
@@ -2081,7 +2110,12 @@ impl<'a> Vm<'a> {
                 OpCode::ArrayPop => {
                     // Muta el arreglo quitando el último; devuelve [] o [x]. Prelude → Option<T>.
                     let h = self.pop_obj();
-                    let popped = self.as_array_mut(h).pop();
+                    // M98.5: camino nativo del IntArray.
+                    let popped = if let Obj::IntArray(xs) = self.cur.heap.get_mut(h) {
+                        xs.pop().map(HeapValue::Int)
+                    } else {
+                        self.as_array_mut(h).pop()
+                    };
                     let elems = popped.map(|v| vec![v]).unwrap_or_default();
                     let nh = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(nh));
@@ -2089,7 +2123,11 @@ impl<'a> Vm<'a> {
                 OpCode::Position => {
                     let x = self.pop();
                     let h = self.pop_obj();
-                    let idx = self.as_array(h).iter().position(|e| values_equal(&self.cur.heap, e, &x));
+                    self.cur.heap.degrade_int_array(h); // M98.5 (préstamo inmutable después)
+                    let idx = match self.cur.heap.get(h) {
+                        Obj::Array(v) => v.iter().position(|e| values_equal(&self.cur.heap, e, &x)),
+                        _ => unreachable!("the checker guarantees an array"),
+                    };
                     let elems = idx.map(|i| vec![HeapValue::Int(i as i64)]).unwrap_or_default();
                     let nh = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(nh));
@@ -3548,7 +3586,11 @@ impl<'a> Vm<'a> {
 
     // ----- Acceso a objetos del heap -----
 
-    fn as_array(&self, h: Handle) -> &Vec<HeapValue> {
+    // M98.5: los dos embudos DEGRADAN un `IntArray` a genérico antes de prestarlo — así toda
+    // operación no especializada (contains/reverse/concat/…) sigue funcionando sin tocarla.
+    // Las calientes (push/index/set/len/pop) manejan `IntArray` nativo y no pasan por aquí.
+    fn as_array(&mut self, h: Handle) -> &Vec<HeapValue> {
+        self.cur.heap.degrade_int_array(h);
         match self.cur.heap.get(h) {
             Obj::Array(v) => v,
             _ => unreachable!("the checker guarantees an array"),
@@ -3556,6 +3598,7 @@ impl<'a> Vm<'a> {
     }
 
     fn as_array_mut(&mut self, h: Handle) -> &mut Vec<HeapValue> {
+        self.cur.heap.degrade_int_array(h);
         match self.cur.heap.get_mut(h) {
             Obj::Array(v) => v,
             _ => unreachable!("the checker guarantees an array"),
@@ -3754,6 +3797,12 @@ fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
             (Obj::Array(va), Obj::Array(vb)) => {
                 va.len() == vb.len() && va.iter().zip(vb).all(|(p, q)| values_equal(heap, p, q))
             }
+            // M98.5: IntArray puro y mixto (un [int] puede estar en cualquiera de las dos formas).
+            (Obj::IntArray(va), Obj::IntArray(vb)) => va == vb,
+            (Obj::IntArray(va), Obj::Array(vb)) | (Obj::Array(vb), Obj::IntArray(va)) => {
+                va.len() == vb.len()
+                    && va.iter().zip(vb).all(|(p, q)| matches!(q, H::Int(n) if n == p))
+            }
             (Obj::Struct(sa), Obj::Struct(sb)) => {
                 sa.name == sb.name
                     && sa.fields.len() == sb.fields.len()
@@ -3791,6 +3840,11 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
         HeapValue::Obj(h) => match heap.get(*h) {
             Obj::Array(elems) => {
                 let parts: Vec<String> = elems.iter().map(|e| format_value(heap, enums, e)).collect();
+                format!("[{}]", parts.join(", "))
+            }
+            // M98.5: misma repr que el genérico (la forma de almacenamiento es invisible).
+            Obj::IntArray(v) => {
+                let parts: Vec<String> = v.iter().map(|i| i.to_string()).collect();
                 format!("[{}]", parts.join(", "))
             }
             Obj::Struct(s) => {
@@ -3840,6 +3894,11 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
         HeapValue::Obj(h) => match heap.get(*h) {
             Obj::Array(elems) => {
                 let v: Vec<Value> = elems.iter().map(|e| to_value(heap, enums, e)).collect();
+                Value::Array(Rc::new(RefCell::new(v)))
+            }
+            // M98.5: al borde se convierte igual que el genérico (invisible para el intérprete).
+            Obj::IntArray(xs) => {
+                let v: Vec<Value> = xs.iter().map(|&i| Value::Int(i)).collect();
                 Value::Array(Rc::new(RefCell::new(v)))
             }
             Obj::Struct(s) => {
@@ -3908,6 +3967,20 @@ pub fn transfer_value(
 
 /// Re-aloja el objeto `h` de `src` en `dst`, recursivamente. Reserva un placeholder + registra el mapeo
 /// antes de copiar los hijos (para ciclos), y memoiza (para sharing).
+/// M98.5: elige la forma de almacenamiento de un arreglo nuevo — todos los elementos `Int` →
+/// `IntArray` compacto (8 B/elem); si no, genérico. Fuera del bucle de despacho a propósito
+/// (el tamaño del cuerpo del match afecta el layout de los caminos calientes, cf. P0.6).
+fn specialize_array(elems: Vec<HeapValue>) -> Obj {
+    if !elems.is_empty() && elems.iter().all(|e| matches!(e, HeapValue::Int(_))) {
+        Obj::IntArray(elems.iter().map(|e| match e {
+            HeapValue::Int(i) => *i,
+            _ => unreachable!("just checked all Int"),
+        }).collect())
+    } else {
+        Obj::Array(elems)
+    }
+}
+
 fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handle, Handle>) -> Handle {
     if let Some(&nh) = remap.get(&h) {
         return nh; // ya copiado (sharing o ciclo) → reusa el handle destino
@@ -3923,6 +3996,8 @@ fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handl
             let elems = elems.clone();
             Obj::Array(elems.iter().map(|e| transfer_value(src, dst, e, remap)).collect())
         }
+        // M98.5: sin handles que remapear → copia directa (y cruza los hilos ya compacto).
+        Obj::IntArray(v) => Obj::IntArray(v.clone()),
         Obj::Struct(s) => {
             let name = s.name.clone();
             let fields = s.fields.clone();

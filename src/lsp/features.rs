@@ -1,207 +1,8 @@
-//! Language Server (LSP) de raylang — diagnósticos en vivo (M10.2).
-//!
-//! Un **Language Server** habla un protocolo (LSP) por stdin/stdout para que *cualquier*
-//! editor (VSCode, Neovim, Helix…) muestre los errores del compilador mientras escribes.
-//! Se escribe **una vez** y sirve a todos.
-//!
-//! Fiel al proyecto, esto es un **cliente externo**, como el REPL (M8.2) y el runner de
-//! `@test` (M10.1): usa solo la API pública (`lex`/`parse`/`check`) y **no toca el núcleo**.
-//! Y fiel a la invariante de *cero dependencias de Cargo*, el transporte es **JSON-RPC a
-//! mano**: el *framing* (`Content-Length: N\r\n\r\n` + N bytes) y un mini-parser/serializador
-//! JSON propios (`mod json`), todo en `std`. Más plomería, pero se *ve* el protocolo por
-//! dentro —que es el punto pedagógico—.
-//!
-//! Alcance (M10.2): **solo diagnósticos**. `initialize` + `didOpen`/`didChange`/`didClose`
-//! → `publishDiagnostics`. Sin hover ni go-to-definition (futuros; exigirían exponer una API
-//! de tipos del checker y un índice de símbolos). DESIGN §19.2.
+//! Las features del LSP: hover, ir-a-definición, referencias+rename, completion,
+//! inteligencia semántica en templates, formateo, outline y resaltado de ocurrencias
+//! (movimiento puro; usar `git log --follow`).
 
-use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
-
-use crate::{checker, lexer, loader, parser};
-use json::Json;
-
-/// Arranca el servidor: lee mensajes de stdin y escribe respuestas a stdout hasta `exit`.
-pub fn run() {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
-    serve(&mut reader, &mut out);
-}
-
-/// El bucle del servidor, parametrizado por los flujos para poder probarlo en memoria.
-///
-/// Lee un mensaje, lo despacha por su `method` y, cuando corresponde, analiza el documento
-/// y publica diagnósticos. Termina al recibir `exit` o al cerrarse la entrada (EOF).
-///
-/// Guarda los documentos abiertos (M10.2b): una petición `hover`/`definition` trae solo la
-/// `uri` y la posición, no el texto, así que el servidor debe recordarlo.
-fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
-    let mut docs: HashMap<String, String> = HashMap::new();
-    while let Some(raw) = read_message(reader) {
-        let Ok(msg) = json::parse(&raw) else {
-            continue; // mensaje ilegible: lo ignoramos (un servidor robusto no se cae)
-        };
-        let method = msg.get("method").and_then(Json::as_str).unwrap_or("");
-        match method {
-            "initialize" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &initialize_response(id));
-            }
-            // Notificación de cortesía tras initialize: no requiere respuesta.
-            "initialized" => {}
-            "shutdown" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, Json::Null));
-            }
-            "exit" => break,
-            "textDocument/didOpen" => {
-                if let Some((uri, text)) = open_params(&msg) {
-                    send(out, &diagnostics(&uri, &text));
-                    docs.insert(uri, text);
-                }
-            }
-            "textDocument/didChange" => {
-                if let Some((uri, text)) = change_params(&msg) {
-                    send(out, &diagnostics(&uri, &text));
-                    docs.insert(uri, text);
-                }
-            }
-            "textDocument/didClose" => {
-                if let Some(uri) = close_uri(&msg) {
-                    docs.remove(&uri);
-                    // Limpiamos los diagnósticos del editor con una lista vacía.
-                    send(out, &publish(&uri, vec![]));
-                }
-            }
-            // M10.2b: hover — el tipo del identificador bajo el cursor.
-            "textDocument/hover" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, hover_result(&msg, &docs)));
-            }
-            // M10.2b: ir-a-definición — salta del uso a su declaración.
-            "textDocument/definition" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, definition_result(&msg, &docs)));
-            }
-            // M10.2c-LSP (cluster 4): find-references — todos los usos (y la declaración).
-            "textDocument/references" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, references_result(&msg, &docs)));
-            }
-            // Cluster 4: rename — renombra el símbolo en todas sus apariciones.
-            "textDocument/rename" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, rename_result(&msg, &docs)));
-            }
-            // Cluster 4: completion — símbolos del documento + builtins + palabras clave.
-            "textDocument/completion" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, completion_result(&msg, &docs)));
-            }
-            // M10.2f: signature help — la firma de la función cuya llamada se está escribiendo.
-            "textDocument/signatureHelp" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, signature_help_result(&msg, &docs)));
-            }
-            // Formateo del documento — reusa el formateador de `ray fmt` (`fmt::format_source`).
-            "textDocument/formatting" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, formatting_result(&msg, &docs)));
-            }
-            // Outline / "ir a símbolo en el archivo": los ítems de nivel superior del documento.
-            "textDocument/documentSymbol" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, document_symbol_result(&msg, &docs)));
-            }
-            // Resaltar todas las apariciones del símbolo bajo el cursor (reusa `symbol_occurrences`).
-            "textDocument/documentHighlight" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, document_highlight_result(&msg, &docs)));
-            }
-            // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
-            _ => {
-                if let Some(id) = msg.get("id") {
-                    send(out, &method_error(id.clone(), method));
-                }
-            }
-        }
-    }
-}
-
-// ── Framing LSP ──────────────────────────────────────────────────────────────────────
-//
-// Cada mensaje es: cabeceras (líneas `Clave: valor\r\n`), una línea en blanco, y el cuerpo
-// JSON de exactamente `Content-Length` bytes. Es lo único que LSP añade sobre JSON-RPC.
-
-/// Lee un mensaje completo: las cabeceras hasta la línea en blanco y luego el cuerpo de
-/// `Content-Length` bytes. `None` si la entrada se cerró (EOF) o el marco es inválido.
-fn read_message<R: BufRead>(reader: &mut R) -> Option<String> {
-    let mut content_length: Option<usize> = None;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).ok()? == 0 {
-            return None; // EOF
-        }
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            break; // fin de cabeceras
-        }
-        if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-            content_length = rest.trim().parse().ok();
-        }
-        // Otras cabeceras (p. ej. Content-Type) se ignoran.
-    }
-    let len = content_length?;
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf).ok()?;
-    String::from_utf8(buf).ok()
-}
-
-/// Escribe un mensaje: la cabecera `Content-Length` (en bytes) y el cuerpo JSON.
-fn send<W: Write>(out: &mut W, payload: &Json) {
-    let body = payload.serialize();
-    let _ = write!(out, "Content-Length: {}\r\n\r\n{}", body.len(), body);
-    let _ = out.flush();
-}
-
-// ── Extracción de parámetros de los mensajes entrantes ───────────────────────────────
-
-/// `(uri, texto)` de un `didOpen`: `params.textDocument.{uri,text}`.
-fn open_params(msg: &Json) -> Option<(String, String)> {
-    let td = msg.get("params")?.get("textDocument")?;
-    let uri = td.get("uri")?.as_str()?.to_string();
-    let text = td.get("text")?.as_str()?.to_string();
-    Some((uri, text))
-}
-
-/// `(uri, texto)` de un `didChange`. Con *Full sync*, el último `contentChange` trae el
-/// documento completo en su campo `text`.
-fn change_params(msg: &Json) -> Option<(String, String)> {
-    let params = msg.get("params")?;
-    let uri = params.get("textDocument")?.get("uri")?.as_str()?.to_string();
-    let changes = params.get("contentChanges")?.as_array()?;
-    let text = changes.last()?.get("text")?.as_str()?.to_string();
-    Some((uri, text))
-}
-
-/// La `uri` de un `didClose`: `params.textDocument.uri`.
-fn close_uri(msg: &Json) -> Option<String> {
-    Some(msg.get("params")?.get("textDocument")?.get("uri")?.as_str()?.to_string())
-}
-
-/// `(uri, línea, carácter)` (0-basados) de una petición posicional (`hover`/`definition`):
-/// `params.textDocument.uri` + `params.position.{line,character}`.
-fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
-    let params = msg.get("params")?;
-    let uri = params.get("textDocument")?.get("uri")?.as_str()?.to_string();
-    let pos = params.get("position")?;
-    let line = as_usize(pos.get("line")?)?;
-    let character = as_usize(pos.get("character")?)?;
-    Some((uri, line, character))
-}
+use super::*;
 
 // ── Hover (M10.2b) ───────────────────────────────────────────────────────────────────
 
@@ -209,7 +10,7 @@ fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 /// símbolo tiene **comentarios de documentación** (`///` encima de su declaración), también la
 /// documentación —renderizada como Markdown, con la firma en un bloque de código—. `null` si no hay
 /// identificador bajo el cursor.
-fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     if is_template_uri(&uri) {
         // M55: hover en un template — primero el semántico (vía el módulo generado: tipos REALES,
@@ -270,7 +71,7 @@ fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 }
 
 /// Descripción breve (Markdown) de un tipo genérico incorporado o del prelude, para el hover.
-fn doc_builtin_type(name: &str) -> Option<&'static str> {
+pub(super) fn doc_builtin_type(name: &str) -> Option<&'static str> {
     Some(match name {
         "Channel" => "`Channel<T>` — a typed channel for communicating between fibers (CSP). Created with `channel()` / `channel(n)`; used with `send`, `recv`, `close`, `select`.",
         "Task" => "`Task<T>` — the in-progress result of a `spawn(f)`. `join(t)` blocks until the task finishes and returns its value.",
@@ -283,7 +84,7 @@ fn doc_builtin_type(name: &str) -> Option<&'static str> {
 
 /// El identificador bajo el cursor y su rango de columnas `[ini, fin)` (0-basadas). Como
 /// `ident_under_cursor` pero devolviendo también el rango, para el hover de builtins.
-fn ident_range_under_cursor(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+pub(super) fn ident_range_under_cursor(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
     let line: Vec<char> = src.lines().nth(line0)?.chars().collect();
     if char0 >= line.len() || !is_ident_char(line[char0]) {
         return None;
@@ -299,7 +100,7 @@ fn ident_range_under_cursor(src: &str, line0: usize, char0: usize) -> Option<(St
 /// declaración con `definition_at` (cruza archivos), abre la fuente de ESE archivo (el buffer si es
 /// el mismo, o el disco si es otro módulo) y reúne los `///` contiguos encima de la línea de la
 /// declaración. `None` si el símbolo no tiene declaración conocida (método, builtin) o no lleva docs.
-fn doc_of_symbol(uri: &str, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<String> {
+pub(super) fn doc_of_symbol(uri: &str, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<String> {
     match definition_at(uri, src, line0, char0) {
         Some((target_uri, def_line0, _, _)) => {
             // Fuente del archivo donde vive la declaración: el buffer si es el mismo doc, el disco, o
@@ -338,7 +139,7 @@ fn doc_of_symbol(uri: &str, src: &str, line0: usize, char0: usize, docs: &HashMa
 /// módulos **embebidos** de la std (`std/*`): su declaración vive en una fuente sin archivo en disco
 /// (`LoadedModule.source`), así que el hover/def no puede leerla del sistema de archivos. `None` si no
 /// carga o no hay un módulo con ese path.
-fn loaded_module_source(entry_uri: &str, entry_src: &str, target_uri: &str) -> Option<String> {
+pub(super) fn loaded_module_source(entry_uri: &str, entry_src: &str, target_uri: &str) -> Option<String> {
     let entry_path = uri_to_path(entry_uri)?;
     let target_path = uri_to_path(target_uri)?;
     let loaded = load(&entry_path, entry_src).ok()?;
@@ -347,7 +148,7 @@ fn loaded_module_source(entry_uri: &str, entry_src: &str, target_uri: &str) -> O
 
 /// El identificador bajo el cursor `(line0, char0)` (0-basados), expandiendo a izquierda y derecha
 /// sobre caracteres de identificador. `None` si el cursor no está sobre uno.
-fn ident_under_cursor(src: &str, line0: usize, char0: usize) -> Option<String> {
+pub(super) fn ident_under_cursor(src: &str, line0: usize, char0: usize) -> Option<String> {
     let line: Vec<char> = src.lines().nth(line0)?.chars().collect();
     if char0 >= line.len() || !is_ident_char(line[char0]) {
         return None;
@@ -366,7 +167,7 @@ fn ident_under_cursor(src: &str, line0: usize, char0: usize) -> Option<String> {
 /// Los `///` de un símbolo del **prelude** (funciones, tipos y traits inyectados: `map`, `sort`,
 /// `Option`…), buscados por nombre en su propia fuente (`prelude::SOURCE`): la posición de su
 /// declaración no vive en el archivo abierto, así que no vale `doc_lines_above` sobre el buffer.
-fn doc_in_prelude(name: &str) -> Option<String> {
+pub(super) fn doc_in_prelude(name: &str) -> Option<String> {
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
     for (i, l) in lines.iter().enumerate() {
         let l = l.trim_start();
@@ -391,7 +192,7 @@ fn doc_in_prelude(name: &str) -> Option<String> {
 /// el checker falle por el `import` y no se recoja nada. El archivo de entrada queda en delta 0, así
 /// que sus posiciones coinciden con las del buffer. Si no es un archivo o el loader falla, se
 /// construye sobre el buffer aislado (comportamiento previo). Es la misma idea que en los diagnósticos.
-fn index_for(uri: Option<&str>, src: &str) -> Option<checker::SemanticIndex> {
+pub(super) fn index_for(uri: Option<&str>, src: &str) -> Option<checker::SemanticIndex> {
     if let Some(path) = uri.and_then(uri_to_path)
         && let Ok(loaded) = load(&path, src)
     {
@@ -405,7 +206,7 @@ fn index_for(uri: Option<&str>, src: &str) -> Option<checker::SemanticIndex> {
 
 /// Busca el identificador en `(line0, char0)` (0-basado) y devuelve `(texto, col_ini, col_fin)`
 /// (columnas 0-basadas en esa línea). El índice es módulo-aware (ver `index_for`).
-fn hover_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+pub(super) fn hover_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
     let idx = index_for(uri, src)?;
     // El índice usa posiciones 1-basadas (como las fases); el cursor llega 0-basado. La consulta
     // cae siempre en la banda de la entrada (delta 0), así que coincide con las posiciones locales.
@@ -430,7 +231,7 @@ fn hover_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<
 /// **cápsula** su raíz (`geo`, cuyo `ns_prefix` también es prefijo) — respetando la encapsulación.
 /// Sin `imports` (o sin match) cae a `primer.último` (comportamiento previo). Un nombre sin `::` se
 /// deja igual.
-fn facade_name(serialized: &str, imports: &[(String, String)]) -> String {
+pub(super) fn facade_name(serialized: &str, imports: &[(String, String)]) -> String {
     let chars: Vec<char> = serialized.chars().collect();
     let seg = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::new();
@@ -477,7 +278,7 @@ fn facade_name(serialized: &str, imports: &[(String, String)]) -> String {
 /// Los `(leaf, ns_prefix)` de los `import a/b/c [as x];` del archivo. Reusa lex + `parse_all` (con
 /// recuperación de errores): los `import` van al principio, así que se recogen aunque el resto del
 /// documento no parsee a medio escribir (`math.`). Si ni lexa, devuelve vacío.
-fn imports_of(src: &str) -> Vec<(String, String)> {
+pub(super) fn imports_of(src: &str) -> Vec<(String, String)> {
     let Ok(tokens) = lexer::lex(src) else { return Vec::new() };
     let (program, _errs) = parser::parse_all(tokens);
     program.imports.iter()
@@ -488,19 +289,19 @@ fn imports_of(src: &str) -> Vec<(String, String)> {
 /// Longitud del identificador que empieza en `(line0, col0)` (0-basados) en la fuente: cuántos
 /// caracteres de identificador consecutivos hay. Sirve para no subrayar de más cuando el índice
 /// trae un nombre namespacado más largo que el token escrito.
-fn token_len(src: &str, line0: usize, col0: usize) -> usize {
+pub(super) fn token_len(src: &str, line0: usize, col0: usize) -> usize {
     let Some(line) = src.lines().nth(line0) else { return 0 };
     line.chars().skip(col0).take_while(|&c| is_ident_char(c)).count()
 }
 
 /// Un `range` LSP en una sola línea (0-basada), de la columna `start` a `end` (0-basadas).
-fn range(line0: usize, start: usize, end: usize) -> Json {
+pub(super) fn range(line0: usize, start: usize, end: usize) -> Json {
     let pos = |ch: usize| obj(vec![("line", num(line0 as i64)), ("character", num(ch as i64))]);
     obj(vec![("start", pos(start)), ("end", pos(end))])
 }
 
 /// Un `range` LSP que cruza líneas (0-basadas): de `(l1, c1)` a `(l2, c2)`.
-fn range_multiline(l1: usize, c1: usize, l2: usize, c2: usize) -> Json {
+pub(super) fn range_multiline(l1: usize, c1: usize, l2: usize, c2: usize) -> Json {
     let pos = |l: usize, ch: usize| obj(vec![("line", num(l as i64)), ("character", num(ch as i64))]);
     obj(vec![("start", pos(l1, c1)), ("end", pos(l2, c2))])
 }
@@ -511,7 +312,7 @@ fn range_multiline(l1: usize, c1: usize, l2: usize, c2: usize) -> Json {
 /// `null` si el identificador no tiene declaración conocida (método, builtin, tipo). La declaración
 /// puede estar en **otro archivo** (M10.2h): se resuelve el import y se devuelve el URI del módulo
 /// donde vive, con su línea local.
-fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     if is_template_uri(&uri) {
         // M55: la posición se traduce al módulo generado y se resuelve ahí; una declaración en el
@@ -534,7 +335,7 @@ fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// largo)` de su declaración. Módulo-aware: si el documento es un archivo, se carga con el loader y
 /// la declaración se mapea a su **módulo** (archivo + línea local) —así se navega cruzando archivos—;
 /// si no, se resuelve solo dentro del buffer.
-fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize, usize)> {
+pub(super) fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize, usize)> {
     let (qline, qcol) = (line0 + 1, char0 + 1);
     // Camino módulo-aware: el loader da el programa fusionado + las bandas de cada módulo (con su
     // ruta). La declaración se localiza por su banda → archivo y línea local correctos.
@@ -574,7 +375,7 @@ fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(St
 // línea de la declaración (la del `let`/`fn`, o ya el nombre en un parámetro). Es un cliente
 // externo: cero cambios en el núcleo (igual que el resto del LSP).
 
-fn is_ident_char(c: char) -> bool {
+pub(super) fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
@@ -582,7 +383,7 @@ fn is_ident_char(c: char) -> bool {
 type Span = (usize, usize, usize);
 
 /// El identificador escrito en `(line0, col0)` (0-basados) de `lines`, o `None` si ahí no empieza uno.
-fn token_at(lines: &[&str], line0: usize, col0: usize) -> Option<String> {
+pub(super) fn token_at(lines: &[&str], line0: usize, col0: usize) -> Option<String> {
     let chars: Vec<char> = lines.get(line0)?.chars().collect();
     if col0 >= chars.len() {
         return None;
@@ -594,13 +395,13 @@ fn token_at(lines: &[&str], line0: usize, col0: usize) -> Option<String> {
 /// El texto (nombre) de un uso `d`, leído de `lines` en la posición de `d` (1-basado en `d.line`).
 /// Se lee el **identificador** que empieza ahí (no `d.len`, que en un uso namespacado —`geo::f`—
 /// excede el token escrito en la fuente).
-fn use_name(lines: &[&str], d: &checker::DefEntry) -> Option<String> {
+pub(super) fn use_name(lines: &[&str], d: &checker::DefEntry) -> Option<String> {
     token_at(lines, d.line - 1, d.col - 1)
 }
 
 /// Rango del **nombre** `name` como palabra entera desde `(def_line, def_col)` (1-basados) en
 /// `lines`: un `let`/`fn` apunta al keyword → escanea hasta el nombre; un parámetro ya está en él.
-fn decl_name_range(lines: &[&str], def_line: usize, def_col: usize, name: &str) -> Option<Span> {
+pub(super) fn decl_name_range(lines: &[&str], def_line: usize, def_col: usize, name: &str) -> Option<Span> {
     let chars: Vec<char> = lines.get(def_line - 1)?.chars().collect();
     let nm: Vec<char> = name.chars().collect();
     let mut i = def_col.saturating_sub(1);
@@ -617,7 +418,7 @@ fn decl_name_range(lines: &[&str], def_line: usize, def_col: usize, name: &str) 
 
 /// El símbolo bajo el cursor: su nombre, el rango de su **declaración** (si se localiza) y los
 /// rangos de todos sus **usos**. `None` si no hay símbolo.
-fn symbol_occurrences(
+pub(super) fn symbol_occurrences(
     uri: Option<&str>,
     src: &str,
     line0: usize,
@@ -668,7 +469,7 @@ fn symbol_occurrences(
 /// El `result` de `textDocument/references`: una lista de `Location` (uso, y la declaración si el
 /// cliente pide `includeDeclaration`). **Cruza archivos** (M10.2h): un símbolo usado en varios
 /// módulos devuelve sus usos en cada archivo. Lista vacía si no hay símbolo.
-fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
     let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
     let include_decl = msg.get("params").and_then(|p| p.get("context"))
@@ -713,7 +514,7 @@ fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// declaración de este archivo) y mapea cada aparición a su módulo → `(uri, rango 0-basado)`. El
 /// largo se recorta al token real del archivo destino (los usos namespacados registran más). `None`
 /// si el uri no es un archivo o el loader falla (→ el llamador cae a un solo archivo).
-fn references_cross(uri: &str, src: &str, line0: usize, char0: usize, include_decl: bool) -> Option<Vec<(String, Span)>> {
+pub(super) fn references_cross(uri: &str, src: &str, line0: usize, char0: usize, include_decl: bool) -> Option<Vec<(String, Span)>> {
     let path = uri_to_path(uri)?;
     let loaded = load(&path, src).ok()?;
     let mut program = loaded.program;
@@ -773,7 +574,7 @@ fn references_cross(uri: &str, src: &str, line0: usize, char0: usize, include_de
 
 /// El `result` de `textDocument/rename`: un `WorkspaceEdit` que sustituye el símbolo (declaración
 /// + usos) por el nuevo nombre. `null` si no hay símbolo o falta `newName`.
-fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
     let Some(new_name) = msg.get("params").and_then(|p| p.get("newName")).and_then(|n| n.as_str()) else {
@@ -839,7 +640,7 @@ fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// traen. Devuelve `None` (→ rename rechazado) si no hay símbolo o si el rename no sería **completo
 /// y seguro**: se exige que TODA posición contenga exactamente el nombre (un uso por **alias** o una
 /// referencia **calificada** tienen otro texto → se rechaza, para no corromper el código).
-fn rename_cross(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Vec<(String, Span)>> {
+pub(super) fn rename_cross(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Vec<(String, Span)>> {
     let path = uri_to_path(uri)?;
     let loaded = load(&path, src).ok()?;
     let mut program = loaded.program.clone();
@@ -921,7 +722,7 @@ fn rename_cross(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Vec<
 
 /// Añade una posición a renombrar si el texto en `(dl0, dc0)` de `lines` es exactamente `name`;
 /// si no (alias, ref calificada, posición inesperada), marca el rename como **inseguro**.
-fn push_rename(pos: &mut Vec<(String, Span)>, safe: &mut bool, name: &str, u: String, dl0: usize, dc0: usize, lines: &[&str]) {
+pub(super) fn push_rename(pos: &mut Vec<(String, Span)>, safe: &mut bool, name: &str, u: String, dl0: usize, dc0: usize, lines: &[&str]) {
     match token_at(lines, dl0, dc0) {
         Some(t) if t == name => pos.push((u, (dl0, dc0, name.chars().count()))),
         _ => *safe = false,
@@ -930,7 +731,7 @@ fn push_rename(pos: &mut Vec<(String, Span)>, safe: &mut bool, name: &str, u: St
 
 /// El nombre global del ítem top-level (función/struct/enum/trait) cuya declaración está en
 /// `(line, col)`, o `None` si ahí no hay uno (p. ej. es una variable local).
-fn def_global_name(program: &crate::ast::Program, line: usize, col: usize) -> Option<String> {
+pub(super) fn def_global_name(program: &crate::ast::Program, line: usize, col: usize) -> Option<String> {
     let en = |l: usize, c: usize| l == line && c == col;
     program.functions.iter().find(|f| en(f.line, f.col)).map(|f| f.name.clone())
         .or_else(|| program.structs.iter().find(|s| en(s.line, s.col)).map(|s| s.name.clone()))
@@ -940,7 +741,7 @@ fn def_global_name(program: &crate::ast::Program, line: usize, col: usize) -> Op
 
 /// El contexto de import en el que está el cursor (M45c), detectado textualmente sobre el prefijo
 /// de la línea (el import a medio escribir no parsea).
-enum ImportCtx {
+pub(super) enum ImportCtx {
     /// `from <ruta> import <cursor>` — completar los **símbolos `pub`** del módulo `<ruta>`.
     Symbols(String),
     /// `import <cursor>` / `from <cursor> import` — completar **rutas de módulo** del proyecto.
@@ -950,7 +751,7 @@ enum ImportCtx {
 /// Detecta el contexto de import a partir del prefijo de la línea hasta el cursor (M45c).
 /// Reconoce `import <ruta>`, `[pub] from <ruta> import <símbolos>` (y su fase de ruta). Devuelve
 /// `None` si la línea no es un import.
-fn import_context(prefix: &str) -> Option<ImportCtx> {
+pub(super) fn import_context(prefix: &str) -> Option<ImportCtx> {
     let t = prefix.trim_start();
     // `from <ruta> import <símbolos>` (con o sin `pub`). Si ya apareció `import`, estamos en los símbolos.
     let from_part = t.strip_prefix("pub ").unwrap_or(t);
@@ -975,7 +776,7 @@ fn import_context(prefix: &str) -> Option<ImportCtx> {
 /// Las raíces de resolución de módulos para el archivo `entry` (M45c): la raíz del proyecto (si hay
 /// `main.ray` ancestro) seguida de las de dependencias (`.ray-deps`). Reusa la lógica de los
 /// diagnósticos modulares.
-fn import_roots(entry: &Path) -> Vec<PathBuf> {
+pub(super) fn import_roots(entry: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(root) = project_root_for(entry) {
         roots.push(root);
@@ -991,7 +792,7 @@ fn import_roots(entry: &Path) -> Vec<PathBuf> {
 /// 22=Struct, 13=Enum, 8=Trait) y su firma si es función. `None` si no está definido ahí. Se usa para
 /// los **re-exports** de una cápsula (`pub from … import …`), cuya declaración vive en el submódulo
 /// interno, no en `mod.ray`.
-fn classify_source_symbol(source: &str, name: &str) -> Option<(i64, Option<(Vec<String>, String)>)> {
+pub(super) fn classify_source_symbol(source: &str, name: &str) -> Option<(i64, Option<(Vec<String>, String)>)> {
     let tokens = lexer::lex(source).ok()?;
     let (program, _) = parser::parse_all(tokens);
     if program.functions.iter().any(|f| f.name == name) {
@@ -1015,7 +816,7 @@ fn classify_source_symbol(source: &str, name: &str) -> Option<(i64, Option<(Vec<
 /// Construye el `CompletionItem` de un símbolo `pub` de módulo (M46a/M46c): label + kind + —si es
 /// función con firma— el detalle y el snippet con placeholders. El calificador de módulo NO es un
 /// receptor (`figuras.area_cuadrado(4)` pasa 4), así que la firma va **completa**.
-fn module_symbol_item(label: String, kind: i64, signature: Option<(Vec<String>, String)>, ctx: &SigCtx) -> Vec<Json> {
+pub(super) fn module_symbol_item(label: String, kind: i64, signature: Option<(Vec<String>, String)>, ctx: &SigCtx) -> Vec<Json> {
     let mut fields = vec![("label", Json::Str(label.clone())), ("kind", num(kind))];
     if let Some((params, ret)) = signature {
         push_signature_raw(&mut fields, params.clone(), ret, false);
@@ -1041,7 +842,7 @@ fn module_symbol_item(label: String, kind: i64, signature: Option<(Vec<String>, 
 
 /// El ítem-extra `Nombre {…}` (kind Snippet) que inserta el literal completo con un placeholder por
 /// campo (M47b): `Nombre { c1: ${1:T1}, … }`. Compartido por la completion de archivo y la calificada.
-fn item_struct_literal(name: &str, fields: &[(String, String)]) -> Json {
+pub(super) fn item_struct_literal(name: &str, fields: &[(String, String)]) -> Json {
     let body = fields.iter().enumerate()
         .map(|(i, (f, t))| format!("{}: ${{{}:{}}}", f, i + 1, t))
         .collect::<Vec<_>>().join(", ");
@@ -1058,7 +859,7 @@ fn item_struct_literal(name: &str, fields: &[(String, String)]) -> Json {
 /// El ítem-extra de completion de un builtin que toma una **función anónima** (`spawn`/`scope`):
 /// inserta `name(fn() {\n\t$0\n});` —la forma con cuerpo, cursor dentro— además del builtin pelado,
 /// al estilo del literal de struct (M47b). El `\t` lo reindenta el editor según su config.
-fn item_closure_snippet(name: &str) -> Json {
+pub(super) fn item_closure_snippet(name: &str) -> Json {
     obj(vec![
         ("label", Json::Str(format!("{}(fn() {{…}})", name))),
         ("kind", num(15)), // 15 = Snippet
@@ -1069,7 +870,7 @@ fn item_closure_snippet(name: &str) -> Json {
     ])
 }
 
-fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
+pub(super) fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
     let roots = import_roots(entry);
     let path = loader::resolve_module_path(&roots, path).ok()??;
     let source = std::fs::read_to_string(&path).ok()?;
@@ -1116,7 +917,7 @@ fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String, i64, Opti
 /// Completion en un **import** (M45c): símbolos `pub` de `from M import …`. `None` si el cursor no
 /// está en un contexto de import completable (entonces se sigue con miembro/archivo). Las rutas de
 /// módulo (`import …`) se resuelven en `module_path_completion_items`.
-fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+pub(super) fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
     let line = src.split('\n').nth(line0)?;
     let chars: Vec<char> = line.chars().collect();
     let col = char0.min(chars.len());
@@ -1146,7 +947,7 @@ fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
 /// `geo/formas/circulo` fallaría. Se resuelve con un **`textEdit`** cuyo rango cubre toda la ruta
 /// parcial (desde su primer carácter hasta el cursor): así el editor usa el texto completo `geo/for`
 /// para el *fuzzy match* contra `filterText`, y al aceptar reemplaza la ruta entera.
-fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &[char]) -> Option<Json> {
+pub(super) fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &[char]) -> Option<Json> {
     let roots = import_roots(entry);
     if roots.is_empty() {
         return Some(Json::Arr(vec![]));
@@ -1176,7 +977,7 @@ fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &
 /// campos del struct que faltan por poner, en vez de la completion de archivo. `None` si el cursor no
 /// está en la **posición de nombre de campo** de un literal de struct conocido (entonces se sigue con
 /// miembro/archivo).
-fn struct_literal_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+pub(super) fn struct_literal_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
     // Prefijo (todo el texto hasta el cursor) como vector de chars.
     let mut prefix = String::new();
     for (i, line) in src.split('\n').enumerate() {
@@ -1265,7 +1066,7 @@ fn struct_literal_completion_items(uri: Option<&str>, src: &str, line0: usize, c
 }
 
 /// Los nombres de campo ya escritos en el cuerpo de un literal de struct (`ident:` de nivel superior).
-fn fields_already_written(body: &[char]) -> std::collections::HashSet<String> {
+pub(super) fn fields_already_written(body: &[char]) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     let (mut depth, mut i) = (0i32, 0usize);
     while i < body.len() {
@@ -1302,7 +1103,7 @@ fn fields_already_written(body: &[char]) -> std::collections::HashSet<String> {
 /// `<leaf>` es el nombre de un módulo importado (`import std/math;` → `math`), ofrece los ítems `pub`
 /// de ese módulo —funciones, `const`, structs/enums/traits— por su nombre corto. Devuelve `None` si el
 /// receptor no es un módulo importado (para que el llamador siga con la completion de miembros por tipo).
-fn module_member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+pub(super) fn module_member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
     let line = src.split('\n').nth(line0)?;
     let chars: Vec<char> = line.chars().collect();
     let col = char0.min(chars.len());
@@ -1366,7 +1167,7 @@ fn module_member_completion_items(uri: Option<&str>, src: &str, line0: usize, ch
 /// sin el receptor, un snippet con placeholders por parámetro y el disparo del signature help (M45b/M46).
 /// `insert_prefix` se antepone al texto insertado (para `x |>` pegado al operador se usa `" "` → `|> f`,
 /// no `|>f`); vacío para `recv.`.
-fn members_to_completion_items(members: Vec<crate::checker::MemberItem>, src: &str, uri: Option<&str>, insert_prefix: &str) -> Vec<Json> {
+pub(super) fn members_to_completion_items(members: Vec<crate::checker::MemberItem>, src: &str, uri: Option<&str>, insert_prefix: &str) -> Vec<Json> {
     let orig_lines: Vec<&str> = src.split('\n').collect();
     let ctx = SigCtx::new(src, uri.and_then(uri_to_path).as_deref()); // M46a: firmas para el detalle
     members
@@ -1429,7 +1230,7 @@ fn members_to_completion_items(members: Vec<crate::checker::MemberItem>, src: &s
 /// `completing`) enumera los miembros del tipo del operando izquierdo —incluidas las funciones libres
 /// aplicables por UFCS—. Se ofrecen también métodos/campos del tipo (ligera sobre-inclusión inocua: el
 /// editor filtra por el prefijo tecleado). `None` si el cursor no está tras un `|>`.
-fn pipeline_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+pub(super) fn pipeline_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
     let lines: Vec<&str> = src.split('\n').collect();
     let line = lines.get(line0)?;
     let chars: Vec<char> = line.chars().collect();
@@ -1480,7 +1281,7 @@ fn pipeline_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: 
 /// módulos (`webserver.Request`, un `from M import Tipo`). Si no es un archivo o el loader falla
 /// (buffer suelto, otro error a medio escribir, import roto), cae al buffer aislado con
 /// recuperación de errores (el comportamiento previo). Misma idea que `index_for` (hover/def).
-fn member_completion_of(uri: Option<&str>, repaired: &str) -> Vec<checker::MemberItem> {
+pub(super) fn member_completion_of(uri: Option<&str>, repaired: &str) -> Vec<checker::MemberItem> {
     if let Some(path) = uri.and_then(uri_to_path)
         && let Ok(loaded) = load(&path, repaired)
     {
@@ -1492,7 +1293,7 @@ fn member_completion_of(uri: Option<&str>, repaired: &str) -> Vec<checker::Membe
     checker::member_completion(&mut program)
 }
 
-fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
+pub(super) fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
     let lines: Vec<&str> = src.split('\n').collect();
     let line = lines.get(line0)?;
     let chars: Vec<char> = line.chars().collect();
@@ -1613,7 +1414,7 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
 /// Los símbolos `pub` del módulo cuyo **leaf** de import es `receptor` (M45c-3): `import a/b/c [as x];`
 /// liga el leaf `x` (o `c`), y `x.` / `c.` accede calificado a sus `pub`. `None` si `receptor` no es
 /// el leaf de ningún `import` del archivo (o no hay URI para resolver desde disco).
-fn module_alias_symbols(uri: Option<&str>, src: &str, receiver: &str) -> Option<Json> {
+pub(super) fn module_alias_symbols(uri: Option<&str>, src: &str, receiver: &str) -> Option<Json> {
     if receiver.is_empty() {
         return None;
     }
@@ -1631,11 +1432,10 @@ fn module_alias_symbols(uri: Option<&str>, src: &str, receiver: &str) -> Option<
     Some(Json::Arr(list))
 }
 
-
 /// El `result` de `textDocument/completion`: los símbolos ofrecibles en el documento (funciones y
 /// tipos definidos —incluido el prelude—, builtins y palabras clave). No filtra por ámbito ni por
 /// prefijo (el cliente filtra por lo ya escrito); es una completion "de archivo", el primer escalón.
-fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     if uri.is_some_and(is_template_uri) {
         // M55: en un template — tras un `.`, los MIEMBROS del receptor (vía el módulo generado:
@@ -1837,7 +1637,7 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// encierran el cursor** (tipo inferido: iterar un param `[T]` → `T`; un rango `a..b` → `int`) y,
 /// en contexto de etiqueta `{%`, las palabras clave del template. Todo por escaneo textual: el
 /// template está a medio escribir mientras se pide completion, no se puede tokenizar entero.
-fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
+pub(super) fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
     let Some((is_tag, vars)) = template_scope(src, line0, char0) else {
         // Fuera de los delimitadores (HTML): NO se compite con la completion de HTML del editor,
         // pero sí se ofrecen los BLOQUES del template como snippets (teclear `for` o `if` inserta
@@ -1907,7 +1707,7 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
 /// lista y filtrar en cliente), así los `additionalTextEdits` de los snippets se calculan siempre
 /// contra el documento actual y nunca aplican posiciones desfasadas. El cálculo es textual →
 /// re-consultar es barato.
-fn template_completion_list(items: Vec<Json>) -> Json {
+pub(super) fn template_completion_list(items: Vec<Json>) -> Json {
     obj(vec![("isIncomplete", Json::Bool(true)), ("items", Json::Arr(items))])
 }
 
@@ -1918,7 +1718,7 @@ fn template_completion_list(items: Vec<Json>) -> Json {
 /// `(línea0, col_ini, col_fin)`: el rango que el snippet REEMPLAZA como `textEdit` explícito —
 /// la palabra parcial tecleada + el cierre huérfano del auto-close — para que ningún cliente
 /// tenga que adivinar el reemplazo (cada uno lo hace distinto).
-fn template_block_snippets(with_opener: bool, lead_space: bool, replace: Option<(usize, usize, usize)>) -> Vec<Json> {
+pub(super) fn template_block_snippets(with_opener: bool, lead_space: bool, replace: Option<(usize, usize, usize)>) -> Vec<Json> {
     // Multilínea, con el ESTILO DEL FORMATEADOR (etiqueta en su línea, cuerpo sangrado): el `\t`
     // del snippet lo traduce el editor a su indentación, y re-indenta las líneas al nivel del
     // punto de inserción (comportamiento estándar de los snippets LSP).
@@ -1962,7 +1762,7 @@ fn template_block_snippets(with_opener: bool, lead_space: bool, replace: Option<
 /// cabecera `{% params %}` más las variables de los `{% for %}` que encierran el cursor (con su
 /// tipo inferido: iterar un param `[T]` → `T`, un rango `a..b` → `int`). Escaneo textual del
 /// prefijo hasta el cursor: mientras escribes, el template no tokeniza entero.
-fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(String, String)>)> {
+pub(super) fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(String, String)>)> {
     // El texto hasta el cursor (la línea del cursor cortada en char0, por caracteres).
     let mut prefix = String::new();
     for (i, l) in src.lines().enumerate() {
@@ -2031,7 +1831,7 @@ fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(S
 /// Hover en un template `.ray.html` (M55): sobre un **param** de la cabecera o una **variable de
 /// `{% for %}`** en ámbito, dentro de los delimitadores → `nombre: tipo` con el rango del
 /// identificador. `None` en cualquier otro sitio (el HTML no es nuestro).
-fn template_hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+pub(super) fn template_hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
     let (name, start, end) = ident_range_under_cursor(src, line0, char0)?;
     // El ámbito se calcula en el INICIO del identificador (así el propio nombre no cuenta como
     // texto del prefijo y un cursor al final del ident no cambia el resultado).
@@ -2056,7 +1856,7 @@ fn template_hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, u
 /// El módulo generado de un template + su line map + el URI del `.ray` hermano (con el que el
 /// loader resuelve `from std/template import …` y las path-deps). `None` si el template no genera
 /// (con error de sintaxis del template no hay semántica; la heurística textual sigue funcionando).
-fn template_generated(uri: &str, src: &str) -> Option<(String, Vec<usize>, String)> {
+pub(super) fn template_generated(uri: &str, src: &str) -> Option<(String, Vec<usize>, String)> {
     let path = uri_to_path(uri);
     let name = path
         .as_deref()
@@ -2070,7 +1870,7 @@ fn template_generated(uri: &str, src: &str) -> Option<(String, Vec<usize>, Strin
 
 /// Busca `needle` en `hay` con **fronteras de identificador** (si la aguja empieza/termina en un
 /// carácter de identificador, el vecino no puede serlo): evita casar `n` dentro de `nombre`.
-fn find_frag(hay: &str, needle: &str) -> Option<usize> {
+pub(super) fn find_frag(hay: &str, needle: &str) -> Option<usize> {
     let mut from = 0;
     while let Some(i) = hay[from..].find(needle) {
         let p = from + i;
@@ -2092,7 +1892,7 @@ fn find_frag(hay: &str, needle: &str) -> Option<usize> {
 /// delimitador (en una etiqueta, sin la palabra clave: `{% if cond %}` → `cond`, que sí aparece en
 /// el `if cond {` generado; en `{% params … %}` la lista aparece en la firma de la función) y se
 /// localiza en la línea generada que el line map atribuye a esta línea del template.
-fn template_pos_to_generated(src: &str, code: &str, map: &[usize], line0: usize, char0: usize) -> Option<(usize, usize)> {
+pub(super) fn template_pos_to_generated(src: &str, code: &str, map: &[usize], line0: usize, char0: usize) -> Option<(usize, usize)> {
     let line = src.lines().nth(line0)?;
     let cursor_b = line.char_indices().nth(char0).map(|(b, _)| b).unwrap_or(line.len());
     // El abridor más cercano a la izquierda del cursor (en esta línea). En `{{&`, `{{` casa en la
@@ -2151,7 +1951,7 @@ type TplOcc = (usize, usize, usize, String, bool);
 /// ámbitos: pila de bloques `for` (cada uno puede declarar varias variables: `for (k, v) in m`);
 /// un ident precedido por `.` (miembro), una palabra clave o un nombre de tipo de la cabecera
 /// no ligan. Solo cuenta delimitadores abiertos y cerrados en la misma línea.
-fn template_occurrences(src: &str) -> Vec<TplOcc> {
+pub(super) fn template_occurrences(src: &str) -> Vec<TplOcc> {
     let params: Vec<String> = crate::templ::header_params(src).into_iter().map(|(n, _)| n).collect();
     let keywords = ["params", "if", "elif", "else", "endif", "for", "endfor", "in", "include", "import", "let", "extends", "block", "endblock", "true", "false"];
     let mut out: Vec<TplOcc> = Vec::new();
@@ -2265,14 +2065,14 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
 }
 
 /// La ocurrencia del template que contiene la posición `(line0, char0)`, si la hay.
-fn template_occurrence_at(occs: &[TplOcc], line0: usize, char0: usize) -> Option<&TplOcc> {
+pub(super) fn template_occurrence_at(occs: &[TplOcc], line0: usize, char0: usize) -> Option<&TplOcc> {
     occs.iter().find(|(l, c, len, _, _)| *l == line0 && char0 >= *c && char0 < *c + *len)
 }
 
 /// Hover semántico en un template: la posición se traduce al módulo generado y el hover corre ahí
 /// (tipos REALES del checker: `fila.precio` → `float`). El rango devuelto es el del identificador
 /// en el TEMPLATE (las columnas del generado no significan nada para el editor).
-fn template_semantic_hover(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+pub(super) fn template_semantic_hover(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
     let (name, start, end) = ident_range_under_cursor(src, line0, char0)?;
     let (code, map, gen_uri) = template_generated(uri, src)?;
     let (gl, gc) = template_pos_to_generated(src, &code, &map, line0, char0)?;
@@ -2291,7 +2091,7 @@ fn template_semantic_hover(uri: &str, src: &str, line0: usize, char0: usize) -> 
 /// declaración que cae en OTRO archivo (un struct importado, una función del proyecto) se devuelve
 /// tal cual; una que cae en el propio generado (un param, una var de for) se traduce de vuelta al
 /// template con el line map (p. ej. un param lleva a la línea del `{% params %}`).
-fn template_definition(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Json> {
+pub(super) fn template_definition(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Json> {
     let (code, map, gen_uri) = template_generated(uri, src)?;
     let (gl, gc) = template_pos_to_generated(src, &code, &map, line0, char0)?;
     let (target_uri, dl0, dc0, len) = definition_at(&gen_uri, &code, gl, gc)?;
@@ -2321,7 +2121,7 @@ fn template_definition(uri: &str, src: &str, line0: usize, char0: usize) -> Opti
 /// Los nombres en ámbito local (params + `let`/`var`) de la función que contiene `cursor_line`
 /// (1-basado), declarados en o antes de esa línea (M10.2f). Sin spans, el alcance es la **función**
 /// envolvente (la de mayor línea de inicio que no la supera), no el bloque exacto: degradación honesta.
-fn scope_locals(program: &crate::ast::Program, cursor_line: usize) -> Vec<String> {
+pub(super) fn scope_locals(program: &crate::ast::Program, cursor_line: usize) -> Vec<String> {
     let Some(f) = program.functions.iter()
         .filter(|f| f.line <= cursor_line && !f.name.contains('#') && !f.name.contains("::"))
         .max_by_key(|f| f.line)
@@ -2335,7 +2135,7 @@ fn scope_locals(program: &crate::ast::Program, cursor_line: usize) -> Vec<String
 
 /// Recolecta los nombres de `let`/`var` de un bloque (recursivo en bloques anidados) cuya línea no
 /// supere `cursor_line`.
-fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &mut Vec<String>) {
+pub(super) fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &mut Vec<String>) {
     use crate::ast::{ExprKind, StmtKind};
     fn visit_expr(e: &crate::ast::Expr, cursor_line: usize, out: &mut Vec<String>) {
         match &e.kind {
@@ -2367,7 +2167,7 @@ fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &mut Vec<Str
 /// El `result` de `textDocument/signatureHelp` (M10.2f): la firma de la función cuya llamada se está
 /// escribiendo bajo el cursor, con el parámetro activo resaltado. `null` si no hay una llamada en
 /// curso o la función no se conoce.
-fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
     if is_template_uri(&uri) {
@@ -2385,7 +2185,7 @@ fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 
 /// El signature help en una posición concreta de una fuente raylang (extraído de
 /// `signature_help_result` para que los templates lo reusen sobre su módulo generado).
-fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
+pub(super) fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
     // 1. Hallar la llamada en curso: el nombre, cuántas comas la preceden (param activo) y el receptor
     //    si es una llamada por punto (`recv.m(`).
     let Some((name, active, receiver)) = enclosing_call(src, line0, char0) else { return Json::Null };
@@ -2454,7 +2254,7 @@ fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
 /// donde `params` son las cadenas `nombre: Tipo` y `retorno` el tipo de retorno (`unit` si no hay
 /// `->`). Textual a propósito: funciona aunque el resto del archivo no parsee (el caso normal al
 /// escribir argumentos). Solo exige que la **declaración** esté bien formada.
-fn find_fn_signature(src: &str, name: &str) -> Option<(Vec<String>, String)> {
+pub(super) fn find_fn_signature(src: &str, name: &str) -> Option<(Vec<String>, String)> {
     let cs: Vec<char> = src.chars().collect();
     let needle: Vec<char> = format!("fn {}", name).chars().collect();
     let mut i = 0;
@@ -2510,13 +2310,13 @@ fn find_fn_signature(src: &str, name: &str) -> Option<(Vec<String>, String)> {
 /// declaración `fn` —el buffer, los módulos importados (leídos de disco) y el prelude—. Se construye
 /// **una vez** por petición de completion y se consulta por nombre. Textual (tolera archivo a medio
 /// escribir); reusa `find_fn_signature`/`builtins::signature`, las mismas que el signature help.
-struct SigCtx {
+pub(super) struct SigCtx {
     sources: Vec<String>,
 }
 
 /// Las rutas de módulo que `src` importa o reexporta (`import M;` / `[pub] from M import …`), para
 /// el cierre transitivo de `SigCtx`.
-fn imported_paths(src: &str) -> Vec<String> {
+pub(super) fn imported_paths(src: &str) -> Vec<String> {
     let Ok(tokens) = lexer::lex(src) else { return Vec::new() };
     let (program, _) = parser::parse_all(tokens);
     let mut paths: Vec<String> = program.imports.iter().map(|d| d.module.clone()).collect();
@@ -2595,7 +2395,7 @@ impl SigCtx {
 /// El cuerpo del snippet de argumentos a partir de los params `["p: P", "k: int"]` (M46c):
 /// `${1:p}, ${2:k}` —solo el **nombre** como placeholder, para teclear encima y recorrer con Tab—.
 /// Vacío si no hay params (→ `nombre()`).
-fn snippet_args(params: &[String]) -> String {
+pub(super) fn snippet_args(params: &[String]) -> String {
     params.iter().enumerate()
         .map(|(i, p)| {
             let name = p.split(':').next().unwrap_or(p).trim();
@@ -2607,7 +2407,7 @@ fn snippet_args(params: &[String]) -> String {
 
 /// El `insertText` (snippet) de una llamada (M46c): con los params resueltos, `nombre(${1:p}, …)`
 /// (placeholders navegables); sin firma pero con args, `nombre($0)` (cursor dentro); si no, `nombre()`.
-fn insert_call(label: &str, params: Option<&[String]>, has_args: bool) -> String {
+pub(super) fn insert_call(label: &str, params: Option<&[String]>, has_args: bool) -> String {
     match params {
         Some(ps) if !ps.is_empty() => format!("{}({})", label, snippet_args(ps)),
         Some(_) => format!("{}()", label),               // firma conocida, sin argumentos
@@ -2619,7 +2419,7 @@ fn insert_call(label: &str, params: Option<&[String]>, has_args: bool) -> String
 /// M48.1: los parámetros de una función asociada, extraídos textualmente de su firma del registro
 /// (`Channel.bounded(n: int) -> Channel<T>` → `["n: int"]`; `Map.new() -> Map<K, V>` → `[]`). Toma el
 /// contenido entre el primer `(` y su `)` de cierre y lo parte por comas de nivel superior.
-fn assoc_param_names(sig: &str) -> Vec<String> {
+pub(super) fn assoc_param_names(sig: &str) -> Vec<String> {
     let cs: Vec<char> = sig.chars().collect();
     let Some(open) = cs.iter().position(|&c| c == '(') else { return Vec::new() };
     let (mut depth, mut end) = (0i32, open);
@@ -2636,7 +2436,7 @@ fn assoc_param_names(sig: &str) -> Vec<String> {
 
 /// Empuja el detalle de una firma **ya resuelta** (M46a): `labelDetails.detail` (params) +
 /// `labelDetails.description` (retorno) + `detail` (panel). Si `metodo`, recorta el receptor.
-fn push_signature_raw(fields: &mut Vec<(&'static str, Json)>, mut params: Vec<String>, ret: String, is_method: bool) {
+pub(super) fn push_signature_raw(fields: &mut Vec<(&'static str, Json)>, mut params: Vec<String>, ret: String, is_method: bool) {
     if is_method && !params.is_empty() {
         params.remove(0); // el receptor
     }
@@ -2650,7 +2450,7 @@ fn push_signature_raw(fields: &mut Vec<(&'static str, Json)>, mut params: Vec<St
 
 /// Parte una lista de parámetros por comas de **nivel superior** (ignora las anidadas en `<…>` o
 /// `(…)`, p. ej. `f: fn(int) -> int`). Recorta los espacios; descarta los vacíos.
-fn split_top_commas(s: &str) -> Vec<String> {
+pub(super) fn split_top_commas(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let (mut depth, mut start) = (0i32, 0usize);
     let cs: Vec<char> = s.chars().collect();
@@ -2675,7 +2475,7 @@ fn split_top_commas(s: &str) -> Vec<String> {
 /// y el nº de comas de nivel superior antes del cursor (el índice del parámetro activo). Escanea el
 /// texto hasta el cursor hacia atrás contando paréntesis: el primer `(` sin cerrar abre la llamada
 /// actual, y el identificador inmediatamente anterior es su nombre.
-fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usize, Option<String>)> {
+pub(super) fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usize, Option<String>)> {
     // Prefijo: todo el texto desde el inicio hasta el cursor.
     let mut prefix = String::new();
     for (i, line) in src.lines().enumerate() {
@@ -2705,7 +2505,7 @@ fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usiz
 /// por **punto** (`recv.nombre`)— el **receptor** (`recv`). `None` (el receptor) si no hay `.`. Se usa
 /// para el signature help: si el receptor es un **valor** se recorta el primer parámetro (es un
 /// método); si es un **módulo** importado, no (llamada calificada, M46b).
-fn ident_before(cs: &[char], i: usize) -> Option<(String, Option<String>)> {
+pub(super) fn ident_before(cs: &[char], i: usize) -> Option<(String, Option<String>)> {
     let mut j = i;
     while j > 0 && cs[j - 1].is_whitespace() {
         j -= 1;
@@ -2746,7 +2546,7 @@ fn ident_before(cs: &[char], i: usize) -> Option<(String, Option<String>)> {
 
 /// ¿`name` es el **leaf** de algún `import` del archivo (un módulo calificable, no un valor)?
 /// (M46b: un `u.cuadrado(` no recorta el receptor, a diferencia de un método `p.doblar(`.)
-fn is_imported_module(src: &str, name: &str) -> bool {
+pub(super) fn is_imported_module(src: &str, name: &str) -> bool {
     lexer::lex(src)
         .ok()
         .map(|t| {
@@ -2757,7 +2557,7 @@ fn is_imported_module(src: &str, name: &str) -> bool {
 }
 
 /// Lee un `Json::Num` como `usize` (las posiciones LSP son enteros).
-fn as_usize(j: &Json) -> Option<usize> {
+pub(super) fn as_usize(j: &Json) -> Option<usize> {
     match j {
         Json::Num(n) => Some(*n as usize),
         _ => None,
@@ -2770,7 +2570,7 @@ fn as_usize(j: &Json) -> Option<usize> {
 /// por su versión formateada. Reusa `fmt::format_source` —**el mismo** formateador que `ray fmt`—,
 /// así el LSP y la CLI dan idéntico resultado. Lista vacía si el documento **no parsea** (no se
 /// formatea código inválido; el editor conserva lo escrito) o si ya está formateado (nada que tocar).
-fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let params = msg.get("params");
     let uri = params.and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
@@ -2816,7 +2616,7 @@ fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// Se construye del AST del **propio buffer** (`parse_all`, tolerante a errores) —no del programa
 /// fusionado— para listar solo lo que el usuario escribió, sin prelude ni otros módulos. Sin spans,
 /// el rango de cada símbolo es el de su **nombre** (una línea); basta para el índice y para saltar.
-fn document_symbol_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn document_symbol_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
     if uri.is_some_and(is_template_uri) {
@@ -2897,13 +2697,13 @@ fn document_symbol_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 }
 
 /// Un `DocumentSymbol` cuyo nombre visible **es** el identificador buscado en la fuente.
-fn doc_symbol(lines: &[&str], line: usize, col: usize, name: &str, kind: i64, children: Vec<Json>) -> Json {
+pub(super) fn doc_symbol(lines: &[&str], line: usize, col: usize, name: &str, kind: i64, children: Vec<Json>) -> Json {
     doc_symbol_named(lines, line, col, name, name, kind, children)
 }
 
 /// Un `DocumentSymbol` con `etiqueta` como nombre mostrado y `buscar` como el identificador a
 /// localizar en la fuente (p. ej. un `impl` muestra "impl T for X" pero su rango apunta a `T`).
-fn doc_symbol_named(lines: &[&str], line: usize, col: usize, search_name: &str, label: &str, kind: i64, children: Vec<Json>) -> Json {
+pub(super) fn doc_symbol_named(lines: &[&str], line: usize, col: usize, search_name: &str, label: &str, kind: i64, children: Vec<Json>) -> Json {
     // El rango del símbolo es el de su nombre (sin spans no tenemos la extensión completa del ítem;
     // el nombre basta para listarlo y para saltar al hacer clic). `decl_name_range` escanea desde la
     // posición de la declaración (que apunta al keyword `fn`/`struct`/… o ya al nombre).
@@ -2928,7 +2728,7 @@ fn doc_symbol_named(lines: &[&str], line: usize, col: usize, search_name: &str, 
 /// símbolo bajo el cursor en ESTE archivo (la declaración como *Write*, los usos como *Text*). Reusa
 /// `symbol_occurrences` (el mismo motor de find-references), que ya resuelve los ámbitos y filtra a
 /// la banda de la entrada. Lista vacía si no hay un símbolo bajo el cursor.
-fn document_highlight_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+pub(super) fn document_highlight_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
     let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
     if is_template_uri(&uri) {
@@ -2962,2026 +2762,4 @@ fn document_highlight_result(msg: &Json, docs: &HashMap<String, String>) -> Json
         highlights.push(obj(vec![("range", range(l, c, c + len)), ("kind", num(1))]));
     }
     Json::Arr(highlights)
-}
-
-// ── Análisis: el puente con el compilador ────────────────────────────────────────────
-
-/// Un diagnóstico del front-end: posición **1-basada** (como reportan las fases), la
-/// extensión del error en caracteres (M33a; `1` si la fase no la conoce) y el mensaje,
-/// que es el `Display` del error (la misma cabecera que muestra el terminal).
-pub struct Diag {
-    pub line: usize,
-    pub col: usize,
-    pub len: usize,
-    pub message: String,
-}
-
-/// Corre el front-end **sin ejecutar** y devuelve TODOS los errores (M33c, hasta el tope
-/// de cada fase): un error léxico corta (sin tokens no hay nada que recuperar); los de
-/// sintaxis se acumulan con recuperación (`parse_all`); solo si el parse quedó limpio se
-/// pasa al checker (`check_all`) — los errores de tipos sobre un AST parcial serían
-/// cascada basura. Es lo que publica `publishDiagnostics`.
-pub fn analyze_all(src: &str) -> Vec<Diag> {
-    let diag = |line: usize, col: usize, len: usize, message: String| Diag { line, col, len, message };
-    let tokens = match lexer::lex(src) {
-        Ok(t) => t,
-        Err(e) => return vec![diag(e.line, e.col, e.len, e.to_string())],
-    };
-    let (mut program, perrs) = parser::parse_all(tokens);
-    if !perrs.is_empty() {
-        return perrs.into_iter().map(|e| diag(e.line, e.col, e.len, e.to_string())).collect();
-    }
-    // `check_all_modulo`: sin exigir `main`. Un buffer sin guardar puede ser un archivo de módulo
-    // (sin entrada); que le falte `main` es asunto de proyecto (lo cazan `ray build`/`ray run`), no
-    // un diagnóstico de este archivo. Así un módulo suelto muestra sus errores reales, no ese ruido.
-    checker::check_all_modulo(&mut program)
-        .into_iter()
-        .map(|e| diag(e.line, e.col, e.len, e.to_string()))
-        .collect()
-}
-
-/// Corre el front-end (lexer → parser → checker) **sin ejecutar** y devuelve el primer
-/// error, si lo hay. Es todo el acoplamiento con el compilador: la API pública, nada más.
-pub fn analyze(src: &str) -> Option<Diag> {
-    let tokens = match lexer::lex(src) {
-        Ok(t) => t,
-        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() }),
-    };
-    let mut program = match parser::parse(tokens) {
-        Ok(p) => p,
-        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() }),
-    };
-    if let Err(e) = checker::check(&mut program) {
-        return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() });
-    }
-    None
-}
-
-// ── Construcción de mensajes salientes ───────────────────────────────────────────────
-
-/// La respuesta a `initialize`: anuncia las capacidades del servidor.
-fn initialize_response(id: Json) -> Json {
-    let capabilities = obj(vec![
-        // 1 = Full sync: el cliente reenvía el documento entero en cada cambio.
-        ("textDocumentSync", num(1)),
-        // M10.2b: el servidor responde hover (el tipo bajo el cursor) e ir-a-definición.
-        ("hoverProvider", Json::Bool(true)),
-        ("definitionProvider", Json::Bool(true)),
-        // Cluster 4: find-references y rename (sobre el índice semántico + la fuente).
-        ("referencesProvider", Json::Bool(true)),
-        ("renameProvider", Json::Bool(true)),
-        // Cluster 4 + M45: completion. `.` dispara el completion de **miembros** (`recv.` →
-        // campos/métodos/builtins/UFCS del tipo del receptor); `>` lo dispara tras un `|>`
-        // (pipeline) para ofrecer las funciones aplicables sin teclear la primera letra —el
-        // segundo carácter de `|>` es la señal—. El espacio ` ` también dispara, pero **solo**
-        // ofrece algo en contexto de pipeline (`|> `): fuera de él devuelve vacío, para no inundar
-        // tras cada espacio del archivo. Tras `->`/`>` sueltos cae a completion de archivo.
-        ("completionProvider", obj(vec![
-            ("triggerCharacters", Json::Arr(vec![text("."), text(">"), text(" ")])),
-        ])),
-        // M10.2f: signature help — la firma de la función mientras se escriben los argumentos.
-        ("signatureHelpProvider", obj(vec![
-            ("triggerCharacters", Json::Arr(vec![text("("), text(",")])),
-        ])),
-        // Formateo del documento (reusa `ray fmt`), outline de símbolos y resaltado de ocurrencias.
-        ("documentFormattingProvider", Json::Bool(true)),
-        ("documentSymbolProvider", Json::Bool(true)),
-        ("documentHighlightProvider", Json::Bool(true)),
-    ]);
-    let result = obj(vec![
-        ("capabilities", capabilities),
-        ("serverInfo", obj(vec![("name", text("raylang-lsp"))])),
-    ]);
-    result_message(id, result)
-}
-
-/// Una respuesta JSON-RPC exitosa: `{ jsonrpc, id, result }`.
-fn result_message(id: Json, result: Json) -> Json {
-    obj(vec![("jsonrpc", text("2.0")), ("id", id), ("result", result)])
-}
-
-/// Una respuesta JSON-RPC de error "método no encontrado" (-32601).
-fn method_error(id: Json, method: &str) -> Json {
-    let error = obj(vec![
-        ("code", num(-32601)),
-        ("message", Json::Str(format!("unsupported method: {method}"))),
-    ]);
-    obj(vec![("jsonrpc", text("2.0")), ("id", id), ("error", error)])
-}
-
-/// Analiza la fuente y construye la notificación `publishDiagnostics` para ese documento.
-fn diagnostics(uri: &str, src: &str) -> Json {
-    // M55: un buffer `.ray.html` es un TEMPLATE — se diagnostica con su propio pipeline (generar +
-    // analizar el módulo generado + traducir las líneas de vuelta al template con el line map).
-    if is_template_uri(uri) {
-        return template_diagnostics(uri, src);
-    }
-    // Soporte de módulos: si el documento es un archivo, se analiza **con el loader** (resolviendo
-    // sus imports desde disco) para no marcar errores espurios en proyectos multi-archivo. Si no es
-    // un archivo o el buffer ni siquiera parsea, se cae al análisis de un solo archivo (multi-error).
-    let diags = analyze_modular(uri, src).unwrap_or_else(|| analyze_all(src));
-    let json = diags.iter().map(|d| diagnostic_json(src, d)).collect();
-    publish(uri, json)
-}
-
-/// ¿El documento es un template compilable (`.ray.html`)? Sus diagnósticos van por `ray templ`;
-/// el resto de features del LSP (hover/definición/…) no aplican (devuelven null).
-fn is_template_uri(uri: &str) -> bool {
-    uri.ends_with(".ray.html")
-}
-
-/// Diagnósticos de un template `.ray.html` (M55): (1) los errores del PROPIO template (etiqueta sin
-/// cerrar, params mal formados…) salen con su línea; (2) si el template genera, se analiza el
-/// módulo raylang GENERADO (con el loader, contra la ruta del `.ray` hermano → `std/template` y las
-/// path-deps resuelven) y cada error se TRADUCE de vuelta a su línea del template con el line map —
-/// el typo en `{{ titluo }}` se subraya en el HTML.
-fn template_diagnostics(uri: &str, src: &str) -> Json {
-    let path = uri_to_path(uri);
-    let name = path
-        .as_deref()
-        .and_then(|p| crate::templ::fn_suffix_of(p).ok())
-        .unwrap_or_else(|| "vista".to_string());
-    let dir = path.as_deref().and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    let (code, map) = match crate::templ::generate_with_map_at(src, &name, dir.as_deref()) {
-        Err(e) => {
-            let d = Diag { line: e.line, col: 1, len: usize::MAX, message: format!("template: {}", e.msg) };
-            return publish(uri, vec![diagnostic_json(src, &d)]);
-        }
-        Ok(x) => x,
-    };
-    // Analizar el generado: con loader si conocemos la ruta (resuelve `from std/template import …`);
-    // si el buffer no es un archivo, al menos lex+parse del generado (el check daría falsos
-    // positivos sin resolver el import del escape).
-    let gen_diags: Vec<Diag> = match &path {
-        Some(p) => {
-            let gen_path = PathBuf::from(p.to_string_lossy().trim_end_matches(".html").to_string());
-            analyze_modular(&format!("file://{}", gen_path.display()), &code).unwrap_or_else(|| analyze_all(&code))
-        }
-        None => match crate::lexer::lex(&code) {
-            Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string() }],
-            Ok(tokens) => match crate::parser::parse(tokens) {
-                Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string() }],
-                Ok(_) => vec![],
-            },
-        },
-    };
-    let json = gen_diags
-        .iter()
-        .map(|d| {
-            let tpl_line = map.get(d.line.saturating_sub(1)).copied().unwrap_or(1).max(1);
-            let td = Diag { line: tpl_line, col: 1, len: usize::MAX, message: format!("template: {}", d.message) };
-            diagnostic_json(src, &td)
-        })
-        .collect();
-    publish(uri, json)
-}
-
-/// Diagnósticos **con módulos**: corre el loader sobre el buffer de entrada (imports leídos de
-/// disco) y devuelve los errores que caen en ESTE archivo, con su línea local. Devuelve `None`
-/// cuando conviene caer al análisis de un solo archivo: si el URI no es un `file:` (buffer sin
-/// guardar) o si el buffer de entrada ni siquiera parsea (así el fallback da errores de sintaxis
-/// precisos y multi-error sobre la entrada, en vez de un único error del loader).
-fn analyze_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
-    let path = uri_to_path(uri)?;
-    match load(&path, src) {
-        Ok(loaded) => {
-            // El módulo de entrada es la banda que empieza más arriba (delta 0 → línea local =
-            // global). Solo publicamos SUS errores: los de otros módulos pertenecen a sus URIs.
-            let entry_start = loaded.modules.iter().map(|m| m.start_line).min().unwrap_or(1);
-            let mut program = loaded.program;
-            // `check_all_modulo`: el archivo abierto puede ser un **submódulo sin `main`** (legítimo);
-            // no exigimos la entrada para no marcar "falta la función de entrada 'main'" en cada módulo.
-            let diags = checker::check_all_modulo(&mut program)
-                .into_iter()
-                .filter_map(|e| {
-                    let m = loaded.modules.iter().rev().find(|m| m.start_line <= e.line)?;
-                    (m.start_line == entry_start).then(|| Diag {
-                        line: e.line - m.start_line + 1,
-                        col: e.col,
-                        len: e.len,
-                        message: e.to_string(),
-                    })
-                })
-                .collect();
-            Some(diags)
-        }
-        Err(e) => {
-            // El loader no pudo cargar. Si el buffer de entrada parsea, el fallo es de un import
-            // (módulo ausente, cápsula violada, dependencia que no parsea) → un diagnóstico al
-            // inicio. Si no parsea, `None` para que el fallback dé los errores de sintaxis precisos.
-            let entry_parses = lexer::lex(src).ok().and_then(|t| parser::parse(t).ok()).is_some();
-            entry_parses.then(|| vec![Diag { line: 1, col: 1, len: 1, message: e.message }])
-        }
-    }
-}
-
-/// Convierte un URI `file://…` a una ruta del sistema (decodificando `%XX`). `None` si no es un
-/// `file:` (p. ej. un buffer `untitled:` sin archivo → se analiza en modo de un solo archivo).
-fn uri_to_path(uri: &str) -> Option<PathBuf> {
-    let rest = uri.strip_prefix("file://")?;
-    // `file:///Users/…` → host vacío; la ruta arranca en el tercer '/'. Un raro `localhost` se ignora.
-    let path = rest.strip_prefix("localhost").unwrap_or(rest);
-    Some(PathBuf::from(percent_decode(path)))
-}
-
-/// Decodifica los `%XX` de un URI (p. ej. `%20` → espacio). Sin dependencias.
-fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    let hex = |c: u8| (c as char).to_digit(16);
-    while i < b.len() {
-        if b[i] == b'%'
-            && i + 2 < b.len()
-            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
-        {
-            out.push((h * 16 + l) as u8);
-            i += 3;
-            continue;
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Raíces de dependencias para el loader (M39c): la caché `.ray-deps/` del proyecto que contiene
-/// `entry` (subiendo hasta el `ray.toml`), si existe. Alinea el LSP con `ray run`.
-fn dep_roots_for(entry: &Path) -> Vec<PathBuf> {
-    // Compartida con el CLI (`deps::dependency_roots_for`): caché `.ray-deps/` + el PADRE de cada
-    // dependencia por ruta (`nombre = "path:<dir>"`). Sin esto, un proyecto con path-deps (como
-    // `examples/db`) compilaba con `ray run` pero el editor marcaba "no se encuentra el módulo".
-    // No descarga nada (el LSP no toca la red al diagnosticar).
-    let dir = entry.parent().unwrap_or(Path::new("."));
-    crate::deps::dependency_roots_for(dir)
-}
-
-/// La raíz del proyecto que contiene `entry`: el **ancestro más cercano** (subiendo desde su carpeta)
-/// que contiene un `main.ray` —la entrada convencional, y por definición la raíz desde la que son
-/// absolutos los `import` (DESIGN §20.3: "la ruta es absoluta desde la raíz del proyecto, el directorio
-/// del archivo de entrada")—. `None` si no hay ninguno (archivo suelto sin proyecto).
-fn project_root_for(entry: &Path) -> Option<PathBuf> {
-    let mut dir = entry.parent()?;
-    loop {
-        if dir.join("main.ray").is_file() {
-            return Some(dir.to_path_buf());
-        }
-        dir = dir.parent()?;
-    }
-}
-
-/// Carga el buffer `src` (del archivo `entry`) con el loader, resolviendo los `import` desde disco.
-/// Si `entry` vive en un proyecto (hay un `main.ray` ancestro), usa esa **raíz** y la identidad de
-/// módulo **real** del archivo (su ruta relativa): así los imports absolutos y el enforcement de
-/// cápsula funcionan aunque el archivo abierto sea un submódulo profundo dentro de una cápsula. Si no
-/// hay proyecto (archivo suelto), carga como entrada en su propia carpeta (comportamiento clásico).
-fn load(entry: &Path, src: &str) -> Result<loader::Loaded, loader::LoadError> {
-    let deps = dep_roots_for(entry);
-    match project_root_for(entry) {
-        Some(root) => loader::load_source_module(entry, src, &root, &deps),
-        None => loader::load_source(entry, src, &deps),
-    }
-}
-
-/// Envuelve una lista de diagnósticos en la notificación `textDocument/publishDiagnostics`.
-fn publish(uri: &str, diags: Vec<Json>) -> Json {
-    let params = obj(vec![("uri", text(uri)), ("diagnostics", Json::Arr(diags))]);
-    obj(vec![
-        ("jsonrpc", text("2.0")),
-        ("method", text("textDocument/publishDiagnostics")),
-        ("params", params),
-    ])
-}
-
-/// Traduce un `Diag` (1-basado) a un diagnóstico LSP (rango 0-basado, severidad Error).
-fn diagnostic_json(src: &str, d: &Diag) -> Json {
-    // 1-basado (nuestras fases) → 0-basado (LSP).
-    let line0 = d.line.saturating_sub(1);
-    let start_char = d.col.saturating_sub(1);
-    // Con extensión conocida (M33a: lexer/parser reportan el token ofensor) subrayamos el
-    // lexema exacto; con `len == 1` (el checker, hasta M33a-2) conservamos el subrayado
-    // hasta el final de la línea (más visible que un solo carácter). El `character` de LSP
-    // cuenta unidades UTF-16; para código ASCII coincide con el número de caracteres, que
-    // es con lo que medimos la línea.
-    let line_len = src
-        .lines()
-        .nth(line0)
-        .map(|l| l.chars().count())
-        .unwrap_or(start_char + 1);
-    let end_char = if d.len > 1 {
-        start_char.saturating_add(d.len).min(line_len.max(start_char + 1))
-    } else if start_char < line_len {
-        line_len
-    } else {
-        start_char + 1
-    };
-    let pos = |ch: usize| obj(vec![("line", num(line0 as i64)), ("character", num(ch as i64))]);
-    obj(vec![
-        ("range", obj(vec![("start", pos(start_char)), ("end", pos(end_char))])),
-        ("severity", num(1)), // 1 = Error
-        ("source", text("raylang")),
-        ("message", Json::Str(d.message.clone())),
-    ])
-}
-
-// ── Constructores breves para JSON ───────────────────────────────────────────────────
-
-/// Un objeto JSON a partir de pares `(clave, valor)`.
-fn obj(pairs: Vec<(&str, Json)>) -> Json {
-    Json::Obj(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
-}
-/// Una cadena JSON.
-fn text(s: &str) -> Json {
-    Json::Str(s.to_string())
-}
-/// Un número JSON (entero).
-fn num(x: i64) -> Json {
-    Json::Num(x as f64)
-}
-
-// ── mod json: mini-JSON en std puro ──────────────────────────────────────────────────
-
-mod json {
-    //! Un JSON mínimo —parser y serializador— en `std` puro, sin dependencias.
-    //!
-    //! No es un JSON de producción: es justo lo que el LSP intercambia (leer los campos de
-    //! los mensajes entrantes y construir los salientes), pero correcto para ese tráfico,
-    //! incluido el *unescape* de cadenas con `\uXXXX` y parejas sustitutas UTF-16.
-
-    /// Un valor JSON. Los objetos preservan el orden de inserción (`Vec` de pares).
-    #[derive(Debug, Clone, PartialEq)]
-    pub enum Json {
-        Null,
-        Bool(bool),
-        Num(f64),
-        Str(String),
-        Arr(Vec<Json>),
-        Obj(Vec<(String, Json)>),
-    }
-
-    impl Json {
-        /// Busca una clave en un objeto (o `None` si no es objeto o no está).
-        pub fn get(&self, key: &str) -> Option<&Json> {
-            match self {
-                Json::Obj(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),
-                _ => None,
-            }
-        }
-        /// El contenido si es una cadena.
-        pub fn as_str(&self) -> Option<&str> {
-            match self {
-                Json::Str(s) => Some(s),
-                _ => None,
-            }
-        }
-        /// Los elementos si es un arreglo.
-        pub fn as_array(&self) -> Option<&[Json]> {
-            match self {
-                Json::Arr(a) => Some(a),
-                _ => None,
-            }
-        }
-
-        /// Serializa a texto JSON compacto.
-        pub fn serialize(&self) -> String {
-            let mut s = String::new();
-            self.write(&mut s);
-            s
-        }
-
-        fn write(&self, out: &mut String) {
-            match self {
-                Json::Null => out.push_str("null"),
-                Json::Bool(true) => out.push_str("true"),
-                Json::Bool(false) => out.push_str("false"),
-                Json::Num(n) => {
-                    // Los enteros se escriben sin parte decimal (id, line, severity…).
-                    if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e15 {
-                        out.push_str(&(*n as i64).to_string());
-                    } else {
-                        out.push_str(&n.to_string());
-                    }
-                }
-                Json::Str(s) => write_string(s, out),
-                Json::Arr(items) => {
-                    out.push('[');
-                    for (i, it) in items.iter().enumerate() {
-                        if i > 0 {
-                            out.push(',');
-                        }
-                        it.write(out);
-                    }
-                    out.push(']');
-                }
-                Json::Obj(pairs) => {
-                    out.push('{');
-                    for (i, (k, v)) in pairs.iter().enumerate() {
-                        if i > 0 {
-                            out.push(',');
-                        }
-                        write_string(k, out);
-                        out.push(':');
-                        v.write(out);
-                    }
-                    out.push('}');
-                }
-            }
-        }
-    }
-
-    /// Escribe una cadena JSON, escapando comillas, barras y caracteres de control.
-    fn write_string(s: &str, out: &mut String) {
-        out.push('"');
-        for c in s.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\t' => out.push_str("\\t"),
-                '\r' => out.push_str("\\r"),
-                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                c => out.push(c),
-            }
-        }
-        out.push('"');
-    }
-
-    /// Parsea un texto JSON a un `Json`.
-    pub fn parse(input: &str) -> Result<Json, String> {
-        let chars: Vec<char> = input.chars().collect();
-        let mut p = Parser { chars: &chars, i: 0 };
-        p.skip_ws();
-        let v = p.value()?;
-        p.skip_ws();
-        Ok(v)
-    }
-
-    /// Un descenso recursivo sobre el texto (vector de `char` + cursor).
-    struct Parser<'a> {
-        chars: &'a [char],
-        i: usize,
-    }
-
-    impl Parser<'_> {
-        fn peek(&self) -> Option<char> {
-            self.chars.get(self.i).copied()
-        }
-        fn bump(&mut self) -> Option<char> {
-            let c = self.peek();
-            if c.is_some() {
-                self.i += 1;
-            }
-            c
-        }
-        fn skip_ws(&mut self) {
-            while matches!(self.peek(), Some(' ' | '\t' | '\n' | '\r')) {
-                self.i += 1;
-            }
-        }
-
-        fn value(&mut self) -> Result<Json, String> {
-            self.skip_ws();
-            match self.peek() {
-                Some('{') => self.object(),
-                Some('[') => self.array(),
-                Some('"') => Ok(Json::Str(self.string()?)),
-                Some('t' | 'f') => self.boolean(),
-                Some('n') => self.null(),
-                Some(c) if c == '-' || c.is_ascii_digit() => self.number(),
-                other => Err(format!("token JSON inesperado: {other:?}")),
-            }
-        }
-
-        fn object(&mut self) -> Result<Json, String> {
-            self.bump(); // '{'
-            let mut pairs = Vec::new();
-            self.skip_ws();
-            if self.peek() == Some('}') {
-                self.bump();
-                return Ok(Json::Obj(pairs));
-            }
-            loop {
-                self.skip_ws();
-                if self.peek() != Some('"') {
-                    return Err("expected an object key".into());
-                }
-                let key = self.string()?;
-                self.skip_ws();
-                if self.bump() != Some(':') {
-                    return Err("expected ':' in an object".into());
-                }
-                let val = self.value()?;
-                pairs.push((key, val));
-                self.skip_ws();
-                match self.bump() {
-                    Some(',') => continue,
-                    Some('}') => break,
-                    other => return Err(format!("expected ',' or '}}', got {other:?}")),
-                }
-            }
-            Ok(Json::Obj(pairs))
-        }
-
-        fn array(&mut self) -> Result<Json, String> {
-            self.bump(); // '['
-            let mut items = Vec::new();
-            self.skip_ws();
-            if self.peek() == Some(']') {
-                self.bump();
-                return Ok(Json::Arr(items));
-            }
-            loop {
-                items.push(self.value()?);
-                self.skip_ws();
-                match self.bump() {
-                    Some(',') => continue,
-                    Some(']') => break,
-                    other => return Err(format!("expected ',' or ']', got {other:?}")),
-                }
-            }
-            Ok(Json::Arr(items))
-        }
-
-        fn string(&mut self) -> Result<String, String> {
-            self.bump(); // '"'
-            let mut s = String::new();
-            loop {
-                match self.bump() {
-                    None => return Err("unterminated string".into()),
-                    Some('"') => break,
-                    Some('\\') => self.escape(&mut s)?,
-                    Some(c) => s.push(c),
-                }
-            }
-            Ok(s)
-        }
-
-        /// Procesa un escape tras `\` y empuja el carácter resultante.
-        fn escape(&mut self, s: &mut String) -> Result<(), String> {
-            match self.bump() {
-                Some('"') => s.push('"'),
-                Some('\\') => s.push('\\'),
-                Some('/') => s.push('/'),
-                Some('n') => s.push('\n'),
-                Some('t') => s.push('\t'),
-                Some('r') => s.push('\r'),
-                Some('b') => s.push('\u{0008}'),
-                Some('f') => s.push('\u{000C}'),
-                Some('u') => {
-                    let cp = self.hex4()?;
-                    // Una pareja sustituta UTF-16 (alta + baja) codifica un carácter > BMP.
-                    if (0xD800..=0xDBFF).contains(&cp) {
-                        if self.bump() != Some('\\') || self.bump() != Some('u') {
-                            return Err("pareja sustituta UTF-16 incompleta".into());
-                        }
-                        let lo = self.hex4()?;
-                        let c = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                        if let Some(ch) = char::from_u32(c) {
-                            s.push(ch);
-                        }
-                    } else if let Some(ch) = char::from_u32(cp) {
-                        s.push(ch);
-                    }
-                }
-                other => return Err(format!("invalid escape: \\{other:?}")),
-            }
-            Ok(())
-        }
-
-        /// Cuatro dígitos hexadecimales (`\uXXXX`).
-        fn hex4(&mut self) -> Result<u32, String> {
-            let mut v = 0u32;
-            for _ in 0..4 {
-                let c = self.bump().ok_or("escape \\u incompleto")?;
-                let d = c.to_digit(16).ok_or("invalid hex digit")?;
-                v = v * 16 + d;
-            }
-            Ok(v)
-        }
-
-        fn number(&mut self) -> Result<Json, String> {
-            let start = self.i;
-            if self.peek() == Some('-') {
-                self.bump();
-            }
-            while matches!(
-                self.peek(),
-                Some(c) if c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-')
-            ) {
-                self.bump();
-            }
-            let s: String = self.chars[start..self.i].iter().collect();
-            s.parse::<f64>()
-                .map(Json::Num)
-                .map_err(|_| format!("invalid number: {s}"))
-        }
-
-        fn boolean(&mut self) -> Result<Json, String> {
-            if self.lit("true") {
-                Ok(Json::Bool(true))
-            } else if self.lit("false") {
-                Ok(Json::Bool(false))
-            } else {
-                Err("invalid boolean literal".into())
-            }
-        }
-
-        fn null(&mut self) -> Result<Json, String> {
-            if self.lit("null") {
-                Ok(Json::Null)
-            } else {
-                Err("invalid null literal".into())
-            }
-        }
-
-        /// Consume `word` si aparece literalmente en el cursor.
-        fn lit(&mut self, word: &str) -> bool {
-            let end = self.i + word.len();
-            if end <= self.chars.len() && self.chars[self.i..end].iter().collect::<String>() == word
-            {
-                self.i = end;
-                true
-            } else {
-                false
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn parses_nested_object() {
-            let v = parse(r#"{"a":1,"b":[true,null,"x"],"c":{"d":-2.5}}"#).unwrap();
-            assert_eq!(v.get("a"), Some(&Json::Num(1.0)));
-            assert_eq!(v.get("b").unwrap().as_array().unwrap().len(), 3);
-            assert_eq!(v.get("c").unwrap().get("d"), Some(&Json::Num(-2.5)));
-        }
-
-        #[test]
-        fn unescapes_strings() {
-            let v = parse(r#""línea\n\t\"fin\"""#).unwrap();
-            assert_eq!(v.as_str(), Some("línea\n\t\"fin\""));
-            // \uXXXX (BMP) y pareja sustituta (emoji).
-            assert_eq!(parse(r#""é""#).unwrap().as_str(), Some("é"));
-            assert_eq!(parse(r#""😀""#).unwrap().as_str(), Some("😀"));
-        }
-
-        #[test]
-        fn serialize_and_reparse_equal() {
-            let original = obj_from(vec![
-                ("jsonrpc", Json::Str("2.0".into())),
-                ("id", Json::Num(7.0)),
-                ("ok", Json::Bool(true)),
-                ("list", Json::Arr(vec![Json::Num(1.0), Json::Null])),
-            ]);
-            let serialized = original.serialize();
-            assert_eq!(parse(&serialized).unwrap(), original);
-            // Los enteros no llevan parte decimal.
-            assert!(serialized.contains("\"id\":7"));
-        }
-
-        fn obj_from(pairs: Vec<(&str, Json)>) -> Json {
-            Json::Obj(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn analyze_all_public_various_errors() {
-        // M33c: dos errores de tipos → dos diagnósticos.
-        let ds = analyze_all("fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { 0 }");
-        assert_eq!(ds.len(), 2, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-        assert_eq!((ds[0].line, ds[1].line), (1, 2));
-        // Dos errores de sintaxis → dos diagnósticos (recuperación del parser)…
-        let ds = analyze_all("fn f() -> int { let = 1; 0 }\nfn g() -> int { 2 + }\nfn main() -> int { 0 }");
-        assert!(ds.len() >= 2, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-        // …pero un parse sucio NO llega al checker (sería cascada sobre un AST parcial).
-        assert!(ds.iter().all(|d| d.message.contains("syntax")), "{:?}",
-            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-        // Sin errores → lista vacía (borra los diagnósticos previos del editor).
-        assert!(analyze_all("fn main() -> int { 0 }").is_empty());
-    }
-
-        #[test]
-    fn analyzes_valid_program_without_errors() {
-        assert!(analyze("fn main() -> int { 1 + 2 }").is_none());
-    }
-
-    #[test]
-    fn diagnostics_con_modules() {
-        // Un proyecto de dos archivos: `geo.ray` (en disco) y la entrada `main.ray` (en el buffer).
-        let dir = std::env::temp_dir().join("ray_lsp_mod");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
-        let entry = dir.join("main.ray");
-        let uri = format!("file://{}", entry.display());
-
-        // (a) Un import válido NO produce diagnósticos (antes: "función 'duplicar' no declarada").
-        let src = "from geo import duplicate;\nfn main() -> int { duplicate(21) }\n";
-        let ds = analyze_modular(&uri, src).expect("mode modular (es un file)");
-        assert!(ds.is_empty(), "un import válido no must dar errors: {:?}",
-            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-
-        // (b) Un error de tipos EN LA ENTRADA sí se reporta, con la línea local.
-        let src = "from geo import duplicate;\nfn main() -> int { duplicate(true) }\n";
-        let ds = analyze_modular(&uri, src).expect("modular");
-        assert_eq!(ds.len(), 1, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-        assert_eq!(ds[0].line, 2, "línea local de la entry, no la global del program fusionado");
-
-        // (c) Un import a un módulo inexistente se reporta (la entrada parsea → error del loader).
-        let src = "from noexiste import cosa;\nfn main() -> int { 0 }\n";
-        let ds = analyze_modular(&uri, src).expect("modular");
-        assert_eq!(ds.len(), 1);
-        assert!(ds[0].message.contains("noexiste"), "{}", ds[0].message);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn diagnostics_submodule_without_main_and_import_by_path() {
-        // Reproduce dos problemas al abrir un ARCHIVO DE MÓDULO (no la entrada) en el editor:
-        //   1. Un submódulo `pub` sin `main` marcaba "falta la función de entrada 'main'".
-        //   2. Un `import geo/util;` (ruta absoluta desde la raíz) no resolvía, porque el loader
-        //      tomaba como raíz la carpeta del propio submódulo, no la raíz del proyecto.
-        // Estructura (igual a examples/proyecto):
-        //   root/main.ray                 (entrada, con main)
-        //   root/geo/util.ray             (pub fn, sin main)
-        //   root/geo/formas/circulo.ray   (import geo/util; pub struct; pub fn area, sin main)
-        let dir = std::env::temp_dir().join("ray_lsp_submod");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
-        std::fs::write(dir.join("main.ray"),
-            "import geo/formas/circle;\nfn main() -> int { circle.area(circle.Circle { radio: 4 }) }\n").unwrap();
-        let util_src = "pub fn square(n: int) -> int { n * n }\n";
-        std::fs::write(dir.join("geo/util.ray"), util_src).unwrap();
-        let circle_src = "import geo/util;\npub struct Circle { radio: int }\npub fn area(c: Circle) -> int { 3 * util.square(c.radio) }\n";
-        std::fs::write(dir.join("geo/formas/circle.ray"), circle_src).unwrap();
-
-        // La raíz del proyecto se detecta como el ancestro con `main.ray`, desde un submódulo profundo.
-        let root = project_root_for(&dir.join("geo/formas/circle.ray")).expect("raíz");
-        assert_eq!(root, dir, "la raíz es el directory con main.ray, no la del submódulo");
-
-        // (1) util.ray: submódulo sin `main` → SIN diagnósticos (antes: "falta … 'main'").
-        let uri_util = format!("file://{}", dir.join("geo/util.ray").display());
-        let ds = analyze_modular(&uri_util, util_src).expect("modular");
-        assert!(ds.is_empty(), "un submódulo sin main no must dar errors: {:?}",
-            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-
-        // (2) circulo.ray: `import geo/util;` resuelve desde la raíz + sin `main` → SIN diagnósticos.
-        let uri_circ = format!("file://{}", dir.join("geo/formas/circle.ray").display());
-        let ds = analyze_modular(&uri_circ, circle_src).expect("modular");
-        assert!(ds.is_empty(), "el import por path absoluta must resolver: {:?}",
-            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-
-        // (3) Un error de tipos REAL en el submódulo sí se reporta (no se traga por el modo módulo).
-        let circle_malo = "import geo/util;\npub struct Circle { radio: int }\npub fn area(c: Circle) -> int { 3 * util.square(c) }\n";
-        let ds = analyze_modular(&uri_circ, circle_malo).expect("modular");
-        assert_eq!(ds.len(), 1, "el error real del body must verse: {:?}",
-            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-        assert_eq!(ds[0].line, 3, "línea local del submódulo");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn diagnostics_internal_submodule_of_capsule() {
-        // Un submódulo DENTRO de una cápsula que importa a un vecino interno de la MISMA cápsula.
-        // `geo/mod.ray` hace de `geo` una cápsula; `geo/util` es interno; `geo/formas/circulo.ray`
-        // (también dentro de `geo/`) hace `import geo/util;` → legítimo (el importador vive bajo la
-        // cápsula). Antes, al abrir el submódulo, el loader lo identificaba por su stem ("circulo")
-        // y el enforcement lo trataba como externo: "el módulo 'geo/util' es interno a la cápsula 'geo'".
-        let dir = std::env::temp_dir().join("ray_lsp_capsule");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
-        std::fs::write(dir.join("main.ray"),
-            "import geo;\nfn main() -> int { geo.area(geo.Circle { radio: 4 }) }\n").unwrap();
-        std::fs::write(dir.join("geo/mod.ray"),
-            "pub from geo/formas/circle import Circle, area;\n").unwrap();
-        std::fs::write(dir.join("geo/util.ray"), "pub fn square(n: int) -> int { n * n }\n").unwrap();
-        let circle_src = "import geo/util;\npub struct Circle { radio: int }\npub fn area(c: Circle) -> int { 3 * util.square(c.radio) }\n";
-        std::fs::write(dir.join("geo/formas/circle.ray"), circle_src).unwrap();
-
-        // La identidad real del submódulo es "geo/formas/circulo" → está bajo la cápsula "geo".
-        let root = project_root_for(&dir.join("geo/formas/circle.ray")).expect("raíz");
-        assert_eq!(root, dir);
-
-        // Abrir el submódulo interno: SIN diagnósticos (import a un vecino de la cápsula, y sin main).
-        let uri = format!("file://{}", dir.join("geo/formas/circle.ray").display());
-        let ds = analyze_modular(&uri, circle_src).expect("modular");
-        assert!(ds.is_empty(), "importar a un vecino internal de la propia cápsula es legítimo: {:?}",
-            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
-
-        // Hover DENTRO del submódulo (sin `main`): antes no daba nada porque el chequeo de main
-        // cortaba antes de recorrer los cuerpos. `circulo_src` línea 3 (0-based 2):
-        //   `pub fn area(c: Circle) -> int { 3 * util.square(c.radio) }`  — uso de `c` en col 48.
-        let (t, _, _) = hover_at(Some(&uri), circle_src, 2, 48).expect("hover about use de 'c'");
-        assert_eq!(t, "c: Circle", "hover de un use inside de un submódulo sin main");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn formatting_replaces_the_document() {
-        let mut docs = HashMap::new();
-        let uri = "file:///t.ray".to_string();
-        // Código mal formateado (espaciado irregular) → un edit que cubre todo el buffer.
-        docs.insert(uri.clone(), "fn  main( )->int{1+2}\n".to_string());
-        let msg = obj(vec![("params", obj(vec![("textDocument", obj(vec![("uri", text(&uri))]))]))]);
-        let r = formatting_result(&msg, &docs);
-        let edits = r.as_array().expect("array de edits");
-        assert_eq!(edits.len(), 1, "un único edit de documento complete");
-        let new = edits[0].get("newText").and_then(Json::as_str).unwrap();
-        // El resultado es el mismo que `ray fmt` (el formateador compartido).
-        assert_eq!(new, crate::fmt::format_source("fn  main( )->int{1+2}\n").unwrap());
-        assert!(new.contains("fn main()"), "se normalizó el espaciado: {new:?}");
-        // El rango arranca en (0,0).
-        let start = edits[0].get("range").unwrap().get("start").unwrap();
-        assert_eq!(start.get("line"), Some(&Json::Num(0.0)));
-        assert_eq!(start.get("character"), Some(&Json::Num(0.0)));
-
-        // Ya formateado → lista vacía (nada que cambiar).
-        let already = crate::fmt::format_source("fn  main( )->int{1+2}\n").unwrap();
-        docs.insert(uri.clone(), already);
-        assert!(formatting_result(&msg, &docs).as_array().unwrap().is_empty());
-
-        // Código que no parsea → lista vacía (no se formatea código inválido).
-        docs.insert(uri.clone(), "fn main( { ".to_string());
-        assert!(formatting_result(&msg, &docs).as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn document_symbol_list_el_outline() {
-        let mut docs = HashMap::new();
-        let uri = "file:///t.ray".to_string();
-        let src = "const K: int = 3;\nstruct Point { x: int, y: int }\nenum Color { Rojo, Verde }\ntrait Show { fn show(self) -> string; }\nimpl Show for Point { fn show(self) -> string { \"p\" } }\nfn main() -> int { 0 }\n";
-        docs.insert(uri.clone(), src.to_string());
-        let msg = obj(vec![("params", obj(vec![("textDocument", obj(vec![("uri", text(&uri))]))]))]);
-        let syms = document_symbol_result(&msg, &docs);
-        let arr = syms.as_array().expect("array");
-        let names: Vec<&str> = arr.iter().filter_map(|s| s.get("name").and_then(Json::as_str)).collect();
-        // Todos los ítems de nivel superior, en orden de archivo.
-        assert_eq!(names, vec!["K", "Point", "Color", "Show", "impl Show for Point", "main"], "{names:?}");
-        // El enum lleva sus variantes como hijos.
-        let color = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Color")).unwrap();
-        let vars: Vec<&str> = color.get("children").unwrap().as_array().unwrap().iter()
-            .filter_map(|c| c.get("name").and_then(Json::as_str)).collect();
-        assert_eq!(vars, vec!["Rojo", "Verde"]);
-        // El trait lleva su método como hijo; el kind del struct es 23 (Struct).
-        let show = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Show")).unwrap();
-        assert_eq!(show.get("children").unwrap().as_array().unwrap().len(), 1);
-        let point = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Point")).unwrap();
-        assert_eq!(point.get("kind"), Some(&Json::Num(23.0)));
-        // El selectionRange del struct apunta a su NOMBRE (col 7 0-based en "struct Point").
-        let sel = point.get("selectionRange").unwrap().get("start").unwrap();
-        assert_eq!(sel.get("line"), Some(&Json::Num(1.0)));
-        assert_eq!(sel.get("character"), Some(&Json::Num(7.0)));
-    }
-
-    #[test]
-    fn hover_and_signature_of_builtins() {
-        // M10.2i: los builtins (print/char_code/…) no viven en la fuente; aun así el hover muestra su
-        // firma (con los tipos de la llamada) y el signature help su firma fija. (M49: sqrt/pow/abs/… se
-        // movieron a `std/math`, ya no son builtins → se prueba con `char_code`, que sí lo sigue siendo.)
-        let src = "fn main() -> int {\n  let x = char_code('a');\n  print(x);\n  0\n}\n";
-        // `char_code('a')` → int.
-        let cc = src.lines().nth(1).unwrap().find("char_code").unwrap();
-        let (ta, _, _) = hover_at(None, src, 1, cc).expect("hover de char_code");
-        assert_eq!(ta, "char_code: fn(char) -> int");
-        // `print(x)` → unit.
-        let cp = src.lines().nth(2).unwrap().find("print").unwrap();
-        let (tp, _, _) = hover_at(None, src, 2, cp).expect("hover de print");
-        assert_eq!(tp, "print: fn(int) -> unit");
-        // Signature help por firma fija de la tabla (`signature`): sigue sirviendo a `math.pow(` (el
-        // envoltorio de `std/math`) aunque `pow` ya no sea builtin.
-        let (ps, ret) = crate::builtins::signature("pow").expect("signature de pow");
-        assert_eq!((ps, ret), (vec!["base: float", "exp: float"], "float"));
-        // M46a: los builtins-método también llevan firma (para el detalle del popup).
-        assert_eq!(crate::builtins::signature("len"), Some((vec!["c"], "int")));
-        assert!(crate::builtins::signature("print").is_none(), "print es variádico ad-hoc, sin signature fixes");
-    }
-
-    #[test]
-    fn hover_shows_documentacion() {
-        // Una función con `///` encima: el hover trae la firma + la doc, como Markdown.
-        let src = "/// Duplica un número.\n/// Segunda línea.\nfn duplicate(x: int) -> int { x * 2 }\nfn main() -> int {\n  duplicate(21)\n}\n";
-        // Uso de `duplicar` en la línea 5 (0-based 4), col 2.
-        let (info, _, _) = hover_at(None, src, 4, 2).expect("hover");
-        assert!(info.starts_with("duplicate: fn(int) -> int"), "{info}");
-        // La doc se localiza escaneando los `///` encima de la declaración.
-        let mut docs = HashMap::new();
-        let uri = format!("file://{}", std::env::temp_dir().join("ray_hover_doc.ray").display());
-        docs.insert(uri.clone(), src.to_string());
-        let d = doc_of_symbol(&uri, src, 4, 2, &docs).expect("documentación");
-        assert_eq!(d, "Duplica un número.\nSegunda línea.");
-        // El result de hover la mete en un bloque Markdown con la firma.
-        let msg = obj(vec![("params", obj(vec![
-            ("textDocument", obj(vec![("uri", text(&uri))])),
-            ("position", obj(vec![("line", num(4)), ("character", num(2))])),
-        ]))]);
-        let r = hover_result(&msg, &docs);
-        let val = r.get("contents").unwrap().get("value").and_then(Json::as_str).unwrap();
-        assert!(val.contains("```raylang"), "signature en block de código: {val}");
-        assert!(val.contains("Duplica un número."), "incluye la doc: {val}");
-        assert_eq!(r.get("contents").unwrap().get("kind"), Some(&Json::Str("markdown".into())));
-
-        // Un MÉTODO documentado con `///` también muestra su doc (M10.2h: los métodos se indexan).
-        let src_m = "trait Show { fn show(self) -> string; }\nstruct P { v: int }\nimpl Show for P {\n  /// Muestra el valor.\n  fn show(self) -> string { \"p\" }\n}\nfn main() -> int {\n  let p = P { v: 1 };\n  print(p.show());\n  0\n}\n";
-        docs.insert(uri.clone(), src_m.to_string());
-        // `p.show()` en la línea 9 (0-based 8); `mostrar` tras el punto.
-        let col_m = src_m.lines().nth(8).unwrap().find("show").unwrap();
-        let d = doc_of_symbol(&uri, src_m, 8, col_m, &docs).expect("doc del método");
-        assert_eq!(d, "Muestra el valor.", "hover-doc de método");
-
-        // Un símbolo SIN doc → hover en texto plano, sin bloque Markdown.
-        let src2 = "fn triple(x: int) -> int { x * 3 }\nfn main() -> int { triple(1) }\n";
-        docs.insert(uri.clone(), src2.to_string());
-        let msg2 = obj(vec![("params", obj(vec![
-            ("textDocument", obj(vec![("uri", text(&uri))])),
-            ("position", obj(vec![("line", num(1)), ("character", num(19))])),
-        ]))]);
-        let r2 = hover_result(&msg2, &docs);
-        assert_eq!(r2.get("contents").unwrap().get("kind"), Some(&Json::Str("plaintext".into())));
-    }
-
-    #[test]
-    fn hover_doc_of_builtins_and_prelude() {
-        let mut docs = HashMap::new();
-        let uri = format!("file://{}", std::env::temp_dir().join("ray_doc_builtin.ray").display());
-        // Un builtin (`pow`) no tiene declaración en el archivo: la doc sale de la tabla
-        // (`builtins::doc`, en inglés).
-        let src = "fn main() -> int {\n  print(pow(2.0, 10.0));\n  0\n}\n";
-        docs.insert(uri.clone(), src.to_string());
-        let col = src.lines().nth(1).unwrap().find("pow").unwrap();
-        let d = doc_of_symbol(&uri, src, 1, col, &docs).expect("doc de pow");
-        assert!(d.contains("Raises `base` to the power"), "{d}");
-        // Un símbolo del PRELUDE (`sort`): su declaración vive en la fuente inyectada, no en el
-        // buffer → la doc se busca por nombre en `prelude::SOURCE`.
-        let src2 = "fn main() -> int {\n  let xs = sort([3, 1, 2]);\n  xs[0]\n}\n";
-        docs.insert(uri.clone(), src2.to_string());
-        let col2 = src2.lines().nth(1).unwrap().find("sort").unwrap();
-        let d2 = doc_of_symbol(&uri, src2, 1, col2, &docs).expect("doc de sort");
-        assert!(!d2.is_empty(), "doc del prelude para sort: {d2}");
-        // Una variable local que TAPA un nombre de builtin no hereda su doc: `min` local.
-        let src3 = "fn main() -> int {\n  let min = 5;\n  min\n}\n";
-        docs.insert(uri.clone(), src3.to_string());
-        let col3 = src3.lines().nth(2).unwrap().find("min").unwrap();
-        assert_eq!(doc_of_symbol(&uri, src3, 2, col3, &docs), None, "local sin doc, aunque exista el builtin min");
-        // El completion adjunta la doc del builtin como Markdown.
-        let msg = obj(vec![("params", obj(vec![
-            ("textDocument", obj(vec![("uri", text(&uri))])),
-            ("position", obj(vec![("line", num(1)), ("character", num(2))])),
-        ]))]);
-        docs.insert(uri.clone(), src.to_string());
-        let r = completion_result(&msg, &docs);
-        let Json::Arr(items) = &r else { panic!("completion no es list") };
-        // M49: `pow`/`sqrt`/`abs`/… se movieron a `std/math` (ya no en el completion global de builtins);
-        // se prueba con `char_code`, que sigue siendo builtin.
-        let cc = items.iter().find(|i| i.get("label") == Some(&Json::Str("char_code".into()))).expect("char_code en completion");
-        let doc_val = cc.get("documentation").and_then(|d| d.get("value")).and_then(Json::as_str).expect("documentation de char_code");
-        assert!(doc_val.contains("Unicode"), "{doc_val}");
-    }
-
-    #[test]
-    fn document_highlight_highlights_occurrences() {
-        let mut docs = HashMap::new();
-        let uri = "file:///t.ray".to_string();
-        // `x` se declara y se usa dos veces.
-        let src = "fn main() -> int {\n  let x = 3;\n  x + x\n}\n";
-        docs.insert(uri.clone(), src.to_string());
-        // Cursor sobre el primer uso de `x` (línea 3 0-based 2, col 2).
-        let msg = obj(vec![
-            ("params", obj(vec![
-                ("textDocument", obj(vec![("uri", text(&uri))])),
-                ("position", obj(vec![("line", num(2)), ("character", num(2))])),
-            ])),
-        ]);
-        let hl = document_highlight_result(&msg, &docs);
-        let arr = hl.as_array().expect("array");
-        // Declaración (let x) + dos usos = 3 rangos, sin duplicados.
-        assert_eq!(arr.len(), 3, "decl + 2 usos: {arr:?}");
-        // Exactamente uno es Write (kind 3, la declaración); el resto Text (kind 1).
-        let writes = arr.iter().filter(|h| h.get("kind") == Some(&Json::Num(3.0))).count();
-        assert_eq!(writes, 1, "la declaración es el único Write");
-    }
-
-    #[test]
-    fn hover_con_modules() {
-        // Antes: un archivo con `import` no daba NINGÚN hover (el checker fallaba por el import).
-        let dir = std::env::temp_dir().join("ray_lsp_hover_mod");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
-        let uri = format!("file://{}", dir.join("main.ray").display());
-        let src = "from geo import duplicate;\nfn main() -> int {\n  let y = 5;\n  duplicate(y)\n}\n";
-
-        // Variable LOCAL: hover funciona pese al import (índice sobre el programa fusionado).
-        let (t, _, _) = hover_at(Some(&uri), src, 3, 12).expect("hover about 'y'");
-        assert_eq!(t, "y: int");
-        // Función IMPORTADA de otro módulo: muestra su tipo en forma de fachada (`geo.duplicar`,
-        // no el `geo::duplicar` interno).
-        let (t, _, _) = hover_at(Some(&uri), src, 3, 2).expect("hover about 'duplicate'");
-        assert_eq!(t, "geo.duplicate: fn(int) -> int", "forma de fachada, sin '::'");
-
-        // Rename de una variable local en un archivo multi-módulo: seguro (vive entera aquí).
-        let (_, _, _, is_local) = symbol_occurrences(Some(&uri), src, 3, 12).expect("símbolo");
-        assert!(is_local, "'y' es local → renombrable");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn hover_of_fields_and_methods() {
-        // Campo de struct: `p.x` → el tipo del campo, en la posición del nombre tras el `.`.
-        let src = "struct Point { x: int, y: int }\nfn main() -> int {\n  let p = Point { x: 3, y: 4 };\n  p.x + p.y\n}\n";
-        let (t, _, _) = hover_at(None, src, 3, 4).expect("hover del campo x");
-        assert_eq!(t, "x: int");
-
-        // Método de trait: `n.doblar()` → la firma del método (incluye el receptor).
-        let src = "trait D { fn fold(self) -> int; }\nstruct N { v: int }\nimpl D for N { fn fold(self) -> int { self.v * 2 } }\nfn main() -> int {\n  let n = N { v: 21 };\n  n.fold()\n}\n";
-        let (t, _, _) = hover_at(None, src, 5, 4).expect("hover del método fold");
-        assert_eq!(t, "fold: fn(N) -> int");
-
-        // Método por UFCS a una función del prelude: `xs.map(f)`.
-        let src = "fn main() -> int {\n  let xs = [1, 2, 3];\n  xs.map(fn(a: int) -> int { a + 1 });\n  0\n}\n";
-        let (t, _, _) = hover_at(None, src, 2, 5).expect("hover del método map");
-        assert!(t.starts_with("map: fn("), "{t}");
-    }
-
-    #[test]
-    fn hover_inside_interpolation() {
-        // Las expresiones de `${…}` se re-lexan con posiciones reales → hover funciona dentro.
-        let src = "fn main() -> int {\n  let x = 7;\n  print(\"n=${x} y ${x + 1}\");\n  0\n}\n";
-        // línea 3 (0-based 2): `  print("n=${x} y ${x + 1}");`
-        //   `x` de `${x}` en col 13; `x` de `${x + 1}` en col 20.
-        let (t, _, _) = hover_at(None, src, 2, 13).expect("hover 'x' en ${x}");
-        assert_eq!(t, "x: int");
-        let (t, _, _) = hover_at(None, src, 2, 20).expect("hover 'x' en ${x + 1}");
-        assert_eq!(t, "x: int");
-    }
-
-    #[test]
-    fn facade_name_collapses_namespaces() {
-        // Sin imports conocidos → fallback `primer.último` (respeta la cápsula, sin `::`).
-        assert_eq!(facade_name("geo::formas::circle::Circulo", &[]), "geo.Circulo");
-        assert_eq!(facade_name("geo::area: fn(geo::formas::circle::Circulo) -> int", &[]),
-            "geo.area: fn(geo.Circulo) -> int");
-        // Nombres sin namespacing (locales, primitivos) intactos.
-        assert_eq!(facade_name("c: Punto", &[]), "c: Punto");
-        assert_eq!(facade_name("n: int", &[]), "n: int");
-        assert_eq!(facade_name("f: fn(int, bool) -> string", &[]), "f: fn(int, bool) -> string");
-        // M49: con el import `std/math` (leaf `math`, ns_prefix `std::math`), la fachada usa el LEAF
-        // con el que el usuario accede: `math.sqrt`, no `std.sqrt`. Una cápsula `geo` (ns_prefix `geo`)
-        // sigue mostrando su raíz (`geo.Circulo`) porque su ns_prefix también es prefijo.
-        let imp = vec![("math".to_string(), "std::math".to_string()), ("geo".to_string(), "geo".to_string())];
-        assert_eq!(facade_name("std::math::sqrt: fn(float) -> float", &imp), "math.sqrt: fn(float) -> float");
-        assert_eq!(facade_name("std::math::PI: float", &imp), "math.PI: float");
-        assert_eq!(facade_name("geo::formas::circle::Circulo", &imp), "geo.Circulo");
-    }
-
-    #[test]
-    fn definition_cross_modules() {
-        let dir = std::env::temp_dir().join("ray_lsp_def_mod");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("geo.ray"), "pub fn duplicate(x: int) -> int { x * 2 }\n").unwrap();
-        let uri = format!("file://{}", dir.join("main.ray").display());
-        let src = "from geo import duplicate;\nfn main() -> int {\n  let r = duplicate(21);\n  r\n}\n";
-
-        // Ir-a-definición de la función IMPORTADA → salta al otro archivo (geo.ray, línea 0).
-        let (turi, line, _, _) = definition_at(&uri, src, 2, 10).expect("def de duplicate");
-        assert!(turi.ends_with("geo.ray"), "el target es el file del módulo: {turi}");
-        assert_eq!(line, 0);
-
-        // Ir-a-definición de una variable LOCAL → se queda en este archivo.
-        let (turi, line, _, _) = definition_at(&uri, src, 3, 2).expect("def de r");
-        assert!(turi.ends_with("main.ray"), "{turi}");
-        assert_eq!(line, 2, "la declaración de 'r' está en la línea 3 (0-based 2)");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn references_cross_modules() {
-        let dir = std::env::temp_dir().join("ray_lsp_refs_mod");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        // geo.ray: define `duplicar` y lo usa una vez internamente.
-        std::fs::write(dir.join("geo.ray"),
-            "pub fn duplicate(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicate(x) }\n").unwrap();
-        let uri = format!("file://{}", dir.join("main.ray").display());
-        let src = "from geo import duplicate;\nfn main() -> int {\n  duplicate(21)\n}\n";
-
-        // Find-references desde el uso en main.ray → apariciones en AMBOS archivos.
-        let locs = references_cross(&uri, src, 2, 2, true).expect("references");
-        let files: std::collections::HashSet<&str> = locs.iter()
-            .map(|(u, _)| u.rsplit('/').next().unwrap())
-            .collect();
-        assert!(files.contains("geo.ray"), "incluye la declaración y el use internal: {locs:?}");
-        assert!(files.contains("main.ray"), "incluye el use del file abierto: {locs:?}");
-        // 3 apariciones: declaración + uso interno en geo.ray, uso en main.ray.
-        assert_eq!(locs.len(), 3, "{locs:?}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn rename_cross_modules() {
-        let dir = std::env::temp_dir().join("ray_lsp_ren_mod");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("geo.ray"),
-            "pub fn duplicate(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicate(x) }\n").unwrap();
-        let uri = format!("file://{}", dir.join("main.ray").display());
-
-        // Rename de una función importada → toca AMBOS archivos, INCLUIDA la línea del import.
-        let src = "from geo import duplicate;\nfn main() -> int {\n  duplicate(21)\n}\n";
-        let pos = rename_cross(&uri, src, 2, 2).expect("rename cross-módulo");
-        let files: std::collections::HashSet<&str> =
-            pos.iter().map(|(u, _)| u.rsplit('/').next().unwrap()).collect();
-        assert!(files.contains("geo.ray") && files.contains("main.ray"), "{pos:?}");
-        // 4 posiciones: decl + uso interno (geo.ray), especificador de import + uso (main.ray).
-        assert_eq!(pos.len(), 4, "{pos:?}");
-        // El especificador del import (main.ray línea 0) está entre las posiciones.
-        assert!(pos.iter().any(|(u, (l, _, _))| u.ends_with("main.ray") && *l == 0), "falta el import: {pos:?}");
-
-        // Con `as alias`, el rename se NIEGA (los usos van por el alias → incompleto e inseguro).
-        let src = "from geo import duplicate as d;\nfn main() -> int { d(21) }\n";
-        assert!(rename_cross(&uri, src, 1, 19).is_none(), "rename con alias must rechazarse");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn uri_to_path_decodes() {
-        assert_eq!(uri_to_path("file:///a/b/c.ray"), Some(PathBuf::from("/a/b/c.ray")));
-        assert_eq!(uri_to_path("file:///a/mi%20carpeta/x.ray"), Some(PathBuf::from("/a/mi carpeta/x.ray")));
-        assert_eq!(uri_to_path("untitled:Untitled-1"), None); // buffer sin archivo → single-file
-    }
-
-    #[test]
-    fn references_of_local_variable() {
-        // `let x = 1; x + x` → declaración + 2 usos.
-        let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
-        // Cursor sobre el primer uso de `x` (línea 3 → 0-based 2, col 2).
-        let (name, decl, uses, is_local) = symbol_occurrences(None, src, 2, 2).expect("hay símbolo");
-        assert_eq!(name, "x");
-        assert_eq!(decl, Some((1, 6, 1)), "la declaración apunta al NOMBRE x, no al 'let'");
-        assert_eq!(uses.len(), 2, "x + x son dos usos");
-        assert!(is_local, "one variable local vive entera en este file");
-        // Y desde el nombre de la declaración (línea 2 → 0-based 1, col 6) da lo mismo.
-        let (n2, d2, u2, _) = symbol_occurrences(None, src, 1, 6).expect("símbolo from la declaración");
-        assert_eq!((n2, d2, u2.len()), ("x".to_string(), Some((1, 6, 1)), 2));
-    }
-
-    #[test]
-    fn references_distinguish_scopes() {
-        // Dos `x` en funciones distintas no se mezclan (claves de declaración distintas).
-        let src = "fn f(a: int) -> int {\n  let x = a;\n  x + x\n}\nfn main() -> int {\n  let x = 9;\n  x\n}\n";
-        // El `x` de `f` (línea 3 → 0-based 2): 2 usos.
-        let (_, _, uf, _) = symbol_occurrences(None, src, 2, 2).unwrap();
-        assert_eq!(uf.len(), 2);
-        // El `x` de `main` (línea 7 → 0-based 6): 1 uso.
-        let (_, _, um, _) = symbol_occurrences(None, src, 6, 2).unwrap();
-        assert_eq!(um.len(), 1);
-    }
-
-    #[test]
-    fn references_of_function() {
-        // Una función llamada dos veces: declaración + 2 usos.
-        let src = "fn double(n: int) -> int { n + n }\nfn main() -> int {\n  double(1) + double(2)\n}\n";
-        // Cursor sobre la primera llamada `double` (línea 3 → 0-based 2, col 2).
-        let (name, decl, uses, _) = symbol_occurrences(None, src, 2, 2).expect("hay símbolo");
-        assert_eq!(name, "double");
-        assert_eq!(decl, Some((0, 3, 6)), "la declaración apunta al name 'double' tras 'fn '");
-        assert_eq!(uses.len(), 2);
-    }
-
-    #[test]
-    fn rename_produces_workspace_edit() {
-        let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
-        let msg = json::parse(
-            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2},"newName":"y"}}"#
-        ).unwrap();
-        let mut docs = HashMap::new();
-        docs.insert("file:///t.ray".to_string(), src.to_string());
-        let res = rename_result(&msg, &docs);
-        let edits = res.get("changes").unwrap().get("file:///t.ray").unwrap().as_array().unwrap();
-        assert_eq!(edits.len(), 3, "declaración + 2 usos");
-        assert_eq!(edits[0].get("newText"), Some(&Json::Str("y".to_string())));
-    }
-
-    #[test]
-    fn completion_offers_symbols_builtins_y_keywords() {
-        let src = "struct Point { x: int }\nfn double(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
-        let msg = json::parse(
-            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":0}}}"#
-        ).unwrap();
-        let mut docs = HashMap::new();
-        docs.insert("file:///t.ray".to_string(), src.to_string());
-        let res = completion_result(&msg, &docs);
-        let items = res.as_array().unwrap();
-        let labels: Vec<&str> = items.iter().filter_map(|i| i.get("label").and_then(|l| l.as_str())).collect();
-        assert!(labels.contains(&"double"), "función propia\n{labels:?}");
-        assert!(labels.contains(&"Point"), "type propio");
-        assert!(labels.contains(&"print"), "builtin");
-        assert!(labels.contains(&"map"), "función del prelude");
-        assert!(labels.contains(&"while"), "palabra clave");
-        // No expone nombres sintéticos (manglados, internos).
-        assert!(!labels.iter().any(|l| l.contains('#') || l.starts_with("__")), "sin names sintéticos");
-    }
-
-    #[test]
-    fn completion_offers_closure_snippet_for_spawn_and_scope() {
-        // `spawn`/`scope` toman una función anónima → un ítem-extra inserta `name(fn() { … });`.
-        let src = "fn main() -> int { 0 }\n";
-        let msg = json::parse(
-            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":0,"character":19}}}"#
-        ).unwrap();
-        let mut docs = HashMap::new();
-        docs.insert("file:///t.ray".to_string(), src.to_string());
-        let res = completion_result(&msg, &docs);
-        let items = res.as_array().unwrap();
-        for name in ["spawn", "scope"] {
-            let snippet = items.iter().find(|i|
-                i.get("label").and_then(|l| l.as_str()) == Some(&format!("{name}(fn() {{…}})")));
-            let snippet = snippet.unwrap_or_else(|| panic!("falta el ítem de closure para {name}"));
-            assert_eq!(snippet.get("insertTextFormat"), Some(&Json::Num(2.0)), "{name}: es snippet");
-            assert_eq!(
-                snippet.get("insertText").and_then(|t| t.as_str()),
-                Some(format!("{name}(fn() {{\n\t$0\n}});").as_str()),
-                "{name}: inserta el body de la función anónima"
-            );
-            // El builtin pelado sigue ofreciéndose aparte.
-            assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(name)),
-                "{name}: builtin pelado también presente");
-        }
-    }
-
-    /// Helper: labels de la completion en `(line, character)` (0-basados) sobre `src`.
-    fn completion_labels(src: &str, line: usize, character: usize) -> Vec<String> {
-        let msg = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{character}}}}}}}"#
-        )).unwrap();
-        let mut docs = HashMap::new();
-        docs.insert("file:///t.ray".to_string(), src.to_string());
-        completion_result(&msg, &docs).as_array().unwrap().iter()
-            .filter_map(|i| i.get("label").and_then(|l| l.as_str()).map(|s| s.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn completion_of_struct_members() {
-        // M45: `p.` sobre un struct ofrece sus campos y sus métodos de trait, no los símbolos de archivo.
-        let src = "struct P { x: int, y: int }\ntrait Ver { fn see(self) -> int; }\nimpl Ver for P { fn see(self) -> int { self.x } }\nfn sum(p: P) -> int { p.x + p.y }\nfn main() -> int {\n    let p = P { x: 1, y: 2 };\n    p.\n    0\n}\n";
-        let labels = completion_labels(src, 6, 6); // línea "    p." (0-basada), tras el punto
-        assert!(labels.contains(&"x".to_string()) && labels.contains(&"y".to_string()), "fields: {labels:?}");
-        assert!(labels.contains(&"see".to_string()), "método de trait: {labels:?}");
-        assert!(labels.contains(&"sum".to_string()), "UFCS del user: {labels:?}");
-        // NO ofrece los símbolos de archivo (no es una completion de archivo tras el punto).
-        assert!(!labels.contains(&"print".to_string()), "sin builtins globales: {labels:?}");
-        assert!(!labels.contains(&"while".to_string()), "sin words clave: {labels:?}");
-    }
-
-    #[test]
-    fn completion_of_string_and_array_members() {
-        // string: builtins de string + métodos de trait; NADA de funciones de E/S que toman una ruta.
-        let s = "fn main() -> int {\n    let s = \"h\";\n    s.\n    0\n}\n";
-        let ls = completion_labels(s, 2, 6);
-        assert!(ls.contains(&"trim".to_string()) && ls.contains(&"split".to_string()) && ls.contains(&"len".to_string()), "string builtins: {ls:?}");
-        assert!(!ls.contains(&"read_file".to_string()) && !ls.contains(&"env".to_string()), "sin E/S about string: {ls:?}");
-        // array: builtins + orden superior del prelude por UFCS.
-        let a = "fn main() -> int {\n    let xs = [1, 2, 3];\n    xs.\n    0\n}\n";
-        let la = completion_labels(a, 2, 7);
-        for m in ["len", "push", "reverse", "map", "filter", "fold", "sort"] {
-            assert!(la.contains(&m.to_string()), "array must ofrecer '{m}': {la:?}");
-        }
-    }
-
-    #[test]
-    fn completion_of_members_in_expression_context() {
-        // M45b: `x.` como argumento de una llamada NO debe romper el parseo (bug del `;` dentro
-        // del paréntesis). `sum(x.)` ofrece los miembros del array.
-        let src = "fn sum(xs: [int]) -> int { 0 }\nfn main() -> int {\n    let x = [1, 2];\n    let y = sum(x.);\n    0\n}\n";
-        let labels = completion_labels(src, 3, 18); // tras "sum(x." (el punto está en col 17, cursor 18)
-        assert!(labels.contains(&"len".to_string()) && labels.contains(&"map".to_string()), "en expresión: {labels:?}");
-    }
-
-    #[test]
-    fn completion_of_members_snippet_and_doc() {
-        // M45b/M46c: un método con args → snippet con placeholders por parámetro, sin el receptor
-        // (`doblar(${1:k})`); un campo no inserta `()`; los métodos del usuario traen su doc `///`.
-        let src = "struct P { x: int }\n/// Duplica x.\nfn fold(p: P, k: int) -> int { p.x * k }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
-        let msg = json::parse(
-            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":5,"character":6}}}"#
-        ).unwrap();
-        let mut docs = HashMap::new();
-        docs.insert("file:///t.ray".to_string(), src.to_string());
-        let items = completion_result(&msg, &docs);
-        let arr = items.as_array().unwrap();
-        let fold = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("fold")).expect("fold");
-        assert_eq!(fold.get("insertText").and_then(|t| t.as_str()), Some("fold(${1:k})"), "snippet con placeholder, sin receptor");
-        assert!(fold.get("command").is_some(), "dispara signature help");
-        let doc = fold.get("documentation").and_then(|d| d.get("value")).and_then(|v| v.as_str()).unwrap_or("");
-        assert!(doc.contains("Duplica x"), "doc /// del método: {doc}");
-        // el campo x no es invocable → sin insertText de llamada.
-        let x = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("x")).expect("x");
-        assert!(x.get("insertText").is_none(), "un campo no inserta ()");
-    }
-
-    #[test]
-    fn completion_after_pipe_is_type_aware() {
-        // La completion tras `|>` ofrece las funciones aplicables al tipo del operando izquierdo
-        // (`x |> f` ≡ `f(x)`), como el acceso a miembro: `duplicar(int)` sí, `saludar(string)` no.
-        let src = "fn duplicate(n: int) -> int { n * 2 }\nfn greet(s: string) -> string { s }\nfn main() -> int {\n    let x = 5;\n    x |> d\n    0\n}\n";
-        // Línea 4 = "    x |> d"; el cursor va tras la `d` (columna 10).
-        let labels = completion_labels(src, 4, 10);
-        assert!(labels.contains(&"duplicate".to_string()), "offers la función de int: {labels:?}");
-        assert!(!labels.contains(&"greet".to_string()), "NO offers la función de string: {labels:?}");
-        // También un builtin aplicable a int (to_string) — enumera builtins-como-método.
-        assert!(labels.contains(&"to_string".to_string()), "offers builtins de int: {labels:?}");
-        // Un método de trait (show) NO es pipeable: `n |> show` sería `show(n)`, y no hay `show` libre.
-        assert!(!labels.contains(&"show".to_string()), "NO offers méall de trait: {labels:?}");
-
-        // Segundo pipe SIN prefijo, cursor justo tras `|>` (lo dispara el trigger char `>`): sobre
-        // `v |> duplicar() |>` el operando izquierdo sigue siendo int → ofrece las mismas funciones.
-        let src2 = "fn duplicate(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> duplicate() |>\n    0\n}\n";
-        let line = "    v |> duplicate() |>"; // cursor al final (tras el segundo `|>`)
-        let labels2 = completion_labels(src2, 3, line.chars().count());
-        assert!(labels2.contains(&"duplicate".to_string()), "segundo pipe sin prefijo: {labels2:?}");
-    }
-
-    #[test]
-    fn completion_after_pipe_inserts_with_space_and_space_triggers() {
-        let src = "fn duplicate(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |>\n    0\n}\n";
-        // (a) Pegado al `|>` (cursor tras `>`): el insertText lleva un espacio inicial → `|> duplicar()`.
-        let msg = json::parse(
-            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":3,"character":8}}}"#
-        ).unwrap();
-        let mut docs = HashMap::new();
-        docs.insert("file:///t.ray".to_string(), src.to_string());
-        let arr = completion_result(&msg, &docs);
-        let dup = arr.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicate")).expect("duplicate");
-        assert_eq!(dup.get("insertText").and_then(|t| t.as_str()), Some(" duplicate()"), "pegado → espacio inicial");
-
-        // (b) El espacio como trigger dispara el pipeline: `v |> ` (con espacio) sigue ofreciendo.
-        let src_sp = "fn duplicate(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> \n    0\n}\n";
-        let msg_sp = json::parse(
-            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":3,"character":9},"context":{"triggerKind":2,"triggerCharacter":" "}}}"#
-        ).unwrap();
-        docs.insert("file:///t.ray".to_string(), src_sp.to_string());
-        let arr_sp = completion_result(&msg_sp, &docs);
-        let has = arr_sp.as_array().unwrap().iter()
-            .any(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicate"));
-        assert!(has, "el espacio-trigger follows ofreciendo en pipeline");
-        // Y su insertText NO duplica el espacio (ya hay uno antes del cursor).
-        let dup_sp = arr_sp.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicate")).unwrap();
-        assert_eq!(dup_sp.get("insertText").and_then(|t| t.as_str()), Some("duplicate()"), "con espacio previo → sin duplicate");
-
-        // (c) El espacio como trigger FUERA de un pipeline no ofrece nada (no inunda el archivo).
-        let src_no = "fn main() -> int {\n    let w = \n    0\n}\n";
-        let msg_no = json::parse(
-            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":12},"context":{"triggerKind":2,"triggerCharacter":" "}}}"#
-        ).unwrap();
-        docs.insert("file:///t.ray".to_string(), src_no.to_string());
-        let arr_no = completion_result(&msg_no, &docs);
-        assert!(arr_no.as_array().unwrap().is_empty(), "espacio outside de pipeline → vacío");
-    }
-
-    #[test]
-    fn completion_of_members_in_interpolation() {
-        // M45b: dentro de `${x.}` el LSP ofrece los miembros (el reparado no rompe la cadena).
-        let src = "fn main() -> int {\n    let x = [1, 2];\n    let y = \"n ${x.}\";\n    0\n}\n";
-        let line = "    let y = \"n ${x.}\";";
-        let col = line.find("x.").unwrap() + 2; // tras el punto
-        let labels = completion_labels(src, 2, col);
-        assert!(labels.contains(&"len".to_string()) && labels.contains(&"push".to_string()), "en interpolación: {labels:?}");
-    }
-
-    #[test]
-    fn completion_of_import_symbols_and_paths() {
-        // M45c: crea un proyecto temporal en disco y comprueba el completion de import.
-        let base = std::env::temp_dir().join("ray_lsp_import_test");
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("geo/formas")).unwrap();
-        std::fs::create_dir_all(base.join("util")).unwrap();
-        let w = |rel: &str, txt: &str| std::fs::write(base.join(rel), txt).unwrap();
-        w("main.ray", "fn main() -> int { 0 }\n");
-        w("geo.ray", "pub struct Circle { r: int }\npub fn area(c: Circle) -> int { c.r }\nfn internal() -> int { 0 }\n");
-        w("geo/formas/circle.ray", "pub fn dibujar() -> int { 0 }\n");
-        w("util/mod.ray", "pub fn publico() -> int { 0 }\n"); // cápsula
-        w("util/internal.ray", "pub fn oculto() -> int { 0 }\n"); // interno a la cápsula
-
-        let uri = format!("file://{}/main.ray", base.display());
-        let labels = |line: &str, ch: usize| -> Vec<String> {
-            let src = format!("{line}\nfn main() -> int {{ 0 }}\n");
-            let mut docs = HashMap::new();
-            docs.insert(uri.clone(), src);
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":0,"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs).as_array().unwrap().iter()
-                .filter_map(|i| i.get("label").and_then(|l| l.as_str()).map(|s| s.to_string())).collect()
-        };
-
-        // from geo import <cursor> → símbolos `pub` (no `interno`).
-        let syms = labels("from geo import ", 16);
-        assert!(syms.contains(&"Circle".to_string()) && syms.contains(&"area".to_string()), "pub de geo: {syms:?}");
-        assert!(!syms.contains(&"internal".to_string()), "no expone lo private: {syms:?}");
-        assert!(!syms.contains(&"print".to_string()), "no cae al completion de file: {syms:?}");
-
-        // import <cursor> → rutas de módulo; la cápsula `util` sí, su interno NO.
-        let paths = labels("import ", 7);
-        assert!(paths.contains(&"geo".to_string()), "módulo geo: {paths:?}");
-        assert!(paths.contains(&"geo/formas/circle".to_string()), "path de directories: {paths:?}");
-        assert!(paths.contains(&"util".to_string()), "la cápsula util: {paths:?}");
-        assert!(!paths.contains(&"util/internal".to_string()), "el internal de la cápsula queda oculto: {paths:?}");
-
-        // M45c-3: acceso calificado `u.` (alias) / `circulo.` (leaf) → símbolos `pub` del módulo.
-        let qualified = |body: &str, line: usize, ch: usize| -> Vec<String> {
-            let src = format!("import geo/formas/circle;\nimport geo as u;\nfn main() -> int {{\n{body}\n0\n}}\n");
-            let mut docs = HashMap::new();
-            docs.insert(uri.clone(), src);
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs).as_array().unwrap().iter()
-                .filter_map(|i| i.get("label").and_then(|l| l.as_str()).map(|s| s.to_string())).collect()
-        };
-        let by_alias = qualified("    u.", 3, 6); // `import geo as u` → símbolos pub de geo
-        assert!(by_alias.contains(&"Circle".to_string()) && by_alias.contains(&"area".to_string()), "alias u.: {by_alias:?}");
-        assert!(!by_alias.contains(&"internal".to_string()), "no expone lo private del módulo: {by_alias:?}");
-        let by_leaf = qualified("    circle.", 3, 12); // leaf `circulo` (geo/formas/circulo.ray)
-        assert!(by_leaf.contains(&"dibujar".to_string()), "leaf circle.: {by_leaf:?}");
-
-        // M46c: en el acceso calificado, las funciones traen firma + snippet con placeholders, y las
-        // firmas de un RE-EXPORT de cápsula se resuelven en el módulo origen (no en `mod.ray`).
-        std::fs::write(base.join("util/mod.ray"),
-            "pub from util/internal import greet;\npub fn publico() -> int { 0 }\n").unwrap();
-        std::fs::write(base.join("util/internal.ray"),
-            "pub fn greet(name: string, times: int) -> string { name }\n").unwrap();
-        let items_at = |body: &str, line: usize, ch: usize| -> Json {
-            let src = format!("import util;\nfn main() -> int {{\n{body}\n0\n}}\n");
-            let mut docs = HashMap::new();
-            docs.insert(uri.clone(), src);
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs)
-        };
-        let it = |arr: &Json, label: &str| arr.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label)).cloned();
-        let items = items_at("    util.", 2, 9);
-        let greet = it(&items, "greet").expect("re-export greet");
-        assert_eq!(greet.get("insertText").and_then(Json::as_str), Some("greet(${1:name}, ${2:times})"),
-                   "signature del re-export resuelta en el módulo origen + placeholders");
-
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn completion_imported_symbols_and_enum_variants() {
-        // Proyecto: un módulo `figuras` con una función `pub`, un struct y un enum; el archivo de
-        // entrada los importa.
-        let base = std::env::temp_dir().join("ray_lsp_import_syms_test");
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("main.ray"), "fn main() -> int { 0 }\n").unwrap();
-        std::fs::write(base.join("figuras.ray"),
-            "pub fn area(a: int, b: int) -> int { a * b }\npub struct Rect { ancho: int }\npub enum Orientation { Horizontal, Vertical }\n").unwrap();
-        let uri = format!("file://{}/main.ray", base.display());
-        let items = |body: &str, line: usize, ch: usize| -> Vec<(String, i64)> {
-            let src = format!("import figuras;\nfrom figuras import Orientation, area;\nfn main() -> int {{\n{body}\n0\n}}\n");
-            let mut docs = HashMap::new();
-            docs.insert(uri.clone(), src);
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs).as_array().unwrap().iter()
-                .filter_map(|i| Some((i.get("label")?.as_str()?.to_string(), as_usize(i.get("kind")?)? as i64)))
-                .collect()
-        };
-        // Completion de archivo: el nombre de módulo `figuras` (kind 9) y los from-imports.
-        let file_items = items("    x", 3, 5);
-        assert!(file_items.iter().any(|(l, k)| l == "figuras" && *k == 9), "módulo figuras (kind Module): {file_items:?}");
-        assert!(file_items.iter().any(|(l, _)| l == "Orientation"), "from-import Orientation: {file_items:?}");
-        assert!(file_items.iter().any(|(l, _)| l == "area"), "from-import area: {file_items:?}");
-        // `Orientation.` → sus variantes (kind 20 = EnumMember).
-        let vars = items("    Orientation.", 3, 16);
-        assert!(vars.iter().any(|(l, k)| l == "Horizontal" && *k == 20), "variant Horizontal: {vars:?}");
-        assert!(vars.iter().any(|(l, _)| l == "Vertical"), "variant Vertical: {vars:?}");
-        assert!(!vars.iter().any(|(l, _)| l == "figuras"), "after el punto NO sale la completion de file: {vars:?}");
-
-        // Una variante con payload muestra los tipos en el popup (`labelDetails.detail`).
-        let src = "enum Shape { Circulo(float), Rect(float, float), Punto }\nfn main() -> int {\n    Shape.\n0\n}\n";
-        let mut docs = HashMap::new();
-        docs.insert(uri.clone(), src.to_string());
-        let msg = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":10}}}}}}"#
-        )).unwrap();
-        let vs = completion_result(&msg, &docs);
-        let rect = vs.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(Json::as_str) == Some("Rect")).unwrap();
-        let det = rect.get("labelDetails").and_then(|d| d.get("detail")).and_then(Json::as_str);
-        assert_eq!(det, Some("(float, float)"), "types del payload en el popup: {rect:?}");
-
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn completion_and_signature_of_associated_functions() {
-        // M48.1: `Channel.` completa `new`/`bounded` (kind 3); el sig help de `Channel.bounded(` sale
-        // del registro de asociadas.
-        let uri = "file:///t.ray";
-        let src = "fn main() -> int {\n    let c: Channel<int> = Channel.\n    0\n}\n";
-        let mut docs = HashMap::new();
-        docs.insert(uri.to_string(), src.to_string());
-        let msg = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":34}}}}}}"#
-        )).unwrap();
-        let vs = completion_result(&msg, &docs);
-        let labels: Vec<&str> = vs.as_array().unwrap().iter()
-            .filter_map(|i| i.get("label").and_then(Json::as_str)).collect();
-        assert!(labels.contains(&"new") && labels.contains(&"bounded"), "asociadas de Channel: {labels:?}");
-        // Signature help dentro de `Channel.bounded(`.
-        let src2 = "fn main() -> int {\n    let c: Channel<int> = Channel.bounded(\n    0\n}\n";
-        docs.insert(uri.to_string(), src2.to_string());
-        let msg2 = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":42}}}}}}"#
-        )).unwrap();
-        let r = signature_help_result(&msg2, &docs);
-        let label = r.get("signatures").and_then(|s| s.as_array()).and_then(|a| a.first())
-            .and_then(|s| s.get("label")).and_then(Json::as_str).unwrap_or("");
-        assert_eq!(label, "Channel.bounded(n: int) -> Channel<T>", "sig de Channel.bounded: {r:?}");
-    }
-
-    #[test]
-    fn signature_help_methods_y_prelude() {
-        // M46b: el signature help resuelve funciones del prelude y recorta el receptor en un método,
-        // pero NO en una llamada calificada de módulo (esa parte cross-módulo se cubre en el CLI).
-        let sig = |src: &str, line: usize, ch: usize| -> Option<(String, usize)> {
-            let mut docs = HashMap::new();
-            docs.insert("file:///t.ray".to_string(), src.to_string());
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            let r = signature_help_result(&msg, &docs);
-            if r == Json::Null { return None; }
-            let label = r.get("signatures").and_then(|s| s.as_array()).and_then(|a| a.first())
-                .and_then(|s| s.get("label")).and_then(Json::as_str)?.to_string();
-            let active = r.get("activeParameter").and_then(as_usize).unwrap_or(0);
-            Some((label, active))
-        };
-        // Prelude: sort(.
-        assert_eq!(sig("fn main() -> int {\n    let xs = [3,1];\n    sort(\n}\n", 2, 9),
-                   Some(("fn sort(a: [T]) -> [T]".into(), 0)));
-        // Método: p.doblar( → receptor recortado, `(k: int)`.
-        let m = "struct P { x: int }\nfn fold(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.fold(\n}\n";
-        assert_eq!(sig(m, 4, 13), Some(("fn fold(k: int) -> int".into(), 0)));
-        // Función libre con una coma: doblar(1, → firma completa, param activo 1.
-        let free_call = "fn fold(p: int, k: int) -> int { p }\nfn main() -> int {\n    fold(1, \n}\n";
-        assert_eq!(sig(free_call, 2, 13), Some(("fn fold(p: int, k: int) -> int".into(), 1)));
-        // Builtin: pow(.
-        assert_eq!(sig("fn main() -> int {\n    let x = pow(\n    0\n}\n", 1, 16),
-                   Some(("fn pow(base: float, exp: float) -> float".into(), 0)));
-        // Construcción de variante de enum: `Shape.Rect(1.0, ` → firma con los tipos del payload,
-        // param activo 1. No es una `fn`, pero el receptor es un enum con esa variante.
-        let e = "enum Shape { Circulo(float), Rect(float, float) }\nfn main() -> int {\n    let r: Shape = Shape.Rect(1.0, \n    0\n}\n";
-        assert_eq!(sig(e, 2, 34), Some(("Shape.Rect(float, float)".into(), 1)));
-    }
-
-    #[test]
-    fn completion_snippet_with_placeholders_per_parameter() {
-        // M46c: el insertText usa un placeholder por parámetro (nombre), navegable con Tab.
-        let insert = |src: &str, line: usize, ch: usize, label: &str| -> Option<String> {
-            let mut docs = HashMap::new();
-            docs.insert("file:///t.ray".to_string(), src.to_string());
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs).as_array().unwrap().iter()
-                .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
-                .and_then(|i| i.get("insertText")).and_then(Json::as_str).map(|s| s.to_string())
-        };
-        // Función de archivo con dos params.
-        let f = "fn fold(p: int, k: int) -> int { p }\nfn main() -> int {\n    dob\n    0\n}\n";
-        assert_eq!(insert(f, 2, 7, "fold").as_deref(), Some("fold(${1:p}, ${2:k})"));
-        // Método: receptor recortado → solo el resto.
-        let m = "struct P { x: int }\nfn tri(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
-        assert_eq!(insert(m, 4, 6, "tri").as_deref(), Some("tri(${1:k})"));
-        // Builtin sin argumentos → `()`.
-        let a = "fn main() -> int {\n    let xs = [1];\n    xs.\n    0\n}\n";
-        assert_eq!(insert(a, 2, 7, "len").as_deref(), Some("len()"));
-    }
-
-    #[test]
-    fn completion_of_struct_literal_fields() {
-        // M47a: dentro de `Nombre { … }` (posición de nombre de campo), los campos del struct.
-        let labels = |body: &str, line: usize, ch: usize| -> Vec<(String, i64, Option<String>)> {
-            let src = format!("struct Point {{ x: int, y: int }}\nfn dobla(n: int) -> int {{ n }}\nfn main() -> int {{\n{body}\n0\n}}\n");
-            let mut docs = HashMap::new();
-            docs.insert("file:///t.ray".to_string(), src);
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs).as_array().unwrap().iter()
-                .map(|i| (i.get("label").unwrap().as_str().unwrap().to_string(),
-                          as_usize(i.get("kind").unwrap()).unwrap() as i64,
-                          i.get("insertText").and_then(Json::as_str).map(|s| s.to_string())))
-                .collect()
-        };
-        // `Point { |` → ambos campos, kind Field (5), insertText `campo: `.
-        let empty = labels("    let p = Point { ", 3, 20);
-        assert!(empty.iter().any(|(l, k, ins)| l == "x" && *k == 5 && ins.as_deref() == Some("x: ")), "campo x: {empty:?}");
-        assert!(empty.iter().any(|(l, _, _)| l == "y"), "campo y: {empty:?}");
-        assert!(!empty.iter().any(|(l, _, _)| l == "print"), "no cae a la completion de file: {empty:?}");
-        // `Point { x: 1, |` → solo el campo que falta.
-        let one = labels("    let p = Point { x: 1, ", 3, 26);
-        assert!(one.iter().any(|(l, _, _)| l == "y") && !one.iter().any(|(l, _, _)| l == "x"),
-                "excluye el campo ya escrito: {one:?}");
-        // `Point { x: dob|` (posición de VALOR) → cae a la completion de archivo (dobla), no campos.
-        let value_labels = labels("    let p = Point { x: dob", 3, 26);
-        assert!(value_labels.iter().any(|(l, _, _)| l == "dobla"), "en posición de valor, completion de file: {value_labels:?}");
-
-        // M47b: al teclear el TIPO, un ítem extra `Point {…}` que inserta el literal con placeholders,
-        // aparte del tipo pelado `Point`.
-        let type_labels = labels("    let p = Poi", 3, 15);
-        assert!(type_labels.iter().any(|(l, k, _)| l == "Point" && *k == 22), "el type pelado follows: {type_labels:?}");
-        assert!(type_labels.iter().any(|(l, k, ins)| l == "Point {…}" && *k == 15
-            && ins.as_deref() == Some("Point { x: ${1:int}, y: ${2:int} }")), "el literal-snippet: {type_labels:?}");
-    }
-
-    #[test]
-    fn hover_of_associated_function() {
-        // M48.1: hover sobre el nombre asociado (`Channel.new`) → su firma del registro de asociadas.
-        let src = "fn main() -> int {\n    let ch: Channel<int> = Channel.new();\n    0\n}\n";
-        let mut docs = HashMap::new();
-        docs.insert("file:///t.ray".to_string(), src.to_string());
-        // Posición sobre `new` (tras `Channel.`).
-        let cn = src.lines().nth(1).unwrap().find("Channel.new").unwrap() + "Channel.".len() + 1;
-        let msg = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":1,"character":{cn}}}}}}}"#
-        )).unwrap();
-        let r = hover_result(&msg, &docs);
-        let v = r.get("contents").and_then(|c| c.get("value")).and_then(Json::as_str).unwrap_or("");
-        assert_eq!(v, "Channel.new() -> Channel<T>", "hover de Channel.new: {v}");
-    }
-
-    #[test]
-    fn hover_of_const_and_builtin_type() {
-        let hover_of = |src: &str, line: usize, ch: usize| -> String {
-            let mut docs = HashMap::new();
-            docs.insert("file:///t.ray".to_string(), src.to_string());
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            let r = hover_result(&msg, &docs);
-            r.get("contents").and_then(|c| c.get("value")).and_then(Json::as_str).unwrap_or("").to_string()
-        };
-        // Uso de una constante → su tipo (como una variable).
-        let c = hover_of("const MAXIMO: int = 100;\nfn main() -> int {\n    let x = MAXIMO;\n    x\n}\n", 2, 13);
-        assert!(c.contains("MAXIMO: int"), "hover de const en use: {c}");
-        // Tipo incorporado (Channel) → descripción breve.
-        let t = hover_of("fn main() -> int {\n    let ch: Channel<int> = channel();\n    0\n}\n", 1, 13);
-        assert!(t.contains("Channel<T>"), "hover de type Channel: {t}");
-    }
-
-    #[test]
-    fn completion_offers_builtin_consts_and_types() {
-        let comp = |src: &str, line: usize, ch: usize| -> Vec<String> {
-            let mut docs = HashMap::new();
-            docs.insert("file:///t.ray".to_string(), src.to_string());
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs).as_array().unwrap().iter()
-                .filter_map(|i| i.get("label").and_then(Json::as_str).map(|s| s.to_string())).collect()
-        };
-        // Constante de nivel superior.
-        let c = comp("const MAXIMO: int = 100;\nfn main() -> int {\n    x\n    0\n}\n", 2, 5);
-        assert!(c.contains(&"MAXIMO".to_string()), "const MAXIMO: {c:?}");
-        // Tipos genéricos incorporados / del prelude.
-        for t in ["Channel", "Task", "Map", "Option", "Result"] {
-            assert!(c.contains(&t.to_string()), "type {t}: {c:?}");
-        }
-    }
-
-    #[test]
-    fn completion_shows_signature_in_detail() {
-        // M46a: los ítems invocables llevan `labelDetails` con params y retorno.
-        let detail_of = |src: &str, line: usize, ch: usize, label: &str| -> Option<(String, String)> {
-            let mut docs = HashMap::new();
-            docs.insert("file:///t.ray".to_string(), src.to_string());
-            let msg = json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
-            )).unwrap();
-            completion_result(&msg, &docs).as_array().unwrap().iter()
-                .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
-                .and_then(|i| i.get("labelDetails"))
-                .map(|ld| (
-                    ld.get("detail").and_then(Json::as_str).unwrap_or("").to_string(),
-                    ld.get("description").and_then(Json::as_str).unwrap_or("").to_string(),
-                ))
-        };
-        // Función de archivo (incompleta: `parse_all` la recupera) → firma completa.
-        let src = "fn fold(p: int, k: int) -> int { p * k }\nfn main() -> int {\n    dob\n    0\n}\n";
-        assert_eq!(detail_of(src, 2, 7, "fold"), Some(("(p: int, k: int)".into(), "int".into())));
-        // Método → sin el receptor.
-        let m = "struct P { x: int }\nfn tri(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
-        assert_eq!(detail_of(m, 4, 6, "tri"), Some(("(k: int)".into(), "int".into())));
-        // Builtin-método → firma sin receptor.
-        let a = "fn main() -> int {\n    let xs = [1, 2];\n    xs.\n    0\n}\n";
-        assert_eq!(detail_of(a, 2, 7, "push"), Some(("(value: T)".into(), "unit".into())));
-    }
-
-    #[test]
-    fn completion_without_dot_stays_file_completion() {
-        // Sin `.` delante, la completion es la de archivo (regresión de M10.2e).
-        let src = "fn double(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
-        let labels = completion_labels(src, 1, 19);
-        assert!(labels.contains(&"double".to_string()) && labels.contains(&"print".to_string()), "{labels:?}");
-    }
-
-    #[test]
-    fn analyzes_type_error() {
-        let d = analyze("fn main() -> int { 1 + true }").expect("debería haber error");
-        assert_eq!(d.line, 1);
-        assert!(d.col >= 1);
-        assert!(!d.message.is_empty());
-    }
-
-    #[test]
-    fn diagnostic_uses_0_based_coordinates() {
-        // Error en la línea 2: la fase reporta 1-basado; LSP debe verlo 0-basado.
-        let src = "fn main() -> int {\n    1 + true\n}";
-        let d = analyze(src).unwrap();
-        assert_eq!(d.line, 2); // 1-basado
-        let dj = diagnostic_json(src, &d);
-        let start = dj.get("range").unwrap().get("start").unwrap();
-        assert_eq!(start.get("line"), Some(&Json::Num(1.0))); // 0-basado
-        assert_eq!(dj.get("severity"), Some(&Json::Num(1.0))); // Error
-    }
-
-    /// Enmarca un cuerpo JSON con su cabecera `Content-Length`, como un cliente real.
-    fn frame(body: &str) -> String {
-        format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
-    }
-
-    #[test]
-    fn serve_responde_initialize_y_public_diagnostics() {
-        let mut input = String::new();
-        input.push_str(&frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#));
-        // didOpen de un programa con error de tipos.
-        input.push_str(&frame(
-            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int { 1 + true }"}}}"#,
-        ));
-        input.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
-
-        let mut reader = io::Cursor::new(input.into_bytes());
-        let mut output: Vec<u8> = Vec::new();
-        serve(&mut reader, &mut output);
-        let out = String::from_utf8(output).unwrap();
-
-        assert!(out.contains("\"id\":1"));
-        assert!(out.contains("\"capabilities\""));
-        // Las capacidades nuevas se anuncian (el cliente las descubre aquí).
-        assert!(out.contains("documentFormattingProvider"));
-        assert!(out.contains("documentSymbolProvider"));
-        assert!(out.contains("documentHighlightProvider"));
-        assert!(out.contains("textDocument/publishDiagnostics"));
-        assert!(out.contains("\"severity\":1"));
-    }
-
-    #[test]
-    fn serve_program_valid_public_list_empty() {
-        let body = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///ok.ray","text":"fn main() -> int { 42 }"}}}"#;
-        let mut input = frame(body);
-        input.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
-
-        let mut reader = io::Cursor::new(input.into_bytes());
-        let mut output: Vec<u8> = Vec::new();
-        serve(&mut reader, &mut output);
-        let out = String::from_utf8(output).unwrap();
-        assert!(out.contains("\"diagnostics\":[]"));
-    }
-
-    #[test]
-    fn completion_in_a_template_offers_for_params_and_vars() {
-        // M55: dentro de `{{ }}` se ofrecen los params tipados de la cabecera; dentro de un
-        // `{% for %}` abierto, también la variable de bucle (con su tipo inferido del `[T]`);
-        // en contexto de etiqueta `{%`, además las keywords; fuera de los delimitadores, nada.
-        let tpl = "{% params titulo: string, rows: [string], total: int %}\n\
-                   <h1>{{ ti }}</h1>\n\
-                   {% for row in rows %}<li>{{ f }}</li>{% endfor %}\n\
-                   {% if total > 0 %}<p>hay</p>{% endif %}\n\
-                   <p>outside</p>\n";
-        let labels = |line0: usize, char0: usize| -> Vec<(String, Option<String>)> {
-            template_completion_items(tpl, line0, char0).get("items").unwrap().as_array().unwrap().iter()
-                .map(|i| (
-                    i.get("label").and_then(Json::as_str).unwrap().to_string(),
-                    i.get("detail").and_then(Json::as_str).map(|s| s.to_string()),
-                ))
-                .collect()
-        };
-        // Dentro de `{{ ti| }}` (línea 2): los tres params con su tipo; sin keywords de etiqueta.
-        let en_expr = labels(1, 10);
-        assert!(en_expr.contains(&("titulo".into(), Some("string".into()))), "{en_expr:?}");
-        assert!(en_expr.contains(&("rows".into(), Some("[string]".into()))), "{en_expr:?}");
-        assert!(en_expr.contains(&("total".into(), Some("int".into()))), "{en_expr:?}");
-        assert!(!en_expr.iter().any(|(l, _)| l == "endif"), "sin keywords de tag en {{{{ }}}}: {en_expr:?}");
-        assert!(!en_expr.iter().any(|(l, _)| l == "row"), "el for aún no está abierto: {en_expr:?}");
-        // Dentro del for (línea 3, `{{ f| }}`): la variable de bucle con el tipo del elemento.
-        let en_for = labels(2, 30);
-        assert!(en_for.contains(&("row".into(), Some("string".into()))), "{en_for:?}");
-        // En una etiqueta `{% if |` (línea 4): params + keywords.
-        let en_tag = labels(3, 6);
-        assert!(en_tag.iter().any(|(l, _)| l == "total"), "{en_tag:?}");
-        assert!(en_tag.iter().any(|(l, _)| l == "endif"), "{en_tag:?}");
-        // Fuera de los delimitadores (línea 5): NADA de variables (el HTML no es nuestro), solo
-        // los snippets de bloque (`{% for %}`/`{% if %}`/…) para insertar un bloque entero.
-        let en_html = labels(4, 3);
-        assert!(!en_html.iter().any(|(l, _)| l == "titulo"), "{en_html:?}");
-        assert!(en_html.iter().any(|(l, _)| l == "{% for %}"), "{en_html:?}");
-
-        // La `}` huérfana del auto-close: en `{% f|}` el snippet de bloque la ELIMINA con un
-        // additionalTextEdit (si no, su cierre propio la duplicaría). Sin llave huérfana, no hay
-        // additionalTextEdits.
-        let for_item_of = |items: &Json| items.get("items").unwrap().as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(Json::as_str) == Some("{% for %}")).cloned().unwrap();
-        let edit_of = |item: &Json| {
-            let e = item.get("textEdit").expect("textEdit explícito (sin él cada client adivina)");
-            let r = e.get("range").unwrap().serialize();
-            (r, e.get("newText").and_then(Json::as_str).unwrap().to_string())
-        };
-        // `{% f|}`: el textEdit reemplaza la palabra parcial `f` Y la `}` huérfana del auto-close
-        // (cols 3..5) con el bloque entero — sin llave duplicada, en cualquier cliente.
-        let tpl2 = "{% params t: string %}\n{% f}\n";
-        let items = template_completion_items(tpl2, 1, 4);
-        assert!(items.serialize().contains("\"isIncomplete\":true"), "re-query por tecla");
-        let (r, txt) = edit_of(&for_item_of(&items));
-        assert!(r.contains("\"character\":3") && r.contains("\"character\":5"), "{r}");
-        assert!(txt.starts_with("for ") && txt.ends_with("{% endfor %}"), "{txt}");
-        // Sin llave huérfana: el rango cubre solo la palabra (3..4).
-        let tpl3 = "{% params t: string %}\n{% f\n";
-        let (r, _) = edit_of(&for_item_of(&template_completion_items(tpl3, 1, 4)));
-        assert!(r.contains("\"character\":3") && r.contains("\"character\":4"), "{r}");
-        // `{%f|}` (sin espacio tras el delimitador): antepone el espacio Y come la llave (2..4).
-        let tpl4 = "{% params t: string %}\n{%f}\n";
-        let (r, txt) = edit_of(&for_item_of(&template_completion_items(tpl4, 1, 3)));
-        assert!(txt.starts_with(" for "), "{txt}");
-        assert!(r.contains("\"character\":2") && r.contains("\"character\":4"), "{r}");
-
-        // Y el enrutado: un completion sobre una URI `.ray.html` pasa por este camino.
-        let uri = "file:///tmp/vista.ray.html";
-        let mut docs = HashMap::new();
-        docs.insert(uri.to_string(), tpl.to_string());
-        let msg = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":10}}}}}}"#
-        )).unwrap();
-        let items = completion_result(&msg, &docs);
-        assert!(items.get("items").unwrap().as_array().unwrap().iter()
-            .any(|i| i.get("label").and_then(Json::as_str) == Some("titulo")));
-
-        // Hover: sobre `ti` de `{{ ti }}`... no hay símbolo; sobre `rows` del for (línea 3,
-        // "{% for row in rows %}" → `rows` empieza en col 15) → `rows: [string]`; sobre la
-        // variable de bucle usada dentro (no cubierta aquí: `f` no es `row`); y sobre HTML, nada.
-        assert_eq!(template_hover_at(tpl, 2, 16), Some(("rows: [string]".into(), 14, 18)));
-        assert_eq!(template_hover_at(tpl, 3, 7), Some(("total: int".into(), 6, 11))); // {% if total
-        assert!(template_hover_at(tpl, 4, 4).is_none(), "about el HTML no hay hover");
-        // Y el enrutado por hover_result con URI .ray.html.
-        let hmsg = json::parse(&format!(
-            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":3,"character":7}}}}}}"#
-        )).unwrap();
-        let h = hover_result(&hmsg, &docs);
-        assert!(h.serialize().contains("total: int"), "{h:?}");
-    }
-
-    #[test]
-    fn semantic_intelligence_in_templates() {
-        // M55: hover con tipos REALES, completion de miembros tras `.`, ir-a-definición y
-        // signature help DENTRO de las expresiones del template — todo vía el módulo generado +
-        // el line map (la posición del cursor se traduce al generado y de vuelta).
-        let base = std::env::temp_dir().join("ray_lsp_tpl_sem_test");
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join("std")).unwrap();
-        // El generado importa `from std/template import escape_html` → resoluble bajo la base.
-        std::fs::write(base.join("std/template.ray"),
-            "pub fn escape_html(s: string) -> string { s }\n").unwrap();
-        let uri = format!("file://{}/vista.ray.html", base.display());
-        let tpl = "{% params titulo: string, rows: [string] %}\n\
-                   <h1>{{ titulo }}</h1>\n\
-                   {% for row in rows %}<li>{{ row.trim() }}</li>{% endfor %}\n";
-
-        // Hover semántico: sobre `row` dentro de `{{ row.trim() }}` → su tipo REAL (string,
-        // inferido por el checker del `for` sobre `[string]`); el rango es el del template.
-        let l2 = tpl.lines().nth(2).unwrap();
-        let col_row = l2.rfind("row.trim").unwrap() + 1; // dentro de `row` (ASCII: byte == char)
-        let (info, start, end) = template_semantic_hover(&uri, tpl, 2, col_row).expect("hover de row");
-        assert!(info.contains("string"), "{info}");
-        assert_eq!((start, end), (l2.rfind("row.trim").unwrap(), l2.rfind("row.trim").unwrap() + 3));
-
-        // Ir-a-definición: sobre `titulo` en `{{ titulo }}` → la línea del `{% params %}` del
-        // PROPIO template (la declaración vive en la firma del generado, que mapea a la línea 1).
-        let l1 = tpl.lines().nth(1).unwrap();
-        let d = template_definition(&uri, tpl, 1, l1.find("titulo").unwrap() + 2).expect("def de titulo");
-        let ser = d.serialize();
-        assert!(ser.contains(&uri), "la def vuelve al template: {ser}");
-        assert!(ser.contains("\"line\":0"), "línea del params: {ser}");
-        assert!(ser.contains(&format!("\"character\":{}", tpl.lines().next().unwrap().find("titulo").unwrap())), "{ser}");
-
-        // Completion de miembros: `{{ titulo. }}` ofrece los builtins de string (len/trim/…).
-        let tpl2 = "{% params titulo: string %}\n<p>{{ titulo. }}</p>\n";
-        let (code, map, gen_uri) = template_generated(&uri, tpl2).unwrap();
-        let l = "<p>{{ titulo. }}</p>";
-        let (gl, gc) = template_pos_to_generated(tpl2, &code, &map, 1, l.find('.').unwrap() + 1).expect("mapea after el punto");
-        let docs = HashMap::new();
-        // Como en completion_result: stub local en vez del import (member_completion es de un buffer).
-        let code_sb = code.replacen("from std/template import escape_html;",
-            "fn escape_html(s: string) -> string { s }", 1);
-        let items = member_completion_items(Some(&gen_uri), &code_sb, gl, gc, &docs).expect("members de string");
-        let labels: Vec<String> = items.as_array().unwrap().iter()
-            .filter_map(|i| i.get("label").and_then(Json::as_str).map(|s| s.to_string())).collect();
-        assert!(labels.iter().any(|l| l == "len"), "{labels:?}");
-        assert!(labels.iter().any(|l| l == "trim"), "{labels:?}");
-
-        // Signature help: `{{ titulo.substring( }}` muestra la firma del builtin.
-        let tpl3 = "{% params titulo: string %}\n<p>{{ titulo.substring( }}</p>\n";
-        let (code3, map3, gen_uri3) = template_generated(&uri, tpl3).unwrap();
-        let l3 = "<p>{{ titulo.substring( }}</p>";
-        let (gl3, gc3) = template_pos_to_generated(tpl3, &code3, &map3, 1, l3.find('(').unwrap() + 1).expect("mapea after el paréntesis");
-        let sh = signature_help_at(&gen_uri3, &code3, gl3, gc3);
-        assert!(sh.serialize().contains("substring"), "{sh:?}");
-
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn rename_references_highlight_y_outline_en_templates() {
-        // M55: el escáner de ocurrencias del template resuelve cada ident de los delimitadores a su
-        // binding (param / var de for, con shadowing) y sobre él corren references / rename /
-        // highlight / outline. El HTML de fuera de los delimitadores NUNCA se toca.
-        let uri = "file:///tmp/list.ray.html".to_string();
-        let tpl = "{% params row: string, rows: [string] %}\n\
-                   <p>row {{ row }}</p>\n\
-                   {% for row in rows %}<li>{{ row.trim() }}</li>{% endfor %}\n\
-                   <i>{{ row }}</i>\n";
-        let occs = template_occurrences(tpl);
-        // El `fila` del texto HTML (línea 2, "fila " literal) NO es ocurrencia.
-        assert!(!occs.iter().any(|(l, c, _, _, _)| *l == 1 && *c == 3), "{occs:?}");
-        // `trim` (miembro tras `.`) no liga.
-        assert!(!occs.iter().any(|(l, c, _, _, _)| *l == 2 && tpl.lines().nth(2).unwrap().chars().skip(*c).take(4).collect::<String>() == "trim"), "{occs:?}");
-        // El `fila` DENTRO del for liga a la var del for (shadowing del param).
-        let l2 = tpl.lines().nth(2).unwrap();
-        let col_usage = l2.rfind("row.trim").unwrap(); // ASCII: byte == char
-        let usage = template_occurrence_at(&occs, 2, col_usage + 1).expect("use de row en el for");
-        assert!(usage.3.starts_with("f:"), "liga al for, no al param: {usage:?}");
-        // Los `fila` de FUERA del for ligan al param (línea 2 y línea 4 + su decl en la cabecera).
-        let param_occs: Vec<_> = occs.iter().filter(|o| o.3 == "p:row").collect();
-        assert_eq!(param_occs.len(), 3, "decl + 2 usos: {param_occs:?}");
-
-        let mut docs = HashMap::new();
-        docs.insert(uri.clone(), tpl.to_string());
-        let at = |line: usize, ch: usize, extra: &str| -> Json {
-            json::parse(&format!(
-                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}{extra}}}}}"#
-            )).unwrap()
-        };
-        // Rename del param `fila` → 3 ediciones (cabecera + 2 usos), sin tocar el for ni el HTML.
-        let col_p = tpl.lines().nth(1).unwrap().rfind("row").unwrap();
-        let w = rename_result(&at(1, col_p + 1, r#","newName":"registro""#), &docs);
-        let ser = w.serialize();
-        assert_eq!(ser.matches("registro").count(), 3, "{ser}");
-        // Un nombre nuevo inválido → null.
-        assert!(matches!(rename_result(&at(1, col_p + 1, r#","newName":"1x""#), &docs), Json::Null));
-        // References sobre la var del for → decl + uso (2), no los del param.
-        let refs = references_result(&at(2, col_usage + 1, ""), &docs);
-        assert_eq!(refs.as_array().unwrap().len(), 2, "{}", refs.serialize());
-        // Highlight: mismas 2, la decl como Write (kind 3).
-        let hl = document_highlight_result(&at(2, col_usage + 1, ""), &docs);
-        assert_eq!(hl.as_array().unwrap().len(), 2);
-        assert!(hl.serialize().contains("\"kind\":3"), "{}", hl.serialize());
-        // Outline: raíz `render_lista` con las decls como hijas (2 params + 1 var de for).
-        let syms = document_symbol_result(&at(0, 0, ""), &docs);
-        let ser = syms.serialize();
-        assert!(ser.contains("render_list"), "{ser}");
-        assert_eq!(ser.matches("\"kind\":13").count(), 3, "{ser}");
-    }
-
-    #[test]
-    fn serve_method_unknown_con_id_da_error() {
-        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/nonexistent","params":{}}"#;
-        let mut input = frame(body);
-        input.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
-
-        let mut reader = io::Cursor::new(input.into_bytes());
-        let mut output: Vec<u8> = Vec::new();
-        serve(&mut reader, &mut output);
-        let out = String::from_utf8(output).unwrap();
-        assert!(out.contains("\"id\":9"));
-        assert!(out.contains("-32601"));
-    }
 }

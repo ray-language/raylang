@@ -570,6 +570,76 @@ fn completion_offers_closure_snippet_for_spawn_and_scope() {
     }
 }
 
+#[test]
+fn completion_offers_language_construct_snippets() {
+    // Snippets de construcciones del lenguaje: teclear la keyword ofrece el bloque completo
+    // con placeholders (además de la keyword pelada, que sigue para las demás posiciones).
+    let src = "fn main() -> int { 0 }\n";
+    let msg = json::parse(
+        r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":0,"character":19}}}"#
+    ).unwrap();
+    let mut docs = HashMap::new();
+    docs.insert("file:///t.ray".to_string(), src.to_string());
+    let res = completion_result(&msg, &docs);
+    let items = res.as_array().unwrap();
+    // (label, filterText, fragmento que el insertText debe contener). Placeholders en INGLÉS
+    // (convención: todo lo que el lenguaje entrega al usuario va en inglés; la política de
+    // identificadores del código la vigila tests/naming_policy.rs, no este test).
+    let expected: &[(&str, &str, &str)] = &[
+        ("fn …() { }", "fn", "fn ${1:name}("),
+        ("fn main() { }", "main", "fn main() -> int {"),
+        ("let … = …;", "let", "let ${1:name} = ${2:expr};"),
+        ("var … = …;", "var", "var ${1:name} = ${2:expr};"),
+        ("if (…) { }", "if", "if (${1:condition}) {"),
+        ("if (…) { } else { }", "if", "} else {"),
+        ("while (…) { }", "while", "while (${1:condition}) {"),
+        ("for … in … { }", "for", "for ${1:elem} in ${2:collection} {"),
+        ("for … in a..b { }", "for", "..${3:n}"),
+        ("match (…) { … => … }", "match", "match (${1:expr}) {"),
+        // Etapa 2 — datos y tipos.
+        ("if let … = … { }", "if", "if let ${1:pattern} = ${2:expr} {"),
+        ("struct … { }", "struct", "${2:field}: ${3:type},"),
+        ("enum … { }", "enum", "${3:Variant}(${4:type}),"),
+        ("trait … { }", "trait", "fn ${2:method}(self)"),
+        ("impl … for … { }", "impl", "impl ${1:Trait} for ${2:Type} {"),
+        ("const … = …;", "const", "const ${1:NAME}: ${2:type} = ${3:value};"),
+        ("fn(…) { } (anonymous)", "fn", "fn(${1:params}) {"),
+        ("@test fn … { }", "test", "@test\nfn ${1:name}() {"),
+        ("@derive(…) struct … { }", "derive", "@derive(${1:Eq, Show})"),
+        // Etapa 3 — los no-obvios: variantes calificadas, channel anotado, ?, import, extern.
+        ("match Option { Some/None }", "match", "Option.Some(${2:v}) => $3,\n\tOption.None => $0,"),
+        ("match Result { Ok/Err }", "match", "Result.Ok(${2:v}) => $3,\n\tResult.Err(${4:e}) => $0,"),
+        ("fn … -> Result … ? …", "fn", "-> Result<${3:int}, string> {"),
+        ("import …;", "import", "import ${1:module};"),
+        ("from … import …;", "from", "from ${1:module} import ${2:name};"),
+        ("channel + spawn + send + recv", "channel", "let ${1:ch}: Channel<${2:int}> = Channel.new();"),
+        ("extern \"lib\" { fn …; }", "extern", "extern \"${1:lib}\" {"),
+    ];
+    for (label, filter, frag) in expected {
+        let it = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
+            .unwrap_or_else(|| panic!("falta el snippet {label}"));
+        assert_eq!(it.get("insertTextFormat"), Some(&Json::Num(2.0)), "{label}: es snippet");
+        assert_eq!(it.get("filterText").and_then(|f| f.as_str()), Some(*filter), "{label}: filterText");
+        let insert = it.get("insertText").and_then(|t| t.as_str()).unwrap();
+        assert!(insert.contains(frag), "{label}: insertText contiene {frag:?}: {insert}");
+    }
+    // La gramática no-obvia: la CONDICIÓN va entre paréntesis en if/while/match… pero el
+    // escrutinio del `if let` va sin paréntesis (hasta el `{`, SPEC §6.2).
+    for label in ["if (…) { }", "if (…) { } else { }", "while (…) { }", "match (…) { … => … }"] {
+        let it = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label)).unwrap();
+        assert!(it.get("insertText").and_then(|t| t.as_str()).unwrap().contains('('),
+            "{label}: condición entre paréntesis");
+    }
+    let iflet = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("if let … = … { }")).unwrap();
+    assert!(!iflet.get("insertText").and_then(|t| t.as_str()).unwrap().starts_with("if let ("),
+        "if let: escrutinio SIN paréntesis");
+    // La keyword pelada sigue ofreciéndose (posiciones donde el bloque no aplica).
+    for kw in ["fn", "if", "while", "for", "match", "let", "var", "struct", "enum", "trait", "impl", "const"] {
+        assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(kw)),
+            "{kw}: keyword pelada también presente");
+    }
+}
+
 /// Helper: labels de la completion en `(line, character)` (0-basados) sobre `src`.
 fn completion_labels(src: &str, line: usize, character: usize) -> Vec<String> {
     let msg = json::parse(&format!(

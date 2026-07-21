@@ -849,7 +849,7 @@ pub(super) fn item_struct_literal(name: &str, fields: &[(String, String)]) -> Js
     obj(vec![
         ("label", Json::Str(format!("{} {{…}}", name))),
         ("kind", num(15)), // 15 = Snippet
-        ("detail", Json::Str("literal de struct".into())),
+        ("detail", Json::Str("struct literal".into())),
         ("filterText", Json::Str(name.to_string())),
         ("insertText", Json::Str(format!("{} {{ {} }}", name, body))),
         ("insertTextFormat", num(2)), // 2 = Snippet
@@ -863,11 +863,66 @@ pub(super) fn item_closure_snippet(name: &str) -> Json {
     obj(vec![
         ("label", Json::Str(format!("{}(fn() {{…}})", name))),
         ("kind", num(15)), // 15 = Snippet
-        ("detail", Json::Str("con función anónima".into())),
+        ("detail", Json::Str("with anonymous function".into())),
         ("filterText", Json::Str(name.to_string())),
         ("insertText", Json::Str(format!("{}(fn() {{\n\t$0\n}});", name))),
         ("insertTextFormat", num(2)), // 2 = Snippet
     ])
+}
+
+/// Snippets de **construcciones del lenguaje** para la completion de archivo `.ray` (gemelo de
+/// `template_block_snippets` para los templates): teclear la palabra clave ofrece, además de la
+/// palabra pelada (que sigue para las posiciones donde el bloque no aplica), un ítem que inserta
+/// la construcción completa con placeholders navegables por Tab. Los cuerpos van con `\t` (el
+/// editor lo traduce a su indentación y re-indenta al nivel del punto de inserción). Fijan la
+/// gramática no-obvia para quien viene de otros lenguajes: paréntesis en `if`/`while`/`match`,
+/// `=>` en los brazos, `let`/`var` (no `mut`).
+pub(super) fn code_block_snippets() -> Vec<Json> {
+    // (label, filterText, insertText). Placeholders y textos de cara al usuario en INGLÉS
+    // (convención del proyecto: todo lo que el lenguaje entrega al usuario va en inglés).
+    let cases: &[(&str, &str, &str)] = &[
+        ("fn …() { }", "fn", "fn ${1:name}(${2:params})${3: -> type} {\n\t$0\n}"),
+        ("fn main() { }", "main", "fn main() -> int {\n\t$0\n}"),
+        ("let … = …;", "let", "let ${1:name} = ${2:expr};$0"),
+        ("var … = …;", "var", "var ${1:name} = ${2:expr};$0"),
+        ("if (…) { }", "if", "if (${1:condition}) {\n\t$0\n}"),
+        ("if (…) { } else { }", "if", "if (${1:condition}) {\n\t$2\n} else {\n\t$0\n}"),
+        ("while (…) { }", "while", "while (${1:condition}) {\n\t$0\n}"),
+        ("for … in … { }", "for", "for ${1:elem} in ${2:collection} {\n\t$0\n}"),
+        ("for … in a..b { }", "for", "for ${1:i} in ${2:0}..${3:n} {\n\t$0\n}"),
+        ("match (…) { … => … }", "match", "match (${1:expr}) {\n\t${2:pattern} => $0,\n}"),
+        // Etapa 2 — datos y tipos. El `if let` va SIN paréntesis (el escrutinio llega hasta el
+        // `{`, SPEC §6.2); los campos de struct llevan coma final (la gramática la exige).
+        ("if let … = … { }", "if", "if let ${1:pattern} = ${2:expr} {\n\t$0\n}"),
+        ("struct … { }", "struct", "struct ${1:Name} {\n\t${2:field}: ${3:type},\n}"),
+        ("enum … { }", "enum", "enum ${1:Name} {\n\t${2:Variant},\n\t${3:Variant}(${4:type}),\n}"),
+        ("trait … { }", "trait", "trait ${1:Name} {\n\tfn ${2:method}(self)${3: -> type};\n}"),
+        ("impl … for … { }", "impl", "impl ${1:Trait} for ${2:Type} {\n\tfn ${3:method}(self)${4: -> type} {\n\t\t$0\n\t}\n}"),
+        ("const … = …;", "const", "const ${1:NAME}: ${2:type} = ${3:value};$0"),
+        ("fn(…) { } (anonymous)", "fn", "fn(${1:params}) {\n\t$0\n}"),
+        ("@test fn … { }", "test", "@test\nfn ${1:name}() {\n\t$0\n}"),
+        ("@derive(…) struct … { }", "derive", "@derive(${1:Eq, Show})\nstruct ${2:Name} {\n\t${3:field}: ${4:type},\n}"),
+        // Etapa 3 — los no-obvios de raylang: variantes CALIFICADAS (`Option.Some`, no `Some`),
+        // `Channel.new()` es indeterminado (exige la anotación `Channel<T>`), el `?` pide que la
+        // función envolvente devuelva Result/Option compatible.
+        ("match Option { Some/None }", "match", "match (${1:opt}) {\n\tOption.Some(${2:v}) => $3,\n\tOption.None => $0,\n}"),
+        ("match Result { Ok/Err }", "match", "match (${1:res}) {\n\tResult.Ok(${2:v}) => $3,\n\tResult.Err(${4:e}) => $0,\n}"),
+        ("fn … -> Result … ? …", "fn", "fn ${1:name}(${2:params}) -> Result<${3:int}, string> {\n\tlet ${4:v} = ${5:expr}?;\n\t$0\n}"),
+        ("import …;", "import", "import ${1:module};$0"),
+        ("from … import …;", "from", "from ${1:module} import ${2:name};$0"),
+        ("channel + spawn + send + recv", "channel", "let ${1:ch}: Channel<${2:int}> = Channel.new();\nspawn(fn() {\n\tsend($1, ${3:value});\n});\nif let Option.Some(${4:v}) = recv($1) {\n\t$0\n}"),
+        ("extern \"lib\" { fn …; }", "extern", "extern \"${1:lib}\" {\n\tfn ${2:name}(${3:params})${4: -> type};\n}"),
+    ];
+    cases.iter().map(|(label, filter, insert)| {
+        obj(vec![
+            ("label", Json::Str(label.to_string())),
+            ("kind", num(15)), // 15 = Snippet
+            ("detail", Json::Str("language construct".into())),
+            ("filterText", Json::Str(filter.to_string())),
+            ("insertText", Json::Str(insert.to_string())),
+            ("insertTextFormat", num(2)), // 2 = Snippet (placeholders ${n:...})
+        ])
+    }).collect()
 }
 
 pub(super) fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
@@ -1627,6 +1682,9 @@ pub(super) fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> J
             list.push(item_closure_snippet(name));
         }
     }
+    // Snippets de construcciones del lenguaje (fn/if/for/while/match/…): teclear la palabra clave
+    // ofrece el bloque completo con placeholders, además de la palabra pelada.
+    list.extend(code_block_snippets());
     Json::Arr(list)
 }
 
@@ -1723,11 +1781,11 @@ pub(super) fn template_block_snippets(with_opener: bool, lead_space: bool, repla
     // del snippet lo traduce el editor a su indentación, y re-indenta las líneas al nivel del
     // punto de inserción (comportamiento estándar de los snippets LSP).
     let cases: &[(&str, &str)] = &[
-        ("for", "for ${1:elem} in ${2:coleccion} %}\n\t$0\n{% endfor %}"),
-        ("if", "if ${1:condicion} %}\n\t$0\n{% endif %}"),
-        ("if/else", "if ${1:condicion} %}\n\t$2\n{% else %}\n\t$0\n{% endif %}"),
+        ("for", "for ${1:elem} in ${2:collection} %}\n\t$0\n{% endfor %}"),
+        ("if", "if ${1:condition} %}\n\t$0\n{% endif %}"),
+        ("if/else", "if ${1:condition} %}\n\t$2\n{% else %}\n\t$0\n{% endif %}"),
         ("let", "let ${1:name} = ${2:expr} %}$0"),
-        ("include", "include ${1:path/al/template}($2) %}$0"),
+        ("include", "include ${1:path/to/template}($2) %}$0"),
         ("block", "block ${1:name} %}\n\t$0\n{% endblock %}"),
     ];
     cases.iter().map(|(label, body)| {

@@ -1544,6 +1544,11 @@ Dos piezas **complementarias** (no alternativas), en orden:
   explícitas…".
 - Los **errores típicos** con el mensaje EXACTO del checker (el modelo reconoce sus fallos).
 - 10-15 **mini-ejemplos idiomáticos** destilados de `examples/` (el oro real ya existe).
+- El **catálogo de snippets de construcciones del LSP** (jul 2026, rama
+  `feature/lsp-code-snippets`: 26 snippets en `code_block_snippets()`, `src/lsp/features.rs`)
+  comparte inventario con este destilado — mismas construcciones, mismos gotchas fijados
+  (paréntesis en `if`/`match`, variantes calificadas `Option.Some`, `Channel.new()` anotado,
+  `if let` sin paréntesis). Reusarlo como esqueleto de la sección de sintaxis.
 - Las **decisiones de nombres congeladas** (SPEC §10: `index_of` vs `position`, `fetch` no
   `get`, `bytes_of` vs `to_bytes`…).
 - Usos: CLAUDE.md/skill de Claude Code, `llms.txt` publicado, y el *resource* que serviría el

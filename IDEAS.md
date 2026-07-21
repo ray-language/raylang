@@ -1525,3 +1525,49 @@ independiente** (referencian `__RayErr`/`__RaySend`/nombres generados) — de ah
 byte-idéntico — verificable con `tests/native_corpus.rs`). **Prioridad: baja**; hacerlo si se
 vuelve a trabajar a fondo en `runtime.rs`. Coste: partir el runtime en dos regímenes
 (archivos para lo estático, `format!` para lo condicional).
+
+## 51. raylang para LLMs — contexto destilado + MCP (jul 2026)
+
+**Problema**: un LLM no tiene raylang en su pretraining → *pattern-matchea* desde Rust/Go y
+alucina (`match x {` sin paréntesis, `null`, `mut` en vez de `var`, sobrecarga, métodos de
+string inexistentes). La SPEC no lo arregla: es **normativa** (446 líneas, EBNF, optimizada
+para conformidad humana), cara en contexto, y los modelos aprenden sintaxis nueva de
+**ejemplos contrastivos**, no de gramática formal. Además, aunque el contexto sea perfecto, el
+modelo se equivocará — y sin bucle de verificación no se entera hasta que el humano ejecuta.
+
+Dos piezas **complementarias** (no alternativas), en orden:
+
+### Pieza A — contexto estático: "raylang para LLMs" destilado (~2-4k tokens, estilo llms.txt)
+
+- La **delta contra Rust/Go**: "se parece a Rust PERO: `match (x) {` con paréntesis, `var` no
+  `mut`, sin sobrecarga, sin `null`, UFCS universal, `let` inmutable/`var` mutable, firmas
+  explícitas…".
+- Los **errores típicos** con el mensaje EXACTO del checker (el modelo reconoce sus fallos).
+- 10-15 **mini-ejemplos idiomáticos** destilados de `examples/` (el oro real ya existe).
+- Las **decisiones de nombres congeladas** (SPEC §10: `index_of` vs `position`, `fetch` no
+  `get`, `bytes_of` vs `to_bytes`…).
+- Usos: CLAUDE.md/skill de Claude Code, `llms.txt` publicado, y el *resource* que serviría el
+  MCP de la pieza B. **Coste: una tarde. Hacer PRIMERO.**
+
+### Pieza B — el MCP: el bucle de feedback (el ROI grande)
+
+Ventaja inusual: **el tooling ya existe entero** — el servidor MCP es un envoltorio fino
+(~200 líneas) sobre el binario `ray`. El bucle escribir→verificar→corregir convierte la
+alucinación en iteración; los mensajes de error de raylang son idóneos (posicionados,
+multi-error hasta 20 vía M33c, byte-idénticos). Es "el LSP para agentes" — encaja con la
+prioridad DX (el tooling es parte del alcance).
+
+| Tool MCP | Sobre qué | Qué le da al LLM |
+|---|---|---|
+| `ray_check(code)` | lex→parse→check (lo del LSP) | diagnósticos exactos con posición, hasta 20 errores — autocorrección sin ejecutar |
+| `ray_run(code, stdin?)` | `ray run` (VM) | stdout + exit code — verificación conductual |
+| `ray_test(code)` | runner `@test` | pasa/falla por test |
+| `ray_fmt(code)` | `ray fmt` | código canónico |
+| `ray_doc(symbol)` | raydoc/builtins | firma y doc — mata la alucinación de API |
+
+**Seguridad**: `ray_run` ejecuta código arbitrario → correrlo con el **fuel** (M42.1) + límite
+de heap ya existentes (exactamente el caso "embeber raylang confinado" para el que se
+diseñaron).
+
+**Fuera de alcance por ahora**: fine-tuning y eval-set formal (prematuro hasta medir cuánto
+rinde A+B; si algún día, el eval reusa el runner `@test`: prompt → `.ray` → ¿compila/corre?).

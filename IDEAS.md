@@ -1503,3 +1503,25 @@ de la ronda 2 (fib ~1,59 s con PGO encima).
 luego **B1**. Si el objetivo es el producto → **B2** antes que nada (el benchmark es un mal
 proxy del nicho). Secuencia r3 sugerida: A4' → medir → B1 → medir → decidir B2/C1. Branch
 propuesta: `feature/opt-vm-ronda3`.
+
+## 50. Runtime embebido del transpilador: `include_str!` para los bloques estáticos (jul 2026)
+
+**Qué**: en `src/transpile/runtime.rs`, el preámbulo de runtime que el backend nativo emite en el
+`.rs` generado vive como strings (`out.push_str`/`concat!`). Los bloques **100% estáticos y
+autocontenidos** (helpers de string/Map, `RayShow`, manejo de errores/panic) podrían migrar a
+archivos aparte (p. ej. `src/transpile/runtime/*.rs.txt`) embebidos con `include_str!` — mismo
+patrón que la stdlib embebida (`src/stdlib.rs`). Ganancia: edición con highlighting y diffs más
+legibles, sin perder el binario único (el texto se incrusta en compile-time).
+
+**Por qué strings hoy (y qué NO puede migrar)**: (1) el resultado debe ser un solo `.rs`
+autocontenido (camino `rustc` pelado, docs/transpilador-nativo.md §4.5) — resuelto igual por
+`include_str!`; (2) buena parte del texto es **condicional/interpolado** (`fast` vs checked,
+bloques por `needs_*`, variantes `Tls`/`Sqlite` del registro de handles vía `format!`) — eso es
+template, no archivo, y se queda como código; (3) los fragmentos **no parsean como Rust
+independiente** (referencian `__RayErr`/`__RaySend`/nombres generados) — de ahí la extensión
+`.txt`, para que rust-analyzer/cargo no los marquen en rojo.
+
+**Impacto**: solo mantenibilidad; cero cambio de comportamiento (el output debe quedar
+byte-idéntico — verificable con `tests/native_corpus.rs`). **Prioridad: baja**; hacerlo si se
+vuelve a trabajar a fondo en `runtime.rs`. Coste: partir el runtime en dos regímenes
+(archivos para lo estático, `format!` para lo condicional).

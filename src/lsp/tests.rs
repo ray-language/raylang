@@ -570,6 +570,50 @@ fn completion_offers_closure_snippet_for_spawn_and_scope() {
     }
 }
 
+#[test]
+fn completion_offers_snippets_de_construcciones() {
+    // Etapa 1 de los snippets de construcciones: teclear la keyword ofrece el bloque completo
+    // con placeholders (además de la keyword pelada, que sigue para las demás posiciones).
+    let src = "fn main() -> int { 0 }\n";
+    let msg = json::parse(
+        r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":0,"character":19}}}"#
+    ).unwrap();
+    let mut docs = HashMap::new();
+    docs.insert("file:///t.ray".to_string(), src.to_string());
+    let res = completion_result(&msg, &docs);
+    let items = res.as_array().unwrap();
+    // (label, filterText, fragmento que el insertText debe contener)
+    let esperados: &[(&str, &str, &str)] = &[
+        ("fn …() { }", "fn", "fn ${1:name}("),
+        ("fn main() { }", "main", "fn main() -> int {"),
+        ("let … = …;", "let", "let ${1:name} = ${2:expr};"),
+        ("var … = …;", "var", "var ${1:name} = ${2:expr};"),
+        ("if (…) { }", "if", "if (${1:condicion}) {"),
+        ("if (…) { } else { }", "if", "} else {"),
+        ("while (…) { }", "while", "while (${1:condicion}) {"),
+        ("for … in … { }", "for", "for ${1:elem} in ${2:coleccion} {"),
+        ("for … in a..b { }", "for", "..${3:n}"),
+        ("match (…) { … => … }", "match", "match (${1:expr}) {"),
+    ];
+    for (label, filter, frag) in esperados {
+        let it = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
+            .unwrap_or_else(|| panic!("falta el snippet {label}"));
+        assert_eq!(it.get("insertTextFormat"), Some(&Json::Num(2.0)), "{label}: es snippet");
+        assert_eq!(it.get("filterText").and_then(|f| f.as_str()), Some(*filter), "{label}: filterText");
+        let insert = it.get("insertText").and_then(|t| t.as_str()).unwrap();
+        assert!(insert.contains(frag), "{label}: insertText contiene {frag:?}: {insert}");
+        // La gramática no-obvia: los bloques de control llevan paréntesis en la condición.
+        if ["if", "while", "match"].contains(filter) {
+            assert!(insert.contains('('), "{label}: condición entre paréntesis");
+        }
+    }
+    // La keyword pelada sigue ofreciéndose (posiciones donde el bloque no aplica).
+    for kw in ["fn", "if", "while", "for", "match", "let", "var"] {
+        assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(kw)),
+            "{kw}: keyword pelada también presente");
+    }
+}
+
 /// Helper: labels de la completion en `(line, character)` (0-basados) sobre `src`.
 fn completion_labels(src: &str, line: usize, character: usize) -> Vec<String> {
     let msg = json::parse(&format!(

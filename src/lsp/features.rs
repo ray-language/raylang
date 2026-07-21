@@ -870,6 +870,39 @@ pub(super) fn item_closure_snippet(name: &str) -> Json {
     ])
 }
 
+/// Snippets de **construcciones del lenguaje** para la completion de archivo `.ray` (gemelo de
+/// `template_block_snippets` para los templates): teclear la palabra clave ofrece, además de la
+/// palabra pelada (que sigue para las posiciones donde el bloque no aplica), un ítem que inserta
+/// la construcción completa con placeholders navegables por Tab. Los cuerpos van con `\t` (el
+/// editor lo traduce a su indentación y re-indenta al nivel del punto de inserción). Fijan la
+/// gramática no-obvia para quien viene de otros lenguajes: paréntesis en `if`/`while`/`match`,
+/// `=>` en los brazos, `let`/`var` (no `mut`).
+pub(super) fn code_block_snippets() -> Vec<Json> {
+    // (label, filterText, insertText)
+    let cases: &[(&str, &str, &str)] = &[
+        ("fn …() { }", "fn", "fn ${1:name}(${2:params})${3: -> tipo} {\n\t$0\n}"),
+        ("fn main() { }", "main", "fn main() -> int {\n\t$0\n}"),
+        ("let … = …;", "let", "let ${1:name} = ${2:expr};$0"),
+        ("var … = …;", "var", "var ${1:name} = ${2:expr};$0"),
+        ("if (…) { }", "if", "if (${1:condicion}) {\n\t$0\n}"),
+        ("if (…) { } else { }", "if", "if (${1:condicion}) {\n\t$2\n} else {\n\t$0\n}"),
+        ("while (…) { }", "while", "while (${1:condicion}) {\n\t$0\n}"),
+        ("for … in … { }", "for", "for ${1:elem} in ${2:coleccion} {\n\t$0\n}"),
+        ("for … in a..b { }", "for", "for ${1:i} in ${2:0}..${3:n} {\n\t$0\n}"),
+        ("match (…) { … => … }", "match", "match (${1:expr}) {\n\t${2:patron} => $0,\n}"),
+    ];
+    cases.iter().map(|(label, filter, insert)| {
+        obj(vec![
+            ("label", Json::Str(label.to_string())),
+            ("kind", num(15)), // 15 = Snippet
+            ("detail", Json::Str("construcción".into())),
+            ("filterText", Json::Str(filter.to_string())),
+            ("insertText", Json::Str(insert.to_string())),
+            ("insertTextFormat", num(2)), // 2 = Snippet (placeholders ${n:...})
+        ])
+    }).collect()
+}
+
 pub(super) fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
     let roots = import_roots(entry);
     let path = loader::resolve_module_path(&roots, path).ok()??;
@@ -1627,6 +1660,9 @@ pub(super) fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> J
             list.push(item_closure_snippet(name));
         }
     }
+    // Snippets de construcciones del lenguaje (fn/if/for/while/match/…): teclear la palabra clave
+    // ofrece el bloque completo con placeholders, además de la palabra pelada.
+    list.extend(code_block_snippets());
     Json::Arr(list)
 }
 

@@ -1336,9 +1336,13 @@ ordenadas (→ serialización determinista gratis).
 **Diseño fijado**:
 - **G.1 — `std/kv`** (genérico, primero): `Store` = `Map<string, bytes>` respaldado por archivo.
   Formato binario propio versionado (magic + count + entradas `[u32 klen | clave utf8 | u32 vlen |
-  valor]`, LE). API: `open(path) -> Result<Store, string>` (archivo ausente → vacío; corrupto →
-  error honesto), `get`/`set`/`delete`/`keys` + azúcar `get_string`/`set_string`, y `save(s) ->
-  Result<int, string>` **atómico** (escribe `path.tmp` + `rename`). Cadencia dev: cargar al boot,
+  valor]`, LE). API: `kv.open(path) -> Result<Store, string>` (archivo ausente → vacío; corrupto →
+  error honesto) + **métodos del trait `StoreOps`** (`s.get(k)`/`set`/`delete`/`keys`/`count` +
+  azúcar `get_string`/`set_string`, y `s.save() -> Result<int, string>` **atómico**: escribe
+  `path.tmp` + `rename`). Por trait y no funciones libres: una libre `get(Store,…)` ganaría al
+  builtin `get` del Map en UFCS (rompía `self.data.get(k)` dentro del módulo, cazado por el LSP);
+  el despacho por receptor lo esquiva (precedente: `Matcher` de regex, M59.2) y los métodos SÍ
+  cruzan módulos. Cadencia dev: cargar al boot,
   `save()` tras el drenado graceful (un write por reload, cero coste en caliente); quien quiera
   más, save-on-mutation. Módulo puro (ambos motores, sin primitivos nuevos).
 - **G.2 — compartición multicore + session store** (siguiente): bajo M38 (M:N, heap aislado) un

@@ -8,6 +8,13 @@
 // (temp + `rename`, mismo patrón que documenta std/fs). Cadencia recomendada en dev:
 // cargar al boot, `save()` tras el drenado graceful — un write por reload.
 //
+// La API va por MÉTODOS de trait (`s.get(k)`, `s.save()`), no por funciones libres:
+// una función libre `get(Store, …)` ganaría al builtin `get` del Map en la resolución
+// UFCS y rompería `self.data.get(k)` dentro del propio módulo (visible en el LSP, que
+// analiza el archivo sin namespacing de import). El despacho por receptor lo esquiva
+// — mismo patrón que el trait `Matcher` de std/regex (M59.2) — y además los métodos
+// SÍ cruzan módulos (UFCS a función libre importada no).
+//
 // Módulo puro (ambos motores, cero primitivos nuevos). La compartición entre fibras
 // bajo multicore (actor CSP dueño del Store) y el session store del paquete web van
 // encima de esto (G.2), no aquí.
@@ -15,7 +22,8 @@
 import std/fs;
 
 /// A persistent key/value store: an in-memory `Map<string, bytes>` backed by a file.
-/// Mutations (`set`/`delete`) touch only memory; call `save` to persist atomically.
+/// Create with `kv.open(path)`; operate through the `StoreOps` methods (`s.get(k)`,
+/// `s.set(k, v)`, `s.save()`). Mutations touch only memory; `save` persists atomically.
 /// Typical dev-state cadence: `open` at boot, `save` once on graceful shutdown.
 pub struct Store {
     path: string,
@@ -35,61 +43,75 @@ pub fn open(path: string) -> Result<Store, string> {
     }
 }
 
-/// Returns the value stored under `key`, if any.
-pub fn get(s: Store, key: string) -> Option<bytes> {
-    s.data.get(key)
+/// The operations of a `Store`, in method-call style.
+pub trait StoreOps {
+    /// Returns the value stored under `key`, if any.
+    fn get(self, key: string) -> Option<bytes>;
+    /// Stores `val` under `key` (in memory; call `save` to persist).
+    fn set(self, key: string, val: bytes);
+    /// Removes `key` from the store; returns whether it was present.
+    fn delete(self, key: string) -> bool;
+    /// The keys currently in the store, sorted.
+    fn keys(self) -> [string];
+    /// Number of entries in the store.
+    fn count(self) -> int;
+    /// Returns the value under `key` decoded as UTF-8; `None` when the key is
+    /// absent or the stored bytes are not valid UTF-8.
+    fn get_string(self, key: string) -> Option<string>;
+    /// Stores a string value, UTF-8 encoded (sugar over `set`).
+    fn set_string(self, key: string, val: string);
+    /// Persists the store atomically: writes `<path>.tmp` and renames it over `path`
+    /// (a crash mid-write never corrupts the previous state). Returns the bytes written.
+    fn save(self) -> Result<int, string>;
 }
 
-/// Stores `val` under `key` (in memory; call `save` to persist).
-pub fn set(s: Store, key: string, val: bytes) {
-    s.data.insert(key, val);
-}
-
-/// Removes `key` from the store; returns whether it was present.
-pub fn delete(s: Store, key: string) -> bool {
-    match (s.data.remove(key)) {
-        Option.Some(v) => true,
-        Option.None => false,
+impl StoreOps for Store {
+    fn get(self, key: string) -> Option<bytes> {
+        self.data.get(key)
     }
-}
 
-/// The keys currently in the store, sorted.
-pub fn keys(s: Store) -> [string] {
-    s.data.keys()
-}
-
-/// Number of entries in the store.
-pub fn count(s: Store) -> int {
-    s.data.len()
-}
-
-/// Stores a string value, UTF-8 encoded (sugar over `set`).
-pub fn set_string(s: Store, key: string, val: string) {
-    s.data.insert(key, val.to_bytes());
-}
-
-/// Returns the value under `key` decoded as UTF-8; `None` when the key is absent
-/// or the stored bytes are not valid UTF-8.
-pub fn get_string(s: Store, key: string) -> Option<string> {
-    match (s.data.get(key)) {
-        Option.Some(b) => {
-            match (from_utf8(b)) {
-                Result.Ok(v) => Option.Some(v),
-                Result.Err(e) => Option.None,
-            }
-        },
-        Option.None => Option.None,
+    fn set(self, key: string, val: bytes) {
+        self.data.insert(key, val);
     }
-}
 
-/// Persists the store atomically: writes `<path>.tmp` and renames it over `path`
-/// (a crash mid-write never corrupts the previous state). Returns the bytes written.
-pub fn save(s: Store) -> Result<int, string> {
-    let b = encode(s.data);
-    let tmp = s.path + ".tmp";
-    fs.write_file_bytes(tmp, b)?;
-    fs.rename(tmp, s.path)?;
-    Result.Ok(b.len())
+    fn delete(self, key: string) -> bool {
+        match (self.data.remove(key)) {
+            Option.Some(v) => true,
+            Option.None => false,
+        }
+    }
+
+    fn keys(self) -> [string] {
+        self.data.keys()
+    }
+
+    fn count(self) -> int {
+        self.data.len()
+    }
+
+    fn get_string(self, key: string) -> Option<string> {
+        match (self.data.get(key)) {
+            Option.Some(b) => {
+                match (from_utf8(b)) {
+                    Result.Ok(v) => Option.Some(v),
+                    Result.Err(e) => Option.None,
+                }
+            },
+            Option.None => Option.None,
+        }
+    }
+
+    fn set_string(self, key: string, val: string) {
+        self.data.insert(key, val.to_bytes());
+    }
+
+    fn save(self) -> Result<int, string> {
+        let b = encode(self.data);
+        let tmp = self.path + ".tmp";
+        fs.write_file_bytes(tmp, b)?;
+        fs.rename(tmp, self.path)?;
+        Result.Ok(b.len())
+    }
 }
 
 // --- formato RKV1 ---

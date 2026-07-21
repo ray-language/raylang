@@ -47,18 +47,18 @@ fn roundtrip_persistencia() {
 fn main() -> int {{
     let path = "{p}";
     var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ print("open: " + e); return 1; }}, }};
-    kv.set_string(s, "user", "roberto");
-    kv.set(s, "raw", bytes_of([0, 255, 128]));
-    kv.set_string(s, "gone", "x");
-    assert(kv.delete(s, "gone"));
-    assert(!kv.delete(s, "gone"));
-    match (kv.save(s)) {{ Result.Ok(n) => print("saved " + to_string(n)), Result.Err(e) => {{ print("save: " + e); return 1; }}, }}
+    s.set_string("user", "roberto");
+    s.set("raw", bytes_of([0, 255, 128]));
+    s.set_string("gone", "x");
+    assert(s.delete("gone"));
+    assert(!s.delete("gone"));
+    match (s.save()) {{ Result.Ok(n) => print("saved " + to_string(n)), Result.Err(e) => {{ print("save: " + e); return 1; }}, }}
     let s2 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ print("reopen: " + e); return 1; }}, }};
-    print("count " + to_string(kv.count(s2)));
-    print("keys " + kv.keys(s2).join(","));
-    match (kv.get_string(s2, "user")) {{ Option.Some(v) => print("user " + v), Option.None => print("user MISSING"), }}
-    match (kv.get(s2, "raw")) {{ Option.Some(b) => print("raw " + to_string(b.len()) + " " + to_string(b[1])), Option.None => print("raw MISSING"), }}
-    match (kv.get(s2, "nope")) {{ Option.Some(b) => print("nope PRESENT"), Option.None => print("nope absent"), }}
+    print("count " + to_string(s2.count()));
+    print("keys " + s2.keys().join(","));
+    match (s2.get_string("user")) {{ Option.Some(v) => print("user " + v), Option.None => print("user MISSING"), }}
+    match (s2.get("raw")) {{ Option.Some(b) => print("raw " + to_string(b.len()) + " " + to_string(b[1])), Option.None => print("raw MISSING"), }}
+    match (s2.get("nope")) {{ Option.Some(b) => print("nope PRESENT"), Option.None => print("nope absent"), }}
     0
 }}
 "#,
@@ -77,14 +77,14 @@ fn sobrescribir_clave() {
 fn main() -> int {{
     let path = "{p}";
     var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
-    kv.set_string(s, "k", "primero");
-    match (kv.save(s)) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
+    s.set_string("k", "primero");
+    match (s.save()) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
     var s2 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
-    kv.set_string(s2, "k", "segundo");
-    match (kv.save(s2)) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
+    s2.set_string("k", "segundo");
+    match (s2.save()) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
     let s3 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
-    match (kv.get_string(s3, "k")) {{ Option.Some(v) => print(v), Option.None => print("MISSING"), }}
-    print(to_string(kv.count(s3)));
+    match (s3.get_string("k")) {{ Option.Some(v) => print(v), Option.None => print("MISSING"), }}
+    print(to_string(s3.count()));
     0
 }}
 "#,
@@ -102,9 +102,9 @@ fn store_vacio() {
 fn main() -> int {{
     let path = "{p}";
     var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
-    match (kv.save(s)) {{ Result.Ok(n) => print("saved " + to_string(n)), Result.Err(e) => {{ return 1; }}, }}
+    match (s.save()) {{ Result.Ok(n) => print("saved " + to_string(n)), Result.Err(e) => {{ return 1; }}, }}
     let s2 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
-    print("count " + to_string(kv.count(s2)));
+    print("count " + to_string(s2.count()));
     0
 }}
 "#,
@@ -159,8 +159,8 @@ import std/fs;
 fn main() -> int {{
     let path = "{p}";
     var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
-    kv.set_string(s, "k", "v");
-    match (kv.save(s)) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
+    s.set_string("k", "v");
+    match (s.save()) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
     print("final " + to_string(fs.exists(path)));
     print("tmp " + to_string(fs.exists(path + ".tmp")));
     0

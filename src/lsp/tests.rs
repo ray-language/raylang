@@ -582,26 +582,27 @@ fn completion_offers_snippets_de_construcciones() {
     docs.insert("file:///t.ray".to_string(), src.to_string());
     let res = completion_result(&msg, &docs);
     let items = res.as_array().unwrap();
-    // (label, filterText, fragmento que el insertText debe contener)
+    // (label, filterText, fragmento que el insertText debe contener). Placeholders en INGLÉS
+    // (convención: todo lo que el lenguaje entrega al usuario va en inglés).
     let esperados: &[(&str, &str, &str)] = &[
         ("fn …() { }", "fn", "fn ${1:name}("),
         ("fn main() { }", "main", "fn main() -> int {"),
         ("let … = …;", "let", "let ${1:name} = ${2:expr};"),
         ("var … = …;", "var", "var ${1:name} = ${2:expr};"),
-        ("if (…) { }", "if", "if (${1:condicion}) {"),
+        ("if (…) { }", "if", "if (${1:condition}) {"),
         ("if (…) { } else { }", "if", "} else {"),
-        ("while (…) { }", "while", "while (${1:condicion}) {"),
-        ("for … in … { }", "for", "for ${1:elem} in ${2:coleccion} {"),
+        ("while (…) { }", "while", "while (${1:condition}) {"),
+        ("for … in … { }", "for", "for ${1:elem} in ${2:collection} {"),
         ("for … in a..b { }", "for", "..${3:n}"),
         ("match (…) { … => … }", "match", "match (${1:expr}) {"),
         // Etapa 2 — datos y tipos.
-        ("if let … = … { }", "if", "if let ${1:patron} = ${2:expr} {"),
-        ("struct … { }", "struct", "${2:campo}: ${3:tipo},"),
-        ("enum … { }", "enum", "${3:Variante}(${4:tipo}),"),
-        ("trait … { }", "trait", "fn ${2:metodo}(self)"),
-        ("impl … for … { }", "impl", "impl ${1:Trait} for ${2:Tipo} {"),
-        ("const … = …;", "const", "const ${1:NAME}: ${2:tipo} = ${3:literal};"),
-        ("fn(…) { } (anónima)", "fn", "fn(${1:params}) {"),
+        ("if let … = … { }", "if", "if let ${1:pattern} = ${2:expr} {"),
+        ("struct … { }", "struct", "${2:field}: ${3:type},"),
+        ("enum … { }", "enum", "${3:Variant}(${4:type}),"),
+        ("trait … { }", "trait", "fn ${2:method}(self)"),
+        ("impl … for … { }", "impl", "impl ${1:Trait} for ${2:Type} {"),
+        ("const … = …;", "const", "const ${1:NAME}: ${2:type} = ${3:value};"),
+        ("fn(…) { } (anonymous)", "fn", "fn(${1:params}) {"),
         ("@test fn … { }", "test", "@test\nfn ${1:name}() {"),
         ("@derive(…) struct … { }", "derive", "@derive(${1:Eq, Show})"),
     ];
@@ -623,6 +624,16 @@ fn completion_offers_snippets_de_construcciones() {
     let iflet = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("if let … = … { }")).unwrap();
     assert!(!iflet.get("insertText").and_then(|t| t.as_str()).unwrap().starts_with("if let ("),
         "if let: escrutinio SIN paréntesis");
+    // Convención inglés-de-cara-afuera: ningún placeholder/detail en español.
+    for it in items.iter().filter(|i| i.get("kind") == Some(&Json::Num(15.0))) {
+        let insert = it.get("insertText").and_then(|t| t.as_str()).unwrap_or("");
+        for palabra in ["condicion", "coleccion", "patron", "campo", "metodo", "Variante"] {
+            assert!(!insert.contains(palabra), "placeholder en español: {insert}");
+        }
+        if let Some(d) = it.get("detail").and_then(|d| d.as_str()) {
+            assert!(!d.contains("construcción") && !d.contains("anónima"), "detail en español: {d}");
+        }
+    }
     // La keyword pelada sigue ofreciéndose (posiciones donde el bloque no aplica).
     for kw in ["fn", "if", "while", "for", "match", "let", "var", "struct", "enum", "trait", "impl", "const"] {
         assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(kw)),

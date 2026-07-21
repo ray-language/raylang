@@ -17,6 +17,9 @@ import std/url;
 // Alias (M11.5): los leaf `json`/`cookie` chocarían con las funciones homónimas del framework.
 import std/json as jsonlib;
 import net/cookie as cookielib;
+// Sesiones (G.2): store compartido por actor (std/kv) + ids de sesión (uuid v4).
+import std/kv;
+import std/uuid;
 // Reexport (M11.6a): el trait vive en std/json (M93.4); los consumidores pueden seguir haciendo
 // `from web/framework import ToJson`.
 pub from std/json import ToJson;
@@ -443,6 +446,93 @@ pub fn redirect(res: Res, url: string) {
 pub fn cookie(res: Res, line: string) -> Res {
     res.set_cookie.push(line);
     res
+}
+
+// --- Sesiones (G.2, IDEAS §48 G-rev) ---
+// El diferenciador de DX del hot reload: editar un handler SIN perder la sesión. La capa
+// son tres piezas ya existentes compuestas: el actor `kv.SharedStore` (estado compartido
+// entre las fibras-conexión, coherente por FIFO), la cookie `ray_session` (uuid v4) y la
+// persistencia RKV1 de std/kv. Bajo `ray dev` (RAY_DEV_RELOAD presente) el store se carga
+// del archivo al boot y se guarda tras cada escritura → el estado sobrevive al restart del
+// supervisor. En producción arranca vacío y NUNCA toca disco.
+
+/// The session layer: a shared `kv` store owned by an actor fiber, plus the persistence
+/// switch. Create it ONCE in `main` with `sessions(path)` and let the handlers capture it.
+/// Under `ray dev` (`RAY_DEV_RELOAD` set) session state is loaded from `path` at boot and
+/// persisted on every write — you edit a handler and stay logged in. In production the
+/// store starts empty and never touches disk.
+pub struct Sessions {
+    store: kv.SharedStore,
+    persist: bool,
+}
+
+/// Opens the session layer (see `Sessions`). The file at `path` is only ever read or
+/// written in dev mode; a corrupt state file is an error (delete it to start over).
+pub fn sessions(path: string) -> Result<Sessions, string> {
+    match (env("RAY_DEV_RELOAD")) {
+        Option.Some(hub) => {
+            let sh = kv.open_shared(path)?;
+            Result.Ok(Sessions { store: sh, persist: true })
+        },
+        Option.None => Result.Ok(Sessions { store: kv.share(kv.empty(path)), persist: false }),
+    }
+}
+
+/// The request's session id: the `ray_session` cookie if present; otherwise a fresh
+/// uuid v4, added to `res` as a `Set-Cookie` (`Path=/; HttpOnly`) and cached in the
+/// request locals — stable within the request, whichever helper asks first.
+pub fn session_of(ctx: Ctx, res: Res) -> string {
+    let cached = local(ctx, "ray_session");
+    if (cached != "") {
+        return cached;
+    }
+    let from_cookie = cookie_of(ctx, "ray_session");
+    if (from_cookie != "") {
+        put_local(ctx, "ray_session", from_cookie);
+        return from_cookie;
+    }
+    let sid = uuid.uuid_v4();
+    put_local(ctx, "ray_session", sid);
+    cookie(res, "ray_session=" + sid + "; Path=/; HttpOnly");
+    sid
+}
+
+/// Reads a value of the request's session; `""` if absent (framework convention).
+pub fn session_get(s: Sessions, ctx: Ctx, res: Res, key: string) -> string {
+    let sid = session_of(ctx, res);
+    match (s.store.get_string(sid + "/" + key)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// Writes a value in the request's session (creating the session cookie if needed).
+/// Under `ray dev` the state is persisted immediately (best-effort: a disk error is
+/// logged to stderr, never breaks the request).
+pub fn session_put(s: Sessions, ctx: Ctx, res: Res, key: string, value: string) {
+    let sid = session_of(ctx, res);
+    s.store.set_string(sid + "/" + key, value);
+    persist_now(s);
+}
+
+/// Deletes one value of the request's session.
+pub fn session_delete(s: Sessions, ctx: Ctx, res: Res, key: string) {
+    let sid = session_of(ctx, res);
+    s.store.delete(sid + "/" + key);
+    persist_now(s);
+}
+
+// Persiste tras una escritura si toca (solo dev). Best-effort: el disco no rompe el request.
+fn persist_now(s: Sessions) {
+    if (s.persist) {
+        match (s.store.save()) {
+            Result.Ok(n) => 0,
+            Result.Err(e) => {
+                eprint("sessions: save failed: " + e);
+                0
+            },
+        };
+    }
 }
 
 /// Responds with the JSON of any `ToJson` value: `r.json_of(user)` (static dispatch via

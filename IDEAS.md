@@ -1334,7 +1334,7 @@ existen: `bytes` + `bytes_of`/`sub_bytes`/`to_bytes`/`from_utf8`, `fs.read_file_
 ordenadas (→ serialización determinista gratis).
 
 **Diseño fijado**:
-- **G.1 — `std/kv`** (genérico, primero): `Store` = `Map<string, bytes>` respaldado por archivo.
+- **G.1 — `std/kv`** ✅ (21 jul, PR #43): `Store` = `Map<string, bytes>` respaldado por archivo.
   Formato binario propio versionado (magic + count + entradas `[u32 klen | clave utf8 | u32 vlen |
   valor]`, LE). API: `kv.open(path) -> Result<Store, string>` (archivo ausente → vacío; corrupto →
   error honesto) + **métodos del trait `StoreOps`** (`s.get(k)`/`set`/`delete`/`keys`/`count` +
@@ -1345,11 +1345,18 @@ ordenadas (→ serialización determinista gratis).
   cruzan módulos. Cadencia dev: cargar al boot,
   `save()` tras el drenado graceful (un write por reload, cero coste en caliente); quien quiera
   más, save-on-mutation. Módulo puro (ambos motores, sin primitivos nuevos).
-- **G.2 — compartición multicore + session store** (siguiente): bajo M38 (M:N, heap aislado) un
-  `Store` en memoria no se comparte entre handlers → envolverlo en un **actor CSP** dueño del Map
-  (get/set por canales; serialización de accesos sin locks), y sobre él un **session store** en
-  `packages/web` (`session_of(ctx)`) que persista automáticamente bajo `RAY_DEV_RELOAD` — "editas
-  el handler y sigues logueado" sin configurar nada.
+- **G.2 — compartición multicore + session store** ✅ (21 jul, mismo arco): (a) **actor CSP** en
+  `std/kv` — `SharedStore` (handle = canal de peticiones; patrón del actor de métricas M38),
+  `kv.share(store)`/`kv.open_shared(path)`/`kv.stop(sh)`, y — la pieza elegante — **`impl
+  StoreOps for SharedStore`**: la MISMA API sirve local y compartido (`sh.get(k)`, `sh.save()`);
+  coherencia por FIFO, azúcar de strings del lado del cliente, `kv.empty(path)` para stores que
+  arrancan limpios. Solo VM (spawn/canales). (b) **sesiones del framework web** —
+  `sessions(path) -> Result<Sessions,string>` (bajo `RAY_DEV_RELOAD` carga del archivo y persiste
+  tras cada escritura, best-effort; en producción memoria pura, cero disco), `session_of(ctx,res)`
+  (cookie `ray_session` uuid v4, `Path=/; HttpOnly`, cacheada en locals) y `session_get/put/
+  delete(sess, ctx, res, key[, val])` — "editas el handler y sigues logueado" verificado
+  (tests/session_cli.rs: la sesión sobrevive al restart). Bonus: destapó el bug §52 (UFCS interno
+  de módulo vs namespacing) — 3 sitios de framework.ray arreglados a llamadas libres.
 
 **Impacto** (clasificación): 💤 acomodable — aditivo puro (módulo std + paquete); no toca VM ni
 checker; el riesgo de drift de esquema entre reloads lo esquiva el KV de bytes por diseño
@@ -1607,3 +1614,29 @@ diseñaron).
 
 **Fuera de alcance por ahora**: fine-tuning y eval-set formal (prematuro hasta medir cuánto
 rinde A+B; si algún día, el eval reusa el runner `@test`: prompt → `.ray` → ¿compila/corre?).
+
+## 52. UFCS interno de un módulo se rompe con el namespacing (bug latente del loader, jul 2026)
+
+**Descubierto en G.2** (sesiones del framework): dentro de `packages/web/framework.ray`, `cors`
+hacía `c.header_of(…)`/`r.status(204).header(…)` — llamadas UFCS a funciones del PROPIO módulo.
+El sitio UFCS (`Call(Field)`) se resuelve en el **checker** por el nombre pelado (`header_of`)
+contra el programa fusionado; pero el loader ya renombró la función a `web::framework::header_of`
+y el **Resolver no reescribe los nombres de campo de un `Call(Field)`** (no puede sin tipos: no
+distingue campo-de-struct de UFCS). Resultado: el sitio interno solo compila si la ENTRADA
+casualmente trae el nombre pelado al programa (p. ej. `from web/framework import header_of`) —
+**acoplamiento accidental a qué importa el consumidor**; el demo del framework importaba todo y
+lo tapaba (los tests pasaban). Con un consumidor mínimo, error: `no field or function 'header_of'
+applicable to web::framework::Ctx`.
+
+**Mitigación aplicada (G.2)**: dentro de un módulo, las llamadas a funciones propias van
+**libres** (`header_of(c, …)`, `text(res, …)`) — al ser `EIdent`, el Resolver las reescribe
+siempre. Arreglados los 3 sitios de `framework.ray` (cors ×2, 405/404 ×2) con nota en el código.
+Es la misma pauta ya documentada para el caso cross-módulo ("UFCS no cruza a módulos importados").
+
+**Fix real (clasificación: 🔧 acomodable, front-end puro)**: que el checker, al resolver un sitio
+UFCS cuyo nombre pelado no exista, pruebe también `<módulo-del-sitio>::nombre` — el loader ya
+sabe la banda de líneas de cada módulo (L3), así que puede publicar `banda → prefijo` y el
+checker consultarla en `check_call_field`. Alternativa descartada: que el Resolver reescriba
+nombres de `Call(Field)` cuando coincidan con una fn del módulo (rompería el caso campo-de-struct
+homónimo, que HOY gana por diseño). Mientras no se haga, la regla de estilo para PAQUETES es:
+UFCS solo hacia builtins/prelude/métodos de trait; a función propia, llamada libre.

@@ -1633,10 +1633,15 @@ applicable to web::framework::Ctx`.
 siempre. Arreglados los 3 sitios de `framework.ray` (cors ×2, 405/404 ×2) con nota en el código.
 Es la misma pauta ya documentada para el caso cross-módulo ("UFCS no cruza a módulos importados").
 
-**Fix real (clasificación: 🔧 acomodable, front-end puro)**: que el checker, al resolver un sitio
-UFCS cuyo nombre pelado no exista, pruebe también `<módulo-del-sitio>::nombre` — el loader ya
-sabe la banda de líneas de cada módulo (L3), así que puede publicar `banda → prefijo` y el
-checker consultarla en `check_call_field`. Alternativa descartada: que el Resolver reescriba
-nombres de `Call(Field)` cuando coincidan con una fn del módulo (rompería el caso campo-de-struct
-homónimo, que HOY gana por diseño). Mientras no se haga, la regla de estilo para PAQUETES es:
-UFCS solo hacia builtins/prelude/métodos de trait; a función propia, llamada libre.
+**Fix real ✅ HECHO (21 jul 2026, mismo día)**: el loader publica `Program.module_bands`
+(inicio de banda → prefijo de funciones; las bandas disjuntas ya existían por L3) y el checker
+resuelve el paso función-libre de UFCS en orden **builtin/local → `prefijo::nombre` por la banda
+del sitio → pelado → alias from-import** (`module_local_fn` en `check_ufcs`; `name_is_callable`
+absorbida). Semántica ganada: ámbito léxico real — con homónimas en módulo y entrada, cada sitio
+usa la de SU módulo (cubre también privadas del módulo); archivo único sin bandas → idéntico a
+antes. DESIGN §16 documenta el orden completo. Tests: 3 nuevos en `tests/modules_cli.rs` (repro
+sin imports, prioridad módulo-vs-entrada con directorio, fallback al prelude). Alternativa
+descartada: que el Resolver reescriba nombres de `Call(Field)` (rompería campo-de-struct
+homónimo, que gana por diseño). La regla de estilo para paquetes ya no es necesaria (las
+llamadas libres de framework.ray se conservan — equivalentes y válidas). **Diferido**: el espejo
+selfhost no conoce módulos con namespacing (su loader M14.7 es más simple) → fuera del corpus.

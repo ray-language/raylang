@@ -530,3 +530,78 @@ fn auto_reference_por_name_de_package() {
         assert_eq!(code, 1, "exit 40-39=1 (vm={vm})");
     }
 }
+
+// --- Fix de IDEAS §52: UFCS interno de un módulo resuelve sus funciones PROPIAS por posición ---
+
+/// El repro de §52: un módulo cuyo código usa UFCS hacia funciones del PROPIO módulo (incl. una
+/// privada), con una entrada que NO importa esos nombres. Antes del fix: "no field or function
+/// 'double' applicable to int" (solo compilaba si la entrada casualmente los importaba).
+#[test]
+fn ufcs_interno_del_modulo_sin_import_de_la_entrada() {
+    let files = &[
+        (
+            "geom",
+            "pub fn double(n: int) -> int { n * 2 }\n\
+             fn plus_one(n: int) -> int { n + 1 }\n\
+             pub fn quad(n: int) -> int { n.double().double() }\n\
+             pub fn quad_plus(n: int) -> int { n.quad().plus_one() }\n",
+        ),
+        (
+            "app",
+            "from geom import quad, quad_plus;\n\
+             fn main() { print(quad(3)); print(quad_plus(2)); }\n",
+        ),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("s52_ufcs_interno", "app", files, vm);
+        assert_eq!(code, 0, "sale 0 (vm={vm})\n{out}");
+        assert_eq!(out, "12\n9\n", "UFCS interno resuelto (vm={vm})");
+    }
+}
+
+/// Ámbito léxico: si el módulo y la entrada definen funciones HOMÓNIMAS, cada sitio UFCS usa la
+/// de SU módulo (antes, el sitio del módulo caía por accidente en la de la entrada vía el alias
+/// plano de from-imports). Cubre también un módulo por directorios (prefijo `geo::util`).
+#[test]
+fn ufcs_interno_prioriza_la_funcion_del_propio_modulo() {
+    let files = &[
+        (
+            "geo/util",
+            "fn scale(n: int) -> int { n * 2 }\n\
+             pub fn twice(n: int) -> int { n.scale() }\n",
+        ),
+        (
+            "app",
+            "from geo/util import twice;\n\
+             fn scale(n: int) -> int { n * 10 }\n\
+             fn main() { print(twice(4)); print(7.scale()); }\n",
+        ),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("s52_ufcs_prioridad", "app", files, vm);
+        assert_eq!(code, 0, "sale 0 (vm={vm})\n{out}");
+        assert_eq!(out, "8\n70\n", "cada módulo usa SU scale (vm={vm})");
+    }
+}
+
+/// El fallback pelado sigue vivo: un sitio UFCS de módulo hacia el prelude (`xs.map(f)`) no
+/// tiene versión namespacada → cae al nombre pelado, como siempre.
+#[test]
+fn ufcs_interno_cae_al_prelude_si_no_hay_propia() {
+    let files = &[
+        (
+            "listas",
+            "pub fn doubled(xs: [int]) -> [int] { xs.map(fn(x: int) -> int { x * 2 }) }\n",
+        ),
+        (
+            "app",
+            "from listas import doubled;\n\
+             fn main() { let ys = doubled([1, 2, 3]); print(ys[0] + ys[1] + ys[2]); }\n",
+        ),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("s52_ufcs_prelude", "app", files, vm);
+        assert_eq!(code, 0, "sale 0 (vm={vm})\n{out}");
+        assert_eq!(out, "12\n", "map del prelude vía fallback pelado (vm={vm})");
+    }
+}

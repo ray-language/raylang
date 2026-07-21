@@ -237,7 +237,8 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
     let mut merged = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
-        ufcs_aliases: HashMap::new(), expr_spans: HashMap::new(), field_name_pos: HashMap::new(),
+        ufcs_aliases: HashMap::new(), module_bands: Vec::new(),
+        expr_spans: HashMap::new(), field_name_pos: HashMap::new(),
         externs: Vec::new(),
         // El programa fusionado se usa para check/run (AST desazucarado), no para formatear → tablas vacías.
         interp_sites: HashMap::new(), pipe_sites: HashMap::new(),
@@ -303,6 +304,9 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         let start = next_start;
         shift_program(&mut m.program, start - 1);
         next_start = start + m.source.lines().count().max(1) + 1; // +1 de holgura entre bandas
+        // Fix §52: publicar la banda → prefijo de funciones, para que el checker resuelva los
+        // sitios UFCS a funciones PROPIAS del módulo por su posición (entrada = prefijo "").
+        merged.module_bands.push((start, prefix.clone().unwrap_or_default()));
 
         // 6. Renombrar las definiciones de función a su nombre global y fusionar.
         for mut f in std::mem::take(&mut m.program.functions) {

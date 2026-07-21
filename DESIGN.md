@@ -843,6 +843,18 @@ Forzado por las decisiones (no abierto):
   es ambiguo sin contexto → se **excluye** (degradación segura). Habilita librerías con API por
   punto (p. ej. el micro-framework `examples/web/framework.ray`, importado por su demo). Los
   imports **calificados** (`import M; M.f(...)`) no añaden alias UFCS (se usan como `M.f`).
+- **UFCS resuelve las funciones PROPIAS del módulo del sitio** (fix de IDEAS §52, jul 2026).
+  El paso (3) tenía un hueco con módulos: el sitio resolvía por el nombre **pelado**, que tras
+  el namespacing del loader solo existía si la ENTRADA lo había traído (from-import → alias) —
+  acoplamiento accidental a qué importa el consumidor (`cors` del framework solo compilaba
+  porque su demo importaba `header_of`). Arreglo: el loader publica en `Program.module_bands`
+  la **banda de líneas** de cada módulo → su prefijo de funciones (L3 ya da bandas disjuntas), y
+  el checker resuelve el paso (3) en orden: (a) builtin o variable-función local (un builtin no
+  se tapa, como en la llamada directa); (b) **`prefijo::nombre` por la banda de la línea del
+  sitio** — el ámbito léxico del módulo, cubre también funciones privadas; (c) el nombre pelado
+  (entrada/prelude); (d) el alias de from-import. Consecuencia semántica: con funciones
+  homónimas en módulo y entrada, cada sitio usa la de **su** módulo (antes el del módulo caía
+  por accidente en la de la entrada). Un archivo único no tiene bandas → idéntico a antes.
 
 ### 16.1 Sintaxis nueva
 

@@ -51,6 +51,7 @@ impl Checker {
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
             ufcs_aliases: HashMap::new(),
+            module_bands: Vec::new(),
             require_main: true,
             completing: false,
             member_hits: Vec::new(),
@@ -62,6 +63,11 @@ impl Checker {
         // aquí, una vez, para usarlos como fallback al resolver `recv.f(...)`.
         if self.ufcs_aliases.is_empty() && !program.ufcs_aliases.is_empty() {
             self.ufcs_aliases = program.ufcs_aliases.clone();
+        }
+        // Fix §52: las bandas de módulo del loader (inicio → prefijo), para resolver un sitio
+        // UFCS contra las funciones PROPIAS de su módulo por posición.
+        if self.module_bands.is_empty() && !program.module_bands.is_empty() {
+            self.module_bands = program.module_bands.clone();
         }
         // M33a-2: los spans de expresiones que dejó el parser, para que `err()` subraye la
         // expresión completa. (Las posiciones del prelude inyectado no están —se parsea
@@ -2588,10 +2594,17 @@ impl Checker {
     /// genéricos) y registra el sitio `(línea, columna, nombre)` para que `lower_ufcs`
     /// baje el nodo a una llamada ordinaria tras la verificación.
     pub(super) fn check_ufcs(&mut self, name: &str, recv_ty: &Type, object: &Expr, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
-        // El destino de la función libre: el propio nombre si es llamable directamente, o —fallback—
-        // el global de una función `from`-importada (UFCS cross-module, M11.3b). Si no resuelve a nada,
+        // El destino de la función libre, en orden (fix de IDEAS §52): (1) builtin o variable-función
+        // local (un builtin no se tapa, como en la llamada directa); (2) función **propia del módulo**
+        // del sitio (`prefijo::nombre` por la banda de la línea — el ámbito léxico del módulo, sin
+        // depender de lo que importe la entrada); (3) el nombre pelado (entrada/prelude); (4) el
+        // global de una función `from`-importada (UFCS cross-module, M11.3b). Si no resuelve a nada,
         // el error habla de UFCS (no es ni campo del receptor ni función), mencionando el tipo.
-        let target = if self.name_is_callable(name) {
+        let target = if crate::builtins::is_builtin(name) || self.lookup(name).is_some() {
+            name.to_string()
+        } else if let Some(local) = self.module_local_fn(name, line) {
+            local
+        } else if self.functions.contains_key(name) {
             name.to_string()
         } else if let Some(global) = self.ufcs_aliases.get(name).cloned() {
             global
@@ -2617,13 +2630,17 @@ impl Checker {
         Ok(ty)
     }
 
-    /// ¿`name` nombra algo llamable? (builtin, variable local de función, o función de
-    /// nivel superior). Lo usa UFCS para dar un error específico cuando un `recv.f(...)`
-    /// no es ni campo ni función.
-    pub(super) fn name_is_callable(&self, name: &str) -> bool {
-        crate::builtins::is_builtin(name)
-            || self.lookup(name).is_some()
-            || self.functions.contains_key(name)
+    /// La función **propia del módulo** del sitio (fix de IDEAS §52): si la línea cae en la banda
+    /// de un módulo namespacado y `prefijo::name` existe como función, esa es la resolución (el
+    /// ámbito léxico del módulo; cubre también las privadas — la privacidad rige entre módulos).
+    /// `None` en la entrada (prefijo `""`), fuera de banda (prelude) o sin bandas (archivo único).
+    fn module_local_fn(&self, name: &str, line: usize) -> Option<String> {
+        let (_, prefix) = self.module_bands.iter().rev().find(|(start, _)| *start <= line)?;
+        if prefix.is_empty() {
+            return None;
+        }
+        let candidate = format!("{prefix}::{name}");
+        self.functions.contains_key(&candidate).then_some(candidate)
     }
 
     /// Resolución de una llamada por **nombre** (`name(args)`): builtins conocidos,

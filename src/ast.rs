@@ -164,6 +164,13 @@ pub struct Program {
     /// importadas, no solo las del módulo de entrada (el azúcar `recv.f` no lo reescribe el loader,
     /// que no tiene tipos; el checker lo usa como *fallback* tras campo/método). Vacío sin imports.
     pub ufcs_aliases: std::collections::HashMap<String, String>,
+    /// Metadata del **loader** (fix de IDEAS §52): la banda de líneas de cada módulo → su prefijo
+    /// de namespacing de funciones (`(línea_de_inicio, prefijo)`, ordenado por inicio; el módulo de
+    /// entrada con prefijo `""`). Permite que un sitio UFCS `recv.f(...)` dentro de un módulo
+    /// resuelva las funciones **propias** del módulo (`M::f`) por su posición, sin depender de que
+    /// la entrada importe el nombre pelado (el acoplamiento accidental de §52). Vacío para un
+    /// programa de un solo archivo → coste y comportamiento idénticos a antes.
+    pub module_bands: Vec<(usize, String)>,
     /// Spans de expresiones (M33a-2): inicio `(línea, col)` de una expresión → su **fin**
     /// `(línea_fin, col_fin)` (exclusivo), registrado por el parser en `expression()` con
     /// política *max-end* (si dos expresiones comparten inicio, queda la más ancha). Lo

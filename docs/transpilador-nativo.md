@@ -750,7 +750,8 @@ proyecto (diagnósticos en INGLÉS): el panic del stub `"'f' no está soportada 
 nativo…"` (`transpile.rs:1048`), `"native build: no se pudo ejecutar rustc (¿está en el
 PATH?)"` (`cli.rs:701`), `"cargo falló (código N)"` (`cli.rs:779`), y los rechazos `"spike: …"`
 (~40 sitios) — jerga del spike de julio que llega al usuario final. *Fix:* traducción por lotes
-(`tools/spanglish.py` ya existe) + renombrar el prefijo `spike:`. **Esfuerzo: 2–3 h.**
+(estilo `tools/spanglish.py`, retirado — en el historial de git) + renombrar el prefijo
+`spike:`. **Esfuerzo: 2–3 h.**
 
 **H18. ✅ RESUELTO. Robustez menor del codegen.** (a) Inyección de Rust vía el nombre de librería FFI:
 `#[link(name = "{}")]` interpola `e.lib` sin escapar (`transpile.rs:1075`; ídem `#[link_name]`

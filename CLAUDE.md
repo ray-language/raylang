@@ -97,11 +97,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (`${1:condition}`, no `${1:condicion}`), hover, signature help. Evitar siempre el
   spanglish de cara afuera. Los mensajes `expect()`/descripciones de asserts en tests
   son internos → siguen en español.
-  La migración se hizo por lotes con `tools/spanglish.py` y está **COMPLETA**
-  (lote 1 compilador + lote 2 runtime + lote 3 tooling + lote 4 stdlib/paquetes;
-  se conservan en español las descripciones de asserts de test, los fixtures
-  raylang embebidos, los comentarios, y `tools/registry_site.ray` —fuera de la
-  política—). ⚠️ El espejo selfhost (`selfhost/checker.ray` etc.) debe emitir
+  La migración se hizo por lotes (con `tools/spanglish.py`, ya retirado — vive en el
+  historial de git) y está **COMPLETA** (lote 1 compilador + lote 2 runtime + lote 3
+  tooling + lote 4 stdlib/paquetes; se conservan en español las descripciones de
+  asserts de test, los fixtures raylang embebidos, los comentarios, y el TEXTO del
+  sitio de `tools/registry_site.ray` —fuera de la política de mensajes—). ⚠️ El espejo
+  selfhost (`selfhost/checker.ray` etc.) debe emitir
   mensajes byte-idénticos a Rust: todo cambio de mensaje va en tándem con su
   espejo y con los tests que lo aseveran.
 - Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo; en los módulos-directorio

@@ -1,5 +1,10 @@
 # Arqueo completo: identificadores en español/spanglish (20 jul 2026)
 
+> **Nota (21 jul 2026)**: documento HISTÓRICO — el arqueo se aplicó completo y los scripts
+> (`tools/arqueo_spanglish.py`, `tools/spanglish.py`) fueron retirados; viven en el historial de
+> git. La detección quedó absorbida por `tests/naming_policy.rs` (que hoy cubre también `tests/`
+> y `tools/`, parte por `_`/CamelCase y compara case-insensitive).
+
 > **Disparador**: la sospecha del usuario de que hay "más lugares" que los 83 sitios que reporta
 > `tests/naming_policy.rs`. **Confirmada con creces: 1219 declaraciones con español confirmado**
 > (14× lo que ve el test), más un residuo de ~2000 marcas de baja confianza a curar. Este documento

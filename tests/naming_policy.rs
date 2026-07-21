@@ -5,8 +5,8 @@
 //! (decisión 21 jul 2026, ver `docs/arqueo-spanglish.md`). `examples/` y `book/`
 //! quedan fuera (código de usuario / material didáctico, más flexible).
 //!
-//! Detección pragmática (alineada con `tools/arqueo_spanglish.py`, el script que
-//! hizo el arqueo completo — mismos declaradores, mismo enfoque): se extraen los
+//! Detección pragmática (heredada del script del arqueo completo — retirado, vive en el
+//! historial de git; metodología en `docs/arqueo-spanglish.md`): se extraen los
 //! identificadores DECLARADOS (`fn`, `let [mut]`, `var`, `struct`, `enum`,
 //! `trait`, `const`, `static`, parámetros y campos de struct) de los `.rs`/`.ray`,
 //! se parten por `_`/CamelCase y se comparan contra una wordlist curada de
@@ -40,7 +40,7 @@ const DECLARATORS: &[&str] = &[
 const FALSE_FRIENDS: &[&str] = &[
     "variable", "variables", "indices", "regen", "configurable", "bitops", "ancount", "saslname",
     "operators",
-    // Falsos amigos ya excluidos por `tools/arqueo_spanglish.py` (mismo deletreo en inglés):
+    // Falsos amigos ya excluidos por el arqueo original (mismo deletreo en inglés):
     "error", "errores", "total", "totals", "final", "temporal", "temporals", "color", "colors",
     "animal", "animales", "division", "modulo", "persona", "personas", "auxiliar", "auxiliares",
     "subtotal", "normal", "base",
@@ -178,7 +178,7 @@ fn find_simple(line: &str, out: &mut Vec<String>) {
 }
 
 /// Parámetros: `(nombre: Tipo` o `, nombre: Tipo` (con `mut` opcional). Heurística de posición,
-/// igual que `tools/arqueo_spanglish.py`.
+/// igual que el script del arqueo original.
 fn find_params(line: &str, out: &mut Vec<String>) {
     let bytes = line.as_bytes();
     for (i, &c) in bytes.iter().enumerate() {

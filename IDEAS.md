@@ -1311,7 +1311,7 @@ socket de escucha. Tres caminos analizados:
 | **D. Herencia de fd** (socket-activation estilo systemd) | el listener | **media** | ✅ **M92.3**: el SUPERVISOR pre-abre y RETIENE el socket (`--port N`/`--listen host:port`/`[dev] listen` en ray.toml) y lo pasa a cada hijo (`pre_exec` dup2 al fd 3 + `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR`); `tcp_listen` (builtins) ADOPTA con `from_raw_fd` si el env matchea (una vez, guardado por `AtomicBool`) → el mismo programa corre idéntico en dev y prod. Durante el reinicio el socket nunca se cierra: el kernel encola en el backlog → **cero conexiones rechazadas, cero re-bind**, conservando el aislamiento por proceso (SIGTERM+drenado como antes). Gotcha cazado: si el fd del listener ya era 3 (primer libre tras stdio), `dup2(3,3)` es no-op que NO limpia CLOEXEC → fix con `fcntl(F_SETFD,0)` explícito. Unix; no-unix cae al re-bind por reinicio. Test rigoroso: si el 2.º hijo no re-adoptara, su bind chocaría (EADDRINUSE) con el socket retenido |
 | **E. `SO_REUSEPORT`** (blue/green local) | el puerto (solape de procesos) | media | descartada para dev: `std` no lo expone (setsockopt por FFI, factible), semántica de reparto difiere macOS/Linux, y durante el solape DOS versiones sirven a la vez (confuso en dev). Es la herramienta de *deploy* sin downtime, no de dev; D es más simple y suficiente |
 | **F. Live-reload del navegador (SSE)** | — (UX) | baja-media | ✅ **M92.4**: hub SSE en el SUPERVISOR (puerto lateral, solo en sesión web con `--port`), un servidor SSE mínimo en Rust que emite `data: reload` a los navegadores en cada reinicio VÁLIDO (compone con check-before-restart). Vive en el supervisor porque es lo único vivo entre reinicios. El webserver, viendo `RAY_DEV_RELOAD`, inyecta el `<script>EventSource(...).onmessage=location.reload()</script>` antes de `</body>` en las respuestas text/html (Content-Length recalculado; no-op en producción). NO reemplaza el SSE del paquete (ese es de la app; este es solo-dev, lateral). Diferido: inyección para CUALQUIER programa (necesitaría un proxy, en tensión con la herencia de fd de D) — hoy solo el paquete webserver |
-| **G. Estado del invitado entre reloads** | estado app | — | NO construir maquinaria (es exactamente el coste/beneficio descartado en B): **documentar el patrón** "estado de dev en SQLite de archivo" en el MANUAL — un `sqlite.connect("dev.db")` sobrevive reloads de forma natural |
+| **G. Estado del invitado entre reloads** | estado app | — | ~~NO construir maquinaria: documentar el patrón "estado de dev en SQLite de archivo"~~ **REABIERTA 21 jul 2026** (decisión con el usuario): para sesiones/config —el caso que hace diferenciador el DX del reload— SQLite es mucho; se construye un **KV persistido en raylang puro** (ver G-rev abajo). SQLite queda como el patrón para estado *de verdad* (relacional, consultas) |
 
 **Contexto del ecosistema**: Go (air), Node (nodemon), Rails = watch+restart → M92.1 ya es el
 estándar de la industria. Flutter/Vite hacen hot reload real porque su runtime lo soporta (clase B).
@@ -1323,6 +1323,37 @@ debounce; Windows-graceful aparcado) · **92.3** ✅ D (herencia de fd: `--port`
 + ✅ G (patrón de estado sqlite-de-archivo, documentado en el MANUAL) · **92.4** ✅ F (live-reload SSE
 desde el supervisor). **ARCO M92 COMPLETO** (A+ + D + F + G; B y C aparcados con criterio — C revive solo
 si la VM gana cancelación preemptiva/teardown fiable).
+
+### G-rev — estado persistido en raylang puro (reabierta 21 jul 2026)
+
+**Motivación**: el diferenciador de DX del reload es *no perder la sesión ni la config* al editar un
+handler. La respuesta original (G: "usa sqlite de archivo") funciona pero es pesada para ese caso:
+una DB entera para un puñado de pares clave/valor. Todas las piezas para hacerlo en raylang puro ya
+existen: `bytes` + `bytes_of`/`sub_bytes`/`to_bytes`/`from_utf8`, `fs.read_file_bytes`/
+`write_file_bytes`/`rename` (→ escritura atómica temp+rename), `Map<string, bytes>` con `keys()`
+ordenadas (→ serialización determinista gratis).
+
+**Diseño fijado**:
+- **G.1 — `std/kv`** (genérico, primero): `Store` = `Map<string, bytes>` respaldado por archivo.
+  Formato binario propio versionado (magic + count + entradas `[u32 klen | clave utf8 | u32 vlen |
+  valor]`, LE). API: `kv.open(path) -> Result<Store, string>` (archivo ausente → vacío; corrupto →
+  error honesto) + **métodos del trait `StoreOps`** (`s.get(k)`/`set`/`delete`/`keys`/`count` +
+  azúcar `get_string`/`set_string`, y `s.save() -> Result<int, string>` **atómico**: escribe
+  `path.tmp` + `rename`). Por trait y no funciones libres: una libre `get(Store,…)` ganaría al
+  builtin `get` del Map en UFCS (rompía `self.data.get(k)` dentro del módulo, cazado por el LSP);
+  el despacho por receptor lo esquiva (precedente: `Matcher` de regex, M59.2) y los métodos SÍ
+  cruzan módulos. Cadencia dev: cargar al boot,
+  `save()` tras el drenado graceful (un write por reload, cero coste en caliente); quien quiera
+  más, save-on-mutation. Módulo puro (ambos motores, sin primitivos nuevos).
+- **G.2 — compartición multicore + session store** (siguiente): bajo M38 (M:N, heap aislado) un
+  `Store` en memoria no se comparte entre handlers → envolverlo en un **actor CSP** dueño del Map
+  (get/set por canales; serialización de accesos sin locks), y sobre él un **session store** en
+  `packages/web` (`session_of(ctx)`) que persista automáticamente bajo `RAY_DEV_RELOAD` — "editas
+  el handler y sigues logueado" sin configurar nada.
+
+**Impacto** (clasificación): 💤 acomodable — aditivo puro (módulo std + paquete); no toca VM ni
+checker; el riesgo de drift de esquema entre reloads lo esquiva el KV de bytes por diseño
+(deserializar es problema de la app; un valor viejo ilegible se descarta).
 
 ## 49. Recuperación de errores fatales (panic → valor, estilo `recover` de Go) — arco M97 (jul 2026)
 

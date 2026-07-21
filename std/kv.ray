@@ -1,0 +1,208 @@
+// std/kv — estado clave/valor persistido en raylang puro (IDEAS §48 G-rev, 21 jul 2026).
+//
+// El caso que lo motiva: conservar sesiones/config entre reloads de `ray dev` sin
+// arrastrar una base de datos entera. Un `Store` es un `Map<string, bytes>` en memoria
+// respaldado por un archivo con formato binario propio (RKV1): magic + nº de entradas +
+// `[u32 klen | clave utf8 | u32 vlen | valor]*`, todo little-endian. La serialización es
+// determinista gratis (las `keys()` del Map van ordenadas) y la escritura es atómica
+// (temp + `rename`, mismo patrón que documenta std/fs). Cadencia recomendada en dev:
+// cargar al boot, `save()` tras el drenado graceful — un write por reload.
+//
+// La API va por MÉTODOS de trait (`s.get(k)`, `s.save()`), no por funciones libres:
+// una función libre `get(Store, …)` ganaría al builtin `get` del Map en la resolución
+// UFCS y rompería `self.data.get(k)` dentro del propio módulo (visible en el LSP, que
+// analiza el archivo sin namespacing de import). El despacho por receptor lo esquiva
+// — mismo patrón que el trait `Matcher` de std/regex (M59.2) — y además los métodos
+// SÍ cruzan módulos (UFCS a función libre importada no).
+//
+// Módulo puro (ambos motores, cero primitivos nuevos). La compartición entre fibras
+// bajo multicore (actor CSP dueño del Store) y el session store del paquete web van
+// encima de esto (G.2), no aquí.
+
+import std/fs;
+
+/// A persistent key/value store: an in-memory `Map<string, bytes>` backed by a file.
+/// Create with `kv.open(path)`; operate through the `StoreOps` methods (`s.get(k)`,
+/// `s.set(k, v)`, `s.save()`). Mutations touch only memory; `save` persists atomically.
+/// Typical dev-state cadence: `open` at boot, `save` once on graceful shutdown.
+pub struct Store {
+    path: string,
+    data: Map<string, bytes>,
+}
+
+/// Opens the store at `path`. A missing file yields an empty store; an existing file
+/// that cannot be read or decoded is an error (never silently discards data).
+pub fn open(path: string) -> Result<Store, string> {
+    if (fs.exists(path)) {
+        let b = fs.read_file_bytes(path)?;
+        let m = decode(b)?;
+        Result.Ok(Store { path: path, data: m })
+    } else {
+        let m: Map<string, bytes> = Map.new();
+        Result.Ok(Store { path: path, data: m })
+    }
+}
+
+/// The operations of a `Store`, in method-call style.
+pub trait StoreOps {
+    /// Returns the value stored under `key`, if any.
+    fn get(self, key: string) -> Option<bytes>;
+    /// Stores `val` under `key` (in memory; call `save` to persist).
+    fn set(self, key: string, val: bytes);
+    /// Removes `key` from the store; returns whether it was present.
+    fn delete(self, key: string) -> bool;
+    /// The keys currently in the store, sorted.
+    fn keys(self) -> [string];
+    /// Number of entries in the store.
+    fn count(self) -> int;
+    /// Returns the value under `key` decoded as UTF-8; `None` when the key is
+    /// absent or the stored bytes are not valid UTF-8.
+    fn get_string(self, key: string) -> Option<string>;
+    /// Stores a string value, UTF-8 encoded (sugar over `set`).
+    fn set_string(self, key: string, val: string);
+    /// Persists the store atomically: writes `<path>.tmp` and renames it over `path`
+    /// (a crash mid-write never corrupts the previous state). Returns the bytes written.
+    fn save(self) -> Result<int, string>;
+}
+
+impl StoreOps for Store {
+    fn get(self, key: string) -> Option<bytes> {
+        self.data.get(key)
+    }
+
+    fn set(self, key: string, val: bytes) {
+        self.data.insert(key, val);
+    }
+
+    fn delete(self, key: string) -> bool {
+        match (self.data.remove(key)) {
+            Option.Some(v) => true,
+            Option.None => false,
+        }
+    }
+
+    fn keys(self) -> [string] {
+        self.data.keys()
+    }
+
+    fn count(self) -> int {
+        self.data.len()
+    }
+
+    fn get_string(self, key: string) -> Option<string> {
+        match (self.data.get(key)) {
+            Option.Some(b) => {
+                match (from_utf8(b)) {
+                    Result.Ok(v) => Option.Some(v),
+                    Result.Err(e) => Option.None,
+                }
+            },
+            Option.None => Option.None,
+        }
+    }
+
+    fn set_string(self, key: string, val: string) {
+        self.data.insert(key, val.to_bytes());
+    }
+
+    fn save(self) -> Result<int, string> {
+        let b = encode(self.data);
+        let tmp = self.path + ".tmp";
+        fs.write_file_bytes(tmp, b)?;
+        fs.rename(tmp, self.path)?;
+        Result.Ok(b.len())
+    }
+}
+
+// --- formato RKV1 ---
+
+// Empuja `n` (0 <= n < 2^32) como u32 little-endian en `out`.
+fn push_u32(out: [int], n: int) {
+    out.push(n % 256);
+    out.push((n / 256) % 256);
+    out.push((n / 65536) % 256);
+    out.push((n / 16777216) % 256);
+}
+
+// Empuja todos los octetos de `b` en `out`.
+fn push_bytes(out: [int], b: bytes) {
+    var i = 0;
+    while (i < b.len()) {
+        out.push(b[i]);
+        i = i + 1;
+    }
+}
+
+// Lee el u32 little-endian que empieza en `pos` (el llamador garantiza los 4 octetos).
+fn read_u32(b: bytes, pos: int) -> int {
+    b[pos] + b[pos + 1] * 256 + b[pos + 2] * 65536 + b[pos + 3] * 16777216
+}
+
+// Serializa el Map al formato RKV1. Determinista: itera `keys()` (ordenadas).
+fn encode(data: Map<string, bytes>) -> bytes {
+    var out: [int] = [];
+    // magic "RKV1"
+    out.push(82);
+    out.push(75);
+    out.push(86);
+    out.push(49);
+    let ks = data.keys();
+    push_u32(out, ks.len());
+    var i = 0;
+    while (i < ks.len()) {
+        let kb = ks[i].to_bytes();
+        push_u32(out, kb.len());
+        push_bytes(out, kb);
+        let v = match (data.get(ks[i])) {
+            Option.Some(x) => x,
+            Option.None => b"",
+        };
+        push_u32(out, v.len());
+        push_bytes(out, v);
+        i = i + 1;
+    }
+    bytes_of(out)
+}
+
+// Decodifica un archivo RKV1; cualquier malformación es un error (no se pierde estado
+// en silencio). `sub_bytes` clampa, así que los cortes van SIEMPRE precedidos del
+// chequeo de longitud explícito.
+fn decode(b: bytes) -> Result<Map<string, bytes>, string> {
+    var m: Map<string, bytes> = Map.new();
+    if (b.len() < 8) {
+        return Result.Err("kv: invalid store file (truncated header)");
+    }
+    if (b[0] != 82 || b[1] != 75 || b[2] != 86 || b[3] != 49) {
+        return Result.Err("kv: invalid store file (bad magic)");
+    }
+    let n = read_u32(b, 4);
+    var pos = 8;
+    var i = 0;
+    while (i < n) {
+        if (pos + 4 > b.len()) {
+            return Result.Err("kv: invalid store file (truncated key length)");
+        }
+        let klen = read_u32(b, pos);
+        pos = pos + 4;
+        if (pos + klen > b.len()) {
+            return Result.Err("kv: invalid store file (truncated key)");
+        }
+        let key = from_utf8(b.sub_bytes(pos, pos + klen))?;
+        pos = pos + klen;
+        if (pos + 4 > b.len()) {
+            return Result.Err("kv: invalid store file (truncated value length)");
+        }
+        let vlen = read_u32(b, pos);
+        pos = pos + 4;
+        if (pos + vlen > b.len()) {
+            return Result.Err("kv: invalid store file (truncated value)");
+        }
+        m.insert(key, b.sub_bytes(pos, pos + vlen));
+        pos = pos + vlen;
+        i = i + 1;
+    }
+    if (pos != b.len()) {
+        return Result.Err("kv: invalid store file (trailing bytes)");
+    }
+    Result.Ok(m)
+}

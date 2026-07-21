@@ -1217,10 +1217,10 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
         return;
     }
     // (1) Marca qué índices son destino de algún salto (no se puede fusionar "dentro" de ellos).
-    let mut es_target = vec![false; n];
+    let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_target[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => is_target[*t] = true,
             _ => {}
         }
     }
@@ -1233,7 +1233,7 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
     let mut i = 0;
     while i < n {
         old_a_new[i] = code.len();
-        if i + 1 < n && !es_target[i + 1] {
+        if i + 1 < n && !is_target[i + 1] {
             if let Some(fusion) = match (&chunk.code[i], &chunk.code[i + 1]) {
                 (OpCode::GetLocal(s), OpCode::GetLocal(t)) => Some(OpCode::GetLocalLocal(*s, *t)),
                 (OpCode::GetLocal(s), OpCode::Constant(c)) => Some(OpCode::GetLocalConst(*s, *c)),
@@ -1274,10 +1274,10 @@ fn fuse_round2(chunk: &mut Chunk) {
     if n == 0 {
         return;
     }
-    let mut es_target = vec![false; n];
+    let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_target[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => is_target[*t] = true,
             _ => {}
         }
     }
@@ -1289,7 +1289,7 @@ fn fuse_round2(chunk: &mut Chunk) {
     while i < n {
         old_a_new[i] = code.len();
         // [Cmp, JumpIfFalse(t), Pop] con code[t] == Pop → CmpJump(op, t+1)
-        if i + 2 < n && !es_target[i + 1] && !es_target[i + 2] {
+        if i + 2 < n && !is_target[i + 1] && !is_target[i + 2] {
             let cmp = match &chunk.code[i] {
                 OpCode::Less => Some(CmpOp::Less),
                 OpCode::LessEqual => Some(CmpOp::LessEqual),
@@ -1310,7 +1310,7 @@ fn fuse_round2(chunk: &mut Chunk) {
                 }
             }
         }
-        if i + 1 < n && !es_target[i + 1] {
+        if i + 1 < n && !is_target[i + 1] {
             // [GetLocalConst, Add|Sub] → AddLocalConst/SubLocalConst
             if let OpCode::GetLocalConst(s2, c) = &chunk.code[i] {
                 let fusion = match &chunk.code[i + 1] {
@@ -1380,10 +1380,10 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
     if n == 0 {
         return;
     }
-    let mut es_target = vec![false; n];
+    let mut is_target = vec![false; n];
     for op in &chunk.code {
         match op {
-            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => es_target[*t] = true,
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => is_target[*t] = true,
             _ => {}
         }
     }
@@ -1394,7 +1394,7 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
     while i < n {
         old_a_new[i] = code.len();
         // [GetLocalConst(s, c), CmpJump(op, t)] → GetLocalConstCmpJump(s, c, op, t)
-        if i + 1 < n && !es_target[i + 1] {
+        if i + 1 < n && !is_target[i + 1] {
             if let OpCode::GetLocalConst(s, c) = &chunk.code[i] {
                 if let OpCode::CmpJump(op, t) = &chunk.code[i + 1] {
                     code.push(OpCode::GetLocalConstCmpJump(*s, *c, *op, *t)); // t en coords viejas

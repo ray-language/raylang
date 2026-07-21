@@ -36,16 +36,16 @@ pub fn policy(attempts: int, base_ms: int, max_ms: int) -> Retry {
 // El backoff del intento `i` (0-based), acotado; el jitter evita el "thundering herd"
 // (todos los clientes reintentando al unísono).
 fn backoff_ms(p: Retry, i: int) -> int {
-    var espera = p.base_ms;
+    var wait = p.base_ms;
     var k = 0;
-    while (k < i && espera < p.max_ms) {
-        espera = espera * 2;
+    while (k < i && wait < p.max_ms) {
+        wait = wait * 2;
         k = k + 1;
     }
-    if (espera > p.max_ms) {
-        espera = p.max_ms;
+    if (wait > p.max_ms) {
+        wait = p.max_ms;
     }
-    espera + random.between(0, espera + 1)
+    wait + random.between(0, wait + 1)
 }
 
 // Ejecuta `f` con reintentos: devuelve el primer Ok, o el ÚLTIMO Err si se agotan.
@@ -74,13 +74,13 @@ pub fn retry<T, E>(p: Retry, f: fn() -> Result<T, E>) -> Result<T, E> {
 pub struct Breaker {
     threshold: int,
     cooldown_ms: int,
-    fallos: int,
+    failures: int,
     abierto_hasta: int,
 }
 
 /// Builds a circuit breaker (see `Breaker`).
 pub fn breaker(threshold: int, cooldown_ms: int) -> Breaker {
-    Breaker { threshold: threshold, cooldown_ms: cooldown_ms, fallos: 0, abierto_hasta: 0 }
+    Breaker { threshold: threshold, cooldown_ms: cooldown_ms, failures: 0, abierto_hasta: 0 }
 }
 
 /// Is the breaker currently OPEN (failing fast)?
@@ -99,13 +99,13 @@ pub fn guard<T, E>(b: Breaker, err_open: E, f: fn() -> Result<T, E>) -> Result<T
     }
     let out = f();
     if (out.is_err()) {
-        b.fallos = b.fallos + 1;
-        if (b.fallos >= b.threshold) {
+        b.failures = b.failures + 1;
+        if (b.failures >= b.threshold) {
             b.abierto_hasta = time.monotonic() + b.cooldown_ms;
-            b.fallos = 0;
+            b.failures = 0;
         }
     } else {
-        b.fallos = 0;
+        b.failures = 0;
     }
     out
 }

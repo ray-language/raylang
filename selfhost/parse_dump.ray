@@ -194,11 +194,11 @@ fn dump_binds(binds: [Option<string>]) -> string {
 }
 
 // Cada expresión precedida de un espacio (para listas: args, elementos de arreglo).
-fn dump_exprs(es: [Expr]) -> string {
+fn dump_exprs(exprs: [Expr]) -> string {
     var s = "";
     var i = 0;
-    while (i < es.len()) {
-        s = s + " " + dump_expr(es[i]);
+    while (i < exprs.len()) {
+        s = s + " " + dump_expr(exprs[i]);
         i = i + 1;
     }
     s

@@ -144,8 +144,8 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
                 toks.push(Tok::Text(cs[start..i].iter().collect(), start_line));
             }
             let tok_line = line;
-            let es_tag = cs[i + 1] == '%';
-            let close = if es_tag { '%' } else { '}' };
+            let is_tag = cs[i + 1] == '%';
+            let close = if is_tag { '%' } else { '}' };
             let ini = i + 2;
             let mut fin = None;
             let mut j = ini;
@@ -157,7 +157,7 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
                 }
             }
             let Some(fin) = fin else {
-                let what = if es_tag { "'{%' without close" } else { "'{{' without close" };
+                let what = if is_tag { "'{%' without close" } else { "'{{' without close" };
                 return Err(TplError { line: tok_line, msg: what.into() });
             };
             let inner: String = cs[ini..fin].iter().collect();
@@ -166,7 +166,7 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
             i = fin + 2;
             start = i;
             start_line = line;
-            if es_tag {
+            if is_tag {
                 toks.push(Tok::Tag(inner, tok_line));
             } else if let Some(rest) = inner.strip_prefix('&') {
                 toks.push(Tok::Raw(rest.trim().to_string(), tok_line));

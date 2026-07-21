@@ -1948,7 +1948,7 @@ mod tests {
     }
 
     #[test]
-    fn import_con_path_de_directories_y_leaf() {
+    fn import_with_path_of_directories_and_leaf() {
         // M11.5: una ruta `a/b/c` se parsea como un solo módulo; el leaf es el último segmento.
         let prog = parse_prog("import geo/formas/circle;\nfn main() -> int { 0 }\n");
         assert_eq!(prog.imports.len(), 1);
@@ -2204,7 +2204,7 @@ mod tests {
     }
 
     #[test]
-    fn string_complete_de_precedence() {
+    fn operator_precedence_chain() {
         // || más débil que &&, que < que ==, que comparación, que aritmética.
         assert_eq!(
             sx(&parse_expr("a || b && c == d < e + f")),
@@ -2386,7 +2386,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn errors_de_syntax() {
+    fn syntax_errors() {
         let bad = |src: &str| {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             parse(tokens)
@@ -2424,7 +2424,7 @@ fn main() -> int {
     // ----- M8.1: anotación de tipo opcional en let/var -----
 
     #[test]
-    fn let_con_y_sin_annotation() {
+    fn let_with_and_without_annotation() {
         let prog = parse_prog("fn main() { let a: int = 1; let b = 2; var c = 3; }");
         let stmts = &prog.functions[0].body.statements;
         let ty_of = |s: &Stmt| match &s.kind {
@@ -2505,7 +2505,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_sin_for_es_error() {
+    fn impl_without_for_is_error() {
         let tokens = crate::lexer::lex("impl T S { } fn main() -> int { 0 }").expect("lex ok");
         let err = parse(tokens).expect_err("falta 'for'");
         assert!(err.msg.contains("expected 'for'"), "mensaje: {}", err.msg);
@@ -2532,7 +2532,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn parse_annotation_about_impl_es_error() {
+    fn parse_annotation_on_impl_is_error() {
         let tokens = crate::lexer::lex("@test\ntrait T { fn f(self) -> int; }").expect("lex ok");
         let err = parse(tokens).expect_err("anotación about trait");
         assert!(err.msg.contains("annotations are not allowed"), "mensaje: {}", err.msg);
@@ -2551,7 +2551,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn parse_dyn_multi_trait_es_canonical() {
+    fn parse_dyn_multi_trait_is_canonical() {
         // `dyn B + A` se guarda ordenado (canónico): igual a `dyn A + B`. (M9.5)
         let prog = parse_prog(r#"
             trait A { fn a(self) -> int; }
@@ -2578,7 +2578,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn parse_bounds_de_generics() {
+    fn parse_generic_bounds() {
         let prog = parse_prog(r#"
             fn f<T: Mostrable, U: A + B>(x: T, y: U) -> int { 0 }
             fn main() -> int { 0 }

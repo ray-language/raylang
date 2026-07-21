@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn llama_a_sqrt_de_libm() {
+    fn calls_libm_sqrt() {
         let d = desc("sqrt", vec![CKind::Float], CKind::Float);
         match call(&d, &[FfiVal::Float(2.0)]).unwrap() {
             FfiRet::Float(v) => assert!((v - std::f64::consts::SQRT_2).abs() < 1e-12),

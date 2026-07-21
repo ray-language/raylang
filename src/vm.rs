@@ -1997,14 +1997,14 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Bool(res));
                 }
                 OpCode::Replace => {
-                    // Orden de los argumentos en la pila: s, de, a → se sacan en orden inverso.
+                    // Orden de los argumentos en la pila: s, from, a → se sacan en orden inverso.
                     let a = self.pop();
-                    let de = self.pop();
+                    let from = self.pop();
                     let s = self.pop();
-                    let (HeapValue::Str(s), HeapValue::Str(de), HeapValue::Str(a)) = (s, de, a) else {
+                    let (HeapValue::Str(s), HeapValue::Str(from), HeapValue::Str(a)) = (s, from, a) else {
                         unreachable!("the checker guarantees three strings");
                     };
-                    self.push(HeapValue::Str(s.replace(de.as_str(), a.as_str())));
+                    self.push(HeapValue::Str(s.replace(from.as_str(), a.as_str())));
                 }
 
                 // --- Más string (M11.7a) ---
@@ -4559,7 +4559,7 @@ mod tests {
     }
 
     #[test]
-    fn if_sin_else_es_unit() {
+    fn if_without_else_is_unit() {
         assert_eq!(run_vm("if (true) { }"), Value::Unit);
         assert_eq!(run_vm("if (false) { }"), Value::Unit);
     }
@@ -5657,7 +5657,7 @@ mod tests {
     }
 
     #[test]
-    fn sum_de_un_array_con_while() {
+    fn array_sum_with_while() {
         oracle_program(
             "fn sum(a: [int]) -> int {
                 var s: int = 0; var i: int = 0;
@@ -5669,7 +5669,7 @@ mod tests {
     }
 
     #[test]
-    fn index_outside_de_range_es_error() {
+    fn index_out_of_range_is_error() {
         let prog_src = "fn main() -> int { let a: [int] = [1, 2]; a[5] }";
         let tokens = crate::lexer::lex(prog_src).unwrap();
         let mut prog = crate::parser::parse(tokens).unwrap();
@@ -5681,7 +5681,7 @@ mod tests {
     // ----- M3.2: structs -----
 
     #[test]
-    fn structs_access_y_order_de_fields() {
+    fn struct_field_access_and_order() {
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 3, y: 4 }; p.x + p.y }");
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { y: 4, x: 3 }; p.x - p.y }");
     }
@@ -6013,7 +6013,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_de_order_superior_oracle() {
+    fn higher_order_generic_oracle() {
         oracle_program(
             "fn apply<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
              fn double(n: int) -> int { n * 2 }
@@ -6441,7 +6441,7 @@ mod tests {
     // ----- M9.2b: impls genéricos -----
 
     #[test]
-    fn impl_generic_sin_bounds_oracle() {
+    fn generic_impl_without_bounds_oracle() {
         // `impl<T> Trait for Caja<T>` cuyo método no usa T: el método manglado es genérico
         // pero sin diccionarios. Despacha igual para Caja<int> y Caja<string>.
         oracle_program(r#"
@@ -6523,7 +6523,7 @@ mod tests {
     }
 
     #[test]
-    fn string_to_string_de_various_types_oracle() {
+    fn to_string_of_various_types_oracle() {
         oracle_program(r#"
             fn main() -> int {
                 print(to_string(42));      // 42
@@ -6984,7 +6984,7 @@ mod tests {
     }
 
     #[test]
-    fn read_file_nonexistent_es_err_oracle() {
+    fn read_file_nonexistent_is_err_oracle() {
         // Leer un archivo inexistente es determinista (misma llamada a std::fs en ambos motores) →
         // oráculo. El oráculo es pre-loader (M50.1: read_file vive en std/fs), así que usa el
         // primitivo __read_file directamente (arreglo etiquetado ["ok",…]/["err",msg]); debe coincidir.

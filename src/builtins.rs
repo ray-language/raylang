@@ -2494,14 +2494,14 @@ mod tests {
     }
 
     #[test]
-    fn todo_builtin_de_user_has_doc() {
+    fn every_user_builtin_has_doc() {
         // La documentación (en inglés) es parte del contrato de la tabla: cada builtin de cara
         // al usuario (sin prefijo `__`) debe tener su entrada en `doc()`; añadir un builtin sin
         // documentarlo rompe este test. Los internos `__*` no la necesitan.
-        let sin_doc: Vec<&str> = names()
+        let without_doc: Vec<&str> = names()
             .filter(|n| !n.starts_with("__") && doc(n).is_none())
             .collect();
-        assert!(sin_doc.is_empty(), "builtins sin doc(): {sin_doc:?}");
+        assert!(without_doc.is_empty(), "builtins sin doc(): {without_doc:?}");
         assert!(doc("__parse_int").is_none(), "los internos no llevan doc");
         assert!(doc("noexiste").is_none());
     }

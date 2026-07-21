@@ -39,6 +39,7 @@ const DECLARADORES: &[&str] = &[
 /// español, usa `// es-ok` en su línea en vez de tocar esta lista.
 const FALSOS_AMIGOS: &[&str] = &[
     "variable", "variables", "indices", "regen", "configurable", "bitops", "ancount", "saslname",
+    "operators",
     // Falsos amigos ya excluidos por `tools/arqueo_spanglish.py` (mismo deletreo en inglés):
     "error", "errores", "total", "totals", "final", "temporal", "temporals", "color", "colors",
     "animal", "animales", "division", "modulo", "persona", "personas", "auxiliar", "auxiliares",

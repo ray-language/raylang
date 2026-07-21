@@ -16,7 +16,7 @@ pub fn sqrt(x: float) -> float { __sqrt(x) }
 pub fn pow(base: float, exp: float) -> float { __pow(base, exp) }
 
 /// Sine of `x` (radians).
-pub fn sin(x: float) -> float { __sin(x) }
+pub fn sin(x: float) -> float { __sin(x) } // es-ok: nombre trigonométrico estándar en inglés
 
 /// Cosine of `x` (radians).
 pub fn cos(x: float) -> float { __cos(x) }

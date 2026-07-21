@@ -3751,7 +3751,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_submodule_internal_de_capsule() {
+    fn diagnostics_internal_submodule_of_capsule() {
         // Un submódulo DENTRO de una cápsula que importa a un vecino interno de la MISMA cápsula.
         // `geo/mod.ray` hace de `geo` una cápsula; `geo/util` es interno; `geo/formas/circulo.ray`
         // (también dentro de `geo/`) hace `import geo/util;` → legítimo (el importador vive bajo la
@@ -3845,7 +3845,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_y_signature_de_builtins() {
+    fn hover_and_signature_of_builtins() {
         // M10.2i: los builtins (print/char_code/…) no viven en la fuente; aun así el hover muestra su
         // firma (con los tipos de la llamada) y el signature help su firma fija. (M49: sqrt/pow/abs/… se
         // movieron a `std/math`, ya no son builtins → se prueba con `char_code`, que sí lo sigue siendo.)
@@ -3911,7 +3911,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_doc_de_builtins_y_prelude() {
+    fn hover_doc_of_builtins_and_prelude() {
         let mut docs = HashMap::new();
         let uri = format!("file://{}", std::env::temp_dir().join("ray_doc_builtin.ray").display());
         // Un builtin (`pow`) no tiene declaración en el archivo: la doc sale de la tabla
@@ -3996,7 +3996,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_de_fields_y_methods() {
+    fn hover_of_fields_and_methods() {
         // Campo de struct: `p.x` → el tipo del campo, en la posición del nombre tras el `.`.
         let src = "struct Point { x: int, y: int }\nfn main() -> int {\n  let p = Point { x: 3, y: 4 };\n  p.x + p.y\n}\n";
         let (t, _, _) = hover_at(None, src, 3, 4).expect("hover del campo x");
@@ -4014,7 +4014,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_inside_de_interpolation() {
+    fn hover_inside_interpolation() {
         // Las expresiones de `${…}` se re-lexan con posiciones reales → hover funciona dentro.
         let src = "fn main() -> int {\n  let x = 7;\n  print(\"n=${x} y ${x + 1}\");\n  0\n}\n";
         // línea 3 (0-based 2): `  print("n=${x} y ${x + 1}");`
@@ -4149,7 +4149,7 @@ mod tests {
     }
 
     #[test]
-    fn references_de_function() {
+    fn references_of_function() {
         // Una función llamada dos veces: declaración + 2 usos.
         let src = "fn double(n: int) -> int { n + n }\nfn main() -> int {\n  double(1) + double(2)\n}\n";
         // Cursor sobre la primera llamada `double` (línea 3 → 0-based 2, col 2).
@@ -4233,7 +4233,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_members_de_struct() {
+    fn completion_of_struct_members() {
         // M45: `p.` sobre un struct ofrece sus campos y sus métodos de trait, no los símbolos de archivo.
         let src = "struct P { x: int, y: int }\ntrait Ver { fn see(self) -> int; }\nimpl Ver for P { fn see(self) -> int { self.x } }\nfn sum(p: P) -> int { p.x + p.y }\nfn main() -> int {\n    let p = P { x: 1, y: 2 };\n    p.\n    0\n}\n";
         let labels = completion_labels(src, 6, 6); // línea "    p." (0-basada), tras el punto
@@ -4246,7 +4246,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_members_de_string_y_array() {
+    fn completion_of_string_and_array_members() {
         // string: builtins de string + métodos de trait; NADA de funciones de E/S que toman una ruta.
         let s = "fn main() -> int {\n    let s = \"h\";\n    s.\n    0\n}\n";
         let ls = completion_labels(s, 2, 6);
@@ -4261,7 +4261,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_members_en_context_de_expression() {
+    fn completion_of_members_in_expression_context() {
         // M45b: `x.` como argumento de una llamada NO debe romper el parseo (bug del `;` dentro
         // del paréntesis). `sum(x.)` ofrece los miembros del array.
         let src = "fn sum(xs: [int]) -> int { 0 }\nfn main() -> int {\n    let x = [1, 2];\n    let y = sum(x.);\n    0\n}\n";
@@ -4270,7 +4270,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_members_snippet_y_doc() {
+    fn completion_of_members_snippet_and_doc() {
         // M45b/M46c: un método con args → snippet con placeholders por parámetro, sin el receptor
         // (`doblar(${1:k})`); un campo no inserta `()`; los métodos del usuario traen su doc `///`.
         let src = "struct P { x: int }\n/// Duplica x.\nfn fold(p: P, k: int) -> int { p.x * k }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
@@ -4292,7 +4292,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_after_pipe_es_type_aware() {
+    fn completion_after_pipe_is_type_aware() {
         // La completion tras `|>` ofrece las funciones aplicables al tipo del operando izquierdo
         // (`x |> f` ≡ `f(x)`), como el acceso a miembro: `duplicar(int)` sí, `saludar(string)` no.
         let src = "fn duplicate(n: int) -> int { n * 2 }\nfn greet(s: string) -> string { s }\nfn main() -> int {\n    let x = 5;\n    x |> d\n    0\n}\n";
@@ -4353,7 +4353,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_members_en_interpolation() {
+    fn completion_of_members_in_interpolation() {
         // M45b: dentro de `${x.}` el LSP ofrece los miembros (el reparado no rompe la cadena).
         let src = "fn main() -> int {\n    let x = [1, 2];\n    let y = \"n ${x.}\";\n    0\n}\n";
         let line = "    let y = \"n ${x.}\";";
@@ -4363,7 +4363,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_import_symbols_y_paths() {
+    fn completion_of_import_symbols_and_paths() {
         // M45c: crea un proyecto temporal en disco y comprueba el completion de import.
         let base = std::env::temp_dir().join("ray_lsp_import_test");
         let _ = std::fs::remove_dir_all(&base);
@@ -4579,7 +4579,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_de_fields_de_literal_de_struct() {
+    fn completion_of_struct_literal_fields() {
         // M47a: dentro de `Nombre { … }` (posición de nombre de campo), los campos del struct.
         let labels = |body: &str, line: usize, ch: usize| -> Vec<(String, i64, Option<String>)> {
             let src = format!("struct Point {{ x: int, y: int }}\nfn dobla(n: int) -> int {{ n }}\nfn main() -> int {{\n{body}\n0\n}}\n");
@@ -4616,7 +4616,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_de_function_associated() {
+    fn hover_of_associated_function() {
         // M48.1: hover sobre el nombre asociado (`Channel.new`) → su firma del registro de asociadas.
         let src = "fn main() -> int {\n    let ch: Channel<int> = Channel.new();\n    0\n}\n";
         let mut docs = HashMap::new();
@@ -4770,7 +4770,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_en_un_template_offers_params_y_vars_de_for() {
+    fn completion_in_a_template_offers_for_params_and_vars() {
         // M55: dentro de `{{ }}` se ofrecen los params tipados de la cabecera; dentro de un
         // `{% for %}` abierto, también la variable de bucle (con su tipo inferido del `[T]`);
         // en contexto de etiqueta `{%`, además las keywords; fuera de los delimitadores, nada.

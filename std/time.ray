@@ -138,13 +138,13 @@ pub fn date_stamp(dt: DateTime) -> string {
 }
 
 fn weekday_name(w: int) -> string {
-    let nombres = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    nombres[w]
+    let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    names[w]
 }
 
 fn month_name(m: int) -> string {
-    let nombres = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    nombres[m]
+    let names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    names[m]
 }
 
 // Formato RFC 1123 (la cabecera `Date:` de HTTP): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
@@ -159,13 +159,13 @@ pub fn to_rfc1123(dt: DateTime) -> string {
 // y todo lo malformado o fuera de rango es un Err real.
 
 // Un campo numérico de ancho fijo: Err si algún carácter no es un dígito.
-fn campo(s: string, ini: int, fin: int, nombre: string) -> Result<int, string> {
+fn field(s: string, ini: int, fin: int, name: string) -> Result<int, string> {
     var n = 0;
     var i = ini;
     while (i < fin) {
         let c = s[i];
         if (c < '0' || c > '9') {
-            return Result.Err("ISO 8601: " + nombre + " no numérico en '" + s + "'");
+            return Result.Err("ISO 8601: " + name + " no numérico en '" + s + "'");
         }
         n = n * 10 + (char_code(c) - 48);
         i = i + 1;
@@ -173,10 +173,10 @@ fn campo(s: string, ini: int, fin: int, nombre: string) -> Result<int, string> {
     Result.Ok(n)
 }
 
-// Exige el separador `esperado` en la posición `i`.
-fn separador(s: string, i: int, esperado: char) -> Result<int, string> {
-    if (s[i] != esperado) {
-        return Result.Err("ISO 8601: se esperaba '" + to_string(esperado) + "' en la posición " + to_string(i) + " de '" + s + "'");
+// Exige el separador `expected` en la posición `i`.
+fn separator(s: string, i: int, expected: char) -> Result<int, string> {
+    if (s[i] != expected) {
+        return Result.Err("ISO 8601: se esperaba '" + to_string(expected) + "' en la posición " + to_string(i) + " de '" + s + "'");
     }
     Result.Ok(0)
 }
@@ -193,19 +193,19 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
     if (s.len() < 20) {
         return Result.Err("ISO 8601 demasiado corto: '" + s + "'");
     }
-    let year = campo(s, 0, 4, "año")?;
-    separador(s, 4, '-')?;
-    let month = campo(s, 5, 7, "mes")?;
-    separador(s, 7, '-')?;
-    let day = campo(s, 8, 10, "día")?;
+    let year = field(s, 0, 4, "año")?;
+    separator(s, 4, '-')?;
+    let month = field(s, 5, 7, "mes")?;
+    separator(s, 7, '-')?;
+    let day = field(s, 8, 10, "día")?;
     if (s[10] != 'T' && s[10] != 't' && s[10] != ' ') {
         return Result.Err("ISO 8601: se esperaba 'T' entre fecha y hora en '" + s + "'");
     }
-    let hour = campo(s, 11, 13, "hora")?;
-    separador(s, 13, ':')?;
-    let minute = campo(s, 14, 16, "minuto")?;
-    separador(s, 16, ':')?;
-    let second = campo(s, 17, 19, "segundo")?;
+    let hour = field(s, 11, 13, "hora")?;
+    separator(s, 13, ':')?;
+    let minute = field(s, 14, 16, "minuto")?;
+    separator(s, 16, ':')?;
+    let second = field(s, 17, 19, "segundo")?;
 
     // Rangos: la fecha se valida EXACTA por round-trip civil (rechaza 31 de abril y 29-feb no
     // bisiesto sin tabla de meses); la hora, por rango simple.
@@ -258,9 +258,9 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
         if (i + 6 > s.len()) {
             return Result.Err("ISO 8601: offset incompleto en '" + s + "'");
         }
-        let oh = campo(s, i + 1, i + 3, "hora del offset")?;
-        separador(s, i + 3, ':')?;
-        let om = campo(s, i + 4, i + 6, "minuto del offset")?;
+        let oh = field(s, i + 1, i + 3, "hora del offset")?;
+        separator(s, i + 3, ':')?;
+        let om = field(s, i + 4, i + 6, "minuto del offset")?;
         if (oh > 23 || om > 59) {
             return Result.Err("ISO 8601: offset fuera de rango en '" + s + "'");
         }

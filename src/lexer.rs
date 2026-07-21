@@ -642,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn interpolation_de_strings() {
+    fn string_interpolation() {
         use crate::token::InterpPart::{Expr, Lit};
         // `${expr}` en cualquier cadena → InterpStr con partes literales y de expresión (código crudo).
         assert_eq!(
@@ -818,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn operators_bit_a_bit() {
+    fn bitwise_operators() {
         // M19.3a: & | ^ ~ << >> sueltos. Ojo: '<<'/'>>' priman sobre '<'/'>'.
         assert_eq!(
             kinds("& | ^ ~ << >>"),
@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn operators_de_one_y_dos_caracteres() {
+    fn one_and_two_char_operators() {
         assert_eq!(
             kinds("== = != ! <= < >= > && || -> - + * / %"),
             vec![

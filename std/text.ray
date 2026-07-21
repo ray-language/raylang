@@ -106,20 +106,20 @@ pub fn lines(s: string) -> [string] {
     if (s.len() == 0) {
         return [];
     }
-    let partes = s.split("\n");
+    let parts = s.split("\n");
     var out: [string] = [];
     var i = 0;
     // Un `\n` final produce una última parte vacía → se descarta (convención universal).
-    var n = partes.len();
-    if (n > 0 && partes[n - 1].len() == 0) {
+    var n = parts.len();
+    if (n > 0 && parts[n - 1].len() == 0) {
         n = n - 1;
     }
     while (i < n) {
-        var linea = partes[i];
-        if (linea.len() > 0 && linea[linea.len() - 1] == '\r') {
-            linea = linea.substring(0, linea.len() - 1);
+        var line = parts[i];
+        if (line.len() > 0 && line[line.len() - 1] == '\r') {
+            line = line.substring(0, line.len() - 1);
         }
-        out.push(linea);
+        out.push(line);
         i = i + 1;
     }
     out

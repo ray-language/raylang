@@ -683,7 +683,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validates_names_de_package() {
+    fn validates_package_names() {
         // M51d: el nombre construye rutas (caché/índice) → charset estricto.
         assert!(valid_package_name("geo"));
         assert!(valid_package_name("mi-package_2"));
@@ -722,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn distingue_path_dep_de_git() {
+    fn distinguishes_path_dep_from_git() {
         // M40.8a: una path-dep se reconoce por el prefijo `path:` y NO es una git spec.
         assert_eq!(path_of_path_dep("path:../pkgs/net"), Some("../pkgs/net"));
         assert_eq!(path_of_path_dep("path:  packages/web  "), Some("packages/web"));

@@ -1210,7 +1210,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_comment_en_branch_de_match() {
+    fn preserves_comment_in_match_branch() {
         let src = "enum E { A, B }\nfn f(e: E) -> int {\n  match (e) {\n    E.A => 1,   // case A\n    E.B => 2,\n  }\n}\nfn main() -> int { 0 }\n";
         let out = fmt(src);
         assert!(out.contains("case A"), "comment en branch: {out}");
@@ -1287,10 +1287,10 @@ mod tests {
         // Canónico = 4 espacios.
         assert!(fmt(src).contains("\n    if ("), "canónico 4 espacios");
         // 2 espacios.
-        let dos = format_source_with_indent(src, "  ").unwrap();
-        assert!(dos.contains("\n  if ("), "2 espacios: {dos:?}");
-        assert!(dos.contains("\n    x"), "nivel 2 = 4 espacios en 2-espacios: {dos:?}");
-        assert_eq!(dos, format_source_with_indent(&dos, "  ").unwrap(), "idempotente en 2 espacios");
+        let two_spaces = format_source_with_indent(src, "  ").unwrap();
+        assert!(two_spaces.contains("\n  if ("), "2 espacios: {two_spaces:?}");
+        assert!(two_spaces.contains("\n    x"), "nivel 2 = 4 espacios en 2-espacios: {two_spaces:?}");
+        assert_eq!(two_spaces, format_source_with_indent(&two_spaces, "  ").unwrap(), "idempotente en 2 espacios");
         // Tabuladores.
         let tabs = format_source_with_indent(src, "\t").unwrap();
         assert!(tabs.contains("\n\tif ("), "1 tab por nivel: {tabs:?}");

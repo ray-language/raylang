@@ -831,11 +831,11 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
             Result.Ok(req) => {
                 let close: bool = wants_close(req);
                 // M56.8: a un HEAD se le responden las cabeceras del GET equivalente SIN el cuerpo.
-                let es_head: bool = req.method == "HEAD";
+                let is_head: bool = req.method == "HEAD";
                 let t = spawn(fn() -> Response { handler(req) });
                 match (try_join(t)) {
                     Result.Ok(resp) => {
-                        match (send_response_keep(conn, resp, !close, es_head)) {
+                        match (send_response_keep(conn, resp, !close, is_head)) {
                             Result.Ok(_) => { },
                             Result.Err(e) => {
                                 eprint("response: " + e);

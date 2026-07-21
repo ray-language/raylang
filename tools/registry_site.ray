@@ -132,7 +132,7 @@ fn estilo() -> string {
     "<style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#222}h1{font-size:1.4rem}a{color:#0b62a4;text-decoration:none}a:hover{text-decoration:underline}input{width:100%;padding:.5rem;font-size:1rem;margin:.5rem 0 1rem;border:1px solid #bbb;border-radius:4px}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.35rem .6rem;border-bottom:1px solid #e5e5e5}code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px}.badge{font-size:.75rem;padding:.1rem .4rem;border-radius:6px;margin-left:.4rem}.yanked{background:#fde5e5;color:#a02020}.signed{background:#e2f4e5;color:#1c6b2a}.muted{color:#777}</style>"
 }
 
-fn pagina_paquete(p: Package) -> string {
+fn pagina_paquete(p: Package) -> string { // es-ok: tools/registry_site.ray fuera de la política (CLAUDE.md)
     let sb = stringbuilder.new();
     stringbuilder.push(sb, "<meta charset=\"utf-8\"><title>" + p.name + " — registro raylang</title>");
     stringbuilder.push(sb, estilo());
@@ -165,7 +165,7 @@ fn pagina_paquete(p: Package) -> string {
     stringbuilder.build(sb)
 }
 
-fn portada(pkgs: [Package]) -> string {
+fn portada(pkgs: [Package]) -> string { // es-ok: tools/registry_site.ray fuera de la política (CLAUDE.md)
     let sb = stringbuilder.new();
     stringbuilder.push(sb, "<meta charset=\"utf-8\"><title>registro de paquetes — raylang</title>");
     stringbuilder.push(sb, estilo());
@@ -175,7 +175,7 @@ fn portada(pkgs: [Package]) -> string {
     var i = 0;
     while (i < pkgs.len()) {
         let p = pkgs[i];
-        var ultima = "";
+        var ultima = ""; // es-ok: tools/registry_site.ray fuera de la política (CLAUDE.md)
         if (p.versions.len() > 0) {
             ultima = p.versions[p.versions.len() - 1].num;
         }

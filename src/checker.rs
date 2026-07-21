@@ -6243,7 +6243,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_de_function_associated() {
+    fn hover_of_associated_function() {
         // M48.1/LSP: hover sobre el nombre asociado (`new`/`bounded`) → su firma del registro.
         let src = "fn main() -> int {\n  let m: Map<string, int> = Map.new();\n  m.len()\n}";
         let tokens = crate::lexer::lex(src).expect("lex ok");
@@ -6314,7 +6314,7 @@ mod tests {
     }
 
     #[test]
-    fn redefine_builtin_es_error() {
+    fn redefine_builtin_is_error() {
         // M48.3: un builtin del núcleo (print/to_string/panic…) no puede redefinirse como función libre.
         for name in ["print", "to_string", "panic"] {
             let src = format!("fn {name}(x: int) -> int {{ x }}\nfn main() -> int {{ 0 }}");
@@ -6336,7 +6336,7 @@ mod tests {
     }
 
     #[test]
-    fn literal_de_map() {
+    fn map_literal() {
         // M48.2: `[k: v]` infiere `Map<K,V>`; `[:]` lo fija el esperado.
         assert!(check_src("fn main() -> int { let m = [1: \"a\", 2: \"b\"]; m.len() }").is_ok());
         assert!(check_src("fn main() { let m: Map<string, int> = [:]; }").is_ok());
@@ -6456,7 +6456,7 @@ mod tests {
     }
 
         #[test]
-    fn el_error_de_types_underscores_la_expression_complete() {
+    fn type_error_underlines_the_whole_expression() {
         // M33a-2: la extensión del error sale de la tabla de spans del parser.
         let e = check_src("fn main() -> int { let x = 1 + true; x }").unwrap_err();
         assert!(e.msg.contains("requires both operands"), "{}", e.msg);
@@ -6482,7 +6482,7 @@ struct Q { n: int }
     }
 
     #[test]
-    fn bound_struct_fails_sin_impl() {
+    fn bound_struct_fails_without_impl() {
         let src = format!("{}struct Box<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Box {{ v: Q {{ n: 1 }} }}; 0 }}\n", BOUND_PRELUDE);
         err_contains(&src, "requires that 'T' be 'Show2'");
     }
@@ -6497,18 +6497,18 @@ struct Q { n: int }
     }
 
     #[test]
-    fn bound_enum_fails_sin_impl() {
+    fn bound_enum_fails_without_impl() {
         let src = format!("{}enum Opt<T: Show2> {{ Nada, Algo(T) }}\nfn main() -> int {{ let x = Opt.Algo(Q {{ n: 1 }}); 0 }}\n", BOUND_PRELUDE);
         err_contains(&src, "requires that 'T' be 'Show2'");
     }
 
     #[test]
-    fn bound_struct_trait_nonexistent_es_error() {
+    fn bound_struct_nonexistent_trait_is_error() {
         err_contains("struct Box<T: NoExiste> { v: T }\nfn main() -> int { 0 }\n", "trait 'NoExiste' not declared");
     }
 
     #[test]
-    fn fib_es_valid() {
+    fn fib_is_valid() {
         let src = r#"
 fn fib(n: int) -> int {
     if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
@@ -6546,7 +6546,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn if_sin_else_must_ser_unit() {
+    fn if_without_else_must_be_unit() {
         err_contains("fn main() { if (true) { 5 } }", "without else has type unit");
     }
 
@@ -6646,7 +6646,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn arrays_errors_de_ty() {
+    fn array_type_errors() {
         err_contains("fn main() -> int { let a: [int] = [1, true]; a[0] }", "must be int");
         err_contains("fn main() -> int { let a: [int] = [1]; a[true] }", "index must be int");
         err_contains("fn main() -> int { let x: int = 5; x[0] }", "not an array");
@@ -6788,7 +6788,7 @@ fn main() {
     }
 
     #[test]
-    fn enum_recursive_es_valid() {
+    fn recursive_enum_is_valid() {
         // Un enum puede portar su propio tipo: el norte de M5 (listas, árboles).
         let src = r#"
 enum List { Cons(int, List), Nil }
@@ -6808,12 +6808,12 @@ fn main() { let xs: List = List.Cons(1, List.Cons(2, List.Nil)); print(xs); }
     }
 
     #[test]
-    fn enum_ty_de_payload_incorrect() {
+    fn enum_payload_type_incorrect() {
         err_contains("enum E { A(int) } fn main() { let x: E = E.A(true); print(x); }", "expected int, got bool");
     }
 
     #[test]
-    fn enum_no_es_comparable() {
+    fn enum_is_not_comparable() {
         err_contains(
             "enum E { A, B } fn main() -> int { let x: E = E.A; if (x == E.B) { 1 } else { 0 } }",
             "same comparable type",
@@ -6844,7 +6844,7 @@ fn main() { let xs: List = List.Cons(1, List.Cons(2, List.Nil)); print(xs); }
     // ----- M5.2: match y exhaustividad -----
 
     #[test]
-    fn match_exhaustive_es_valid() {
+    fn exhaustive_match_is_valid() {
         let src = r#"
 enum List { Cons(int, List), Nil }
 fn sum(xs: List) -> int {
@@ -6897,7 +6897,7 @@ fn main() -> int { sum(List.Cons(1, List.Nil)) }
     }
 
     #[test]
-    fn match_arity_de_binding_incorrect() {
+    fn match_binding_arity_incorrect() {
         err_contains(
             "enum E { A(int) } fn f(e: E) -> int { match (e) { E.A => 1 } } fn main() {}",
             "binds 0 value(s), but the variant has 1",
@@ -6913,7 +6913,7 @@ fn main() -> int { sum(List.Cons(1, List.Nil)) }
     }
 
     #[test]
-    fn match_patron_de_other_enum() {
+    fn match_pattern_from_other_enum() {
         err_contains(
             "enum E { A } enum F { B } fn f(e: E) -> int { match (e) { F.B => 1, _ => 0 } } fn main() {}",
             "is of enum 'F'",
@@ -6978,7 +6978,7 @@ fn main() -> int { apply(double, 21) }
     }
 
     #[test]
-    fn generic_no_se_can_compare_un_parameter_de_ty() {
+    fn generic_cannot_compare_a_type_parameter() {
         err_contains(
             "fn ig<T>(a: T, b: T) -> bool { a == b } fn main() {}",
             "same comparable type",
@@ -6991,7 +6991,7 @@ fn main() -> int { apply(double, 21) }
     }
 
     #[test]
-    fn ty_unknown_no_es_parameter() {
+    fn unknown_type_is_not_a_parameter() {
         err_contains("fn f(x: Desconocido) -> int { 0 } fn main() {}", "'Desconocido' not declared");
     }
 
@@ -7034,7 +7034,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn generic_arity_de_args_de_ty() {
+    fn generic_type_args_arity() {
         err_contains(
             "enum Box<T> { Llena(T), Vacia } fn main() { let b: Box<int, bool> = Box.Vacia; print(b); }",
             "expects 1 type argument(s)",
@@ -7186,7 +7186,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn ufcs_receptor_de_ty_incorrect() {
+    fn ufcs_receiver_type_incorrect() {
         // El receptor se inserta como primer argumento: si su tipo no encaja, error.
         err_contains(
             "fn double(x: int) -> int { x * 2 } fn main() -> int { let b: bool = true; b.double() }",
@@ -7411,7 +7411,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_de_trait_nonexistent() {
+    fn impl_of_nonexistent_trait() {
         err_contains(
             r#"struct S { x: int }
                impl NoExiste for S { fn f(self) -> int { 1 } }
@@ -7541,7 +7541,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn self_outside_de_impl_es_error() {
+    fn self_outside_impl_is_error() {
         err_contains(
             "fn f(x: Self) -> int { 1 } fn main() -> int { 0 }",
             "'Self' is only valid inside a trait or impl",
@@ -7719,7 +7719,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn dyn_de_trait_nonexistent() {
+    fn dyn_of_nonexistent_trait() {
         err_contains(
             "fn f(x: dyn NoExiste) -> int { 0 } fn main() -> int { 0 }",
             "trait 'NoExiste' not declared",
@@ -7762,7 +7762,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn test_about_struct_es_error() {
+    fn test_annotation_on_struct_is_error() {
         err_contains(
             "@test struct S { x: int } fn main() -> int { 0 }",
             "'@test' is only allowed on functions",
@@ -7806,7 +7806,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn derive_en_ty_generic_es_error() {
+    fn derive_on_generic_type_is_error() {
         err_contains(
             "@derive(Eq) struct Box<T> { v: T } fn main() -> int { 0 }",
             "generic type",
@@ -7831,7 +7831,7 @@ fn main() -> int {
     }
 
     #[test]
-    fn derive_eq_y_show_juntos() {
+    fn derive_eq_and_show_together() {
         check_src(r#"
             @derive(Eq, Show)
             struct P { x: int }

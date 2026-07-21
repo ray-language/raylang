@@ -76,8 +76,8 @@ pub fn resolve(c: Cache, name: string, qtype: int) -> Result<[Record], string> {
 pub fn clear(c: Cache) {
     var ks: [string] = [];
     var rs: [[Record]] = [];
-    var es: [int] = [];
+    var exps: [int] = [];
     c.keys = ks;
     c.records = rs;
-    c.expiry = es;
+    c.expiry = exps;
 }

@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn native_without_es_un_array_de_subsistemas() {
+    fn native_without_is_an_array_of_subsystems() {
         // [native] without = ["tls", "sqlite"] → la política estable de exclusión del binario nativo.
         let src = "[package]\nname = \"svc\"\nversion = \"1.0.0\"\n\n[native]\nwithout = [\"tls\", \"sqlite\"]\n";
         let m = parse_src(src).unwrap();

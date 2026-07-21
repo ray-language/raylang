@@ -81,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_es_none() {
+    fn unknown_is_none() {
         assert!(embedded("std/nonexistent").is_none());
         assert!(embedded("math").is_none()); // sin el prefijo std/ no es de la stdlib
     }

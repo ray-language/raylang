@@ -605,6 +605,14 @@ fn completion_offers_snippets_de_construcciones() {
         ("fn(…) { } (anonymous)", "fn", "fn(${1:params}) {"),
         ("@test fn … { }", "test", "@test\nfn ${1:name}() {"),
         ("@derive(…) struct … { }", "derive", "@derive(${1:Eq, Show})"),
+        // Etapa 3 — los no-obvios: variantes calificadas, channel anotado, ?, import, extern.
+        ("match Option { Some/None }", "match", "Option.Some(${2:v}) => $3,\n\tOption.None => $0,"),
+        ("match Result { Ok/Err }", "match", "Result.Ok(${2:v}) => $3,\n\tResult.Err(${4:e}) => $0,"),
+        ("fn … -> Result … ? …", "fn", "-> Result<${3:int}, string> {"),
+        ("import …;", "import", "import ${1:module};"),
+        ("from … import …;", "from", "from ${1:module} import ${2:name};"),
+        ("channel + spawn + send + recv", "channel", "let ${1:ch}: Channel<${2:int}> = Channel.new();"),
+        ("extern \"lib\" { fn …; }", "extern", "extern \"${1:lib}\" {"),
     ];
     for (label, filter, frag) in esperados {
         let it = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))

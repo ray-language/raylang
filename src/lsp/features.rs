@@ -902,6 +902,16 @@ pub(super) fn code_block_snippets() -> Vec<Json> {
         ("fn(…) { } (anonymous)", "fn", "fn(${1:params}) {\n\t$0\n}"),
         ("@test fn … { }", "test", "@test\nfn ${1:name}() {\n\t$0\n}"),
         ("@derive(…) struct … { }", "derive", "@derive(${1:Eq, Show})\nstruct ${2:Name} {\n\t${3:field}: ${4:type},\n}"),
+        // Etapa 3 — los no-obvios de raylang: variantes CALIFICADAS (`Option.Some`, no `Some`),
+        // `Channel.new()` es indeterminado (exige la anotación `Channel<T>`), el `?` pide que la
+        // función envolvente devuelva Result/Option compatible.
+        ("match Option { Some/None }", "match", "match (${1:opt}) {\n\tOption.Some(${2:v}) => $3,\n\tOption.None => $0,\n}"),
+        ("match Result { Ok/Err }", "match", "match (${1:res}) {\n\tResult.Ok(${2:v}) => $3,\n\tResult.Err(${4:e}) => $0,\n}"),
+        ("fn … -> Result … ? …", "fn", "fn ${1:name}(${2:params}) -> Result<${3:int}, string> {\n\tlet ${4:v} = ${5:expr}?;\n\t$0\n}"),
+        ("import …;", "import", "import ${1:module};$0"),
+        ("from … import …;", "from", "from ${1:module} import ${2:name};$0"),
+        ("channel + spawn + send + recv", "channel", "let ${1:ch}: Channel<${2:int}> = Channel.new();\nspawn(fn() {\n\tsend($1, ${3:value});\n});\nif let Option.Some(${4:v}) = recv($1) {\n\t$0\n}"),
+        ("extern \"lib\" { fn …; }", "extern", "extern \"${1:lib}\" {\n\tfn ${2:name}(${3:params})${4: -> type};\n}"),
     ];
     cases.iter().map(|(label, filter, insert)| {
         obj(vec![

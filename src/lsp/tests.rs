@@ -594,6 +594,16 @@ fn completion_offers_snippets_de_construcciones() {
         ("for … in … { }", "for", "for ${1:elem} in ${2:coleccion} {"),
         ("for … in a..b { }", "for", "..${3:n}"),
         ("match (…) { … => … }", "match", "match (${1:expr}) {"),
+        // Etapa 2 — datos y tipos.
+        ("if let … = … { }", "if", "if let ${1:patron} = ${2:expr} {"),
+        ("struct … { }", "struct", "${2:campo}: ${3:tipo},"),
+        ("enum … { }", "enum", "${3:Variante}(${4:tipo}),"),
+        ("trait … { }", "trait", "fn ${2:metodo}(self)"),
+        ("impl … for … { }", "impl", "impl ${1:Trait} for ${2:Tipo} {"),
+        ("const … = …;", "const", "const ${1:NAME}: ${2:tipo} = ${3:literal};"),
+        ("fn(…) { } (anónima)", "fn", "fn(${1:params}) {"),
+        ("@test fn … { }", "test", "@test\nfn ${1:name}() {"),
+        ("@derive(…) struct … { }", "derive", "@derive(${1:Eq, Show})"),
     ];
     for (label, filter, frag) in esperados {
         let it = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
@@ -602,13 +612,19 @@ fn completion_offers_snippets_de_construcciones() {
         assert_eq!(it.get("filterText").and_then(|f| f.as_str()), Some(*filter), "{label}: filterText");
         let insert = it.get("insertText").and_then(|t| t.as_str()).unwrap();
         assert!(insert.contains(frag), "{label}: insertText contiene {frag:?}: {insert}");
-        // La gramática no-obvia: los bloques de control llevan paréntesis en la condición.
-        if ["if", "while", "match"].contains(filter) {
-            assert!(insert.contains('('), "{label}: condición entre paréntesis");
-        }
     }
+    // La gramática no-obvia: la CONDICIÓN va entre paréntesis en if/while/match… pero el
+    // escrutinio del `if let` va sin paréntesis (hasta el `{`, SPEC §6.2).
+    for label in ["if (…) { }", "if (…) { } else { }", "while (…) { }", "match (…) { … => … }"] {
+        let it = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label)).unwrap();
+        assert!(it.get("insertText").and_then(|t| t.as_str()).unwrap().contains('('),
+            "{label}: condición entre paréntesis");
+    }
+    let iflet = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("if let … = … { }")).unwrap();
+    assert!(!iflet.get("insertText").and_then(|t| t.as_str()).unwrap().starts_with("if let ("),
+        "if let: escrutinio SIN paréntesis");
     // La keyword pelada sigue ofreciéndose (posiciones donde el bloque no aplica).
-    for kw in ["fn", "if", "while", "for", "match", "let", "var"] {
+    for kw in ["fn", "if", "while", "for", "match", "let", "var", "struct", "enum", "trait", "impl", "const"] {
         assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(kw)),
             "{kw}: keyword pelada también presente");
     }

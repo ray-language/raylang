@@ -890,6 +890,17 @@ pub(super) fn code_block_snippets() -> Vec<Json> {
         ("for … in … { }", "for", "for ${1:elem} in ${2:coleccion} {\n\t$0\n}"),
         ("for … in a..b { }", "for", "for ${1:i} in ${2:0}..${3:n} {\n\t$0\n}"),
         ("match (…) { … => … }", "match", "match (${1:expr}) {\n\t${2:patron} => $0,\n}"),
+        // Etapa 2 — datos y tipos. El `if let` va SIN paréntesis (el escrutinio llega hasta el
+        // `{`, SPEC §6.2); los campos de struct llevan coma final (la gramática la exige).
+        ("if let … = … { }", "if", "if let ${1:patron} = ${2:expr} {\n\t$0\n}"),
+        ("struct … { }", "struct", "struct ${1:Name} {\n\t${2:campo}: ${3:tipo},\n}"),
+        ("enum … { }", "enum", "enum ${1:Name} {\n\t${2:Variante},\n\t${3:Variante}(${4:tipo}),\n}"),
+        ("trait … { }", "trait", "trait ${1:Name} {\n\tfn ${2:metodo}(self)${3: -> tipo};\n}"),
+        ("impl … for … { }", "impl", "impl ${1:Trait} for ${2:Tipo} {\n\tfn ${3:metodo}(self)${4: -> tipo} {\n\t\t$0\n\t}\n}"),
+        ("const … = …;", "const", "const ${1:NAME}: ${2:tipo} = ${3:literal};$0"),
+        ("fn(…) { } (anónima)", "fn", "fn(${1:params}) {\n\t$0\n}"),
+        ("@test fn … { }", "test", "@test\nfn ${1:name}() {\n\t$0\n}"),
+        ("@derive(…) struct … { }", "derive", "@derive(${1:Eq, Show})\nstruct ${2:Name} {\n\t${3:campo}: ${4:tipo},\n}"),
     ];
     cases.iter().map(|(label, filter, insert)| {
         obj(vec![

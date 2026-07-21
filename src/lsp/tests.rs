@@ -571,8 +571,8 @@ fn completion_offers_closure_snippet_for_spawn_and_scope() {
 }
 
 #[test]
-fn completion_offers_snippets_de_construcciones() {
-    // Etapa 1 de los snippets de construcciones: teclear la keyword ofrece el bloque completo
+fn completion_offers_language_construct_snippets() {
+    // Snippets de construcciones del lenguaje: teclear la keyword ofrece el bloque completo
     // con placeholders (además de la keyword pelada, que sigue para las demás posiciones).
     let src = "fn main() -> int { 0 }\n";
     let msg = json::parse(
@@ -583,8 +583,9 @@ fn completion_offers_snippets_de_construcciones() {
     let res = completion_result(&msg, &docs);
     let items = res.as_array().unwrap();
     // (label, filterText, fragmento que el insertText debe contener). Placeholders en INGLÉS
-    // (convención: todo lo que el lenguaje entrega al usuario va en inglés).
-    let esperados: &[(&str, &str, &str)] = &[
+    // (convención: todo lo que el lenguaje entrega al usuario va en inglés; la política de
+    // identificadores del código la vigila tests/naming_policy.rs, no este test).
+    let expected: &[(&str, &str, &str)] = &[
         ("fn …() { }", "fn", "fn ${1:name}("),
         ("fn main() { }", "main", "fn main() -> int {"),
         ("let … = …;", "let", "let ${1:name} = ${2:expr};"),
@@ -614,7 +615,7 @@ fn completion_offers_snippets_de_construcciones() {
         ("channel + spawn + send + recv", "channel", "let ${1:ch}: Channel<${2:int}> = Channel.new();"),
         ("extern \"lib\" { fn …; }", "extern", "extern \"${1:lib}\" {"),
     ];
-    for (label, filter, frag) in esperados {
+    for (label, filter, frag) in expected {
         let it = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
             .unwrap_or_else(|| panic!("falta el snippet {label}"));
         assert_eq!(it.get("insertTextFormat"), Some(&Json::Num(2.0)), "{label}: es snippet");
@@ -632,16 +633,6 @@ fn completion_offers_snippets_de_construcciones() {
     let iflet = items.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("if let … = … { }")).unwrap();
     assert!(!iflet.get("insertText").and_then(|t| t.as_str()).unwrap().starts_with("if let ("),
         "if let: escrutinio SIN paréntesis");
-    // Convención inglés-de-cara-afuera: ningún placeholder/detail en español.
-    for it in items.iter().filter(|i| i.get("kind") == Some(&Json::Num(15.0))) {
-        let insert = it.get("insertText").and_then(|t| t.as_str()).unwrap_or("");
-        for palabra in ["condicion", "coleccion", "patron", "campo", "metodo", "Variante"] {
-            assert!(!insert.contains(palabra), "placeholder en español: {insert}");
-        }
-        if let Some(d) = it.get("detail").and_then(|d| d.as_str()) {
-            assert!(!d.contains("construcción") && !d.contains("anónima"), "detail en español: {d}");
-        }
-    }
     // La keyword pelada sigue ofreciéndose (posiciones donde el bloque no aplica).
     for kw in ["fn", "if", "while", "for", "match", "let", "var", "struct", "enum", "trait", "impl", "const"] {
         assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(kw)),

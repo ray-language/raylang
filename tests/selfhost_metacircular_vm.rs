@@ -43,21 +43,21 @@ fn run(args: &[&str]) -> (String, i32) {
 }
 
 /// Compara un driver del self-hosting corrido por Rust vs COMPILADO Y CORRIDO sobre la VM auto-alojada.
-fn compare_driver_vm(driver_rel: &str, input_abs: &str, etiqueta: &str) {
+fn compare_driver_vm(driver_rel: &str, input_abs: &str, label: &str) {
     let driver = repo_path(driver_rel);
     let driver = driver.to_str().expect("path utf-8");
     let run_vm = repo_path("selfhost/run_vm.ray");
     let run_vm = run_vm.to_str().expect("path utf-8");
     let (so_r, code_r) = run(&[driver, input_abs]);
     let (so_v, code_v) = run(&[run_vm, driver, input_abs]);
-    assert_eq!(so_v, so_r, "stdout difiere ({etiqueta})");
-    assert_eq!(code_v, code_r, "código de output difiere ({etiqueta})");
+    assert_eq!(so_v, so_r, "stdout difiere ({label})");
+    assert_eq!(code_v, code_r, "código de output difiere ({label})");
 }
 
 // Fuentes pequeñas (la VM auto-alojada corre sobre la VM del host → entradas chicas).
 const FIB: &str = "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\n\
                    fn main() -> int { var i = 0; while (i <= 6) { print(fib(i)); i = i + 1; } 0 }\n";
-const DATOS: &str = "struct P { x: int, y: int }\nenum F { C(int), R(int, int) }\n\
+const DATA: &str = "struct P { x: int, y: int }\nenum F { C(int), R(int, int) }\n\
                      fn area(f: F) -> int { match (f) { F.C(r) => 3 * r * r, F.R(a, b) => a * b } }\n\
                      fn main() -> int { let p = P { x: 3, y: 4 }; print(p.x + p.y); print(area(F.C(2))); print(area(F.R(3, 5))); 0 }\n";
 
@@ -66,7 +66,7 @@ fn lexer_metacircular_vm() {
     // El lexer auto-alojado, COMPILADO y corrido sobre la VM auto-alojada, lexea idéntico a Rust.
     let inp = temp_input("mcvm_lex_fib.ray", FIB);
     compare_driver_vm("selfhost/lex_dump.ray", &inp, "lex_dump/fib");
-    let inp = temp_input("mcvm_lex_data.ray", DATOS);
+    let inp = temp_input("mcvm_lex_data.ray", DATA);
     compare_driver_vm("selfhost/lex_dump.ray", &inp, "lex_dump/data");
 }
 
@@ -75,7 +75,7 @@ fn parser_metacircular_vm() {
     // El parser auto-alojado, sobre la VM auto-alojada, produce el mismo AST que Rust.
     let inp = temp_input("mcvm_parse_fib.ray", FIB);
     compare_driver_vm("selfhost/parse_dump.ray", &inp, "parse_dump/fib");
-    let inp = temp_input("mcvm_parse_data.ray", DATOS);
+    let inp = temp_input("mcvm_parse_data.ray", DATA);
     compare_driver_vm("selfhost/parse_dump.ray", &inp, "parse_dump/data");
 }
 
@@ -84,7 +84,7 @@ fn checker_metacircular_vm() {
     // El checker auto-alojado, sobre la VM auto-alojada, da el mismo veredicto que Rust.
     let inp = temp_input("mcvm_check_fib.ray", FIB);
     compare_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/fib");
-    let inp = temp_input("mcvm_check_data.ray", DATOS);
+    let inp = temp_input("mcvm_check_data.ray", DATA);
     compare_driver_vm("selfhost/check_dump.ray", &inp, "check_dump/data");
     // Un programa con error de tipos: el veredicto (mensaje) también debe coincidir.
     let inp = temp_input("mcvm_check_err.ray", "fn main() -> int { let x: int = true; 0 }\n");

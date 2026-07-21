@@ -6,7 +6,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "<h1>Hola, &lt;b&gt;Ada&lt;/b&gt;!</h1>",
     "<p>admin</p>",
     "<ul><li>a &amp; b</li><li>c</li><li>42</li></ul>",
@@ -37,12 +37,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn template_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "template_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn template_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "template_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

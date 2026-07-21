@@ -62,7 +62,7 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "https://auth.example.com/authorize?response_type=code&client_id=mi-cliente&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&scope=read%20write&state=xyz123",
     "access_token=tok-abc-123",
     "token_type=Bearer",
@@ -73,11 +73,11 @@ const ESPERADO: &[&str] = &[
 #[test]
 fn oauth2_client_credentials_interpreter() {
     let port = toy_token_endpoint();
-    assert_eq!(run(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), EXPECTED);
 }
 
 #[test]
 fn oauth2_client_credentials_vm() {
     let port = toy_token_endpoint();
-    assert_eq!(run(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), EXPECTED);
 }

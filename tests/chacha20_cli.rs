@@ -6,7 +6,7 @@
 use std::process::Command;
 
 /// El criptograma oficial del RFC 8439 §2.4.2 (114 octetos en hex) + el veredicto del round-trip.
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0b\
 f91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d8\
 07ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab7793736\
@@ -29,12 +29,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn chacha20_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "chacha20_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn chacha20_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "chacha20_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

@@ -35,7 +35,7 @@ fn run(name: &str, src: &str, vm: bool) -> (String, String, i32) {
 }
 
 #[test]
-fn productor_consumidor() {
+fn producer_consumer() {
     // Una fibra produce 5 valores y cierra; main los consume vía recv -> Option, sumando.
     let src = r#"
 fn main() -> int {
@@ -63,7 +63,7 @@ fn main() -> int {
 }
 
 #[test]
-fn order_determinista_dos_productores() {
+fn deterministic_order_two_producers() {
     // Dos productores + un consumidor: el scheduler determinista fija el orden de entrega.
     let src = r#"
 fn productor(ch: Channel<int>, base: int) {
@@ -131,7 +131,7 @@ fn main() -> int {
 }
 
 #[test]
-fn deadlock_detectado() {
+fn deadlock_detected() {
     // recv sobre un canal vacío que nadie alimentará ni cerrará → deadlock (error de ejecución limpio).
     let src = r#"
 fn main() -> int {
@@ -147,7 +147,7 @@ fn main() -> int {
 }
 
 #[test]
-fn send_a_canal_closed_es_error() {
+fn send_to_closed_channel_is_error() {
     let src = r#"
 fn main() -> int {
     let ch: Channel<int> = Channel.new();
@@ -177,7 +177,7 @@ fn main() -> int {
 }
 
 #[test]
-fn pipeline_de_fibras() {
+fn fiber_pipeline() {
     // Pipeline CSP: generador -> cuadrador -> main. Cada etapa es una fibra; comunican por canales.
     let src = r#"
 fn main() -> int {
@@ -247,7 +247,7 @@ fn main() -> int {
 }
 
 #[test]
-fn rendezvous_capacidad_cero() {
+fn rendezvous_zero_capacity() {
     // Canal de capacidad 0 (síncrono): cada `send` se completa solo cuando hay un `recv` esperando.
     let src = r#"
 fn main() -> int {
@@ -273,7 +273,7 @@ fn main() -> int {
 }
 
 #[test]
-fn close_con_emisor_bloqueado_es_error() {
+fn close_with_blocked_sender_is_error() {
     // Cerrar un canal del que un emisor todavía espera enviar es un error de programa, detectado de forma
     // determinista en el sitio del `close`.
     let src = r#"
@@ -292,7 +292,7 @@ fn main() -> int {
 }
 
 #[test]
-fn deadlock_por_emisor_bloqueado() {
+fn deadlock_from_blocked_sender() {
     // Un `send` sobre un canal síncrono que nadie recibirá bloquea al emisor para siempre → deadlock.
     let src = r#"
 fn main() -> int {
@@ -309,7 +309,7 @@ fn main() -> int {
 // --- M12.3: structured concurrency (Task<T> + join + scope) ---
 
 #[test]
-fn scope_join_valor_de_return_val() {
+fn scope_join_returns_value() {
     // spawn devuelve Task<int>; join bloquea y da su valor; el scope devuelve el valor del cuerpo.
     let src = r#"
 fn square(n: int) -> int { n * n }
@@ -329,7 +329,7 @@ fn main() -> int {
 }
 
 #[test]
-fn scope_une_tasks_no_unidas() {
+fn scope_joins_unjoined_tasks() {
     // El scope espera a una tarea aunque no se la una explícitamente: al salir, ya terminó.
     let src = r#"
 fn main() -> int {
@@ -350,7 +350,7 @@ fn main() -> int {
 }
 
 #[test]
-fn join_propagates_el_panic_de_la_tarea() {
+fn join_propagates_panic_from_task() {
     // Una tarea que hace panic: join re-lanza ese fallo en el sitio del join (propagación).
     let src = r#"
 fn main() -> int {
@@ -366,7 +366,7 @@ fn main() -> int {
 }
 
 #[test]
-fn scope_propagates_el_panic_de_one_hija() {
+fn scope_propagates_panic_from_one_child() {
     // Una tarea lanzada dentro del scope hace panic: el scope lo propaga al unir al salir.
     let src = r#"
 fn main() -> int {
@@ -385,7 +385,7 @@ fn main() -> int {
 }
 
 #[test]
-fn scope_de_various_tasks() {
+fn scope_with_various_tasks() {
     // Varias tareas en un scope, unidas en orden: ejercita el scheduler y el GC multi-raíz.
     let src = r#"
 fn main() -> int {
@@ -417,7 +417,7 @@ fn main() -> int {
 // --- M12.4: select sobre varios canales ---
 
 #[test]
-fn select_multiplexa_dos_canales() {
+fn select_multiplexes_two_channels() {
     // Dos productores en canales distintos; main multiplexa con select (devuelve el índice listo).
     let src = r#"
 fn main() -> int {
@@ -446,7 +446,7 @@ fn main() -> int {
 }
 
 #[test]
-fn select_detecta_canal_closed() {
+fn select_detects_closed_channel() {
     // Un canal cerrado cuenta como "listo": select lo devuelve y el recv da None.
     let src = r#"
 fn main() -> int {
@@ -467,7 +467,7 @@ fn main() -> int {
 }
 
 #[test]
-fn select_bloquea_hasta_what_un_canal_este_listo() {
+fn select_blocks_until_a_channel_is_ready() {
     // Un canal nunca recibe valor; select bloquea hasta que el otro lo tiene, y devuelve su índice.
     let src = r#"
 fn productor(ch: Channel<int>) {
@@ -492,7 +492,7 @@ fn main() -> int {
 }
 
 #[test]
-fn select_sin_source_es_deadlock() {
+fn select_without_source_is_deadlock() {
     // select sobre un canal que nadie alimenta ni cierra → deadlock (error de ejecución limpio).
     let src = r#"
 fn main() -> int {
@@ -511,7 +511,7 @@ fn main() -> int {
 // --- M12.5: cancelación de hermanas ---
 
 #[test]
-fn scope_cancela_a_las_hermanas_cuando_one_fails() {
+fn scope_cancels_siblings_when_one_fails() {
     // La hija 0 hace panic; la hija 1 se bloquearía para siempre e imprimiría al final. El scope cancela a
     // la hija 1 (no llega a imprimir) y propaga el panic ORIGINAL (no un deadlock por esperarla).
     let src = r#"
@@ -538,7 +538,7 @@ fn main() -> int {
 }
 
 #[test]
-fn scope_ve_el_fallo_aunque_espere_a_otra_hermana() {
+fn scope_sees_failure_even_when_waiting_on_other_sibling() {
     // Regresión (17 jul 2026, destapada por el port nativo H21-N3): `ScopeEnd` aparca sobre la PRIMERA
     // hija pendiente; si la que falla es OTRA (aquí la bloqueada se registra primero), nadie despertaba
     // al scope para re-escanear → deadlock en vez de propagar. Ahora un fallo despierta a TODOS los
@@ -567,7 +567,7 @@ fn main() -> int {
 }
 
 #[test]
-fn fiber_what_fails_cancela_sus_propias_tasks() {
+fn fiber_that_fails_cancels_its_own_tasks() {
     // Una tarea externa abre su scope; su cuerpo hace panic con una sub-tarea en vuelo. Al fallar, esa
     // fibra cancela sus hijos (la sub-tarea no llega a imprimir), y join re-lanza el panic.
     let src = r#"
@@ -595,7 +595,7 @@ fn main() -> int {
 }
 
 #[test]
-fn try_join_observa_el_failure_sin_relanzar() {
+fn try_join_observes_failure_without_rethrowing() {
     // M56.5: try_join une una tarea devolviendo su desenlace como VALOR — Ok(valor) si terminó,
     // Err(mensaje del panic) si falló — a diferencia de join, que re-lanza el fallo. El programa
     // sigue vivo tras observar un fallo (base del webserver: un handler que panica no tumba nada).
@@ -631,7 +631,7 @@ fn main() -> int {
 }
 
 #[test]
-fn try_join_dentro_de_scope_cuenta_como_manejado() {
+fn try_join_inside_scope_counts_as_handled() {
     // M97.1 (semántica FIJADA con el usuario): un fallo OBSERVADO con try_join dentro de un scope
     // cuenta como MANEJADO — el ScopeEnd lo trata como tarea terminada: NO cancela a las hermanas
     // ni re-lanza el fallo (antes: try_join observaba pero ScopeEnd re-lanzaba igual → try_join
@@ -661,7 +661,7 @@ fn main() -> int {
 // --- M98.1: el almacén de tareas libera (join/try_join consumen; el scope consume a sus hijas) ---
 
 #[test]
-fn join_consume_la_tarea_y_el_doble_join_es_error() {
+fn join_consumes_task_and_double_join_is_error() {
     // M98.1 (semántica FIJADA): una tarea es de UN solo consumidor — `join`/`try_join` la toman
     // (liberan su slot y el heap del resultado; antes quedaba retenida para siempre: la fuga de
     // ~1 KB/request del webserver). Un segundo join sobre el mismo handle → error claro.
@@ -680,7 +680,7 @@ fn main() -> int {
 }
 
 #[test]
-fn spawn_join_en_bucle_reusa_slots_sin_corromper() {
+fn spawn_join_in_loop_reuses_slots_without_corrupting() {
     // M98.1: el free-list reusa slots liberados. 10k ciclos spawn+join con valores distintos:
     // si el reuso confundiera generaciones (ABA) o mezclara heaps, la suma no cuadraría.
     let src = r#"
@@ -702,7 +702,7 @@ fn main() -> int {
 }
 
 #[test]
-fn canal_liberado_se_comporta_como_cerrado_y_vacio() {
+fn freed_channel_behaves_as_closed_and_empty() {
     // M98.3: un canal cerrado y drenado se LIBERA (su slot se reusa; antes quedaba retenido para
     // siempre, ~450 B/canal). La liberación es INVISIBLE: el handle stale responde exactamente como
     // un canal cerrado y vacío — recv → None (una y otra vez), close → no-op (idempotente como
@@ -743,7 +743,7 @@ fn main() -> int {
 }
 
 #[test]
-fn las_hijas_no_sobreviven_al_scope() {
+fn children_do_not_survive_the_scope() {
     // M98.1: el scope CONSUME a sus hijas al cerrar (es su dueño). Un handle que escapa del scope
     // y se une después → el mismo error del doble join (la tarea ya fue consumida).
     let src = r#"

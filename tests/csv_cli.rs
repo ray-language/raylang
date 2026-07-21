@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "name|age|city",
     "Doe, John|42|New \"York\"",
     "Ada|36|London",
@@ -27,12 +27,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn csv_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "csv_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn csv_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "csv_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

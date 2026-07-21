@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "Zg==",
     "Zg",
     "ok: 77 97 110",
@@ -44,11 +44,11 @@ fn run(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn base64_estricto_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+fn base64_strict_interpreter() {
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
-fn base64_estricto_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+fn base64_strict_vm() {
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

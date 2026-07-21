@@ -30,10 +30,10 @@ fn launch() -> (Child, u16) {
         .expect("lanza servidor de métricas");
 
     let mut reader = BufReader::new(child.stdout.take().unwrap());
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee port");
-    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("no se pudo leer el port de: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee port");
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no se pudo leer el port de: {line:?}"));
     // Drena el resto del stdout en un hilo (por si el servidor imprimiera algo más).
     std::thread::spawn(move || {
         let mut sink = Vec::new();
@@ -57,7 +57,7 @@ fn get(port: u16, path: &str) -> String {
 }
 
 #[test]
-fn endpoint_metrics_expone_counters_e_histograma() {
+fn metrics_endpoint_exposes_counters_and_histogram() {
     let (mut child, port) = launch();
 
     // Genera tráfico: dos GET / y un GET /foo (404).

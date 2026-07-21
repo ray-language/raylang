@@ -7,18 +7,18 @@ use std::process::Command;
 /// Escribe `src` a un archivo temporal, ejecuta `raylang --test <archivo>` y devuelve
 /// `(stdout, código de salida)`.
 fn run_tests(src: &str, name: &str) -> (String, i32) {
-    run_tests_filtro(src, name, None)
+    run_tests_with_filter(src, name, None)
 }
 
 /// Como `run_tests`, pero pasa un filtro de nombre tras la ruta (M13.2b).
-fn run_tests_filtro(src: &str, name: &str, filtro: Option<&str>) -> (String, i32) {
+fn run_tests_with_filter(src: &str, name: &str, filter: Option<&str>) -> (String, i32) {
     let mut path = std::env::temp_dir();
     path.push(name);
     let mut f = std::fs::File::create(&path).expect("crea el file temporal");
     f.write_all(src.as_bytes()).expect("escribe la source");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
     cmd.arg("--test").arg(&path);
-    if let Some(p) = filtro {
+    if let Some(p) = filter {
         cmd.arg(p);
     }
     let out = cmd.output().expect("ejecuta el binary");
@@ -27,7 +27,7 @@ fn run_tests_filtro(src: &str, name: &str, filtro: Option<&str>) -> (String, i32
 }
 
 #[test]
-fn runs_las_tests_e_informa_fallos() {
+fn runs_tests_and_reports_failures() {
     let src = r#"
 fn square(x: int) -> int { x * x }
 @test fn square_ok() -> bool { square(3) == 9 }
@@ -51,7 +51,7 @@ fn todas_pasan_code_cero() {
 }
 
 #[test]
-fn sin_tests_lo_indica() {
+fn no_tests_reports_it() {
     let (out, code) = run_tests("fn main() -> int { 0 }\n", "ray_test_none.ray");
     assert!(out.contains("no tests"), "{out}");
     assert_eq!(code, 0);
@@ -73,7 +73,7 @@ fn main() -> int { 0 }
 }
 
 #[test]
-fn panic_no_abort_la_bateria() {
+fn panic_does_not_abort_the_suite() {
     // M13.2b: cada prueba corre aislada; un panic en una no impide ejecutar las demás.
     let src = r#"
 @test fn first() { panic("boom"); }
@@ -88,14 +88,14 @@ fn main() -> int { 0 }
 }
 
 #[test]
-fn filtro_por_name() {
+fn filter_by_name() {
     // M13.2b: un argumento tras la ruta selecciona por subcadena del nombre.
     let src = r#"
 @test fn sum_ok() -> bool { 1 + 1 == 2 }
 @test fn resta_ok() -> bool { 3 - 1 == 2 }
 fn main() -> int { 0 }
 "#;
-    let (out, code) = run_tests_filtro(src, "ray_test_filtro.ray", Some("sum"));
+    let (out, code) = run_tests_with_filter(src, "ray_test_filtro.ray", Some("sum"));
     assert!(out.contains("ok    sum_ok"), "runs la what casa\n{out}");
     assert!(!out.contains("resta_ok"), "no runs la what no casa\n{out}");
     assert_eq!(code, 0);

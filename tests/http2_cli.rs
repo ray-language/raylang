@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     // RFC 7541 §C.3.1 / C.3.2 / C.3.3 (sin Huffman): los tres bloques de petición.
     "828684410f7777772e6578616d706c652e636f6d",
     "828684be58086e6f2d6361636865",
@@ -41,10 +41,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn hpack_y_framing_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn hpack_y_framing_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

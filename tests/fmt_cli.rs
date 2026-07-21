@@ -21,7 +21,7 @@ fn fmt(path: &str) -> (String, bool) {
 }
 
 /// Escribe `content` a un temporal con nombre único y devuelve su ruta.
-fn escribe_tmp(name: &str, content: &str) -> String {
+fn write_tmp(name: &str, content: &str) -> String {
     let mut p = std::env::temp_dir();
     p.push(format!("rayfmt_{}_{}", std::process::id(), name));
     let mut f = std::fs::File::create(&p).expect("crea temporal");
@@ -31,7 +31,7 @@ fn escribe_tmp(name: &str, content: &str) -> String {
 
 /// La lista de ejemplos sobre los que se exige idempotencia. Cubre control de flujo, datos, genéricos,
 /// traits/impls, match, closures y la propia librería de regex (single-file, sin imports).
-const EJEMPLOS: &[&str] = &[
+const EXAMPLES: &[&str] = &[
     "examples/basics/fib.ray",
     "examples/basics/fizzbuzz.ray",
     "examples/basics/gcd.ray",
@@ -49,19 +49,19 @@ const EJEMPLOS: &[&str] = &[
 ];
 
 #[test]
-fn formatea_sin_error() {
-    for rel in EJEMPLOS {
+fn formats_without_error() {
+    for rel in EXAMPLES {
         let (_, ok) = fmt(&repo(rel));
         assert!(ok, "--fmt falló en {}", rel);
     }
 }
 
 #[test]
-fn es_idempotente() {
-    for rel in EJEMPLOS {
+fn is_idempotent() {
+    for rel in EXAMPLES {
         let (once, ok1) = fmt(&repo(rel));
         assert!(ok1, "--fmt falló en {}", rel);
-        let tmp = escribe_tmp(&rel.replace('/', "_"), &once);
+        let tmp = write_tmp(&rel.replace('/', "_"), &once);
         let (twice, ok2) = fmt(&tmp);
         assert!(ok2, "--fmt (2a pasada) falló en {}", rel);
         assert_eq!(once, twice, "el formateo no es idempotente en {}", rel);
@@ -81,12 +81,12 @@ fn run(path: &str, vm: bool) -> (String, i32) {
 /// El formateo preserva el comportamiento: original y formateado dan la misma salida y código de salida,
 /// en ambos motores. Se prueba con programas autocontenidos (sin imports).
 #[test]
-fn preserves_el_comportamiento() {
+fn preserves_behavior() {
     for rel in ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray"] {
         let orig = repo(rel);
         let (formateado, ok) = fmt(&orig);
         assert!(ok, "--fmt falló en {}", rel);
-        let tmp = escribe_tmp(&format!("run_{}", rel.replace('/', "_")), &formateado);
+        let tmp = write_tmp(&format!("run_{}", rel.replace('/', "_")), &formateado);
 
         for vm in [false, true] {
             let (o_out, o_code) = run(&orig, vm);

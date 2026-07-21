@@ -82,13 +82,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (La **limpieza de identificadores a inglés** L1+L2+L3 está **COMPLETA** — todo el
   core Rust, el core raylang y los métodos Eq/Show/Ord; ver
   `docs/limpieza-nombres-en-ingles.md`.)
-  - **Alcance del inglés (decisión jul 2026; `tests/` excluido 20 jul 2026)**: aplica
-    a `src/`, `selfhost/`, `packages/` y `benchmarks/` — incluidos los nombres de
-    funciones de test dentro de `#[cfg(test)] mod tests` y los snippets raylang
-    embebidos ahí. **`tests/` (integración) queda FUERA de esta política** — sus
-    nombres de test e identificadores pueden estar en español; no lo vigila el check
-    ni se limpia retroactivamente (ver `docs/arqueo-spanglish.md`, lote C). `examples/`
-    y `book/` también son flexibles (código de usuario / didáctico). Lo vigila el
+  - **Alcance del inglés (decisión jul 2026; `tests/` y `tools/` incluidos 21 jul
+    2026)**: aplica a `src/`, `selfhost/`, `packages/`, `benchmarks/`, `tools/` y
+    `tests/` (integración) — incluidos los nombres de funciones de test dentro de
+    `#[cfg(test)] mod tests` y los snippets raylang embebidos ahí. `examples/` y
+    `book/` siguen siendo flexibles (código de usuario / didáctico). Lo vigila el
     check CI `tests/naming_policy.rs` (wordlist `tests/naming_policy_es.txt`;
     excepción puntual con `// es-ok`).
 - **Comentarios y documentación en español**, en el propio código.

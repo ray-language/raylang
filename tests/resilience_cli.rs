@@ -67,7 +67,7 @@ fn main() -> int {
 }
 "#;
 
-const ESPERADO: &str = "retry ok after 3 intentos\n\
+const EXPECTED: &str = "retry ok after 3 intentos\n\
 retry agotado en 3\n\
 guard err 1\n\
 guard err 2\n\
@@ -83,5 +83,5 @@ fn resilience_ambos_engines() {
     assert_eq!(c_in, 0, "intérprete 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm 0\n{o_vm}");
     assert_eq!(o_in, o_vm, "ambos engines match");
-    assert_eq!(o_in, ESPERADO, "output expected_val");
+    assert_eq!(o_in, EXPECTED, "output expected_val");
 }

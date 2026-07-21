@@ -25,7 +25,7 @@ fn repl(input: &str) -> String {
 }
 
 #[test]
-fn imprime_values_y_persiste_estado() {
+fn prints_values_and_persists_state() {
     let out = repl(
         "1 + 2\n\
          let x = 10\n\
@@ -61,7 +61,7 @@ fn ufcs_pipelines_y_structs_en_el_repl() {
 }
 
 #[test]
-fn un_error_no_tumba_el_repl_ni_pierde_estado() {
+fn an_error_does_not_crash_the_repl_or_lose_state() {
     let out = repl(
         "let x = 3\n\
          1 + true\n\

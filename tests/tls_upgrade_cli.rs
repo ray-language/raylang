@@ -19,7 +19,7 @@ const KEY_PEM: &str = include_str!("fixtures/tls_key.pem");
 
 /// Servidor STARTTLS de una conexión: lee "STARTTLS\n" en claro, responde "GO\n", y SOLO entonces
 /// arranca TLS de servidor sobre el mismo socket; bajo TLS lee una línea y responde "hola-seguro\n".
-fn launch_servidor_starttls() -> u16 {
+fn launch_starttls_server() -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("certificado de prueba válido");
@@ -56,7 +56,7 @@ fn launch_servidor_starttls() -> u16 {
     port
 }
 
-const CLIENTE: &str = r#"import std/net;
+const CLIENT: &str = r#"import std/net;
 
 fn main() -> int {
     let a = args();
@@ -103,14 +103,14 @@ fn main() -> int {
 }
 "#;
 
-const ESPERADO: &str = "claro: GO\ntls: hello-seguro\ndouble: handle 1 is not a plain TCP socket\n";
+const EXPECTED: &str = "claro: GO\ntls: hello-seguro\ndouble: handle 1 is not a plain TCP socket\n";
 
 fn run(port: u16, flags: &[&str]) -> String {
     let dir = std::env::temp_dir().join(format!("ray_tls_upgrade_{}", flags.join("_")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let main = dir.join("main.ray");
-    std::fs::write(&main, CLIENTE).unwrap();
+    std::fs::write(&main, CLIENT).unwrap();
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -130,14 +130,14 @@ fn run(port: u16, flags: &[&str]) -> String {
 
 #[test]
 fn starttls_upgrade_interpreter() {
-    let port = launch_servidor_starttls();
-    assert_eq!(run(port, &["--interp"]), ESPERADO);
+    let port = launch_starttls_server();
+    assert_eq!(run(port, &["--interp"]), EXPECTED);
 }
 
 #[test]
 fn starttls_upgrade_vm() {
-    let port = launch_servidor_starttls();
-    assert_eq!(run(port, &["--vm"]), ESPERADO);
+    let port = launch_starttls_server();
+    assert_eq!(run(port, &["--vm"]), EXPECTED);
 }
 
 /// M96g: STARTTLS en el backend NATIVO — el handle pasa de Tcp a Tls a mitad de conexión
@@ -153,12 +153,12 @@ fn starttls_upgrade_native() {
         eprintln!("saltando starttls_upgrade_native: cargo no disponible");
         return;
     }
-    let port = launch_servidor_starttls();
+    let port = launch_starttls_server();
     let dir = std::env::temp_dir().join("ray_tls_upgrade_native");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let main = dir.join("main.ray");
-    std::fs::write(&main, CLIENTE).unwrap();
+    std::fs::write(&main, CLIENT).unwrap();
     let bin = dir.join("client_bin");
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", main.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
@@ -182,5 +182,5 @@ fn starttls_upgrade_native() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), ESPERADO, "STARTTLS nativo ≡ VM/intérprete");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), EXPECTED, "STARTTLS nativo ≡ VM/intérprete");
 }

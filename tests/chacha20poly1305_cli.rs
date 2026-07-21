@@ -6,7 +6,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     // Criptograma (114 octetos) — RFC 8439 §2.8.2.
     "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d6\
 3dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b36\
@@ -33,12 +33,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn aead_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "chacha20poly1305_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn aead_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "chacha20poly1305_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

@@ -22,14 +22,14 @@ fn toy_dns_server(counter: Arc<AtomicUsize>) -> u16 {
             };
             counter.fetch_add(1, Ordering::SeqCst);
             let query = &buf[..n];
-            let pregunta = &query[12..n];
+            let question = &query[12..n];
             let mut resp: Vec<u8> = Vec::new();
             resp.extend_from_slice(&query[0..2]);  // ID
             resp.extend_from_slice(&[0x81, 0x80]);    // flags
             resp.extend_from_slice(&[0, 1]);          // QDCOUNT
             resp.extend_from_slice(&[0, 1]);          // ANCOUNT
             resp.extend_from_slice(&[0, 0, 0, 0]);    // NS, AR
-            resp.extend_from_slice(pregunta);         // eco de la pregunta
+            resp.extend_from_slice(question);         // eco de la pregunta
             resp.extend_from_slice(&[0xC0, 0x0C]);    // NAME = puntero a la pregunta
             resp.extend_from_slice(&[0, 1]);          // TYPE = A
             resp.extend_from_slice(&[0, 1]);          // CLASS = IN
@@ -61,7 +61,7 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "93.184.216.34", // example.com (fallo)
     "93.184.216.34", // example.com (acierto de caché)
     "93.184.216.34", // example.org (fallo)
@@ -71,17 +71,17 @@ const ESPERADO: &[&str] = &[
 fn case(flags: &[&str]) {
     let counter = Arc::new(AtomicUsize::new(0));
     let port = toy_dns_server(counter.clone());
-    assert_eq!(run(flags, port), ESPERADO);
+    assert_eq!(run(flags, port), EXPECTED);
     // 3 resoluciones, 2 claves → el servidor recibe solo 2 consultas (la repetida se cachea).
     assert_eq!(counter.load(Ordering::SeqCst), 2, "el servidor debió recibir 2 consultas");
 }
 
 #[test]
-fn cache_evita_la_second_query_interpreter() {
+fn cache_avoids_second_query_interpreter() {
     case(&[]);
 }
 
 #[test]
-fn cache_evita_la_second_query_vm() {
+fn cache_avoids_second_query_vm() {
     case(&["--vm"]);
 }

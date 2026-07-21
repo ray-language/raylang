@@ -57,7 +57,7 @@ fn compare_source(src: &str, name_tmp: &str) {
 }
 
 #[test]
-fn corpus_nucleo() {
+fn core_corpus() {
     // Los cuatro programas-objetivo del núcleo, por la VM auto-alojada.
     for rel in ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray", "examples/basics/primes.ray"] {
         compare_file(rel);
@@ -105,7 +105,7 @@ fn variables_y_recursion() {
 }
 
 #[test]
-fn builtins_escalares() {
+fn scalar_builtins() {
     // print/eprint/to_string + concatenación de string.
     compare_source(
         "fn main() -> int { print(to_string(42) + \"!\"); eprint(\"a stderr\"); print(\"hello\"); 0 }",
@@ -114,7 +114,7 @@ fn builtins_escalares() {
 }
 
 #[test]
-fn code_de_output() {
+fn exit_code() {
     compare_source("fn main() -> int { 42 }", "vm_exit42.ray");
     compare_source("fn main() { }", "vm_unit.ray");
     compare_source("fn pick(n: int) -> int { if (n > 5) { return 100; } n } fn main() -> int { print(pick(9)); pick(3) }", "vm_return.ray");
@@ -325,7 +325,7 @@ fn methods_y_ufcs_snippets() {
 
 #[test]
 #[ignore]
-fn recursion_de_cola() {
+fn tail_recursion() {
     // Recursión de cola DIRECTA profunda (sin TCO crecería el stack de marcos sin límite → desbordaría).
     compare_source(
         "fn account(n: int, acc: int) -> int { if (n == 0) { acc } else { account(n - 1, acc + n) } } fn main() -> int { print(account(1000000, 0)); 0 }",

@@ -41,7 +41,7 @@ fn ambos_engines_matches(path: &str, expected: &str) {
 /// cota → `.hash()` de un string ≥ ~12 chars (o un derive con un campo de valor grande)
 /// reventaba con "desbordamiento aritmético", matando `Set<string>` con claves reales.
 #[test]
-fn hash_sin_overflow_ambos_engines() {
+fn hash_without_overflow_both_engines() {
     let src = "import std/collections/set;\n\
         @derive(Hash, Eq)\n\
         struct Q { a: int, b: int, name: string }\n\
@@ -75,7 +75,7 @@ fn hash_sin_overflow_ambos_engines() {
 /// M61.2 — `sort` pasó de insertion sort O(n²) a merge sort bottom-up O(n log n). Debe seguir
 /// siendo ESTABLE (claves iguales conservan su orden relativo) y cubrir los bordes.
 #[test]
-fn sort_merge_estable_ambos_engines() {
+fn stable_merge_sort_both_engines() {
     let src = "import std/sort as su;\n\
         struct Par { k: int, tag: string }\n\
         impl Ord for Par {\n\
@@ -148,7 +148,7 @@ fn set_crece_con_rehash_ambos_engines() {
 }
 
 #[test]
-fn set_conjunto_ambos_engines() {
+fn set_both_engines() {
     ambos_engines_matches(
         "examples/stdlib/conjunto.ray",
         "7\ntrue\nfalse\nfalse\n6\n2\ntrue\n26\n",
@@ -164,7 +164,7 @@ fn stringbuilder_y_deque_ambos_engines() {
 }
 
 #[test]
-fn names_globales_ya_no_existen() {
+fn global_names_no_longer_exist() {
     // M50.2: la forma global del prelude se retiró; usar los nombres sin importar el submódulo es error.
     assert_ne!(
         run_src("m50_set_bad", "fn main() -> int { let s: Set<int> = set_new(); set_size(s) }"),
@@ -184,7 +184,7 @@ fn names_globales_ya_no_existen() {
 }
 
 #[test]
-fn import_qualified_de_submodule() {
+fn qualified_import_from_submodule() {
     // El leaf-binding liga el último segmento: `import std/collections/set;` → `set.new()`.
     let src = "import std/collections/set;\n\
                fn main() -> int {\n\
@@ -199,7 +199,7 @@ fn import_qualified_de_submodule() {
 /// hermano del Set. Claves struct con @derive(Hash, Eq), reemplazo (last wins), remove
 /// que devuelve el valor, crecimiento con rehash (200 claves) y keys/values alineados.
 #[test]
-fn dict_keys_de_user_ambos_engines() {
+fn dict_user_keys_both_engines() {
     let src = r#"import std/collections/dict;
 
 @derive(Hash, Eq, Show)

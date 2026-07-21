@@ -125,14 +125,14 @@ fn run(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO: &str = "enc1: 160000000268656c6c6f0006000000776f726c640000\n\
+const EXPECTED: &str = "enc1: 160000000268656c6c6f0006000000776f726c640000\n\
 dec2: {BSON: [\"awesome\", 5.05, 1986]}\n\
 dec3: {d: -2.5, s: \"café\", sub: {ok: 1}, a: [-42, null], bin: bin(0102ff), id: oid(000102030405060708090a0b), t: true, n: null, big: 9007199254740993, dt: date(2026-07-09T12:34:56.789Z), ts: timestamp(1783600000,7)}\n\
 rt: true\n\
 trunc: invalid BSON (byte 0): invalid document length: 49\n\
 type: invalid BSON (byte 6): unsupported BSON type: 14\n";
 
-fn project_puente(base: &std::path::Path) -> std::path::PathBuf {
+fn project_bridge(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -177,20 +177,20 @@ fn main() -> int {
     app
 }
 
-const ESPERADO_PUENTE: &str = "from: {name: \"ada\", nota: 36, tags: [\"a\", null, true]}\n\
+const EXPECTED_BRIDGE: &str = "from: {name: \"ada\", nota: 36, tags: [\"a\", null, true]}\n\
 uni: {s: \"café\"}\n\
 tope: a document's JSON must be an object\n\
 to: {\"id\":\"000102030405060708090a0b\",\"n\":42,\"sub\":{\"ok\":1}}\n";
 
 #[test]
-fn bson_puente_json() {
+fn bson_bridge_json() {
     let base = std::env::temp_dir().join("ray_bson_cli_json");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = project_puente(&base);
+    let app = project_bridge(&base);
 
-    assert_eq!(run(&app, &[]), ESPERADO_PUENTE, "VM");
-    assert_eq!(run(&app, &["--interp"]), ESPERADO_PUENTE, "intérprete");
+    assert_eq!(run(&app, &[]), EXPECTED_BRIDGE, "VM");
+    assert_eq!(run(&app, &["--interp"]), EXPECTED_BRIDGE, "intérprete");
 }
 
 #[test]
@@ -201,11 +201,11 @@ fn bson_vectors_del_spec_roundtrip_y_errors() {
     let app = project(&base);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    assert_eq!(run(&app, &[]), ESPERADO, "VM");
-    assert_eq!(run(&app, &["--interp"]), ESPERADO, "intérprete");
+    assert_eq!(run(&app, &[]), EXPECTED, "VM");
+    assert_eq!(run(&app, &["--interp"]), EXPECTED, "intérprete");
 }
 
-fn project_profundo(base: &std::path::Path) -> std::path::PathBuf {
+fn project_deep(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -261,13 +261,13 @@ fn main() -> int {
 /// por desbordamiento de pila: se rechaza como valor (`Err`). Antes, ~4.8 KB (600 niveles) abortaban
 /// el proceso con "desbordamiento de pila".
 #[test]
-fn bson_nesting_profundo_es_error() {
+fn bson_deep_nesting_is_error() {
     let base = std::env::temp_dir().join("ray_bson_cli_profundo");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = project_profundo(&base);
+    let app = project_deep(&base);
 
-    const ESPERADO_PROFUNDO: &str = "d50: OK\nd200: OK\nd600: Err\n";
-    assert_eq!(run(&app, &[]), ESPERADO_PROFUNDO, "VM");
-    assert_eq!(run(&app, &["--interp"]), ESPERADO_PROFUNDO, "intérprete");
+    const EXPECTED_DEEP: &str = "d50: OK\nd200: OK\nd600: Err\n";
+    assert_eq!(run(&app, &[]), EXPECTED_DEEP, "VM");
+    assert_eq!(run(&app, &["--interp"]), EXPECTED_DEEP, "intérprete");
 }

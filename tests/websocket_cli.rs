@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 /// Las líneas que `crypto_demo.ray` debe imprimir, en orden. Cada una es un vector estándar.
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     // SHA-1 (hex)
     "da39a3ee5e6b4b0d3255bfef95601890afd80709", // ""
     "a9993e364706816aba3e25717850c26c9cd0d89d", // "abc"
@@ -46,12 +46,12 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn vectors_sha1_base64_handshake_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn vectors_sha1_base64_handshake_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }
 
 // --- Echo server de WebSocket de extremo a extremo (M19.3c) ---
@@ -72,9 +72,9 @@ fn launch_echo() -> (Child, u16) {
         .spawn()
         .expect("lanza el echo server");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el port");
+    let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("invalid port: {line:?}"));
     (child, port)
 }
 
@@ -90,7 +90,7 @@ fn trama_client(opcode: u8, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Lee una trama del servidor (sin máscara; asume payload < 126) y devuelve (opcode, payload).
-fn leer_trama(stream: &mut TcpStream) -> (u8, Vec<u8>) {
+fn read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     let mut hdr = [0u8; 2];
     stream.read_exact(&mut hdr).expect("lee header de trama");
     let opcode = hdr[0] & 0x0f;
@@ -129,18 +129,18 @@ fn echo_server_handshake_y_tramas() {
 
     // 2) Enviar una trama de texto y verificar que vuelve idéntica (eco).
     stream.write_all(&trama_client(0x1, b"hello raylang")).expect("envía trama");
-    let (opcode, payload) = leer_trama(&mut stream);
+    let (opcode, payload) = read_frame(&mut stream);
     assert_eq!(opcode, 0x1, "esperaba one trama de text");
     assert_eq!(payload, b"hello raylang", "el echo no coincide");
 
     // 3) Una segunda trama, para confirmar el bucle.
     stream.write_all(&trama_client(0x1, b"other")).expect("envía 2ª trama");
-    let (_, payload2) = leer_trama(&mut stream);
+    let (_, payload2) = read_frame(&mut stream);
     assert_eq!(payload2, b"other");
 
     // 4) Cerrar: enviar un close y esperar el close de cortesía del servidor.
     stream.write_all(&trama_client(0x8, b"")).expect("envía close");
-    let (op_cierre, _) = leer_trama(&mut stream);
+    let (op_cierre, _) = read_frame(&mut stream);
     assert_eq!(op_cierre, 0x8, "esperaba un close del servidor");
 
     let _ = child.kill();
@@ -186,32 +186,32 @@ fn echo_server_robust_ante_framing_real() {
     stream.flush().ok();
     std::thread::sleep(Duration::from_millis(120));
     stream.write_all(&f[3..]).expect("half 2");
-    let (op, payload) = leer_trama(&mut stream);
+    let (op, payload) = read_frame(&mut stream);
     assert_eq!((op, payload.as_slice()), (0x1, b"partida".as_slice()), "trama partida");
 
     // 2) Dos tramas PEGADAS en una sola escritura → dos ecos, en orden.
-    let mut dos = trama_client(0x1, b"one");
-    dos.extend_from_slice(&trama_client(0x1, b"dos"));
-    stream.write_all(&dos).expect("pegadas");
-    let (_, p1) = leer_trama(&mut stream);
-    let (_, p2) = leer_trama(&mut stream);
+    let mut two = trama_client(0x1, b"one");
+    two.extend_from_slice(&trama_client(0x1, b"dos"));
+    stream.write_all(&two).expect("pegadas");
+    let (_, p1) = read_frame(&mut stream);
+    let (_, p2) = read_frame(&mut stream);
     assert_eq!(p1, b"one", "1ª pegada");
     assert_eq!(p2, b"dos", "2ª pegada (antes se descartaba)");
 
     // 3) PING → el servidor contesta PONG con la misma carga (antes lo ecoaba como texto).
     stream.write_all(&trama_client(0x9, b"live")).expect("ping");
-    let (op_pong, p_pong) = leer_trama(&mut stream);
+    let (op_pong, p_pong) = read_frame(&mut stream);
     assert_eq!((op_pong, p_pong.as_slice()), (0xA, b"live".as_slice()), "pong automático");
 
     // 4) Mensaje FRAGMENTADO (texto FIN=0 + continuación FIN=1) → un solo eco reensamblado.
     stream.write_all(&trama_client_fin(0x1, b"frag-", false)).expect("fragmento 1");
     stream.write_all(&trama_client_fin(0x0, b"mento", true)).expect("fragmento 2");
-    let (op_fr, p_fr) = leer_trama(&mut stream);
+    let (op_fr, p_fr) = read_frame(&mut stream);
     assert_eq!((op_fr, p_fr.as_slice()), (0x1, b"frag-mento".as_slice()), "reensamblado");
 
     // 5) Close → close de cortesía.
     stream.write_all(&trama_client(0x8, b"")).expect("close");
-    let (op_cl, _) = leer_trama(&mut stream);
+    let (op_cl, _) = read_frame(&mut stream);
     assert_eq!(op_cl, 0x8, "close de cortesía");
 
     let _ = child.kill();

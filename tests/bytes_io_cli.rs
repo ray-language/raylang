@@ -67,8 +67,8 @@ fn toy_bin_server() -> u16 {
 }
 
 #[test]
-fn socket_binary_lee_octetos_crudos() {
-    const CLIENTE: &str = r#"
+fn socket_binary_reads_raw_bytes() {
+    const CLIENT: &str = r#"
 import std/net;
 fn main() -> int {
     match (net.tcp_connect("127.0.0.1", __PORT__)) {
@@ -96,7 +96,7 @@ fn main() -> int {
 "#;
     for vm in [false, true] {
         let port = toy_bin_server();
-        let src = CLIENTE.replace("__PORT__", &port.to_string());
+        let src = CLIENT.replace("__PORT__", &port.to_string());
         let (out, code) = run("ray_bin_sock", &src, vm);
         // 3 octetos crudos: 0, 16, 255 (un string UTF-8 lossy los habría corrompido).
         assert_eq!(out, "3\n0\n16\n255\n", "lectura binaria de socket (vm={vm}): {out}");

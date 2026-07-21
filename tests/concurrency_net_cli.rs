@@ -11,7 +11,7 @@ use std::time::Duration;
 
 // Servidor de eco concurrente que atiende EXACTAMENTE 2 conexiones (vía `scope`) y termina. Cada
 // conexión se atiende en su propia fibra (`spawn`); accept/read ceden al scheduler.
-const SERVIDOR: &str = r#"
+const SERVER: &str = r#"
 import std/net;
 fn handle(conn: int) {
     match (net.socket_read(conn)) {
@@ -49,10 +49,10 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_concurrente_atiende_outside_de_order() {
+fn concurrent_server_serves_out_of_order() {
     let mut path = std::env::temp_dir();
     path.push("ray_srv_concurrente.ray");
-    std::fs::File::create(&path).expect("crea").write_all(SERVIDOR.as_bytes()).expect("escribe");
+    std::fs::File::create(&path).expect("crea").write_all(SERVER.as_bytes()).expect("escribe");
 
     // Solo VM: la concurrencia (spawn/scope) requiere la VM; el intérprete daría error limpio.
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -63,9 +63,9 @@ fn servidor_concurrente_atiende_outside_de_order() {
         .expect("lanza servidor");
 
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el port");
+    let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("invalid port: {line:?}"));
 
     // Dos clientes; el SEGUNDO en conectarse pide su eco PRIMERO. Un servidor secuencial bloqueado
     // leyendo al primero nunca respondería → el read del segundo daría timeout y el test fallaría.

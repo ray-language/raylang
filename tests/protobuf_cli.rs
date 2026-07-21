@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "089601120774657374696e6718ac02",             // protobuf: f1=150, f2="testing", f3=300
     "field1=150",
     "field2=testing",
@@ -34,12 +34,12 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn protobuf_grpc_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn protobuf_grpc_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }
 
 /// El protobuf que produce raylang debe decodificarlo un parser del wire format en Python (sin deps).
@@ -88,7 +88,7 @@ print('WIRE OK')
 /// M59.4 — un varint negativo debe PANICAR (antes emitía octetos corruptos en silencio: el
 /// bucle LEB128 no entraba con negativos y salía un solo octeto mal).
 #[test]
-fn varint_negativo_panica_en_vez_de_corromper() {
+fn negative_varint_panics_instead_of_corrupting() {
     let mut dir = std::env::temp_dir();
     dir.push("ray_pb_negativo");
     std::fs::create_dir_all(&dir).expect("crea dir");

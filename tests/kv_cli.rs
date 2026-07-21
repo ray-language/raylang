@@ -70,7 +70,7 @@ fn main() -> int {{
 
 /// Sobrescribir una clave y volver a guardar conserva el ÚLTIMO valor (y solo ese).
 #[test]
-fn sobrescribir_clave() {
+fn overwrite_key() {
     let store = store_path("sobrescribir");
     let src = format!(
         r#"import std/kv;
@@ -95,7 +95,7 @@ fn main() -> int {{
 
 /// Un store vacío también persiste y reabre vacío (solo la cabecera: magic + count 0).
 #[test]
-fn store_vacio() {
+fn empty_store() {
     let store = store_path("vacio");
     let src = format!(
         r#"import std/kv;
@@ -116,7 +116,7 @@ fn main() -> int {{
 /// Un archivo existente que NO es un store (magic malo / truncado) es un error honesto de
 /// `open` — nunca se descarta estado en silencio.
 #[test]
-fn archivo_corrupto_es_error() {
+fn corrupt_file_is_error() {
     let store = store_path("corrupto");
     let src = format!(
         r#"import std/kv;
@@ -205,7 +205,7 @@ fn main() -> int {{
 /// El guardado es atómico (temp + rename): tras `save` no queda `<path>.tmp` y el archivo
 /// final existe.
 #[test]
-fn save_atomico_sin_residuo() {
+fn atomic_save_leaves_no_residue() {
     let store = store_path("atomico");
     let src = format!(
         r#"import std/kv;

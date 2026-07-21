@@ -275,8 +275,8 @@ fn dump_enum(e: &EnumDef) -> String {
 }
 
 /// Cada expresión precedida de un espacio (listas: args, elementos de arreglo).
-fn dump_exprs(es: &[Expr]) -> String {
-    es.iter().map(|e| format!(" {}", dump_expr(e))).collect()
+fn dump_exprs(exprs: &[Expr]) -> String {
+    exprs.iter().map(|e| format!(" {}", dump_expr(e))).collect()
 }
 
 fn dump_opt_expr(o: &Option<Box<Expr>>) -> String {
@@ -485,7 +485,7 @@ fn function_minima() {
 }
 
 #[test]
-fn precedence_y_asociatividad() {
+fn precedence_and_associativity() {
     // `1 + 2 * 3` → `1 + (2 * 3)`;  `1 - 2 - 3` → `(1 - 2) - 3`.
     compare("fn f() -> int { 1 + 2 * 3 }", "sp_prec.ray");
     compare("fn f() -> int { 1 - 2 - 3 }", "sp_asoc.ray");
@@ -494,7 +494,7 @@ fn precedence_y_asociatividad() {
 }
 
 #[test]
-fn calls_indexacion_y_fields() {
+fn calls_indexing_and_fields() {
     compare("fn f() -> int { g(1, 2) }", "sp_call.ray");
     compare("fn f() -> int { a[i][j] }", "sp_index.ray");
     compare("fn f() -> int { p.x.y }", "sp_field.ray");
@@ -512,7 +512,7 @@ fn statements() {
 }
 
 #[test]
-fn control_de_flujo() {
+fn control_flow() {
     compare("fn f() -> int { if (c) { 1 } else { 2 } }", "sp_if.ray");
     compare("fn f() -> int { if (a) { 1 } else if (b) { 2 } else { 3 } }", "sp_elseif.ray");
     compare("fn f() { while (i < 10) { i = i + 1; } }", "sp_while.ray");
@@ -552,14 +552,14 @@ fn structs_y_enums() {
 }
 
 #[test]
-fn literal_de_struct() {
+fn struct_literal() {
     compare("fn f() -> Punto { Punto { x: 1, y: 2 } }", "sp_structlit.ray");
     compare("fn f() -> Vacio { Vacio { } }", "sp_structlit0.ray");
     compare("fn f() -> Caja { Caja { v: g(1) + 2 } }", "sp_structlit_expr.ray");
 }
 
 #[test]
-fn functions_anonimas() {
+fn anonymous_functions() {
     compare("fn f() -> int { let g = fn(x: int) -> int { x + 1 }; g(2) }", "sp_fnexpr.ray");
     // Anidadas: los ids son densos en pre-orden (exterior < interior).
     compare("fn f() { let h = fn() { let k = fn() { 0 }; k() }; }", "sp_fnexpr_nested.ray");
@@ -579,7 +579,7 @@ fn match_y_patterns() {
 }
 
 #[test]
-fn generics_en_declaraciones() {
+fn generics_in_declarations() {
     compare("fn id<T>(x: T) -> T { x }", "sp_gen_fn.ray");
     compare("fn dos<A, B>(a: A, b: B) -> A { a }", "sp_gen_fn2.ray");
     compare("fn f<T: Show + Eq>(x: T) -> T { x }", "sp_gen_bounds.ray");
@@ -628,7 +628,7 @@ fn annotations_y_pub() {
 }
 
 #[test]
-fn azucar_try_y_pipeline() {
+fn try_and_pipeline_sugar() {
     compare("fn f() -> int { g()? }", "sp_try.ray");
     compare("fn f() -> int { a()?.b()? }", "sp_try_chain.ray");
     // pipeline desazucara: `x |> g() |> h(1)` ≡ `h(g(x), 1)`.
@@ -637,7 +637,7 @@ fn azucar_try_y_pipeline() {
 }
 
 #[test]
-fn references_calificadas_por_modulo() {
+fn module_qualified_references() {
     compare("fn f(p: M.Punto) -> M.Color { p }", "sp_qual_type.ray");
     compare("fn f() -> M.Punto { M.Punto { x: 1 } }", "sp_qual_lit.ray");
     compare("fn f(c: M.Color) -> int { match (c) { M.Color.Rojo => 0, _ => 1 } }", "sp_qual_pat.ray");
@@ -646,7 +646,7 @@ fn references_calificadas_por_modulo() {
 /// M14.2d: errores como valores. Ante una entrada inválida, el parser auto-alojado debe producir el
 /// MISMO mensaje y ubicación que el de Rust (no abortar con `panic`).
 #[test]
-fn errors_de_syntax_equal_what_el_oracle() {
+fn syntax_errors_match_the_oracle() {
     compare("fn f() -> int { let x = ; }", "spe_expr.ray"); // se esperaba una expresión, … Semicolon
     compare("1 + 2", "spe_toplevel.ray"); // se esperaba 'fn'
     compare("fn f( {", "spe_param.ray"); // se esperaba el nombre de un parámetro
@@ -746,14 +746,14 @@ fn parses_files_reales_equal_what_el_oracle() {
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,
     // con fragmentos `mod.ray` no parseables sueltos), que prueba `modules_cli`.
     const DIRS_EXCLUIDOS: &[&str] = &["capsule", "modules", "project", "ssr"];
-    fn recolectar(dir: &std::path::Path, outside: &[&str], difer: &[&str], out: &mut Vec<String>) {
+    fn collect_examples(dir: &std::path::Path, outside: &[&str], difer: &[&str], out: &mut Vec<String>) {
         let mut entries: Vec<_> = std::fs::read_dir(dir).expect("lee dir").filter_map(|e| e.ok()).map(|e| e.path()).collect();
         entries.sort();
         for p in entries {
             if p.is_dir() {
                 let name = p.file_name().unwrap().to_string_lossy().to_string();
                 if !outside.contains(&name.as_str()) {
-                    recolectar(&p, outside, difer, out);
+                    collect_examples(&p, outside, difer, out);
                 }
             } else if p.extension().map(|x| x == "ray").unwrap_or(false) {
                 let name = p.file_name().unwrap().to_string_lossy().to_string();
@@ -765,7 +765,7 @@ fn parses_files_reales_equal_what_el_oracle() {
             }
         }
     }
-    recolectar(&repo_path("examples"), DIRS_EXCLUIDOS, DIFERIDOS_SELFHOST, &mut files);
+    collect_examples(&repo_path("examples"), DIRS_EXCLUIDOS, DIFERIDOS_SELFHOST, &mut files);
     // Los propios fuentes del self-hosting: el parser se parsea a sí mismo.
     files.push("selfhost/lexer.ray".into());
     files.push("selfhost/lex_dump.ray".into());

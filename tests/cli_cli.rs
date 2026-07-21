@@ -24,7 +24,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn new_crea_el_esqueleto_y_run_lo_ejecuta() {
+fn new_creates_the_skeleton_and_run_executes_it() {
     let base = tmp("new");
     // `ray new proj` crea ray.toml + src/main.ray + .gitignore.
     let (out, _err, code) = ray(&base, &["new", "proj"]);
@@ -43,7 +43,7 @@ fn new_crea_el_esqueleto_y_run_lo_ejecuta() {
 }
 
 #[test]
-fn new_fails_si_el_target_existe() {
+fn new_fails_if_the_target_exists() {
     let base = tmp("new_dup");
     assert_eq!(ray(&base, &["new", "dup"]).2, 0);
     let (_o, err, code) = ray(&base, &["new", "dup"]);
@@ -52,7 +52,7 @@ fn new_fails_si_el_target_existe() {
 }
 
 #[test]
-fn run_pasa_los_args_del_program() {
+fn run_passes_the_program_args() {
     let base = tmp("run_args");
     std::fs::write(
         base.join("prog.ray"),
@@ -65,7 +65,7 @@ fn run_pasa_los_args_del_program() {
 }
 
 #[test]
-fn build_compila_ok_y_reports_errors() {
+fn build_compiles_ok_and_reports_errors() {
     let base = tmp("build");
     // Programa válido: build sale 0.
     std::fs::write(base.join("ok.ray"), "fn main() -> int { 1 + 2 }\n").unwrap();
@@ -83,7 +83,7 @@ fn build_compila_ok_y_reports_errors() {
 }
 
 #[test]
-fn build_native_produce_un_binario_que_corre_como_la_vm() {
+fn build_native_produces_a_binary_that_runs_like_the_vm() {
     // `ray build --native` (P2.b): transpila a Rust, compila con `rustc -O` y produce un binario nativo
     // cuya salida coincide con la VM. Requiere `rustc` en el PATH; si no está, se salta (no es un fallo).
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -111,7 +111,7 @@ fn build_native_produce_un_binario_que_corre_como_la_vm() {
 }
 
 #[test]
-fn build_native_de_un_proyecto_multi_modulo_es_un_solo_binario() {
+fn build_native_of_a_multi_module_project_is_a_single_binary() {
     // `ray build --native` sobre un main que importa OTRO módulo con tipos propios: el loader aplana
     // todo en un Program, el transpilador mangla los tipos namespacados (`geo::Punto` → `geo_CC_Punto`)
     // y sale UN solo binario nativo cuya salida coincide con la VM.
@@ -145,7 +145,7 @@ fn build_native_de_un_proyecto_multi_modulo_es_un_solo_binario() {
 }
 
 #[test]
-fn build_native_env_y_args_coinciden_con_la_vm() {
+fn build_native_env_and_args_match_the_vm() {
     // `ray build --native` de un programa que lee una variable de entorno (env) y los argumentos de
     // línea de comandos (args): el binario nativo, con el MISMO entorno/args, produce la salida de la VM.
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -188,7 +188,7 @@ fn build_native_env_y_args_coinciden_con_la_vm() {
 }
 
 #[test]
-fn build_native_concurrencia_csp_coincide_con_la_vm() {
+fn build_native_csp_concurrency_matches_the_vm() {
     // `ray build --native` de un pipeline CSP (spawn + canales): el binario nativo usa hilos de SO reales
     // y, por el orden FIFO de los canales, produce la MISMA salida (determinista-por-diseño) que la VM.
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -273,7 +273,7 @@ fn build_native_canal_rendezvous_no_se_deadlockea() {
 }
 
 #[test]
-fn build_native_errores_de_ejecucion_exit_70_como_la_vm() {
+fn build_native_runtime_errors_exit_70_like_the_vm() {
     // H6: la VM aborta los errores de ejecución con `runtime error at L:C: <msg>` y EXIT 70; el nativo
     // hacía wrapping silencioso en overflow y panics de Rust (texto distinto, exit 101). Ahora: aritmética
     // de int CHECKED (helpers __ray_add/sub/mul/div/mod/neg), panic/assert/assert_eq con los mensajes del
@@ -286,7 +286,7 @@ fn build_native_errores_de_ejecucion_exit_70_como_la_vm() {
     let base = tmp("build_native_exit70");
     // (programa, fragmento de mensaje esperado). `input()`-opacidad: valores vía args no hace falta —
     // el checker no const-evalúa, así que el overflow con literales llega al runtime.
-    let casos: &[(&str, &str, &str)] = &[
+    let cases: &[(&str, &str, &str)] = &[
         ("divzero", "fn main() -> int { let a = 10; let b = 0; a / b }", "integer division by zero"),
         ("modzero", "fn main() -> int { let a = 10; let b = 0; a % b }", "modulo by zero"),
         (
@@ -302,7 +302,7 @@ fn build_native_errores_de_ejecucion_exit_70_como_la_vm() {
             "assert_eq failed: 3 != 4",
         ),
     ];
-    for (nombre, prog, msg) in casos {
+    for (nombre, prog, msg) in cases {
         let src = format!("{nombre}.ray");
         std::fs::write(base.join(&src), prog).unwrap();
         let bin = base.join(format!("{nombre}_bin"));
@@ -332,7 +332,7 @@ fn build_native_errores_de_ejecucion_exit_70_como_la_vm() {
 }
 
 #[test]
-fn build_native_fast_envuelve_overflow_pero_chequea_div_cero() {
+fn build_native_fast_wraps_overflow_but_checks_div_zero() {
     // H6, opt-out `--fast`: la aritmética de int vuelve a ser ENVOLVENTE (wrapping — renuncia
     // deliberada a la paridad de overflow, para el último tramo de rendimiento), pero div/mod por
     // cero SIGUEN siendo runtime error + exit 70 (Rust los chequea igual: gratis).
@@ -371,7 +371,7 @@ fn build_native_fast_envuelve_overflow_pero_chequea_div_cero() {
 }
 
 #[test]
-fn build_native_try_join_en_scope_cuenta_como_manejado() {
+fn build_native_try_join_in_scope_counts_as_handled() {
     // M97.1 (paridad con la VM): un fallo observado con try_join dentro de un scope cuenta como
     // MANEJADO — el cierre del scope no cancela hermanas ni re-lanza. En el runtime nativo lo
     // implementa `wait_observed` (marca la Task) + `failed()` que salta las observadas.
@@ -411,7 +411,7 @@ fn build_native_try_join_en_scope_cuenta_como_manejado() {
 }
 
 #[test]
-fn build_native_doble_join_es_error_y_el_churn_no_explota() {
+fn build_native_double_join_is_error_and_churn_doesnt_explode() {
     // M98.1 (paridad): una tarea es de un solo consumidor — doble join → mismo error que la VM.
     // M98.2: churn secuencial de 20k spawn+join — antes la trampa de paridad del pool shardeado
     // (M96e) creaba un hilo del SO por spawn → EAGAIN y crash; ahora el spawner sondea todos los
@@ -466,7 +466,7 @@ fn build_native_doble_join_es_error_y_el_churn_no_explota() {
 }
 
 #[test]
-fn build_native_valores_de_heap_y_funciones_cruzan_los_hilos() {
+fn build_native_heap_values_and_functions_cross_threads() {
     // H21-N5: (a) structs/enums/Map/arrays cruzan canales/Tasks/capturas de spawn por DEEP COPY
     // (repr __RaySend, semántica de heap aislado M38); (b) un param de tipo fn que cruza un spawn
     // se emite como genérico Send de Rust (marcado por punto fijo) → una función NOMBRADA o un
@@ -534,7 +534,7 @@ fn build_native_valores_de_heap_y_funciones_cruzan_los_hilos() {
 }
 
 #[test]
-fn build_native_fallo_de_tarea_contenido_y_try_join() {
+fn build_native_task_failure_contained_and_try_join() {
     // H21-N1/N2: el fallo de una tarea queda CAPTURADO en su Task (como el Failed de la VM) y solo
     // mata el programa cuando se OBSERVA (join/scope lo re-lanzan → runtime error + exit 70);
     // try_join lo devuelve como VALOR (Result). Antes: un panic en la hija mataba el proceso al
@@ -545,7 +545,7 @@ fn build_native_fallo_de_tarea_contenido_y_try_join() {
     }
     let base = tmp("build_native_task_fail");
     // (nombre, programa, exit esperado, fragmento de stderr o "" si no aplica, stdout esperado)
-    let casos: &[(&str, &str, i32, &str, &str)] = &[
+    let cases: &[(&str, &str, i32, &str, &str)] = &[
         (
             "contenido",
             "import std/time;\n\
@@ -601,7 +601,7 @@ fn build_native_fallo_de_tarea_contenido_y_try_join() {
             "ok: 42\nerr: se rompe\n",
         ),
     ];
-    for (nombre, prog, exit, err_frag, stdout_esp) in casos {
+    for (nombre, prog, exit, err_frag, stdout_esp) in cases {
         let src = format!("{nombre}.ray");
         std::fs::write(base.join(&src), prog).unwrap();
         let bin = base.join(format!("{nombre}_bin"));
@@ -625,7 +625,7 @@ fn build_native_fallo_de_tarea_contenido_y_try_join() {
 }
 
 #[test]
-fn build_native_cancelacion_de_hermanas_y_select_sin_busy_wait() {
+fn build_native_sibling_cancellation_and_select_without_busy_wait() {
     // H21-N3/N4: (a) el scope observa el fallo de una hija aunque OTRA hermana (registrada antes) siga
     // bloqueada — cancela a las pendientes y propaga el fallo ORIGINAL (antes: unión en orden de
     // registro → colgaba para siempre detrás de la bloqueada); (b) `select` espera en la condvar global
@@ -690,7 +690,7 @@ fn build_native_cancelacion_de_hermanas_y_select_sin_busy_wait() {
 }
 
 #[test]
-fn build_native_rendezvous_multi_emisor_no_se_cuelga() {
+fn build_native_rendezvous_multi_sender_doesnt_hang() {
     // Slice de canales (revisión post-H2/H21): el handshake rendezvous esperaba "cola vacía", no "MI
     // valor consumido" — con ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse
     // para siempre aunque el suyo ya se consumió. Ahora el handshake es por generación (`taken`).
@@ -735,7 +735,7 @@ fn build_native_rendezvous_multi_emisor_no_se_cuelga() {
 }
 
 #[test]
-fn build_native_send_sobre_canal_cerrado_es_error_como_la_vm() {
+fn build_native_send_on_closed_channel_is_error_like_the_vm() {
     // Slice de canales: `send` sobre un canal cerrado se DESCARTABA en silencio en nativo; la VM da
     // "send on a closed channel" (error de ejecución). Ahora el nativo aborta con el MISMO texto.
     // (H6: el exit code también casa — 70 por __ray_rt_err, como la VM.)
@@ -770,7 +770,7 @@ fn build_native_send_sobre_canal_cerrado_es_error_como_la_vm() {
 }
 
 #[test]
-fn build_native_close_con_emisor_bloqueado_es_error_como_la_vm() {
+fn build_native_close_with_blocked_sender_is_error_like_the_vm() {
     // Slice de canales: `close` con un emisor bloqueado hacía return silencioso del emisor (y su valor
     // quedaba consumible); la VM da "close on a channel with a blocked sender" en el sitio del close
     // (M12.2). Ahora el nativo detecta los emisores bloqueados (contador `senders`) y aborta igual.
@@ -810,7 +810,7 @@ fn build_native_close_con_emisor_bloqueado_es_error_como_la_vm() {
 }
 
 #[test]
-fn build_native_spawn_de_funcion_nombrada_coincide_con_la_vm() {
+fn build_native_spawn_of_named_function_matches_the_vm() {
     // `spawn(worker)` con `worker` una función de nivel superior (no un literal `fn(){}`) → el binario
     // nativo la corre en un hilo real y `join` recoge su resultado, byte-idéntico a la VM. (Fleco no-crate
     // del transpilador: antes `spawn` solo aceptaba una función anónima literal.)
@@ -924,7 +924,7 @@ fn launch_tls_echo_server(cmd: &mut Command) -> (std::process::Child, u16) {
 }
 
 #[test]
-fn build_native_tls_cliente_contra_servidor_vm_hace_eco() {
+fn build_native_tls_client_against_vm_server_echoes() {
     // Paso 1 del crate ray-runtime: un cliente TLS (std/net → rustls) transpila a nativo. build_native
     // detecta la feature `tls`, genera un proyecto Cargo con ray-runtime y compila con cargo. El binario
     // hace I/O TLS bloqueante (ray_runtime::tls::TlsStream). Cliente NATIVO ↔ servidor TLS del VM (echo).
@@ -960,7 +960,7 @@ fn build_native_tls_cliente_contra_servidor_vm_hace_eco() {
 }
 
 #[test]
-fn build_native_tls_servidor_contra_cliente_vm_hace_eco() {
+fn build_native_tls_server_against_vm_client_echoes() {
     // El otro lado: un servidor TLS (tls_accept) transpila a nativo; un cliente del VM conecta por TLS y
     // recibe el eco. Valida el camino de servidor (rustls server-side) del binario transpilado.
     if Command::new("cargo").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -995,7 +995,7 @@ fn build_native_tls_servidor_contra_cliente_vm_hace_eco() {
 }
 
 #[test]
-fn build_native_crypto_de_produccion_via_ray_runtime_coincide_con_la_vm() {
+fn build_native_production_crypto_via_ray_runtime_matches_the_vm() {
     // Paso 0b del crate ray-runtime (docs/transpilador-nativo.md §4-5): un programa que usa cripto de
     // PRODUCCIÓN (std/crypto → ring) transpila a nativo por PRIMERA vez. build_native detecta la feature
     // `crypto`, genera un proyecto Cargo con ray-runtime incrustado y compila con cargo. El binario llama al
@@ -1035,7 +1035,7 @@ fn build_native_crypto_de_produccion_via_ray_runtime_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_dos_programas_con_el_mismo_stem_no_comparten_artefacto() {
+fn build_native_two_programs_with_same_stem_dont_share_artifact() {
     // H14 (revisión post-lote): el artefacto del camino Cargo vive en `<caché>/<profile>/<pkg>` con la
     // caché COMPARTIDA por máquina; con pkg = solo el stem, dos programas distintos llamados `prog.ray`
     // colisionaban (un build concurrente podía copiar el binario del otro). Ahora el pkg incorpora un
@@ -1102,7 +1102,7 @@ fn build_native_sqlite_via_ray_runtime_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_target_cross_compile_pasa_el_triple_a_rustc() {
+fn build_native_target_cross_compile_passes_triple_to_rustc() {
     // H20: `--target <triple>` (cross-compilation). Se prueba con el triple del HOST (que siempre está
     // instalado) → el flag llega a rustc, la ruta del binario resuelve y el binario corre. El mensaje de
     // éxito nombra el target. (Un cross real a otro SO necesita `rustup target add`, fuera del test.)
@@ -1142,7 +1142,7 @@ fn build_native_target_cross_compile_pasa_el_triple_a_rustc() {
 }
 
 #[test]
-fn build_native_tls_error_de_conexion_coincide_con_la_vm() {
+fn build_native_tls_connection_error_matches_the_vm() {
     // H13: camino de ERROR de TLS (los tests de TLS solo cubrían el eco feliz). Conectar a un puerto
     // cerrado → `Result.Err` cuyo mensaje lo produce `ray_runtime::tls` (el mismo código en el binario
     // nativo y la VM). El texto exacto ("Connection refused (os error N)") depende del SO, pero el ORÁCULO
@@ -1186,7 +1186,7 @@ fn build_native_tls_error_de_conexion_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_sqlite_errores_coinciden_byte_a_byte_con_la_vm() {
+fn build_native_sqlite_errors_match_byte_for_byte_with_the_vm() {
     // H13: el camino con-crate (SQLite vía ray-runtime) solo tenía oráculo del camino FELIZ. Aquí se
     // ejercitan los caminos de ERROR (SQL malformado, tabla inexistente): el mensaje de `Result.Err` lo
     // produce rusqlite en `ray-runtime`, el MISMO código en el binario nativo y en la VM → debe ser
@@ -1238,7 +1238,7 @@ fn build_native_sqlite_errores_coinciden_byte_a_byte_con_la_vm() {
 }
 
 #[test]
-fn build_native_without_crypto_fuerza_la_via_rapida_y_stubbea() {
+fn build_native_without_crypto_forces_the_fast_path_and_stubs() {
     // `--without crypto` (escape hatch): aunque el programa use cripto, NO se enlaza ray-runtime → el
     // binario compila por la vía rápida `rustc` (sin cargo/red; el éxito no menciona ray-runtime) y su uso
     // de cripto cae en un stub que panica en runtime. Para builds herméticos/cross-compile/policy.
@@ -1269,7 +1269,7 @@ fn build_native_without_crypto_fuerza_la_via_rapida_y_stubbea() {
 }
 
 #[test]
-fn build_native_lee_la_exclusion_estable_del_ray_toml() {
+fn build_native_reads_the_stable_exclusion_from_ray_toml() {
     // `[native] without = ["crypto"]` en ray.toml: política de exclusión versionada con el proyecto, sin
     // pasar `--without`. Un `ray build --native` la aplica → el uso de cripto stubbea y el binario compila
     // por la vía rápida (rustc, sin ray-runtime). Equivalente a `--without crypto` pero persistente.
@@ -1299,7 +1299,7 @@ fn build_native_lee_la_exclusion_estable_del_ray_toml() {
 }
 
 #[test]
-fn build_native_without_rechaza_un_subsistema_desconocido() {
+fn build_native_without_rejects_an_unknown_subsystem() {
     // Fail-fast ante un typo en `--without` (como `ray add` valida el nombre del paquete).
     let base = tmp("build_native_without_bad");
     std::fs::write(base.join("prog.ray"), "fn main() -> int { 0 }\n").unwrap();
@@ -1311,7 +1311,7 @@ fn build_native_without_rechaza_un_subsistema_desconocido() {
 }
 
 #[test]
-fn build_native_without_rechaza_un_typo_del_ray_toml_nombrando_el_origen() {
+fn build_native_without_rejects_a_ray_toml_typo_naming_the_source() {
     // Un typo en `[native] without` del ray.toml versionado afecta a todo el equipo → el error debe
     // apuntar al ray.toml, no a `--without` (que aquí ni se pasó). Fija la distinción de origen (H1).
     let base = tmp("build_native_toml_typo");
@@ -1328,7 +1328,7 @@ fn build_native_without_rechaza_un_typo_del_ray_toml_nombrando_el_origen() {
 }
 
 #[test]
-fn build_native_sin_crate_externo_usa_la_via_rapida_rustc() {
+fn build_native_without_external_crate_uses_the_fast_rustc_path() {
     // El otro lado de la bifurcación: un programa SIN subsistemas-con-crate compila por `rustc` pelado
     // (camino rápido, sin Cargo) → el mensaje de éxito NO menciona ray-runtime. Cero regresión de
     // velocidad/red para el caso común (el 90 % de programas).
@@ -1383,7 +1383,7 @@ fn build_native_structured_concurrency_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_select_invariante_coincide_con_la_vm() {
+fn build_native_select_invariant_matches_the_vm() {
     // `select` sobre varios canales: bajo paralelismo real el ORDEN de impresión es no-determinista (la
     // VM multicore por default también varía), pero el INVARIANTE (multiset de valores + total + exit
     // code) casa. El binario nativo recoge los 4 valores {100,101,200,201}, total 602, exit 90 (602&0xFF).
@@ -1425,7 +1425,7 @@ fn build_native_select_invariante_coincide_con_la_vm() {
 
 #[cfg(unix)]
 #[test]
-fn build_native_signals_apagado_ordenado() {
+fn build_native_signals_graceful_shutdown() {
     // `ray build --native` de un programa que usa signals() (SIGTERM/SIGINT): el binario nativo instala
     // los handlers (self-pipe + FFI a libc) y, al recibir SIGTERM, drena el canal de señales y apaga.
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -1467,9 +1467,9 @@ fn build_native_signals_apagado_ordenado() {
         if reader.read_line(&mut line).unwrap_or(0) == 0 {
             break; // EOF prematuro: el proceso murió; las aserciones de abajo lo reportan
         }
-        let listo = line.contains("ready");
+        let ready = line.contains("ready");
         s.push_str(&line);
-        if listo {
+        if ready {
             break;
         }
     }
@@ -1484,7 +1484,7 @@ fn build_native_signals_apagado_ordenado() {
 }
 
 #[test]
-fn build_native_canal_de_string_coincide_con_la_vm() {
+fn build_native_string_channel_matches_the_vm() {
     // `ray build --native` de un programa que manda STRINGS por un canal y una Task<string>: el valor
     // viaja como repr Send (Arc<str>) al cruzar el hilo y se convierte de vuelta a Rc<str> al recibir.
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -1520,7 +1520,7 @@ fn build_native_canal_de_string_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_release_produce_binario_correcto() {
+fn build_native_release_produces_correct_binary() {
     // `ray build --native --release` usa el tier agresivo (opt3+lto+cgu1+target-cpu=native): compila más
     // lento y no-portable, pero el binario da la MISMA salida que el default y la VM (solo cambia rustc).
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -1540,7 +1540,7 @@ fn build_native_release_produce_binario_correcto() {
 }
 
 #[test]
-fn build_native_enteros_con_tamano_no_corrompen_el_prelude() {
+fn build_native_sized_integers_dont_corrupt_the_prelude() {
     // Regresión: un módulo con literales `u64` (aquí `poly1305`, importado) se desplaza a una banda de
     // líneas por el loader; el prelude se inyecta con SUS líneas. Antes del fix, un literal u64 podía caer
     // en la misma (línea, col) que un literal `int` del prelude (p. ej. el `17` de `string#hash`), y la
@@ -1588,7 +1588,7 @@ fn build_native_json_con_map_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_protobuf_con_concat_de_bytes_coincide_con_la_vm() {
+fn build_native_protobuf_with_byte_concat_matches_the_vm() {
     // `ray build --native` de un codec protobuf: usa concatenación de bytes (`b1 + b2`) por doquier.
     // Antes rustc fallaba (`cannot add Rc<[u8]> to Rc<[u8]>`); ahora `a + b` baja a un concat de slices.
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -1630,7 +1630,7 @@ fn build_native_url_con_override_y_utf8_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_http_con_tls_no_alcanzado_coincide_con_la_vm() {
+fn build_native_http_with_unreachable_tls_matches_the_vm() {
     // `ray build --native` de un cliente HTTP: importa el módulo `http`, que trae funciones TLS
     // (`std::net::tls_connect`) fuera del subconjunto. Antes rustc fallaba por la llamada colgante,
     // aunque el demo habla HTTP PLANO y nunca alcanza TLS. Ahora la función no soportada se emite como
@@ -1652,7 +1652,7 @@ fn build_native_http_con_tls_no_alcanzado_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_closures_con_estado_mutable_coincide_con_la_vm() {
+fn build_native_closures_with_mutable_state_match_the_vm() {
     // `ray build --native` de closures con ESTADO mutable (patrón contador: `var n` que la closure
     // incrementa entre llamadas, y contadores independientes). Antes rustc fallaba (`cannot assign to
     // captured variable in a Fn closure`); ahora la var capturada+mutada vive en Rc<RefCell> (B1) →
@@ -1676,7 +1676,7 @@ fn build_native_closures_con_estado_mutable_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_iteradores_coinciden_con_la_vm() {
+fn build_native_iterators_match_the_vm() {
     // `ray build --native` del ejemplo COMPLETO de iteradores (B2): `impl Iterator<T>` de usuario
     // recorrido con `for`, más los adaptadores del prelude — escalares (`.iter()`/`range`/`.map()`/
     // `.filter()`/`.take()`/`.skip()`/`.sum()`) Y los que entregan TUPLAS (`.enumerate()`/`.zip()`). Antes
@@ -1701,7 +1701,7 @@ fn build_native_iteradores_coinciden_con_la_vm() {
 }
 
 #[test]
-fn build_native_avisa_de_las_funciones_stubbeadas() {
+fn build_native_warns_about_stubbed_functions() {
     // H7: una función cuyo cuerpo cae fuera del subconjunto (aquí un `match` con guarda `if`) se emite
     // como stub que panica. Antes el build decía "ok" en silencio y el binario moría en runtime si la
     // llamaba. Ahora AVISA (nombre + motivo) al compilar; el binario sigue compilando y corre si no llama
@@ -1740,7 +1740,7 @@ fn build_native_avisa_de_las_funciones_stubbeadas() {
 }
 
 #[test]
-fn build_native_literales_genericos_anidados_transpilan() {
+fn build_native_nested_generic_literals_transpile() {
     // H9: `type_of` de un literal de struct/enum genérico descartaba los args de tipo → un acceso
     // ANIDADO (`b.v.v` con `Box<Box<[int]>>`) no podía sustituir el param y fallaba con "campo
     // desconocido en T", donde la VM funciona. Ahora se infieren los args desde los campos/payload.
@@ -1775,7 +1775,7 @@ fn build_native_literales_genericos_anidados_transpilan() {
 }
 
 #[test]
-fn build_native_override_de_prelude_gana_sobre_el_builtin() {
+fn build_native_prelude_override_wins_over_the_builtin() {
     // H3: si el usuario redefine una función del prelude (`sort`), su versión GANA sobre el builtin
     // interceptado, como en la VM (M7.3). Antes el sitio de llamada bajaba a `__ray_sort` (el builtin)
     // aunque la def del usuario se emitiera → divergencia silenciosa. Se prueban ambas formas: llamada
@@ -1869,7 +1869,7 @@ fn build_native_builtin_real_no_se_tapa_y_closure_local_si() {
 }
 
 #[test]
-fn build_native_identificadores_palabra_clave_de_rust_no_rompen_rustc() {
+fn build_native_rust_keyword_identifiers_dont_break_rustc() {
     // H5: un identificador LEGAL de raylang puede ser palabra reservada de Rust (`type`, `loop`, `move`,
     // `mut`, `ref`, `where`) como variable, parámetro o CAMPO de struct. Antes generaba Rust inválido
     // (`let loop = …`, `struct Cfg { type: i64 }`) → rustc rechazaba código raylang perfectamente válido.
@@ -1921,7 +1921,7 @@ fn build_native_identificadores_palabra_clave_de_rust_no_rompen_rustc() {
 }
 
 #[test]
-fn build_native_asignacion_autoreferente_no_hace_doble_borrow_del_refcell() {
+fn build_native_self_referential_assignment_doesnt_double_borrow_the_refcell() {
     // H4/H8: una asignación indexada/de campo cuyo índice, receptor o RHS lee la MISMA colección
     // (`a[a.len()-1] = a[0]`, `p.x = p.x + 1`, `w.push(w[0]+w[1])`) generaba antes
     // `a.borrow_mut()[a.borrow().len()-1] = …` → panic de RefCell (doble borrow) donde la VM funciona.
@@ -1963,7 +1963,7 @@ fn build_native_asignacion_autoreferente_no_hace_doble_borrow_del_refcell() {
 }
 
 #[test]
-fn build_native_map_autoreferente_no_hace_doble_borrow_del_refcell() {
+fn build_native_self_referential_map_doesnt_double_borrow_the_refcell() {
     // H4, la CLASE completa (revisión post-lote): la misma auto-referencia sobre un Map —
     // `m.insert(k, m.get_or(k,0)+1)`, `m.add_to(k, m.get_or(k,0))`, `m.remove(m.keys()[0])` —
     // evaluaba clave/valor/delta DENTRO del borrow_mut() → panic de RefCell donde la VM funciona.
@@ -2027,7 +2027,7 @@ fn build_native_ffi_libc_libm_coincide_con_la_vm() {
 }
 
 #[test]
-fn build_native_servidor_tcp_hace_eco() {
+fn build_native_tcp_server_echoes() {
     // `ray build --native` de un servidor TCP: escucha en un puerto libre (lo imprime), acepta una
     // conexión, lee y hace ECO con un prefijo. El TEST hace de cliente (std::net) y verifica el round-trip.
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -2071,7 +2071,7 @@ fn build_native_servidor_tcp_hace_eco() {
 }
 
 #[test]
-fn build_native_udp_hace_eco() {
+fn build_native_udp_echoes() {
     // `ray build --native` de un servidor UDP: bind en un puerto libre (imprime el puerto vía
     // net.local_port), recibe un datagrama y responde al remitente. El TEST hace de cliente (UdpSocket).
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
@@ -2144,7 +2144,7 @@ fn help_y_version() {
 }
 
 #[test]
-fn compat_flags_legadas() {
+fn compat_legacy_flags() {
     let base = tmp("legacy");
     std::fs::write(base.join("p.ray"), "fn main() -> int { 7 }\n").unwrap();
     // La interfaz previa por flags sigue funcionando (un `<archivo>` directo, y --vm).
@@ -2165,7 +2165,7 @@ fn project(name: &str, manifest: &str, entry_rel: &str, entry_src: &str) -> std:
 }
 
 #[test]
-fn build_y_run_usan_la_entry_del_manifest() {
+fn build_and_run_use_the_manifest_entry() {
     let root = project(
         "manifest_entry",
         "[package]\nname = \"miapp\"\nversion = \"2.0.0\"\nentry = \"src/arranque.ray\"\n",
@@ -2184,7 +2184,7 @@ fn build_y_run_usan_la_entry_del_manifest() {
 }
 
 #[test]
-fn run_sube_a_la_root_from_un_subdirectorio() {
+fn run_climbs_to_root_from_a_subdirectory() {
     let root = project(
         "manifest_subdir",
         "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
@@ -2198,7 +2198,7 @@ fn run_sube_a_la_root_from_un_subdirectorio() {
 }
 
 #[test]
-fn dependency_inalcanzable_fails_al_descargar() {
+fn dependency_unreachable_fails_to_download() {
     // M39c-2a: una dependencia declarada se descarga en `run`/`build`; si no se puede clonar
     // (aquí, una ruta local inexistente → fallo rápido y offline), es error de compilación.
     let root = project(
@@ -2213,7 +2213,7 @@ fn dependency_inalcanzable_fails_al_descargar() {
 }
 
 #[test]
-fn manifest_mal_formado_fails_claro() {
+fn manifest_malformed_fails_clearly() {
     let root = tmp("manifest_bad");
     std::fs::write(root.join("ray.toml"), "[package]\nname = sinComillas\n").unwrap();
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -2233,7 +2233,7 @@ fn dep(root: &std::path::Path, name: &str, mod_ray: &str) {
 }
 
 #[test]
-fn dependency_de_ray_deps_es_importable() {
+fn dependency_from_ray_deps_is_importable() {
     let root = project(
         "dep_import",
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"git+https://x/geo@v1\"\n",
@@ -2250,7 +2250,7 @@ fn dependency_de_ray_deps_es_importable() {
 }
 
 #[test]
-fn dependency_qualified_y_capsule_protege_internos() {
+fn dependency_qualified_and_capsule_protects_internals() {
     let root = project(
         "dep_capsule",
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
@@ -2303,7 +2303,7 @@ fn lo_local_tapa_a_la_dependency_del_same_name() {
 }
 
 #[test]
-fn doc_genera_markdown_de_la_superficie_public() {
+fn doc_generates_markdown_of_the_public_surface() {
     let base = tmp("doc");
     let file = base.join("lib.ray");
     std::fs::write(
@@ -2320,7 +2320,7 @@ fn doc_genera_markdown_de_la_superficie_public() {
 }
 
 #[test]
-fn importa_la_stdlib_del_sistema() {
+fn imports_the_system_stdlib() {
     // Un programa fuera del repo (dir temporal) puede `import std/math;` — la stdlib va EMBEBIDA en el
     // binario (M40.5), así que resuelve sin que `std/` exista en disco junto al programa.
     let base = tmp("std_import");
@@ -2337,7 +2337,7 @@ fn importa_la_stdlib_del_sistema() {
 }
 
 #[test]
-fn stdlib_text_capitaliza_e_invierte() {
+fn stdlib_text_capitalizes_and_reverses() {
     let base = tmp("std_text");
     let file = base.join("main.ray");
     std::fs::write(
@@ -2384,7 +2384,7 @@ fn stdlib_text_words_y_lines() {
 }
 
 #[test]
-fn stdlib_sort_busca_y_deduplica() {
+fn stdlib_sort_searches_and_deduplicates() {
     let base = tmp("std_sort");
     let file = base.join("main.ray");
     std::fs::write(
@@ -2440,7 +2440,7 @@ fn stdlib_encoding_hex_base64_url_json() {
 /// No determinista → prueba de propiedades: longitud exacta, n<=0 vacío, y dos tiradas de
 /// 32 octetos distintas (iguales por azar = 2^-256).
 #[test]
-fn crypto_random_bytes_propiedades() {
+fn crypto_random_bytes_properties() {
     let base = tmp("crypto_rand");
     let file = base.join("main.ray");
     std::fs::write(
@@ -2490,7 +2490,7 @@ fn crypto_builtins_hashing_vectors() {
 }
 
 #[test]
-fn stdlib_compresion_roundtrip() {
+fn stdlib_compression_roundtrip() {
     // M40.7c: compresión promovida a std/. deflate → std/inflate (namespacado en el ejemplo).
     let base = tmp("std_comp");
     let file = base.join("main.ray");
@@ -2551,7 +2551,7 @@ fn stdlib_text_regex_csv_toml() {
 }
 
 #[test]
-fn stdlib_cripto_aead_y_protobuf() {
+fn stdlib_crypto_aead_and_protobuf() {
     // AEAD (chacha20-poly1305) de PRODUCCIÓN vía el builtin `ring` (M43.4) + protobuf (std, M40.7e).
     // seal → ct||tag (Option<bytes>), open verifica y descifra. Antes esto usaba la std cripto pura
     // embebida (des-embebida en M43.5b); el builtin la sustituye. Protobuf sigue siendo std embebida.
@@ -2587,7 +2587,7 @@ fn stdlib_cripto_aead_y_protobuf() {
 }
 
 #[test]
-fn stdlib_uuid_genera_y_validates() {
+fn stdlib_uuid_generates_and_validates() {
     // M40.7f: uuid_v4 usa random_int (no determinista); se valida el ROUNDTRIP (is_uuid_v4 es determinista).
     let base = tmp("std_uuid");
     let file = base.join("main.ray");
@@ -2654,7 +2654,7 @@ fn ffi_marshala_strings_a_char_ptr() {
 }
 
 #[test]
-fn ffi_return_val_char_ptr_como_option() {
+fn ffi_return_val_char_ptr_as_option() {
     // M41.3: un char* de retorno → Option<string> (None si NULL). strstr es determinista.
     let base = tmp("ffi_ret");
     let file = base.join("main.ray");
@@ -2679,7 +2679,7 @@ fn ffi_return_val_char_ptr_como_option() {
 }
 
 #[test]
-fn ffi_anchura_int_y_puntero_opaco_como_u64() {
+fn ffi_int_width_and_opaque_pointer_as_u64() {
     // M41.4a: int → C int (32-bit, EOF=-1 corta el bucle); u64 → C long/size_t (64-bit); un FILE*
     // (puntero) se pasa como u64 (opaco). fopen/fgetc/fclose sobre un archivo con contenido conocido.
     let base = tmp("ffi_width");
@@ -2717,7 +2717,7 @@ fn ffi_anchura_int_y_puntero_opaco_como_u64() {
 }
 
 #[test]
-fn ffi_ptr_opaco_y_option_ptr() {
+fn ffi_opaque_ptr_and_option_ptr() {
     // M41.4b: tipo `ptr` opaco + Option<ptr> fallible. fopen(existe)→Some, fopen(no existe)→None.
     let base = tmp("ffi_ptr");
     std::fs::write(base.join("data.txt"), "Hi!").unwrap();
@@ -2757,7 +2757,7 @@ fn ffi_ptr_opaco_y_option_ptr() {
 }
 
 #[test]
-fn dependency_por_path_local() {
+fn dependency_by_local_path() {
     // M40.8a: `nombre = "path:<dir>"` consume un paquete-cápsula LOCAL sin git ni descarga (un paquete
     // adicional que no va en el binario). El paquete vive fuera del proyecto que lo importa.
     let base = tmp("pathdep");
@@ -2853,7 +2853,7 @@ fn package_net_hpack_roundtrip() {
 }
 
 #[test]
-fn package_net_hpack_decode_malformado() {
+fn package_net_hpack_decode_malformed() {
     // M78: HPACK decodifica bloques del PEER (no confiables). Un entero truncado, un string
     // sobredimensionado, un size-update > 4096 y una bomba de varint deben dar Err como VALOR,
     // no un trap que tumbe al cliente. El índice estático legítimo (0x82 = :method GET) sí decodifica.
@@ -2916,7 +2916,7 @@ fn package_net_websocket_accept_key() {
 }
 
 #[test]
-fn package_net_observabilidad() {
+fn package_net_observability() {
     // M40.8e: time (formateo determinista) + metrics (Prometheus). log → net/time (dep interna).
     let repo = env!("CARGO_MANIFEST_DIR");
     let base = tmp("net_obs");
@@ -2948,7 +2948,7 @@ fn package_net_observabilidad() {
 }
 
 #[test]
-fn fuel_abort_un_loop_iter_infinito() {
+fn fuel_aborts_an_infinite_iter_loop() {
     // M42.1: `ray run --fuel N` limita las instrucciones de la VM (para embeber raylang confinado).
     // Un bucle infinito aborta en vez de colgar; el error lo dice y el código de salida es 70.
     let base = tmp("fuel");
@@ -2964,7 +2964,7 @@ fn fuel_abort_un_loop_iter_infinito() {
 }
 
 #[test]
-fn tope_de_heap_abort_un_program_glotón() {
+fn heap_cap_aborts_a_gluttonous_program() {
     // M42.2: `ray run --heap N` limita los objetos vivos de la VM (el otro recurso, junto al fuel).
     // Un programa que retiene objetos sin cesar aborta al rebasar el tope; el error lo dice, exit 70.
     let base = tmp("heap");

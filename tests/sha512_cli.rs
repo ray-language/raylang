@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
 2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
     "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce\
@@ -29,12 +29,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn sha512_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "sha512_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn sha512_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "sha512_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

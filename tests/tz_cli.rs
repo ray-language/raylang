@@ -127,7 +127,7 @@ fn main() -> int {{
     app
 }
 
-const ESPERADO: &str = "2026-01-15T12:00:00Z CET dst=false off_h=1\n\
+const EXPECTED: &str = "2026-01-15T12:00:00Z CET dst=false off_h=1\n\
 2026-07-15T12:00:00Z CEST dst=true off_h=2\n\
 2026-07-15T12:00:00Z\n\
 gap\n\
@@ -159,7 +159,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
 }
 
 #[test]
-fn tz_hora_local_ambos_engines() {
+fn tz_local_time_both_engines() {
     let base = std::env::temp_dir().join("ray_tz_cli");
     let _ = std::fs::remove_dir_all(&base);
     let app = project(&base);
@@ -168,5 +168,5 @@ fn tz_hora_local_ambos_engines() {
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
     assert_eq!(o_in, o_vm, "ambos engines match");
-    assert_eq!(o_in, ESPERADO, "output expected_val");
+    assert_eq!(o_in, EXPECTED, "output expected_val");
 }

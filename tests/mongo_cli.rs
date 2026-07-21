@@ -241,7 +241,7 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
     }
 }
 
-fn launch_servidor() -> u16 {
+fn launch_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -310,21 +310,21 @@ fn run(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO: &str = "conectado\n\
+const EXPECTED: &str = "conectado\n\
 mala clave: mongo: the server signature does not verify (authentication failed)\n\
 mal user: mongo: Authentication failed.\n";
 
 #[test]
-fn mongo_hello_scram_y_errors_de_auth() {
+fn mongo_hello_scram_and_auth_errors() {
     let base = std::env::temp_dir().join("ray_mongo_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    assert_eq!(run(&app, &[]), ESPERADO, "VM");
-    assert_eq!(run(&app, &["--interp"]), ESPERADO, "intérprete");
+    assert_eq!(run(&app, &[]), EXPECTED, "VM");
+    assert_eq!(run(&app, &["--interp"]), EXPECTED, "intérprete");
 }
 
 // --- M54.3: CRUD ---
@@ -416,7 +416,7 @@ fn main() -> int {{
     app
 }
 
-const ESPERADO_CRUD: &str = "insertados: 2\n\
+const EXPECTED_CRUD: &str = "insertados: 2\n\
 {name: \"ada\", nota: 36}\n\
 {name: \"grace\"}\n\
 modificados: 1\n\
@@ -428,20 +428,20 @@ paginados: 3\n\
 mongo: ns not found\n";
 
 #[test]
-fn mongo_crud_y_error_del_servidor() {
+fn mongo_crud_and_server_error() {
     let base = std::env::temp_dir().join("ray_mongo_cli_crud");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project_crud(&base, port);
 
-    assert_eq!(run(&app, &[]), ESPERADO_CRUD, "VM");
-    assert_eq!(run(&app, &["--interp"]), ESPERADO_CRUD, "intérprete");
+    assert_eq!(run(&app, &[]), EXPECTED_CRUD, "VM");
+    assert_eq!(run(&app, &["--interp"]), EXPECTED_CRUD, "intérprete");
 }
 
 // --- TLS: connect_tls (cifrado desde el octeto 0, sin STARTTLS) ---
 
-fn launch_servidor_tls() -> u16 {
+fn launch_server_tls() -> u16 {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
@@ -532,18 +532,18 @@ fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO_TLS: &str = "conectado seguro\n\
+const EXPECTED_TLS: &str = "conectado seguro\n\
 {name: \"ada\", nota: 36}\n\
 {name: \"grace\"}\n";
 
 #[test]
-fn mongo_tls_conexion_y_find_cifrados() {
+fn mongo_tls_connection_and_encrypted_find() {
     let base = std::env::temp_dir().join("ray_mongo_cli_tls");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor_tls();
+    let port = launch_server_tls();
     let app = project_tls(&base, port);
 
-    assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");
-    assert_eq!(run_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
+    assert_eq!(run_tls(&app, &[]), EXPECTED_TLS, "VM");
+    assert_eq!(run_tls(&app, &["--interp"]), EXPECTED_TLS, "intérprete");
 }

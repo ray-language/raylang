@@ -49,14 +49,14 @@ impl Rng {
 
 /// Recolecta recursivamente los `.ray` bajo `dir` (corpus de semillas para la mutación). Sin `walkdir`:
 /// un recorrido a mano con `std::fs`, como el resto del proyecto.
-fn recolectar_ray(dir: &Path, acc: &mut Vec<PathBuf>) {
+fn collect_ray(dir: &Path, acc: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
-            recolectar_ray(&p, acc);
+            collect_ray(&p, acc);
         } else if p.extension().is_some_and(|x| x == "ray") {
             acc.push(p);
         }
@@ -65,21 +65,21 @@ fn recolectar_ray(dir: &Path, acc: &mut Vec<PathBuf>) {
 
 /// Carga el corpus: los fuentes reales del repo (ejemplos + self-hosting + std). Son entradas **válidas y
 /// variadas** — mutarlas explora el vecindario de lo real (donde viven los bugs interesantes), mucho más
-/// fértil que solo bytes al azar. Trunca cada semilla a `MAX_SEMILLA` para acotar la profundidad de anidación
+/// fértil que solo bytes al azar. Trunca cada semilla a `MAX_SEED` para acotar la profundidad de anidación
 /// (y con ella la recursión del parser: una entrada de N bytes anida a lo sumo ~N niveles).
-fn cargar_corpus() -> Vec<String> {
-    const MAX_SEMILLA: usize = 4096;
+fn load_corpus() -> Vec<String> {
+    const MAX_SEED: usize = 4096;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut paths = Vec::new();
     for sub in ["examples", "selfhost", "std"] {
-        recolectar_ray(&root.join(sub), &mut paths);
+        collect_ray(&root.join(sub), &mut paths);
     }
     let mut corpus: Vec<String> = paths
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         // Truncar por CARACTERES, no por bytes: `String::truncate` en un byte a mitad de un carácter
         // multibyte (los acentos de los comentarios en español) panicaría. `take` por char es seguro.
-        .map(|s| s.chars().take(MAX_SEMILLA).collect())
+        .map(|s| s.chars().take(MAX_SEED).collect())
         .collect();
     // Unos cuantos snippets mínimos garantizan variedad de tokens aunque el corpus del disco falte.
     for s in [
@@ -97,7 +97,7 @@ fn cargar_corpus() -> Vec<String> {
 /// Fabrica una entrada de fuzz a partir del corpus, con una de varias estrategias barajadas. Todas producen
 /// entradas **acotadas en tamaño** (→ profundidad de anidación acotada → la recursión del parser no desborda
 /// ni siquiera la pila normal, y menos la de 256 MiB en la que corremos).
-fn generar(rng: &mut Rng, corpus: &[String]) -> Vec<u8> {
+fn generate(rng: &mut Rng, corpus: &[String]) -> Vec<u8> {
     let base = corpus[rng.below(corpus.len())].as_bytes().to_vec();
     match rng.below(6) {
         // (0) Bytes puros al azar: el caso extremo (casi nunca lexéa, estresa el lexer).
@@ -109,8 +109,8 @@ fn generar(rng: &mut Rng, corpus: &[String]) -> Vec<u8> {
         1 => {
             let mut v = base;
             if !v.is_empty() {
-                let ediciones = 1 + rng.below(8);
-                for _ in 0..ediciones {
+                let edits = 1 + rng.below(8);
+                for _ in 0..edits {
                     let i = rng.below(v.len());
                     v[i] = rng.byte();
                 }
@@ -130,8 +130,8 @@ fn generar(rng: &mut Rng, corpus: &[String]) -> Vec<u8> {
         // (3) Borrado: quita tramos (deja el fuente truncado a media construcción).
         3 => {
             let mut v = base;
-            let borrados = 1 + rng.below(8);
-            for _ in 0..borrados {
+            let deletions = 1 + rng.below(8);
+            for _ in 0..deletions {
                 if v.is_empty() {
                     break;
                 }
@@ -174,8 +174,8 @@ fn generar(rng: &mut Rng, corpus: &[String]) -> Vec<u8> {
 /// syscall** (el fuel cuenta instrucciones, no esperas de I/O), además de abrir sockets/archivos y ser
 /// no-determinista. La robustez de la *ejecución* de código no confiable es otra cosa (y sus recursos —fuel,
 /// tope de heap— se prueban en M42.1/42.2, sobre programas propios, no aquí).
-fn ejercitar(input: &str) -> Result<(), String> {
-    let resultado = panic::catch_unwind(AssertUnwindSafe(|| {
+fn exercise(input: &str) -> Result<(), String> {
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let Ok(tokens) = lexer::lex(input) else {
             return;
         };
@@ -188,7 +188,7 @@ fn ejercitar(input: &str) -> Result<(), String> {
         // Bajar a bytecode es la última fase pura; NO se ejecuta (ver el doc de la función).
         let _ = compiler::compile_program(&program);
     }));
-    resultado.map_err(|payload| {
+    result.map_err(|payload| {
         payload
             .downcast_ref::<String>()
             .cloned()
@@ -198,8 +198,8 @@ fn ejercitar(input: &str) -> Result<(), String> {
 }
 
 /// Lee una variable de entorno como `usize`, con default.
-fn env_usize(clave: &str, default: usize) -> usize {
-    std::env::var(clave).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
 /// El fuzzer determinista. Corre en el hilo de pila grande (`with_big_stack`) por margen frente a entradas
@@ -209,8 +209,8 @@ fn env_usize(clave: &str, default: usize) -> usize {
 #[test]
 fn fuzz_el_frontend_no_panica() {
     raylang::with_big_stack(|| {
-        const SEMILLA_BASE: u64 = 0x5241_594C_414E_47; // "RAYLANG" en ASCII (determinismo).
-        let corpus = cargar_corpus();
+        const BASE_SEED: u64 = 0x5241_594C_414E_47; // "RAYLANG" en ASCII (determinismo).
+        let corpus = load_corpus();
         assert!(!corpus.is_empty(), "el corpus de fuzz no debería estar vacío");
 
         // Modo reproducción: `RAYLANG_FUZZ_SEED=<n>` ejercita una sola entrada (la de esa semilla) y para.
@@ -218,39 +218,39 @@ fn fuzz_el_frontend_no_panica() {
         let seed_fixes = std::env::var("RAYLANG_FUZZ_SEED").ok().and_then(|s| s.parse::<u64>().ok());
 
         // Silenciamos el hook de pánico durante el fuzzing y lo restauramos al terminar.
-        let hook_previo = panic::take_hook();
+        let previous_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
 
         let mut failure: Option<(u64, Vec<u8>, String)> = None;
         let range: Vec<u64> = match seed_fixes {
             Some(s) => vec![s],
-            None => (0..iters as u64).map(|i| SEMILLA_BASE.wrapping_add(i.wrapping_mul(0x9E37_79B9))).collect(),
+            None => (0..iters as u64).map(|i| BASE_SEED.wrapping_add(i.wrapping_mul(0x9E37_79B9))).collect(),
         };
 
         for seed in range {
             let mut rng = Rng(seed);
-            let bytes = generar(&mut rng, &corpus);
+            let bytes = generate(&mut rng, &corpus);
             // Solo UTF-8 válido llega al compilador (el CLI lee el archivo como texto); el resto se descarta.
             let Ok(text) = std::str::from_utf8(&bytes) else {
                 continue;
             };
-            if let Err(msg) = ejercitar(text) {
+            if let Err(msg) = exercise(text) {
                 failure = Some((seed, bytes.clone(), msg));
                 break;
             }
         }
 
-        panic::set_hook(hook_previo);
+        panic::set_hook(previous_hook);
 
         if let Some((seed, bytes, msg)) = failure {
             // Escribe la entrada culpable para inspección/repro y falla con instrucciones claras.
-            let repro = std::env::temp_dir().join(format!("raylang_fuzz_repro_{seed}.ray"));
-            let _ = std::fs::write(&repro, &bytes);
+            let crash_input_path = std::env::temp_dir().join(format!("raylang_fuzz_repro_{seed}.ray"));
+            let _ = std::fs::write(&crash_input_path, &bytes);
             panic!(
                 "el front-end PANICÓ ante one entry de fuzz (esto es un ICE what input de user nunca must \
                  causar).\n  seed: {seed}\n  pánico: {msg}\n  entry escrita en: {}\n  reproducir: \
                  RAYLANG_FUZZ_SEED={seed} cargo test --test fuzz_frontend",
-                repro.display()
+                crash_input_path.display()
             );
         }
     });

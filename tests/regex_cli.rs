@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "full  /abc/ ~ \"abc\" = si",
     "full  /abc/ ~ \"abd\" = no",
     "full  /abc/ ~ \"ab\" = no",
@@ -92,14 +92,14 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn regex_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "regex_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn regex_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "regex_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 /// Oráculo conductual: intérprete y VM deben producir EXACTAMENTE la misma salida.
@@ -114,7 +114,7 @@ fn regex_ambos_engines_matches() {
 // ---------------------------------------------------------------------------
 // M81 — Pike VM: grupos de captura, {n,m} y cuantificadores lazy.
 // ---------------------------------------------------------------------------
-const ESPERADO_M81: &[&str] = &[
+const EXPECTED_M81: &[&str] = &[
     "caps /(\\d+)-(\\d+)/ ~ \"tel 12-345 fin\" → [0]=12-345 [1]=12 [2]=345",
     "caps /(a+)(b*)/ ~ \"aab\" → [0]=aab [1]=aa [2]=b",
     "caps /((a)(b))c/ ~ \"abc\" → [0]=abc [1]=ab [2]=a [3]=b",
@@ -153,10 +153,10 @@ fn run_m81(flags: &[&str]) -> (Vec<String>, bool) {
 }
 
 #[test]
-fn regex_capturas_ambos_engines() {
+fn regex_captures_both_engines() {
     let (interp, ok1) = run_m81(&[]);
     let (vm, ok2) = run_m81(&["--vm"]);
     assert!(ok1 && ok2, "regex_captures_demo falló");
-    assert_eq!(interp, ESPERADO_M81, "intérprete vs golden");
-    assert_eq!(vm, ESPERADO_M81, "VM vs golden");
+    assert_eq!(interp, EXPECTED_M81, "intérprete vs golden");
+    assert_eq!(vm, EXPECTED_M81, "VM vs golden");
 }

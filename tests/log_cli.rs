@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     r#"{"ts":"2026-06-30T12:00:00Z","level":"INFO","service":"api","msg":"servidor iniciado"}"#,
     r#"{"ts":"2026-06-30T12:00:00Z","level":"INFO","service":"api","msg":"peticion","method":"GET","path":"/users/42","status":200}"#,
     r#"{"ts":"2026-06-30T12:00:00Z","level":"WARN","service":"api","msg":"latencia alta","ms":1500,"retry":true}"#,
@@ -30,17 +30,17 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 }
 
 #[test]
-fn log_estructurado_interpreter() {
+fn structured_log_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "log_demo falló");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
-fn log_estructurado_vm() {
+fn structured_log_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "log_demo falló");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 /// Cada línea JSON (salvo "(filtrado)") debe ser parseable por Python `json.loads` (escapado correcto).

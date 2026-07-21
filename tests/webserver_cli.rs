@@ -12,7 +12,7 @@ use std::time::Duration;
 
 /// Copia `webserver.ray` a un temporal único, escribe `driver` como `main.ray` a su lado, lanza con
 /// `--vm` y devuelve el proceso hijo + el puerto efímero que imprimió en su primera línea.
-fn launch_servidor(name: &str, driver: &str) -> (Child, u16) {
+fn launch_server(name: &str, driver: &str) -> (Child, u16) {
     let mut dir = std::env::temp_dir();
     dir.push(format!("ray_web_{name}"));
     std::fs::create_dir_all(&dir).expect("crea dir");
@@ -30,12 +30,12 @@ fn launch_servidor(name: &str, driver: &str) -> (Child, u16) {
         .expect("lanza servidor");
 
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el port");
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el port");
     // El último token de la línea: cubre tanto el puerto a secas (drivers manuales) como el
     // "escuchando en el puerto N" que imprime `serve` (M56.5: tests sobre el serve real).
-    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("invalid port: {line:?}"));
     (child, port)
 }
 
@@ -107,8 +107,8 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_http_responde_y_enruta() {
-    let (mut child, port) = launch_servidor("http", SRV_HTTP);
+fn server_http_responds_and_routes() {
+    let (mut child, port) = launch_server("http", SRV_HTTP);
 
     let ok = ask(port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(ok.contains("200 OK"), "esperaba 200 OK, got: {ok}");
@@ -183,8 +183,8 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_sse_emite_eventos() {
-    let (mut child, port) = launch_servidor("sse", SRV_SSE);
+fn server_sse_emits_events() {
+    let (mut child, port) = launch_server("sse", SRV_SSE);
 
     let resp = ask(port, "GET /eventos HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(resp.contains("text/event-stream"), "esperaba Content-Type SSE, got: {resp}");
@@ -197,7 +197,7 @@ fn servidor_sse_emite_eventos() {
 
 // Driver: servidor que eco-devuelve el cuerpo de la petición como respuesta BINARIA. Verifica que un
 // cuerpo binario (con \x00/\xff) cruza intacto read_request (por Content-Length) y send_response (M19.2).
-const SRV_ECO_BIN: &str = r#"
+const ECHO_SERVER_BIN: &str = r#"
 import webserver;
 import std/net;
 fn handle(conn: int) {
@@ -285,8 +285,8 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_applies_limites_de_seguridad() {
-    let (mut child, port) = launch_servidor("limites", SRV_LIMITES);
+fn server_applies_security_limits() {
+    let (mut child, port) = launch_server("limites", SRV_LIMITES);
 
     // (a) Una petición normal dentro de los límites responde 200.
     let ok = ask(port, "POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc");
@@ -353,8 +353,8 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_corta_lecturas_lentas_por_timeout() {
-    let (mut child, port) = launch_servidor("timeout", SRV_TIMEOUT);
+fn server_cuts_slow_reads_by_timeout() {
+    let (mut child, port) = launch_server("timeout", SRV_TIMEOUT);
 
     // Slowloris: abre, envía media petición y se queda callado (sin cerrar). El timeout (300 ms)
     // debe vencer y responder 400; sin él, esta conexión retendría su fibra para siempre.
@@ -399,8 +399,8 @@ fn main() -> int {
 "#;
 
 #[test]
-fn handler_what_panica_responde_500_y_no_fuga_recursos() {
-    let (mut child, port) = launch_servidor("panic", SRV_PANIC);
+fn handler_that_panics_responds_500_and_leaks_no_resources() {
+    let (mut child, port) = launch_server("panic", SRV_PANIC);
 
     // Más peticiones que panican (4) que max_conns (2): si el panic fugara el fd o el token del
     // semáforo, el servidor dejaría de aceptar a la 3ª y esto colgaría (el timeout del cliente
@@ -420,7 +420,7 @@ fn handler_what_panica_responde_500_y_no_fuga_recursos() {
 
 /// Lee UNA respuesta HTTP completa (cabeceras + cuerpo delimitado por Content-Length) del stream.
 /// Necesaria con keep-alive (M56.6): el servidor NO cierra, así que read_to_end no termina.
-fn leer_one_response(stream: &mut TcpStream) -> String {
+fn read_one_response(stream: &mut TcpStream) -> String {
     let mut resp: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
     let mut fin_cab: Option<usize> = None;
@@ -469,24 +469,24 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_mantiene_la_conexion_viva_between_peticiones() {
-    let (mut child, port) = launch_servidor("keepalive", SRV_KEEPALIVE);
+fn server_keeps_connection_alive_between_requests() {
+    let (mut child, port) = launch_server("keepalive", SRV_KEEPALIVE);
 
     // Dos peticiones por la MISMA conexión (keep-alive HTTP/1.1 por defecto).
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     stream.write_all(b"GET /a HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía 1ª");
-    let r1 = leer_one_response(&mut stream);
+    let r1 = read_one_response(&mut stream);
     assert!(r1.contains("200 OK") && r1.contains("hello /a"), "1ª response: {r1}");
     assert!(r1.contains("Connection: keep-alive"), "esperaba keep-alive, got: {r1}");
 
     stream.write_all(b"GET /b HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía 2ª");
-    let r2 = leer_one_response(&mut stream);
+    let r2 = read_one_response(&mut stream);
     assert!(r2.contains("hello /b"), "2ª response por la misma connection: {r2}");
 
     // `Connection: close` se honra: responde y CIERRA (EOF).
     stream.write_all(b"GET /c HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").expect("envía 3ª");
-    let r3 = leer_one_response(&mut stream);
+    let r3 = read_one_response(&mut stream);
     assert!(r3.contains("hello /c") && r3.contains("Connection: close"), "3ª response: {r3}");
     let mut extra = [0u8; 16];
     let n = stream.read(&mut extra).expect("lee after close");
@@ -494,13 +494,13 @@ fn servidor_mantiene_la_conexion_viva_between_peticiones() {
 
     // Una conexión keep-alive OCIOSA se cierra sola al vencer el read timeout (500 ms), en
     // silencio (sin 400): el servidor no retiene la fibra para siempre.
-    let mut ociosa = TcpStream::connect(("127.0.0.1", port)).expect("conecta ociosa");
-    ociosa.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    ociosa.write_all(b"GET /d HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía");
-    let r4 = leer_one_response(&mut ociosa);
+    let mut idle = TcpStream::connect(("127.0.0.1", port)).expect("conecta ociosa");
+    idle.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    idle.write_all(b"GET /d HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía");
+    let r4 = read_one_response(&mut idle);
     assert!(r4.contains("hello /d"), "response antes del ocio: {r4}");
     let mut fin = Vec::new();
-    ociosa.read_to_end(&mut fin).expect("lee hasta el cierre por ocio");
+    idle.read_to_end(&mut fin).expect("lee hasta el cierre por ocio");
     assert!(fin.is_empty(), "esperaba cierre clean sin data extra, got: {:?}", String::from_utf8_lossy(&fin));
 
     let _ = child.kill();
@@ -547,7 +547,7 @@ fn main() -> int {
 
 #[test]
 fn response_con_various_cookies() {
-    let (mut child, port) = launch_servidor("cookies", SRV_COOKIES);
+    let (mut child, port) = launch_server("cookies", SRV_COOKIES);
 
     let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(r.contains("200 OK"), "esperaba 200, got: {r}");
@@ -560,10 +560,10 @@ fn response_con_various_cookies() {
 }
 
 #[test]
-fn head_returns_headers_sin_body() {
+fn head_returns_headers_without_body() {
     // M56.8: a un HEAD, el camino `serve` responde las cabeceras del GET (incl. Content-Length)
     // pero SIN el cuerpo. Reusa el driver keep-alive (handler: "hello " + path).
-    let (mut child, port) = launch_servidor("head", SRV_KEEPALIVE);
+    let (mut child, port) = launch_server("head", SRV_KEEPALIVE);
 
     let r = ask(port, "HEAD /a HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("200 OK"), "esperaba 200 a HEAD, got: {r}");
@@ -575,10 +575,10 @@ fn head_returns_headers_sin_body() {
 }
 
 #[test]
-fn body_chunked_se_decodifica() {
+fn chunked_body_gets_decoded() {
     // M56.8: Transfer-Encoding: chunked entrante → el eco devuelve el cuerpo DECODIFICADO
     // ("hola" + " mundo", con extensión de chunk ignorada). Antes llegaba vacío en silencio.
-    let (mut child, port) = launch_servidor("chunked", SRV_ECO_BIN);
+    let (mut child, port) = launch_server("chunked", ECHO_SERVER_BIN);
 
     let req = b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nhola\r\n6;ext=1\r\n mundo\r\n0\r\n\r\n";
     let resp = ask_bytes(port, req);
@@ -633,7 +633,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn files_estaticos_con_saneo() {
+fn static_files_with_sanitization() {
     // Prepara la raíz estática: pub/index.html público y secreto.txt FUERA de la raíz.
     let mut base = std::env::temp_dir();
     base.push("ray_web_static_root");
@@ -659,10 +659,10 @@ fn files_estaticos_con_saneo() {
         .spawn()
         .expect("lanza servidor estático");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el port");
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("invalid port: {line:?}"));
 
     // "/" sirve index.html con su Content-Type.
     let r = ask(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -751,10 +751,10 @@ fn static_mount_prefix_method_and_etag_304() {
         .spawn()
         .expect("lanza servidor mount");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el port");
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("invalid port: {line:?}"));
 
     // 1) El prefijo se recorta: /static/app.css sale de assets/app.css, con mime + ETag.
     let r = ask(port, "GET /static/app.css HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -791,8 +791,8 @@ fn static_mount_prefix_method_and_etag_304() {
 }
 
 #[test]
-fn servidor_echo_body_binary_intacto() {
-    let (mut child, port) = launch_servidor("ecobin", SRV_ECO_BIN);
+fn server_echoes_body_binary_intact() {
+    let (mut child, port) = launch_server("ecobin", ECHO_SERVER_BIN);
 
     // POST con un cuerpo binario de 7 octetos, incl. 0x00 y 0xFF (que UTF-8 lossy corrompería).
     let bin_body: [u8; 7] = [0, 255, 1, 2, b'b', b'i', b'n'];

@@ -19,7 +19,7 @@ fn run_file_stderr(src: &str, name: &str) -> String {
 }
 
 #[test]
-fn error_de_types_shows_linea_y_cursor() {
+fn type_error_shows_line_and_cursor() {
     let err = run_file_stderr("fn main() -> int {\n    let x = 1 + true;\n    x\n}\n", "ray_err_ty.ray");
     assert!(err.contains("type error at 2:"), "header con ubicación\n{err}");
     assert!(err.contains("2 |     let x = 1 + true;"), "shows la línea de source\n{err}");
@@ -27,7 +27,7 @@ fn error_de_types_shows_linea_y_cursor() {
 }
 
 #[test]
-fn error_de_execution_shows_context() {
+fn runtime_error_shows_context() {
     let err = run_file_stderr("fn main() -> int {\n    let d = 0;\n    10 / d\n}\n", "ray_err_run.ray");
     assert!(err.contains("runtime error at 3:"), "{err}");
     assert!(err.contains("3 |     10 / d"), "{err}");
@@ -35,7 +35,7 @@ fn error_de_execution_shows_context() {
 }
 
 #[test]
-fn error_de_syntax_underscores_el_token_complete() {
+fn syntax_error_underlines_full_token() {
     // M33a: el token ofensor se subraya entero (^^^^), no solo su primer carácter.
     let err = run_file_stderr("fn main() -> int {\n    let x = enum;\n    x\n}\n", "ray_err_span.ray");
     assert!(err.contains("syntax error at 2:13"), "header con ubicación\n{err}");
@@ -45,7 +45,7 @@ fn error_de_syntax_underscores_el_token_complete() {
 }
 
 #[test]
-fn error_de_types_underscores_la_expression_complete() {
+fn type_error_underlines_full_expression() {
     // M33a-2: el checker subraya la expresión entera, no solo su inicio.
     let err = run_file_stderr("fn main() -> int {\n    let x = 1 + true;\n    x\n}\n", "ray_err_span_expr.ray");
     assert!(err.contains("type error at 2:13"), "header\n{err}");
@@ -54,7 +54,7 @@ fn error_de_types_underscores_la_expression_complete() {
 }
 
 #[test]
-fn el_cli_shows_all_los_errors_de_types() {
+fn cli_shows_all_type_errors() {
     // M33c: dos cuerpos con error → los dos diagnósticos renderizados, exit 65.
     let err = run_file_stderr(
         "fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { f() + g() }\n",
@@ -66,7 +66,7 @@ fn el_cli_shows_all_los_errors_de_types() {
 }
 
 #[test]
-fn error_de_execution_shows_la_traza_de_calls() {
+fn runtime_error_shows_call_trace() {
     // M79: la traza de llamadas — `en <fn>` el marco interno, `desde <fn>` los
     // llamadores, cada uno con su posición local. El assert del prelude se etiqueta
     // `prelude` (fuera de banda) y el sitio del USUARIO aparece con su línea real.
@@ -84,7 +84,7 @@ fn error_de_execution_shows_la_traza_de_calls() {
 }
 
 #[test]
-fn error_direct_en_main_no_imprime_traza() {
+fn direct_error_in_main_does_not_print_trace() {
     // M79: con un solo marco la traza no aporta (la cabecera ya lo dice).
     let err = run_file_stderr("fn main() -> int {\n    let d = 0;\n    10 / d\n}\n", "ray_err_sin_traza.ray");
     assert!(err.contains("runtime error at 3:"), "{err}");
@@ -92,7 +92,7 @@ fn error_direct_en_main_no_imprime_traza() {
 }
 
 #[test]
-fn error_en_la_std_reposiciona_la_header_al_llamador() {
+fn error_in_std_repositions_header_to_caller() {
     // M79c: un trap dentro de `std/math` (factorial(25) desborda el int) apunta la
     // cabecera al SITIO del usuario; el marco real de la std queda en la traza.
     let err = run_file_stderr(

@@ -32,7 +32,7 @@ fn run_threads(name: &str, src: &str, n: usize) -> (String, String, i32) {
 }
 
 #[test]
-fn sum_de_values_de_tasks_en_parallel() {
+fn sum_of_task_values_in_parallel() {
     // Ocho tareas independientes, cada una devuelve i*i; main las une y suma. El resultado
     // (0+1+4+9+16+25+36+49 = 140) NO depende del orden en que corran los 4 hilos.
     let src = r#"
@@ -58,7 +58,7 @@ fn main() -> int {
 }
 
 #[test]
-fn muchos_productores_un_consumidor() {
+fn many_producers_one_consumer() {
     // Cuatro productores envían 100 valores cada uno a un canal compartido; main consume los 400 y suma.
     // La suma total (620200) es independiente del entrelazado; sólo el ORDEN de llegada varía (por eso no
     // se imprime cada valor, sólo el total). Valida que ningún envío se pierde bajo M:N.
@@ -91,7 +91,7 @@ fn main() -> int {
 }
 
 #[test]
-fn scope_estructurado_en_parallel() {
+fn structured_scope_in_parallel() {
     // Structured concurrency (M12.3) bajo M:N: un scope lanza 6 tareas de cómputo y las une; el valor del
     // cuerpo del scope (la suma de i*100) es determinista pese al paralelismo.
     let src = r#"
@@ -112,7 +112,7 @@ fn main() -> int {
 }
 
 #[test]
-fn parallel_coincide_con_serie() {
+fn parallel_matches_serial() {
     // Meta-prueba: el MISMO programa da salida+código idénticos con 1 hilo (determinista) y con 4 (M:N).
     // Cubre que el multicore no cambia el resultado observable de un programa bien sincronizado.
     let src = r#"
@@ -139,7 +139,7 @@ fn main() -> int {
 }
 
 #[test]
-fn default_es_multicore_sin_override() {
+fn default_is_multicore_without_override() {
     // M38.4: sin `RAYLANG_THREADS` ni `--deterministic`, un programa CON `spawn` corre en multicore por
     // defecto (`available_parallelism()`). No podemos observar el paralelismo directamente, pero sí que el
     // camino por defecto produce el resultado correcto (independiente del scheduling). Un programa SIN
@@ -200,7 +200,7 @@ fn main() -> int {
 }
 
 #[test]
-fn deadlock_detectado_en_parallel() {
+fn deadlock_detected_in_parallel() {
     // Un recv sobre un canal que nadie alimenta ni cierra: con todas las fibras bloqueadas y ningún worker
     // ejecutando (running == 0), el scheduler M:N debe detectar el deadlock (no colgarse indefinidamente).
     let src = r#"

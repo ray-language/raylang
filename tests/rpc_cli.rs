@@ -124,7 +124,7 @@ fn project(name: &str) -> std::path::PathBuf {
 }
 
 /// Lanza el servidor y devuelve (hijo, puerto anunciado).
-fn launch_servidor(base: &std::path::Path) -> (Child, u16) {
+fn launch_server(base: &std::path::Path) -> (Child, u16) {
     let mut child = Command::new(BIN)
         .args(["run", "src/server.ray"])
         .current_dir(base)
@@ -133,10 +133,10 @@ fn launch_servidor(base: &std::path::Path) -> (Child, u16) {
         .spawn()
         .expect("lanza el servidor");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee el port");
-    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| panic!("invalid port: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee el port");
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("invalid port: {line:?}"));
     child.stdout = Some(reader.into_inner());
     (child, port)
 }
@@ -155,9 +155,9 @@ fn run_client(base: &std::path::Path, port: u16) -> (String, i32) {
 /// conexión, deadline vencido + reconexión, y apagado ordenado por RPC (el servidor drena la
 /// respuesta "bye", devuelve de serve_shutdown y sale 0).
 #[test]
-fn rpc_de_punta_a_punta() {
+fn rpc_end_to_end() {
     let base = project("e2e");
-    let (server, port) = launch_servidor(&base);
+    let (server, port) = launch_server(&base);
     let (out, code) = run_client(&base, port);
     assert_eq!(code, 0, "client sale 0\n{out}");
     let expected = "sum=6\n\
@@ -181,7 +181,7 @@ apagar=\"bye\"\n";
 /// Dos clientes CONCURRENTES contra el mismo servidor: cada conexión tiene su fibra y sus ids
 /// propios; ambos obtienen sus resultados correctos.
 #[test]
-fn dos_clientes_concurrentes() {
+fn two_concurrent_clients() {
     let base = project("dos");
     // Un cliente mínimo parametrizado por sus sumandos (argv[1], argv[2]).
     std::fs::write(
@@ -211,7 +211,7 @@ fn main() -> int {
 "#,
     )
     .unwrap();
-    let (server, port) = launch_servidor(&base);
+    let (server, port) = launch_server(&base);
     let base2 = base.clone();
     let h1 = std::thread::spawn(move || {
         Command::new(BIN).args(["run", "src/mini.ray", &port.to_string(), "1", "2"])

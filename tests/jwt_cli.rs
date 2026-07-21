@@ -7,7 +7,7 @@
 use std::process::Command;
 
 /// Las líneas fijas que `jwt_demo.ray` imprime (en orden). Las dos últimas (UUID) deben ser "true".
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSIsImFkbWluIjp0cnVlfQ.lbFHAPAyxfbCKv0qbJb1ukylm0ZOW_skQJhpnZkZLcM",
     "{\"sub\":\"1234567890\",\"name\":\"Ada\",\"admin\":true}",
     "firma inválida",
@@ -42,10 +42,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn jwt_y_uuid_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn jwt_y_uuid_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

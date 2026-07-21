@@ -98,10 +98,10 @@ fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
 }
 
-const ESPERADO: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\nafter rollback: 2\nsqlite: no such table: no_existe\ncerrada: invalid or already closed handle\n";
+const EXPECTED: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\nafter rollback: 2\nsqlite: no such table: no_existe\ncerrada: invalid or already closed handle\n";
 
 #[test]
-fn sqlite_crud_transaccion_y_errors() {
+fn sqlite_crud_transaction_and_errors() {
     let base = std::env::temp_dir().join("ray_sqlite_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
@@ -109,13 +109,13 @@ fn sqlite_crud_transaccion_y_errors() {
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
     let (out_vm, _) = run(&app, &[]);
-    assert_eq!(out_vm, ESPERADO, "VM");
+    assert_eq!(out_vm, EXPECTED, "VM");
     let (out_interp, _) = run(&app, &["--interp"]);
-    assert_eq!(out_interp, ESPERADO, "intérprete");
+    assert_eq!(out_interp, EXPECTED, "intérprete");
 }
 
 #[test]
-fn sqlite_path_invalida_da_error_claro() {
+fn sqlite_invalid_path_gives_clear_error() {
     let base = std::env::temp_dir().join("ray_sqlite_cli_badpath");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();

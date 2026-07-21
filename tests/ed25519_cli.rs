@@ -8,7 +8,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     // Semilla 9d61b19d… (mensaje vacío).
     "ca3b229b946be2bb71cb50a9ccf1dc5991efc14f3baa3a20cabd77a56e620d3d",
     "871226d44624a3ac2c24a14251b7c033074c43174a814ff7446fdc8da35fc980\
@@ -46,12 +46,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn ed25519_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "ed25519_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn ed25519_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "ed25519_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

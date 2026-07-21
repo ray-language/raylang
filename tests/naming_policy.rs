@@ -1,9 +1,8 @@
 //! La convención de nombres (CLAUDE.md §Convenciones) se auto-defiende: los
-//! IDENTIFICADORES van en inglés en `src/`, `selfhost/`, `packages/` y
-//! `benchmarks/` (incluidos los nombres de test dentro de `#[cfg(test)] mod
-//! tests` y los snippets raylang embebidos ahí). **`tests/` (integración) queda
-//! FUERA de la política** (decisión 20 jul 2026, ver `docs/arqueo-spanglish.md`):
-//! sus nombres de test pueden estar en español. `examples/` y `book/` también
+//! IDENTIFICADORES van en inglés en `src/`, `selfhost/`, `packages/`,
+//! `benchmarks/`, `tools/` y `tests/` (integración) — incluidos los nombres de
+//! test dentro de `#[cfg(test)] mod tests` y los snippets raylang embebidos ahí
+//! (decisión 21 jul 2026, ver `docs/arqueo-spanglish.md`). `examples/` y `book/`
 //! quedan fuera (código de usuario / material didáctico, más flexible).
 //!
 //! Detección pragmática (alineada con `tools/arqueo_spanglish.py`, el script que
@@ -24,8 +23,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Directorios bajo la política. `tests/` queda excluido deliberadamente.
-const EN_POLITICA: &[&str] = &["src", "selfhost", "packages", "benchmarks", "std", "tools"];
+/// Directorios bajo la política.
+const EN_POLITICA: &[&str] =
+    &["src", "selfhost", "packages", "benchmarks", "std", "tools", "tests"];
 
 /// Palabras clave simples que introducen una declaración con nombre justo detrás.
 const DECLARADORES: &[&str] = &[
@@ -124,6 +124,31 @@ fn ident_after(line: &str, pos: usize) -> &str {
     &rest[..end]
 }
 
+/// Descompone un identificador en tokens en minúsculas, partiendo por `_` y por límites de
+/// CamelCase — así un `const ALL_CAPS` o un `struct CamelCase` que lleve una palabra española se
+/// detecta igual que un `snake_case` normal. Un límite de CamelCase solo arranca al pasar de
+/// minúscula a mayúscula (`EsperadaValor` → `esperada`+`valor`); una tirada de mayúsculas seguidas
+/// (`VALOR`, dentro de un const `ALL_CAPS`) queda como un solo token — partirla letra a letra
+/// (como haría comprobar solo "¿es mayúscula?") no detectaría nada.
+fn tokens_of(name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for part in name.split('_') {
+        let mut current = String::new();
+        let mut prev_is_lower = false;
+        for c in part.chars() {
+            if c.is_uppercase() && prev_is_lower {
+                tokens.push(std::mem::take(&mut current).to_lowercase());
+            }
+            prev_is_lower = c.is_lowercase();
+            current.push(c);
+        }
+        if !current.is_empty() {
+            tokens.push(current.to_lowercase());
+        }
+    }
+    tokens
+}
+
 /// ¿Es `line[at]` un byte precedido por un carácter de identificador? (evita que `fn ` case
 /// dentro de `often `, o que `let ` case dentro de `si let `→ok en realidad si let SÍ es válido,
 /// pero evita falsos "medio-palabra" como `reflect `).
@@ -207,11 +232,13 @@ fn identifiers_are_english() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let wordlist = std::fs::read_to_string(root.join("tests/naming_policy_es.txt"))
         .expect("wordlist tests/naming_policy_es.txt");
-    let falsos_amigos: HashSet<&str> = FALSOS_AMIGOS.iter().copied().collect();
-    let spanish: HashSet<&str> = wordlist
+    let falsos_amigos: HashSet<String> = FALSOS_AMIGOS.iter().map(|s| s.to_lowercase()).collect();
+    let spanish: HashSet<String> = wordlist
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !falsos_amigos.contains(l))
+        .filter(|l| !l.is_empty())
+        .map(str::to_lowercase)
+        .filter(|l| !falsos_amigos.contains(l))
         .collect();
 
     let mut files = Vec::new();
@@ -238,7 +265,7 @@ fn identifiers_are_english() {
                 if name == "self" {
                     continue;
                 }
-                if name.split('_').any(|tok| spanish.contains(tok)) {
+                if tokens_of(&name).iter().any(|tok| spanish.contains(tok)) {
                     violations.push(format!("{rel}:{}: {name}", i + 1));
                 }
             }

@@ -29,7 +29,7 @@ fn lsp(entry: &str) -> String {
 }
 
 #[test]
-fn responde_initialize_con_capacidades() {
+fn responds_to_initialize_with_capabilities() {
     let entry = frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
         + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
     let out = lsp(&entry);
@@ -43,7 +43,7 @@ fn responde_initialize_con_capacidades() {
 }
 
 #[test]
-fn hover_shows_el_ty_de_one_variable() {
+fn hover_shows_the_type_of_a_variable() {
     // didOpen un programa y pide hover sobre el uso de `x` (línea 2, carácter 2, 0-basado).
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int {\n  let x = 5;\n  x\n}"}}}"#;
     let hover = r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2}}}"#;
@@ -54,7 +54,7 @@ fn hover_shows_el_ty_de_one_variable() {
 }
 
 #[test]
-fn definicion_salta_a_la_declaracion() {
+fn definition_jumps_to_declaration() {
     // Ir-a-definición del uso de `x` (línea 2) → su `let` (línea 1).
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int {\n  let x = 5;\n  x\n}"}}}"#;
     let def = r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2}}}"#;
@@ -67,7 +67,7 @@ fn definicion_salta_a_la_declaracion() {
 }
 
 #[test]
-fn references_list_los_usos() {
+fn references_list_the_usages() {
     // find-references del uso de `x` (línea 2) → declaración + los dos usos en `x + x`.
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int {\n  let x = 5;\n  x + x\n}"}}}"#;
     let refs = r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2},"context":{"includeDeclaration":true}}}"#;
@@ -102,7 +102,7 @@ fn completion_offers_symbols() {
 }
 
 #[test]
-fn hover_de_miembro_de_modulo_incluye_doc() {
+fn hover_of_module_member_includes_doc() {
     // M49.1: el hover de `math.sqrt` muestra la firma + el `///` de std/math (módulo embebido, sin
     // archivo en disco → su fuente se toma del programa cargado).
     let dir = std::env::temp_dir().join("ray_lsp_hoverdoc");
@@ -124,7 +124,7 @@ fn hover_de_miembro_de_modulo_incluye_doc() {
 }
 
 #[test]
-fn completion_de_members_de_modulo() {
+fn completion_of_module_members() {
     // M49.1: tras `math.` (módulo importado) el LSP ofrece los ítems pub del módulo: funciones, consts.
     // Usa un archivo real (la resolución del `import` necesita un path de proyecto válido, no `/t.ray`).
     let dir = std::env::temp_dir().join("ray_lsp_modcomp");
@@ -147,7 +147,7 @@ fn completion_de_members_de_modulo() {
 }
 
 #[test]
-fn completion_de_miembros_de_tipo_importado() {
+fn completion_of_imported_type_members() {
     // La completion de miembros es módulo-aware: `p.` con `p: Punto` importado de otro módulo
     // ofrece sus campos (antes: buffer aislado → el tipo no resolvía → nada).
     let dir = std::env::temp_dir().join("ray_lsp_memimport");
@@ -171,7 +171,7 @@ fn completion_de_miembros_de_tipo_importado() {
 }
 
 #[test]
-fn cuerpo_con_retorno_calificado_no_es_literal_de_struct() {
+fn body_with_qualified_return_is_not_a_struct_literal() {
     // Regresión: `fn f(...) -> m.Tipo {` — la guarda de `-> T {` debe cubrir el nombre CALIFICADO;
     // antes el cuerpo entero se confundía con un literal `Tipo { … }` y `recv.` dentro del cuerpo
     // ofrecía los CAMPOS DEL TIPO DE RETORNO en vez de los miembros del receptor.
@@ -196,7 +196,7 @@ fn cuerpo_con_retorno_calificado_no_es_literal_de_struct() {
 }
 
 #[test]
-fn archivo_de_paquete_diagnostica_limpio() {
+fn package_file_diagnoses_clean() {
     // Un archivo DENTRO de un paquete-librería (ray.toml sin entry) resuelve sus imports por el
     // nombre del paquete y sus hermanas del monorepo (deps::dependency_roots_for añade el padre):
     // packages/web/framework.ray importa net/webserver y net/log → sin diagnósticos en el editor.
@@ -278,7 +278,7 @@ fn signature_help_shows_la_signature() {
 }
 
 #[test]
-fn completion_incluye_locals_por_ambito() {
+fn completion_includes_scoped_locals() {
     // M10.2f: la completion incluye los params y locales de la función bajo el cursor.
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn calc(factor: int) -> int {\n  let total = factor + 1;\n  \n}"}}}"#;
     let comp = r#"{"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2}}}"#;
@@ -290,7 +290,7 @@ fn completion_incluye_locals_por_ambito() {
 }
 
 #[test]
-fn hover_de_ty_en_literal_de_struct() {
+fn hover_of_type_in_struct_literal() {
     // M10.2f: hover sobre el nombre de tipo en un literal de struct.
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"struct Punto { x: int }\nfn main() -> int {\n  let p = Punto { x: 1 };\n  p.x\n}"}}}"#;
     // `Punto` en la línea 2 (0-basado), carácter 10.
@@ -302,7 +302,7 @@ fn hover_de_ty_en_literal_de_struct() {
 }
 
 #[test]
-fn diagnostica_con_las_dependencies_por_path_del_manifest() {
+fn diagnoses_with_path_dependencies_from_manifest() {
     // Regresión: un proyecto con una path-dep en su ray.toml (como examples/db) compilaba con
     // `ray run` pero el LSP marcaba "no se encuentra el módulo" — dep_roots_for solo miraba
     // `.ray-deps/`, no las dependencias por ruta. Ahora el LSP resuelve con las MISMAS raíces
@@ -337,7 +337,7 @@ fn diagnostica_con_las_dependencies_por_path_del_manifest() {
 }
 
 #[test]
-fn diagnostica_templates_ray_html() {
+fn diagnoses_ray_html_templates() {
     // M55: un buffer `.ray.html` se diagnostica con el pipeline de `ray templ`. (1) Un typo en una
     // variable ({{ titluo }}) genera código que no compila y el error vuelve TRADUCIDO a la línea
     // del template (línea 2 → 1 en 0-based) con el prefijo "template:". (2) Un error del propio
@@ -345,19 +345,19 @@ fn diagnostica_templates_ray_html() {
     // null — no hereda el hover de un nodo envolvente del generado. (4) hover sobre un nombre
     // declarado (el param en la cabecera) da su tipo, vía el módulo generado.
     let open_typo = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///vista.ray.html","text":"{% params titulo: string %}\n<h1>{{ titluo }}</h1>\n"}}}"#;
-    let open_sin_endif = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///rota.ray.html","text":"{% params x: int %}\n{% if x > 0 %}abierto\n"}}}"#;
+    let open_without_endif = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///rota.ray.html","text":"{% params x: int %}\n{% if x > 0 %}abierto\n"}}}"#;
     let hover = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///vista.ray.html"},"position":{"line":1,"character":9}}}"#;
     let hover_param = r#"{"jsonrpc":"2.0","id":10,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///vista.ray.html"},"position":{"line":0,"character":12}}}"#;
-    let entry = frame(open_typo) + &frame(open_sin_endif) + &frame(hover) + &frame(hover_param)
+    let entry = frame(open_typo) + &frame(open_without_endif) + &frame(hover) + &frame(hover_param)
         + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
     let out = lsp(&entry);
     assert!(out.contains("titluo"), "el typo llega como diagnóstico\n{out}");
     assert!(out.contains("template:"), "prefijo de template\n{out}");
     // El typo está en la línea 2 del template → "line":1 (0-based) en su rango.
-    let seccion_typo = out.split("vista.ray.html").nth(1).unwrap_or("");
-    assert!(seccion_typo.contains("\"line\":1"), "el error mapea a la línea del template\n{out}");
+    let typo_section = out.split("vista.ray.html").nth(1).unwrap_or("");
+    assert!(typo_section.contains("\"line\":1"), "el error mapea a la línea del template\n{out}");
     assert!(out.contains("endif"), "el if sin close se reports\n{out}");
     assert!(out.contains("\"id\":9,\"result\":null"), "hover about el typo = null\n{out}");
-    let seccion_param = out.split("\"id\":10").nth(1).unwrap_or("");
-    assert!(seccion_param.contains("titulo: string"), "hover del param da su type\n{out}");
+    let param_section = out.split("\"id\":10").nth(1).unwrap_or("");
+    assert!(param_section.contains("titulo: string"), "hover del param da su type\n{out}");
 }

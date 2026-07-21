@@ -297,11 +297,10 @@ pub fn log_requests(app: App) {
 /// `OPTIONS` preflight (204 + Allow-Origin/Methods/Headers, `Step.Done`) and stamps
 /// `Access-Control-Allow-Origin` on every routed response via an `after` hook. Note: static
 /// mounts bypass the after chain (assets are usually same-origin).
-// OJO (bug cazado en G.2): dentro del propio módulo las llamadas a funciones PROPIAS van
-// LIBRES (`header_of(c, …)`), no por UFCS (`c.header_of(…)`): el sitio UFCS resuelve por el
-// nombre pelado, que tras el namespacing del loader solo existe si la ENTRADA lo importó
-// (acoplamiento accidental — el demo lo importaba todo y lo tapaba). La llamada libre la
-// reescribe el Resolver siempre. Clasificado en IDEAS §52.
+// Nota histórica (G.2): estas llamadas a funciones propias van LIBRES (`header_of(c, …)`)
+// porque el UFCS interno de un módulo tenía un hueco de resolución (IDEAS §52). El hueco ya
+// está ARREGLADO (module_bands: UFCS resuelve las funciones propias del módulo por posición)
+// — `c.header_of(…)` volvería a valer —, pero la forma libre es equivalente y se conserva.
 pub fn cors(app: App, origin: string) {
     app.middlewares.push(fn(c: Ctx, r: Res) -> Step {
         if (c.method == "OPTIONS" && header_of(c, "access-control-request-method") != "") {

@@ -569,6 +569,11 @@ struct Checker {
     /// que `recv.f(...)` resuelva una función importada como *fallback* (tras campo/método). Vacío sin
     /// imports.
     ufcs_aliases: HashMap<String, String>,
+    /// Bandas de módulo del loader (fix de IDEAS §52): `(línea_de_inicio, prefijo)` ordenado por
+    /// inicio. Un sitio UFCS resuelve primero contra las funciones **propias** de su módulo
+    /// (`prefijo::nombre`, por la banda a la que pertenece su línea) — el ámbito léxico del módulo,
+    /// sin depender de lo que importe la entrada. Vacío en un programa de un solo archivo.
+    module_bands: Vec<(usize, String)>,
     /// Exigir la función de entrada `main` (DESIGN §11). `true` por defecto (`check`/`check_all`: un
     /// programa ejecutable la necesita). El LSP la pone en `false` al analizar un **archivo de módulo**
     /// (submódulo `pub`, sin `main`): un módulo suelto es legítimo sin entrada, y esa regla es de

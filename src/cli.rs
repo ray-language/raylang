@@ -30,7 +30,7 @@ use std::process;
 
 use crate::manifest::Manifest;
 use crate::runtime::Value;
-use crate::{checker, compiler, diagnostic, loader, lsp, repl, runtime, test_runner, vm};
+use crate::{checker, compiler, diagnostic, loader, lsp, mcp, repl, runtime, test_runner, vm};
 
 pub fn main() {
     // M13.3a: todo el trabajo corre en un hilo con pila grande, para que la recursión
@@ -65,6 +65,7 @@ fn run() {
         Some("templ") => cmd_templ(&rest[1..]),
         Some("doc") => cmd_doc(&rest[1..]),
         Some("lsp") => lsp::run(),
+        Some("mcp") => mcp::run(),
         Some("repl") | None => repl::run(),
         Some("version") | Some("--version") | Some("-V") => {
             println!("raylang {}", env!("CARGO_PKG_VERSION"));
@@ -100,6 +101,7 @@ Usage: ray <subcommand> [options]
   templ <path>...   compile .ray.html templates to typed raylang modules
   doc <file>     generate the Markdown documentation of its public surface
   lsp               start the Language Server
+  mcp               start the MCP server (tools for AI agents: check/run/test/fmt/doc)
   repl              interactive REPL
   version           the language version
   help              this help

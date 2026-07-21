@@ -1606,6 +1606,19 @@ desactualizada (cabeceras en español; el binario emite las inglesas desde la re
 
 ### Pieza B — el MCP: el bucle de feedback (el ROI grande)
 
+**✅ HECHA (21 jul 2026): `ray mcp`** — subcomando del propio binario (`src/mcp.rs`, ~300
+líneas), cliente 100% externo como LSP/REPL/runner: cero cambios en el core, **cero deps** (MCP
+es JSON-RPC 2.0 por stdio delimitado por línea; el JSON reusa `lsp::json`, ahora `pub(crate)`).
+Las 5 tools de la tabla; `ray_check/run/test/fmt` van por **subproceso del propio binario**
+(`current_exe`): aislamiento por proceso, el stdout del invitado no toca el canal MCP, y el
+confinamiento previsto — fuel 100M + heap 1M (M42) + plazo de pared 10 s con kill (lo que no
+consume fuel: red/stdin) + salida truncada 64 KiB + `--deterministic`. `ray_doc` en-proceso
+(registro de builtins: `signature()` + `doc()`). Resource `raylang://llms.txt` = la pieza A
+embebida (`include_str!`). Un diagnóstico del compilador es resultado normal (isError=false);
+isError=true solo para fallos del envoltorio. Guía + config de clientes: `docs/mcp.md`. Tests:
+3 unitarios en memoria + `tests/mcp_cli.rs` e2e (handshake, 5 tools, stdin pipeado, bomba de
+bucle cortada por FUEL, resource). **ARCO §51 COMPLETO (A + B).**
+
 Ventaja inusual: **el tooling ya existe entero** — el servidor MCP es un envoltorio fino
 (~200 líneas) sobre el binario `ray`. El bucle escribir→verificar→corregir convierte la
 alucinación en iteración; los mensajes de error de raylang son idóneos (posicionados,

@@ -20,7 +20,8 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use crate::{checker, lexer, loader, parser};
-mod json;
+// `pub(crate)`: el JSON a mano lo reusa también el servidor MCP (`src/mcp.rs`, §51 pieza B).
+pub(crate) mod json;
 mod protocol;
 mod features;
 use json::Json;

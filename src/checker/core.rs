@@ -2597,12 +2597,15 @@ impl Checker {
         // El destino de la función libre, en orden (fix de IDEAS §52): (1) builtin o variable-función
         // local (un builtin no se tapa, como en la llamada directa); (2) función **propia del módulo**
         // del sitio (`prefijo::nombre` por la banda de la línea — el ámbito léxico del módulo, sin
-        // depender de lo que importe la entrada); (3) el nombre pelado (entrada/prelude); (4) el
-        // global de una función `from`-importada (UFCS cross-module, M11.3b). Si no resuelve a nada,
-        // el error habla de UFCS (no es ni campo del receptor ni función), mencionando el tipo.
+        // depender de lo que importe la entrada), solo si el RECEPTOR encaja en su primer parámetro
+        // (si no, cae al pelado: un homónimo propio incompatible no tapa al prelude — caso
+        // `db/bson::get([Field],…)` vs `m.get(…)` sobre un Map); (3) el nombre pelado
+        // (entrada/prelude); (4) el global de una función `from`-importada (UFCS cross-module,
+        // M11.3b). Si no resuelve a nada, el error habla de UFCS (no es ni campo del receptor ni
+        // función), mencionando el tipo.
         let target = if crate::builtins::is_builtin(name) || self.lookup(name).is_some() {
             name.to_string()
-        } else if let Some(local) = self.module_local_fn(name, line) {
+        } else if let Some(local) = self.module_local_fn(name, line, recv_ty) {
             local
         } else if self.functions.contains_key(name) {
             name.to_string()
@@ -2631,16 +2634,24 @@ impl Checker {
     }
 
     /// La función **propia del módulo** del sitio (fix de IDEAS §52): si la línea cae en la banda
-    /// de un módulo namespacado y `prefijo::name` existe como función, esa es la resolución (el
-    /// ámbito léxico del módulo; cubre también las privadas — la privacidad rige entre módulos).
-    /// `None` en la entrada (prefijo `""`), fuera de banda (prelude) o sin bandas (archivo único).
-    fn module_local_fn(&self, name: &str, line: usize) -> Option<String> {
+    /// de un módulo namespacado y `prefijo::name` existe como función **cuyo primer parámetro
+    /// admite el receptor** (sonda de unificación, como la del completion del LSP), esa es la
+    /// resolución (el ámbito léxico del módulo; cubre también las privadas — la privacidad rige
+    /// entre módulos). El guard de tipo evita que un homónimo propio incompatible tape al
+    /// prelude: `db/bson` define `get([Field], string)` y aun así `m.get(k)` sobre un `Map`
+    /// debe resolver al `get` del prelude. `None` en la entrada (prefijo `""`), fuera de banda
+    /// (prelude) o sin bandas (archivo único).
+    fn module_local_fn(&self, name: &str, line: usize, recv_ty: &Type) -> Option<String> {
         let (_, prefix) = self.module_bands.iter().rev().find(|(start, _)| *start <= line)?;
         if prefix.is_empty() {
             return None;
         }
         let candidate = format!("{prefix}::{name}");
-        self.functions.contains_key(&candidate).then_some(candidate)
+        let sig = self.functions.get(&candidate)?;
+        let first = sig.params.first()?;
+        let mut sigma: HashMap<String, Type> = HashMap::new();
+        unify(first, recv_ty, &mut sigma).ok()?;
+        Some(candidate)
     }
 
     /// Resolución de una llamada por **nombre** (`name(args)`): builtins conocidos,

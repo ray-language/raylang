@@ -851,10 +851,14 @@ Forzado por las decisiones (no abierto):
   la **banda de líneas** de cada módulo → su prefijo de funciones (L3 ya da bandas disjuntas), y
   el checker resuelve el paso (3) en orden: (a) builtin o variable-función local (un builtin no
   se tapa, como en la llamada directa); (b) **`prefijo::nombre` por la banda de la línea del
-  sitio** — el ámbito léxico del módulo, cubre también funciones privadas; (c) el nombre pelado
-  (entrada/prelude); (d) el alias de from-import. Consecuencia semántica: con funciones
-  homónimas en módulo y entrada, cada sitio usa la de **su** módulo (antes el del módulo caía
-  por accidente en la de la entrada). Un archivo único no tiene bandas → idéntico a antes.
+  sitio** — el ámbito léxico del módulo, cubre también funciones privadas — **solo si el
+  RECEPTOR unifica con su primer parámetro** (sonda de tipo, como la del completion del LSP);
+  si no encaja, cae a (c): un homónimo propio incompatible no tapa al prelude (caso real:
+  `db/bson` define `get([Field], string)` y aun así `m.get(k)` sobre un `Map` resuelve al
+  `get` del prelude); (c) el nombre pelado (entrada/prelude); (d) el alias de from-import.
+  Consecuencia semántica: con funciones homónimas en módulo y entrada, cada sitio usa la de
+  **su** módulo (antes el del módulo caía por accidente en la de la entrada). Un archivo único
+  no tiene bandas → idéntico a antes.
 
 ### 16.1 Sintaxis nueva
 

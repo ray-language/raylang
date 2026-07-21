@@ -1,0 +1,172 @@
+//! G-rev (IDEAS §48) — `std/kv`: estado clave/valor persistido en raylang puro. El caso de uso
+//! es conservar sesiones/config entre reloads de `ray dev` sin una base de datos. Como toca
+//! disco (no determinista para el oráculo de `vm.rs`), se prueba por subproceso corriendo cada
+//! fuente por AMBOS motores y exigiendo que coincidan y den la salida esperada (patrón de
+//! `collections_cli.rs`), sobre archivos temporales propios de cada test.
+
+use std::process::Command;
+
+/// Corre `src` (fuente inline en un temporal) por el motor elegido; devuelve (stdout, código).
+fn run_src(name: &str, src: &str, vm: bool) -> (String, i32) {
+    let path = std::env::temp_dir().join(format!("kv_cli_{name}.ray"));
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg(if vm { "--vm" } else { "--interp" })
+        .arg(&path)
+        .output()
+        .expect("ejecuta raylang");
+    (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
+}
+
+/// Oráculo por subproceso: ambos motores coinciden (stdout + código 0) y la salida es la esperada.
+/// `store` es la ruta del archivo de estado del test, que se limpia antes y después.
+fn ambos_engines(name: &str, store: &std::path::Path, src: &str, expected: &str) {
+    let _ = std::fs::remove_file(store);
+    let (o_in, c_in) = run_src(name, src, false);
+    assert_eq!(c_in, 0, "intérprete sale 0 ({name})\n{o_in}");
+    assert_eq!(o_in, expected, "salida esperada en el intérprete ({name})");
+    let _ = std::fs::remove_file(store);
+    let (o_vm, c_vm) = run_src(name, src, true);
+    assert_eq!(c_vm, 0, "vm sale 0 ({name})\n{o_vm}");
+    assert_eq!(o_vm, o_in, "ambos motores coinciden ({name})");
+    let _ = std::fs::remove_file(store);
+}
+
+/// Ruta del archivo de estado del test (única por nombre, en el temp del sistema).
+fn store_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("kv_cli_{name}.rkv"))
+}
+
+/// El ciclo completo de dev-state: abrir (vacío), poblar, guardar, REABRIR (el "reload") y
+/// encontrar el estado — strings, bytes crudos, borrado, keys ordenadas y clave ausente.
+#[test]
+fn roundtrip_persistencia() {
+    let store = store_path("roundtrip");
+    let src = format!(
+        r#"import std/kv;
+fn main() -> int {{
+    let path = "{p}";
+    var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ print("open: " + e); return 1; }}, }};
+    kv.set_string(s, "user", "roberto");
+    kv.set(s, "raw", bytes_of([0, 255, 128]));
+    kv.set_string(s, "gone", "x");
+    assert(kv.delete(s, "gone"));
+    assert(!kv.delete(s, "gone"));
+    match (kv.save(s)) {{ Result.Ok(n) => print("saved " + to_string(n)), Result.Err(e) => {{ print("save: " + e); return 1; }}, }}
+    let s2 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ print("reopen: " + e); return 1; }}, }};
+    print("count " + to_string(kv.count(s2)));
+    print("keys " + kv.keys(s2).join(","));
+    match (kv.get_string(s2, "user")) {{ Option.Some(v) => print("user " + v), Option.None => print("user MISSING"), }}
+    match (kv.get(s2, "raw")) {{ Option.Some(b) => print("raw " + to_string(b.len()) + " " + to_string(b[1])), Option.None => print("raw MISSING"), }}
+    match (kv.get(s2, "nope")) {{ Option.Some(b) => print("nope PRESENT"), Option.None => print("nope absent"), }}
+    0
+}}
+"#,
+        p = store.display()
+    );
+    let expected = "saved 41\ncount 2\nkeys raw,user\nuser roberto\nraw 3 255\nnope absent\n";
+    ambos_engines("roundtrip", &store, &src, expected);
+}
+
+/// Sobrescribir una clave y volver a guardar conserva el ÚLTIMO valor (y solo ese).
+#[test]
+fn sobrescribir_clave() {
+    let store = store_path("sobrescribir");
+    let src = format!(
+        r#"import std/kv;
+fn main() -> int {{
+    let path = "{p}";
+    var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
+    kv.set_string(s, "k", "primero");
+    match (kv.save(s)) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
+    var s2 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
+    kv.set_string(s2, "k", "segundo");
+    match (kv.save(s2)) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
+    let s3 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
+    match (kv.get_string(s3, "k")) {{ Option.Some(v) => print(v), Option.None => print("MISSING"), }}
+    print(to_string(kv.count(s3)));
+    0
+}}
+"#,
+        p = store.display()
+    );
+    ambos_engines("sobrescribir", &store, &src, "segundo\n1\n");
+}
+
+/// Un store vacío también persiste y reabre vacío (solo la cabecera: magic + count 0).
+#[test]
+fn store_vacio() {
+    let store = store_path("vacio");
+    let src = format!(
+        r#"import std/kv;
+fn main() -> int {{
+    let path = "{p}";
+    var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
+    match (kv.save(s)) {{ Result.Ok(n) => print("saved " + to_string(n)), Result.Err(e) => {{ return 1; }}, }}
+    let s2 = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
+    print("count " + to_string(kv.count(s2)));
+    0
+}}
+"#,
+        p = store.display()
+    );
+    ambos_engines("vacio", &store, &src, "saved 8\ncount 0\n");
+}
+
+/// Un archivo existente que NO es un store (magic malo / truncado) es un error honesto de
+/// `open` — nunca se descarta estado en silencio.
+#[test]
+fn archivo_corrupto_es_error() {
+    let store = store_path("corrupto");
+    let src = format!(
+        r#"import std/kv;
+fn main() -> int {{
+    match (kv.open("{p}")) {{
+        Result.Ok(st) => print("ok?!"),
+        Result.Err(e) => print("err: " + e),
+    }}
+    0
+}}
+"#,
+        p = store.display()
+    );
+    for (caso, contenido, msg) in [
+        ("basura", b"esto no es un store".to_vec(), "bad magic"),
+        ("truncado", b"RKV".to_vec(), "truncated header"),
+        // cabecera válida que anuncia 1 entrada que no está → truncated key length
+        ("cortado", b"RKV1\x01\x00\x00\x00".to_vec(), "truncated key length"),
+    ] {
+        std::fs::write(&store, &contenido).unwrap();
+        let (o_in, c_in) = run_src("corrupto", &src, false);
+        std::fs::write(&store, &contenido).unwrap();
+        let (o_vm, c_vm) = run_src("corrupto", &src, true);
+        assert_eq!(c_in, 0, "intérprete sale 0 ({caso})\n{o_in}");
+        assert_eq!(c_vm, 0, "vm sale 0 ({caso})\n{o_vm}");
+        assert_eq!(o_in, o_vm, "ambos motores coinciden ({caso})");
+        assert!(o_in.starts_with("err: ") && o_in.contains(msg), "detecta {caso}: {o_in}");
+    }
+    let _ = std::fs::remove_file(&store);
+}
+
+/// El guardado es atómico (temp + rename): tras `save` no queda `<path>.tmp` y el archivo
+/// final existe.
+#[test]
+fn save_atomico_sin_residuo() {
+    let store = store_path("atomico");
+    let src = format!(
+        r#"import std/kv;
+import std/fs;
+fn main() -> int {{
+    let path = "{p}";
+    var s = match (kv.open(path)) {{ Result.Ok(st) => st, Result.Err(e) => {{ return 1; }}, }};
+    kv.set_string(s, "k", "v");
+    match (kv.save(s)) {{ Result.Ok(n) => 0, Result.Err(e) => {{ return 1; }}, }};
+    print("final " + to_string(fs.exists(path)));
+    print("tmp " + to_string(fs.exists(path + ".tmp")));
+    0
+}}
+"#,
+        p = store.display()
+    );
+    ambos_engines("atomico", &store, &src, "final true\ntmp false\n");
+}

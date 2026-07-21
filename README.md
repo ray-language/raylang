@@ -219,6 +219,7 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
 | [`PUBLICAR.md`](PUBLICAR.md) | La guía del **publicador**: empaquetar, versionar y publicar en el registro. |
 | [`SPEC.md`](SPEC.md) | La **especificación normativa** del lenguaje (gramática + semántica). |
 | [`llms.txt`](llms.txt) | **raylang para LLMs**: el contexto destilado (delta vs Rust, formas canónicas, errores exactos) para que un modelo escriba raylang correcto. Pégalo en tu prompt/CLAUDE.md. |
+| [`docs/mcp.md`](docs/mcp.md) | El **servidor MCP** (`ray mcp`): las tools check/run/test/fmt/doc para agentes LLM, con el código confinado (fuel/heap/plazo). |
 | [`docs/web-framework.md`](docs/web-framework.md) | La guía del **framework web** (estilo Express): rutas, middleware, SSR, deploy. |
 | [`docs/build.md`](docs/build.md) | La guía de **builds**: features slim, PGO, binario nativo. |
 | [`PERFORMANCE.md`](PERFORMANCE.md) | La **crónica de rendimiento**: cada arco de optimización, medido. |

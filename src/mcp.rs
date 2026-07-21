@@ -1,0 +1,434 @@
+//! `ray mcp` — servidor MCP (Model Context Protocol) por stdio (IDEAS §51, pieza B).
+//!
+//! "El LSP para agentes": el bucle escribir→verificar→corregir que convierte la alucinación
+//! de un LLM en iteración. **Cliente 100% externo** (como `lsp.rs`/`repl.rs`/`test_runner.rs`):
+//! cero cambios en el core y cero dependencias de Cargo — MCP es JSON-RPC 2.0 con mensajes
+//! delimitados por línea sobre stdin/stdout, y el JSON reusa el del LSP (`lsp::json`).
+//!
+//! Las tools que EJECUTAN código del invitado (`ray_run`/`ray_test`/`ray_check`/`ray_fmt`) van
+//! por **subproceso del propio binario** (`current_exe`): aislamiento por proceso (la única
+//! parada fiable del proyecto), stdout del invitado separado del canal MCP, y los límites de
+//! embebido de M42 (`--fuel`, `--heap`) + un plazo de pared con kill. `ray_doc` es en-proceso
+//! (consulta el registro de builtins). El recurso `raylang://llms.txt` sirve el contexto
+//! destilado de la pieza A (embebido con `include_str!`, como la stdlib).
+
+use crate::lsp::json::{self, Json};
+use std::io::{BufRead, Read, Write};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Límite de instrucciones de la VM para `ray_run` (M42.1): ~1 s de CPU.
+const FUEL: u64 = 100_000_000;
+/// Tope de objetos vivos del heap para `ray_run` (M42.2).
+const HEAP: u64 = 1_000_000;
+/// Plazo de pared por tool que ejecuta un subproceso (un invitado bloqueado en red/stdin no
+/// consume fuel): pasado el plazo, kill al hijo y se reporta el timeout.
+const WALL_MS: u64 = 10_000;
+/// Tope de salida reportada por flujo (stdout/stderr): el resto se trunca con aviso.
+const MAX_OUT: usize = 64 * 1024;
+
+/// El contexto destilado de la pieza A, embebido: el *resource* que sirve este servidor.
+const LLMS_TXT: &str = include_str!("../llms.txt");
+
+/// Arranca el servidor sobre stdin/stdout reales (lo llama `ray mcp`).
+pub fn run() {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    serve(stdin.lock(), stdout.lock());
+}
+
+/// El bucle del servidor: un mensaje JSON-RPC por línea; responde solo a peticiones (con `id`).
+/// Genérico sobre los flujos para poder probarlo en memoria (como `lsp::serve`).
+pub fn serve<R: BufRead, W: Write>(reader: R, mut writer: W) {
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(msg) = json::parse(line) else { continue };
+        let id = msg.get("id").cloned();
+        let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("").to_string();
+        let Some(id) = id else { continue }; // notificación (initialized, cancelled…): sin respuesta
+        let reply = match method.as_str() {
+            "initialize" => result(id, initialize_result()),
+            "ping" => result(id, Json::Obj(vec![])),
+            "tools/list" => result(id, Json::Obj(vec![("tools".into(), tools_list())])),
+            "tools/call" => {
+                let name = msg.get("params").and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+                let args = msg.get("params").and_then(|p| p.get("arguments")).cloned().unwrap_or(Json::Obj(vec![]));
+                match call_tool(name, &args) {
+                    Ok(text) => result(id, tool_result(&text, false)),
+                    Err(text) => result(id, tool_result(&text, true)),
+                }
+            }
+            "resources/list" => result(id, Json::Obj(vec![("resources".into(), resources_list())])),
+            "resources/read" => {
+                let uri = msg.get("params").and_then(|p| p.get("uri")).and_then(|u| u.as_str()).unwrap_or("");
+                if uri == "raylang://llms.txt" {
+                    result(id, Json::Obj(vec![("contents".into(), Json::Arr(vec![Json::Obj(vec![
+                        ("uri".into(), Json::Str(uri.into())),
+                        ("mimeType".into(), Json::Str("text/plain".into())),
+                        ("text".into(), Json::Str(LLMS_TXT.into())),
+                    ])]))]))
+                } else {
+                    error(id, -32602, &format!("unknown resource: {uri}"))
+                }
+            }
+            _ => error(id, -32601, &format!("method not found: {method}")),
+        };
+        let _ = writeln!(writer, "{}", reply.serialize());
+        let _ = writer.flush();
+    }
+}
+
+/// La respuesta a `initialize`: versión de protocolo, capacidades (tools + resources) e info.
+fn initialize_result() -> Json {
+    Json::Obj(vec![
+        ("protocolVersion".into(), Json::Str("2024-11-05".into())),
+        ("capabilities".into(), Json::Obj(vec![
+            ("tools".into(), Json::Obj(vec![])),
+            ("resources".into(), Json::Obj(vec![])),
+        ])),
+        ("serverInfo".into(), Json::Obj(vec![
+            ("name".into(), Json::Str("raylang".into())),
+            ("version".into(), Json::Str(env!("CARGO_PKG_VERSION").into())),
+        ])),
+    ])
+}
+
+/// Un `result` JSON-RPC.
+fn result(id: Json, value: Json) -> Json {
+    Json::Obj(vec![
+        ("jsonrpc".into(), Json::Str("2.0".into())),
+        ("id".into(), id),
+        ("result".into(), value),
+    ])
+}
+
+/// Un `error` JSON-RPC.
+fn error(id: Json, code: i64, message: &str) -> Json {
+    Json::Obj(vec![
+        ("jsonrpc".into(), Json::Str("2.0".into())),
+        ("id".into(), id),
+        ("error".into(), Json::Obj(vec![
+            ("code".into(), Json::Num(code as f64)),
+            ("message".into(), Json::Str(message.into())),
+        ])),
+    ])
+}
+
+/// El resultado de una tool: un bloque de texto (+ `isError` para fallos del ENVOLTORIO —
+/// un diagnóstico del compilador es un resultado normal: es el feedback que el modelo necesita).
+fn tool_result(text: &str, is_error: bool) -> Json {
+    Json::Obj(vec![
+        ("content".into(), Json::Arr(vec![Json::Obj(vec![
+            ("type".into(), Json::Str("text".into())),
+            ("text".into(), Json::Str(text.into())),
+        ])])),
+        ("isError".into(), Json::Bool(is_error)),
+    ])
+}
+
+/// El esquema `{code: string}` que comparten las tools de código.
+fn code_schema(desc: &str) -> Json {
+    Json::Obj(vec![
+        ("type".into(), Json::Str("object".into())),
+        ("properties".into(), Json::Obj(vec![(
+            "code".into(),
+            Json::Obj(vec![
+                ("type".into(), Json::Str("string".into())),
+                ("description".into(), Json::Str(desc.into())),
+            ]),
+        )])),
+        ("required".into(), Json::Arr(vec![Json::Str("code".into())])),
+    ])
+}
+
+/// Una definición de tool para `tools/list`.
+fn tool(name: &str, desc: &str, schema: Json) -> Json {
+    Json::Obj(vec![
+        ("name".into(), Json::Str(name.into())),
+        ("description".into(), Json::Str(desc.into())),
+        ("inputSchema".into(), schema),
+    ])
+}
+
+/// Las cinco tools (IDEAS §51): check / run / test / fmt / doc.
+fn tools_list() -> Json {
+    let run_schema = Json::Obj(vec![
+        ("type".into(), Json::Str("object".into())),
+        ("properties".into(), Json::Obj(vec![
+            ("code".into(), Json::Obj(vec![
+                ("type".into(), Json::Str("string".into())),
+                ("description".into(), Json::Str("A complete raylang program (must define fn main).".into())),
+            ])),
+            ("stdin".into(), Json::Obj(vec![
+                ("type".into(), Json::Str("string".into())),
+                ("description".into(), Json::Str("Text piped to the program's stdin (optional).".into())),
+            ])),
+        ])),
+        ("required".into(), Json::Arr(vec![Json::Str("code".into())])),
+    ]);
+    let doc_schema = Json::Obj(vec![
+        ("type".into(), Json::Str("object".into())),
+        ("properties".into(), Json::Obj(vec![(
+            "symbol".into(),
+            Json::Obj(vec![
+                ("type".into(), Json::Str("string".into())),
+                ("description".into(), Json::Str("A builtin name, e.g. 'len', 'parse_int', 'sha256'.".into())),
+            ]),
+        )])),
+        ("required".into(), Json::Arr(vec![Json::Str("symbol".into())])),
+    ]);
+    Json::Arr(vec![
+        tool(
+            "ray_check",
+            "Type-check a raylang program without running it. Returns 'ok' or the exact compiler diagnostics (up to 20, with positions). Use this after writing code and fix what it reports.",
+            code_schema("A complete raylang source file."),
+        ),
+        tool(
+            "ray_run",
+            "Run a raylang program on the VM (sandboxed: instruction fuel, heap cap and a 10 s wall clock). Returns exit code, stdout and stderr. The exit code is main's int return.",
+            run_schema,
+        ),
+        tool(
+            "ray_test",
+            "Run the @test functions of a raylang program. Reports each test and a summary; the exit code is the number of failures.",
+            code_schema("A raylang source file with @test functions."),
+        ),
+        tool(
+            "ray_fmt",
+            "Format a raylang program canonically. Returns the formatted source.",
+            code_schema("A raylang source file to format."),
+        ),
+        tool(
+            "ray_doc",
+            "Signature and documentation of a raylang builtin (e.g. 'len', 'split', 'parse_int'). Kills API hallucination: check before calling anything you are not sure exists.",
+            doc_schema,
+        ),
+    ])
+}
+
+/// El recurso publicado: el contexto destilado "raylang for LLMs" (pieza A).
+fn resources_list() -> Json {
+    Json::Arr(vec![Json::Obj(vec![
+        ("uri".into(), Json::Str("raylang://llms.txt".into())),
+        ("name".into(), Json::Str("raylang for LLMs".into())),
+        ("description".into(), Json::Str("Distilled context for writing correct raylang: the delta vs Rust, canonical forms, exact error messages.".into())),
+        ("mimeType".into(), Json::Str("text/plain".into())),
+    ])])
+}
+
+/// Despacha una tool. `Ok(texto)` es un resultado (incluidos diagnósticos del compilador);
+/// `Err(texto)` es un fallo del envoltorio (argumento ausente, timeout, E/S).
+fn call_tool(name: &str, args: &Json) -> Result<String, String> {
+    let code = || args.get("code").and_then(|c| c.as_str()).ok_or("missing required argument 'code'".to_string());
+    match name {
+        "ray_check" => run_self(&["build"], code()?, None),
+        "ray_run" => {
+            let stdin = args.get("stdin").and_then(|s| s.as_str()).map(str::to_string);
+            let fuel = FUEL.to_string();
+            let heap = HEAP.to_string();
+            run_self(&["run", "--deterministic", "--fuel", &fuel, "--heap", &heap], code()?, stdin)
+        }
+        "ray_test" => run_self(&["test"], code()?, None),
+        "ray_fmt" => run_self(&["fmt"], code()?, None),
+        "ray_doc" => {
+            let symbol = args.get("symbol").and_then(|s| s.as_str()).ok_or("missing required argument 'symbol'")?;
+            Ok(doc_text(symbol))
+        }
+        other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+/// Firma + doc de un builtin, del registro único (`src/builtins.rs`).
+fn doc_text(symbol: &str) -> String {
+    let sig = crate::builtins::signature(symbol)
+        .map(|(params, ret)| format!("{}({}) -> {}", symbol, params.join(", "), ret));
+    let doc = crate::builtins::doc(symbol);
+    match (sig, doc) {
+        (Some(s), Some(d)) => format!("{s}\n{d}"),
+        (Some(s), None) => s,
+        (None, Some(d)) => format!("{symbol}: {d}"),
+        (None, None) => format!(
+            "'{symbol}' is not a builtin. See the stdlib map in the raylang://llms.txt resource; \
+             std/* module functions are documented by `ray doc` over their source."
+        ),
+    }
+}
+
+/// Escribe `code` a un temporal, corre `current_exe() <args> <archivo>` con plazo de pared,
+/// y reporta `exit` + stdout + stderr (truncados). El invitado jamás toca el stdout del MCP.
+fn run_self(args: &[&str], code: &str, stdin: Option<String>) -> Result<String, String> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("ray_mcp_{}_{n}.ray", std::process::id()));
+    std::fs::write(&path, code).map_err(|e| format!("could not write temp file: {e}"))?;
+
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let mut cmd = Command::new(exe);
+    cmd.args(args).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = cmd.spawn().map_err(|e| format!("could not spawn: {e}"));
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+    };
+    // El stdin del invitado: el texto dado, o cerrado de inmediato (input() → None).
+    if let Some(mut si) = child.stdin.take() {
+        if let Some(text) = &stdin {
+            let _ = si.write_all(text.as_bytes());
+        }
+        drop(si);
+    }
+    // Drenar stdout/stderr en hilos (evita el deadlock del pipe lleno) mientras corre el plazo.
+    let mut out_pipe = child.stdout.take().unwrap();
+    let mut err_pipe = child.stderr.take().unwrap();
+    let out_h = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let err_h = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let deadline = Instant::now() + Duration::from_millis(WALL_MS);
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    timed_out = true;
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break None,
+        }
+    };
+    let stdout = out_h.join().unwrap_or_default();
+    let stderr = err_h.join().unwrap_or_default();
+    let _ = std::fs::remove_file(&path);
+    if timed_out {
+        return Err(format!(
+            "timeout: the program did not finish within {} s (killed). stdout so far:\n{}",
+            WALL_MS / 1000,
+            clip(&stdout)
+        ));
+    }
+    let code = status.and_then(|s| s.code()).unwrap_or(-1);
+    let mut text = format!("exit: {code}");
+    if !stdout.is_empty() {
+        text.push_str("\n--- stdout ---\n");
+        text.push_str(&clip(&stdout));
+    }
+    if !stderr.is_empty() {
+        text.push_str("\n--- stderr ---\n");
+        text.push_str(&clip(&stderr));
+    }
+    if stdout.is_empty() && stderr.is_empty() && code == 0 {
+        text.push_str("\nok");
+    }
+    Ok(text)
+}
+
+/// UTF-8 con pérdida y truncado a `MAX_OUT` (con aviso), sin salto final redundante.
+fn clip(bytes: &[u8]) -> String {
+    let s = String::from_utf8_lossy(bytes);
+    let s = s.trim_end_matches('\n');
+    if s.len() > MAX_OUT {
+        let mut cut = MAX_OUT;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}\n... [truncated at {} KiB]", &s[..cut], MAX_OUT / 1024)
+    } else {
+        s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Manda las líneas dadas al servidor en memoria y devuelve las respuestas parseadas.
+    fn roundtrip(lines: &[&str]) -> Vec<Json> {
+        let input = lines.join("\n");
+        let mut out = Vec::new();
+        serve(Cursor::new(input), &mut out);
+        String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| json::parse(l).expect("respuesta JSON válida"))
+            .collect()
+    }
+
+    #[test]
+    fn initialize_y_tools_list() {
+        let replies = roundtrip(&[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        ]);
+        assert_eq!(replies.len(), 2, "la notificación no se responde");
+        let init = replies[0].get("result").expect("result de initialize");
+        assert_eq!(
+            init.get("serverInfo").and_then(|s| s.get("name")).and_then(|n| n.as_str()),
+            Some("raylang")
+        );
+        let tools = replies[1]
+            .get("result").and_then(|r| r.get("tools")).and_then(|t| t.as_array())
+            .expect("lista de tools");
+        let names: Vec<_> = tools.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str())).collect();
+        assert_eq!(names, vec!["ray_check", "ray_run", "ray_test", "ray_fmt", "ray_doc"]);
+    }
+
+    #[test]
+    fn resource_llms_txt() {
+        let replies = roundtrip(&[
+            r#"{"jsonrpc":"2.0","id":1,"method":"resources/list"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"raylang://llms.txt"}}"#,
+        ]);
+        let uri = replies[0]
+            .get("result").and_then(|r| r.get("resources")).and_then(|a| a.as_array())
+            .and_then(|a| a.first()).and_then(|r| r.get("uri")).and_then(|u| u.as_str());
+        assert_eq!(uri, Some("raylang://llms.txt"));
+        let text = replies[1]
+            .get("result").and_then(|r| r.get("contents")).and_then(|a| a.as_array())
+            .and_then(|a| a.first()).and_then(|c| c.get("text")).and_then(|t| t.as_str())
+            .expect("contenido del recurso");
+        assert!(text.contains("# raylang for LLMs"), "sirve el llms.txt embebido");
+    }
+
+    #[test]
+    fn ray_doc_en_proceso_y_method_not_found() {
+        let replies = roundtrip(&[
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ray_doc","arguments":{"symbol":"len"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ray_doc","arguments":{"symbol":"no_such_fn"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"nope/nope"}"#,
+        ]);
+        let text = |i: usize| {
+            replies[i]
+                .get("result").and_then(|r| r.get("content")).and_then(|c| c.as_array())
+                .and_then(|a| a.first()).and_then(|b| b.get("text")).and_then(|t| t.as_str())
+                .unwrap_or("").to_string()
+        };
+        assert!(text(0).contains("len("), "firma de len: {}", text(0));
+        assert!(text(0).contains("length of a collection"), "doc de len");
+        assert!(text(1).contains("is not a builtin"), "símbolo desconocido honesto");
+        assert_eq!(
+            replies[2].get("error").and_then(|e| e.get("code")).map(|c| c.serialize()),
+            Some("-32601".to_string())
+        );
+    }
+}

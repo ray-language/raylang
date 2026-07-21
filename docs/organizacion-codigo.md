@@ -1,10 +1,17 @@
 # Estrategia de subdivisión de los archivos grandes
 
-> Documento de diseño (17 jul 2026). Objetivo: mejorar la mantenibilidad y la organización del
+> Documento de diseño (17 jul 2026; **actualizado 20 jul 2026** — cifras refrescadas, el plan de
+> partición sigue sin ejecutarse). Objetivo: mejorar la mantenibilidad y la organización del
 > repo dividiendo los archivos que han crecido más allá de lo razonable, **sin cambiar ni una línea
 > de lógica ni la API pública**. Este documento presenta el diagnóstico, las opciones evaluadas, la
 > recomendación y el mapa de partición archivo por archivo. La ejecución es un trabajo aparte
 > (por lotes, un archivo por commit).
+>
+> **Estado (20 jul 2026): nada de esto se ha ejecutado todavía** — los cuatro archivos grandes
+> siguen siendo archivos únicos (`src/checker.rs` etc., no `src/checker/`); no hay branch ni PR
+> previos sobre este tema. En los tres días transcurridos crecieron ~1–2 % más (self-hosting +
+> concurrencia M12 siguieron tocándolos) pero el diagnóstico y el mapa de partición del §4 siguen
+> vigentes tal cual.
 
 ## 1. Diagnóstico
 
@@ -12,14 +19,21 @@ Tamaños actuales (líneas) y frecuencia de cambio (commits que tocan el archivo
 
 | Archivo | Líneas | Churn | De ellas, tests | Núcleo del problema |
 |---|---:|---:|---:|---|
-| `src/checker.rs` | 7 766 | 119 | ~1 700 | Un `impl Checker` de ~3 100 líneas + 9 secciones de lowering |
-| `src/vm.rs` | 6 918 | **178** | ~3 100 | Bucle de despacho + scheduler + GC + **la mitad es tests** |
-| `src/transpile.rs` | 5 879 | 69 | ~800 | Emisión + runtime embebido (strings) + análisis + tipos, todo junto |
-| `src/lsp.rs` | 4 964 | 74 | ~1 300 | 7 features LSP + transporte JSON-RPC + docs en un archivo |
-| `src/parser.rs` | 2 598 | 62 | — | Aceptable (descenso recursivo cohesivo) |
-| `src/builtins.rs` | 2 552 | 85 | — | **No dividir**: es el registro único (L1), su valor es estar junto |
-| `src/interpreter.rs` | 2 443 | 111 | — | Aceptable (oráculo, cohesivo) |
-| `src/cli.rs` | 2 091 | 60 | — | Aceptable |
+| `src/checker.rs` | 7 849 | 124 | ~1 710 | Un `impl Checker` de ~3 100 líneas + 9 secciones de lowering |
+| `src/vm.rs` | 7 221 | **188** | ~3 100 | Bucle de despacho + scheduler + GC + **la mitad es tests** |
+| `src/transpile.rs` | 6 220 | 86 | ~810 | Emisión + runtime embebido (strings) + análisis + tipos, todo junto |
+| `src/lsp.rs` | 4 987 | 79 | ~1 340 | 7 features LSP + transporte JSON-RPC + docs en un archivo |
+| `src/parser.rs` | 2 598 | — | — | Aceptable (descenso recursivo cohesivo) |
+| `src/builtins.rs` | 2 571 | — | — | **No dividir**: es el registro único (L1), su valor es estar junto |
+| `src/interpreter.rs` | 2 444 | — | — | Aceptable (oráculo, cohesivo) |
+| `src/cli.rs` | 2 174 | — | — | Aceptable |
+| `src/fmt.rs` | 1 600 | — | — | Por debajo del umbral; vigilar |
+| `src/loader.rs` | 1 543 | — | — | Por debajo del umbral |
+| `src/compiler.rs` | 1 423 | — | — | Por debajo del umbral |
+
+(Churn no recalculado para las filas sin variación de diagnóstico — ver §4.5 para la lista completa
+de "no se divide". `transpile.rs` tiene además dos bloques `#[cfg(test)]` pequeños en cabecera,
+líneas 184 y 222, además del `mod tests` grande en 5415 — no cambia el mapa de partición del §4.3.)
 
 Observaciones que guían la estrategia:
 
@@ -95,7 +109,7 @@ Separar fases en crates del workspace (como ya se hizo con `crates/ray-runtime`)
 
 Las líneas citadas son las actuales (17 jul 2026), para localizar cada bloque al ejecutar.
 
-### 4.1 `src/checker.rs` (7 766) → `src/checker/` (7 archivos)
+### 4.1 `src/checker.rs` (7 849) → `src/checker/` (7 archivos)
 
 | Archivo nuevo | Contenido (líneas actuales) | Tamaño estimado |
 |---|---|---:|
@@ -105,12 +119,12 @@ Las líneas citadas son las actuales (17 jul 2026), para localizar cada bloque a
 | `enums.rs` | Resolución de construcción de enums, M5 (3942–4080) | ~150 |
 | `traits.rs` | Auxiliares de traits M9 + `@derive` M10.1 (4081–5163) | ~1 000 |
 | `lowering.rs` | Las 6 bajadas post-check: UFCS/dicts/dyn/uint/`?`-conv/operadores (5164–6053). Son secciones de ~150 líneas: UN archivo con las cabeceras actuales como separadores | ~900 |
-| `tests.rs` | `mod tests` (6058–7766) | ~1 700 |
+| `tests.rs` | `mod tests` (6141–7849, actualizado 20 jul) | ~1 700 |
 
 Nota: el espejo selfhost (`selfhost/checker.ray`) **no se toca** — la partición es solo del host
 Rust y no cambia ningún mensaje.
 
-### 4.2 `src/vm.rs` (6 918) → `src/vm/` (6 archivos)
+### 4.2 `src/vm.rs` (7 221) → `src/vm/` (6 archivos)
 
 | Archivo nuevo | Contenido (líneas actuales) | Tamaño estimado |
 |---|---|---:|
@@ -118,12 +132,12 @@ Rust y no cambia ningún mensaje.
 | `sched.rs` | El scheduler: `Fiber`/`ScopeFrame`/`Waiting`/`Parked`/`IoParked`/`Shared` (161–284) + los métodos de scheduling del `impl Vm` (`poll_next`, `wake_*`, `cancel_task`, `fail_current_fiber`, aparcamiento de E/S, M38 workers) | ~1 200 |
 | `values.rs` | Conversión y formato de valores: `const_to_heap`/`values_equal`/`format_value`/`to_value`/`heap_to_key` (3490–3650, 3741–3812) | ~250 |
 | `transfer.rs` | M38.1a transferencia de subgrafo entre heaps (3650–3740) | ~100 |
-| `tests.rs` | `mod tests` (3817–6918) — si estorba, segunda pasada: `tests/oracle.rs` (los `oracle_*`) vs `tests/unit.rs` | ~3 100 |
+| `tests.rs` | `mod tests` (4120–7221, actualizado 20 jul) — si estorba, segunda pasada: `tests/oracle.rs` (los `oracle_*`) vs `tests/unit.rs` | ~3 100 |
 
 El corte exacto despacho-vs-scheduler dentro del `impl Vm` se decide al ejecutar (regla: si el
 método toca `Shared`/`parked`/`ready`, va a `sched.rs`).
 
-### 4.3 `src/transpile.rs` (5 879) → `src/transpile/` (7 archivos)
+### 4.3 `src/transpile.rs` (6 220) → `src/transpile/` (7 archivos)
 
 | Archivo nuevo | Contenido (líneas actuales) | Tamaño estimado |
 |---|---|---:|
@@ -134,33 +148,34 @@ método toca `Shared`/`parked`/`ready`, va a `sched.rs`).
 | `emit.rs` | `impl Transpiler`: funciones/stmts/exprs/match/literales (1399–2860 aprox.) | ~1 400 |
 | `calls.rs` | `emit_call` (~735 líneas) + `emit_call_arg` + emisión de builtins + `emit_send_convs`/spawn-captures N5 (2288, 2861–4620 aprox.) | ~1 500 |
 | `types.rs` | Sistema de tipos del backend: `type_of`, `classify`, `normalize_type`, `rust_ty`, `send_type`/`send_is_tree`, `unify`/`subst_type`, helpers FFI (4203–5070) | ~900 |
-| `tests.rs` | `mod tests` (5075–5879) | ~800 |
+| `tests.rs` | `mod tests` (5415–6220, actualizado 20 jul; hay además dos bloques `#[cfg(test)]` pequeños en cabecera, 184/222, que se mueven junto con ellos) | ~810 |
 
-### 4.4 `src/lsp.rs` (4 964) → `src/lsp/` (6 archivos)
+### 4.4 `src/lsp.rs` (4 987) → `src/lsp/` (6 archivos)
 
 | Archivo nuevo | Contenido | Tamaño estimado |
 |---|---|---:|
 | `mod.rs` | `run`/`serve` + dispatch de mensajes | ~300 |
-| `json.rs` | El `mod json` interno (3281–3628, parser+serializador) — ya es un módulo, solo cambia de sitio; su `mod tests` interno (3588) le acompaña | ~350 |
+| `json.rs` | El `mod json` interno (3304–3651, actualizado 20 jul; parser+serializador) — ya es un módulo, solo cambia de sitio; su `mod tests` interno (3611) le acompaña | ~350 |
 | `protocol.rs` | Framing (`read_message`/`send`), extracción de params, helpers de rangos/posiciones | ~300 |
 | `features.rs` | hover, definición, referencias+rename, completion, signature help — si supera ~1 500, partir en `hover_def.rs` / `refs_rename.rs` / `completion.rs` | ~1 800 |
 | `docs.rs` | Documentación de símbolos (`doc_of_symbol`, docs de builtins/prelude) | ~400 |
-| `tests.rs` | `mod tests` (3629–4964) | ~1 300 |
+| `tests.rs` | `mod tests` (3652–4987, actualizado 20 jul) | ~1 340 |
 
 ### 4.5 Lo que NO se divide (y por qué)
 
-- **`src/builtins.rs` (2 552)**: es el **registro único** de L1 — su valor es precisamente que
+- **`src/builtins.rs` (2 571)**: es el **registro único** de L1 — su valor es precisamente que
   cada builtin sea UNA fila en UN sitio. Dividirlo recrearía el problema que L1 eliminó.
 - **`src/parser.rs` (2 598)**: descenso recursivo; la jerarquía de precedencia se lee de arriba
   a abajo — partirla rompería la narrativa. Vigilar si supera ~3 500.
-- **`src/interpreter.rs` (2 443)**: el oráculo; cohesivo y estable.
-- **`src/cli.rs`, `src/fmt.rs`, `src/loader.rs`, `src/compiler.rs`**: por debajo del umbral.
+- **`src/interpreter.rs` (2 444)**: el oráculo; cohesivo y estable.
+- **`src/cli.rs` (2 174), `src/fmt.rs` (1 600), `src/loader.rs` (1 543), `src/compiler.rs`
+  (1 423)**: por debajo del umbral (20 jul).
 
 ## 5. Orden propuesto y esfuerzo
 
 Prioridad = tamaño × churn × riesgo bajo. Cada paso es un commit independiente con suite verde.
 
-1. **`vm.rs`** (el más caliente: 178 commits/6 semanas y 45 % tests). Empezar por extraer
+1. **`vm.rs`** (el más caliente: 188 commits/6 semanas y 45 % tests). Empezar por extraer
    `tests.rs` (riesgo ~0), luego `sched.rs`/`values.rs`/`transfer.rs`. — ~medio día.
 2. **`transpile.rs`** (foco actual del trabajo nativo). `runtime.rs` y `tests.rs` primero
    (texto y tests), luego `analysis.rs`/`names.rs`/`types.rs`, y por último el corte
@@ -178,5 +193,5 @@ Total estimado: **2–3 días** repartibles; cada paso deja el repo mejor sin bl
 | Romper lógica al mover | Commits de movimiento puro + suite dirigida por módulo entre commits |
 | Perder `git blame` | `git log --follow`; anotarlo en cada mensaje de commit |
 | Visibilidad: privados usados entre submódulos | `pub(super)` mínimo; nunca `pub` nuevo en la API del crate |
-| Choque con ramas abiertas (PR #18) | Ejecutar las particiones **después** de fusionar la rama nativa activa, o sobre ella si va a vivir más |
+| Choque con ramas abiertas | La rama nativa (PR #18) ya se fusionó (20 jul); no hay ramas largas abiertas ahora mismo — buen momento para ejecutar sin choque. Revisar `git branch -a`/PRs abiertos antes de arrancar cada paso, por si hay trabajo nuevo en curso sobre alguno de los cuatro archivos |
 | Convención "cada fase lleva sus tests en su archivo" | Se conserva en espíritu: los tests viven en `foo/tests.rs`, dentro del módulo de su fase (actualizar la línea de CLAUDE.md al ejecutar) |

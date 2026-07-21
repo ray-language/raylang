@@ -222,6 +222,44 @@ framework). Enums, arrays y Map como campo → diferidos (impl manual mientras t
 estáticos responden antes de la cadena `after`, así que no llevan las cabeceras CORS (los
 assets suelen ser same-origin).
 
+## Sesiones (G.2)
+
+Estado por usuario sobre la cookie `ray_session` y un store `std/kv` compartido por un
+**actor** (una fibra dueña del estado; los handlers le hablan por canal — coherente por FIFO,
+sin locks). La gracia está en `ray dev`: **la sesión sobrevive al hot reload** — bajo
+`RAY_DEV_RELOAD` el estado se carga del archivo al arrancar y se persiste tras cada escritura
+(formato binario RKV1, escritura atómica). En producción vive en memoria y **nunca toca disco**.
+
+```raylang
+from web/framework import sessions, session_get, session_put, session_delete, Sessions;
+
+fn main() -> int {
+    // UNA vez, en main; los handlers la capturan. El archivo solo se usa bajo `ray dev`.
+    let sess = match (sessions("dev-sessions.rkv")) {
+        Result.Ok(s) => s,
+        Result.Err(e) => { print("sessions: " + e); return 1; },   // archivo corrupto: bórralo
+    };
+    listen(fn() -> App {
+        var app = new_app();
+        app.POST("/login", fn(c: Ctx, r: Res) {
+            session_put(sess, c, r, "user", c.form_field("user"));  // estrena la cookie si no hay
+            r.text("dentro");
+        });
+        app.GET("/perfil", fn(c: Ctx, r: Res) {
+            let u = session_get(sess, c, r, "user");                // "" si no hay sesión/valor
+            r.text("hola " + u);
+        });
+        app
+    }, "127.0.0.1", 8080);
+    0
+}
+```
+
+`session_of(ctx, res)` da el id (cookie `ray_session`, uuid v4, `Path=/; HttpOnly`; se crea y
+se añade el `Set-Cookie` la primera vez que cualquier helper lo necesita). Los valores son
+strings; para estado no ligado a un usuario (config, contadores), usa `std/kv` directamente
+(`kv.open_shared(path)` — misma API `StoreOps` que el store local).
+
 ## Despliegue
 
 Una **única** familia de arranque (M93.3), siempre sobre el builder top-level:
@@ -288,6 +326,9 @@ compartido va por canales a una fibra que lo posee (ver `examples/web/ssr/README
 | `status/header/cookie(res, …) -> Res` | encadenables |
 | `text/json/html/redirect(res, …)` | fijan cuerpo y Content-Type / 302 |
 | `json_of(res, v: T: ToJson)` | el JSON de un valor tipado (trait `ToJson`) |
+| `sessions(path) -> Result<Sessions, string>` | capa de sesiones (dev: persiste y sobrevive al reload; prod: memoria) |
+| `session_of(ctx, res) -> string` | id de sesión (cookie `ray_session`; la estrena si falta) |
+| `session_get/put/delete(sess, ctx, res, clave[, valor])` | valores de la sesión del request |
 | `listen[_tls|_graceful|_limits](build_app, …)` | arranca el servidor desde el builder (VM y nativo) |
 
 Demo completo: `examples/web/framework/` (`ray run` y los curl de su README).

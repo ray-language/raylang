@@ -242,7 +242,9 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
     }
 }
 
-/// Firma + doc de un builtin, del registro único (`src/builtins.rs`).
+/// Firma + doc de un builtin (registro único, `src/builtins.rs`) o — *fallback* — de un
+/// envoltorio del **prelude** (`parse_int`, `read_int`, `assert_eq`, `sort`…: funciones
+/// raylang ordinarias, no filas de la tabla; cazado probando el MCP con Claude Code real).
 fn doc_text(symbol: &str) -> String {
     let sig = crate::builtins::signature(symbol)
         .map(|(params, ret)| format!("{}({}) -> {}", symbol, params.join(", "), ret));
@@ -251,10 +253,52 @@ fn doc_text(symbol: &str) -> String {
         (Some(s), Some(d)) => format!("{s}\n{d}"),
         (Some(s), None) => s,
         (None, Some(d)) => format!("{symbol}: {d}"),
-        (None, None) => format!(
-            "'{symbol}' is not a builtin. See the stdlib map in the raylang://llms.txt resource; \
-             std/* module functions are documented by `ray doc` over their source."
-        ),
+        (None, None) => prelude_doc_text(symbol).unwrap_or_else(|| format!(
+            "'{symbol}' is not a builtin nor a prelude function. See the stdlib map in the \
+             raylang://llms.txt resource; std/* module functions are documented by `ray doc` \
+             over their source."
+        )),
+    }
+}
+
+/// Firma (del AST del prelude) + doc (las `///` del fuente) de una función del prelude.
+fn prelude_doc_text(symbol: &str) -> Option<String> {
+    if symbol.starts_with("__") || symbol.contains('#') {
+        return None; // primitivos internos / métodos manglados: no son superficie
+    }
+    let funcs = crate::prelude::functions();
+    let f = funcs.iter().find(|f| f.name == symbol)?;
+    // `<T: Eq + Show>` de type_params + bounds.
+    let tparams = if f.type_params.is_empty() {
+        String::new()
+    } else {
+        let parts: Vec<String> = f.type_params.iter().map(|tp| {
+            let traits: Vec<&str> =
+                f.bounds.iter().filter(|(p, _)| p == tp).map(|(_, t)| t.as_str()).collect();
+            if traits.is_empty() { tp.clone() } else { format!("{}: {}", tp, traits.join(" + ")) }
+        }).collect();
+        format!("<{}>", parts.join(", "))
+    };
+    let params: Vec<String> = f.params.iter().map(|p| format!("{}: {}", p.name, p.ty)).collect();
+    let ret = match &f.return_type {
+        crate::ast::Type::Unit => String::new(),
+        t => format!(" -> {t}"),
+    };
+    let sig = format!("{symbol}{tparams}({}){ret}", params.join(", "));
+    // Las líneas `///` contiguas encima del `fn <symbol>(` en el fuente del prelude.
+    let mut doc_lines: Vec<&str> = Vec::new();
+    let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
+    if let Some(i) = lines.iter().position(|l| l.trim_start().starts_with(&format!("fn {symbol}("))) {
+        let mut j = i;
+        while j > 0 && lines[j - 1].trim_start().starts_with("///") {
+            j -= 1;
+            doc_lines.insert(0, lines[j].trim_start().trim_start_matches("///").trim());
+        }
+    }
+    if doc_lines.is_empty() {
+        Some(sig)
+    } else {
+        Some(format!("{sig}\n{}", doc_lines.join(" ")))
     }
 }
 
@@ -408,6 +452,17 @@ mod tests {
             .and_then(|a| a.first()).and_then(|c| c.get("text")).and_then(|t| t.as_str())
             .expect("contenido del recurso");
         assert!(text.contains("# raylang for LLMs"), "sirve el llms.txt embebido");
+    }
+
+    /// El fallback del prelude (cazado con Claude Code real: `parse_int` no es fila de la
+    /// tabla de builtins — es un envoltorio raylang — y `ray_doc` lo negaba).
+    #[test]
+    fn ray_doc_covers_the_prelude() {
+        let t = doc_text("parse_int");
+        assert!(t.contains("parse_int(s: string) -> Option<int>"), "firma del prelude: {t}");
+        assert!(t.contains("Parses a string as an integer"), "doc /// del prelude: {t}");
+        let g = doc_text("assert_eq");
+        assert!(g.contains("assert_eq<T: Eq + Show>"), "genéricos con bounds: {g}");
     }
 
     #[test]

@@ -116,9 +116,12 @@ fn handshake_y_las_cinco_tools() {
     let fmt = mcp.call(8, "ray_fmt", r#"{"code":"fn main(){print(1);}"}"#);
     assert!(fmt.contains("fn main() {"), "fmt canónico: {fmt}");
 
-    // ray_doc: firma + doc del registro de builtins; desconocido → honesto.
+    // ray_doc: firma + doc — de un builtin de tabla Y de un envoltorio del prelude
+    // (parse_int: el assert laxo de antes dejaba pasar el "is not a builtin").
     let doc = mcp.call(9, "ray_doc", r#"{"symbol":"parse_int"}"#);
-    assert!(doc.contains("parse_int"), "doc de parse_int: {doc}");
+    assert!(doc.contains("-> Option<int>"), "firma del prelude en ray_doc: {doc}");
+    let builtin = mcp.call(12, "ray_doc", r#"{"symbol":"len"}"#);
+    assert!(builtin.contains("length of a collection"), "doc de builtin: {builtin}");
     let unknown = mcp.call(10, "ray_doc", r#"{"symbol":"no_existe"}"#);
     assert!(unknown.contains("is not a builtin"), "símbolo desconocido: {unknown}");
 

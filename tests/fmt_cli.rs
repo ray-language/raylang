@@ -31,7 +31,7 @@ fn write_tmp(name: &str, content: &str) -> String {
 
 /// La lista de ejemplos sobre los que se exige idempotencia. Cubre control de flujo, datos, genéricos,
 /// traits/impls, match, closures y la propia librería de regex (single-file, sin imports).
-const EJEMPLOS: &[&str] = &[
+const EXAMPLES: &[&str] = &[
     "examples/basics/fib.ray",
     "examples/basics/fizzbuzz.ray",
     "examples/basics/gcd.ray",
@@ -50,7 +50,7 @@ const EJEMPLOS: &[&str] = &[
 
 #[test]
 fn formats_without_error() {
-    for rel in EJEMPLOS {
+    for rel in EXAMPLES {
         let (_, ok) = fmt(&repo(rel));
         assert!(ok, "--fmt falló en {}", rel);
     }
@@ -58,7 +58,7 @@ fn formats_without_error() {
 
 #[test]
 fn is_idempotent() {
-    for rel in EJEMPLOS {
+    for rel in EXAMPLES {
         let (once, ok1) = fmt(&repo(rel));
         assert!(ok1, "--fmt falló en {}", rel);
         let tmp = write_tmp(&rel.replace('/', "_"), &once);

@@ -56,7 +56,7 @@ fn launch_starttls_server() -> u16 {
     port
 }
 
-const CLIENTE: &str = r#"import std/net;
+const CLIENT: &str = r#"import std/net;
 
 fn main() -> int {
     let a = args();
@@ -103,14 +103,14 @@ fn main() -> int {
 }
 "#;
 
-const ESPERADO: &str = "claro: GO\ntls: hello-seguro\ndouble: handle 1 is not a plain TCP socket\n";
+const EXPECTED: &str = "claro: GO\ntls: hello-seguro\ndouble: handle 1 is not a plain TCP socket\n";
 
 fn run(port: u16, flags: &[&str]) -> String {
     let dir = std::env::temp_dir().join(format!("ray_tls_upgrade_{}", flags.join("_")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let main = dir.join("main.ray");
-    std::fs::write(&main, CLIENTE).unwrap();
+    std::fs::write(&main, CLIENT).unwrap();
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
@@ -131,13 +131,13 @@ fn run(port: u16, flags: &[&str]) -> String {
 #[test]
 fn starttls_upgrade_interpreter() {
     let port = launch_starttls_server();
-    assert_eq!(run(port, &["--interp"]), ESPERADO);
+    assert_eq!(run(port, &["--interp"]), EXPECTED);
 }
 
 #[test]
 fn starttls_upgrade_vm() {
     let port = launch_starttls_server();
-    assert_eq!(run(port, &["--vm"]), ESPERADO);
+    assert_eq!(run(port, &["--vm"]), EXPECTED);
 }
 
 /// M96g: STARTTLS en el backend NATIVO — el handle pasa de Tcp a Tls a mitad de conexión
@@ -158,7 +158,7 @@ fn starttls_upgrade_native() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let main = dir.join("main.ray");
-    std::fs::write(&main, CLIENTE).unwrap();
+    std::fs::write(&main, CLIENT).unwrap();
     let bin = dir.join("client_bin");
     let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(["build", main.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
@@ -182,5 +182,5 @@ fn starttls_upgrade_native() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&out.stdout), ESPERADO, "STARTTLS nativo ≡ VM/intérprete");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), EXPECTED, "STARTTLS nativo ≡ VM/intérprete");
 }

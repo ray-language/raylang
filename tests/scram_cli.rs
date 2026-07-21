@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "n,,n=user,r=rOprNGfwEbeRWgbNEkqO",
     "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=",
     "server verificado",
@@ -22,7 +22,7 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
     (lines, out.status.success())
 }
 
-const RECHAZOS: &[&str] = &[
+const REJECTIONS: &[&str] = &[
     "n,,n=ad=2Ca=3Dx,r=clientnonce", // M75: el usuario se escapa (',' → =2C, '=' → =3D)
     "nonce rechazado",              // el nonce del servidor debe extender el del cliente (RFC 5802 §5.1)
     "iter rechazado",               // iteraciones absurdas = Err (bomba de CPU)
@@ -46,14 +46,14 @@ fn run_reject(flags: &[&str]) -> (Vec<String>, bool) {
 fn scram_rejections_interpreter() {
     let (lines, ok) = run_reject(&[]);
     assert!(ok, "scram_reject_demo falló en el intérprete");
-    assert_eq!(lines, RECHAZOS);
+    assert_eq!(lines, REJECTIONS);
 }
 
 #[test]
 fn scram_rejections_vm() {
     let (lines, ok) = run_reject(&["--vm"]);
     assert!(ok, "scram_reject_demo falló en la VM");
-    assert_eq!(lines, RECHAZOS);
+    assert_eq!(lines, REJECTIONS);
 }
 
 /// Ambos van `#[ignore]`: este test valida SCRAM contra el vector del RFC 7677 con i=4096 (PBKDF2 lento,
@@ -64,7 +64,7 @@ fn scram_rejections_vm() {
 fn scram_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "scram_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
@@ -72,5 +72,5 @@ fn scram_interpreter() {
 fn scram_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "scram_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

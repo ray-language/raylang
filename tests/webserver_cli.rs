@@ -197,7 +197,7 @@ fn server_sse_emits_events() {
 
 // Driver: servidor que eco-devuelve el cuerpo de la petición como respuesta BINARIA. Verifica que un
 // cuerpo binario (con \x00/\xff) cruza intacto read_request (por Content-Length) y send_response (M19.2).
-const SRV_ECO_BIN: &str = r#"
+const ECHO_SERVER_BIN: &str = r#"
 import webserver;
 import std/net;
 fn handle(conn: int) {
@@ -578,7 +578,7 @@ fn head_returns_headers_without_body() {
 fn chunked_body_gets_decoded() {
     // M56.8: Transfer-Encoding: chunked entrante → el eco devuelve el cuerpo DECODIFICADO
     // ("hola" + " mundo", con extensión de chunk ignorada). Antes llegaba vacío en silencio.
-    let (mut child, port) = launch_server("chunked", SRV_ECO_BIN);
+    let (mut child, port) = launch_server("chunked", ECHO_SERVER_BIN);
 
     let req = b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nhola\r\n6;ext=1\r\n mundo\r\n0\r\n\r\n";
     let resp = ask_bytes(port, req);
@@ -792,7 +792,7 @@ fn static_mount_prefix_method_and_etag_304() {
 
 #[test]
 fn server_echoes_body_binary_intact() {
-    let (mut child, port) = launch_server("ecobin", SRV_ECO_BIN);
+    let (mut child, port) = launch_server("ecobin", ECHO_SERVER_BIN);
 
     // POST con un cuerpo binario de 7 octetos, incl. 0x00 y 0xFF (que UTF-8 lossy corrompería).
     let bin_body: [u8; 7] = [0, 255, 1, 2, b'b', b'i', b'n'];

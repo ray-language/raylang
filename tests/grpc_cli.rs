@@ -101,18 +101,18 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect()
 }
 
-const ESPERADO: &[&str] = &["grpc-status: 0", "greeting: hello, raylang"];
+const EXPECTED: &[&str] = &["grpc-status: 0", "greeting: hello, raylang"];
 
 #[test]
 fn grpc_call_interpreter() {
     let port = launch_grpc_server();
-    assert_eq!(run(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), EXPECTED);
 }
 
 #[test]
 fn grpc_call_vm() {
     let port = launch_grpc_server();
-    assert_eq!(run(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), EXPECTED);
 }
 
 /// M73 — un servidor gRPC que cierra el stream SIN `grpc-status` en los trailers (protocolo

@@ -6,7 +6,7 @@
 use std::process::Command;
 
 /// Las líneas que `hmac_demo.ray` debe imprimir, en orden.
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", // HMAC "Jefe"/"what do ya..."
     "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8", // HMAC "key"/"The quick..."
     "7d5c78edf5aae49e5d1bf1106e250485811585bcad0d78ebbea235d9f320a0dd", // HMAC clave > bloque
@@ -37,10 +37,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn vectors_hmac_base64url_hex_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn vectors_hmac_base64url_hex_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

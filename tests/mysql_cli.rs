@@ -14,7 +14,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
 /// Scramble fijo del handshake (20 octetos) y la respuesta de auth PRECOMPUTADA para pass=secret.
 const SCRAMBLE: [u8; 20] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
-const AUTH_ESPERADA: [u8; 20] = [
+const EXPECTED_AUTH: [u8; 20] = [
     179, 43, 179, 165, 131, 225, 52, 12, 10, 17, 8, 213, 139, 27, 228, 151, 129, 173, 140, 47,
 ];
 
@@ -108,7 +108,7 @@ fn handle(mut s: TcpStream) {
     let auth_len = resp[i] as usize;
     i += 1;
     let auth = &resp[i..i + auth_len];
-    if user != "raylang" || auth != AUTH_ESPERADA {
+    if user != "raylang" || auth != EXPECTED_AUTH {
         let mut err = vec![0xffu8, 0x15, 0x04]; // ERR + código 1045
         err.extend_from_slice(b"#28000acceso denegado");
         s.write_all(&pkt(2, &err)).unwrap();
@@ -316,7 +316,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
 }
 
-const ESPERADO: &str = "ada|36\ngrace|\nafectadas: 3\nmysql: la tabla no existe\ntrunc rechazado\n";
+const EXPECTED: &str = "ada|36\ngrace|\nafectadas: 3\nmysql: la tabla no existe\ntrunc rechazado\n";
 
 #[test]
 fn mysql_handshake_query_exec_y_error() {
@@ -328,9 +328,9 @@ fn mysql_handshake_query_exec_y_error() {
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
     let (out_vm, _) = run(&app, &[]);
-    assert_eq!(out_vm, ESPERADO, "VM");
+    assert_eq!(out_vm, EXPECTED, "VM");
     let (out_interp, _) = run(&app, &["--interp"]);
-    assert_eq!(out_interp, ESPERADO, "intérprete");
+    assert_eq!(out_interp, EXPECTED, "intérprete");
 }
 
 #[test]
@@ -476,7 +476,7 @@ fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO_TLS: &str = "conectado seguro\nada|36\ngrace|\nmysql: acceso denegado\n";
+const EXPECTED_TLS: &str = "conectado seguro\nada|36\ngrace|\nmysql: acceso denegado\n";
 
 #[test]
 fn mysql_tls_full_path_caching_sha2() {
@@ -486,8 +486,8 @@ fn mysql_tls_full_path_caching_sha2() {
     let port = launch_server_tls();
     let app = project_tls(&base, port);
 
-    assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");
-    assert_eq!(run_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
+    assert_eq!(run_tls(&app, &[]), EXPECTED_TLS, "VM");
+    assert_eq!(run_tls(&app, &["--interp"]), EXPECTED_TLS, "intérprete");
 }
 
 // --- Protocolo binario (prepared statements) ---
@@ -545,7 +545,7 @@ fn main() -> int {{
     app
 }
 
-const ESPERADO_BIN: &str = "echo|-5|2.5|2026-07-09 12:34:56\n\
+const EXPECTED_BIN: &str = "echo|-5|2.5|2026-07-09 12:34:56\n\
 fixes|||0000-00-00 00:00:00\n\
 afectadas: 4\n\
 mysql: la tabla no existe\n";
@@ -559,7 +559,7 @@ fn mysql_protocol_binary_prepared() {
     let app = project_binary(&base, port);
 
     let (out_vm, _) = run(&app, &[]);
-    assert_eq!(out_vm, ESPERADO_BIN, "VM");
+    assert_eq!(out_vm, EXPECTED_BIN, "VM");
     let (out_interp, _) = run(&app, &["--interp"]);
-    assert_eq!(out_interp, ESPERADO_BIN, "intérprete");
+    assert_eq!(out_interp, EXPECTED_BIN, "intérprete");
 }

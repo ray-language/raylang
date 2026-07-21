@@ -6,7 +6,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "f1e3c2e5f23a6ba0ab90f4ff", "roundtrip ok",           // C.4.1  www.example.com
     "a8eb10649cbf", "roundtrip ok",                        // C.4.2  no-cache
     "25a849e95ba97d7f", "roundtrip ok",                    // C.4.3  custom-key
@@ -31,12 +31,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn huffman_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "huffman_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn huffman_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "huffman_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

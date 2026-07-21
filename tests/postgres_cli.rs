@@ -96,16 +96,16 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect()
 }
 
-const ESPERADO: &[&str] = &["row: hello-postgres"];
+const EXPECTED: &[&str] = &["row: hello-postgres"];
 
 #[test]
 fn pg_query_vm() {
     let port = launch_pg_server();
-    assert_eq!(run(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), EXPECTED);
 }
 
 #[test]
 fn pg_query_interpreter() {
     let port = launch_pg_server();
-    assert_eq!(run(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), EXPECTED);
 }

@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "title = \"raylang\"",
     "server.host = \"localhost\"",
     "server.port = 8080",
@@ -46,12 +46,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn toml_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "toml_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn toml_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "toml_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

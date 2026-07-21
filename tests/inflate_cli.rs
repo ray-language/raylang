@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "raylang es un lenguaje de aprendizaje. raylang es divertido. raylang raylang raylang!", // fijo
     "raylang es un lenguaje de aprendizaje. raylang es divertido. raylang raylang raylang!", // stored
     "516",                                       // longitud del texto del bloque dinámico
@@ -46,10 +46,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn inflate_gzip_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn inflate_gzip_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

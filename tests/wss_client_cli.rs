@@ -56,14 +56,14 @@ fn run_client(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &["hola", "mundo", "raylang ☃ unicode"];
+const EXPECTED: &[&str] = &["hola", "mundo", "raylang ☃ unicode"];
 
 fn case(flags: &[&str]) {
     let (mut server, port) = launch_server();
     let output = run_client(flags, port);
     let _ = server.kill();
     let _ = server.wait();
-    assert_eq!(output, ESPERADO);
+    assert_eq!(output, EXPECTED);
 }
 
 #[test]

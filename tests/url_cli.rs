@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "hola%20mundo%20%26%20m%C3%A1s%3Dcosas%2F%C3%B1", // url_encode con UTF-8
     "a-b_c.d~e",                                       // unreserved intactos
     "hola mundo & más",                                // url_decode
@@ -44,10 +44,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn url_query_cookies_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn url_query_cookies_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

@@ -5,7 +5,7 @@
 use std::process::Command;
 
 /// Las líneas que `sha256_demo.ray` debe imprimir, en orden. Cada una es un vector estándar.
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // ""
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", // "abc"
     "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1", // 56 octetos (multi-bloque)
@@ -34,10 +34,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn vectors_sha256_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn vectors_sha256_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

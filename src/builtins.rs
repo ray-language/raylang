@@ -197,11 +197,11 @@ pub fn assoc_for_type(type_name: &str) -> impl Iterator<Item = &'static AssocFn>
 /// (M45b: para el snippet de completion — `push($0)` con args, `len()` sin ellos.) Los builtins son
 /// ad-hoc polimórficos y muchos no tienen `signature()`, así que se lista el conjunto **sin args**.
 pub fn method_takes_args(name: &str) -> bool {
-    const SIN_ARGS: &[&str] = &[
+    const NO_ARGS: &[&str] = &[
         "len", "trim", "chars", "reverse", "keys", "values", "to_upper", "to_lower", "to_string",
         "to_bytes",
     ];
-    !SIN_ARGS.contains(&name)
+    !NO_ARGS.contains(&name)
 }
 
 /// Builtins invocables como **método** (UFCS `recv.f(...)`) sobre un tipo de la categoría dada,

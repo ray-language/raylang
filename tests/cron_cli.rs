@@ -74,7 +74,7 @@ fn main() -> int {
     app
 }
 
-const ESPERADO: &str = "*/15 * * * * → 2026-07-11T10:45:00Z 2026-07-11T11:00:00Z 2026-07-11T11:15:00Z\n\
+const EXPECTED: &str = "*/15 * * * * → 2026-07-11T10:45:00Z 2026-07-11T11:00:00Z 2026-07-11T11:15:00Z\n\
 0 9 * * 1-5 → 2026-07-13T09:00:00Z 2026-07-14T09:00:00Z 2026-07-15T09:00:00Z\n\
 30 2 1 * * → 2026-08-01T02:30:00Z 2026-09-01T02:30:00Z\n\
 @daily → 2026-07-12T00:00:00Z 2026-07-13T00:00:00Z\n\
@@ -107,7 +107,7 @@ fn cron_next_after_ambos_engines() {
     assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
     assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
     assert_eq!(o_in, o_vm, "ambos engines match");
-    assert_eq!(o_in, ESPERADO, "output expected_val");
+    assert_eq!(o_in, EXPECTED, "output expected_val");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -56,7 +56,7 @@ fn compare_driver(driver_rel: &str, input_abs: &str, label: &str) {
 // Fuentes pequeñas (los drivers grandes corren un intérprete sobre un intérprete → entradas chicas).
 const FIB: &str = "fn fib(n: int) -> int { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }\n\
                    fn main() -> int { var i = 0; while (i <= 6) { print(fib(i)); i = i + 1; } 0 }\n";
-const DATOS: &str = "struct P { x: int, y: int }\nenum F { C(int), R(int, int) }\n\
+const DATA: &str = "struct P { x: int, y: int }\nenum F { C(int), R(int, int) }\n\
                      fn area(f: F) -> int { match (f) { F.C(r) => 3 * r * r, F.R(a, b) => a * b } }\n\
                      fn main() -> int { let p = P { x: 3, y: 4 }; print(p.x + p.y); print(area(F.C(2))); print(area(F.R(3, 5))); 0 }\n";
 
@@ -65,7 +65,7 @@ fn lexer_metacircular() {
     // El lexer auto-alojado, sobre el intérprete auto-alojado, lexea idéntico a Rust.
     let inp = temp_input("mc_lex_fib.ray", FIB);
     compare_driver("selfhost/lex_dump.ray", &inp, "lex_dump/fib");
-    let inp = temp_input("mc_lex_data.ray", DATOS);
+    let inp = temp_input("mc_lex_data.ray", DATA);
     compare_driver("selfhost/lex_dump.ray", &inp, "lex_dump/data");
 }
 
@@ -74,7 +74,7 @@ fn parser_metacircular() {
     // El parser auto-alojado, sobre el intérprete auto-alojado, produce el mismo AST que Rust.
     let inp = temp_input("mc_parse_fib.ray", FIB);
     compare_driver("selfhost/parse_dump.ray", &inp, "parse_dump/fib");
-    let inp = temp_input("mc_parse_data.ray", DATOS);
+    let inp = temp_input("mc_parse_data.ray", DATA);
     compare_driver("selfhost/parse_dump.ray", &inp, "parse_dump/data");
 }
 
@@ -83,7 +83,7 @@ fn checker_metacircular() {
     // El checker auto-alojado, sobre el intérprete auto-alojado, da el mismo veredicto que Rust.
     let inp = temp_input("mc_check_fib.ray", FIB);
     compare_driver("selfhost/check_dump.ray", &inp, "check_dump/fib");
-    let inp = temp_input("mc_check_data.ray", DATOS);
+    let inp = temp_input("mc_check_data.ray", DATA);
     compare_driver("selfhost/check_dump.ray", &inp, "check_dump/data");
     // Un programa con error de tipos: el veredicto (mensaje) también debe coincidir.
     let inp = temp_input("mc_check_err.ray", "fn main() -> int { let x: int = true; 0 }\n");
@@ -100,6 +100,6 @@ fn run_on_run_metacircular() {
     // comportamiento que Rust ejecutándolo directamente → el compilador entero corre sobre sí mismo.
     let inp = temp_input("mc_ror_fib.ray", FIB);
     compare_driver("selfhost/run.ray", &inp, "run-on-run/fib");
-    let inp = temp_input("mc_ror_data.ray", DATOS);
+    let inp = temp_input("mc_ror_data.ray", DATA);
     compare_driver("selfhost/run.ray", &inp, "run-on-run/data");
 }

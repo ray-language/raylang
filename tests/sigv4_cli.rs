@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, \
      SignedHeaders=host;x-amz-date, \
      Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
@@ -33,10 +33,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn sigv4_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn sigv4_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

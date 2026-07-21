@@ -330,7 +330,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO: &str = "ada|36\nfixes0|fixes1\nbegin: 0\ninsert: 5\nnull: [hello|]\npostgres: relacion nonexistent\n";
+const EXPECTED: &str = "ada|36\nfixes0|fixes1\nbegin: 0\ninsert: 5\nnull: [hello|]\npostgres: relacion nonexistent\n";
 
 #[test]
 fn postgres_v2_extended_params_and_transaction() {
@@ -341,8 +341,8 @@ fn postgres_v2_extended_params_and_transaction() {
     let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
-    assert_eq!(run(&app, &[]), ESPERADO, "VM");
-    assert_eq!(run(&app, &["--interp"]), ESPERADO, "intérprete");
+    assert_eq!(run(&app, &[]), EXPECTED, "VM");
+    assert_eq!(run(&app, &["--interp"]), EXPECTED, "intérprete");
 }
 
 // --- TLS: connect_tls (sslRequest → 'S' → tls_upgrade → misma sesión cifrada) ---
@@ -407,7 +407,7 @@ fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO_TLS: &str = "segura\nfixes0\n";
+const EXPECTED_TLS: &str = "segura\nfixes0\n";
 
 #[test]
 fn postgres_tls_sslrequest_and_encrypted_session() {
@@ -417,6 +417,6 @@ fn postgres_tls_sslrequest_and_encrypted_session() {
     let port = launch_server_tls();
     let app = project_tls(&base, port);
 
-    assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");
-    assert_eq!(run_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
+    assert_eq!(run_tls(&app, &[]), EXPECTED_TLS, "VM");
+    assert_eq!(run_tls(&app, &["--interp"]), EXPECTED_TLS, "intérprete");
 }

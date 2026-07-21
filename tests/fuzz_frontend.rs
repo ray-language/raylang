@@ -65,10 +65,10 @@ fn collect_ray(dir: &Path, acc: &mut Vec<PathBuf>) {
 
 /// Carga el corpus: los fuentes reales del repo (ejemplos + self-hosting + std). Son entradas **válidas y
 /// variadas** — mutarlas explora el vecindario de lo real (donde viven los bugs interesantes), mucho más
-/// fértil que solo bytes al azar. Trunca cada semilla a `MAX_SEMILLA` para acotar la profundidad de anidación
+/// fértil que solo bytes al azar. Trunca cada semilla a `MAX_SEED` para acotar la profundidad de anidación
 /// (y con ella la recursión del parser: una entrada de N bytes anida a lo sumo ~N niveles).
 fn load_corpus() -> Vec<String> {
-    const MAX_SEMILLA: usize = 4096;
+    const MAX_SEED: usize = 4096;
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut paths = Vec::new();
     for sub in ["examples", "selfhost", "std"] {
@@ -79,7 +79,7 @@ fn load_corpus() -> Vec<String> {
         .filter_map(|p| std::fs::read_to_string(p).ok())
         // Truncar por CARACTERES, no por bytes: `String::truncate` en un byte a mitad de un carácter
         // multibyte (los acentos de los comentarios en español) panicaría. `take` por char es seguro.
-        .map(|s| s.chars().take(MAX_SEMILLA).collect())
+        .map(|s| s.chars().take(MAX_SEED).collect())
         .collect();
     // Unos cuantos snippets mínimos garantizan variedad de tokens aunque el corpus del disco falte.
     for s in [
@@ -209,7 +209,7 @@ fn env_usize(key: &str, default: usize) -> usize {
 #[test]
 fn fuzz_el_frontend_no_panica() {
     raylang::with_big_stack(|| {
-        const SEMILLA_BASE: u64 = 0x5241_594C_414E_47; // "RAYLANG" en ASCII (determinismo).
+        const BASE_SEED: u64 = 0x5241_594C_414E_47; // "RAYLANG" en ASCII (determinismo).
         let corpus = load_corpus();
         assert!(!corpus.is_empty(), "el corpus de fuzz no debería estar vacío");
 
@@ -224,7 +224,7 @@ fn fuzz_el_frontend_no_panica() {
         let mut failure: Option<(u64, Vec<u8>, String)> = None;
         let range: Vec<u64> = match seed_fixes {
             Some(s) => vec![s],
-            None => (0..iters as u64).map(|i| SEMILLA_BASE.wrapping_add(i.wrapping_mul(0x9E37_79B9))).collect(),
+            None => (0..iters as u64).map(|i| BASE_SEED.wrapping_add(i.wrapping_mul(0x9E37_79B9))).collect(),
         };
 
         for seed in range {

@@ -102,7 +102,7 @@ fn handle(mut stream: TcpStream) {
     }
 }
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "PONG", "OK", "valor", "(nil)", "1", "2", "3", "[a, b, c]", "1",
     // M69 — round-trip multibyte: el framing RESP cuenta octetos (pre-M69 contaba caracteres:
     // "añejo ñandú" declaraba $12 en vez de $14 y desincronizaba el protocolo).
@@ -139,10 +139,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn redis_resp_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn redis_resp_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

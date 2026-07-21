@@ -61,7 +61,7 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "93.184.216.34", // example.com (fallo)
     "93.184.216.34", // example.com (acierto de caché)
     "93.184.216.34", // example.org (fallo)
@@ -71,7 +71,7 @@ const ESPERADO: &[&str] = &[
 fn case(flags: &[&str]) {
     let counter = Arc::new(AtomicUsize::new(0));
     let port = toy_dns_server(counter.clone());
-    assert_eq!(run(flags, port), ESPERADO);
+    assert_eq!(run(flags, port), EXPECTED);
     // 3 resoluciones, 2 claves → el servidor recibe solo 2 consultas (la repetida se cachea).
     assert_eq!(counter.load(Ordering::SeqCst), 2, "el servidor debió recibir 2 consultas");
 }

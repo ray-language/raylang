@@ -11,7 +11,7 @@ use std::time::Duration;
 
 // Servidor de eco concurrente que atiende EXACTAMENTE 2 conexiones (vía `scope`) y termina. Cada
 // conexión se atiende en su propia fibra (`spawn`); accept/read ceden al scheduler.
-const SERVIDOR: &str = r#"
+const SERVER: &str = r#"
 import std/net;
 fn handle(conn: int) {
     match (net.socket_read(conn)) {
@@ -52,7 +52,7 @@ fn main() -> int {
 fn concurrent_server_serves_out_of_order() {
     let mut path = std::env::temp_dir();
     path.push("ray_srv_concurrente.ray");
-    std::fs::File::create(&path).expect("crea").write_all(SERVIDOR.as_bytes()).expect("escribe");
+    std::fs::File::create(&path).expect("crea").write_all(SERVER.as_bytes()).expect("escribe");
 
     // Solo VM: la concurrencia (spawn/scope) requiere la VM; el intérprete daría error limpio.
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))

@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "1970-01-01T00:00:00Z",
     "Thu, 01 Jan 1970 00:00:00 GMT",
     "1994-11-06T08:49:37Z",
@@ -51,10 +51,10 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn utc_dates_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn utc_dates_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }

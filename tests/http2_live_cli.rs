@@ -78,18 +78,18 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect()
 }
 
-const ESPERADO: &[&str] = &["status: 200", "body: hello-h2"];
+const EXPECTED: &[&str] = &["status: 200", "body: hello-h2"];
 
 #[test]
 fn http2_get_interpreter() {
     let port = launch_h2_server();
-    assert_eq!(run(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), EXPECTED);
 }
 
 #[test]
 fn http2_get_vm() {
     let port = launch_h2_server();
-    assert_eq!(run(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), EXPECTED);
 }
 
 // --- M58.3: flow control + PING + RST contra servidores de juguete más exigentes ---

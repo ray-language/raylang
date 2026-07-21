@@ -5,7 +5,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "# HELP http_requests_total Total de peticiones HTTP",
     "# TYPE http_requests_total counter",
     r#"http_requests_total{code="200",method="GET"} 2"#,
@@ -47,14 +47,14 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn metrics_exposure_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "metrics_demo falló");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn metrics_exposure_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "metrics_demo falló");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 /// Validación estructural con Python plano (sin prometheus_client): cada línea de serie es

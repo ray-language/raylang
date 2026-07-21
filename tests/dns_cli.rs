@@ -133,7 +133,7 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "A 93.184.216.34",        // registro A (IPv4)
     "AAAA 2001:db8::1",       // registro AAAA (IPv6, con compresión ::)
     "MX 10 mail.example.com", // registro MX (preferencia + exchange con compresión de nombre)
@@ -146,13 +146,13 @@ const ESPERADO: &[&str] = &[
 #[test]
 fn dns_resolves_all_types_interpreter() {
     let port = toy_dns_server();
-    assert_eq!(run(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), EXPECTED);
 }
 
 #[test]
 fn dns_resolves_all_types_vm() {
     let port = toy_dns_server();
-    assert_eq!(run(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), EXPECTED);
 }
 
 /// M72.1 — robustez: el parser procesa datos EXTERNOS, así que toda respuesta corrupta/truncada

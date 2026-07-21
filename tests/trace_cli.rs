@@ -97,7 +97,7 @@ fn main() -> int {
 }
 "#;
 
-const GOLDEN_ESPERADO: &str = "4bf92f3577b34da6a3ce929d0e0e4736 00f067aa0ba902b7 01\n\
+const GOLDEN_EXPECTED: &str = "4bf92f3577b34da6a3ce929d0e0e4736 00f067aa0ba902b7 01\n\
 true\n\
 true\ntrue\ntrue\ntrue\ntrue\n\
 32 16 01\n\
@@ -112,10 +112,10 @@ true\ntrue\ntrue\n\
 fn trace_golden_ambos_engines() {
     let (o_vm, e_vm, c_vm) = run("golden_vm", GOLDEN, false);
     assert_eq!(c_vm, 0, "vm sale 0\n{e_vm}\n{o_vm}");
-    assert_eq!(o_vm, GOLDEN_ESPERADO, "golden vm");
+    assert_eq!(o_vm, GOLDEN_EXPECTED, "golden vm");
     let (o_in, e_in, c_in) = run("golden_interp", GOLDEN, true);
     assert_eq!(c_in, 0, "intérprete sale 0\n{e_in}\n{o_in}");
-    assert_eq!(o_in, GOLDEN_ESPERADO, "golden intérprete");
+    assert_eq!(o_in, GOLDEN_EXPECTED, "golden intérprete");
 }
 
 // El e2e: un servidor de UNA conexión (tcp_listen + read_request + trace_of) y un cliente

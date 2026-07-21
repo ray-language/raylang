@@ -41,7 +41,7 @@ fn toy_echo_server() -> u16 {
     port
 }
 
-const CLIENTE: &str = r#"
+const CLIENT: &str = r#"
 import std/net;
 fn main() -> int {
     match (net.tcp_connect("127.0.0.1", __PORT__)) {
@@ -68,17 +68,17 @@ fn tcp_client_exchanges_with_a_server() {
     for vm in [false, true] {
         // Un servidor nuevo por ejecución (cada uno acepta una sola conexión).
         let port = toy_echo_server();
-        let src = CLIENTE.replace("__PORT__", &port.to_string());
+        let src = CLIENT.replace("__PORT__", &port.to_string());
         let (out, code) = run("ray_tcp_ok", &src, vm);
         assert_eq!(out.trim(), "pong:ping", "intercambio TCP (vm={vm}): {out}");
         assert_eq!(code, 0, "output 0 (vm={vm})");
     }
 }
 
-/// El `.ray` es el SERVIDOR (M15.3): escucha en puerto 0, imprime el puerto, acepta UNA conexión,
+/// El `.ray` es el SERVER (M15.3): escucha en puerto 0, imprime el puerto, acepta UNA conexión,
 /// lee y responde con eco. El test lee el puerto de su stdout EN VIVO (el servidor bloquea en accept,
 /// así que no se puede usar `.output()` que espera a que termine) y se conecta como cliente.
-const SERVIDOR: &str = r#"
+const SERVER: &str = r#"
 import std/net;
 fn main() -> int {
     match (net.tcp_listen("127.0.0.1", 0)) {
@@ -114,7 +114,7 @@ fn tcp_server_accepts_and_responds() {
         // Escribir el servidor a un temporal y lanzarlo con stdout en pipe (lo leeremos en vivo).
         let mut path = std::env::temp_dir();
         path.push("ray_tcp_srv.ray");
-        std::fs::File::create(&path).expect("crea").write_all(SERVIDOR.as_bytes()).expect("escribe");
+        std::fs::File::create(&path).expect("crea").write_all(SERVER.as_bytes()).expect("escribe");
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
         if vm {
             cmd.arg("--vm");
@@ -148,7 +148,7 @@ fn tcp_connect_fails_a_un_port_closed() {
         // `l` se cierra aquí al salir del bloque.
     };
     for vm in [false, true] {
-        let src = CLIENTE.replace("__PORT__", &port.to_string());
+        let src = CLIENT.replace("__PORT__", &port.to_string());
         let (out, code) = run("ray_tcp_err", &src, vm);
         assert!(out.contains("connect err"), "conexión rechazada (vm={vm}): {out}");
         assert_eq!(code, 1, "output 1 en error (vm={vm})");

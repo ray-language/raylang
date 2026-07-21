@@ -47,16 +47,16 @@ fn run(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
-const ESPERADO: &[&str] = &["8", "HOLA UDP"];
+const EXPECTED: &[&str] = &["8", "HOLA UDP"];
 
 #[test]
 fn udp_echo_interpreter() {
     let port = toy_udp_server();
-    assert_eq!(run(&[], port), ESPERADO);
+    assert_eq!(run(&[], port), EXPECTED);
 }
 
 #[test]
 fn udp_echo_vm() {
     let port = toy_udp_server();
-    assert_eq!(run(&["--vm"], port), ESPERADO);
+    assert_eq!(run(&["--vm"], port), EXPECTED);
 }

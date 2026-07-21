@@ -27,7 +27,7 @@ fn main() -> int {
 }
 "#;
 
-const ESPERADO: &str = "<html><body>\n\
+const EXPECTED: &str = "<html><body>\n\
 <h1>Informe &amp; data</h1>\n\
 <p>2 filas</p>\n\
 <ul><li>a&lt;b</li><li>c</li></ul>\n\
@@ -73,7 +73,7 @@ fn generates_and_renders_on_both_engines() {
         args.push("main.ray");
         let out = Command::new(BIN).args(&args).current_dir(&app).output().unwrap();
         assert!(out.status.success(), "run fails ({flags:?}): {}", String::from_utf8_lossy(&out.stderr));
-        assert_eq!(String::from_utf8_lossy(&out.stdout), ESPERADO, "({flags:?})");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), EXPECTED, "({flags:?})");
     }
 }
 

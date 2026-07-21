@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 /// Las líneas que `crypto_demo.ray` debe imprimir, en orden. Cada una es un vector estándar.
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     // SHA-1 (hex)
     "da39a3ee5e6b4b0d3255bfef95601890afd80709", // ""
     "a9993e364706816aba3e25717850c26c9cd0d89d", // "abc"
@@ -46,12 +46,12 @@ fn run(flags: &[&str]) -> Vec<String> {
 
 #[test]
 fn vectors_sha1_base64_handshake_interpreter() {
-    assert_eq!(run(&[]), ESPERADO);
+    assert_eq!(run(&[]), EXPECTED);
 }
 
 #[test]
 fn vectors_sha1_base64_handshake_vm() {
-    assert_eq!(run(&["--vm"]), ESPERADO);
+    assert_eq!(run(&["--vm"]), EXPECTED);
 }
 
 // --- Echo server de WebSocket de extremo a extremo (M19.3c) ---

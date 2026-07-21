@@ -7,7 +7,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZGEiLCJhZG1pbiI6dHJ1ZX0.\
 2hgDGXGFX02ju6Jrdo7czKw-QH0ara8Xpfe1r2P_IUK5TYiz0Ma9owaJy-X8rZes4fXZNOSx0tTxK6rCFXbEDw",
     "ok: {\"sub\":\"ada\",\"admin\":true}",
@@ -34,12 +34,12 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 fn jwt_eddsa_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "jwt_eddsa_demo falló en el intérprete");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn jwt_eddsa_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "jwt_eddsa_demo falló en la VM");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }

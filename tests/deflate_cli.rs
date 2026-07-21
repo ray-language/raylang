@@ -6,7 +6,7 @@
 
 use std::process::Command;
 
-const ESPERADO: &[&str] = &[
+const EXPECTED: &[&str] = &[
     "true", // deflate_raw → inflate_raw
     "true", // comprime (len < original)
     "true", // gzip_compress → gunzip (con verificación CRC-32)
@@ -32,14 +32,14 @@ fn run(flags: &[&str], extra_arg: Option<&str>) -> (Vec<String>, bool) {
 fn deflate_round_trip_interpreter() {
     let (lines, ok) = run(&[], None);
     assert!(ok, "deflate_demo falló");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 #[test]
 fn deflate_round_trip_vm() {
     let (lines, ok) = run(&["--vm"], None);
     assert!(ok, "deflate_demo falló");
-    assert_eq!(lines, ESPERADO);
+    assert_eq!(lines, EXPECTED);
 }
 
 /// El gzip que produce raylang debe poder descomprimirlo Python (compatibilidad estándar). Se escribe

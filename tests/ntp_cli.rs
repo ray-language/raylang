@@ -10,7 +10,7 @@ use std::thread;
 /// La hora fija que "tiene" el servidor de juguete: 2026-01-01 00:00:00.5 UTC.
 const UNIX_SECS: u64 = 1_767_225_600;
 const NTP_EPOCH_DELTA: u64 = 2_208_988_800;
-const FRAC_MEDIO_SEGUNDO: u32 = 0x8000_0000; // 0.5 en punto fijo .32
+const HALF_SECOND_FRAC: u32 = 0x8000_0000; // 0.5 en punto fijo .32
 
 /// Servidor SNTP de juguete: responde a cada petición válida con stratum 2 y Receive/Transmit
 /// Timestamp fijos (la hora de arriba). Devuelve el puerto.
@@ -35,7 +35,7 @@ fn toy_sntp_server() -> u16 {
             // Receive (32..40) y Transmit (40..48) Timestamp = la hora fija.
             for base in [32usize, 40usize] {
                 resp[base..base + 4].copy_from_slice(&ntp_secs.to_be_bytes());
-                resp[base + 4..base + 8].copy_from_slice(&FRAC_MEDIO_SEGUNDO.to_be_bytes());
+                resp[base + 4..base + 8].copy_from_slice(&HALF_SECOND_FRAC.to_be_bytes());
             }
             let _ = sock.send_to(&resp, origen);
         }

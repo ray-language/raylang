@@ -1577,6 +1577,18 @@ Dos piezas **complementarias** (no alternativas), en orden:
 
 ### Pieza A — contexto estático: "raylang para LLMs" destilado (~2-4k tokens, estilo llms.txt)
 
+**✅ HECHA (21 jul 2026): `llms.txt` en la raíz del repo** (~190 líneas, inglés — es de cara al
+modelo). Secciones: delta contra Rust · formas canónicas (del catálogo de snippets del LSP) ·
+errores-como-valores · semántica (referencia, indeterminados, sin aritmética de char, `&`/`|`
+vs `==`) · módulos · concurrencia CSP · mapa de stdlib + nombres congelados (SPEC §10) · tabla
+de "error que provocarás → mensaje EXACTO → fix" · el bucle `ray run/build/test/fmt/doc`.
+**Método anti-alucinación: el propio doc se VERIFICÓ contra el binario** — todos los ejemplos
+compilados y corridos por ambos motores, y cada mensaje de la tabla provocado y cotejado
+literal; cazó 5 errores del borrador (`return` no es expresión de brazo de match, `@derive(Ord)`
+no existe, 2 mensajes mal citados, módulo duplicado en la lista). Bonus: SPEC §11 estaba
+desactualizada (cabeceras en español; el binario emite las inglesas desde la regla del 21 jul)
+— corregida. Cuando exista la pieza B (MCP), este archivo es el *resource* que servirá.
+
 - La **delta contra Rust/Go**: "se parece a Rust PERO: `match (x) {` con paréntesis, `var` no
   `mut`, sin sobrecarga, sin `null`, UFCS universal, `let` inmutable/`var` mutable, firmas
   explícitas…".

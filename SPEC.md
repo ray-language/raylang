@@ -406,8 +406,9 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
 
 ## 11. Diagnósticos y códigos de salida
 
-- Formatos de cabecera (estables): `error léxico en L:C: msg` · `error de sintaxis en L:C:
-  msg` · `error de tipos en L:C: msg` · `error en ejecución en L:C: msg`. El render añade la
+- Formatos de cabecera (estables, **en inglés** — regla del 21 jul 2026: todo lo que el
+  lenguaje entrega al usuario va en inglés): `lex error at L:C: msg` · `syntax error at L:C:
+  msg` · `type error at L:C: msg` · `runtime error at L:C: msg`. El render añade la
   línea de fuente (acotada a una ventana si es larguísima) y el subrayado `^…` del span; en
   multi-módulo se antepone `[módulo]` y la línea es la local del archivo.
 - El compilador reporta **múltiples errores** (hasta 20) con recuperación; el primer error es

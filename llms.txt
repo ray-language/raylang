@@ -1,0 +1,192 @@
+# raylang for LLMs
+
+raylang is a statically typed, expression-oriented language with curly-brace syntax,
+compiled/run by the `ray` CLI. Errors are values (`Result`/`Option` + `?`), there is no
+null and no exceptions. This file is the distilled context for writing correct raylang:
+the delta against languages you already know, the canonical forms, and the exact error
+messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (guide).
+
+## The delta: it looks like Rust, BUT
+
+- `match`, `if` and `while` take their scrutinee/condition IN PARENTHESES:
+  `match (x) { ... }`, `if (cond) { ... }`, `while (cond) { ... }`.
+  (Only `if let` takes none: `if let Option.Some(v) = expr { ... }`.)
+- Mutability is `var`, not `mut`: `let x = 1;` (immutable) / `var y = 1;` (mutable).
+  `let mut` is a syntax error.
+- Enum variants are always QUALIFIED: `Option.Some(3)`, `Option.None`, `Result.Ok(v)`,
+  `Result.Err(e)`, `Color.Red` — never bare `Some`/`None`/`Ok`/`Err`.
+- There is NO null (`name 'null' not declared`), NO exceptions, NO overloading
+  (one name = one signature), NO method-as-value (`recv.f` alone is field access only).
+- Function signatures are always explicit (params and return annotated). Only local
+  `let`/`var` infer from the initializer.
+- String interpolation is `"...${expr}..."` in any string — NO `f"..."` prefix.
+  Backtick strings `` `...` `` are the same token but multiline and with literal `"`.
+- UFCS everywhere: `recv.f(args)` ≡ `f(recv, args)` when `f` is not a field. Pipelines:
+  `x |> f(a)` ≡ `f(x, a)` (lowest precedence, left-associative).
+- Struct fields end with a comma; struct literals are `Name { field: value }`.
+- `main` returns `int` (the process exit code) or unit.
+
+## Canonical forms (from the LSP snippet catalog)
+
+```raylang
+fn name(x: int, s: string) -> int { x }         // explicit signature, implicit return
+fn main() -> int { 0 }
+
+let a = 3;                                       // immutable
+var b = 0;                                       // mutable; b = b + 1; later
+const LIMIT: int = 100;                          // top-level constant
+
+if (cond) { 1 } else { 2 }                       // if is an EXPRESSION (both branches typed)
+while (i < n) { i = i + 1; }
+for x in xs { print(x); }                        // also: for i in 0..n { ... }
+
+match (opt) {                                    // parens required; arms end with comma
+    Option.Some(v) => v,
+    Option.None => 0,
+}
+if let Option.Some(v) = recv(ch) { print(v); }   // if let: NO parens around the pattern
+
+struct Point { x: int, y: int, }                 // trailing comma
+let p = Point { x: 1, y: 2 };
+enum Shape { Circle(float), Rect(float, float), }
+let s = Shape.Circle(2.0);                       // construction is qualified
+
+trait Greeter { fn greet(self) -> string; }
+impl Greeter for Point {
+    fn greet(self) -> string { "point at ${self.x}" }
+}
+
+fn largest<T: Ord>(a: T, b: T) -> T {            // generics with bounds
+    if (a.less(b)) { b } else { a }
+}
+
+let f = fn(x: int) -> int { x * 2 };             // anonymous fn (closure, captures by ref)
+[1, 2, 3].map(f).filter(fn(x: int) -> bool { x > 2 });
+
+@derive(Eq, Show)                                // also Hash, ToJson — NOT Ord (impl it)
+struct User { id: int, name: string, }
+
+@test
+fn addition_works() { assert_eq(2 + 2, 4); }     // run with: ray test file.ray
+```
+
+## Errors as values
+
+```raylang
+fn read_port(s: string) -> Result<int, string> {
+    match (parse_int(s)) {                       // parse_int -> Option<int>
+        Option.Some(x) => Result.Ok(x),
+        Option.None => Result.Err("not a number: ${s}"),
+    }
+}
+
+fn setup() -> Result<int, string> {
+    let port = read_port("8080")?;               // ? unwraps Ok / returns the Err
+    Result.Ok(port)
+}
+```
+
+`?` requires the enclosing function to return a compatible `Result<_, E>` (or `Option`);
+otherwise: `'?' on Result<int, string> requires the function to return Result<_, string>,
+but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
+`assert_eq(a, b)` (no custom-message variant — use `panic`).
+
+## Semantics you must respect
+
+- Arrays `[T]`, structs and `Map` have REFERENCE semantics (aliases share the object;
+  `push`/`a[i] = v`/`p.x = v` mutate in place). Primitives copy.
+- "Indeterminate" expressions need an expected type or annotation: `[]`, `Option.None`,
+  `Map.new()`, `Channel.new()` → write `let m: Map<string, int> = Map.new();`.
+- Strings are immutable, indexed BY CHARACTER: `s[i]` yields `char`; `s[i] = c` is an
+  error; `s.len()` counts characters; `s.to_bytes()` for raw UTF-8 octets.
+- No char arithmetic: `'a' + 1` is an error → `char_code(c)` / `char_from_code(n)`.
+- Bitwise `&`/`|`/`^` bind LOOSER than `==` (C-style): write `(a & b) == c`.
+- A builtin always beats a user function of the same name — do not name your functions
+  `print`, `len`, `get`, `join`, `insert`, `keys`…  (in a library module, prefer trait
+  methods for such names: dispatch by receiver type avoids the clash).
+- `from` is a keyword (imports) — not usable as a variable/parameter name.
+
+## Modules
+
+```raylang
+import std/fs;                       // qualified use via the LEAF: fs.read_file("x")
+import geo/shapes/circle;            // directory path; leaf binding: circle.area(...)
+from std/json import obj, field;     // unqualified names (alias: import x as y)
+pub fn api() -> int { 1 }            // pub = exported; private by default
+```
+
+One file = one module. Types cross modules with `pub` + `from M import Type`. A
+`dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
+are private. Inside a module, calls to its own functions and UFCS both resolve
+module-locally.
+
+## Concurrency (CSP; VM only)
+
+```raylang
+let ch: Channel<int> = Channel.new();            // annotate; Channel.new(n) = bounded
+spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
+if let Option.Some(v) = recv(ch) { print(v); }   // recv -> Option<T> (None = closed)
+
+let r = scope(fn() -> int {                      // structured: scope joins its tasks
+    let t = spawn(fn() -> int { 21 * 2 });
+    join(t)                                      // try_join(t) -> Result<T, string>
+});
+select(chs)                                      // -> index of the first ready channel
+```
+
+Fibers have isolated heaps: values sent over channels are deep-copied; share state by
+giving it to ONE owner fiber (an actor) and talking to it via channels.
+
+## Stdlib map
+
+Global builtins (no import): `print eprint to_string len panic assert assert_eq` ·
+string: `trim split chars contains replace starts_with ends_with to_upper to_lower
+substring repeat index_of join parse_int parse_float to_bytes` · arrays: `push pop
+reverse contains position sort map filter fold iter` (and `a + b` concatenates) ·
+bytes: `bytes_of sub_bytes from_utf8` · `Map<K,V>`: `Map.new insert get remove
+contains_key keys values` · math: `sqrt pow floor ceil round abs min max` · process/io:
+`args env input read_file write_file exists` · crypto (ring-backed): `sha256 sha512
+hmac_sha256 ed25519_sign ed25519_verify chacha20poly1305_seal/open`.
+
+Import-on-demand modules: `std/fs std/net std/math std/random std/time std/crypto
+std/text std/sort std/kv std/json std/hex std/base64 std/url std/regex std/csv
+std/toml std/template std/protobuf std/uuid std/inflate std/deflate std/huffman
+std/collections/{set,deque,stringbuilder,dict} std/resilience`.
+
+Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
+for HTTP (because `get` belongs to Map); `bytes_of([int])` vs `to_bytes(string)`;
+`join(arr, sep)` vs `join(task)` and `close` (file handle/channel) are the only
+arity/type dualities.
+
+## Mistakes you will make, and the exact errors
+
+| You write | You get | Fix |
+|---|---|---|
+| `match x { ... }` | `syntax error at L:C: expected '(' after 'match'` | `match (x) { ... }` |
+| `let mut x = 1;` | `syntax error at L:C: expected '=' in the declaration` | `var x = 1;` |
+| `Some(3)` | `type error at L:C: function 'Some' not declared` | `Option.Some(3)` |
+| `null` | `type error at L:C: name 'null' not declared` | `Option.None` + `Option<T>` |
+| `5.count()` | `type error at L:C: no field or function 'count' applicable to int` | check the stdlib map above |
+| `let m = Map.new();` | `type error at L:C: cannot infer the type of 'Map.new'; annotate it, e.g. 'let m: Map<string, int> = Map.new()'` | annotate as it says |
+| `if (c) { 1 }` used as value | `type error at L:C: an if without else has type unit, but its branch produces int (add an else)` | add `else` |
+| missing enum arm | `type error at L:C: non-exhaustive match on 'Shape': missing variants: Rect` | add the arm or `_` |
+| `f(1)` on `fn f(a: int, b: int)` | `type error at L:C: 'f' expects 2 argument(s), received 1` | fix arity |
+| `f("x")` on `fn f(a: int)` | `type error at L:C: argument 1 of 'f': expected int, got string` | fix the type |
+
+Error headers (stable): `lex error at L:C:` · `syntax error at L:C:` ·
+`type error at L:C:` · `runtime error at L:C:` — always with source line and `^` cursor,
+up to 20 diagnostics per run.
+
+## Verify, don't guess
+
+```
+ray run file.ray            # type-check + run on the VM (exit code = main's int)
+ray dev file.ray            # run + auto-restart on saved changes (hot reload)
+ray build file.ray          # check only (also: ray build --native for a machine binary)
+ray test file.ray           # run @test functions; exit code = number of failures
+ray fmt file.ray            # canonical formatting
+ray doc file.ray            # API docs (raydoc)
+```
+
+Always run what you write: the checker's messages are positioned and specific — treat
+them as the feedback loop, not as failure.

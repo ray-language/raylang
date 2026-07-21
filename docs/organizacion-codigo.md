@@ -1,17 +1,14 @@
 # Estrategia de subdivisión de los archivos grandes
 
-> Documento de diseño (17 jul 2026; **actualizado 20 jul 2026** — cifras refrescadas, el plan de
-> partición sigue sin ejecutarse). Objetivo: mejorar la mantenibilidad y la organización del
-> repo dividiendo los archivos que han crecido más allá de lo razonable, **sin cambiar ni una línea
-> de lógica ni la API pública**. Este documento presenta el diagnóstico, las opciones evaluadas, la
-> recomendación y el mapa de partición archivo por archivo. La ejecución es un trabajo aparte
-> (por lotes, un archivo por commit).
+> Documento de diseño (17 jul 2026; cifras refrescadas 20 jul). Objetivo: mejorar la
+> mantenibilidad y la organización del repo dividiendo los archivos que han crecido más allá de
+> lo razonable, **sin cambiar ni una línea de lógica ni la API pública**. Los §1–§6 son el plan
+> original (se conservan como registro de la decisión); el resultado real está en el **§7**.
 >
-> **Estado (20 jul 2026): nada de esto se ha ejecutado todavía** — los cuatro archivos grandes
-> siguen siendo archivos únicos (`src/checker.rs` etc., no `src/checker/`); no hay branch ni PR
-> previos sobre este tema. En los tres días transcurridos crecieron ~1–2 % más (self-hosting +
-> concurrencia M12 siguieron tocándolos) pero el diagnóstico y el mapa de partición del §4 siguen
-> vigentes tal cual.
+> **Estado: ✅ EJECUTADO Y COMPLETO (20–21 jul 2026).** Los cuatro archivos grandes (`vm.rs`,
+> `transpile.rs`, `checker.rs`, `lsp.rs`) están divididos en módulos-directorio según la Opción A,
+> fusionado todo en `main` vía los PRs #35/#36/#38 (vm), #39 (transpile), #40 (checker) y
+> #41 (lsp). Ver §7 para el layout final, las desviaciones del plan y la verificación.
 
 ## 1. Diagnóstico
 
@@ -105,7 +102,7 @@ Separar fases en crates del workspace (como ya se hizo con `crates/ray-runtime`)
 7. Después de cada partición, correr los tests dirigidos del módulo + una pasada de
    `cargo clippy` (no debe aparecer ningún warning nuevo).
 
-## 4. Mapa de partición por archivo
+## 4. Mapa de partición por archivo (el PLAN — el resultado real está en §7)
 
 Las líneas citadas son las actuales (17 jul 2026), para localizar cada bloque al ejecutar.
 
@@ -195,3 +192,56 @@ Total estimado: **2–3 días** repartibles; cada paso deja el repo mejor sin bl
 | Visibilidad: privados usados entre submódulos | `pub(super)` mínimo; nunca `pub` nuevo en la API del crate |
 | Choque con ramas abiertas | La rama nativa (PR #18) ya se fusionó (20 jul); no hay ramas largas abiertas ahora mismo — buen momento para ejecutar sin choque. Revisar `git branch -a`/PRs abiertos antes de arrancar cada paso, por si hay trabajo nuevo en curso sobre alguno de los cuatro archivos |
 | Convención "cada fase lleva sus tests en su archivo" | Se conserva en espíritu: los tests viven en `foo/tests.rs`, dentro del módulo de su fase (actualizar la línea de CLAUDE.md al ejecutar) |
+
+## 7. Resultado de la ejecución (20–21 jul 2026) — ✅ COMPLETO
+
+Los cuatro archivos se dividieron en el orden de §5, cada pieza como commit de **movimiento
+puro** con suite verde, en cuatro PRs fusionados a `main`:
+
+| Archivo | PR(s) | Antes | Después (módulo) |
+|---|---|---:|---|
+| `src/vm.rs` | #35 (tests) + #36/#38 (resto) | 7 221 | `vm/`: `mod.rs` 3 103 · `tests.rs` 3 102 · `sched.rs` 723 · `values.rs` 208 · `transfer.rs` 113 |
+| `src/transpile.rs` | #39 | 6 220 | `transpile/`: `calls.rs` 1 911 · `emit.rs` 1 496 · `tests.rs` 853 · `runtime.rs` 677 · `mod.rs` 447 · `types.rs` 378 · `analysis.rs` 345 · `names.rs` 185 |
+| `src/checker.rs` | #40 | 7 849 | `checker/`: `core.rs` 3 147 · `tests.rs` 1 709 · `traits.rs` 1 136 · `lowering.rs` 907 · `mod.rs` 605 · `aux.rs` 249 · `enums.rs` 145 |
+| `src/lsp.rs` | #41 | 4 987 | `lsp/`: `features.rs` 2 765 · `tests.rs` 1 336 · `protocol.rs` 418 · `json.rs` 344 · `mod.rs` 141 |
+
+### Desviaciones del plan (§4), todas decididas al ver el código real
+
+- **checker**: `core.rs` quedó como UN archivo (el plan dejaba abierta la opción `core.rs` +
+  `calls.rs`) — dentro del `impl Checker` no había una costura natural de tamaño comparable.
+- **transpile**: el "runtime embebido" NO era un bloque contiguo (estaba entrelazado con la
+  emisión de structs/enums/funciones/`main` dentro de `transpile_with_opts`); se extrajeron sus
+  dos mitades autocontenidas como funciones — `emit_core_runtime` (preámbulo siempre presente) y
+  `emit_runtime_features` (bloques bajo demanda por `needs_*`) — y la recolección de
+  `rt_features` (metadata, no texto) se quedó en `mod.rs`. La guardia H11
+  `NATIVE_TRACKED_BUILTINS` fue a `tests.rs` (solo la usa el test), no a `names.rs`.
+- **lsp**: el `docs.rs` previsto no se materializó — `doc_of_symbol` y vecinos están
+  entrelazados dentro de la sección de Hover sin marcador propio; se plegaron en `features.rs`.
+- **Tamaño objetivo** (~1 500): `vm/mod.rs` (bucle de despacho), `checker/core.rs`,
+  `lsp/features.rs`, `calls.rs` y los `tests.rs` grandes lo superan **a conciencia** — cortarlos
+  más habría sido fragmentación sin costura. Candidatos a segunda pasada si algún día duele:
+  `vm/tests.rs` (oracle vs unit), `lsp/features.rs` (por feature).
+
+### Visibilidad: lo aprendido
+
+`pub(super)` bastó para casi todo (un submódulo ve los privados de su ancestro: los campos de
+`Vm`/`Transpiler`/`Checker` no se tocaron). Dos excepciones de API **realmente pública** que un
+`use x::*;` interno no re-exporta (la reexportación de un `use` normal es privada):
+`checker::{generate_derives, member_completion}` (los llaman `loader.rs`/`lsp.rs`) y
+`lsp::{analyze, analyze_all}` (lo llama `tests/fuzz_front.rs` desde fuera del crate) → `pub use`
+explícito en su `mod.rs`. Más `pub(super) type DictSites` (alias de `lowering.rs` usado por un
+campo de `struct Checker`).
+
+### Verificación (por commit y al cierre)
+
+`cargo build --lib` + los **610 tests de lib** + `cargo clippy --lib` (82 warnings, idéntico a
+antes — cero nuevos) en cada commit. Además, por módulo: vm → `concurrency_cli` (31) +
+`concurrency_net_cli` + ejemplos VM↔intérprete; transpile → 4 builds nativos manuales +
+`native_corpus -- --ignored` (~50 binarios byte-idénticos a la VM); checker →
+`selfhost_checker` (26, mensajes byte-idénticos al espejo selfhost) + `lsp_cli`/`modules_cli`;
+lsp → `lsp_cli` (19) + `fuzz_front` + una sesión LSP real por stdio (`initialize` →
+capabilities). Blame: todos los commits anotan "movimiento puro; usar `git log --follow`" y git
+detectó los renames (`checker.rs → checker/mod.rs` etc.).
+
+**Pendiente**: nada. Los archivos de §4.5 (parser/builtins/interpreter/cli/…) siguen fuera a
+propósito; revisar solo si cruzan su umbral (§4.5).

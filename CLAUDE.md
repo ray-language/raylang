@@ -102,7 +102,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   política—). ⚠️ El espejo selfhost (`selfhost/checker.ray` etc.) debe emitir
   mensajes byte-idénticos a Rust: todo cambio de mensaje va en tándem con su
   espejo y con los tests que lo aseveran.
-- Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo).
+- Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo; en los módulos-directorio
+  divididos —`vm/`, `transpile/`, `checker/`, `lsp/`— viven en el `tests.rs` del módulo, ver
+  `docs/organizacion-codigo.md` §7).
 - **Todo token/nodo lleva `(línea, columna)`**; los errores siempre reportan
   ubicación. Es un principio, no un extra.
 - El tipo `Type` (en `ast.rs`) se diseña **extensible** (futuros genéricos/enums);

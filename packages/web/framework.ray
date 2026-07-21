@@ -294,18 +294,24 @@ pub fn log_requests(app: App) {
 /// `OPTIONS` preflight (204 + Allow-Origin/Methods/Headers, `Step.Done`) and stamps
 /// `Access-Control-Allow-Origin` on every routed response via an `after` hook. Note: static
 /// mounts bypass the after chain (assets are usually same-origin).
+// OJO (bug cazado en G.2): dentro del propio módulo las llamadas a funciones PROPIAS van
+// LIBRES (`header_of(c, …)`), no por UFCS (`c.header_of(…)`): el sitio UFCS resuelve por el
+// nombre pelado, que tras el namespacing del loader solo existe si la ENTRADA lo importó
+// (acoplamiento accidental — el demo lo importaba todo y lo tapaba). La llamada libre la
+// reescribe el Resolver siempre. Clasificado en IDEAS §52.
 pub fn cors(app: App, origin: string) {
     app.middlewares.push(fn(c: Ctx, r: Res) -> Step {
-        if (c.method == "OPTIONS" && c.header_of("access-control-request-method") != "") {
-            r.status(204).header("Access-Control-Allow-Origin", origin)
-                .header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-                .header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        if (c.method == "OPTIONS" && header_of(c, "access-control-request-method") != "") {
+            status(r, 204);
+            header(r, "Access-Control-Allow-Origin", origin);
+            header(r, "Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+            header(r, "Access-Control-Allow-Headers", "Content-Type, Authorization");
             return Step.Done;
         }
         Step.Next
     });
     app.afters.push(fn(c: Ctx, r: Res) {
-        r.header("Access-Control-Allow-Origin", origin);
+        header(r, "Access-Control-Allow-Origin", origin);
     });
 }
 
@@ -624,7 +630,7 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
         }
         res.code = 405;
         res.headers.insert("Allow", join(allow, ", "));
-        res.text("Method Not Allowed");
+        text(res, "Method Not Allowed");  // llamada libre, no UFCS (ver nota en cors)
         return;
     }
 
@@ -634,7 +640,7 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
         let nf: fn(Ctx, Res) = app.nf_handlers[app.nf_handlers.len() - 1];
         nf(ctx, res);
     } else {
-        res.text("Not Found");
+        text(res, "Not Found");  // llamada libre, no UFCS (ver nota en cors)
     }
 }
 

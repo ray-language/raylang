@@ -41,11 +41,11 @@ const DIRS: &[&str] = &["basics", "data", "types", "stdlib"];
 /// determinista: SQLite en `:memory:`). Cada una corre con cwd en su directorio (resuelve sus imports).
 const EXTRAS: &[&str] = &["modulos/main.ray", "capsula/main.ray", "proyecto/main.ray", "db/sqlite_demo.ray"];
 
-fn tiene_rustc() -> bool {
+fn has_rustc() -> bool {
     Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-fn ejemplos_de(dir: &str) -> Vec<PathBuf> {
+fn examples_in(dir: &str) -> Vec<PathBuf> {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join(dir);
     let mut v: Vec<PathBuf> = std::fs::read_dir(&base)
         .unwrap_or_else(|e| panic!("no se pudo leer {}: {e}", base.display()))
@@ -56,15 +56,15 @@ fn ejemplos_de(dir: &str) -> Vec<PathBuf> {
     v
 }
 
-fn excluido(p: &Path) -> Option<&'static str> {
+fn excluded(p: &Path) -> Option<&'static str> {
     let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
     EXCLUIDOS.iter().find(|(n, _)| *n == name).map(|(_, motivo)| *motivo)
 }
 
 #[test]
 #[ignore = "compila ~50 binarios nativos con rustc (~2-3 min); correr con -- --ignored"]
-fn los_ejemplos_deterministas_transpilan_identicos_a_la_vm() {
-    if !tiene_rustc() {
+fn the_deterministic_examples_transpile_identically_to_the_vm() {
+    if !has_rustc() {
         // En LOCAL el skip es honesto (no todo el mundo tiene rustc a mano). Bajo CI sería un falso
         // verde silencioso — exactamente lo que este corpus existe para impedir → fallo duro.
         assert!(
@@ -77,14 +77,14 @@ fn los_ejemplos_deterministas_transpilan_identicos_a_la_vm() {
     let tmp = std::env::temp_dir().join(format!("ray_corpus_{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("crea el dir temporal");
 
-    let mut cubiertos = 0usize;
-    let mut saltados = 0usize;
-    let mut fallos: Vec<String> = Vec::new();
+    let mut covered = 0usize;
+    let mut skipped = 0usize;
+    let mut failures: Vec<String> = Vec::new();
 
     // Cubre UN ejemplo: VM (oráculo) → build --native → binario ≡ VM (stdout + código de salida).
     // `cwd` fija el directorio de trabajo (los EXTRAS resuelven sus imports/manifiesto relativo a él).
-    let mut cubrir = |etiqueta: &str, src: &str, cwd: &Path, bin: &Path,
-                      cubiertos: &mut usize, fallos: &mut Vec<String>| {
+    let mut cover = |label: &str, src: &str, cwd: &Path, bin: &Path,
+                      covered: &mut usize, failures: &mut Vec<String>| {
         // (1) La VM: oráculo de referencia.
         let vm = Command::new(BIN).args(["run", src]).current_dir(cwd).output().expect("corre la VM");
         let vm_out = String::from_utf8_lossy(&vm.stdout).into_owned();
@@ -98,8 +98,8 @@ fn los_ejemplos_deterministas_transpilan_identicos_a_la_vm() {
             .output()
             .expect("lanza el build --native");
         if !build.status.success() {
-            fallos.push(format!(
-                "{etiqueta}: build --native falló\n  {}",
+            failures.push(format!(
+                "{label}: build --native falló\n  {}",
                 String::from_utf8_lossy(&build.stderr).trim()
             ));
             return;
@@ -108,48 +108,48 @@ fn los_ejemplos_deterministas_transpilan_identicos_a_la_vm() {
         let nat = Command::new(bin).output().expect("corre el binario nativo");
         let nat_out = String::from_utf8_lossy(&nat.stdout).into_owned();
         if nat_out != vm_out {
-            fallos.push(format!("{etiqueta}: stdout diverge\n  VM: {vm_out:?}\n  nativo: {nat_out:?}"));
+            failures.push(format!("{label}: stdout diverge\n  VM: {vm_out:?}\n  nativo: {nat_out:?}"));
         } else if nat.status.code() != vm_code {
-            fallos.push(format!(
-                "{etiqueta}: código de salida diverge (VM={vm_code:?}, nativo={:?})",
+            failures.push(format!(
+                "{label}: código de salida diverge (VM={vm_code:?}, nativo={:?})",
                 nat.status.code()
             ));
         } else {
-            *cubiertos += 1;
+            *covered += 1;
         }
         let _ = std::fs::remove_file(bin);
     };
 
-    let raiz = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
     for dir in DIRS {
-        for ejemplo in ejemplos_de(dir) {
-            if let Some(motivo) = excluido(&ejemplo) {
+        for ejemplo in examples_in(dir) {
+            if let Some(motivo) = excluded(&ejemplo) {
                 eprintln!("· saltado {}/{}: {motivo}", dir, ejemplo.file_name().unwrap().to_string_lossy());
-                saltados += 1;
+                skipped += 1;
                 continue;
             }
-            let etiqueta = format!("{}/{}", dir, ejemplo.file_name().unwrap().to_string_lossy());
+            let label = format!("{}/{}", dir, ejemplo.file_name().unwrap().to_string_lossy());
             let bin = tmp.join(ejemplo.file_stem().unwrap());
-            cubrir(&etiqueta, ejemplo.to_str().unwrap(), &raiz, &bin, &mut cubiertos, &mut fallos);
+            cover(&label, ejemplo.to_str().unwrap(), &root, &bin, &mut covered, &mut failures);
         }
     }
     // Los EXTRAS corren con cwd en SU directorio y un nombre de binario propio (dos se llaman main.ray).
     for extra in EXTRAS {
-        let ruta = raiz.join("examples").join(extra);
-        let cwd = ruta.parent().unwrap().to_path_buf();
-        let nombre = ruta.file_name().unwrap().to_str().unwrap().to_string();
+        let path = root.join("examples").join(extra);
+        let cwd = path.parent().unwrap().to_path_buf();
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
         let bin = tmp.join(extra.replace('/', "_").replace(".ray", ""));
-        cubrir(extra, &nombre, &cwd, &bin, &mut cubiertos, &mut fallos);
+        cover(extra, &name, &cwd, &bin, &mut covered, &mut failures);
     }
     let _ = std::fs::remove_dir_all(&tmp);
 
-    eprintln!("native_corpus: {cubiertos} ejemplos ≡ VM, {saltados} saltados (excluidos)");
+    eprintln!("native_corpus: {covered} ejemplos ≡ VM, {skipped} saltados (excluidos)");
     assert!(
-        fallos.is_empty(),
+        failures.is_empty(),
         "el backend nativo diverge de la VM en {} ejemplo(s):\n{}",
-        fallos.len(),
-        fallos.join("\n")
+        failures.len(),
+        failures.join("\n")
     );
     // Salvaguarda: si el corpus cae a ~0 (p. ej. un cambio rompe TODOS los builds), es señal de alarma.
-    assert!(cubiertos >= 40, "el corpus cubrió solo {cubiertos} ejemplos (¿regresión masiva del backend?)");
+    assert!(covered >= 40, "el corpus cubrió solo {covered} ejemplos (¿regresión masiva del backend?)");
 }

@@ -70,7 +70,7 @@ fn ask(port: u16, req: &str) -> String {
 }
 
 #[test]
-fn framework_enruta_params_middleware_y_404() {
+fn framework_routes_params_middleware_and_404() {
     let (mut child, port) = launch();
 
     // Ruta raíz (HTML).
@@ -121,7 +121,7 @@ fn framework_enruta_params_middleware_y_404() {
 }
 
 #[test]
-fn framework_step_locals_after_y_middleware_por_ruta() {
+fn framework_step_locals_after_and_per_route_middleware() {
     // M93.2a: Step.Next/Done, use_on (prefijo), with_mw (por ruta), locals y hooks after.
     let (mut child, port) = launch();
 
@@ -189,7 +189,7 @@ fn framework_cors_cache_y_json_of() {
 }
 
 #[test]
-fn framework_estaticos_redirect_y_metodos() {
+fn framework_static_files_redirect_and_methods() {
     let (mut child, port) = launch();
 
     // Estáticos (M56.9) montados bajo /assets/ desde static/: 200 + mime + ETag.
@@ -223,7 +223,7 @@ fn framework_estaticos_redirect_y_metodos() {
 }
 
 #[test]
-fn framework_contexto_form_json_cookies_y_headers() {
+fn framework_context_form_json_cookies_and_headers() {
     // M93.2c: form_field (urlencoded), json_body (std/json), cookie_of y header_of.
     let (mut child, port) = launch();
 

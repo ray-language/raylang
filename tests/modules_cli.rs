@@ -46,7 +46,7 @@ fn import_qualified_en_ambos_engines() {
 }
 
 #[test]
-fn const_qualified_de_modulo() {
+fn qualified_const_from_module() {
     // M49.1c: un `pub const` de un módulo se accede CALIFICADO (`M.CONST`), en ambos motores.
     let files = &[
         ("fisica", "pub const G: float = 9.81;\n"),
@@ -74,7 +74,7 @@ fn const_qualified_de_modulo() {
 }
 
 #[test]
-fn import_transitivo() {
+fn transitive_import() {
     let files = &[
         ("base", "pub fn one() -> int { 1 }\n"),
         ("mid", "import base;\nfn internal(n: int) -> int { n + base.one() }\npub fn cinco() -> int { internal(base.one()) + internal(2) }\n"),
@@ -102,7 +102,7 @@ fn from_import_con_alias_en_ambos_engines() {
 }
 
 #[test]
-fn from_import_collision_sin_alias_es_error() {
+fn from_import_collision_without_alias_is_error() {
     // Importar un nombre que ya existe en el módulo (sin `as`) es error: pide renombrar.
     let files = &[
         ("mates", "pub fn double(n: int) -> int { n + n }\n"),
@@ -140,7 +140,7 @@ fn from_import_ty_con_alias() {
 }
 
 #[test]
-fn from_import_ty_private_es_error() {
+fn from_import_private_type_is_error() {
     // Importar un tipo NO `pub` con `from` falla: pide `pub` (encapsulamiento).
     let files = &[
         ("lib", "pub fn f() -> int { 1 }\nstruct Punto { x: int, y: int }\n"),
@@ -166,7 +166,7 @@ fn reference_qualified_m_ty_en_ambos_engines() {
 }
 
 #[test]
-fn reference_qualified_a_ty_private_es_error() {
+fn qualified_reference_to_private_type_is_error() {
     // `M.Tipo` con un tipo NO `pub` no resuelve: el checker lo rechaza (encapsulamiento).
     let files = &[
         ("geo", "pub struct Punto { x: int, y: int }\nstruct Secreto { z: int }\n"),
@@ -177,7 +177,7 @@ fn reference_qualified_a_ty_private_es_error() {
 }
 
 #[test]
-fn reference_qualified_a_enum_private_es_error() {
+fn qualified_reference_to_private_enum_is_error() {
     // Construcción de enum calificada `M.Color.Rojo` con un enum NO `pub` → error de carga.
     let files = &[
         ("geo", "enum Color { Rojo, Verde }\npub fn f() -> int { 0 }\n"),
@@ -188,7 +188,7 @@ fn reference_qualified_a_enum_private_es_error() {
 }
 
 #[test]
-fn from_import_name_nonexistent_es_error() {
+fn from_import_nonexistent_name_is_error() {
     let files = &[
         ("lib", "pub fn f() -> int { 1 }\n"),
         ("app", "from lib import NoExiste;\nfn main() -> int { 0 }\n"),
@@ -198,7 +198,7 @@ fn from_import_name_nonexistent_es_error() {
 }
 
 #[test]
-fn types_por_modulo_reusan_name() {
+fn types_per_module_reuse_name() {
     // Dos módulos definen `struct Node` y `enum Estado` (distintos) sin colisionar: los tipos se
     // namespacan por módulo (M11.3c). Cada uno usa los suyos (incl. @derive, match, construcción).
     let files = &[
@@ -213,7 +213,7 @@ fn types_por_modulo_reusan_name() {
 }
 
 #[test]
-fn ty_de_other_modulo_sin_importar_es_error() {
+fn type_from_another_module_without_import_is_error() {
     // Un tipo es privado a su módulo: referenciarlo bare desde otro (sin importar) no resuelve.
     let files = &[
         ("lib", "pub struct Punto { x: int, y: int }\n"),
@@ -224,7 +224,7 @@ fn ty_de_other_modulo_sin_importar_es_error() {
 }
 
 #[test]
-fn ty_duplicado_en_un_modulo_es_error() {
+fn duplicate_type_in_a_module_is_error() {
     let files = &[
         ("dup", "struct Foo { a: int }\nstruct Foo { b: int }\n"),
         ("main", "import dup;\nfn main() -> int { 0 }\n"),
@@ -234,7 +234,7 @@ fn ty_duplicado_en_un_modulo_es_error() {
 }
 
 #[test]
-fn collision_de_positions_between_modules() {
+fn position_collision_between_modules() {
     // Dos llamadas a método en la MISMA (línea, col) de módulos distintos: antes colisionaban en
     // el lowering por posición de M9 y el programa crasheaba en ambos motores. L3 las desambigua
     // dando a cada módulo una banda de líneas distinta. Ambas llamadas caen en (línea 5, col 1).
@@ -249,7 +249,7 @@ fn collision_de_positions_between_modules() {
 }
 
 #[test]
-fn error_en_modulo_no_entry_se_atribuye() {
+fn error_in_non_entry_module_is_attributed() {
     // Un error de tipos en un módulo importado debe renderizarse contra ESE archivo, con su línea
     // LOCAL (2, no la global) y prefijado con `[mates]`.
     let mut base = std::env::temp_dir();
@@ -277,7 +277,7 @@ fn error_en_modulo_no_entry_se_atribuye() {
 }
 
 #[test]
-fn llamar_function_privada_es_error() {
+fn calling_private_function_is_error() {
     let files = &[
         ("lib", "pub fn public() -> int { 1 }\nfn privada() -> int { 2 }\n"),
         ("app", "import lib;\nfn main() -> int { lib.privada() }\n"),
@@ -290,7 +290,7 @@ fn llamar_function_privada_es_error() {
 // --- M11.5: módulos por directorios (import a/b/c) -------------------------------------------
 
 #[test]
-fn import_por_directory_function_y_ty() {
+fn import_by_directory_function_and_type() {
     // `import geo/formas/circulo;` resuelve <raíz>/geo/formas/circulo.ray; el leaf es `circulo`,
     // y se accede calificado tanto a una función `pub` como a un tipo `pub`.
     let files = &[
@@ -307,7 +307,7 @@ fn import_por_directory_function_y_ty() {
 }
 
 #[test]
-fn import_por_directory_con_alias() {
+fn import_by_directory_with_alias() {
     let files = &[
         ("geo/formas/circle", "pub fn area(r: int) -> int { 3 * r * r }\n"),
         ("app", "import geo/formas/circle as c;\nfn main() -> int { c.area(4) }\n"),
@@ -317,7 +317,7 @@ fn import_por_directory_con_alias() {
 }
 
 #[test]
-fn import_por_directory_transitivo_from_la_root() {
+fn import_by_directory_transitive_from_root() {
     // Un submódulo importa a otro **por su ruta absoluta desde la raíz** (no relativa).
     let files = &[
         ("geo/util", "pub fn square(n: int) -> int { n * n }\n"),
@@ -330,7 +330,7 @@ fn import_por_directory_transitivo_from_la_root() {
 }
 
 #[test]
-fn collision_de_leaf_asks_alias() {
+fn leaf_collision_requires_alias() {
     // Dos rutas con el mismo último segmento (`circulo`) colisionan: el segundo necesita `as`.
     let files = &[
         ("a/circle", "pub fn area(r: int) -> int { r }\n"),
@@ -342,7 +342,7 @@ fn collision_de_leaf_asks_alias() {
 }
 
 #[test]
-fn from_import_por_directory() {
+fn from_import_by_directory() {
     let files = &[
         ("geo/formas/circle", "pub fn area(r: int) -> int { 3 * r * r }\n"),
         ("app", "from geo/formas/circle import area;\nfn main() -> int { area(4) }\n"),
@@ -354,7 +354,7 @@ fn from_import_por_directory() {
 // --- M11.6a: cápsula direccionable (mod.ray) + reexport (pub from) ----------------------------
 
 #[test]
-fn mod_ray_direccionable_con_reexport() {
+fn mod_ray_addressable_with_reexport() {
     // `import geo;` carga geo/mod.ray, que reexporta una función y un tipo `pub` de un submódulo.
     let files = &[
         ("geo/formas/circle",
@@ -370,7 +370,7 @@ fn mod_ray_direccionable_con_reexport() {
 }
 
 #[test]
-fn from_capsule_trae_los_reexportados() {
+fn from_capsule_brings_reexported() {
     // Un `from geo import …` trae al ámbito lo que la cápsula reexporta (sin calificar).
     let files = &[
         ("geo/formas/circle", "pub fn area(r: int) -> int { 3 * r * r }\n"),
@@ -397,7 +397,7 @@ fn reexport_en_string_between_capsulas() {
 }
 
 #[test]
-fn modulo_file_y_directory_homonimos_es_ambiguo() {
+fn module_file_and_directory_homonyms_is_ambiguous() {
     // Una sola forma canónica: si existen geo.ray Y geo/mod.ray, el módulo `geo` es ambiguo.
     let files = &[
         ("geo", "pub fn f() -> int { 1 }\n"),
@@ -411,7 +411,7 @@ fn modulo_file_y_directory_homonimos_es_ambiguo() {
 // --- M11.6b: enforcement de la cápsula -------------------------------------------------------
 
 #[test]
-fn import_direct_de_submodule_internal_es_error() {
+fn direct_import_of_internal_submodule_is_error() {
     // Desde fuera de la cápsula, importar un submódulo interno por ruta es ilegal: hay que
     // pasar por la fachada `import geo;`.
     let files = &[
@@ -424,7 +424,7 @@ fn import_direct_de_submodule_internal_es_error() {
 }
 
 #[test]
-fn from_de_submodule_internal_es_error() {
+fn from_import_of_internal_submodule_is_error() {
     // Lo mismo con `from`: la arista cruza el borde de la cápsula.
     let files = &[
         ("geo/formas/circle", "pub fn area(r: int) -> int { 3 * r * r }\n"),
@@ -436,7 +436,7 @@ fn from_de_submodule_internal_es_error() {
 }
 
 #[test]
-fn access_internal_a_la_capsule_follows_permitido() {
+fn internal_access_within_the_capsule_is_allowed() {
     // Dentro de la cápsula, los submódulos se importan entre sí por ruta sin restricción.
     let files = &[
         ("geo/util", "pub fn square(n: int) -> int { n * n }\n"),
@@ -452,7 +452,7 @@ fn access_internal_a_la_capsule_follows_permitido() {
 }
 
 #[test]
-fn capsulas_anidadas_respetan_el_borde_mas_cercano() {
+fn nested_capsules_respect_the_closest_boundary() {
     // `a/b` es una cápsula dentro de `a` (también cápsula). Un módulo que vive en `a` pero NO en
     // `a/b` no puede alcanzar el interior de `a/b`.
     let files = &[
@@ -468,7 +468,7 @@ fn capsulas_anidadas_respetan_el_borde_mas_cercano() {
 }
 
 #[test]
-fn ufcs_resolves_function_importada() {
+fn ufcs_resolves_imported_function() {
     // UFCS (`recv.f(...)`) debe resolver una función traída por `from M import f` —no solo las del
     // módulo de entrada—. El loader deja el alias local→global (`Program.ufcs_aliases`) y el checker
     // lo usa como *fallback* tras campo/método. Encadenado: `"x".saluda().grita()`.
@@ -484,7 +484,7 @@ fn ufcs_resolves_function_importada() {
 }
 
 #[test]
-fn ufcs_importado_con_alias() {
+fn ufcs_imported_with_alias() {
     // El alias de `from M import f as g` también vale para UFCS: `x.g(...)` → `M::f(x, ...)`.
     let files = &[
         ("lib", "pub fn double(n: int) -> int { n * 2 }\n"),
@@ -498,7 +498,7 @@ fn ufcs_importado_con_alias() {
 }
 
 #[test]
-fn ufcs_importado_no_breaks_access_a_campo() {
+fn ufcs_imported_does_not_break_field_access() {
     // Seguridad: que exista una función importada homónima a un campo NO rompe el acceso al campo
     // (la resolución prueba campo antes que el alias importado).
     let files = &[
@@ -513,7 +513,7 @@ fn ufcs_importado_no_breaks_access_a_campo() {
 }
 
 #[test]
-fn auto_reference_por_name_de_package() {
+fn self_reference_by_package_name() {
     // M91.8: los fuentes de un paquete se importan entre sí por el NOMBRE del paquete
     // (`import net/trace;` desde packages/net/http.ray) — si el primer segmento del import
     // coincide con el nombre del directorio raíz, el loader prueba contra el padre (la misma
@@ -537,7 +537,7 @@ fn auto_reference_por_name_de_package() {
 /// privada), con una entrada que NO importa esos nombres. Antes del fix: "no field or function
 /// 'double' applicable to int" (solo compilaba si la entrada casualmente los importaba).
 #[test]
-fn ufcs_interno_del_modulo_sin_import_de_la_entrada() {
+fn internal_ufcs_of_module_without_entry_import() {
     let files = &[
         (
             "geom",
@@ -563,7 +563,7 @@ fn ufcs_interno_del_modulo_sin_import_de_la_entrada() {
 /// de SU módulo (antes, el sitio del módulo caía por accidente en la de la entrada vía el alias
 /// plano de from-imports). Cubre también un módulo por directorios (prefijo `geo::util`).
 #[test]
-fn ufcs_interno_prioriza_la_funcion_del_propio_modulo() {
+fn internal_ufcs_prioritizes_own_module_function() {
     let files = &[
         (
             "geo/util",
@@ -587,7 +587,7 @@ fn ufcs_interno_prioriza_la_funcion_del_propio_modulo() {
 /// El fallback pelado sigue vivo: un sitio UFCS de módulo hacia el prelude (`xs.map(f)`) no
 /// tiene versión namespacada → cae al nombre pelado, como siempre.
 #[test]
-fn ufcs_interno_cae_al_prelude_si_no_hay_propia() {
+fn internal_ufcs_falls_back_to_prelude_if_none_own() {
     let files = &[
         (
             "listas",

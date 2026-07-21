@@ -153,7 +153,7 @@ fn run_m81(flags: &[&str]) -> (Vec<String>, bool) {
 }
 
 #[test]
-fn regex_capturas_ambos_engines() {
+fn regex_captures_both_engines() {
     let (interp, ok1) = run_m81(&[]);
     let (vm, ok2) = run_m81(&["--vm"]);
     assert!(ok1 && ok2, "regex_captures_demo falló");

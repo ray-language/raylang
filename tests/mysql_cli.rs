@@ -115,11 +115,11 @@ fn handle(mut s: TcpStream) {
         return;
     }
     s.write_all(&pkt(2, &[0x00, 0, 0, 0, 0, 0, 0])).unwrap(); // OK
-    fase_comandos(&mut s);
+    command_phase(&mut s);
 }
 
 /// La fase de comandos (COM_QUERY/COM_QUIT), genérica sobre el flujo (TCP plano o rustls::Stream).
-fn fase_comandos<S: Read + Write>(s: &mut S) {
+fn command_phase<S: Read + Write>(s: &mut S) {
     let mut prep_sql = String::new();
     let mut prep_nparams = 0usize;
     loop {
@@ -209,12 +209,12 @@ fn fase_comandos<S: Read + Write>(s: &mut S) {
                     s.write_all(&pkt(2, &col_def("name"))).unwrap();
                     s.write_all(&pkt(3, &col_def("nota"))).unwrap();
                     s.write_all(&pkt(4, &EOF)).unwrap();
-                    let mut fila1 = lenc("ada");
-                    fila1.extend_from_slice(&lenc("36"));
-                    s.write_all(&pkt(5, &fila1)).unwrap();
-                    let mut fila2 = lenc("grace");
-                    fila2.push(0xfb); // NULL
-                    s.write_all(&pkt(6, &fila2)).unwrap();
+                    let mut row1 = lenc("ada");
+                    row1.extend_from_slice(&lenc("36"));
+                    s.write_all(&pkt(5, &row1)).unwrap();
+                    let mut row2 = lenc("grace");
+                    row2.push(0xfb); // NULL
+                    s.write_all(&pkt(6, &row2)).unwrap();
                     s.write_all(&pkt(7, &EOF)).unwrap();
                 } else if sql.starts_with("TRUNC") {
                     // M77: fila MALFORMADA — el string length-encoded declara 200 octetos pero el
@@ -239,7 +239,7 @@ fn fase_comandos<S: Read + Write>(s: &mut S) {
 }
 
 /// Lanza el servidor de juguete en un puerto efímero; atiende conexiones en serie (una por motor).
-fn launch_servidor() -> u16 {
+fn launch_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -323,7 +323,7 @@ fn mysql_handshake_query_exec_y_error() {
     let base = std::env::temp_dir().join("ray_mysql_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
@@ -338,7 +338,7 @@ fn mysql_password_incorrect_da_error_claro() {
     let base = std::env::temp_dir().join("ray_mysql_cli_badpw");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project(&base, port);
     // Reescribe el main con una contraseña equivocada → el servidor rechaza con su ERR.
     let main = std::fs::read_to_string(app.join("src/main.ray")).unwrap();
@@ -382,12 +382,12 @@ fn handle_tls(mut s: TcpStream, config: std::sync::Arc<rustls::ServerConfig>) {
         return;
     }
     tls.write_all(&pkt(5, &[0x00, 0, 0, 0, 0, 0, 0])).unwrap(); // OK
-    fase_comandos(&mut tls);
+    command_phase(&mut tls);
     conn.send_close_notify();
     let _ = conn.complete_io(&mut s);
 }
 
-fn launch_servidor_tls() -> u16 {
+fn launch_server_tls() -> u16 {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
@@ -479,11 +479,11 @@ fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
 const ESPERADO_TLS: &str = "conectado seguro\nada|36\ngrace|\nmysql: acceso denegado\n";
 
 #[test]
-fn mysql_tls_full_path_de_caching_sha2() {
+fn mysql_tls_full_path_caching_sha2() {
     let base = std::env::temp_dir().join("ray_mysql_cli_tls");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor_tls();
+    let port = launch_server_tls();
     let app = project_tls(&base, port);
 
     assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");
@@ -551,11 +551,11 @@ afectadas: 4\n\
 mysql: la tabla no existe\n";
 
 #[test]
-fn mysql_protocolo_binary_prepared() {
+fn mysql_protocol_binary_prepared() {
     let base = std::env::temp_dir().join("ray_mysql_cli_bin");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project_binary(&base, port);
 
     let (out_vm, _) = run(&app, &[]);

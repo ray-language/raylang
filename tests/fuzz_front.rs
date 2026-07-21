@@ -45,18 +45,18 @@ fn corpus() -> Vec<Vec<u8>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     for dir in ["examples", "selfhost"] {
-        recoger(&root.join(dir), &mut files);
+        collect_files(&root.join(dir), &mut files);
     }
     assert!(files.len() > 50, "el corpus must tener los .ray del repo");
     files
 }
 
-fn recoger(dir: &Path, sink: &mut Vec<Vec<u8>>) {
+fn collect_files(dir: &Path, sink: &mut Vec<Vec<u8>>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
-            recoger(&p, sink);
+            collect_files(&p, sink);
         } else if p.extension().is_some_and(|x| x == "ray") {
             if let Ok(bytes) = std::fs::read(&p) {
                 sink.push(bytes);
@@ -68,7 +68,7 @@ fn recoger(dir: &Path, sink: &mut Vec<Vec<u8>>) {
 // ── Mutador ──────────────────────────────────────────────────────────────────────────
 
 /// Produce un caso: un archivo del corpus con 1–4 mutaciones aplicadas.
-fn mutar(rng: &mut Rng, corpus: &[Vec<u8>]) -> Vec<u8> {
+fn mutate(rng: &mut Rng, corpus: &[Vec<u8>]) -> Vec<u8> {
     let mut case = corpus[rng.below(corpus.len())].clone();
     for _ in 0..(1 + rng.below(4)) {
         if case.is_empty() {
@@ -92,19 +92,19 @@ fn mutar(rng: &mut Rng, corpus: &[Vec<u8>]) -> Vec<u8> {
             3 => {
                 let ini = rng.below(case.len());
                 let fin = (ini + 1 + rng.below(64)).min(case.len());
-                let trozo: Vec<u8> = case[ini..fin].to_vec();
+                let chunk: Vec<u8> = case[ini..fin].to_vec();
                 let target = rng.below(case.len());
-                for (k, b) in trozo.into_iter().enumerate() {
+                for (k, b) in chunk.into_iter().enumerate() {
                     case.insert(target + k, b);
                 }
             }
             // Insertar basura (ASCII imprimible, tokens raros y UTF-8 multibyte).
             4 => {
-                let basura: &[&[u8]] = &[
+                let junk: &[&[u8]] = &[
                     b"(((((", b"{{{", b"[[[", b"\"", b"f\"", b"b\"", b"'", b"\\x", b"..",
                     b"|>", b"=>", b"->", b"::", "é😀\u{7f}".as_bytes(), b"\x00\xff\xfe",
                 ];
-                let g = basura[rng.below(basura.len())];
+                let g = junk[rng.below(junk.len())];
                 let target = rng.below(case.len() + 1);
                 for (k, b) in g.iter().enumerate() {
                     case.insert(target + k, *b);
@@ -164,7 +164,7 @@ fn fuzz(seed: u64, iters: usize) {
     let corpus = corpus();
     let mut rng = Rng(seed);
     for i in 0..iters {
-        let case = mutar(&mut rng, &corpus);
+        let case = mutate(&mut rng, &corpus);
         if let Some(msg) = run(&case) {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fuzz");
             std::fs::create_dir_all(&dir).expect("crea target/fuzz");
@@ -184,7 +184,7 @@ fn fuzz(seed: u64, iters: usize) {
 /// Smoke determinista: corre SIEMPRE en la suite. Semilla fija → mismos casos en cada
 /// corrida; es la regresión de "el front-end no panica", no una búsqueda.
 #[test]
-fn fuzz_smoke_determinista() {
+fn fuzz_smoke_deterministic() {
     fuzz(0xC0FFEE, 400);
 }
 

@@ -132,7 +132,7 @@ rt: true\n\
 trunc: invalid BSON (byte 0): invalid document length: 49\n\
 type: invalid BSON (byte 6): unsupported BSON type: 14\n";
 
-fn project_puente(base: &std::path::Path) -> std::path::PathBuf {
+fn project_bridge(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -183,11 +183,11 @@ tope: a document's JSON must be an object\n\
 to: {\"id\":\"000102030405060708090a0b\",\"n\":42,\"sub\":{\"ok\":1}}\n";
 
 #[test]
-fn bson_puente_json() {
+fn bson_bridge_json() {
     let base = std::env::temp_dir().join("ray_bson_cli_json");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = project_puente(&base);
+    let app = project_bridge(&base);
 
     assert_eq!(run(&app, &[]), ESPERADO_PUENTE, "VM");
     assert_eq!(run(&app, &["--interp"]), ESPERADO_PUENTE, "intérprete");
@@ -205,7 +205,7 @@ fn bson_vectors_del_spec_roundtrip_y_errors() {
     assert_eq!(run(&app, &["--interp"]), ESPERADO, "intérprete");
 }
 
-fn project_profundo(base: &std::path::Path) -> std::path::PathBuf {
+fn project_deep(base: &std::path::Path) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -261,11 +261,11 @@ fn main() -> int {
 /// por desbordamiento de pila: se rechaza como valor (`Err`). Antes, ~4.8 KB (600 niveles) abortaban
 /// el proceso con "desbordamiento de pila".
 #[test]
-fn bson_nesting_profundo_es_error() {
+fn bson_deep_nesting_is_error() {
     let base = std::env::temp_dir().join("ray_bson_cli_profundo");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let app = project_profundo(&base);
+    let app = project_deep(&base);
 
     const ESPERADO_PROFUNDO: &str = "d50: OK\nd200: OK\nd600: Err\n";
     assert_eq!(run(&app, &[]), ESPERADO_PROFUNDO, "VM");

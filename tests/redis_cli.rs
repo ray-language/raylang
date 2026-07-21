@@ -9,14 +9,14 @@ use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 
 /// Lee exactamente un comando RESP (array de bulk strings) del stream. `None` si la conexión se cierra.
-fn leer_comando(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<Vec<String>> {
+fn read_command(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<Vec<String>> {
     // Asegura que hay al menos una línea completa disponible; rellena leyendo del socket.
-    fn leer_linea(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<String> {
+    fn read_line(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<String> {
         loop {
             if let Some(pos) = buf.windows(2).position(|w| w == b"\r\n") {
-                let linea = String::from_utf8_lossy(&buf[..pos]).into_owned();
+                let line = String::from_utf8_lossy(&buf[..pos]).into_owned();
                 buf.drain(..pos + 2);
-                return Some(linea);
+                return Some(line);
             }
             let mut tmp = [0u8; 1024];
             match stream.read(&mut tmp) {
@@ -25,7 +25,7 @@ fn leer_comando(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<Vec<String>
             }
         }
     }
-    fn leer_n(buf: &mut Vec<u8>, stream: &mut TcpStream, n: usize) -> Option<String> {
+    fn read_n(buf: &mut Vec<u8>, stream: &mut TcpStream, n: usize) -> Option<String> {
         while buf.len() < n + 2 {
             let mut tmp = [0u8; 1024];
             match stream.read(&mut tmp) {
@@ -38,16 +38,16 @@ fn leer_comando(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<Vec<String>
         Some(s)
     }
 
-    let header = leer_linea(buf, stream)?;
+    let header = read_line(buf, stream)?;
     if !header.starts_with('*') {
         return None;
     }
     let n: usize = header[1..].parse().ok()?;
     let mut args = Vec::with_capacity(n);
     for _ in 0..n {
-        let largo_linea = leer_linea(buf, stream)?; // $<len>
-        let len: usize = largo_linea[1..].parse().ok()?;
-        args.push(leer_n(buf, stream, len)?);
+        let line_len = read_line(buf, stream)?; // $<len>
+        let len: usize = line_len[1..].parse().ok()?;
+        args.push(read_n(buf, stream, len)?);
     }
     Some(args)
 }
@@ -55,9 +55,9 @@ fn leer_comando(buf: &mut Vec<u8>, stream: &mut TcpStream) -> Option<Vec<String>
 /// Atiende una conexión: un mini-Redis en memoria. Soporta lo que la demo ejercita.
 fn handle(mut stream: TcpStream) {
     let mut kv: HashMap<String, String> = HashMap::new();
-    let mut listas: HashMap<String, Vec<String>> = HashMap::new();
+    let mut lists: HashMap<String, Vec<String>> = HashMap::new();
     let mut buf: Vec<u8> = Vec::new();
-    while let Some(args) = leer_comando(&mut buf, &mut stream) {
+    while let Some(args) = read_command(&mut buf, &mut stream) {
         let cmd = args[0].to_uppercase();
         let resp = match cmd.as_str() {
             "PING" => "+PONG\r\n".to_string(),
@@ -75,7 +75,7 @@ fn handle(mut stream: TcpStream) {
                 format!(":{}\r\n", n)
             }
             "RPUSH" => {
-                let l = listas.entry(args[1].clone()).or_default();
+                let l = lists.entry(args[1].clone()).or_default();
                 for v in &args[2..] {
                     l.push(v.clone());
                 }
@@ -83,7 +83,7 @@ fn handle(mut stream: TcpStream) {
             }
             "LRANGE" => {
                 let empty = Vec::new();
-                let l = listas.get(&args[1]).unwrap_or(&empty);
+                let l = lists.get(&args[1]).unwrap_or(&empty);
                 let mut s = format!("*{}\r\n", l.len());
                 for v in l {
                     s.push_str(&format!("${}\r\n{}\r\n", v.len(), v));
@@ -91,8 +91,8 @@ fn handle(mut stream: TcpStream) {
                 s
             }
             "DEL" => {
-                let habia = kv.remove(&args[1]).is_some() || listas.remove(&args[1]).is_some();
-                format!(":{}\r\n", if habia { 1 } else { 0 })
+                let existed = kv.remove(&args[1]).is_some() || lists.remove(&args[1]).is_some();
+                format!(":{}\r\n", if existed { 1 } else { 0 })
             }
             _ => "-ERR comando no soportado\r\n".to_string(),
         };

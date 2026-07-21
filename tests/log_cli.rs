@@ -30,14 +30,14 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 }
 
 #[test]
-fn log_estructurado_interpreter() {
+fn structured_log_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "log_demo falló");
     assert_eq!(lines, ESPERADO);
 }
 
 #[test]
-fn log_estructurado_vm() {
+fn structured_log_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "log_demo falló");
     assert_eq!(lines, ESPERADO);

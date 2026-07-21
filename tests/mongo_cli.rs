@@ -241,7 +241,7 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
     }
 }
 
-fn launch_servidor() -> u16 {
+fn launch_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -315,11 +315,11 @@ mala clave: mongo: the server signature does not verify (authentication failed)\
 mal user: mongo: Authentication failed.\n";
 
 #[test]
-fn mongo_hello_scram_y_errors_de_auth() {
+fn mongo_hello_scram_and_auth_errors() {
     let base = std::env::temp_dir().join("ray_mongo_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
@@ -428,11 +428,11 @@ paginados: 3\n\
 mongo: ns not found\n";
 
 #[test]
-fn mongo_crud_y_error_del_servidor() {
+fn mongo_crud_and_server_error() {
     let base = std::env::temp_dir().join("ray_mongo_cli_crud");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project_crud(&base, port);
 
     assert_eq!(run(&app, &[]), ESPERADO_CRUD, "VM");
@@ -441,7 +441,7 @@ fn mongo_crud_y_error_del_servidor() {
 
 // --- TLS: connect_tls (cifrado desde el octeto 0, sin STARTTLS) ---
 
-fn launch_servidor_tls() -> u16 {
+fn launch_server_tls() -> u16 {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
@@ -537,11 +537,11 @@ const ESPERADO_TLS: &str = "conectado seguro\n\
 {name: \"grace\"}\n";
 
 #[test]
-fn mongo_tls_conexion_y_find_cifrados() {
+fn mongo_tls_connection_and_encrypted_find() {
     let base = std::env::temp_dir().join("ray_mongo_cli_tls");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor_tls();
+    let port = launch_server_tls();
     let app = project_tls(&base, port);
 
     assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");

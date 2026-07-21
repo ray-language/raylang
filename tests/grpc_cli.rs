@@ -29,11 +29,11 @@ fn frame(ftype: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
 }
 
 /// Servidor gRPC de juguete (una conexión) con ALPN `h2`. Puerto efímero.
-fn launch_servidor_grpc() -> u16 {
-    launch_servidor_grpc_cfg(true)
+fn launch_grpc_server() -> u16 {
+    launch_grpc_server_cfg(true)
 }
 
-fn launch_servidor_grpc_cfg(con_grpc_status: bool) -> u16 {
+fn launch_grpc_server_cfg(con_grpc_status: bool) -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("cert de prueba");
@@ -105,13 +105,13 @@ const ESPERADO: &[&str] = &["grpc-status: 0", "greeting: hello, raylang"];
 
 #[test]
 fn grpc_call_interpreter() {
-    let port = launch_servidor_grpc();
+    let port = launch_grpc_server();
     assert_eq!(run(&[], port), ESPERADO);
 }
 
 #[test]
 fn grpc_call_vm() {
-    let port = launch_servidor_grpc();
+    let port = launch_grpc_server();
     assert_eq!(run(&["--vm"], port), ESPERADO);
 }
 
@@ -119,8 +119,8 @@ fn grpc_call_vm() {
 /// violado) ya no pasa como OK: `grpc_call` devuelve `Err`. Antes `tuvo_grpc_status` se
 /// computaba pero no se leía → `Ok(grpc_status: 0)` indistinguible de un OK legítimo.
 #[test]
-fn grpc_sin_status_es_error() {
-    let port = launch_servidor_grpc_cfg(false);
+fn grpc_without_status_is_error() {
+    let port = launch_grpc_server_cfg(false);
     let demo = format!("{}/examples/web/grpc_call_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))

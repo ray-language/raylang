@@ -19,7 +19,7 @@ const KEY_PEM: &str = include_str!("fixtures/tls_key.pem");
 
 /// Servidor STARTTLS de una conexión: lee "STARTTLS\n" en claro, responde "GO\n", y SOLO entonces
 /// arranca TLS de servidor sobre el mismo socket; bajo TLS lee una línea y responde "hola-seguro\n".
-fn launch_servidor_starttls() -> u16 {
+fn launch_starttls_server() -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("certificado de prueba válido");
@@ -130,13 +130,13 @@ fn run(port: u16, flags: &[&str]) -> String {
 
 #[test]
 fn starttls_upgrade_interpreter() {
-    let port = launch_servidor_starttls();
+    let port = launch_starttls_server();
     assert_eq!(run(port, &["--interp"]), ESPERADO);
 }
 
 #[test]
 fn starttls_upgrade_vm() {
-    let port = launch_servidor_starttls();
+    let port = launch_starttls_server();
     assert_eq!(run(port, &["--vm"]), ESPERADO);
 }
 
@@ -153,7 +153,7 @@ fn starttls_upgrade_native() {
         eprintln!("saltando starttls_upgrade_native: cargo no disponible");
         return;
     }
-    let port = launch_servidor_starttls();
+    let port = launch_starttls_server();
     let dir = std::env::temp_dir().join("ray_tls_upgrade_native");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

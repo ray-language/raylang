@@ -101,7 +101,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
 const ESPERADO: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\nafter rollback: 2\nsqlite: no such table: no_existe\ncerrada: invalid or already closed handle\n";
 
 #[test]
-fn sqlite_crud_transaccion_y_errors() {
+fn sqlite_crud_transaction_and_errors() {
     let base = std::env::temp_dir().join("ray_sqlite_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
@@ -115,7 +115,7 @@ fn sqlite_crud_transaccion_y_errors() {
 }
 
 #[test]
-fn sqlite_path_invalida_da_error_claro() {
+fn sqlite_invalid_path_gives_clear_error() {
     let base = std::env::temp_dir().join("ray_sqlite_cli_badpath");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();

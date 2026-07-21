@@ -18,7 +18,7 @@ use std::process::Command;
 
 #[test]
 #[ignore = "lento (~1 min) y no determinista; córrelo con --ignored"]
-fn sin_regresion_de_rendimiento() {
+fn no_performance_regression() {
     let root = env!("CARGO_MANIFEST_DIR");
 
     // 1. Compila la release (el gate mide `target/release/raylang`).

@@ -43,15 +43,15 @@ fn run(args: &[&str]) -> (String, i32) {
 }
 
 /// Compara un driver del self-hosting corrido por Rust vs COMPILADO Y CORRIDO sobre la VM auto-alojada.
-fn compare_driver_vm(driver_rel: &str, input_abs: &str, etiqueta: &str) {
+fn compare_driver_vm(driver_rel: &str, input_abs: &str, label: &str) {
     let driver = repo_path(driver_rel);
     let driver = driver.to_str().expect("path utf-8");
     let run_vm = repo_path("selfhost/run_vm.ray");
     let run_vm = run_vm.to_str().expect("path utf-8");
     let (so_r, code_r) = run(&[driver, input_abs]);
     let (so_v, code_v) = run(&[run_vm, driver, input_abs]);
-    assert_eq!(so_v, so_r, "stdout difiere ({etiqueta})");
-    assert_eq!(code_v, code_r, "código de output difiere ({etiqueta})");
+    assert_eq!(so_v, so_r, "stdout difiere ({label})");
+    assert_eq!(code_v, code_r, "código de output difiere ({label})");
 }
 
 // Fuentes pequeñas (la VM auto-alojada corre sobre la VM del host → entradas chicas).

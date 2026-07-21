@@ -110,7 +110,7 @@ fn test_dir(name: &str) -> std::path::PathBuf {
 /// Modo dev (RAY_DEV_RELOAD): la primera respuesta pone la cookie, la sesión se lee con
 /// ella, y — el diferenciador — SOBREVIVE al restart del servidor (archivo RKV1).
 #[test]
-fn sesion_sobrevive_al_reload_en_dev() {
+fn session_survives_reload_in_dev() {
     let dir = test_dir("dev");
     let (mut child, port) = launch(&dir, &[("RAY_DEV_RELOAD", "1")]);
 
@@ -141,7 +141,7 @@ fn sesion_sobrevive_al_reload_en_dev() {
 
 /// Modo producción (sin RAY_DEV_RELOAD): la sesión funciona en memoria y NUNCA toca disco.
 #[test]
-fn sesion_en_memoria_en_produccion() {
+fn session_in_memory_in_production() {
     let dir = test_dir("prod");
     let (mut child, port) = launch(&dir, &[]);
 

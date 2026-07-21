@@ -61,7 +61,7 @@ fn metrics_exposure_vm() {
 /// `nombre[{labels}] valor`, HELP/TYPE preceden a las series, y los buckets del histograma son
 /// cumulativos (cuentas no decrecientes por `le` ascendente, y +Inf == _count).
 #[test]
-fn formato_de_exposure_valid() {
+fn exposure_format_is_valid() {
     if Command::new("python3").arg("--version").output().is_err() {
         eprintln!("python3 no disponible: se omite la validación de formato");
         return;
@@ -140,7 +140,7 @@ print('FORMATO OK')
 /// M70 — chequeo de tipo: `set` sobre un counter y `observe` sobre un counter panican con
 /// mensaje claro (antes creaban una serie espuria que corrompía la exposición en silencio).
 #[test]
-fn ty_equivocado_panica() {
+fn wrong_type_panics() {
     let src = r#"
 from metrics import registry, register_counter, set, no_labels;
 fn main() {

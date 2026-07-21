@@ -52,7 +52,7 @@ fn read_typed<S: Read + Write>(s: &mut S) -> (u8, Vec<u8>) {
 
 /// Extrae (query, params) de un ciclo Parse/Bind/…/Sync. La query viene del Parse ('P'), los
 /// parámetros del Bind ('B'). Devuelve al ver Sync ('S'); None si el cliente terminó ('X').
-fn leer_ciclo<S: Read + Write>(s: &mut S) -> Option<(String, Vec<String>)> {
+fn read_cycle<S: Read + Write>(s: &mut S) -> Option<(String, Vec<String>)> {
     let mut query = String::new();
     let mut params: Vec<String> = Vec::new();
     loop {
@@ -155,10 +155,10 @@ fn handle(mut s: TcpStream) {
 /// La sesión en sí, genérica sobre el flujo (TCP plano o rustls::Stream → sirve para el test TLS).
 fn handle_stream<S: Read + Write>(s: &mut S) {
     read_startup(s);
-    let mut sasl = vec![0u8, 0, 0, 10];
-    sasl.extend_from_slice(b"SCRAM-SHA-256\0");
-    sasl.push(0);
-    s.write_all(&msg(b'R', &sasl)).unwrap();
+    let mut scram_body = vec![0u8, 0, 0, 10];
+    scram_body.extend_from_slice(b"SCRAM-SHA-256\0");
+    scram_body.push(0);
+    s.write_all(&msg(b'R', &scram_body)).unwrap();
     read_typed(&mut *s); // SASLInitialResponse
     let mut cont = vec![0u8, 0, 0, 11];
     cont.extend_from_slice(SERVER_FIRST);
@@ -170,18 +170,18 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
     s.write_all(&msg(b'R', &[0, 0, 0, 0])).unwrap(); // AuthenticationOk
     s.write_all(&msg(b'Z', b"I")).unwrap(); // ReadyForQuery
 
-    while let Some((query, params)) = leer_ciclo(&mut *s) {
+    while let Some((query, params)) = read_cycle(&mut *s) {
         s.write_all(&msg(b'1', &[])).unwrap(); // ParseComplete
         s.write_all(&msg(b'2', &[])).unwrap(); // BindComplete
         if query.starts_with("SELECT") {
             // Primera fila = los parámetros (prueba el binding); segunda fila fija.
             let ncols = params.len().max(1);
             s.write_all(&msg(b'T', &row_description(ncols))).unwrap();
-            let mut fila1 = params.clone();
-            if fila1.is_empty() {
-                fila1.push("sin-params".to_string());
+            let mut row1 = params.clone();
+            if row1.is_empty() {
+                row1.push("sin-params".to_string());
             }
-            s.write_all(&msg(b'D', &data_row(&fila1))).unwrap();
+            s.write_all(&msg(b'D', &data_row(&row1))).unwrap();
             let fixes: Vec<String> = (0..ncols).map(|k| format!("fixes{k}")).collect();
             s.write_all(&msg(b'D', &data_row(&fixes))).unwrap();
             s.write_all(&msg(b'C', &command_complete("SELECT 2"))).unwrap();
@@ -208,7 +208,7 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
     }
 }
 
-fn launch_servidor() -> u16 {
+fn launch_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -222,7 +222,7 @@ fn launch_servidor() -> u16 {
 /// Variante TLS: espera el **SSLRequest** del protocolo (8 octetos, código 80877103), responde
 /// 'S', hace el handshake TLS (cert autofirmado de `tests/fixtures/`) y atiende LA MISMA sesión
 /// (startup + SCRAM + extendido) sobre el canal cifrado.
-fn launch_servidor_tls() -> u16 {
+fn launch_server_tls() -> u16 {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
@@ -333,11 +333,11 @@ fn run(app: &std::path::Path, flags: &[&str]) -> String {
 const ESPERADO: &str = "ada|36\nfixes0|fixes1\nbegin: 0\ninsert: 5\nnull: [hello|]\npostgres: relacion nonexistent\n";
 
 #[test]
-fn postgres_v2_extendido_params_y_transaccion() {
+fn postgres_v2_extended_params_and_transaction() {
     let base = std::env::temp_dir().join("ray_pg_v2_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor();
+    let port = launch_server();
     let app = project(&base, port);
 
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
@@ -410,11 +410,11 @@ fn run_tls(app: &std::path::Path, flags: &[&str]) -> String {
 const ESPERADO_TLS: &str = "segura\nfixes0\n";
 
 #[test]
-fn postgres_tls_sslrequest_y_sesion_cifrada() {
+fn postgres_tls_sslrequest_and_encrypted_session() {
     let base = std::env::temp_dir().join("ray_pg_v2_cli_tls");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
-    let port = launch_servidor_tls();
+    let port = launch_server_tls();
     let app = project_tls(&base, port);
 
     assert_eq!(run_tls(&app, &[]), ESPERADO_TLS, "VM");

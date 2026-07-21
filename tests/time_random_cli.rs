@@ -22,7 +22,7 @@ fn run(name: &str, src: &str, vm: bool) -> (String, i32) {
 
 /// `sleep` hace pasar al menos el tiempo pedido en el reloj monótono.
 #[test]
-fn monotonic_y_sleep_miden_intervalos() {
+fn monotonic_and_sleep_measure_intervals() {
     let src = r#"
 import std/time;
 fn main() -> int {
@@ -43,7 +43,7 @@ fn main() -> int {
 
 /// `now` devuelve un epoch en ms posterior a 2023 (cordura del reloj de pared).
 #[test]
-fn now_es_un_epoch_razonable() {
+fn now_is_a_reasonable_epoch() {
     let src = r#"
 import std/time;
 fn main() -> int {
@@ -59,7 +59,7 @@ fn main() -> int {
 
 /// `random.next()` siempre cae en `[0, 1)`; `random.below(n)` en `[0, n)`; los casos de borde son totales.
 #[test]
-fn random_respects_sus_rangos() {
+fn random_respects_its_ranges() {
     let src = r#"
 import std/random;
 fn main() -> int {
@@ -89,7 +89,7 @@ fn main() -> int {
 /// El RNG produce variedad: 2000 tiradas de un dado tocan los 6 valores (probabilidad de fallo
 /// despreciable: ~ (5/6)^2000). Detecta un generador "pegado".
 #[test]
-fn random_int_has_variedad() {
+fn random_int_has_variety() {
     let src = r#"
 import std/random;
 fn main() -> int {

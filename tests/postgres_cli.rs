@@ -42,14 +42,14 @@ fn read_msg(s: &mut TcpStream) {
     let _ = read_exact(s, len - 4);
 }
 
-fn launch_servidor_pg() -> u16 {
+fn launch_pg_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
         if let Ok((mut s, _)) = listener.accept() {
             read_startup(&mut s);                              // StartupMessage
             // AuthenticationSASL: code 10 + "SCRAM-SHA-256\0" + "\0".
-            let mut sasl = vec![0u8, 0, 0, 10];
+            let mut sasl = vec![0u8, 0, 0, 10]; // es-ok: SASL, sigla del protocolo, no español
             sasl.extend_from_slice(b"SCRAM-SHA-256\0");
             sasl.push(0);
             s.write_all(&msg(b'R', &sasl)).unwrap();
@@ -100,12 +100,12 @@ const ESPERADO: &[&str] = &["row: hello-postgres"];
 
 #[test]
 fn pg_query_vm() {
-    let port = launch_servidor_pg();
+    let port = launch_pg_server();
     assert_eq!(run(&["--vm"], port), ESPERADO);
 }
 
 #[test]
 fn pg_query_interpreter() {
-    let port = launch_servidor_pg();
+    let port = launch_pg_server();
     assert_eq!(run(&[], port), ESPERADO);
 }

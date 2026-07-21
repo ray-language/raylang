@@ -171,7 +171,7 @@ fn compare(src: &str, name_tmp: &str) {
 }
 
 #[test]
-fn cases_basicos() {
+fn basic_cases() {
     compare("fn fib(n: int) -> int { fib(n - 1) }", "sh_basico.ray");
     compare("", "sh_empty.ray");
     compare("let x = 42; var y = 3.14;", "sh_literals.ray");
@@ -186,7 +186,7 @@ fn flotantes_con_exponente() {
 }
 
 #[test]
-fn all_los_operators_y_puntuacion() {
+fn all_operators_and_punctuation() {
     compare(
         "+ - * / % == != < <= > >= && || ! = -> => ? |> @ ( ) { } [ ] , ; : .",
         "sh_ops.ray",
@@ -194,7 +194,7 @@ fn all_los_operators_y_puntuacion() {
 }
 
 #[test]
-fn words_clave_y_types() {
+fn keywords_and_types() {
     compare(
         "let var fn return if else while true false struct enum match trait impl dyn pub import from as int float bool string char",
         "sh_keywords.ray",
@@ -209,25 +209,25 @@ fn strings_chars_and_escapes() {
 }
 
 #[test]
-fn flotantes_y_punto() {
+fn floats_and_dot() {
     // El '.' sin dígito detrás no es flotante: 1.x → Int(1) Dot Ident(x).
     compare("12.5 0.0 100.25 1.x 7", "sh_float.ray");
 }
 
 #[test]
-fn comments_se_ignoran() {
+fn comments_are_ignored() {
     compare("let // comment\n x // other\n y", "sh_coment.ray");
 }
 
 #[test]
-fn positions_multilinea() {
+fn multiline_positions() {
     compare("let x\n  42\n    foo", "sh_pos.ray");
 }
 
 /// M14.1b: errores como valores. Ante una entrada inválida, el lexer auto-alojado debe
 /// producir el MISMO mensaje y ubicación que el de Rust (no abortar con `panic`).
 #[test]
-fn errors_lexicos_equal_what_el_oracle() {
+fn lex_errors_match_the_oracle() {
     compare("#", "sh_err_inesperado.ray"); // unexpected character '#'
     compare("\"sin close", "sh_err_str_abierta.ray"); // cadena sin cerrar
     compare("\"rota\nlinea\"", "sh_err_str_nl.ray"); // salto de línea en cadena
@@ -245,7 +245,7 @@ fn errors_lexicos_equal_what_el_oracle() {
 /// El test más fuerte: lexar archivos REALES (los ejemplos y el propio lexer auto-alojado) y
 /// exigir que el lexer en raylang coincida con el de Rust en cada uno.
 #[test]
-fn lexa_files_reales_equal_what_el_oracle() {
+fn lexes_real_files_matching_the_oracle() {
     let files = [
         "examples/basics/fib.ray",
         "examples/basics/fizzbuzz.ray",

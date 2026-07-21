@@ -43,14 +43,14 @@ fn run_reject(flags: &[&str]) -> (Vec<String>, bool) {
 /// M75 — salvaguardas de la revisión en frío. Rápido (todos los casos retornan antes del PBKDF2), va
 /// en la suite por defecto por ambos motores.
 #[test]
-fn scram_rechazos_interpreter() {
+fn scram_rejections_interpreter() {
     let (lines, ok) = run_reject(&[]);
     assert!(ok, "scram_reject_demo falló en el intérprete");
     assert_eq!(lines, RECHAZOS);
 }
 
 #[test]
-fn scram_rechazos_vm() {
+fn scram_rejections_vm() {
     let (lines, ok) = run_reject(&["--vm"]);
     assert!(ok, "scram_reject_demo falló en la VM");
     assert_eq!(lines, RECHAZOS);

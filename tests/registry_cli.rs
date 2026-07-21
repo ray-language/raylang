@@ -91,7 +91,7 @@ fn app(base: &Path, main_ray: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn dependency_por_name_from_el_index() {
+fn dependency_by_name_from_the_index() {
     let base = tmp("byname");
     let index = base.join("index");
     let repo = publish(&base, "geo", "1.2.0", "pub fn duplicate(x: int) -> int { x * 2 }\n");
@@ -116,7 +116,7 @@ fn dependency_por_name_from_el_index() {
 }
 
 #[test]
-fn ray_add_escribe_el_manifest_y_descarga() {
+fn ray_add_writes_manifest_and_downloads() {
     let base = tmp("add");
     let index = base.join("index");
     let repo = publish(&base, "util", "0.3.1", "pub fn greeting() -> string { \"hello\" }\n");
@@ -138,7 +138,7 @@ fn ray_add_escribe_el_manifest_y_descarga() {
 }
 
 #[test]
-fn ray_add_con_version_exacta_respects_el_requisito() {
+fn ray_add_with_exact_version_respects_requirement() {
     let base = tmp("addexact");
     let index = base.join("index");
     let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
@@ -156,7 +156,7 @@ fn ray_add_con_version_exacta_respects_el_requisito() {
 }
 
 #[test]
-fn caret_elige_la_mas_alta_compatible() {
+fn caret_picks_the_highest_compatible() {
     let base = tmp("caret");
     let index = base.join("index");
     let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
@@ -245,7 +245,7 @@ fn ray_publish_añade_al_index_y_un_consumidor_lo_resolves() {
 }
 
 #[test]
-fn ray_publish_sin_tag_fails_claro() {
+fn ray_publish_without_tag_fails_clearly() {
     let base = tmp("publishnotag");
     let index = base.join("index");
     // Repo con origin pero SIN el tag v2.0.0 que declara su versión.
@@ -266,7 +266,7 @@ fn ray_publish_sin_tag_fails_claro() {
 }
 
 #[test]
-fn yank_excluye_la_version_de_nuevas_resoluciones() {
+fn yank_excludes_version_from_new_resolutions() {
     let base = tmp("yank");
     let index = base.join("index");
     let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
@@ -298,7 +298,7 @@ fn yank_excluye_la_version_de_nuevas_resoluciones() {
 }
 
 #[test]
-fn el_lock_fixes_la_version_y_update_la_sube() {
+fn lock_pins_version_and_update_bumps_it() {
     let base = tmp("update");
     let index = base.join("index");
     let r120 = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
@@ -330,7 +330,7 @@ fn el_lock_fixes_la_version_y_update_la_sube() {
 }
 
 #[test]
-fn index_remoto_por_git_se_clona_y_resolves() {
+fn remote_git_index_clones_and_resolves() {
     let base = tmp("remoteidx");
     // El índice es un REPO git (no un dir suelto): se crea, se escriben sus archivos y se commitea.
     let index_repo = base.join("index-repo");
@@ -359,7 +359,7 @@ fn index_remoto_por_git_se_clona_y_resolves() {
 }
 
 #[test]
-fn spec_por_name_sin_index_configurado_avisa() {
+fn spec_by_name_without_configured_index_warns() {
     let base = tmp("noindex");
     let app = app(&base, "fn main() -> int { 0 }\n");
     std::fs::write(
@@ -377,7 +377,7 @@ fn spec_por_name_sin_index_configurado_avisa() {
 // ── M51d: endurecimiento (nombres, hash del índice, publish del tag, índice re-cacheado) ──
 
 #[test]
-fn name_de_package_invalido_se_rejects() {
+fn invalid_package_name_is_rejected() {
     let base = tmp("badname");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -399,17 +399,17 @@ fn name_de_package_invalido_se_rejects() {
     assert!(err.contains("invalid package name"), "mensaje claro:\n{err}");
 
     // La valla importante: una dep TRANSITIVA (el ray.toml de un paquete descargado, NO confiable)
-    // con nombre malicioso → error, sin clonar ni borrar fuera de `.ray-deps/`.
-    let malicioso = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 1 }\n");
+    // con nombre malicious → error, sin clonar ni borrar fuera de `.ray-deps/`.
+    let malicious = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 1 }\n");
     std::fs::write(
-        malicioso.join("ray.toml"),
+        malicious.join("ray.toml"),
         "[package]\nname = \"geo\"\nversion = \"1.0.0\"\n\n[dependencies]\n../../pwn = \"git+file:///nada@v1\"\n",
     )
     .unwrap();
-    git(&malicioso, &["add", "-A"]);
-    git(&malicioso, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "mal"]);
-    git(&malicioso, &["tag", "-f", "v1.0.0"]);
-    write_index(&index, "geo", &[("1.0.0", &malicioso)]);
+    git(&malicious, &["add", "-A"]);
+    git(&malicious, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "mal"]);
+    git(&malicious, &["tag", "-f", "v1.0.0"]);
+    write_index(&index, "geo", &[("1.0.0", &malicious)]);
     std::fs::write(
         app.join("ray.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"1.0.0\"\n",
@@ -424,7 +424,7 @@ fn name_de_package_invalido_se_rejects() {
 }
 
 #[test]
-fn publish_hashea_el_tag_no_el_working_tree() {
+fn publish_hashes_the_tag_not_the_working_tree() {
     let base = tmp("publishtag");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -483,7 +483,7 @@ fn el_hash_del_index_se_verifies() {
 }
 
 #[test]
-fn index_remoto_recacheado_si_cambia_la_spec() {
+fn remote_index_recached_when_spec_changes() {
     let base = tmp("reidx");
     // Dos índices-repo git distintos: el 1º publica geo 1.0.0 (imprime 100), el 2º geo 2.0.0 (200).
     let r100 = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 100 }\n");
@@ -524,7 +524,7 @@ fn index_remoto_recacheado_si_cambia_la_spec() {
 // ── M51e: H5 check semántico en publish · H6 pre-releases · H7 aviso de índice propio ──
 
 #[test]
-fn publish_runs_el_check_semantico() {
+fn publish_runs_the_semantic_check() {
     let base = tmp("publishcheck");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -593,7 +593,7 @@ fn pre_releases_son_opt_in() {
 }
 
 #[test]
-fn transitiva_con_index_propio_avisa() {
+fn transitive_dep_with_own_index_warns() {
     let base = tmp("ownidx");
     let index = base.join("index");
     let util = publish(&base, "util", "1.0.0", "pub fn u() -> int { 5 }\n");
@@ -629,7 +629,7 @@ fn transitiva_con_index_propio_avisa() {
 // ── M51f: ray remove + ray search ──
 
 #[test]
-fn ray_remove_elimina_dep_lock_y_cache() {
+fn ray_remove_removes_dep_lock_and_cache() {
     let base = tmp("remove");
     let index = base.join("index");
     let geo = publish(&base, "geo", "1.0.0", "pub fn v() -> int { 9 }\n");
@@ -718,7 +718,7 @@ fn ray_signed(cwd: &Path, index: &Path, key: &Path, args: &[&str]) -> (String, S
 /// keygen → publish --sign: reclama el nombre (owners.toml + TOFU de la pubkey), firma la
 /// entrada, y un consumidor resuelve con la firma VERIFICADA. index-verify da OK.
 #[test]
-fn publish_firmado_reclama_verifies_y_audita() {
+fn signed_publish_claims_verifies_and_audits() {
     let base = tmp("sign");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -757,7 +757,7 @@ fn publish_firmado_reclama_verifies_y_audita() {
 
 /// Una firma MANIPULADA (o que no casa con el dueño) rompe la resolución y la auditoría.
 #[test]
-fn signature_manipulada_breaks_resolucion_y_auditoria() {
+fn tampered_signature_breaks_resolution_and_audit() {
     let base = tmp("signtamper");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -800,7 +800,7 @@ fn signature_manipulada_breaks_resolucion_y_auditoria() {
 
 /// El nombre reclamado PROTEGE: otra clave no puede publicar --sign sobre él.
 #[test]
-fn other_clave_no_can_publish_un_name_reclamado() {
+fn other_key_cannot_publish_a_claimed_name() {
     let base = tmp("signowner");
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
@@ -830,7 +830,7 @@ fn other_clave_no_can_publish_un_name_reclamado() {
 
 /// Crea el clon-mirror de `repo` bajo `mirror_root` respetando la regla de reescritura
 /// `prefijo/<url-sin-esquema>`: el repo `file:///a/b/geo` vive en `<mirror_root>/a/b/geo`.
-fn clonar_en_mirror(mirror_root: &Path, repo: &Path) {
+fn clone_into_mirror(mirror_root: &Path, repo: &Path) {
     let rel = repo.to_string_lossy();
     let dest = mirror_root.join(rel.trim_start_matches('/'));
     std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
@@ -844,13 +844,13 @@ fn clonar_en_mirror(mirror_root: &Path, repo: &Path) {
 /// El mirror sirve el paquete aunque el origen haya DESAPARECIDO (disponibilidad); el hash
 /// del índice verifica el contenido igual (mirror trustless).
 #[test]
-fn mirror_sirve_el_package_si_el_origen_cae() {
+fn mirror_serves_package_if_origin_disappears() {
     let base = tmp("mirror");
     let index = base.join("index");
     let repo = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
     write_index(&index, "geo", &[("1.2.0", &repo)]);
     let mirror_root = base.join("mirror");
-    clonar_en_mirror(&mirror_root, &repo);
+    clone_into_mirror(&mirror_root, &repo);
     // El origen cae: el índice sigue apuntando a él, pero ya no existe.
     std::fs::remove_dir_all(&repo).unwrap();
 
@@ -874,7 +874,7 @@ fn mirror_sirve_el_package_si_el_origen_cae() {
 
 /// Un mirror que no tiene el paquete NO rompe la resolución: se avisa y se cae al origen.
 #[test]
-fn mirror_caido_cae_a_la_url_original() {
+fn mirror_down_falls_back_to_original_url() {
     let base = tmp("mirrorfall");
     let index = base.join("index");
     let repo = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");

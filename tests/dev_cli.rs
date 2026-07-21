@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// Sondea `path` hasta que su contenido contenga `needle` (plazo `secs`); devuelve el contenido.
-fn esperar_contenido(path: &std::path::Path, needle: &str, secs: u64) -> String {
+fn wait_for_content(path: &std::path::Path, needle: &str, secs: u64) -> String {
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         let mut s = String::new();
@@ -25,7 +25,7 @@ fn esperar_contenido(path: &std::path::Path, needle: &str, secs: u64) -> String 
 }
 
 #[test]
-fn dev_reinicia_ante_cambios() {
+fn dev_restarts_on_changes() {
     let base = std::env::temp_dir().join("ray_dev_cli");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("src")).unwrap();
@@ -44,13 +44,13 @@ fn dev_reinicia_ante_cambios() {
         .expect("lanza ray dev");
 
     // 1) El programa corre al arrancar y, al terminar solo, el supervisor queda a la espera.
-    esperar_contenido(&out_path, "v1", 10);
-    esperar_contenido(&out_path, "waiting for changes", 10);
+    wait_for_content(&out_path, "v1", 10);
+    wait_for_content(&out_path, "waiting for changes", 10);
 
     // 2) Editar el fuente → el watcher lo ve y relanza con el código NUEVO.
     std::thread::sleep(Duration::from_millis(50)); // mtime estrictamente posterior
     std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
-    let output = esperar_contenido(&out_path, "v2", 10);
+    let output = wait_for_content(&out_path, "v2", 10);
     assert!(output.contains("restarting"), "anuncia el reinicio:\n{output}");
 
     let _ = dev.kill();
@@ -61,7 +61,7 @@ fn dev_reinicia_ante_cambios() {
 /// socket lo retiene el supervisor, así que una conexión temprana se ENCOLA en el backlog (nunca
 /// rechazada) hasta que un hijo la acepta — justo la propiedad que probamos.
 #[cfg(unix)]
-fn conectar_y_leer(port: u16, secs: u64) -> String {
+fn connect_and_read(port: u16, secs: u64) -> String {
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
@@ -79,7 +79,7 @@ fn conectar_y_leer(port: u16, secs: u64) -> String {
 
 #[cfg(unix)]
 #[test]
-fn dev_socket_activation_retiene_el_listener_entre_reinicios() {
+fn dev_socket_activation_retains_listener_across_restarts() {
     // M92.3: con `--port P`, el supervisor pre-abre y RETIENE `127.0.0.1:P`; cada hijo lo ADOPTA (fd
     // heredado) en vez de re-bind. Prueba rigurosa: si el segundo hijo NO adoptara, su `bind(P)` chocaría
     // con el socket que el supervisor sigue reteniendo (EADDRINUSE) → el servidor v2 no arrancaría. Que la
@@ -118,15 +118,15 @@ fn dev_socket_activation_retiene_el_listener_entre_reinicios() {
         .spawn()
         .expect("lanza ray dev --port");
 
-    esperar_contenido(&out_path, "socket-activation", 10);
+    wait_for_content(&out_path, "socket-activation", 10);
     // 1) El primer hijo adopta el socket retenido; una conexión recibe "v1" (si no adoptara, EADDRINUSE).
-    assert_eq!(conectar_y_leer(port, 10), "v1", "el primer hijo adoptó el socket retenido");
-    esperar_contenido(&out_path, "waiting for changes", 10);
+    assert_eq!(connect_and_read(port, 10), "v1", "el primer hijo adoptó el socket retenido");
+    wait_for_content(&out_path, "waiting for changes", 10);
     // 2) Editar → reinicio → el segundo hijo RE-adopta el MISMO socket (el supervisor lo retuvo).
     std::thread::sleep(Duration::from_millis(50));
     std::fs::write(base.join("src/main.ray"), src("v2")).unwrap();
-    esperar_contenido(&out_path, "restarting", 10);
-    assert_eq!(conectar_y_leer(port, 10), "v2", "el segundo hijo re-adoptó el socket entre reinicios");
+    wait_for_content(&out_path, "restarting", 10);
+    assert_eq!(connect_and_read(port, 10), "v2", "el segundo hijo re-adoptó el socket entre reinicios");
 
     let _ = dev.kill();
     let _ = dev.wait();
@@ -134,10 +134,10 @@ fn dev_socket_activation_retiene_el_listener_entre_reinicios() {
 
 /// Lee el puerto del hub de live-reload del log de `ray dev` (`live-reload on http://127.0.0.1:<port>`).
 #[cfg(unix)]
-fn leer_hub_port(path: &std::path::Path, secs: u64) -> u16 {
-    let s = esperar_contenido(path, "live-reload on http://127.0.0.1:", secs);
-    let marca = "live-reload on http://127.0.0.1:";
-    let i = s.find(marca).unwrap() + marca.len();
+fn read_hub_port(path: &std::path::Path, secs: u64) -> u16 {
+    let s = wait_for_content(path, "live-reload on http://127.0.0.1:", secs);
+    let marker = "live-reload on http://127.0.0.1:";
+    let i = s.find(marker).unwrap() + marker.len();
     s[i..].split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()
 }
 
@@ -161,7 +161,7 @@ fn http_get(port: u16, secs: u64) -> String {
 
 #[cfg(unix)]
 #[test]
-fn dev_live_reload_inyecta_el_snippet_y_emite_reload() {
+fn dev_live_reload_injects_snippet_and_emits_reload() {
     // M92.4: bajo `ray dev --port P` con un webserver, (1) las respuestas HTML llevan inyectado un
     // `EventSource` al hub SSE del supervisor, y (2) el hub emite `data: reload` en cada reinicio → la
     // página se refresca sola. El hub es un canal SOLO-de-dev en un puerto lateral (no el SSE de la app).
@@ -198,7 +198,7 @@ fn dev_live_reload_inyecta_el_snippet_y_emite_reload() {
         .spawn()
         .expect("lanza ray dev --port");
 
-    let hub = leer_hub_port(&out_path, 10);
+    let hub = read_hub_port(&out_path, 10);
     // 1) La respuesta HTML lleva el snippet de live-reload apuntando al hub.
     let resp = http_get(port, 15);
     assert!(resp.contains("EventSource"), "el HTML lleva el snippet inyectado:\n{resp}");
@@ -236,7 +236,7 @@ fn dev_live_reload_inyecta_el_snippet_y_emite_reload() {
 
 #[cfg(unix)]
 #[test]
-fn dev_live_reload_sin_port_tambien_inyecta() {
+fn dev_live_reload_without_port_also_injects() {
     // El hub arranca SIEMPRE (no solo con `--port`): "es una app web" lo decide el webserver al servir
     // HTML, no el supervisor. Sin socket-activation el snippet reintenta el fetch hasta que el hijo
     // re-binde (aquí solo se verifica la inyección; el reinicio lo cubre el test con `--port`).
@@ -269,7 +269,7 @@ fn dev_live_reload_sin_port_tambien_inyecta() {
         .spawn()
         .expect("lanza ray dev sin --port");
 
-    let hub = leer_hub_port(&out_path, 10);
+    let hub = read_hub_port(&out_path, 10);
     let resp = http_get(port, 15);
     assert!(resp.contains("EventSource"), "el HTML lleva el snippet inyectado sin --port:\n{resp}");
     assert!(resp.contains(&format!(":{hub}/")), "el snippet apunta al hub {hub}:\n{resp}");
@@ -279,7 +279,7 @@ fn dev_live_reload_sin_port_tambien_inyecta() {
 }
 
 #[test]
-fn dev_no_reinicia_si_el_cambio_no_compila() {
+fn dev_does_not_restart_if_change_fails_to_compile() {
     // Check-before-restart (M92.2): un cambio que NO compila NO debe reiniciar el programa; el
     // supervisor imprime el diagnóstico y mantiene lo que había. Un cambio verde posterior sí reinicia.
     let base = std::env::temp_dir().join("ray_dev_check");
@@ -299,18 +299,18 @@ fn dev_no_reinicia_si_el_cambio_no_compila() {
         .spawn()
         .expect("lanza ray dev");
 
-    esperar_contenido(&out_path, "v1", 10);
-    esperar_contenido(&out_path, "waiting for changes", 10);
+    wait_for_content(&out_path, "v1", 10);
+    wait_for_content(&out_path, "waiting for changes", 10);
 
     // 1) Un cambio que NO compila (falta cerrar la llave): el supervisor lo rechaza, no reinicia.
     std::thread::sleep(Duration::from_millis(50));
     std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"roto\"); 0 \n").unwrap();
-    esperar_contenido(&out_path, "does not compile", 10);
+    wait_for_content(&out_path, "does not compile", 10);
 
     // 2) Un cambio verde posterior SÍ reinicia con el código nuevo.
     std::thread::sleep(Duration::from_millis(50));
     std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
-    let output = esperar_contenido(&out_path, "v2", 10);
+    let output = wait_for_content(&out_path, "v2", 10);
     assert!(output.contains("does not compile"), "rechazó el cambio roto:\n{output}");
     assert!(output.contains("restarting"), "reinició con el cambio verde:\n{output}");
     // El código roto nunca corrió (no imprimió "roto").
@@ -321,7 +321,7 @@ fn dev_no_reinicia_si_el_cambio_no_compila() {
 }
 
 #[test]
-fn dev_ignora_un_guardado_sin_cambios() {
+fn dev_ignores_a_save_with_no_changes() {
     // Confirmación por contenido: un mtime tocado con los MISMOS bytes (guardado sin editar, un
     // formateador idempotente, `touch`) no debe reiniciar el programa ni emitir reload. Solo una
     // edición real (otros bytes) reinicia.
@@ -343,19 +343,19 @@ fn dev_ignora_un_guardado_sin_cambios() {
         .spawn()
         .expect("lanza ray dev");
 
-    esperar_contenido(&out_path, "v1", 10);
-    esperar_contenido(&out_path, "waiting for changes", 10);
+    wait_for_content(&out_path, "v1", 10);
+    wait_for_content(&out_path, "waiting for changes", 10);
 
     // 1) Reescribir el MISMO contenido (bump de mtime, cero bytes cambiados): se ignora sin reiniciar.
     std::thread::sleep(Duration::from_millis(50));
     std::fs::write(base.join("src/main.ray"), v1).unwrap();
-    let output = esperar_contenido(&out_path, "contents unchanged", 10);
+    let output = wait_for_content(&out_path, "contents unchanged", 10);
     assert!(!output.contains("restarting"), "un guardado sin cambios no reinicia:\n{output}");
 
     // 2) Una edición real posterior SÍ reinicia.
     std::thread::sleep(Duration::from_millis(50));
     std::fs::write(base.join("src/main.ray"), "fn main() -> int { print(\"v2\"); 0 }\n").unwrap();
-    let output = esperar_contenido(&out_path, "v2", 10);
+    let output = wait_for_content(&out_path, "v2", 10);
     assert!(output.contains("restarting"), "la edición real reinició:\n{output}");
 
     let _ = dev.kill();

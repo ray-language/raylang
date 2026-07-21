@@ -45,7 +45,7 @@ fn deflate_round_trip_vm() {
 /// El gzip que produce raylang debe poder descomprimirlo Python (compatibilidad estándar). Se escribe
 /// a un temporal (vía el argumento del demo) y se descomprime con `python3 -c "gzip.decompress(...)"`.
 #[test]
-fn gzip_de_raylang_lo_descomprime_python() {
+fn gzip_from_raylang_is_decompressed_by_python() {
     // Si no hay python3, se omite (no es un fallo del proyecto).
     if Command::new("python3").arg("--version").output().is_err() {
         eprintln!("python3 no disponible: se omite la verificación de compatibilidad");

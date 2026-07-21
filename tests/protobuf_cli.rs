@@ -88,7 +88,7 @@ print('WIRE OK')
 /// M59.4 — un varint negativo debe PANICAR (antes emitía octetos corruptos en silencio: el
 /// bucle LEB128 no entraba con negativos y salía un solo octeto mal).
 #[test]
-fn varint_negativo_panica_en_vez_de_corromper() {
+fn negative_varint_panics_instead_of_corrupting() {
     let mut dir = std::env::temp_dir();
     dir.push("ray_pb_negativo");
     std::fs::create_dir_all(&dir).expect("crea dir");

@@ -167,7 +167,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn traceparent_viaja_del_client_al_servidor() {
+fn traceparent_travels_from_client_to_server() {
     let (out, err, code) = run("e2e", E2E, false);
     assert_eq!(code, 0, "e2e sale 0\n{err}\n{out}");
     assert_eq!(out, "200\ntrue\ntrue\ntrue\n", "el trace viaja y el span es child\n{out}");

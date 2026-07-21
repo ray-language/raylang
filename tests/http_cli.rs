@@ -151,7 +151,7 @@ fn toy_capture() -> (u16, std::sync::mpsc::Receiver<String>) {
 }
 
 #[test]
-fn peticion_con_host_port_accept_encoding_y_octetos() {
+fn request_with_host_port_accept_encoding_and_bytes() {
     // M58.2: Host lleva el puerto no-default, Accept-Encoding: gzip se anuncia, y el
     // Content-Length cuenta OCTETOS ("café" = 5 octetos UTF-8, no 4 caracteres — antes fallaba).
     let (port, rx) = toy_capture();
@@ -187,7 +187,7 @@ fn main() -> int {
 }
 
 #[test]
-fn client_corta_por_timeout_a_servidor_mudo() {
+fn client_times_out_against_silent_server() {
     // M58.2: un servidor que acepta y no responde ya no cuelga al cliente para siempre.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -222,7 +222,7 @@ fn main() -> int {
 }
 
 #[test]
-fn response_truncada_es_error() {
+fn truncated_response_is_error() {
     // M58.2: Content-Length declarado 10 pero solo llegan 3 octetos → Err, no un cuerpo a medias.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();

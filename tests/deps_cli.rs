@@ -59,7 +59,7 @@ fn app_con_dep(base: &Path, dep: &str, dep_repo: &Path, main_ray: &str) -> std::
 }
 
 #[test]
-fn fetch_clona_la_dependency_y_run_la_uses() {
+fn fetch_clones_the_dependency_and_run_uses_it() {
     let base = tmp("fetch");
     let repo = publish(&base, "geo", "pub fn duplicate(x: int) -> int { x * 2 }\n");
     let app = app_con_dep(
@@ -86,7 +86,7 @@ fn fetch_clona_la_dependency_y_run_la_uses() {
 }
 
 #[test]
-fn run_auto_descarga_las_dependencies_faltantes() {
+fn run_auto_downloads_missing_dependencies() {
     let base = tmp("autofetch");
     let repo = publish(&base, "geo", "pub fn triple(x: int) -> int { x * 3 }\n");
     let app = app_con_dep(
@@ -103,7 +103,7 @@ fn run_auto_descarga_las_dependencies_faltantes() {
 }
 
 #[test]
-fn ref_nonexistent_fails_y_deja_la_cache_limpia() {
+fn ref_nonexistent_fails_and_leaves_cache_clean() {
     let base = tmp("badref");
     let repo = publish(&base, "geo", "pub fn f() -> int { 1 }\n");
     let app = base.join("app");
@@ -126,7 +126,7 @@ fn ref_nonexistent_fails_y_deja_la_cache_limpia() {
 // ── M39c-2b: lockfile `ray.lock` con hashes + verificación de integridad ──────────────
 
 #[test]
-fn fetch_genera_y_verifies_el_lockfile() {
+fn fetch_generates_and_verifies_the_lockfile() {
     let base = tmp("lockfile");
     let repo = publish(&base, "geo", "pub fn duplicate(x: int) -> int { x * 2 }\n");
     let app = app_con_dep(
@@ -148,7 +148,7 @@ fn fetch_genera_y_verifies_el_lockfile() {
 }
 
 #[test]
-fn la_verificacion_detecta_manipulacion() {
+fn verification_detects_tampering() {
     let base = tmp("tamper");
     let repo = publish(&base, "geo", "pub fn duplicate(x: int) -> int { x * 2 }\n");
     let app = app_con_dep(
@@ -160,9 +160,9 @@ fn la_verificacion_detecta_manipulacion() {
     assert_eq!(ray(&app, &["fetch"]).2, 0);
     // Manipular un archivo de la dependencia cacheada.
     let modray = app.join(".ray-deps/geo/mod.ray");
-    let mut contenido = std::fs::read_to_string(&modray).unwrap();
-    contenido.push_str("\n// inyectado\n");
-    std::fs::write(&modray, contenido).unwrap();
+    let mut contents = std::fs::read_to_string(&modray).unwrap();
+    contents.push_str("\n// inyectado\n");
+    std::fs::write(&modray, contents).unwrap();
     // La próxima resolución detecta que el hash no coincide con el lock → aborta (supply-chain).
     let (_o, err, code) = ray(&app, &["run"]);
     assert_eq!(code, 65, "one dependency manipulada abort\n{err}");
@@ -190,7 +190,7 @@ fn publish_con_deps(base: &Path, name: &str, mod_ray: &str, deps: &[(&str, &Path
 }
 
 #[test]
-fn resolves_dependencies_transitivas() {
+fn resolves_transitive_dependencies() {
     let base = tmp("transitivas");
     // mathx (hoja) ← geo (depende de mathx) ← app.
     let mathx = publish(&base, "mathx", "pub fn add10(x: int) -> int { x + 10 }\n");

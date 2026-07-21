@@ -50,11 +50,11 @@ fn run(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn fechas_utc_interpreter() {
+fn utc_dates_interpreter() {
     assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
-fn fechas_utc_vm() {
+fn utc_dates_vm() {
     assert_eq!(run(&["--vm"]), ESPERADO);
 }

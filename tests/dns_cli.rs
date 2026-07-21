@@ -25,7 +25,7 @@ fn toy_dns_server() -> u16 {
             // QTYPE = los 2 octetos antes del QCLASS final (pregunta = QNAME + QTYPE(2) + QCLASS(2)).
             let qtype = ((query[n - 4] as u16) << 8) | query[n - 3] as u16;
             // La pregunta va de offset 12 al final (un solo QNAME + QTYPE + QCLASS).
-            let pregunta = &query[12..n];
+            let question = &query[12..n];
 
             let mut resp: Vec<u8> = Vec::new();
             resp.extend_from_slice(&query[0..2]); // ID (eco)
@@ -33,7 +33,7 @@ fn toy_dns_server() -> u16 {
             resp.extend_from_slice(&[0, 1]);         // QDCOUNT = 1
             resp.extend_from_slice(&[0, 1]);         // ANCOUNT = 1
             resp.extend_from_slice(&[0, 0, 0, 0]);   // NSCOUNT, ARCOUNT
-            resp.extend_from_slice(pregunta);        // eco de la pregunta
+            resp.extend_from_slice(question);        // eco de la pregunta
             // NAME de la respuesta = puntero al offset 12 (la pregunta), común a todos los tipos.
             resp.extend_from_slice(&[0xC0, 0x0C]);
             match qtype {
@@ -144,13 +144,13 @@ const ESPERADO: &[&str] = &[
 ];
 
 #[test]
-fn dns_resolves_all_los_types_interpreter() {
+fn dns_resolves_all_types_interpreter() {
     let port = toy_dns_server();
     assert_eq!(run(&[], port), ESPERADO);
 }
 
 #[test]
-fn dns_resolves_all_los_types_vm() {
+fn dns_resolves_all_types_vm() {
     let port = toy_dns_server();
     assert_eq!(run(&["--vm"], port), ESPERADO);
 }
@@ -160,7 +160,7 @@ fn dns_resolves_all_los_types_vm() {
 /// cíclico (ambos verificados antes del fix). Se corre un `.ray` que llama a `parse_full` con
 /// vectores maliciosos, por ambos motores; debe salir 0 tras manejarlos todos.
 #[test]
-fn parse_robust_ante_respuestas_corruptas() {
+fn parse_is_robust_against_corrupt_responses() {
     let src = r#"
 from dns import parse_full;
 fn es_err(data: bytes) -> bool {

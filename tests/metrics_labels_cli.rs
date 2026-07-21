@@ -38,14 +38,14 @@ fn run(flags: &[&str]) -> (Vec<String>, bool) {
 }
 
 #[test]
-fn histograma_con_labels_interpreter() {
+fn histogram_with_labels_interpreter() {
     let (lines, ok) = run(&[]);
     assert!(ok, "metrics_labels_demo falló");
     assert_eq!(lines, ESPERADO);
 }
 
 #[test]
-fn histograma_con_labels_vm() {
+fn histogram_with_labels_vm() {
     let (lines, ok) = run(&["--vm"]);
     assert!(ok, "metrics_labels_demo falló");
     assert_eq!(lines, ESPERADO);
@@ -54,7 +54,7 @@ fn histograma_con_labels_vm() {
 /// Validación estructural con Python: por cada conjunto de labels (sin `le`), los buckets son
 /// cumulativos y el bucket +Inf iguala al _count de ese mismo conjunto.
 #[test]
-fn cumulatividad_por_conjunto_de_labels() {
+fn cumulativity_by_label_set() {
     if Command::new("python3").arg("--version").output().is_err() {
         eprintln!("python3 no disponible: se omite la validación");
         return;

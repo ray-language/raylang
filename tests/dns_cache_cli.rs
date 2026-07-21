@@ -22,14 +22,14 @@ fn toy_dns_server(counter: Arc<AtomicUsize>) -> u16 {
             };
             counter.fetch_add(1, Ordering::SeqCst);
             let query = &buf[..n];
-            let pregunta = &query[12..n];
+            let question = &query[12..n];
             let mut resp: Vec<u8> = Vec::new();
             resp.extend_from_slice(&query[0..2]);  // ID
             resp.extend_from_slice(&[0x81, 0x80]);    // flags
             resp.extend_from_slice(&[0, 1]);          // QDCOUNT
             resp.extend_from_slice(&[0, 1]);          // ANCOUNT
             resp.extend_from_slice(&[0, 0, 0, 0]);    // NS, AR
-            resp.extend_from_slice(pregunta);         // eco de la pregunta
+            resp.extend_from_slice(question);         // eco de la pregunta
             resp.extend_from_slice(&[0xC0, 0x0C]);    // NAME = puntero a la pregunta
             resp.extend_from_slice(&[0, 1]);          // TYPE = A
             resp.extend_from_slice(&[0, 1]);          // CLASS = IN
@@ -77,11 +77,11 @@ fn case(flags: &[&str]) {
 }
 
 #[test]
-fn cache_evita_la_second_query_interpreter() {
+fn cache_avoids_second_query_interpreter() {
     case(&[]);
 }
 
 #[test]
-fn cache_evita_la_second_query_vm() {
+fn cache_avoids_second_query_vm() {
     case(&["--vm"]);
 }

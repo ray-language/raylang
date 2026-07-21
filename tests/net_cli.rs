@@ -64,7 +64,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn client_tcp_intercambia_con_un_servidor() {
+fn tcp_client_exchanges_with_a_server() {
     for vm in [false, true] {
         // Un servidor nuevo por ejecución (cada uno acepta una sola conexión).
         let port = toy_echo_server();
@@ -109,7 +109,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn servidor_tcp_acepta_y_responde() {
+fn tcp_server_accepts_and_responds() {
     for vm in [false, true] {
         // Escribir el servidor a un temporal y lanzarlo con stdout en pipe (lo leeremos en vivo).
         let mut path = std::env::temp_dir();
@@ -123,9 +123,9 @@ fn servidor_tcp_acepta_y_responde() {
 
         // Leer el puerto (println! es line-buffered → se vacía con el salto, aunque el proceso siga).
         let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-        let mut linea = String::new();
-        reader.read_line(&mut linea).expect("lee el port");
-        let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("port inválido (vm={vm}): {linea:?}"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("lee el port");
+        let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("port inválido (vm={vm}): {line:?}"));
 
         // Conectar como cliente, escribir, y leer hasta que el servidor cierre.
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");

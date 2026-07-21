@@ -159,7 +159,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
 }
 
 #[test]
-fn tz_hora_local_ambos_engines() {
+fn tz_local_time_both_engines() {
     let base = std::env::temp_dir().join("ray_tz_cli");
     let _ = std::fs::remove_dir_all(&base);
     let app = project(&base);

@@ -256,7 +256,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn http_keepalive_reusa_y_reintenta() {
+fn http_keepalive_reuses_and_retries() {
     for vm in [false, true] {
         let port = toy_server_keepalive();
         let driver = DRIVER_KEEPALIVE.replace("__PORT__", &port.to_string());

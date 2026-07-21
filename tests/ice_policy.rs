@@ -44,7 +44,7 @@ const PROHIBIDOS: &[&str] = &[
 ];
 
 #[test]
-fn el_front_end_no_panica_a_pelo() {
+fn front_end_does_not_panic_bare() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut violaciones = Vec::new();
     for file in EN_POLITICA {
@@ -79,7 +79,7 @@ fn el_front_end_no_panica_a_pelo() {
 /// Truco: el test se re-lanza a sí mismo como subproceso (variable de entorno
 /// `RAYLANG_ICE_CHILD`) porque `process::exit` no puede probarse en el mismo proceso.
 #[test]
-fn la_red_central_presenta_el_ice() {
+fn central_net_presents_the_ice() {
     if std::env::var("RAYLANG_ICE_CHILD").is_ok() {
         // Rama hija: panica dentro de la red. No retorna.
         raylang::with_big_stack_or_ice(|| panic!("invariante rota de prueba"));
@@ -87,7 +87,7 @@ fn la_red_central_presenta_el_ice() {
     }
     let exe = std::env::current_exe().expect("path del test");
     let out = std::process::Command::new(exe)
-        .arg("la_red_central_presenta_el_ice")
+        .arg("central_net_presents_the_ice")
         .arg("--nocapture") // sin esto el arnés captura el stderr y el exit() lo pierde
         .env("RAYLANG_ICE_CHILD", "1")
         .output()

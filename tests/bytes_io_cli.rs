@@ -67,7 +67,7 @@ fn toy_bin_server() -> u16 {
 }
 
 #[test]
-fn socket_binary_lee_octetos_crudos() {
+fn socket_binary_reads_raw_bytes() {
     const CLIENTE: &str = r#"
 import std/net;
 fn main() -> int {

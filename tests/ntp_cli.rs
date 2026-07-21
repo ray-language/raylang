@@ -88,7 +88,7 @@ fn run_ntp(driver: &str, vm: bool) -> (String, String, i32) {
 }
 
 #[test]
-fn sntp_hora_fixes_del_servidor() {
+fn sntp_time_matches_server() {
     for vm in [false, true] {
         let port = toy_sntp_server();
         let driver = DRIVER.replace("__PORT__", &port.to_string());

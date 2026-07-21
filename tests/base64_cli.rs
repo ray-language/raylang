@@ -44,11 +44,11 @@ fn run(flags: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn base64_estricto_interpreter() {
+fn base64_strict_interpreter() {
     assert_eq!(run(&[]), ESPERADO);
 }
 
 #[test]
-fn base64_estricto_vm() {
+fn base64_strict_vm() {
     assert_eq!(run(&["--vm"]), ESPERADO);
 }

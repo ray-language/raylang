@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 
 /// Lanza `wss_echo.ray` con el cert/clave de prueba; devuelve el proceso + el puerto efímero.
-fn launch_servidor() -> (Child, u16) {
+fn launch_server() -> (Child, u16) {
     let root = env!("CARGO_MANIFEST_DIR");
     let echo = format!("{root}/examples/web/wss_echo.ray");
     let cert = format!("{root}/tests/fixtures/tls_cert.pem");
@@ -23,9 +23,9 @@ fn launch_servidor() -> (Child, u16) {
         .expect("lanza wss_echo");
 
     let mut reader = BufReader::new(child.stdout.take().unwrap());
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
+    let mut port_line = String::new();
+    reader.read_line(&mut port_line).expect("lee port");
+    let port: u16 = port_line.trim().parse().unwrap_or_else(|_| panic!("invalid port: {port_line:?}"));
     std::thread::spawn(move || {
         let mut sink = Vec::new();
         let _ = reader.read_to_end(&mut sink);
@@ -59,10 +59,10 @@ fn run_client(flags: &[&str], port: u16) -> Vec<String> {
 const ESPERADO: &[&str] = &["hola", "mundo", "raylang ☃ unicode"];
 
 fn case(flags: &[&str]) {
-    let (mut servidor, port) = launch_servidor();
+    let (mut server, port) = launch_server();
     let output = run_client(flags, port);
-    let _ = servidor.kill();
-    let _ = servidor.wait();
+    let _ = server.kill();
+    let _ = server.wait();
     assert_eq!(output, ESPERADO);
 }
 

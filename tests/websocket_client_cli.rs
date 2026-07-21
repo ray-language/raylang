@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 
 /// Lanza `websocket_echo.ray` con `--vm`; devuelve el proceso + el puerto efímero (1.ª línea de stdout).
-fn launch_servidor() -> (Child, u16) {
+fn launch_server() -> (Child, u16) {
     let echo = format!("{}/examples/web/websocket_echo.ray", env!("CARGO_MANIFEST_DIR"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .arg("--vm")
@@ -18,9 +18,9 @@ fn launch_servidor() -> (Child, u16) {
         .expect("lanza websocket_echo");
 
     let mut reader = BufReader::new(child.stdout.take().unwrap());
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee port");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("invalid port: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee port");
+    let port: u16 = line.trim().parse().unwrap_or_else(|_| panic!("invalid port: {line:?}"));
     // Drena el resto del stdout del servidor.
     std::thread::spawn(move || {
         let mut sink = Vec::new();
@@ -51,7 +51,7 @@ fn run_client(flags: &[&str], port: u16) -> Vec<String> {
 const ESPERADO: &[&str] = &["hola", "mundo", "raylang ☃ unicode"];
 
 fn case(flags: &[&str]) {
-    let (mut servidor, port) = launch_servidor();
+    let (mut servidor, port) = launch_server();
     let output = run_client(flags, port);
     let _ = servidor.kill();
     let _ = servidor.wait();

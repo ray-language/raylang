@@ -37,7 +37,7 @@ fn check(name: &str, driver: &str, expected: &str) {
 }
 
 #[test]
-fn round_trip_canonical_con_keys_ordenadas() {
+fn round_trip_canonical_with_sorted_keys() {
     let driver = r#"
 from json import parse, stringify;
 fn main() -> int {
@@ -135,7 +135,7 @@ fn main() -> int {
 }
 
 #[test]
-fn errors_como_values() {
+fn errors_as_values() {
     let driver = r#"
 from json import parse, stringify;
 fn reports(s: string) {
@@ -158,7 +158,7 @@ fn main() -> int {
 // ── Helpers de acceso + pretty-print (M90.3) ─────────────────────────────────────────
 
 #[test]
-fn helpers_de_access() {
+fn access_helpers() {
     let driver = r#"
 from json import parse, get_string, get_int, get_float, get_bool, get_array, member, at, as_int, as_string, is_null;
 
@@ -225,7 +225,7 @@ fn main() -> int {
 }
 
 #[test]
-fn pretty_print_con_sangria() {
+fn pretty_print_with_indentation() {
     let driver = r#"
 from json import parse, stringify_pretty;
 fn main() -> int {

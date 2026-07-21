@@ -96,7 +96,7 @@ fn programas_valid_vals() {
 }
 
 #[test]
-fn errors_de_ty() {
+fn type_errors() {
     // Operadores.
     compare("fn main() -> int { 1 + true }", "sce_add.ray");
     compare("fn main() -> int { if (1) { 1 } else { 2 } }", "sce_cond.ray");
@@ -141,7 +141,7 @@ fn data_valid_vals() {
 }
 
 #[test]
-fn errors_de_data() {
+fn data_errors() {
     // Structs.
     compare("fn main() -> int { let p = Q { x: 1 }; 0 }", "scde_unk_struct.ray");
     compare("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1 }; 0 }", "scde_missing.ray");
@@ -425,7 +425,7 @@ fn panic_y_parse() {
 
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
-fn ejemplos_reales_valid_vals() {
+fn real_examples_valid_values() {
     let files = ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray", "examples/basics/primes.ray",
         "examples/data/structs.ray", "examples/data/match_figuras.ray", "examples/data/enums.ray", "examples/data/arrays.ray",
         "examples/data/matriz.ray", "examples/types/genericos.ray", "examples/types/tipos_genericos.ray", "examples/types/opcional.ray",
@@ -445,7 +445,7 @@ fn ejemplos_reales_valid_vals() {
 /// empieza con `(`/`[` tras un if/while/match-sentencia se parsea como llamada/indexación
 /// de su valor; el error lo dice, con la pista de separarla con 'return' o 'let'.
 #[test]
-fn gotcha_55_lleva_pista() {
+fn gotcha_55_has_a_hint() { // es-ok: "gotcha" es jerga técnica inglesa aceptada, no español
     // Llamada: el "callee" es un while-expresión (unit).
     compare(
         "fn main() { var i = 0; while (i < 3) { i = i + 1; } (2); }",

@@ -40,7 +40,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn std_math_envoltorios() {
+fn std_math_wrappers() {
     let expected = "4\n1024\n3\n4\n3\n0\n1\n3\n7\n2.5\n3\n9\na\ntrue\n";
     let (o_in, c_in) = run("m49_math_in", PROG, false);
     let (o_vm, c_vm) = run("m49_math_vm", PROG, true);
@@ -77,7 +77,7 @@ fn main() -> int {
 /// M65.2 — trig inversa y compañía: los envoltorios `math.asin/acos/atan/atan2/log2/trunc`
 /// compilan y corren por ambos motores (el cálculo lo cubre el oráculo de `vm.rs`).
 #[test]
-fn trig_inversa_y_compania() {
+fn inverse_trig_and_friends() {
     let src = r#"import std/math;
 fn main() -> int {
     print(math.atan2(1.0, 0.0) == math.PI / 2.0);  // true (ángulo de (0,1) = π/2)
@@ -104,7 +104,7 @@ fn main() -> int {
 /// (b) los empates de `min`/`max` devuelven `a`, como promete la doc (antes `b`; observable
 /// con un `impl Ord` de usuario).
 #[test]
-fn ipow_sin_trap_y_empates_min_max() {
+fn ipow_without_trap_and_min_max_ties() {
     let src = r#"import std/math;
 @derive(Eq, Show)
 struct P { order: int, tag: string }
@@ -136,7 +136,7 @@ fn main() -> int {
 }
 
 #[test]
-fn prefijo_global_ya_no_existe() {
+fn global_prefix_no_longer_exists() {
     // M49.1a: la forma prefija global se retiró; `sqrt(x)` sin importar `std/math` es un error de tipos.
     let (_o, c) = run("m49_math_bad", "fn main() -> int { print(sqrt(16.0)); 0 }", true);
     assert_ne!(c, 0, "sqrt() global must fallar (ya no es builtin)");

@@ -57,42 +57,42 @@ fn launch() -> (std::process::Child, u16) {
         .stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().expect("lanza servidor");
     let mut reader = BufReader::new(child.stdout.take().unwrap());
-    let mut linea = String::new();
-    reader.read_line(&mut linea).expect("lee port");
-    let port = linea.trim().parse().unwrap_or_else(|_| panic!("port: {linea:?}"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee port");
+    let port = line.trim().parse().unwrap_or_else(|_| panic!("port: {line:?}"));
     (child, port)
 }
 
 /// Lee exactamente la línea "READY\n" (6 octetos) de un stream.
-fn leer_ready(s: &mut TcpStream) {
+fn read_ready(s: &mut TcpStream) {
     let mut b = [0u8; 6];
     s.read_exact(&mut b).expect("READY");
     assert_eq!(&b, b"READY\n");
 }
 
 #[test]
-fn socket_write_cede_y_no_acapara_el_scheduler() {
+fn socket_write_yields_and_does_not_hog_the_scheduler() {
     let (mut child, port) = launch();
 
     // Cliente 1: lee "READY", luego NO drena el blob → su escritura en el servidor se aparca.
     let mut c1 = TcpStream::connect(("127.0.0.1", port)).expect("conecta c1");
     c1.set_read_timeout(Some(Duration::from_secs(15))).ok();
-    leer_ready(&mut c1);
+    read_ready(&mut c1);
 
     // Cliente 2: debe ser atendido POR COMPLETO aunque c1 tenga al servidor bloqueado escribiendo.
     let mut c2 = TcpStream::connect(("127.0.0.1", port)).expect("conecta c2");
     c2.set_read_timeout(Some(Duration::from_secs(15))).ok();
-    leer_ready(&mut c2);
-    let mut recibido = 0usize;
+    read_ready(&mut c2);
+    let mut received = 0usize;
     let mut buf = [0u8; 65536];
-    while recibido < BLOB {
+    while received < BLOB {
         match c2.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => recibido += n,
+            Ok(n) => received += n,
             Err(e) => panic!("c2 no recibió su blob complete (cesión rota → scheduler acaparado): {e}"),
         }
     }
-    assert_eq!(recibido, BLOB, "el client 2 must recibir su blob entero mientras el 1 está aparcado");
+    assert_eq!(received, BLOB, "el client 2 must recibir su blob entero mientras el 1 está aparcado");
 
     // Ahora c1 drena su blob → su escritura aparcada termina → el scope une y el servidor sale limpio.
     let mut total1 = 0usize;

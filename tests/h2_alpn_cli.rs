@@ -16,7 +16,7 @@ const KEY_PEM: &str = include_str!("fixtures/tls_key.pem");
 
 /// Levanta un servidor TLS de una conexión; si `ofrece_h2`, anuncia ALPN `h2`. Completa el handshake y
 /// cierra. Devuelve el puerto efímero.
-fn launch_servidor(offers_h2: bool) -> u16 {
+fn launch_server(offers_h2: bool) -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("cert de prueba");
@@ -63,20 +63,20 @@ fn run(flags: &[&str], port: u16) -> String {
 }
 
 #[test]
-fn negocia_h2_interpreter() {
-    let port = launch_servidor(true);
+fn negotiates_h2_interpreter() {
+    let port = launch_server(true);
     assert_eq!(run(&[], port), "h2 ok");
 }
 
 #[test]
-fn negocia_h2_vm() {
-    let port = launch_servidor(true);
+fn negotiates_h2_vm() {
+    let port = launch_server(true);
     assert_eq!(run(&["--vm"], port), "h2 ok");
 }
 
 #[test]
-fn rejects_sin_h2() {
-    let port = launch_servidor(false);
+fn rejects_without_h2() {
+    let port = launch_server(false);
     // El servidor no ofrece `h2` → `tls_connect_h2` debe fallar.
     assert!(run(&[], port).starts_with("h2 err"), "debería fallar sin ALPN h2");
 }

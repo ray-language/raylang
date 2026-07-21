@@ -20,7 +20,7 @@ fn fixture(base: &std::path::Path) -> std::path::PathBuf {
     idx
 }
 
-fn genera(idx: &std::path::Path, out: &std::path::Path, interp: bool) {
+fn generate(idx: &std::path::Path, out: &std::path::Path, interp: bool) {
     let tool = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/registry_site.ray");
     let mut cmd = Command::new(BIN);
     if interp {
@@ -35,13 +35,13 @@ fn genera(idx: &std::path::Path, out: &std::path::Path, interp: bool) {
 }
 
 #[test]
-fn genera_el_sitio_y_ambos_engines_matches() {
+fn generates_the_site_and_both_engines_match() {
     let base = std::env::temp_dir().join("ray_registry_site");
     let _ = std::fs::remove_dir_all(&base);
     let idx = fixture(&base);
     let (vm, interp) = (base.join("site_vm"), base.join("site_in"));
-    genera(&idx, &vm, false);
-    genera(&idx, &interp, true);
+    generate(&idx, &vm, false);
+    generate(&idx, &interp, true);
 
     // Byte-idénticos por ambos motores.
     for rel in ["index.html", "p/mate.html", "p/textutils.html"] {
@@ -51,9 +51,9 @@ fn genera_el_sitio_y_ambos_engines_matches() {
     }
 
     // Contenido clave.
-    let portada = std::fs::read_to_string(vm.join("index.html")).unwrap();
-    assert!(portada.contains("p/mate.html") && portada.contains("p/textutils.html"), "{portada}");
-    assert!(portada.contains("<input id=\"q\""), "búsqueda client-side\n{portada}");
+    let homepage = std::fs::read_to_string(vm.join("index.html")).unwrap();
+    assert!(homepage.contains("p/mate.html") && homepage.contains("p/textutils.html"), "{homepage}");
+    assert!(homepage.contains("<input id=\"q\""), "búsqueda client-side\n{homepage}");
     let mate = std::fs::read_to_string(vm.join("p/mate.html")).unwrap();
     assert!(mate.contains("dueño: roberto"), "{mate}");
     assert!(mate.contains("nombre reclamado"), "{mate}");

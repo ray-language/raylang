@@ -42,15 +42,15 @@ fn run(args: &[&str]) -> (String, i32) {
 }
 
 /// Compara un driver del self-hosting corrido por Rust vs corrido SOBRE el intérprete auto-alojado.
-fn compare_driver(driver_rel: &str, input_abs: &str, etiqueta: &str) {
+fn compare_driver(driver_rel: &str, input_abs: &str, label: &str) {
     let driver = repo_path(driver_rel);
     let driver = driver.to_str().expect("path utf-8");
     let run_path = repo_path("selfhost/run.ray");
     let run_path = run_path.to_str().expect("path utf-8");
     let (so_r, code_r) = run(&[driver, input_abs]);
     let (so_s, code_s) = run(&[run_path, driver, input_abs]);
-    assert_eq!(so_s, so_r, "stdout difiere ({etiqueta})");
-    assert_eq!(code_s, code_r, "código de output difiere ({etiqueta})");
+    assert_eq!(so_s, so_r, "stdout difiere ({label})");
+    assert_eq!(code_s, code_r, "código de output difiere ({label})");
 }
 
 // Fuentes pequeñas (los drivers grandes corren un intérprete sobre un intérprete → entradas chicas).

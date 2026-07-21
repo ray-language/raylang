@@ -69,7 +69,7 @@ fn compare_source(src: &str, name_tmp: &str) {
 }
 
 #[test]
-fn corpus_nucleo() {
+fn core_corpus() {
     // Los cuatro programas-objetivo del núcleo: recursión, while, if/else, %, return temprano.
     for rel in [
         "examples/basics/fib.ray",
@@ -450,7 +450,7 @@ fn assert_y_sort() {
 }
 
 #[test]
-fn io_de_files() {
+fn file_io() {
     // M14.6d (M50.1: fs → std/fs; el oráculo es pre-loader → usa los primitivos __x directamente):
     // __write_file/__read_file (arreglo etiquetado [string]) + __exists (bool).
     // Determinista para el oráculo conductual: ambos pipelines escriben el MISMO contenido a un
@@ -564,7 +564,7 @@ fn modules_types() {
 }
 
 #[test]
-fn code_de_output() {
+fn output_code() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     compare_source("fn main() -> int { 42 }", "in_exit42.ray");
     compare_source("fn main() { }", "in_unit.ray");

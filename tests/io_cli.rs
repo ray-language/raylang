@@ -51,7 +51,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn input_y_read_int_leen_de_stdin_en_ambos_engines() {
+fn input_and_read_int_read_stdin_in_both_engines() {
     for vm in [false, true] {
         let (out, err, code) = run_io("ray_io_ok", PROG, "mundo\n7\n", vm);
         assert!(out.contains("hello, mundo"), "input() leyó la first línea (vm={vm})\n{out}");
@@ -61,7 +61,7 @@ fn input_y_read_int_leen_de_stdin_en_ambos_engines() {
 }
 
 #[test]
-fn eof_inmediato_da_none() {
+fn immediate_eof_gives_none() {
     // Sin entrada: input() -> None ("EOF"); read_int() -> None -> -1 (& 0xFF = 255).
     let (out, _, code) = run_io("ray_io_eof", PROG, "", false);
     assert!(out.contains("EOF"), "input() en EOF es None\n{out}");
@@ -69,7 +69,7 @@ fn eof_inmediato_da_none() {
 }
 
 #[test]
-fn read_int_con_text_no_entero_da_none() {
+fn read_int_with_non_integer_text_gives_none() {
     // Primera línea cualquiera; segunda no es entero -> read_int None -> -1.
     let (out, _, code) = run_io("ray_io_noint", PROG, "x\nabc\n", false);
     assert!(out.contains("hello, x"), "input() leyó 'x'\n{out}");
@@ -139,7 +139,7 @@ fn main() -> int {
 "#;
 
 #[test]
-fn read_write_file_ida_y_vuelta_en_ambos_engines() {
+fn read_write_file_round_trip_in_both_engines() {
     let mut prog = std::env::temp_dir();
     prog.push("ray_file_prog.ray");
     std::fs::File::create(&prog).unwrap().write_all(FILE_PROG.as_bytes()).unwrap();
@@ -206,7 +206,7 @@ fn exists_y_append_file_en_ambos_engines() {
 }
 
 #[test]
-fn env_no_definida_da_none() {
+fn env_undefined_gives_none() {
     let mut path = std::env::temp_dir();
     path.push("ray_args_env2.ray");
     std::fs::File::create(&path).unwrap().write_all(ARGS_ENV_PROG.as_bytes()).unwrap();
@@ -264,7 +264,7 @@ fn main() -> int {{
 }
 
 #[test]
-fn handles_de_file_open_write_read_close() {
+fn file_handles_open_write_read_close() {
     // M11.8: abrir, escribir por partes, cerrar, reabrir y leer línea a línea. I/O real → subproceso.
     for vm in [false, true] {
         let mut dir = std::env::temp_dir();
@@ -315,7 +315,7 @@ fn main() -> int {{
 }
 
 #[test]
-fn open_de_file_nonexistent_da_err() {
+fn open_of_nonexistent_file_gives_err() {
     let mut path = std::env::temp_dir();
     path.push("ray_open_err.ray");
     let src = r#"
@@ -336,7 +336,7 @@ fn main() -> int {
 /// is_dir/is_file → file_size → append_file_bytes → copy → rename → remove_dir, por ambos
 /// motores. El mensaje de "directorio no vacío" varía por OS → solo se comprueba la etiqueta.
 #[test]
-fn fs_directories_y_metadatos() {
+fn fs_directories_and_metadata() {
     let src = r#"
 import std/fs;
 fn tag(r: Result<int, string>) -> string {
@@ -391,7 +391,7 @@ fn main() -> int {
 /// archivo, y comprueba que el binario nativo produce la MISMA salida que la VM. Requiere `rustc`; se
 /// salta limpiamente si no está (no es un fallo).
 #[test]
-fn native_io_de_entrada_coincide_con_la_vm() {
+fn native_input_io_matches_the_vm() {
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando native_io: rustc no disponible");
         return;
@@ -435,7 +435,7 @@ fn native_io_de_entrada_coincide_con_la_vm() {
 /// P2.b: handles de archivo transpilables (open/write/read_line/close). Compila con `ray build --native`
 /// un programa que escribe con un handle y lo relee línea a línea, y comprueba nativo ≡ VM. Requiere rustc.
 #[test]
-fn native_handles_de_archivo_coinciden_con_la_vm() {
+fn native_file_handles_match_the_vm() {
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando native_handles: rustc no disponible");
         return;
@@ -477,7 +477,7 @@ fn native_handles_de_archivo_coinciden_con_la_vm() {
 /// P2.b: list_dir/remove_file transpilables. Crea archivos, lista el dir (ordenado), borra uno y re-lista;
 /// comprueba nativo ≡ VM. Requiere rustc; se salta si no está.
 #[test]
-fn native_list_dir_y_remove_file_coinciden_con_la_vm() {
+fn native_list_dir_and_remove_file_match_the_vm() {
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando native_list_dir: rustc no disponible");
         return;
@@ -524,7 +524,7 @@ fn native_list_dir_y_remove_file_coinciden_con_la_vm() {
 /// P2.b: operaciones de directorio/metadatos transpilables (mkdir/is_dir/is_file/file_size/copy_file/
 /// rename/remove_dir). Ejercita el ciclo completo y comprueba nativo ≡ VM. Requiere rustc.
 #[test]
-fn native_directorios_coinciden_con_la_vm() {
+fn native_directories_match_the_vm() {
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando native_directorios: rustc no disponible");
         return;
@@ -575,7 +575,7 @@ fn native_directorios_coinciden_con_la_vm() {
 /// P2.b: I/O binaria transpilable (bytes + read_file_bytes/write_file_bytes). Escribe bytes a un archivo
 /// y los relee; comprueba nativo ≡ VM (incl. el render en hex). Requiere rustc.
 #[test]
-fn native_io_binaria_coincide_con_la_vm() {
+fn native_binary_io_matches_the_vm() {
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando native_io_binaria: rustc no disponible");
         return;

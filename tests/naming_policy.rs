@@ -1,9 +1,8 @@
 //! La convención de nombres (CLAUDE.md §Convenciones) se auto-defiende: los
-//! IDENTIFICADORES van en inglés en `src/`, `selfhost/`, `packages/` y
-//! `benchmarks/` (incluidos los nombres de test dentro de `#[cfg(test)] mod
-//! tests` y los snippets raylang embebidos ahí). **`tests/` (integración) queda
-//! FUERA de la política** (decisión 20 jul 2026, ver `docs/arqueo-spanglish.md`):
-//! sus nombres de test pueden estar en español. `examples/` y `book/` también
+//! IDENTIFICADORES van en inglés en `src/`, `selfhost/`, `packages/`,
+//! `benchmarks/`, `tools/` y `tests/` (integración) — incluidos los nombres de
+//! test dentro de `#[cfg(test)] mod tests` y los snippets raylang embebidos ahí
+//! (decisión 21 jul 2026, ver `docs/arqueo-spanglish.md`). `examples/` y `book/`
 //! quedan fuera (código de usuario / material didáctico, más flexible).
 //!
 //! Detección pragmática (alineada con `tools/arqueo_spanglish.py`, el script que
@@ -24,8 +23,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Directorios bajo la política. `tests/` queda excluido deliberadamente.
-const EN_POLITICA: &[&str] = &["src", "selfhost", "packages", "benchmarks", "std", "tools"];
+/// Directorios bajo la política.
+const EN_POLITICA: &[&str] =
+    &["src", "selfhost", "packages", "benchmarks", "std", "tools", "tests"];
 
 /// Palabras clave simples que introducen una declaración con nombre justo detrás.
 const DECLARADORES: &[&str] = &[

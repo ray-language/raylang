@@ -7,7 +7,7 @@
 //!
 //! Es un GUARDIA de regresión: si un cambio del transpilador rompe un ejemplo (o uno nuevo usa algo fuera
 //! del subconjunto), el test falla. Los ejemplos que el backend nativo NO soporta o que no son
-//! deterministas están en `EXCLUIDOS` con su motivo.
+//! deterministas están en `EXCLUDED` con su motivo.
 //!
 //! `#[ignore]` porque compila ~50 binarios con rustc (lento, ~2-3 min). Correr con:
 //!   cargo test --test native_corpus -- --ignored
@@ -21,7 +21,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_raylang");
 
 /// Ejemplos NO cubiertos, con su motivo (se saltan al iterar). Si el backend nativo llega a soportarlos,
 /// quitarlos de aquí y el corpus los cubrirá automáticamente.
-const EXCLUIDOS: &[(&str, &str)] = &[
+const EXCLUDED: &[(&str, &str)] = &[
     // Módulos-librería: sin `main` ejecutable (se importan desde su `*_demo.ray`). `ray run`/`--native`
     // sobre ellos no produce un programa.
     ("csv.ray", "módulo-librería sin main (se usa vía csv_demo.ray)"),
@@ -58,7 +58,7 @@ fn examples_in(dir: &str) -> Vec<PathBuf> {
 
 fn excluded(p: &Path) -> Option<&'static str> {
     let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    EXCLUIDOS.iter().find(|(n, _)| *n == name).map(|(_, motivo)| *motivo)
+    EXCLUDED.iter().find(|(n, _)| *n == name).map(|(_, motivo)| *motivo)
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn the_deterministic_examples_transpile_identically_to_the_vm() {
         let vm_code = vm.status.code();
 
         // (2) El binario nativo debe COMPILAR (si un ejemplo nuevo usa algo fuera del subconjunto, esto
-        //     falla → hay que soportarlo o añadirlo a EXCLUIDOS con su motivo).
+        //     falla → hay que soportarlo o añadirlo a EXCLUDED con su motivo).
         let build = Command::new(BIN)
             .args(["build", src, "--native", "-o", bin.to_str().unwrap()])
             .current_dir(cwd)

@@ -392,7 +392,7 @@ pub fn body_text(r: Response) -> Result<string, string> {
 }
 
 // Abre la conexión adecuada al esquema: TLS para https, TCP en claro para http (M19.4a).
-fn connect(u: Url) -> Result<int, string> {
+fn dial(u: Url) -> Result<int, string> {
     if (u.tls) {
         net.tls_connect(u.host, u.port)
     } else {
@@ -449,7 +449,7 @@ pub fn request_bytes(method: string, url: string, body: bytes, headers: Map<stri
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (connect(u)) {
+            match (dial(u)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
                     let deadline: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
@@ -571,7 +571,7 @@ pub fn connect(base_url: string) -> Result<Conn, string> {
     match (parse_url(base_url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (connect(u)) {
+            match (dial(u)) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => Result.Ok(Conn { h: h, buf: b"", host: u.host, port: u.port, tls: u.tls, open: true }),
             }
@@ -591,7 +591,7 @@ pub fn conn_close(c: Conn) {
 
 // Reabre el socket de una Conn cerrada (reconexión perezosa).
 fn conn_reopen(c: Conn) -> Result<int, string> {
-    match (connect(Url { host: c.host, port: c.port, path: "/", tls: c.tls })) {
+    match (dial(Url { host: c.host, port: c.port, path: "/", tls: c.tls })) {
         Result.Err(e) => Result.Err("could not connect: " + e),
         Result.Ok(h) => {
             c.h = h;

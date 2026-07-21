@@ -29,6 +29,8 @@ amarillo
 ambiguo
 ambito
 ambitos
+amigo
+amigos
 anade
 anadir
 analiza
@@ -428,6 +430,7 @@ etiquetas
 evita
 exacta
 excluido
+excluidos
 excluye
 exhaustivo
 exige
@@ -446,6 +449,7 @@ fallar
 fallo
 fallos
 falso
+falsos
 falta
 faltantes
 fase
@@ -1115,3 +1119,5 @@ operators
 de
 dos
 caracteres
+politica
+declaradores

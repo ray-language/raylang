@@ -745,7 +745,7 @@ fn parses_files_reales_equal_what_el_oracle() {
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,
     // con fragmentos `mod.ray` no parseables sueltos), que prueba `modules_cli`.
-    const DIRS_EXCLUIDOS: &[&str] = &["capsule", "modules", "project", "ssr"];
+    const EXCLUDED_DIRS: &[&str] = &["capsule", "modules", "project", "ssr"];
     fn collect_examples(dir: &std::path::Path, outside: &[&str], difer: &[&str], out: &mut Vec<String>) {
         let mut entries: Vec<_> = std::fs::read_dir(dir).expect("lee dir").filter_map(|e| e.ok()).map(|e| e.path()).collect();
         entries.sort();
@@ -765,7 +765,7 @@ fn parses_files_reales_equal_what_el_oracle() {
             }
         }
     }
-    collect_examples(&repo_path("examples"), DIRS_EXCLUIDOS, DIFERIDOS_SELFHOST, &mut files);
+    collect_examples(&repo_path("examples"), EXCLUDED_DIRS, DIFERIDOS_SELFHOST, &mut files);
     // Los propios fuentes del self-hosting: el parser se parsea a sí mismo.
     files.push("selfhost/lexer.ray".into());
     files.push("selfhost/lex_dump.ray".into());

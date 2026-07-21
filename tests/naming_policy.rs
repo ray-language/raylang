@@ -18,17 +18,17 @@
 //! Si aparece un token español nuevo que la lista no cubre, añádelo a la lista.
 //! Una excepción deliberada se marca con `// es-ok` en la misma línea (para
 //! casos aislados); un **falso amigo** recurrente (palabra igual en inglés y
-//! español, como "variable") va en `FALSOS_AMIGOS`.
+//! español, como "variable") va en `FALSE_FRIENDS`.
 
 use std::collections::HashSet;
 use std::path::Path;
 
 /// Directorios bajo la política.
-const EN_POLITICA: &[&str] =
+const IN_POLICY: &[&str] =
     &["src", "selfhost", "packages", "benchmarks", "std", "tools", "tests"];
 
 /// Palabras clave simples que introducen una declaración con nombre justo detrás.
-const DECLARADORES: &[&str] = &[
+const DECLARATORS: &[&str] = &[
     "fn ", "let mut ", "let ", "var ", "struct ", "enum ", "trait ", "const ", "static ",
 ];
 
@@ -37,7 +37,7 @@ const DECLARADORES: &[&str] = &[
 /// técnica aceptada) — `variable`/`indices`/`regen`… Residuo documentado en
 /// `docs/arqueo-spanglish.md` §3; si un futuro identificador realmente necesita esa palabra en
 /// español, usa `// es-ok` en su línea en vez de tocar esta lista.
-const FALSOS_AMIGOS: &[&str] = &[
+const FALSE_FRIENDS: &[&str] = &[
     "variable", "variables", "indices", "regen", "configurable", "bitops", "ancount", "saslname",
     "operators",
     // Falsos amigos ya excluidos por `tools/arqueo_spanglish.py` (mismo deletreo en inglés):
@@ -161,7 +161,7 @@ fn word_boundary_before(line: &str, at: usize) -> bool {
 
 /// Sitios de declaración simple (`fn`/`let`/`var`/`struct`/`enum`/`trait`/`const`/`static`).
 fn find_simple(line: &str, out: &mut Vec<String>) {
-    for kw in DECLARADORES {
+    for kw in DECLARATORS {
         let mut from = 0;
         while let Some(off) = line[from..].find(kw) {
             let at = from + off;
@@ -232,17 +232,17 @@ fn identifiers_are_english() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let wordlist = std::fs::read_to_string(root.join("tests/naming_policy_es.txt"))
         .expect("wordlist tests/naming_policy_es.txt");
-    let falsos_amigos: HashSet<String> = FALSOS_AMIGOS.iter().map(|s| s.to_lowercase()).collect();
+    let false_friends: HashSet<String> = FALSE_FRIENDS.iter().map(|s| s.to_lowercase()).collect();
     let spanish: HashSet<String> = wordlist
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(str::to_lowercase)
-        .filter(|l| !falsos_amigos.contains(l))
+        .filter(|l| !false_friends.contains(l))
         .collect();
 
     let mut files = Vec::new();
-    for dir in EN_POLITICA {
+    for dir in IN_POLICY {
         collect_files(&root.join(dir), &mut files);
     }
     files.sort();

@@ -13,18 +13,21 @@
 //! auditoría va con el arco del motor único (M35/M36); mientras tanto la red
 //! central ya los presenta como ICE.
 
-/// Los archivos bajo la política: el front-end + los clientes de compilación.
-const EN_POLITICA: &[&str] = &[
+/// Los archivos bajo la política: el front-end + los clientes de compilación. Una entrada puede
+/// ser un **módulo-directorio** (`checker/`, `lsp/`, ver `docs/organizacion-codigo.md` §7): se
+/// recorren sus `.rs` menos `tests.rs` (los tests del módulo, fuera de la política como los
+/// `#[cfg(test)]` inline).
+const IN_POLICY: &[&str] = &[
     "src/token.rs",
     "src/lexer.rs",
     "src/parser.rs",
     "src/ast.rs",
-    "src/checker.rs",
+    "src/checker",
     "src/loader.rs",
     "src/prelude.rs",
     "src/diagnostic.rs",
     "src/fmt.rs",
-    "src/lsp.rs",
+    "src/lsp",
     "src/repl.rs",
     "src/test_runner.rs",
     "src/main.rs",
@@ -47,7 +50,25 @@ const PROHIBIDOS: &[&str] = &[
 fn front_end_does_not_panic_bare() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut violaciones = Vec::new();
-    for file in EN_POLITICA {
+    // Expande cada entrada: archivo suelto, o módulo-directorio → sus `.rs` menos `tests.rs`.
+    let mut files: Vec<String> = Vec::new();
+    for entry in IN_POLICY {
+        let path = root.join(entry);
+        if path.is_dir() {
+            let mut subs: Vec<String> = std::fs::read_dir(&path)
+                .unwrap_or_else(|e| panic!("no se pudo leer {entry}: {e}"))
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| n.ends_with(".rs") && n != "tests.rs")
+                .map(|n| format!("{entry}/{n}"))
+                .collect();
+            subs.sort();
+            files.extend(subs);
+        } else {
+            files.push(entry.to_string());
+        }
+    }
+    for file in &files {
         let source = std::fs::read_to_string(root.join(file))
             .unwrap_or_else(|e| panic!("no se pudo leer {file}: {e}"));
         for (i, linea) in source.lines().enumerate() {

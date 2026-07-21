@@ -38,9 +38,15 @@ pub fn open(path: string) -> Result<Store, string> {
         let m = decode(b)?;
         Result.Ok(Store { path: path, data: m })
     } else {
-        let m: Map<string, bytes> = Map.new();
-        Result.Ok(Store { path: path, data: m })
+        Result.Ok(empty(path))
     }
+}
+
+/// A fresh, empty in-memory store bound to `path` WITHOUT reading the file — for
+/// state that should start clean and only touch disk if `save` is ever called.
+pub fn empty(path: string) -> Store {
+    let m: Map<string, bytes> = Map.new();
+    Store { path: path, data: m }
 }
 
 /// The operations of a `Store`, in method-call style.
@@ -111,6 +117,149 @@ impl StoreOps for Store {
         fs.write_file_bytes(tmp, b)?;
         fs.rename(tmp, self.path)?;
         Result.Ok(b.len())
+    }
+}
+
+// --- G.2: el store COMPARTIDO entre fibras (actor CSP) ---
+//
+// Bajo el pool M:N (M38) los heaps de fibra están aislados: un `Store` no puede
+// compartirse — al cruzar un canal se copia profundo y los alias divergen. El patrón
+// del proyecto (actor de métricas, M38) aplica tal cual: UNA fibra posee el `Store`
+// y las demás le hablan por un canal de peticiones; el id de canal sí se comparte al
+// transferir. FIFO da la coherencia: un `get` ve todos los `set` encolados antes.
+// `impl StoreOps for SharedStore` → la MISMA API sirve local y compartido. Solo VM
+// (spawn/canales); el intérprete da su error limpio de siempre.
+
+// Los mensajes al actor. Las peticiones con respuesta llevan su canal de reply.
+enum KvMsg {
+    Get(string, Channel<Option<bytes>>),
+    Set(string, bytes),
+    Delete(string, Channel<bool>),
+    Keys(Channel<[string]>),
+    Count(Channel<int>),
+    Save(Channel<Result<int, string>>),
+}
+
+/// A `Store` owned by a dedicated fiber, shared between fibers through a request
+/// channel. Create with `kv.share(store)` or `kv.open_shared(path)`; use the same
+/// `StoreOps` methods as a local `Store` (`sh.get(k)`, `sh.save()`, …). Requests are
+/// served in FIFO order, so a `get` observes every `set` sent before it on the same
+/// handle. Stop the owner fiber with `kv.stop(sh)`; a stopped store must not be used.
+pub struct SharedStore {
+    ch: Channel<KvMsg>,
+}
+
+/// Moves `s` into a dedicated owner fiber and returns the shared handle. The fiber
+/// gets its own copy of the store — do not keep using `s` after sharing it.
+pub fn share(s: Store) -> SharedStore {
+    let ch: Channel<KvMsg> = Channel.new();
+    spawn(fn() {
+        store_actor(s, ch);
+    });
+    SharedStore { ch: ch }
+}
+
+/// Opens the store at `path` (like `open`) and shares it in one step.
+pub fn open_shared(path: string) -> Result<SharedStore, string> {
+    let s = open(path)?;
+    Result.Ok(share(s))
+}
+
+/// Stops the owner fiber (closes the request channel). Call after a final `save`
+/// if the state must persist; using the handle afterwards is an error.
+pub fn stop(sh: SharedStore) {
+    close(sh.ch);
+}
+
+// El actor: posee el Store y lo toca SOLO él; canal cerrado → termina.
+fn store_actor(s: Store, ch: Channel<KvMsg>) {
+    var running = true;
+    while (running) {
+        match (recv(ch)) {
+            Option.Some(msg) => {
+                match (msg) {
+                    KvMsg.Get(k, reply) => send(reply, s.get(k)),
+                    KvMsg.Set(k, v) => s.set(k, v),
+                    KvMsg.Delete(k, reply) => send(reply, s.delete(k)),
+                    KvMsg.Keys(reply) => send(reply, s.keys()),
+                    KvMsg.Count(reply) => send(reply, s.count()),
+                    KvMsg.Save(reply) => send(reply, s.save()),
+                }
+            },
+            Option.None => {
+                running = false;
+            },
+        }
+    }
+}
+
+impl StoreOps for SharedStore {
+    fn get(self, key: string) -> Option<bytes> {
+        let reply: Channel<Option<bytes>> = Channel.new();
+        send(self.ch, KvMsg.Get(key, reply));
+        match (recv(reply)) {
+            Option.Some(v) => v,
+            Option.None => Option.None,
+        }
+    }
+
+    // Fire-and-forget: el orden FIFO del canal garantiza que un get posterior lo ve.
+    fn set(self, key: string, val: bytes) {
+        send(self.ch, KvMsg.Set(key, val));
+    }
+
+    fn delete(self, key: string) -> bool {
+        let reply: Channel<bool> = Channel.new();
+        send(self.ch, KvMsg.Delete(key, reply));
+        match (recv(reply)) {
+            Option.Some(b) => b,
+            Option.None => false,
+        }
+    }
+
+    fn keys(self) -> [string] {
+        let reply: Channel<[string]> = Channel.new();
+        send(self.ch, KvMsg.Keys(reply));
+        match (recv(reply)) {
+            Option.Some(ks) => ks,
+            Option.None => [],
+        }
+    }
+
+    fn count(self) -> int {
+        let reply: Channel<int> = Channel.new();
+        send(self.ch, KvMsg.Count(reply));
+        match (recv(reply)) {
+            Option.Some(n) => n,
+            Option.None => 0,
+        }
+    }
+
+    // El azúcar de strings va del lado del CLIENTE (codifica/decodifica en su fibra):
+    // el actor solo conoce Get/Set de bytes.
+    fn get_string(self, key: string) -> Option<string> {
+        match (self.get(key)) {
+            Option.Some(b) => {
+                match (from_utf8(b)) {
+                    Result.Ok(v) => Option.Some(v),
+                    Result.Err(e) => Option.None,
+                }
+            },
+            Option.None => Option.None,
+        }
+    }
+
+    fn set_string(self, key: string, val: string) {
+        self.set(key, val.to_bytes());
+    }
+
+    fn save(self) -> Result<int, string> {
+        let reply: Channel<Result<int, string>> = Channel.new();
+        send(self.ch, KvMsg.Save(reply));
+        match (recv(reply)) {
+            Option.Some(r) => r,
+            Option.None => Result.Err("kv: shared store is stopped"),
+        }
     }
 }
 

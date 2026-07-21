@@ -148,6 +148,60 @@ fn main() -> int {{
     let _ = std::fs::remove_file(&store);
 }
 
+/// G.2 — el store COMPARTIDO (actor CSP): el handle cruza fibras (spawn/scope/join), la
+/// coherencia es FIFO, `save` persiste vía el actor y el archivo reabre local. Solo VM
+/// (spawn/canales) y `--deterministic` (salida exacta, como `concurrency_cli`).
+#[test]
+fn shared_store_actor() {
+    let store = store_path("shared");
+    let _ = std::fs::remove_file(&store);
+    let src = format!(
+        r#"import std/kv;
+fn main() -> int {{
+    let sh = match (kv.open_shared("{p}")) {{ Result.Ok(s) => s, Result.Err(e) => {{ print("open: " + e); return 1; }}, }};
+    sh.set_string("main", "hola");
+    let r = scope(fn() -> int {{
+        let t1 = spawn(fn() -> int {{
+            sh.set_string("w1", "uno");
+            sh.count()
+        }});
+        let t2 = spawn(fn() -> int {{
+            sh.set_string("w2", "dos");
+            sh.count()
+        }});
+        join(t1) + join(t2)
+    }});
+    print("joined " + to_string(r >= 2));
+    print("count " + to_string(sh.count()));
+    print("keys " + sh.keys().join(","));
+    match (sh.get_string("w1")) {{ Option.Some(v) => print("w1 " + v), Option.None => print("w1 MISSING"), }}
+    assert(sh.delete("w2"));
+    match (sh.save()) {{ Result.Ok(n) => print("saved " + to_string(n)), Result.Err(e) => {{ print("save: " + e); return 1; }}, }}
+    kv.stop(sh);
+    let s2 = match (kv.open("{p}")) {{ Result.Ok(st) => st, Result.Err(e) => {{ print("reopen: " + e); return 1; }}, }};
+    print("persisted " + s2.keys().join(","));
+    0
+}}
+"#,
+        p = store.display()
+    );
+    let path = std::env::temp_dir().join("kv_cli_shared.ray");
+    std::fs::write(&path, &src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["--vm", "--deterministic"])
+        .arg(&path)
+        .output()
+        .expect("ejecuta raylang");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "sale 0\n{stdout}");
+    assert_eq!(
+        stdout,
+        "joined true\ncount 3\nkeys main,w1,w2\nw1 uno\nsaved 37\npersisted main,w1\n",
+        "salida del actor compartido"
+    );
+    let _ = std::fs::remove_file(&store);
+}
+
 /// El guardado es atómico (temp + rename): tras `save` no queda `<path>.tmp` y el archivo
 /// final existe.
 #[test]

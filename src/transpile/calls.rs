@@ -521,8 +521,9 @@ impl Transpiler {
         Ok(())
     }
 
-    /// `std::time::<fn>`: now/monotonic → int (millis), sleep(ms) → duerme. now/sleep inline; monotonic
-    /// usa un `Instant` global (helper `__ray_monotonic`, activa `needs_time_rng`).
+    /// `std::time::<fn>`: now/monotonic → int (millis), monotonic_nanos → int (ns), sleep(ms) → duerme.
+    /// now/sleep inline; monotonic/monotonic_nanos usan un `Instant` global compartido (helpers
+    /// `__ray_monotonic`/`__ray_monotonic_nanos`, activan `needs_time_rng`).
     pub(super) fn emit_time(&mut self, out: &mut String, tfn: &str, eff: &[&Expr]) -> Result<(), String> {
         match tfn {
             "now" => out.push_str(
@@ -531,6 +532,10 @@ impl Transpiler {
             "monotonic" => {
                 self.needs_time_rng = true;
                 out.push_str("__ray_monotonic()");
+            }
+            "monotonic_nanos" => {
+                self.needs_time_rng = true;
+                out.push_str("__ray_monotonic_nanos()");
             }
             "sleep" => {
                 out.push_str("std::thread::sleep(std::time::Duration::from_millis((");
@@ -773,7 +778,7 @@ impl Transpiler {
         // `std::time::{now,monotonic,sleep}`/`std::random::{next,below,seed}` → reloj + PRNG de Rust (no
         // deterministas → casan por propiedades). El resto de std/time|random es raylang puro → pasa de largo.
         if let Some(tfn) = name.strip_prefix("std::time::") {
-            if matches!(tfn, "now" | "monotonic" | "sleep") {
+            if matches!(tfn, "now" | "monotonic" | "monotonic_nanos" | "sleep") {
                 return self.emit_time(out, tfn, &eff);
             }
         }
@@ -1727,7 +1732,8 @@ impl Transpiler {
                 // seed → unit.
                 // Solo las funciones-primitivo; el resto de std/time|random (raylang puro) → ruta genérica.
                 match n {
-                    "std::time::now" | "std::time::monotonic" | "std::random::below" => return Ok(Type::Int),
+                    "std::time::now" | "std::time::monotonic" | "std::time::monotonic_nanos"
+                    | "std::random::below" => return Ok(Type::Int),
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),

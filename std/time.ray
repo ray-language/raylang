@@ -18,6 +18,13 @@ pub fn now() -> int { __now() }
 /// NOT comparable across processes and must not be persisted — store `now()` for that.
 pub fn monotonic() -> int { __monotonic() }
 
+/// A monotonic clock reading in **nanoseconds**, from the SAME per-process origin as `monotonic`
+/// (so `monotonic_nanos() / 1000000` and `monotonic()` agree). Use it to measure intervals
+/// shorter than a millisecond (micro-benchmarks); for everything else `monotonic` composes
+/// better with the rest of the stdlib, whose duration currency is milliseconds. Same caveats:
+/// arbitrary origin, not comparable across processes, never persist a reading.
+pub fn monotonic_nanos() -> int { __monotonic_nanos() }
+
 /// Suspends the current fiber for at least `ms` milliseconds (`ms <= 0` returns immediately).
 /// **Cooperative in the VM** (M57.2): the fiber parks and other fibers keep running — sleeping
 /// inside a server does not stall other connections. In the interpreter (single-threaded oracle)

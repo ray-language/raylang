@@ -1870,6 +1870,7 @@ impl<'a> Interpreter<'a> {
             // --- Reloj y aleatoriedad (M15.1b): no deterministas, delegan en los helpers compartidos. ---
             "__now" => Value::Int(crate::builtins::now_millis()),
             "__monotonic" => Value::Int(crate::builtins::monotonic_millis()),
+            "__monotonic_nanos" => Value::Int(crate::builtins::monotonic_nanos()),
             "__sleep" => match &values[0] {
                 Value::Int(ms) => {
                     crate::builtins::sleep_millis(*ms);

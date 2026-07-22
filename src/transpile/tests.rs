@@ -25,7 +25,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
-    "__monotonic", "__now", "__random", "__random_int", "__random_seed", "__sleep",
+    "__monotonic", "__monotonic_nanos", "__now", "__random", "__random_int", "__random_seed", "__sleep",
     // Sockets TCP/UDP (interceptados vía `std::net::*`).
     "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_read_timeout",
     "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_listen",
@@ -594,7 +594,8 @@ fn transpiles_time_and_random() {
     let dir = std::env::temp_dir().join(format!("ray_tr_test_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let src = "import std/time;\nimport std/random;\n\
-         fn main() -> int { let t = time.now() + time.monotonic(); random.seed(1); \
+         fn main() -> int { let t = time.now() + time.monotonic() + time.monotonic_nanos() / 1000000; \
+         random.seed(1); \
          let r = random.next(); let n = random.below(6); if (r > 0.0) { n + t } else { 0 } }\n";
     std::fs::write(dir.join("main.ray"), src).unwrap();
     let loaded = match crate::loader::load(&dir.join("main.ray")) {
@@ -606,6 +607,7 @@ fn transpiles_time_and_random() {
     let rust = transpile(&prog).expect("transpile").source;
     assert!(rust.contains("SystemTime::now()"), "now → SystemTime: {}", rust);
     assert!(rust.contains("__ray_monotonic()"), "monotonic: {}", rust);
+    assert!(rust.contains("__ray_monotonic_nanos()"), "monotonic_nanos: {}", rust);
     assert!(rust.contains("__ray_random_f64()") && rust.contains("__ray_random_int("), "random: {}", rust);
     assert!(rust.contains("fn __ray_next_u64()"), "PRNG SplitMix64 emitido: {}", rust);
     let _ = std::fs::remove_dir_all(&dir);

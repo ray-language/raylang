@@ -687,9 +687,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // Mutex global tampoco, un `send`/mutación concurrente entre hilos competía igual por orden).
     if t.needs_time_rng {
         out.push_str(concat!(
-            "fn __ray_monotonic() -> i64 {\n",
+            "fn __ray_monotonic_start() -> std::time::Instant {\n",
             "    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();\n",
-            "    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as i64\n}\n",
+            "    *START.get_or_init(std::time::Instant::now)\n}\n",
+            "fn __ray_monotonic() -> i64 { __ray_monotonic_start().elapsed().as_millis() as i64 }\n",
+            "fn __ray_monotonic_nanos() -> i64 { __ray_monotonic_start().elapsed().as_nanos() as i64 }\n",
             "fn __ray_rng_seed() -> u64 {\n",
             "    static CTR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
             "    let c = CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",

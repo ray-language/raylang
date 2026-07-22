@@ -848,7 +848,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::MapInsert => {
                     let v = self.pop();
-                    let k = heap_to_key(&self.pop());
+                    let k = heap_to_key(self.pop());
                     let h = self.pop_obj();
                     match self.cur.heap.get_mut(h) {
                         Obj::Map(m) => { m.insert(k, v); }
@@ -857,7 +857,7 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Unit);
                 }
                 OpCode::MapContainsKey => {
-                    let k = heap_to_key(&self.pop());
+                    let k = heap_to_key(self.pop());
                     let h = self.pop_obj();
                     let present = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.contains_key(&k),
@@ -867,7 +867,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::MapGet => {
                     // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
-                    let k = heap_to_key(&self.pop());
+                    let k = heap_to_key(self.pop());
                     let h = self.pop_obj();
                     let elems = match self.cur.heap.get(h) {
                         Obj::Map(m) => match m.get(&k) {
@@ -882,7 +882,7 @@ impl<'a> Vm<'a> {
                 OpCode::MapGetOr => {
                     // P0.2: get-or-default SIN alocar. Args apilados (map, key, default) → cima = default.
                     let d = self.pop();
-                    let k = heap_to_key(&self.pop());
+                    let k = heap_to_key(self.pop());
                     let h = self.pop_obj();
                     let v = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.get(&k).cloned().unwrap_or(d),
@@ -894,7 +894,7 @@ impl<'a> Vm<'a> {
                     // P0.3: upsert acumulativo en UN lookup (entry-API). Args (map, key, delta) → cima = delta.
                     use std::collections::hash_map::Entry;
                     let delta = self.pop();
-                    let k = heap_to_key(&self.pop());
+                    let k = heap_to_key(self.pop());
                     let h = self.pop_obj();
                     let (l, c) = pos!();
                     let ovf = || runtime_error(l, c, "arithmetic overflow on int");
@@ -917,7 +917,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::MapRemove => {
                     // M13.1b: quita la clave; [] o [v]. El prelude → Option<V>.
-                    let k = heap_to_key(&self.pop());
+                    let k = heap_to_key(self.pop());
                     let h = self.pop_obj();
                     let elems = match self.cur.heap.get_mut(h) {
                         Obj::Map(m) => match m.remove(&k) {
@@ -1430,6 +1430,12 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Str(s), HeapValue::Str(sep)) = (s, sep) else {
                         unreachable!("the checker guarantees two strings");
                     };
+                    // V3 (bench políglota) EVALUADA y DESCARTADA (22 jul, medido): ni el fast-path
+                    // de patrón `char` para separador de 1 carácter (+9% MÁS LENTO: el `StrSearcher`
+                    // de std ya acelera con memchr sobre el primer byte, mientras `CharSearcher`
+                    // decodifica UTF-8 carácter a carácter) ni el preconteo para preasignar el Vec
+                    // (+4%: el barrido extra cuesta más que los reallocs amortizados) ganan. El
+                    // camino genérico de `str::split` es el rápido; no reabrir sin re-medir.
                     let parts: Vec<HeapValue> =
                         s.split(sep.as_str()).map(|p| HeapValue::Str(p.to_string())).collect();
                     // El arreglo es un objeto del heap; los Str son inline, sin handles que rootear.

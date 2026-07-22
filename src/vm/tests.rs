@@ -3100,3 +3100,28 @@ fn derive_eq_oracle() {
         }
     "#);
 }
+
+/// V2 (bench políglota): la bajada `lower_concat` reescribe las cadenas de `+` de strings (y la
+/// interpolación, que desazucara a `+`) al primitivo `__concat` → opcode `ConcatN`. Este oráculo
+/// fija que la reescritura preserva la semántica en ambos motores: cadenas largas, interpolación,
+/// operandos que son a su vez cadenas anidadas en llamadas, y la mezcla con `+` no-string (int).
+#[test]
+fn concat_chain_lowering_oracle() {
+    oracle_program(
+        r#"
+        fn wrap(s: string) -> string { "[" + s + "]" }
+        fn main() -> int {
+            var acc = 0;
+            var i = 0;
+            while (i < 100) {
+                let a = "id:" + to_string(i) + ",n:" + wrap("u" + to_string(i * 2)) + "!";
+                let b = "x${i}y${i % 7}z";
+                acc = acc + a.len() + b.len();
+                i = i + 1;
+            }
+            print(acc);
+            acc
+        }
+        "#,
+    );
+}

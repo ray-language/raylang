@@ -29,6 +29,7 @@ impl Checker {
             ufcs_sites: HashMap::new(),
             for_iter_sites: HashMap::new(),
             op_sites: HashMap::new(),
+            concat_sites: HashSet::new(),
             trait_tparams: HashMap::new(),
             from_impls: HashMap::new(),
             try_conversions: HashMap::new(),
@@ -2190,7 +2191,11 @@ impl Checker {
             Add | Sub | Mul | Div | Rem => match (&lt, &rt) {
                 (Type::Int, Type::Int) => Ok(Type::Int),
                 (Type::Float, Type::Float) => Ok(Type::Float),
-                (Type::String, Type::String) if op == Add => Ok(Type::String),
+                (Type::String, Type::String) if op == Add => {
+                    // V2: registrar el sitio para que `lower_concat` aplane la cadena a `__concat`.
+                    self.concat_sites.insert((line, col));
+                    Ok(Type::String)
+                }
                 // M16.1b: `+` concatena dos bytes → bytes.
                 (Type::Bytes, Type::Bytes) if op == Add => Ok(Type::Bytes),
                 // M11.7b: `+` concatena dos arreglos del mismo tipo de elemento → arreglo.

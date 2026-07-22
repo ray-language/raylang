@@ -976,6 +976,15 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".chars().collect::<Vec<char>>()))");
             }
+            // V2: `__concat(a, b, …)` (el checker aplana ahí las cadenas de `+` de strings y la
+            // interpolación) → el MISMO `format!` único de `emit_concat` (los operandos llegan ya
+            // aplanados; `to_string(x)` se inlinea como `{}`). Antes de V2 este aplanado lo hacía
+            // el propio transpilador sobre la cadena de `Add` (`flatten_concat`, que sigue para
+            // los `+` no registrados).
+            // (el `match` es sobre `method`, que recorta el prefijo `__` → "concat")
+            "concat" => {
+                self.emit_concat(out, &eff)?;
+            }
             // split(s, sep) → [string]; join(a, sep) → string (helpers del preámbulo generado).
             "split" => {
                 out.push_str("__ray_split(&");

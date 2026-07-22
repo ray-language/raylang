@@ -905,3 +905,150 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
         expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(lit)), line, col, end_line: line });
     }
 }
+
+// =====================================================================
+// V2 (bench políglota) — aplanar cadenas de concatenación de strings
+// =====================================================================
+//
+// El checker registró la posición de cada `Add` tipado `string + string` (`concat_sites`).
+// Esta pasada reescribe cada cadena `a + b + c + …` (incl. la interpolación, que el parser
+// desazucara a `+`) en UNA llamada al primitivo interno `__concat(a, b, c, …)`: el compilador
+// la baja al opcode `ConcatN(n)` (un String con capacidad exacta, sin los n−1 intermedios) y
+// el intérprete la implementa en `eval_builtin` con la misma semántica → oráculo intacto.
+// Corre la ÚLTIMA de las bajadas: las demás indexan por (línea, col) y el `Call` sintético
+// comparte posición con el `Add` raíz (que a su vez la comparte con su operando izquierdo) —
+// después de ellas ya no hay tablas que puedan confundirlo.
+
+pub(super) fn lower_concat(program: &mut Program, sites: &std::collections::HashSet<(usize, usize)>) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_concat_block(&mut f.body, sites);
+    }
+}
+
+fn lower_concat_block(block: &mut Block, sites: &std::collections::HashSet<(usize, usize)>) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_concat_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_concat_expr(start, sites); lower_concat_expr(end, sites); }
+                    ForIter::In(e) => lower_concat_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_concat_expr(expr, sites),
+                }
+                lower_concat_block(body, sites);
+            }
+            StmtKind::Assign { target, value } => {
+                lower_concat_expr(target, sites);
+                lower_concat_expr(value, sites);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_concat_expr(v, sites);
+                }
+            }
+            StmtKind::Expr(e) => lower_concat_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_concat_expr(t, sites);
+    }
+}
+
+fn lower_concat_expr(expr: &mut Expr, sites: &std::collections::HashSet<(usize, usize)>) {
+    // ¿Es la RAÍZ de una cadena registrada? Se desmonta el spine izquierdo completo (los `Add` de
+    // string anidados, también registrados), se recorre cada operando (puede contener otras cadenas,
+    // p. ej. dentro de una llamada) y se reescribe a `__concat(operandos…)`.
+    if let ExprKind::Binary { op: BinaryOp::Add, .. } = &expr.kind {
+        if sites.contains(&(expr.line, expr.col)) {
+            let kind = std::mem::replace(&mut expr.kind, ExprKind::Bool(false));
+            let mut parts = Vec::new();
+            collect_concat(Expr { kind, line: expr.line, col: expr.col }, sites, &mut parts);
+            for p in &mut parts {
+                lower_concat_expr(p, sites);
+            }
+            let callee = Box::new(Expr { kind: ExprKind::Ident("__concat".to_string()), line: expr.line, col: expr.col });
+            expr.kind = ExprKind::Call { callee, args: parts };
+            return;
+        }
+    }
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => {
+            lower_concat_expr(inner, sites)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            lower_concat_expr(left, sites);
+            lower_concat_expr(right, sites);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_concat_expr(callee, sites);
+            for a in args {
+                lower_concat_expr(a, sites);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            for e in elems {
+                lower_concat_expr(e, sites);
+            }
+        }
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                lower_concat_expr(k, sites);
+                lower_concat_expr(v, sites);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            lower_concat_expr(array, sites);
+            lower_concat_expr(index, sites);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_concat_expr(e, sites);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_concat_expr(a, sites);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_concat_expr(object, sites),
+        ExprKind::Func(f) => lower_concat_block(&mut f.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_concat_expr(scrutinee, sites);
+            for arm in arms {
+                if let Some(g) = &mut arm.guard {
+                    lower_concat_expr(g, sites);
+                }
+                lower_concat_expr(&mut arm.body, sites);
+            }
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_concat_expr(cond, sites);
+            lower_concat_block(then_branch, sites);
+            if let Some(e) = else_branch {
+                lower_concat_expr(e, sites);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            lower_concat_expr(cond, sites);
+            lower_concat_block(body, sites);
+        }
+        ExprKind::Block(b) => lower_concat_block(b, sites),
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
+    }
+}
+
+/// Desmonta el spine izquierdo de una cadena de `Add` de strings registrada, acumulando los
+/// operandos en orden izquierda→derecha (el mismo orden de evaluación que los `Add` anidados).
+fn collect_concat(e: Expr, sites: &std::collections::HashSet<(usize, usize)>, out: &mut Vec<Expr>) {
+    match e.kind {
+        ExprKind::Binary { op: BinaryOp::Add, left, right } if sites.contains(&(e.line, e.col)) => {
+            collect_concat(*left, sites, out);
+            out.push(*right);
+        }
+        kind => out.push(Expr { kind, line: e.line, col: e.col }),
+    }
+}

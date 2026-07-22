@@ -1059,6 +1059,16 @@ impl<'a> Compiler<'a> {
                     self.emit(OpCode::TaskJoin, line, col);
                     return Ok(());
                 }
+                // V2: `__concat(a, b, …)` (generado por el checker al aplanar cadenas de `+` de
+                // strings) → `ConcatN(argc)`. Special-case por la aridad VARIABLE (la fila de la
+                // tabla lleva un opcode placeholder), como `channel`/`join`.
+                if name == "__concat" {
+                    for arg in args {
+                        self.emit_expr(arg)?;
+                    }
+                    self.emit(OpCode::ConcatN(args.len()), line, col);
+                    return Ok(());
+                }
                 // Builtin: el opcode lo da el registro único (`src/builtins.rs`).
                 if let Some(b) = crate::builtins::lookup(name) {
                     for arg in args {

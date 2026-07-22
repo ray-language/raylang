@@ -1402,6 +1402,23 @@ impl<'a> Vm<'a> {
                     let s = format_value(&self.cur.heap, &self.program.enums, &v);
                     self.push(HeapValue::Str(s));
                 }
+                OpCode::ConcatN(n) => {
+                    // V2 (bench políglota): concatenación n-aria — un solo String con la capacidad
+                    // EXACTA (frente a n−1 intermedios de la cadena de `Add`). Se opera sobre el
+                    // tramo superior de la pila sin sacar los valores (cero Vec temporal).
+                    let n = *n;
+                    let start = self.cur.stack.len() - n;
+                    let total: usize = self.cur.stack[start..].iter().map(|v| match v {
+                        HeapValue::Str(s) => s.len(),
+                        _ => unreachable!("the checker guarantees strings"),
+                    }).sum();
+                    let mut out = String::with_capacity(total);
+                    for v in &self.cur.stack[start..] {
+                        if let HeapValue::Str(s) = v { out.push_str(s); }
+                    }
+                    self.cur.stack.truncate(start);
+                    self.push(HeapValue::Str(out));
+                }
                 OpCode::Trim => match self.pop() {
                     HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().to_string())),
                     _ => unreachable!("the checker guarantees a string"),

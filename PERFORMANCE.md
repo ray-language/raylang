@@ -641,6 +641,25 @@ mejor forma del fuente en AMBOS motores (VM 135.3 ms vs 136.8 concat-inline vs 1
 35.2/35.5/42.1) — se desazucara a la misma cadena de `Add` y el transpilador la aplana en un
 `format!` con los `to_string` inlineados gratis.
 
+#### Fase 57 — V2: opcode `ConcatN` — concatenación n-aria en la VM (22 jul, bench políglota)
+
+El lever de tiempo grande de la VM que quedaba en jsonserialize: una cadena `a + b + c + …` (y la
+interpolación, que el parser desazucara a `+`) se ejecutaba como `Add` par a par — n−1 strings
+intermedios, cada uno con su alloc/realloc y su vuelta por el bucle de despacho. **Mecánica**
+(front-end, patrón de las bajadas de M9): el checker registra la posición de cada `Add` tipado
+`string+string` (`concat_sites`) y una pasada **final** (`lower_concat`, tras todas las demás para
+no interferir con sus tablas por posición) aplana cada cadena en una llamada al primitivo interno
+**`__concat(a, b, …)`** — un `Call` ordinario, cero variantes de AST nuevas. El compilador lo baja
+al opcode **`ConcatN(n)`** (special-case por aridad variable, como `channel`): saca n strings y
+construye el resultado UNA vez con la capacidad exacta, operando sobre el tramo superior de la pila
+sin Vec temporal. El intérprete lo implementa en `eval_builtin` (misma semántica → **oráculo
+intacto**, test `concat_chain_lowering_oracle`); el transpilador lo intercepta con su mismo
+`format!` único (los operandos le llegan ya aplanados) → **nativo neutro** (verificado). **Medido**
+(A/B estricto, mismo binario con la bajada on/off): jsonserialize **143.1 → 105.0 ms (−27 %)**,
+logparse **152.4 → 136.6 ms (−10 %)**, wordcount **315.1 → 306.4 ms (−3 %)**. Gotcha de la sesión:
+el primer A/B (contra el `ray` instalado, que resultó ser un build PGO) daba "neutro" — la
+atribución honesta exigió el toggle en el MISMO binario.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

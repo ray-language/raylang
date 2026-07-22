@@ -205,6 +205,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // p. ej. `[T]#push`) se reescribe a la llamada al builtin directamente, recuperando el
     // opcode directo en la VM (y ahorrando el marco en el intérprete). Semántica idéntica.
     inline_forwarders(program);
+    // Paso 9 (V2, bench políglota): aplanar las cadenas de `+` de strings (incl. interpolación) a
+    // `__concat(a, b, …)` → opcode `ConcatN` (un String con capacidad exacta, sin intermedios).
+    // La ÚLTIMA bajada: el `Call` sintético comparte (línea, col) con el `Add` raíz y no debe
+    // entrar en las tablas por posición de las pasadas anteriores.
+    lower_concat(program, &checker.concat_sites);
     Ok(())
 }
 
@@ -492,6 +497,12 @@ struct Checker {
     /// M28.1: sitios de sobrecarga de operadores. Clave `(línea, col, "Add"/"Sub"/…)` → función manglada
     /// del método del operador (`Vec2#add`). El lowering reescribe el `Binary`/`Unary` a una llamada.
     op_sites: HashMap<(usize, usize, String), String>,
+    /// V2 (bench políglota): posiciones de los `Add` **de strings** (`string + string`). La pasada
+    /// `lower_concat` (la ÚLTIMA, para no interferir con las tablas por posición de las demás) aplana
+    /// cada cadena en una llamada al primitivo `__concat(a, b, …)` → opcode `ConcatN` en la VM (un
+    /// String con capacidad exacta en vez de n−1 intermedios). La interpolación desazucara a `+` en
+    /// el parser, así que entra gratis.
+    concat_sites: std::collections::HashSet<(usize, usize)>,
     /// Traits declarados (M9): nombre → firmas de sus métodos (con `self`/`Self` aún sin
     /// sustituir). Llenado en la pre-pasada, antes de validar los impls.
     traits: HashMap<String, Vec<MethodSig>>,

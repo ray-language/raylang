@@ -117,7 +117,10 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
     }
     // De `std/time` y `std/random` SOLO se saltan las funciones que envuelven un primitivo (interceptadas);
     // el resto (p. ej. `std::time::to_epoch_millis`, helpers de `DateTime`) son raylang puro → se emiten.
-    if matches!(name, "std::time::now" | "std::time::monotonic" | "std::time::sleep")
+    if matches!(
+        name,
+        "std::time::now" | "std::time::monotonic" | "std::time::monotonic_nanos" | "std::time::sleep"
+    )
         || matches!(name, "std::random::next" | "std::random::below" | "std::random::seed")
     {
         return true;

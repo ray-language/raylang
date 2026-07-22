@@ -518,6 +518,9 @@ pub enum OpCode {
     Now,
     /// No saca nada; empuja los milisegundos de un reloj monótono (`int`). Builtin `monotonic`.
     Monotonic,
+    /// No saca nada; empuja los nanosegundos del mismo reloj monótono (`int`, misma ancla que
+    /// `Monotonic`). Builtin `monotonic_nanos`.
+    MonotonicNanos,
     /// Saca `ms` (int); duerme el hilo ese tiempo y empuja unit. Builtin `sleep`.
     Sleep,
     /// No saca nada; empuja un `float` en `[0, 1)`. Builtin `random`.

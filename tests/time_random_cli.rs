@@ -41,6 +41,37 @@ fn main() -> int {
     }
 }
 
+/// `monotonic_nanos`: monótono, coherente con `monotonic` (misma ancla) y con resolución real
+/// sub-ms (un intervalo corto con trabajo da > 0 ns aunque en ms dé 0).
+#[test]
+fn monotonic_nanos_is_monotonic_and_coherent() {
+    let src = r#"
+import std/time;
+fn main() -> int {
+    let n0: int = time.monotonic_nanos();
+    // Un poco de trabajo real (demasiado corto para registrarse en ms, visible en ns).
+    var acc: int = 0;
+    var i: int = 0;
+    while (i < 10000) { acc = acc + i; i = i + 1; }
+    let n1: int = time.monotonic_nanos();
+    if (n1 >= n0) { print("mono ok") } else { print("mono mal") }
+    if (n1 - n0 > 0) { print("resolucion ok") } else { print("resolucion mal") }
+    // Coherencia con la lectura en ms: misma ancla → difieren menos de 100 ms.
+    let ms: int = time.monotonic();
+    let diff: int = time.monotonic_nanos() / 1000000 - ms;
+    if (diff >= 0 - 100 && diff <= 100) { print("coherente ok") } else { print("coherente mal") }
+    if (acc > 0) { 0 } else { 1 }
+}
+"#;
+    for vm in [false, true] {
+        let (out, code) = run("ray_mono_nanos", src, vm);
+        assert!(out.contains("mono ok"), "monotonic_nanos no retrocede (vm={vm}): {out}");
+        assert!(out.contains("resolucion ok"), "resolución sub-ms (vm={vm}): {out}");
+        assert!(out.contains("coherente ok"), "misma ancla que monotonic (vm={vm}): {out}");
+        assert_eq!(code, 0);
+    }
+}
+
 /// `now` devuelve un epoch en ms posterior a 2023 (cordura del reloj de pared).
 #[test]
 fn now_is_a_reasonable_epoch() {

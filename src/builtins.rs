@@ -61,11 +61,23 @@ pub fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+// El ancla del reloj monótono: un `Instant` fijado en la primera lectura, COMPARTIDO por las
+// lecturas en ms y en ns (así `monotonic_nanos()/1_000_000` y `monotonic()` son coherentes).
+fn monotonic_start() -> std::time::Instant {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(std::time::Instant::now)
+}
+
 /// Milisegundos de un reloj **monótono**: ancla un `Instant` de referencia en la primera llamada y
 /// devuelve el tiempo transcurrido desde él. Sirve para medir intervalos. Builtin `monotonic`.
 pub fn monotonic_millis() -> i64 {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as i64
+    monotonic_start().elapsed().as_millis() as i64
+}
+
+/// Nanosegundos del mismo reloj monótono (misma ancla que `monotonic_millis` → coherentes entre
+/// sí). En `i64` caben ~292 años desde el arranque del proceso. Builtin `monotonic_nanos`.
+pub fn monotonic_nanos() -> i64 {
+    monotonic_start().elapsed().as_nanos() as i64
 }
 
 /// Duerme el hilo `ms` milisegundos (`ms<=0` → no duerme). Builtin `sleep`.
@@ -245,7 +257,7 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "abs" => (vec!["x: float"], "float"), // ad-hoc: también int → int
         "min" | "max" => (vec!["a: float", "b: float"], "float"), // ad-hoc: también int
         "pi" | "e" | "random" => (vec![], "float"),
-        "now" | "monotonic" => (vec![], "int"),
+        "now" | "monotonic" | "monotonic_nanos" => (vec![], "int"),
         "sleep" => (vec!["ms: int"], "unit"),
         "random_int" => (vec!["n: int"], "int"),
         "panic" => (vec!["msg: string"], "unit"),
@@ -343,6 +355,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         // --- Tiempo / azar ---
         "now" => "Current wall-clock time in milliseconds since the Unix epoch.",
         "monotonic" => "Monotonic clock reading in milliseconds; use for measuring durations (never goes backwards).",
+        "monotonic_nanos" => "Monotonic clock reading in nanoseconds (same origin as `monotonic`); use for measuring sub-millisecond durations.",
         "sleep" => "Suspends the current fiber (or the program) for the given number of milliseconds.",
         "random" => "A pseudo-random float in `[0, 1)`.",
         "random_int" => "A pseudo-random int in `[0, n)`.",
@@ -2098,6 +2111,7 @@ static BUILTINS: &[Builtin] = &[
     // solo los primitivos internos `__now`/`__monotonic`/`__sleep`/`__random`/`__random_int`. ---
     Builtin { name: "__now",       opcode: OpCode::Now,       check: |a| { nullary(a, "__now")?; Ok(Type::Int) } },
     Builtin { name: "__monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "__monotonic")?; Ok(Type::Int) } },
+    Builtin { name: "__monotonic_nanos", opcode: OpCode::MonotonicNanos, check: |a| { nullary(a, "__monotonic_nanos")?; Ok(Type::Int) } },
     Builtin { name: "__random",  opcode: OpCode::Random,    check: |a| { nullary(a, "__random")?; Ok(Type::Float) } },
     Builtin { name: "__sleep", opcode: OpCode::Sleep, check: |a| {
         arity(a, 1, "__sleep", "")?;

@@ -2582,6 +2582,7 @@ impl<'a> Vm<'a> {
                 // --- Reloj y aleatoriedad (M15.1b): delegan en los helpers compartidos. ---
                 OpCode::Now => self.push(HeapValue::Int(crate::builtins::now_millis())),
                 OpCode::Monotonic => self.push(HeapValue::Int(crate::builtins::monotonic_millis())),
+                OpCode::MonotonicNanos => self.push(HeapValue::Int(crate::builtins::monotonic_nanos())),
                 OpCode::Sleep => match self.pop() {
                     HeapValue::Int(ms) => {
                         // M57.2: dormir es COOPERATIVO — la fibra se aparca con un deadline sin fd

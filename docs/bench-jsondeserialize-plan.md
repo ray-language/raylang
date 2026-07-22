@@ -126,3 +126,34 @@ fn main() {
 
 Total del arco jsondeserialize: **VM 3.1× más rápida** (998→321) y **nativo
 2.7×** (224→84) — todo medido con binarios reales y salida byte-idéntica.
+
+## 7. Adenda (22 jul): ¿heredan estas mejoras `std/json` y `std/regex`?
+
+Medido (VM pre-D1 vs actual con D1+D3, misma máquina; micros: parse de un array
+de 20k objetos ×5, y regex `find_all` sobre ~300 KB de log sintético):
+
+| librería | VM antes | VM ahora | delta | nativo (actual) |
+|---|---|---|---|---|
+| `std/json` (parse) | 5.37 s | 5.10 s | **−5 %** | **263 ms (19× vs VM)** |
+| `std/regex` (find_all) | 3.62 s | 2.64 s | **−27 %** | **169 ms (15.6× vs VM)** |
+
+- **`std/json` casi no hereda** — y es lo esperado: su parser ya esquiva por
+  diseño los builtins mejorados (cursor sobre `[char]` materializado una vez,
+  M59.5, justo porque `s[i]`/`substring` eran O(n); StringBuilder para strings).
+  D3 tampoco le aplica (usa `match`, no `unwrap_or`). Su coste en la VM es el
+  **bucle interpretado por-carácter** (~51 µs/registro): cada carácter son
+  varios opcodes+marcos. Eso no lo mueve ningún builtin — es territorio del
+  despacho (P2.a JIT), o de un tokenizador JSON nativo si algún día el parse en
+  la VM importara de verdad. La respuesta práctica hoy es el modelo del
+  proyecto: **dev = VM, deploy = nativo** (263 ms).
+- **`std/regex` hereda −27 %**, y por una razón concreta: `find_all`/`find_str`
+  extraen cada coincidencia con `substring` sobre el texto COMPLETO — pre-D1
+  eso materializaba el `Vec<char>` de los ~300 KB **por coincidencia** (8k
+  coincidencias × 300 KB de chars). Con el fast-path ASCII es un corte de bytes.
+  El resto de su coste es la simulación Pike-VM por carácter: mismo diagnóstico
+  y misma respuesta (nativo: 169 ms).
+
+Conclusión: las D1–D3 benefician sobre todo al **código de usuario** que parsea
+con `index_of`/`substring`/`parse_int` (el estilo del bench) y a la extracción
+de resultados de `std/regex`; los motores por-carácter de las librerías están
+limitados por el despacho de la VM, y su vía rápida es el binario nativo.

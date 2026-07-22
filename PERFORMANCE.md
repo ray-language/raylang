@@ -625,6 +625,22 @@ Go" del bench — AYUDA a la VM pero CUESTA ~9 ms al nativo (el `to_string` inli
 gratis en el `format!` del concat; materializado son 2 allocs/iteración). Optimizarlo (emitir el
 `let` de un `to_string` como `String` y coste 1 alloc, o CoW al concat) queda anotado para N4.
 
+#### Fase 56 — N3+V1: `join` sin recopia en AMBOS backends (22 jul, bench políglota)
+
+El pico de memoria de jsonserialize lo dominaba el `join` en los dos motores, cada uno con su
+desperdicio: el **nativo** (`__ray_join`) hacía `Vec<&str>` + `join` a `String` + **recopia entera**
+a `Rc<str>` (el resultado vivía DOBLE en el pico); la **VM** (opcode `Join`) clonaba **cada elemento**
+a un `Vec<String>` intermedio con el arreglo aún vivo. Fix: (a) nativo — construir el `Rc<str>` UNA
+vez (`Rc::<[u8]>::new_uninit_slice(total)` + copiar los trozos + cast `Rc<[u8]>`→`Rc<str>`; unsafe
+acotado y comentado: mismo layout, UTF-8 por construcción, `total` del mismo borrow); (b) VM — sumar
+longitudes → `String::with_capacity(exacto)` → `push_str` de los `&str` directo del heap. **Medido**
+(jsonserialize con interpolación): pico nativo **75.5 → 51.4 MB (−32 %**, Go: 47.0) y tiempo −3 %;
+pico VM **88 → 76 MB (−14 %)**. Salida byte-idéntica; 615 lib + 51 native + **corpus nativo entero**
+verdes. Colateral medido (pregunta del usuario sobre la Fase 0 del bench): la **interpolación** es la
+mejor forma del fuente en AMBOS motores (VM 135.3 ms vs 136.8 concat-inline vs 142.9 `let s`; nativo
+35.2/35.5/42.1) — se desazucara a la misma cadena de `Add` y el transpilador la aplana en un
+`format!` con los `to_string` inlineados gratis.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

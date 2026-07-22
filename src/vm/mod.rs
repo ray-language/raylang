@@ -1794,11 +1794,25 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Obj(h), HeapValue::Str(sep)) = (arr, sep) else {
                         unreachable!("the checker guarantees [string], string");
                     };
-                    let parts: Vec<String> = self.as_array(h).iter().map(|v| match v {
-                        HeapValue::Str(s) => s.clone(),
-                        _ => unreachable!("the checker guarantees [string]"),
-                    }).collect();
-                    self.push(HeapValue::Str(parts.join(sep.as_str())));
+                    // V1 (bench políglota): unir SIN clonar cada elemento. Antes: `Vec<String>` intermedio
+                    // (un clon por elemento, con el arreglo aún vivo → en jsonserialize ~27 MB de pico
+                    // transitorio) + `join`. Ahora: suma de longitudes → un `String` preasignado exacto →
+                    // escribir los `&str` directo del heap. Mismo resultado, N clones menos y −14% de pico
+                    // medido en jsonserialize (88→76 MB).
+                    let out = {
+                        let elems = self.as_array(h);
+                        let total: usize = elems.iter().map(|v| match v {
+                            HeapValue::Str(s) => s.len(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        }).sum::<usize>() + sep.len() * elems.len().saturating_sub(1);
+                        let mut out = String::with_capacity(total);
+                        for (i, v) in elems.iter().enumerate() {
+                            if i > 0 { out.push_str(sep.as_str()); }
+                            if let HeapValue::Str(s) = v { out.push_str(s); }
+                        }
+                        out
+                    };
+                    self.push(HeapValue::Str(out));
                 }
 
                 // --- Más arreglos (M11.7b) ---

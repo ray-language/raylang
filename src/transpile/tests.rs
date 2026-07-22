@@ -113,9 +113,11 @@ fn transpiles_string_concat_and_clone() {
         "fn greet(name: string) -> string { \"hi \" + name }\n\
          fn main() -> int { let g = greet(\"bob\"); print(g); g.len() }",
     );
-    // string → Rc<str>; concat via format!; el `g` heap se clona al leer.
+    // string → Rc<str>; concat vía write! sobre String preasignado (N4); el `g` heap se clona al leer.
     assert!(rust.contains("fn greet(mut name: Rc<str>) -> Rc<str>"), "{}", rust);
-    assert!(rust.contains("Rc::<str>::from(format!"), "{}", rust);
+    assert!(rust.contains("String::with_capacity("), "{}", rust);
+    assert!(rust.contains("write!(__rt_s, "), "{}", rust);
+    assert!(rust.contains("Rc::<str>::from(__rt_s)"), "{}", rust);
     assert!(rust.contains("g.clone()"), "{}", rust);
 }
 

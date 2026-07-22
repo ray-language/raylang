@@ -678,6 +678,22 @@ binario con el cambio, mismo perfil de build — la lección de la Fase 57):
   cuesta más que los reallocs amortizados). Queda anotado en el propio opcode `Split` para no
   reabrirla sin re-medir.
 
+#### Fase 59 — N4: concat nativo pre-dimensionado (22 jul, bench políglota)
+
+`emit_concat` emitía `Rc::<str>::from(format!("…"))`: el `format!` construye el `String` creciendo
+por duplicación (reallocs) porque no conoce la longitud final. Ahora emite un bloque que (1) **iza
+cada operando no-literal a un temp** `__rt_c<i>` — una sola evaluación, mismo orden
+izquierda→derecha que la cadena de `+` —, (2) suma la **capacidad**: bytes exactos de los
+literales + `.len()` de los temps string + cota fija para los primitivos inlineados (int 20,
+float 24, bool 5, char 4; sobrar unos bytes es solo memoria transitoria, el `Rc` final copia lo
+exacto), y (3) escribe con `write!` sobre `String::with_capacity(total)` → cero reallocs.
+**Medido** (A/B estricto, baseline de main vs N4, `--release`): logparse **32.2 → 28.8 ms
+(−10.6 %)**, jsonserialize **35.8 → 33.8 ms (−5.6 %)**, wordcount **53.7 → 52.2 ms (−2.8 %)** —
+los tres nativos quedan a **~1.1× de Go** (arrancaron el 21 jul en 2.03×/2.11×/1.45×). Bonus:
+recupera parte del coste de materializar `let s = to_string(i)` (el hallazgo de la Fase 55).
+Colateral: arreglado un flake real de la suite — dos tests compartían el dir temporal
+`ray_cli_build_native_fast` y en paralelo se borraban mutuamente.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

@@ -118,11 +118,10 @@ es exactamente lo que emitiría el transpilador.
 5. **N3 — `__ray_join` sin recopia** ✅ **HECHA** (22 jul, junto a V1; PERFORMANCE.md
    Fase 56): `Rc<str>` construido una vez. Medido: pico nativo jsonserialize
    **75.5 → 51.4 MB (−32 %**, Go: 47.0), tiempo −3 %.
-6. **N4 — concat pre-dimensionado**: en `emit_concat`, sustituir `format!` por un
-   `String::with_capacity(estimación)` + `write!`/`push_str` (los operandos son
-   conocidos; los `to_string` inlineados escriben con `itoa`-style al mismo
-   buffer). Elimina los reallocs del `format!`; queda 1 alloc + la copia a
-   `Rc<str>` (esperado: unos ms en jsonserialize).
+6. **N4 — concat pre-dimensionado** ✅ **HECHA** (22 jul; PERFORMANCE.md Fase 59:
+   temps + `String::with_capacity(exacta/cota)` + `write!`). Medido (A/B
+   estricto): logparse **−10.6 %**, jsonserialize **−5.6 %**, wordcount −2.8 %.
+   Los tres nativos a ~1.1× de Go.
 7. (Menor) **N5 — `Vec::with_capacity` en `__ray_split`** por conteo previo de
    separadores, y evaluar `-C panic=abort` NO (el modelo de errores depende de
    unwind — descartado salvo rediseño).

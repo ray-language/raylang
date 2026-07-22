@@ -1313,17 +1313,26 @@ impl Transpiler {
         Ok(())
     }
 
-    /// Emite una concatenación aplanada como UN solo `format!` → un `Rc<str>` (2 allocs en vez de ~2N).
-    /// Un literal de string se incrusta en la plantilla; `to_string(x)` se inlinea como `{}` sobre `x`
-    /// (sin Rc intermedio); el resto va como `{}` con el operando emitido.
+    /// Emite una concatenación aplanada como UN solo `write!` sobre un `String` **preasignado** →
+    /// un `Rc<str>` (N4: antes `format!`, que crece por duplicación → reallocs). Un literal de
+    /// string se incrusta en la plantilla; `to_string(x)` se inlinea como `{}` sobre `x` (sin Rc
+    /// intermedio); el resto va como `{}` con el operando emitido. Cada operando no-literal se iza
+    /// a un TEMP (`__rt_c<i>`) — una sola evaluación, mismo orden izquierda→derecha que la cadena
+    /// de `+` — y la capacidad se suma de: bytes exactos de los literales, `.len()` de los temps
+    /// string, y una cota fija para los primitivos inlineados (int 20, float 24, bool 5, char 4;
+    /// sobrar unos bytes solo cuesta memoria transitoria, el `Rc` final copia lo exacto).
     pub(super) fn emit_concat(&mut self, out: &mut String, operands: &[&Expr]) -> Result<(), String> {
         let mut fmt = String::new();
         let mut args: Vec<&Expr> = Vec::new();
+        let mut lit_len = 0usize;
         for op in operands {
             match &op.kind {
                 // texto literal: escapado completo para un literal de plantilla `format!` de Rust
                 // (`{`/`}` se duplican; `"`, `\`, saltos de línea… se escapan como en un string de Rust).
-                ExprKind::Str(s) => push_fmt_literal(&mut fmt, s),
+                ExprKind::Str(s) => {
+                    lit_len += s.len();
+                    push_fmt_literal(&mut fmt, s);
+                }
                 // to_string(x) / x.to_string(): si `x` es un PRIMITIVO Display (int/float/bool/char/string)
                 // se inlina como `{}` sobre `x` (sin Rc intermedio). Si no (bytes/struct/enum/array — no
                 // son Display en Rust), se emite el `to_string(x)` entero → `Rc<str>` (que sí es Display).
@@ -1343,14 +1352,29 @@ impl Transpiler {
                 }
             }
         }
-        out.push_str("Rc::<str>::from(format!(\"");
+        out.push_str("{ ");
+        let mut caps: Vec<String> = vec![lit_len.to_string()];
+        for (i, a) in args.iter().enumerate() {
+            out.push_str(&format!("let __rt_c{i} = "));
+            self.emit_expr(out, a)?;
+            out.push_str("; ");
+            caps.push(match self.type_of(a)? {
+                Type::Int | Type::UInt(_) => "20".to_string(),
+                Type::Float => "24".to_string(),
+                Type::Bool => "5".to_string(),
+                Type::Char => "4".to_string(),
+                // string (incl. el to_string(x) no-primitivo, de tipo string): longitud exacta.
+                _ => format!("__rt_c{i}.len()"),
+            });
+        }
+        out.push_str(&format!("let mut __rt_s = String::with_capacity({}); ", caps.join(" + ")));
+        out.push_str("{ use std::fmt::Write as _; let _ = write!(__rt_s, \"");
         out.push_str(&fmt);
         out.push('"');
-        for a in args {
-            out.push_str(", ");
-            self.emit_expr(out, a)?;
+        for i in 0..args.len() {
+            out.push_str(&format!(", __rt_c{i}"));
         }
-        out.push_str("))");
+        out.push_str("); } Rc::<str>::from(__rt_s) }");
         Ok(())
     }
 

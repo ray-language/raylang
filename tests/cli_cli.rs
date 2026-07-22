@@ -1339,7 +1339,9 @@ fn build_native_defaults_to_mimalloc_and_without_recovers_the_fast_path() {
         eprintln!("saltando build_native fast-path: rustc no disponible");
         return;
     }
-    let base = tmp("build_native_fast");
+    // Dir propio: `build_native_fast` lo usa el test de `--fast` (aritmética envolvente) — compartirlo
+    // hacía que en la corrida paralela cada tmp() borrara el dir del otro (flakes intermitentes).
+    let base = tmp("build_native_default_mimalloc");
     std::fs::write(base.join("prog.ray"), "fn main() -> int { print(\"hola\"); 0 }\n").unwrap();
     let bin = base.join("prog_bin");
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);

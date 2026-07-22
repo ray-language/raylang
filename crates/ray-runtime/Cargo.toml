@@ -24,6 +24,11 @@ tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 # SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
 # del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
 sqlite = ["dep:rusqlite"]
+# N1 (bench políglota, jul 2026): mimalloc como allocador del binario TRANSPILADO. El binario `ray` ya lo
+# usa (P0.4); el transpilado caía al malloc del sistema (lento en churn de strings pequeños en macOS).
+# Medido: wordcount/logparse −40%, jsonserialize −18%. Activada POR DEFECTO por `ray build --native`;
+# escape: `--without mimalloc` (vuelve al malloc del sistema y, sin otros subsistemas, al rustc pelado).
+mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 # M43 — ring 0.17: primitivas de tiempo constante y auditadas. Misma versión que la que usaba el binario
@@ -36,3 +41,5 @@ webpki-roots = { version = "0.26", optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
 # M53.3 — rusqlite 0.32 con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# N1 — mimalloc 0.1: misma versión/crate que usa el binario `ray` (src/lib.rs) → mismo allocador en ambos.
+mimalloc = { version = "0.1", optional = true }

@@ -1254,9 +1254,10 @@ fn build_native_without_crypto_forces_the_fast_path_and_stubs() {
     )
     .unwrap();
     let bin = base.join("prog_bin");
+    // N1: `mimalloc` va por defecto; para forzar la vía rápida rustc se excluye TAMBIÉN mimalloc.
     let (out, err, code) =
-        ray(&base, &["build", "prog.ray", "--native", "--without", "crypto", "-o", bin.to_str().unwrap()]);
-    assert_eq!(code, 0, "build --native --without crypto ok\n{err}");
+        ray(&base, &["build", "prog.ray", "--native", "--without", "crypto,mimalloc", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --without crypto,mimalloc ok\n{err}");
     assert!(!out.contains("ray-runtime"), "vía rápida rustc, sin ray-runtime: {out}");
     // El binario compila pero panica al alcanzar la cripto stubbeada (código de salida != 0).
     let run = Command::new(&bin).output().expect("corre el binario stubbeado");
@@ -1280,7 +1281,8 @@ fn build_native_reads_the_stable_exclusion_from_ray_toml() {
     let base = tmp("build_native_toml_policy");
     std::fs::write(
         base.join("ray.toml"),
-        "[package]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[native]\nwithout = [\"crypto\"]\n",
+        // N1: se excluye también mimalloc (por-defecto) para que la política deje el build en la vía rustc.
+        "[package]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[native]\nwithout = [\"crypto\", \"mimalloc\"]\n",
     )
     .unwrap();
     std::fs::write(
@@ -1328,10 +1330,11 @@ fn build_native_without_rejects_a_ray_toml_typo_naming_the_source() {
 }
 
 #[test]
-fn build_native_without_external_crate_uses_the_fast_rustc_path() {
-    // El otro lado de la bifurcación: un programa SIN subsistemas-con-crate compila por `rustc` pelado
-    // (camino rápido, sin Cargo) → el mensaje de éxito NO menciona ray-runtime. Cero regresión de
-    // velocidad/red para el caso común (el 90 % de programas).
+fn build_native_defaults_to_mimalloc_and_without_recovers_the_fast_path() {
+    // N1 (bench políglota): el binario nativo enlaza mimalloc POR DEFECTO (medido: wordcount/logparse
+    // −40%, jsonserialize −18% vs el malloc del sistema) → el build por defecto va por el camino Cargo y
+    // reporta `[ray-runtime: mimalloc]`. `--without mimalloc` es el escape: recupera el `rustc` pelado
+    // (sin Cargo/red) para builds herméticos. Ambos binarios corren idéntico.
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando build_native fast-path: rustc no disponible");
         return;
@@ -1340,10 +1343,18 @@ fn build_native_without_external_crate_uses_the_fast_rustc_path() {
     std::fs::write(base.join("prog.ray"), "fn main() -> int { print(\"hola\"); 0 }\n").unwrap();
     let bin = base.join("prog_bin");
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
-    assert_eq!(code, 0, "build --native fast-path ok\n{err}");
-    assert!(!out.contains("ray-runtime"), "camino rápido rustc, sin ray-runtime: {out}");
+    assert_eq!(code, 0, "build --native por defecto ok\n{err}");
+    assert!(out.contains("[ray-runtime: mimalloc]"), "el default enlaza mimalloc vía Cargo: {out}");
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     assert_eq!(String::from_utf8_lossy(&native.stdout), "hola\n", "corre como la VM");
+    // Escape hatch: sin mimalloc → vía rápida rustc, sin ray-runtime, misma salida.
+    let bin2 = base.join("prog_bin2");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--without", "mimalloc", "-o", bin2.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --without mimalloc ok\n{err}");
+    assert!(!out.contains("ray-runtime"), "camino rápido rustc, sin ray-runtime: {out}");
+    let native2 = Command::new(&bin2).output().expect("corre el binario sin mimalloc");
+    assert_eq!(String::from_utf8_lossy(&native2.stdout), "hola\n", "misma salida sin mimalloc");
 }
 
 #[test]

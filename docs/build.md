@@ -134,9 +134,19 @@ compilan una vez por máquina. Ahí también se persiste el **`Cargo.lock` resue
 versiones de deps (reproducibilidad por máquina; entre máquinas puede variar dentro de
 los rangos declarados).
 
-**Exclusión.** `--without crypto,tls,sqlite` fuerza el *stub* que panica (→ vía rápida
-`rustc`); `[native] without = [...]` en el `ray.toml` fija la política estable del
-proyecto (la CLI se une a ella). Para builds herméticos/cross-compile/policy.
+**mimalloc por defecto (N1, jul 2026).** El binario transpilado enlaza **mimalloc** como
+`#[global_allocator]` (feature `mimalloc` de `ray-runtime`, mismo crate/versión que usa el
+binario `ray` desde P0.4). Sin él, el binario caía al malloc del sistema — lento en churn
+de strings pequeños (macOS). Medido (bench políglota, `docs/bench-poliglota-optimizacion.md`):
+wordcount/logparse **−40 %**, jsonserialize **−18 %**. Consecuencia: el build nativo por
+defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compila una vez por
+máquina); `--without mimalloc` recupera el `rustc` pelado (sin Cargo/red).
+
+**Exclusión.** `--without crypto,tls,sqlite,mimalloc` — para los subsistemas de uso
+(crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc` vuelve al malloc del sistema
+(→ con todo excluido, vía rápida `rustc`); `[native] without = [...]` en el `ray.toml` fija
+la política estable del proyecto (la CLI se une a ella). Para builds herméticos/
+cross-compile/policy.
 
 > El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
 > `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`

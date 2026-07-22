@@ -34,6 +34,12 @@ mimalloc = ["dep:mimalloc"]
 # Medido: wordcount −8.5% adicional sobre mimalloc. Como `mimalloc`, no se detecta por uso: POR DEFECTO,
 # escape `--without ahash`. La resistencia a hash-flooding se conserva (RandomState con RNG de runtime).
 ahash = ["dep:ahash"]
+# R5 (bench regex, jul 2026): motor de regex ACELERADO del binario transpilado (crate `regex`,
+# la liga de Rust: ~27 ms donde la Pike VM transpilada tarda ~580 ms). Detectada POR USO (import
+# std/regex ejecutado), como crypto/tls/sqlite. `--without regex` NO stubbea: el fallback es la
+# Pike VM de std/regex transpilada tal cual (la implementación real). El parseo/validación del
+# patrón y sus errores siguen siendo los de std/regex (paridad byte-idéntica con la VM).
+regex = ["dep:regex"]
 
 [dependencies]
 # M43 — ring 0.17: primitivas de tiempo constante y auditadas. Misma versión que la que usaba el binario
@@ -50,3 +56,5 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 mimalloc = { version = "0.1", optional = true }
 # N2 — ahash 0.8: misma versión que usa el binario `ray` (P0.1, `MapStore` de la VM) → mismo hasher en ambos.
 ahash = { version = "0.8", optional = true }
+# R5 — regex 1.x: el motor de producción de Rust (NFA/DFA híbrido, literal optimizations).
+regex = { version = "1", optional = true }

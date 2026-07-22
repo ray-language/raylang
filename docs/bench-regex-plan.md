@@ -64,11 +64,20 @@ queda en el perfil es el bucle central de la Pike VM (match de instrucción +
 `add_thread` + los `Save` inherentes al patrón): territorio del despacho de la
 VM (P2.a) o de R5. Para regex en caliente, la respuesta de la VM sigue siendo
 **deploy = nativo**.
-- **R5 (decisión de producto, si algún día hace falta la liga C)**: feature
-  `regex` en `ray-runtime` (el crate `regex` de Rust) como motor acelerado del
-  nativo — precedente ring/rusqlite/mimalloc. Pondría a raylang en los 27 ms de
-  Rust, a cambio de que el motor deje de ser raylang puro en el binario nativo.
-  No proponerlo hasta que un caso real lo pida.
+- **R5 — crate `regex` como motor del NATIVO** ✅ **HECHA** (22 jul; PERFORMANCE.md
+  Fase 63). Diseño que preserva la paridad: el **parseo/validación** del patrón
+  sigue siendo el parser raylang de std/regex (errores byte-idénticos a la VM);
+  el `Prog` retiene el patrón fuente y el transpilador intercepta las 7 funciones
+  internas `run_*` → `ray_runtime::regex` (feature detectada POR USO, como
+  crypto). La ejecución traduce el DIALECTO (clases ASCII fijas `\d\w\s`, escapes
+  literales `\b`→b, `.` que casa `\n`, índices por carácter, y los matches
+  VACÍOS con el bucle exacto de std/regex vía `find_at` — el iterador del crate
+  omite el vacío adyacente y std no). `--without regex` NO stubbea: el fallback
+  es la Pike VM transpilada (la implementación real). **Medido: nativo 570 →
+  70.7 ms — LE GANA A GO (76.1); 2.6× tras el crate de Rust a pelo (27.1)**.
+  Oráculo e2e `build_native_regex_via_ray_runtime_matches_the_vm` (tortura del
+  dialecto VM↔nativo byte a byte + fallback). La VM sigue con la Pike VM
+  (motor raylang puro, R1–R4a).
 
 ## 4. La variante `regex-std.ray` usada (para el set del bench, si se quiere añadir)
 

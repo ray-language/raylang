@@ -142,6 +142,8 @@ wordcount/logparse **−40 %**, jsonserialize **−18 %**. Consecuencia: el buil
 defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compila una vez por
 máquina); `--without mimalloc` recupera el `rustc` pelado (sin Cargo/red).
 
+**Regex acelerado (R5, jul 2026).** Si el programa usa `std/regex`, el nativo enlaza el crate `regex` de Rust vía `ray-runtime` (feature detectada por uso): mismo comportamiento que la Pike VM de la librería (dialecto traducido, validación raylang) a velocidad de Rust — medido 570→71 ms en el bench regex, por delante de Go. `--without regex` recupera la Pike VM transpilada (raylang puro).
+
 **aHash por defecto (N2, jul 2026).** Los `Map` del binario transpilado usan **aHash**
 (feature `ahash` de `ray-runtime`) — el mismo hasher que el `MapStore` de la VM desde P0.1;
 el `HashMap` std con SipHash es lento en claves string. Medido: wordcount **−8.5 %**

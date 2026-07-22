@@ -86,7 +86,7 @@ Usage: ray <subcommand> [options]
   new <name>      create a new project (ray.toml + src/main.ray)
   run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash]]
+  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex]]
   test [file]    run the @test functions [filter]
   add <name>[@req]  add a dependency from the index to ray.toml and download it
   remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
@@ -678,7 +678,7 @@ fn cmd_build(args: &[String]) {
         }
     }
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash"];
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(
@@ -856,6 +856,7 @@ const RT_LIB_RS: &str = include_str!("../crates/ray-runtime/src/lib.rs");
 const RT_CRYPTO_RS: &str = include_str!("../crates/ray-runtime/src/crypto.rs");
 const RT_TLS_RS: &str = include_str!("../crates/ray-runtime/src/tls.rs");
 const RT_SQLITE_RS: &str = include_str!("../crates/ray-runtime/src/sqlite.rs");
+const RT_REGEX_RS: &str = include_str!("../crates/ray-runtime/src/regex.rs");
 
 /// Camino Cargo: el programa usa un subsistema con crate externo (cripto/…). Se genera un proyecto Cargo
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
@@ -905,6 +906,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/crypto.rs", RT_CRYPTO_RS),
         ("ray-runtime/src/tls.rs", RT_TLS_RS),
         ("ray-runtime/src/sqlite.rs", RT_SQLITE_RS),
+        ("ray-runtime/src/regex.rs", RT_REGEX_RS),
     ];
     for (rel, content) in files {
         if let Err(e) = write(rel, content) {

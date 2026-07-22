@@ -53,6 +53,11 @@ struct Prog {
     classes: [Class],
     nsaves: int,
     ngroups: int,
+    // R5 (perf, 22 jul 2026): el patrón FUENTE. En la VM no se usa (la Pike VM ejecuta insts);
+    // el backend nativo intercepta las funciones `run_*` y ejecuta este patrón —ya VALIDADO por
+    // el parser de arriba— con el crate `regex` de ray-runtime (semántica traducida; ver
+    // docs/bench-regex-plan.md §R5). El parseo/los errores siguen siendo los de esta librería.
+    pat: string,
 }
 
 // El AST del patrón. Recursivo: en raylang los enums son objetos del heap (semántica de referencia),
@@ -517,7 +522,7 @@ fn compile_pattern(pattern: string) -> Result<Prog, string> {
     }
     var insts: [Inst] = [];
     var classes: [Class] = [];
-    let prog = Prog { insts: insts, classes: classes, nsaves: 2 * p.ngroups, ngroups: p.ngroups };
+    let prog = Prog { insts: insts, classes: classes, nsaves: 2 * p.ngroups, ngroups: p.ngroups, pat: pattern };
     // M81: el match entero es el grupo 0 — Save(0) al entrar, Save(1) antes del Match.
     emit(prog, 8, 0, 0, ' ');
     compile_re(re, prog);

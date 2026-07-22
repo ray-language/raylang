@@ -509,14 +509,32 @@ impl Transpiler {
                             Type::String => Type::Char,
                             other => return Err(format!("for over {:?} is not supported", other)),
                         };
-                        write!(out, "for {} in ", var).unwrap();
-                        self.emit_expr(out, expr)?;
-                        out.push_str(if matches!(ety, Type::Char) { ".chars()" } else { ".borrow().clone()" });
-                        out.push(' ');
-                        self.scopes.push(HashMap::new());
-                        self.declare(&var, ety);
-                        self.emit_block(out, body)?;
-                        self.scopes.pop();
+                        if matches!(ety, Type::Char) {
+                            write!(out, "for {} in ", var).unwrap();
+                            self.emit_expr(out, expr)?;
+                            out.push_str(".chars() ");
+                            self.scopes.push(HashMap::new());
+                            self.declare(&var, ety);
+                            self.emit_block(out, body)?;
+                            self.scopes.pop();
+                        } else {
+                            // SN2 (bench sortnums): iterar POR ÍNDICE sobre el arreglo VIVO (longitud
+                            // tomada al entrar), sin clonar el Vec entero (antes: `.borrow().clone()`
+                            // — +8 MB en un arreglo de 1M). Es además la semántica de la VM
+                            // (`emit_counted_loop`: len al entrar, elementos leídos del array vivo).
+                            // El borrow por elemento se suelta antes del cuerpo (que puede mutar);
+                            // el incremento va ANTES del cuerpo → `continue` avanza correctamente.
+                            out.push_str("{ let __rt_it = ");
+                            self.emit_expr(out, expr)?;
+                            out.push_str(".clone(); let __rt_n = __rt_it.borrow().len(); let mut __rt_i = 0usize; while __rt_i < __rt_n { let ");
+                            out.push_str(&var);
+                            out.push_str(" = __rt_it.borrow()[__rt_i].clone(); __rt_i += 1; ");
+                            self.scopes.push(HashMap::new());
+                            self.declare(&var, ety);
+                            self.emit_block(out, body)?;
+                            self.scopes.pop();
+                            out.push_str(" } }");
+                        }
                         out.push('\n');
                     }
                     // `for x in <it>` sobre un Iterator<T> de usuario (M40.2): el checker guarda el método

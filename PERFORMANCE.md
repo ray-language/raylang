@@ -832,6 +832,22 @@ GC O(1)) → acumulado **1.43 → 0.93 s (−35 %)** y la matriz de 3.8 MB a ~1 
 bucle de despacho (P2.a); en el NATIVO el gap con Go son los `borrow()` de RefCell por acceso —
 candidato N6 (izar el préstamo de fila, loop-invariant) documentado para su propia medición.
 
+#### Fase 66 — SN1/SN2: el nativo gastaba MÁS memoria que la VM (22 jul, sortnums)
+
+Caso especial cazado por el usuario: en `sortnums` (ordenar 1M de ints) el binario NATIVO usaba más
+pico que la VM (34.1 vs 28.8 MB; Go 11.1, Rust 17.1). El `--emit-rust` lo delató (análisis:
+`docs/bench-sortnums-plan.md`): (1) **`for v in xs` clonaba el `Vec` ENTERO para iterar** (+8.4 MB
+en 1M; además, divergencia latente con la VM, que itera por índice sobre el arreglo VIVO con la
+longitud tomada al entrar); (2) **`__ray_sort` usa el sort ESTABLE** de Rust (buffer temporal n/2 =
++4.2 MB), donde la VM ordena primitivos con `sort_unstable` desde V5. Fixes: **SN1** — la forma
+fusionada `__sort_prim` (solo primitivos, lo garantiza el checker) → `__ray_sort_unstable`
+(idéntico observable; los tipos de usuario siguen en el estable); **SN2** — `for-in` sobre arreglos
+por ÍNDICE sobre el arreglo vivo (la semántica de la VM), préstamo por elemento soltado antes del
+cuerpo e incremento antes del cuerpo (`continue` correcto). **Medido**: pico nativo **34.1 →
+26.1 MB (−24 %)** y tiempo **23.3 → 20.4 ms (−12 %)**, salida idéntica; el nativo vuelve a quedar
+por debajo de la VM. Resto del gap con Rust (26 vs 17 MB): la semántica de `sort` (arreglo nuevo →
+original+ordenado vivos a la vez) — compartida con la VM, documentada sin acción.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

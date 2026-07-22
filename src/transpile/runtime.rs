@@ -102,6 +102,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
     }
     out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
     out.push_str("    let mut v = a.borrow().clone(); v.sort(); Rc::new(std::cell::RefCell::new(v))\n}\n");
+    // SN1 (bench sortnums): la forma FUSIONADA __sort_prim (solo primitivos: int/string/char, lo
+    // garantiza el checker) ordena INESTABLE — para primitivos es observacionalmente idéntico y evita
+    // el buffer n/2 del sort estable (4 MB en 1M de ints). Los tipos de usuario siguen en __ray_sort.
+    out.push_str("fn __ray_sort_unstable<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
+    out.push_str("    let mut v = a.borrow().clone(); v.sort_unstable(); Rc::new(std::cell::RefCell::new(v))\n}\n");
     // keys()/values() ORDENADAS por clave (determinista, como la VM). values() en el orden de keys().
     out.push_str("fn __ray_keys<K: Ord + Clone, V>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<K>>> {\n");
     out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");

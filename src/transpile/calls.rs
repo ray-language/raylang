@@ -920,13 +920,13 @@ impl Transpiler {
             }
             // substring(s, i, j): corte por CARÁCTER con clamp (nunca falla), como la VM.
             "substring" => {
-                out.push_str("{ let __rt_c: Vec<char> = ");
+                out.push_str("__ray_substring(&");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".chars().collect(); let __rt_n = __rt_c.len() as i64; let __rt_lo = (");
+                out.push_str(", ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(").clamp(0, __rt_n); let __rt_hi = (");
+                out.push_str(", ");
                 self.emit_expr(out, eff[2])?;
-                out.push_str(").clamp(__rt_lo, __rt_n); Rc::<str>::from(__rt_c[__rt_lo as usize..__rt_hi as usize].iter().collect::<String>()) }");
+                out.push(')');
             }
             // to_string(x) → Rc<str>. Vía show_expr (maneja struct→borrow, arreglo→[…], escalar/enum).
             "to_string" => {

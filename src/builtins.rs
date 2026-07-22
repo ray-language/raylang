@@ -428,6 +428,12 @@ pub fn fs_test(t: crate::bytecode::FsTest, path: &str) -> bool {
 /// byte), consistente con `len`/`chars`/`s[i]`. `sub` vacío → `Some(0)`. Helper compartido por ambos
 /// motores (`__index_of`).
 pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
+    // D1 (bench políglota, jsondeserialize): fast-path ASCII — índice de byte == índice de carácter,
+    // y `str::find` va acelerado con memchr; el camino general materializaba DOS `Vec<char>` por
+    // llamada (medido: VM −14% en jsondeserialize). El caso no-ASCII sigue por el camino por carácter.
+    if s.is_ascii() {
+        return s.find(sub);
+    }
     let chars: Vec<char> = s.chars().collect();
     let sub: Vec<char> = sub.chars().collect();
     if sub.is_empty() {
@@ -442,6 +448,14 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
 /// Subcadena `[i, j)` por índice de **carácter**, con *clamp* al rango válido (M11.7a): así nunca
 /// falla en runtime (un `i`/`j` fuera de rango se recorta; `i > j` → `""`). Helper compartido.
 pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
+    // D1 (bench políglota, jsondeserialize): fast-path ASCII — corte por bytes con el mismo clamp
+    // (sin materializar el `Vec<char>` del string entero por llamada).
+    if s.is_ascii() {
+        let n = s.len() as i64;
+        let lo = i.clamp(0, n);
+        let hi = j.clamp(lo, n);
+        return s[lo as usize..hi as usize].to_string();
+    }
     let chars: Vec<char> = s.chars().collect();
     let n = chars.len() as i64;
     let lo = i.clamp(0, n);
@@ -2594,5 +2608,23 @@ mod tests {
         let xs_int = Type::Array(Box::new(Type::Int));
         assert_eq!((push.check)(&[xs_int.clone(), Type::Int]), Ok(Type::Unit));
         assert!(matches!((push.check)(&[xs_int, Type::String]), Err((Some(1), _))));
+    }
+
+    // D1 (jsondeserialize): el fast-path ASCII de index_of/substring debe ser INDISTINGUIBLE del
+    // camino por carácter. Ambos motores comparten estos helpers → el oráculo VM↔intérprete no
+    // cazaría una divergencia aquí; este test fija el contrato por-carácter directamente.
+    #[test]
+    fn index_of_and_substring_ascii_fast_path_matches_char_semantics() {
+        // ASCII: el fast-path (bytes) da los mismos índices que la semántica por carácter.
+        assert_eq!(char_index_of("{\"id\":7,\"name\":\"u\"}", ",\"name\":\""), Some(7));
+        assert_eq!(char_index_of("abc", ""), Some(0));
+        assert_eq!(char_index_of("abc", "zz"), None);
+        assert_eq!(substring_chars("hello world", 6, 11), "world");
+        assert_eq!(substring_chars("abc", -5, 99), "abc"); // clamp
+        assert_eq!(substring_chars("abc", 2, 1), ""); // i > j → vacío
+        // No-ASCII: sigue el camino por carácter — los índices son de CARÁCTER, no de byte.
+        assert_eq!(char_index_of("añô€x", "€x"), Some(3));
+        assert_eq!(substring_chars("añô€x", 1, 4), "ñô€");
+        assert_eq!(char_index_of("añô", "z"), None);
     }
 }

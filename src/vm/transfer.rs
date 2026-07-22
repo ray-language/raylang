@@ -47,6 +47,12 @@ pub(super) fn specialize_array(elems: Vec<HeapValue>) -> Obj {
             HeapValue::Int(i) => *i,
             _ => unreachable!("just checked all Int"),
         }).collect())
+    } else if !elems.is_empty() && elems.iter().all(|e| matches!(e, HeapValue::Float(_))) {
+        // MM3: gemelo de floats.
+        Obj::FloatArray(elems.iter().map(|e| match e {
+            HeapValue::Float(f) => *f,
+            _ => unreachable!("just checked all Float"),
+        }).collect())
     } else {
         Obj::Array(elems)
     }
@@ -69,6 +75,7 @@ pub(super) fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut Ha
         }
         // M98.5: sin handles que remapear → copia directa (y cruza los hilos ya compacto).
         Obj::IntArray(v) => Obj::IntArray(v.clone()),
+        Obj::FloatArray(v) => Obj::FloatArray(v.clone()),
         Obj::Struct(s) => {
             let struct_idx = s.struct_idx;
             let fields = s.fields.clone();

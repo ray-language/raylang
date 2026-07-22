@@ -53,6 +53,12 @@ pub(super) fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
                 va.len() == vb.len()
                     && va.iter().zip(vb).all(|(p, q)| matches!(q, H::Int(n) if n == p))
             }
+            // MM3: FloatArray puro y mixto (mismo criterio que el genérico: `==` de f64, NaN != NaN).
+            (Obj::FloatArray(va), Obj::FloatArray(vb)) => va.len() == vb.len() && va.iter().zip(vb).all(|(p, q)| p == q),
+            (Obj::FloatArray(va), Obj::Array(vb)) | (Obj::Array(vb), Obj::FloatArray(va)) => {
+                va.len() == vb.len()
+                    && va.iter().zip(vb).all(|(p, q)| matches!(q, H::Float(f) if f == p))
+            }
             (Obj::Struct(sa), Obj::Struct(sb)) => {
                 // TA1: mismo índice de def ≡ mismo tipo con los mismos campos (los nombres viven en
                 // la tabla); basta comparar los valores en orden.
@@ -97,6 +103,11 @@ pub(super) fn format_value(heap: &Heap, structs: &[crate::bytecode::CompiledStru
             // M98.5: misma repr que el genérico (la forma de almacenamiento es invisible).
             Obj::IntArray(v) => {
                 let parts: Vec<String> = v.iter().map(|i| i.to_string()).collect();
+                format!("[{}]", parts.join(", "))
+            }
+            // MM3: misma repr que el genérico (delegando en el formato de Float compartido).
+            Obj::FloatArray(v) => {
+                let parts: Vec<String> = v.iter().map(|&f| format_value(heap, structs, enums, &HeapValue::Float(f))).collect();
                 format!("[{}]", parts.join(", "))
             }
             Obj::Struct(s) => {
@@ -153,6 +164,10 @@ pub(super) fn to_value(heap: &Heap, structs: &[crate::bytecode::CompiledStruct],
             // M98.5: al borde se convierte igual que el genérico (invisible para el intérprete).
             Obj::IntArray(xs) => {
                 let v: Vec<Value> = xs.iter().map(|&i| Value::Int(i)).collect();
+                Value::Array(Rc::new(RefCell::new(v)))
+            }
+            Obj::FloatArray(xs) => {
+                let v: Vec<Value> = xs.iter().map(|&f| Value::Float(f)).collect();
                 Value::Array(Rc::new(RefCell::new(v)))
             }
             Obj::Struct(s) => {

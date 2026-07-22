@@ -489,6 +489,29 @@ impl<'a> Vm<'a> {
                         };
                         self.push(r);
                     }
+                    // MM1 (bench matrixmul, 22 jul 2026): fast-path FLOTANTE, gemelo del entero de
+                    // arriba. La aritmética de float caía SIEMPRE a `apply_binary` (doble match +
+                    // ~30 combinaciones): en un bucle numérico de floats son 2+ caídas por iteración.
+                    // Semántica idéntica al camino general (IEEE: div/rem por cero → inf/NaN, sin error).
+                    else if let (HeapValue::Float(a), HeapValue::Float(b)) = (&left, &right) {
+                        let (a, b) = (*a, *b);
+                        let r = match bin {
+                            OpCode::Add => HeapValue::Float(a + b),
+                            OpCode::Sub => HeapValue::Float(a - b),
+                            OpCode::Mul => HeapValue::Float(a * b),
+                            OpCode::Div => HeapValue::Float(a / b),
+                            OpCode::Rem => HeapValue::Float(a % b),
+                            OpCode::Less => HeapValue::Bool(a < b),
+                            OpCode::LessEqual => HeapValue::Bool(a <= b),
+                            OpCode::Greater => HeapValue::Bool(a > b),
+                            OpCode::GreaterEqual => HeapValue::Bool(a >= b),
+                            OpCode::Equal => HeapValue::Bool(a == b),
+                            OpCode::NotEqual => HeapValue::Bool(a != b),
+                            // Bit a bit / shifts no aplican a float (el checker los rechaza).
+                            _ => unreachable!("the checker rejects bitwise operators on float"),
+                        };
+                        self.push(r);
+                    }
                     // M11.7b: `+` sobre dos arreglos (objetos del heap) los concatena en uno nuevo.
                     // El checker garantiza que dos `Obj` con `Add` son arreglos (strings son inline).
                     else if let (OpCode::Add, HeapValue::Obj(l), HeapValue::Obj(r)) = (bin, &left, &right) {
@@ -738,49 +761,27 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::Index => {
                     let i = self.pop_int();
-                    match self.pop() {
-                        HeapValue::Obj(h) => {
-                            // M98.5: camino nativo del IntArray (sin degradar).
-                            if let Obj::IntArray(v) = self.cur.heap.get(h) {
-                                let idx = bounds_check(i, v.len(), pos!().0, pos!().1)?;
-                                let n = v[idx];
-                                self.push(HeapValue::Int(n));
-                            } else {
-                                let idx = {
-                                    let arr = self.as_array(h);
-                                    bounds_check(i, arr.len(), pos!().0, pos!().1)?
-                                };
-                                let v = self.as_array(h)[idx].clone();
-                                self.push(v);
-                            }
-                        }
-                        // M11.4c-2: indexar un string → el carácter en esa posición.
-                        // M90.6 (superset de Opt.16): sin materializar los chars (antes un
-                        // `Vec<char>` COMPLETO por acceso): un string ASCII indexa el byte en
-                        // O(1); uno no-ASCII escanea hasta `i` sin asignar. El conteo total
-                        // solo se paga al errar.
-                        HeapValue::Str(s) => {
-                            let c = if s.is_ascii() {
-                                let idx = bounds_check(i, s.len(), pos!().0, pos!().1)?;
-                                s.as_bytes()[idx] as char
-                            } else {
-                                match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
-                                    Some(c) => c,
-                                    None => {
-                                        bounds_check(i, s.chars().count(), pos!().0, pos!().1)?;
-                                        unreachable!("nth failed ⇒ index out of range")
-                                    }
-                                }
-                            };
-                            self.push(HeapValue::Char(c));
-                        }
-                        // M16.1a: indexar bytes → el octeto como int.
-                        HeapValue::Bytes(b) => {
-                            let idx = bounds_check(i, b.len(), pos!().0, pos!().1)?;
-                            self.push(HeapValue::Int(b[idx] as i64));
-                        }
-                        _ => unreachable!("the checker guarantees an array, string or bytes"),
-                    }
+                    let base = self.pop();
+                    let (l, c) = pos!();
+                    self.do_index(base, i, l, c)?;
+                }
+                // MM2 (ronda 4, bench matrixmul): las formas fusionadas de la indexación. Misma
+                // semántica que Index (comparten `do_index`); solo cambia de dónde salen base/índice.
+                OpCode::IndexLL(s, t) => {
+                    let base = self.get_local(fi, *s);
+                    let HeapValue::Int(i) = self.get_local(fi, *t) else {
+                        unreachable!("the checker guarantees an int index");
+                    };
+                    let (l, c) = pos!();
+                    self.do_index(base, i, l, c)?;
+                }
+                OpCode::IndexLocal(t) => {
+                    let base = self.pop();
+                    let HeapValue::Int(i) = self.get_local(fi, *t) else {
+                        unreachable!("the checker guarantees an int index");
+                    };
+                    let (l, c) = pos!();
+                    self.do_index(base, i, l, c)?;
                 }
                 OpCode::SetIndex => {
                     let v = self.pop();
@@ -791,6 +792,9 @@ impl<'a> Vm<'a> {
                     if let (Obj::IntArray(xs), HeapValue::Int(n)) = (self.cur.heap.get_mut(h), &v) {
                         let idx = bounds_check(i, xs.len(), pos!().0, pos!().1)?;
                         xs[idx] = *n;
+                    } else if let (Obj::FloatArray(xs), HeapValue::Float(f)) = (self.cur.heap.get_mut(h), &v) {
+                        let idx = bounds_check(i, xs.len(), pos!().0, pos!().1)?;
+                        xs[idx] = *f;
                     } else {
                         let idx = bounds_check(i, self.as_array(h).len(), pos!().0, pos!().1)?;
                         self.as_array_mut(h)[idx] = v;
@@ -808,6 +812,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Array(v) => v.len() as i64,
                             Obj::IntArray(v) => v.len() as i64, // M98.5
+                            Obj::FloatArray(v) => v.len() as i64, // MM3
                             Obj::Map(m) => m.len() as i64,
                             _ => unreachable!("the checker guarantees an array or Map"),
                         },
@@ -966,6 +971,11 @@ impl<'a> Vm<'a> {
                         (Obj::IntArray(xs), HeapValue::Int(n)) => xs.push(*n),
                         (Obj::Array(xs), HeapValue::Int(n)) if xs.is_empty() => {
                             *self.cur.heap.get_mut(h) = Obj::IntArray(vec![*n]);
+                        }
+                        // MM3: gemelo de floats (push nativo + promoción del vacío).
+                        (Obj::FloatArray(xs), HeapValue::Float(f)) => xs.push(*f),
+                        (Obj::Array(xs), HeapValue::Float(f)) if xs.is_empty() => {
+                            *self.cur.heap.get_mut(h) = Obj::FloatArray(vec![*f]);
                         }
                         _ => self.as_array_mut(h).push(v),
                     }
@@ -1879,7 +1889,9 @@ impl<'a> Vm<'a> {
                     // Muta el arreglo quitando el último; devuelve [] o [x]. Prelude → Option<T>.
                     let h = self.pop_obj();
                     // M98.5: camino nativo del IntArray.
-                    let popped = if let Obj::IntArray(xs) = self.cur.heap.get_mut(h) {
+                    let popped = if let Obj::FloatArray(xs) = self.cur.heap.get_mut(h) {
+                        xs.pop().map(HeapValue::Float) // MM3
+                    } else if let Obj::IntArray(xs) = self.cur.heap.get_mut(h) {
                         xs.pop().map(HeapValue::Int)
                     } else {
                         self.as_array_mut(h).pop()
@@ -3008,6 +3020,59 @@ impl<'a> Vm<'a> {
             Obj::Array(v) => v,
             _ => unreachable!("the checker guarantees an array"),
         }
+    }
+
+
+    /// MM2: la semántica COMPLETA de la indexación (`Index`/`IndexLL`/`IndexLocal` la comparten):
+    /// arrays (con camino nativo de IntArray), string (char, fast-path ASCII) y bytes, con bounds.
+    fn do_index(&mut self, base: HeapValue, i: i64, line: usize, col: usize) -> Result<(), RuntimeError> {
+        match base {
+            HeapValue::Obj(h) => {
+                // M98.5/MM3: caminos nativos de IntArray/FloatArray (sin degradar).
+                if let Obj::IntArray(v) = self.cur.heap.get(h) {
+                    let idx = bounds_check(i, v.len(), line, col)?;
+                    let n = v[idx];
+                    self.push(HeapValue::Int(n));
+                } else if let Obj::FloatArray(v) = self.cur.heap.get(h) {
+                    let idx = bounds_check(i, v.len(), line, col)?;
+                    let f = v[idx];
+                    self.push(HeapValue::Float(f));
+                } else {
+                    let idx = {
+                        let arr = self.as_array(h);
+                        bounds_check(i, arr.len(), line, col)?
+                    };
+                    let v = self.as_array(h)[idx].clone();
+                    self.push(v);
+                }
+            }
+            // M11.4c-2: indexar un string → el carácter en esa posición.
+            // M90.6 (superset de Opt.16): sin materializar los chars (antes un `Vec<char>` COMPLETO
+            // por acceso): un string ASCII indexa el byte en O(1); uno no-ASCII escanea hasta `i`
+            // sin asignar. El conteo total solo se paga al errar.
+            HeapValue::Str(s) => {
+                let c = if s.is_ascii() {
+                    let idx = bounds_check(i, s.len(), line, col)?;
+                    s.as_bytes()[idx] as char
+                } else {
+                    match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
+                        Some(c) => c,
+                        None => {
+                            bounds_check(i, s.chars().count(), line, col)?;
+                            unreachable!("nth failed ⇒ index out of range")
+                        }
+                    }
+                };
+                self.push(HeapValue::Char(c));
+            }
+            // M16.1a: indexar bytes → el octeto como int.
+            HeapValue::Bytes(b) => {
+                let idx = bounds_check(i, b.len(), line, col)?;
+                self.push(HeapValue::Int(b[idx] as i64));
+            }
+            _ => unreachable!("the checker guarantees an array, string or bytes"),
+        }
+        Ok(())
     }
 
     fn as_struct(&self, h: Handle) -> &VmStruct {

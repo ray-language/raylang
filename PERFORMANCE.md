@@ -815,6 +815,23 @@ deref del Map boxeado + los contadores de la sonda) — asumido. Batería comple
 concurrencia verdes. Pendientes documentados: TA5 (niche de Option: 2 objetos por nodo → 1, cambio
 de repr GRANDE), TA6 (marcos sin alloc por llamada — junto a P2.a), TA7 (payload inline aridad 1).
 
+#### Fase 65 — MM1/MM2/MM3: aritmética flotante, fusión de indexado y FloatArray (22 jul, matrixmul)
+
+El bench `matrixmul` (el único flotante de la suite) puso a la VM en 1.43 s (nativo: 31 ms, 3.2× Go).
+Tres fixes medidos (análisis: `docs/bench-matrixmul-plan.md`): **MM1** — fast-path FLOTANTE en el
+bucle de despacho (la aritmética float caía SIEMPRE a `apply_binary`; gemelo del fast-path entero de
+Opt.4, semántica IEEE intacta) → −7.6 %. **MM2** — fusión de INDEXACIÓN (ronda 4 de
+superinstrucciones): `[GetLocalLocal, Index]` → `IndexLL(s,t)` y `[GetLocal, Index]` →
+`IndexLocal(t)`, con la semántica completa del índice factorizada en `do_index` (compartida por los
+tres opcodes: arrays/IntArray/FloatArray/string/bytes + bounds) → acumulado −31 %; el patrón es
+general y regala wordcount −5 %, sortnums −4.3 %, logparse −2.5 %. **MM3** — **`FloatArray`** (la
+P1.2 diferida del arco P1, que descartó la representación "por tamaño" pero dejó viva la de
+"mecanismo": este bench ES el cómputo que aquella preveía): arreglo homogéneo de floats a
+8 B/elemento, gemelo completo de `IntArray` (specialize/promoción/degradación por el mismo embudo,
+GC O(1)) → acumulado **1.43 → 0.93 s (−35 %)** y la matriz de 3.8 MB a ~1 MB. Restante: ~64 % es el
+bucle de despacho (P2.a); en el NATIVO el gap con Go son los `borrow()` de RefCell por acceso —
+candidato N6 (izar el préstamo de fila, loop-invariant) documentado para su propia medición.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

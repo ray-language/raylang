@@ -1128,7 +1128,9 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            "sort" => {
+            // "sort_prim" = `__sort_prim` (V5): el checker reescribe ahí el `sort` del prelude sobre
+            // primitivos; en nativo ambos caminos ya eran el sort de Rust (`__ray_sort`).
+            "sort" | "sort_prim" => {
                 out.push_str("__ray_sort(&");
                 self.emit_expr(out, eff[0])?;
                 out.push(')');

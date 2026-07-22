@@ -1419,6 +1419,34 @@ impl<'a> Vm<'a> {
                     self.cur.stack.truncate(start);
                     self.push(HeapValue::Str(out));
                 }
+                OpCode::SortPrim => {
+                    // V5 (bench políglota): sort nativo de [int]/[string]/[char]. Devuelve un
+                    // arreglo NUEVO (como el sort del prelude). Empates de primitivos son valores
+                    // idénticos → sort_unstable es observacionalmente igual al merge sort estable.
+                    let HeapValue::Obj(h) = self.pop() else {
+                        unreachable!("the checker guarantees an array");
+                    };
+                    let sorted = match self.cur.heap.get(h) {
+                        Obj::IntArray(v) => {
+                            let mut s = v.clone();
+                            s.sort_unstable();
+                            Obj::IntArray(s)
+                        }
+                        Obj::Array(v) => {
+                            let mut s = v.clone();
+                            s.sort_unstable_by(|a, b| match (a, b) {
+                                (HeapValue::Str(x), HeapValue::Str(y)) => x.cmp(y),
+                                (HeapValue::Int(x), HeapValue::Int(y)) => x.cmp(y),
+                                (HeapValue::Char(x), HeapValue::Char(y)) => x.cmp(y),
+                                _ => unreachable!("the checker guarantees primitive elements"),
+                            });
+                            Obj::Array(s)
+                        }
+                        _ => unreachable!("the checker guarantees an array"),
+                    };
+                    let nh = self.cur.heap.allocate(sorted);
+                    self.push(HeapValue::Obj(nh));
+                }
                 OpCode::Trim => match self.pop() {
                     HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().to_string())),
                     _ => unreachable!("the checker guarantees a string"),

@@ -694,6 +694,37 @@ recupera parte del coste de materializar `let s = to_string(i)` (el hallazgo de 
 Colateral: arreglado un flake real de la suite — dos tests compartían el dir temporal
 `ray_cli_build_native_fast` y en paralelo se borraban mutuamente.
 
+#### Fase 60 — V5+V6 aplicadas, V7 descartada — CIERRE del arco bench políglota (22 jul)
+
+Los tres puntos restantes del plan, resueltos por medición ("solo si vale la pena se aplica"):
+
+- **V5 ✅ — sort nativo para `[int]`/`[string]`/`[char]`**: el `sort<T: Ord>` del prelude paga 2
+  clones de String por comparación vía `Index` — micro de 100k strings: **630 ms**. Bajada
+  `lower_sort_prim`: tras `lower_dict_calls`, un `sort(a, <prim>#less)` se reescribe a
+  `__sort_prim(a)` (opcode `SortPrim`, sort de Rust) **solo si** el `fn sort` Y el `impl Ord` del
+  primitivo son los del prelude (`PreludeOrigin`, calculado en la inyección — un override del
+  usuario, p. ej. orden inverso, sigue por el camino genérico; oráculo `sort_prim_lowering_oracle`
+  lo fija). `float` excluido (`<` con NaN no es orden total). **Medido: 630 → 27.9 ms (23×)**;
+  bonus wordcount −3.6 % (sus 1000 claves). En nativo ambos caminos ya eran `__ray_sort`.
+- **V6 ✅ — GC consciente de BYTES**: el umbral por Nº de objetos es ciego a los buffers — micro
+  patológico (split grande por iteración, ~3 MB vivos): **536 MB de pico**. Ahora cada `Slot`
+  lleva su estimación de bytes (`obj_bytes`: Vec del contenedor + capacidades de String/Bytes),
+  `allocate` suma, `sweep` recomputa de los supervivientes (corrige la deriva por push/insert
+  entre GCs) y `should_collect` también dispara por `live_bytes >= next_gc_bytes` (doblado por
+  vivos, suelo 16 MiB → los programas pequeños JAMÁS disparan por bytes: coste cero). **Medido:
+  pico 536 → 40.5 MB (−92 %) y −6 % de tiempo en la patología** (el baseline pagaba 36 ms de
+  sistema tocando 536 MB); benchmarks del servicio sin regresión.
+- **V7 ❌ — constantes string sin clon por push — DESCARTADA**: techo ~4–5 % (perfil:
+  `const_to_heap` + su parte de `String::clone`), y TODA implementación exige cambiar la
+  representación (`Rc<str>`/CoW/interning) — medida y rechazada tres veces (Opt.3, P1.4, y el
+  interning en P0.4). No se reabre sin nueva evidencia.
+
+Colateral (flake real de la batería): el `ray_check` del MCP escribía el snippet a pelo en el
+temp_dir compartido → la regeneración de templates escaneaba desde ahí y un `.ray.html` ROTO
+residual de otro test (templ_cli los deja a propósito) abortaba el check. El MCP ahora usa un
+subdirectorio propio por proceso; templ_cli además limpia su dir. **El arco bench políglota queda
+CERRADO** (N1–N4 + V1–V7, cada punto aplicado o descartado con números).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

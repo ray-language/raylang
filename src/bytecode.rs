@@ -213,6 +213,11 @@ pub enum OpCode {
     /// primitivo interno `__concat(a, b, …)`, que genera el checker (`lower_concat`) aplanando las
     /// cadenas de `+`/interpolación de strings.
     ConcatN(usize),
+    /// V5 (bench políglota): ordena un arreglo de PRIMITIVOS (int/string/char) con el sort de Rust
+    /// y empuja un arreglo NUEVO (como el `sort` del prelude, que no muta). Lo emite el compilador
+    /// para `__sort_prim(a)`, que genera el checker (`lower_sort_prim`) cuando el `sort` genérico
+    /// resuelve con el `impl Ord` de un primitivo del prelude (sin overrides del usuario).
+    SortPrim,
     /// Saca un string; empuja el mismo sin espacio en blanco en los extremos. Builtin `trim`.
     Trim,
     /// Saca el separador y el string; empuja un arreglo de strings con los trozos. Builtin

@@ -1026,6 +1026,22 @@ impl<'a> Interpreter<'a> {
                 crate::host_print(&values[0].to_string());
                 Value::Unit
             }
+            // V5 (bench políglota): sort nativo de [int]/[string]/[char] (el checker reescribe el
+            // `sort` del prelude cuando resuelve con el Ord primitivo del prelude). Arreglo NUEVO,
+            // misma semántica que el merge sort del prelude → oráculo intacto.
+            "__sort_prim" => match &values[0] {
+                Value::Array(rc) => {
+                    let mut s = rc.borrow().clone();
+                    s.sort_unstable_by(|a, b| match (a, b) {
+                        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+                        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+                        (Value::Char(x), Value::Char(y)) => x.cmp(y),
+                        _ => unreachable!("the checker guarantees primitive elements"),
+                    });
+                    Value::Array(std::rc::Rc::new(std::cell::RefCell::new(s)))
+                }
+                _ => unreachable!("the checker guarantees an array"),
+            },
             // V2 (bench políglota): concatenación n-aria de strings (el checker aplana las cadenas
             // de `+`/interpolación a `__concat`). Un solo String con la capacidad exacta; misma
             // semántica que la cadena de `Add` par a par → oráculo intacto.

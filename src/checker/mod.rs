@@ -166,7 +166,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     check_builtin_redefinition(program)?;
     // Pasos 0–1: inyectar el prelude, generar derivaciones, bajar los métodos de impl y
     // resolver la construcción de enums (compartido con `semantic_index`).
-    prepare_program(program)?;
+    let prelude_origin = prepare_program(program)?;
     // Pasos 2–3: pre-pasada y verificación.
     let mut checker = Checker::new();
     checker.check_program(program)?;
@@ -205,6 +205,12 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // p. ej. `[T]#push`) se reescribe a la llamada al builtin directamente, recuperando el
     // opcode directo en la VM (y ahorrando el marco en el intérprete). Semántica idéntica.
     inline_forwarders(program);
+    // Paso 8b (V5, bench políglota): `sort(a, <prim>#less)` — el sort genérico del prelude con el
+    // diccionario de un `impl Ord` primitivo del prelude (ambas condiciones en `prelude_origin`) —
+    // se reescribe a `__sort_prim(a)`: sort nativo de Rust en la VM/intérprete (el del prelude paga
+    // 2 clones de String por comparación vía Index). float queda FUERA (su `<` con NaN no forma
+    // orden total → replicar el merge sort del prelude exigiría el mismo algoritmo).
+    lower_sort_prim(program, &prelude_origin);
     // Paso 9 (V2, bench políglota): aplanar las cadenas de `+` de strings (incl. interpolación) a
     // `__concat(a, b, …)` → opcode `ConcatN` (un String con capacidad exacta, sin intermedios).
     // La ÚLTIMA bajada: el `Call` sintético comparte (línea, col) con el `Add` raíz y no debe
@@ -236,7 +242,19 @@ pub fn semantic_index(program: &mut Program) -> SemanticIndex {
 /// Pasos 0–1 del front-end, compartidos por `check` y `semantic_index`: inyección del prelude,
 /// derivaciones de `@derive`, bajada de los métodos de impl a funciones mangladas y resolución
 /// de la construcción de enums. Muta `program`.
-fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
+/// V5 (bench políglota): qué piezas relevantes para el `sort` nativo vienen del PRELUDE (no
+/// redefinidas por el usuario). `lower_sort_prim` solo reescribe `sort(a, <prim>#less)` →
+/// `__sort_prim(a)` si el `fn sort` Y el `impl Ord` del primitivo son los del prelude — un
+/// override del usuario (p. ej. un orden inverso) debe seguir por el camino genérico.
+#[derive(Default)]
+pub(super) struct PreludeOrigin {
+    /// ¿El `fn sort` en el programa es el del prelude?
+    pub(super) sort_fn: bool,
+    /// Primitivos cuyo `impl Ord` es el del prelude (claves `int`/`string`/`char`).
+    pub(super) ord_prims: HashSet<String>,
+}
+
+fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
     // Paso 0: inyectar el prelude (Option/Result) si no está ya. Sus enums se
     // anteponen, así forman parte del AST que también ven el intérprete y la VM.
     if !program.enums.iter().any(|e| e.name == "Option" || e.name == "Result") {
@@ -261,6 +279,9 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
     // idempotente si se vuelve a verificar—. Como los enums, quedan en el AST que
     // también compilan/ejecutan el intérprete y la VM.
     let defined: HashSet<String> = program.functions.iter().map(|f| f.name.clone()).collect();
+    // V5: si el usuario definió su propio `sort`, el del prelude no se inyecta → el sort nativo
+    // no aplica (el suyo puede tener OTRA semántica).
+    let mut origin = PreludeOrigin { sort_fn: !defined.contains("sort"), ..Default::default() };
     let mut prelude_fns: Vec<Function> = crate::prelude::functions()
         .into_iter()
         .filter(|f| !defined.contains(&f.name))
@@ -290,6 +311,17 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
         .into_iter()
         .filter(|i| !impls_existentes.contains(&(i.trait_name.clone(), type_key_of(&i.target))))
         .collect();
+    // V5: los `impl Ord` de primitivos que quedan siendo los del prelude (un impl del usuario para
+    // el mismo (Ord, tipo) lo desplaza — p. ej. un orden inverso — y el sort nativo no aplica).
+    for i in &prelude_impls {
+        if i.trait_name == "Ord" {
+            if let Some(k) = type_key_of(&i.target) {
+                if matches!(k.as_str(), "int" | "string" | "char") {
+                    origin.ord_prims.insert(k);
+                }
+            }
+        }
+    }
     program.impls.extend(prelude_impls);
     // Paso 0b3 (M10.1, L2): generar los `impl` de `@derive(Eq)` / `@derive(Show)` sobre
     // struct/enum. Genera el AST de un `impl Trait for T { ... }` y lo añade a `program.impls`;
@@ -408,7 +440,7 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
     for f in &mut program.functions {
         resolve_block(&mut f.body, &enum_names);
     }
-    Ok(())
+    Ok(origin)
 }
 
 /// Índice semántico del programa (M10.2b): lo que el LSP necesita para hover e

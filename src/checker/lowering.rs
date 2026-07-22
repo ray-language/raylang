@@ -1052,3 +1052,138 @@ fn collect_concat(e: Expr, sites: &std::collections::HashSet<(usize, usize)>, ou
         kind => out.push(Expr { kind, line: e.line, col: e.col }),
     }
 }
+
+// =====================================================================
+// V5 (bench políglota) — sort nativo para arreglos de primitivos
+// =====================================================================
+//
+// Tras `lower_dict_calls`, una llamada al `sort<T: Ord>` del prelude lleva su diccionario como
+// segundo argumento: `sort(a, string#less)`. Si tanto el `fn sort` como el `impl Ord` del
+// primitivo son los del PRELUDE (no hay override del usuario — `PreludeOrigin`), la semántica es
+// exactamente "orden ascendente estándar" y la llamada se reescribe a `__sort_prim(a)`: un builtin
+// que ordena con el sort de Rust (el del prelude paga 2 clones de String por comparación vía
+// `Index`, ~40× más lento sobre [string]). `float` queda fuera: su `<` con NaN no forma orden
+// total y el resultado podría divergir del merge sort del prelude.
+
+pub(super) fn lower_sort_prim(program: &mut Program, origin: &PreludeOrigin) {
+    if !origin.sort_fn || origin.ord_prims.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_sort_block(&mut f.body, origin);
+    }
+}
+
+fn sortable_dict(d: &str, origin: &PreludeOrigin) -> bool {
+    matches!(d, "int#less" | "string#less" | "char#less")
+        && origin.ord_prims.contains(d.split('#').next().unwrap_or(""))
+}
+
+fn lower_sort_block(block: &mut Block, origin: &PreludeOrigin) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_sort_expr(value, origin),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_sort_expr(start, origin); lower_sort_expr(end, origin); }
+                    ForIter::In(e) => lower_sort_expr(e, origin),
+                    ForIter::Iter { expr, .. } => lower_sort_expr(expr, origin),
+                }
+                lower_sort_block(body, origin);
+            }
+            StmtKind::Assign { target, value } => {
+                lower_sort_expr(target, origin);
+                lower_sort_expr(value, origin);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_sort_expr(v, origin);
+                }
+            }
+            StmtKind::Expr(e) => lower_sort_expr(e, origin),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_sort_expr(t, origin);
+    }
+}
+
+fn lower_sort_expr(expr: &mut Expr, origin: &PreludeOrigin) {
+    if let ExprKind::Call { callee, args } = &mut expr.kind {
+        if let ExprKind::Ident(n) = &callee.kind {
+            if n == "sort" && args.len() == 2 {
+                if let ExprKind::Ident(d) = &args[1].kind {
+                    if sortable_dict(d, origin) {
+                        callee.kind = ExprKind::Ident("__sort_prim".to_string());
+                        args.truncate(1);
+                    }
+                }
+            }
+        }
+    }
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => {
+            lower_sort_expr(inner, origin)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            lower_sort_expr(left, origin);
+            lower_sort_expr(right, origin);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_sort_expr(callee, origin);
+            for a in args {
+                lower_sort_expr(a, origin);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            for e in elems {
+                lower_sort_expr(e, origin);
+            }
+        }
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                lower_sort_expr(k, origin);
+                lower_sort_expr(v, origin);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            lower_sort_expr(array, origin);
+            lower_sort_expr(index, origin);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_sort_expr(e, origin);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_sort_expr(a, origin);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_sort_expr(object, origin),
+        ExprKind::Func(f) => lower_sort_block(&mut f.body, origin),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_sort_expr(scrutinee, origin);
+            for arm in arms {
+                if let Some(g) = &mut arm.guard {
+                    lower_sort_expr(g, origin);
+                }
+                lower_sort_expr(&mut arm.body, origin);
+            }
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_sort_expr(cond, origin);
+            lower_sort_block(then_branch, origin);
+            if let Some(e) = else_branch {
+                lower_sort_expr(e, origin);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            lower_sort_expr(cond, origin);
+            lower_sort_block(body, origin);
+        }
+        ExprKind::Block(b) => lower_sort_block(b, origin),
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
+    }
+}

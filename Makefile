@@ -16,7 +16,7 @@ LABEL ?= medición
 .PHONY: help build run run-interp repl test test-one test-slow clippy ci \
         release slim pgo pgo-slim playground playground-serve \
         bench bench-gate bench-record bench-vs-interp \
-        book book-serve vscode install clean
+        book book-serve vscode install clean clean-cache
 
 help: ## Lista los targets disponibles
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUso: make <target> [VAR=valor]\n\n"} \
@@ -110,6 +110,11 @@ install: ## Enlaza target/release/{ray,raylang} en ~/.local/bin (compila release
 	ln -sf $(CURDIR)/target/release/raylang $(HOME)/.local/bin/raylang
 	@echo "enlazados: ~/.local/bin/{ray,raylang} → target/release"
 
-clean: ## Limpia los artefactos de cargo (target/ y target/pgo-gen/)
+clean: ## Limpia TODO target/ (⚠ rompe el symlink de `make install` y el binario PGO; suele bastar clean-cache)
 	cargo clean
 	rm -rf target/pgo-gen
+
+clean-cache: ## Libera los cachés de build (debug + builds especiales, ~25G) CONSERVANDO target/release (el ray instalado/PGO)
+	rm -rf target/debug target/pgo-gen target/wasm32-unknown-unknown target/profiling \
+	       target/pgo target/slim target/slim3 target/plain-check target/pgo-use
+	@du -sh target 2>/dev/null | awk '{print "target/ ahora ocupa " $$1}'

@@ -746,6 +746,25 @@ fusiona). **Total jsondeserialize** desde la foto del bench: VM 998 → 321 ms (
 6.7× de Go), nativo 224 → 84 ms (2.7×; a ~1.7× de Go). Plan/crónica del caso:
 `docs/bench-jsondeserialize-plan.md`.
 
+#### Fase 62 — R1/R2/R4a: la Pike VM de std/regex, 3.2–3.4× (22 jul, bench regex)
+
+La comparación del bench políglota `regex` con el motor REAL (`import std/regex`, patrón compilado
+una vez) daba VM 55.9 s / nativo 1.95 s (Go `regexp`: 77 ms; todos los demás lenguajes bindean
+motores C/JIT — `std/regex` es el único escrito EN el lenguaje del bench). El perfil del nativo
+nombró los hotspots DE LA LIBRERÍA y se atacaron ahí (raylang puro, cero cambios de motor):
+**R1** — el set `seen` por GENERACIONES (un `[int]` por ejecución + contador) en vez de re-alocar
+y re-llenar un `[bool]` con pushes POR POSICIÓN del texto (el nº 1 del perfil, ~7.4 M allocs);
+**R2** — `is_anchored(prog)` (cadena Save/Jmp→AssertStart sin Splits) apaga la siembra de un hilo
+por posición bajo `^` (moría en la aserción, pero pagaba `new_saves`+`add_thread` cada vez);
+**R4a** — `copy_saves` por la concatenación nativa (`s + []`, un opcode que clona en Rust) en vez
+del bucle de push. **R3** (saves copy-on-write) ya estaba implementada. **R4b** (reusar las listas
+de hilos vía struct con longitud manual) EVALUADA y DESCARTADA por medición: nativo −9 % pero
+**VM +17 %** — el GetField por nombre por hilo cuesta más que las 2 allocs/posición que ahorra
+(reevaluar si P1.3/`GetFieldIdx` aterriza). **Medido** (checksum idéntico en cada paso): VM
+**55.9 → 17.6 s (3.2×)**, nativo **1.95 s → 580 ms (3.4×; de 25× a 7.5× de Go)**. Análisis y
+comparación completa: `docs/bench-regex-plan.md`; R5 (crate `regex` como feature de ray-runtime,
+la liga de los 27 ms de Rust) queda dormida hasta demanda real.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

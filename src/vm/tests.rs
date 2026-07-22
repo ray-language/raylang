@@ -396,7 +396,7 @@ fn oracle_stress(src: &str) {
     let mut vm = Vm::new(&compiled);
     vm.cur.heap.stress = true;
     let result = vm.run().expect("vm ok");
-    let vm_result = to_value(&vm.cur.heap, &compiled.enums, &result);
+    let vm_result = to_value(&vm.cur.heap, &compiled.structs, &compiled.enums, &result);
     assert_eq!(interp, vm_result, "VM (estrés) y intérprete difieren en:\n{}", src);
 }
 
@@ -566,12 +566,12 @@ fn transfer_value_between_heaps() {
     // (1) Estructural: [1, P{x:2}, "hi"] → estructuralmente igual, con handles del destino.
     {
         let mut a = Heap::new();
-        let p = a.allocate(Obj::Struct(VmStruct { name: "P".into(), fields: vec![("x".into(), HeapValue::Int(2))] }));
+        let p = a.allocate(Obj::Struct(VmStruct { struct_idx: 0, fields: vec![HeapValue::Int(2)] }));
         let top = a.allocate(Obj::Array(vec![HeapValue::Int(1), HeapValue::Obj(p), HeapValue::Str("hi".into())]));
         let mut b = Heap::new();
         let mut remap = HashMap::new();
         let tv = transfer_value(&a, &mut b, &HeapValue::Obj(top), &mut remap);
-        assert_eq!(to_value(&b, &[], &tv), to_value(&a, &[], &HeapValue::Obj(top)), "estructuralmente iguales");
+        assert_eq!(to_value(&b, &[crate::bytecode::CompiledStruct { name: "P".into(), fields: vec!["x".into()] }], &[], &tv), to_value(&a, &[crate::bytecode::CompiledStruct { name: "P".into(), fields: vec!["x".into()] }], &[], &HeapValue::Obj(top)), "estructuralmente iguales");
         assert_eq!(b.live(), 2, "se copiaron 2 objetos (array + struct)");
     }
     // (2) Sharing: [sub, sub] con el MISMO handle → tras transferir, ambos apuntan al mismo destino.

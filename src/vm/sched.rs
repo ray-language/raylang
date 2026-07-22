@@ -22,6 +22,11 @@ pub(super) struct Fiber {
     /// M12.3: pila de scopes activos en esta fibra (structured concurrency); las tareas que lance
     /// mientras un scope esté activo quedan adscritas al más interno.
     pub(super) scopes: Vec<ScopeFrame>,
+    /// TA4 (bench treealloc, 22 jul 2026): handle CANÓNICO por variante de enum SIN payload
+    /// (`Option.None`, etc.). Un enum es inmutable y sin identidad observable → todas las
+    /// construcciones de la misma variante vacía comparten un solo objeto del heap (antes:
+    /// una asignación POR construcción — en binary-trees, 2 `None` por hoja). Raíz del GC.
+    pub(super) unit_enums: crate::gc::MapStore2,
 }
 
 /// Un scope activo (M12.3): la lista de tareas lanzadas mientras estuvo en la cima de la pila de la
@@ -257,6 +262,7 @@ impl<'a> Vm<'a> {
             }
         }
         let res = self.run_loop();
+        self.cur.heap.dump_probe(); // RAY_HEAP_STATS=1: picos exactos del heap de este worker
         // Si nos detuvimos porque otro worker ya fijó el outcome (`stop`), no lo pisamos.
         if !self.stop {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");

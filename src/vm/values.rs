@@ -54,9 +54,11 @@ pub(super) fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
                     && va.iter().zip(vb).all(|(p, q)| matches!(q, H::Int(n) if n == p))
             }
             (Obj::Struct(sa), Obj::Struct(sb)) => {
-                sa.name == sb.name
+                // TA1: mismo índice de def ≡ mismo tipo con los mismos campos (los nombres viven en
+                // la tabla); basta comparar los valores en orden.
+                sa.struct_idx == sb.struct_idx
                     && sa.fields.len() == sb.fields.len()
-                    && sa.fields.iter().zip(&sb.fields).all(|((n1, v1), (n2, v2))| n1 == n2 && values_equal(heap, v1, v2))
+                    && sa.fields.iter().zip(&sb.fields).all(|(v1, v2)| values_equal(heap, v1, v2))
             }
             // Closures: identidad (mismo handle).
             (Obj::Closure(_), Obj::Closure(_)) => x == y,
@@ -75,7 +77,7 @@ pub(super) fn enum_names<'a>(enums: &'a [CompiledEnum], enum_id: usize, tag: usi
 
 /// Formatea un valor de la VM como texto (siguiendo handles en el heap). Debe
 /// coincidir con el `Display` del `Value` del intérprete, para que `print` sea igual.
-pub(super) fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
+pub(super) fn format_value(heap: &Heap, structs: &[crate::bytecode::CompiledStruct], enums: &[CompiledEnum], v: &HeapValue) -> String {
     match v {
         HeapValue::Int(n) => n.to_string(),
         HeapValue::Float(x) => x.to_string(),
@@ -89,7 +91,7 @@ pub(super) fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -
         HeapValue::Function(_) => "<fn>".to_string(),
         HeapValue::Obj(h) => match heap.get(*h) {
             Obj::Array(elems) => {
-                let parts: Vec<String> = elems.iter().map(|e| format_value(heap, enums, e)).collect();
+                let parts: Vec<String> = elems.iter().map(|e| format_value(heap, structs, enums, e)).collect();
                 format!("[{}]", parts.join(", "))
             }
             // M98.5: misma repr que el genérico (la forma de almacenamiento es invisible).
@@ -98,15 +100,17 @@ pub(super) fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -
                 format!("[{}]", parts.join(", "))
             }
             Obj::Struct(s) => {
-                let parts: Vec<String> = s.fields.iter().map(|(n, v)| format!("{}: {}", n, format_value(heap, enums, v))).collect();
-                format!("{} {{ {} }}", s.name, parts.join(", "))
+                let def = &structs[s.struct_idx];
+                let parts: Vec<String> = def.fields.iter().zip(&s.fields)
+                    .map(|(n, v)| format!("{}: {}", n, format_value(heap, structs, enums, v))).collect();
+                format!("{} {{ {} }}", def.name, parts.join(", "))
             }
             Obj::Enum(e) => {
-                let (ename, vname) = enum_names(enums, e.enum_id, e.tag);
+                let (ename, vname) = enum_names(enums, e.enum_id as usize, e.tag as usize);
                 if e.payload.is_empty() {
                     format!("{}.{}", ename, vname)
                 } else {
-                    let parts: Vec<String> = e.payload.iter().map(|v| format_value(heap, enums, v)).collect();
+                    let parts: Vec<String> = e.payload.iter().map(|v| format_value(heap, structs, enums, v)).collect();
                     format!("{}.{}({})", ename, vname, parts.join(", "))
                 }
             }
@@ -115,7 +119,7 @@ pub(super) fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -
             // M13.1: el print de un Map está diferido; se ordena por clave (determinista).
             Obj::Map(m) => {
                 let mut parts: Vec<String> = m.iter()
-                    .map(|(k, v)| format!("{}: {}", k.to_value(), format_value(heap, enums, v)))
+                    .map(|(k, v)| format!("{}: {}", k.to_value(), format_value(heap, structs, enums, v)))
                     .collect();
                 parts.sort();
                 format!("Map{{{}}}", parts.join(", "))
@@ -129,7 +133,7 @@ pub(super) fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -
 
 /// Convierte un valor de la VM al `Value` del intérprete (para el resultado final y
 /// el oráculo). Los compuestos se reconstruyen siguiendo el heap.
-pub(super) fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
+pub(super) fn to_value(heap: &Heap, structs: &[crate::bytecode::CompiledStruct], enums: &[CompiledEnum], v: &HeapValue) -> Value {
     match v {
         HeapValue::Int(n) => Value::Int(*n),
         HeapValue::Float(x) => Value::Float(*x),
@@ -143,7 +147,7 @@ pub(super) fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Va
         HeapValue::Function(i) => Value::Function(*i),
         HeapValue::Obj(h) => match heap.get(*h) {
             Obj::Array(elems) => {
-                let v: Vec<Value> = elems.iter().map(|e| to_value(heap, enums, e)).collect();
+                let v: Vec<Value> = elems.iter().map(|e| to_value(heap, structs, enums, e)).collect();
                 Value::Array(Rc::new(RefCell::new(v)))
             }
             // M98.5: al borde se convierte igual que el genérico (invisible para el intérprete).
@@ -152,12 +156,14 @@ pub(super) fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Va
                 Value::Array(Rc::new(RefCell::new(v)))
             }
             Obj::Struct(s) => {
-                let fields: Vec<(String, Value)> = s.fields.iter().map(|(n, v)| (n.clone(), to_value(heap, enums, v))).collect();
-                Value::Struct(Rc::new(RefCell::new(StructInstance { name: s.name.clone(), fields })))
+                let def = &structs[s.struct_idx];
+                let fields: Vec<(String, Value)> = def.fields.iter().zip(&s.fields)
+                    .map(|(n, v)| (n.clone(), to_value(heap, structs, enums, v))).collect();
+                Value::Struct(Rc::new(RefCell::new(StructInstance { name: def.name.clone(), fields })))
             }
             Obj::Enum(e) => {
-                let (ename, vname) = enum_names(enums, e.enum_id, e.tag);
-                let payload: Vec<Value> = e.payload.iter().map(|v| to_value(heap, enums, v)).collect();
+                let (ename, vname) = enum_names(enums, e.enum_id as usize, e.tag as usize);
+                let payload: Vec<Value> = e.payload.iter().map(|v| to_value(heap, structs, enums, v)).collect();
                 Value::Enum(Rc::new(EnumInstance {
                     enum_name: ename.to_string(),
                     variant: vname.to_string(),
@@ -167,12 +173,12 @@ pub(super) fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Va
             // Una closure como resultado: la representamos como función (su identidad
             // no se observa; se imprime <fn>).
             Obj::Closure(c) => Value::Function(c.index),
-            Obj::Cell(inner) => to_value(heap, enums, inner),
+            Obj::Cell(inner) => to_value(heap, structs, enums, inner),
             // M13.1: reconstruye el Map del intérprete (igual igualdad estructural → oráculo).
             Obj::Map(m) => {
                 let mut hm = crate::runtime::MapStore::with_capacity_and_hasher(m.len(), Default::default());
-                for (k, val) in m {
-                    hm.insert(k.clone(), to_value(heap, enums, val));
+                for (k, val) in m.iter() {
+                    hm.insert(k.clone(), to_value(heap, structs, enums, val));
                 }
                 Value::Map(Rc::new(RefCell::new(hm)))
             }

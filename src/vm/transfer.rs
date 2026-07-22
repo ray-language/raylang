@@ -70,11 +70,11 @@ pub(super) fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut Ha
         // M98.5: sin handles que remapear → copia directa (y cruza los hilos ya compacto).
         Obj::IntArray(v) => Obj::IntArray(v.clone()),
         Obj::Struct(s) => {
-            let name = s.name.clone();
+            let struct_idx = s.struct_idx;
             let fields = s.fields.clone();
             Obj::Struct(VmStruct {
-                name,
-                fields: fields.iter().map(|(n, e)| (n.clone(), transfer_value(src, dst, e, remap))).collect(),
+                struct_idx,
+                fields: fields.iter().map(|e| transfer_value(src, dst, e, remap)).collect(),
             })
         }
         Obj::Enum(e) => {
@@ -105,7 +105,7 @@ pub(super) fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut Ha
                 let nv = transfer_value(src, dst, &val, remap);
                 nm.insert(k, nv); // las claves son primitivos (sin handles)
             }
-            Obj::Map(nm)
+            Obj::Map(Box::new(nm))
         }
     };
     *dst.get_mut(nh) = new_obj;

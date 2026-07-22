@@ -81,6 +81,7 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
     // index_of(s, sub) -> Option<int>: índice por CARÁCTER de la primera aparición de sub (como la VM;
     // sub vacío → Some(0)). Rust `str::find` da índice de BYTE, así que se compara por char.
     out.push_str("fn __ray_index_of(s: &str, sub: &str) -> Option<i64> {\n");
+    out.push_str("    if s.is_ascii() { return s.find(sub).map(|i| i as i64); }\n");
     out.push_str("    let chars: Vec<char> = s.chars().collect(); let sub: Vec<char> = sub.chars().collect();\n");
     out.push_str("    if sub.is_empty() { return Some(0); }\n");
     out.push_str("    if sub.len() > chars.len() { return None; }\n");
@@ -89,6 +90,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
     // el `MapStore` de la VM (P0.1) — SipHash es lento en claves string; con `--without ahash`, el
     // HashMap std puro. Todo el código generado construye con `__RayMap::default()`/`from_iter` (valen
     // para ambos hashers); los registros internos (sockets/TLS, clave i64) siguen en HashMap std.
+    out.push_str("fn __ray_substring(s: &str, i: i64, j: i64) -> Rc<str> {\n");
+    out.push_str("    if s.is_ascii() { let n = s.len() as i64; let lo = i.clamp(0, n); let hi = j.clamp(lo, n); return Rc::from(&s[lo as usize..hi as usize]); }\n");
+    out.push_str("    let c: Vec<char> = s.chars().collect(); let n = c.len() as i64;\n");
+    out.push_str("    let lo = i.clamp(0, n); let hi = j.clamp(lo, n);\n");
+    out.push_str("    Rc::from(c[lo as usize..hi as usize].iter().collect::<String>())\n}\n");
     if ahash {
         out.push_str("type __RayMap<K, V> = std::collections::HashMap<K, V, ray_runtime::RandomState>;\n");
     } else {

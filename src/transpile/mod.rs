@@ -101,6 +101,8 @@ struct Transpiler {
     /// conexión (`ray_runtime::sqlite::Conn`) en el registro de handles inline (variante `Sqlite`). I/O
     /// local → se retiene el lock global (como la VM). Activa la feature `sqlite` de `ray-runtime`.
     needs_rt_sqlite: bool,
+    /// R5: el programa ejecuta std/regex → feature `regex` de ray-runtime (motor acelerado).
+    pub(super) needs_rt_regex: bool,
     /// Subsistemas con-crate EXCLUIDOS por `--without` (crypto/tls/sqlite): sus builtins no se interceptan
     /// (caen en stub que panica) → el binario puede usar la vía rápida `rustc`. Ver `transpile_with`.
     exclude: std::collections::HashSet<String>,
@@ -215,6 +217,7 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         needs_rt_crypto: false,
         needs_rt_tls: false,
         needs_rt_sqlite: false,
+        needs_rt_regex: false,
         exclude: exclude.iter().cloned().collect(),
         cells: std::collections::HashSet::new(),
     };
@@ -442,6 +445,11 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     }
     if t.needs_rt_sqlite {
         rt_features.push("sqlite");
+    }
+    // R5: motor de regex acelerado (detectado por USO de std/regex, como crypto/tls/sqlite;
+    // `--without regex` ya evitó marcar el flag y la Pike VM raylang se transpila tal cual).
+    if t.needs_rt_regex {
+        rt_features.push("regex");
     }
     // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
     // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,

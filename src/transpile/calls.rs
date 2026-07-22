@@ -709,6 +709,63 @@ impl Transpiler {
         if let Some(mfn) = name.strip_prefix("std::math::") {
             return self.emit_math(out, mfn, &eff);
         }
+        // R5 (bench regex): las funciones INTERNAS `run_*` de std/regex (reciben el `Prog`, que
+        // retiene el patrón FUENTE ya validado por el parser raylang) se ejecutan con el crate
+        // `regex` de ray-runtime — la validación y sus errores siguen siendo los de std/regex
+        // (paridad byte-idéntica con la VM). `--without regex` desactiva la interceptación y la
+        // Pike VM raylang se transpila tal cual: el fallback es la implementación real, sin stubs.
+        if let Some(rfn) = name.strip_prefix("std::regex::run_") {
+            if !self.exclude.contains("regex")
+                && matches!(rfn, "full" | "search" | "find" | "find_all" | "replace_all" | "captures" | "captures_str")
+            {
+                self.needs_rt_regex = true;
+                out.push_str("{ let __rx_p = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rx_b = __rx_p.borrow(); ");
+                match rfn {
+                    "full" => {
+                        out.push_str("ray_runtime::regex::full_match(&*__rx_b.pat, &");
+                        self.emit_expr(out, eff[1])?;
+                        out.push(')');
+                    }
+                    "search" => {
+                        out.push_str("ray_runtime::regex::search(&*__rx_b.pat, &");
+                        self.emit_expr(out, eff[1])?;
+                        out.push(')');
+                    }
+                    "find" => {
+                        out.push_str("ray_runtime::regex::find(&*__rx_b.pat, &");
+                        self.emit_expr(out, eff[1])?;
+                        out.push(')');
+                    }
+                    "find_all" => {
+                        out.push_str("Rc::new(std::cell::RefCell::new(ray_runtime::regex::find_all(&*__rx_b.pat, &");
+                        self.emit_expr(out, eff[1])?;
+                        out.push_str(").into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()))");
+                    }
+                    "replace_all" => {
+                        out.push_str("Rc::<str>::from(ray_runtime::regex::replace_all(&*__rx_b.pat, &");
+                        self.emit_expr(out, eff[1])?;
+                        out.push_str(", &");
+                        self.emit_expr(out, eff[2])?;
+                        out.push_str("))");
+                    }
+                    "captures" => {
+                        out.push_str("ray_runtime::regex::captures(&*__rx_b.pat, &");
+                        self.emit_expr(out, eff[1])?;
+                        out.push_str(").map(|__rx_v| Rc::new(std::cell::RefCell::new(__rx_v)))");
+                    }
+                    "captures_str" => {
+                        out.push_str("ray_runtime::regex::captures_str(&*__rx_b.pat, &");
+                        self.emit_expr(out, eff[1])?;
+                        out.push_str(").map(|__rx_v| Rc::new(std::cell::RefCell::new(__rx_v.into_iter().map(|__rx_o| __rx_o.map(Rc::<str>::from)).collect::<Vec<Option<Rc<str>>>>())))");
+                    }
+                    _ => unreachable!("guarded by the matches! above"),
+                }
+                out.push_str(" }");
+                return Ok(());
+            }
+        }
         // `std::fs::*` (módulo std/fs) → I/O de archivos con `std::fs`/`std::io` de Rust (Ok/Err como la VM).
         if let Some(ffn) = name.strip_prefix("std::fs::") {
             return self.emit_fs(out, ffn, &eff);

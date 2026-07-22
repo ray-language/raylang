@@ -765,6 +765,27 @@ de hilos vía struct con longitud manual) EVALUADA y DESCARTADA por medición: n
 comparación completa: `docs/bench-regex-plan.md`; R5 (crate `regex` como feature de ray-runtime,
 la liga de los 27 ms de Rust) queda dormida hasta demanda real.
 
+#### Fase 63 — R5: el crate `regex` como motor de std/regex en el NATIVO (22 jul, bench regex)
+
+Sexta feature de `ray-runtime` (`regex`, detectada POR USO como crypto/tls/sqlite). El diseño
+preserva las dos garantías del proyecto: (1) **paridad de errores** — el parseo/validación del
+patrón sigue siendo el parser raylang de std/regex (transpilado): al crate solo llegan patrones YA
+validados, y `compile()`/los panics de las funciones libres dan los mensajes de siempre; el `Prog`
+gana el campo `pat` (el fuente) y el transpilador intercepta las 7 funciones internas `run_*` →
+`ray_runtime::regex::*`. (2) **paridad de comportamiento** — la ejecución traduce el DIALECTO de
+std/regex al del crate: `\d\w\s` son sus clases ASCII fijas (no las Unicode del crate), cualquier
+otro `\X` es el carácter literal (`\b` es la letra b), `.` casa también `\n`
+(`dot_matches_new_line`), los índices se convierten a CARÁCTER (fast-path ASCII), `replace_all` es
+literal (sin `$1`), y los matches VACÍOS siguen el bucle exacto de std/regex vía `find_at` (el
+`find_iter` del crate omite el vacío adyacente al match anterior; std no — la tortura lo cazó:
+`a*` sobre "baa" es `["", "aa", ""]`). Caché de compilación por hilo. `--without regex` NO
+stubbea: el fallback es la Pike VM raylang transpilada tal cual — la implementación real.
+**Medido** (bench regex 200k líneas): nativo **570 → 70.7 ms — POR DELANTE de Go** (`regexp`:
+76.1) y a 2.6× del crate de Rust a pelo (27.1); la cadena completa del arco regex: VM 55.9 s →
+17.6 s (Pike VM optimizada) y nativo 1.95 s → 70.7 ms (**27×**). Oráculo e2e nuevo
+(`build_native_regex_via_ray_runtime_matches_the_vm`): tortura del dialecto byte a byte VM↔nativo
++ fallback. La VM conserva la Pike VM (el motor escrito en raylang, showcase intacto).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

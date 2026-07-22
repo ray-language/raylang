@@ -2991,3 +2991,68 @@ fn heap_cap_aborts_a_gluttonous_program() {
     assert_eq!(code, 70, "un program glotón con tope de heap abort (EX_SOFTWARE)\n{err}");
     assert!(err.contains("heap cap"), "el error menciona el tope de heap\n{err}");
 }
+
+#[test]
+fn build_native_regex_via_ray_runtime_matches_the_vm() {
+    // R5 (bench regex): el nativo ejecuta std/regex con el crate `regex` de ray-runtime (feature
+    // detectada por USO), traduciendo el dialecto (clases ASCII fijas, escapes literales, `.` que
+    // casa '\n', índices por carácter, matches vacíos estilo std). La VM sigue con la Pike VM
+    // raylang → este test es el ORÁCULO entre ambos motores sobre un programa de tortura del
+    // dialecto. También cubre el escape `--without regex` (fallback = Pike VM transpilada).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native regex: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_regex");
+    std::fs::write(
+        base.join("prog.ray"),
+        r#"import std/regex;
+
+fn main() {
+    print(regex.find_all("a*", "baa").join("|"));
+    print(regex.replace_all("x*", "ab", "-"));
+    print(regex.replace_all("a+", "banana", "[$0]"));
+    print(regex.find_str("h.la", "linea1\nh\nla fin").unwrap_or("no"));
+    print(regex.find_str("[\\d]+", "abc 123 def").unwrap_or("no"));
+    print(regex.find_str("\\bcd", "abcd").unwrap_or("no"));
+    print(regex.find_str("añ.€", "x añô€ y").unwrap_or("no"));
+    match (regex.find("ñ+", "añññb")) {
+        Option.Some(par) => { print(par.0); print(par.1); },
+        Option.None => { print(0 - 1); },
+    }
+    print(regex.find_all("[0-9]+?", "a123b45").join("|"));
+    var vacio: [Option<string>] = [];
+    let caps = regex.captures_str("(\\w+)@(\\w+)", "mail: ana@example fin").unwrap_or(vacio);
+    var i = 0;
+    while (i < caps.len()) { print(caps[i].unwrap_or("<none>")); i = i + 1; }
+    print(regex.full_match("us.r\\d+", "user42"));
+    print(regex.full_match("us.r\\d+", "user42x"));
+    print(regex.search("^ab|cd$", "zzcd"));
+    print(regex.replace_all("[aeiou]", "murciélago", "_"));
+    let rx = regex.compile("(\\d+)-(\\d+)").unwrap();
+    print(rx.find_all("1-2 33-44 5").join(","));
+}
+"#,
+    )
+    .unwrap();
+    let vm = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm.2, 0, "la VM corre el programa de tortura\n{}", vm.1);
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native con std/regex ok\n{err}");
+    assert!(out.contains("regex"), "el nativo enlaza la feature regex de ray-runtime: {out}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        vm.0,
+        "regex nativo (crate) ≡ VM (Pike VM), byte a byte"
+    );
+    // Escape: --without regex → sin ray-runtime/regex, la Pike VM transpilada da lo MISMO.
+    let bin2 = base.join("prog_bin2");
+    let (out, err, code) =
+        ray(&base, &["build", "prog.ray", "--native", "--without", "regex", "-o", bin2.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --without regex ok\n{err}");
+    assert!(!out.contains("ray-runtime: regex"), "sin la feature regex: {out}");
+    let native2 = Command::new(&bin2).output().expect("corre el binario fallback");
+    assert_eq!(String::from_utf8_lossy(&native2.stdout), vm.0, "fallback Pike VM ≡ VM");
+}

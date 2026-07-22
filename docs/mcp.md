@@ -57,3 +57,15 @@ que el modelo necesita. `isError: true` queda para fallos del envoltorio (timeou
 core, cero dependencias (el JSON es el del LSP, `lsp::json`). Tests: unitarios en memoria
 (`serve` es genérico sobre los flujos) + `tests/mcp_cli.rs` (el servidor real por stdio,
 las cinco tools de punta a punta, incluida la bomba de bucle cortada por fuel).
+
+## Tras actualizar `ray`
+
+El servidor MCP es un proceso de larga vida: **Claude Code lo arranca al abrir la sesión y
+no lo reemplaza aunque reinstales el binario**. Tras un `make install` (o cualquier upgrade),
+reinicia la sesión de Claude Code (o reconecta el servidor con `/mcp`) para que las
+correcciones del lado MCP apliquen — un servidor viejo puede exhibir bugs ya corregidos
+(p. ej. el del escaneo de templates en el /tmp compartido, arreglado en jul 2026).
+
+`ray_doc` acepta, además de builtins y funciones del prelude, las funciones públicas de los
+módulos `std/*` embebidos: `ray_doc("json.parse")`, `ray_doc("regex.find_all")` — o el nombre
+a secas, que se busca en todos los módulos.

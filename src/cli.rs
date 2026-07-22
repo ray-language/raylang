@@ -1768,6 +1768,16 @@ fn regen_stale_templates(entry: &Path) {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
+    // Guardia: si la entrada vive DIRECTAMENTE en el temp dir del sistema (un snippet suelto en
+    // /tmp — el patrón del MCP viejo, o un `ray run /tmp/x.ray` a mano), NO se escanea: el /tmp
+    // compartido acumula `.ray.html` residuales de OTROS procesos (algunos rotos a propósito, como
+    // los de los tests de templates) y un template ajeno abortaría el build con un error que no es
+    // del programa. Nadie tiene proyectos de templates en la RAÍZ de /tmp; los proyectos reales
+    // (con subdirectorio propio) no cambian.
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    if canon(dir) == canon(&std::env::temp_dir()) {
+        return;
+    }
     let mut tpls = Vec::new();
     collect_templates(dir, &mut tpls);
     tpls.sort();

@@ -52,11 +52,35 @@ fn templ(app: &std::path::Path, arg: &str) -> (String, String, i32) {
     )
 }
 
+
+/// Dir temporal AUTO-LIMPIADO al salir del test (los `.ray.html` ROTOS que estos tests dejan a
+/// propósito envenenaban el /tmp compartido: cualquier proceso que escanease templates desde ahí
+/// —p. ej. un servidor MCP viejo— abortaba con un error ajeno).
+struct TmpDir(std::path::PathBuf);
+impl TmpDir {
+    fn new(name: &str) -> Self {
+        let d = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("crea el dir temporal");
+        Self(d)
+    }
+}
+impl std::ops::Deref for TmpDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path { &self.0 }
+}
+impl AsRef<std::path::Path> for TmpDir {
+    fn as_ref(&self) -> &std::path::Path { &self.0 }
+}
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn generates_and_renders_on_both_engines() {
-    let base = std::env::temp_dir().join("ray_templ_cli");
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
+    let base = TmpDir::new("ray_templ_cli");
     let app = project(&base, TPL, MAIN);
 
     let (stdout, stderr, code) = templ(&app, "vistas");
@@ -81,9 +105,7 @@ fn generates_and_renders_on_both_engines() {
 fn a_typo_in_a_variable_is_a_compile_error() {
     // La promesa del diseño: `{{ titulo }}` mal escrito NO es un "" silencioso (como en el motor
     // runtime), sino un error de tipos del módulo generado al compilar el programa.
-    let base = std::env::temp_dir().join("ray_templ_cli_typo");
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
+    let base = TmpDir::new("ray_templ_cli_typo");
     let tpl = "{% params titulo: string %}<h1>{{ titluo }}</h1>\n"; // typo: titluo
     let main = "import vistas/list;\n\nfn main() -> int {\n    print(list.render_list(\"x\"));\n    0\n}\n";
     let app = project(&base, tpl, main);
@@ -100,9 +122,7 @@ fn a_typo_in_a_variable_is_a_compile_error() {
 fn run_and_build_regenerate_stale_templates() {
     // M55: `ray run`/`ray build` regeneran los `.ray.html` cuyo `.ray` falte o esté viejo — no hay
     // que acordarse de `ray templ`. El aviso va por stderr (stdout es del programa).
-    let base = std::env::temp_dir().join("ray_templ_autoregen");
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
+    let base = TmpDir::new("ray_templ_autoregen");
     let tpl = "{% params t: string %}<h1>{{ t }}</h1>\n";
     let main = "import vistas/list;\n\nfn main() -> int {\n    print(list.render_list(\"hello\"));\n    0\n}\n";
     let app = project(&base, tpl, main);
@@ -143,8 +163,7 @@ fn editing_the_layout_regenerates_views_that_extend_it() {
     // `{% extends %}` fusiona el layout EN COMPILACIÓN: su HTML vive dentro del `.ray` generado
     // del hijo. Editar solo el layout debe dejar VIEJO también el generado del hijo (antes solo
     // se comparaba cada template contra su propio `.ray` → el hijo servía el layout viejo).
-    let base = std::env::temp_dir().join("ray_templ_layout_stale");
-    let _ = std::fs::remove_dir_all(&base);
+    let base = TmpDir::new("ray_templ_layout_stale");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("vistas")).unwrap();
     std::fs::write(app.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
@@ -178,8 +197,7 @@ fn editing_the_layout_regenerates_views_that_extend_it() {
 fn include_and_import_compose_views_and_layout() {
     // Composición M55: una página {% import %}a un partial y lo {% include %}; un layout es un
     // template más con param `contenido: string` que envuelve lo ya renderizado.
-    let base = std::env::temp_dir().join("ray_templ_include");
-    let _ = std::fs::remove_dir_all(&base);
+    let base = TmpDir::new("ray_templ_include");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("vistas")).unwrap();
     std::fs::write(app.join("vistas/tarjeta.ray.html"),
@@ -208,8 +226,7 @@ fn extends_block_y_let_end_to_end() {
     // Herencia de layout estilo Jinja (M55): el hijo `{% extends base %}` + `{% block %}`s; el
     // layout pone la estructura (con defaults) y compila también standalone. `{% let %}` declara
     // locales del template.
-    let base = std::env::temp_dir().join("ray_templ_extends");
-    let _ = std::fs::remove_dir_all(&base);
+    let base = TmpDir::new("ray_templ_extends");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("vistas")).unwrap();
     std::fs::write(app.join("vistas/base.ray.html"),
@@ -237,9 +254,7 @@ fn extends_block_y_let_end_to_end() {
 
 #[test]
 fn errors_del_template() {
-    let base = std::env::temp_dir().join("ray_templ_cli_err");
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
+    let base = TmpDir::new("ray_templ_cli_err");
 
     let cases: &[(&str, &str)] = &[
         ("<h1>hello</h1>", "params"),                                    // sin firma

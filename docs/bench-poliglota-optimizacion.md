@@ -137,14 +137,14 @@ es exactamente lo que emitiría el transpilador.
    estricto): jsonserialize **−27 %** (143→105 ms), logparse **−10 %**,
    wordcount −3 %; nativo neutro. La fusión de `ToString` en el buffer quedó
    fuera (siguiente refinamiento si el perfil aún la señala).
-10. **V3 — `split` con separador de 1 byte por `memchr`**: fast-path en el opcode
-    `Split` cuando `sep.len()==1` (los benchmarks parten por `" "`), evitando
-    `TwoWaySearcher`. Además `Vec::with_capacity` por conteo previo. Esperado:
-    recorte visible en wordcount/logparse (el matcher aparece con ~5 % top-of-stack,
-    más sus allocs).
-11. **V4 — `heap_to_key` que consuma el valor**: `MapInsert`/`MapAdd` clonan la
-    clave aunque ya sea owned (`values.rs:188`). Variante que mueva el `String`.
-    Barato, quita 1 alloc+copia por inserción (wordcount hace 1.8 M).
+10. **V3 — `split` con separador de 1 byte** ❌ **EVALUADA y DESCARTADA** (22 jul,
+    medido; PERFORMANCE.md Fase 58): el patrón `char` es +9 % MÁS LENTO que el
+    `&str` (el `StrSearcher` de std ya usa memchr; `CharSearcher` decodifica
+    UTF-8), y el preconteo para preasignar, +4 %. El camino actual ya era el
+    rápido. Anotado en el opcode `Split`.
+11. **V4 — `heap_to_key` que consuma el valor** ✅ **HECHA** (22 jul; Fase 58):
+    la clave se mueve en vez de clonarse en los 6 sitios de Map. Medido:
+    wordcount **−4.3 %** (313.4 → 300.0 ms), micro de inserciones −3 %.
 12. **V5 — `sort` nativo para `[string]`**: `keys().sort()` corre el merge sort
     del prelude (raylang), con 2 clones de String por comparación vía `Index`.
     Un builtin que ordene el `Vec<HeapValue>` in situ comparando `&str`. En estos

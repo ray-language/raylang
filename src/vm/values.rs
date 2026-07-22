@@ -185,13 +185,16 @@ pub(super) fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Va
 }
 
 /// Convierte un valor de la VM en una clave de Map (M13.1). El checker garantiza el tipo.
-pub(super) fn heap_to_key(v: &HeapValue) -> MapKey {
+/// V4 (bench políglota): **consume** el valor — todos los sitios lo llaman con el valor recién
+/// sacado de la pila (owned), así el String/Bytes de la clave se MUEVE en vez de clonarse
+/// (antes: 1 alloc+copia por cada insert/get/contains/remove/add_to con clave string).
+pub(super) fn heap_to_key(v: HeapValue) -> MapKey {
     match v {
-        HeapValue::Int(n) => MapKey::Int(*n),
-        HeapValue::Str(s) => MapKey::Str(s.clone()),
-        HeapValue::Char(c) => MapKey::Char(*c),
-        HeapValue::Bool(b) => MapKey::Bool(*b),
-        HeapValue::Bytes(b) => MapKey::Bytes(b.clone()),
+        HeapValue::Int(n) => MapKey::Int(n),
+        HeapValue::Str(s) => MapKey::Str(s),
+        HeapValue::Char(c) => MapKey::Char(c),
+        HeapValue::Bool(b) => MapKey::Bool(b),
+        HeapValue::Bytes(b) => MapKey::Bytes(b),
         _ => unreachable!("the checker guarantees a hashable key (int/string/char/bool/bytes)"),
     }
 }

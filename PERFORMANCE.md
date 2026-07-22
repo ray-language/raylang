@@ -660,6 +660,24 @@ logparse **152.4 → 136.6 ms (−10 %)**, wordcount **315.1 → 306.4 ms (−3 
 el primer A/B (contra el `ray` instalado, que resultó ser un build PGO) daba "neutro" — la
 atribución honesta exigió el toggle en el MISMO binario.
 
+#### Fase 58 — V4: clave de Map sin clon; V3 (split) DESCARTADA (22 jul, bench políglota)
+
+Dos candidatas del plan, resueltas por medición con A/B estricto (binario baseline de main vs
+binario con el cambio, mismo perfil de build — la lección de la Fase 57):
+
+- **V4 ✅ — `heap_to_key` consume el valor**: los 6 sitios (insert/get/get_or/contains/remove/
+  add_to) la llamaban con el valor recién sacado de la pila y aun así **clonaba** el String/Bytes
+  de la clave. Ahora toma el `HeapValue` por valor y la clave se **mueve** (−1 alloc+copia por
+  operación de Map con clave string). Medido: wordcount **313.4 → 300.0 ms (−4.3 %)**, micro de
+  inserciones −3 %, logparse neutro. Cambio de 2 archivos, semántica intacta.
+- **V3 ❌ — fast-path del `split` EVALUADA y DESCARTADA** (dos variantes, ambas neto-negativas):
+  (1) separador de 1 carácter por patrón `char` → **+9 % MÁS LENTO** — el `StrSearcher` de std
+  (patrón `&str`) ya acelera con memchr sobre el primer byte, mientras `CharSearcher` decodifica
+  UTF-8 carácter a carácter (quirk conocido de std; el `TwoWaySearcher` del perfil ya ERA el
+  camino rápido); (2) preconteo de separadores para preasignar el Vec → **+4 %** (el barrido extra
+  cuesta más que los reallocs amortizados). Queda anotado en el propio opcode `Split` para no
+  reabrirla sin re-medir.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

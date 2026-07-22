@@ -131,14 +131,12 @@ es exactamente lo que emitiría el transpilador.
 
 8. **V1 — `Join` sin clonar** ✅ **HECHA** (22 jul, junto a N3; PERFORMANCE.md
    Fase 56): pico VM jsonserialize **88 → 76 MB (−14 %)**, oráculo intacto.
-9. **V2 — opcode `ConcatN` (concatenación n-aria)**: el compilador aplana la
-   cadena de `Add` de strings (como ya hace el transpilador con
-   `flatten_concat`) a un solo opcode que suma longitudes, preasigna y escribe
-   una vez; los `ToString` de operandos int se fusionan escribiendo al mismo
-   buffer. Mata los N−1 strings intermedios + sus allocs en los tres benchmarks
-   (jsonserialize construye 5 fragmentos por registro). Esperado: el lever de
-   tiempo más grande de la VM en jsonserialize (del orden de −15–25 %; el perfil
-   muestra Add+to_string+memmove+malloc como el grueso del tiempo no-despacho).
+9. **V2 — opcode `ConcatN` (concatenación n-aria)** ✅ **HECHA** (22 jul;
+   PERFORMANCE.md Fase 57: bajada `lower_concat` → primitivo `__concat` →
+   opcode `ConcatN(n)`; oráculo `concat_chain_lowering_oracle`). Medido (A/B
+   estricto): jsonserialize **−27 %** (143→105 ms), logparse **−10 %**,
+   wordcount −3 %; nativo neutro. La fusión de `ToString` en el buffer quedó
+   fuera (siguiente refinamiento si el perfil aún la señala).
 10. **V3 — `split` con separador de 1 byte por `memchr`**: fast-path en el opcode
     `Split` cuando `sep.len()==1` (los benchmarks parten por `" "`), evitando
     `TwoWaySearcher`. Además `Vec::with_capacity` por conteo previo. Esperado:

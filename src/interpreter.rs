@@ -1026,6 +1026,20 @@ impl<'a> Interpreter<'a> {
                 crate::host_print(&values[0].to_string());
                 Value::Unit
             }
+            // V2 (bench políglota): concatenación n-aria de strings (el checker aplana las cadenas
+            // de `+`/interpolación a `__concat`). Un solo String con la capacidad exacta; misma
+            // semántica que la cadena de `Add` par a par → oráculo intacto.
+            "__concat" => {
+                let total: usize = values.iter().map(|v| match v {
+                    Value::Str(s) => s.len(),
+                    _ => unreachable!("the checker guarantees strings"),
+                }).sum();
+                let mut out = String::with_capacity(total);
+                for v in &values {
+                    if let Value::Str(s) = v { out.push_str(s); }
+                }
+                Value::Str(out)
+            }
             // M48.4: `__len` es el primitivo interno al que baja el trait `Len`; idéntico a `len`.
             "__len" => match &values[0] {
                 Value::Array(rc) => Value::Int(rc.borrow().len() as i64),

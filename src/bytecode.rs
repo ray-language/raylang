@@ -207,6 +207,12 @@ pub enum OpCode {
     // --- Stdlib de string (M11.1) ---
     /// Saca un valor primitivo; empuja su representación textual (string). Builtin `to_string`.
     ToString,
+    /// V2 (bench políglota): concatenación **n-aria** de strings. Saca `n` strings y empuja su
+    /// concatenación, construida UNA vez con la capacidad exacta (suma de longitudes) — frente a la
+    /// cadena de `Add` par a par, que creaba n−1 strings intermedios. Lo emite el compilador para el
+    /// primitivo interno `__concat(a, b, …)`, que genera el checker (`lower_concat`) aplanando las
+    /// cadenas de `+`/interpolación de strings.
+    ConcatN(usize),
     /// Saca un string; empuja el mismo sin espacio en blanco en los extremos. Builtin `trim`.
     Trim,
     /// Saca el separador y el string; empuja un arreglo de strings con los trozos. Builtin

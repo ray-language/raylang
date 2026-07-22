@@ -2117,6 +2117,22 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Unit)
     } },
     // __parse_int(s) -> [int] (M11.2a): [] si no parsea, [n] si sí. El prelude → Option<int>.
+    // V2 (bench políglota): primitivo INTERNO de concatenación n-aria de strings. No lo escribe el
+    // usuario: lo genera el checker (`lower_concat`) aplanando cadenas de `+`/interpolación. El
+    // opcode de la fila es un PLACEHOLDER: la aridad es variable y el compilador emite
+    // `ConcatN(argc)` por special-case (como `channel` por aridad). La regla tipa por si acaso
+    // alguien lo escribe a mano: ≥2 strings → string (semántica idéntica a la cadena de `+`).
+    Builtin { name: "__concat", opcode: OpCode::ConcatN(0), check: |a| {
+        if a.len() < 2 {
+            return Err((None, format!("__concat expects at least 2 arguments, got {}", a.len())));
+        }
+        for (i, t) in a.iter().enumerate() {
+            if *t != Type::String {
+                return Err((Some(i), format!("__concat expects strings, not {t}")));
+            }
+        }
+        Ok(Type::String)
+    } },
     Builtin { name: "__parse_int", opcode: OpCode::ParseInt, check: |a| {
         arity(a, 1, "__parse_int", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__parse_int expects a string, not {}", a[0]))); }

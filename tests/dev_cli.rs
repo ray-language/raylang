@@ -8,6 +8,31 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Termina el supervisor `ray dev` con **SIGTERM** (no `Child::kill`, que es SIGKILL): su handler
+/// (`install_cleanup_on_death`) reenvía SIGTERM al hijo en curso — con SIGKILL el handler nunca
+/// corre y un hijo-servidor (los tests de live-reload) quedaba HUÉRFANO sirviendo para siempre.
+/// Escala a SIGKILL si el supervisor no muere en ~3 s.
+fn stop_dev(dev: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        const SIGTERM: i32 = 15;
+        unsafe {
+            kill(dev.id() as i32, SIGTERM);
+        }
+        for _ in 0..30 {
+            if let Ok(Some(_)) = dev.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let _ = dev.kill();
+    let _ = dev.wait();
+}
+
 /// Sondea `path` hasta que su contenido contenga `needle` (plazo `secs`); devuelve el contenido.
 fn wait_for_content(path: &std::path::Path, needle: &str, secs: u64) -> String {
     let deadline = Instant::now() + Duration::from_secs(secs);
@@ -53,8 +78,7 @@ fn dev_restarts_on_changes() {
     let output = wait_for_content(&out_path, "v2", 10);
     assert!(output.contains("restarting"), "anuncia el reinicio:\n{output}");
 
-    let _ = dev.kill();
-    let _ = dev.wait();
+    stop_dev(&mut dev);
 }
 
 /// Conecta a `127.0.0.1:port`, envía un ping y devuelve la respuesta (reintenta hasta `secs`). El
@@ -128,8 +152,7 @@ fn dev_socket_activation_retains_listener_across_restarts() {
     wait_for_content(&out_path, "restarting", 10);
     assert_eq!(connect_and_read(port, 10), "v2", "el segundo hijo re-adoptó el socket entre reinicios");
 
-    let _ = dev.kill();
-    let _ = dev.wait();
+    stop_dev(&mut dev);
 }
 
 /// Lee el puerto del hub de live-reload del log de `ray dev` (`live-reload on http://127.0.0.1:<port>`).
@@ -230,8 +253,7 @@ fn dev_live_reload_injects_snippet_and_emits_reload() {
         got.push_str(&String::from_utf8_lossy(&probe[..n]));
     }
 
-    let _ = dev.kill();
-    let _ = dev.wait();
+    stop_dev(&mut dev);
 }
 
 #[cfg(unix)]
@@ -274,8 +296,7 @@ fn dev_live_reload_without_port_also_injects() {
     assert!(resp.contains("EventSource"), "el HTML lleva el snippet inyectado sin --port:\n{resp}");
     assert!(resp.contains(&format!(":{hub}/")), "el snippet apunta al hub {hub}:\n{resp}");
 
-    let _ = dev.kill();
-    let _ = dev.wait();
+    stop_dev(&mut dev);
 }
 
 #[test]
@@ -316,8 +337,7 @@ fn dev_does_not_restart_if_change_fails_to_compile() {
     // El código roto nunca corrió (no imprimió "roto").
     assert!(!output.contains("roto"), "el cambio roto no llegó a ejecutarse:\n{output}");
 
-    let _ = dev.kill();
-    let _ = dev.wait();
+    stop_dev(&mut dev);
 }
 
 #[test]
@@ -358,6 +378,5 @@ fn dev_ignores_a_save_with_no_changes() {
     let output = wait_for_content(&out_path, "v2", 10);
     assert!(output.contains("restarting"), "la edición real reinició:\n{output}");
 
-    let _ = dev.kill();
-    let _ = dev.wait();
+    stop_dev(&mut dev);
 }

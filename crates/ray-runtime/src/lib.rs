@@ -11,3 +11,10 @@
 pub mod crypto;
 pub mod sqlite;
 pub mod tls;
+
+// N1 — reexport de `MiMalloc` para el binario transpilado. El `#[global_allocator]` lo declara el
+// `main.rs` GENERADO (no este crate): una dep que el binario no referencia NO se enlaza, y un
+// `#[global_allocator]` aquí podría quedarse silenciosamente fuera. El reexport fuerza la referencia
+// y deja la declaración a la vista en el Rust generado.
+#[cfg(feature = "mimalloc")]
+pub use mimalloc::MiMalloc;

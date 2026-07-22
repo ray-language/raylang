@@ -164,6 +164,19 @@ Hoy un `import http` arrastra `tls_connect` como stub aunque el programa hable H
 el stub se vuelva implementación real); `--without <dep>` lo devuelve a stub. Así el mismo
 programa compila siempre, con o sin la dep — solo cambia si el camino TLS funciona o panica.
 
+**N1 — mimalloc por defecto (jul 2026, bench políglota).** Cuarta feature de `ray-runtime`:
+`mimalloc`, que a diferencia de crypto/tls/sqlite **no se detecta por uso** — se activa
+**siempre** salvo `--without mimalloc`. El binario transpilado enlazaba el malloc del sistema,
+lento en churn de strings pequeños (macOS); medido en el bench políglota
+(`docs/bench-poliglota-optimizacion.md`): wordcount/logparse **−40 %**, jsonserialize **−18 %**.
+Mecánica: `ray-runtime` solo **reexporta** `MiMalloc` (una dep no referenciada no se enlaza —
+el `#[global_allocator]` dentro del crate podría quedar silenciosamente fuera) y el
+`#[global_allocator]` se emite en el `main.rs` **generado**. Consecuencia asumida: el camino
+común pasa a ser el proyecto Cargo (la caché compartida compila mimalloc una vez por máquina);
+el punto 2 de arriba ("camino rápido intacto") queda condicionado a `--without mimalloc`, que
+es también el escape para builds herméticos/cross-compile sin toolchain C. Si `cargo` no está
+en el PATH, el error lo sugiere (`hint: … --without mimalloc`).
+
 ## 4. El diseño: el crate `ray-runtime`
 
 ### 4.1 La motivación — dos debilidades de la versión ingenua

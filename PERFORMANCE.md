@@ -594,6 +594,21 @@ y da salida **byte-idéntica** a la VM (test `build_native_sqlite_via_ray_runtim
 bajo demanda, con paridad por construcción. Siguiente posible: `ring`-extra (crypto avanzada) donde los
 ejemplos lo pidan, o retomar otros frentes.
 
+#### Fase 54 — N1: mimalloc POR DEFECTO en el binario nativo (22 jul, bench políglota)
+
+La investigación del bench políglota (`docs/bench-poliglota-optimizacion.md`) atribuyó el grueso del gap
+nativo-vs-Go en los servicios string-heavy al **malloc del sistema**: el binario `ray` lleva mimalloc desde
+P0.4, pero el TRANSPILADO caía al libmalloc de macOS (lento en churn de strings pequeños). Fix: cuarta
+feature de `ray-runtime` (`mimalloc`, mismo crate/versión que el binario `ray`), activada **siempre** salvo
+`--without mimalloc` — no es un subsistema de uso detectable como crypto/tls/sqlite. El crate solo
+**reexporta** `MiMalloc`; el `#[global_allocator]` se emite en el `main.rs` generado (una dep no
+referenciada no se enlaza — el allocator dentro del crate podría quedar fuera en silencio). **Medido**
+(hyperfine, M3, `--release`): wordcount **86.8 → 52.5 ms (−40 %)**, logparse **50.3 → 30.4 ms (−40 %)**,
+jsonserialize **42.4 → 34.6 ms (−18 %)** — wordcount pasa de 2.03× a ~1.15× de Go (y con N2/ahash, a ~1.05×).
+Consecuencia asumida: el build nativo por defecto va por el camino Cargo (mimalloc se compila una vez por
+máquina en la caché compartida); `--without mimalloc` recupera el `rustc` pelado y es el escape
+hermético/cross. Tests `build_native` actualizados al contrato nuevo.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

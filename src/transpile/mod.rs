@@ -440,6 +440,16 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     if t.needs_rt_sqlite {
         rt_features.push("sqlite");
     }
+    // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
+    // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,
+    // jsonserialize −18% (docs/bench-poliglota-optimizacion.md §3). A diferencia de crypto/tls/sqlite no
+    // se detecta por uso: siempre on salvo `--without mimalloc` (escape para builds herméticos/cross sin
+    // toolchain C/rustc-pelado). El `#[global_allocator]` va en el main GENERADO — una dep no referenciada
+    // no se enlaza y el allocador no aplicaría (por eso ray-runtime solo REEXPORTA `MiMalloc`).
+    if !t.exclude.contains("mimalloc") {
+        out.push_str("#[global_allocator]\nstatic __RAY_ALLOC: ray_runtime::MiMalloc = ray_runtime::MiMalloc;\n");
+        rt_features.push("mimalloc");
+    }
     Ok(Transpiled { source: out, rt_features, stubbed })
 }
 

@@ -100,7 +100,9 @@ es exactamente lo que emitiría el transpilador.
 
 ### Fase N — el nativo a la altura de Go (transpilador) · el ROI grande
 
-3. **N1 — mimalloc en el binario generado** (medido: −40/−40/−18 %).
+3. **N1 — mimalloc en el binario generado** ✅ **HECHA** (22 jul; PERFORMANCE.md Fase 54:
+   feature `mimalloc` de `ray-runtime` por defecto, `--without mimalloc` de escape;
+   medido: −40/−40/−18 %).
    El transpilador ya sabe generar un proyecto Cargo cuando hay features con
    crate (TLS/cripto/SQLite); la vía natural es tratar mimalloc igual: si está
    disponible, el build nativo emite `#[global_allocator]` + dep `mimalloc` y

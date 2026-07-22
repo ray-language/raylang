@@ -725,6 +725,27 @@ residual de otro test (templ_cli los deja a propósito) abortaba el check. El MC
 subdirectorio propio por proceso; templ_cli además limpia su dir. **El arco bench políglota queda
 CERRADO** (N1–N4 + V1–V7, cada punto aplicado o descartado con números).
 
+#### Fase 61 — D3: fusión del envoltorio Option (`…unwrap_or(d)`) en la VM (22 jul, jsondeserialize)
+
+La segunda capa del gap de jsondeserialize (tras el fast-path ASCII de la Fase D1/D2, PR #56): cada
+`index_of(…)`/`parse_int(…)` paga el **impuesto del envoltorio Option** — el primitivo devuelve un
+arreglo etiquetado en el heap, el wrapper del prelude lo traduce a `Option` (otro alloc + match) y
+`.unwrap_or(d)` es una tercera llamada con su marco. **Fix**: la pasada `lower_prelude_fusions`
+(generaliza la de V5; misma guardia `PreludeOrigin` — solo si `index_of`/`parse_int` y el
+`unwrap_or` de `OptionOps` son los del prelude, sin overrides) reescribe
+`Option#unwrap_or(index_of(s, sub), d)` → `__index_of_or(s, sub, d)` y
+`Option#unwrap_or(parse_int(s), d)` → `__parse_int_or(s, d)` (opcodes `IndexOfOr`/`ParseIntOr`,
+semántica byte-idéntica: mismo `char_index_of`/`trim().parse::<i64>()`). Cero arreglo etiquetado,
+cero Option, cero marcos — el patrón P0.2 (`get_or`), ahora sobre wrappers de Option. **Medido**
+(A/B, misma máquina): jsondeserialize VM **853 → 413 ms (−52 %)** con el `.ray` original y
+**784 → 321 ms (−59 %)** con la variante B — muy por encima del estimado (−25–40 %): la fusión
+también mata el enum, los `len()`/`[0]` del wrapper y el despacho genérico. Nativo neutro (su
+Option ya era barato). Oráculo `option_unwrap_or_fusion_oracle` (casos fusionados, no-fusionados
+—`unwrap_or` sobre otros Option, wrapper sin `unwrap_or`— y override del usuario, que NO se
+fusiona). **Total jsondeserialize** desde la foto del bench: VM 998 → 321 ms (3.1×; de 20.8× a
+6.7× de Go), nativo 224 → 84 ms (2.7×; a ~1.7× de Go). Plan/crónica del caso:
+`docs/bench-jsondeserialize-plan.md`.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

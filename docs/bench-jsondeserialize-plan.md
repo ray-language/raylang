@@ -74,16 +74,16 @@ zero-copy) — inherente a la semántica de valores, aceptable.
 
 ## 4. Plan restante
 
-- **D3 — fusión del envoltorio `Option` (la pieza grande de la VM)**: reconocer
-  en el checker el patrón `index_of(s, sub).unwrap_or(d)` y
-  `parse_int(s).unwrap_or(d)` (post-lowering, cuando el wrapper y `unwrap_or`
-  resolvieron a los del prelude — guardia `PreludeOrigin`, como `lower_sort_prim`)
-  y bajarlos a builtins directos `__index_of_or(s, sub, d) -> int` /
-  `__parse_int_or(s, d) -> int`: **cero arreglo etiquetado, cero Option, cero
-  marcos de wrapper**. Precedente medido de la misma forma: P0.2 `get_or`.
-  Estimación honesta (por conteo de allocs/marcos eliminados, ~4 pares por
-  iteración aquí): del orden de −25–40 % adicional en la VM sobre este bench →
-  ~500–600 ms. El techo de la VM seguirá siendo el despacho (P2.a).
+- **D3 — fusión del envoltorio `Option`** ✅ **HECHA** (22 jul; PERFORMANCE.md
+  Fase 61): la pasada `lower_prelude_fusions` (generaliza la de V5, misma guardia
+  `PreludeOrigin`) reescribe `Option#unwrap_or(index_of(s,sub), d)` →
+  `__index_of_or(s,sub,d)` y `Option#unwrap_or(parse_int(s), d)` →
+  `__parse_int_or(s,d)` (opcodes `IndexOfOr`/`ParseIntOr`): cero arreglo
+  etiquetado, cero Option, cero marcos. **Medido (muy por encima del estimado
+  −25–40 %): VM 853 → 413 ms (jd) y 784 → 321 ms (jd-b) — −52/−59 %**; nativo
+  neutro (su Option ya era barato); oráculo `option_unwrap_or_fusion_oracle`
+  (fusionados + no-fusionados + override del usuario). El techo restante de la
+  VM es el despacho (P2.a).
 - **D4 — adoptar la variante B en el bench** (medida: −8.6 % VM / −12 % nativo,
   misma salida; más pareja con lo que hacen Go/JS/Rust).
 - **D5 — diferidos conscientes**: `index_of_from(s, sub, start)` (búsqueda con
@@ -119,10 +119,10 @@ fn main() {
 
 ## 6. Dónde debería aterrizar
 
-| | hoy (imagen) | con D1+D2 (+B) | con D3 (est.) |
+| | baseline (imagen) | D1+D2 (+B) | **D1+D2+D3 (+B), medido** |
 |---|---|---|---|
-| nativo | 224 ms (4.7× Go) | **~84 ms (~1.7×)** | ~80 ms |
-| VM | 998 ms (20.8×) | **~784 ms** | ~500–600 ms |
+| nativo | 224 ms (4.7× Go) | ~84 ms (~1.7×) | **84 ms (~1.7×)** |
+| VM | 998 ms (20.8×) | ~784 ms | **321 ms (6.7×; 413 con el .ray original)** |
 
-(Los nativos medidos con binarios reales; D3 es estimación por conteo, a validar
-con A/B estricto como siempre.)
+Total del arco jsondeserialize: **VM 3.1× más rápida** (998→321) y **nativo
+2.7×** (224→84) — todo medido con binarios reales y salida byte-idéntica.

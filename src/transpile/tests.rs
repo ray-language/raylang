@@ -11,7 +11,7 @@
 const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Primitivos de string/bytes/map/arreglo (interceptados en emit_call por su nombre pelado).
     "__chars", "__concat", "__contains", "__contains_key", "__ends_with", "__from_utf8", "__get_or", "__index_of",
-    "__sort_prim",
+    "__sort_prim", "__index_of_or", "__parse_int_or",
     "__insert", "__keys", "__len", "__map_get", "__map_remove", "__pop", "__position", "__push",
     "__repeat", "__replace", "__reverse", "__split", "__starts_with", "__sub_bytes", "__substring",
     "__to_bytes", "__to_lower", "__to_upper", "__trim", "__values", "__char_from_code",

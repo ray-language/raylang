@@ -1915,6 +1915,26 @@ impl<'a> Vm<'a> {
                     crate::host_eprint(&format_value(&self.cur.heap, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
+                OpCode::IndexOfOr => {
+                    // D3: `index_of(s, sub).unwrap_or(d)` fusionado — sin arreglo etiquetado, sin
+                    // Option, sin marcos de wrapper. Mismo `char_index_of` (fast-path ASCII D1).
+                    let d = self.pop_int();
+                    let (sub, s) = (self.pop(), self.pop());
+                    let (HeapValue::Str(s), HeapValue::Str(sub)) = (s, sub) else {
+                        unreachable!("the checker guarantees two strings");
+                    };
+                    let r = crate::builtins::char_index_of(&s, &sub).map(|i| i as i64).unwrap_or(d);
+                    self.push(HeapValue::Int(r));
+                }
+                OpCode::ParseIntOr => {
+                    // D3: `parse_int(s).unwrap_or(d)` fusionado. Misma semántica que el primitivo
+                    // `__parse_int` (`trim().parse::<i64>()`).
+                    let d = self.pop_int();
+                    let HeapValue::Str(s) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    self.push(HeapValue::Int(s.trim().parse::<i64>().unwrap_or(d)));
+                }
                 OpCode::ParseInt => {
                     // Primitivo: [] o [n]; el prelude lo envuelve en Option<int>.
                     let elems = match self.pop() {

@@ -205,12 +205,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // p. ej. `[T]#push`) se reescribe a la llamada al builtin directamente, recuperando el
     // opcode directo en la VM (y ahorrando el marco en el intérprete). Semántica idéntica.
     inline_forwarders(program);
-    // Paso 8b (V5, bench políglota): `sort(a, <prim>#less)` — el sort genérico del prelude con el
-    // diccionario de un `impl Ord` primitivo del prelude (ambas condiciones en `prelude_origin`) —
-    // se reescribe a `__sort_prim(a)`: sort nativo de Rust en la VM/intérprete (el del prelude paga
-    // 2 clones de String por comparación vía Index). float queda FUERA (su `<` con NaN no forma
-    // orden total → replicar el merge sort del prelude exigiría el mismo algoritmo).
-    lower_sort_prim(program, &prelude_origin);
+    // Paso 8b (V5+D3, bench políglota): fusiones de llamadas al prelude, guardadas por
+    // `prelude_origin` (sin overrides del usuario): `sort(a, <prim>#less)` → `__sort_prim(a)`
+    // (sort nativo; float fuera por NaN), y `index_of(…)/parse_int(…) .unwrap_or(d)` →
+    // `__index_of_or`/`__parse_int_or` (muere el arreglo etiquetado + el Option + los marcos).
+    lower_prelude_fusions(program, &prelude_origin);
     // Paso 9 (V2, bench políglota): aplanar las cadenas de `+` de strings (incl. interpolación) a
     // `__concat(a, b, …)` → opcode `ConcatN` (un String con capacidad exacta, sin intermedios).
     // La ÚLTIMA bajada: el `Call` sintético comparte (línea, col) con el `Add` raíz y no debe
@@ -242,16 +241,22 @@ pub fn semantic_index(program: &mut Program) -> SemanticIndex {
 /// Pasos 0–1 del front-end, compartidos por `check` y `semantic_index`: inyección del prelude,
 /// derivaciones de `@derive`, bajada de los métodos de impl a funciones mangladas y resolución
 /// de la construcción de enums. Muta `program`.
-/// V5 (bench políglota): qué piezas relevantes para el `sort` nativo vienen del PRELUDE (no
-/// redefinidas por el usuario). `lower_sort_prim` solo reescribe `sort(a, <prim>#less)` →
-/// `__sort_prim(a)` si el `fn sort` Y el `impl Ord` del primitivo son los del prelude — un
-/// override del usuario (p. ej. un orden inverso) debe seguir por el camino genérico.
+/// V5+D3 (bench políglota): qué piezas vienen del PRELUDE (no redefinidas por el usuario).
+/// `lower_prelude_fusions` solo reescribe si TODAS las piezas del patrón son las del prelude —
+/// un override del usuario (p. ej. un sort inverso o un `index_of` propio) debe seguir por el
+/// camino genérico.
 #[derive(Default)]
 pub(super) struct PreludeOrigin {
     /// ¿El `fn sort` en el programa es el del prelude?
     pub(super) sort_fn: bool,
     /// Primitivos cuyo `impl Ord` es el del prelude (claves `int`/`string`/`char`).
     pub(super) ord_prims: HashSet<String>,
+    /// D3: ¿los wrappers `fn index_of`/`fn parse_int` son los del prelude?
+    pub(super) index_of_fn: bool,
+    pub(super) parse_int_fn: bool,
+    /// D3: ¿el `unwrap_or` que resolverá como `Option#unwrap_or` es el del prelude? (el usuario no
+    /// redefinió el trait `OptionOps` ni aporta su propio `impl OptionOps for Option`).
+    pub(super) unwrap_or_impl: bool,
 }
 
 fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
@@ -279,9 +284,14 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
     // idempotente si se vuelve a verificar—. Como los enums, quedan en el AST que
     // también compilan/ejecutan el intérprete y la VM.
     let defined: HashSet<String> = program.functions.iter().map(|f| f.name.clone()).collect();
-    // V5: si el usuario definió su propio `sort`, el del prelude no se inyecta → el sort nativo
-    // no aplica (el suyo puede tener OTRA semántica).
-    let mut origin = PreludeOrigin { sort_fn: !defined.contains("sort"), ..Default::default() };
+    // V5/D3: si el usuario definió su propia función homónima, la del prelude no se inyecta → la
+    // fusión correspondiente no aplica (la suya puede tener OTRA semántica).
+    let mut origin = PreludeOrigin {
+        sort_fn: !defined.contains("sort"),
+        index_of_fn: !defined.contains("index_of"),
+        parse_int_fn: !defined.contains("parse_int"),
+        ..Default::default()
+    };
     let mut prelude_fns: Vec<Function> = crate::prelude::functions()
         .into_iter()
         .filter(|f| !defined.contains(&f.name))
@@ -311,6 +321,10 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
         .into_iter()
         .filter(|i| !impls_existentes.contains(&(i.trait_name.clone(), type_key_of(&i.target))))
         .collect();
+    // D3: el `unwrap_or` de Option es del prelude si el usuario NI redefinió el trait `OptionOps`
+    // NI aporta un impl propio `(OptionOps, Option)` (que desplazaría al del prelude).
+    origin.unwrap_or_impl = !traits_user.contains("OptionOps")
+        && !impls_existentes.contains(&("OptionOps".to_string(), Some("Option".to_string())));
     // V5: los `impl Ord` de primitivos que quedan siendo los del prelude (un impl del usuario para
     // el mismo (Ord, tipo) lo desplaza — p. ej. un orden inverso — y el sort nativo no aplica).
     for i in &prelude_impls {

@@ -985,6 +985,24 @@ impl Transpiler {
             "concat" => {
                 self.emit_concat(out, &eff)?;
             }
+            // D3: formas fusionadas de `<wrapper>(…).unwrap_or(d)` (las genera el checker). En
+            // nativo el Option ya era barato, pero la forma fusionada llega como builtin propio.
+            "index_of_or" => {
+                out.push_str("__ray_index_of(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(").unwrap_or(");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
+            "parse_int_or" => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".trim().parse::<i64>().unwrap_or(");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("))");
+            }
             // split(s, sep) → [string]; join(a, sep) → string (helpers del preámbulo generado).
             "split" => {
                 out.push_str("__ray_split(&");

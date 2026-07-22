@@ -218,6 +218,14 @@ pub enum OpCode {
     /// para `__sort_prim(a)`, que genera el checker (`lower_sort_prim`) cuando el `sort` genérico
     /// resuelve con el `impl Ord` de un primitivo del prelude (sin overrides del usuario).
     SortPrim,
+    /// D3 (jsondeserialize): `index_of(s, sub).unwrap_or(d)` FUSIONADO — saca `d`, `sub`, `s` y
+    /// empuja el índice (por carácter) o `d`. Cero arreglo etiquetado, cero Option, cero marcos de
+    /// wrapper (el camino sin fusión pagaba ~3 allocs de heap + 2 llamadas por uso). Lo genera el
+    /// checker (`lower_prelude_fusions`) cuando wrapper y `unwrap_or` son los del prelude.
+    IndexOfOr,
+    /// D3: `parse_int(s).unwrap_or(d)` fusionado — saca `d` y `s`, empuja el int parseado
+    /// (`trim().parse::<i64>()`, la misma semántica que el primitivo `__parse_int`) o `d`.
+    ParseIntOr,
     /// Saca un string; empuja el mismo sin espacio en blanco en los extremos. Builtin `trim`.
     Trim,
     /// Saca el separador y el string; empuja un arreglo de strings con los trozos. Builtin

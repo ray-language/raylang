@@ -2158,6 +2158,23 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("__sort_prim expects [int], [string] or [char], not {other}"))),
         }
     } },
+    // D3 (jsondeserialize): formas FUSIONADAS de `<wrapper>(…).unwrap_or(d)` — las genera el
+    // checker (`lower_prelude_fusions`) cuando el wrapper del prelude y el `unwrap_or` de
+    // `OptionOps` son los del prelude (sin overrides). Reglas por si se escriben a mano.
+    Builtin { name: "__index_of_or", opcode: OpCode::IndexOfOr, check: |a| {
+        arity(a, 3, "__index_of_or", "")?;
+        for (i, t) in a.iter().take(2).enumerate() {
+            if *t != Type::String { return Err((Some(i), format!("__index_of_or expects a string, not {t}"))); }
+        }
+        if a[2] != Type::Int { return Err((Some(2), format!("__index_of_or expects an int default, not {}", a[2]))); }
+        Ok(Type::Int)
+    } },
+    Builtin { name: "__parse_int_or", opcode: OpCode::ParseIntOr, check: |a| {
+        arity(a, 2, "__parse_int_or", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__parse_int_or expects a string, not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__parse_int_or expects an int default, not {}", a[1]))); }
+        Ok(Type::Int)
+    } },
     Builtin { name: "__parse_int", opcode: OpCode::ParseInt, check: |a| {
         arity(a, 1, "__parse_int", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__parse_int expects a string, not {}", a[0]))); }

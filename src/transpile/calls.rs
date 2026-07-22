@@ -742,7 +742,7 @@ impl Transpiler {
         if method == "new" {
             if let Some(o) = recv {
                 if matches!(&o.kind, ExprKind::Ident(n) if n == "Map") {
-                    out.push_str("Rc::new(std::cell::RefCell::new(__RayMap::new()))");
+                    out.push_str("Rc::new(std::cell::RefCell::new(__RayMap::default()))");
                     return Ok(());
                 }
                 // `Channel.new()` (función asociada): canal MPMC no acotado.

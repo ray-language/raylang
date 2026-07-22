@@ -43,7 +43,7 @@ pub struct Manifest {
     /// índice, otra URL de descarga); el hash publicado verifica igual. Si el mirror falla, se cae a
     /// la URL original. Lo puede sobrescribir la variable de entorno `RAY_MIRROR`.
     pub registry_mirror: Option<String>,
-    /// `[native] without` — subsistemas con-crate (crypto/tls/sqlite/mimalloc) a EXCLUIR del binario nativo
+    /// `[native] without` — subsistemas con-crate (crypto/tls/sqlite/mimalloc/ahash) a EXCLUIR del binario nativo
     /// (`ray build --native`), como política estable del proyecto. Equivale a `--without` pero versionado
     /// con el repo (builds herméticos/policy). El flag `--without` de CLI se UNE a esta lista. Vacío = sin
     /// exclusión. Ver docs/transpilador-nativo.md §3.3.

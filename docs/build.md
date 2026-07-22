@@ -142,11 +142,17 @@ wordcount/logparse **−40 %**, jsonserialize **−18 %**. Consecuencia: el buil
 defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compila una vez por
 máquina); `--without mimalloc` recupera el `rustc` pelado (sin Cargo/red).
 
-**Exclusión.** `--without crypto,tls,sqlite,mimalloc` — para los subsistemas de uso
-(crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc` vuelve al malloc del sistema
-(→ con todo excluido, vía rápida `rustc`); `[native] without = [...]` en el `ray.toml` fija
-la política estable del proyecto (la CLI se une a ella). Para builds herméticos/
-cross-compile/policy.
+**aHash por defecto (N2, jul 2026).** Los `Map` del binario transpilado usan **aHash**
+(feature `ahash` de `ray-runtime`) — el mismo hasher que el `MapStore` de la VM desde P0.1;
+el `HashMap` std con SipHash es lento en claves string. Medido: wordcount **−8.5 %**
+adicional sobre mimalloc (neutro donde el Map no domina). La resistencia a hash-flooding
+se conserva (RandomState con RNG de runtime, como la VM).
+
+**Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash` — para los subsistemas de uso
+(crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc`/`ahash` vuelven al malloc del
+sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native] without =
+[...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para
+builds herméticos/cross-compile/policy.
 
 > El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
 > `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`

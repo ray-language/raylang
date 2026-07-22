@@ -35,20 +35,35 @@ motor, no lenguaje-contra-lenguaje. Aun así, 25× en nativo tiene margen real:
 
 ## 3. Plan (library-level, raylang puro — mantiene la pureza del motor)
 
-- **R1 — `seen` por generaciones**: un solo `[int]` asignado por ejecución + un
-  contador; `seen[pc] == gen` en vez de re-alocar y re-llenar `[bool]` por
-  posición. Mata el hotspot nº 1.
-- **R2 — no sembrar bajo `^`**: si el programa arranca con la aserción BOL (y no
-  es multiline), la siembra por posición es trabajo muerto — sembrar solo en
-  `start`. En este bench elimina ~7.4 M `new_saves`+`add_thread`.
-- **R3 — `copy_saves` copy-on-write**: clonar el array de saves solo cuando una
-  instrucción `Save` escribe (el clásico de la Pike VM), no en cada `add_thread`.
-- **R4 — reusar `pcs`/`npcs`/`svs`** entre posiciones (índices con longitud
-  manual en vez de arrays frescos).
-- Estimación conjunta (por el peso del perfil: R1+R2 cubren ~50 % de las
-  muestras, R3 otro ~20 %): nativo **1.95 s → ~0.4–0.7 s** (de 25× a ~6–9× de
-  Go); la VM bajará proporcionalmente (~15–25 s) pero seguirá lejos — para regex
-  en caliente la respuesta de la VM sigue siendo **deploy = nativo** (o P2.a).
+- **R1 — `seen` por generaciones** ✅ **HECHA** (22 jul): un solo `[int]` por
+  ejecución + contador; `seen[pc] == gen` en vez de re-alocar/re-llenar `[bool]`
+  por posición.
+- **R2 — no sembrar bajo `^`** ✅ **HECHA**: `is_anchored(prog)` (cadena
+  Save/Jmp desde pc 0 hasta AssertStart, sin Splits — una alternancia con brazo
+  no anclado sigue sembrando) apaga la siembra por posición.
+- **R3 — `copy_saves` copy-on-write**: al leer el código resultó que **ya estaba
+  implementada** (el clon solo ocurre en `Save`); su peso en el perfil era
+  volumen, no clones de más.
+- **R4a — `copy_saves` por concatenación nativa** ✅ **HECHA**: `s + []` (un
+  opcode que clona en Rust) en vez del bucle de push por elemento.
+- **R4b — reusar las listas de hilos entre posiciones** ❌ **EVALUADA y
+  DESCARTADA por medición**: struct con longitud manual + swap dio nativo −9 %
+  pero **VM +17 %** (el acceso a campos por nombre por hilo cuesta más que las
+  2 allocs/posición ahorradas). Anotado en el código; reevaluar solo si la VM
+  gana acceso a campos por índice (P1.3 `GetFieldIdx`).
+
+**Medido (bench regex 200k líneas, checksum intacto en cada paso)**:
+
+| | antes | R1+R2 | +R4a (final) | total |
+|---|---|---|---|---|
+| VM | 55.9 s | 20.8 s | **17.6 s** | **3.2×** |
+| nativo | 1.95 s | 696 ms | **580 ms** | **3.4×** (de 25× a **7.5× de Go**) |
+
+El micro de `find_all` (~300 KB) bajó también: 2.64 → ~1.9 s en la VM. Lo que
+queda en el perfil es el bucle central de la Pike VM (match de instrucción +
+`add_thread` + los `Save` inherentes al patrón): territorio del despacho de la
+VM (P2.a) o de R5. Para regex en caliente, la respuesta de la VM sigue siendo
+**deploy = nativo**.
 - **R5 (decisión de producto, si algún día hace falta la liga C)**: feature
   `regex` en `ray-runtime` (el crate `regex` de Rust) como motor acelerado del
   nativo — precedente ring/rusqlite/mimalloc. Pondría a raylang en los 27 ms de

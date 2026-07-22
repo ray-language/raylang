@@ -558,11 +558,16 @@ fn must_compile(pattern: string) -> Prog {
 // ---------------------------------------------------------------------------
 // Simulación (Thompson): conjunto de hilos activos. `pos`/`n` dan la posición para las aserciones.
 // ---------------------------------------------------------------------------
-fn new_bools(n: int) -> [bool] {
-    var b: [bool] = [];
+// R1 (perf, 22 jul 2026): el set `seen` de la Pike VM funciona por GENERACIONES — un solo
+// `[int]` asignado por ejecución (0 = nunca visto) y un contador que se incrementa por posición;
+// `seen[pc] == gen` marca "visto en esta posición". Antes era un `[bool]` RE-ALOCADO y re-llenado
+// con un bucle de push POR POSICIÓN del texto (el hotspot nº 1 del perfil: ~7.4M allocs en el
+// bench regex de 200k líneas).
+fn new_ints(n: int) -> [int] {
+    var b: [int] = [];
     var i = 0;
     while (i < n) {
-        b.push(false);
+        b.push(0);
         i = i + 1;
     }
     b
@@ -589,14 +594,13 @@ fn class_matches(cl: Class, ch: char) -> bool {
 // dedup por `seen` acota los hilos a |insts| por posición.
 
 // Copia las ranuras de captura de un hilo (copy-on-write en Save).
+// R4 (perf, 22 jul 2026): copiar vía la CONCATENACIÓN nativa de arreglos (`s + []` es un solo
+// opcode que clona en Rust) en vez de un bucle de push por elemento (interpretado en la VM,
+// con growth por duplicación en ambos motores). copy_saves corre una vez por `Save` cruzado
+// por hilo (copy-on-write) — es el 3er hotspot del perfil.
 fn copy_saves(s: [int]) -> [int] {
-    var out: [int] = [];
-    var i = 0;
-    while (i < s.len()) {
-        out.push(s[i]);
-        i = i + 1;
-    }
-    out
+    var empty: [int] = [];
+    s + empty
 }
 
 fn new_saves(n: int) -> [int] {
@@ -612,34 +616,38 @@ fn new_saves(n: int) -> [int] {
 // Sigue los epsilon (Jmp/Split/Save) y las aserciones (`^`/`$`) desde `pc`, añadiendo los
 // pc "consumidores" (Char/Any/Class/Match) a las listas paralelas `pcs`/`svs` EN ORDEN de
 // prioridad. `seen` deduplica: el primer hilo (mayor prioridad) que llega a un pc gana.
-fn add_thread(prog: Prog, pcs: [int], svs: [[int]], seen: [bool], pc: int, saves: [int], pos: int, n: int) {
-    if (seen[pc]) {
+// R4b (reusar las listas de hilos entre posiciones vía un struct con longitud manual) se EVALUÓ
+// y DESCARTÓ por medición (22 jul 2026): nativo −9%, pero la VM +17% — el acceso a campos por
+// nombre (GetField) por hilo cuesta más que las 2 allocs/posición ahorradas. Reevaluar solo si
+// la VM gana acceso a campos por índice (P1.3, GetFieldIdx).
+fn add_thread(prog: Prog, pcs: [int], svs: [[int]], seen: [int], gen: int, pc: int, saves: [int], pos: int, n: int) {
+    if (seen[pc] == gen) {
         return;
     }
-    seen[pc] = true;
+    seen[pc] = gen;
     let ins = prog.insts[pc];
     if (ins.op == 3) {
         // Jmp
-        add_thread(prog, pcs, svs, seen, ins.x, saves, pos, n);
+        add_thread(prog, pcs, svs, seen, gen, ins.x, saves, pos, n);
     } else if (ins.op == 4) {
         // Split: x primero (mayor prioridad), y después.
-        add_thread(prog, pcs, svs, seen, ins.x, saves, pos, n);
-        add_thread(prog, pcs, svs, seen, ins.y, saves, pos, n);
+        add_thread(prog, pcs, svs, seen, gen, ins.x, saves, pos, n);
+        add_thread(prog, pcs, svs, seen, gen, ins.y, saves, pos, n);
     } else if (ins.op == 6) {
         // AssertStart `^`
         if (pos == 0) {
-            add_thread(prog, pcs, svs, seen, pc + 1, saves, pos, n);
+            add_thread(prog, pcs, svs, seen, gen, pc + 1, saves, pos, n);
         }
     } else if (ins.op == 7) {
         // AssertEnd `$`
         if (pos == n) {
-            add_thread(prog, pcs, svs, seen, pc + 1, saves, pos, n);
+            add_thread(prog, pcs, svs, seen, gen, pc + 1, saves, pos, n);
         }
     } else if (ins.op == 8) {
         // Save: copia las ranuras (otros hilos comparten las viejas) y sigue.
         let ns = copy_saves(saves);
         ns[ins.x] = pos;
-        add_thread(prog, pcs, svs, seen, pc + 1, ns, pos, n);
+        add_thread(prog, pcs, svs, seen, gen, pc + 1, ns, pos, n);
     } else {
         // Char / Any / Class / Match
         pcs.push(pc);
@@ -652,17 +660,43 @@ fn add_thread(prog: Prog, pcs: [int], svs: [[int]], seen: [bool], pc: int, saves
 //   `seed`: siembra un hilo nuevo por posición (búsqueda NO anclada) mientras no haya match.
 //   `full`: solo acepta un Match al consumir TODO el texto (full_match) — y entonces un
 //           Match prematuro no corta (el hilo muere; los demás siguen).
+
+// R2 (perf, 22 jul 2026): ¿el programa está ANCLADO a `^`? Cierto si desde pc 0, siguiendo solo
+// Save (8) y Jmp (3), se llega a AssertStart (6) — sin Splits por medio (una alternancia podría
+// tener un brazo no anclado). Con ancla, sembrar un hilo por posición es trabajo muerto: el hilo
+// muere en la aserción (pos != 0), pero ya pagó `new_saves` + `add_thread` en CADA posición.
+fn is_anchored(prog: Prog) -> bool {
+    var pc = 0;
+    var pasos = 0;
+    while (pasos < prog.insts.len()) {
+        let ins = prog.insts[pc];
+        if (ins.op == 6) {
+            return true;
+        } else if (ins.op == 8) {
+            pc = pc + 1;
+        } else if (ins.op == 3) {
+            pc = ins.x;
+        } else {
+            return false;
+        }
+        pasos = pasos + 1;
+    }
+    false
+}
+
 fn run_pike(prog: Prog, txt: [char], n: int, start: int, seed: bool, full: bool) -> Option<[int]> {
     var pcs: [int] = [];
     var svs: [[int]] = [];
-    let seen0 = new_bools(prog.insts.len());
-    add_thread(prog, pcs, svs, seen0, 0, new_saves(prog.nsaves), start, n);
+    let seen = new_ints(prog.insts.len());
+    var gen = 1;
+    let sembrar = seed && !is_anchored(prog);
+    add_thread(prog, pcs, svs, seen, gen, 0, new_saves(prog.nsaves), start, n);
     var matched: Option<[int]> = Option.None;
     var pos = start;
     while (true) {
         var npcs: [int] = [];
         var nsvs: [[int]] = [];
-        let nseen = new_bools(prog.insts.len());
+        gen = gen + 1;
         var k = 0;
         var corta = false;
         while (k < pcs.len() && !corta) {
@@ -691,7 +725,7 @@ fn run_pike(prog: Prog, txt: [char], n: int, start: int, seed: bool, full: bool)
                     consume = true;
                 }
                 if (consume) {
-                    add_thread(prog, npcs, nsvs, nseen, pc + 1, svs[k], pos + 1, n);
+                    add_thread(prog, npcs, nsvs, seen, gen, pc + 1, svs[k], pos + 1, n);
                 }
             }
             k = k + 1;
@@ -701,8 +735,8 @@ fn run_pike(prog: Prog, txt: [char], n: int, start: int, seed: bool, full: bool)
         }
         // Siembra de búsqueda: un arranque nuevo en pos+1, con MENOR prioridad que todos
         // los hilos vivos (leftmost). Tras un match ya no se siembra.
-        if (seed && matched.is_none()) {
-            add_thread(prog, npcs, nsvs, nseen, 0, new_saves(prog.nsaves), pos + 1, n);
+        if (sembrar && matched.is_none()) {
+            add_thread(prog, npcs, nsvs, seen, gen, 0, new_saves(prog.nsaves), pos + 1, n);
         }
         if (npcs.len() == 0) {
             return matched;

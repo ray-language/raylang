@@ -8353,7 +8353,13 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   capturas de heap de un closure boxed se **pre-clonan** todas (dos closures hermanos capturando
   la misma local no-Copy — los dos de `cors(origin)` — daban E0382). Corpus nativo intacto.
   Gotcha operativo (macOS): re-emitir el binario sobre la MISMA ruta invalida la firma ad-hoc
-  cacheada → SIGKILL silencioso al ejecutar; usar ruta nueva o borrar antes.
+  cacheada → SIGKILL silencioso al ejecutar; usar ruta nueva o borrar antes. **Hermano moderno
+  (Darwin 25, jul 2026)**: la PRIMERA ejecución de todo binario fresco pasa por la evaluación de
+  Gatekeeper (`syspolicyd`); si la cola está saturada —p. ej. la suite de tests emitiendo decenas
+  de binarios nativos (`cli_cli`/corpus)— el exec se queda **decenas de segundos a 0% CPU
+  bloqueado en `_dyld_start`** (parece un hang del binario; `sample <pid>` lo delata). Un binario
+  ya evaluado corre instantáneo. No es un bug de raylang: esperar o correr benchmarks con la
+  suite parada.
 - **M93.4 — `ToJson` sube a `std/json` (jul 2026)**: el trait (+ impls de int/float/bool/string,
   el de string vía `stringify(Json.JStr(…))`) pasa de `web/framework` a la stdlib — así un futuro
   `@derive(ToJson)` (IDEAS) no dependería de un paquete. El framework lo REEXPORTA

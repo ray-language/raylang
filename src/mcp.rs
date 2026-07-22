@@ -253,22 +253,70 @@ fn doc_text(symbol: &str) -> String {
         (Some(s), Some(d)) => format!("{s}\n{d}"),
         (Some(s), None) => s,
         (None, Some(d)) => format!("{symbol}: {d}"),
-        (None, None) => prelude_doc_text(symbol).unwrap_or_else(|| format!(
-            "'{symbol}' is not a builtin nor a prelude function. See the stdlib map in the \
-             raylang://llms.txt resource; std/* module functions are documented by `ray doc` \
-             over their source."
-        )),
+        (None, None) => prelude_doc_text(symbol)
+            .or_else(|| std_doc_text(symbol))
+            .unwrap_or_else(|| format!(
+                "'{symbol}' is not a builtin, a prelude function, nor a public std/* function. \
+                 For module functions use 'module.function' (e.g. 'json.parse', 'regex.find_all'); \
+                 see the stdlib map in the raylang://llms.txt resource."
+            )),
     }
 }
 
-/// Firma (del AST del prelude) + doc (las `///` del fuente) de una función del prelude.
-fn prelude_doc_text(symbol: &str) -> Option<String> {
-    if symbol.starts_with("__") || symbol.contains('#') {
-        return None; // primitivos internos / métodos manglados: no son superficie
+
+/// Firma + doc de una función PÚBLICA de un módulo `std/*` embebido (cazado probando el MCP:
+/// `ray_doc` no cubría `json.parse`/`regex.find_all`…). Acepta `modulo.funcion` (p. ej.
+/// `json.parse`) y, sin punto, busca el nombre en TODOS los módulos embebidos (primer match,
+/// prefijado con su módulo). La firma sale del AST parseado del fuente embebido; la doc, de las
+/// `///` contiguas encima del `pub fn` en el texto.
+fn std_doc_text(symbol: &str) -> Option<String> {
+    let (module, func) = match symbol.split_once('.') {
+        Some((m, f)) => (Some(m.to_string()), f.to_string()),
+        None => (None, symbol.to_string()),
+    };
+    let candidates: Vec<(String, &'static str)> = match &module {
+        Some(m) => ["std/", "std/collections/"]
+            .iter()
+            .filter_map(|p| {
+                let name = format!("{p}{m}");
+                crate::stdlib::embedded(&name).map(|src| (name, src))
+            })
+            .collect(),
+        None => crate::stdlib::names().iter().filter_map(|n| {
+            crate::stdlib::embedded(n).map(|src| (n.to_string(), src))
+        }).collect(),
+    };
+    for (mod_name, src) in candidates {
+        let Ok(tokens) = crate::lexer::lex(src) else { continue };
+        let Ok(prog) = crate::parser::parse(tokens) else { continue };
+        let Some(f) = prog.functions.iter().find(|f| f.is_pub && f.name == func) else { continue };
+        let sig = fn_signature(f);
+        // Las `///` contiguas encima del `pub fn <func>(` en el fuente del módulo.
+        let lines: Vec<&str> = src.lines().collect();
+        let mut doc_lines: Vec<&str> = Vec::new();
+        if let Some(i) = lines.iter().position(|l| {
+            let t = l.trim_start();
+            t.starts_with(&format!("pub fn {func}(")) || t.starts_with(&format!("fn {func}("))
+        }) {
+            let mut j = i;
+            while j > 0 && (lines[j - 1].trim_start().starts_with("///") || lines[j - 1].trim_start().starts_with("//")) {
+                j -= 1;
+                let t = lines[j].trim_start();
+                if t.starts_with("///") {
+                    doc_lines.insert(0, t.trim_start_matches("///").trim());
+                }
+            }
+        }
+        let head = format!("{mod_name}: {sig}");
+        return Some(if doc_lines.is_empty() { head } else { format!("{head}\n{}", doc_lines.join(" ")) });
     }
-    let funcs = crate::prelude::functions();
-    let f = funcs.iter().find(|f| f.name == symbol)?;
-    // `<T: Eq + Show>` de type_params + bounds.
+    None
+}
+
+
+/// La firma legible de una función del AST (`nombre<T: A + B>(params) -> ret`). La comparten el
+/// fallback del prelude y el de los módulos `std/*`.
+fn fn_signature(f: &crate::ast::Function) -> String {
     let tparams = if f.type_params.is_empty() {
         String::new()
     } else {
@@ -284,7 +332,17 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
         crate::ast::Type::Unit => String::new(),
         t => format!(" -> {t}"),
     };
-    let sig = format!("{symbol}{tparams}({}){ret}", params.join(", "));
+    format!("{}{tparams}({}){ret}", f.name, params.join(", "))
+}
+
+/// Firma (del AST del prelude) + doc (las `///` del fuente) de una función del prelude.
+fn prelude_doc_text(symbol: &str) -> Option<String> {
+    if symbol.starts_with("__") || symbol.contains('#') {
+        return None; // primitivos internos / métodos manglados: no son superficie
+    }
+    let funcs = crate::prelude::functions();
+    let f = funcs.iter().find(|f| f.name == symbol)?;
+    let sig = fn_signature(f);
     // Las líneas `///` contiguas encima del `fn <symbol>(` en el fuente del prelude.
     let mut doc_lines: Vec<&str> = Vec::new();
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
@@ -462,6 +520,21 @@ mod tests {
 
     /// El fallback del prelude (cazado con Claude Code real: `parse_int` no es fila de la
     /// tabla de builtins — es un envoltorio raylang — y `ray_doc` lo negaba).
+    #[test]
+    fn ray_doc_covers_std_modules() {
+        // Cazado probando el MCP con Claude Code real (jsondeserialize con std/json): `ray_doc` no
+        // cubría las funciones públicas de los módulos std/* embebidos. Formas: `modulo.funcion` y
+        // el nombre a secas (búsqueda en todos los módulos, primer match con su módulo).
+        let d = doc_text("json.parse");
+        assert!(d.contains("std/json") && d.contains("Result<Json, string>"), "{d}");
+        let d = doc_text("regex.find_all");
+        assert!(d.contains("find_all(pattern: string, text: string) -> [string]"), "{d}");
+        let d = doc_text("find_all"); // sin módulo → lo encuentra igual
+        assert!(d.contains("std/regex"), "{d}");
+        let d = doc_text("no_existe_tal_cosa");
+        assert!(d.contains("is not a builtin"), "{d}");
+    }
+
     #[test]
     fn ray_doc_covers_the_prelude() {
         let t = doc_text("parse_int");

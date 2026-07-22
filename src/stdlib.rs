@@ -65,6 +65,11 @@ const MODULES: &[(&str, &str)] = &[
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.
+/// Los nombres de todos los módulos embebidos (para el descubrimiento del `ray_doc` del MCP).
+pub fn names() -> Vec<&'static str> {
+    MODULES.iter().map(|(n, _)| *n).collect()
+}
+
 pub fn embedded(name: &str) -> Option<&'static str> {
     MODULES.iter().find(|(n, _)| *n == name).map(|(_, src)| *src)
 }

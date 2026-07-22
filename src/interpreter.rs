@@ -1459,6 +1459,18 @@ impl<'a> Interpreter<'a> {
                 Value::Unit
             }
             // M11.2a: primitivo de parseo → [] o [n]. El prelude lo envuelve en Option.
+            // D3: formas fusionadas de `<wrapper>(…).unwrap_or(d)` (misma semántica que la cadena
+            // wrapper+unwrap_or del prelude → oráculo intacto).
+            "__index_of_or" => match (&values[0], &values[1], &values[2]) {
+                (Value::Str(s), Value::Str(sub), Value::Int(d)) => {
+                    Value::Int(crate::builtins::char_index_of(s, sub).map(|i| i as i64).unwrap_or(*d))
+                }
+                _ => unreachable!("the checker guarantees (string, string, int)"),
+            },
+            "__parse_int_or" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Int(d)) => Value::Int(s.trim().parse::<i64>().unwrap_or(*d)),
+                _ => unreachable!("the checker guarantees (string, int)"),
+            },
             "__parse_int" => match &values[0] {
                 Value::Str(s) => match s.trim().parse::<i64>() {
                     Ok(n) => Value::Array(Rc::new(RefCell::new(vec![Value::Int(n)]))),

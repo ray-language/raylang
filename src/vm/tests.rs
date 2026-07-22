@@ -3178,3 +3178,39 @@ fn sort_prim_lowering_oracle() {
         "#,
     );
 }
+
+/// D3 (jsondeserialize): `lower_prelude_fusions` reescribe `index_of(…)/parse_int(…) .unwrap_or(d)`
+/// a `__index_of_or`/`__parse_int_or`. Fija: los casos fusionados (hallado/no hallado, parseable/no,
+/// no-ASCII), los NO fusionados (unwrap_or sobre otros Option; el wrapper sin unwrap_or), y el
+/// override del usuario de `index_of` (no debe fusionarse: su semántica es otra).
+#[test]
+fn option_unwrap_or_fusion_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            let s = "{\"id\":42,\"name\":\"ana\"}";
+            let a = s.index_of(",\"name\"").unwrap_or(0 - 1);
+            let b = s.index_of("zzz").unwrap_or(0 - 1);
+            let c = parse_int("  77 ").unwrap_or(0);
+            let d = parse_int("nope").unwrap_or(0 - 5);
+            let e = "añô€x".index_of("€x").unwrap_or(0 - 1);
+            let f = s.index_of("42");
+            let g = match (f) { Option.Some(i) => i, Option.None => 0 - 1, };
+            let h = [1, 2].pop().unwrap_or(0 - 9);
+            print(a); print(b); print(c); print(d); print(e); print(g); print(h);
+            0
+        }
+        "#,
+    );
+    // Override del usuario: su `index_of` (semántica distinta: siempre Some(len)) NO se fusiona.
+    oracle_program(
+        r#"
+        fn index_of(s: string, sub: string) -> Option<int> { Option.Some(s.len()) }
+        fn main() -> int {
+            let x = "hola".index_of("zzz").unwrap_or(0 - 1);
+            print(x);
+            x - 4
+        }
+        "#,
+    );
+}

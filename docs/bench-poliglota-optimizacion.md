@@ -115,10 +115,9 @@ es exactamente lo que emitiría el transpilador.
    `--without ahash`; medido: −8.5 % extra en wordcount, neutro donde el map no
    domina). Nota colateral: el ajuste de Fase 0 (`let s = to_string(i)`) ayudó a la
    VM pero costó ~9 ms al nativo (el inline en `format!` era gratis) → anotado en N4.
-5. **N3 — `__ray_join` sin recopia** : calcular la longitud total, construir el
-   `Rc<str>` **una vez** (buffer exacto vía `Rc::new_uninit_slice` o equivalente
-   seguro) → −1 copia de 17 MB y −17 MB de pico en jsonserialize (esperado:
-   pico nativo ~57 MB, por debajo… cerca de Go).
+5. **N3 — `__ray_join` sin recopia** ✅ **HECHA** (22 jul, junto a V1; PERFORMANCE.md
+   Fase 56): `Rc<str>` construido una vez. Medido: pico nativo jsonserialize
+   **75.5 → 51.4 MB (−32 %**, Go: 47.0), tiempo −3 %.
 6. **N4 — concat pre-dimensionado**: en `emit_concat`, sustituir `format!` por un
    `String::with_capacity(estimación)` + `write!`/`push_str` (los operandos son
    conocidos; los `to_string` inlineados escriben con `itoa`-style al mismo
@@ -130,9 +129,8 @@ es exactamente lo que emitiría el transpilador.
 
 ### Fase V — la VM (tiempo y memoria)
 
-8. **V1 — `Join` sin clonar** (ya prototipado y medido: −12 MB de pico en
-   jsonserialize VM, −14 %): iterar `&str` sobre el heap y escribir en un
-   `String` preasignado. Cambio local en `OpCode::Join`, oráculo intacto.
+8. **V1 — `Join` sin clonar** ✅ **HECHA** (22 jul, junto a N3; PERFORMANCE.md
+   Fase 56): pico VM jsonserialize **88 → 76 MB (−14 %)**, oráculo intacto.
 9. **V2 — opcode `ConcatN` (concatenación n-aria)**: el compilador aplana la
    cadena de `Add` de strings (como ya hace el transpilador con
    `flatten_concat`) a un solo opcode que suma longitudes, preasigna y escribe

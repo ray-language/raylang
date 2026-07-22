@@ -59,10 +59,25 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
     // Preámbulo: helpers de runtime para operaciones de arreglo/string que no son 1:1 con Rust.
     out.push_str("fn __ray_split(s: &str, sep: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
     out.push_str("    Rc::new(std::cell::RefCell::new(s.split(sep).map(Rc::<str>::from).collect()))\n}\n");
+    // N3 (bench políglota): join SIN recopia — construye el `Rc<str>` resultado UNA vez, escribiendo los
+    // trozos directo en su buffer (antes: `Vec<&str>` + `join` a `String` + recopia entera a `Rc<str>` →
+    // 3 allocs y el DOBLE del resultado vivo en el pico; en jsonserialize eso eran ~17 MB extra).
+    // Soundness del unsafe: `total` se calcula del MISMO `v` (el borrow se retiene todo el cuerpo, nadie
+    // muta), las copias cubren exactamente `total` bytes, `str` y `[u8]` comparten layout y la
+    // concatenación de `str` válidos es UTF-8 válido → el cast `Rc<[u8]>`→`Rc<str>` preserva metadatos.
     out.push_str("fn __ray_join(a: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, sep: &str) -> Rc<str> {\n");
     out.push_str("    let v = a.borrow();\n");
-    out.push_str("    let parts: Vec<&str> = v.iter().map(|s| &**s).collect();\n");
-    out.push_str("    Rc::<str>::from(parts.join(sep))\n}\n");
+    out.push_str("    if v.is_empty() { return Rc::from(\"\"); }\n");
+    out.push_str("    let total: usize = v.iter().map(|s| s.len()).sum::<usize>() + sep.len() * (v.len() - 1);\n");
+    out.push_str("    let mut buf = Rc::<[u8]>::new_uninit_slice(total);\n");
+    out.push_str("    let dst = Rc::get_mut(&mut buf).unwrap().as_mut_ptr() as *mut u8;\n");
+    out.push_str("    let mut off = 0usize;\n");
+    out.push_str("    for (i, s) in v.iter().enumerate() {\n");
+    out.push_str("        if i > 0 { unsafe { std::ptr::copy_nonoverlapping(sep.as_ptr(), dst.add(off), sep.len()); } off += sep.len(); }\n");
+    out.push_str("        unsafe { std::ptr::copy_nonoverlapping(s.as_ptr(), dst.add(off), s.len()); } off += s.len();\n");
+    out.push_str("    }\n");
+    out.push_str("    let bytes: Rc<[u8]> = unsafe { buf.assume_init() };\n");
+    out.push_str("    unsafe { Rc::from_raw(Rc::into_raw(bytes) as *const str) }\n}\n");
     // index_of(s, sub) -> Option<int>: índice por CARÁCTER de la primera aparición de sub (como la VM;
     // sub vacío → Some(0)). Rust `str::find` da índice de BYTE, así que se compara por char.
     out.push_str("fn __ray_index_of(s: &str, sub: &str) -> Option<i64> {\n");

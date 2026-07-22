@@ -132,6 +132,10 @@ fn run_and_build_regenerate_stale_templates() {
     let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
     assert_eq!(out.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&out.stderr).contains("endif"), "{}", String::from_utf8_lossy(&out.stderr));
+    // Limpieza: el template ROTO no debe quedar en el /tmp compartido — otro test que resuelva una
+    // entrada bajo temp_dir (p. ej. el `ray_check` del MCP) dispararía la regeneración sobre él y
+    // fallaría con este 65 (flake real observado en la batería paralela).
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]

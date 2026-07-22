@@ -308,7 +308,13 @@ fn run_self(args: &[&str], code: &str, stdin: Option<String>) -> Result<String, 
     use std::sync::atomic::{AtomicUsize, Ordering};
     static SEQ: AtomicUsize = AtomicUsize::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("ray_mcp_{}_{n}.ray", std::process::id()));
+    // Subdirectorio PROPIO por proceso, no el temp_dir compartido a pelo: `resolve_entry` sobre el
+    // snippet dispara la regeneración de templates obsoletos, que escanea desde el directorio del
+    // archivo — sobre el /tmp compartido, cualquier `.ray.html` residual (p. ej. los ROTOS que otros
+    // procesos/tests dejan a propósito) abortaría el check del snippet con un error ajeno.
+    let dir = std::env::temp_dir().join(format!("ray_mcp_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create temp dir: {e}"))?;
+    let path = dir.join(format!("snippet_{n}.ray"));
     std::fs::write(&path, code).map_err(|e| format!("could not write temp file: {e}"))?;
 
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;

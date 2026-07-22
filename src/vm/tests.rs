@@ -3125,3 +3125,56 @@ fn concat_chain_lowering_oracle() {
         "#,
     );
 }
+
+/// V5 (bench políglota): `lower_sort_prim` reescribe el `sort` del prelude sobre primitivos a
+/// `__sort_prim` (sort nativo). Este oráculo fija que la reescritura preserva la semántica y que
+/// los caminos NO reescritos siguen intactos: float (excluido por NaN), tipo de usuario con
+/// `impl Ord` (diccionario), y un `sort` REDEFINIDO por el usuario (override → sin reescritura).
+#[test]
+fn sort_prim_lowering_oracle() {
+    // Primitivos (reescritos) + float y tipo de usuario (camino del prelude).
+    oracle_program(
+        r#"
+        struct P { n: int }
+        impl Ord for P { fn less(self, other: Self) -> bool { self.n > other.n } }
+        fn main() -> int {
+            let s = ["pera", "uva", "kiwi", "uva", "anis"].sort();
+            let i = [5, 1, 4, 1, 3].sort();
+            let c = ['z', 'a', 'm'].sort();
+            let f = [2.5, 0.5, 1.5].sort();
+            let p = [P { n: 1 }, P { n: 9 }, P { n: 4 }].sort();
+            print(s.join(","));
+            print(i[0] + i[4]);
+            print(c[0]);
+            print(f[0]);
+            print(p[0].n);
+            0
+        }
+        "#,
+    );
+    // Override del usuario: su `sort` (descendente) NO debe reescribirse a `__sort_prim`.
+    oracle_program(
+        r#"
+        fn sort(a: [int]) -> [int] {
+            var out: [int] = [];
+            var i = 0;
+            while (i < a.len()) { out.push(a[i]); i = i + 1; }
+            var j = 0;
+            while (j < out.len()) {
+                var k = j + 1;
+                while (k < out.len()) {
+                    if (out[k] > out[j]) { let t = out[j]; out[j] = out[k]; out[k] = t; }
+                    k = k + 1;
+                }
+                j = j + 1;
+            }
+            out
+        }
+        fn main() -> int {
+            let d = sort([1, 9, 5]);
+            print(d[0]);
+            d[0] - 9
+        }
+        "#,
+    );
+}

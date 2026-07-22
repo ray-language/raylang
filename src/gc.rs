@@ -168,15 +168,68 @@ pub enum Obj {
     // aquí (los usa la VM); el GC solo rootea los valores en tránsito / de `Done` que la VM le aporta.
 }
 
-/// Una ranura del heap: un objeto y su bit de marca.
+/// Una ranura del heap: un objeto, su bit de marca y su tamaño estimado en bytes (V6).
 struct Slot {
     obj: Obj,
     marked: bool,
+    /// V6 (bench políglota): estimación del payload en BYTES (buffers de String/Bytes + los Vec del
+    /// contenedor), calculada al asignar y REFRESCADA en cada sweep (las mutaciones entre GCs —
+    /// push/insert— derivan la cuenta; el refresco la corrige). Gobierna `live_bytes`.
+    bytes: usize,
 }
 
 /// Umbral inicial de objetos vivos antes de la primera recolección. Pequeño a
 /// propósito: así los programas de prueba ejercitan el GC pronto.
 const INITIAL_GC: usize = 64;
+
+/// V6: umbral mínimo de BYTES estimados vivos+basura antes de un GC por bytes (16 MiB). Lo bastante
+/// alto para que los programas pequeños nunca disparen por bytes (cero coste extra), y lo bastante
+/// bajo para acotar el pico cuando pocos objetos acumulan mucha basura de buffers.
+const INITIAL_GC_BYTES: usize = 16 << 20;
+
+/// V6: bytes del *payload* inline de un valor (los buffers que el conteo por objetos no ve).
+fn value_bytes(v: &HeapValue) -> usize {
+    match v {
+        HeapValue::Str(s) => s.capacity(),
+        HeapValue::Bytes(b) => b.capacity(),
+        _ => 0,
+    }
+}
+
+/// V6: estimación en bytes del payload de un objeto (el Vec del contenedor + los buffers inline de
+/// sus elementos). O(elementos) — el mismo orden que costó construir el objeto; se calcula al
+/// asignar y se refresca en cada sweep.
+fn obj_bytes(obj: &Obj) -> usize {
+    match obj {
+        Obj::Array(v) => {
+            v.capacity() * std::mem::size_of::<HeapValue>() + v.iter().map(value_bytes).sum::<usize>()
+        }
+        Obj::IntArray(v) => v.capacity() * 8,
+        Obj::Struct(s) => {
+            s.fields.len() * (std::mem::size_of::<HeapValue>() + 24)
+                + s.fields.iter().map(|(_, v)| value_bytes(v)).sum::<usize>()
+        }
+        Obj::Closure(c) => c.upvalues.len() * 8,
+        Obj::Enum(e) => {
+            e.payload.len() * std::mem::size_of::<HeapValue>()
+                + e.payload.iter().map(value_bytes).sum::<usize>()
+        }
+        Obj::Cell(v) => std::mem::size_of::<HeapValue>() + value_bytes(v),
+        Obj::Map(m) => {
+            m.capacity() * (std::mem::size_of::<MapKey>() + std::mem::size_of::<HeapValue>())
+                + m.iter()
+                    .map(|(k, v)| {
+                        let kb = match k {
+                            MapKey::Str(s) => s.capacity(),
+                            MapKey::Bytes(b) => b.capacity(),
+                            _ => 0,
+                        };
+                        kb + value_bytes(v)
+                    })
+                    .sum::<usize>()
+        }
+    }
+}
 
 /// El heap: las ranuras, la lista de ranuras libres (para reusar handles), el conteo
 /// de vivos y el umbral de disparo.
@@ -198,6 +251,13 @@ pub struct Heap {
     /// Modo de estrés: si está activo, la VM recolecta en **cada** punto seguro. Sirve
     /// para destapar raíces faltantes en los tests.
     pub stress: bool,
+    /// V6 (bench políglota): bytes estimados VIVOS (suma de `Slot.bytes`). El umbral por Nº de
+    /// objetos es CIEGO a los bytes: pocos objetos grandes (arrays de strings de un `split`
+    /// gigante) acumulaban cientos de MB de basura sin disparar el GC (medido: 536 MB de pico con
+    /// ~3 MB vivos). Este contador añade un disparo por BYTES (`should_collect`).
+    live_bytes: usize,
+    /// V6: umbral de bytes para el próximo GC (doblado por bytes vivos, mínimo `INITIAL_GC_BYTES`).
+    next_gc_bytes: usize,
 }
 
 impl Default for Heap {
@@ -211,6 +271,8 @@ impl Default for Heap {
             traced_work: 0,
             max_live: usize::MAX,
             stress: false,
+            live_bytes: 0,
+            next_gc_bytes: INITIAL_GC_BYTES,
         }
     }
 }
@@ -223,7 +285,9 @@ impl Heap {
     /// Reserva un objeto y devuelve su handle. Reusa una ranura libre si la hay.
     pub fn allocate(&mut self, obj: Obj) -> Handle {
         self.live += 1;
-        let slot = Slot { obj, marked: false };
+        let bytes = obj_bytes(&obj);
+        self.live_bytes += bytes;
+        let slot = Slot { obj, marked: false, bytes };
         if let Some(h) = self.free.pop() {
             self.slots[h] = Some(slot);
             h
@@ -255,7 +319,12 @@ impl Heap {
     /// ¿Conviene recolectar? (En modo estrés, siempre.) M42.2: también al alcanzar el tope de
     /// heap, para forzar un GC antes de rebasarlo (si tras recolectar sigue por encima, `over_cap`).
     pub fn should_collect(&self) -> bool {
-        self.stress || self.live >= self.next_gc || self.live >= self.max_live
+        self.stress
+            || self.live >= self.next_gc
+            || self.live >= self.max_live
+            // V6: disparo por BYTES estimados — cubre el caso "pocos objetos, buffers enormes"
+            // (arrays/maps de strings grandes) que el conteo por objetos no ve.
+            || self.live_bytes >= self.next_gc_bytes
     }
 
     /// M42.2: ¿se rebasó el tope de heap tras recolectar? La VM lo consulta después del GC: si es
@@ -338,10 +407,15 @@ impl Heap {
     /// Barrido: libera lo no marcado y limpia las marcas de los sobrevivientes.
     /// Ajusta el umbral para la próxima recolección.
     pub fn sweep(&mut self) {
+        // V6: la cuenta de bytes se RECOMPUTA de los supervivientes (corrige la deriva por
+        // mutación —push/insert— entre GCs; O(elementos vivos), mismo orden que el marcado).
+        let mut live_bytes = 0usize;
         for (h, opt) in self.slots.iter_mut().enumerate() {
             if let Some(slot) = opt {
                 if slot.marked {
                     slot.marked = false; // limpiar para la próxima vuelta
+                    slot.bytes = obj_bytes(&slot.obj);
+                    live_bytes += slot.bytes;
                 } else {
                     *opt = None; // liberar
                     self.free.push(h);
@@ -349,6 +423,10 @@ impl Heap {
                 }
             }
         }
+        self.live_bytes = live_bytes;
+        // V6: umbral de bytes doblado por vivos, con suelo (los programas pequeños no disparan
+        // nunca por bytes → coste cero para ellos).
+        self.next_gc_bytes = (self.live_bytes * 2).max(INITIAL_GC_BYTES);
         // El umbral crece con la población viva Y con el TRABAJO de la recolección
         // recién hecha (Opt.13): tras un trazado que escaneó W elementos se permiten
         // al menos W/4 asignaciones antes del próximo GC → el coste se amortiza a

@@ -2133,6 +2133,17 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::String)
     } },
+    // V5 (bench políglota): sort NATIVO para arreglos de primitivos. Interno: lo genera el checker
+    // (`lower_sort_prim`) reescribiendo el `sort` del prelude cuando resuelve con el `impl Ord` de
+    // un primitivo del prelude. La regla tipa por si alguien lo escribe a mano. `float` excluido
+    // (su `<` con NaN no forma orden total; sigue por el merge sort del prelude).
+    Builtin { name: "__sort_prim", opcode: OpCode::SortPrim, check: |a| {
+        arity(a, 1, "__sort_prim", "")?;
+        match &a[0] {
+            Type::Array(t) if matches!(**t, Type::Int | Type::String | Type::Char) => Ok(a[0].clone()),
+            other => Err((Some(0), format!("__sort_prim expects [int], [string] or [char], not {other}"))),
+        }
+    } },
     Builtin { name: "__parse_int", opcode: OpCode::ParseInt, check: |a| {
         arity(a, 1, "__parse_int", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__parse_int expects a string, not {}", a[0]))); }

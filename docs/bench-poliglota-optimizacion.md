@@ -144,25 +144,27 @@ es exactamente lo que emitiría el transpilador.
 11. **V4 — `heap_to_key` que consuma el valor** ✅ **HECHA** (22 jul; Fase 58):
     la clave se mueve en vez de clonarse en los 6 sitios de Map. Medido:
     wordcount **−4.3 %** (313.4 → 300.0 ms), micro de inserciones −3 %.
-12. **V5 — `sort` nativo para `[string]`**: `keys().sort()` corre el merge sort
-    del prelude (raylang), con 2 clones de String por comparación vía `Index`.
-    Un builtin que ordene el `Vec<HeapValue>` in situ comparando `&str`. En estos
-    benchmarks las claves son pocas (~1000) — impacto menor aquí, pero es la
-    pieza que falta para cargas de ordenación reales (los `Ord` de usuario siguen
-    por el camino del prelude).
-13. **V6 — GC consciente de bytes (memoria, no tiempo)**: el umbral dispara por
-    número de objetos; sumar `String::capacity` (contabilidad incremental en
-    allocate/sweep) para que cargas string-heavy con pocos objetos no queden
-    fuera del radar. En estos 3 benchmarks no cambia nada (no hay basura de heap
-    que recolectar), pero gobierna el pico en programas con churn de arreglos de
-    strings. Junto a esto: `shrink_to_fit` de `slots`/`free` tras barridos
-    grandes (hoy el pico de handles es permanente).
-14. **(Evaluar con prudencia) V7 — constantes string sin clon por push**: cada
-    iteración clona la constante `base` (`const_to_heap` caliente). Opciones:
-    handle de heap pre-alocado por constante (raíz permanente) o `Rc<str>` solo
-    para constantes. Ojo: `Rc<str>` global (Opt.3) y SSO (P1.4) ya se midieron
-    y descartaron; esta variante es más estrecha (solo el borde constante→pila),
-    pero hay que medirla A/B antes de comprometerla.
+12. **V5 — `sort` nativo para primitivos** ✅ **HECHA** (22 jul; PERFORMANCE.md
+    Fase 60): `lower_sort_prim` → `__sort_prim`/opcode `SortPrim`, solo si sort
+    e `impl Ord` son los del prelude (`PreludeOrigin`; override del usuario →
+    camino genérico). Medido: micro 100k strings **630 → 27.9 ms (23×)**;
+    wordcount −3.6 %. `float` excluido (NaN).
+13. **V6 — GC consciente de bytes** ✅ **HECHA** (22 jul; Fase 60): `Slot.bytes`
+    (`obj_bytes` en allocate, recomputado en sweep) + disparo por
+    `live_bytes >= next_gc_bytes` (suelo 16 MiB → coste cero en programas
+    pequeños). Medido: micro patológico **536 → 40.5 MB de pico (−92 %)** y −6 %
+    de tiempo; benchmarks sin regresión. (El `shrink_to_fit` de `slots` queda
+    como fleco futuro.)
+14. **V7 — constantes string sin clon por push** ❌ **DESCARTADA** (22 jul;
+    Fase 60): techo ~4–5 % según el perfil, y toda implementación pasa por
+    cambiar la representación (`Rc<str>`/CoW/interning), medida y rechazada
+    tres veces (Opt.3, P1.4, interning en P0.4). No reabrir sin nueva evidencia.
+
+**ARCO CERRADO** (22 jul 2026): N1–N4 y V1–V7, cada punto aplicado o descartado
+con medición. Estado final vs el baseline del §1: nativos a ~1.1× de Go los tres
+(eran 1.45–2.11×), pico nativo de jsonserialize 51 MB (74), VM −27 %/−10 %/−7 %
+en jsonserialize/logparse/wordcount con −14 % de pico, más el sort 23× y la
+gobernanza de bytes del GC fuera de los benchmarks.
 
 ### Lo que NO hacer (ya refutado por medición, no reabrir)
 

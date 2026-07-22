@@ -161,6 +161,12 @@ pub enum Obj {
     /// operación no especializada lo **degrada** in place a `Array` (`Heap::degrade_int_array`,
     /// invisible para el programa); las calientes (push/index/set/len/pop) lo manejan nativo.
     IntArray(Vec<i64>),
+    /// MM3 (bench matrixmul, 22 jul 2026 — la P1.2 pendiente): arreglo homogéneo de FLOATS,
+    /// gemelo de `IntArray` (8 B/elemento en vez del `HeapValue` de 32; trazado O(1), sin handles).
+    /// Nace en `specialize_array` (literal con todos Float) o al hacer `push` de un Float sobre un
+    /// arreglo genérico vacío; cualquier operación no especializada lo degrada (mismo embudo que
+    /// IntArray). Crítico en cómputo numérico: 4× de densidad de caché en `a[i][k]*b[k][j]`.
+    FloatArray(Vec<f64>),
     Struct(VmStruct),
     Closure(VmClosure),
     /// Un enum: variante + payload (M5). El GC traza su payload.
@@ -219,6 +225,7 @@ fn obj_bytes(obj: &Obj) -> usize {
             v.capacity() * std::mem::size_of::<HeapValue>() + v.iter().map(value_bytes).sum::<usize>()
         }
         Obj::IntArray(v) => v.capacity() * 8,
+        Obj::FloatArray(v) => v.capacity() * 8,
         Obj::Struct(s) => {
             s.fields.capacity() * std::mem::size_of::<HeapValue>()
                 + s.fields.iter().map(value_bytes).sum::<usize>()
@@ -342,6 +349,10 @@ impl Heap {
         if let Obj::IntArray(v) = obj {
             let elems: Vec<HeapValue> = v.iter().map(|&i| HeapValue::Int(i)).collect();
             *obj = Obj::Array(elems);
+        } else if let Obj::FloatArray(v) = obj {
+            // MM3: mismo embudo para el gemelo de floats.
+            let elems: Vec<HeapValue> = v.iter().map(|&f| HeapValue::Float(f)).collect();
+            *obj = Obj::Array(elems);
         }
     }
 
@@ -408,7 +419,7 @@ impl Heap {
     fn trace_cost(&self, h: Handle) -> usize {
         1 + match self.get(h) {
             Obj::Array(v) => v.len(),
-            Obj::IntArray(_) => 0, // M98.5: sin handles → nada que escanear (coste constante)
+            Obj::IntArray(_) | Obj::FloatArray(_) => 0, // M98.5/MM3: sin handles → coste constante
             Obj::Struct(s) => s.fields.len(),
             Obj::Closure(c) => c.upvalues.len(),
             Obj::Enum(e) => e.payload.len(),
@@ -421,7 +432,7 @@ impl Heap {
     fn children(&self, h: Handle) -> Vec<Handle> {
         match self.get(h) {
             Obj::Array(v) => v.iter().filter_map(HeapValue::handle).collect(),
-            Obj::IntArray(_) => Vec::new(), // M98.5: los ints son inline, sin hijos
+            Obj::IntArray(_) | Obj::FloatArray(_) => Vec::new(), // M98.5/MM3: inline, sin hijos
             Obj::Struct(s) => s.fields.iter().filter_map(|v| v.handle()).collect(),
             Obj::Closure(c) => c.upvalues.clone(),
             Obj::Enum(e) => e.payload.iter().filter_map(HeapValue::handle).collect(),

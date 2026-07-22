@@ -145,6 +145,14 @@ pub enum OpCode {
     /// compara, y si es falso salta a `target` — sin apilar ni sacar los operandos. Es el par de
     /// opcodes más ejecutado en fib/bucles (la guarda `n < 2`, `i < N`). Campos: `(slot, const, op, target)`.
     GetLocalConstCmpJump(usize, usize, CmpOp, usize),
+    /// MM2 (ronda 4, bench matrixmul): indexación con base e índice LOCALES en una instrucción
+    /// (`[GetLocalLocal(s, t), Index]` → `IndexLL(s, t)`): empuja `local[s][local[t]]`. Es la forma
+    /// `a[i]` — el patrón dominante de los bucles numéricos sobre arreglos. Misma semántica que
+    /// `Index` (arrays/IntArray/string/bytes, bounds).
+    IndexLL(usize, usize),
+    /// MM2 (ronda 4): `[GetLocal(t), Index]` → `IndexLocal(t)`: saca la base de la pila e indexa por
+    /// `local[t]`. Es el segundo nivel de `a[i][k]` (la base ya está en la pila) y el `x[k]` suelto.
+    IndexLocal(usize),
     /// A4 (ronda 2): `local[slot] + const` en una instrucción (`[GetLocalConst, Add]`).
     AddLocalConst(usize, usize),
     /// A4 (ronda 2): `local[slot] - const` en una instrucción (`[GetLocalConst, Sub]`).

@@ -227,6 +227,7 @@ impl<'a> Compiler<'a> {
         fuse_superinstructions(&mut self.cur().chunk);
         fuse_round2(&mut self.cur().chunk); // A4: guardas y aritmética local-const
         fuse_guard_round3(&mut self.cur().chunk); // P0.6: GetLocalConst;CmpJump → guarda en 1 opcode
+        fuse_index_round4(&mut self.cur().chunk); // MM2: [GetLocalLocal|GetLocal, Index] → IndexLL/IndexLocal
         discard_spawn_results(&mut self.cur().chunk); // M98.1: spawn fire-and-forget sin Task retenida
 
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
@@ -1412,6 +1413,69 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
                     i += 2;
                     continue;
                 }
+            }
+        }
+        code.push(chunk.code[i].clone());
+        lines.push(chunk.lines[i]);
+        i += 1;
+    }
+    old_a_new[n] = code.len();
+    for op in &mut code {
+        match op {
+            OpCode::Jump(t)
+            | OpCode::JumpIfFalse(t)
+            | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t) => *t = old_a_new[*t],
+            _ => {}
+        }
+    }
+    chunk.code = code;
+    chunk.lines = lines;
+}
+
+
+/// MM2 (ronda 4, bench matrixmul): fusiona la INDEXACIÓN — el patrón dominante de los bucles
+/// numéricos sobre arreglos (`a[i]`, `a[i][k]`):
+///   - `[GetLocalLocal(s, t), Index]` → `IndexLL(s, t)` (base e índice locales: la forma `a[i]`).
+///   - `[GetLocal(t), Index]` → `IndexLocal(t)` (la base ya está en la pila: el segundo nivel de
+///     `a[i][k]`, o un `x[k]` cuya base vino de otra expresión).
+/// En `s + a[i][k] * b[k][j]` (matrixmul) el bucle interno pasa de ~15 a ~9 despachos. Mismo
+/// esquema de remapeo de saltos que las rondas anteriores; un salto que caiga ENTRE los dos
+/// opcodes del par anula esa fusión (`is_target`).
+fn fuse_index_round4(chunk: &mut Chunk) {
+    let n = chunk.code.len();
+    if n == 0 {
+        return;
+    }
+    let mut is_target = vec![false; n];
+    for op in &chunk.code {
+        match op {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t) => is_target[*t] = true,
+            _ => {}
+        }
+    }
+    let mut old_a_new = vec![0usize; n + 1];
+    let mut code = Vec::with_capacity(n);
+    let mut lines = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        old_a_new[i] = code.len();
+        if i + 1 < n && !is_target[i + 1] && matches!(chunk.code[i + 1], OpCode::Index) {
+            match &chunk.code[i] {
+                OpCode::GetLocalLocal(s, t) => {
+                    code.push(OpCode::IndexLL(*s, *t));
+                    lines.push(chunk.lines[i + 1]); // posición del Index (la del error de bounds)
+                    i += 2;
+                    continue;
+                }
+                OpCode::GetLocal(t) => {
+                    code.push(OpCode::IndexLocal(*t));
+                    lines.push(chunk.lines[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                _ => {}
             }
         }
         code.push(chunk.code[i].clone());

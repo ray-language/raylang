@@ -116,7 +116,7 @@ pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
     let mut vm = Vm::new(program);
     let result = vm.run()?;
     vm.print_gc_stats_if_requested(); // M37.1
-    Ok(to_value(&vm.cur.heap, &program.enums, &result))
+    Ok(to_value(&vm.cur.heap, &program.structs, &program.enums, &result))
 }
 
 /// Como [`run_program`], pero con **límites de recursos** para embeber raylang confinado (un bucle
@@ -139,7 +139,7 @@ pub fn run_program_with_limit(
     }
     let result = vm.run()?;
     vm.print_gc_stats_if_requested(); // M37.1
-    Ok(to_value(&vm.cur.heap, &program.enums, &result))
+    Ok(to_value(&vm.cur.heap, &program.structs, &program.enums, &result))
 }
 
 /// Ejecuta un `Chunk` suelto (una expresión compilada). Lo envuelve como una
@@ -230,6 +230,7 @@ impl<'a> Vm<'a> {
                 is_main: true,
                 task: None,
                 scopes: Vec::new(),
+                unit_enums: Default::default(),
             },
             shared: Arc::new(Mutex::new(Shared::default())),
             locals_pool: Vec::new(),
@@ -650,7 +651,7 @@ impl<'a> Vm<'a> {
 
                 OpCode::Print => {
                     let v = self.pop();
-                    crate::host_print(&format_value(&self.cur.heap, &self.program.enums, &v));
+                    crate::host_print(&format_value(&self.cur.heap, &self.program.structs, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
 
@@ -705,7 +706,7 @@ impl<'a> Vm<'a> {
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
                                 runtime_error(pos!().0, pos!().1, "the prelude Option enum is not available for the FFI return_val"))?;
-                            let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
+                            let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid as u32, tag: tag as u32, payload }));
                             HeapValue::Obj(h)
                         }
                         // M41.4b: puntero opaco.
@@ -717,7 +718,7 @@ impl<'a> Vm<'a> {
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
                                 runtime_error(pos!().0, pos!().1, "the prelude Option enum is not available for the FFI return_val"))?;
-                            let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
+                            let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid as u32, tag: tag as u32, payload }));
                             HeapValue::Obj(h)
                         }
                     };
@@ -1010,7 +1011,7 @@ impl<'a> Vm<'a> {
                         };
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), heap: new_heap, is_main: false,
-                            task, scopes: Vec::new(),
+                            task, scopes: Vec::new(), unit_enums: Default::default(),
                         });
                         task
                     };
@@ -1399,7 +1400,7 @@ impl<'a> Vm<'a> {
                     // Representación textual (la misma que `print`): coincide con el `Display`
                     // que usa el intérprete en `to_string`.
                     let v = self.pop();
-                    let s = format_value(&self.cur.heap, &self.program.enums, &v);
+                    let s = format_value(&self.cur.heap, &self.program.structs, &self.program.enums, &v);
                     self.push(HeapValue::Str(s));
                 }
                 OpCode::ConcatN(n) => {
@@ -1912,7 +1913,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::EPrint => {
                     let v = self.pop();
-                    crate::host_eprint(&format_value(&self.cur.heap, &self.program.enums, &v));
+                    crate::host_eprint(&format_value(&self.cur.heap, &self.program.structs, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
                 OpCode::IndexOfOr => {
@@ -2607,31 +2608,49 @@ impl<'a> Vm<'a> {
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
-                    let sname = self.program.structs[*idx].name.clone();
-                    let field_names: Vec<String> = self.program.structs[*idx].fields.clone();
-                    let mut values = Vec::with_capacity(field_names.len());
-                    for _ in 0..field_names.len() {
-                        values.push(self.pop());
+                    // TA1: la instancia lleva solo el índice de su def + los valores en orden de
+                    // declaración — cero clones de nombres (antes: nombre + N nombres de campo,
+                    // Strings, POR instancia).
+                    let arity = self.program.structs[*idx].fields.len();
+                    let mut fields = Vec::with_capacity(arity);
+                    for _ in 0..arity {
+                        fields.push(self.pop());
                     }
-                    values.reverse(); // orden de declaración
-                    let fields: Vec<(String, HeapValue)> = field_names.into_iter().zip(values).collect();
-                    let h = self.cur.heap.allocate(Obj::Struct(VmStruct { name: sname, fields }));
+                    fields.reverse(); // orden de declaración
+                    let h = self.cur.heap.allocate(Obj::Struct(VmStruct { struct_idx: *idx, fields }));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::MakeEnum(enum_id, tag) => {
                     // La aridad la da la tabla; sacamos ese tanto de payload.
                     let arity = self.program.enums[*enum_id].variants[*tag].arity;
-                    let mut payload = Vec::with_capacity(arity);
-                    for _ in 0..arity {
-                        payload.push(self.pop());
+                    // TA4: una variante SIN payload es inmutable y sin identidad observable → un solo
+                    // objeto canónico por fibra, reusado en cada construcción (raíz del GC en collect).
+                    if arity == 0 {
+                        let key = (*enum_id as u32, *tag as u32);
+                        let h = match self.cur.unit_enums.get(&key) {
+                            Some(&h) => h,
+                            None => {
+                                let h = self.cur.heap.allocate(Obj::Enum(VmEnum {
+                                    enum_id: key.0, tag: key.1, payload: Vec::new(),
+                                }));
+                                self.cur.unit_enums.insert(key, h);
+                                h
+                            }
+                        };
+                        self.push(HeapValue::Obj(h));
+                    } else {
+                        let mut payload = Vec::with_capacity(arity);
+                        for _ in 0..arity {
+                            payload.push(self.pop());
+                        }
+                        payload.reverse(); // orden de declaración
+                        let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: *enum_id as u32, tag: *tag as u32, payload }));
+                        self.push(HeapValue::Obj(h));
                     }
-                    payload.reverse(); // orden de declaración
-                    let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: *enum_id, tag: *tag, payload }));
-                    self.push(HeapValue::Obj(h));
                 }
                 OpCode::EnumTagEq(tag) => {
                     let h = self.pop_obj();
-                    let matches = self.as_enum(h).tag == *tag;
+                    let matches = self.as_enum(h).tag as usize == *tag;
                     self.push(HeapValue::Bool(matches));
                 }
                 OpCode::GetEnumField(i) => {
@@ -2643,17 +2662,22 @@ impl<'a> Vm<'a> {
                     return Err(runtime_error(pos!().0, pos!().1, "no match branch matched (should not happen)"));
                 }
                 OpCode::GetField(name) => {
+                    // TA1: el nombre se resuelve a POSICIÓN en la tabla de defs (compartida), no en
+                    // la instancia (que ya no lleva nombres).
                     let h = self.pop_obj();
-                    let v = self.as_struct(h).fields.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+                    let s = self.as_struct(h);
+                    let pos = self.program.structs[s.struct_idx].fields.iter().position(|n| n == name)
                         .expect("the checker guarantees the field");
+                    let v = s.fields[pos].clone();
                     self.push(v);
                 }
                 OpCode::SetField(name) => {
                     let v = self.pop();
                     let h = self.pop_obj();
-                    let s = self.as_struct_mut(h);
-                    let slot = s.fields.iter_mut().find(|(n, _)| n == name).expect("the checker guarantees the field");
-                    slot.1 = v;
+                    let idx = self.as_struct(h).struct_idx;
+                    let pos = self.program.structs[idx].fields.iter().position(|n| n == name)
+                        .expect("the checker guarantees the field");
+                    self.as_struct_mut(h).fields[pos] = v;
                 }
 
                 OpCode::Call(idx, argc) => {
@@ -2861,6 +2885,8 @@ impl<'a> Vm<'a> {
         // en el heap del canal/tarea. Así la pausa la acota el tamaño del heap de una sola fibra.
         let mut roots: Vec<Handle> = Vec::new();
         gather_roots(&self.cur.frames, &self.cur.stack, &mut roots);
+        // TA4: los handles canónicos de variantes sin payload son raíces (viven toda la fibra).
+        roots.extend(self.cur.unit_enums.values().copied());
 
         for h in roots {
             self.cur.heap.mark(h);

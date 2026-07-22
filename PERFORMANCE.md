@@ -786,6 +786,35 @@ stubbea: el fallback es la Pike VM raylang transpilada tal cual — la implement
 (`build_native_regex_via_ray_runtime_matches_the_vm`): tortura del dialecto byte a byte VM↔nativo
 + fallback. La VM conserva la Pike VM (el motor escrito en raylang, showcase intacto).
 
+#### Fase 64 — TA1/TA2/TA4: la VM en cargas de muchos objetos (22 jul, bench treealloc)
+
+El bench `treealloc` (binary-trees) puso a la VM en ~900 ms / decenas de MB donde el NATIVO corre en
+20 ms — por delante de Go (30) y de la variante Rust (30). Tres hallazgos y tres fixes, todo medido
+(análisis completo: `docs/bench-treealloc-plan.md`):
+
+- **Lección metodológica**: el RSS y hasta el peak-commit de mimalloc son ADAPTATIVOS (el mismo
+  binario daba 78 y 45 MB en tandas distintas; los A/B salían "idénticos" por compensaciones — la V6
+  además se auto-compensa: mejorar la repr baja también los bytes contabilizados y retrasa el
+  disparo). La memoria de la VM se mide ahora con una **sonda determinista** permanente
+  (`RAY_HEAP_STATS=1`: picos exactos de objetos/bytes, slots, allocs).
+- **TA1 — structs sin metadatos por instancia**: `VmStruct` pasa de `name: String + Vec<(String,
+  HeapValue)>` (¡el nombre del struct y el de CADA campo se clonaban por instancia!) a
+  `struct_idx + Vec<HeapValue>` (los nombres, en la tabla del programa). Churn de treealloc
+  230→154 MB (−33 %).
+- **TA2 — Slot 88→48 B**: `Obj::Map` BOXEADO (la variante de 64 B dimensionaba todo el enum `Obj` y
+  con él cada ranura del heap), ids de `VmEnum` a u32, `Slot.bytes` u32 saturado. El vector de slots
+  es el mayor componente del pico en cargas de muchos objetos: −45 % por ranura. Guardia de
+  regresión `slot_stays_small` (≤48 B).
+- **TA4 — singleton por variante de enum SIN payload**: `Option.None` asignaba un objeto de heap POR
+  construcción (binary-trees: 2 por hoja); una variante vacía es inmutable y sin identidad
+  observable → un handle canónico por fibra (raíz del GC). **Allocs totales 4.82 M → 3.20 M
+  (−34 %)**; slots 524 k → 262 k entradas (46 → 12.6 MB acumulado, −73 %).
+
+**Tiempo**: treealloc ~945 → ~805 ms (−15 %); benches de servicios +1–2 % (borde del ruido; el
+deref del Map boxeado + los contadores de la sonda) — asumido. Batería completa + corpus nativo +
+concurrencia verdes. Pendientes documentados: TA5 (niche de Option: 2 objetos por nodo → 1, cambio
+de repr GRANDE), TA6 (marcos sin alloc por llamada — junto a P2.a), TA7 (payload inline aridad 1).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

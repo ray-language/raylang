@@ -32,6 +32,8 @@ use std::collections::{HashMap, VecDeque};
 /// Almacén interno de un `Map` en la VM (P0.1, perf): `HashMap` con el hasher **aHash** en vez del
 /// SipHash de std — 2–5× más rápido sobre claves cortas (int/string), con resistencia a hash-flooding.
 pub type MapStore = HashMap<MapKey, HeapValue, ahash::RandomState>;
+/// TA4: mapa (enum_id, tag) → handle canónico de la variante SIN payload (ver `Fiber.unit_enums`).
+pub type MapStore2 = HashMap<(u32, u32), Handle, ahash::RandomState>;
 
 /// Un *handle*: la referencia a un objeto del heap (su índice de ranura).
 pub type Handle = usize;
@@ -82,8 +84,13 @@ impl HeapValue {
 
 /// Un struct en el heap: nombre + campos en orden de declaración.
 pub struct VmStruct {
-    pub name: String,
-    pub fields: Vec<(String, HeapValue)>,
+    /// TA1 (bench treealloc, 22 jul 2026): la instancia NO lleva metadatos — solo el índice de su
+    /// definición (`CompiledProgram.structs`) y los VALORES en orden de declaración. Antes cada
+    /// instancia clonaba el nombre del struct + el nombre de CADA campo (Strings): en un árbol de
+    /// binary-trees eso era ~150 B y 4 mallocs de metadatos POR NODO. Los nombres se consultan en
+    /// la tabla del programa (acceso a campo, Show, borde a intérprete).
+    pub struct_idx: usize,
+    pub fields: Vec<HeapValue>,
 }
 
 /// Una closure en el heap: el índice de su función y sus upvalues (handles a celdas).
@@ -96,8 +103,10 @@ pub struct VmClosure {
 /// y el payload posicional. `enum_id` indexa la tabla de enums del programa; juntos
 /// dan el nombre del enum y de la variante para imprimir y para el oráculo.
 pub struct VmEnum {
-    pub enum_id: usize,
-    pub tag: usize,
+    /// TA2: u32 (ningún programa real se acerca a 4G enums/variantes) → VmEnum 40→32 B, y con él
+    /// `Obj` y el `Slot` del heap.
+    pub enum_id: u32,
+    pub tag: u32,
     pub payload: Vec<HeapValue>,
 }
 
@@ -161,7 +170,11 @@ pub enum Obj {
     Cell(HeapValue),
     /// Un mapa `Map<K, V>` (M13.1): clave hashable → valor. El GC traza los **valores**
     /// (las claves son primitivos *inline*, sin handles). Usa el hasher aHash (P0.1) vía [`MapStore`].
-    Map(MapStore),
+    /// TA2 (bench treealloc, 22 jul 2026): el Map va BOXEADO — `MapStore` (HashMap, 64 B) era la
+    /// variante más grande y dimensionaba TODO `Obj` (72 B) y con él cada `Slot` del heap (88 B ×
+    /// objeto vivo o libre). Boxeándolo, `Obj` lo dimensiona `VmEnum` y el Slot baja a ~48 B: el
+    /// vector de slots es el mayor componente del pico en cargas de muchos objetos pequeños.
+    Map(Box<MapStore>),
     // M38.1b: `Channel`/`Task` YA NO son objetos del heap. Son sincronización compartida entre actores,
     // viven en almacenes del host de la VM (`Vm.channels`/`Vm.tasks`) referenciados por
     // `HeapValue::Channel(id)`/`Task(id)`. Sus structs (`VmChannel`/`VmTask`/`TaskState`) siguen definidos
@@ -175,7 +188,8 @@ struct Slot {
     /// V6 (bench políglota): estimación del payload en BYTES (buffers de String/Bytes + los Vec del
     /// contenedor), calculada al asignar y REFRESCADA en cada sweep (las mutaciones entre GCs —
     /// push/insert— derivan la cuenta; el refresco la corrige). Gobierna `live_bytes`.
-    bytes: usize,
+    /// TA2: u32 SATURADO (un objeto de >4 GiB satura la cuenta, no la corrompe) → Slot 8 B menos.
+    bytes: u32,
 }
 
 /// Umbral inicial de objetos vivos antes de la primera recolección. Pequeño a
@@ -206,8 +220,8 @@ fn obj_bytes(obj: &Obj) -> usize {
         }
         Obj::IntArray(v) => v.capacity() * 8,
         Obj::Struct(s) => {
-            s.fields.len() * (std::mem::size_of::<HeapValue>() + 24)
-                + s.fields.iter().map(|(_, v)| value_bytes(v)).sum::<usize>()
+            s.fields.capacity() * std::mem::size_of::<HeapValue>()
+                + s.fields.iter().map(value_bytes).sum::<usize>()
         }
         Obj::Closure(c) => c.upvalues.len() * 8,
         Obj::Enum(e) => {
@@ -258,6 +272,13 @@ pub struct Heap {
     live_bytes: usize,
     /// V6: umbral de bytes para el próximo GC (doblado por bytes vivos, mínimo `INITIAL_GC_BYTES`).
     next_gc_bytes: usize,
+    /// TA (bench treealloc, 22 jul 2026): sonda de picos EXACTOS del heap (`RAY_HEAP_STATS=1`),
+    /// inmune al ruido del allocador (RSS/commit de mimalloc resultaron ADAPTATIVOS entre tandas —
+    /// la lección de la Fase 64: medir memoria de la VM con esta sonda, no con el pico del SO).
+    probe_peak_live: usize,
+    probe_peak_bytes: usize,
+    probe_total_allocs: usize,
+    probe_total_bytes: usize,
 }
 
 impl Default for Heap {
@@ -273,6 +294,10 @@ impl Default for Heap {
             stress: false,
             live_bytes: 0,
             next_gc_bytes: INITIAL_GC_BYTES,
+            probe_peak_live: 0,
+            probe_peak_bytes: 0,
+            probe_total_allocs: 0,
+            probe_total_bytes: 0,
         }
     }
 }
@@ -285,8 +310,12 @@ impl Heap {
     /// Reserva un objeto y devuelve su handle. Reusa una ranura libre si la hay.
     pub fn allocate(&mut self, obj: Obj) -> Handle {
         self.live += 1;
-        let bytes = obj_bytes(&obj);
-        self.live_bytes += bytes;
+        let bytes = obj_bytes(&obj).min(u32::MAX as usize) as u32;
+        self.live_bytes += bytes as usize;
+        self.probe_total_allocs += 1;
+        self.probe_total_bytes += bytes as usize;
+        if self.live > self.probe_peak_live { self.probe_peak_live = self.live; }
+        if self.live_bytes > self.probe_peak_bytes { self.probe_peak_bytes = self.live_bytes; }
         let slot = Slot { obj, marked: false, bytes };
         if let Some(h) = self.free.pop() {
             self.slots[h] = Some(slot);
@@ -393,7 +422,7 @@ impl Heap {
         match self.get(h) {
             Obj::Array(v) => v.iter().filter_map(HeapValue::handle).collect(),
             Obj::IntArray(_) => Vec::new(), // M98.5: los ints son inline, sin hijos
-            Obj::Struct(s) => s.fields.iter().filter_map(|(_, v)| v.handle()).collect(),
+            Obj::Struct(s) => s.fields.iter().filter_map(|v| v.handle()).collect(),
             Obj::Closure(c) => c.upvalues.clone(),
             Obj::Enum(e) => e.payload.iter().filter_map(HeapValue::handle).collect(),
             Obj::Cell(v) => v.handle().into_iter().collect(),
@@ -414,8 +443,8 @@ impl Heap {
             if let Some(slot) = opt {
                 if slot.marked {
                     slot.marked = false; // limpiar para la próxima vuelta
-                    slot.bytes = obj_bytes(&slot.obj);
-                    live_bytes += slot.bytes;
+                    slot.bytes = obj_bytes(&slot.obj).min(u32::MAX as usize) as u32;
+                    live_bytes += slot.bytes as usize;
                 } else {
                     *opt = None; // liberar
                     self.free.push(h);
@@ -434,5 +463,33 @@ impl Heap {
         // objetos. Contrapartida consciente: más basura transitoria entre GCs
         // (espacio por tiempo); el tope de heap (`max_live`, M42.2) sigue mandando.
         self.next_gc = (self.live * 2).max(self.live + self.traced_work / 4).max(INITIAL_GC);
+    }
+}
+
+impl Heap {
+    /// Volcado de la sonda de picos exactos (`RAY_HEAP_STATS=1`); ver los campos `probe_*`.
+    pub fn dump_probe(&self) {
+        if std::env::var_os("RAY_HEAP_STATS").is_some() {
+            eprintln!(
+                "HEAP_STATS peak_live_objs={} peak_live_bytes={} slots_cap={} slot_size={} total_allocs={} total_bytes={}",
+                self.probe_peak_live, self.probe_peak_bytes, self.slots.capacity(),
+                std::mem::size_of::<Option<Slot>>(), self.probe_total_allocs, self.probe_total_bytes
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod size_guard {
+    use super::*;
+    /// TA2: el `Slot` dimensiona el vector de ranuras del heap — el MAYOR componente del pico en
+    /// cargas de muchos objetos (48 B × ranura). Esta guardia impide que una variante nueva de
+    /// `Obj` lo re-infle en silencio (la variante grande se BOXEA, como `Map`).
+    #[test]
+    fn slot_stays_small() {
+        assert!(std::mem::size_of::<Option<Slot>>() <= 48,
+            "Slot creció a {} B (>48): boxea la variante grande de Obj (como Map)",
+            std::mem::size_of::<Option<Slot>>());
+        assert!(std::mem::size_of::<HeapValue>() <= 32, "HeapValue creció: {}", std::mem::size_of::<HeapValue>());
     }
 }

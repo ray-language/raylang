@@ -1203,10 +1203,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            // "sort_prim" = `__sort_prim` (V5): el checker reescribe ahí el `sort` del prelude sobre
-            // primitivos; en nativo ambos caminos ya eran el sort de Rust (`__ray_sort`).
-            "sort" | "sort_prim" => {
+            // "sort_prim" = `__sort_prim` (V5): solo primitivos (checker) → sort INESTABLE (SN1:
+            // idéntico observable, sin el buffer n/2 del estable). El `sort` genérico (tipos de
+            // usuario, estabilidad observable) sigue en `__ray_sort` estable.
+            "sort" => {
                 out.push_str("__ray_sort(&");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "sort_prim" => {
+                out.push_str("__ray_sort_unstable(&");
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }

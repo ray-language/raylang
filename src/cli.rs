@@ -86,7 +86,7 @@ Usage: ray <subcommand> [options]
   new <name>      create a new project (ray.toml + src/main.ray)
   run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc]]
+  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash]]
   test [file]    run the @test functions [filter]
   add <name>[@req]  add a dependency from the index to ray.toml and download it
   remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
@@ -653,11 +653,11 @@ fn cmd_build(args: &[String]) {
     // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa
     // `target-cpu=native` (sería la CPU del host, no la del target) → binario release PORTABLE al target.
     let target = args.iter().position(|a| a == "--target").and_then(|i| args.get(i + 1)).cloned();
-    // `--without <lista>` (P2.b): excluye subsistemas con-crate (crypto/tls/sqlite/mimalloc) del binario
-    // nativo. Un subsistema de USO (crypto/…) excluido cae en un stub que panica; `mimalloc` (N1, siempre-on
-    // sin detección de uso) excluido vuelve al malloc del sistema. El binario compila por la vía rápida
-    // (rustc pelado, sin cargo/red) solo si no queda NINGUNA feature — es decir, hoy exige `--without
-    // mimalloc`. Escape hatch para builds herméticos/cross-compile/policy.
+    // `--without <lista>` (P2.b): excluye subsistemas con-crate (crypto/tls/sqlite/mimalloc/ahash) del
+    // binario nativo. Un subsistema de USO (crypto/…) excluido cae en un stub que panica; `mimalloc` (N1) y
+    // `ahash` (N2) — siempre-on sin detección de uso — excluidos vuelven al malloc del sistema / al HashMap
+    // std. El binario compila por la vía rápida (rustc pelado, sin cargo/red) solo si no queda NINGUNA
+    // feature — es decir, hoy exige `--without mimalloc,ahash`. Escape para builds herméticos/cross/policy.
     // Se UNE a la política estable del proyecto (`[native] without` en ray.toml).
     // Cada exclusión rastrea su ORIGEN (`--without` de CLI vs `ray.toml`) para que un typo apunte al sitio
     // que hay que corregir: un error en un ray.toml versionado afecta a todo el equipo.
@@ -678,7 +678,7 @@ fn cmd_build(args: &[String]) {
         }
     }
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc"];
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(
@@ -770,9 +770,9 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     });
     // **Bifurcación bajo demanda** (P2.b, docs/transpilador-nativo.md §4.5): sin features de `ray-runtime`
     // → `rustc` pelado, rápido y sin red. Con features → un proyecto Cargo generado que enlaza `ray-runtime`
-    // (mismo código que la VM). N1: como `mimalloc` va POR DEFECTO, el camino común hoy es el Cargo (con la
-    // caché compartida ~/.ray/native-cache, mimalloc se compila una vez por máquina); `--without mimalloc`
-    // (sin otros subsistemas) recupera el rustc pelado.
+    // (mismo código que la VM). N1/N2: como `mimalloc` y `ahash` van POR DEFECTO, el camino común hoy es el
+    // Cargo (con la caché compartida ~/.ray/native-cache, se compilan una vez por máquina); `--without
+    // mimalloc,ahash` (sin otros subsistemas) recupera el rustc pelado.
     if transpiled.rt_features.is_empty() {
         build_native_rustc(&transpiled.source, stem, &out_bin, release, target);
     } else {
@@ -971,10 +971,12 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         }
         Err(e) => {
             eprintln!("native build: could not run cargo (is it on PATH?): {e}");
-            // N1: mimalloc-por-defecto trae el camino Cargo al caso común; sin cargo aún se puede
-            // compilar con rustc pelado excluyendo todas las features con-crate.
-            if rt_features == ["mimalloc"] {
-                eprintln!("hint: build without cargo (plain rustc) with: ray build --native --without mimalloc");
+            // N1/N2: mimalloc+ahash-por-defecto traen el camino Cargo al caso común; sin cargo aún se
+            // puede compilar con rustc pelado excluyendo las features siempre-on (las de USO no: el
+            // programa las necesita de verdad).
+            if rt_features.iter().all(|f| *f == "mimalloc" || *f == "ahash") {
+                let list = rt_features.join(",");
+                eprintln!("hint: build without cargo (plain rustc) with: ray build --native --without {list}");
             }
             process::exit(65);
         }

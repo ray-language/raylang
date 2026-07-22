@@ -220,7 +220,10 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     };
 
     let mut out = String::new();
-    emit_core_runtime(&mut out, fast);
+    // N2: el hasher de los Map (aHash por defecto, std con `--without ahash`) se decide aquí porque el
+    // alias `__RayMap` vive en el preámbulo; la feature se añade a rt_features más abajo, junto a mimalloc.
+    let use_ahash = !t.exclude.contains("ahash");
+    emit_core_runtime(&mut out, fast, use_ahash);
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
@@ -449,6 +452,11 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     if !t.exclude.contains("mimalloc") {
         out.push_str("#[global_allocator]\nstatic __RAY_ALLOC: ray_runtime::MiMalloc = ray_runtime::MiMalloc;\n");
         rt_features.push("mimalloc");
+    }
+    // N2: aHash en los Map, por defecto (como mimalloc: siempre-on salvo `--without ahash`). El alias
+    // `__RayMap` ya se emitió en el preámbulo; aquí solo se activa la feature que trae el crate.
+    if use_ahash {
+        rt_features.push("ahash");
     }
     Ok(Transpiled { source: out, rt_features, stubbed })
 }

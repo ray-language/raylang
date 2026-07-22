@@ -41,11 +41,12 @@ tipado, orientado a expresiones, sintaxis de llaves.
 - **Guía de builds** (features slim M89, PGO, flags de adelgazamiento): `docs/build.md`.
   Release PGO: `sh tools/pgo.sh [--slim | --features "a,b,c"]`.
 - **Binario nativo del PROGRAMA (arco P2.b)**: `ray build --native prog.ray [-o out] [--release]
-  [--without crypto,tls,sqlite,mimalloc]` transpila el programa a Rust (`src/transpile.rs`) y lo compila
+  [--without crypto,tls,sqlite,mimalloc,ahash]` transpila el programa a Rust (`src/transpile.rs`) y lo compila
   con `rustc`/`cargo` → binario de código máquina, byte-idéntico a la VM (24–61×). Los subsistemas
   con-crate (TLS/cripto/SQLite) viven en `crates/ray-runtime` (workspace) y se enlazan **bajo
-  demanda** (proyecto Cargo generado); **mimalloc va POR DEFECTO** (N1 jul 2026: wordcount/logparse
-  −40%) → el default es la vía Cargo, y `--without mimalloc` recupera el `rustc` pelado. Exclusión estable del
+  demanda** (proyecto Cargo generado); **mimalloc y aHash van POR DEFECTO** (N1/N2 jul 2026:
+  wordcount/logparse −40%, +ahash −8.5% en Map string-heavy) → el default es la vía Cargo, y
+  `--without mimalloc,ahash` recupera el `rustc` pelado. Exclusión estable del
   proyecto: `[native] without = ["tls", …]` en `ray.toml`. Diseño: `docs/transpilador-nativo.md`;
   crónica: `PERFORMANCE.md` (arco P2.b, Fases 34–53). No confundir con construir la toolchain `ray`.
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).

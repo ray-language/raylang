@@ -61,10 +61,11 @@ pub(super) fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tpa
         Type::Task(t) => return Ok(format!("__RayTask<{}>", send_type(t, enums, tparams)?)),
         // Arreglo: semántica de referencia + mutación → Rc<RefCell<Vec<…>>> (como el intérprete).
         Type::Array(t) => return Ok(format!("Rc<std::cell::RefCell<Vec<{}>>>", rust_ty(t, enums, tparams)?)),
-        // Map: igual, sobre un HashMap.
+        // Map: igual, sobre un HashMap — vía el alias `__RayMap` del preámbulo (N2: con aHash por
+        // defecto, std con `--without ahash`; el alias deja esta emisión igual para ambos).
         Type::Map(k, v) => {
             return Ok(format!(
-                "Rc<std::cell::RefCell<std::collections::HashMap<{}, {}>>>",
+                "Rc<std::cell::RefCell<__RayMap<{}, {}>>>",
                 rust_ty(k, enums, tparams)?,
                 rust_ty(v, enums, tparams)?
             ))

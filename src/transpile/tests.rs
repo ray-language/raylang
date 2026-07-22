@@ -430,7 +430,7 @@ fn emits_rayshow_for_map() {
          fn main() { print(J.JInt(1)); }",
     );
     assert!(
-        rust.contains("RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>>"),
+        rust.contains("RayShow for Rc<std::cell::RefCell<__RayMap<K, V>>>"),
         "impl RayShow para Map: {}",
         rust
     );

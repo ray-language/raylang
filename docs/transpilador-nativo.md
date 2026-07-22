@@ -177,6 +177,18 @@ el punto 2 de arriba ("camino rápido intacto") queda condicionado a `--without 
 es también el escape para builds herméticos/cross-compile sin toolchain C. Si `cargo` no está
 en el PATH, el error lo sugiere (`hint: … --without mimalloc`).
 
+**N2 — aHash por defecto en los `Map` (jul 2026, bench políglota).** Quinta feature de
+`ray-runtime`: `ahash`, como `mimalloc` siempre-on (no es de uso detectable; escape `--without
+ahash`). El `HashMap` std usa SipHash 1-3, lento en claves string; la VM usa aHash desde P0.1 →
+esto además da **paridad de motor de hashing** entre ambos backends. Mecánica: el preámbulo emite
+el alias `__RayMap` como `type __RayMap<K, V> = HashMap<K, V, ray_runtime::RandomState>` (con
+aHash) o `use std::collections::HashMap as __RayMap` (sin él); TODO el código generado construye
+con `__RayMap::default()`/`from_iter` (valen para cualquier hasher `S: Default` — `new()`/`from`
+son solo del RandomState de std) y las posiciones de tipo emiten `__RayMap<K, V>` (types.rs).
+**Medido** (hyperfine, M3, `--release`): wordcount **−8.5 %** adicional sobre mimalloc (58.0 →
+53.2 ms); logparse/jsonserialize neutros (el Map no domina). Hash-flooding: aHash con RNG de
+runtime, como la VM. Los registros internos (sockets/TLS, clave `i64`) siguen en HashMap std.
+
 ## 4. El diseño: el crate `ray-runtime`
 
 ### 4.1 La motivación — dos debilidades de la versión ingenua

@@ -7,7 +7,7 @@
 
 use super::*;
 
-pub(super) fn emit_core_runtime(out: &mut String, fast: bool) {
+pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
     out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables)]\n");
     out.push_str("use std::rc::Rc;\n");
@@ -70,7 +70,15 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool) {
     out.push_str("    if sub.is_empty() { return Some(0); }\n");
     out.push_str("    if sub.len() > chars.len() { return None; }\n");
     out.push_str("    (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..]).map(|i| i as i64)\n}\n");
-    out.push_str("use std::collections::HashMap as __RayMap;\n");
+    // N2: los `Map` del programa van tras el alias `__RayMap`. Con aHash (default), el mismo hasher que
+    // el `MapStore` de la VM (P0.1) — SipHash es lento en claves string; con `--without ahash`, el
+    // HashMap std puro. Todo el código generado construye con `__RayMap::default()`/`from_iter` (valen
+    // para ambos hashers); los registros internos (sockets/TLS, clave i64) siguen en HashMap std.
+    if ahash {
+        out.push_str("type __RayMap<K, V> = std::collections::HashMap<K, V, ray_runtime::RandomState>;\n");
+    } else {
+        out.push_str("use std::collections::HashMap as __RayMap;\n");
+    }
     out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
     out.push_str("    let mut v = a.borrow().clone(); v.sort(); Rc::new(std::cell::RefCell::new(v))\n}\n");
     // keys()/values() ORDENADAS por clave (determinista, como la VM). values() en el orden de keys().
@@ -103,7 +111,7 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool) {
     // Map: `Map{k: v, …}` con los pares (renderizados) ordenados como cadena, como el Display del
     // runtime (`Value::Map`): determinista pese al HashMap. `print(map)` directo lo veta el checker,
     // pero un struct/enum que CONTENGA un Map (p. ej. `Json.JObject`) sí se renderiza recursivamente.
-    out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<std::collections::HashMap<K, V>>> { fn ray_show(&self) -> String { let __rt_m = self.borrow(); let mut __parts: Vec<String> = __rt_m.iter().map(|(__k, __rt_v)| format!(\"{}: {}\", __k.ray_show(), __rt_v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
+    out.push_str("impl<K: RayShow + std::hash::Hash + Eq, V: RayShow> RayShow for Rc<std::cell::RefCell<__RayMap<K, V>>> { fn ray_show(&self) -> String { let __rt_m = self.borrow(); let mut __parts: Vec<String> = __rt_m.iter().map(|(__k, __rt_v)| format!(\"{}: {}\", __k.ray_show(), __rt_v.ray_show())).collect(); __parts.sort(); format!(\"Map{{{}}}\", __parts.join(\", \")) } }\n");
     out.push_str("impl<T: RayShow> RayShow for Option<T> { fn ray_show(&self) -> String { match self { Some(__rt_v) => format!(\"Option.Some({})\", __rt_v.ray_show()), None => \"Option.None\".to_string() } } }\n");
     out.push_str("impl<T: RayShow, E: RayShow> RayShow for Result<T, E> { fn ray_show(&self) -> String { match self { Ok(__rt_v) => format!(\"Result.Ok({})\", __rt_v.ray_show()), Err(__e) => format!(\"Result.Err({})\", __e.ray_show()) } } }\n");
     // Tuplas (2 y 3 elementos): `(a, b)`. El checker no deja `print`ar una tupla, así que esto rara vez
@@ -143,7 +151,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "struct __RayReg { next: i64, open: __RayMap<i64, __RayHandle> }\n",
             "fn __ray_reg() -> &'static std::sync::Mutex<__RayReg> {\n",
             "    static R: std::sync::OnceLock<std::sync::Mutex<__RayReg>> = std::sync::OnceLock::new();\n",
-            "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::new() }))\n}\n",
+            "    R.get_or_init(|| std::sync::Mutex::new(__RayReg { next: 1, open: __RayMap::default() }))\n}\n",
             "fn __ray_reg_insert(h: __RayHandle) -> i64 { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; reg.open.insert(id, h); id }\n",
         ));
         // M96c/M96g: `close` corre en el mismo hilo dueño de la conexión (fin de `handle_http`) →

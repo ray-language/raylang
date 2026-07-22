@@ -110,10 +110,11 @@ es exactamente lo que emitiría el transpilador.
    (recomendado; el precedente ring/rusqlite ya rompió el cero-deps) con
    `--without mimalloc` para el rustc pelado, o detrás de un flag? Con esto,
    wordcount nativo queda a ~1.15× de Go y logparse a ~1.15×.
-4. **N2 — ahash en los Map generados** (medido: −8.5 % extra en wordcount, neutro
-   donde el map no domina). Mismo mecanismo de dep que N1. `types.rs:67` +
-   `runtime.rs:73` (alias con `ahash::RandomState`, `::default()` en vez de
-   `::new()`).
+4. **N2 — ahash en los Map generados** ✅ **HECHA** (22 jul; PERFORMANCE.md Fase 55:
+   feature `ahash` de `ray-runtime` por defecto vía el alias `__RayMap`, escape
+   `--without ahash`; medido: −8.5 % extra en wordcount, neutro donde el map no
+   domina). Nota colateral: el ajuste de Fase 0 (`let s = to_string(i)`) ayudó a la
+   VM pero costó ~9 ms al nativo (el inline en `format!` era gratis) → anotado en N4.
 5. **N3 — `__ray_join` sin recopia** : calcular la longitud total, construir el
    `Rc<str>` **una vez** (buffer exacto vía `Rc::new_uninit_slice` o equivalente
    seguro) → −1 copia de 17 MB y −17 MB de pico en jsonserialize (esperado:

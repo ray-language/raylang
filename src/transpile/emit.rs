@@ -1057,13 +1057,15 @@ impl Transpiler {
                 self.emit_expr(out, inner)?;
                 out.push('?');
             }
-            // Literal de Map: [k1: v1, k2: v2] → HashMap::from([(k1,v1), …]); [:] vacío → HashMap::new().
+            // Literal de Map: [k1: v1, k2: v2] → __RayMap::from_iter([(k1,v1), …]); [:] vacío → default().
+            // (`default()`/`from_iter` y no `new()`/`from`: valen para CUALQUIER hasher `S: Default` —
+            // con aHash (N2) el `new()`/`from` de HashMap no existen, son solo del RandomState de std.)
             ExprKind::MapLit(pairs) => {
                 out.push_str("Rc::new(std::cell::RefCell::new(");
                 if pairs.is_empty() {
-                    out.push_str("__RayMap::new()");
+                    out.push_str("__RayMap::default()");
                 } else {
-                    out.push_str("__RayMap::from([");
+                    out.push_str("__RayMap::from_iter([");
                     for (i, (k, v)) in pairs.iter().enumerate() {
                         if i > 0 {
                             out.push_str(", ");

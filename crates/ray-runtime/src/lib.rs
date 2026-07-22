@@ -18,3 +18,9 @@ pub mod tls;
 // y deja la declaración a la vista en el Rust generado.
 #[cfg(feature = "mimalloc")]
 pub use mimalloc::MiMalloc;
+
+// N2 — reexport del `RandomState` de aHash para los `Map` del binario transpilado (mismo hasher que el
+// `MapStore` de la VM, P0.1). El alias `__RayMap` del Rust generado lo usa como tercer parámetro del
+// `HashMap` std; el reexport evita que el programa generado dependa del crate `ahash` por su nombre.
+#[cfg(feature = "ahash")]
+pub use ahash::RandomState;

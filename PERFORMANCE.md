@@ -609,6 +609,22 @@ Consecuencia asumida: el build nativo por defecto va por el camino Cargo (mimall
 máquina en la caché compartida); `--without mimalloc` recupera el `rustc` pelado y es el escape
 hermético/cross. Tests `build_native` actualizados al contrato nuevo.
 
+#### Fase 55 — N2: aHash en los `Map` del binario nativo (22 jul, bench políglota)
+
+Segunda pieza del plan del bench políglota: el `HashMap` std del Rust generado usa SipHash 1-3 —
+lento en claves string — mientras la VM usa **aHash desde P0.1**. Quinta feature de `ray-runtime`
+(`ahash`, misma versión 0.8 que el binario `ray`), siempre-on como mimalloc, escape `--without
+ahash`; da además **paridad de motor de hashing** VM↔nativo. Mecánica: el alias `__RayMap` del
+preámbulo cambia entre `type __RayMap<K,V> = HashMap<K,V, ray_runtime::RandomState>` y el `use`
+de std; todo el codegen construye con `default()`/`from_iter` (valen para cualquier `S: Default`)
+y las posiciones de tipo emiten `__RayMap<K, V>`. **Medido** (hyperfine, M3, `--release`, A/B
+aislado): wordcount **58.0 → 53.2 ms (−8.5 %)** sobre mimalloc solo; logparse/jsonserialize
+neutros (el Map no domina). Con N1+N2, wordcount nativo queda a **~1.1× de Go** (era 2.03×).
+Hallazgo colateral (medido): materializar `let s = to_string(i)` en el fuente — el ajuste "como
+Go" del bench — AYUDA a la VM pero CUESTA ~9 ms al nativo (el `to_string` inline se fusionaba
+gratis en el `format!` del concat; materializado son 2 allocs/iteración). Optimizarlo (emitir el
+`let` de un `to_string` como `String` y coste 1 alloc, o CoW al concat) queda anotado para N4.
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

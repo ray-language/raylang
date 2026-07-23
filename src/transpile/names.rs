@@ -96,6 +96,20 @@ pub(super) fn is_prelude_impl(name: &str) -> bool {
     builtin_key && prelude_method
 }
 
+/// ¿La clave de un método manglado (`clave#metodo`) es un tipo CORE de la stdlib (primitivos,
+/// contenedores, Option/Result/Iter)? Sus métodos pueden interceptarse por el nombre pelado (los
+/// brazos nativos de emit_call/type_of se escribieron para ellos: `Option#unwrap_or` → `.unwrap_or`).
+/// Para una clave de USUARIO o de módulo (`Store`, `std::kv::Store`) el checker ya resolvió el impl
+/// concreto y su def se emite → la llamada va SIEMPRE a esa def, aunque el nombre pelado coincida
+/// con un builtin (`Store#get` nunca es el `get` de Map).
+pub(super) fn is_core_impl_key(key: &str) -> bool {
+    matches!(
+        key,
+        "int" | "float" | "bool" | "char" | "string" | "bytes" | "uint" | "u8" | "u32" | "u64"
+            | "unit" | "[]" | "Map" | "Channel" | "Task" | "Option" | "Result" | "Iter"
+    )
+}
+
 /// Resuelve el `callee` de una llamada a `(nombre, receptor)`. UFCS `obj.m(args)` llega como callee
 /// `Field{object, name}` (el checker no lo baja para builtins) ≡ `m(obj, args)`: el receptor va primero.
 pub(super) fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {

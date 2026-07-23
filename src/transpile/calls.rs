@@ -148,6 +148,12 @@ impl Transpiler {
                 let id = self.send_conv_id(&t)?;
                 format!("__to_send_{id}({expr})")
             }
+            // Canal/tarea: cruzan COMPARTIÉNDOSE (clone del Arc), type-erased en el árbol (el enum
+            // `__RaySend` es monomórfico y `__RayChan<T>`/`__RayTask<T>` genéricos). Semántica de la
+            // VM (M12): el canal es el conducto entre fibras, no un dato que copiar.
+            Type::Channel(_) | Type::Task(_) => {
+                format!("__RaySend::Ch(std::sync::Arc::new(({expr}).clone()) as std::sync::Arc<dyn std::any::Any + Send + Sync>)")
+            }
             Type::Fn(..) => {
                 return Err(
                     "a function value cannot cross a thread boundary (spawn capture / channel / Task) in the native backend"
@@ -212,6 +218,13 @@ impl Transpiler {
             t @ (Type::Struct(..) | Type::Enum(..)) => {
                 let id = self.send_conv_id(&t)?;
                 format!("__from_send_{id}({expr})")
+            }
+            // Canal/tarea: el árbol trae el Arc type-erased → downcast al genérico concreto y clone
+            // (comparte el mismo canal; el `unreachable` está garantizado por el checker: el tipo del
+            // elemento del canal es estático).
+            ty @ (Type::Channel(_) | Type::Task(_)) => {
+                let rty = rust_ty(&ty, &self.enums, &self.tparams)?;
+                format!("match {expr} {{ __RaySend::Ch(__sc) => __sc.downcast_ref::<{rty}>().expect(\"channel/task type mismatch across threads\").clone(), {un} }}")
             }
             other => return Err(format!("type {:?} cannot cross a thread boundary in the native backend", other)),
         })
@@ -843,7 +856,15 @@ impl Transpiler {
             || (!name.contains("::")
                 && !name.contains('#')
                 && self.funcs.contains_key(name)
-                && crate::builtins::lookup(name).is_none());
+                && crate::builtins::lookup(name).is_none())
+            // Un método de TRAIT sobre un tipo de usuario/módulo cuyo nombre pelado coincide con un
+            // builtin (`Store#get`, `Store#keys`…): el checker ya lo resolvió al manglado y su def SE
+            // EMITE (vive en `funcs`) → llamada ordinaria, nunca la interceptación por `method` (que lo
+            // confundiría con el builtin homónimo de Map/string). Las claves CORE (`Option#unwrap_or`,
+            // `string#len`…) SÍ se interceptan: sus brazos nativos son la bajada intencional.
+            || (name.contains('#')
+                && self.funcs.contains_key(name)
+                && !is_core_impl_key(name.split('#').next().unwrap_or("")));
         if shadows_builtin {
             let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
             out.push_str(&mangle(name));
@@ -1751,7 +1772,15 @@ impl Transpiler {
                     _ => {}
                 }
                 let _ = &args;
-                let method = n.rsplit('#').next().unwrap_or(n).trim_start_matches("__");
+                // Como en emit_call: un método de trait sobre un tipo de usuario/módulo cuyo nombre
+                // pelado coincide con un builtin (`Store#get`, `Store#keys`…) vive en `funcs` (su def
+                // se emite) y gana sobre los brazos manuales por nombre pelado — `method = ""` lo manda
+                // directo al brazo `_` (función de usuario). Igual un closure local que sombree el
+                // nombre. Las claves CORE (`Option#unwrap_or`…) siguen por sus brazos nativos.
+                let user_call = matches!(self.lookup(n), Some(Type::Fn(_, _)))
+                    || (self.funcs.contains_key(n)
+                        && !(n.contains('#') && is_core_impl_key(n.split('#').next().unwrap_or(""))));
+                let method = if user_call { "" } else { n.rsplit('#').next().unwrap_or(n).trim_start_matches("__") };
                 // Receptor efectivo (UFCS o primer argumento), para métodos cuyo tipo depende de él.
                 let recv0 = recv.or_else(|| args.first());
                 // H16: el tipo de retorno de un builtin lo aporta su regla `check` de la tabla

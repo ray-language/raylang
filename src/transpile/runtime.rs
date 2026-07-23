@@ -34,7 +34,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
         "#[derive(Clone)]\n",
         "enum __RaySend { I(i64), F(f64), B(bool), C(char), U, UI(u64), S(std::sync::Arc<str>), ",
         "By(std::sync::Arc<[u8]>), A(Vec<__RaySend>), M(Vec<(__RaySend, __RaySend)>), ",
-        "T(Vec<__RaySend>), E(usize, Vec<__RaySend>) }\n",
+        "T(Vec<__RaySend>), E(usize, Vec<__RaySend>), ",
+        // Un canal/tarea dentro del árbol NO se copia: se COMPARTE (clone del Arc interno), como la VM
+        // comparte el id de canal al cruzar (M12: el canal ES el conducto, no un dato). Va type-erased
+        // (`__RayChan<T>`/`__RayTask<T>` son genéricos y el árbol es monomórfico); `from` downcastea.
+        "Ch(std::sync::Arc<dyn std::any::Any + Send + Sync>) }\n",
     ));
     // Aritmética de `int` CHECKED por defecto, como la VM (overflow/div-cero → runtime error, no
     // wrapping silencioso). Mismos textos que interpreter.rs/vm.rs. Con `--fast` (opt-out medido:
@@ -397,6 +401,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize>, taken: u64, senders: usize }\n",
             "struct __RayChan<T> { inner: std::sync::Arc<(std::sync::Mutex<__ChanState<T>>, std::sync::Condvar)> }\n",
             "impl<T> Clone for __RayChan<T> { fn clone(&self) -> Self { __RayChan { inner: self.inner.clone() } } }\n",
+            // Un canal dentro de un struct/enum mostrable se renderiza `<channel>`, como la VM
+            // (`format_value`: canal/tarea no se inspeccionan textualmente).
+            "impl<T> RayShow for __RayChan<T> { fn ray_show(&self) -> String { \"<channel>\".to_string() } }\n",
             "impl<T: Send> __RayChan<T> {\n",
             "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0 }), std::sync::Condvar::new())) } }\n",
             "    fn send(&self, v: T) {\n",
@@ -491,6 +498,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // MANEJADO: `failed()` (el escaneo del scope) lo salta — semántica M97.1.
             "struct __RayTask<T> { inner: std::sync::Arc<(std::sync::Mutex<__TaskState<T>>, std::sync::Condvar)>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, consumed: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
             "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone(), cancel: self.cancel.clone(), consumed: self.consumed.clone() } } }\n",
+            "impl<T> RayShow for __RayTask<T> { fn ray_show(&self) -> String { \"<task>\".to_string() } }\n",
             "const __RAY_TASK_CONSUMED: &str = \"task already consumed (join/try_join takes the task)\";\n",
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
             "    fn wait(&self) -> Result<T, String> {\n",

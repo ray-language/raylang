@@ -664,6 +664,52 @@ fn transpiles_struct_channel() {
 }
 
 #[test]
+fn trait_method_named_like_builtin_calls_the_impl() {
+    // Bug std/kv: un método de trait sobre un tipo de USUARIO cuyo nombre pelado coincide con un
+    // builtin de Map (`Store#get`, `Store#keys`) se interceptaba como el builtin (Rust inválido /
+    // stub). Debe llamar a la def emitida del impl.
+    let rust = transpile_src(
+        "struct Store { data: Map<string, int> }\n\
+         trait Ops { fn get(self, k: string) -> Option<int>; fn keys(self) -> [string]; }\n\
+         impl Ops for Store {\n\
+             fn get(self, k: string) -> Option<int> { self.data.get(k) }\n\
+             fn keys(self) -> [string] { self.data.keys() }\n\
+         }\n\
+         fn main() -> int { let m: Map<string, int> = Map.new(); let s = Store { data: m };\n\
+             s.get(\"a\"); s.keys().len() }",
+    );
+    assert!(rust.contains("fn Store_HH_get"), "la def del método se emite: {}", rust);
+    assert!(rust.contains("Store_HH_get(s"), "el sitio llama al impl, no al builtin de Map: {}", rust);
+    assert!(rust.contains("Store_HH_keys(s"), "keys va al impl, no a __ray_keys: {}", rust);
+}
+
+#[test]
+fn channel_field_shows_as_channel_literal() {
+    // Bug std/kv: el RayShow generado de un struct/enum con campo/payload `Channel<T>` llamaba
+    // `.ray_show()` sobre `__RayChan` (sin impl → E0599). El runtime ahora lo implementa como la
+    // VM: `<channel>`/`<task>` (values.rs).
+    let rust = transpile_src(
+        "struct H { ch: Channel<int> }\n\
+         fn main() { let ch: Channel<int> = Channel.new(); let h = H { ch: ch }; print(h); }",
+    );
+    assert!(rust.contains("impl<T> RayShow for __RayChan<T>"), "impl RayShow del canal: {}", rust);
+    assert!(rust.contains("\"<channel>\""), "render <channel> como la VM: {}", rust);
+}
+
+#[test]
+fn channel_inside_message_crosses_shared() {
+    // Patrón actor de std/kv: un canal de reply DENTRO del mensaje que viaja por otro canal. Cruza
+    // COMPARTIÉNDOSE (Arc clonado, type-erased en __RaySend::Ch), como la VM comparte el id de canal.
+    let rust = transpile_src(
+        "enum Msg { Ask(Channel<int>) }\n\
+         fn main() { let ch: Channel<Msg> = Channel.new(); let r: Channel<int> = Channel.new();\n\
+             send(ch, Msg.Ask(r)); }",
+    );
+    assert!(rust.contains("__RaySend::Ch("), "el canal entra al árbol Send compartido: {}", rust);
+    assert!(rust.contains("downcast_ref::<__RayChan<i64>>"), "from downcastea al canal concreto: {}", rust);
+}
+
+#[test]
 fn transpiles_signals() {
     // signals() -> Channel<int> (M88.1): canal de señales del SO (self-pipe + FFI a libc).
     let rust = transpile_src(

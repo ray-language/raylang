@@ -5166,6 +5166,10 @@ subcomando conocido cae al **modo legado** (`legacy`), que reconoce `--vm`/`--in
 `--fmt`/`--lsp`/`--repl` y el `<archivo>` directo. Los 688 tests (todos con flags o ruta
 directa) pasan sin cambios; los subcomandos nuevos se prueban en `tests/cli_cli.rs`.
 
+> **La superficie de subcomandos se reorganiza antes de la 1.0 → §88 (M97)**: los comandos de
+> publicador bajan a `ray registry <sub>` y el help se secciona. Lo de aquí describe la fundación
+> del CLI, no su superficie final.
+
 ### 41.2 M39b — el manifiesto `ray.toml` dirige el build
 
 Un proyecto raylang es un directorio con `ray.toml` en su raíz. M39b lo **lee** y hace que
@@ -6735,6 +6739,10 @@ a un paquete, o retirarse), lo que en `std/` exige un cambio de versión mayor d
 
 ## 54. M51 — Registro central de paquetes y `ray publish` (arco C, DISEÑO)
 
+> **Nombres renombrados en M97 (§88)**: `publish`/`yank`/`keygen`/`index-verify` pasaron a
+> `ray registry publish|yank|keygen|verify`. Esta sección conserva los nombres de su época (es
+> crónica del hito); la superficie vigente del CLI está en §88.3.
+
 El gestor de paquetes (M39c) resuelve dependencias por **git** (`git+URL@ref`) y por **ruta** (`path:dir`):
 para instalar hay que conocer y escribir la URL exacta. Falta la última pieza de "ecosistema": **instalar por
 nombre** (`ray add foo`) contra un **índice** compartido, y **publicar** (`ray publish`) para poblarlo. Es la
@@ -7312,6 +7320,10 @@ Revisión del FFI de M41 bajo el foco de producción. Dos arreglos y un plan:
   Pendiente conocido documentado: variádicas (printf) son UB en arm64; indetectable desde la firma.
 
 ## 59. M55 — Templates compilados (`ray templ`). ✅ COMPLETO
+
+> **Renombrado en M97 (§88.4)**: `ray templ` pasó a ser `ray build --templates-only` — compilar
+> templates es un paso del build, no un comando de usuario. Esta sección conserva el nombre de su
+> época (es crónica del hito); la superficie vigente del CLI está en §88.3.
 
 La versión "limpia" de la localidad de PHP (decidida con el usuario tras optimizar `std/template`,
 IDEAS §14b): el archivo ES la página, pero el código incrustado se limita a la sintaxis restringida
@@ -8516,3 +8528,94 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
 - **Metodología fijada para el proyecto**: throughput de pico → wrk (open-loop saturante);
   latencia de SLO → tasa fija con corrección (`oha -q`/wrk2). Reportar el p99 de wrk como
   latencia del servicio es un error de medición, no un dato.
+
+## 88. M97 — la superficie de la CLI antes de la 1.0 (DISEÑO)
+
+> Contrato de la **interfaz pública** de `ray`. La 1.0 congela nombres de subcomandos igual que
+> congela la API del lenguaje (M34): después del lanzamiento, mover un subcomando cuesta un ciclo
+> de deprecación; **ahora cuesta un search-and-replace**. Esta sección fija la superficie final.
+
+### 88.1 El diagnóstico
+
+La CLI creció por acumulación (M39a la fundó con 8 subcomandos; M51 le añadió el registro, M55
+`templ`, y así). Hoy `ray help` lista **22 subcomandos en un solo nivel**, de los cuales **9 son
+gestión de paquetes** — `add`, `remove`, `search`, `publish`, `keygen`, `index-verify`, `update`,
+`yank`, `fetch`. Casi la mitad del help es el gestor de paquetes, y ahí conviven cosas de uso
+diario (`add`) con cosas de mantenedor de índice que un usuario ejecuta una vez al año o nunca
+(`yank`, `index-verify`).
+
+### 88.2 El principio: agrupar por ROL y FRECUENCIA, no por tema
+
+La tentación es agrupar los nueve bajo `ray pkg <sub>`. **Se descarta.** Agrupar por *tema* mete
+en la misma caja frecuencias de uso incomparables y castiga al comando frecuente para ordenar al
+raro: `ray add http` se teclea a diario, y `ray pkg add http` es un impuesto permanente a cambio
+de un help que se lee tres veces en la vida.
+
+El precedente es consistente y no es imitación mutua: **cargo** (`add`/`remove`/`update`/`publish`/
+`search`/`yank` en la raíz, nunca hubo `cargo pkg`), **npm**, **deno** y **bun** ponen la gestión
+de dependencias en la raíz. **go** sí agrupó (`go mod tidy/download/verify`), pero porque el módulo
+es un concepto propio con su propio ciclo de vida y `go` roza los 30 comandos.
+
+**Decisión: híbrido.** Se queda en la raíz lo que un *consumidor* de paquetes usa; baja a un grupo
+lo que solo toca un *publicador*. El corte cae naturalmente en "¿esto escribe en el índice?".
+
+### 88.3 La superficie fijada
+
+```
+Project:    new · run · dev · build · test · fmt · doc
+Packages:   add · remove · update · search · fetch
+Registry:   registry publish · registry yank · registry keygen · registry verify
+Tooling:    lsp · mcp · repl · version · help
+```
+
+**22 subcomandos raíz → 18**, y los 4 de publicador dejan de competir por atención con los de uso
+diario. `templ` desaparece de la raíz (→ §88.4).
+
+- **`ray registry <sub>`** agrupa los cuatro comandos de publicador. Son coherentes entre sí (todos
+  tocan el índice compartido y las firmas Ed25519 de M51d) y comparten rol: los ejecuta quien
+  *mantiene* paquetes, no quien los consume.
+- **`index-verify` → `registry verify`**: sin compat que respetar, el nombre con guion desaparece.
+  El prefijo `index-` era precisamente el intento de agrupar sin tener dónde agrupar.
+- **Sin alias legados.** raylang no está publicado ni tiene usuarios: el corte es limpio y no se
+  arrastra un mapa de nombres viejos. (Ortogonal: el **modo legado por flags** de M39a —
+  `--vm`/`--interp`/`--test`/`--fmt`/`<archivo>` directo— **no se toca**; lo usa la suite de tests
+  y no es superficie de paquetes.)
+- **`print_help` pasa a estar seccionado** con los cuatro grupos de arriba. Es el 80% de la mejora
+  percibida a coste cero, e independiente del resto: un help de 22 líneas planas no se lee.
+
+### 88.4 Las dos decisiones de superficie (RESUELTAS)
+
+Aprovechando que la ventana sin coste está abierta, se revisó el resto de la superficie con ojos
+frescos. Dos subcomandos no se justificaban solos:
+
+1. **`templ` (M55) → `ray build --templates-only`. RESUELTO: se mueve al build.** Compilar
+   `.ray.html` a módulos tipados es un **paso del pipeline de build**, no un comando de usuario; la
+   abreviatura además era fea. Clave para que el movimiento no cueste nada: **la vía implícita ya
+   existía** — `regen_stale_templates` (M55) regenera los templates desactualizados antes de
+   `run`/`build`/`test`, incremental por mtime. `ray templ` solo aportaba el modo **explícito**, que
+   sobrevive como flag.
+   - **Por qué la flag no sobra**: la regeneración automática se decide por **mtime del `.ray.html`
+     vs. el `.ray` generado**, así que **no detecta un cambio en el GENERADOR** (actualizar `ray`
+     deja generados obsoletos con mtime nuevo). `--templates-only` **fuerza** la regeneración de
+     todos, sin mirar mtimes; es también el gancho para CI ("compila las plantillas y nada más").
+   - Sin rutas escanea la **raíz del proyecto** (`Manifest::find` sube por los ancestros → funciona
+     desde cualquier subdirectorio); con rutas acepta archivos o directorios, recursivo.
+2. **`dev` — RESUELTO: se queda como subcomando.** El coste de superficie es una línea del help, y a
+   cambio conserva el verbo que la gente teclea sin pensar (`npm run dev`, `cargo watch`): ser corto
+   y memorable *es* su valor. `ray run --watch` habría heredado gratis las flags de `run`, pero eso
+   no compensa perder el verbo.
+
+### 88.5 Redirecciones de cortesía (no son alias)
+
+Un subcomando movido caería al **modo legado** y se interpretaría como nombre de archivo — con un
+`could not read module 'publish'` que no dice nada. `legacy` los intercepta antes y apunta al
+destino (`'ray publish' moved: use \`ray registry publish\``, salida 64). **No son alias**: el
+comando viejo no ejecuta nada. Son señalización de DX para un nombre que este proyecto usó, no una
+promesa de compatibilidad.
+
+### 88.6 Impacto de la migración
+
+Cambio mecánico, sin lógica nueva: la tabla de dispatch de `src/cli.rs` (§41.1) gana un nivel para
+`registry` y `print_help` se secciona. Fuera del código, los usos a renombrar están en `DESIGN.md`,
+`PUBLICAR.md` (la guía del publicador, la más afectada), `MANUAL.md`, `REFERENCIA.md`, `README.md`,
+`IDEAS.md` y las suites `tests/registry_cli.rs` y `tests/deps_cli.rs`.

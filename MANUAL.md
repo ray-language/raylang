@@ -10,7 +10,7 @@ recomendaciones. Complementa a los otros documentos:
 - **`book/`** — el libro *Construyendo raylang*: cómo se **construyó** el lenguaje, fase a fase (pedagogía de
   implementación).
 - **[`PUBLICAR.md`](PUBLICAR.md)** — la guía del **publicador**: empaquetar, versionar y publicar
-  en el registro (`ray publish`, índice, yank, garantías del lock).
+  en el registro (`ray registry publish`, índice, yank, garantías del lock).
 - **Este manual** — cómo **usar** raylang para programar.
 
 ## Índice
@@ -726,7 +726,7 @@ ray add textutils@^1.2      # añade al manifiesto y descarga
 ray search json             # busca en el registro
 ray update                  # re-resuelve a las más nuevas compatibles
 ray remove textutils
-ray publish                 # publica TU paquete en el registro (valida + chequea + hashea)
+ray registry publish                 # publica TU paquete en el registro (valida + chequea + hashea)
 ```
 
 El flujo completo del **publicador** (empaquetar, el índice, versionado, `yank`, garantías y
@@ -1140,7 +1140,7 @@ ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (s
 ray fmt archivo.ray      # formatea (canónico e idempotente)
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
 ray doc archivo.ray      # documentación Markdown desde ///
-ray templ vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
+ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
 ray repl                 # REPL interactivo
 ray lsp                  # servidor LSP (diagnósticos, hover, definición, rename, completion…)
 ray build                # chequea + compila sin ejecutar (para CI: 0 ok / 65 error)
@@ -1221,11 +1221,11 @@ fn con_assert() {
 
 `ray test` sale con el número de fallos como código (0 = todo verde, ideal para CI).
 
-### Templates compilados (`ray templ`)
+### Templates compilados (`ray build --templates-only`)
 
 Para SSR, además del motor runtime (`std/template`, §12), un template puede **compilarse a una
 función raylang tipada**: el archivo `vistas/lista.ray.html` declara su firma en la primera línea y
-`ray templ` genera `vistas/lista.ray` al lado (commiteable). Reparto de roles: los compilados son
+`ray build --templates-only` genera `vistas/lista.ray` al lado (commiteable). Reparto de roles: los compilados son
 la opción por defecto (tipados, y solo ellos soportan `{% include %}`/`{% extends %}`/`{% block %}`/
 `{% let %}`); el motor runtime es un subconjunto (interpolación + `if`/`for`) para plantillas
 **dinámicas** — cargadas de disco o BD en caliente — que no existen en build time:
@@ -1237,7 +1237,7 @@ la opción por defecto (tipados, y solo ellos soportan `{% include %}`/`{% exten
 ```
 
 ```sh
-ray templ vistas/        # genera vistas/lista.ray (pub fn render_lista(...) -> string)
+ray build --templates-only vistas/        # genera vistas/lista.ray (pub fn render_lista(...) -> string)
 ```
 
 No hace falta acordarse de regenerar: `ray run`/`ray build`/`ray test` **regeneran solos** los

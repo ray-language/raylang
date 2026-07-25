@@ -3056,3 +3056,50 @@ fn main() {
     let native2 = Command::new(&bin2).output().expect("corre el binario fallback");
     assert_eq!(String::from_utf8_lossy(&native2.stdout), vm.0, "fallback Pike VM ≡ VM");
 }
+
+// ── M97: la superficie de subcomandos agrupada por rol (DESIGN.md §88) ───────────────
+
+/// `ray registry` sin subcomando (y con uno desconocido) explica el grupo y sale 64.
+#[test]
+fn registry_group_lists_its_subcommands() {
+    let base = tmp("registry_group");
+    let (_out, err, code) = ray(&base, &["registry"]);
+    assert_eq!(code, 64, "sin subcomando es un error de uso");
+    for sub in ["publish", "yank", "keygen", "verify"] {
+        assert!(err.contains(sub), "el uso lista '{sub}': {err}");
+    }
+    let (_o, err, code) = ray(&base, &["registry", "nope"]);
+    assert_eq!(code, 64, "subcomando desconocido es error de uso");
+    assert!(err.contains("unknown registry subcommand"), "lo nombra: {err}");
+}
+
+/// Los subcomandos que se movieron en M97 no se interpretan como nombre de archivo: apuntan al
+/// destino nuevo. (Redirección de cortesía, no alias: el comando viejo NO ejecuta nada.)
+#[test]
+fn moved_subcommands_point_to_their_new_home() {
+    let base = tmp("moved_subcommands");
+    for (old, new) in [
+        ("publish", "ray registry publish"),
+        ("yank", "ray registry yank"),
+        ("keygen", "ray registry keygen"),
+        ("index-verify", "ray registry verify"),
+        ("templ", "ray build --templates-only"),
+    ] {
+        let (_o, err, code) = ray(&base, &[old]);
+        assert_eq!(code, 64, "'ray {old}' es un error de uso, no un archivo");
+        assert!(err.contains(new), "'ray {old}' redirige a `{new}`: {err}");
+    }
+}
+
+/// El help va seccionado por rol, y las secciones nombran sus comandos.
+#[test]
+fn help_is_grouped_by_role() {
+    let base = tmp("help_grouped");
+    let (out, _err, code) = ray(&base, &["help"]);
+    assert_eq!(code, 0);
+    for section in ["Project:", "Packages:", "Registry", "Tooling:"] {
+        assert!(out.contains(section), "el help tiene la sección '{section}': {out}");
+    }
+    assert!(out.contains("registry publish"), "los de publicador van bajo registry: {out}");
+    assert!(!out.contains("\n  templ "), "`templ` ya no es un subcomando raíz: {out}");
+}

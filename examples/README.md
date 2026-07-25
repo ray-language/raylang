@@ -61,7 +61,7 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
   respuestas) sobre `webserver`, como **librería reutilizable**. `framework_demo` lo importa y usa la
   API por punto (`app.GET(...)`, `r.text(...)`) — UFCS resuelve las funciones importadas.
 - **`ssr/`**: **server-side rendering** con **templates compilados** (M55) — un mini-proyecto donde
-  `ray templ` compila `vistas/*.ray.html` (firma tipada) a funciones raylang que el servidor de
+  `ray build --templates-only` compila `vistas/*.ray.html` (firma tipada) a funciones raylang que el servidor de
   `net` sirve por petición. Ver `ssr/README.md`.
 
 ## Módulos (multi-archivo)

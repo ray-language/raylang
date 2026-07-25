@@ -221,14 +221,14 @@ fn ray_publish_añade_al_index_y_un_consumidor_lo_resolves() {
     let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn triple(x: int) -> int { x * 3 }\n");
 
     // `ray publish` desde el paquete: deriva git+<origin>@v1.0.0, hashea y añade la entrada al índice.
-    let (out, err, code) = ray_idx(&work, &index, &["publish"]);
+    let (out, err, code) = ray_idx(&work, &index, &["registry", "publish"]);
     assert_eq!(code, 0, "publish OK\n{err}");
     assert!(out.contains("published mate 1.0.0"), "{out}");
     let entry = std::fs::read_to_string(index.join("mate.toml")).unwrap();
     assert!(entry.contains("[1.0.0]") && entry.contains("@v1.0.0") && entry.contains("hash ="), "entry en el índice:\n{entry}");
 
     // Republicar la MISMA versión → error de inmutabilidad, sin duplicar en el índice.
-    let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
+    let (_o, err, code) = ray_idx(&work, &index, &["registry", "publish"]);
     assert_eq!(code, 65, "republicar la misma versión fails");
     assert!(err.contains("is already published"), "{err}");
 
@@ -260,7 +260,7 @@ fn ray_publish_without_tag_fails_clearly() {
     std::fs::write(work.join("ray.toml"), "[package]\nname = \"x\"\nversion = \"2.0.0\"\n").unwrap();
     git(&work, &["add", "-A"]);
     git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c"]);
-    let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
+    let (_o, err, code) = ray_idx(&work, &index, &["registry", "publish"]);
     assert_eq!(code, 65, "sin tag fails");
     assert!(err.contains("the tag 'v2.0.0' does not exist"), "mensaje claro:\n{err}");
 }
@@ -280,7 +280,7 @@ fn yank_excludes_version_from_new_resolutions() {
     .unwrap();
 
     // Retira la 1.3.0 (usa el proyecto solo para localizar el índice vía RAY_INDEX).
-    let (out, err, code) = ray_idx(&app, &index, &["yank", "geo@1.3.0"]);
+    let (out, err, code) = ray_idx(&app, &index, &["registry", "yank", "geo@1.3.0"]);
     assert_eq!(code, 0, "yank OK\n{err}");
     assert!(out.contains("yanked"), "{out}");
 
@@ -289,7 +289,7 @@ fn yank_excludes_version_from_new_resolutions() {
     assert!(out.contains("120"), "yank excluye la 1.3.0 en new resolución\n{out}\n{err}");
 
     // --undo la restaura; `ray update` re-resuelve a la 1.3.0 (el lock estaba fijado en 1.2.0).
-    let (_o, _e, code) = ray_idx(&app, &index, &["yank", "geo@1.3.0", "--undo"]);
+    let (_o, _e, code) = ray_idx(&app, &index, &["registry", "yank", "geo@1.3.0", "--undo"]);
     assert_eq!(code, 0);
     let (_o, err, code) = ray_idx(&app, &index, &["update"]);
     assert_eq!(code, 0, "update after --undo\n{err}");
@@ -434,7 +434,7 @@ fn publish_hashes_the_tag_not_the_working_tree() {
     // El hash publicado debe ser el del TAG (lo que el consumidor descargará), no el del árbol sucio.
     std::fs::write(work.join("mod.ray"), "pub fn triple(x: int) -> int { x * 999 }\n").unwrap();
     std::fs::write(work.join("borrador.txt"), "no publicado").unwrap();
-    let (out, err, code) = ray_idx(&work, &index, &["publish"]);
+    let (out, err, code) = ray_idx(&work, &index, &["registry", "publish"]);
     assert_eq!(code, 0, "publish con working tree sucio OK (hashea el tag)\n{err}");
     assert!(out.contains("published mate 1.0.0"), "{out}");
 
@@ -457,7 +457,7 @@ fn el_hash_del_index_se_verifies() {
     let index = base.join("index");
     std::fs::create_dir_all(&index).unwrap();
     let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn v() -> int { 7 }\n");
-    let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
+    let (_o, err, code) = ray_idx(&work, &index, &["registry", "publish"]);
     assert_eq!(code, 0, "publish OK\n{err}");
 
     // Manipular el hash publicado (simula un índice que avala OTRO contenido que el del repo).
@@ -532,7 +532,7 @@ fn publish_runs_the_semantic_check() {
     // (a) Un paquete que lexea y parsea pero NO chequea (tipo de retorno mal) → publish falla.
     let roto = publish(&base, "roto", "1.0.0", "pub fn v() -> int { true }\n");
     let repo_spec = format!("git+file://{}@v1.0.0", roto.display());
-    let (_o, err, code) = ray_idx(&roto, &index, &["publish", "--repo", &repo_spec]);
+    let (_o, err, code) = ray_idx(&roto, &index, &["registry", "publish", "--repo", &repo_spec]);
     assert_eq!(code, 65, "publish de un package what no chequea fails\n{err}");
     assert!(err.contains("does not pass the semantic check"), "mensaje claro:\n{err}");
     assert!(!index.join("roto.toml").exists(), "no se publicó nada");
@@ -553,7 +553,7 @@ fn publish_runs_the_semantic_check() {
     git(&calc, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "calc"]);
     git(&calc, &["tag", "v1.0.0"]);
     let repo_spec = format!("git+file://{}@v1.0.0", calc.display());
-    let (out, err, code) = ray_idx(&calc, &index, &["publish", "--repo", &repo_spec]);
+    let (out, err, code) = ray_idx(&calc, &index, &["registry", "publish", "--repo", &repo_spec]);
     assert_eq!(code, 0, "publish con dep por name chequea y pasa\n{err}");
     assert!(out.contains("published calc 1.0.0"), "{out}");
 }
@@ -725,11 +725,11 @@ fn signed_publish_claims_verifies_and_audits() {
     let key = base.join("publish.key");
     let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn seis() -> int { 6 }\n");
 
-    let (out, err, code) = ray_signed(&work, &index, &key, &["keygen"]);
+    let (out, err, code) = ray_signed(&work, &index, &key, &["registry", "keygen"]);
     assert_eq!(code, 0, "keygen OK\n{err}");
     assert!(out.contains("pubkey: ed25519:"), "{out}");
 
-    let (out, err, code) = ray_signed(&work, &index, &key, &["publish", "--sign"]);
+    let (out, err, code) = ray_signed(&work, &index, &key, &["registry", "publish", "--sign"]);
     assert_eq!(code, 0, "publish --sign OK\n{err}");
     assert!(out.contains("claimed in the index"), "first publicación reclama\n{out}");
     assert!(out.contains("signature: ed25519"), "{out}");
@@ -750,7 +750,7 @@ fn signed_publish_claims_verifies_and_audits() {
     assert!(out.contains("42"), "{out}");
 
     // La auditoría del índice (para el CI del repo del índice) está verde.
-    let (out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
+    let (out, err, code) = ray_idx(&app, &index, &["registry", "verify", index.to_str().unwrap()]);
     assert_eq!(code, 0, "index-verify OK\n{err}");
     assert!(out.contains("1 signed and verified"), "{out}");
 }
@@ -763,8 +763,8 @@ fn tampered_signature_breaks_resolution_and_audit() {
     std::fs::create_dir_all(&index).unwrap();
     let key = base.join("publish.key");
     let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn v() -> int { 7 }\n");
-    ray_signed(&work, &index, &key, &["keygen"]);
-    let (_o, err, code) = ray_signed(&work, &index, &key, &["publish", "--sign"]);
+    ray_signed(&work, &index, &key, &["registry", "keygen"]);
+    let (_o, err, code) = ray_signed(&work, &index, &key, &["registry", "publish", "--sign"]);
     assert_eq!(code, 0, "publish --sign OK\n{err}");
 
     // Voltear la firma publicada (índice comprometido que avala otra cosa).
@@ -793,7 +793,7 @@ fn tampered_signature_breaks_resolution_and_audit() {
     assert_ne!(code, 0, "la invalid signature must romper la resolución");
     assert!(err.contains("SIGNATURE") && err.contains("does not verify"), "{err}");
 
-    let (_out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
+    let (_out, err, code) = ray_idx(&app, &index, &["registry", "verify", index.to_str().unwrap()]);
     assert_ne!(code, 0, "index-verify must fallar\n{err}");
     assert!(err.contains("FALLO"), "{err}");
 }
@@ -807,9 +807,9 @@ fn other_key_cannot_publish_a_claimed_name() {
     let key1 = base.join("k1.key");
     let key2 = base.join("k2.key");
     let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn v() -> int { 7 }\n");
-    ray_signed(&work, &index, &key1, &["keygen"]);
-    ray_signed(&work, &index, &key2, &["keygen", "--out", key2.to_str().unwrap()]);
-    let (_o, err, code) = ray_signed(&work, &index, &key1, &["publish", "--sign"]);
+    ray_signed(&work, &index, &key1, &["registry", "keygen"]);
+    ray_signed(&work, &index, &key2, &["registry", "keygen", "--out", key2.to_str().unwrap()]);
+    let (_o, err, code) = ray_signed(&work, &index, &key1, &["registry", "publish", "--sign"]);
     assert_eq!(code, 0, "el dueño public\n{err}");
 
     // v1.1.0 con OTRA clave → rechazado por el dueño registrado.
@@ -821,7 +821,7 @@ fn other_key_cannot_publish_a_claimed_name() {
     git(&work, &["add", "-A"]);
     git(&work, &["commit", "-m", "v1.1.0"]);
     git(&work, &["tag", "v1.1.0"]);
-    let (_out, err, code) = ray_signed(&work, &index, &key2, &["publish", "--sign"]);
+    let (_out, err, code) = ray_signed(&work, &index, &key2, &["registry", "publish", "--sign"]);
     assert_ne!(code, 0, "other clave no public un name ajeno");
     assert!(err.contains("your key does NOT match"), "{err}");
 }

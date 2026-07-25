@@ -105,7 +105,7 @@ ray build --native     # transpila a Rust y compila un binario nativo (24–61×
 ray test               # corre las funciones @test
 ray fmt src/main.ray   # formatea
 ray doc src/main.ray   # genera documentación desde /// 
-ray templ vistas/      # compila templates .ray.html a funciones raylang tipadas (SSR)
+ray build --templates-only vistas/      # compila templates .ray.html a funciones raylang tipadas (SSR)
 ray repl               # REPL interactivo
 ray lsp                # servidor LSP (diagnósticos, hover, definición, refs, rename, completado, formateo, símbolos…)
 ```
@@ -116,7 +116,7 @@ ray lsp                # servidor LSP (diagnósticos, hover, definición, refs, 
 ray add textutils@^1.2 # añade una dependencia del registro y la descarga
 ray search json        # busca en el registro
 ray update             # re-resuelve a las más nuevas compatibles
-ray publish            # publica TU paquete (valida + chequea + hashea; --sign lo firma)
+ray registry publish            # publica TU paquete (valida + chequea + hashea; --sign lo firma)
 ```
 
 **Modo desarrollo** (`ray dev`): vigila los fuentes, recompila en ms y **solo reinicia si el cambio

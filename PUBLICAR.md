@@ -34,7 +34,7 @@ mipaquete/
 Un repo git (o un directorio local, para probar) con un TOML por paquete:
 
 ```toml
-# <índice>/mipaquete.toml  — lo escribe `ray publish`; no se edita a mano
+# <índice>/mipaquete.toml  — lo escribe `ray registry publish`; no se edita a mano
 [1.0.0]
 git = "git+https://github.com/user/mipaquete@v1.0.0"
 hash = "sha256:…"
@@ -84,17 +84,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: curl -sSfL https://raw.githubusercontent.com/roberto-ayala/raylang/main/install.sh | sh
-      - run: ~/.local/bin/ray index-verify .          # la auditoría de firmas (M83)
+      - run: ~/.local/bin/ray registry verify .          # la auditoría de firmas (M83)
       - run: ~/.local/bin/ray run tools/registry_site.ray . _site   # requiere el checkout del lenguaje o el script vendorizado
       - uses: actions/upload-pages-artifact@v3
       - uses: actions/deploy-pages@v4
 ```
 
-## 3. `ray publish`, paso a paso
+## 3. `ray registry publish`, paso a paso
 
 ```sh
 git tag v1.0.0 && git push --tags     # la versión del ray.toml, con prefijo v
-ray publish                            # …o: ray publish --repo git+URL@ref
+ray registry publish                            # …o: ray registry publish --repo git+URL@ref
 ```
 
 Sin `--repo`, la spec publicada se deriva del remoto **`origin`** + el tag **`v<versión>`**
@@ -129,11 +129,11 @@ re-publicar `1.0.0` es un error — publica `1.0.1` (o retira con `yank`, §5).
 - Contrato semver de siempre: parche = fixes, minor = API aditiva, major = rupturas. La
   cara (`mod.ray`) ES tu API pública — lo no reexportado puede cambiar libremente.
 
-## 5. Retirar una versión: `ray yank`
+## 5. Retirar una versión: `ray registry yank`
 
 ```sh
-ray yank mipaquete@1.0.1          # la resolución deja de elegirla (^1.0 la salta)
-ray yank mipaquete@1.0.1 --undo   # la restaura
+ray registry yank mipaquete@1.0.1          # la resolución deja de elegirla (^1.0 la salta)
+ray registry yank mipaquete@1.0.1 --undo   # la restaura
 ```
 
 `yank` **no borra** (quien ya la tiene fijada en su lock sigue compilando; el requisito
@@ -156,8 +156,8 @@ herramienta para "esta versión tiene un bug/vulnerabilidad — no se la des a n
 Para abrir un índice a varios publicadores:
 
 ```sh
-ray keygen                        # una vez: genera tu clave Ed25519 (~/.ray/publish.key o RAY_KEY)
-ray publish --sign                # publica firmado
+ray registry keygen                        # una vez: genera tu clave Ed25519 (~/.ray/publish.key o RAY_KEY)
+ray registry publish --sign                # publica firmado
 ```
 
 - **La primera publicación firmada RECLAMA el nombre**: se escribe el sidecar
@@ -169,7 +169,7 @@ ray publish --sign                # publica firmado
   con el dueño registrado corta la resolución en seco (protege incluso si el repo del
   índice se compromete — el atacante puede cambiar URL y hash, pero no firmar por ti).
   Una entrada sin firma de un paquete con dueño resuelve con **aviso** (transición).
-- **`ray index-verify <dir>`** audita el índice completo (cada firma verifica contra su
+- **`ray registry verify <dir>`** audita el índice completo (cada firma verifica contra su
   dueño): es el check de **CI del repo del índice**. La otra mitad del enforcement — que
   un PR solo toque paquetes de su autor — es del hosting (CODEOWNERS/branch protection +
   publicación por PR).
@@ -186,14 +186,14 @@ git init -q && git add -A && git commit -qm "v0.1.0" && git tag v0.1.0
 git remote add origin git@github.com:user/textutils.git && git push -q --tags origin main
 
 # (opcional pero recomendado) tu clave de publicador
-ray keygen
+ray registry keygen
 
 # El índice (una vez)
 git init -q ~/ray-index && (cd ~/ray-index && git commit -qm raiz --allow-empty)
 
 # Publicar
 export RAY_INDEX=~/ray-index
-ray publish --sign
+ray registry publish --sign
 
 # Consumir (cualquier proyecto con el mismo índice)
 ray add textutils          # ray.toml: textutils = "0.1.0"; descarga y fija en el lock

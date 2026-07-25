@@ -1,19 +1,19 @@
 //! CLI de raylang — el ejecutable `ray` (M39a), como módulo de la lib para que los dos
 //! binarios (`ray` y el alias `raylang`) sean envoltorios de una línea sobre `cli::main`.
 //!
-//! Interfaz de **subcomandos** (estilo `cargo`/`go`), agrupada por ROL — DESIGN.md §88 (M97):
+//! Interfaz de **subcomandos** (estilo `cargo`/`go`), agrupada por ROL — DESIGN.md §88 (M99):
 //!   `ray new <nombre>`      — crea un proyecto nuevo (ray.toml + src/main.ray).
 //!   `ray run [archivo]`     — ejecuta (por defecto `src/main.ray`) en la VM (M35).
 //!   `ray build [archivo]`   — chequea y compila sin ejecutar (para CI); 0 ok / 65 error.
 //!                             con `--native [-o <salida>] [--release]` transpila a Rust y compila con
 //!                             rustc → binario nativo (P2.b, requiere `rustc`). `--release` = opt3+lto+
 //!                             codegen-units=1+target-cpu=native (más lento de compilar, no portable).
-//!                             con `--templates-only [ruta...]` solo compila los `.ray.html` (M97).
+//!                             con `--templates-only [ruta...]` solo compila los `.ray.html` (M99).
 //!   `ray test [archivo]`    — corre las funciones `@test` (M10.1).
 //!   `ray fmt <archivo>`     — imprime la versión canónica por stdout (M29.2).
 //!   `ray doc <archivo>`     — genera la documentación Markdown (raydoc).
 //!   `ray add|remove|update|search|fetch` — gestión de dependencias, uso diario (M39b/M51).
-//!   `ray registry <sub>`    — comandos del PUBLICADOR: `publish`/`yank`/`keygen`/`verify` (M51/M97).
+//!   `ray registry <sub>`    — comandos del PUBLICADOR: `publish`/`yank`/`keygen`/`verify` (M51/M99).
 //!   `ray lsp`               — arranca el Language Server (M10.2).
 //!   `ray mcp`               — arranca el servidor MCP.
 //!   `ray repl`              — REPL interactivo (M8.2).
@@ -117,7 +117,7 @@ Tooling:
     );
 }
 
-/// `ray registry <sub>` (M97): los comandos del **publicador** de paquetes — los que escriben en el
+/// `ray registry <sub>` (M99): los comandos del **publicador** de paquetes — los que escriben en el
 /// índice compartido o manejan sus claves de firma. Se agrupan porque comparten ROL (mantenedor, no
 /// consumidor) y frecuencia (rara); los de consumo —`add`/`remove`/`update`/`search`/`fetch`— viven
 /// en la raíz porque son de uso diario. Ver DESIGN.md §88.
@@ -676,7 +676,7 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// `ray build [archivo]`: chequea y **compila** el programa sin ejecutarlo (útil para CI y
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
 fn cmd_build(args: &[String]) {
-    // `--templates-only [ruta...]` (M97): compila los `.ray.html` y termina, SIN chequear ni compilar
+    // `--templates-only [ruta...]` (M99): compila los `.ray.html` y termina, SIN chequear ni compilar
     // el programa. Es el reemplazo del subcomando `ray build --templates-only`: la compilación de templates es un paso
     // del build, no un comando de usuario (DESIGN.md §88.4). A diferencia de la regeneración
     // automática de `run`/`build`/`test` —que es incremental por mtime—, esta **fuerza** la
@@ -1757,7 +1757,7 @@ fn cmd_fmt(args: &[String]) {
 // M40.4: `ray doc <archivo>` imprime la documentación Markdown de la superficie pública del archivo.
 /// `ray templ <ruta>...`: compila cada template `.ray.html` (o todos los de un directorio,
 /// recursivo) a su módulo raylang generado (`.ray` al lado, commiteable). M55.
-/// `ray build --templates-only [ruta...]` (M97, antes el subcomando `ray build --templates-only` de M55): compila los
+/// `ray build --templates-only [ruta...]` (M99, antes el subcomando `ray templ` de M55): compila los
 /// `.ray.html` dados —archivos o directorios, recursivo— a módulos raylang tipados. Sin rutas usa la
 /// raíz del proyecto (`ray.toml`) o el directorio actual. Regenera SIEMPRE, sin mirar mtimes.
 fn build_templates(args: &[String]) {
@@ -1894,7 +1894,7 @@ fn cmd_doc(args: &[String]) {
 // ── Modo legado (compatibilidad con la interfaz por flags) ───────────────────────────
 
 fn legacy(rest: &[String]) {
-    // M97: un subcomando que SE MOVIÓ cae aquí y se interpretaría como nombre de archivo, con un
+    // M99: un subcomando que SE MOVIÓ cae aquí y se interpretaría como nombre de archivo, con un
     // "could not read module 'publish'" que no dice nada. Se intercepta antes para señalar el destino.
     // (raylang no está publicado: son redirecciones de cortesía, no alias — el comando viejo NO corre.)
     if let Some(first) = rest.first() {

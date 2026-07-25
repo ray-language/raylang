@@ -1,7 +1,7 @@
 //! Templates compilados (M55) — un archivo `.ray.html` se compila a una FUNCIÓN raylang tipada, en
-//! la línea de `templ` (Go) o `askama` (Rust). Vía explícita: `ray build --templates-only`
-//! (era el subcomando `ray templ` hasta M97); implícita: `run`/`build`/`test` regeneran los
-//! desactualizados. Es la versión "limpia" de la
+//! la línea de `templ` (Go) o `askama` (Rust). Vía explícita: `ray build --templates-only` (era el
+//! subcomando `ray templ` hasta M99); implícita: `run`/`build`/`test` regeneran los desactualizados.
+//! Es la versión "limpia" de la
 //! localidad de PHP: el archivo es la página, pero el código incrustado se limita a la sintaxis
 //! restringida del template y las variables son PARÁMETROS TIPADOS (un typo en `{{ var }}` o un
 //! tipo equivocado es error de compilación, no un "" silencioso como en el motor runtime).

@@ -5166,7 +5166,7 @@ subcomando conocido cae al **modo legado** (`legacy`), que reconoce `--vm`/`--in
 `--fmt`/`--lsp`/`--repl` y el `<archivo>` directo. Los 688 tests (todos con flags o ruta
 directa) pasan sin cambios; los subcomandos nuevos se prueban en `tests/cli_cli.rs`.
 
-> **La superficie de subcomandos se reorganiza antes de la 1.0 → §88 (M97)**: los comandos de
+> **La superficie de subcomandos se reorganiza antes de la 1.0 → §88 (M99)**: los comandos de
 > publicador bajan a `ray registry <sub>` y el help se secciona. Lo de aquí describe la fundación
 > del CLI, no su superficie final.
 
@@ -6739,7 +6739,7 @@ a un paquete, o retirarse), lo que en `std/` exige un cambio de versión mayor d
 
 ## 54. M51 — Registro central de paquetes y `ray publish` (arco C, DISEÑO)
 
-> **Nombres renombrados en M97 (§88)**: `publish`/`yank`/`keygen`/`index-verify` pasaron a
+> **Nombres renombrados en M99 (§88)**: `publish`/`yank`/`keygen`/`index-verify` pasaron a
 > `ray registry publish|yank|keygen|verify`. Esta sección conserva los nombres de su época (es
 > crónica del hito); la superficie vigente del CLI está en §88.3.
 
@@ -7321,7 +7321,7 @@ Revisión del FFI de M41 bajo el foco de producción. Dos arreglos y un plan:
 
 ## 59. M55 — Templates compilados (`ray templ`). ✅ COMPLETO
 
-> **Renombrado en M97 (§88.4)**: `ray templ` pasó a ser `ray build --templates-only` — compilar
+> **Renombrado en M99 (§88.4)**: `ray templ` pasó a ser `ray build --templates-only` — compilar
 > templates es un paso del build, no un comando de usuario. Esta sección conserva el nombre de su
 > época (es crónica del hito); la superficie vigente del CLI está en §88.3.
 
@@ -8529,7 +8529,7 @@ pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
   latencia de SLO → tasa fija con corrección (`oha -q`/wrk2). Reportar el p99 de wrk como
   latencia del servicio es un error de medición, no un dato.
 
-## 88. M97 — la superficie de la CLI antes de la 1.0 (DISEÑO)
+## 88. M99 — la superficie de la CLI antes de la 1.0 (DISEÑO)
 
 > Contrato de la **interfaz pública** de `ray`. La 1.0 congela nombres de subcomandos igual que
 > congela la API del lenguaje (M34): después del lanzamiento, mover un subcomando cuesta un ciclo

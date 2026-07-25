@@ -3057,7 +3057,7 @@ fn main() {
     assert_eq!(String::from_utf8_lossy(&native2.stdout), vm.0, "fallback Pike VM ≡ VM");
 }
 
-// ── M97: la superficie de subcomandos agrupada por rol (DESIGN.md §88) ───────────────
+// ── M99: la superficie de subcomandos agrupada por rol (DESIGN.md §88) ───────────────
 
 /// `ray registry` sin subcomando (y con uno desconocido) explica el grupo y sale 64.
 #[test]
@@ -3073,7 +3073,7 @@ fn registry_group_lists_its_subcommands() {
     assert!(err.contains("unknown registry subcommand"), "lo nombra: {err}");
 }
 
-/// Los subcomandos que se movieron en M97 no se interpretan como nombre de archivo: apuntan al
+/// Los subcomandos que se movieron en M99 no se interpretan como nombre de archivo: apuntan al
 /// destino nuevo. (Redirección de cortesía, no alias: el comando viejo NO ejecuta nada.)
 #[test]
 fn moved_subcommands_point_to_their_new_home() {

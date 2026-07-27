@@ -1,0 +1,26 @@
+import std/time;
+
+// Servicio: parsear N líneas de log — split + parse_int + agregación en 2 maps.
+// Modela la ruta de ENTRADA de un servicio (parsear y agregar peticiones).
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let statuses = ["200", "200", "200", "404", "500"];
+    var cnt: Map<string, int> = Map.new();
+    var lat: Map<string, int> = Map.new();
+    for i in 0..150000 {
+        let path = "/api/" + to_string(i % 50);
+        let status = statuses[i % 5];
+        let line = "GET " + path + " " + status + " " + to_string(i % 250);
+        let f = line.split(" ");
+        cnt.add_to(f[2], 1);
+        lat.add_to(f[1], parse_int(f[3]).unwrap_or(0));
+    }
+    let sk = cnt.keys().sort();
+    for k in sk {
+        print(k + " " + to_string(cnt.get(k).unwrap_or(0)));
+    }
+    var total = 0;
+    for v in lat.values() { total = total + v; }
+    print(total);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

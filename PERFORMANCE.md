@@ -8,8 +8,11 @@
 
 ## 1. Punto de partida (medido, jul 2026)
 
-Benchmark poliglota del usuario (`~/Desktop/benchmarks`, hyperfine/best-of-N, M3) contra
-node/php/lua/python/ruby/perl:
+Benchmark poliglota (M3) contra node/php/lua/python/ruby/perl/go/rust. El arnés vive **en el
+repo**: `benchmarks/poly/` (importado el 27 jul 2026 desde el directorio de trabajo del usuario,
+donde estas cifras se midieron con hyperfine/best-of-N; el arnés actual ya no usa hyperfine —
+ver `benchmarks/poly/README.md` §Metodología). Las cifras de esta tabla y las de §6 son
+anteriores a la importación y no se han vuelto a medir con el arnés nuevo:
 
 | Workload | Qué mide | ray vs líder | Puesto |
 |---|---|---|---|
@@ -1427,9 +1430,10 @@ self-hosting por el tercer backend.
 
 ## 5. Gobernanza: cómo se trabaja este objetivo
 
-1. **El banco poliglota es el juez** (`~/Desktop/benchmarks`, hyperfine): fibrec ·
+1. **El banco poliglota es el juez** (`benchmarks/poly/`, `./bench.py`): fibrec ·
    loopsum · jsonserialize · logparse · wordcount + arranque. Tabla completa antes/después
-   de cada arco.
+   de cada arco (`--export-md` deja el bloque de entorno —fecha, CPU, versiones— junto a los
+   números; sin él un resultado no es comparable con el de la sesión siguiente).
 2. **Presupuesto de arranque**: ≤ 5 ms es un activo de marca — gate de regresión.
 3. **Oráculo y goldens siempre verdes**; cada optimización = commit propio con su
    medición (formato del ledger §11/§45 de IDEAS.md).

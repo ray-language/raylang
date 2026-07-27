@@ -1,0 +1,40 @@
+// Servicio: extracción regex de campos de una línea de log, con el MOTOR REAL de la
+// stdlib (`import std/regex`): el mismo patrón `^user(\d+) GET /api/(\d+) (\d+) (\d+)ms$`
+// que las demás variantes matchean con su motor nativo, compilado UNA vez (trait Matcher).
+//
+// Historia de rendimiento (jul 2026): la primera versión de este bench parseaba a mano
+// porque std/regex costaba ~59s VM / ~2.3s nativo. Tras optimizar la Pike VM de la
+// librería (seen por generaciones, sin siembra bajo ^, PERFORMANCE.md Fase 62) y R5
+// (Fase 63: en el binario NATIVO el motor es el crate `regex` de Rust vía ray-runtime,
+// con la validación y el dialecto de std/regex), el nativo corre en ~71 ms — por delante
+// de Go (~76 ms). La VM (~17 s) sigue interpretando la Pike VM escrita en raylang: es el
+// modelo del proyecto (dev = VM, deploy = nativo), y el único motor del bench escrito en
+// el propio lenguaje que compara.
+import std/regex;
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let n = 200000;
+    let rx = regex.compile("^user([0-9]+) GET /api/([0-9]+) ([0-9]+) ([0-9]+)ms$").unwrap();
+    var checksum = 0;
+    var match_count = 0;
+    for i in 0..n {
+        let status = if (i % 5 != 4) { 200 } else { 404 };
+        let line = `user${i} GET /api/${i % 50} ${status} ${i % 250}ms`;
+        match (rx.captures_str(line)) {
+            Option.Some(caps) => {
+                match_count = match_count + 1;
+                let uid = parse_int(caps[1].unwrap_or("")).unwrap_or(0);
+                let path = parse_int(caps[2].unwrap_or("")).unwrap_or(0);
+                let st = parse_int(caps[3].unwrap_or("")).unwrap_or(0);
+                let ms = parse_int(caps[4].unwrap_or("")).unwrap_or(0);
+                checksum = (checksum * 31 + uid + path + st + ms) % 1000000007;
+            },
+            Option.None => {},
+        }
+    }
+    print(match_count);
+    print(checksum);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

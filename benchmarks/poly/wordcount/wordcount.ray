@@ -1,0 +1,24 @@
+import std/time;
+
+// Servicio: word-count sobre "líneas" sintéticas — split + hash map + sort.
+// Modela el crunch de datos de un servicio (parsear cada request y agregar).
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let base = "the quick brown fox jumps over the lazy dog and runs away fast today";
+    var m: Map<string, int> = Map.new();
+    for r in 0..120000 {
+        let line = to_string(r % 1000) + " " + base;
+        let words = line.split(" ");
+        for w in words {
+            m.add_to(w, 1);
+        }
+    }
+    let keys = m.keys().sort();
+    var acc = 0;
+    for k in keys {
+        acc = (acc * 31 + m.get(k).unwrap_or(0)) % 1000000007;
+    }
+    print(keys.len());
+    print(acc);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

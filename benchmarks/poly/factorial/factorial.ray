@@ -1,0 +1,13 @@
+import std/time;
+
+fn fact(n: int) -> int {
+    if (n < 2) { 1 } else { n * fact(n - 1) }
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    for i in 0..10 {
+        print(fact(i));
+    }
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

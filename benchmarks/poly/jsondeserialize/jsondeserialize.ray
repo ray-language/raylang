@@ -1,0 +1,45 @@
+import std/time;
+
+// Servicio: parsear registros JSON (contraparte de jsonserialize) — búsqueda
+// de substrings + parse_int, sin librería de JSON (mismo espíritu que logparse).
+//
+// Optimización (jul 2026): los literales fijos (id_prefix/mid/tail y sus
+// longitudes) se calculan UNA vez antes del loop en vez de re-evaluarse en
+// las 400 000 iteraciones. Medido: nativo 99.3ms -> 89.3ms (~10%), VM 413ms
+// -> 361ms (~13%), mismo checksum.
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let n = 400000;
+    var checksum = 0;
+    var total_name_len = 0;
+
+    let id_prefix = "{\"id\":";
+    let mid = ",\"name\":\"";
+    let tail = "\",\"score\":";
+    let id_start = id_prefix.len();
+    let mid_len = mid.len();
+    let tail_len = tail.len();
+
+    for i in 0..n {
+        let line = `{"id":${i},"name":"user${i}","score":${i % 100}}`;
+
+        let id_end = index_of(line, mid).unwrap_or(0);
+        let id_val = parse_int(line.substring(id_start, id_end)).unwrap_or(0);
+
+        let name_start = id_end + mid_len;
+        let after_name = line.substring(name_start, line.len());
+        let name_len = index_of(after_name, tail).unwrap_or(0);
+        let name_val = line.substring(name_start, name_start + name_len);
+
+        let score_start = name_start + name_len + tail_len;
+        let score_end = line.len() - 1;
+        let score_val = parse_int(line.substring(score_start, score_end)).unwrap_or(0);
+
+        checksum = (checksum * 31 + id_val + score_val) % 1000000007;
+        total_name_len = total_name_len + name_val.len();
+    }
+
+    print(checksum);
+    print(total_name_len);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

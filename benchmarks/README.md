@@ -1,8 +1,21 @@
 # Benchmarks
 
-Comparan los dos motores de ejecución de raylang: el **intérprete** (M1) y la
-**máquina virtual** (M2). Sirven para medir el progreso a medida que optimizamos la
-VM (ver las ideas de optimización en `IDEAS.md`).
+Dos arneses con trabajos distintos — no se solapan y ninguno reemplaza al otro:
+
+| | Qué compara | Para qué |
+|---|---|---|
+| **este directorio** | raylang contra sí mismo (intérprete M1 vs VM M2, y VM contra un baseline commiteado) | **gate** de regresión: avisa si un cambio nos deja más lentos |
+| **`poly/`** | raylang contra node/go/rust/php/lua/python/ruby/perl, en tiempo Y memoria | **comparación** externa: las cifras de `PERFORMANCE.md` §1/§6 salen de aquí |
+
+`poly/` es un arnés en python3 puro (`./bench.py`, o `./tui.py` interactivo) que necesita los
+compiladores/intérpretes de los otros lenguajes instalados —los que falten se omiten con un
+aviso— y **no está cableado a CI**: es una herramienta de sesión, se corre a mano. Ver
+`poly/README.md`, en particular su §Metodología de medición (rondas intercaladas con rotación,
+mediana+MAD, detector de desalojo del SO), que es más rigurosa que la de `measure.py`.
+
+El resto de este documento describe el arnés de **este** directorio: compara los dos motores de
+ejecución de raylang, el **intérprete** (M1) y la **máquina virtual** (M2). Sirve para medir el
+progreso a medida que optimizamos la VM (ver las ideas de optimización en `IDEAS.md`).
 
 ## Uso
 

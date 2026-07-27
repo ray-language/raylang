@@ -1,0 +1,16 @@
+# Artefactos de compilación: los regenera `build-all.sh`, nunca se commitean.
+# Los binarios nativos de raylang NO tienen extensión (`sortnums`, `wordcount`,
+# …), así que ningún patrón por sufijo los caza: se ignora TODO lo que hay
+# dentro de los directorios de programa y se re-admiten solo las fuentes.
+/*/*
+!/*/*.ray
+!/*/*.go
+!/*/*.rs
+!/*/*.js
+!/*/*.py
+!/*/*.rb
+!/*/*.lua
+!/*/*.php
+!/*/*.pl
+
+__pycache__/

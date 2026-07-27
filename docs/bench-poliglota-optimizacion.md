@@ -1,7 +1,7 @@
 # Bench políglota — investigación de optimización (22 jul 2026)
 
 Investigación sobre los tres benchmarks de servicios del proyecto políglota
-(`~/Desktop/benchmarks`): **wordcount**, **jsonserialize** y **logparse**, con dos
+(`benchmarks/poly/`): **wordcount**, **jsonserialize** y **logparse**, con dos
 objetivos: bajar los tiempos (VM y nativo) y bajar el **pico de memoria de
 jsonserialize**. Todo lo de aquí está **medido en esta máquina** (M3, macOS), no
 estimado, salvo donde se indica.

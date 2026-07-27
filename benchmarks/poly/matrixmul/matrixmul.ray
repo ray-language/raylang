@@ -1,0 +1,61 @@
+// Servicio: multiplicación de matrices — el único benchmark con aritmética de
+// punto flotante (todo lo demás en la suite es entero puro).
+//
+// Optimización (jul 2026): se transpone `b` una vez (bt[j][k] = b[k][j]) y se
+// hoistean las filas de `a`/`bt` fuera del loop de `k` (`ai`/`bj`), para que el
+// acceso a cada elemento en el loop más interno sea UN solo indexado de array
+// en vez de dos (a[i][k] repetía la búsqueda de la fila i en cada iteración de
+// k, n² veces de más). Medido: nativo 35.5ms -> 15.7ms (2.3x), VM 922ms ->
+// 664ms (28%) para n=200, mismo checksum.
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let n = 200;
+    var a: [[float]] = [];
+    var b: [[float]] = [];
+    for i in 0..n {
+        var row_a: [float] = [];
+        var row_b: [float] = [];
+        for j in 0..n {
+            row_a.push(((i * n + j) % 13) as float);
+            row_b.push(((j * n + i) % 17) as float);
+        }
+        a.push(row_a);
+        b.push(row_b);
+    }
+
+    var bt: [[float]] = [];
+    for j in 0..n {
+        var col: [float] = [];
+        for k in 0..n {
+            col.push(b[k][j]);
+        }
+        bt.push(col);
+    }
+
+    var c: [[float]] = [];
+    for i in 0..n {
+        let ai = a[i];
+        var row: [float] = [];
+        for j in 0..n {
+            let bj = bt[j];
+            var s = 0.0;
+            for k in 0..n {
+                s = s + ai[k] * bj[k];
+            }
+            row.push(s);
+        }
+        c.push(row);
+    }
+
+    var checksum = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            checksum = checksum + c[i][j];
+        }
+    }
+
+    print(checksum as int);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

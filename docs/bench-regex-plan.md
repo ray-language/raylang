@@ -1,6 +1,6 @@
 # regex — comparación con std/regex y plan (22 jul 2026)
 
-El bench políglota `regex` (`~/Desktop/benchmarks/regex`) usa en su variante
+El bench políglota `regex` (`benchmarks/poly/regex`) usa en su variante
 `.ray` un **parseo manual** (nota en el propio archivo: `std/regex` daba ~59 s
 VM / ~2.3 s nativo). Aquí la comparación pedida con la **librería real**
 (`import std/regex`, patrón compilado una vez vía `Matcher`, checksum idéntico

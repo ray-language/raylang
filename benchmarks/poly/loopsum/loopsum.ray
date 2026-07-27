@@ -1,0 +1,11 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var acc: int = 0;
+    for i in 1..10000001 {
+        acc = (acc + i * i) % 1000000007;
+    }
+    print(acc);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

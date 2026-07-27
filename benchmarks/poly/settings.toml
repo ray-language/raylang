@@ -1,0 +1,28 @@
+# Activa (true) o desactiva (false) variantes de lenguaje para bench.py y
+# tui.py. Una variante desactivada se omite en list/choose/bench, igual que si
+# se pasara --exclude.
+#
+# Claves válidas: las extensiones existentes en cada subdirectorio de
+# ejemplo, más "native" (binario compilado con `ray build --native`).
+#
+# El default commiteado deja los NUEVE activos: es el conjunto con el que se
+# midió la tabla de PERFORMANCE.md §1, y un lenguaje sin intérprete instalado
+# se omite solo (con aviso) en vez de romper la corrida. Para una sesión más
+# corta, apaga aquí lo que no te interese o usa --exclude.
+
+native = true   # binario nativo (ray build --native)
+go     = true   # binario compilado (go build)
+rs     = true   # binario compilado (rustc -O)
+js     = true   # node
+lua    = true   # lua
+php    = true   # php
+pl     = true   # perl
+py     = true   # python3
+ray    = true   # ray run (intérprete)
+rb     = true   # ruby
+
+# Defaults de corridas/calentamiento (se pueden sobreescribir con --runs/--warmup).
+[bench]
+runs     = 10   # corridas medidas por variante (tope si hay presupuesto)
+warmup   = 5    # corridas de calentamiento descartadas
+budget_s = 5    # presupuesto de pared por variante en segundos (0 = sin límite)

@@ -1,0 +1,13 @@
+import std/time;
+
+fn fib(n: int) -> int {
+    if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    for i in 0..10 {
+        print(fib(i));
+    }
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

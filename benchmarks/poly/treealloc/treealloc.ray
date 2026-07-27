@@ -1,0 +1,50 @@
+// Servicio: presión de GC/allocator — construir, contar y descartar muchos
+// árboles binarios pequeños (clásico benchmark "binary-trees").
+import std/time;
+
+struct Node {
+    left: Option<Node>,
+    right: Option<Node>,
+}
+
+fn make_tree(depth: int) -> Option<Node> {
+    if (depth == 0) {
+        Option.None
+    } else {
+        Option.Some(Node { left: make_tree(depth - 1), right: make_tree(depth - 1) })
+    }
+}
+
+fn node_count(n: Option<Node>) -> int {
+    match (n) {
+        Option.None => 0,
+        Option.Some(node) => 1 + node_count(node.left) + node_count(node.right),
+    }
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let min_depth = 4;
+    let max_depth = 14;
+
+    let stretch = make_tree(max_depth + 1);
+    print(node_count(stretch));
+
+    let long_lived = make_tree(max_depth);
+
+    var total_check = 0;
+    var depth = min_depth;
+    while (depth <= max_depth) {
+        let iterations = 1 << (max_depth - depth + min_depth);
+        var check = 0;
+        for i in 0..iterations {
+            check = check + node_count(make_tree(depth));
+        }
+        total_check = total_check + check;
+        depth = depth + 2;
+    }
+
+    print(node_count(long_lived));
+    print(total_check);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

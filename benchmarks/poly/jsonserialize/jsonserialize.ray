@@ -1,0 +1,15 @@
+import std/time;
+
+// Servicio: serializar N registros a JSON — construcción de strings intensiva.
+// Modela la ruta de SALIDA de un servicio (armar la respuesta).
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var parts: [string] = [];
+    for i in 0..400000 {
+        parts.push(`{"id":${i},"name":"user${i}","score":${i % 100}}`);
+    }
+    let out = parts.join("\n");
+    print(out.len());
+    print(parts.len());
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

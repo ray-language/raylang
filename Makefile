@@ -15,7 +15,7 @@ LABEL ?= medición
 .DEFAULT_GOAL := help
 .PHONY: help build run run-interp repl test test-one test-slow clippy ci \
         release slim pgo pgo-slim playground playground-serve \
-        bench bench-gate bench-record bench-vs-interp \
+        bench bench-gate bench-record bench-vs-interp bench-poly bench-poly-build \
         book book-serve vscode install clean clean-cache
 
 help: ## Lista los targets disponibles
@@ -91,6 +91,12 @@ bench-record: ## Graba el baseline en esta máquina (release PLANO, no PGO)
 
 bench-vs-interp: ## Compara VM vs intérprete con hyperfine: make bench-vs-interp FILE=prog.ray
 	benchmarks/bench.sh $(FILE)
+
+bench-poly-build: ## Compila los binarios del banco poliglota (requiere ray/go/rustc en PATH)
+	cd benchmarks/poly && ./build-all.sh
+
+bench-poly: ## Banco poliglota (tiempo+memoria): make bench-poly PROG=wordcount (o PROG=all)
+	cd benchmarks/poly && ./bench.py $(or $(PROG),list)
 
 ##@ Documentación y tooling
 

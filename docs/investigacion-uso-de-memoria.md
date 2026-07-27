@@ -17,7 +17,7 @@
 - **Protocolo**: 3 corridas por combinación, se reporta la **mediana**; stdout del programa a
   `/dev/null`; máquina en reposo verificada con `ps` (lección de la investigación p99: procesos
   huérfanos contaminan). Para el intérprete en cargas largas, 1 corrida (orden de magnitud).
-- **Corpus**: el banco políglota de `~/Desktop/benchmarks` (los mismos programas por lenguaje):
+- **Corpus**: el banco políglota de `benchmarks/poly/` (los mismos programas por lenguaje):
   `empty` (huella de arranque), `fibrec` (cómputo puro, casi sin heap), `logparse` (parseo),
   `wordcount` (Map + split, 120k líneas), `jsonserialize` (construcción de strings, 400k registros).
   Más micro-benchmarks dirigidos escritos para esta investigación (§4–§6).

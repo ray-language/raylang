@@ -1,6 +1,6 @@
 # jsondeserialize — investigación y plan (22 jul 2026)
 
-El benchmark nuevo del proyecto políglota (`~/Desktop/benchmarks/jsondeserialize`)
+El benchmark nuevo del proyecto políglota (`benchmarks/poly/jsondeserialize`)
 dejó a raylang último en tiempo: **VM 998 ms (20.8× Go)** y **nativo 224 ms (4.7×
 Go)**, con Go en 48 ms y Rust en 52 ms. Investigación con el método de siempre:
 reproducir, atribuir, prototipar midiendo. Los prototipos D1/D2 de este documento

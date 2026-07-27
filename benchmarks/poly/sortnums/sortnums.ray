@@ -1,0 +1,26 @@
+// Servicio: ordenar un array grande de números (distinto de los sorts de
+// claves de string en wordcount/logparse) — ejercita el sort de arreglos.
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let n = 1000000;
+    var seed = 12345;
+    var arr: [int] = [];
+    for i in 0..n {
+        seed = (48271 * seed) % 2147483647;
+        arr.push(seed % 1000000);
+    }
+
+    let sorted = arr.sort();
+
+    var checksum = 0;
+    for v in sorted {
+        checksum = (checksum * 31 + v) % 1000000007;
+    }
+
+    print(sorted[0]);
+    print(sorted[n - 1]);
+    print(checksum);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

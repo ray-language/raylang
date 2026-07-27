@@ -205,5 +205,5 @@ escribir los argumentos, **find-references/rename/highlight** de params y variab
 **outline** (`render_<stem>` con sus params), y **snippets de bloque** (teclear `for`/`if` inserta
 el `{% for %}…{% endfor %}` entero con placeholders navegables por Tab). Los templates componen
 con `{% import %}` + `{% include %}`, heredan con `{% extends %}` + `{% block %}`, y declaran
-locales con `{% let %}`. No hace falta `ray templ` a mano: `ray run`/`build`/`test` regeneran los
+locales con `{% let %}`. No hace falta `ray build --templates-only` a mano: `ray run`/`build`/`test` regeneran los
 templates desactualizados.

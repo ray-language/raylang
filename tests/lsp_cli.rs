@@ -338,7 +338,7 @@ fn diagnoses_with_path_dependencies_from_manifest() {
 
 #[test]
 fn diagnoses_ray_html_templates() {
-    // M55: un buffer `.ray.html` se diagnostica con el pipeline de `ray templ`. (1) Un typo en una
+    // M55: un buffer `.ray.html` se diagnostica con el pipeline de `ray build --templates-only`. (1) Un typo en una
     // variable ({{ titluo }}) genera código que no compila y el error vuelve TRADUCIDO a la línea
     // del template (línea 2 → 1 en 0-based) con el prefijo "template:". (2) Un error del propio
     // template (if sin endif) sale con su línea. (3) hover sobre el TYPO (no declarado) devuelve

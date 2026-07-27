@@ -1,16 +1,21 @@
 //! CLI de raylang — el ejecutable `ray` (M39a), como módulo de la lib para que los dos
 //! binarios (`ray` y el alias `raylang`) sean envoltorios de una línea sobre `cli::main`.
 //!
-//! Interfaz de **subcomandos** (estilo `cargo`/`go`):
+//! Interfaz de **subcomandos** (estilo `cargo`/`go`), agrupada por ROL — DESIGN.md §88 (M99):
 //!   `ray new <nombre>`      — crea un proyecto nuevo (ray.toml + src/main.ray).
 //!   `ray run [archivo]`     — ejecuta (por defecto `src/main.ray`) en la VM (M35).
 //!   `ray build [archivo]`   — chequea y compila sin ejecutar (para CI); 0 ok / 65 error.
 //!                             con `--native [-o <salida>] [--release]` transpila a Rust y compila con
 //!                             rustc → binario nativo (P2.b, requiere `rustc`). `--release` = opt3+lto+
 //!                             codegen-units=1+target-cpu=native (más lento de compilar, no portable).
+//!                             con `--templates-only [ruta...]` solo compila los `.ray.html` (M99).
 //!   `ray test [archivo]`    — corre las funciones `@test` (M10.1).
 //!   `ray fmt <archivo>`     — imprime la versión canónica por stdout (M29.2).
+//!   `ray doc <archivo>`     — genera la documentación Markdown (raydoc).
+//!   `ray add|remove|update|search|fetch` — gestión de dependencias, uso diario (M39b/M51).
+//!   `ray registry <sub>`    — comandos del PUBLICADOR: `publish`/`yank`/`keygen`/`verify` (M51/M99).
 //!   `ray lsp`               — arranca el Language Server (M10.2).
+//!   `ray mcp`               — arranca el servidor MCP.
 //!   `ray repl`              — REPL interactivo (M8.2).
 //!   `ray version`          — versión del lenguaje (M34).
 //!   `ray help`              — esta ayuda.
@@ -55,14 +60,10 @@ fn run() {
         Some("add") => cmd_add(&rest[1..]),
         Some("remove") => cmd_remove(&rest[1..]),
         Some("search") => cmd_search(&rest[1..]),
-        Some("publish") => cmd_publish(&rest[1..]),
-        Some("keygen") => cmd_keygen(&rest[1..]),
-        Some("index-verify") => cmd_index_verify(&rest[1..]),
         Some("update") => cmd_update(&rest[1..]),
-        Some("yank") => cmd_yank(&rest[1..]),
         Some("fetch") => cmd_fetch(&rest[1..]),
+        Some("registry") => cmd_registry(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
-        Some("templ") => cmd_templ(&rest[1..]),
         Some("doc") => cmd_doc(&rest[1..]),
         Some("lsp") => lsp::run(),
         Some("mcp") => mcp::run(),
@@ -83,23 +84,29 @@ raylang {v} — programming language
 
 Usage: ray <subcommand> [options]
 
-  new <name>      create a new project (ray.toml + src/main.ray)
-  run [file]     run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
-  dev [file]     like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]   check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex]]
-  test [file]    run the @test functions [filter]
+Project:
+  new <name>        create a new project (ray.toml + src/main.ray)
+  run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
+  dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex]] [--templates-only [path...]]
+  test [file]       run the @test functions [filter]
+  fmt <file>        print the canonical version to stdout
+  doc <file>        generate the Markdown documentation of its public surface
+
+Packages:
   add <name>[@req]  add a dependency from the index to ray.toml and download it
-  remove <name>   remove a dependency from ray.toml (and its cache if nobody else uses it)
-  search [pattern]   list the index packages (that contain the pattern)
-  publish [--repo S] [--sign]  publish this package's version in the index (--sign signs it)
-  keygen [--out F]  generate the Ed25519 publish key (RAY_KEY or ~/.ray/publish.key)
-  index-verify [dir]  audit the signatures of an index (for the index repo's CI)
+  remove <name>     remove a dependency from ray.toml (and its cache if nobody else uses it)
   update            re-resolve the index dependencies to the newest compatible ones
-  yank <nom>@<see>  yank (or --undo restore) a published version in the index
+  search [pattern]  list the index packages (that contain the pattern)
   fetch             download the ray.toml dependencies to .ray-deps/
-  fmt <file>     print the canonical version to stdout
-  templ <path>...   compile .ray.html templates to typed raylang modules
-  doc <file>     generate the Markdown documentation of its public surface
+
+Registry (package authors):
+  registry publish [--repo S] [--sign]   publish this package's version in the index
+  registry yank <name>@<ver> [--undo]    yank (or restore) a published version in the index
+  registry keygen [--out F]              generate the Ed25519 publish key (RAY_KEY or ~/.ray/publish.key)
+  registry verify [dir]                  audit the signatures of an index (for the index repo's CI)
+
+Tooling:
   lsp               start the Language Server
   mcp               start the MCP server (tools for AI agents: check/run/test/fmt/doc)
   repl              interactive REPL
@@ -108,6 +115,34 @@ Usage: ray <subcommand> [options]
 ",
         v = env!("CARGO_PKG_VERSION")
     );
+}
+
+/// `ray registry <sub>` (M99): los comandos del **publicador** de paquetes — los que escriben en el
+/// índice compartido o manejan sus claves de firma. Se agrupan porque comparten ROL (mantenedor, no
+/// consumidor) y frecuencia (rara); los de consumo —`add`/`remove`/`update`/`search`/`fetch`— viven
+/// en la raíz porque son de uso diario. Ver DESIGN.md §88.
+fn cmd_registry(args: &[String]) {
+    match args.first().map(String::as_str) {
+        Some("publish") => cmd_publish(&args[1..]),
+        Some("yank") => cmd_yank(&args[1..]),
+        Some("keygen") => cmd_keygen(&args[1..]),
+        Some("verify") => cmd_index_verify(&args[1..]),
+        other => {
+            if let Some(sub) = other {
+                eprintln!("unknown registry subcommand: '{sub}'");
+            }
+            eprintln!(
+                "\
+usage: ray registry <subcommand>
+
+  publish [--repo S] [--sign]   publish this package's version in the index
+  yank <name>@<ver> [--undo]    yank (or restore) a published version in the index
+  keygen [--out F]              generate the Ed25519 publish key
+  verify [dir]                  audit the signatures of an index"
+            );
+            process::exit(64);
+        }
+    }
 }
 
 // ── Subcomandos ──────────────────────────────────────────────────────────────────────
@@ -511,7 +546,7 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
                 }
                 pending.push(path);
             } else if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
-                // Un `.ray` con un `.ray.html` hermano es el módulo GENERADO por `ray templ`
+                // Un `.ray` con un `.ray.html` hermano es el módulo GENERADO por `ray build --templates-only`
                 // (derivado): se vigila el fuente (el .html), no el artefacto — si no, cada
                 // edición de template causaría un segundo reinicio al regenerarlo el hijo.
                 if name.ends_with(".ray") && !name.ends_with(".ray.html") {
@@ -641,6 +676,22 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// `ray build [archivo]`: chequea y **compila** el programa sin ejecutarlo (útil para CI y
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
 fn cmd_build(args: &[String]) {
+    // `--templates-only [ruta...]` (M99): compila los `.ray.html` y termina, SIN chequear ni compilar
+    // el programa. Es el reemplazo del subcomando `ray build --templates-only`: la compilación de templates es un paso
+    // del build, no un comando de usuario (DESIGN.md §88.4). A diferencia de la regeneración
+    // automática de `run`/`build`/`test` —que es incremental por mtime—, esta **fuerza** la
+    // regeneración de todos: es el escape para cuando cambia el GENERADOR (p. ej. al actualizar `ray`)
+    // y los mtimes no reflejan que el `.ray` de salida quedó obsoleto. Sin rutas, escanea la raíz del
+    // proyecto (o el directorio actual si no hay `ray.toml`).
+    if args.iter().any(|a| a == "--templates-only") {
+        let paths: Vec<String> = args
+            .iter()
+            .filter(|a| !a.starts_with('-'))
+            .cloned()
+            .collect();
+        build_templates(&paths);
+        return;
+    }
     // `--native [-o <salida>] [--release]` (P2.b): transpila a Rust y lo compila con rustc → binario
     // nativo. El resto de flags/archivo se pasan igual; el archivo es el primer no-flag.
     let native = args.iter().any(|a| a == "--native");
@@ -1706,11 +1757,21 @@ fn cmd_fmt(args: &[String]) {
 // M40.4: `ray doc <archivo>` imprime la documentación Markdown de la superficie pública del archivo.
 /// `ray templ <ruta>...`: compila cada template `.ray.html` (o todos los de un directorio,
 /// recursivo) a su módulo raylang generado (`.ray` al lado, commiteable). M55.
-fn cmd_templ(args: &[String]) {
-    if args.is_empty() {
-        eprintln!("usage: ray templ <file.ray.html | directory>...");
-        process::exit(64);
-    }
+/// `ray build --templates-only [ruta...]` (M99, antes el subcomando `ray templ` de M55): compila los
+/// `.ray.html` dados —archivos o directorios, recursivo— a módulos raylang tipados. Sin rutas usa la
+/// raíz del proyecto (`ray.toml`) o el directorio actual. Regenera SIEMPRE, sin mirar mtimes.
+fn build_templates(args: &[String]) {
+    // Sin rutas: la raíz del proyecto, o `.` si se invoca fuera de un proyecto.
+    let default_root = load_manifest()
+        .map(|m| m.root.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string());
+    let owned: Vec<String>;
+    let args: &[String] = if args.is_empty() {
+        owned = vec![default_root];
+        &owned
+    } else {
+        args
+    };
     let mut entries: Vec<PathBuf> = Vec::new();
     for a in args {
         let p = Path::new(a);
@@ -1759,7 +1820,7 @@ fn collect_templates(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// M55: **regeneración automática de templates** — antes de compilar/correr, cada `.ray.html` bajo
 /// el directorio de la entrada cuyo `.ray` generado **falte** o esté **desactualizado** (mtime
-/// anterior al del template) se regenera, como si se hubiera corrido `ray templ`. El aviso va por
+/// anterior al del template) se regenera, como si se hubiera corrido `ray build --templates-only`. El aviso va por
 /// **stderr** (stdout es del programa). Un template con error de sintaxis aborta con 65 (el build
 /// habría fallado igual al compilar el generado viejo, pero con peor señal). Con los generados al
 /// día el coste es un stat por template (cero sin `.ray.html`).
@@ -1833,6 +1894,23 @@ fn cmd_doc(args: &[String]) {
 // ── Modo legado (compatibilidad con la interfaz por flags) ───────────────────────────
 
 fn legacy(rest: &[String]) {
+    // M99: un subcomando que SE MOVIÓ cae aquí y se interpretaría como nombre de archivo, con un
+    // "could not read module 'publish'" que no dice nada. Se intercepta antes para señalar el destino.
+    // (raylang no está publicado: son redirecciones de cortesía, no alias — el comando viejo NO corre.)
+    if let Some(first) = rest.first() {
+        let moved = match first.as_str() {
+            "publish" => Some("ray registry publish"),
+            "yank" => Some("ray registry yank"),
+            "keygen" => Some("ray registry keygen"),
+            "index-verify" => Some("ray registry verify"),
+            "templ" => Some("ray build --templates-only"),
+            _ => None,
+        };
+        if let Some(dest) = moved {
+            eprintln!("'ray {first}' moved: use `{dest}` (see `ray help`)");
+            process::exit(64);
+        }
+    }
     // M38.4: `--deterministic` (order-independent) fuerza el scheduler M:1 reproducible. Se extrae antes de
     // todo el parseo por-posición del modo legado.
     let (deterministic, rest) = take_flag_bool(rest, "--deterministic");

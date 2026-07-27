@@ -7,10 +7,10 @@
 //   - `compile(tpl) -> Result<Template, string>` + `render(t, ctx) -> string`
 //   - `render_template(tpl, ctx)` = azúcar de una vez (compila + renderiza).
 //
-// Reparto de roles con `ray templ` (M55): los templates COMPILADOS (`.ray.html` → función tipada)
+// Reparto de roles con `ray build --templates-only` (M55): los templates COMPILADOS (`.ray.html` → función tipada)
 // son la opción por defecto y además soportan `{% include %}`/`{% extends %}`/`{% block %}`/
 // `{% let %}`; este motor runtime es un SUBCONJUNTO (interpolación + if/for) para plantillas
-// **dinámicas** — cargadas de disco/BD en caliente, editables por el usuario — que `ray templ`
+// **dinámicas** — cargadas de disco/BD en caliente, editables por el usuario — que `ray build --templates-only`
 // no puede cubrir (necesita el template en build time). Los compilados importan `escape_html`
 // de aquí: este módulo es también su librería de soporte.
 //
@@ -258,7 +258,7 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
 // Escape HTML apoyado en los builtins NATIVOS (`contains`/`replace` corren en Rust): el caso común
 // (texto limpio) devuelve el string original tras 5 escaneos O(n); el sucio, 5 pasadas de replace.
 // (No iterar `s[i]` en bucle: indexar un string es O(len) por acceso → un bucle así es cuadrático.)
-// Pub: también lo usan los módulos GENERADOS por `ray templ` (M55).
+// Pub: también lo usan los módulos GENERADOS por `ray build --templates-only` (M55).
 /// Escapes HTML special characters (`& < > " '`) as entities. Clean text is returned as-is.
 pub fn escape_html(s: string) -> string {
     if (!(s.contains("&") || s.contains("<") || s.contains(">") || s.contains("\"") || s.contains("'"))) {

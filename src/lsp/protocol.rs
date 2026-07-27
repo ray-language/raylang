@@ -202,7 +202,7 @@ pub(super) fn diagnostics(uri: &str, src: &str) -> Json {
     publish(uri, json)
 }
 
-/// ¿El documento es un template compilable (`.ray.html`)? Sus diagnósticos van por `ray templ`;
+/// ¿El documento es un template compilable (`.ray.html`)? Sus diagnósticos van por el compilador de templates;
 /// el resto de features del LSP (hover/definición/…) no aplican (devuelven null).
 pub(super) fn is_template_uri(uri: &str) -> bool {
     uri.ends_with(".ray.html")

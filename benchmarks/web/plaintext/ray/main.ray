@@ -1,0 +1,37 @@
+// Carga `plaintext` — raylang sobre `net/webserver` PELADO (sin `web/framework`).
+//
+// Responde `Hello, World!` con `Content-Type: text/plain` a cualquier ruta: es la primera
+// categoría de TechEmpower, el mínimo común denominador que todas las implementaciones del
+// banco sirven byte a byte igual (lo verifica `webbench.py` antes de medir).
+//
+// El puerto llega por argumento (`args()[0]`) porque el arnés asigna uno distinto a cada
+// implementación: así puede levantarlas en paralelo sin colisiones ni esperas de TIME_WAIT.
+import net/webserver;
+
+fn handle(req: webserver.Request) -> webserver.Response {
+    var r: webserver.Response = webserver.text(200, "Hello, World!");
+    r.headers.insert("Content-Type", "text/plain");
+    r
+}
+
+fn main() -> int {
+    let argv: [string] = args();
+    if (argv.len() < 1) {
+        eprint("uso: plaintext-ray <puerto>");
+        return 2;
+    }
+    let port: int = match (argv[0].parse_int()) {
+        Option.Some(p) => p,
+        Option.None => {
+            eprint("puerto inválido: " + argv[0]);
+            return 2;
+        },
+    };
+    match (webserver.serve("127.0.0.1", port, handle)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint("serve: " + e);
+            1
+        },
+    }
+}

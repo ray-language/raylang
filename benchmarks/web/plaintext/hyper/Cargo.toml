@@ -1,0 +1,20 @@
+# Proyecto Cargo INDEPENDIENTE: el `[workspace]` vacío lo saca del workspace del repo (si no,
+# cargo se queja de un paquete anidado que no está en `members`). Sus dependencias son solo
+# del banco — no entran al binario del lenguaje ni a `ray-runtime`.
+[package]
+name = "plaintext-hyper"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

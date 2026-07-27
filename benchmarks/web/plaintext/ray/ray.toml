@@ -1,0 +1,7 @@
+[package]
+name = "plaintext-ray"
+version = "0.1.0"
+entry = "main.ray"
+
+[dependencies]
+net = "path:../../../../packages/net"

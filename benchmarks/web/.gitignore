@@ -1,0 +1,8 @@
+# Artefactos de compilación: los regenera `build-all.sh`.
+plaintext/ray/plaintext-ray
+plaintext/go/plaintext-go
+plaintext/hyper/target/
+__pycache__/
+
+# Cargo.lock del proyecto de hyper SÍ se commitea: fija la versión exacta de hyper/tokio con
+# la que se midió. Un baseline que cambia de dependencias entre sesiones no es un baseline.

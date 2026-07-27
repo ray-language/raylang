@@ -1746,17 +1746,36 @@ struct Output { exit: Exit, stdout: bytes, stderr: bytes, truncated: bool }
   explícito). Mezclar dos canales en userspace da orden arbitrario: los buffers del kernel son
   independientes.
 
-### 53.4 Lo único urgente HOY: auditoría CLOEXEC (desacoplada de todo esto)
+### 53.4 Auditoría CLOEXEC — HECHA (27 jul 2026)
 
-**Riesgo vivo, exista `exec` o no.** La VM sostiene sockets de escucha, conexiones, handles de
-SQLite y librerías por `dlopen`. Un fd sin `O_CLOEXEC` desde su creación lo hereda cualquier hijo, y
-el síntoma es el clásico: reinicias el servidor y el puerto sigue ocupado porque un proceso lanzado
-hace media hora se quedó el socket de escucha.
+Se auditó **todo sitio del proyecto que crea un fd fuera de `std`** (que sí pone CLOEXEC por
+defecto). Resultado: **dos fds sin CLOEXEC, ambos nuestros, ambos corregidos**; el resto limpio.
 
-El proyecto **ya lanza hijos con herencia de fd deliberada**: M92.3 (`ray dev`) hace `pre_exec` +
-`dup2` al fd 3 para socket-activation, y ya cazó una sutileza ahí (`dup2(3,3)` es no-op que NO
-limpia CLOEXEC → `fcntl(F_SETFD,0)` explícito). Sin auditar: los fds de `rusqlite` y los que cruzan
-el FFI. Rust pone CLOEXEC por defecto en lo que abre `std`; esos dos caminos no son `std`.
+| Sitio | Veredicto |
+|---|---|
+| **Self-pipe de señales** (`builtins.rs`, M88.1) | ❌ **FUGA** → corregida. `pipe(2)` crea los fds sin `FD_CLOEXEC` y el código solo llamaba a `F_SETFL` (flags de ESTADO: `O_NONBLOCK`), nunca a `F_SETFD` (flags del DESCRIPTOR). Fix: `fcntl(fd, F_SETFD, FD_CLOEXEC)` en ambos extremos (`pipe2` sería atómico pero no existe en macOS) |
+| **`epoll_create1(0)`** (`poll.rs`, M17) | ❌ **FUGA** (Linux) → corregida con `EPOLL_CLOEXEC`. Ventana estrecha (el epoll nace y muere dentro de `wait`), pero el flag es gratis |
+| **`kqueue()`** (`poll.rs`) | ✅ limpio **por construcción**: kqueue(2) garantiza que el descriptor NO se hereda por `fork` |
+| **SQLite** (`rusqlite`/`libsqlite3-sys` bundled) | ✅ limpio, verificado en la fuente vendorizada: `robust_open` usa `osOpen(z, f\|O_CLOEXEC, m2)` con fallback a `FD_CLOEXEC` por `fcntl` |
+| **`ray dev`: `pre_exec`+`dup2` al fd 3** (`cli.rs`, M92.3) | ✅ **correcto**. El `fcntl(F_SETFD, 0)` que limpia CLOEXEC corre DENTRO de `pre_exec` — o sea en el hijo, tras el `fork` y antes del `exec` — así que el fd del supervisor conserva su CLOEXEC. La herencia es deliberada y acotada al hijo |
+| **Sockets / ficheros / handles** (`std::net`, `std::fs`) | ✅ limpio: Rust pone CLOEXEC al crear |
+| **FFI (`dlopen`/`dlsym`)** | ✅ sin fds propios. Lo que abra una función foránea queda fuera de nuestro control — documentado, no auditable |
+
+**Exposición real HOY: ninguna.** Las dos fugas eran **latentes**, no vivas: los únicos `exec` del
+proyecto son de nivel CLI (`git` desde `deps.rs`, `rustc`/`cargo` desde `build --native`, el
+re-lanzamiento de `ray` en `mcp.rs` y `dev`), y ninguno de esos procesos sostiene el self-pipe (lo
+crea la VM, que no lanza procesos) ni un epoll. El supervisor de `ray dev` tiene su propio handler
+de señales **sin** self-pipe (reenvía SIGTERM al hijo directamente). Se corrigieron igual: el día
+que exista `exec` habrían sido fugas silenciosas, y un hijo con el extremo de ESCRITURA del
+self-pipe abierto impide para siempre el EOF de ese pipe.
+
+**Pendiente para cuando llegue `exec`**: el hijo de `ray dev` adopta el listener en el fd 3 con
+`from_raw_fd`, y ese fd tiene `FD_CLOEXEC` a 0 **dentro del hijo** (necesario para que sobreviva al
+exec). Si ese programa llegara a lanzar procesos, heredarían el socket de escucha → hay que
+re-poner CLOEXEC tras la adopción en `tcp_listen`.
+
+**No verificado**: el camino de `epoll` no se compiló (no hay target de Linux instalado en la
+máquina de desarrollo); el cambio es un `const` + su paso como argumento, y lo cubre el CI.
 
 ### 53.5 Implementación, cuando toque
 

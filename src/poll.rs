@@ -148,6 +148,8 @@ mod sys {
     use super::PollResult;
 
     const EPOLL_CTL_ADD: i32 = 1;
+    /// `EPOLL_CLOEXEC` == `O_CLOEXEC` (0o2000000 en Linux): el fd del epoll no sobrevive a un `exec`.
+    const EPOLL_CLOEXEC: i32 = 0o2000000;
     const EPOLLIN: u32 = 0x001;
     const EPOLLOUT: u32 = 0x004;
 
@@ -182,7 +184,12 @@ mod sys {
         // SAFETY: `epoll_*` son syscalls de libc. Igual que en kqueue: fds vivos, buffers locales del
         // tamaño declarado, llamadas bien formadas.
         unsafe {
-            let ep = epoll_create1(0);
+            // EPOLL_CLOEXEC (auditoría jul 2026, IDEAS §53.4): sin él, el fd del epoll se filtraría a
+            // un hijo lanzado por exec DURANTE esta llamada. La ventana es estrecha (el epoll nace y
+            // muere dentro de `wait`) y hoy no hay vía de fuga, pero el flag es gratis y es lo
+            // correcto. En macOS/BSD no hace falta el equivalente: kqueue(2) garantiza que el
+            // descriptor NO se hereda por `fork`.
+            let ep = epoll_create1(EPOLL_CLOEXEC);
             if ep < 0 {
                 return PollResult::Unsupported;
             }

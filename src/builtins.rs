@@ -2479,6 +2479,8 @@ mod signals_host {
     const SIGINT: i32 = 2;
     const SIGTERM: i32 = 15;
     const F_SETFL: i32 = 4;
+    const F_SETFD: i32 = 2;
+    const FD_CLOEXEC: i32 = 1;
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     const O_NONBLOCK: i32 = 0x0004;
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
@@ -2510,6 +2512,16 @@ mod signals_host {
         unsafe {
             let _ = fcntl(fds[0], F_SETFL, O_NONBLOCK);
             let _ = fcntl(fds[1], F_SETFL, O_NONBLOCK);
+            // CLOEXEC (auditoría jul 2026, IDEAS §53.4): `pipe(2)` crea los fds SIN FD_CLOEXEC, y
+            // `F_SETFL` toca los flags de ESTADO (O_NONBLOCK), no los del DESCRIPTOR — sin esto, el
+            // par de fds del self-pipe se filtra a cualquier hijo que se lance por exec. Hoy no hay
+            // vía de fuga (el `exec` del proyecto es de nivel CLI y la VM no lanza procesos), pero
+            // el día que exista sería una fuga silenciosa: un hijo con el extremo de ESCRITURA
+            // abierto impide para siempre el EOF del pipe. `pipe2(O_CLOEXEC)` sería atómico pero no
+            // existe en macOS; el `fcntl` posterior es la vía portable (sin carrera real: `install`
+            // corre una sola vez, temprano, y aquí nadie hace fork).
+            let _ = fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+            let _ = fcntl(fds[1], F_SETFD, FD_CLOEXEC);
         }
         PIPE_W.store(fds[1], Ordering::Release);
         unsafe {

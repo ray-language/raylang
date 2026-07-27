@@ -66,6 +66,7 @@
 | **Framework web `packages/web`** (estilo Express, promoción de examples) | Librería raylang pura sobre `net/webserver` + `net/log` | **M93** | ✅ **COMPLETO** (DESIGN §85, rama `feature/packages-web`): promovido de `examples/web/framework.ray` y re-basado en el webserver de producción; API express-parity — `static_files` (M56.9, ETag/304), `not_found` custom, `PATCH`+`route` genérico, `header`/`html`/`redirect`, `log_requests` (JSON por petición), `listen_tls`/`listen_graceful`/`listen_limits`. Consumidores: `examples/web/framework/` (proyecto con ray.toml) + `tests/framework_cli.rs` sobre el paquete; guía en `docs/web-framework.md`. Diferido: middleware por-ruta/grupos, body parsers tipados, sesiones/CSRF |
 | **Memoria** (fuga del almacén de tareas VM + trampa de paridad del pool nativo + coste 32 B/elem) | VM (`vm.rs`/`gc.rs`: free-list de tasks/channels) + runtime nativo (`transpile.rs`: pool) + banco | **M98** | 📌 **PLAN FIJADO** ([docs/investigacion-uso-de-memoria.md](docs/investigacion-uso-de-memoria.md) §8, investigación 20 jul 2026). Huella de arranque = la mejor de la mesa (nativo 1.5 MB, VM 6.8 vs node 49/php 26/python 15); **dos bugs de producción**: (1) la VM **fuga ~1 KB/request** (tasks/channels nunca liberan; `Done(v)` retenido → webserver 924 MB en 30 s) · (2) el nativo **crashea** con churn secuencial de tareas (trampa de paridad del round-robin M96e → hilo nuevo por spawn → EAGAIN). Fases: ✅ **98.1** join consume + free-list con generación + `SpawnDiscard` (VM; task_churn 123.8→6.9 MB, webserver 924 MB→31 MB plano; espec DESIGN §21.7) · ✅ **98.2** sondear shards antes de crear hilo (nativo; churn 20k de crash→2.1 MB) · ✅ **98.3** canales ídem (liberados al cerrar+drenar; stale ≡ cerrado+vacío, cero semántica nueva; chan_churn 45.4→7.0 MB) · ✅ **98.4** RSS en el banco (gate de memoria en regress.py: ru_maxrss vía os.wait4, umbral 15%, micros task_churn/chan_churn/arr_while commiteados; ruido medido ±0.0%) · ✅ **98.5** `Obj::IntArray` (storage strategy con degradación a genérico; arr_1M 69→22.1 MB −68%, iter −73%, CPU neutra-o-mejor en A/B de misma sesión; HeapValue-16B descartado sin re-medir). **ARCO M98 COMPLETO** |
 | **Recuperación de errores fatales** (panic → valor, estilo `recover` de Go) | Builtin nuevo (`try_call`) + doc; la base ya existe (`try_join` M56.5, tres motores) | **M97** | 📌 **PLAN FIJADO** (§49 abajo): 97.1 documentar `try_join` como el "recover" del proyecto (hoy 0 menciones en el MANUAL) + fijar semántica con la cancelación de hermanas · 97.2 `try_call` (misma fibra; intérprete trivial → oráculo completo; VM desenrolla marcos al marcador; nativo `catch_unwind`) · 97.3 supervisión de actores (librería pura sobre spawn+try_join) · 97.4 💤 limpieza en unwind (defer/with_file), solo si 97.2 lo destapa. Aditivo, no bloquea nada |
+| **Ejecución de comandos del SO** (`run("git", ["status"])`) | Builtin + `std/process` + feature de Cargo; toca los TRES motores | 💤 **sin hito** | 💤 **APARCADA con diseño hecho** (§53 abajo, jul 2026). Decisión: **no antes de la 1.0**. No hay demanda —cero entradas previas en este archivo, ningún paquete bloqueado— y el FFI (M41) ya es válvula de escape para quien lo necesite hoy. M34 congeló la API con semver: meterla ahora sería congelar superficie sin uso real, y la API de procesos es de las que nadie acierta a la primera (Python tardó 15 años en `subprocess.run`; Node arrastra `spawn`/`exec`/`execFile`/`fork` + `Sync`). El diseño queda escrito para no rehacerlo. **Desacoplado y sí urgente**: la auditoría CLOEXEC (§53.4) |
 
 ---
 
@@ -1670,3 +1671,122 @@ descartada: que el Resolver reescriba nombres de `Call(Field)` (rompería campo-
 homónimo, que gana por diseño). La regla de estilo para paquetes ya no es necesaria (las
 llamadas libres de framework.ray se conservan — equivalentes y válidas). **Diferido**: el espejo
 selfhost no conoce módulos con namespacing (su loader M14.7 es más simple) → fuera del corpus.
+
+---
+
+## 53. Ejecución de comandos del SO — diseño hecho, APARCADA (jul 2026)
+
+Lanzar procesos del sistema (`git`, `ffmpeg`, `rustc`) desde raylang. Se diseñó a fondo en una
+sesión de julio de 2026 y **se decidió no construirla antes de la 1.0**. Esta sección conserva el
+diseño para no rehacerlo el día que haya demanda.
+
+### 53.1 Por qué se aparca
+
+- **No hay demanda.** Cero entradas previas en este archivo; ningún paquete ni ejemplo bloqueado.
+  En un backlog que clasifica hasta PTY, mirrors del registro y namespaces con dueño, la ausencia
+  es evidencia, no descuido.
+- **Hay válvula de escape.** El FFI con ABI C (M41, `dlopen`/`dlsym`) permite declarar `system()` o
+  `posix_spawn` como `extern` hoy mismo. Es incómodo a propósito: si alguien se toma esa molestia,
+  aparece la demanda que ahora falta.
+- **Calendario.** M44 (distribución) es el único hito que queda para la 1.0, y **M34 ya congeló la
+  API con semver**. Meter `exec` ahora congela superficie recién nacida y sin uso. La API de
+  procesos es de las que nadie acierta a la primera: Python tardó quince años en llegar a
+  `subprocess.run` y arrastra `os.system`/`popen`/`call`/`check_output`; Node lleva
+  `spawn`/`exec`/`execFile`/`fork` con sus variantes `Sync` como verruga permanente. Ninguno pudo
+  quitarlo después.
+- **El self-hosting NO la pide.** `selfhost/` es el **front-end** (lexer/parser/checker/compiler/
+  interpreter/loader) y nada de eso lanza procesos. Quien sí lo haría es la *toolchain* (`ray
+  publish`→`git`, `ray build --native`→`rustc`/`cargo`, `ray dev`→se relanza a sí mismo), pero
+  self-hostear el CLI no es objetivo declarado.
+
+**Qué la reabre** (cualquiera de las tres): un servicio real en raylang que lo necesite · decidir
+self-hostear la toolchain, no solo el front-end · alguien que llegue con el FFI puesto y la queja
+de que es intragable.
+
+### 53.2 La restricción que manda el diseño: TRES motores
+
+raylang corre en **intérprete** (oráculo secuencial), **VM** (producto) y **nativo transpilado**,
+con paridad byte a byte exigida. El propio código ya trazó la línea que decide el reparto:
+
+> `"concurrency (spawn/channel/send/recv/join/scope/select) requires the VM; the interpreter is
+> only the sequential oracle"` — `src/interpreter.rs`
+
+| Capa | Motores | Por qué |
+|---|---|---|
+| `run()` — bloqueante, captura acotada | los **tres** | llamada secuencial; el oráculo la valida |
+| streaming por canales | **solo VM** | necesita aparcar fibras; mismo precedente que `spawn` |
+
+**Empezar por lo bloqueante.** Si se empieza por el streaming, el 90% de los casos de uso se queda
+sin oráculo de desarrollo.
+
+### 53.3 La API
+
+```raylang
+enum Exit { Code(int), Signal(int) }
+
+struct Output { exit: Exit, stdout: bytes, stderr: bytes, truncated: bool }
+```
+
+- **`Exit` es un enum, no un int.** El lenguaje tiene `enum`+`match`; aplanar una muerte por señal
+  a `128+sig` es la convención del shell, no una verdad, y aquí no cuesta nada evitarla.
+- **Salir con código ≠ error.** El `Result` distingue *no se pudo lanzar* (ENOENT/EACCES) de *lanzó
+  y terminó*; que `grep` devuelva 1 es un dato. Norte del proyecto (DESIGN §0: errores como
+  valores). Encima, un `check()` para el caso ergonómico.
+- **`bytes`, no `string`.** El tipo ya existe (`Type::Bytes`, M16.1a). Un nombre de fichero POSIX es
+  cualquier secuencia de octetos sin NUL; forzar UTF-8 en el borde es una mentira que explota tarde.
+- **Tope de salida por defecto** (~16 MB) con `truncated: bool`. raylang apunta a servidores: ese
+  `run()` acabará ejecutándose con input semi-controlado, y un `Vec` sin límite es vía de OOM.
+- **Sin shell, ni siquiera opt-in en v1.** Quien quiera una tubería escribe `run("sh", ["-c", …])`
+  explícitamente — honesto y visible en el código.
+- **Streaming (v2, solo-VM): un `Channel<bytes>` ACOTADO**, no un tipo nuevo de concurrencia. El
+  `send` que bloquea con el canal lleno **es** la contrapresión, y se propaga sola al pipe y de ahí
+  al hijo. El orden causal ("el estado siempre tras todos los datos") sale **estructural**: el canal
+  cierra en EOF → `recv` da `None` → entonces `join`. No hay que prometerlo en la spec.
+- Intercalar stdout/stderr en orden real exige `dup2` de ambos al MISMO pipe (modo `Merge`
+  explícito). Mezclar dos canales en userspace da orden arbitrario: los buffers del kernel son
+  independientes.
+
+### 53.4 Lo único urgente HOY: auditoría CLOEXEC (desacoplada de todo esto)
+
+**Riesgo vivo, exista `exec` o no.** La VM sostiene sockets de escucha, conexiones, handles de
+SQLite y librerías por `dlopen`. Un fd sin `O_CLOEXEC` desde su creación lo hereda cualquier hijo, y
+el síntoma es el clásico: reinicias el servidor y el puerto sigue ocupado porque un proceso lanzado
+hace media hora se quedó el socket de escucha.
+
+El proyecto **ya lanza hijos con herencia de fd deliberada**: M92.3 (`ray dev`) hace `pre_exec` +
+`dup2` al fd 3 para socket-activation, y ya cazó una sutileza ahí (`dup2(3,3)` es no-op que NO
+limpia CLOEXEC → `fcntl(F_SETFD,0)` explícito). Sin auditar: los fds de `rusqlite` y los que cruzan
+el FFI. Rust pone CLOEXEC por defecto en lo que abre `std`; esos dos caminos no son `std`.
+
+### 53.5 Implementación, cuando toque
+
+- **El bloqueo del pool es el problema propio de raylang.** Desde M38 el scheduler es multicore por
+  defecto con `available_parallelism()` hilos: un `run()` bloqueante dentro de una fibra secuestra
+  un hilo del pool, y ocho concurrentes lo dejan seco. Ningún runtime single-threaded tiene este
+  problema. Solución sin maquinaria nueva: **aparcar la fibra en los fds del hijo** vía `src/poll.rs`
+  (M17) — donde `IoParked` **ya lleva `deadline`**, así que los timeouts no son código nuevo. En
+  intérprete y nativo, bloquear está bien (el intérprete no tiene fibras; el nativo tiene hilos).
+- **SIGCHLD por self-pipe, reusando M88.1**, no `pidfd`/`EVFILT_PROC`. El patrón ya está en el árbol
+  y probado (handler async-signal-safe → pipe → fd registrado en el mismo `poll::wait` que los
+  sockets). Objeción previsible ("secuestra la señal globalmente"): el proyecto **ya** secuestra
+  SIGTERM y SIGINT. Además `poll::wait()` toma y devuelve **fds** con `EVFILT_READ`/`WRITE` fijos, y
+  `EVFILT_PROC` identifica por *pid* → no cabe en esa firma sin ensancharla.
+- **Feature de Cargo, no sistema de permisos.** raylang no tiene capabilities y no conviene
+  inventarlas aquí: tiene el precedente de `sqlite`/`net-tls`/`ffi` (arco M89), donde el binario slim
+  da un `Err` claro. "Este binario no puede lanzar procesos" verificable por ausencia de código es
+  más fuerte que un flag de runtime.
+- **Reparto por tiers** (política de DESIGN §53): el primitivo es **builtin** (syscalls del host + impl en el
+  transpilador nativo), el builder y la ergonomía van en **`std/process` escrito en raylang**.
+- **Grupos de proceso desde el día uno**, aunque parezcan prematuros: en cuanto exista `timeout`,
+  matar solo al PID directo deja vivos a los nietos de un `sh -c "a | b"`, y añadirlo después
+  **cambia la semántica** de programas ya escritos. Escalera de apagado: cerrar stdin (deja hacer
+  flush) → SIGTERM al grupo → SIGKILL al grupo.
+- **Fuera de v1**: PTY (subsistema propio: cambia el buffering de los hijos), Windows (el CI compila
+  `ray` para Windows → ahí `run` da un `Err` honesto, precedente de `packages/tz`), y cualquier
+  abstracción de supervisión de procesos (`Task<T>` + `Channel` ya cubren lo que haría falta).
+
+### 53.6 Orden de ataque, si se reabre
+
+**(0)** auditoría CLOEXEC (independiente, hacer ya) · **(1)** SIGCHLD por self-pipe sobre M88.1 ·
+**(2)** `run()` + `std/process` en los tres motores con golden VM≡nativo · **(3)** streaming sobre
+canal acotado, solo-VM.

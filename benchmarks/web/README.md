@@ -93,6 +93,25 @@ escalón se marca como techo. Ese guardián no se contamina con el jitter del ge
 `--correction` sigue disponible para comparar, y el bloque de entorno del `--export-md` registra
 si estaba activa.
 
+### Repeticiones, mediana y MAD
+
+`--reps` (default **3**) mide cada escalón varias veces y reporta la **mediana** de cada métrica
+más el **MAD** de la p99 (y su min-max). Mediana y MAD en vez de media y σ, por lo mismo que en
+`poly/`: el ruido aquí es aditivo —una pausa del scheduler o un tropiezo del generador solo puede
+sumar—, así que un outlier arrastra la media pero no la mediana.
+
+El veredicto (¿sostiene? ¿dentro del SLO?) se decide sobre las **medianas**, no sobre una corrida
+suelta: una repetición desafortunada no debe cortar la escalera ni tumbar un escalón.
+
+Y el MAD no es decoración: es lo que permite **no** afirmar una jerarquía que los datos no
+sostienen. Dos implementaciones comparten puesto (marcado con `=`) si sostienen la misma tasa y
+sus ventanas de p99 (mediana ± 2·MAD) se solapan. Esto entró precisamente porque con una sola
+corrida raylang y Go quedaban a un ~7 % de p99 — una diferencia que no se podía defender.
+
+Las repeticiones se **intercalan igual que los escalones**: la repetición *r* de cada
+implementación se mide junto a la *r* de las demás, y la rotación avanza en cada pasada. Así
+ninguna acumula sus repeticiones en la misma ventana térmica.
+
 ### Rondas intercaladas con rotación
 
 En cada escalón se miden **todas** las implementaciones vivas, y el orden rota
@@ -197,25 +216,38 @@ puede alcanzar loopback.
 ## Resultado con generador remoto (27 jul 2026)
 
 Servidor M3 Pro (11 cores) ↔ generador M4 (12 cores) por Thunderbolt bridge; escalera por
-defecto, `-c 100`, 8 s por escalón, SLO p99 ≤ 10 ms, sin corrección de latencia:
+defecto, `-c 100`, 8 s × **3 repeticiones** por escalón, SLO p99 ≤ 10 ms, sin corrección de
+latencia. Medianas de las 3, con el MAD de la p99:
 
-| implementación | tasa sostenida bajo SLO | p50 | p99 | p99.9 | techo observado |
-|---|---|---|---|---|---|
-| hyper | **≥200 000 rps** (tope del generador) | 0.47 ms | 0.71 ms | 1.57 ms | no alcanzado |
-| **raylang** (`net/webserver`, nativo) | **120 000 rps** | 0.63 ms | 1.92 ms | 7.14 ms | ~128 000 |
-| Go `net/http` | 120 000 rps | 0.77 ms | 2.06 ms | 2.60 ms | ~123 000 |
-| `node:http` | 80 000 rps | 1.01 ms | 2.30 ms | 3.06 ms | ~82 000 |
+| implementación | tasa sostenida bajo SLO | p50 | p99 | p99 MAD | p99.9 | techo observado |
+|---|---|---|---|---|---|---|
+| hyper | **≥200 000 rps** (tope del generador) | 0.46 ms | 0.69 ms | ±0.00 | 1.11 ms | no alcanzado |
+| **raylang** (`net/webserver`, nativo) | **120 000 rps** | 0.65 ms | **1.86 ms** | ±0.04 | 6.59 ms | **~129 500** |
+| Go `net/http` | 120 000 rps | 0.79 ms | 2.11 ms | ±0.01 | 2.63 ms | ~120 400 |
+| `node:http` | 40 000 rps | 0.86 ms | 2.48 ms | ±0.15 | 6.57 ms | ~61 800 |
 
-**raylang y Go empatan**: mismo veredicto (120k), y en los detalles raylang va ligeramente por
-delante en techo (128k vs 123k), p50 (0.63 vs 0.77) y p99 (1.92 vs 2.06), y por detrás en p99.9
-(7.14 vs 2.60). Son diferencias de pocos por ciento con **una corrida por escalón**: el par
-raylang/Go es indistinguible con estos datos, y separarlos exige repeticiones (ver §Pendiente).
-Lo sólido es el peldaño: los dos sostienen 120k con p99 ~2 ms, y node queda claramente por
-debajo (~82k).
+**Con repeticiones, raylang y Go SÍ se separan** — y raylang gana en tres de cuatro:
 
-Comparado con la sesión de loopback, el cambio importante es que **el techo de raylang subió de
-~113k a ~128k** al quitarle al servidor la competencia del generador; Go y node se movieron poco
-(119→123k, 86→82k).
+- **p99 a 120k**: 1.86 ms vs 2.11 ms. Las ventanas no se solapan (mediana ± 2·MAD: `[1.78, 1.94]`
+  contra `[2.09, 2.13]`) y ni los rangos crudos se tocan (raylang 1.71-1.90, Go 2.08-2.11). Un
+  12 % a favor, defendible.
+- **p50**: 0.65 ms vs 0.79 ms.
+- **Techo**: ~129 500 vs ~120 400 rps (7.5 % más).
+- **Pero la cola profunda es peor**: p99.9 de 6.59 ms contra 2.63 ms de Go. Se repitió en las dos
+  sesiones remotas (7.14 y 6.59), así que es un rasgo real de `net/webserver`, no ruido — y es el
+  candidato natural para la próxima investigación.
+
+El veredicto de peldaño (120k) sigue siendo el mismo para ambos: la escalera es discreta y los
+dos caen en el mismo escalón. Lo que las repeticiones permiten es afirmar la diferencia **dentro**
+de ese escalón sin inventarla.
+
+Comparado con la sesión de loopback, el techo de raylang subió de ~113k a ~129.5k al quitarle al
+servidor la competencia del generador.
+
+**node es el menos reproducible**: entre la sesión de 1 corrida y esta de 3, su veredicto cayó de
+80k a 40k y su techo de ~82k a ~62k. Las otras tres se movieron poco. No está diagnosticado; con
+`-c 100` y un solo proceso sin `cluster`, node es el que más sufre, pero la variación entre
+sesiones es mayor que la de sus vecinos y conviene no citar su número sin más repeticiones.
 
 ### Dos límites de esta medición
 
@@ -224,20 +256,24 @@ Comparado con la sesión de loopback, el cambio importante es que **el techo de 
 corrida a 300k rps pedidos, el **generador estaba al 86 %** (28 % user + 58 % sys) mientras el
 **servidor tenía 40 % idle**. Subir la escalera no sirve sin una segunda máquina generadora.
 
-**El p99.9 a tasas bajas (5k-10k) es un artefacto**, no de los servidores: son ~90-99 ms en las
-cuatro implementaciones a la vez, y **desaparece al subir la carga** (≤10 ms desde 20k) — un
-servidor no mejora su cola al cargarlo más. Con `-c 100` a 5k rps cada conexión pasa ~20 ms
+**El p99.9 a tasas bajas (5k-10k) es un artefacto**, no de los servidores: son ~90-104 ms en las
+cuatro implementaciones a la vez —hyper incluida— y **desaparece al subir la carga** (≤13 ms desde
+20k, ≤3 ms desde 80k). Un servidor no mejora su cola al cargarlo más. Con `-c 100` a 5k rps cada conexión pasa ~20 ms
 ociosa, y el camino Thunderbolt-IP parece pagar el despertar. No afecta a la comparación (pega
 igual a las cuatro) ni a los veredictos, que se deciden mucho más arriba. El enlace en reposo,
 por contraste, es impecable: RTT 0.34/0.57/1.50 ms (min/avg/max) con stddev 0.12 en 500 pings.
 
 ## Pendiente
 
-- **Repeticiones por escalón** — es ahora lo más urgente: raylang y Go quedan a pocos por ciento
-  y con una sola corrida no se pueden separar. Hace falta repetir cada escalón y comparar
-  dispersión, como hace `poly/` con mediana+MAD.
+- **El p99.9 de raylang** (6.6 ms contra 2.6 de Go a la misma tasa, reproducido en dos sesiones)
+  es el hallazgo más accionable que ha salido de este banco. Candidato a investigación con el
+  método de `docs/investigacion-p99-framework-web.md`: `sample` bajo carga sostenida a 120k.
+- **Más repeticiones para node** — su veredicto se movió de 80k a 40k entre sesiones, mucho más
+  que sus vecinos. Sin diagnosticar.
 - **Un techo de verdad para hyper** — el generador topa antes que el servidor (~200k). Exige una
   segunda máquina generadora, o `oha` desde las dos a la vez sumando tasa.
+- **Resolver el artefacto de tasas bajas** — si se quiere reportar p99.9 a 5-10k rps, hay que
+  entender primero qué del camino Thunderbolt-IP añade esos ~95 ms con conexiones semi-ociosas.
 - **Escalón de framework**: `web/framework` vs express/fastify vs chi/gin.
 - **Carga `json`**: la segunda categoría de TechEmpower, que engancha con `jsonserialize` del
   banco poliglota (coste de CPU por serializado ↔ req/s sostenidos).

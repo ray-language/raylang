@@ -56,6 +56,7 @@ import resource
 import shlex
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import time
@@ -277,10 +278,47 @@ def stop_server(proc, host, port):
     wait_port_free(host, port)
 
 
+def aggregate(samples, rate, slo_p99_ms):
+    """Resume las repeticiones de un escalón: MEDIANA de cada métrica, más el MAD de la p99.
+
+    Mediana y MAD (no media y σ), por la misma razón que el banco poliglota: el ruido de esta
+    medición es aditivo —una pausa del scheduler o un tropiezo del generador solo puede
+    SUMAR—, así que un outlier arrastra la media pero no la mediana. El MAD de la p99 es lo que
+    permite decir si dos implementaciones están de verdad separadas o solo parecen.
+
+    El veredicto (sostiene / dentro de SLO) se decide sobre las MEDIANAS, no sobre una corrida
+    suelta: una sola repetición desafortunada no debe cortar la escalera ni tumbar un escalón.
+    """
+    med = lambda k: statistics.median(s[k] for s in samples)
+    p99s = [s["p99"] for s in samples]
+    p99_med = statistics.median(p99s)
+    step = {
+        "rate": rate,
+        "reps": len(samples),
+        "rps": med("rps"),
+        "success_rate": med("success_rate"),
+        "p50": med("p50"),
+        "p99": p99_med,
+        "p999": med("p999"),
+        "p99_mad": statistics.median(abs(p - p99_med) for p in p99s),
+        "p99_min": min(p99s),
+        "p99_max": max(p99s),
+        "rps_min": min(s["rps"] for s in samples),
+    }
+    step["sustained"] = step["rps"] >= rate * 0.99 and step["success_rate"] >= 0.999
+    step["within_slo"] = step["p99"] <= slo_p99_ms
+    return step
+
+
 def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, generator,
-               correction=False):
+               correction=False, reps=1):
     """Escalera INTERCALADA con rotación: en cada escalón de tasa se miden todas las
     implementaciones vivas, y el orden rota (A B C / B C A / C A B ...).
+
+    Con `reps > 1`, las repeticiones también se intercalan: la repetición r de cada
+    implementación se mide junto a la r de las demás, y la rotación avanza en CADA pasada (no
+    solo en cada escalón). Así ninguna implementación acumula sus repeticiones en la misma
+    ventana térmica, que es el sesgo que se quiere cancelar.
 
     Por qué, y no una implementación entera de una tirada: el drift ambiental (térmico,
     procesos de fondo) se reparte entre todas en vez de caer entero sobre la que tocaba en
@@ -301,28 +339,35 @@ def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, gen
         print(f">> {name}: calentando {warmup_s}s...", file=sys.stderr)
         run_oha(target, port, max(rates), conns, warmup_s, generator, correction)
 
-    for i, rate in enumerate(rates):
+    pass_idx = 0
+    for rate in rates:
         active = [t for t in live if t[0] not in done]
         if not active:
             break
-        pivot = i % len(active)
-        for name, _proc, port in active[pivot:] + active[:pivot]:
-            print(f">> -q {rate}: {name} ({duration_s}s)...", file=sys.stderr)
-            m = run_oha(target, port, rate, conns, duration_s, generator, correction)
-            if m is None:
-                print(f">> {name}: oha falló a -q {rate}", file=sys.stderr)
+        samples = {name: [] for name, _, _ in active}
+        for rep in range(reps):
+            pivot = pass_idx % len(active)
+            pass_idx += 1
+            for name, _proc, port in active[pivot:] + active[:pivot]:
+                tag = f" rep {rep + 1}/{reps}" if reps > 1 else ""
+                print(f">> -q {rate}:{tag} {name} ({duration_s}s)...", file=sys.stderr)
+                m = run_oha(target, port, rate, conns, duration_s, generator, correction)
+                if m is None:
+                    print(f">> {name}: oha falló a -q {rate}", file=sys.stderr)
+                    continue
+                samples[name].append(m)
+
+        for name, _proc, _port in active:
+            if not samples[name]:
                 continue
-            m["rate"] = rate
-            # "Sostiene la tasa" = consigue >=99% de lo pedido. Por debajo de eso el servidor
-            # ya no da abasto y su p99 describe otro régimen, no el que se pidió medir.
-            m["sustained"] = m["rps"] >= rate * 0.99 and m["success_rate"] >= 0.999
-            m["within_slo"] = m["p99"] <= slo_p99_ms
-            steps[name].append(m)
-            if not m["sustained"]:
+            step = aggregate(samples[name], rate, slo_p99_ms)
+            steps[name].append(step)
+            if not step["sustained"]:
                 # Techo encontrado: los escalones por encima solo repiten el mismo régimen de
                 # saturación (la tasa conseguida se queda clavada y la latencia crece con el
                 # encolamiento). Seguir subiendo no añade información, solo minutos.
-                print(f">> {name}: techo en ~{m['rps']:,.0f} rps, escalera cortada", file=sys.stderr)
+                print(f">> {name}: techo en ~{step['rps']:,.0f} rps, escalera cortada",
+                      file=sys.stderr)
                 done.add(name)
     return steps
 
@@ -333,7 +378,11 @@ def verdict(steps):
     return max(ok, key=lambda s: s["rate"]) if ok else None
 
 
-HEADERS = ("Implementación", "Tasa sostenida bajo SLO", "p50", "p99", "p99.9", "Primer escalón fallido")
+HEADERS = ("Implementación", "Tasa sostenida bajo SLO", "p50", "p99", "p99 MAD", "p99.9",
+           "Primer escalón fallido")
+
+TIE_NOTE = ("Dos implementaciones comparten puesto (marcado con '=') si sostienen la misma tasa Y "
+            "sus ventanas de p99 (mediana ± 2·MAD) se solapan: con esos datos no están separadas.")
 
 
 def _why_failed(failed):
@@ -348,11 +397,24 @@ def _why_failed(failed):
     return f"{failed['rate']:,} rps (p99 {failed['p99']:.1f} ms)"
 
 
+def _tied(a, b):
+    """Dos veredictos indistinguibles: misma tasa sostenida y ventanas de p99 solapadas.
+
+    La ventana es mediana ± 2·MAD, el mismo criterio que `poly/benchlib._overlaps`. Sin esto,
+    ordenar por p99 sugiere una jerarquía que los datos no sostienen — el caso concreto que
+    motivó las repeticiones: raylang y Go quedaban a un 7 % de p99 con una sola corrida.
+    """
+    if a["rate"] != b["rate"]:
+        return False
+    return (a["p99"] - 2 * a["p99_mad"] <= b["p99"] + 2 * b["p99_mad"]
+            and b["p99"] - 2 * b["p99_mad"] <= a["p99"] + 2 * a["p99_mad"])
+
+
 def build_rows(results, slo_p99_ms):
     ranked, failures = [], []
     for name, steps in results:
         if not steps:
-            failures.append([name, "sin datos", "-", "-", "-", "-"])
+            failures.append([name, "sin datos", "-", "-", "-", "-", "-"])
             continue
         best = verdict(steps)
         why = _why_failed(next((s for s in steps if not (s["sustained"] and s["within_slo"])), None))
@@ -362,24 +424,33 @@ def build_rows(results, slo_p99_ms):
             first = steps[0]
             failures.append([name, f"ninguna (ya falla en {first['rate']:,})",
                              f"{first['p50']:.2f} ms", f"{first['p99']:.2f} ms",
-                             f"{first['p999']:.2f} ms", why])
+                             f"±{first['p99_mad']:.2f}", f"{first['p999']:.2f} ms", why])
 
-    ranked.sort(key=lambda r: r[1]["rate"], reverse=True)
+    # Orden: tasa sostenida (lo que decide el veredicto) y, a igualdad, p99 mediana.
+    ranked.sort(key=lambda r: (-r[1]["rate"], r[1]["p99"]))
     top = ranked[0][1]["rate"] if ranked else None
-    rows = [[name, f"{b['rate']:,} rps ({b['rate'] / top:.2f}x líder)", f"{b['p50']:.2f} ms",
-             f"{b['p99']:.2f} ms", f"{b['p999']:.2f} ms", why]
-            for name, b, why in ranked]
+    rows = []
+    for i, (name, b, why) in enumerate(ranked):
+        tie = "= " if (i > 0 and _tied(ranked[i - 1][1], b)) or \
+                     (i + 1 < len(ranked) and _tied(b, ranked[i + 1][1])) else ""
+        rows.append([name, f"{tie}{b['rate']:,} rps ({b['rate'] / top:.2f}x líder)",
+                     f"{b['p50']:.2f} ms", f"{b['p99']:.2f} ms", f"±{b['p99_mad']:.2f}",
+                     f"{b['p999']:.2f} ms", why])
     return rows + failures
 
 
 def print_ladder(name, steps):
-    print(f"\n=== {name} — escalones ===")
-    ladder = [["tasa pedida", "conseguida", "p50", "p99", "p99.9", "veredicto"]]
+    reps = steps[0]["reps"] if steps else 1
+    suffix = f" (medianas de {reps} repeticiones)" if reps > 1 else ""
+    print(f"\n=== {name} — escalones{suffix} ===")
+    head = ["tasa pedida", "conseguida", "p50", "p99", "p99 MAD", "p99 min-max", "p99.9", "veredicto"]
+    rows = []
     for s in steps:
         mark = "ok" if (s["sustained"] and s["within_slo"]) else ("no sostiene" if not s["sustained"] else "fuera de SLO")
-        ladder.append([f"{s['rate']:,}", f"{s['rps']:,.0f}", f"{s['p50']:.2f} ms",
-                       f"{s['p99']:.2f} ms", f"{s['p999']:.2f} ms", mark])
-    benchlib.print_table(ladder[1:], headers=tuple(ladder[0]))
+        rows.append([f"{s['rate']:,}", f"{s['rps']:,.0f}", f"{s['p50']:.2f} ms",
+                     f"{s['p99']:.2f} ms", f"±{s['p99_mad']:.2f}",
+                     f"{s['p99_min']:.2f}-{s['p99_max']:.2f}", f"{s['p999']:.2f} ms", mark])
+    benchlib.print_table(rows, headers=tuple(head))
 
 
 def main():
@@ -403,6 +474,10 @@ def main():
     ap.add_argument("--ssh-key", "-i", metavar="RUTA",
                     help="llave privada para el SSH al generador (como `ssh -i`). Sin esto se usa "
                          "la configuración de ssh del usuario (~/.ssh/config, agente)")
+    ap.add_argument("--reps", type=int, default=3,
+                    help="repeticiones por escalón (default: 3). Intercaladas igual que los "
+                         "escalones; se reportan mediana y MAD. Con 1 no hay dispersión y dos "
+                         "implementaciones cercanas no se pueden separar")
     ap.add_argument("--correction", action="store_true",
                     help="añade --latency-correction a oha. OPT-IN por medición: con -q el run ya "
                          "es open-loop y la corrección cobra como latencia del servidor el jitter "
@@ -468,7 +543,7 @@ def main():
         return 1
 
     fds = raise_fd_limit()
-    print(f">> plaintext · -c {args.connections} · {args.duration}s por escalón · SLO p99 <= {args.slo_p99_ms} ms",
+    print(f">> plaintext · -c {args.connections} · {args.duration}s × {args.reps} rep por escalón · SLO p99 <= {args.slo_p99_ms} ms",
           file=sys.stderr)
     print(f">> bind {args.bind} · fds {fds} (heredados por los servidores) · generador: "
           f"{destination + ' (' + generator.oha + ')' if remote else 'local'}", file=sys.stderr)
@@ -491,7 +566,7 @@ def main():
 
     try:
         steps = run_ladder(live, rates, args.connections, args.duration, args.warmup,
-                           args.slo_p99_ms, target, generator, args.correction)
+                           args.slo_p99_ms, target, generator, args.correction, args.reps)
     finally:
         for _name, proc, port in live:
             stop_server(proc, check_host, port)
@@ -505,13 +580,16 @@ def main():
     print(f"\n=== plaintext — veredicto (tasa sostenida con p99 <= {args.slo_p99_ms} ms) ===")
     rows = build_rows(results, args.slo_p99_ms)
     benchlib.print_table(rows, headers=HEADERS)
+    if args.reps > 1:
+        print(f"\n{TIE_NOTE}")
 
     if args.export_md:
         meta = benchlib.env_metadata(exclude=("lua", "php", "pl", "py", "rb"))
         oha_version = (benchlib._version_line(ssh_argv(generator, f"{generator.oha} --version")) if remote
                        else benchlib._version_line(["oha", "--version"]))
         meta.append(("oha", oha_version))
-        meta.append(("carga", f"-c {args.connections}, {args.duration}s/escalón, SLO p99 <= {args.slo_p99_ms} ms"))
+        meta.append(("carga", f"-c {args.connections}, {args.duration}s × {args.reps} rep/escalón, "
+                               f"SLO p99 <= {args.slo_p99_ms} ms"))
         meta.append(("fds", str(fds)))
         meta.append(("latency-correction", "sí" if args.correction else "no (default)"))
         # El origen del generador va SIEMPRE en el bloque de entorno: es lo que decide si las
@@ -519,7 +597,8 @@ def main():
         meta.append(("generador", f"remoto vía SSH: {destination} → {target}" if remote
                      else "loopback (misma máquina) — NO publicable, ver README §Loopback"))
         benchlib.write_markdown_metadata(args.export_md, meta)
-        benchlib.write_markdown(args.export_md, "plaintext — veredicto", rows, headers=HEADERS)
+        benchlib.write_markdown(args.export_md, "plaintext — veredicto", rows, headers=HEADERS,
+                                note=TIE_NOTE if args.reps > 1 else None)
     return 0
 
 

@@ -93,13 +93,25 @@ ningún export se lea fuera de contexto.
 ## Generador en otra máquina
 
 ```sh
-./webbench.py --bind 10.0.0.10 --generator-host 10.0.0.20
+./webbench.py --bind 10.0.0.10 --generator-host roberto@10.0.0.20
+
+# usuario y llave por separado, si prefieres no mezclarlos en el host:
+./webbench.py --bind 10.0.0.10 --generator-host 10.0.0.20 \
+              --ssh-user roberto -i ~/.ssh/id_bench
 ```
 
 `--bind` es la IP del enlace en la máquina servidor (los cuatro servidores la reciben como
-argumento); `--generator-host` es el host SSH donde corre `oha`. El readiness y la verificación
-de respuesta siguen siendo locales —son chequeos de corrección, no de rendimiento— y el
-intercalado con rotación se conserva sin coordinar dos máquinas.
+argumento); `--generator-host` es el destino SSH donde corre `oha`. El readiness y la
+verificación de respuesta siguen siendo locales —son chequeos de corrección, no de rendimiento—
+y el intercalado con rotación se conserva sin coordinar dos máquinas.
+
+**Usuario y llave.** `--generator-host` acepta el formato de `ssh` (`[usuario@]host`), y
+`--ssh-user` / `--ssh-key` (`-i`) son la alternativa para darlos por separado; si el host ya
+trae `usuario@`, ese gana. Sin `--ssh-key` se usa tu configuración normal (`~/.ssh/config`,
+agente). Con ella se añade `IdentitiesOnly=yes`, porque si no `ssh` ofrece antes las claves del
+agente y la `-i` explícita podría no llegar a usarse: el flag diría una cosa y la conexión haría
+otra. Todo el SSH va con `BatchMode=yes`, para que una llave con passphrase falle en el acto en
+vez de bloquear una sesión de medida esperando en un prompt.
 
 ### Requisitos, en orden
 
@@ -121,6 +133,12 @@ intercalado con rotación se conserva sin coordinar dos máquinas.
    (`command -v oha` por SSH) y aborta con un mensaje claro si falla — sin él, un SSH mal
    configurado se manifestaría como "ninguna implementación sostiene ninguna tasa", que es un
    diagnóstico pésimo.
+
+   ```sh
+   ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_bench     # sin passphrase: BatchMode la rechaza
+   ssh-copy-id -i ~/.ssh/id_bench roberto@10.0.0.20   # acepta la clave del host la 1ª vez
+   ssh -i ~/.ssh/id_bench roberto@10.0.0.20 'brew install oha'
+   ```
 
 3. **Comprobar que el generador NO es el nuevo cuello.** Apunta el `oha` remoto contra **hyper**
    (el techo) y verifica que supera lo que viste en loopback (~163k rps). Si la máquina

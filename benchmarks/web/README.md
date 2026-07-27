@@ -55,7 +55,7 @@ prácticamente el syscall; cada resultado se lee como fracción de él.
 6. Cuando una implementación no sostiene, **se le corta la escalera**: los escalones por
    encima solo repiten el mismo régimen.
 
-### `oha` siempre con `-q` y `--latency-correction`
+### `oha` siempre con `-q`
 
 Cableado en el arnés, no opcional. Sin `-q`, oha es **closed-loop**: mantiene N conexiones y
 espera la respuesta antes de mandar la siguiente, así que cuando el servidor se atasca el
@@ -65,6 +65,33 @@ de cometer y más difícil de detectar leyendo el resultado.
 
 Por eso el eje del experimento es la **tasa de llegada**, no la concurrencia: `-c` se fija y se
 barre `-q` hasta que la p99 hace rodilla.
+
+### La corrección de latencia es OPT-IN, y es una lección medida
+
+`--latency-correction` empezó cableado en el arnés y **se retiró por medición**. Contra hyper a
+5 000 rps con el generador remoto, cambiando solo ese flag:
+
+| config | p50 | p99 | p99.9 |
+|---|---|---|---|
+| `-c 100` con corrección | 0.58 ms | 12.90 ms | 78.94 ms |
+| `-c 100` sin corrección | 0.52 ms | 3.19 ms | 81.73 ms |
+| `-c 10` con corrección | 0.52 ms | 25.06 ms | 86.05 ms |
+| `-c 10` sin corrección | 0.46 ms | **2.17 ms** | **5.07 ms** |
+
+Mismo rps y mismo p50; la cola se derrumba 10-17× al quitar el flag. **La cola la fabricaba la
+corrección, no los servidores.** El razonamiento original estaba incompleto: la corrección mide
+el retraso respecto al instante en que la petición *debía* haberse enviado, y eso arregla
+coordinated omission en runs **closed-loop**. Con `-q` el run ya es open-loop, así que la
+corrección no aporta y sí cobra como latencia del servidor los tropiezos de planificación del
+propio `oha` (más visibles con el generador en otra máquina y con 100 conexiones despertando cada
+20 ms).
+
+Lo que protege de verdad contra coordinated omission en este arnés es el chequeo de **"¿sostuvo
+la tasa pedida?"** (≥99 %): si el servidor no da abasto, la tasa conseguida se desploma y el
+escalón se marca como techo. Ese guardián no se contamina con el jitter del generador.
+
+`--correction` sigue disponible para comparar, y el bloque de entorno del `--export-md` registra
+si estaba activa.
 
 ### Rondas intercaladas con rotación
 
@@ -167,27 +194,50 @@ el arnés, el veredicto deja de depender de la terminal desde la que se lanzó.
 `--bind 127.0.0.1` junto con `--generator-host` es un error explícito: el generador remoto no
 puede alcanzar loopback.
 
-## Primer resultado (loopback, M3 Pro, 27 jul 2026)
+## Resultado con generador remoto (27 jul 2026)
 
-Escalera por defecto, `-c 100`, 8 s por escalón, SLO p99 ≤ 10 ms. **Relativo, no citable**:
+Servidor M3 Pro (11 cores) ↔ generador M4 (12 cores) por Thunderbolt bridge; escalera por
+defecto, `-c 100`, 8 s por escalón, SLO p99 ≤ 10 ms, sin corrección de latencia:
 
-| implementación | tasa sostenida bajo SLO | techo observado |
-|---|---|---|
-| hyper | 120 000 rps | ~163 000 |
-| **raylang** (`net/webserver`, nativo) | **80 000 rps** (0.67× hyper) | ~113 000 |
-| Go `net/http` | 80 000 rps (0.67× hyper) | ~119 000 |
-| `node:http` | 40 000 rps (0.33× hyper) | ~86 000 |
+| implementación | tasa sostenida bajo SLO | p50 | p99 | p99.9 | techo observado |
+|---|---|---|---|---|---|
+| hyper | **≥200 000 rps** (tope del generador) | 0.47 ms | 0.71 ms | 1.57 ms | no alcanzado |
+| **raylang** (`net/webserver`, nativo) | **120 000 rps** | 0.63 ms | 1.92 ms | 7.14 ms | ~128 000 |
+| Go `net/http` | 120 000 rps | 0.77 ms | 2.06 ms | 2.60 ms | ~123 000 |
+| `node:http` | 80 000 rps | 1.01 ms | 2.30 ms | 3.06 ms | ~82 000 |
 
-Lectura: en el escalón pelado, raylang está **en el mismo peldaño que Go `net/http`** (mismo
-veredicto, techos a 113k vs 119k) y a ~0.67× del techo de I/O de la máquina. Node queda un
-escalón por debajo, con la p99 disparándose ya a 80k. El resultado se repitió en dos sesiones
-(una sin intercalado y otra con él) con los mismos veredictos.
+**raylang y Go empatan**: mismo veredicto (120k), y en los detalles raylang va ligeramente por
+delante en techo (128k vs 123k), p50 (0.63 vs 0.77) y p99 (1.92 vs 2.06), y por detrás en p99.9
+(7.14 vs 2.60). Son diferencias de pocos por ciento con **una corrida por escalón**: el par
+raylang/Go es indistinguible con estos datos, y separarlos exige repeticiones (ver §Pendiente).
+Lo sólido es el peldaño: los dos sostienen 120k con p99 ~2 ms, y node queda claramente por
+debajo (~82k).
+
+Comparado con la sesión de loopback, el cambio importante es que **el techo de raylang subió de
+~113k a ~128k** al quitarle al servidor la competencia del generador; Go y node se movieron poco
+(119→123k, 86→82k).
+
+### Dos límites de esta medición
+
+**hyper no es un techo aquí, es un suelo.** Pasó los 200k del último escalón sin sudar (p99
+0.71 ms) porque el que topa es el generador: midiendo la CPU de las dos máquinas durante una
+corrida a 300k rps pedidos, el **generador estaba al 86 %** (28 % user + 58 % sys) mientras el
+**servidor tenía 40 % idle**. Subir la escalera no sirve sin una segunda máquina generadora.
+
+**El p99.9 a tasas bajas (5k-10k) es un artefacto**, no de los servidores: son ~90-99 ms en las
+cuatro implementaciones a la vez, y **desaparece al subir la carga** (≤10 ms desde 20k) — un
+servidor no mejora su cola al cargarlo más. Con `-c 100` a 5k rps cada conexión pasa ~20 ms
+ociosa, y el camino Thunderbolt-IP parece pagar el despertar. No afecta a la comparación (pega
+igual a las cuatro) ni a los veredictos, que se deciden mucho más arriba. El enlace en reposo,
+por contraste, es impecable: RTT 0.34/0.57/1.50 ms (min/avg/max) con stddev 0.12 en 500 pings.
 
 ## Pendiente
 
-- **Correr con el generador remoto** — el arnés ya lo soporta (`--bind` + `--generator-host`) y
-  el enlace está medido; falta el acceso SSH con `oha` en la máquina generadora, y después el
-  requisito 3 de arriba. Es el prerrequisito de cualquier cifra publicable.
+- **Repeticiones por escalón** — es ahora lo más urgente: raylang y Go quedan a pocos por ciento
+  y con una sola corrida no se pueden separar. Hace falta repetir cada escalón y comparar
+  dispersión, como hace `poly/` con mediana+MAD.
+- **Un techo de verdad para hyper** — el generador topa antes que el servidor (~200k). Exige una
+  segunda máquina generadora, o `oha` desde las dos a la vez sumando tasa.
 - **Escalón de framework**: `web/framework` vs express/fastify vs chi/gin.
 - **Carga `json`**: la segunda categoría de TechEmpower, que engancha con `jsonserialize` del
   banco poliglota (coste de CPU por serializado ↔ req/s sostenidos).

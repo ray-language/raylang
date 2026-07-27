@@ -22,10 +22,18 @@ Método (ver README.md §Método para el porqué de cada pieza):
   6. Mata el servidor y espera a que el puerto se libere antes de la siguiente
      implementación.
 
-`oha` se invoca SIEMPRE con `-q` (tasa fija, open-loop) y `--latency-correction`. Sin `-q`,
-oha es closed-loop: cuando el servidor se atasca el generador deja de mandar y el stall nunca
-se registra — los p99 salen bonitos justo cuando el sistema está peor (coordinated omission).
-Por eso la tasa no es un flag opcional del arnés sino el eje del experimento.
+`oha` se invoca SIEMPRE con `-q` (tasa fija, open-loop). Sin `-q`, oha es closed-loop: cuando
+el servidor se atasca el generador deja de mandar y el stall nunca se registra — los p99 salen
+bonitos justo cuando el sistema está peor (coordinated omission). Por eso la tasa no es un flag
+opcional del arnés sino el eje del experimento.
+
+`--latency-correction` en cambio es OPT-IN (`--correction`), y por medición: con `-q` el run ya
+es open-loop, así que la corrección no aporta y sí cobra como latencia del servidor los
+tropiezos de planificación del propio oha. Medido el 27 jul 2026 contra hyper a 5k rps con el
+generador remoto: p50 idéntico y rps idéntico, pero p99 2.17→25.06 ms y p99.9 5.07→86.05 ms
+solo por añadir el flag (ver README §La corrección de latencia). Lo que protege de verdad
+contra coordinated omission aquí es el chequeo de "¿sostuvo la tasa pedida?", que no se
+contamina con el jitter del generador.
 
 Uso:
     ./webbench.py                       Mide todas las implementaciones de `plaintext`
@@ -69,9 +77,18 @@ IMPLS = [
 # Techo de fds que se pide para el arnés y, por herencia, para los cuatro servidores.
 FD_TARGET = 65536
 
-# El generador remoto: destino ya en el formato de ssh ([usuario@]host) y llave opcional.
-# None = el generador corre en esta máquina.
-Generator = collections.namedtuple("Generator", "host key")
+# El generador remoto: destino ya en el formato de ssh ([usuario@]host), llave opcional, y la
+# ruta de oha ALLÍ (absoluta; la resuelve el preflight). None = el generador corre aquí.
+Generator = collections.namedtuple("Generator", "host key oha")
+
+# Dónde buscar oha en el generador. Hace falta porque una shell de SSH no interactiva trae un
+# PATH mínimo (`/usr/bin:/bin:/usr/sbin:/sbin` en macOS) que NO incluye Homebrew ni cargo: un
+# `oha` pelado falla aunque esté perfectamente instalado.
+REMOTE_OHA_CANDIDATES = [
+    "/opt/homebrew/bin/oha",   # Homebrew en Apple Silicon
+    "/usr/local/bin/oha",      # Homebrew en Intel, o instalación manual
+    "$HOME/.cargo/bin/oha",    # cargo install oha
+]
 
 EXPECTED_BODY = b"Hello, World!"
 
@@ -163,7 +180,28 @@ def ssh_argv(generator, remote_command):
     return argv + [generator.host, remote_command]
 
 
-def oha_command(target, port, rate, conns, duration_s, generator):
+def resolve_remote_oha(generator):
+    """La ruta absoluta de oha en el generador, o None si no aparece.
+
+    Prueba, en orden: el PATH tal cual, un shell de LOGIN (que sí carga el perfil del usuario),
+    y las rutas conocidas. Resolverlo UNA vez aquí evita depender del PATH de cada `ssh`
+    posterior, que en una shell no interactiva de macOS es solo `/usr/bin:/bin:/usr/sbin:/sbin`
+    — sin Homebrew ni cargo, donde vive oha en la práctica.
+    """
+    probe = "; ".join([
+        "command -v oha 2>/dev/null && exit 0",
+        "sh -lc 'command -v oha' 2>/dev/null && exit 0",
+        *(f'[ -x "{p}" ] && echo "{p}" && exit 0' for p in REMOTE_OHA_CANDIDATES),
+        "exit 1",
+    ])
+    out = subprocess.run(ssh_argv(generator, probe), capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    path = out.stdout.strip().splitlines()
+    return path[0].strip() if path else None
+
+
+def oha_command(target, port, rate, conns, duration_s, generator, correction=False):
     """El comando de oha, local (`generator` None) o vía SSH.
 
     Remoto: se envuelve en la shell del `ssh` para poder subir el `ulimit -n` del generador en
@@ -171,9 +209,10 @@ def oha_command(target, port, rate, conns, duration_s, generator):
     borde y empieza a fallar conexiones — que el arnés leería como "el servidor no sostiene la
     tasa", atribuyendo al servidor un límite del generador)."""
     oha = [
-        "oha", "--no-tui", "--output-format", "json",
+        generator.oha if generator else "oha",
+        "--no-tui", "--output-format", "json",
         "-z", f"{duration_s}s", "-c", str(conns), "-q", str(rate),
-        "--latency-correction",
+        *(["--latency-correction"] if correction else []),
         f"http://{target}:{port}/",
     ]
     if generator is None:
@@ -182,9 +221,9 @@ def oha_command(target, port, rate, conns, duration_s, generator):
     return ssh_argv(generator, remote)
 
 
-def run_oha(target, port, rate, conns, duration_s, generator=None):
+def run_oha(target, port, rate, conns, duration_s, generator=None, correction=False):
     """Una corrida de oha a tasa FIJA. Devuelve el dict de métricas o None si falló."""
-    cmd = oha_command(target, port, rate, conns, duration_s, generator)
+    cmd = oha_command(target, port, rate, conns, duration_s, generator, correction)
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         return None
@@ -238,7 +277,8 @@ def stop_server(proc, host, port):
     wait_port_free(host, port)
 
 
-def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, generator):
+def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, generator,
+               correction=False):
     """Escalera INTERCALADA con rotación: en cada escalón de tasa se miden todas las
     implementaciones vivas, y el orden rota (A B C / B C A / C A B ...).
 
@@ -259,7 +299,7 @@ def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, gen
 
     for name, _proc, port in live:
         print(f">> {name}: calentando {warmup_s}s...", file=sys.stderr)
-        run_oha(target, port, max(rates), conns, warmup_s, generator)
+        run_oha(target, port, max(rates), conns, warmup_s, generator, correction)
 
     for i, rate in enumerate(rates):
         active = [t for t in live if t[0] not in done]
@@ -268,7 +308,7 @@ def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, gen
         pivot = i % len(active)
         for name, _proc, port in active[pivot:] + active[:pivot]:
             print(f">> -q {rate}: {name} ({duration_s}s)...", file=sys.stderr)
-            m = run_oha(target, port, rate, conns, duration_s, generator)
+            m = run_oha(target, port, rate, conns, duration_s, generator, correction)
             if m is None:
                 print(f">> {name}: oha falló a -q {rate}", file=sys.stderr)
                 continue
@@ -363,11 +403,19 @@ def main():
     ap.add_argument("--ssh-key", "-i", metavar="RUTA",
                     help="llave privada para el SSH al generador (como `ssh -i`). Sin esto se usa "
                          "la configuración de ssh del usuario (~/.ssh/config, agente)")
+    ap.add_argument("--correction", action="store_true",
+                    help="añade --latency-correction a oha. OPT-IN por medición: con -q el run ya "
+                         "es open-loop y la corrección cobra como latencia del servidor el jitter "
+                         "de planificación del generador (ver README §La corrección de latencia)")
+    ap.add_argument("--remote-oha", metavar="RUTA",
+                    help="ruta de oha en el generador. Por defecto la resuelve el preflight "
+                         "(PATH, shell de login, y las rutas de Homebrew/cargo)")
     ap.add_argument("--export-md", help="exporta la tabla a Markdown (append)")
     args = ap.parse_args()
 
     remote = bool(args.generator_host)
-    for flag, value in (("--ssh-user", args.ssh_user), ("--ssh-key", args.ssh_key)):
+    for flag, value in (("--ssh-user", args.ssh_user), ("--ssh-key", args.ssh_key),
+                        ("--remote-oha", args.remote_oha)):
         if value and not remote:
             print(f"error: {flag} solo tiene sentido con --generator-host", file=sys.stderr)
             return 1
@@ -384,7 +432,7 @@ def main():
     destination = args.generator_host
     if remote and args.ssh_user and "@" not in destination:
         destination = f"{args.ssh_user}@{destination}"
-    generator = Generator(destination, key) if remote else None
+    generator = Generator(destination, key, args.remote_oha) if remote else None
 
     # El chequeo local a 0.0.0.0 no vale; el bind comodín se comprueba por loopback.
     check_host = "127.0.0.1" if args.bind in ("0.0.0.0", "::", "") else args.bind
@@ -392,15 +440,20 @@ def main():
     target = args.bind if args.bind not in ("0.0.0.0", "::", "") else "127.0.0.1"
 
     if remote:
-        # Preflight: sin esto, un oha ausente o un SSH mal configurado se manifestarían como
-        # "ninguna implementación sostiene ninguna tasa", que es un diagnóstico pésimo.
-        probe = subprocess.run(ssh_argv(generator, "command -v oha"),
-                               capture_output=True, text=True)
-        if probe.returncode != 0:
-            print(f"error: no se pudo ejecutar oha en {destination} vía SSH "
-                  f"(¿llave correcta y sin passphrase? ¿oha instalado allí?)\n"
-                  f"{probe.stderr.strip()}", file=sys.stderr)
-            return 127
+        # Preflight: sin esto, un SSH mal configurado o un oha que el PATH no ve se
+        # manifestarían como "ninguna implementación sostiene ninguna tasa", el peor
+        # diagnóstico posible. Resuelve además la ruta absoluta de oha una sola vez.
+        if not generator.oha:
+            found = resolve_remote_oha(generator)
+            if not found:
+                print(f"error: no se pudo ejecutar oha en {destination} vía SSH.\n"
+                      "  · ¿llave correcta y sin passphrase, y usuario remoto correcto?\n"
+                      "  · ¿oha instalado allí? Ojo: una shell de SSH no interactiva trae un\n"
+                      "    PATH mínimo sin Homebrew, así que un oha instalado puede no verse.\n"
+                      "    Pásalo explícito con --remote-oha /opt/homebrew/bin/oha.",
+                      file=sys.stderr)
+                return 127
+            generator = generator._replace(oha=found)
         if args.bind in ("127.0.0.1", "localhost"):
             print(f"error: --generator-host {destination} con --bind {args.bind}: el "
                   "generador remoto no puede alcanzar loopback. Pasa la IP del enlace "
@@ -418,7 +471,7 @@ def main():
     print(f">> plaintext · -c {args.connections} · {args.duration}s por escalón · SLO p99 <= {args.slo_p99_ms} ms",
           file=sys.stderr)
     print(f">> bind {args.bind} · fds {fds} (heredados por los servidores) · generador: "
-          f"{destination if remote else 'local'}", file=sys.stderr)
+          f"{destination + ' (' + generator.oha + ')' if remote else 'local'}", file=sys.stderr)
     if fds < args.connections * 4:
         print(f">> AVISO: {fds} fds para -c {args.connections} es justo; hyper y node no suben "
               ">> su propio límite y podrían fallar conexiones.", file=sys.stderr)
@@ -438,7 +491,7 @@ def main():
 
     try:
         steps = run_ladder(live, rates, args.connections, args.duration, args.warmup,
-                           args.slo_p99_ms, target, generator)
+                           args.slo_p99_ms, target, generator, args.correction)
     finally:
         for _name, proc, port in live:
             stop_server(proc, check_host, port)
@@ -455,11 +508,12 @@ def main():
 
     if args.export_md:
         meta = benchlib.env_metadata(exclude=("lua", "php", "pl", "py", "rb"))
-        oha_version = (benchlib._version_line(ssh_argv(generator, "oha --version")) if remote
+        oha_version = (benchlib._version_line(ssh_argv(generator, f"{generator.oha} --version")) if remote
                        else benchlib._version_line(["oha", "--version"]))
         meta.append(("oha", oha_version))
         meta.append(("carga", f"-c {args.connections}, {args.duration}s/escalón, SLO p99 <= {args.slo_p99_ms} ms"))
         meta.append(("fds", str(fds)))
+        meta.append(("latency-correction", "sí" if args.correction else "no (default)"))
         # El origen del generador va SIEMPRE en el bloque de entorno: es lo que decide si las
         # cifras son citables, y un export suelto no tiene otra forma de decirlo.
         meta.append(("generador", f"remoto vía SSH: {destination} → {target}" if remote

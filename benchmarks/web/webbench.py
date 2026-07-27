@@ -33,11 +33,16 @@ Uso:
     ./webbench.py --rates 5000,10000    Escalones a medida
     ./webbench.py --slo-p99-ms 5        SLO distinto
     ./webbench.py --export-md FILE      Exporta la tabla (con bloque de entorno)
+
+    # Generador en OTRA máquina (la única forma de obtener cifras citables):
+    ./webbench.py --bind 10.0.0.10 --generator-host 10.0.0.20
 """
 
 import argparse
 import json
 import os
+import resource
+import shlex
 import shutil
 import socket
 import subprocess
@@ -52,11 +57,14 @@ import benchlib  # noqa: E402  (tras el sys.path: vive en benchmarks/poly/)
 # Cada implementación con su comando ya construido y su puerto propio. Puertos distintos para
 # que un TIME_WAIT del anterior no retrase al siguiente.
 IMPLS = [
-    ("ray", ["{dir}/ray/plaintext-ray", "{port}"], 18080),
-    ("hyper", ["{dir}/hyper/target/release/plaintext-hyper", "{port}"], 18081),
-    ("go", ["{dir}/go/plaintext-go", "{port}"], 18082),
-    ("node", ["node", "{dir}/node/main.js", "{port}"], 18083),
+    ("ray", ["{dir}/ray/plaintext-ray", "{bind}", "{port}"], 18080),
+    ("hyper", ["{dir}/hyper/target/release/plaintext-hyper", "{bind}", "{port}"], 18081),
+    ("go", ["{dir}/go/plaintext-go", "{bind}", "{port}"], 18082),
+    ("node", ["node", "{dir}/node/main.js", "{bind}", "{port}"], 18083),
 ]
+
+# Techo de fds que se pide para el arnés y, por herencia, para los cuatro servidores.
+FD_TARGET = 65536
 
 EXPECTED_BODY = b"Hello, World!"
 
@@ -67,39 +75,63 @@ EXPECTED_BODY = b"Hello, World!"
 DEFAULT_RATES = [5000, 10000, 20000, 40000, 80000, 120000, 160000, 200000]
 
 
-def wait_ready(port, timeout_s=10.0):
+def raise_fd_limit():
+    """Sube el límite blando de fds del arnés; los servidores lo HEREDAN al hacer fork.
+
+    No es cosmético, es una corrección de SESGO: raylang sube su propio límite blando al duro
+    al arrancar (`src/lib.rs`), y el runtime de Go también (1.19+), pero **hyper y node no**.
+    Lanzado desde una shell con el default de macOS (`ulimit -n 256`), ray y Go correrían con
+    ~138 000 fds y hyper/node con 256 — desigualdad invisible en el resultado, que castiga a
+    dos de las cuatro en cuanto sube la concurrencia. Igualándolo aquí, el veredicto deja de
+    depender de la terminal desde la que se lanzó.
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft >= FD_TARGET:
+        return soft
+    target = FD_TARGET if hard == resource.RLIM_INFINITY else min(FD_TARGET, hard)
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        return soft
+    return resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+
+
+def wait_ready(host, port, timeout_s=10.0):
     """Espera a que el puerto ACEPTE conexiones. Un sleep fijo mediría el arranque de unos y
     no el de otros (node tarda ~40 ms, un binario nativo ~3 ms); esperar el evento real hace
     la comparación honesta y además falla rápido si el servidor no levanta."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+            with socket.create_connection((host, port), timeout=0.25):
                 return True
         except OSError:
             time.sleep(0.02)
     return False
 
 
-def wait_port_free(port, timeout_s=10.0):
+def wait_port_free(host, port, timeout_s=10.0):
     """Espera a que el puerto deje de aceptar (el proceso murió del todo). Sin esto, la
     siguiente implementación puede encontrarse el bind ocupado o —peor— medir contra el
     servidor anterior todavía vivo."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+            with socket.create_connection((host, port), timeout=0.25):
                 time.sleep(0.05)
         except OSError:
             return True
     return False
 
 
-def check_response(port):
+def check_response(host, port):
     """Verifica cuerpo y status. El equivalente del checksum del banco poliglota: dos
-    servidores que no responden lo mismo no son comparables."""
+    servidores que no responden lo mismo no son comparables.
+
+    Se comprueba SIEMPRE desde esta máquina (aunque el generador sea remoto): es un chequeo
+    de corrección, no de rendimiento, y hacerlo local mantiene el diagnóstico simple."""
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as r:
+        with urllib.request.urlopen(f"http://{host}:{port}/", timeout=5) as r:
             body = r.read()
             if r.status != 200:
                 return f"status {r.status}, esperaba 200"
@@ -110,14 +142,28 @@ def check_response(port):
     return None
 
 
-def run_oha(port, rate, conns, duration_s):
-    """Una corrida de oha a tasa FIJA. Devuelve el dict de métricas o None si falló."""
-    cmd = [
+def oha_command(target, port, rate, conns, duration_s, generator_host):
+    """El comando de oha, local o vía SSH.
+
+    Remoto: se envuelve en `sh -c` para poder subir el `ulimit -n` del generador en la MISMA
+    shell que lanza oha (con -c 200 y el default de macOS de 256 fds, oha se queda al borde y
+    empieza a fallar conexiones — que el arnés leería como "el servidor no sostiene la tasa",
+    atribuyendo al servidor un límite del generador)."""
+    oha = [
         "oha", "--no-tui", "--output-format", "json",
         "-z", f"{duration_s}s", "-c", str(conns), "-q", str(rate),
         "--latency-correction",
-        f"http://127.0.0.1:{port}/",
+        f"http://{target}:{port}/",
     ]
+    if not generator_host:
+        return oha
+    remote = f"ulimit -n {FD_TARGET} 2>/dev/null; exec " + " ".join(shlex.quote(a) for a in oha)
+    return ["ssh", "-o", "BatchMode=yes", generator_host, remote]
+
+
+def run_oha(target, port, rate, conns, duration_s, generator_host=None):
+    """Una corrida de oha a tasa FIJA. Devuelve el dict de métricas o None si falló."""
+    cmd = oha_command(target, port, rate, conns, duration_s, generator_host)
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         return None
@@ -135,42 +181,43 @@ def run_oha(port, rate, conns, duration_s):
     }
 
 
-def start_server(name, cmd_template, port):
+def start_server(name, cmd_template, port, bind, check_host):
     """Levanta una implementación y devuelve su proceso, o None si no sirve para medir.
     Verifica la respuesta ANTES de que nadie mida: dos servidores que no responden lo mismo
     no son comparables (el equivalente del checksum del banco poliglota)."""
-    cmd = [part.format(dir=os.path.join(DIR, "plaintext"), port=port) for part in cmd_template]
+    cmd = [part.format(dir=os.path.join(DIR, "plaintext"), bind=bind, port=port)
+           for part in cmd_template]
     exe = cmd[0]
     if not os.path.exists(exe) and "/" in exe:
         print(f">> {name}: falta {exe} — corre ./build-all.sh", file=sys.stderr)
         return None
 
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    if not wait_ready(port):
+    if not wait_ready(check_host, port):
         err = (proc.stderr.read(4096) or b"").decode(errors="replace").strip()
         print(f">> {name}: no aceptó conexiones en 10 s. {err}", file=sys.stderr)
-        stop_server(proc, port)
+        stop_server(proc, check_host, port)
         return None
 
-    problem = check_response(port)
+    problem = check_response(check_host, port)
     if problem:
         print(f">> {name}: respuesta no comparable — {problem}", file=sys.stderr)
-        stop_server(proc, port)
+        stop_server(proc, check_host, port)
         return None
     return proc
 
 
-def stop_server(proc, port):
+def stop_server(proc, host, port):
     proc.terminate()
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
-    wait_port_free(port)
+    wait_port_free(host, port)
 
 
-def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms):
+def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, generator_host):
     """Escalera INTERCALADA con rotación: en cada escalón de tasa se miden todas las
     implementaciones vivas, y el orden rota (A B C / B C A / C A B ...).
 
@@ -191,7 +238,7 @@ def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms):
 
     for name, _proc, port in live:
         print(f">> {name}: calentando {warmup_s}s...", file=sys.stderr)
-        run_oha(port, max(rates), conns, warmup_s)
+        run_oha(target, port, max(rates), conns, warmup_s, generator_host)
 
     for i, rate in enumerate(rates):
         active = [t for t in live if t[0] not in done]
@@ -200,7 +247,7 @@ def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms):
         pivot = i % len(active)
         for name, _proc, port in active[pivot:] + active[:pivot]:
             print(f">> -q {rate}: {name} ({duration_s}s)...", file=sys.stderr)
-            m = run_oha(port, rate, conns, duration_s)
+            m = run_oha(target, port, rate, conns, duration_s, generator_host)
             if m is None:
                 print(f">> {name}: oha falló a -q {rate}", file=sys.stderr)
                 continue
@@ -282,12 +329,40 @@ def main():
     ap.add_argument("--duration", "-z", type=int, default=10, help="segundos por escalón (default: 10)")
     ap.add_argument("--warmup", type=int, default=3, help="segundos de calentamiento descartado (default: 3)")
     ap.add_argument("--slo-p99-ms", type=float, default=10.0, help="SLO de p99 en ms (default: 10)")
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="IP a la que bindean los servidores (default: 127.0.0.1). Con generador "
+                         "remoto, la IP del enlace, p. ej. 10.0.0.10")
+    ap.add_argument("--generator-host",
+                    help="host SSH donde corre oha (default: esta máquina). Con esto las cifras "
+                         "dejan de estar contaminadas por el generador; ver README §Loopback")
     ap.add_argument("--export-md", help="exporta la tabla a Markdown (append)")
     args = ap.parse_args()
 
-    if not shutil.which("oha"):
+    remote = bool(args.generator_host)
+    if not remote and not shutil.which("oha"):
         print("Falta oha: brew install oha  (o https://github.com/hatoo/oha)", file=sys.stderr)
         return 127
+
+    # El chequeo local a 0.0.0.0 no vale; el bind comodín se comprueba por loopback.
+    check_host = "127.0.0.1" if args.bind in ("0.0.0.0", "::", "") else args.bind
+    # Lo que oha pone en la URL: la IP del bind (alcanzable desde el generador remoto).
+    target = args.bind if args.bind not in ("0.0.0.0", "::", "") else "127.0.0.1"
+
+    if remote:
+        # Preflight: sin esto, un oha ausente o un SSH sin clave se manifestarían como
+        # "ninguna implementación sostiene ninguna tasa", que es un diagnóstico pésimo.
+        probe = subprocess.run(["ssh", "-o", "BatchMode=yes", args.generator_host,
+                                "command -v oha"], capture_output=True, text=True)
+        if probe.returncode != 0:
+            print(f"error: no se pudo ejecutar oha en {args.generator_host} vía SSH "
+                  f"(¿clave sin passphrase? ¿oha instalado allí?)\n{probe.stderr.strip()}",
+                  file=sys.stderr)
+            return 127
+        if args.bind in ("127.0.0.1", "localhost"):
+            print(f"error: --generator-host {args.generator_host} con --bind {args.bind}: el "
+                  "generador remoto no puede alcanzar loopback. Pasa la IP del enlace "
+                  "(p. ej. --bind 10.0.0.10).", file=sys.stderr)
+            return 1
 
     rates = [int(r) for r in args.rates.split(",")] if args.rates else DEFAULT_RATES
     only = set(args.only.split(",")) if args.only else None
@@ -296,15 +371,22 @@ def main():
         print(f"error: ninguna implementación casa con --only {args.only}", file=sys.stderr)
         return 1
 
+    fds = raise_fd_limit()
     print(f">> plaintext · -c {args.connections} · {args.duration}s por escalón · SLO p99 <= {args.slo_p99_ms} ms",
           file=sys.stderr)
-    print(">> AVISO: si el generador corre en ESTA máquina, compite por los mismos cores que el\n"
-          ">> servidor. Sirve para depurar el arnés y para comparaciones relativas, NO para\n"
-          ">> publicar cifras (ver README.md §Loopback).", file=sys.stderr)
+    print(f">> bind {args.bind} · fds {fds} (heredados por los servidores) · generador: "
+          f"{args.generator_host if remote else 'local'}", file=sys.stderr)
+    if fds < args.connections * 4:
+        print(f">> AVISO: {fds} fds para -c {args.connections} es justo; hyper y node no suben "
+              ">> su propio límite y podrían fallar conexiones.", file=sys.stderr)
+    if not remote:
+        print(">> AVISO: el generador corre en ESTA máquina y compite por los mismos cores que\n"
+              ">> el servidor. Sirve para depurar el arnés y para comparaciones relativas, NO\n"
+              ">> para publicar cifras (ver README.md §Loopback).", file=sys.stderr)
 
     live = []
     for name, cmd, port in impls:
-        proc = start_server(name, cmd, port)
+        proc = start_server(name, cmd, port, args.bind, check_host)
         if proc:
             live.append((name, proc, port))
     if not live:
@@ -313,10 +395,10 @@ def main():
 
     try:
         steps = run_ladder(live, rates, args.connections, args.duration, args.warmup,
-                           args.slo_p99_ms)
+                           args.slo_p99_ms, target, args.generator_host)
     finally:
         for _name, proc, port in live:
-            stop_server(proc, port)
+            stop_server(proc, check_host, port)
 
     # Las que no levantaron quedan con lista vacía → "sin datos" en la tabla, no desaparecen.
     results = [(name, steps.get(name, [])) for name, _, _ in impls]
@@ -330,9 +412,16 @@ def main():
 
     if args.export_md:
         meta = benchlib.env_metadata(exclude=("lua", "php", "pl", "py", "rb"))
-        meta.append(("oha", benchlib._version_line(["oha", "--version"])))
+        oha_version = (benchlib._version_line(["ssh", "-o", "BatchMode=yes", args.generator_host,
+                                               "oha --version"]) if remote
+                       else benchlib._version_line(["oha", "--version"]))
+        meta.append(("oha", oha_version))
         meta.append(("carga", f"-c {args.connections}, {args.duration}s/escalón, SLO p99 <= {args.slo_p99_ms} ms"))
-        meta.append(("generador", "loopback (misma máquina) — no publicable, ver README §Loopback"))
+        meta.append(("fds", str(fds)))
+        # El origen del generador va SIEMPRE en el bloque de entorno: es lo que decide si las
+        # cifras son citables, y un export suelto no tiene otra forma de decirlo.
+        meta.append(("generador", f"remoto vía SSH: {args.generator_host} → {target}" if remote
+                     else "loopback (misma máquina) — NO publicable, ver README §Loopback"))
         benchlib.write_markdown_metadata(args.export_md, meta)
         benchlib.write_markdown(args.export_md, "plaintext — veredicto", rows, headers=HEADERS)
     return 0

@@ -24,15 +24,16 @@ async fn handle(_req: Request<hyper::body::Incoming>) -> Result<Response<Full<By
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let port: u16 = match std::env::args().nth(1).and_then(|p| p.parse().ok()) {
-        Some(p) => p,
-        None => {
-            eprintln!("uso: plaintext-hyper <puerto>");
+    let mut argv = std::env::args().skip(1);
+    let (host, port) = match (argv.next(), argv.next().and_then(|p| p.parse::<u16>().ok())) {
+        (Some(h), Some(p)) => (h, p),
+        _ => {
+            eprintln!("uso: plaintext-hyper <host> <puerto>");
             std::process::exit(2);
         }
     };
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let listener = TcpListener::bind(addr).await?;
 
     loop {

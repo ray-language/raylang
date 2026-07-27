@@ -87,11 +87,67 @@ consumen ~0 CPU): arrancar y parar entre escalones reintroduce exactamente el se
 misma máquina, `oha` compite por los mismos cores que el servidor: el techo que ves es en parte
 la capacidad total de la máquina repartida entre los dos procesos, no la del servidor. Sirve
 para depurar el arnés y para **comparaciones relativas** entre implementaciones medidas en la
-misma sesión.
+misma sesión. El `--export-md` estampa el origen del generador en el bloque de entorno, para que
+ningún export se lea fuera de contexto.
 
-Para cifras citables, el generador va en otra máquina (Thunderbolt bridge). El arnés no cambia:
-solo el host del `oha`. Hasta entonces, el `--export-md` estampa el aviso en el bloque de
-entorno para que ningún export se lea fuera de contexto.
+## Generador en otra máquina
+
+```sh
+./webbench.py --bind 10.0.0.10 --generator-host 10.0.0.20
+```
+
+`--bind` es la IP del enlace en la máquina servidor (los cuatro servidores la reciben como
+argumento); `--generator-host` es el host SSH donde corre `oha`. El readiness y la verificación
+de respuesta siguen siendo locales —son chequeos de corrección, no de rendimiento— y el
+intercalado con rotación se conserva sin coordinar dos máquinas.
+
+### Requisitos, en orden
+
+1. **El enlace.** Thunderbolt Bridge en ambos Macs con IPs manuales. Verifica que la ruta va por
+   ahí y **mídelo**, no lo supongas:
+
+   ```sh
+   route get 10.0.0.20     # debe salir por bridge0, NO por en0/Wi-Fi
+   iperf3 -s               # en el servidor; iperf3 -c 10.0.0.10 en el generador
+   ```
+
+   Medido el 27 jul 2026 en el enlace M3↔M4: **5.35 Gbit/s** sostenidos, con bastante jitter
+   entre segundos (4.58–7.44). Para esta carga el ancho de banda **no es el límite**: a 160k rps
+   una petición+respuesta con framing son ~385 B, o sea ~0.5 Gbit/s — un 9 % del enlace. Lo que
+   hay que vigilar es la **tasa de paquetes** (~320k pps a 160k rps), y ahí `iperf3` con tramas
+   de 1500 B no demuestra gran cosa: por eso el requisito 3 no es opcional.
+
+2. **SSH sin passphrase y `oha` instalado en el generador.** El arnés hace un preflight
+   (`command -v oha` por SSH) y aborta con un mensaje claro si falla — sin él, un SSH mal
+   configurado se manifestaría como "ninguna implementación sostiene ninguna tasa", que es un
+   diagnóstico pésimo.
+
+3. **Comprobar que el generador NO es el nuevo cuello.** Apunta el `oha` remoto contra **hyper**
+   (el techo) y verifica que supera lo que viste en loopback (~163k rps). Si la máquina
+   generadora no puede producir más de lo que el servidor sirve, has movido el cuello de sitio y
+   sigues midiendo el generador — con el agravante de que ya no lo sospechas:
+
+   ```sh
+   ./webbench.py --bind 10.0.0.10 --generator-host 10.0.0.20 --only hyper \
+                 --rates 160000,200000,260000
+   ```
+
+4. **Límites del SO.** El arnés sube el suyo y los servidores lo heredan (ver abajo); en el
+   generador lo sube la propia shell remota antes de lanzar `oha`. Vigila además los puertos
+   efímeros del generador (`sysctl net.inet.ip.portrange.*`) y `kern.ipc.somaxconn` en el
+   servidor. macOS pedirá autorizar conexiones entrantes la primera vez.
+
+### El sesgo de los descriptores de archivo
+
+El arnés **sube el límite blando de fds y los servidores lo heredan**. No es cosmético, corrige
+una desigualdad real: **raylang sube su propio límite blando al duro al arrancar**
+(`src/lib.rs`), y el runtime de Go también (1.19+), pero **hyper y node no**. Lanzado desde una
+shell con el default de macOS (`ulimit -n 256`), ray y Go correrían con ~138 000 fds y hyper/node
+con 256 — una desventaja invisible en el resultado que crece con la concurrencia. Igualándolo en
+el arnés, el veredicto deja de depender de la terminal desde la que se lanzó.
+
+`--bind 127.0.0.1` junto con `--generator-host` es un error explícito: el generador remoto no
+puede alcanzar loopback.
 
 ## Primer resultado (loopback, M3 Pro, 27 jul 2026)
 
@@ -111,7 +167,9 @@ escalón por debajo, con la p99 disparándose ya a 80k. El resultado se repitió
 
 ## Pendiente
 
-- **Generador en la otra máquina** — prerrequisito de cualquier cifra publicable.
+- **Correr con el generador remoto** — el arnés ya lo soporta (`--bind` + `--generator-host`) y
+  el enlace está medido; falta el acceso SSH con `oha` en la máquina generadora, y después el
+  requisito 3 de arriba. Es el prerrequisito de cualquier cifra publicable.
 - **Escalón de framework**: `web/framework` vs express/fastify vs chi/gin.
 - **Carga `json`**: la segunda categoría de TechEmpower, que engancha con `jsonserialize` del
   banco poliglota (coste de CPU por serializado ↔ req/s sostenidos).

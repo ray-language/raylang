@@ -12,11 +12,11 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "uso: plaintext-go <puerto>")
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "uso: plaintext-go <host> <puerto>")
 		os.Exit(2)
 	}
-	addr := "127.0.0.1:" + os.Args[1]
+	addr := os.Args[1] + ":" + os.Args[2]
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")

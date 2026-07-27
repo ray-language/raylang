@@ -16,6 +16,7 @@ LABEL ?= medición
 .PHONY: help build run run-interp repl test test-one test-slow clippy ci \
         release slim pgo pgo-slim playground playground-serve \
         bench bench-gate bench-record bench-vs-interp bench-poly bench-poly-build \
+        bench-web bench-web-build \
         book book-serve vscode install clean clean-cache
 
 help: ## Lista los targets disponibles
@@ -97,6 +98,12 @@ bench-poly-build: ## Compila los binarios del banco poliglota (requiere ray/go/r
 
 bench-poly: ## Banco poliglota (tiempo+memoria): make bench-poly PROG=wordcount (o PROG=all)
 	cd benchmarks/poly && ./bench.py $(or $(PROG),list)
+
+bench-web-build: ## Compila el banco de carga web (requiere ray/go/cargo en PATH)
+	benchmarks/web/build-all.sh
+
+bench-web: ## Banco de carga web (requiere oha): make bench-web [ARGS="--only ray,hyper"]
+	cd benchmarks/web && ./webbench.py $(ARGS)
 
 ##@ Documentación y tooling
 

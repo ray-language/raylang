@@ -1,0 +1,122 @@
+# Banco de carga web
+
+Mide **throughput sostenible bajo un SLO de latencia**: no "req/s máximo". Es el tercer arnés
+del repo y no se solapa con los otros dos:
+
+| arnés | compara | eje |
+|---|---|---|
+| `benchmarks/` | intérprete vs VM, y VM vs baseline commiteado | gate de regresión |
+| `benchmarks/poly/` | raylang vs 9 lenguajes, programas de CPU/memoria | latencia de proceso |
+| **`benchmarks/web/`** | servidores HTTP de raylang vs Rust/Go/Node | **carga sostenida** |
+
+```sh
+./build-all.sh                          # compila ray (nativo), Go y hyper (node no compila)
+./webbench.py                           # las cuatro implementaciones, escalera por defecto
+./webbench.py --only ray,hyper          # solo esas
+./webbench.py --rates 80000,100000,120000   # afina cuando ya sabes el vecindario
+./webbench.py --export-md /tmp/web.md   # tabla + bloque de entorno
+```
+
+O con el Makefile: `make bench-web` / `make bench-web-build`.
+
+## Escalones: pelado vs framework
+
+La comparación solo significa algo entre capas equivalentes:
+
+| escalón | raylang | referencias |
+|---|---|---|
+| **pelado** (este banco) | `net/webserver` | Rust hyper · Go `net/http` · `node:http` |
+| **framework** (pendiente) | `web/framework` | express/fastify · chi/gin |
+
+Comparar `web/framework` contra hyper mezclaría dos costes que las investigaciones ya
+demostraron que se atribuyen por separado
+([`docs/investigacion-overhead-framework-express.md`](../../docs/investigacion-overhead-framework-express.md)
+§3: la maquinaria del framework son ~72 µs, las rutas y el logging otros ~41 µs). El escalón
+pelado es además el que decide si optimizar el router tiene sentido siquiera: si el techo de
+I/O ya está lejos, el router no es el problema.
+
+**hyper no es un rival, es el techo.** Dice cuánto da la máquina cuando el servidor es
+prácticamente el syscall; cada resultado se lee como fracción de él.
+
+## Método
+
+1. **Levanta las cuatro a la vez**, cada una en su puerto, y espera a que **acepten**
+   conexiones (no un sleep fijo: node tarda ~40 ms en levantar y un binario nativo ~3 ms;
+   esperar el evento real hace la comparación honesta y falla rápido si algo no arranca).
+2. **Verifica que responden lo mismo** (status + cuerpo exacto). Es el equivalente del
+   checksum del banco poliglota: dos servidores que no sirven lo mismo no son comparables.
+3. **Calentamiento** descartado por implementación.
+4. **Escalones de tasa fija**, intercalados con rotación (ver abajo): `-q 5k, 10k, 20k…`
+   Para cada escalón se registra p50/p99/p99.9 y la tasa **realmente conseguida**.
+5. **Veredicto** = la tasa más alta que cumple el SLO (default p99 ≤ 10 ms) **y** sostiene
+   ≥99 % de lo pedido. Un servidor que no llega a la tasa tocó su techo de throughput; su p99
+   en ese escalón (segundos, por encolamiento) describe el régimen de saturación, no una cola
+   patológica — el arnés distingue los dos fallos en la columna "primer escalón fallido".
+6. Cuando una implementación no sostiene, **se le corta la escalera**: los escalones por
+   encima solo repiten el mismo régimen.
+
+### `oha` siempre con `-q` y `--latency-correction`
+
+Cableado en el arnés, no opcional. Sin `-q`, oha es **closed-loop**: mantiene N conexiones y
+espera la respuesta antes de mandar la siguiente, así que cuando el servidor se atasca el
+generador también deja de mandar y el stall **nunca se registra como latencia**. Los p99 salen
+bonitos justo cuando el sistema está peor. Es *coordinated omission*, y es el error más fácil
+de cometer y más difícil de detectar leyendo el resultado.
+
+Por eso el eje del experimento es la **tasa de llegada**, no la concurrencia: `-c` se fija y se
+barre `-q` hasta que la p99 hace rodilla.
+
+### Rondas intercaladas con rotación
+
+En cada escalón se miden **todas** las implementaciones vivas, y el orden rota
+(`A B C / B C A / C A B …`) — la misma disciplina que `poly/benchlib.run_variants`. El drift
+ambiental (térmico, procesos de fondo) se reparte entre todas en vez de caer entero sobre la
+que tocaba, y la rotación cancela el sesgo de posición.
+
+No es una precaución teórica:
+[`docs/investigacion-p99-framework-web.md`](../../docs/investigacion-p99-framework-web.md) §12
+documenta una sesión donde, con corridas consecutivas, **el orden determinó el resultado por
+completo** — invertir el orden invirtió el signo de la conclusión. Por lo mismo los servidores
+se levantan **una vez** y viven toda la sesión (solo uno recibe carga a la vez; los demás
+consumen ~0 CPU): arrancar y parar entre escalones reintroduce exactamente el sesgo de §12
+(TIME_WAIT y limpieza del kernel con gaps cortos).
+
+## Loopback
+
+⚠️ **Las cifras de este banco medidas en loopback no son publicables.** Con el generador en la
+misma máquina, `oha` compite por los mismos cores que el servidor: el techo que ves es en parte
+la capacidad total de la máquina repartida entre los dos procesos, no la del servidor. Sirve
+para depurar el arnés y para **comparaciones relativas** entre implementaciones medidas en la
+misma sesión.
+
+Para cifras citables, el generador va en otra máquina (Thunderbolt bridge). El arnés no cambia:
+solo el host del `oha`. Hasta entonces, el `--export-md` estampa el aviso en el bloque de
+entorno para que ningún export se lea fuera de contexto.
+
+## Primer resultado (loopback, M3 Pro, 27 jul 2026)
+
+Escalera por defecto, `-c 100`, 8 s por escalón, SLO p99 ≤ 10 ms. **Relativo, no citable**:
+
+| implementación | tasa sostenida bajo SLO | techo observado |
+|---|---|---|
+| hyper | 120 000 rps | ~163 000 |
+| **raylang** (`net/webserver`, nativo) | **80 000 rps** (0.67× hyper) | ~113 000 |
+| Go `net/http` | 80 000 rps (0.67× hyper) | ~119 000 |
+| `node:http` | 40 000 rps (0.33× hyper) | ~86 000 |
+
+Lectura: en el escalón pelado, raylang está **en el mismo peldaño que Go `net/http`** (mismo
+veredicto, techos a 113k vs 119k) y a ~0.67× del techo de I/O de la máquina. Node queda un
+escalón por debajo, con la p99 disparándose ya a 80k. El resultado se repitió en dos sesiones
+(una sin intercalado y otra con él) con los mismos veredictos.
+
+## Pendiente
+
+- **Generador en la otra máquina** — prerrequisito de cualquier cifra publicable.
+- **Escalón de framework**: `web/framework` vs express/fastify vs chi/gin.
+- **Carga `json`**: la segunda categoría de TechEmpower, que engancha con `jsonserialize` del
+  banco poliglota (coste de CPU por serializado ↔ req/s sostenidos).
+- **Repeticiones por escalón**: hoy es una corrida por escalón. La rotación reparte el drift,
+  pero no da barras de error; para un veredicto ajustado (dos implementaciones a un escalón de
+  distancia) haría falta repetir y comparar dispersión, como hace `poly/` con mediana+MAD.
+- **Linux/epoll**: todo esto es macOS/kqueue. `src/poll.rs` soporta epoll, pero los números no
+  transfieren.

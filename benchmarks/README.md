@@ -5,13 +5,19 @@ Dos arneses con trabajos distintos — no se solapan y ninguno reemplaza al otro
 | | Qué compara | Para qué |
 |---|---|---|
 | **este directorio** | raylang contra sí mismo (intérprete M1 vs VM M2, y VM contra un baseline commiteado) | **gate** de regresión: avisa si un cambio nos deja más lentos |
-| **`poly/`** | raylang contra node/go/rust/php/lua/python/ruby/perl, en tiempo Y memoria | **comparación** externa: las cifras de `PERFORMANCE.md` §1/§6 salen de aquí |
+| **`poly/`** | raylang contra node/go/rust/php/lua/python/ruby/perl, en tiempo Y memoria | **comparación** externa de CPU/memoria: las cifras de `PERFORMANCE.md` §1/§6 salen de aquí |
+| **`web/`** | los servidores HTTP: `net/webserver` contra Rust hyper, Go `net/http` y `node:http` | **carga sostenida**: throughput bajo un SLO de p99, con `oha` |
 
 `poly/` es un arnés en python3 puro (`./bench.py`, o `./tui.py` interactivo) que necesita los
 compiladores/intérpretes de los otros lenguajes instalados —los que falten se omiten con un
 aviso— y **no está cableado a CI**: es una herramienta de sesión, se corre a mano. Ver
 `poly/README.md`, en particular su §Metodología de medición (rondas intercaladas con rotación,
 mediana+MAD, detector de desalojo del SO), que es más rigurosa que la de `measure.py`.
+
+`web/` mide otro eje: el servidor vive toda la sesión y quien mide es un generador de carga
+externo (`oha`, siempre con `-q` y `--latency-correction`). Tampoco va a CI. **Sus cifras en
+loopback no son publicables** —el generador compite por los cores del servidor— hasta que el
+generador viva en otra máquina; ver `web/README.md` §Loopback.
 
 El resto de este documento describe el arnés de **este** directorio: compara los dos motores de
 ejecución de raylang, el **intérprete** (M1) y la **máquina virtual** (M2). Sirve para medir el

@@ -8576,6 +8576,12 @@ diario. `templ` desaparece de la raíz (→ §88.4).
   *mantiene* paquetes, no quien los consume.
 - **`index-verify` → `registry verify`**: sin compat que respetar, el nombre con guion desaparece.
   El prefijo `index-` era precisamente el intento de agrupar sin tener dónde agrupar.
+- **`ray dev` se queda en la raíz** (M92.1, IDEAS §48): watcher por polling de mtimes sobre
+  `.ray`/`.ray.html`/`ray.toml` que reinicia el programa ante un cambio (SIGTERM al hijo, compone
+  con `serve_graceful`). Es el único subcomando que **duplica** a otro —es `run` más el bucle de
+  reinicio— y por eso se auditó aquí: ver §88.4 punto 2 para por qué NO se colapsó a `run --watch`.
+  La raíz vigilada es la del proyecto (`Manifest::find` hacia arriba desde el cwd); sin manifiesto,
+  el directorio de la entrada.
 - **Sin alias legados.** raylang no está publicado ni tiene usuarios: el corte es limpio y no se
   arrastra un mapa de nombres viejos. (Ortogonal: el **modo legado por flags** de M39a —
   `--vm`/`--interp`/`--test`/`--fmt`/`<archivo>` directo— **no se toca**; lo usa la suite de tests

@@ -1399,7 +1399,17 @@ magia posicional de `recover` es lo menos elegante de Go). La forma raylang es *
   nativo con salida exacta; espec en DESIGN §21.6 (refinamiento); MANUAL §15 "Recuperación de errores
   fatales" (patrón `spawn`+`try_join`, reglas, batch tolerante, el webserver como caso real).
 - **M97.2 — `try_call(f: fn() -> T) -> Result<T, string>`** (recuperación en la MISMA fibra, sin
-  `spawn`): el recover general. Por motor: **intérprete** trivial (interceptar `Flow::Error`) — y a
+  `spawn`): el recover general. **🔥 Ahora también tiene justificación de RENDIMIENTO, medida
+  contra terceros** (27 jul 2026, [docs/investigacion-p999-webserver-nativo.md](docs/investigacion-p999-webserver-nativo.md)):
+  el `spawn`+`try_join` por petición de `handle_http` —que está ahí SOLO por el aislamiento de
+  panic de M56.5— hace que en el nativo **cada petición cruce dos hilos de SO** (send al canal del
+  pool + despertar de semáforo + join). Censo del perfil bajo 120k rps con `-c 100`: **198 hilos de
+  SO** (101 sirviendo conexión + 96 workers aparcados + accept) sobre 11 cores. Es el mecanismo de
+  la cola profunda: `benchmarks/web/` mide raylang **mejor que Go en p50 (0.65 vs 0.79), p99 (1.86
+  vs 2.11) y techo (129.5k vs 120.4k)** pero **2.5× PEOR en p99.9 (6.59 vs 2.63 ms)** — el trabajo
+  por petición es eficiente, lo que se paga es meter al scheduler del SO en cada petición. Con
+  `try_call` el handoff desaparece y el censo baja a ~101. Validación ya montada: `webbench.py
+  --only ray,go --reps 5`. Por motor: **intérprete** trivial (interceptar `Flow::Error`) — y a
   diferencia de `try_join` (solo-VM, porque `spawn` no corre en el intérprete), `try_call` tendría
   **oráculo VM↔intérprete completo**; **VM**: desenrollar los marcos de la fibra hasta el marcador
   (guardar `frames.len()`/altura de pila al entrar, restaurar al fallar — la mecánica que

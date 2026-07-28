@@ -64,6 +64,19 @@ fn excluded(p: &Path) -> Option<&'static str> {
 #[test]
 #[ignore = "compila ~50 binarios nativos con rustc (~2-3 min); correr con -- --ignored"]
 fn the_deterministic_examples_transpile_identically_to_the_vm() {
+    run_corpus(&[]);
+}
+
+/// F2 (arco de concurrencia nativa): el MISMO corpus con `--fibers` — la concurrencia sobre el
+/// scheduler M:N de ray_runtime::fibers debe seguir siendo byte-idéntica a la VM. Todo va por la
+/// vía Cargo (corosensei), así que tarda más que el corpus plano.
+#[test]
+#[ignore = "compila ~50 binarios nativos vía cargo (--fibers, lento); correr con -- --ignored"]
+fn the_deterministic_examples_transpile_identically_with_fibers() {
+    run_corpus(&["--fibers"]);
+}
+
+fn run_corpus(extra_flags: &[&str]) {
     if !has_rustc() {
         // En LOCAL el skip es honesto (no todo el mundo tiene rustc a mano). Bajo CI sería un falso
         // verde silencioso — exactamente lo que este corpus existe para impedir → fallo duro.
@@ -92,8 +105,10 @@ fn the_deterministic_examples_transpile_identically_to_the_vm() {
 
         // (2) El binario nativo debe COMPILAR (si un ejemplo nuevo usa algo fuera del subconjunto, esto
         //     falla → hay que soportarlo o añadirlo a EXCLUDED con su motivo).
+        let mut args: Vec<&str> = vec!["build", src, "--native", "-o", bin.to_str().unwrap()];
+        args.extend_from_slice(extra_flags);
         let build = Command::new(BIN)
-            .args(["build", src, "--native", "-o", bin.to_str().unwrap()])
+            .args(&args)
             .current_dir(cwd)
             .output()
             .expect("lanza el build --native");

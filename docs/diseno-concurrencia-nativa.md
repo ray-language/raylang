@@ -261,3 +261,47 @@ respaldo y como grupo de control para el A/B.
 Nota asumida: las operaciones que siguen siendo bloqueantes de verdad (ficheros, SQLite, DNS del
 sistema) bloquean un worker mientras duran, igual que hoy bloquean un hilo. Es el mismo compromiso
 que acepta la VM y no forma parte de este arco.
+
+## 6. F2, EJECUTADA (28 jul 2026) — resultados y lecciones
+
+`ray build --native --fibers` funciona de punta a punta. Paridad: los **7 tests dedicados**
+(`tests/native_fibers_cli.rs`: spawn/join, canales acotados y rendezvous, scope+cancelación,
+try_call en fibras, sleep, servidor TCP auto-hablándose, read-timeout) y el **corpus completo**
+(~50 programas, `native_corpus -- --ignored`, variante `--fibers`) son **byte-idénticos a la VM**.
+La vía sin `--fibers` no cambia (corpus plano verde).
+
+Medido sobre el `plaintext` del bench, A/B intercalado ×3, misma sesión, `-c 1000` loopback:
+
+| | hilos | RSS (mimalloc) | RSS (slim) | rps |
+|---|---|---|---|---|
+| hilo-por-conexión | **1002** | 239 MB | ~147 MB | ~106.4k |
+| **fibras (--fibers)** | **14** | ~209 MB | **~110 MB** | ~93k (−13 %) |
+
+- **El muro cayó**: 14 hilos constantes (idle: 2 MB de RSS). El objetivo estructural del arco.
+- El RSS restante es **retención de churn del asignador** (~100-200 B/petición retenidos; `leaks`
+  reporta 0 fugas y 22 KB rastreables; `vmmap` lo sitúa en las arenas). mimalloc retiene ~4× más
+  con 14 heaps que con 1002 — investigarlo es de F5, igual que el −13 % de rps (candidatos:
+  registro persistente de intereses en vez de re-registro por ciclo, batching del buzón,
+  `MIMALLOC_PURGE_DELAY` no surtió efecto).
+- TLS sigue bloqueante con fibras (F4); UDP también. `connect` bloqueante (acotado por el SO).
+
+**Dos lecciones de corrección que redefinen el diseño (pagadas con sangre de release-only):**
+
+1. **Las fibras quedan FIJADAS a su worker (sin migración, sin robo de trabajo).** Con opt3+LTO,
+   LLVM cachea la dirección de un thread-local a través del cambio de contexto (el asm de
+   corosensei no le dice que el hilo puede cambiar): una fibra que migraba escribía en los TLS del
+   worker ANTIGUO — yielder nulo, `RefCell already borrowed` en `__RAY_RDBUF`, `in_try` con
+   overflow, SIGBUS. Solo en release; el test de estrés de la vía del reactor lo caza. Es el
+   hazard clásico de las corrutinas stackful compiladas (Go lo evita porque su compilador conoce
+   los puntos de cesión). La fijación lo elimina de raíz: cualquier TLS cacheado sigue siendo del
+   hilo correcto. Consecuencia: **el robo de trabajo queda PROHIBIDO, no pendiente.**
+2. **Con fijación, ninguna espera dentro de una fibra puede bloquear el hilo**: una hermana fijada
+   al mismo worker no correría jamás (interbloqueo). Todas las esperas del runtime emitido pasan
+   por `__ray_cv_wait`, que con fibras suelta el lock, CEDE el turno y re-toma (F3 lo hará por
+   lista de esperas, sin ceder en bucle); el `JoinHandle::join` del crate igual. Y las syscalls
+   bloqueantes en fibra deben ser ACOTADAS (la lección del livelock de connects > backlog).
+
+Y una del reactor: el read-timeout del webserver (10 s) aparca CADA lectura con deadline; el
+readiness casi siempre gana y el temporizador huérfano vivía 10 s — a 100k rps, ~1M de entradas y
+un barrido O(n) por ciclo. Ahora: min-heap + cancelación explícita + compactación (memoria
+O(vivos), siguiente-plazo O(log n)).

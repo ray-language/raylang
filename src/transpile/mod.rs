@@ -106,6 +106,10 @@ struct Transpiler {
     /// Subsistemas con-crate EXCLUIDOS por `--without` (crypto/tls/sqlite): sus builtins no se interceptan
     /// (caen en stub que panica) → el binario puede usar la vía rápida `rustc`. Ver `transpile_with`.
     exclude: std::collections::HashSet<String>,
+    /// F2 (concurrencia nativa): ¿emitir la concurrencia sobre el scheduler de FIBRAS de
+    /// `ray_runtime::fibers` (`--fibers`)? Cambia la forma de spawn/sockets/contexto por-tarea;
+    /// con `false` (default) se emite el modelo de hilo-por-tarea de siempre, byte-idéntico.
+    pub(super) fibers: bool,
     /// Nombres de `var` locales que van en una **celda** `Rc<RefCell<T>>` (B1): capturadas y mutadas por
     /// una closure. Se leen con `.borrow().clone()` y se escriben con `.borrow_mut()`; la closure captura
     /// un clon del `Rc`. Se pueblan al entrar en cada función/closure (con su `cell_vars`) y se quitan al
@@ -147,6 +151,16 @@ pub fn transpile_with(prog: &Program, exclude: &[String]) -> Result<Transpiled, 
 /// cero SIGUEN siendo error (Rust los chequea igual; no cuestan nada). Solo cambia el PREÁMBULO
 /// (los cuerpos de `__ray_add`/…); los sitios de llamada son idénticos.
 pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Result<Transpiled, String> {
+    transpile_full(prog, exclude, fast, false)
+}
+
+/// Como [`transpile_with_opts`], con el modo **fibras** (F2 del arco de concurrencia nativa,
+/// `ray build --native --fibers`, EXPERIMENTAL): la concurrencia del binario corre sobre el
+/// scheduler M:N de `ray_runtime::fibers` (corrutinas corosensei + reactor kqueue/epoll) en vez de
+/// hilo-de-SO-por-tarea — los sockets se emiten no-bloqueantes y aparcan la FIBRA, `__ray_spawn`
+/// crea fibras, y el contexto por-tarea (cancelación/scopes/try) viaja con la fibra. Ver
+/// docs/diseno-concurrencia-nativa.md §5.
+pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bool) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
@@ -220,13 +234,14 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
         needs_rt_regex: false,
         exclude: exclude.iter().cloned().collect(),
         cells: std::collections::HashSet::new(),
+        fibers,
     };
 
     let mut out = String::new();
     // N2: el hasher de los Map (aHash por defecto, std con `--without ahash`) se decide aquí porque el
     // alias `__RayMap` vive en el preámbulo; la feature se añade a rt_features más abajo, junto a mimalloc.
     let use_ahash = !t.exclude.contains("ahash");
-    emit_core_runtime(&mut out, fast, use_ahash);
+    emit_core_runtime(&mut out, fast, use_ahash, fibers);
 
     // Definiciones de tipos de usuario (no genéricos). struct → Rust struct; enum → Rust enum. `Clone`
     // para el clon-al-leer y para los payloads. El orden no importa (Rust permite referencias adelantadas).
@@ -467,6 +482,11 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     // `__RayMap` ya se emitió en el preámbulo; aquí solo se activa la feature que trae el crate.
     if use_ahash {
         rt_features.push("ahash");
+    }
+    // F2: el scheduler de fibras vive en ray-runtime tras su feature → --fibers fuerza la vía Cargo
+    // (una feature no vacía nunca compila por rustc pelado, que no puede traer corosensei).
+    if fibers {
+        rt_features.push("fibers");
     }
     Ok(Transpiled { source: out, rt_features, stubbed })
 }

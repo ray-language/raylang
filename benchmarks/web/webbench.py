@@ -66,14 +66,38 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(DIR), "poly"))
 import benchlib  # noqa: E402  (tras el sys.path: vive en benchmarks/poly/)
 
-# Cada implementación con su comando ya construido y su puerto propio. Puertos distintos para
-# que un TIME_WAIT del anterior no retrase al siguiente.
-IMPLS = [
-    ("ray", ["{dir}/ray/plaintext-ray", "{bind}", "{port}"], 18080),
-    ("hyper", ["{dir}/hyper/target/release/plaintext-hyper", "{bind}", "{port}"], 18081),
-    ("go", ["{dir}/go/plaintext-go", "{bind}", "{port}"], 18082),
-    ("node", ["node", "{dir}/node/main.js", "{bind}", "{port}"], 18083),
-]
+# Los dos ESCALONES del banco (ver README §Escalones). Cada uno con sus implementaciones, la ruta
+# que se pide y el cuerpo exacto que las cuatro deben devolver — comparar servidores que no sirven
+# lo mismo no significa nada, así que el arnés lo verifica antes de medir.
+#
+# `pelado` mide el servidor HTTP a secas; `framework` mide lo que un framework AÑADE encima
+# (emparejar ruta, extraer parámetro, serializar), por eso su endpoint lleva un `:id` y devuelve
+# JSON en vez de un texto fijo. Los puertos son distintos por escalón para que un TIME_WAIT de una
+# sesión anterior no estorbe a la siguiente.
+WORKLOADS = {
+    "plaintext": {
+        "dir": "plaintext",
+        "path": "/",
+        "body": b"Hello, World!",
+        "impls": [
+            ("ray", ["{dir}/ray/plaintext-ray", "{bind}", "{port}"], 18080),
+            ("hyper", ["{dir}/hyper/target/release/plaintext-hyper", "{bind}", "{port}"], 18081),
+            ("go", ["{dir}/go/plaintext-go", "{bind}", "{port}"], 18082),
+            ("node", ["node", "{dir}/node/main.js", "{bind}", "{port}"], 18083),
+        ],
+    },
+    "json": {
+        "dir": "json",
+        "path": "/users/42",
+        "body": b'{"id":"42","name":"Ada"}',
+        "impls": [
+            ("ray", ["{dir}/ray/json-ray", "{bind}", "{port}"], 18090),
+            ("axum", ["{dir}/axum/target/release/json-axum", "{bind}", "{port}"], 18091),
+            ("chi", ["{dir}/chi/json-chi", "{bind}", "{port}"], 18092),
+            ("express", ["node", "{dir}/express/main.js", "{bind}", "{port}"], 18093),
+        ],
+    },
+}
 
 # Techo de fds que se pide para el arnés y, por herencia, para los cuatro servidores.
 FD_TARGET = 65536
@@ -90,8 +114,6 @@ REMOTE_OHA_CANDIDATES = [
     "/usr/local/bin/oha",      # Homebrew en Intel, o instalación manual
     "$HOME/.cargo/bin/oha",    # cargo install oha
 ]
-
-EXPECTED_BODY = b"Hello, World!"
 
 # La escalera por defecto llega hasta donde las cuatro implementaciones ya han tocado techo
 # en loopback (hyper, el techo de I/O, satura sobre 160k). Una escalera que se queda corta
@@ -149,19 +171,19 @@ def wait_port_free(host, port, timeout_s=10.0):
     return False
 
 
-def check_response(host, port):
+def check_response(host, port, path, expected):
     """Verifica cuerpo y status. El equivalente del checksum del banco poliglota: dos
     servidores que no responden lo mismo no son comparables.
 
     Se comprueba SIEMPRE desde esta máquina (aunque el generador sea remoto): es un chequeo
     de corrección, no de rendimiento, y hacerlo local mantiene el diagnóstico simple."""
     try:
-        with urllib.request.urlopen(f"http://{host}:{port}/", timeout=5) as r:
+        with urllib.request.urlopen(f"http://{host}:{port}{path}", timeout=5) as r:
             body = r.read()
             if r.status != 200:
                 return f"status {r.status}, esperaba 200"
-            if body != EXPECTED_BODY:
-                return f"cuerpo {body!r}, esperaba {EXPECTED_BODY!r}"
+            if body != expected:
+                return f"cuerpo {body!r}, esperaba {expected!r}"
     except Exception as e:  # noqa: BLE001 — cualquier fallo aquí invalida la medición
         return f"no responde: {e}"
     return None
@@ -202,7 +224,7 @@ def resolve_remote_oha(generator):
     return path[0].strip() if path else None
 
 
-def oha_command(target, port, rate, conns, duration_s, generator, correction=False):
+def oha_command(target, port, path, rate, conns, duration_s, generator, correction=False):
     """El comando de oha, local (`generator` None) o vía SSH.
 
     Remoto: se envuelve en la shell del `ssh` para poder subir el `ulimit -n` del generador en
@@ -214,7 +236,7 @@ def oha_command(target, port, rate, conns, duration_s, generator, correction=Fal
         "--no-tui", "--output-format", "json",
         "-z", f"{duration_s}s", "-c", str(conns), "-q", str(rate),
         *(["--latency-correction"] if correction else []),
-        f"http://{target}:{port}/",
+        f"http://{target}:{port}{path}",
     ]
     if generator is None:
         return oha
@@ -222,9 +244,9 @@ def oha_command(target, port, rate, conns, duration_s, generator, correction=Fal
     return ssh_argv(generator, remote)
 
 
-def run_oha(target, port, rate, conns, duration_s, generator=None, correction=False):
+def run_oha(target, port, path, rate, conns, duration_s, generator=None, correction=False):
     """Una corrida de oha a tasa FIJA. Devuelve el dict de métricas o None si falló."""
-    cmd = oha_command(target, port, rate, conns, duration_s, generator, correction)
+    cmd = oha_command(target, port, path, rate, conns, duration_s, generator, correction)
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         return None
@@ -242,11 +264,11 @@ def run_oha(target, port, rate, conns, duration_s, generator=None, correction=Fa
     }
 
 
-def start_server(name, cmd_template, port, bind, check_host):
+def start_server(name, cmd_template, port, bind, check_host, wl_dir, path, expected):
     """Levanta una implementación y devuelve su proceso, o None si no sirve para medir.
     Verifica la respuesta ANTES de que nadie mida: dos servidores que no responden lo mismo
     no son comparables (el equivalente del checksum del banco poliglota)."""
-    cmd = [part.format(dir=os.path.join(DIR, "plaintext"), bind=bind, port=port)
+    cmd = [part.format(dir=os.path.join(DIR, wl_dir), bind=bind, port=port)
            for part in cmd_template]
     exe = cmd[0]
     if not os.path.exists(exe) and "/" in exe:
@@ -260,7 +282,7 @@ def start_server(name, cmd_template, port, bind, check_host):
         stop_server(proc, check_host, port)
         return None
 
-    problem = check_response(check_host, port)
+    problem = check_response(check_host, port, path, expected)
     if problem:
         print(f">> {name}: respuesta no comparable — {problem}", file=sys.stderr)
         stop_server(proc, check_host, port)
@@ -310,7 +332,7 @@ def aggregate(samples, rate, slo_p99_ms):
     return step
 
 
-def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, generator,
+def run_ladder(live, rates, path, conns, duration_s, warmup_s, slo_p99_ms, target, generator,
                correction=False, reps=1):
     """Escalera INTERCALADA con rotación: en cada escalón de tasa se miden todas las
     implementaciones vivas, y el orden rota (A B C / B C A / C A B ...).
@@ -337,7 +359,7 @@ def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, gen
 
     for name, _proc, port in live:
         print(f">> {name}: calentando {warmup_s}s...", file=sys.stderr)
-        run_oha(target, port, max(rates), conns, warmup_s, generator, correction)
+        run_oha(target, port, path, max(rates), conns, warmup_s, generator, correction)
 
     pass_idx = 0
     for rate in rates:
@@ -351,7 +373,7 @@ def run_ladder(live, rates, conns, duration_s, warmup_s, slo_p99_ms, target, gen
             for name, _proc, port in active[pivot:] + active[:pivot]:
                 tag = f" rep {rep + 1}/{reps}" if reps > 1 else ""
                 print(f">> -q {rate}:{tag} {name} ({duration_s}s)...", file=sys.stderr)
-                m = run_oha(target, port, rate, conns, duration_s, generator, correction)
+                m = run_oha(target, port, path, rate, conns, duration_s, generator, correction)
                 if m is None:
                     print(f">> {name}: oha falló a -q {rate}", file=sys.stderr)
                     continue
@@ -455,6 +477,8 @@ def print_ladder(name, steps):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--workload", "-w", default="plaintext", choices=sorted(WORKLOADS),
+                    help="escalón a medir: `plaintext` (servidor pelado) o `json` (framework: ruta con parámetro + JSON). Default: plaintext")
     ap.add_argument("--only", help="implementaciones a medir, separadas por coma")
     ap.add_argument("--rates", help="escalones de tasa, separados por coma")
     ap.add_argument("--connections", "-c", type=int, default=100, help="conexiones concurrentes (default: 100)")
@@ -535,15 +559,16 @@ def main():
                   "(p. ej. --bind 10.0.0.10).", file=sys.stderr)
             return 1
 
+    wl = WORKLOADS[args.workload]
     rates = [int(r) for r in args.rates.split(",")] if args.rates else DEFAULT_RATES
     only = set(args.only.split(",")) if args.only else None
-    impls = [i for i in IMPLS if only is None or i[0] in only]
+    impls = [i for i in wl["impls"] if only is None or i[0] in only]
     if not impls:
         print(f"error: ninguna implementación casa con --only {args.only}", file=sys.stderr)
         return 1
 
     fds = raise_fd_limit()
-    print(f">> plaintext · -c {args.connections} · {args.duration}s × {args.reps} rep por escalón · SLO p99 <= {args.slo_p99_ms} ms",
+    print(f">> {args.workload} · -c {args.connections} · {args.duration}s × {args.reps} rep por escalón · SLO p99 <= {args.slo_p99_ms} ms",
           file=sys.stderr)
     print(f">> bind {args.bind} · fds {fds} (heredados por los servidores) · generador: "
           f"{destination + ' (' + generator.oha + ')' if remote else 'local'}", file=sys.stderr)
@@ -557,7 +582,7 @@ def main():
 
     live = []
     for name, cmd, port in impls:
-        proc = start_server(name, cmd, port, args.bind, check_host)
+        proc = start_server(name, cmd, port, args.bind, check_host, wl["dir"], wl["path"], wl["body"])
         if proc:
             live.append((name, proc, port))
     if not live:
@@ -565,7 +590,7 @@ def main():
         return 1
 
     try:
-        steps = run_ladder(live, rates, args.connections, args.duration, args.warmup,
+        steps = run_ladder(live, rates, wl["path"], args.connections, args.duration, args.warmup,
                            args.slo_p99_ms, target, generator, args.correction, args.reps)
     finally:
         for _name, proc, port in live:
@@ -577,7 +602,7 @@ def main():
         if s:
             print_ladder(name, s)
 
-    print(f"\n=== plaintext — veredicto (tasa sostenida con p99 <= {args.slo_p99_ms} ms) ===")
+    print(f"\n=== {args.workload} — veredicto (tasa sostenida con p99 <= {args.slo_p99_ms} ms) ===")
     rows = build_rows(results, args.slo_p99_ms)
     benchlib.print_table(rows, headers=HEADERS)
     if args.reps > 1:
@@ -588,6 +613,7 @@ def main():
         oha_version = (benchlib._version_line(ssh_argv(generator, f"{generator.oha} --version")) if remote
                        else benchlib._version_line(["oha", "--version"]))
         meta.append(("oha", oha_version))
+        meta.append(("escalón", args.workload))
         meta.append(("carga", f"-c {args.connections}, {args.duration}s × {args.reps} rep/escalón, "
                                f"SLO p99 <= {args.slo_p99_ms} ms"))
         meta.append(("fds", str(fds)))
@@ -597,7 +623,7 @@ def main():
         meta.append(("generador", f"remoto vía SSH: {destination} → {target}" if remote
                      else "loopback (misma máquina) — NO publicable, ver README §Loopback"))
         benchlib.write_markdown_metadata(args.export_md, meta)
-        benchlib.write_markdown(args.export_md, "plaintext — veredicto", rows, headers=HEADERS,
+        benchlib.write_markdown(args.export_md, f"{args.workload} — veredicto", rows, headers=HEADERS,
                                 note=TIE_NOTE if args.reps > 1 else None)
     return 0
 

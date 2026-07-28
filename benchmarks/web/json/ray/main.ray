@@ -1,0 +1,55 @@
+// Carga `json` — el escalón de FRAMEWORK: `web/framework` de raylang (estilo Express).
+//
+// Mide lo que un framework AÑADE sobre el servidor pelado: emparejar una ruta, extraer un
+// parámetro y serializar la respuesta. Por eso el endpoint es `GET /users/{id}` devolviendo
+// `{"id":<id>,"name":"Ada"}` y no un plaintext: un texto fijo no ejercita ni el router ni el
+// serializador, que es justo la capa bajo examen.
+//
+// Las 10 rutas registradas NO son decoración: el coste de emparejar depende del tamaño de la
+// tabla, así que las cuatro implementaciones del banco registran las MISMAS diez para que la
+// comparación sea entre routers y no entre tamaños de tabla.
+from web/framework import new_app, GET, listen, json, param, App, Ctx, Res;
+
+fn build_app() -> App {
+    var app = new_app();
+    // La ruta medida. El `id` llega como string y se interpola tal cual: hacerlo así en las
+    // cuatro implementaciones evita que una pague un parse_int que otra no hace.
+    app.GET("/users/:id", fn(c: Ctx, r: Res) {
+        let id: string = c.param("id");
+        r.json(`{"id":"${id}","name":"Ada"}`);
+    });
+    // Relleno hasta 10 rutas, para igualar el tamaño de la tabla entre implementaciones.
+    app.GET("/", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/health", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/version", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/items", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/items/:id", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/orders", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/orders/:id", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/posts", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/posts/:id", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app
+}
+
+fn main() -> int {
+    let argv: [string] = args();
+    if (argv.len() < 2) {
+        eprint("uso: json-ray <host> <puerto>");
+        return 2;
+    }
+    let host: string = argv[0];
+    let port: int = match (argv[1].parse_int()) {
+        Option.Some(p) => p,
+        Option.None => {
+            eprint("puerto inválido: " + argv[1]);
+            return 2;
+        },
+    };
+    match (listen(build_app, host, port)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint("listen: " + e);
+            1
+        },
+    }
+}

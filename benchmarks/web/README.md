@@ -11,7 +11,8 @@ del repo y no se solapa con los otros dos:
 
 ```sh
 ./build-all.sh                          # compila ray (nativo), Go y hyper (node no compila)
-./webbench.py                           # las cuatro implementaciones, escalera por defecto
+./webbench.py                           # escalón pelado, las cuatro, escalera por defecto
+./webbench.py -w json                   # escalón de framework
 ./webbench.py --only ray,hyper          # solo esas
 ./webbench.py --rates 80000,100000,120000   # afina cuando ya sabes el vecindario
 ./webbench.py --export-md /tmp/web.md   # tabla + bloque de entorno
@@ -23,10 +24,19 @@ O con el Makefile: `make bench-web` / `make bench-web-build`.
 
 La comparación solo significa algo entre capas equivalentes:
 
-| escalón | raylang | referencias |
-|---|---|---|
-| **pelado** (este banco) | `net/webserver` | Rust hyper · Go `net/http` · `node:http` |
-| **framework** (pendiente) | `web/framework` | express/fastify · chi/gin |
+| escalón | qué se pide | raylang | referencias |
+|---|---|---|---|
+| **`plaintext`** (pelado) | `GET /` → `Hello, World!` | `net/webserver` | Rust hyper · Go `net/http` · `node:http` |
+| **`json`** (framework) | `GET /users/42` → `{"id":"42","name":"Ada"}` | `web/framework` | Rust axum · Go chi · express |
+
+Se eligen con `--workload` (`-w`); el default es `plaintext`.
+
+El escalón de framework **no** sirve un texto fijo a propósito: un plaintext no ejercita ni el
+router ni el serializador, que son justo la capa bajo examen. El endpoint lleva un parámetro de
+ruta y devuelve JSON, y las cuatro implementaciones registran las **mismas 10 rutas** — el coste
+de emparejar depende del tamaño de la tabla, así que igualarlo es parte de que la comparación
+signifique algo. El `id` se interpola como string sin parsear en las cuatro, para que ninguna
+pague un trabajo que otra no hace.
 
 Comparar `web/framework` contra hyper mezclaría dos costes que las investigaciones ya
 demostraron que se atribuyen por separado
@@ -35,8 +45,9 @@ demostraron que se atribuyen por separado
 pelado es además el que decide si optimizar el router tiene sentido siquiera: si el techo de
 I/O ya está lejos, el router no es el problema.
 
-**hyper no es un rival, es el techo.** Dice cuánto da la máquina cuando el servidor es
-prácticamente el syscall; cada resultado se lee como fracción de él.
+**hyper y axum no son rivales, son el techo** de su escalón. Dicen cuánto da la máquina cuando el
+servidor es prácticamente el syscall (más un match de rutas, en el caso de axum); cada resultado se
+lee como fracción de ellos.
 
 ## Método
 

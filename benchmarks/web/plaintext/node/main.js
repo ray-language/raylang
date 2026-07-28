@@ -8,9 +8,10 @@
 // multiplicar procesos aquí mediría otra cosa.
 const http = require("node:http");
 
-const port = process.argv[2];
-if (!port) {
-  console.error("uso: plaintext-node <puerto>");
+const host = process.argv[2];
+const port = process.argv[3];
+if (!host || !port) {
+  console.error("uso: plaintext-node <host> <puerto>");
   process.exit(2);
 }
 
@@ -21,4 +22,4 @@ http
     res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": body.length });
     res.end(body);
   })
-  .listen(Number(port), "127.0.0.1");
+  .listen(Number(port), host);

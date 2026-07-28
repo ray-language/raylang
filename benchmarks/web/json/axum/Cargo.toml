@@ -1,0 +1,16 @@
+# Proyecto Cargo INDEPENDIENTE (`[workspace]` vacío lo saca del workspace del repo).
+[package]
+name = "json-axum"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

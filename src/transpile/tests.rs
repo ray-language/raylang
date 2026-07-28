@@ -41,6 +41,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "panic", "print", "scope", "select", "send", "signals", "spawn", "to_string",
     // H21-N2: `__task_failed` (el primitivo tras `try_join`) YA está portado (sobre `wait()` de N1).
     "__task_failed",
+    // M97.2: `__try_call` (el primitivo tras `try_call`) → `catch_unwind` en el MISMO hilo.
+    "__try_call",
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que

@@ -1,0 +1,8 @@
+[package]
+name = "json-ray"
+version = "0.1.0"
+entry = "main.ray"
+
+[dependencies]
+web = "path:../../../../packages/web"
+net = "path:../../../../packages/net"

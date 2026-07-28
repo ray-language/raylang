@@ -2,7 +2,12 @@
 plaintext/ray/plaintext-ray
 plaintext/go/plaintext-go
 plaintext/hyper/target/
+json/ray/json-ray
+json/chi/json-chi
+json/axum/target/
+json/express/node_modules/
 __pycache__/
 
-# Cargo.lock del proyecto de hyper SÍ se commitea: fija la versión exacta de hyper/tokio con
-# la que se midió. Un baseline que cambia de dependencias entre sesiones no es un baseline.
+# Los lockfiles SÍ se commitean (Cargo.lock, go.sum, package-lock.json): fijan las versiones
+# exactas de hyper/axum/chi/express con las que se midió. Un baseline que cambia de dependencias
+# entre sesiones no es un baseline.

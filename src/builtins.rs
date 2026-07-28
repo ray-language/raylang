@@ -1937,6 +1937,17 @@ static BUILTINS: &[Builtin] = &[
     // __task_failed(t) -> [string] (M56.5): bloquea hasta que la tarea termine; [] si acabó bien,
     // [msg] si falló. El fallo como valor (sin re-lanzar, a diferencia de join); el prelude lo
     // envuelve en try_join(t) -> Result<T, string>.
+    // M97.2: llama a la closure en la MISMA fibra y devuelve `[]` (bien) o `[msg]` (falló). El
+    // valor de retorno NO viaja por aquí: el prelude pasa una closure que empuja el resultado a un
+    // array capturado, así este primitivo se queda con la firma mínima (`fn()` → `[string]`) y no
+    // necesita construir un enum genérico desde el runtime.
+    Builtin { name: "__try_call", opcode: OpCode::TryCall, check: |a| {
+        arity(a, 1, "__try_call", " (one function of no arguments)")?;
+        match &a[0] {
+            Type::Fn(params, _) if params.is_empty() => Ok(Type::Array(Box::new(Type::String))),
+            other => Err((Some(0), format!("__try_call expects a function of no arguments, not {}", other))),
+        }
+    } },
     Builtin { name: "__task_failed", opcode: OpCode::TaskFailed, check: |a| {
         arity(a, 1, "__task_failed", " (one Task)")?;
         match &a[0] {

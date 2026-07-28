@@ -1141,6 +1141,25 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 write!(out, ").wait_consume() {{ Ok(__rt_v) => Ok({}), Err(__rt_m) => Err(Rc::<str>::from(__rt_m)) }}", okconv).unwrap();
             }
+            // M97.2: __try_call(f) → [string] (el primitivo del prelude): [] si `f` volvió bien,
+            // [msg] si falló. En nativo es `catch_unwind` en el MISMO hilo — sin `spawn`, que es
+            // justo el punto (docs/investigacion-p999-webserver-nativo.md). `__ray_rt_err` ya
+            // panica con el payload `__RayErr`, así que no hay nada que cambiar en el lado del
+            // error: solo hay que interceptar el unwind antes de que llegue al `main`.
+            // `AssertUnwindSafe` es la misma decisión que ya toma el `catch_unwind` de `main`, y el
+            // sharp edge (recuperar con estado a medio mutar) está documentado en el prelude.
+            // Los paréntesis alrededor del argumento NO son decorativos: una closure emite como un
+            // BLOQUE que produce un `Rc<dyn Fn() -> ()>` (`{ let x = x.clone(); Rc::new(move || …) }`),
+            // y `bloque()` no es una llamada válida en Rust — hace falta `(bloque)()`.
+            // La guarda sobre el nombre COMPLETO es necesaria: `method` ya viene con el prefijo `__`
+            // recortado, así que sin ella este brazo taparía también al envoltorio `try_call` del
+            // prelude — y ese sí queremos que transpile como raylang normal (es quien arma el
+            // `Result`), no que lo reimplemente el backend.
+            "try_call" if name == "__try_call" => {
+                out.push_str("__ray_try_call(|| (");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(")())");
+            }
             // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
             // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
             "__task_failed" => {

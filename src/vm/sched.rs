@@ -27,6 +27,25 @@ pub(super) struct Fiber {
     /// construcciones de la misma variante vacía comparten un solo objeto del heap (antes:
     /// una asignación POR construcción — en binary-trees, 2 `None` por hoja). Raíz del GC.
     pub(super) unit_enums: crate::gc::MapStore2,
+    /// M97.2: pila de marcadores de `try_call` activos en esta fibra. Cada `TryCall` empuja uno con
+    /// la altura de marcos y de pila de operandos ANTES de la llamada; al fallar, el error se
+    /// desenrolla hasta el más interno en vez de tumbar la fibra. Anidan (un `try_call` dentro de
+    /// otro) porque es una pila, y son POR FIBRA: un `spawn` dentro de un `try_call` no hereda el
+    /// marcador (su fallo lo captura su `Task`, como siempre).
+    pub(super) try_markers: Vec<TryMarker>,
+}
+
+/// Un `try_call` en vuelo (M97.2): a dónde volver si su cuerpo falla.
+pub(super) struct TryMarker {
+    /// `frames.len()` en el momento del `TryCall`. Al volver bien, el `Return` que devuelve los
+    /// marcos a esta altura es el del cuerpo protegido; al fallar, se truncan hasta aquí.
+    pub(super) frames_len: usize,
+    /// Altura de la pila de operandos tras sacar la closure. El resultado (`[]` o `[msg]`) se
+    /// empuja sobre esta altura, así el llamador ve exactamente un valor, falle o no.
+    pub(super) stack_len: usize,
+    /// Nº de scopes activos al entrar. Un `scope` abierto dentro del cuerpo que falla no puede
+    /// quedar huérfano en la pila de la fibra: se cierran hasta esta altura al desenrollar.
+    pub(super) scopes_len: usize,
 }
 
 /// Un scope activo (M12.3): la lista de tareas lanzadas mientras estuvo en la cima de la pila de la
@@ -405,6 +424,48 @@ impl<'a> Vm<'a> {
     /// Una fibra hija **falló** (M12.3): guarda el fallo en su `Task` como `Failed`, despierta a los que la
     /// unen (que lo re-lanzarán) y planifica la siguiente. El error solo se pierde si la tarea no la une
     /// nadie ni la posee un `scope`. M38.3b paso 3: método `&mut self` (park bajo guard + `poll_next`).
+    /// M97.2: desenrolla el fallo `e` hasta el `try_call` más interno y deja `[msg]` en la pila de
+    /// operandos, en vez de tumbar la fibra. El llamador reanuda justo tras el `TryCall` (el `ip`
+    /// del marco que lo ejecutó ya apunta después, porque el avance ocurre antes de ejecutar).
+    ///
+    /// Es el hermano de `fail_current_fiber` para un tramo acotado: misma disciplina con las tareas
+    /// huérfanas (un `scope` abierto dentro del cuerpo que falló cancela sus hijas) y mismo trato
+    /// del mensaje (viaja SIN traza ni posición; quien lo observe pone la suya).
+    pub(super) fn unwind_to_try_marker(&mut self, e: RuntimeError) {
+        let m = self
+            .cur
+            .try_markers
+            .pop()
+            .expect("the caller checks there is a marker");
+        // Los marcos del tramo abortado se descartan reciclando sus locales, como hace `Return`:
+        // sin esto el pool de locales (Opt.2) los perdería en cada recuperación.
+        while self.cur.frames.len() > m.frames_len {
+            if let Some(f) = self.cur.frames.pop() {
+                self.recycle_locals(f.locals);
+            }
+        }
+        // Scopes abiertos dentro del cuerpo que falló: sus hijas no pueden quedar huérfanas.
+        if self.cur.scopes.len() > m.scopes_len {
+            let orphans: Vec<usize> = self.cur.scopes[m.scopes_len..]
+                .iter()
+                .flat_map(|s| s.children.iter().copied())
+                .collect();
+            self.cur.scopes.truncate(m.scopes_len);
+            if !orphans.is_empty() {
+                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                for c in orphans {
+                    Self::cancel_task(&mut sh, c);
+                }
+            }
+        }
+        self.cur.stack.truncate(m.stack_len);
+        let arr = self
+            .cur
+            .heap
+            .allocate(crate::gc::Obj::Array(vec![HeapValue::Str(e.msg)]));
+        self.push(HeapValue::Obj(arr));
+    }
+
     pub(super) fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {
         {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");

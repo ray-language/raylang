@@ -4,8 +4,9 @@
 // categoría de TechEmpower, el mínimo común denominador que todas las implementaciones del
 // banco sirven byte a byte igual (lo verifica `webbench.py` antes de medir).
 //
-// El puerto llega por argumento (`args()[0]`) porque el arnés asigna uno distinto a cada
-// implementación: así puede levantarlas en paralelo sin colisiones ni esperas de TIME_WAIT.
+// El host y el puerto llegan por argumento porque el arnés asigna un puerto distinto a cada
+// implementación (las levanta en paralelo sin colisiones ni esperas de TIME_WAIT) y, cuando el
+// generador de carga vive en otra máquina, necesita bindear a una IP alcanzable desde ella.
 import net/webserver;
 
 fn handle(req: webserver.Request) -> webserver.Response {
@@ -16,18 +17,19 @@ fn handle(req: webserver.Request) -> webserver.Response {
 
 fn main() -> int {
     let argv: [string] = args();
-    if (argv.len() < 1) {
-        eprint("uso: plaintext-ray <puerto>");
+    if (argv.len() < 2) {
+        eprint("uso: plaintext-ray <host> <puerto>");
         return 2;
     }
-    let port: int = match (argv[0].parse_int()) {
+    let host: string = argv[0];
+    let port: int = match (argv[1].parse_int()) {
         Option.Some(p) => p,
         Option.None => {
-            eprint("puerto inválido: " + argv[0]);
+            eprint("puerto inválido: " + argv[1]);
             return 2;
         },
     };
-    match (webserver.serve("127.0.0.1", port, handle)) {
+    match (webserver.serve(host, port, handle)) {
         Result.Ok(_) => 0,
         Result.Err(e) => {
             eprint("serve: " + e);

@@ -365,7 +365,9 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
     out.push_str("        if getrlimit(NOFILE, &mut r) == 0 { let o = r.max.min(cap); if o > r.cur { let n = RL { cur: o, max: r.max }; let _ = setrlimit(NOFILE, &n); } }\n");
     out.push_str("    }\n");
     out.push_str("    let __rt_hook = std::panic::take_hook();\n");
-    out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() { __rt_hook(i); } }));\n");
+    // M97.2: el hook también calla dentro de un `try_call` — el fallo se va a convertir en valor,
+    // así que imprimir "thread panicked at …" sería ruido que la VM no emite.
+    out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() && !__ray_in_try() { __rt_hook(i); } }));\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
     if main_ret_int {
         out.push_str("        Ok(code) => { __ray_flush_prints(); std::process::exit(code as i32) },\n");

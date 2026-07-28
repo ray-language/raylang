@@ -29,12 +29,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Motivo por el que una fibra devuelve el control al scheduler.
+/// Motivo por el que una fibra devuelve el control al scheduler. Los parks de E/S llevan un
+/// deadline OPCIONAL (M56.4 del lado nativo: el timeout de lectura de un socket no-bloqueante no
+/// puede ser SO_RCVTIMEO — vive en el park, como el `read_deadline` de la VM); al reanudar, la
+/// fibra recibe un `bool`: ¿despertó por VENCIMIENTO (true) o por readiness (false)?
 enum Park {
-    /// Aparca hasta que el fd esté listo para leer.
-    Read(i32),
-    /// Aparca hasta que el fd esté listo para escribir.
-    Write(i32),
+    /// Aparca hasta que el fd esté listo para leer (o venza el deadline).
+    Read(i32, Option<Instant>),
+    /// Aparca hasta que el fd esté listo para escribir (o venza el deadline).
+    Write(i32, Option<Instant>),
     /// Aparca hasta el instante dado (`sleep`).
     SleepUntil(Instant),
     /// Cede el turno y vuelve al final de la cola de listas.
@@ -47,12 +50,18 @@ enum Dir {
     Write,
 }
 
-type FiberCo = Coroutine<(), Park, ()>;
+type FiberCo = Coroutine<bool, Park, ()>;
 
 /// Una fibra en vuelo: la corrutina + la celda donde se publica su resultado.
 struct Task {
     co: FiberCo,
     done: Arc<DoneCell>,
+    /// Almacén FIBER-LOCAL genérico (viaja con la fibra entre workers): el binario transpilado
+    /// guarda aquí su contexto (token de cancelación, pila de scopes, profundidad de try_call),
+    /// que en el modelo de hilos eran thread-locals. Ver `with_local`.
+    local: Option<Box<dyn std::any::Any>>,
+    /// Con qué valor reanudar: ¿el último park despertó por VENCIMIENTO del deadline?
+    timed_out: bool,
 }
 
 // SAFETY: corosensei NO marca `Coroutine` como Send a propósito — una pila suspendida puede contener
@@ -64,6 +73,8 @@ struct Task {
 // (2) AISLAMIENTO (el argumento de M38 en la VM): los valores de una fibra no se comparten con otras
 //     fibras — los contadores `Rc` de su pila solo los toca la fibra dueña, esté en el worker que
 //     esté. Lo que cruza fibras cruza por canales (F3), que imponen su propia sincronización.
+// El slot `local` (Box<dyn Any>, sin cota Send) viaja bajo el MISMO argumento: es estado privado
+// de la fibra, solo accesible mientras ELLA corre (puntero TLS publicado alrededor de resume).
 unsafe impl Send for Task {}
 
 /// Celda de terminación de una fibra: `None` mientras corre; `Ok`/`Err(mensaje del panic)` al acabar.
@@ -90,7 +101,7 @@ impl JoinHandle {
 
 /// Operaciones que los workers encargan al reactor (via buzón + tubería de despertar).
 enum Op {
-    Wait(i32, Dir, Task),
+    Wait(i32, Dir, Option<Instant>, Task),
     Timer(Instant, Task),
 }
 
@@ -164,18 +175,21 @@ thread_local! {
     /// Yielder de la fibra actualmente en ejecución en ESTE worker (nulo fuera de fibra). Puntero
     /// crudo porque el tipo lleva lifetime; ver los SAFETY de `suspend`.
     static CURRENT: Cell<*const ()> = const { Cell::new(std::ptr::null()) };
+    /// Puntero al slot `local` de la Task en resume en ESTE worker (nulo fuera de fibra). Lo
+    /// publica el worker alrededor de cada resume; lo consume `with_local`.
+    static CURRENT_LOCAL: Cell<*mut Option<Box<dyn std::any::Any>>> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 /// Lanza `f` como fibra. Llamable desde cualquier hilo (incluida otra fibra).
 pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
     let done = Arc::new(DoneCell { state: Mutex::new(None), cv: Condvar::new() });
     let stack = DefaultStack::new(fiber_stack_size()).expect("could not map a fiber stack");
-    let co = Coroutine::with_stack(stack, move |y: &Yielder<(), Park>, ()| {
+    let co = Coroutine::with_stack(stack, move |y: &Yielder<bool, Park>, _timed_out: bool| {
         // Prólogo: deja el yielder a mano para la cesión profunda (park desde N marcos más abajo).
-        CURRENT.with(|c| c.set(y as *const Yielder<(), Park> as *const ()));
+        CURRENT.with(|c| c.set(y as *const Yielder<bool, Park> as *const ()));
         f();
     });
-    let task = Task { co, done: done.clone() };
+    let task = Task { co, done: done.clone(), local: None, timed_out: false };
     sched().enqueue(task);
     JoinHandle { done }
 }
@@ -186,26 +200,82 @@ pub fn in_fiber() -> bool {
     CURRENT.with(|c| !c.get().is_null())
 }
 
-/// Cede el control del worker con el motivo dado. Solo dentro de una fibra.
-fn suspend(park: Park) {
+/// Cede el control del worker con el motivo dado. Solo dentro de una fibra. Devuelve `true` si el
+/// despertar fue por VENCIMIENTO del deadline del park (solo posible en parks de E/S con plazo).
+fn suspend(park: Park) -> bool {
     let y = CURRENT.with(|c| c.get());
     assert!(!y.is_null(), "fiber park outside of a fiber");
     // SAFETY: `y` apunta al `Yielder` de la corrutina EN EJECUCIÓN en este hilo: vive en la pila de
     // la corrutina (viva hasta que retorna) y solo lo usa la propia fibra. `suspend` devuelve el
     // control al `resume` del worker; cuando la fibra despierte, la ejecución sigue aquí.
-    unsafe { (*(y as *const Yielder<(), Park>)).suspend(park) };
+    let timed_out = unsafe { (*(y as *const Yielder<bool, Park>)).suspend(park) };
     // Al volver podemos estar en OTRO worker: reponer su TLS (el prólogo solo corre una vez).
     CURRENT.with(|c| c.set(y));
+    timed_out
 }
 
 /// Aparca la fibra hasta que `fd` esté listo para **leer**.
 pub fn park_readable(fd: i32) {
-    suspend(Park::Read(fd));
+    suspend(Park::Read(fd, None));
 }
 
 /// Aparca la fibra hasta que `fd` esté listo para **escribir**.
 pub fn park_writable(fd: i32) {
-    suspend(Park::Write(fd));
+    suspend(Park::Write(fd, None));
+}
+
+/// Espera a que `fd` esté listo para **leer**, desde CUALQUIER contexto: en fibra aparca (park);
+/// fuera de fibra (p. ej. el hilo `main` del binario transpilado) hace un `poll(2)` bloqueante.
+/// Es el helper que usa el runtime emitido con `--fibers` (los sockets son no-bloqueantes SIEMPRE,
+/// también cuando los toca `main`).
+pub fn wait_readable(fd: i32) {
+    if in_fiber() { park_readable(fd) } else { sys_common::poll_block(fd, false, -1); }
+}
+
+/// Como [`wait_readable`], para **escritura**.
+pub fn wait_writable(fd: i32) {
+    if in_fiber() { park_writable(fd) } else { sys_common::poll_block(fd, true, -1); }
+}
+
+/// Como [`wait_readable`], con PLAZO: devuelve `true` si venció sin readiness (`timeout_ms <= 0`
+/// = sin plazo). Es el timeout de lectura de sockets (M56.4) del lado fibras: en un socket
+/// no-bloqueante SO_RCVTIMEO es inerte, así que el plazo vive en el park (como el `read_deadline`
+/// de la VM).
+pub fn wait_readable_timeout(fd: i32, timeout_ms: i64) -> bool {
+    if timeout_ms <= 0 {
+        wait_readable(fd);
+        return false;
+    }
+    if in_fiber() {
+        suspend(Park::Read(fd, Some(Instant::now() + Duration::from_millis(timeout_ms as u64))))
+    } else {
+        let clamped = timeout_ms.min(i32::MAX as i64) as i32;
+        sys_common::poll_block(fd, false, clamped)
+    }
+}
+
+/// Despierta el reactor para que RE-REGISTRE sus intereses. Lo llama el `close` del runtime
+/// emitido: el fd cerrado se re-registra en el siguiente ciclo y kqueue/epoll lo devuelven como
+/// error/listo → la fibra aparcada en él despierta y su syscall reporta el error real (el mismo
+/// papel que cumple el re-poll por ronda del scheduler de la VM).
+pub fn poke() {
+    sys::wake(sched().wake_wr);
+}
+
+/// Acceso al almacén FIBER-LOCAL de la fibra en ejecución: `None` si este hilo no está ejecutando
+/// una fibra ahora mismo (el llamador cae a su thread-local de siempre). El slot es un
+/// `Box<dyn Any>` que el binario transpilado puebla con su contexto (cancelación/scopes/try).
+/// CONTRATO: `f` no debe aparcar la fibra ni llamar a `with_local` anidado (el préstamo exclusivo
+/// del slot vive durante `f`).
+pub fn with_local<R>(f: impl FnOnce(&mut Option<Box<dyn std::any::Any>>) -> R) -> Option<R> {
+    let p = CURRENT_LOCAL.with(|c| c.get());
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: el puntero lo publicó ESTE worker alrededor del resume de la fibra actual (ver
+    // worker_loop) y apunta al slot de esa Task, viva en el marco del worker durante todo el
+    // resume. El contrato de arriba (sin parks ni anidación dentro de `f`) garantiza exclusividad.
+    Some(f(unsafe { &mut *p }))
 }
 
 /// Duerme la fibra (no el worker) `ms` milisegundos.
@@ -244,14 +314,19 @@ fn worker_loop(s: &'static Scheduler) {
                 q = s.runq_cv.wait(q).unwrap();
             }
         };
+        // Publica el slot fiber-local de ESTA task mientras corre (puntero crudo: la Task vive en
+        // este marco durante todo el resume; se retira ANTES de ceder la Task a nadie).
+        CURRENT_LOCAL.with(|c| c.set(&mut task.local as *mut _));
+        let timed_out = std::mem::replace(&mut task.timed_out, false);
         // El catch_unwind delimita el panic de LA FIBRA (corosensei lo propaga a través de resume):
         // se publica como Err en su celda y el worker sigue con la siguiente.
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task.co.resume(())));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task.co.resume(timed_out)));
         CURRENT.with(|c| c.set(std::ptr::null()));
+        CURRENT_LOCAL.with(|c| c.set(std::ptr::null_mut()));
         match r {
             Ok(CoroutineResult::Yield(park)) => match park {
-                Park::Read(fd) => s.to_reactor(Op::Wait(fd, Dir::Read, task)),
-                Park::Write(fd) => s.to_reactor(Op::Wait(fd, Dir::Write, task)),
+                Park::Read(fd, dl) => s.to_reactor(Op::Wait(fd, Dir::Read, dl, task)),
+                Park::Write(fd, dl) => s.to_reactor(Op::Wait(fd, Dir::Write, dl, task)),
                 Park::SleepUntil(at) => s.to_reactor(Op::Timer(at, task)),
                 Park::Yield => s.enqueue(task),
             },
@@ -261,36 +336,74 @@ fn worker_loop(s: &'static Scheduler) {
     }
 }
 
-/// Esperas registradas sobre un fd: fibras aparcadas por lectura y por escritura.
+/// Esperas registradas sobre un fd: fibras aparcadas por lectura y por escritura, cada una con un
+/// id (para casar su temporizador de deadline, si lo tiene).
 #[derive(Default)]
 struct FdWaiters {
-    read: Vec<Task>,
-    write: Vec<Task>,
+    read: Vec<(u64, Task)>,
+    write: Vec<(u64, Task)>,
+}
+
+/// Qué venció: un `sleep` (la fibra viaja dentro) o el DEADLINE de un park de E/S (la fibra hay
+/// que sacarla de `fds` por su id; si ya no está, despertó antes por readiness y esto es ruido).
+enum Due {
+    Sleep(Task),
+    IoDeadline(i32, Dir, u64),
 }
 
 fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
     let poller = sys::Poller::new();
     let mut fds: HashMap<i32, FdWaiters> = HashMap::new();
-    // Temporizadores como Vec con barrido lineal: F1 no espera miles de sleeps simultáneos; si el
-    // bench dice lo contrario, un BinaryHeap es un cambio local.
-    let mut timers: Vec<(Instant, Task)> = Vec::new();
+    // Temporizadores como Vec con barrido lineal: F1/F2 no esperan miles de plazos simultáneos; si
+    // el bench dice lo contrario, un BinaryHeap es un cambio local.
+    let mut timers: Vec<(Instant, Due)> = Vec::new();
+    let mut next_id: u64 = 0;
     loop {
         // 1) Drena el buzón de los workers.
         for op in std::mem::take(&mut *s.inbox.lock().unwrap()) {
             match op {
-                Op::Wait(fd, Dir::Read, t) => fds.entry(fd).or_default().read.push(t),
-                Op::Wait(fd, Dir::Write, t) => fds.entry(fd).or_default().write.push(t),
-                Op::Timer(at, t) => timers.push((at, t)),
+                Op::Wait(fd, dir, deadline, t) => {
+                    next_id += 1;
+                    let w = fds.entry(fd).or_default();
+                    match dir {
+                        Dir::Read => w.read.push((next_id, t)),
+                        Dir::Write => w.write.push((next_id, t)),
+                    }
+                    if let Some(at) = deadline {
+                        timers.push((at, Due::IoDeadline(fd, dir, next_id)));
+                    }
+                }
+                Op::Timer(at, t) => timers.push((at, Due::Sleep(t))),
             }
         }
-        // 2) Despierta los sleeps vencidos y calcula el timeout hasta el siguiente.
+        // 2) Despierta los vencidos y calcula el timeout hasta el siguiente plazo vivo.
         let now = Instant::now();
         let mut i = 0;
         while i < timers.len() {
-            if timers[i].0 <= now {
-                s.enqueue(timers.swap_remove(i).1);
-            } else {
+            if timers[i].0 > now {
                 i += 1;
+                continue;
+            }
+            match timers.swap_remove(i).1 {
+                Due::Sleep(t) => s.enqueue(t),
+                Due::IoDeadline(fd, dir, id) => {
+                    // Si el waiter sigue aparcado, venció de verdad: despierta con timed_out.
+                    // Si ya no está, el readiness ganó la carrera y este timer es ruido inocuo.
+                    if let Some(w) = fds.get_mut(&fd) {
+                        let v = match dir {
+                            Dir::Read => &mut w.read,
+                            Dir::Write => &mut w.write,
+                        };
+                        if let Some(pos) = v.iter().position(|(wid, _)| *wid == id) {
+                            let (_, mut t) = v.swap_remove(pos);
+                            t.timed_out = true;
+                            s.enqueue(t);
+                        }
+                        if w.read.is_empty() && w.write.is_empty() {
+                            fds.remove(&fd);
+                        }
+                    }
+                }
             }
         }
         let timeout_ms: i32 = match timers.iter().map(|(at, _)| *at).min() {
@@ -302,7 +415,9 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
         let write_fds: Vec<i32> = fds.iter().filter(|(_, w)| !w.write.is_empty()).map(|(&fd, _)| fd).collect();
         let ready = poller.wait(wake_rd, &read_fds, &write_fds, timeout_ms);
         // 4) Reencola las fibras de los fds listos. Si varias esperaban el mismo (fd, dirección),
-        //    despiertan todas y las no atendidas se re-aparcan solas: siempre hay progreso.
+        //    despiertan todas y las no atendidas se re-aparcan solas: siempre hay progreso. Sus
+        //    timers de deadline quedan huérfanos y se descartan solos al vencer (no encuentran
+        //    su id en `fds`).
         for (fd, dir) in ready {
             if fd == wake_rd {
                 sys::drain(wake_rd);
@@ -313,12 +428,71 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
                     Dir::Read => std::mem::take(&mut w.read),
                     Dir::Write => std::mem::take(&mut w.write),
                 };
-                for t in woken {
+                for (_, t) in woken {
                     s.enqueue(t);
                 }
                 if w.read.is_empty() && w.write.is_empty() {
                     fds.remove(&fd);
                 }
+            }
+        }
+    }
+}
+
+// ─── poll(2) bloqueante para hilos NO-fibra (el `main` del binario transpilado) ─────────────────
+//
+// Con `--fibers` los sockets son no-bloqueantes SIEMPRE; cuando los toca un hilo que no es fibra
+// (main), la espera es un poll(2) clásico de un solo fd. Común a macOS y Linux (mismos valores de
+// POLLIN/POLLOUT; solo difiere el tipo de `nfds`).
+mod sys_common {
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    const POLLIN: i16 = 0x0001;
+    const POLLOUT: i16 = 0x0004;
+    const EINTR: i32 = 4;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    type Nfds = u64;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    type Nfds = u32;
+
+    unsafe extern "C" {
+        fn poll(fds: *mut PollFd, n: Nfds, timeout: i32) -> i32;
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    unsafe extern "C" {
+        #[link_name = "__errno_location"]
+        fn errno_ptr() -> *mut i32;
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    unsafe extern "C" {
+        #[link_name = "__error"]
+        fn errno_ptr() -> *mut i32;
+    }
+
+    /// Espera bloqueante a que `fd` esté listo (lectura o escritura). Devuelve `true` si VENCIÓ el
+    /// timeout sin readiness (`timeout_ms < 0` = sin plazo, siempre `false`). EINTR reintenta; otro
+    /// error devuelve `false` de inmediato: el llamador hará su syscall y verá el error real.
+    pub(super) fn poll_block(fd: i32, want_write: bool, timeout_ms: i32) -> bool {
+        let mut p = PollFd { fd, events: if want_write { POLLOUT } else { POLLIN }, revents: 0 };
+        loop {
+            // SAFETY: `poll` de libc sobre un array local de 1 entrada, vivo durante la llamada;
+            // errno_ptr es el errno del hilo (__error/__errno_location, siempre válido).
+            let n = unsafe { poll(&mut p as *mut PollFd, 1, timeout_ms) };
+            if n > 0 {
+                return false; // listo (o error del fd: la syscall del llamador lo reporta)
+            }
+            if n == 0 {
+                return true; // venció el plazo
+            }
+            if unsafe { *errno_ptr() } != EINTR {
+                return false; // error no transitorio: que la syscall del llamador lo vea
             }
         }
     }
@@ -779,6 +953,81 @@ mod tests {
             h.join().expect("la fibra durmiente termina");
         }
         assert_eq!(*order.lock().unwrap(), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn a_read_park_with_deadline_times_out_on_a_silent_socket() {
+        // Un socket sin datos + plazo de 30 ms → despierta con timed_out=true (el "read timeout"
+        // de M56.4 del lado fibras). Después llegan datos con plazo holgado → false y lee.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let h = spawn(move || {
+            let (mut server_side, _) = listener.accept().expect("accept"); // bloqueante: test corto
+            let client_started = Instant::now();
+            server_side.set_nonblocking(true).expect("nonblocking");
+            let fd = server_side.as_raw_fd();
+            assert!(wait_readable_timeout(fd, 30), "sin datos: vence el plazo");
+            assert!(client_started.elapsed() >= Duration::from_millis(25), "no antes de tiempo");
+            // El cliente escribe a los ~60 ms (ver abajo): ahora el plazo holgado NO vence.
+            assert!(!wait_readable_timeout(fd, 5_000), "con datos en camino: readiness gana");
+            let mut buf = [0u8; 4];
+            let n = server_side.read(&mut buf).expect("lee tras readiness");
+            assert_eq!(&buf[..n], b"ping");
+        });
+        let mut client = TcpStream::connect(addr).expect("connect");
+        std::thread::sleep(Duration::from_millis(60));
+        client.write_all(b"ping").expect("write");
+        h.join().expect("la fibra del test termina");
+    }
+
+    #[test]
+    fn the_fiber_local_slot_travels_with_the_fiber_across_parks() {
+        // El slot fiber-local sobrevive a parks (que pueden reanudar en OTRO worker) y es privado
+        // por fibra: N fibras escriben su marca, ceden varias veces, y cada una relee LA SUYA.
+        let handles: Vec<_> = (0..50)
+            .map(|i: usize| {
+                spawn(move || {
+                    with_local(|slot| *slot = Some(Box::new(i))).expect("en fibra hay slot");
+                    for _ in 0..5 {
+                        yield_now();
+                        let got = with_local(|slot| {
+                            *slot.as_ref().expect("sigue poblado").downcast_ref::<usize>().expect("mi tipo")
+                        })
+                        .expect("en fibra hay slot");
+                        assert_eq!(got, i, "el slot es de ESTA fibra");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("la fibra termina");
+        }
+        // Fuera de fibra no hay slot: el llamador cae a su thread-local.
+        assert!(with_local(|_| ()).is_none());
+    }
+
+    #[test]
+    fn wait_readable_blocks_a_plain_thread_until_data_arrives() {
+        // La vía NO-fibra de wait_readable (poll(2) bloqueante): el hilo del test espera datos de
+        // una fibra sin estar él mismo en el scheduler.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let _writer = spawn(move || {
+            let mut s = TcpStream::connect(addr).expect("connect");
+            fiber_sleep(40);
+            s.write_all(b"late").expect("write");
+            // mantiene el socket vivo hasta que el lector termine
+            fiber_sleep(200);
+        });
+        let (mut conn, _) = listener.accept().expect("accept");
+        conn.set_nonblocking(true).expect("nonblocking");
+        let t0 = Instant::now();
+        wait_readable(conn.as_raw_fd());
+        assert!(t0.elapsed() >= Duration::from_millis(20), "esperó de verdad");
+        let mut buf = [0u8; 4];
+        assert_eq!(conn.read(&mut buf).expect("lee"), 4);
+        // timeout vencido en la vía no-fibra:
+        assert!(wait_readable_timeout(conn.as_raw_fd(), 30), "sin más datos: vence");
     }
 
     #[test]

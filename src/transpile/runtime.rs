@@ -312,8 +312,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // pila, y costaba por partida doble: (1) Rust lo inicializa a cero, así que cada hilo TOCABA
         // las 16 páginas enteras en su primer `read` → residentes para siempre (~45 KB/conexión
         // medidos: 59→50 MB de RSS a -c 200); (2) hundía la pila 64 KiB, lo que fijaba un suelo de
-        // ~56 KiB de pila por conexión. Con el búfer fuera, el servidor sobrevive con pilas de 8 KiB
-        // (medido), que es el dato que faltaba para dimensionar corrutinas de pila propia.
+        // ~56 KiB de pila por conexión. Con el búfer fuera, el servidor sobrevive con la pila mínima
+        // que macOS concede (pedida de 8 KiB, concedida de 28; la pila realmente tocada queda acotada
+        // en 4-12 KiB por la bisección), que es el dato que faltaba para dimensionar corrutinas de
+        // pila propia (docs/diseno-concurrencia-nativa.md §3c).
         // No es reentrante a propósito: no hay `socket_read` anidado dentro de otro en el mismo hilo.
         out.push_str("thread_local! { static __RAY_RDBUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 65536]); }\n");
         write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();

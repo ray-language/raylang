@@ -153,22 +153,49 @@ dentro de `__ray_socket_read`/`_read_bytes`. Cobraba dos veces:
 Moverlo a un `thread_local!` (commit aparte, `perf(native)`) da un **beneficio inmediato en el modelo
 actual**, A/B intercalado y reproducible al MB: **c=200 → 59-50 MB (−15 %)**, **c=1000 → 285-239 MB
 (−16 %, o sea −46 KB por conexión)**, con el caudal igual o algo mejor. Y para el arco deja lo que
-importa: **con el búfer fuera, el servidor funciona con pilas de 8 KiB**.
+importa: **con el búfer fuera, el servidor funciona con las pilas más pequeñas que macOS concede**
+(pedidas de 8 KiB; concedidas de 28, ver la auditoría de abajo).
 
-**Conclusión para (B): la pila tocada por una conexión de `net/webserver` es ≤ 8 KiB** — por debajo
-del mínimo que `pthread` sabe dar, así que la medición no puede afinar más y no hace falta. La
-estimación de 32-64 KiB del §2 era **pesimista por un factor de 4 a 8**.
+**Auditoría de esta medición (corrige la primera versión de este apartado).** El "sobrevive a
+8 KiB" no puede tomarse literal: se midió con `pthread_get_stacksize_np` qué concede macOS de
+verdad, y **pedir 8 KiB concede 28 KiB** (Rust añade reserva para TLS y macOS redondea a páginas de
+**16 KiB** — Apple Silicon). Así que la prueba "después" solo demuestra tocado < 28 KiB. La cota
+fina la da la **bisección de antes**: con el búfer de 64 KiB en la pila, 48 KiB pedidos
+(≈68 concedidos) desbordan y 56 (≈76) sobreviven → la pila tocada sin el búfer está **entre ~4 y
+~12 KiB**. En una máquina de páginas de 16 KiB eso es **una página residente por pila**; en Linux
+(páginas de 4 KiB), 1-3 páginas.
+
+La cifra exacta importa menos de lo que parece: con pilas `mmap`-eadas y página de guarda, la
+**reserva** virtual es gratis (solo cuentan las páginas tocadas), así que las corrutinas pueden
+reservar 64-128 KiB con seguridad y pagar solo la página que toquen. El número no es de seguridad,
+es de estimación de RSS.
 
 ### Lo que el prototipo sintético todavía aportaría: nada
 
 Ya **no** hace falta para saber si el modelo de fibras baja la memoria (medido: 11.5×) ni para
-dimensionar la pila de una corrutina (medido: ≤ 8 KiB). Los dos números que el prototipo iba a
-estimar están medidos sobre el código real, que es mejor evidencia de la que el prototipo habría
-dado. **Se descarta.**
+dimensionar la pila de una corrutina (medido: 4-12 KiB tocados, ~1 página). Los dos números que el
+prototipo iba a estimar están medidos sobre el código real, que es mejor evidencia de la que el
+prototipo habría dado. **Se descarta.**
 
-Estimación resultante para (B): **~23 KB (estado por fibra, medido en la VM) + ≤ 8 KiB de pila
-≈ 30 KB por conexión.** 10 000 conexiones pasarían de ~2.6 GB y 10 000 hilos a **~300 MB y un puñado
-de hilos**.
+Estimación resultante para (B): **~23 KB (estado por fibra, medido en la VM) + 1 página de pila
+tocada (16 KiB en macOS, 4-12 KiB en Linux) ≈ 30-40 KB por conexión.** 10 000 conexiones pasarían de
+~2.6 GB y 10 000 hilos a **~300-400 MB y un puñado de hilos**.
+
+### Verificación 2×2: los dos ahorros conocidos son aditivos (misma sesión, A/B intercalado)
+
+| RSS a `-c 1000` | con mimalloc | `--without mimalloc` |
+|---|---|---|
+| búfer en la pila (antes) | 285 MB (×3 idénticos) | ~209 MB (195-212) |
+| búfer thread-local (después) | **239 MB** (×3 idénticos) | **~147 MB** (141-157) |
+
+Aditividad: 285 − 46 (búfer) − 76 (mimalloc) = 163 esperados contra ~147 medidos — consistente
+dentro del ruido (el asignador del sistema es notablemente más ruidoso que mimalloc, que reproduce
+al MB). El caudal no paga: la variante slim además rinde ~2 % más aquí. Dos avisos de honestidad
+metodológica: (1) los **absolutos** entre sesiones bailan (el "antes" de hoy da 285 MB donde la
+investigación midió 268; el ahorro de mimalloc da hoy −76 KB/conexión donde aquella midió −128) —
+solo el A/B intercalado de la misma sesión es concluyente, y las conclusiones de este documento se
+apoyan en esos; (2) todo esto está medido sobre `plaintext`, el handler más simple — código de
+usuario más profundo tocará más pila, lo que refuerza usar reserva generosa con página de guarda.
 
 ## 4. Recomendación
 

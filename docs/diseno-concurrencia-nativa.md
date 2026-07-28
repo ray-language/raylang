@@ -99,6 +99,51 @@ quien lo fija cuando hace falta.
 Esta distinción rebaja mucho el listón: no hay que replicar el scheduler de la VM, hay que **no
 romper el nivel 1 y mantener verde el corpus**.
 
+## 3b. El objetivo, MEDIDO (no estimado): la VM ya corre el modelo destino
+
+Antes de construir un prototipo sintético conviene notar que **el modelo objetivo ya existe y se
+puede medir**: la VM ejecuta el MISMO `net/webserver` sobre fibras y `poll.rs`. Mismo programa,
+misma carga, loopback:
+
+| a `-c 1000` | hilos de SO | RSS | por conexión | rps |
+|---|---|---|---|---|
+| nativo (hilo por conexión) | **1002** | **268 MB** | **265 KB** | ~145 000 |
+| **VM (fibras + `poll.rs`)** | **13** | **40 MB** | **23 KB** | ~59 000 |
+| Go `net/http` (referencia) | 17 | 49 MB | — | ~132 000 |
+
+(VM: 19 MB a `-c 100` → 40 MB a `-c 1000`, pendiente de 23 KB/conexión; hilos **constantes** en 13,
+independientes del número de conexiones.)
+
+**Dos correcciones a lo escrito arriba, ambas a peor para mí:**
+
+1. **La estimación de 32-64 KiB por conexión era pesimista.** El modelo de fibras, en el código
+   raylang real, cuesta **23 KB** por conexión. El objetivo no es una conjetura: está medido.
+2. **La descomposición del §6.1b estaba mal interpretada.** Se dijo que los ~137 KB/conexión que
+   quedaban al quitar mimalloc eran "estado raylang irreducible (heap por fibra + búferes)". Falso:
+   la VM tiene ese mismo estado por conexión y le cuesta 23 KB. O sea que **~91 % de los 265 KB del
+   nativo son atribuibles al HILO** (arena de mimalloc, cachés por hilo del asignador del sistema,
+   contabilidad del SO), no al modelo de datos de raylang.
+
+Eso refuerza el arco: quitar el hilo no ahorra "algo", ahorra **casi todo** — y el destino ya bate a
+Go en memoria (40 MB contra 49) con **13 hilos constantes** en vez de 1002 crecientes.
+
+**La contrapartida, también medida**: la VM sostiene ~59k rps donde el nativo hace ~145k. Pero ese
+2.5× es sobre todo el coste de **interpretar bytecode**, no del modelo de fibras — son dos cosas
+distintas que esta medición no separa. El arco busca justamente quedarse con el modelo de memoria de
+la VM y el rendimiento del nativo.
+
+### Lo que el prototipo sintético todavía aportaría (y lo que ya no)
+
+Ya **no** hace falta para saber si el modelo de fibras baja la memoria: está medido, 11.5×. Queda
+una sola incógnita propia de la opción (B): **cuánta pila TOCA de verdad una corrutina**, que es lo
+que se sumaría a esos 23 KB. Hay una forma barata de acotarlo sin escribir corrutinas: bajar la pila
+de los hilos actuales a 32 KiB y 16 KiB y ver a partir de qué tamaño el binario revienta — eso da
+directamente cuánta pila usa el código de `net/webserver`. Con la hipótesis 1 ya se probó que a
+128 KiB funciona sin cambiar el RSS, así que el techo está por debajo de eso.
+
+Estimación resultante para (B): **~23 KB + pila tocada**, probablemente 30-40 KB por conexión. 10 000
+conexiones pasarían de ~2.6 GB y 10 000 hilos a ~300-400 MB y un puñado de hilos.
+
 ## 4. Recomendación
 
 **(B), corrutinas con pila propia**, y no (A), invirtiendo lo que dije antes de mirar el código.

@@ -34,6 +34,12 @@ mimalloc = ["dep:mimalloc"]
 # Medido: wordcount −8.5% adicional sobre mimalloc. Como `mimalloc`, no se detecta por uso: POR DEFECTO,
 # escape `--without ahash`. La resistencia a hash-flooding se conserva (RandomState con RNG de runtime).
 ahash = ["dep:ahash"]
+# F1 (arco de concurrencia nativa, jul 2026 — docs/diseno-concurrencia-nativa.md): scheduler M:N de
+# FIBRAS para el binario transpilado (corrutinas de pila propia con corosensei + reactor kqueue/epoll),
+# sustituto del hilo-por-conexión (medido: 1002 hilos / ~265 KB/conexión a -c 1000, contra 13 hilos /
+# 23 KB del mismo modelo en la VM). corosensei y no `asm!` propio: el unsafe de cambio de contexto es
+# la clase de código donde un error es corrupción de memoria silenciosa, no una excepción.
+fibers = ["dep:corosensei"]
 # R5 (bench regex, jul 2026): motor de regex ACELERADO del binario transpilado (crate `regex`,
 # la liga de Rust: ~27 ms donde la Pike VM transpilada tarda ~580 ms). Detectada POR USO (import
 # std/regex ejecutado), como crypto/tls/sqlite. `--without regex` NO stubbea: el fallback es la
@@ -58,3 +64,6 @@ mimalloc = { version = "0.1", optional = true }
 ahash = { version = "0.8", optional = true }
 # R5 — regex 1.x: el motor de producción de Rust (NFA/DFA híbrido, literal optimizations).
 regex = { version = "1", optional = true }
+# F1 — corosensei 0.2: corrutinas de pila propia (aarch64+x86_64, macOS/Linux/Windows), pila mmap con
+# página de guarda. El cambio de contexto en asm auditado de un solo crate, sin arrastre transitivo.
+corosensei = { version = "0.2", optional = true }

@@ -253,6 +253,46 @@ funciona, y Go y Rust lo cruzan sin enterarse.
 Duele además en el activo que el proyecto sí presume: la huella de memoria (arco M98; arranque
 nativo 1.5 MB, la mejor de la mesa). Aquí son 5.5× la de Go.
 
+### 6.1b De dónde salen esos 265 KB por conexión (28 jul 2026)
+
+Antes de comprometer un arco caro conviene saber qué compone la memoria. Dos experimentos baratos,
+los dos a `-c 1000` (en loopback: aquí solo importan hilos y RSS, no la latencia).
+
+**Hipótesis 1 — "es la pila de cada hilo": FALSADA.** El default de Rust son 2 MiB por hilo; se
+compiló el mismo programa con 2 MiB, 512 KiB y 128 KiB:
+
+| pila por worker | hilos | RSS |
+|---|---|---|
+| 2 MiB (default) | 1002 | 268 MB |
+| 512 KiB | 1002 | 268 MB |
+| 128 KiB | 1002 | 268 MB |
+
+**Cero diferencia**, y tiene sentido: la pila se *reserva* como memoria virtual y en RSS solo
+cuentan las páginas realmente tocadas; estos hilos apenas bajan unos marcos. Reducirla no habría
+ahorrado nada y habría añadido riesgo de desbordamiento en programas recursivos. Descartada, sin
+dejar código.
+
+**Hipótesis 2 — "son las arenas por hilo de mimalloc": CONFIRMADA A MEDIAS.**
+
+| | `-c 100` | `-c 1000` | por conexión |
+|---|---|---|---|
+| con mimalloc (el default) | 29 MB | 268 MB | **265 KB** |
+| sin mimalloc (`--without mimalloc`) | 49 MB | 172 MB | **137 KB** |
+
+mimalloc explica **~128 KB de los 265**, casi la mitad: da una arena por hilo, y aquí hay un hilo
+por conexión. Los otros ~137 KB son estado propio de raylang por conexión (el heap por fibra del
+modelo de actores, más los búferes de lectura de `net/webserver`).
+
+Aparece además un matiz que el default no contempla: **mimalloc es mejor en huella base y peor al
+escalar en conexiones** — ahorra 20 MB a `-c 100` y cuesta 96 MB a `-c 1000`; el cruce cae sobre las
+~250 conexiones. Para un programa normal el default es correcto; para un servidor con muchas
+conexiones simultáneas, no. No se cambia (el default sirve al caso común), pero queda registrado que
+`--without mimalloc` es una palanca real para ese perfil.
+
+**Lo que esto le dice al arco**: pasar a fibras no ahorraría solo el hilo — se llevaría también su
+arena, o sea los ~265 KB completos por conexión, dejando únicamente el heap por fibra. El arco
+ataca las dos mitades a la vez, y ese es el argumento cuantitativo que antes no existía.
+
 ### 6.2 El arco, y por qué NO se arranca en esta sesión
 
 El objetivo correcto, con estos datos, **no es "ir más rápido"** —raylang ya gana en throughput y

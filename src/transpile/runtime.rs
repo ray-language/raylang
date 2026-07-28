@@ -222,6 +222,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             fields.push_str(" socks: std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>, rd_to: std::collections::HashMap<i64, i64>,");
             init.push_str(" socks: std::collections::HashMap::new(), rd_to: std::collections::HashMap::new(),");
         }
+        if t.needs_rt_tls {
+            // F4: la caché TLS también viaja con la fibra (mismo motivo que socks: una entrada en
+            // el thread-local de un worker ajeno retendría la sesión viva tras el close), y el
+            // búfer de lectura TLS es del ctx — se SACA con mem::take antes de leer (la lectura
+            // TLS aparca dentro; el préstamo de __RAY_RDBUF no puede cruzar la cesión).
+            fields.push_str(" tls: std::collections::HashMap<i64, Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>>>, tls_buf: Vec<u8>,");
+            init.push_str(" tls: std::collections::HashMap::new(), tls_buf: Vec::new(),");
+        }
         write!(out, "struct __FiberCtx {{{fields} }}\n").unwrap();
         write!(out, "fn __ray_ctx_new() -> __FiberCtx {{ __FiberCtx {{{init} }} }}\n").unwrap();
         out.push_str(concat!(
@@ -281,7 +289,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         } else {
             ""
         };
-        let tls_evict = if t.needs_rt_tls {
+        let tls_evict = if t.needs_rt_tls && t.fibers {
+            "__ray_ctx(|c| { c.tls.remove(&h); }); "
+        } else if t.needs_rt_tls {
             "__RAY_TLS_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
         } else {
             ""
@@ -388,7 +398,19 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // Como la VM: SOLO las variantes `_bytes` despachan a TLS (socket_read/write string dan el error de
         // no-socket sobre un handle TLS). read tiene helper propio (matchea la VM: sin TLS); el `write`
         // compartido cubre write_bytes (el uso real de TLS) → lleva el despacho.
-        let (tls_rdb, tls_wr) = if t.needs_rt_tls {
+        let (tls_rdb, tls_wr) = if t.needs_rt_tls && t.fibers {
+            // F4: la lectura TLS APARCA LA FIBRA dentro de read_wait (dirección por wants_write:
+            // el handshake alterna). El búfer sale del ctx con mem::take (nada de __RAY_RDBUF: su
+            // préstamo no puede cruzar la cesión — otra fibra del MISMO worker lo pediría y
+            // reventaría el RefCell). El MutexGuard de la sesión SÍ cruza el park: es sólido
+            // porque la fibra está FIJADA a su worker (el guard nunca cambia de hilo) y la sesión
+            // es fiber-privada (solo su dueña la toca). Timeout M56.4 desde el ctx (rd_to);
+            // vencido → "read timeout", byte-idéntico a la VM.
+            (
+                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0)); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap(); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all_wait(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+            )
+        } else if t.needs_rt_tls {
             (
                 "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return __RAY_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); match __g.read(&mut buf[..]) { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) } }); } ",
                 "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
@@ -451,21 +473,53 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // UDP: los primitivos devuelven ARREGLOS ETIQUETADOS (bind/send → [\"ok\"/\"err\", ...]; recv →
             // [b\"ok\"/b\"err\", host, port, data]) que los wrappers de raylang (udp.ray) parsean. recv es
             // BLOQUEANTE (con hilos de SO reales; la VM usa no-bloqueante + scheduler → mismo efecto).
-            "fn __ray_udp_bind(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    match std::net::UdpSocket::bind((host, port as u16)) {\n",
-            "        Ok(s) => { let id = __ray_reg_insert(__RayHandle::Udp(s)); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
-            "        Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.to_string())])) } }\n",
-            "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok(), _ => None } }\n",
-            "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let r = match __ray_udp_clone(h) { Some(s) => s.send_to(data, (host, port as u16)).map_err(|e| e.to_string()), None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
-            "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",
-            "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
-            "    match __ray_udp_clone(h) {\n",
-            "        Some(s) => { let mut buf = vec![0u8; 65536]; match s.recv_from(&mut buf) {\n",
-            "            Ok((n, addr)) => { buf.truncate(n); Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(addr.ip().to_string().as_bytes()), Rc::<[u8]>::from(addr.port().to_string().as_bytes()), Rc::<[u8]>::from(&buf[..])])) }\n",
-            "            Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.to_string().as_bytes())])) } }\n",
-            "        None => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"handle {} is not a UDP socket\", h).as_bytes())])) } }\n",
         ));
+        // F4 (--fibers): UDP no-bloqueante — recv_from aparca la FIBRA hasta que haya datagrama
+        // (como la cesión M20.11 de la VM); send_to aparca en el raro buffer-lleno. Sin fibras,
+        // el modelo bloqueante de siempre.
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_udp_bind(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    match std::net::UdpSocket::bind((host, port as u16)) {\n",
+                "        Ok(s) => { let _ = s.set_nonblocking(true); let id = __ray_reg_insert(__RayHandle::Udp(s)); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
+                "        Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.to_string())])) } }\n",
+                "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok(), _ => None } }\n",
+                "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    let r = match __ray_udp_clone(h) { Some(s) => { use std::os::fd::AsRawFd; let fd = s.as_raw_fd(); loop {\n",
+                "        match s.send_to(data, (host, port as u16)) {\n",
+                "            Ok(n) => break Ok(n),\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_writable(fd),\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}\n",
+                "            Err(e) => break Err(e.to_string()) } } }, None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
+                "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",
+                "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+                "    match __ray_udp_clone(h) {\n",
+                "        Some(s) => { use std::os::fd::AsRawFd; let fd = s.as_raw_fd(); let mut buf = vec![0u8; 65536]; loop {\n",
+                "            match s.recv_from(&mut buf) {\n",
+                "                Ok((n, addr)) => { buf.truncate(n); break Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(addr.ip().to_string().as_bytes()), Rc::<[u8]>::from(addr.port().to_string().as_bytes()), Rc::<[u8]>::from(&buf[..])])); }\n",
+                "                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_readable(fd),\n",
+                "                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}\n",
+                "                Err(e) => break Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.to_string().as_bytes())])) } } }\n",
+                "        None => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"handle {} is not a UDP socket\", h).as_bytes())])) } }\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "fn __ray_udp_bind(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    match std::net::UdpSocket::bind((host, port as u16)) {\n",
+                "        Ok(s) => { let id = __ray_reg_insert(__RayHandle::Udp(s)); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
+                "        Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.to_string())])) } }\n",
+                "fn __ray_udp_clone(h: i64) -> Option<std::net::UdpSocket> { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Udp(s)) => s.try_clone().ok(), _ => None } }\n",
+                "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    let r = match __ray_udp_clone(h) { Some(s) => s.send_to(data, (host, port as u16)).map_err(|e| e.to_string()), None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
+                "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",
+                "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+                "    match __ray_udp_clone(h) {\n",
+                "        Some(s) => { let mut buf = vec![0u8; 65536]; match s.recv_from(&mut buf) {\n",
+                "            Ok((n, addr)) => { buf.truncate(n); Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(addr.ip().to_string().as_bytes()), Rc::<[u8]>::from(addr.port().to_string().as_bytes()), Rc::<[u8]>::from(&buf[..])])) }\n",
+                "            Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.to_string().as_bytes())])) } }\n",
+                "        None => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"handle {} is not a UDP socket\", h).as_bytes())])) } }\n",
+            ));
+        }
     }
     // Helpers de TLS (P2.b Paso 1), solo si el programa usa TLS. El binario transpilado hace I/O TLS
     // BLOQUEANTE (hilos reales) vía `ray_runtime::tls` — a diferencia de la VM (no-bloqueante + fibras).
@@ -486,21 +540,57 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // rellenarse perezosa en el primer acceso; así nunca queda una entrada "no es TLS"
             // stale tras un upgrade. Se cachea el resultado POSITIVO y el NEGATIVO (None) — el
             // caso caliente de un programa sin TLS en absoluto es que TODA lectura dé None.
-            "thread_local! { static __RAY_TLS_CACHE: std::cell::RefCell<std::collections::HashMap<i64, Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
-            "fn __ray_tls_get(h: i64) -> Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>> {\n",
-            "    if let Some(v) = __RAY_TLS_CACHE.with(|c| c.borrow().get(&h).cloned()) { return v; }\n",
-            "    let reg = __ray_reg().lock().unwrap();\n",
-            "    let v = match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None };\n",
-            "    drop(reg);\n",
-            "    __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, v.clone()); });\n",
-            "    v\n}\n",
+        ));
+        // F4 (--fibers): la caché "¿es TLS este handle?" viaja en el ctx de la fibra, no en el
+        // hilo (mismo motivo que la caché de sockets: una entrada retenida en un worker ajeno
+        // mantendría la sesión viva tras el close al migrar... aquí no hay migración, pero sí
+        // muerte de la fibra dueña: el ctx cae con ella y la sesión se libera).
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_tls_get(h: i64) -> Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>> {\n",
+                "    if let Some(v) = __ray_ctx(|c| c.tls.get(&h).cloned()) { return v; }\n",
+                "    let reg = __ray_reg().lock().unwrap();\n",
+                "    let v = match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None };\n",
+                "    drop(reg);\n",
+                "    __ray_ctx(|c| { c.tls.insert(h, v.clone()); });\n",
+                "    v\n}\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "thread_local! { static __RAY_TLS_CACHE: std::cell::RefCell<std::collections::HashMap<i64, Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
+                "fn __ray_tls_get(h: i64) -> Option<std::sync::Arc<std::sync::Mutex<ray_runtime::tls::TlsStream>>> {\n",
+                "    if let Some(v) = __RAY_TLS_CACHE.with(|c| c.borrow().get(&h).cloned()) { return v; }\n",
+                "    let reg = __ray_reg().lock().unwrap();\n",
+                "    let v = match reg.open.get(&h) { Some(__RayHandle::Tls(a)) => Some(a.clone()), _ => None };\n",
+                "    drop(reg);\n",
+                "    __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, v.clone()); });\n",
+                "    v\n}\n",
+            ));
+        }
+        out.push_str(concat!(
             "fn __ray_tls_tag_ok(id: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())])) }\n",
             "fn __ray_tls_tag_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(msg)])) }\n",
             "fn __ray_tls_wrap(s: ray_runtime::tls::TlsStream) -> i64 { __ray_reg_insert(__RayHandle::Tls(std::sync::Arc::new(std::sync::Mutex::new(s)))) }\n",
-            "fn __ray_tls_connect(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    match ray_runtime::tls::connect(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
-            "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
+        ));
+        // F4 (--fibers): el socket de connect/connect_h2 nace aquí BLOQUEANTE (en connect_h2 el
+        // handshake eager con complete_io bloquea el worker un instante, acotado) y pasa a
+        // no-bloqueante al insertarse: toda I/O posterior aparca la fibra (read_wait/write_all_wait).
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_tls_connect(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    match ray_runtime::tls::connect(host, port) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
+                "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "fn __ray_tls_connect(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    match ray_runtime::tls::connect(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
+                "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
+            ));
+        }
+        out.push_str(concat!(
             // Saca el TcpStream del handle `h` (debe ser TCP), lo deja fuera del registro y lo devuelve.
             // También lo saca de la caché M96c (M96g): dejó de ser Tcp, una lectura futura no debe
             // reusar el Arc<TcpStream> viejo (aunque hoy nunca se llegaría a consultar: __ray_tls_get,
@@ -527,7 +617,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    match ray_runtime::tls::accept(sock, cert, key) {\n",
             "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
             "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
-            "            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n",
+        ));
+        if t.fibers {
+            out.push_str("            __ray_ctx(|c| { c.tls.insert(h, Some(a)); });\n");
+        } else {
+            out.push_str("            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n");
+        }
+        out.push_str(concat!(
             "            __ray_tls_tag_ok(h) }\n",
             "        Err(e) => __ray_tls_tag_err(e) } }\n",
             "fn __ray_tls_upgrade(h: i64, host: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
@@ -535,7 +631,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    match ray_runtime::tls::upgrade(sock, host) {\n",
             "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
             "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
-            "            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n",
+        ));
+        if t.fibers {
+            out.push_str("            __ray_ctx(|c| { c.tls.insert(h, Some(a)); });\n");
+        } else {
+            out.push_str("            __RAY_TLS_CACHE.with(|c| { c.borrow_mut().insert(h, Some(a)); });\n");
+        }
+        out.push_str(concat!(
             "            __ray_tls_tag_ok(h) }\n",
             "        Err(e) => __ray_tls_tag_err(e) } }\n",
         ));

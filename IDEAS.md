@@ -1843,3 +1843,14 @@ máquina de desarrollo); el cambio es un `const` + su paso como argumento, y lo 
 **(0)** auditoría CLOEXEC (independiente, hacer ya) · **(1)** SIGCHLD por self-pipe sobre M88.1 ·
 **(2)** `run()` + `std/process` en los tres motores con golden VM≡nativo · **(3)** streaming sobre
 canal acotado, solo-VM.
+
+## 54. Carrera de builds nativos concurrentes del MISMO fuente (jul 2026, impacto: BAJO)
+
+Dos `ray build --native` simultáneos del mismo archivo comparten el pkg de la caché Cargo (H14: el
+nombre sale de la ruta canónica) → compiten por `~/.ray/native-cache/<profile>/<pkg>` y uno puede
+copiar el binario mientras el otro lo reemplaza ("could not copy the binary"). Cazada al correr en
+paralelo los dos corpus nativos (plano y `--fibers`), que compilan los mismos ejemplos; los tests
+se serializaron con un mutex (`tests/native_corpus.rs`). El caso real (dos terminales/CI jobs
+compilando el mismo fuente a la vez en una máquina) es raro y el fallo es ruidoso, no silencioso:
+clasificación BAJO. Arreglo natural si se reabre: copiar con nombre temporal + rename atómico, o
+un flock por pkg alrededor del `cargo build` + copia.

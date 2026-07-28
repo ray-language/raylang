@@ -361,3 +361,33 @@ Pendiente del arco: F3 (esperas de fibra por lista — los canales calientes no 
 path del webserver, no mueve este bench), **F4 (TLS/UDP sobre fibras)**, y el DEFAULT: con estos
 números la única razón para no encender `fibers` por defecto es que TLS/UDP siguen bloqueantes →
 primero F4, luego el default.
+
+## 8. F4, EJECUTADA (28 jul 2026) — TLS y UDP sobre fibras: el arco queda completo
+
+Lo que faltaba para que `--fibers` cubra TODA la superficie de red:
+
+- **TLS** (`ray_runtime::tls`): variantes `read_wait`/`write_all_wait` (feature `fibers`) que en
+  `WouldBlock` esperan readiness y reintentan — en fibra APARCAN, fuera hacen poll(2). La
+  **dirección** de la espera sale de la sesión rustls (`wants_write`): el handshake alterna
+  lecturas y escrituras, y aparcar por lectura cuando toca escribir interbloquearía. El timeout de
+  lectura (M56.4) va por el mismo camino y vence con `"read timeout"` byte-idéntico a la VM. Los
+  sockets de `connect`/`connect_h2` pasan a no-bloqueantes al crearse (los de accept/upgrade ya lo
+  eran por F2); el handshake eager de `connect_h2` (ALPN) sigue bloqueante-acotado.
+- **La lectura TLS aparca DENTRO del despacho** → dos reglas nuevas con dientes: el búfer no puede
+  ser `__RAY_RDBUF` (su préstamo no cruza la cesión: otra fibra del MISMO worker lo pediría y
+  reventaría el RefCell) → va en el ctx (`tls_buf`, `mem::take` antes / restaurar después; cero
+  asignaciones en régimen); y el `MutexGuard` de la sesión SÍ cruza el park — sólido SOLO por la
+  fijación (el guard nunca cambia de hilo) y porque la sesión es fiber-privada.
+- **La caché "¿es TLS este handle?" viaja en el ctx** (como la de sockets: el estado por-conexión
+  muere con su fibra dueña, no con un hilo).
+- **UDP**: bind no-bloqueante; `recv_from` aparca la fibra hasta el datagrama (la cesión M20.11 de
+  la VM); `send_to` aparca en el raro búfer-lleno.
+
+Paridad: 9/9 en `native_fibers_cli` (los 2 nuevos: TLS self-talk — handshake+I/O aparcando por
+ambos lados, cliente en main por la vía poll — y ping-pong UDP) y los DOS corpus completos verdes
+(plano y `--fibers`, ahora serializados: compilan los mismos ejemplos contra la misma caché Cargo
+y en paralelo se pisaban el artefacto — carrera preexistente anotada en IDEAS §54).
+
+**Con F4, la única fase restante es F3 (esperas por lista, optimización sin efecto en el bench) y
+la DECISIÓN DE DEFAULT queda desbloqueada**: no queda ninguna superficie de red donde `--fibers`
+se comporte peor que el modelo de hilos.

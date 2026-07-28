@@ -76,7 +76,15 @@ fn the_deterministic_examples_transpile_identically_with_fibers() {
     run_corpus(&["--fibers"]);
 }
 
+/// Los dos corpus (plano y --fibers) compilan LOS MISMOS programas: el pkg de la caché Cargo
+/// compartida (H14) sale de la ruta canónica del fuente, así que dos builds concurrentes del mismo
+/// ejemplo pisan el mismo artefacto (cazado: "could not copy the binary" al correr ambos tests a
+/// la vez). Se serializan aquí. La carrera de fondo (dos `ray build --native` concurrentes del
+/// mismo fuente en una máquina) es preexistente y queda anotada en IDEAS.
+static CORPUS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn run_corpus(extra_flags: &[&str]) {
+    let _serial = CORPUS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if !has_rustc() {
         // En LOCAL el skip es honesto (no todo el mundo tiene rustc a mano). Bajo CI sería un falso
         // verde silencioso — exactamente lo que este corpus existe para impedir → fallo duro.

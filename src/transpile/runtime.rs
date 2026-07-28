@@ -302,14 +302,22 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // compartido cubre write_bytes (el uso real de TLS) → lleva el despacho.
         let (tls_rdb, tls_wr) = if t.needs_rt_tls {
             (
-                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); let mut buf = [0u8; 65536]; return match __g.read(&mut buf) { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return __RAY_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); match __g.read(&mut buf[..]) { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) } }); } ",
                 "if let Some(__t) = __ray_tls_get(h) { let mut __g = __t.lock().unwrap(); return match __g.write_all(bytes) { Ok(()) => Ok(bytes.len() as i64), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
             )
         } else {
             ("", "")
         };
-        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; let mut buf = [0u8; 65536]; match r.read(&mut buf) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
-        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; let mut buf = [0u8; 65536]; match r.read(&mut buf) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}\n").unwrap();
+        // Búfer de lectura por HILO, no por llamada. Antes era `let mut buf = [0u8; 65536]` en la
+        // pila, y costaba por partida doble: (1) Rust lo inicializa a cero, así que cada hilo TOCABA
+        // las 16 páginas enteras en su primer `read` → residentes para siempre (~45 KB/conexión
+        // medidos: 59→50 MB de RSS a -c 200); (2) hundía la pila 64 KiB, lo que fijaba un suelo de
+        // ~56 KiB de pila por conexión. Con el búfer fuera, el servidor sobrevive con pilas de 8 KiB
+        // (medido), que es el dato que faltaba para dimensionar corrutinas de pila propia.
+        // No es reentrante a propósito: no hay `socket_read` anidado dentro de otro en el mismo hilo.
+        out.push_str("thread_local! { static __RAY_RDBUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 65536]); }\n");
+        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
+        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
         write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
         out.push_str(concat!(
             "fn __ray_local_port(h: i64) -> i64 {\n",

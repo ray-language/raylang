@@ -215,44 +215,39 @@ puede alcanzar loopback.
 
 ## Resultado con generador remoto (27 jul 2026)
 
-Servidor M3 Pro (11 cores) ↔ generador M4 (12 cores) por Thunderbolt bridge; escalera por
-defecto, `-c 100`, 8 s × **3 repeticiones** por escalón, SLO p99 ≤ 10 ms, sin corrección de
-latencia. Medianas de las 3, con el MAD de la p99:
+Servidor M3 Pro (11 cores) ↔ generador M4 (12 cores) por Thunderbolt bridge; `-c 100`, 8 s ×
+**5 repeticiones** por escalón, SLO p99 ≤ 10 ms, sin corrección de latencia. Medianas, con el MAD
+de la p99:
 
 | implementación | tasa sostenida bajo SLO | p50 | p99 | p99 MAD | p99.9 | techo observado |
 |---|---|---|---|---|---|---|
 | hyper | **≥200 000 rps** (tope del generador) | 0.46 ms | 0.69 ms | ±0.00 | 1.11 ms | no alcanzado |
-| **raylang** (`net/webserver`, nativo) | **120 000 rps** | 0.65 ms | **1.86 ms** | ±0.04 | 6.59 ms | **~129 500** |
-| Go `net/http` | 120 000 rps | 0.79 ms | 2.11 ms | ±0.01 | 2.63 ms | ~120 400 |
+| **raylang** (`net/webserver`, nativo) | **160 000 rps** | **0.54 ms** | **0.80 ms** | ±0.03 | **1.68 ms** | ~165 600 |
+| Go `net/http` | 120 000 rps | 0.80 ms | 2.07 ms | ±0.00 | 2.64 ms | ~120 700 |
 | `node:http` | 40 000 rps | 0.86 ms | 2.48 ms | ±0.15 | 6.57 ms | ~61 800 |
 
-**Con repeticiones, raylang y Go SÍ se separan** — y raylang gana en tres de cuatro:
+**raylang sostiene 1.33× el throughput de Go** y le gana en las cuatro métricas. Comparados en el
+mismo escalón (120k rps), donde los dos aguantan: p50 0.54 vs 0.80, p99 1.15 vs 2.07 (ventanas de
+mediana ± 2·MAD disjuntas por mucho: `[1.13, 1.17]` contra `[2.06, 2.08]`), p99.9 1.88 vs 2.64.
 
-- **p99 a 120k**: 1.86 ms vs 2.11 ms. Las ventanas no se solapan (mediana ± 2·MAD: `[1.78, 1.94]`
-  contra `[2.09, 2.13]`) y ni los rangos crudos se tocan (raylang 1.71-1.90, Go 2.08-2.11). Un
-  12 % a favor, defendible.
-- **p50**: 0.65 ms vs 0.79 ms.
-- **Techo**: ~129 500 vs ~120 400 rps (7.5 % más).
-- **Pero la cola profunda es peor**: p99.9 de 6.59 ms contra 2.63 ms de Go. Se repitió en las dos
-  sesiones remotas (7.14 y 6.59), así que es un rasgo real de `net/webserver`, no ruido — y es el
-  candidato natural para la próxima investigación.
+Estas cifras son **posteriores a M97.2** (`try_call`), que quitó el `spawn` por petición del
+webserver. Antes de ese cambio raylang empataba con Go en el veredicto (120k) y perdía la cola
+profunda por 2.5× (6.59 vs 2.63 ms). La crónica completa —cómo se localizó el mecanismo y qué se
+midió— está en
+[`docs/investigacion-p999-webserver-nativo.md`](../../docs/investigacion-p999-webserver-nativo.md):
 
-El veredicto de peldaño (120k) sigue siendo el mismo para ambos: la escalera es discreta y los
-dos caen en el mismo escalón. Lo que las repeticiones permiten es afirmar la diferencia **dentro**
-de ese escalón sin inventarla.
-
-Comparado con la sesión de loopback, el techo de raylang subió de ~113k a ~129.5k al quitarle al
-servidor la competencia del generador.
-
-**node es el menos reproducible**: entre la sesión de 1 corrida y esta de 3, su veredicto cayó de
-80k a 40k y su techo de ~82k a ~62k. Las otras tres se movieron poco. No está diagnosticado; con
-`-c 100` y un solo proceso sin `cluster`, node es el que más sufre, pero la variación entre
-sesiones es mayor que la de sus vecinos y conviene no citar su número sin más repeticiones.
+| raylang | antes de M97.2 | después |
+|---|---|---|
+| hilos de SO (100 conexiones) | 198 | 97 |
+| p50 @120k | 0.65 ms | 0.54 ms |
+| p99 @120k | 1.86 ms | 1.15 ms |
+| p99.9 @120k | 6.59 ms | 1.88 ms |
+| techo | ~129 500 rps | ~165 600 rps |
 
 ### Dos límites de esta medición
 
 **hyper no es un techo aquí, es un suelo.** Pasó los 200k del último escalón sin sudar (p99
-0.71 ms) porque el que topa es el generador: midiendo la CPU de las dos máquinas durante una
+0.69 ms) porque el que topa es el generador: midiendo la CPU de las dos máquinas durante una
 corrida a 300k rps pedidos, el **generador estaba al 86 %** (28 % user + 58 % sys) mientras el
 **servidor tenía 40 % idle**. Subir la escalera no sirve sin una segunda máquina generadora.
 
@@ -265,9 +260,12 @@ por contraste, es impecable: RTT 0.34/0.57/1.50 ms (min/avg/max) con stddev 0.12
 
 ## Pendiente
 
-- **El p99.9 de raylang** (6.6 ms contra 2.6 de Go a la misma tasa, reproducido en dos sesiones)
-  es el hallazgo más accionable que ha salido de este banco. Candidato a investigación con el
-  método de `docs/investigacion-p99-framework-web.md`: `sample` bajo carga sostenida a 120k.
+- ✅ **El p99.9 de raylang** (era 6.6 ms contra 2.6 de Go) fue el hallazgo más accionable de este
+  banco y ya está **resuelto**: se perfiló con `sample` bajo carga, la causa era el `spawn` por
+  petición del webserver, y M97.2 (`try_call`) lo bajó a 1.88 ms — mejor que Go. Crónica en
+  `docs/investigacion-p999-webserver-nativo.md`.
+- **Un techo nuevo para raylang**: ahora sostiene 160k y topa en ~165 600, más cerca del límite del
+  generador (~200k) que del suyo propio. Con más margen de generación habría que re-medirlo.
 - **Más repeticiones para node** — su veredicto se movió de 80k a 40k entre sesiones, mucho más
   que sus vecinos. Sin diagnosticar.
 - **Un techo de verdad para hyper** — el generador topa antes que el servidor (~200k). Exige una

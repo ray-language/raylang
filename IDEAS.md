@@ -1417,6 +1417,12 @@ magia posicional de `recover` es lo menos elegante de Go). La forma raylang es *
   marcador gana al `return Err` que aborta en `main`: si no, `try_call` no serviría donde más se usa.
   Tests: `tests/recover_cli.rs` (6, casi todos de ORÁCULO intérprete≡VM≡nativo — lo que
   `spawn`+`try_join` nunca pudo tener) + corpus nativo completo verde.
+- ✅ **RESULTADO de aplicarlo al webserver (27 jul 2026, validado con generador remoto y 5
+  repeticiones)**: `handle_http` pasa de `spawn`+`try_join` a `try_call` → hilos de SO con 100
+  conexiones **198→97**; a 120k rps **p50 0.65→0.54 ms, p99 1.86→1.15, p99.9 6.59→1.88 (3.5×)**; techo
+  **~129 500→~165 600 rps**. raylang deja de empatar con Go y le gana en las CUATRO métricas, con
+  **1.33× su throughput sostenido bajo SLO** (160k contra 120k) y ventanas de p99 disjuntas por mucho.
+  La cola profunda pasa de ser 2.5× PEOR que la de Go a ser mejor (1.88 vs 2.64 ms).
 - **La justificación de RENDIMIENTO que lo movió de "planificado" a "hecho", medida contra terceros** (27 jul 2026, [docs/investigacion-p999-webserver-nativo.md](docs/investigacion-p999-webserver-nativo.md)):
   el `spawn`+`try_join` por petición de `handle_http` —que está ahí SOLO por el aislamiento de
   panic de M56.5— hace que en el nativo **cada petición cruce dos hilos de SO** (send al canal del

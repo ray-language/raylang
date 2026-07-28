@@ -152,24 +152,34 @@ rps, con los dos servidores vivos a la vez en puertos distintos y patrón ABBA×
 — exactamente lo que se espera al quitar un handoff de hilo por petición. p99 y p99.9 quedan
 idénticos **en este régimen**.
 
-**❓ La hipótesis del p99.9 sigue SIN validar.** Y hay que decirlo claro: la cola profunda que motivó
-todo esto (6.59 ms contra 2.63 de Go) apareció a **120k rps con el generador remoto**, y ese régimen
-no se pudo volver a medir — el enlace Thunderbolt se cayó a mitad de la sesión (la IP del bridge
-desapareció de las dos máquinas). En loopback a 80k la p99.9 ya era de 2.7 ms *antes* del cambio, o
-sea que ese banco no tiene resolución para la señal que se busca. Lo que se sabe es que el mecanismo
-identificado ya no está; **falta comprobar que la cola lo seguía**.
+**✅ La hipótesis del p99.9 queda CONFIRMADA.** Validación con el generador remoto, `-c 100`,
+**5 repeticiones** por escalón (el criterio fijado de antemano: p99.9 de raylang a 120k desde los
+6.59 ms hacia el entorno de Go, con las ventanas de mediana ± 2·MAD como juez):
 
-Pendiente inmediato, en cuanto vuelva el enlace:
+| a 120 000 rps | p50 | p99 | p99 MAD | **p99.9** |
+|---|---|---|---|---|
+| raylang **antes** (`spawn`+`try_join`) | 0.65 ms | 1.86 ms | ±0.04 | **6.59 ms** |
+| raylang **después** (`try_call`) | **0.54 ms** | **1.15 ms** | ±0.01 | **1.88 ms** |
+| Go `net/http` (referencia, sin cambios) | 0.80 ms | 2.07 ms | ±0.00 | 2.64 ms |
 
-```sh
-cd benchmarks/web && ./webbench.py --bind 10.0.0.10 --generator-host <gen> -i ~/.ssh/id_bench \
-                                  --only ray,go --rates 80000,120000,160000 --reps 5
-```
+**La cola profunda cae 3.5× (6.59 → 1.88 ms) y pasa a ser MEJOR que la de Go** (1.88 vs 2.64). El
+mecanismo era el que se había identificado.
 
-Criterio: p99.9 de raylang a 120k hacia el entorno de Go (~2.6 ms) desde los 6.59 ms medidos, con
-las ventanas de mediana ± 2·MAD como juez. Si NO baja, la conclusión honesta es que el handoff de
-hilo era un coste real de mediana pero no el mecanismo de la cola, y el siguiente sospechoso es el
-ítem del §6 (un hilo bloqueante por conexión).
+Y el efecto no se queda en la cola: **el techo de throughput sube de ~129 500 a ~165 600 rps**
+(+28 %), así que el veredicto bajo SLO pasa de empate a **160 000 contra los 120 000 de Go — 1.33×**.
+En las cuatro métricas a la vez, con las ventanas de p99 disjuntas por un margen amplio
+(`[1.13, 1.17]` contra `[2.06, 2.08]`).
+
+Resumen del arco, contra la medición que lo abrió:
+
+| | antes | después |
+|---|---|---|
+| hilos de SO (100 conexiones) | 198 | 97 |
+| p50 @120k | 0.65 ms | 0.54 ms |
+| p99 @120k | 1.86 ms | 1.15 ms |
+| p99.9 @120k | 6.59 ms | 1.88 ms |
+| techo | ~129 500 rps | ~165 600 rps |
+| veredicto bajo SLO | 120k (empate con Go) | **160k (1.33× Go)** |
 
 **Efecto colateral del cambio, en el transpilador**: `handle_http` perdió su `spawn` y con él la
 marca que hace viajar su parámetro-handler como genérico monomorfizado, mientras `loop_iter_server`

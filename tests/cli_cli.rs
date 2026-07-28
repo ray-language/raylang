@@ -1254,10 +1254,10 @@ fn build_native_without_crypto_forces_the_fast_path_and_stubs() {
     )
     .unwrap();
     let bin = base.join("prog_bin");
-    // N1/N2: `mimalloc` y `ahash` van por defecto; la vía rápida rustc exige excluirlos TAMBIÉN.
+    // N1/N2 + fibras: mimalloc, ahash y fibers van por defecto; la vía rápida rustc exige excluirlos TAMBIÉN.
     let (out, err, code) =
-        ray(&base, &["build", "prog.ray", "--native", "--without", "crypto,mimalloc,ahash", "-o", bin.to_str().unwrap()]);
-    assert_eq!(code, 0, "build --native --without crypto,mimalloc,ahash ok\n{err}");
+        ray(&base, &["build", "prog.ray", "--native", "--without", "crypto,mimalloc,ahash,fibers", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --without crypto,mimalloc,ahash,fibers ok\n{err}");
     assert!(!out.contains("ray-runtime"), "vía rápida rustc, sin ray-runtime: {out}");
     // El binario compila pero panica al alcanzar la cripto stubbeada (código de salida != 0).
     let run = Command::new(&bin).output().expect("corre el binario stubbeado");
@@ -1282,7 +1282,7 @@ fn build_native_reads_the_stable_exclusion_from_ray_toml() {
     std::fs::write(
         base.join("ray.toml"),
         // N1/N2: se excluyen también mimalloc y ahash (por-defecto) para dejar el build en la vía rustc.
-        "[package]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[native]\nwithout = [\"crypto\", \"mimalloc\", \"ahash\"]\n",
+        "[package]\nname = \"svc\"\nversion = \"0.1.0\"\n\n[native]\nwithout = [\"crypto\", \"mimalloc\", \"ahash\", \"fibers\"]\n",
     )
     .unwrap();
     std::fs::write(
@@ -1346,14 +1346,14 @@ fn build_native_defaults_to_mimalloc_and_without_recovers_the_fast_path() {
     let bin = base.join("prog_bin");
     let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native por defecto ok\n{err}");
-    assert!(out.contains("[ray-runtime: mimalloc+ahash]"), "el default enlaza mimalloc+ahash vía Cargo: {out}");
+    assert!(out.contains("[ray-runtime: mimalloc+ahash+fibers]"), "el default enlaza mimalloc+ahash+fibras vía Cargo: {out}");
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     assert_eq!(String::from_utf8_lossy(&native.stdout), "hola\n", "corre como la VM");
     // Escape hatch: sin mimalloc ni ahash → vía rápida rustc, sin ray-runtime, misma salida.
     let bin2 = base.join("prog_bin2");
     let (out, err, code) =
-        ray(&base, &["build", "prog.ray", "--native", "--without", "mimalloc,ahash", "-o", bin2.to_str().unwrap()]);
-    assert_eq!(code, 0, "build --native --without mimalloc,ahash ok\n{err}");
+        ray(&base, &["build", "prog.ray", "--native", "--without", "mimalloc,ahash,fibers", "-o", bin2.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native --without mimalloc,ahash,fibers ok\n{err}");
     assert!(!out.contains("ray-runtime"), "camino rápido rustc, sin ray-runtime: {out}");
     let native2 = Command::new(&bin2).output().expect("corre el binario sin mimalloc");
     assert_eq!(String::from_utf8_lossy(&native2.stdout), "hola\n", "misma salida sin mimalloc");

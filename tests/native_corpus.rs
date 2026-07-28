@@ -62,18 +62,17 @@ fn excluded(p: &Path) -> Option<&'static str> {
 }
 
 #[test]
-#[ignore = "compila ~50 binarios nativos con rustc (~2-3 min); correr con -- --ignored"]
+#[ignore = "compila ~50 binarios nativos vía cargo (~3-4 min); correr con -- --ignored"]
 fn the_deterministic_examples_transpile_identically_to_the_vm() {
-    run_corpus(&[]);
+    run_corpus(&[]); // el DEFAULT: fibras (decisión post-F5/F4)
 }
 
-/// F2 (arco de concurrencia nativa): el MISMO corpus con `--fibers` — la concurrencia sobre el
-/// scheduler M:N de ray_runtime::fibers debe seguir siendo byte-idéntica a la VM. Todo va por la
-/// vía Cargo (corosensei), así que tarda más que el corpus plano.
+/// El RESPALDO hilo-por-tarea (`--without fibers`): sigue siendo un modelo soportado (escape del
+/// default y única vía en targets sin poller) → sigue teniendo su corpus byte-idéntico a la VM.
 #[test]
-#[ignore = "compila ~50 binarios nativos vía cargo (--fibers, lento); correr con -- --ignored"]
-fn the_deterministic_examples_transpile_identically_with_fibers() {
-    run_corpus(&["--fibers"]);
+#[ignore = "compila ~50 binarios nativos (--without fibers, hilo-por-tarea); correr con -- --ignored"]
+fn the_deterministic_examples_transpile_identically_with_the_thread_fallback() {
+    run_corpus(&["--without", "fibers"]);
 }
 
 /// Los dos corpus (plano y --fibers) compilan LOS MISMOS programas: el pkg de la caché Cargo

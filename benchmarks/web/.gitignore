@@ -1,6 +1,6 @@
 # Artefactos de compilación: los regenera `build-all.sh`.
 plaintext/ray/plaintext-ray
-plaintext/ray/plaintext-ray-fib
+plaintext/ray/plaintext-ray-thr
 plaintext/go/plaintext-go
 plaintext/hyper/target/
 json/ray/json-ray

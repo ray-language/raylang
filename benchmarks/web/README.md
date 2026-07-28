@@ -255,6 +255,46 @@ midió— está en
 | p99.9 @120k | 6.59 ms | 1.88 ms |
 | techo | ~129 500 rps | ~165 600 rps |
 
+### Escalón de framework (`-w json`, 27 jul 2026)
+
+Mismo enlace y método, `-c 100`, 8 s × 3 repeticiones, SLO p99 ≤ 10 ms:
+
+| implementación | tasa sostenida bajo SLO | p50 | p99 | p99 MAD | p99.9 | techo observado |
+|---|---|---|---|---|---|---|
+| axum | **≥200 000 rps** (tope del generador) | 0.47 ms | 0.71 ms | ±0.01 | 1.39 ms | no alcanzado |
+| **raylang** (`web/framework`) | **160 000 rps** | 0.56 ms | 0.81 ms | ±0.05 | 1.94 ms | ~165 500 |
+| Go chi | 120 000 rps | 0.73 ms | 2.18 ms | ±0.00 | 2.72 ms | ~122 800 |
+| express | 40 000 rps | 0.85 ms | 2.21 ms | ±0.03 | 4.25 ms | ~48 800 |
+
+**`web/framework` sostiene 1.33× lo de Go+chi** — el mismo múltiplo que en el escalón pelado — y
+express queda cuatro veces por debajo.
+
+#### El impuesto de framework, por lenguaje
+
+Cruzando cada framework con el servidor pelado del mismo lenguaje (los dos escalones se midieron
+con el mismo enlace y método):
+
+| | pelado | framework | impuesto |
+|---|---|---|---|
+| raylang | ~165 600 | ~165 500 | **~0 %** |
+| Go | ~120 700 (`net/http`) | ~122 800 (chi) | ~0 % (dentro del ruido) |
+| Node | ~61 800 (`node:http`) | ~48 800 (express) | **−21 %** |
+| Rust | ≥200 000 (hyper) | ≥200 000 (axum) | no medible (tope del generador) |
+
+chi es un router fino y no cuesta nada apreciable, como cabía esperar. express sí: se lleva un
+quinto del techo de Node.
+
+⚠️ **Cuidado con leer el ~0 % de raylang como "el framework es gratis".** El techo coincide con el
+del servidor pelado hasta la tercera cifra significativa (165 600 vs 165 500), y eso no dice que la
+capa de framework no cueste: dice que **no es ella la que limita**. El cuello está por debajo, en
+`net/webserver` —el ítem del §6 de
+[`docs/investigacion-p999-webserver-nativo.md`](../../docs/investigacion-p999-webserver-nativo.md):
+un hilo de SO bloqueante por conexión—, y mientras ese techo no suba, el coste real del framework
+seguirá enmascarado. La investigación de
+[`investigacion-overhead-framework-express.md`](../../docs/investigacion-overhead-framework-express.md)
+sí lo midió en aislamiento: ~7 µs por petición reconstruyendo la `App`, que a 165k rps son ~1.16
+core-segundos por segundo (~10 % de los 11 cores) — real, pero no lo que topa.
+
 ### Dos límites de esta medición
 
 **hyper no es un techo aquí, es un suelo.** Pasó los 200k del último escalón sin sudar (p99
@@ -283,7 +323,11 @@ por contraste, es impecable: RTT 0.34/0.57/1.50 ms (min/avg/max) con stddev 0.12
   segunda máquina generadora, o `oha` desde las dos a la vez sumando tasa.
 - **Resolver el artefacto de tasas bajas** — si se quiere reportar p99.9 a 5-10k rps, hay que
   entender primero qué del camino Thunderbolt-IP añade esos ~95 ms con conexiones semi-ociosas.
-- **Escalón de framework**: `web/framework` vs express/fastify vs chi/gin.
+- ✅ **Escalón de framework**: hecho (`-w json`, resultados arriba). Ampliable con fastify (la
+  alternativa rápida de Node) y gin, si interesa cubrir más del ecosistema.
+- **Subir el techo de `net/webserver`** — es ahora el límite de raylang en LOS DOS escalones
+  (~165 500 en ambos), así que el coste real de `web/framework` no se puede medir hasta que suba.
+  El sospechoso está identificado: un hilo de SO bloqueante por conexión (§6 de la investigación).
 - **Carga `json`**: la segunda categoría de TechEmpower, que engancha con `jsonserialize` del
   banco poliglota (coste de CPU por serializado ↔ req/s sostenidos).
 - **Repeticiones por escalón**: hoy es una corrida por escalón. La rotación reparte el drift,

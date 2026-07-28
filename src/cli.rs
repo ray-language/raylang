@@ -88,7 +88,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--fibers] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers]] [--templates-only [path...]]
   test [file]       run the @test functions [filter]
   fmt <file>        print the canonical version to stdout
   doc <file>        generate the Markdown documentation of its public surface
@@ -699,11 +699,14 @@ fn cmd_build(args: &[String]) {
     // `--fast` (H6): aritmética de int ENVOLVENTE (wrapping) en vez de checked — renuncia a la paridad
     // de overflow con la VM a cambio del último tramo de rendimiento (div/mod por cero siguen chequeados).
     let fast = args.iter().any(|a| a == "--fast");
-    // `--fibers` (F2, EXPERIMENTAL): la concurrencia del binario nativo corre sobre el scheduler M:N
-    // de fibras (corosensei + reactor kqueue/epoll) en vez de hilo-de-SO-por-tarea. Objetivo del arco:
-    // quitar el muro de memoria del hilo-por-conexión (docs/diseno-concurrencia-nativa.md). Exige la
-    // vía Cargo (corosensei); en F5 se decidirá si pasa a ser el default con --without fibers de escape.
-    let fibers = args.iter().any(|a| a == "--fibers");
+    // Fibras (arco de concurrencia nativa, jul 2026): la concurrencia del binario nativo corre sobre
+    // el scheduler M:N de fibras (corosensei + reactor kqueue/epoll) POR DEFECTO — decisión tomada
+    // tras F5 (banco en red real: techo +16 % sobre hilo-por-tarea, 14 hilos / 8 MB donde el modelo
+    // viejo levantaba uno por conexión) y F4 (TLS/UDP cubiertos). Escape: `--without fibers` recupera
+    // el hilo-por-tarea (y es lo que exige la vía rustc pelada, que no puede traer corosensei). El
+    // flag `--fibers` se acepta por compatibilidad (hoy es el default); combinarlo con el escape es
+    // contradictorio → error. Ver docs/diseno-concurrencia-nativa.md.
+    let fibers_flag = args.iter().any(|a| a == "--fibers");
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
     // `--target <triple>` (P2.b, H20): cross-compilation. Se pasa tal cual a rustc/cargo (el usuario debe
     // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa
@@ -734,7 +737,7 @@ fn cmd_build(args: &[String]) {
         }
     }
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex"];
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(
@@ -745,6 +748,22 @@ fn cmd_build(args: &[String]) {
         }
     }
     let exclude: Vec<String> = exclude.into_iter().map(|(d, _)| d).collect();
+    // Resolución del modo fibras: default ON; `--without fibers` lo apaga; ambos a la vez es un
+    // contrasentido (fail-fast, como los typos de subsistema). En un target sin poller propio
+    // (Windows: el reactor es kqueue/epoll) se apaga solo, con aviso — el hilo-por-tarea sigue
+    // siendo el respaldo completo.
+    let fibers = {
+        let without_fibers = exclude.iter().any(|d| d == "fibers");
+        if fibers_flag && without_fibers {
+            eprintln!("--fibers and '--without fibers' contradict each other; pick one");
+            process::exit(64);
+        }
+        let windows = target.as_deref().is_some_and(|t| t.contains("windows"));
+        if windows && !without_fibers {
+            eprintln!("note: fibers are not available on Windows targets yet; building with the thread-per-task model");
+        }
+        !without_fibers && !windows
+    };
     let file = args
         .iter()
         .find(|a| {

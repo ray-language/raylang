@@ -177,6 +177,15 @@ el punto 2 de arriba ("camino rápido intacto") queda condicionado a `--without 
 es también el escape para builds herméticos/cross-compile sin toolchain C. Si `cargo` no está
 en el PATH, el error lo sugiere (`hint: … --without mimalloc`).
 
+**Fibras por defecto (jul 2026, arco de concurrencia nativa).** Como mimalloc/aHash, la feature
+`fibers` de `ray-runtime` no se detecta por uso: se activa **siempre** salvo `--without fibers`
+(y se apaga sola en targets Windows: el reactor es kqueue/epoll). La concurrencia del binario
+(spawn, sockets, TLS, UDP, sleep) corre sobre el scheduler M:N de `ray_runtime::fibers`
+(corrutinas corosensei FIJADAS a su worker + reactor persistente) en vez de un hilo de SO por
+tarea; el hilo-por-tarea queda como RESPALDO soportado con su propio corpus. Diseño, mediciones y
+las dos lecciones de corrección (cacheo de TLS de LLVM → fijación; esperas que ceden, no
+bloquean) en `docs/diseno-concurrencia-nativa.md`.
+
 **N2 — aHash por defecto en los `Map` (jul 2026, bench políglota).** Quinta feature de
 `ray-runtime`: `ahash`, como `mimalloc` siempre-on (no es de uso detectable; escape `--without
 ahash`). El `HashMap` std usa SipHash 1-3, lento en claves string; la VM usa aHash desde P0.1 →

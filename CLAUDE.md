@@ -41,14 +41,17 @@ expresiones, sintaxis de llaves.
 - **Guía de builds** (features slim, PGO, flags de adelgazamiento): `docs/build.md`.
   Release PGO: `sh tools/pgo.sh [--slim | --features "a,b,c"]`.
 - **Binario nativo del PROGRAMA**: `ray build --native prog.ray [-o out] [--release]
-  [--without crypto,tls,sqlite,mimalloc,ahash,regex]` transpila el programa a Rust
-  (`src/transpile.rs`) y lo compila con `rustc`/`cargo` → binario de código máquina,
-  byte-idéntico a la VM. Los subsistemas con-crate (TLS/cripto/SQLite) viven en
-  `crates/ray-runtime` (workspace) y se enlazan **bajo demanda** (proyecto Cargo
-  generado); **mimalloc y aHash van POR DEFECTO** → el default es la vía Cargo, y
-  `--without mimalloc,ahash` recupera el `rustc` pelado. Exclusión estable del
-  proyecto: `[native] without = ["tls", …]` en `ray.toml`. Diseño:
-  `docs/transpilador-nativo.md`. No confundir con construir la toolchain `ray`.
+  [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers]` transpila el programa a
+  Rust (`src/transpile/`) y lo compila con `rustc`/`cargo` → binario de código
+  máquina, byte-idéntico a la VM. Los subsistemas con-crate (TLS/cripto/SQLite)
+  viven en `crates/ray-runtime` (workspace) y se enlazan **bajo demanda** (proyecto
+  Cargo generado); **mimalloc, aHash y las FIBRAS van POR DEFECTO** (la concurrencia
+  corre en el scheduler M:N de `ray_runtime::fibers` — corosensei + reactor
+  kqueue/epoll, `docs/diseno-concurrencia-nativa.md`) → el default es la vía Cargo,
+  y `--without mimalloc,ahash,fibers` recupera el `rustc` pelado con
+  hilo-por-tarea. Exclusión estable del proyecto: `[native] without = ["tls", …]`
+  en `ray.toml`. Diseño: `docs/transpilador-nativo.md`. No confundir con construir
+  la toolchain `ray`.
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).
 
 ## Arquitectura (pipeline)

@@ -391,3 +391,16 @@ y en paralelo se pisaban el artefacto — carrera preexistente anotada en IDEAS 
 **Con F4, la única fase restante es F3 (esperas por lista, optimización sin efecto en el bench) y
 la DECISIÓN DE DEFAULT queda desbloqueada**: no queda ninguna superficie de red donde `--fibers`
 se comporte peor que el modelo de hilos.
+
+## 9. DEFAULT activado (28 jul 2026) — el arco se cierra
+
+Con F4 completa y el banco en red real a favor en todas las métricas, **`fibers` es el default de
+`ray build --native`** (decisión del usuario): la feature va siempre-on como mimalloc/aHash,
+`--without fibers` recupera el hilo-por-tarea (que sigue soportado, con su corpus propio como
+respaldo y única vía en Windows, donde el reactor kqueue/epoll no existe y el modo se apaga solo
+con aviso). `--fibers` se acepta por compatibilidad; combinarlo con el escape es error. El banco
+conserva ambos modelos (`ray` = default/fibras, `ray-thr` = respaldo) mientras convivan.
+
+Queda F3 (esperas de fibra por lista de esperas, sin ceder en bucle) como optimización de fondo
+sin efecto en el bench del webserver, y los pendientes menores anotados: connect no-bloqueante
+del cliente, pool de pilas de corrutina, sharding del buzón del reactor si el bench lo pide.

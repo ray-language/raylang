@@ -80,12 +80,12 @@ WORKLOADS = {
         "path": "/",
         "body": b"Hello, World!",
         "impls": [
+            # El DEFAULT de ray build --native (fibras, decisión post-F5/F4):
+            #   ray build main.ray --native --release -o plaintext-ray
             ("ray", ["{dir}/ray/plaintext-ray", "{bind}", "{port}"], 18080),
-            # F5 del arco de concurrencia nativa: el MISMO main.ray compilado con --fibers
-            # (scheduler M:N de fibras). Candidato a default; se benchea como impl separada
-            # mientras conviven los dos modelos. Se construye con:
-            #   ray build main.ray --native --release --fibers -o plaintext-ray-fib
-            ("ray-fib", ["{dir}/ray/plaintext-ray-fib", "{bind}", "{port}"], 18084),
+            # El RESPALDO hilo-por-tarea, benchado mientras convivan los dos modelos:
+            #   ray build main.ray --native --release --without fibers -o plaintext-ray-thr
+            ("ray-thr", ["{dir}/ray/plaintext-ray-thr", "{bind}", "{port}"], 18084),
             ("hyper", ["{dir}/hyper/target/release/plaintext-hyper", "{bind}", "{port}"], 18081),
             ("go", ["{dir}/go/plaintext-go", "{bind}", "{port}"], 18082),
             ("node", ["node", "{dir}/node/main.js", "{bind}", "{port}"], 18083),

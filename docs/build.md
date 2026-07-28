@@ -140,7 +140,7 @@ binario `ray` desde P0.4). Sin él, el binario caía al malloc del sistema — l
 de strings pequeños (macOS). Medido (bench políglota, `docs/bench-poliglota-optimizacion.md`):
 wordcount/logparse **−40 %**, jsonserialize **−18 %**. Consecuencia: el build nativo por
 defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compila una vez por
-máquina); `--without mimalloc` recupera el `rustc` pelado (sin Cargo/red).
+máquina); `--without mimalloc,ahash,fibers` recupera el `rustc` pelado (sin Cargo/red).
 
 **Regex acelerado (R5, jul 2026).** Si el programa usa `std/regex`, el nativo enlaza el crate `regex` de Rust vía `ray-runtime` (feature detectada por uso): mismo comportamiento que la Pike VM de la librería (dialecto traducido, validación raylang) a velocidad de Rust — medido 570→71 ms en el bench regex, por delante de Go. `--without regex` recupera la Pike VM transpilada (raylang puro).
 
@@ -150,7 +150,14 @@ el `HashMap` std con SipHash es lento en claves string. Medido: wordcount **−8
 adicional sobre mimalloc (neutro donde el Map no domina). La resistencia a hash-flooding
 se conserva (RandomState con RNG de runtime, como la VM).
 
-**Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash` — para los subsistemas de uso
+**Fibras (jul 2026).** La concurrencia del binario nativo corre POR DEFECTO sobre el scheduler
+M:N de fibras (`ray_runtime::fibers`: corrutinas corosensei + reactor kqueue/epoll) en vez de un
+hilo de SO por tarea/conexión — medido en el banco web: techo +16 %, y 14 hilos / 8 MB donde el
+modelo antiguo levantaba un hilo por conexión (docs/diseno-concurrencia-nativa.md §7-§8).
+`--without fibers` recupera el hilo-por-tarea (y es necesario para la vía `rustc` pelada). En
+targets Windows se apaga solo (el reactor es kqueue/epoll).
+
+**Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers` — para los subsistemas de uso
 (crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc`/`ahash` vuelven al malloc del
 sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native] without =
 [...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para

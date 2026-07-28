@@ -206,6 +206,13 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
 }
 
 pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
+    // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) →
+    // implica net. La normalización va ANTES que nada: el ctx de fibras (justo debajo) elige sus
+    // campos por estas flags, y con la implicación tardía un programa solo-TLS emitía un ctx sin
+    // `socks`/`rd_to` que el close sí referenciaba (E0609, cazado por build_native_tls_connection).
+    if t.needs_rt_tls {
+        t.needs_net = true;
+    }
     // F2 (--fibers): el CONTEXTO POR-TAREA que en el modelo de hilos eran thread-locals
     // (cancelación, pila de scopes, profundidad de try_call, caché de sockets y sus timeouts).
     // Con fibras que pueden reanudarse en otro worker, ese estado viaja EN LA FIBRA: vive en el
@@ -245,10 +252,6 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    __RAY_MAIN_CTX.with(|c| (f.take().unwrap())(&mut c.borrow_mut()))\n",
             "}\n",
         ));
-    }
-    // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) → implica net.
-    if t.needs_rt_tls {
-        t.needs_net = true;
     }
     // Registro global de handles de archivo (M11.8), solo si el programa los usa. Rust permite items
     // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +

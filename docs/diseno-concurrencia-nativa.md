@@ -302,3 +302,62 @@ Y una del reactor: el read-timeout del webserver (10 s) aparca CADA lectura con 
 readiness casi siempre gana y el temporizador huérfano vivía 10 s — a 100k rps, ~1M de entradas y
 un barrido O(n) por ciclo. Ahora: min-heap + cancelación explícita + compactación (memoria
 O(vivos), siguiente-plazo O(log n)).
+
+## 7. F5, EJECUTADA (28 jul 2026) — el reactor a cero asignaciones: fibras gana TODO
+
+La "retención del asignador" del §6 tenía una causa concreta y era NUESTRA: el reactor asignaba
+**cuatro buffers O(fds-aparcados) POR CICLO** (changelist, eventlist y las dos listas de interés)
+— a `-c 1000` y ~15k ciclos/s, ~500 MB/s de churn de asignación cuya marca de agua quedaba
+retenida (meseta de 163-217 MB). F5 lo lleva a **cero asignaciones por ciclo en régimen**:
+
+1. **Armado incremental**: solo se registran los parks nuevos; los oneshot no disparados siguen
+   armados en el kqueue/epoll. El `poke` del close (byte etiquetado en la tubería) dispara el
+   único re-armado global — O(n) solo en closes, donde el diseño anterior lo pagaba SIEMPRE.
+2. **Buffers persistentes** en el Poller y buzón por swap (ping-pong, sin frees cruzados de
+   hilos); un byte de despertar por lote, no por op.
+3. **Entradas de `fds` persistentes** (capacidad reutilizada; acotado por el pico de fds vivos).
+4. **Despertares agrupados por worker** (un lock por cola y ciclo).
+
+Medido en loopback (`plaintext`, A/B intercalado ×3, `-c 1000`, misma sesión):
+
+| | hilos | RSS bajo carga | RSS tras carga | rps |
+|---|---|---|---|---|
+| hilo-por-conexión | 1002 | 239 MB | 239 (retiene) | ~105.7k |
+| fibras F2 | 14 | ~217 MB | ~217 (retiene) | ~100.1k |
+| **fibras F5** | **14** | **23 MB** | **8 MB** | **~112k** |
+
+72× menos hilos, 10× menos memoria bajo carga que el modelo de hilos — 2× menos que Go (49 MB),
+1.7× menos que la VM (40 MB) —, +6 % de rps, y la memoria **vuelve** al cerrar. Los ~23 MB bajo
+carga son ~21 KB/conexión con todo incluido, clavado en la estimación del §3c.
+
+### §7b — Validación en RED REAL (generador remoto Mac mini M4 por Thunderbolt)
+
+Corrida oficial del banco (`webbench.py`, plaintext, `-c 100`, 10 s × 3 reps/escalón, escalera
+hasta 280k, SLO p99 ≤ 10 ms, enlace verificado sano antes y después; `ray-fib` entra al banco
+como implementación permanente — el MISMO `main.ray` compilado con `--fibers`):
+
+| | sostenida bajo SLO | techo | p50 | p99 | p99.9 |
+|---|---|---|---|---|---|
+| hyper | 200k (líder) | **~206k** (por fin visible) | 0.45 | 0.73 | 0.96 |
+| **ray-fib** | **160k** | **~190.5k** | **0.47** | 0.73 | 1.05 |
+| ray (hilos) | 160k | ~164k | 0.59 | 0.73 | 1.17 |
+| go | 120k | ~121.5k | 0.77 | 2.16 | 2.71 |
+| node | 40k | ~60k | 0.72 | 1.73 | 2.68 |
+
+En red real las lecturas aparcan DE VERDAD (en loopback los datos solían estar ya en el búfer) —
+y aun así **fibras supera al modelo de hilos en todo**: techo +16 % (190.5k contra 164k; el
+sostenido empata a 160k porque el siguiente escalón de la escalera era 200k), p50 −20 %, p99.9
+−10 %, sirviendo 160k reales con **14 hilos / 8 MB** contra 102 hilos / 24 MB del modelo de hilos
+(a `-c 100`; el muro de 1002 hilos aparece a `-c 1000`). Contra Go: **1.57× su techo**; contra
+hyper: **92 % de su techo**.
+
+Gotcha de banco pagado esta semana: una corrida con el generador DORMIBLE no vale — el Mac mini
+entró en reposo a mitad de la primera escalera y `ray-fib`/`go` dieron techos falsos (32k/90k)
+mientras el resto salía normal (la rotación repartió el daño de forma desigual); con el reposo
+desactivado volvieron a 190k/125k. El protocolo incorpora: desactivar el reposo del generador y
+verificar el enlace con ping antes y después de cada corrida.
+
+Pendiente del arco: F3 (esperas de fibra por lista — los canales calientes no están en el hot
+path del webserver, no mueve este bench), **F4 (TLS/UDP sobre fibras)**, y el DEFAULT: con estos
+números la única razón para no encender `fibers` por defecto es que TLS/UDP siguen bloqueantes →
+primero F4, luego el default.

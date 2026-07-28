@@ -210,9 +210,67 @@ hallazgo (a) del §3 y es una decisión de arquitectura del backend nativo, no u
 fuente corre en la VM sobre fibras y kqueue, y en nativo sobre hilos bloqueantes. A concurrencias
 mucho mayores que 100 esto volverá a aparecer, y con más fuerza.
 
-No lo propongo ahora: es un arco, no un fix, y el §5 es la parte barata que ataca el mecanismo
-medido. Pero conviene tenerlo escrito para no re-descubrirlo, y **medirlo antes de diseñarlo**:
-repetir el banco con `-c 500` y `-c 1000` diría cuánto duele y a partir de dónde.
+### 6.1 Medido (27 jul 2026): duele en MEMORIA, no tanto en throughput
+
+Barrido de concurrencia con el generador remoto, `-q 200000` fijo (por encima de todos los techos),
+2 repeticiones. La cifra es la tasa **conseguida**:
+
+| `-c` | hyper | **raylang** | Go `net/http` |
+|---|---|---|---|
+| 100 | ≥200 000 | **166 659** | 119 567 |
+| 250 | ≥200 000 | **159 220** | 138 496 |
+| 500 | ≥200 000 | **154 263** | 136 994 |
+| 1000 | 197 576 | **145 163** | 131 971 |
+
+**Una hipótesis previa cae y otra se confirma.** Se entró sospechando que los ~165k de raylang
+podían ser un artefacto de medir con solo 100 conexiones (por Little's Law, `conexiones ÷ p50` daba
+~178k, y estábamos al 93 % de eso). Para **Go era cierto**: a `-c 100` estaba limitado por la
+concurrencia (119.6k) y al subir a 250 reveló su capacidad real, ~138k. Para **raylang era falso**:
+subir la concurrencia no levantó su techo, **lo bajó** — −13 % de `-c 100` a `-c 1000`. Es la firma
+del modelo: más conexiones = más hilos de SO compitiendo por 11 cores, no más paralelismo útil.
+
+Aun así raylang le gana a Go en throughput en **todas** las concurrencias (145k contra 132k incluso
+a `-c 1000`) y en p50. Donde sí pierde es en la cola profunda con mucha concurrencia: a `-c 1000`,
+p99.9 de 119.6 ms contra 74.7 de hyper y 69.0 de Go.
+
+**Y el dato que cambia la conversación es la memoria:**
+
+| | hilos de SO | RSS |
+|---|---|---|
+| **raylang** a `-c 100` | 102 | 29 MB |
+| **raylang** a `-c 1000` | **1002** | **268 MB** |
+| Go `net/http` a `-c 1000` | 17 | 49 MB |
+
+Confirmado el mecanismo hasta el final: **un hilo de SO por conexión**, y con él su pila. El
+crecimiento es lineal, ~265 KB por conexión (29 MB a `-c 100` → 268 MB a `-c 1000`).
+
+Esa linealidad es lo que convierte el asunto en un **muro y no en una pendiente**: 10 000
+conexiones —una cifra ordinaria para un servidor de producción— pedirían 10 000 hilos de SO y del
+orden de 2.6 GB solo en pilas, y el SO se negaría mucho antes. No es que raylang vaya un 13 % más
+lento con mucha carga: es que hay un número de conexiones a partir del cual sencillamente no
+funciona, y Go y Rust lo cruzan sin enterarse.
+
+Duele además en el activo que el proyecto sí presume: la huella de memoria (arco M98; arranque
+nativo 1.5 MB, la mejor de la mesa). Aquí son 5.5× la de Go.
+
+### 6.2 El arco, y por qué NO se arranca en esta sesión
+
+El objetivo correcto, con estos datos, **no es "ir más rápido"** —raylang ya gana en throughput y
+p50 a todas las concurrencias— sino **dejar de necesitar un hilo por conexión**. Tres caminos, en
+orden de coherencia con el proyecto:
+
+1. **Llevar `src/poll.rs` al runtime nativo.** La VM ya resuelve esto: fibras M:N con readiness por
+   kqueue/epoll. El mismo fuente raylang corre hoy sobre dos modelos de ejecución distintos, y el
+   del nativo es el peor de los dos para este caso. No añade dependencias y reusa código probado.
+2. **Sockets no bloqueantes con un pool pequeño.** Es (1) sin reusar lo que ya existe: escribir un
+   event loop a mano. Difícil de justificar teniendo `poll.rs`.
+3. **Adoptar tokio.** Rápido de escribir y mete un segundo scheduler junto a `__RAY_POOL` y los
+   actores de heap aislado — el mismo argumento por el que se descartó hyper en el §7.
+
+Es un arco de diseño con impacto en el modelo de ejecución del backend nativo, no un fix: toca
+decidirlo explícitamente (clasificarlo en `IDEAS.md` como pide el método del proyecto) antes de
+escribir código. Lo que esta sección aporta es el caso medido para esa decisión, que antes no
+existía.
 
 ## 7. ¿Ayudaría hyper a raylang?
 

@@ -155,8 +155,17 @@ impl Scheduler {
     }
 
     fn to_reactor(&self, op: Op) {
-        self.inbox.lock().unwrap().push(op);
-        sys::wake(self.wake_wr);
+        let was_empty = {
+            let mut q = self.inbox.lock().unwrap();
+            let e = q.is_empty();
+            q.push(op);
+            e
+        };
+        // F5: un byte por LOTE, no por op — si el buzón no estaba vacío, ya hay un byte pendiente
+        // en la tubería (persiste hasta el drain del reactor): escribir otro solo cuesta syscall.
+        if was_empty {
+            sys::wake(self.wake_wr, 1);
+        }
     }
 }
 
@@ -295,7 +304,7 @@ pub fn wait_readable_timeout(fd: i32, timeout_ms: i64) -> bool {
 /// error/listo → la fibra aparcada en él despierta y su syscall reporta el error real (el mismo
 /// papel que cumple el re-poll por ronda del scheduler de la VM).
 pub fn poke() {
-    sys::wake(sched().wake_wr);
+    sys::wake(sched().wake_wr, 2);
 }
 
 /// Acceso al almacén FIBER-LOCAL de la fibra en ejecución: `None` si este hilo no está ejecutando
@@ -414,23 +423,27 @@ impl PartialOrd for IoDeadline {
 
 fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
     use std::cmp::Reverse;
-    let poller = sys::Poller::new();
+    let mut poller = sys::Poller::new(wake_rd);
+    // Esperas por fd. F5: las entradas NO se borran al vaciarse — conservan la capacidad de sus
+    // Vec (cero asignaciones por park en régimen). El mapa queda acotado por el pico de fds
+    // concurrentes (los números de fd se REUTILIZAN), no por el total histórico.
     let mut fds: HashMap<i32, FdWaiters> = HashMap::new();
     // Sleeps: pocos y de vida legítima → Vec con barrido lineal basta.
     let mut sleeps: Vec<(Instant, Task)> = Vec::new();
-    // Deadlines de E/S: min-heap + CANCELACIÓN EXPLÍCITA. La lección medida (196 MB y techo de
-    // rps en el plaintext): cada lectura aparca con el read-timeout del servidor (10 s) y el
-    // readiness casi siempre gana → el temporizador huérfano vivía 10 s en un Vec con barrido
-    // O(n) por ciclo; a 100k rps eso es ~1M de entradas (~50 MB) y un barrido millonario por
-    // evento. Ahora: al despertar por readiness un waiter CON deadline, su id entra en
-    // `cancelled`; el pop del heap lo descarta; y si `cancelled` crece (> 8192), se compacta el
-    // heap → memoria O(vivos + 8k), siguiente-plazo O(log n).
+    // Deadlines de E/S: min-heap + cancelación explícita + compactación (ver F2: los huérfanos
+    // del read-timeout llegaban a ~1M de entradas a 100k rps con barrido O(n)).
     let mut io_deadlines: std::collections::BinaryHeap<Reverse<IoDeadline>> = std::collections::BinaryHeap::new();
     let mut cancelled: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut next_id: u64 = 0;
+    // Buffers reutilizados (F5): el buzón se intercambia por swap (el buffer hace ping-pong y no
+    // se libera nunca → sin churn cruzado de hilos) y los despertares se agrupan POR WORKER para
+    // tomar cada cola una sola vez por ciclo.
+    let mut ops: Vec<Op> = Vec::new();
+    let mut batches: Vec<Vec<Task>> = (0..s.queues.len()).map(|_| Vec::new()).collect();
     loop {
-        // 1) Drena el buzón de los workers.
-        for op in std::mem::take(&mut *s.inbox.lock().unwrap()) {
+        // 1) Drena el buzón de los workers (swap: sin asignar ni liberar buffers).
+        std::mem::swap(&mut *s.inbox.lock().unwrap(), &mut ops);
+        for op in ops.drain(..) {
             match op {
                 Op::Wait(fd, dir, deadline, t) => {
                     next_id += 1;
@@ -443,6 +456,22 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
                     if let Some(at) = deadline {
                         io_deadlines.push(Reverse(IoDeadline { at, fd, dir_write: dir == Dir::Write, id: next_id }));
                     }
+                    // F5: armado INCREMENTAL — solo el interés nuevo (kqueue lo presenta con el
+                    // siguiente kevent; epoll hace el ctl aquí). Si no se puede armar (fd ya
+                    // cerrado en carrera), despierta YA: su syscall verá el error real.
+                    if !poller.arm(fd, dir) {
+                        let w = fds.get_mut(&fd).unwrap();
+                        let v = match dir {
+                            Dir::Read => &mut w.read,
+                            Dir::Write => &mut w.write,
+                        };
+                        if let Some((id, had_dl, t)) = v.pop() {
+                            if had_dl {
+                                cancelled.insert(id);
+                            }
+                            batches[t.home].push(t);
+                        }
+                    }
                 }
                 Op::Timer(at, t) => sleeps.push((at, t)),
             }
@@ -452,7 +481,8 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
         let mut i = 0;
         while i < sleeps.len() {
             if sleeps[i].0 <= now {
-                s.enqueue(sleeps.swap_remove(i).1);
+                let (_, t) = sleeps.swap_remove(i);
+                batches[t.home].push(t);
             } else {
                 i += 1;
             }
@@ -465,16 +495,12 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
             if cancelled.remove(&dl.id) {
                 continue; // el readiness ganó la carrera: temporizador ya cancelado
             }
-            // Si el waiter sigue aparcado, venció de verdad: despierta con timed_out.
             if let Some(w) = fds.get_mut(&dl.fd) {
                 let v = if dl.dir_write { &mut w.write } else { &mut w.read };
                 if let Some(pos) = v.iter().position(|(wid, _, _)| *wid == dl.id) {
                     let (_, _, mut t) = v.swap_remove(pos);
                     t.timed_out = true;
-                    s.enqueue(t);
-                }
-                if w.read.is_empty() && w.write.is_empty() {
-                    fds.remove(&dl.fd);
+                    batches[t.home].push(t);
                 }
             }
         }
@@ -482,6 +508,9 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
             io_deadlines.retain(|Reverse(dl)| !cancelled.contains(&dl.id));
             cancelled.clear();
         }
+        // 3) Entrega los despertares acumulados hasta aquí, agrupados por worker (una toma de
+        //    lock por cola y por ciclo), y espera readiness.
+        flush_batches(s, &mut batches);
         let next_sleep = sleeps.iter().map(|(at, _)| *at).min();
         let next_io = io_deadlines.peek().map(|Reverse(dl)| dl.at);
         let timeout_ms: i32 = match (next_sleep, next_io) {
@@ -491,35 +520,62 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
                 at.saturating_duration_since(now).as_millis().min(i32::MAX as u128) as i32
             }
         };
-        // 3) Espera readiness de todos los fds con esperas (+ la tubería de despertar).
-        let read_fds: Vec<i32> = fds.iter().filter(|(_, w)| !w.read.is_empty()).map(|(&fd, _)| fd).collect();
-        let write_fds: Vec<i32> = fds.iter().filter(|(_, w)| !w.write.is_empty()).map(|(&fd, _)| fd).collect();
-        let ready = poller.wait(wake_rd, &read_fds, &write_fds, timeout_ms);
-        // 4) Reencola las fibras de los fds listos. Si varias esperaban el mismo (fd, dirección),
-        //    despiertan todas y las no atendidas se re-aparcan solas: siempre hay progreso. Sus
-        //    timers de deadline quedan huérfanos y se descartan solos al vencer (no encuentran
-        //    su id en `fds`).
-        for (fd, dir) in ready {
+        let mut rearm_all = false;
+        for &(fd, dir) in poller.wait(timeout_ms) {
             if fd == wake_rd {
-                sys::drain(wake_rd);
+                if sys::drain(wake_rd) {
+                    rearm_all = true;
+                }
                 continue;
             }
             if let Some(w) = fds.get_mut(&fd) {
-                let woken = match dir {
-                    Dir::Read => std::mem::take(&mut w.read),
-                    Dir::Write => std::mem::take(&mut w.write),
+                let v = match dir {
+                    Dir::Read => &mut w.read,
+                    Dir::Write => &mut w.write,
                 };
-                for (id, had_dl, t) in woken {
+                // Drena los waiters SIN liberar la capacidad del Vec (entrada persistente).
+                for (id, had_dl, t) in v.drain(..) {
                     if had_dl {
                         cancelled.insert(id); // su temporizador ya no debe despertar a nadie
                     }
-                    s.enqueue(t);
-                }
-                if w.read.is_empty() && w.write.is_empty() {
-                    fds.remove(&fd);
+                    batches[t.home].push(t);
                 }
             }
         }
+        // 4) Tras un POKE (un close del programa): el knote/registro de un fd cerrado muere en
+        //    silencio → re-arma TODOS los intereses vivos; el fd muerto vuelve como error/listo
+        //    en el siguiente wait y su fibra despierta al error real. O(fds aparcados), solo en
+        //    closes (coalescidos por ciclo), que es lo que el modelo de re-registro-total pagaba
+        //    en TODOS los ciclos.
+        if rearm_all {
+            for (&fd, w) in fds.iter() {
+                if !w.read.is_empty() {
+                    let _ = poller.arm(fd, Dir::Read);
+                }
+                if !w.write.is_empty() {
+                    let _ = poller.arm(fd, Dir::Write);
+                }
+            }
+        }
+        flush_batches(s, &mut batches);
+    }
+}
+
+/// Encola cada lote en la cola de su worker con UNA toma de lock por cola (los buffers de lote se
+/// reutilizan entre ciclos).
+fn flush_batches(s: &'static Scheduler, batches: &mut [Vec<Task>]) {
+    for (home, batch) in batches.iter_mut().enumerate() {
+        if batch.is_empty() {
+            continue;
+        }
+        let wq = &s.queues[home];
+        {
+            let mut q = wq.q.lock().unwrap();
+            for t in batch.drain(..) {
+                q.push_back(t);
+            }
+        }
+        wq.cv.notify_one();
     }
 }
 
@@ -643,54 +699,69 @@ mod sys {
 
     pub struct Poller {
         kq: i32,
+        /// Cambios PENDIENTES de registrar (se acumulan en `arm` y los presenta el siguiente
+        /// `wait` en su mismo syscall). Buffer persistente: capacidad reutilizada entre ciclos.
+        changes: Vec<Kevent>,
+        /// Buffer de eventos de salida, persistente. Si un ciclo devuelve el buffer LLENO, el
+        /// resto sigue pendiente en el kqueue y sale en el ciclo siguiente (kevent no los pierde).
+        events: Vec<Kevent>,
+        /// Pares (fd, dir) listos del último `wait` (buffer reutilizado).
+        ready: Vec<(i32, Dir)>,
     }
 
     impl Poller {
-        pub fn new() -> Poller {
+        pub fn new(wake_rd: i32) -> Poller {
             // SAFETY: syscall sin argumentos; kqueue(2) NO se hereda por fork (no necesita CLOEXEC).
             let kq = unsafe { kqueue() };
             assert!(kq >= 0, "could not create the fiber reactor (kqueue)");
-            Poller { kq }
+            let mut p = Poller {
+                kq,
+                changes: Vec::with_capacity(64),
+                events: (0..1024).map(|_| Poller::ev(0, 0, 0)).collect(),
+                ready: Vec::with_capacity(64),
+            };
+            // La tubería de despertar, registrada UNA vez y sin oneshot (permanente).
+            p.changes.push(Poller::ev(wake_rd, EVFILT_READ, EV_ADD));
+            p
         }
 
-        /// Espera hasta que algo esté listo. Registra los intereses como ONESHOT en la misma llamada
-        /// (changelist+eventlist en un solo syscall); re-registrar un (fd, filtro) vivo es idempotente
-        /// (lo reemplaza). La tubería se registra SIN oneshot: es permanente.
-        pub fn wait(&self, wake_rd: i32, read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> Vec<(i32, Dir)> {
-            let mut changes: Vec<Kevent> = Vec::with_capacity(read_fds.len() + write_fds.len() + 1);
-            let ev = |fd: i32, filter: i16, flags: u16| Kevent {
-                ident: fd as usize,
-                filter,
-                flags,
-                fflags: 0,
-                data: 0,
-                udata: core::ptr::null_mut(),
-            };
-            changes.push(ev(wake_rd, EVFILT_READ, EV_ADD));
-            for &fd in read_fds {
-                changes.push(ev(fd, EVFILT_READ, EV_ADD | EV_ONESHOT));
-            }
-            for &fd in write_fds {
-                changes.push(ev(fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT));
-            }
-            let mut events: Vec<Kevent> = (0..changes.len()).map(|_| ev(0, 0, 0)).collect();
+        fn ev(fd: i32, filter: i16, flags: u16) -> Kevent {
+            Kevent { ident: fd as usize, filter, flags, fflags: 0, data: 0, udata: core::ptr::null_mut() }
+        }
+
+        /// Registra (o re-registra) el interés ONESHOT de un fd. F5: INCREMENTAL — antes se
+        /// re-registraban TODOS los fds aparcados en cada ciclo (a -c 1000, un changelist de ~1000
+        /// entradas por evento); ahora solo entran los intereses NUEVOS, y los no disparados
+        /// siguen armados en el kqueue. Un fd CERRADO pierde su knote en silencio: de eso se
+        /// encarga el re-armado global que dispara `poke` (ver el reactor).
+        pub fn arm(&mut self, fd: i32, dir: Dir) -> bool {
+            let filter = if dir == Dir::Write { EVFILT_WRITE } else { EVFILT_READ };
+            self.changes.push(Poller::ev(fd, filter, EV_ADD | EV_ONESHOT));
+            true // el fallo real (EBADF…) llega como evento EV_ERROR en banda → despierta igual
+        }
+
+        /// Presenta los cambios acumulados y espera. Devuelve los (fd, dir) listos en un buffer
+        /// interno reutilizado (cero asignaciones en régimen).
+        pub fn wait(&mut self, timeout_ms: i32) -> &[(i32, Dir)] {
             let ts = Timespec {
                 tv_sec: (timeout_ms as isize) / 1000,
                 tv_nsec: ((timeout_ms as isize) % 1000) * 1_000_000,
             };
             let tsp = if timeout_ms < 0 { core::ptr::null() } else { &ts as *const Timespec };
-            // SAFETY: como en `src/poll.rs` — buffers locales del tamaño declarado, fds de sockets
-            // vivos (una fibra aparcada no cierra su fd), `tsp` nulo o apuntando a `ts` viva.
+            // SAFETY: buffers propios vivos durante la llamada, del tamaño declarado; fds de
+            // sockets del programa (uno cerrado en carrera produce EV_ERROR en banda, no UB).
             let n = unsafe {
-                kevent(self.kq, changes.as_ptr(), changes.len() as i32, events.as_mut_ptr(), events.len() as i32, tsp)
+                kevent(self.kq, self.changes.as_ptr(), self.changes.len() as i32, self.events.as_mut_ptr(), self.events.len() as i32, tsp)
             };
+            self.changes.clear();
+            self.ready.clear();
             if n < 0 {
-                return Vec::new(); // EINTR u otro transitorio: el bucle del reactor reintenta
+                return &self.ready; // EINTR u otro transitorio: el bucle del reactor reintenta
             }
-            events[..n as usize]
-                .iter()
-                .map(|e| (e.ident as i32, if e.filter == EVFILT_WRITE { Dir::Write } else { Dir::Read }))
-                .collect()
+            for e in &self.events[..n as usize] {
+                self.ready.push((e.ident as i32, if e.filter == EVFILT_WRITE { Dir::Write } else { Dir::Read }));
+            }
+            &self.ready
         }
     }
 
@@ -713,22 +784,34 @@ mod sys {
         (fds[0], fds[1])
     }
 
-    /// Toca la tubería (un byte; si está llena, el reactor ya tiene un despertar pendiente).
-    pub fn wake(wake_wr: i32) {
+    /// Toca la tubería (si está llena, el reactor ya tiene un despertar pendiente). El byte
+    /// distingue el motivo: 1 = trabajo en el buzón; 2 = POKE de un close (re-armar intereses).
+    pub fn wake(wake_wr: i32, tag: u8) {
         // SAFETY: escribe 1 byte de un buffer local a un fd propio no-bloqueante.
         unsafe {
-            let b = 1u8;
-            let _ = write(wake_wr, &b as *const u8, 1);
+            let _ = write(wake_wr, &tag as *const u8, 1);
         }
     }
 
-    /// Vacía la tubería tras un despertar (lecturas no-bloqueantes hasta agotar).
-    pub fn drain(wake_rd: i32) {
+    /// Vacía la tubería tras un despertar. Devuelve `true` si algún byte era un POKE (un `close`
+    /// del programa, byte 2): el reactor debe RE-ARMAR todos los intereses, porque el knote de un
+    /// fd cerrado muere en silencio y su fibra quedaría aparcada para siempre.
+    pub fn drain(wake_rd: i32) -> bool {
+        let mut poked = false;
         // SAFETY: lee a un buffer local desde un fd propio no-bloqueante.
         unsafe {
-            let mut buf = [0u8; 64];
-            while read(wake_rd, buf.as_mut_ptr(), buf.len()) > 0 {}
+            let mut buf = [0u8; 256];
+            loop {
+                let n = read(wake_rd, buf.as_mut_ptr(), buf.len());
+                if n <= 0 {
+                    break;
+                }
+                if buf[..n as usize].contains(&2u8) {
+                    poked = true;
+                }
+            }
         }
+        poked
     }
 }
 
@@ -776,94 +859,84 @@ mod sys {
 
     pub struct Poller {
         ep: i32,
-        /// fds que este epoll ya conoce (en epoll re-ADD da EEXIST: hay que alternar con MOD). Un
-        /// ONESHOT disparado sigue "conocido" pero desarmado; se re-arma con MOD. Celda interior
-        /// porque `wait` toma `&self`.
-        known: std::cell::RefCell<HashSet<i32>>,
+        /// fds que este epoll ya conoce (re-ADD da EEXIST: hay que alternar con MOD). Un ONESHOT
+        /// disparado sigue "conocido" pero desarmado; se re-arma con MOD.
+        known: HashSet<i32>,
+        /// Interés pendiente combinado por fd (un fd puede tener esperas de lectura Y escritura);
+        /// se arma en `arm` directamente (epoll_ctl es por-fd, no hay changelist que amortizar).
+        interest: std::collections::HashMap<i32, u32>,
+        events: Vec<EpollEvent>,
+        ready: Vec<(i32, Dir)>,
     }
 
     impl Poller {
-        pub fn new() -> Poller {
+        pub fn new(wake_rd: i32) -> Poller {
             // SAFETY: syscall directa; CLOEXEC como en el epoll de la VM (auditoría IDEAS §53.4).
             let ep = unsafe { epoll_create1(EPOLL_CLOEXEC) };
             assert!(ep >= 0, "could not create the fiber reactor (epoll)");
-            let p = Poller { ep, known: std::cell::RefCell::new(HashSet::new()) };
-            p.arm(super::sys_wake_rd(), EPOLLIN); // la tubería, permanente (sin ONESHOT)
+            let mut p = Poller {
+                ep,
+                known: HashSet::new(),
+                interest: std::collections::HashMap::new(),
+                events: (0..1024).map(|_| EpollEvent { events: 0, data: 0 }).collect(),
+                ready: Vec::with_capacity(64),
+            };
+            p.ctl(wake_rd, EPOLLIN); // la tubería, permanente (sin ONESHOT)
             p
         }
 
-        /// Arma (o re-arma) el interés de un fd. Ante cualquier fallo de `epoll_ctl` se degrada a
-        /// "listo ya" en el llamador: nunca se pierde una fibra, como mucho despierta de más.
-        fn arm(&self, fd: i32, events: u32) -> bool {
+        /// Arma (o re-arma) el interés de un fd vía epoll_ctl. Ante cualquier fallo devuelve
+        /// `false`: el llamador despierta la fibra YA (nunca se pierde; como mucho, de más).
+        fn ctl(&mut self, fd: i32, events: u32) -> bool {
             let mut ev = EpollEvent { events, data: fd as u64 };
-            let mut known = self.known.borrow_mut();
-            let (first, second) =
-                if known.contains(&fd) { (EPOLL_CTL_MOD, EPOLL_CTL_ADD) } else { (EPOLL_CTL_ADD, EPOLL_CTL_MOD) };
-            // SAFETY: `ev` vive durante la llamada; el fd viene de un socket vivo del programa.
+            let (first, second) = if self.known.contains(&fd) {
+                (EPOLL_CTL_MOD, EPOLL_CTL_ADD)
+            } else {
+                (EPOLL_CTL_ADD, EPOLL_CTL_MOD)
+            };
+            // SAFETY: `ev` vive durante la llamada; el fd viene de un socket del programa.
             unsafe {
                 if epoll_ctl(self.ep, first, fd, &mut ev as *mut EpollEvent) == 0
                     || epoll_ctl(self.ep, second, fd, &mut ev as *mut EpollEvent) == 0
                 {
-                    known.insert(fd);
+                    self.known.insert(fd);
                     return true;
                 }
             }
-            known.remove(&fd);
+            self.known.remove(&fd);
             false
         }
 
-        pub fn wait(&self, wake_rd: i32, read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> Vec<(i32, Dir)> {
-            // La tubería quedó armada permanente en `new`; aquí se arman los intereses ONESHOT.
-            // Interés combinado por fd (un fd puede tener esperas de lectura Y de escritura).
-            let mut interest: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
-            for &fd in read_fds {
-                *interest.entry(fd).or_insert(0) |= EPOLLIN;
-            }
-            for &fd in write_fds {
-                *interest.entry(fd).or_insert(0) |= EPOLLOUT;
-            }
-            let mut ready: Vec<(i32, Dir)> = Vec::new();
-            for (&fd, &evs) in &interest {
-                if !self.arm(fd, evs | EPOLLONESHOT) {
-                    // No se pudo armar (fd cerrado en carrera, etc.): despierta ya, la fibra decide.
-                    if evs & EPOLLIN != 0 {
-                        ready.push((fd, Dir::Read));
-                    }
-                    if evs & EPOLLOUT != 0 {
-                        ready.push((fd, Dir::Write));
-                    }
-                }
-            }
-            if !ready.is_empty() {
-                return ready;
-            }
-            let cap = interest.len() + 1;
-            let mut events: Vec<EpollEvent> = (0..cap).map(|_| EpollEvent { events: 0, data: 0 }).collect();
-            // SAFETY: buffer local del tamaño declarado; el timeout es el contrato de epoll_wait.
-            let n = unsafe { epoll_wait(self.ep, events.as_mut_ptr(), cap as i32, timeout_ms) };
+        /// F5: INCREMENTAL, como en kqueue. Combina lectura+escritura del mismo fd re-armando con
+        /// la unión (el mapa `interest` recuerda la máscara viva de cada fd armado).
+        pub fn arm(&mut self, fd: i32, dir: Dir) -> bool {
+            let bit = if dir == Dir::Write { EPOLLOUT } else { EPOLLIN };
+            let evs = { let e = self.interest.entry(fd).or_insert(0); *e |= bit; *e };
+            self.ctl(fd, evs | EPOLLONESHOT)
+        }
+
+        pub fn wait(&mut self, timeout_ms: i32) -> &[(i32, Dir)] {
+            let cap = self.events.len() as i32;
+            // SAFETY: buffer propio del tamaño declarado; contrato normal de epoll_wait.
+            let n = unsafe { epoll_wait(self.ep, self.events.as_mut_ptr(), cap, timeout_ms) };
+            self.ready.clear();
             if n < 0 {
-                return Vec::new(); // EINTR: el bucle del reactor reintenta
+                return &self.ready; // EINTR: el bucle del reactor reintenta
             }
-            for e in &events[..n as usize] {
+            for e in &self.events[..n as usize] {
                 let evs = e.events;
                 let fd = { e.data } as i32; // copia (struct empaquetado en x86_64)
-                // ERR/HUP despiertan AMBAS direcciones: la fibra hará la syscall y verá el error real.
+                self.interest.remove(&fd); // el oneshot quedó desarmado: la máscara viva expira
+                // ERR/HUP despiertan AMBAS direcciones: la fibra hará la syscall y verá el error.
                 if evs & (EPOLLIN | EPOLLERR | EPOLLHUP) != 0 {
-                    ready.push((fd, Dir::Read));
+                    self.ready.push((fd, Dir::Read));
                 }
                 if evs & (EPOLLOUT | EPOLLERR | EPOLLHUP) != 0 {
-                    ready.push((fd, Dir::Write));
+                    self.ready.push((fd, Dir::Write));
                 }
             }
-            ready
+            &self.ready
         }
-    }
-
-    // La tubería se crea antes que el Poller pero epoll necesita armarla en `new`: se memoriza aquí.
-    static WAKE_RD: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
-
-    pub(super) fn sys_wake_rd() -> i32 {
-        *WAKE_RD.get().expect("wake_pipe() must run before Poller::new()")
     }
 
     pub fn wake_pipe() -> (i32, i32) {
@@ -880,24 +953,34 @@ mod sys {
                 let _ = fcntl(fd, F_SETFD, FD_CLOEXEC);
             }
         }
-        let _ = WAKE_RD.set(fds[0]);
         (fds[0], fds[1])
     }
 
-    pub fn wake(wake_wr: i32) {
+    /// Ver la variante kqueue: 1 = trabajo en el buzón; 2 = POKE de un close.
+    pub fn wake(wake_wr: i32, tag: u8) {
         // SAFETY: escribe 1 byte de un buffer local a un fd propio no-bloqueante.
         unsafe {
-            let b = 1u8;
-            let _ = write(wake_wr, &b as *const u8, 1);
+            let _ = write(wake_wr, &tag as *const u8, 1);
         }
     }
 
-    pub fn drain(wake_rd: i32) {
+    /// Ver la variante kqueue: devuelve `true` si hubo POKE (re-armar todos los intereses).
+    pub fn drain(wake_rd: i32) -> bool {
+        let mut poked = false;
         // SAFETY: lee a un buffer local desde un fd propio no-bloqueante.
         unsafe {
-            let mut buf = [0u8; 64];
-            while read(wake_rd, buf.as_mut_ptr(), buf.len()) > 0 {}
+            let mut buf = [0u8; 256];
+            loop {
+                let n = read(wake_rd, buf.as_mut_ptr(), buf.len());
+                if n <= 0 {
+                    break;
+                }
+                if buf[..n as usize].contains(&2u8) {
+                    poked = true;
+                }
+            }
         }
+        poked
     }
 }
 
@@ -1021,29 +1104,26 @@ mod tests {
     }
 
     #[test]
-    fn sleeping_fibers_wake_after_their_deadline_and_far_deadlines_keep_order() {
-        // El contrato de sleep es "duerme AL MENOS ms": la latencia despertar→correr es mejor-
-        // esfuerzo (con fibras FIJADAS, una vecina que bloquea su worker unos ms puede retrasar
-        // la reanudación — los tests de eco de esta misma suite lo hacen con connect_timeout).
-        // Por eso: (1) cada durmiente verifica su plazo mínimo; (2) el orden solo se asevera
-        // entre plazos con margen GORDO (10 ms contra 400: ninguna carga de la suite tapa eso).
-        let order = Arc::new(Mutex::new(Vec::new()));
-        let handles: Vec<_> = [(400u64, 400u16), (10, 10)]
+    fn sleeping_fibers_wake_after_their_deadline() {
+        // El contrato de sleep es "duerme AL MENOS ms". La latencia despertar→correr es mejor-
+        // esfuerzo y NO se asevera: con fibras FIJADAS, una vecina que bloquee su worker retrasa
+        // la reanudación sin límite teórico (los tests de eco de esta MISMA suite, corriendo en
+        // paralelo, encadenan connect_timeout de 50 ms; con RAYLANG_THREADS=2 se midieron
+        // retrasos > 400 ms). Cualquier aserción de orden entre fibras dormidas es flaky por
+        // construcción — se aprendió dos veces antes de rendirse.
+        let handles: Vec<_> = [400u64, 10, 120]
             .into_iter()
-            .map(|(ms, tag)| {
-                let order = order.clone();
+            .map(|ms| {
                 spawn(move || {
                     let t0 = Instant::now();
                     fiber_sleep(ms as i64);
                     assert!(t0.elapsed() >= Duration::from_millis(ms), "duerme al menos {ms} ms");
-                    order.lock().unwrap().push(tag);
                 })
             })
             .collect();
         for h in handles {
             h.join().expect("la fibra durmiente termina");
         }
-        assert_eq!(*order.lock().unwrap(), vec![10u16, 400]);
     }
 
     #[test]

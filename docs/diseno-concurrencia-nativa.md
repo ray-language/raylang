@@ -278,11 +278,8 @@ Medido sobre el `plaintext` del bench, A/B intercalado ×3, misma sesión, `-c 1
 | **fibras (--fibers)** | **14** | ~209 MB | **~110 MB** | ~93k (−13 %) |
 
 - **El muro cayó**: 14 hilos constantes (idle: 2 MB de RSS). El objetivo estructural del arco.
-- El RSS restante es **retención de churn del asignador** (~100-200 B/petición retenidos; `leaks`
-  reporta 0 fugas y 22 KB rastreables; `vmmap` lo sitúa en las arenas). mimalloc retiene ~4× más
-  con 14 heaps que con 1002 — investigarlo es de F5, igual que el −13 % de rps (candidatos:
-  registro persistente de intereses en vez de re-registro por ciclo, batching del buzón,
-  `MIMALLOC_PURGE_DELAY` no surtió efecto).
+- El RSS restante era **retención de churn del asignador** (~100-200 B/petición retenidos; `leaks`
+  reportaba 0 fugas; `vmmap` lo situaba en las arenas) — RESUELTO en F5, ver §7.
 - TLS sigue bloqueante con fibras (F4); UDP también. `connect` bloqueante (acotado por el SO).
 
 **Dos lecciones de corrección que redefinen el diseño (pagadas con sangre de release-only):**

@@ -226,3 +226,38 @@ dependencia acotada tipo `corosensei`. El proyecto ya acepta deps cuando lo mere
 regex), y aquí el argumento a favor es fuerte: el `unsafe` de cambio de contexto escrito a mano es
 justo la clase de código donde un error no se manifiesta como excepción sino como corrupción de
 memoria silenciosa.
+
+> **DECISIÓN (28 jul 2026, confirmada por el usuario): opción (B) con `corosensei`.**
+
+## 5. Plan del arco (fases; cada una compila y se commitea sola)
+
+La palanca de integración ya existe: los subsistemas de `ray-runtime` van tras **features** y el
+default de `ray build --native` es la vía Cargo. El scheduler de fibras entra como feature
+**`fibers`** (con `dep:corosensei`): mientras el arco avanza, `--without fibers` — y la vía
+`rustc` pelada, que no puede traer crates — conservan el modelo de hilo-por-conexión actual como
+respaldo y como grupo de control para el A/B.
+
+- **F1 — núcleo de fibras en `ray-runtime`** (sin tocar el transpilador). Scheduler M:N:
+  corrutinas `corosensei` (pila `mmap` con página de guarda, reserva generosa, residencia por
+  páginas tocadas), N workers = cores, cola de listas compartida, **reactor** con kqueue/epoll
+  **persistente** (a diferencia de `src/poll.rs`, que crea y destruye el poller por llamada — aquí
+  el patrón oneshot por interés) + tubería de despertar CLOEXEC, y temporizadores para `sleep`.
+  API: `spawn` / `park_readable(fd)` / `park_writable(fd)` / `fiber_sleep` / `yield_now` /
+  `in_fiber`, con la cesión profunda vía TLS del yielder (repuesto tras cada reanudación, porque
+  una fibra puede despertar en otro worker). Tests del crate: masividad, E/S aparcada, panics.
+- **F2 — E/S de sockets del transpilado sobre fibras**: sockets no-bloqueantes;
+  `accept`/`read`/`write` aparcan la fibra en vez del hilo; `__ray_spawn` crea fibra cuando la
+  feature está activa. Corpus verde; el `plaintext` del bench como humo.
+- **F3 — primitivas de concurrencia sobre fibras**: canales, `join`/`try_join`, `scope` y
+  cancelación, `sleep`. ⚠️ Los thread-locals del runtime emitido (`__RAY_CANCEL`, `__SCOPES`) hoy
+  suponen hilo=tarea; con fibras que pueden reanudarse en otro worker, ese estado pasa a viajar
+  **con la fibra**. `__RAY_RDBUF` sí puede seguir por hilo: no se cede con el préstamo vivo.
+- **F4 — TLS (rustls) sobre fibras**: `StreamOwned` bloqueante → no-bloqueante con aparcado (el
+  mismo esquema que ya usa la VM).
+- **F5 — paridad, medición y default**: corpus byte a byte, suite de red completa, A/B
+  fibras-contra-hilos en el bench web (memoria/hilos/rps/p99.9), y la decisión de encender
+  `fibers` por defecto con `--without fibers` de escape.
+
+Nota asumida: las operaciones que siguen siendo bloqueantes de verdad (ficheros, SQLite, DNS del
+sistema) bloquean un worker mientras duran, igual que hoy bloquean un hilo. Es el mismo compromiso
+que acepta la VM y no forma parte de este arco.

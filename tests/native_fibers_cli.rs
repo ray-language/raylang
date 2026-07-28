@@ -305,3 +305,157 @@ fn main() -> int {
 "#,
     );
 }
+
+/// Los PEM de prueba (CN=localhost, firmados por la CA de fixtures) embebidos en el fuente raylang
+/// como literales con `\n` (el programa es autocontenido; la CA va por SSL_CERT_FILE).
+fn pem_literal(pem: &str) -> String {
+    pem.trim_end().replace('\n', "\\n")
+}
+
+#[test]
+fn tls_self_talk_parks_fibers_through_handshake_and_io() {
+    // F4: TLS sobre fibras — el servidor (fibra) hace tls_accept sobre un socket YA no-bloqueante
+    // (F2) y el handshake+lecturas aparcan la fibra (read_wait, dirección por wants_write); el
+    // cliente (main, no-fibra) usa la vía poll(2). Byte-idéntico a la VM.
+    if !has_rustc() {
+        eprintln!("saltando tls_self_talk: rustc no disponible");
+        return;
+    }
+    let cert = pem_literal(include_str!("fixtures/tls_cert.pem"));
+    let key = pem_literal(include_str!("fixtures/tls_key.pem"));
+    let src = format!(
+        r#"
+import std/net;
+
+fn main() -> int {{
+    let cert = "{cert}";
+    let key = "{key}";
+    match (net.tcp_listen("127.0.0.1", 0)) {{
+        Result.Err(e) => {{ print("listen: " + e); 1 }},
+        Result.Ok(srv) => {{
+            let port = net.local_port(srv);
+            let server = spawn(fn() {{
+                match (net.tcp_accept(srv)) {{
+                    Result.Ok(c) => {{
+                        match (net.tls_accept(c, cert, key)) {{
+                            Result.Ok(t) => {{
+                                match (net.socket_read_bytes(t)) {{
+                                    Result.Ok(data) => {{ net.socket_write_bytes(t, b"pong:" + data); }},
+                                    Result.Err(e) => print("srv read: " + e),
+                                }}
+                                close(t);
+                            }},
+                            Result.Err(e) => print("tls_accept: " + e),
+                        }}
+                    }},
+                    Result.Err(e) => print("accept: " + e),
+                }}
+            }});
+            match (net.tls_connect("localhost", port)) {{
+                Result.Ok(t) => {{
+                    net.socket_write_bytes(t, b"ping");
+                    match (net.socket_read_bytes(t)) {{
+                        Result.Ok(reply) => print(to_string(reply)),
+                        Result.Err(e) => print("cli read: " + e),
+                    }}
+                    close(t);
+                }},
+                Result.Err(e) => print("tls_connect: " + e),
+            }}
+            join(server);
+            close(srv);
+            print("tls done");
+            0
+        }},
+    }}
+}}
+"#
+    );
+    // Variante con entorno: la CA de prueba vía SSL_CERT_FILE para que el cliente confíe en el
+    // certificado autofirmado (mismo mecanismo que tls_upgrade_cli).
+    let dir = std::env::temp_dir().join(format!("ray_fibers_tls_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("crea el dir del test");
+    let ca = dir.join("ca.pem");
+    std::fs::write(&ca, include_str!("fixtures/tls_ca.pem")).expect("escribe la CA");
+    let src_path = dir.join("tls_self.ray");
+    std::fs::write(&src_path, &src).expect("escribe el fuente");
+
+    let vm = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("--vm")
+        .arg(&src_path)
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("corre la VM");
+    let bin = dir.join("tls_self_bin");
+    let built = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["build", src_path.to_str().unwrap(), "--native", "--fibers", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("lanza ray build --native --fibers");
+    assert!(built.status.success(), "build falla: {}", String::from_utf8_lossy(&built.stderr));
+    let native = Command::new(&bin).env("SSL_CERT_FILE", &ca).output().expect("corre el binario");
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        String::from_utf8_lossy(&vm.stdout),
+        "stdout de fibras ≡ VM en TLS (stderr nativo: {})",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(native.status.code(), vm.status.code(), "código de salida ≡ VM");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn udp_ping_pong_parks_fibers() {
+    // F4: UDP sobre fibras — recv_from aparca la fibra hasta que llega el datagrama; el lado main
+    // usa la vía poll(2). Orden causal: cada extremo espera el datagrama del otro.
+    assert_fibers_matches_vm(
+        "udp_pingpong",
+        r#"
+import std/net;
+
+// `text` decodifica bytes→string (to_string sobre bytes hexdumpea; el mismo helper que udp.ray).
+fn text(b: bytes) -> string {
+    match (from_utf8(b)) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
+}
+fn tag_recv(r: [bytes]) -> string {
+    if (text(r[0]) == "ok") { text(r[3]) } else { "err " + text(r[1]) }
+}
+fn main() -> int {
+    let ra = __udp_bind("127.0.0.1", 0);
+    let rb = __udp_bind("127.0.0.1", 0);
+    if (ra[0] != "ok" || rb[0] != "ok") { print("bind failed"); return 1; }
+    let a = match (parse_int(ra[1])) { Option.Some(h) => h, Option.None => { return 1; } };
+    let b = match (parse_int(rb[1])) { Option.Some(h) => h, Option.None => { return 1; } };
+    let pb = net.local_port(b);
+    let server = spawn(fn() {
+        var k: int = 0;
+        while (k < 3) {
+            let p = __udp_recv_from(b);
+            if (text(p[0]) == "ok") {
+                match (parse_int(text(p[2]))) {
+                    Option.Some(rport) => { __udp_send_to(b, text(p[1]), rport, b"eco:" + p[3]); },
+                    Option.None => print("bad port"),
+                }
+            } else {
+                print("recv b: " + text(p[1]));
+            }
+            k = k + 1;
+        }
+    });
+    var k: int = 0;
+    while (k < 3) {
+        __udp_send_to(a, "127.0.0.1", pb, b"dato" + to_string(k).to_bytes());
+        print(tag_recv(__udp_recv_from(a)));
+        k = k + 1;
+    }
+    join(server);
+    close(a);
+    close(b);
+    print("udp done");
+    0
+}
+"#,
+    );
+}

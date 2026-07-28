@@ -49,6 +49,124 @@ mod imp {
         }
     }
 
+    // ─── F4 (arco de concurrencia nativa): I/O TLS apto para FIBRAS ────────────────────────────
+    //
+    // Con `--fibers` los sockets son NO-bloqueantes: `read`/`write_all` de arriba devolverían
+    // WouldBlock (incluido el handshake, que StreamOwned conduce dentro de la primera I/O). Estas
+    // variantes esperan readiness y reintentan: en fibra APARCAN (park del reactor), fuera hacen
+    // poll(2). La DIRECCIÓN de la espera sale de la sesión rustls (`wants_write`): el handshake
+    // alterna lecturas y escrituras, y aparcar por lectura cuando toca escribir interbloquearía.
+    #[cfg(feature = "fibers")]
+    impl TlsStream {
+        fn raw_fd(&self) -> i32 {
+            use std::os::fd::AsRawFd;
+            match self {
+                TlsStream::Client(s) => s.sock.as_raw_fd(),
+                TlsStream::Server(s) => s.sock.as_raw_fd(),
+            }
+        }
+
+        fn wants_write(&self) -> bool {
+            match self {
+                TlsStream::Client(s) => s.conn.wants_write(),
+                TlsStream::Server(s) => s.conn.wants_write(),
+            }
+        }
+
+        /// Marca el socket subyacente como (no-)bloqueante. Lo llama el runtime emitido con
+        /// `--fibers` justo tras crear la sesión (los sockets aceptados/upgradeados ya vienen
+        /// no-bloqueantes de F2; esto cubre los de `connect`/`connect_h2`, que nacen aquí).
+        pub fn set_nonblocking(&self, nb: bool) -> std::io::Result<()> {
+            match self {
+                TlsStream::Client(s) => s.sock.set_nonblocking(nb),
+                TlsStream::Server(s) => s.sock.set_nonblocking(nb),
+            }
+        }
+
+        /// Como [`TlsStream::read`], esperando readiness en WouldBlock. `timeout_ms > 0` acota la
+        /// operación completa (el read-timeout M56.4); vencido → `ErrorKind::TimedOut` (el
+        /// llamador lo normaliza a "read timeout", byte-idéntico a la VM).
+        pub fn read_wait(&mut self, buf: &mut [u8], timeout_ms: i64) -> std::io::Result<usize> {
+            let deadline = if timeout_ms > 0 {
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms as u64))
+            } else {
+                None
+            };
+            loop {
+                match self.read(buf) {
+                    Ok(n) => return Ok(n),
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        self.wait_ready(deadline)?;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        /// Como [`TlsStream::write_all`], esperando readiness en WouldBlock (sin plazo: el modelo
+        /// de escritura no tiene timeout, como en TCP plano).
+        pub fn write_all_wait(&mut self, data: &[u8]) -> std::io::Result<()> {
+            let mut off = 0;
+            loop {
+                let r = match self {
+                    TlsStream::Client(s) => {
+                        use std::io::Write;
+                        s.write(&data[off..]).and_then(|n| { s.flush()?; Ok(n) })
+                    }
+                    TlsStream::Server(s) => {
+                        use std::io::Write;
+                        s.write(&data[off..]).and_then(|n| { s.flush()?; Ok(n) })
+                    }
+                };
+                match r {
+                    Ok(n) => {
+                        off += n;
+                        if off >= data.len() {
+                            return Ok(());
+                        }
+                    }
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        self.wait_ready(None)?;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        /// Espera la readiness que la sesión NECESITA (escritura si rustls tiene datos pendientes
+        /// de vaciar; lectura si espera del peer). Vencido el plazo → `TimedOut`.
+        fn wait_ready(&self, deadline: Option<std::time::Instant>) -> std::io::Result<()> {
+            let fd = self.raw_fd();
+            let timed_out = if self.wants_write() {
+                // La escritura no lleva plazo (como TCP plano): espera sin límite.
+                crate::fibers::wait_writable(fd);
+                false
+            } else {
+                let ms = match deadline {
+                    None => 0,
+                    Some(d) => {
+                        let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64;
+                        if rem <= 0 {
+                            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
+                        }
+                        rem
+                    }
+                };
+                crate::fibers::wait_readable_timeout(fd, ms)
+            };
+            if timed_out {
+                return Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
+            }
+            Ok(())
+        }
+    }
+
     /// Config de cliente: raíces de Mozilla + (como curl) los certificados extra de `SSL_CERT_FILE` (una CA
     /// propia o —en pruebas— una autofirmada). Espeja `tls_client_config` de la VM (mismo comportamiento).
     fn client_config() -> Arc<rustls::ClientConfig> {

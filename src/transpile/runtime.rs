@@ -676,15 +676,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // `senders` los emisores bloqueados (para que `close` los detecte, como la VM). Los panics
             // llevan el MISMO texto que el error de ejecución de la VM (exit code ≠ 70: diferido a H6).
             "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize>, taken: u64, senders: usize }\n",
-            "struct __RayChan<T> { inner: std::sync::Arc<(std::sync::Mutex<__ChanState<T>>, std::sync::Condvar)> }\n",
+            "struct __RayChan<T> { inner: std::sync::Arc<__RaySync<__ChanState<T>>> }\n",
             "impl<T> Clone for __RayChan<T> { fn clone(&self) -> Self { __RayChan { inner: self.inner.clone() } } }\n",
             // Un canal dentro de un struct/enum mostrable se renderiza `<channel>`, como la VM
             // (`format_value`: canal/tarea no se inspeccionan textualmente).
             "impl<T> RayShow for __RayChan<T> { fn ray_show(&self) -> String { \"<channel>\".to_string() } }\n",
             "impl<T: Send> __RayChan<T> {\n",
-            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new((std::sync::Mutex::new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0 }), std::sync::Condvar::new())) } }\n",
+            "    fn make(cap: Option<usize>) -> Self { __RayChan { inner: std::sync::Arc::new(__ray_sync_new(__ChanState { q: std::collections::VecDeque::new(), closed: false, cap, taken: 0, senders: 0 })) } }\n",
             "    fn send(&self, v: T) {\n",
-            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        let mut st = self.inner.0.lock().unwrap();\n",
             // `send` sobre un canal cerrado = error de ejecución, como la VM (antes: descarte silencioso).
             // El guard se suelta antes del panic para no envenenar el Mutex (los otros hilos verían
             // PoisonError en vez del mensaje real). Toda espera bloqueante usa `__ray_cv_wait` (timeout
@@ -697,49 +697,72 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // suyo ya se consumió. `my` = el ordinal que consumirá su valor; A retorna cuando `taken >= my`.
             "        if st.cap == Some(0) {\n",
             "            st.senders += 1;\n",
-            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "            if st.closed { st.senders -= 1; drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            st.q.push_back(v);\n",
-            "            let my = st.taken + 1; cv.notify_all(); __ray_bump();\n",
-            "            while !st.closed && st.taken < my { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            let my = st.taken + 1; __ray_notify(&self.inner); __ray_bump();\n",
+            "            while !st.closed && st.taken < my { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "            st.senders -= 1;\n",
             "            if st.taken < my { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            return;\n",
             "        }\n",
             "        st.senders += 1;\n",
-            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.senders -= 1;\n",
             "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
-            "        st.q.push_back(v); cv.notify_all(); drop(st); __ray_bump();\n",
+            "        st.q.push_back(v); __ray_notify(&self.inner); drop(st); __ray_bump();\n",
             "    }\n",
             "    fn recv(&self) -> Option<T> {\n",
-            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
-            "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; cv.notify_all(); } v\n",
+            "        let mut st = self.inner.0.lock().unwrap();\n",
+            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; __ray_notify(&self.inner); } v\n",
             "    }\n",
             // `close` con un emisor bloqueado = error de ejecución en el sitio del close, como la VM
             // (M12.2; antes el emisor hacía return silencioso y su valor quedaba consumible).
             "    fn close(&self) {\n",
-            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
+            "        let mut st = self.inner.0.lock().unwrap();\n",
             "        if st.senders > 0 { drop(st); __ray_rt_err(\"close on a channel with a blocked sender\"); }\n",
-            "        st.closed = true; cv.notify_all(); drop(st); __ray_bump();\n",
+            "        st.closed = true; __ray_notify(&self.inner); drop(st); __ray_bump();\n",
             "    }\n",
             "}\n",
             // Condvar-wait con timeout corto: el despertar normal sigue llegando por `notify` (sin
             // latencia añadida); el timeout solo acota cuánto tarda una tarea bloqueada en NOTAR su
             // cancelación (cooperativa, H21-N3) → sin busy-wait.
-            "fn __ray_cv_wait<'a, T>(m: &'a std::sync::Mutex<T>, cv: &std::sync::Condvar, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> {\n",
         ));
-        // F2 (--fibers): una espera bloqueante DENTRO de una fibra clavaría a su worker — y con
-        // fibras FIJADAS al worker (corrección frente al cacheo de TLS de LLVM, ver fibers.rs),
-        // una hermana del mismo worker no correría jamás (interbloqueo). En fibra: soltar el
-        // lock, CEDER el turno y re-tomar. El bucle del llamador rechequea la condición — mismo
-        // contrato que el timeout de 10 ms. Fuera de fibra (main), el condvar de siempre.
+        // F3: la TRÍADA de sincronización por modo. Con fibras, cada condición (canal/tarea)
+        // lleva además una LISTA DE ESPERAS (ray_runtime::fibers::WaitList): la espera de una
+        // FIBRA se aparca de verdad (cero CPU; el ceder-en-bucle de F2 quemaba un worker por
+        // esperador ocioso) con el protocolo anti despertar-perdido de la lista (prepare bajo el
+        // lock → soltar → block_on; el registro re-lee la generación) y el pulso de 10 ms que
+        // conserva la cadencia de cancelación (H21-N3). El hilo `main` sigue en la condvar. Los
+        // SITIOS (send/recv/close/wait) comparten cadena en ambos modos: solo cambian estos
+        // helpers y el alias del tipo.
         if t.fibers {
-            out.push_str("    if ray_runtime::fibers::in_fiber() { drop(g); ray_runtime::fibers::yield_now(); return m.lock().unwrap(); }\n");
+            out.push_str(concat!(
+                "type __RaySync<T> = (std::sync::Mutex<T>, std::sync::Condvar, ray_runtime::fibers::WaitList);\n",
+                "fn __ray_sync_new<T>(v: T) -> __RaySync<T> { (std::sync::Mutex::new(v), std::sync::Condvar::new(), ray_runtime::fibers::WaitList::new()) }\n",
+                "fn __ray_cv_wait<'a, T>(inner: &'a __RaySync<T>, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> {\n",
+                "    if ray_runtime::fibers::in_fiber() {\n",
+                "        let seen = inner.2.prepare();\n",
+                "        drop(g);\n",
+                "        ray_runtime::fibers::block_on(&inner.2, seen);\n",
+                "        return inner.0.lock().unwrap();\n",
+                "    }\n",
+                "    inner.1.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0\n}\n",
+                "fn __ray_notify<T>(inner: &__RaySync<T>) { inner.1.notify_all(); inner.2.wake_all(); }\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "type __RaySync<T> = (std::sync::Mutex<T>, std::sync::Condvar);\n",
+                "fn __ray_sync_new<T>(v: T) -> __RaySync<T> { (std::sync::Mutex::new(v), std::sync::Condvar::new()) }\n",
+                // Condvar-wait con timeout corto: el despertar normal llega por notify; el timeout
+                // solo acota cuánto tarda una tarea bloqueada en NOTAR su cancelación (H21-N3).
+                "fn __ray_cv_wait<'a, T>(inner: &'a __RaySync<T>, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> {\n",
+                "    inner.1.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0\n}\n",
+                "fn __ray_notify<T>(inner: &__RaySync<T>) { inner.1.notify_all(); }\n",
+            ));
         }
         out.push_str(concat!(
-            "    let _ = m; cv.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0 }\n",
             // Token de cancelación del hilo actual (lo instala `__ray_spawn`; `main` no tiene → false).
         ));
         // F2 (--fibers): el token de cancelación viaja EN LA FIBRA (ctx) — la fibra puede
@@ -766,15 +789,46 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "static __RAY_ACT_WAITERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
             "static __RAY_ACT_M: std::sync::Mutex<()> = std::sync::Mutex::new(());\n",
             "static __RAY_ACT_CV: std::sync::Condvar = std::sync::Condvar::new();\n",
-            "fn __ray_bump() {\n",
-            "    __RAY_ACT_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
-            "    if __RAY_ACT_WAITERS.load(std::sync::atomic::Ordering::SeqCst) > 0 { let _g = __RAY_ACT_M.lock().unwrap(); __RAY_ACT_CV.notify_all(); }\n",
-            "}\n",
+        ));
+        // F3 (--fibers): la actividad global también tiene su lista de esperas (para las FIBRAS en
+        // select/salida-de-scope); el condvar sigue cubriendo al hilo main.
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_act_wl() -> &'static ray_runtime::fibers::WaitList {\n",
+                "    static W: std::sync::OnceLock<ray_runtime::fibers::WaitList> = std::sync::OnceLock::new();\n",
+                "    W.get_or_init(ray_runtime::fibers::WaitList::new)\n}\n",
+                "fn __ray_bump() {\n",
+                "    __RAY_ACT_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
+                "    if __RAY_ACT_WAITERS.load(std::sync::atomic::Ordering::SeqCst) > 0 { { let _g = __RAY_ACT_M.lock().unwrap(); __RAY_ACT_CV.notify_all(); } __ray_act_wl().wake_all(); }\n",
+                "}\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "fn __ray_bump() {\n",
+                "    __RAY_ACT_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
+                "    if __RAY_ACT_WAITERS.load(std::sync::atomic::Ordering::SeqCst) > 0 { let _g = __RAY_ACT_M.lock().unwrap(); __RAY_ACT_CV.notify_all(); }\n",
+                "}\n",
+            ));
+        }
+        out.push_str(concat!(
             "fn __ray_wait_activity(act: u64) {\n",
             "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
             "    while __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
-            "        g = __ray_cv_wait(&__RAY_ACT_M, &__RAY_ACT_CV, g);\n",
+        ));
+        if t.fibers {
+            out.push_str(concat!(
+                "        g = if ray_runtime::fibers::in_fiber() {\n",
+                "            let seen = __ray_act_wl().prepare();\n",
+                "            drop(g);\n",
+                "            if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act { ray_runtime::fibers::block_on(__ray_act_wl(), seen); }\n",
+                "            __RAY_ACT_M.lock().unwrap()\n",
+                "        } else { __RAY_ACT_CV.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0 };\n",
+            ));
+        } else {
+            out.push_str("        g = __RAY_ACT_CV.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0;\n");
+        }
+        out.push_str(concat!(
             "        if __ray_cancelled() { drop(g); __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
             "    }\n",
             "    drop(g);\n",
@@ -794,14 +848,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // consume a sus hijas al cerrar). Un segundo join → error TASK_CONSUMED (byte-idéntico a
             // la VM, que libera el slot y detecta el handle stale). Un `Failed` consumido cuenta como
             // MANEJADO: `failed()` (el escaneo del scope) lo salta — semántica M97.1.
-            "struct __RayTask<T> { inner: std::sync::Arc<(std::sync::Mutex<__TaskState<T>>, std::sync::Condvar)>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, consumed: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
+            "struct __RayTask<T> { inner: std::sync::Arc<__RaySync<__TaskState<T>>>, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>, consumed: std::sync::Arc<std::sync::atomic::AtomicBool> }\n",
             "impl<T> Clone for __RayTask<T> { fn clone(&self) -> Self { __RayTask { inner: self.inner.clone(), cancel: self.cancel.clone(), consumed: self.consumed.clone() } } }\n",
             "impl<T> RayShow for __RayTask<T> { fn ray_show(&self) -> String { \"<task>\".to_string() } }\n",
             "const __RAY_TASK_CONSUMED: &str = \"task already consumed (join/try_join takes the task)\";\n",
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
             "    fn wait(&self) -> Result<T, String> {\n",
-            "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        while st.result.is_none() { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        let mut st = self.inner.0.lock().unwrap();\n",
+            "        while st.result.is_none() { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.result.clone().unwrap()\n",
             "    }\n",
             // try_join: consume la tarea entera (Ok y Err) — es la observación + la unión en una.
@@ -846,13 +900,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         if t.fibers {
             out.push_str(concat!(
                 "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
-                "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
+                "    let task = __RayTask { inner: std::sync::Arc::new(__ray_sync_new(__TaskState { result: None })), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
                 "    let t = task.clone();\n",
                 "    let _ = ray_runtime::fibers::spawn(move || {\n",
                 "        __ray_ctx(|c| c.cancel = Some(t.cancel.clone()));\n",
                 "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
                 "        if r.is_err() { let frames = __ray_ctx(|c| std::mem::take(&mut c.scopes)); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
-                "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
+                "        let mut st = t.inner.0.lock().unwrap(); st.result = Some(r); drop(st); __ray_notify(&t.inner); __ray_bump();\n",
                 "    });\n",
                 "    let t2 = task.clone();\n",
                 "    __ray_ctx(|c| { if let Some(frame) = c.scopes.last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
@@ -929,7 +983,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    });\n",
                 "}\n",
                 "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
-                "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
+                "    let task = __RayTask { inner: std::sync::Arc::new(__ray_sync_new(__TaskState { result: None })), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
                 "    let t = task.clone();\n",
                 "    __ray_pool_exec(std::boxed::Box::new(move || {\n",
                 "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
@@ -937,7 +991,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // Una hija que falla con tareas en vuelo cancela los hijos de sus scopes sin cerrar (el
                 // unwinding se saltó los pops de __SCOPES) → transitiva, sin nietos huérfanos (M12.5).
                 "        if r.is_err() { let frames = __SCOPES.with(|s| std::mem::take(&mut *s.borrow_mut())); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
-                "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
+                "        let mut st = t.inner.0.lock().unwrap(); st.result = Some(r); drop(st); __ray_notify(&t.inner); __ray_bump();\n",
                 "    }));\n",
                 "    let t2 = task.clone();\n",
                 "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
@@ -980,7 +1034,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    loop {\n",
             "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
             "        for (i, ch) in chs.iter().enumerate() {\n",
-            "            let (m, _) = &*ch.inner; let st = m.lock().unwrap();\n",
+            "            let st = ch.inner.0.lock().unwrap();\n",
             "            if !st.q.is_empty() || st.closed { return i as i64; }\n",
             "        }\n",
             "        __ray_wait_activity(act);\n",

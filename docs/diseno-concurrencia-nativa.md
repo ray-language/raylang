@@ -427,3 +427,34 @@ La incógnita que dejó el arco: el framework con hilos tenía el techo CLAVADO 
   hyper pelado (~206k): en Rust la capa axum también sale ~gratis.
 - `ray-thr` como grupo de control interno reprodujo el techo histórico del modelo de hilos
   (161.6k ≈ 160-165k de las corridas previas): la sesión es comparable.
+
+## 11. F3, EJECUTADA (28 jul 2026) — esperas por lista: el arco queda SIN interinos
+
+La última pieza: las esperas de condición de una fibra (canales, `join`, `select`, salida de
+scope) dejan el interino de F2 (soltar-ceder-retomar en bucle, que quemaba un worker por
+esperador ocioso) y pasan a una **lista de esperas** (`WaitList` en `ray_runtime::fibers`):
+
+- Protocolo anti despertar-perdido: el esperador lee la GENERACIÓN con el lock de su condición
+  tomado (`prepare`), lo suelta y suspende; el worker, al registrar, re-lee la generación — si
+  cambió en la ventana, re-encola en vez de dormir. `wake_all` avanza la generación y encola cada
+  fibra en su worker de origen.
+- **Cancelación (H21-N3) intacta**: cada espera lleva un pulso de 10 ms (temporizador del
+  reactor) — la MISMA cadencia con la que el modelo de hilos notaba la cancelación vía
+  `wait_timeout(10ms)` — pero con la fibra aparcada de verdad entre pulsos.
+- El runtime emitido unifica los sitios (send/recv/close/wait/select/scope) sobre una tríada
+  `__RaySync<T>` = (Mutex, Condvar, WaitList) con helpers `__ray_cv_wait`/`__ray_notify`: las
+  cadenas de los sitios son IDÉNTICAS en ambos modos; solo cambian los helpers y el alias. El
+  hilo `main` sigue esperando por la condvar (ambas vías se notifican).
+
+Medido (6 fibras esperando canales ociosos durante 3 s):
+
+| | CPU (user+sys) |
+|---|---|
+| F2 (ceder-en-bucle) | 14.0 s |
+| **F3 (lista de esperas)** | **0.04 s** (~350×) |
+
+El webserver no se mueve (A/B intercalado: ~111k rps, 8 MB — idéntico), como se predijo: sus
+canales no están en el hot path. Paridad intacta: 9/9 de fibras, AMBOS corpus, cli_cli 94/94.
+
+**El arco no tiene ya piezas interinas.** Pendientes menores (no bloqueantes): connect
+no-bloqueante del cliente, pool de pilas de corrutina, sharding del buzón del reactor.

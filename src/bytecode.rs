@@ -407,6 +407,12 @@ pub enum OpCode {
     /// `[msg]` si falló — el fallo como VALOR, sin re-lanzar (M56.5). Primitivo `__task_failed`; el
     /// prelude lo envuelve en `try_join(t) -> Result<T, string>` (que reusa `join` para el valor). Solo VM.
     TaskFailed,
+    /// M97.2: saca una closure `fn()` y la llama en la **MISMA fibra**, con un marcador de
+    /// recuperación. Al volver bien empuja `[]`; si el cuerpo falla, se desenrollan los marcos hasta
+    /// el marcador y empuja `[msg]` — el fallo como VALOR, sin `spawn` ni cambio de hilo. Primitivo
+    /// `__try_call`; el prelude lo envuelve en `try_call(f) -> Result<T, string>`. Los TRES motores
+    /// (a diferencia de `TaskFailed`, que es solo-VM porque `spawn` no corre en el intérprete).
+    TryCall,
     /// Saca un **arreglo de canales** `[Channel<T>]`; espera a que **alguno** esté listo para recibir (cola
     /// no vacía, emisor bloqueado, o cerrado) y empuja el **índice** (int) del primero listo. Si ninguno
     /// lo está, **bloquea** la fibra hasta que alguno lo esté (M12.4). Builtin `select`. Solo VM.

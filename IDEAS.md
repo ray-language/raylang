@@ -1398,9 +1398,26 @@ magia posicional de `recover` es lo menos elegante de Go). La forma raylang es *
   siempre; el no-observado conserva M12.5 íntegra. Paridad en el nativo (`wait_observed`). Tests VM +
   nativo con salida exacta; espec en DESIGN §21.6 (refinamiento); MANUAL §15 "Recuperación de errores
   fatales" (patrón `spawn`+`try_join`, reglas, batch tolerante, el webserver como caso real).
-- **M97.2 — `try_call(f: fn() -> T) -> Result<T, string>`** (recuperación en la MISMA fibra, sin
-  `spawn`): el recover general. **🔥 Ahora también tiene justificación de RENDIMIENTO, medida
-  contra terceros** (27 jul 2026, [docs/investigacion-p999-webserver-nativo.md](docs/investigacion-p999-webserver-nativo.md)):
+- ✅ **M97.2 — `try_call(f: fn() -> T) -> Result<T, string>`** (COMPLETA, 27 jul 2026): recuperación
+  en la MISMA fibra, sin `spawn`; el recover general, en los TRES motores. Implementado tal como se
+  había planeado: primitivo `__try_call(f: fn()) -> [string]` (`[]` bien / `[msg]` falló — el mismo
+  contrato que `__task_failed`) + envoltorio `try_call` en el prelude. **El valor NO viaja por el
+  primitivo**: el envoltorio le pasa una closure que empuja el resultado a un array capturado, así el
+  primitivo se queda con la firma mínima y no hay que construir un enum genérico desde el runtime.
+  Por motor: **intérprete** captura el `Flow::Error` de `call_index`; **VM** pila de `TryMarker` por
+  fibra (marcos/pila/scopes al entrar) — el `Return` que devuelve los marcos a la altura del marcador
+  entrega `[]`, y el manejador de errores del bucle desenrolla hasta él (`unwind_to_try_marker`, con
+  la misma cancelación de hijas huérfanas que `fail_current_fiber`); **nativo** `catch_unwind` en el
+  mismo hilo. **Dos decisiones que la implementación obligó a tomar**: (1) el nativo captura
+  CUALQUIER panic, no solo `__RayErr`, porque un índice fuera de rango allí es el bounds check de
+  Rust — capturar solo `__RayErr` habría hecho DIVERGIR el flujo de control entre motores, que es la
+  línea que no se cruza; el texto del mensaje sí difiere en esa clase de error (divergencia
+  preexistente, documentada en MANUAL §15); (2) el hook de panic calla dentro de un `try_call`
+  (contador thread-local) — un fallo que se va a recuperar no debe imprimir "thread panicked at". El
+  marcador gana al `return Err` que aborta en `main`: si no, `try_call` no serviría donde más se usa.
+  Tests: `tests/recover_cli.rs` (6, casi todos de ORÁCULO intérprete≡VM≡nativo — lo que
+  `spawn`+`try_join` nunca pudo tener) + corpus nativo completo verde.
+- **La justificación de RENDIMIENTO que lo movió de "planificado" a "hecho", medida contra terceros** (27 jul 2026, [docs/investigacion-p999-webserver-nativo.md](docs/investigacion-p999-webserver-nativo.md)):
   el `spawn`+`try_join` por petición de `handle_http` —que está ahí SOLO por el aislamiento de
   panic de M56.5— hace que en el nativo **cada petición cruce dos hilos de SO** (send al canal del
   pool + despertar de semáforo + join). Censo del perfil bajo 120k rps con `-c 100`: **198 hilos de

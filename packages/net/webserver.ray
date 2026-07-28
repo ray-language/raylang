@@ -823,7 +823,8 @@ fn wants_close(req: Request) -> bool {
 // (`Connection: close`), cierre él mismo, quede ocioso (vence `read_timeout_millis`) o algo falle.
 // Aquí sí podemos: la respuesta la escribe el servidor (el framing por Content-Length ya es
 // correcto), así que el header `Connection` siempre dice la verdad. Cada petición corre su handler
-// en su PROPIA tarea (M56.5): un panic responde 500 y cierra, sin fugar nada.
+// en su PROPIO `try_call` (M56.5, cambiado en M97.2 de `spawn`+`try_join` a recuperación en la misma
+// fibra): un panic responde 500 y cierra, sin fugar nada y sin cruzar de hilo.
 fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     var follow: bool = true;
     while (follow) {
@@ -832,8 +833,18 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                 let close: bool = wants_close(req);
                 // M56.8: a un HEAD se le responden las cabeceras del GET equivalente SIN el cuerpo.
                 let is_head: bool = req.method == "HEAD";
-                let t = spawn(fn() -> Response { handler(req) });
-                match (try_join(t)) {
+                // M97.2: `try_call` en vez de `spawn`+`try_join`. Misma garantía (un handler que
+                // revienta responde 500 y cierra, sin tumbar el servidor) sin cambio de hilo: en el
+                // binario nativo el `spawn` iba al pool de hilos del SO, así que CADA petición
+                // cruzaba dos hilos —send al canal, despertar de semáforo, join— y con 100
+                // conexiones el proceso levantaba 198 hilos sobre 11 cores. Ese handoff era el
+                // mecanismo medido detrás de la cola profunda (p99.9 2.5× peor que Go con p50 y p99
+                // MEJORES); ver docs/investigacion-p999-webserver-nativo.md.
+                // Contrapartida aceptada: `try_call` no aísla el heap, así que un handler que
+                // revienta a mitad puede dejar estado suyo a medio mutar. Da igual aquí: ese estado
+                // es por-petición y la conexión se cierra a continuación (`follow = false`), que es
+                // lo que este código ya hacía.
+                match (try_call(fn() -> Response { handler(req) })) {
                     Result.Ok(resp) => {
                         match (send_response_keep(conn, resp, !close, is_head)) {
                             Result.Ok(_) => { },

@@ -20,6 +20,46 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
     // con el hook de Rust.
     out.push_str("struct __RayErr(String);\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    // M97.2 (`try_call`): recuperación en el MISMO hilo. Devuelve `[]` si `f` volvió bien y `[msg]`
+    // si falló, el mismo contrato que `__task_failed` — así el envoltorio `try_call` del prelude es
+    // idéntico para los tres motores.
+    //
+    // Captura CUALQUIER panic, no solo los `__RayErr`, y esto es deliberado: no todos los fallos de
+    // runtime del nativo pasan por `__ray_rt_err`. Un índice fuera de rango, por ejemplo, es el
+    // bounds check de Rust (el indexado se emite sin comprobación propia, para no pagarla en el
+    // camino caliente). Si aquí solo se capturasen los `__RayErr`, la VM recuperaría ese caso y el
+    // nativo no → los dos motores DIVERGIRÍAN en el flujo de control, que es la línea que el
+    // proyecto no cruza. Capturando todo, `try_call` recupera el mismo conjunto de fallos en los
+    // tres motores; lo único que difiere es el TEXTO del mensaje en esa clase de errores, y esa
+    // divergencia es preexistente (también se ve hoy en un fallo sin capturar: la VM dice
+    // "index 7 out of range (length 2)" y el nativo el texto de Rust).
+    // Profundidad de `try_call` en vuelo EN ESTE HILO. El hook de panic la consulta para callarse:
+    // un fallo que se va a recuperar no debe escupir "thread panicked at …" ni la nota del
+    // backtrace (la VM no imprime nada al recuperar, y los dos motores deben verse igual). Es
+    // thread-local, no global: cada hilo lleva la suya, sin sincronización.
+    out.push_str("thread_local! { static __RAY_IN_TRY: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }\n");
+    out.push_str("fn __ray_in_try() -> bool { __RAY_IN_TRY.with(|d| d.get() > 0) }\n");
+    out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
+    out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() + 1));\n");
+    out.push_str("    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n");
+    out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() - 1));\n");
+    out.push_str("    Rc::new(std::cell::RefCell::new(match r {\n");
+    out.push_str("        Ok(()) => Vec::new(),\n");
+    out.push_str("        Err(e) => {\n");
+    out.push_str("            let m = match e.downcast::<__RayErr>() {\n");
+    out.push_str("                Ok(r) => r.0,\n");
+    out.push_str("                Err(o) => match o.downcast::<String>() {\n");
+    out.push_str("                    Ok(s) => *s,\n");
+    out.push_str("                    Err(o) => match o.downcast::<&'static str>() {\n");
+    out.push_str("                        Ok(s) => (*s).to_string(),\n");
+    out.push_str("                        Err(_) => \"panic\".to_string(),\n");
+    out.push_str("                    },\n");
+    out.push_str("                },\n");
+    out.push_str("            };\n");
+    out.push_str("            vec![Rc::<str>::from(m.as_str())]\n");
+    out.push_str("        }\n");
+    out.push_str("    }))\n");
+    out.push_str("}\n");
     out.push_str("fn __ray_panic_msg(e: &(dyn std::any::Any + Send)) -> String {\n");
     out.push_str("    if let Some(r) = e.downcast_ref::<__RayErr>() { r.0.clone() }\n");
     out.push_str("    else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }\n");

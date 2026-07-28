@@ -920,6 +920,36 @@ impl<'a> Interpreter<'a> {
                         };
                         return Err(runtime_error(callee.line, callee.col, &msg));
                     }
+                    // M97.2: `__try_call(f)` llama a `f` y convierte un fallo en valor: `[]` si fue
+                    // bien, `[msg]` si falló. Se intercepta aquí —no en `eval_builtin`— por dos
+                    // razones: hace falta `&mut self` para llamar (`eval_builtin` toma `&self`), y
+                    // el fallo que se captura ES un `Flow::Error`, que solo se ve desde aquí.
+                    // El desenrollado lo hace el `?` de Rust: al capturar el `Err`, los marcos del
+                    // tramo abortado ya se descartaron con la pila de Rust.
+                    if name == "__try_call" {
+                        let outcome = match &values[0] {
+                            Value::Function(idx) => {
+                                self.call_index(*idx, vec![], &[], callee.line, callee.col)
+                            }
+                            Value::Closure(c) => {
+                                let captured = c.upvalues.clone();
+                                self.call_index(c.index, vec![], &captured, callee.line, callee.col)
+                            }
+                            _ => unreachable!("the checker guarantees a function of no arguments"),
+                        };
+                        let cell = match outcome {
+                            Ok(_) => vec![],
+                            // Solo el MENSAJE: quien lo observe le pone su propia posición, igual
+                            // que `try_join` (`fail_current_fiber` hace lo mismo con la fibra).
+                            Err(Flow::Error(e)) => vec![Value::Str(e.msg)],
+                            // `call_index` consume el `Return` del cuerpo y ejecuta las `TailCall`
+                            // en su trampolín, así que ninguno de los dos escapa hasta aquí.
+                            Err(_) => unreachable!("call_index consumes Return and TailCall"),
+                        };
+                        return Ok(Value::Array(std::rc::Rc::new(
+                            std::cell::RefCell::new(cell),
+                        )));
+                    }
                     // P0.3: `add_to(m, k, delta)` — upsert acumulativo en 1 lookup (entry-API). Se
                     // intercepta aquí (no en `eval_builtin`) porque el overflow int es un `Flow::Error`
                     // (como `+`), y aquí tenemos la posición del callee. Espejo del opcode `MapAdd`.

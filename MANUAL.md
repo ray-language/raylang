@@ -1054,13 +1054,37 @@ fn main() -> int {
 }
 ```
 
-### Recuperación de errores fatales (`try_join`)
+### Recuperación de errores fatales (`try_call` y `try_join`)
 
 Un error fatal (`panic`, división por cero, índice fuera de rango, overflow) aborta el programa… salvo
-que ocurra **dentro de una tarea**: ahí queda capturado en su `Task<T>` y raylang te deja decidir. `join`
-lo **re-lanza** (propagación por defecto: un fallo no se pierde en silencio); **`try_join` lo devuelve
-como valor** — `Result<T, string>` con el mensaje del fallo — y el programa sigue. Es el `recover` de Go,
-pero sin magia posicional: el fallo es un `Result` ordinario que se maneja con `match`/`?`.
+que lo envuelvas. Hay dos formas, y la diferencia entre ellas es cuánto aíslan:
+
+| | qué hace | aislamiento | motores |
+|---|---|---|---|
+| **`try_call(f)`** | corre `f` **aquí mismo** y devuelve `Result<T, string>` | ninguno: lo que `f` mutó antes de fallar sigue mutado | los tres |
+| **`try_join(spawn(f))`** | corre `f` en una **tarea** y observa su desenlace | total: heap propio, se descarta entero al fallar | solo VM y nativo (`spawn` no corre en el intérprete) |
+
+**Empieza por `try_call`**: es el `recover` general, no necesita tarea, y no paga ni un cambio de hilo.
+
+```rust
+fn main() -> int {
+    match (try_call(fn() -> int { procesar_entrada_dudosa() })) {
+        Result.Ok(v) => print("resultado: " + to_string(v)),
+        Result.Err(msg) => eprint("fallo, sigo con el resto: " + msg),
+    }
+    0
+}
+```
+
+⚠️ `try_call` recupera **en la misma fibra**, así que el estado que el cuerpo mutó antes de fallar
+sigue ahí (el mismo trade-off que `catch_unwind` en Rust, o que un `except` en Python). Si lo que
+necesitas es que un fallo no deje nada a medias, usa una tarea:
+
+Un error fatal dentro de una **tarea** queda capturado en su `Task<T>` y raylang te deja decidir.
+`join` lo **re-lanza** (propagación por defecto: un fallo no se pierde en silencio); **`try_join` lo
+devuelve como valor** — `Result<T, string>` con el mensaje del fallo — y el programa sigue. Es el
+`recover` de Go, pero sin magia posicional: el fallo es un `Result` ordinario que se maneja con
+`match`/`?`.
 
 ```rust
 fn main() -> int {
@@ -1075,7 +1099,13 @@ fn main() -> int {
 
 Reglas:
 
-- `try_join` captura **cualquier** error de ejecución de la tarea, no solo `panic` explícito.
+- Los dos capturan **cualquier** error de ejecución, no solo `panic` explícito: división por cero,
+  índice fuera de rango, overflow.
+- `try_call` **anida**: el `try_call` más interno gana, y un fallo posterior en el cuerpo de fuera lo
+  recupera el de fuera.
+- En el binario nativo, el mensaje de algunos errores de runtime (p. ej. un índice fuera de rango)
+  difiere del de la VM, porque allí el chequeo lo hace el propio Rust. El comportamiento —que se
+  recupere— es idéntico en los tres motores; solo cambia el texto.
 - **Una tarea es de un solo consumidor**: `join`/`try_join` la *consumen* (liberan su resultado — así
   un servidor de larga vida no acumula memoria por tarea terminada). Unirla dos veces, o unir una
   tarea cuyo `scope` ya cerró, es un error de ejecución (`task already consumed`).

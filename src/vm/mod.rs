@@ -231,6 +231,7 @@ impl<'a> Vm<'a> {
                 task: None,
                 scopes: Vec::new(),
                 unit_enums: Default::default(),
+                try_markers: Vec::new(),
             },
             shared: Arc::new(Mutex::new(Shared::default())),
             locals_pool: Vec::new(),
@@ -1022,6 +1023,7 @@ impl<'a> Vm<'a> {
                         sh.ready.push_back(Fiber {
                             frames: vec![frame], stack: Vec::new(), heap: new_heap, is_main: false,
                             task, scopes: Vec::new(), unit_enums: Default::default(),
+                            try_markers: Vec::new(),
                         });
                         task
                     };
@@ -2749,6 +2751,35 @@ impl<'a> Vm<'a> {
                         function: fn_idx, ip: 0, locals, upvalues, stack_base: self.cur.stack.len(),
                     });
                 }
+                // M97.2: `__try_call(f)` — llama a `f` en ESTA fibra dejando un marcador de
+                // recuperación. La llamada en sí es la de `CallValue` con 0 argumentos; lo único
+                // propio es el marcador. El resultado (`[]` o `[msg]`) lo empuja el `Return` que
+                // cierra el marcador (camino bueno) o el manejador de errores del bucle (camino
+                // malo), no este opcode.
+                OpCode::TryCall => {
+                    if self.cur.frames.len() >= MAX_FRAMES {
+                        return Err(runtime_error(pos!().0, pos!().1, "stack overflow (recursion too deep)"));
+                    }
+                    let (fn_idx, upvalues) = match self.pop() {
+                        HeapValue::Function(i) => (i, Vec::new()),
+                        HeapValue::Obj(h) => match self.cur.heap.get(h) {
+                            Obj::Closure(c) => (c.index, c.upvalues.clone()),
+                            _ => unreachable!("the checker guarantees a function"),
+                        },
+                        _ => unreachable!("the checker guarantees a function"),
+                    };
+                    // El marcador se toma TRAS sacar la closure: `stack_len` es la altura sobre la
+                    // que irá el resultado, igual que la vería un `Return` normal.
+                    self.cur.try_markers.push(crate::vm::sched::TryMarker {
+                        frames_len: self.cur.frames.len(),
+                        stack_len: self.cur.stack.len(),
+                        scopes_len: self.cur.scopes.len(),
+                    });
+                    let locals = self.new_locals(fn_idx);
+                    self.cur.frames.push(CallFrame {
+                        function: fn_idx, ip: 0, locals, upvalues, stack_base: self.cur.stack.len(),
+                    });
+                }
                 // M13.3b: llamada indirecta en cola — reutiliza el marco actual.
                 OpCode::TailCallValue(argc) => {
                     let mut args_rev = Vec::with_capacity(*argc);
@@ -2796,13 +2827,29 @@ impl<'a> Vm<'a> {
                 }
 
                 OpCode::Return => {
-                    let result = self.pop();
+                    let mut result = self.pop();
                     if let Some(frame) = self.cur.frames.pop() {
                         // El `Return` que baja `?` ocurre en mitad de una expresión: los operandos
                         // pendientes de este marco quedan por encima de su base y hay que descartarlos,
                         // o desalinean los argumentos de la siguiente llamada del llamador (M64.1).
                         self.cur.stack.truncate(frame.stack_base);
                         self.recycle_locals(frame.locals); // Opt.2: el marco se descarta → recicla sus locales
+                    }
+                    // M97.2: ¿este `Return` cierra un `try_call`? El marcador guardó la altura de
+                    // marcos ANTES de la llamada, así que coincide justo tras sacar el marco del
+                    // cuerpo protegido. Entonces el valor que se entrega no es el del cuerpo (el
+                    // prelude ya lo guardó en su array capturado) sino `[]` = "no falló".
+                    // Una sola comparación sobre un `Vec` casi siempre vacío: el camino caliente
+                    // paga un `last()` y nada más.
+                    if self
+                        .cur
+                        .try_markers
+                        .last()
+                        .is_some_and(|m| m.frames_len == self.cur.frames.len())
+                    {
+                        self.cur.try_markers.pop();
+                        let h = self.cur.heap.allocate(Obj::Array(Vec::new()));
+                        result = HeapValue::Obj(h);
                     }
                     if self.cur.frames.is_empty() {
                         // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
@@ -2827,6 +2874,15 @@ impl<'a> Vm<'a> {
                     // es la misma disciplina que el intérprete).
                     if e.trace.is_empty() {
                         e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
+                    }
+                    // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se
+                    // desenrolla hasta su marcador y se entrega `[msg]` como valor. Va ANTES del
+                    // reparto main/hija de abajo a propósito: un `try_call` en `main` también
+                    // recupera (es justo su razón de ser), y para eso tiene que ganarle al
+                    // `return Err(e)` que aborta el programa.
+                    if !self.cur.try_markers.is_empty() {
+                        self.unwind_to_try_marker(e);
+                        continue;
                     }
                     // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
                     // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los

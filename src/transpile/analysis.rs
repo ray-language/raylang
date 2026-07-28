@@ -100,9 +100,49 @@ pub(super) fn spawn_fn_param_marks(prog: &Program) -> HashMap<String, std::colle
                     }
                 }
             });
+            // M97.2: propagación HACIA DELANTE. Las reglas de arriba marcan al LLAMADOR (su param
+            // cruza porque lo captura un spawn, propio o de un callee ya marcado). Falta el sentido
+            // contrario: si un param YA marcado se pasa tal cual a otra función, la posición
+            // receptora también tiene que viajar como genérico — un `__F` no se convierte solo a
+            // `Rc<dyn Fn>` y rustc lo rechaza con "expected Rc<dyn Fn…>, found type parameter __F".
+            //
+            // Se destapó al cambiar `handle_http` de `spawn`+`try_join` a `try_call`: perdió su
+            // `spawn` (y con él su marca) mientras `loop_iter_server`, que sí spawnea por conexión y
+            // le pasa el handler, seguía marcado. Marcar la posición receptora es además lo
+            // SEMÁNTICAMENTE correcto: ese handler sigue cruzando a la fibra de la conexión, así que
+            // necesita los mismos bounds (`Send + Sync + Clone`) que ya tiene en el llamador.
+            let mine: Vec<usize> = marks.get(&f.name).map(|m| m.iter().copied().collect()).unwrap_or_default();
+            let mut forward: Vec<(String, usize)> = Vec::new();
+            if !mine.is_empty() {
+                let marked_names: Vec<&String> =
+                    fps.iter().filter(|(i, _)| mine.contains(i)).map(|(_, n)| n).collect();
+                visit_exprs_block(&f.body, &mut |e: &Expr| {
+                    if let ExprKind::Call { callee, args } = &e.kind
+                        && let ExprKind::Ident(cn) = &callee.kind
+                        && cn != "spawn"
+                    {
+                        for (j, a) in args.iter().enumerate() {
+                            if let ExprKind::Ident(an) = &a.kind
+                                && marked_names.iter().any(|n| *n == an)
+                            {
+                                forward.push((cn.clone(), j));
+                            }
+                        }
+                    }
+                });
+            }
             let entry = marks.entry(f.name.clone()).or_default();
             for h in hits {
                 if entry.insert(h) {
+                    changed = true;
+                }
+            }
+            for (cn, j) in forward {
+                // Solo si esa posición del callee es de verdad un param de tipo fn (un homónimo o
+                // un builtin no tienen entrada en `fn_params` y se ignoran solos).
+                if fn_params.get(&cn).is_some_and(|ps| ps.iter().any(|(i, _)| *i == j))
+                    && marks.entry(cn).or_default().insert(j)
+                {
                     changed = true;
                 }
             }

@@ -1091,6 +1091,26 @@ fn recv<T>(ch: Channel<T>) -> Option<T> {
 // reusa join, que con la tarea ya terminada ni bloquea ni falla. Solo la VM.
 /// Waits for the task and returns its outcome as a value: `Ok(its result)` if it finished, or
 /// `Err(panic message)` if it failed — unlike `join`, which re-raises the failure. VM only.
+// M97.2 — el "recover" general: corre `f` en la MISMA fibra y convierte un fallo fatal (panic,
+// índice fuera de rango, división por cero…) en un valor. A diferencia de `try_join`, no hace
+// `spawn`: ni cambio de hilo en el binario nativo, ni fibra nueva en la VM, y funciona también en
+// el intérprete (donde `spawn` no existe) → oráculo completo entre los tres motores.
+// El valor viaja por `slot`, un array capturado por la closure que se le pasa al primitivo: así
+// `__try_call` solo tiene que decir SI falló (`[]` / `[msg]`), no acarrear un `T` genérico.
+// ⚠️ Recupera con el heap de la propia fibra posiblemente a medio mutar (el mismo trade-off que
+// `catch_unwind` de Rust). Para aislamiento de verdad, `spawn` + `try_join`.
+/// Runs `f` and returns its outcome as a value: `Ok(its result)`, or `Err(message)` if it failed
+/// with a fatal error. Recovery happens in the SAME fiber (no task is spawned), so state mutated
+/// before the failure stays mutated — use `spawn` plus `try_join` when you need real isolation.
+fn try_call<T>(f: fn() -> T) -> Result<T, string> {
+    var slot: [T] = [];
+    let e = __try_call(fn() { slot.push(f()); });
+    if (e.len() > 0) {
+        return Result.Err(e[0]);
+    }
+    Result.Ok(slot[0])
+}
+
 fn try_join<T>(t: Task<T>) -> Result<T, string> {
     let f = __task_failed(t);
     if (f.len() > 0) {

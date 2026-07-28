@@ -132,17 +132,43 @@ Go en memoria (40 MB contra 49) con **13 hilos constantes** en vez de 1002 creci
 distintas que esta medición no separa. El arco busca justamente quedarse con el modelo de memoria de
 la VM y el rendimiento del nativo.
 
-### Lo que el prototipo sintético todavía aportaría (y lo que ya no)
+## 3c. Cuánta pila toca de verdad una conexión, MEDIDO — y el búfer que la inflaba
 
-Ya **no** hace falta para saber si el modelo de fibras baja la memoria: está medido, 11.5×. Queda
-una sola incógnita propia de la opción (B): **cuánta pila TOCA de verdad una corrutina**, que es lo
-que se sumaría a esos 23 KB. Hay una forma barata de acotarlo sin escribir corrutinas: bajar la pila
-de los hilos actuales a 32 KiB y 16 KiB y ver a partir de qué tamaño el binario revienta — eso da
-directamente cuánta pila usa el código de `net/webserver`. Con la hipótesis 1 ya se probó que a
-128 KiB funciona sin cambiar el RSS, así que el techo está por debajo de eso.
+Era la última incógnita de la opción (B), y se acotó sin escribir una sola corrutina: se hizo
+configurable el tamaño de pila de los hilos del pool (`Builder::stack_size`, parche temporal) y se
+bajó bajo carga real (`plaintext`, `-c 200`, oha) hasta que el binario revienta.
 
-Estimación resultante para (B): **~23 KB + pila tocada**, probablemente 30-40 KB por conexión. 10 000
-conexiones pasarían de ~2.6 GB y 10 000 hilos a ~300-400 MB y un puñado de hilos.
+| pila por hilo | 512 KiB | 128 | 64 | **56** | **48** | 32 | 16 |
+|---|---|---|---|---|---|---|---|
+| antes | vive | vive | vive | **vive** | **desborda** | desborda | desborda |
+| después | vive | vive | vive | vive | vive | vive | **vive** |
+
+El escalón entre 48 y 56 KiB tenía nombre y apellidos: **`let mut buf = [0u8; 65536]` en la pila**,
+dentro de `__ray_socket_read`/`_read_bytes`. Cobraba dos veces:
+
+1. Rust **inicializa el array a cero**, así que cada hilo tocaba sus 16 páginas en el primer `read` y
+   quedaban residentes de por vida — RSS puro por hilo, no por trabajo.
+2. Hundía la pila 64 KiB, fijando ese suelo de ~56 KiB por conexión.
+
+Moverlo a un `thread_local!` (commit aparte, `perf(native)`) da un **beneficio inmediato en el modelo
+actual**, A/B intercalado y reproducible al MB: **c=200 → 59-50 MB (−15 %)**, **c=1000 → 285-239 MB
+(−16 %, o sea −46 KB por conexión)**, con el caudal igual o algo mejor. Y para el arco deja lo que
+importa: **con el búfer fuera, el servidor funciona con pilas de 8 KiB**.
+
+**Conclusión para (B): la pila tocada por una conexión de `net/webserver` es ≤ 8 KiB** — por debajo
+del mínimo que `pthread` sabe dar, así que la medición no puede afinar más y no hace falta. La
+estimación de 32-64 KiB del §2 era **pesimista por un factor de 4 a 8**.
+
+### Lo que el prototipo sintético todavía aportaría: nada
+
+Ya **no** hace falta para saber si el modelo de fibras baja la memoria (medido: 11.5×) ni para
+dimensionar la pila de una corrutina (medido: ≤ 8 KiB). Los dos números que el prototipo iba a
+estimar están medidos sobre el código real, que es mejor evidencia de la que el prototipo habría
+dado. **Se descarta.**
+
+Estimación resultante para (B): **~23 KB (estado por fibra, medido en la VM) + ≤ 8 KiB de pila
+≈ 30 KB por conexión.** 10 000 conexiones pasarían de ~2.6 GB y 10 000 hilos a **~300 MB y un puñado
+de hilos**.
 
 ## 4. Recomendación
 
@@ -155,21 +181,21 @@ nuevo de coloreado en el transpilador que se propaga por todo el programa genera
 todo lo demás, incluido el código raylang de `net/webserver`, que no se entera. Y el nivel 1 del §3
 sale casi gratis, porque el aparcado pasa a ser el mismo concepto que en la VM.
 
-La memoria estimada baja de 265 KB a ~32-64 KiB por conexión (**4-8×**), y los hilos de 1002 a un
-puñado. No es el orden de magnitud de (A), pero **quita el muro**: 10 000 conexiones pasan de ~2.6 GB
-y 10 000 hilos a ~300-600 MB y ~11 hilos.
+Y con los §3b y §3c medidos, la desventaja que le apuntaba a (B) —"no baja a cientos de bytes sino a
+la pila mínima"— **se desinfla**: la pila mínima real es ≤ 8 KiB, no 32-64. La memoria por conexión
+baja de 265 KB a **~30 KB (≈9×)**, y los hilos de 1002 a un puñado: 10 000 conexiones pasan de
+~2.6 GB y 10 000 hilos a **~300 MB y ~11 hilos**. La diferencia que quedaría con (A) —cientos de
+bytes contra 8 KiB de pila— ya no cambia el orden de magnitud del resultado, y no justifica su coste
+en alcance.
 
-### Antes de comprometerse: un experimento que decide
+### Antes de comprometerse: el experimento, ya hecho
 
-Estimar no basta, y el precedente de esta misma semana lo demuestra (la hipótesis de la pila se
-falsó en 20 minutos). Antes del arco completo:
+El plan era un prototipo sintético (servidor echo con corrutinas sobre `poll.rs`) para confirmar el
+orden de magnitud. **Se descarta por innecesario**: los §3b y §3c midieron las dos incógnitas sobre
+el código real, que es mejor evidencia. Queda una sola decisión abierta antes del arco:
 
-1. **Prototipo mínimo fuera de raylang**: un servidor echo en Rust con corrutinas de pila propia
-   sobre `poll.rs`, 1000 conexiones, midiendo hilos y RSS. Confirma o refuta el orden de magnitud
-   estimado sin tocar el transpilador.
-2. Si confirma, **decidir la pieza de cambio de contexto**: a mano con `asm!` por arquitectura, o
-   una dependencia acotada. El proyecto ya acepta deps cuando lo merecen (ring, rusqlite, regex),
-   y aquí el argumento a favor es fuerte: el `unsafe` de cambio de contexto escrito a mano es
-   justo la clase de código donde un error no se manifiesta como excepción sino como corrupción.
-
-Solo después, el arco sobre el runtime nativo.
+**La pieza de cambio de contexto**: a mano con `asm!` por arquitectura (aarch64 + x86_64), o una
+dependencia acotada tipo `corosensei`. El proyecto ya acepta deps cuando lo merecen (ring, rusqlite,
+regex), y aquí el argumento a favor es fuerte: el `unsafe` de cambio de contexto escrito a mano es
+justo la clase de código donde un error no se manifiesta como excepción sino como corrupción de
+memoria silenciosa.

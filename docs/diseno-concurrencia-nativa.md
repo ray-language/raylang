@@ -404,3 +404,26 @@ conserva ambos modelos (`ray` = default/fibras, `ray-thr` = respaldo) mientras c
 Queda F3 (esperas de fibra por lista de esperas, sin ceder en bucle) como optimización de fondo
 sin efecto en el bench del webserver, y los pendientes menores anotados: connect no-bloqueante
 del cliente, pool de pilas de corrutina, sharding del buzón del reactor si el bench lo pide.
+
+## 10. Post-cierre: el FRAMEWORK con el default nuevo (28 jul 2026, escalón json en red real)
+
+La incógnita que dejó el arco: el framework con hilos tenía el techo CLAVADO en el del pelado
+(165.6k vs 165.5k — "el cuello está debajo de la capa de framework"). Con fibras por default:
+
+| json (framework) | sostenida | techo | p50 | p99.9 |
+|---|---|---|---|---|
+| axum | 200k (líder) | **~202k** (por fin visible) | 0.47 | 1.04 |
+| **ray (fibras)** | **160k** | **~188k** | **0.48** | **1.05** |
+| ray-thr (hilos) | 160k | ~161.6k | 0.60 | 1.17 |
+| chi | 120k | ~124.8k | 0.65 | 2.77 |
+| express | 40k | ~40k | 2.44 | 5.28 |
+
+- **El techo del framework SIGUIÓ al del pelado**: 161.6k (hilos) → 188k (fibras), +16 % — y queda
+  a ~1 % del plaintext (190.5k). El diagnóstico "el cuello está debajo" era correcto y el arco lo
+  quitó: la capa de framework sigue costando ~0-1 %.
+- **Contra axum (el framework de referencia de Rust): 93 % de su techo**, con p50 y p99.9 en
+  EMPATE estadístico (0.48/1.05 contra 0.47/1.04). Contra chi (Go): **1.51×**.
+- El techo de axum por fin es visible (~202k, falla el escalón de 240k) — casi idéntico al de
+  hyper pelado (~206k): en Rust la capa axum también sale ~gratis.
+- `ray-thr` como grupo de control interno reprodujo el techo histórico del modelo de hilos
+  (161.6k ≈ 160-165k de las corridas previas): la sesión es comparable.

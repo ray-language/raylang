@@ -4,6 +4,7 @@ plaintext/ray/plaintext-ray-thr
 plaintext/go/plaintext-go
 plaintext/hyper/target/
 json/ray/json-ray
+json/ray/json-ray-thr
 json/chi/json-chi
 json/axum/target/
 json/express/node_modules/

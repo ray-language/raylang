@@ -96,7 +96,10 @@ WORKLOADS = {
         "path": "/users/42",
         "body": b'{"id":"42","name":"Ada"}',
         "impls": [
+            # ray = el DEFAULT (fibras); ray-thr = el respaldo hilo-por-tarea (--without fibers),
+            # como en plaintext.
             ("ray", ["{dir}/ray/json-ray", "{bind}", "{port}"], 18090),
+            ("ray-thr", ["{dir}/ray/json-ray-thr", "{bind}", "{port}"], 18094),
             ("axum", ["{dir}/axum/target/release/json-axum", "{bind}", "{port}"], 18091),
             ("chi", ["{dir}/chi/json-chi", "{bind}", "{port}"], 18092),
             ("express", ["node", "{dir}/express/main.js", "{bind}", "{port}"], 18093),

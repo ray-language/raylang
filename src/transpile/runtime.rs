@@ -7,7 +7,7 @@
 
 use super::*;
 
-pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
+pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fibers: bool) {
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
     out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables)]\n");
     out.push_str("use std::rc::Rc;\n");
@@ -37,12 +37,24 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
     // un fallo que se va a recuperar no debe escupir "thread panicked at …" ni la nota del
     // backtrace (la VM no imprime nada al recuperar, y los dos motores deben verse igual). Es
     // thread-local, no global: cada hilo lleva la suya, sin sincronización.
-    out.push_str("thread_local! { static __RAY_IN_TRY: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }\n");
-    out.push_str("fn __ray_in_try() -> bool { __RAY_IN_TRY.with(|d| d.get() > 0) }\n");
-    out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
-    out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() + 1));\n");
-    out.push_str("    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n");
-    out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() - 1));\n");
+    // F2 (--fibers): la profundidad viaja EN LA FIBRA (ctx) — un try_call puede aparcar dentro
+    // (E/S de socket) y reanudarse en OTRO worker; el contador por-hilo se quedaría en el anterior
+    // (hook mal silenciado allí, silencio de más aquí). `__ray_ctx`/`__FiberCtx` se emiten en
+    // emit_runtime_features (el orden de items no importa en Rust).
+    if fibers {
+        out.push_str("fn __ray_in_try() -> bool { __ray_ctx(|c| c.in_try > 0) }\n");
+        out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
+        out.push_str("    __ray_ctx(|c| c.in_try += 1);\n");
+        out.push_str("    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n");
+        out.push_str("    __ray_ctx(|c| c.in_try -= 1);\n");
+    } else {
+        out.push_str("thread_local! { static __RAY_IN_TRY: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }\n");
+        out.push_str("fn __ray_in_try() -> bool { __RAY_IN_TRY.with(|d| d.get() > 0) }\n");
+        out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
+        out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() + 1));\n");
+        out.push_str("    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n");
+        out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() - 1));\n");
+    }
     out.push_str("    Rc::new(std::cell::RefCell::new(match r {\n");
     out.push_str("        Ok(()) => Vec::new(),\n");
     out.push_str("        Err(e) => {\n");
@@ -194,6 +206,38 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool) {
 }
 
 pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
+    // F2 (--fibers): el CONTEXTO POR-TAREA que en el modelo de hilos eran thread-locals
+    // (cancelación, pila de scopes, profundidad de try_call, caché de sockets y sus timeouts).
+    // Con fibras que pueden reanudarse en otro worker, ese estado viaja EN LA FIBRA: vive en el
+    // slot fiber-local de ray_runtime::fibers (Box<dyn Any> por Task); el hilo `main` — que no es
+    // una fibra — cae al thread-local de respaldo. Los campos se recortan a lo que el programa usa.
+    if t.fibers {
+        let mut fields = String::from(" in_try: u32,");
+        let mut init = String::from(" in_try: 0,");
+        if t.needs_concurrency {
+            fields.push_str(" cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>, scopes: Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>,");
+            init.push_str(" cancel: None, scopes: Vec::new(),");
+        }
+        if t.needs_net {
+            fields.push_str(" socks: std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>, rd_to: std::collections::HashMap<i64, i64>,");
+            init.push_str(" socks: std::collections::HashMap::new(), rd_to: std::collections::HashMap::new(),");
+        }
+        write!(out, "struct __FiberCtx {{{fields} }}\n").unwrap();
+        write!(out, "fn __ray_ctx_new() -> __FiberCtx {{ __FiberCtx {{{init} }} }}\n").unwrap();
+        out.push_str(concat!(
+            "thread_local! { static __RAY_MAIN_CTX: std::cell::RefCell<__FiberCtx> = std::cell::RefCell::new(__ray_ctx_new()); }\n",
+            // CONTRATO (de fibers::with_local): `f` no aparca la fibra ni anida otro __ray_ctx —
+            // los accesos son hojas (leer un flag, push/pop, tocar un HashMap).
+            "fn __ray_ctx<R>(f: impl FnOnce(&mut __FiberCtx) -> R) -> R {\n",
+            "    let mut f = Some(f);\n",
+            "    if let Some(r) = ray_runtime::fibers::with_local(|slot| {\n",
+            "        if slot.is_none() { *slot = Some(std::boxed::Box::new(__ray_ctx_new())); }\n",
+            "        (f.take().unwrap())(slot.as_mut().unwrap().downcast_mut::<__FiberCtx>().expect(\"fiber slot holds __FiberCtx\"))\n",
+            "    }) { return r; }\n",
+            "    __RAY_MAIN_CTX.with(|c| (f.take().unwrap())(&mut c.borrow_mut()))\n",
+            "}\n",
+        ));
+    }
     // TLS reusa el registro de handles + `TcpStream` (accept/upgrade parten de un handle TCP) → implica net.
     if t.needs_rt_tls {
         t.needs_net = true;
@@ -227,7 +271,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // M96c/M96g: `close` corre en el mismo hilo dueño de la conexión (fin de `handle_http`) →
         // borra también la(s) entrada(s) de ESE hilo en las cachés de socket/TLS, para que un
         // worker del pool reusado miles de veces (M96) no acumule handles muertos indefinidamente.
-        let sock_evict = if t.needs_net {
+        let sock_evict = if t.needs_net && t.fibers {
+            // F2: evict del ctx de ESTA fibra (la dueña de la conexión) + poke al reactor — si otra
+            // fibra estuviera aparcada en el fd (el caso real: el accept sobre el listener cerrado
+            // en el apagado), el re-registro del siguiente ciclo lo devuelve como error/listo.
+            "__ray_ctx(|c| { c.socks.remove(&h); c.rd_to.remove(&h); }); ray_runtime::fibers::poke(); "
+        } else if t.needs_net {
             "__RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); }); "
         } else {
             ""
@@ -278,21 +327,60 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // Los ids del registro NUNCA se reasignan (`reg.next` solo crece) → una entrada
             // vieja en la caché tras un `close` es inerte, no ambigua; igual se borra en
             // `__ray_close` para no crecer sin límite en un hilo del pool reusado miles de veces.
-            "thread_local! { static __RAY_SOCK_CACHE: std::cell::RefCell<std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
-            "fn __ray_sock_clone(h: i64) -> Result<std::sync::Arc<std::net::TcpStream>, Rc<str>> {\n",
-            "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { return Ok(s); }\n",
-            "    let reg = __ray_reg().lock().unwrap();\n",
-            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => { let s = std::sync::Arc::clone(s); drop(reg);\n",
-            "            __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, std::sync::Arc::clone(&s)); }); Ok(s) },\n",
-            "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
-            "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
-            "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
-            "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
-            "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
-            "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
-            "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
-            "    match l.accept() { Ok((s, _)) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
         ));
+        // F2 (--fibers): la caché de sockets viaja en el CTX de la fibra, no en el hilo — una
+        // conexión keep-alive puede migrar de worker entre peticiones, y una entrada retenida en
+        // el thread-local de un worker ajeno mantendría el fd VIVO tras el close (el peer no vería
+        // cerrar la conexión). El ctx muere con la fibra → los Arc caen con ella.
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_sock_clone(h: i64) -> Result<std::sync::Arc<std::net::TcpStream>, Rc<str>> {\n",
+                "    if let Some(s) = __ray_ctx(|c| c.socks.get(&h).cloned()) { return Ok(s); }\n",
+                "    let reg = __ray_reg().lock().unwrap();\n",
+                "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => { let s = std::sync::Arc::clone(s); drop(reg);\n",
+                "            __ray_ctx(|c| { c.socks.insert(h, std::sync::Arc::clone(&s)); }); Ok(s) },\n",
+                "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
+                // connect sigue BLOQUEANTE (acotado por el SO; el connect no-bloqueante con
+                // park_writable + SO_ERROR es de F4/cliente); el stream queda no-bloqueante para
+                // que las lecturas/escrituras posteriores aparquen la fibra.
+                "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
+                "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
+                "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => { let _ = l.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Listener(l))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                // El accept RE-RESUELVE el handle en cada vuelta (como la VM): así el `close` del
+                // listener en el apagado ordenado lo despierta (poke) y la siguiente vuelta ve el
+                // handle ausente → error, no un accept eterno sobre un dup vivo. Se aparca sobre
+                // el fd del REGISTRO (estable hasta el close), no el del clon (muere con el drop).
+                "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
+                "    loop {\n",
+                "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map_err(|e| Rc::<str>::from(e.to_string()))?, std::os::fd::AsRawFd::as_raw_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
+                "        match l.accept() {\n",
+                "            Ok((s, _)) => { let _ = s.set_nonblocking(true); let _ = s.set_nodelay(true); return Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))); }\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { drop(l); ray_runtime::fibers::wait_readable(fd); }\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}\n",
+                "            Err(e) => return Err(Rc::<str>::from(e.to_string())),\n",
+                "        }\n",
+                "    }\n}\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "thread_local! { static __RAY_SOCK_CACHE: std::cell::RefCell<std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>> = std::cell::RefCell::new(std::collections::HashMap::new()); }\n",
+                "fn __ray_sock_clone(h: i64) -> Result<std::sync::Arc<std::net::TcpStream>, Rc<str>> {\n",
+                "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { return Ok(s); }\n",
+                "    let reg = __ray_reg().lock().unwrap();\n",
+                "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => { let s = std::sync::Arc::clone(s); drop(reg);\n",
+                "            __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, std::sync::Arc::clone(&s)); }); Ok(s) },\n",
+                "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
+                "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
+                "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
+                "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
+                "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
+                "    match l.accept() { Ok((s, _)) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            ));
+        }
+
         // socket_read/read_bytes/write DESPACHAN a TLS si el handle es una conexión TLS (solo si el
         // programa usa TLS): se clona el `Arc<Mutex<TlsStream>>` del registro y se hace I/O tras SU lock
         // (no el global) → conexiones concurrentes no se serializan. Si no, la vía TCP de siempre (clona el
@@ -318,13 +406,37 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // pila propia (docs/diseno-concurrencia-nativa.md §3c).
         // No es reentrante a propósito: no hay `socket_read` anidado dentro de otro en el mismo hilo.
         out.push_str("thread_local! { static __RAY_RDBUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 65536]); }\n");
-        write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
-        write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
-        write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
+        if t.fibers {
+            // F2: lectura no-bloqueante que APARCA LA FIBRA en WouldBlock. El intento va dentro del
+            // préstamo de __RAY_RDBUF y el park FUERA (una fibra puede reanudar en otro worker; el
+            // préstamo no debe cruzar la cesión). El timeout de lectura (M56.4) vive aquí: en un
+            // socket no-bloqueante SO_RCVTIMEO es inerte → plazo total por lectura contra el ctx
+            // (rd_to), vencimiento = Err("read timeout"), byte-idéntico a la VM (READ_TIMEOUT_MSG).
+            // EINTR también aparca: si había datos, el readiness dispara de inmediato.
+            let read_loop = |ok_expr: &str| {
+                format!(
+                    "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*s);\n    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    loop {{\n        let res = __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{\n            Ok(n) => Some(Ok({ok_expr})),\n            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n            Err(e) => Some(Err(Rc::<str>::from(e.to_string()))) }} }});\n        if let Some(v) = res {{ return v; }}\n        let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"read timeout\")); }} rem }} }};\n        if ray_runtime::fibers::wait_readable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"read timeout\")); }}\n    }}\n}}\n"
+                )
+            };
+            write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())")).unwrap();
+            write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{\n    {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<[u8]>::from(&buf[..n])")).unwrap();
+            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{\n    {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s;\n    let fd = std::os::fd::AsRawFd::as_raw_fd(&*s); let mut off = 0;\n    while off < bytes.len() {{ match w.write(&bytes[off..]) {{\n        Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")),\n        Ok(n) => off += n,\n        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_writable(fd),\n        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {{}}\n        Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }}\n    Ok(bytes.len() as i64)\n}}\n").unwrap();
+        } else {
+            write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
+            write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
+            write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
+        }
         out.push_str(concat!(
             "fn __ray_local_port(h: i64) -> i64 {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Udp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
+            ));
+        if t.fibers {
+            // F2: en no-bloqueante SO_RCVTIMEO es inerte — el plazo se guarda en el ctx (rd_to) y
+            // lo aplica el park de la lectura (wait_readable_timeout). ms <= 0 lo quita, como hoy.
+            out.push_str("fn __ray_set_read_timeout(h: i64, ms: i64) { __ray_ctx(|c| { if ms <= 0 { c.rd_to.remove(&h); } else { c.rd_to.insert(h, ms); } }); }\n");
+        } else {
+            out.push_str(concat!(
             "fn __ray_set_read_timeout(h: i64, ms: i64) {\n",
             "    let d = if ms <= 0 { None } else { Some(std::time::Duration::from_millis(ms as u64)) };\n",
             // M96c: mismo fast-path que __ray_sock_clone — si ya está en la caché de ESTE hilo, ni
@@ -333,6 +445,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let s2 = std::sync::Arc::clone(s); let _ = s2.set_read_timeout(d); drop(reg);\n",
             "        __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, s2); }); } }\n",
+            ));
+        }
+        out.push_str(concat!(
             // UDP: los primitivos devuelven ARREGLOS ETIQUETADOS (bind/send → [\"ok\"/\"err\", ...]; recv →
             // [b\"ok\"/b\"err\", host, port, data]) que los wrappers de raylang (udp.ray) parsean. recv es
             // BLOQUEANTE (con hilos de SO reales; la VM usa no-bloqueante + scheduler → mismo efecto).
@@ -396,7 +511,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // texto byte-a-byte según quién llame (cazado por `starttls_upgrade_native`, M96g).
             "fn __ray_tls_take_tcp(h: i64, not_tcp_msg: &str) -> Result<std::net::TcpStream, String> {\n",
             "    let mut reg = __ray_reg().lock().unwrap(); match reg.open.remove(&h) {\n",
-            "        Some(__RayHandle::Tcp(s)) => { drop(reg); __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); });\n",
+        ));
+        // La higiene de la caché de sockets según el modelo: ctx de fibra (--fibers) o thread-local.
+        if t.fibers {
+            out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); __ray_ctx(|c| { c.socks.remove(&h); c.rd_to.remove(&h); });\n");
+        } else {
+            out.push_str("        Some(__RayHandle::Tcp(s)) => { drop(reg); __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().remove(&h); });\n");
+        }
+        out.push_str(concat!(
             "            match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) } }\n",
             "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} {}\", h, not_tcp_msg)) }\n",
             "        None => Err(format!(\"invalid handle: {}\", h)) } }\n",
@@ -470,24 +592,24 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // suyo ya se consumió. `my` = el ordinal que consumirá su valor; A retorna cuando `taken >= my`.
             "        if st.cap == Some(0) {\n",
             "            st.senders += 1;\n",
-            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "            if st.closed { st.senders -= 1; drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            st.q.push_back(v);\n",
             "            let my = st.taken + 1; cv.notify_all(); __ray_bump();\n",
-            "            while !st.closed && st.taken < my { st = __ray_cv_wait(cv, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            while !st.closed && st.taken < my { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "            st.senders -= 1;\n",
             "            if st.taken < my { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            return;\n",
             "        }\n",
             "        st.senders += 1;\n",
-            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.senders -= 1;\n",
             "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "        st.q.push_back(v); cv.notify_all(); drop(st); __ray_bump();\n",
             "    }\n",
             "    fn recv(&self) -> Option<T> {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; cv.notify_all(); } v\n",
             "    }\n",
             // `close` con un emisor bloqueado = error de ejecución en el sitio del close, como la VM
@@ -501,10 +623,31 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // Condvar-wait con timeout corto: el despertar normal sigue llegando por `notify` (sin
             // latencia añadida); el timeout solo acota cuánto tarda una tarea bloqueada en NOTAR su
             // cancelación (cooperativa, H21-N3) → sin busy-wait.
-            "fn __ray_cv_wait<'a, T>(cv: &std::sync::Condvar, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> { cv.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0 }\n",
+            "fn __ray_cv_wait<'a, T>(m: &'a std::sync::Mutex<T>, cv: &std::sync::Condvar, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> {\n",
+        ));
+        // F2 (--fibers): una espera bloqueante DENTRO de una fibra clavaría a su worker — y con
+        // fibras FIJADAS al worker (corrección frente al cacheo de TLS de LLVM, ver fibers.rs),
+        // una hermana del mismo worker no correría jamás (interbloqueo). En fibra: soltar el
+        // lock, CEDER el turno y re-tomar. El bucle del llamador rechequea la condición — mismo
+        // contrato que el timeout de 10 ms. Fuera de fibra (main), el condvar de siempre.
+        if t.fibers {
+            out.push_str("    if ray_runtime::fibers::in_fiber() { drop(g); ray_runtime::fibers::yield_now(); return m.lock().unwrap(); }\n");
+        }
+        out.push_str(concat!(
+            "    let _ = m; cv.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0 }\n",
             // Token de cancelación del hilo actual (lo instala `__ray_spawn`; `main` no tiene → false).
-            "thread_local! { static __RAY_CANCEL: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> = std::cell::RefCell::new(None); }\n",
-            "fn __ray_cancelled() -> bool { __RAY_CANCEL.with(|c| c.borrow().as_ref().map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))) }\n",
+        ));
+        // F2 (--fibers): el token de cancelación viaja EN LA FIBRA (ctx) — la fibra puede
+        // reanudarse en otro worker y un thread-local se quedaría en el anterior.
+        if t.fibers {
+            out.push_str("fn __ray_cancelled() -> bool { __ray_ctx(|c| c.cancel.as_ref().map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))) }\n");
+        } else {
+            out.push_str(concat!(
+                "thread_local! { static __RAY_CANCEL: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> = std::cell::RefCell::new(None); }\n",
+                "fn __ray_cancelled() -> bool { __RAY_CANCEL.with(|c| c.borrow().as_ref().map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))) }\n",
+            ));
+        }
+        out.push_str(concat!(
             // Condvar GLOBAL de actividad (H21-N4): send/close/fin-de-tarea la notifican (generación
             // monótona); `select` y la salida del scope esperan en ella en vez de hacer poll con sleep.
             // Orden de locks: canal/tarea → actividad (nunca al revés) → sin ciclos.
@@ -526,7 +669,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
             "    while __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
-            "        g = __ray_cv_wait(&__RAY_ACT_CV, g);\n",
+            "        g = __ray_cv_wait(&__RAY_ACT_M, &__RAY_ACT_CV, g);\n",
             "        if __ray_cancelled() { drop(g); __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
             "    }\n",
             "    drop(g);\n",
@@ -553,7 +696,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
             "    fn wait(&self) -> Result<T, String> {\n",
             "        let (m, cv) = &*self.inner; let mut st = m.lock().unwrap();\n",
-            "        while st.result.is_none() { st = __ray_cv_wait(cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        while st.result.is_none() { st = __ray_cv_wait(m, cv, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.result.clone().unwrap()\n",
             "    }\n",
             // try_join: consume la tarea entera (Ok y Err) — es la observación + la unión en una.
@@ -582,98 +725,136 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "}\n",
             // Cada scope activo (por hilo) acumula las tareas lanzadas dentro; `spawn` registra la suya
             // en el scope más interno, si hay.
-            "thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>> = std::cell::RefCell::new(Vec::new()); }\n",
-            // Pool de hilos (M96): `spawn` REUSA un worker ocioso en vez de crear un hilo del SO por
-            // tarea (el webserver spawn-ea por PETICIÓN → miles de creaciones/s bajo carga). Es un
-            // thread-cache CRECIENTE (nunca bloquea al spawner: sin worker ocioso → hilo nuevo), porque
-            // hay tareas que bloquean indefinidamente (fibras de conexión) y un pool fijo se moriría de
-            // deadlock. Protocolo sin pérdida: un worker que agota su ocio solo SALE si logra quitarse
-            // de la pila él mismo; si ya no está, es que un spawner lo pop-eó y su job llega (o llegó)
-            // → recv bloqueante. El estado THREAD-LOCAL por tarea (token de cancelación, scopes) se
-            // resetea entre jobs. El spawner recupera el job de un SendError (worker justo muerto).
-            "type __RayJob = std::boxed::Box<dyn FnOnce() + Send + 'static>;\n",
-            "type __RayPoolShard = std::sync::Mutex<Vec<(u64, std::sync::mpsc::Sender<__RayJob>)>>;\n",
-            // M96e: el pool se SHARDEA (antes: un único Mutex<Vec<...>> global para TODO el proceso).
-            // Cada request hace un spawn+retorno-a-pool (M56.5, panic→500), 2 adquisiciones del
-            // mismo lock; bajo carga alta eso compite fuerte. Con N listas independientes
-            // (round-robin atómico, sin relación entre el shard que elige el spawner y el que
-            // elige el worker) la contención cae ~N× — a costa de que un pop puede fallar si el
-            // único worker ocioso está en OTRO shard (crea un hilo nuevo de más; desperdicio
-            // acotado, nunca deadlock: el invariante "sin worker ocioso → hilo nuevo" se preserva
-            // igual, ahora por shard). N escala con los núcleos disponibles.
-            "fn __ray_pool_shards() -> &'static [__RayPoolShard] {\n",
-            "    static P: std::sync::OnceLock<Vec<__RayPoolShard>> = std::sync::OnceLock::new();\n",
-            "    P.get_or_init(|| {\n",
-            "        let n = std::thread::available_parallelism().map(|c| c.get()).unwrap_or(4).saturating_mul(2).clamp(4, 64);\n",
-            "        (0..n).map(|_| std::sync::Mutex::new(Vec::new())).collect()\n",
-            "    })\n}\n",
-            "static __RAY_POOL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
-            "static __RAY_POOL_RR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
-            "fn __ray_pool_next_shard(shards: &[__RayPoolShard]) -> usize {\n",
-            "    __RAY_POOL_RR.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % shards.len()\n}\n",
-            // M98.2: tras fallar el pop en el shard round-robin, se SONDEAN los demás shards antes de
-            // crear un hilo. Sin el barrido había una TRAMPA DE PARIDAD: spawner (pop) y worker (park)
-            // usan el MISMO contador round-robin; en churn secuencial `join(spawn(f))` las llamadas
-            // alternan estrictamente (pops en valores pares, parks en impares) y con N shards PAR — N
-            // siempre lo es: cores*2 — los residuos mod N son disjuntos → el spawner NUNCA veía al
-            // worker aparcado → un hilo del SO nuevo por spawn → EAGAIN y crash en ~20k tareas. El
-            // primer probe conserva la baja contención de M96e (el barrido solo corre en el miss).
-            "fn __ray_pool_exec(job: __RayJob) {\n",
-            "    let mut job = job;\n",
-            "    let shards = __ray_pool_shards();\n",
-            "    let start = __ray_pool_next_shard(shards);\n",
-            "    for off in 0..shards.len() {\n",
-            "        let idx = (start + off) % shards.len();\n",
-            "        while let Some((_, tx)) = { let w = shards[idx].lock().unwrap().pop(); w } {\n",
-            "            match tx.send(job) { Ok(()) => return, Err(e) => job = e.0 }\n",
-            "        }\n",
-            "    }\n",
-            "    std::thread::spawn(move || {\n",
-            "        let mut job = job;\n",
-            "        loop {\n",
-            "            job();\n",
-            "            __RAY_CANCEL.with(|c| *c.borrow_mut() = None);\n",
-            "            __SCOPES.with(|s| s.borrow_mut().clear());\n",
-            "            let (tx, rx) = std::sync::mpsc::channel::<__RayJob>();\n",
-            "            let id = __RAY_POOL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
-            "            let shards = __ray_pool_shards();\n",
-            "            let shard_idx = __ray_pool_next_shard(shards);\n",
-            "            shards[shard_idx].lock().unwrap().push((id, tx));\n",
-            "            match rx.recv_timeout(std::time::Duration::from_secs(10)) {\n",
-            "                Ok(next) => job = next,\n",
-            "                Err(_) => {\n",
-            "                    let mut pool = shards[shard_idx].lock().unwrap();\n",
-            "                    if let Some(pos) = pool.iter().position(|(i, _)| *i == id) { pool.remove(pos); return; }\n",
-            "                    drop(pool);\n",
-            "                    match rx.recv() { Ok(next) => job = next, Err(_) => return }\n",
-            "                }\n",
-            "            }\n",
-            "        }\n",
-            "    });\n",
-            "}\n",
-            "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
-            "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
-            "    let t = task.clone();\n",
-            "    __ray_pool_exec(std::boxed::Box::new(move || {\n",
-            "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
-            "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
-            // Una hija que falla con tareas en vuelo cancela los hijos de sus scopes sin cerrar (el
-            // unwinding se saltó los pops de __SCOPES) → transitiva, sin nietos huérfanos (M12.5).
-            "        if r.is_err() { let frames = __SCOPES.with(|s| std::mem::take(&mut *s.borrow_mut())); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
-            "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
-            "    }));\n",
-            "    let t2 = task.clone();\n",
-            "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
-            "    task\n}\n",
+        ));
+        if !t.fibers {
+            out.push_str("thread_local! { static __SCOPES: std::cell::RefCell<Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>> = std::cell::RefCell::new(Vec::new()); }\n");
+        }
+        out.push_str(concat!(
+            ));
+        // F2 (--fibers): spawn = FIBRA del scheduler M:N (ray_runtime::fibers) — el pool de hilos
+        // NO se emite. El cuerpo es el mismo del modelo de hilos (catch_unwind → resultado en la
+        // Task; un fallo cancela los scopes sin cerrar, sin nietos huérfanos, M12.5); el token de
+        // cancelación y el registro en el scope del padre van por el CTX por-fibra (viaja con
+        // ella entre workers). El JoinHandle de fibers se descarta: la observación es la __RayTask
+        // (condvar), que main espera bloqueando y una fibra espera en rondas acotadas de
+        // __ray_cv_wait (10 ms) — interino hasta F3 (esperas de fibra nativas).
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
+                "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
+                "    let t = task.clone();\n",
+                "    let _ = ray_runtime::fibers::spawn(move || {\n",
+                "        __ray_ctx(|c| c.cancel = Some(t.cancel.clone()));\n",
+                "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
+                "        if r.is_err() { let frames = __ray_ctx(|c| std::mem::take(&mut c.scopes)); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
+                "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
+                "    });\n",
+                "    let t2 = task.clone();\n",
+                "    __ray_ctx(|c| { if let Some(frame) = c.scopes.last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
+                "    task\n}\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                // Pool de hilos (M96): `spawn` REUSA un worker ocioso en vez de crear un hilo del SO por
+                // tarea (el webserver spawn-ea por PETICIÓN → miles de creaciones/s bajo carga). Es un
+                // thread-cache CRECIENTE (nunca bloquea al spawner: sin worker ocioso → hilo nuevo), porque
+                // hay tareas que bloquean indefinidamente (fibras de conexión) y un pool fijo se moriría de
+                // deadlock. Protocolo sin pérdida: un worker que agota su ocio solo SALE si logra quitarse
+                // de la pila él mismo; si ya no está, es que un spawner lo pop-eó y su job llega (o llegó)
+                // → recv bloqueante. El estado THREAD-LOCAL por tarea (token de cancelación, scopes) se
+                // resetea entre jobs. El spawner recupera el job de un SendError (worker justo muerto).
+                "type __RayJob = std::boxed::Box<dyn FnOnce() + Send + 'static>;\n",
+                "type __RayPoolShard = std::sync::Mutex<Vec<(u64, std::sync::mpsc::Sender<__RayJob>)>>;\n",
+                // M96e: el pool se SHARDEA (antes: un único Mutex<Vec<...>> global para TODO el proceso).
+                // Cada request hace un spawn+retorno-a-pool (M56.5, panic→500), 2 adquisiciones del
+                // mismo lock; bajo carga alta eso compite fuerte. Con N listas independientes
+                // (round-robin atómico, sin relación entre el shard que elige el spawner y el que
+                // elige el worker) la contención cae ~N× — a costa de que un pop puede fallar si el
+                // único worker ocioso está en OTRO shard (crea un hilo nuevo de más; desperdicio
+                // acotado, nunca deadlock: el invariante "sin worker ocioso → hilo nuevo" se preserva
+                // igual, ahora por shard). N escala con los núcleos disponibles.
+                "fn __ray_pool_shards() -> &'static [__RayPoolShard] {\n",
+                "    static P: std::sync::OnceLock<Vec<__RayPoolShard>> = std::sync::OnceLock::new();\n",
+                "    P.get_or_init(|| {\n",
+                "        let n = std::thread::available_parallelism().map(|c| c.get()).unwrap_or(4).saturating_mul(2).clamp(4, 64);\n",
+                "        (0..n).map(|_| std::sync::Mutex::new(Vec::new())).collect()\n",
+                "    })\n}\n",
+                "static __RAY_POOL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
+                "static __RAY_POOL_RR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
+                "fn __ray_pool_next_shard(shards: &[__RayPoolShard]) -> usize {\n",
+                "    __RAY_POOL_RR.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % shards.len()\n}\n",
+                // M98.2: tras fallar el pop en el shard round-robin, se SONDEAN los demás shards antes de
+                // crear un hilo. Sin el barrido había una TRAMPA DE PARIDAD: spawner (pop) y worker (park)
+                // usan el MISMO contador round-robin; en churn secuencial `join(spawn(f))` las llamadas
+                // alternan estrictamente (pops en valores pares, parks en impares) y con N shards PAR — N
+                // siempre lo es: cores*2 — los residuos mod N son disjuntos → el spawner NUNCA veía al
+                // worker aparcado → un hilo del SO nuevo por spawn → EAGAIN y crash en ~20k tareas. El
+                // primer probe conserva la baja contención de M96e (el barrido solo corre en el miss).
+                "fn __ray_pool_exec(job: __RayJob) {\n",
+                "    let mut job = job;\n",
+                "    let shards = __ray_pool_shards();\n",
+                "    let start = __ray_pool_next_shard(shards);\n",
+                "    for off in 0..shards.len() {\n",
+                "        let idx = (start + off) % shards.len();\n",
+                "        while let Some((_, tx)) = { let w = shards[idx].lock().unwrap().pop(); w } {\n",
+                "            match tx.send(job) { Ok(()) => return, Err(e) => job = e.0 }\n",
+                "        }\n",
+                "    }\n",
+                "    std::thread::spawn(move || {\n",
+                "        let mut job = job;\n",
+                "        loop {\n",
+                "            job();\n",
+                "            __RAY_CANCEL.with(|c| *c.borrow_mut() = None);\n",
+                "            __SCOPES.with(|s| s.borrow_mut().clear());\n",
+                "            let (tx, rx) = std::sync::mpsc::channel::<__RayJob>();\n",
+                "            let id = __RAY_POOL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+                "            let shards = __ray_pool_shards();\n",
+                "            let shard_idx = __ray_pool_next_shard(shards);\n",
+                "            shards[shard_idx].lock().unwrap().push((id, tx));\n",
+                "            match rx.recv_timeout(std::time::Duration::from_secs(10)) {\n",
+                "                Ok(next) => job = next,\n",
+                "                Err(_) => {\n",
+                "                    let mut pool = shards[shard_idx].lock().unwrap();\n",
+                "                    if let Some(pos) = pool.iter().position(|(i, _)| *i == id) { pool.remove(pos); return; }\n",
+                "                    drop(pool);\n",
+                "                    match rx.recv() { Ok(next) => job = next, Err(_) => return }\n",
+                "                }\n",
+                "            }\n",
+                "        }\n",
+                "    });\n",
+                "}\n",
+                "fn __ray_spawn<T: Send + Clone + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> __RayTask<T> {\n",
+                "    let task = __RayTask { inner: std::sync::Arc::new((std::sync::Mutex::new(__TaskState { result: None }), std::sync::Condvar::new())), cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), consumed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) };\n",
+                "    let t = task.clone();\n",
+                "    __ray_pool_exec(std::boxed::Box::new(move || {\n",
+                "        __RAY_CANCEL.with(|c| *c.borrow_mut() = Some(t.cancel.clone()));\n",
+                "        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| __ray_panic_msg(&*e));\n",
+                // Una hija que falla con tareas en vuelo cancela los hijos de sus scopes sin cerrar (el
+                // unwinding se saltó los pops de __SCOPES) → transitiva, sin nietos huérfanos (M12.5).
+                "        if r.is_err() { let frames = __SCOPES.with(|s| std::mem::take(&mut *s.borrow_mut())); for fr in frames { for c in fr { c.cancel_task(); } } }\n",
+                "        let (m, cv) = &*t.inner; let mut st = m.lock().unwrap(); st.result = Some(r); cv.notify_all(); drop(st); __ray_bump();\n",
+                "    }));\n",
+                "    let t2 = task.clone();\n",
+                "    __SCOPES.with(|s| { if let Some(frame) = s.borrow_mut().last_mut() { frame.push(std::boxed::Box::new(t2)); } });\n",
+                "    task\n}\n",
+            ));
+        }
+        out.push_str(concat!(
             // Salida del scope (ScopeEnd, M12.3+M12.5): espera a las hijas SIN orden fijo; si alguna
             // falló, cancela a las hermanas pendientes y propaga el fallo observado DE INMEDIATO (antes:
             // unión en orden de registro → un fallo podía esperar para siempre detrás de una hermana
             // bloqueada). La generación se lee ANTES de escanear: un cambio entre escaneo y espera
             // despierta al instante.
             "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R {\n",
-            "    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n",
-            "    let r = body();\n",
-            "    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n",
+        ));
+        // F2 (--fibers): la pila de scopes vive en el ctx de la fibra (body() puede aparcar y
+        // reanudar en otro worker; el push/pop deben ver LA MISMA pila).
+        if t.fibers {
+            out.push_str("    __ray_ctx(|c| c.scopes.push(Vec::new()));\n    let r = body();\n    let frame = __ray_ctx(|c| c.scopes.pop().unwrap());\n");
+        } else {
+            out.push_str("    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n    let r = body();\n    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n");
+        }
+        out.push_str(concat!(
             "    loop {\n",
             "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
             "        if let Some(m) = frame.iter().find_map(|c| c.failed()) {\n",

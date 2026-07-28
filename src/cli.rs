@@ -88,7 +88,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--fibers] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex]] [--templates-only [path...]]
   test [file]       run the @test functions [filter]
   fmt <file>        print the canonical version to stdout
   doc <file>        generate the Markdown documentation of its public surface
@@ -699,6 +699,11 @@ fn cmd_build(args: &[String]) {
     // `--fast` (H6): aritmética de int ENVOLVENTE (wrapping) en vez de checked — renuncia a la paridad
     // de overflow con la VM a cambio del último tramo de rendimiento (div/mod por cero siguen chequeados).
     let fast = args.iter().any(|a| a == "--fast");
+    // `--fibers` (F2, EXPERIMENTAL): la concurrencia del binario nativo corre sobre el scheduler M:N
+    // de fibras (corosensei + reactor kqueue/epoll) en vez de hilo-de-SO-por-tarea. Objetivo del arco:
+    // quitar el muro de memoria del hilo-por-conexión (docs/diseno-concurrencia-nativa.md). Exige la
+    // vía Cargo (corosensei); en F5 se decidirá si pasa a ser el default con --without fibers de escape.
+    let fibers = args.iter().any(|a| a == "--fibers");
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
     // `--target <triple>` (P2.b, H20): cross-compilation. Se pasa tal cual a rustc/cargo (el usuario debe
     // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa
@@ -754,7 +759,7 @@ fn cmd_build(args: &[String]) {
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
-        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast);
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers);
         return;
     }
     match compiler::compile_program(&program) {
@@ -780,10 +785,10 @@ fn cmd_build(args: &[String]) {
 ///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool) {
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_with_opts(&program, exclude, fast) {
+    let transpiled = match crate::transpile::transpile_full(&program, exclude, fast, fibers) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");

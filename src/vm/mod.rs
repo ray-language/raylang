@@ -2181,6 +2181,44 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // M100 (IDEAS §53.8): ejecuta un proceso del SO. Interinamente BLOQUEA el hilo del
+                // worker entero (el precedente es SQLite, arriba); el aparcado de la fibra sobre los
+                // fds de los pipes es una fase posterior de M100 (no hay park multi-fd todavía).
+                OpCode::Run => {
+                    // Orden en la pila: el inverso al de la firma de `__run`.
+                    let merge_output = self.pop();
+                    let max_output = self.pop();
+                    let timeout_ms = self.pop();
+                    let has_stdin = self.pop();
+                    let stdin = self.pop();
+                    let env_clear = self.pop();
+                    let env = self.pop();
+                    let dir = self.pop();
+                    let args = self.pop();
+                    let program = self.pop();
+                    let (HeapValue::Str(program), HeapValue::Obj(ah), HeapValue::Str(dir),
+                        HeapValue::Obj(eh), HeapValue::Bool(env_clear), HeapValue::Bytes(stdin),
+                        HeapValue::Bool(has_stdin), HeapValue::Int(timeout_ms),
+                        HeapValue::Int(max_output), HeapValue::Bool(merge_output)) =
+                        (program, args, dir, env, env_clear, stdin, has_stdin, timeout_ms,
+                         max_output, merge_output)
+                    else { unreachable!("the checker guarantees the __run signature") };
+                    let as_strings = |vm: &mut Self, h| -> Vec<String> {
+                        vm.as_array(h).iter().map(|v| match v {
+                            HeapValue::Str(s) => s.clone(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        }).collect()
+                    };
+                    let opts = crate::builtins::run_opts_from_flat(
+                        &dir, as_strings(self, eh), env_clear, &stdin, has_stdin,
+                        timeout_ms, max_output, merge_output,
+                    );
+                    let elems = crate::builtins::run_encoded(&program, &as_strings(self, ah), &opts)
+                        .into_iter().map(HeapValue::Bytes).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+
                 // --- I/O con buffering: handles de archivo (M11.8) ---
                 OpCode::Open => {
                     let mode = self.pop();

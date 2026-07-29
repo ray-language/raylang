@@ -1374,6 +1374,29 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M100 (IDEAS §53.8): ejecuta un proceso del SO (bloqueante: el intérprete es el oráculo
+            // secuencial) → el arreglo etiquetado de `run_encoded`.
+            "__run" => {
+                let (Value::Str(program), Value::Array(args), Value::Str(dir), Value::Array(env),
+                    Value::Bool(env_clear), Value::Bytes(stdin), Value::Bool(has_stdin),
+                    Value::Int(timeout_ms), Value::Int(max_output), Value::Bool(merge_output)) =
+                    (&values[0], &values[1], &values[2], &values[3], &values[4], &values[5],
+                     &values[6], &values[7], &values[8], &values[9])
+                else { unreachable!("the checker guarantees the __run signature") };
+                let as_strings = |rc: &Rc<RefCell<Vec<Value>>>| -> Vec<String> {
+                    rc.borrow().iter().map(|v| match v {
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("the checker guarantees [string]"),
+                    }).collect()
+                };
+                let opts = crate::builtins::run_opts_from_flat(
+                    dir, as_strings(env), *env_clear, stdin, *has_stdin,
+                    *timeout_ms, *max_output, *merge_output,
+                );
+                let arr = crate::builtins::run_encoded(program, &as_strings(args), &opts)
+                    .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
             "__contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),

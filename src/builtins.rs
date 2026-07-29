@@ -2460,6 +2460,25 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__append_file expects a string (the content), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // __run(program, args, dir, env, env_clear, stdin, has_stdin, timeout_ms, max_output,
+    // merge_output) -> [bytes] (M100, IDEAS §53.8): las opciones van APLANADAS (el borde de builtins
+    // solo ve escalares y arreglos); el resultado es el arreglo etiquetado de `run_encoded`.
+    // `std/process` (fase 1c) es quien arma el builder y decodifica a Result<Output, string>.
+    Builtin { name: "__run", opcode: OpCode::Run, check: |a| {
+        arity(a, 10, "__run", " (program, args, dir, env, env_clear, stdin, has_stdin, timeout_ms, max_output, merge_output)")?;
+        let str_arr = Type::Array(Box::new(Type::String));
+        if a[0] != Type::String { return Err((Some(0), format!("__run expects a string (the program), not {}", a[0]))); }
+        if a[1] != str_arr { return Err((Some(1), format!("__run expects a [string] (the arguments), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__run expects a string (the directory, \"\" = inherited), not {}", a[2]))); }
+        if a[3] != str_arr { return Err((Some(3), format!("__run expects a [string] (the flattened env pairs), not {}", a[3]))); }
+        if a[4] != Type::Bool { return Err((Some(4), format!("__run expects a bool (env_clear), not {}", a[4]))); }
+        if a[5] != Type::Bytes { return Err((Some(5), format!("__run expects bytes (the stdin data), not {}", a[5]))); }
+        if a[6] != Type::Bool { return Err((Some(6), format!("__run expects a bool (has_stdin), not {}", a[6]))); }
+        if a[7] != Type::Int { return Err((Some(7), format!("__run expects an int (the timeout in ms), not {}", a[7]))); }
+        if a[8] != Type::Int { return Err((Some(8), format!("__run expects an int (max_output), not {}", a[8]))); }
+        if a[9] != Type::Bool { return Err((Some(9), format!("__run expects a bool (merge_output), not {}", a[9]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
 ];
 
 
@@ -2930,6 +2949,56 @@ pub fn run(program: &str, _args: &[String], _opts: &RunOpts) -> Result<RunOutput
     Err(format!("{program}: running OS processes is not supported on this platform"))
 }
 
+/// Ejecuta y APLANA el resultado al arreglo etiquetado del builtin `__run`. Los dos motores envuelven
+/// estos octetos en su tipo de valor propio — una sola codificación aquí = cero divergencia:
+/// `[b"ok", b"code"|b"signal", valor decimal, b"1"|b"0" (timed_out), b"1"|b"0" (truncated), stdout,
+/// stderr]` o `[b"err", msg]`.
+pub fn run_encoded(program: &str, args: &[String], opts: &RunOpts) -> Vec<Vec<u8>> {
+    match run(program, args, opts) {
+        Ok(o) => {
+            let (kind, val) = match o.exit {
+                Ok(code) => ("code", code),
+                Err(sig) => ("signal", sig),
+            };
+            vec![
+                b"ok".to_vec(),
+                kind.as_bytes().to_vec(),
+                val.to_string().into_bytes(),
+                vec![if o.timed_out { b'1' } else { b'0' }],
+                vec![if o.truncated { b'1' } else { b'0' }],
+                o.stdout,
+                o.stderr,
+            ]
+        }
+        Err(e) => vec![b"err".to_vec(), e.into_bytes()],
+    }
+}
+
+/// Reconstruye `RunOpts` desde los argumentos APLANADOS del builtin `__run` (el decodificador único
+/// para los dos motores; el orden es el de la firma). `dir == ""` = heredado; `env` llega como pares
+/// clave/valor consecutivos; `stdin` solo cuenta si `has_stdin`.
+#[allow(clippy::too_many_arguments)] // es el borde plano del builtin, no una API para humanos
+pub fn run_opts_from_flat(
+    dir: &str,
+    env_flat: Vec<String>,
+    env_clear: bool,
+    stdin: &[u8],
+    has_stdin: bool,
+    timeout_ms: i64,
+    max_output: i64,
+    merge_output: bool,
+) -> RunOpts {
+    RunOpts {
+        dir: if dir.is_empty() { None } else { Some(dir.to_string()) },
+        env: env_flat.chunks_exact(2).map(|p| (p[0].clone(), p[1].clone())).collect(),
+        env_clear,
+        stdin: if has_stdin { Some(stdin.to_vec()) } else { None },
+        timeout_ms,
+        max_output,
+        merge_output,
+    }
+}
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 #[repr(C)]
 struct PollFd {
@@ -3082,7 +3151,7 @@ mod process_tests {
         let out = run("sh", &sh("echo partial; sleep 30 & wait"), &o).unwrap();
         assert!(out.timed_out);
         assert_eq!(out.stdout, b"partial\n");
-        assert!(matches!(out.exit, Err(_)), "the ladder ends in a signal, got {:?}", out.exit);
+        assert!(out.exit.is_err(), "the ladder ends in a signal, got {:?}", out.exit);
     }
 
     // dir + env: el hijo ve el directorio pedido y la variable añadida sobre el entorno heredado.

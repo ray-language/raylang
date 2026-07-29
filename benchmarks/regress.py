@@ -24,7 +24,7 @@ import time
 
 BIN = "./target/release/raylang"
 BASELINE = "benchmarks/baseline.json"
-DEFAULT_THRESHOLD = 0.05  # 5% (PRODUCCION.md M35c)
+DEFAULT_THRESHOLD = 0.05  # 5% (PRODUCTION.md M35c)
 N = 15  # mejor-de-N; N alto filtra mejor el ruido del planificador (measure.py halló que 15 hace falta)
 
 # Los casos del banco (los mismos que measure.py), sobre la VM de release.

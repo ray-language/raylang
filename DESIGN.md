@@ -4784,7 +4784,7 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
 ## 37. El plan de producción (rama `feature/improvements`)
 
 El cambio de norte anotado en §21.1 tiene ahora **documento-contrato propio**:
-**[PRODUCCION.md](PRODUCCION.md)**. Contiene (I) el análisis a fondo del lenguaje post-§36 contra
+**[PRODUCTION.md](PRODUCTION.md)**. Contiene (I) el análisis a fondo del lenguaje post-§36 contra
 los cinco ejes —moderno, flexible, ligero, seguro, elegante— con las **siete brechas** hacia
 producción, y (II) el plan **M33–M44** en cuatro arcos (la numeración creció al separar la cripto en su
 propio hito; ver el desglose del arco D abajo):
@@ -4832,7 +4832,7 @@ propio hito; ver el desglose del arco D abajo):
 
 A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios del proyecto (una
 fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción
-consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCCION.md.
+consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCTION.md.
 
 **Estado del plan de producción** (al cierre del arco B): **arcos A, B, C y D-endurecimiento/cripto COMPLETOS**.
 - **A — Estabilidad**: ✅ M33 (diagnósticos sin ICEs) · M34 (SPEC + semver `1.0.0-beta.1`) · M35 (la VM es
@@ -4851,7 +4851,7 @@ consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCCI
 
 ## 38. M33 — Compilador sin pánicos y diagnósticos de producción
 
-Primera fase del arco A (PRODUCCION.md). Sub-fases: **a)** spans, **b)** ICE→diagnóstico,
+Primera fase del arco A (PRODUCTION.md). Sub-fases: **a)** spans, **b)** ICE→diagnóstico,
 **c)** multi-error con recuperación, **d)** fuzzing. La (a) se parte en dos cortes verticales:
 
 ### 38.1 M33a-1 — spans en tokens + subrayado de rango
@@ -4916,7 +4916,7 @@ diagnóstico. Un pánico interno (ICE, *internal compiler error*) puede seguir e
 invariantes internas se rompen cuando hay un bug— pero debe (a) distinguirse de un error del
 usuario, (b) pedir un reporte, y (c) no depender de que cada sitio lo formatee bien.
 
-**La auditoría, primero.** El análisis de PRODUCCION.md estimó ~200 `panic!`/`unwrap` en el
+**La auditoría, primero.** El análisis de PRODUCTION.md estimó ~200 `panic!`/`unwrap` en el
 front-end; la auditoría real (excluyendo tests y el falso positivo del **método `expect` del
 propio parser**, que devuelve `Result` y es el camino bueno) encontró **26 sitios** en el
 front-end y sus clientes de compilación. Los tres sospechosos de ser alcanzables por entrada
@@ -5063,7 +5063,7 @@ errores.
 
 ## 40. M35a — La VM es el motor de producto (arco A)
 
-Tercera fase del arco A (PRODUCCION.md). Hasta aquí el binario ejecutaba con el **intérprete**
+Tercera fase del arco A (PRODUCTION.md). Hasta aquí el binario ejecutaba con el **intérprete**
 por defecto y `--vm` era opt-in — al revés de lo que quiere producción: el usuario que corre
 `raylang prog.ray` recibía el tree-walker lento. M35a lo invierte.
 
@@ -5138,7 +5138,7 @@ por actores) y el arco **C** (ecosistema: M39 `ray`+paquetes, M40 stdlib 1.0, M4
 
 ## 41. M39 — CLI unificado `ray` + gestor de paquetes (arco C)
 
-Primera fase del arco C (ecosistema, PRODUCCION.md). El análisis marcó la falta de gestor de
+Primera fase del arco C (ecosistema, PRODUCTION.md). El análisis marcó la falta de gestor de
 paquetes como la **brecha nº1 de adopción**; M39 la ataca, empezando por el CLI que lo alojará.
 
 ### 41.1 M39a — el CLI de subcomandos
@@ -6746,7 +6746,7 @@ a un paquete, o retirarse), lo que en `std/` exige un cambio de versión mayor d
 El gestor de paquetes (M39c) resuelve dependencias por **git** (`git+URL@ref`) y por **ruta** (`path:dir`):
 para instalar hay que conocer y escribir la URL exacta. Falta la última pieza de "ecosistema": **instalar por
 nombre** (`ray add foo`) contra un **índice** compartido, y **publicar** (`ray publish`) para poblarlo. Es la
-brecha nº1 que `PRODUCCION.md` (Parte I §2) marca como "flexible en el lenguaje, ❌ en el ecosistema".
+brecha nº1 que `PRODUCTION.md` (Parte I §2) marca como "flexible en el lenguaje, ❌ en el ecosistema".
 
 ### 54.1 Decisión central: un índice **respaldado por git**, sin servidor propio
 
@@ -8623,7 +8623,7 @@ promesa de compatibilidad.
 
 Cambio mecánico, sin lógica nueva: la tabla de dispatch de `src/cli.rs` (§41.1) gana un nivel para
 `registry` y `print_help` se secciona. Fuera del código, los usos a renombrar están en `DESIGN.md`,
-`PUBLICAR.md` (la guía del publicador, la más afectada), `MANUAL.md`, `REFERENCIA.md`, `README.md`,
+`PUBLISH.md` (la guía del publicador, la más afectada), `MANUAL.md`, `REFERENCE.md`, `README.md`,
 `IDEAS.md` y las suites `tests/registry_cli.rs` y `tests/deps_cli.rs`.
 
 ## 89. M100 — ejecución de procesos del SO, v1 (EJECUTADA, jul 2026)

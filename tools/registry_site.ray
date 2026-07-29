@@ -2,7 +2,7 @@
 //
 // Dogfooding: la UI web del índice de paquetes (IDEAS §41) es un sitio ESTÁTICO generado
 // desde los TOML del propio índice — sin servidor ni base de datos. Pensado para el CI
-// del repo del índice (regenerar en cada push y publicar en Pages; snippet en PUBLICAR.md).
+// del repo del índice (regenerar en cada push y publicar en Pages; snippet en PUBLISH.md).
 //
 //   ray run tools/registry_site.ray <dir-del-índice> <dir-de-salida>
 //

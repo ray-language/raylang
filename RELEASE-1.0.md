@@ -1,6 +1,6 @@
 # Camino a raylang 1.0
 
-Checklist viva hacia el lanzamiento de la **1.0**. Los criterios los fija PRODUCCION.md (arco D → 1.0); aquí
+Checklist viva hacia el lanzamiento de la **1.0**. Los criterios los fija PRODUCTION.md (arco D → 1.0); aquí
 se rastrea su estado honesto. Versión: **`1.0.0`** (bump hecho en `Cargo.toml`/`SPEC.md`; falta empujar el
 tag `v1.0.0` para publicar la Release).
 

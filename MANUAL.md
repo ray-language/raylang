@@ -5,11 +5,11 @@ recomendaciones. Complementa a los otros documentos:
 
 - **`SPEC.md`** — la referencia **normativa** (gramática y semántica exactas). Cuando el manual y la SPEC
   discrepen, manda la SPEC.
-- **[`REFERENCIA.md`](REFERENCIA.md)** — el **catálogo exhaustivo**: todas las palabras clave, símbolos,
+- **[`REFERENCE.md`](REFERENCE.md)** — el **catálogo exhaustivo**: todas las palabras clave, símbolos,
   operadores con precedencia, builtins, prelude, módulos `std/` y paquetes, con sus firmas.
 - **`book/`** — el libro *Construyendo raylang*: cómo se **construyó** el lenguaje, fase a fase (pedagogía de
   implementación).
-- **[`PUBLICAR.md`](PUBLICAR.md)** — la guía del **publicador**: empaquetar, versionar y publicar
+- **[`PUBLISH.md`](PUBLISH.md)** — la guía del **publicador**: empaquetar, versionar y publicar
   en el registro (`ray registry publish`, índice, yank, garantías del lock).
 - **Este manual** — cómo **usar** raylang para programar.
 
@@ -160,7 +160,7 @@ fn main() -> int {
 
 ## 3. Operadores y números
 
-La tabla completa de precedencia (15 niveles) está en [`REFERENCIA.md` §2](REFERENCIA.md#2-símbolos-y-operadores).
+La tabla completa de precedencia (15 niveles) está en [`REFERENCE.md` §2](REFERENCE.md#2-símbolos-y-operadores).
 Lo esencial:
 
 ```rust
@@ -730,11 +730,11 @@ ray registry publish                 # publica TU paquete en el registro (valida
 ```
 
 El flujo completo del **publicador** (empaquetar, el índice, versionado, `yank`, garantías y
-receta de punta a punta) está en [`PUBLICAR.md`](PUBLICAR.md).
+receta de punta a punta) está en [`PUBLISH.md`](PUBLISH.md).
 
 ## 12. La biblioteca estándar
 
-Tres capas (catálogo completo en [`REFERENCIA.md`](REFERENCIA.md#10-la-biblioteca-estándar-std)):
+Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std)):
 
 1. **Builtins + prelude** — disponibles sin `import`: `print`, `to_string`, los métodos de
    string/arreglo/Map, `Option`/`Result`, `parse_int`, `sort`, `assert`, la cripto (`sha256`,
@@ -1261,7 +1261,7 @@ fn main() -> int {
 }
 ```
 
-Reglas (tabla completa en [`REFERENCIA.md` §13](REFERENCIA.md#13-ffi-tipos-marshalables)):
+Reglas (tabla completa en [`REFERENCE.md` §13](REFERENCE.md#13-ffi-tipos-marshalables)):
 
 - Aridad 0 a 3; tipos: `int` (C `int`), `u64` (C `long`/`size_t`), `float`, `bool`, `string`/`bytes`
   (solo argumento), `ptr`, `unit`; retornos falibles como `Option<string>`/`Option<bytes>`/`Option<ptr>`.
@@ -1495,5 +1495,5 @@ Cosas que sorprenden viniendo de otros lenguajes:
 
 ---
 
-¿Falta algo o quieres el detalle exacto de una construcción? Mira **[`REFERENCIA.md`](REFERENCIA.md)**
+¿Falta algo o quieres el detalle exacto de una construcción? Mira **[`REFERENCE.md`](REFERENCE.md)**
 (el catálogo completo), **`SPEC.md`** (normativa) o los **160+ ejemplos** en `examples/`.

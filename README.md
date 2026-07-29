@@ -217,8 +217,8 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
 | Documento | Qué es |
 |-----------|--------|
 | [`MANUAL.md`](MANUAL.md) | La **guía práctica**: cómo usar el lenguaje, idiomas, y mejores prácticas. |
-| [`REFERENCIA.md`](REFERENCIA.md) | El **catálogo exhaustivo**: palabras clave, operadores, builtins, prelude, `std/` y CLI, con firmas. |
-| [`PUBLICAR.md`](PUBLICAR.md) | La guía del **publicador**: empaquetar, versionar y publicar en el registro. |
+| [`REFERENCE.md`](REFERENCE.md) | El **catálogo exhaustivo**: palabras clave, operadores, builtins, prelude, `std/` y CLI, con firmas. |
+| [`PUBLISH.md`](PUBLISH.md) | La guía del **publicador**: empaquetar, versionar y publicar en el registro. |
 | [`SPEC.md`](SPEC.md) | La **especificación normativa** del lenguaje (gramática + semántica). |
 | [`llms.txt`](llms.txt) | **raylang para LLMs**: el contexto destilado (delta vs Rust, formas canónicas, errores exactos) para que un modelo escriba raylang correcto. Pégalo en tu prompt/CLAUDE.md. |
 | [`docs/mcp.md`](docs/mcp.md) | El **servidor MCP** (`ray mcp`): las tools check/run/test/fmt/doc para agentes LLM, con el código confinado (fuel/heap/plazo). |

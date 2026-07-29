@@ -8,11 +8,19 @@ porqué de cada decisión, fase a fase) y el libro (`book/`) es la *pedagogía* 
 Ante un conflicto, manda esta SPEC; un conflicto entre la SPEC y la implementación es un bug de
 una de las dos y debe resolverse explícitamente.
 
-**Conformidad.** raylang tiene dos motores (intérprete de árbol y máquina virtual de bytecode)
-que deben producir **comportamiento observable idéntico** (stdout, errores, código de salida)
-para todo programa determinista; la suite lo verifica por oráculo cruzado. Las excepciones están
-acotadas y listadas: la concurrencia (§9) y la E/S asíncrona solo existen en la VM (el intérprete
-da un error limpio), y el intérprete es el oráculo *secuencial*.
+**Conformidad.** raylang tiene **tres motores** que deben producir **comportamiento observable
+idéntico** (stdout, errores, código de salida) para todo programa determinista:
+
+1. la **máquina virtual de bytecode** — el motor de producto (`ray run`);
+2. el **binario nativo** (`ray build --native`), que transpila el programa a Rust y lo compila a
+   código máquina — su salida es **byte-idéntica** a la de la VM (corpus de paridad en la suite);
+3. el **intérprete de árbol** (`ray run --interp`), que es el **oráculo secuencial** de desarrollo.
+
+La suite lo verifica por oráculo cruzado en las tres direcciones. Las excepciones están acotadas
+y listadas: la concurrencia (§9) y la E/S asíncrona **no existen en el intérprete** (da un error
+limpio "requires the VM"), y los subsistemas que un binario nativo excluye a propósito
+(`--without …`, ver [REFERENCE.md](REFERENCE.md) §14) responden con un error de ejecución
+explícito en vez de silencio.
 
 Notación de gramática: EBNF con `{ x }` = cero o más, `[ x ]` = opcional, `|` = alternativa,
 `'x'` = literal. Las producciones léxicas (§1) operan sobre caracteres; las sintácticas (§2, §4–
@@ -80,8 +88,10 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
 - Los **tipos** se namespacan por módulo (dos módulos pueden definir `Node`); las funciones
   también. `main` vive en el módulo de entrada.
 - **Anotaciones** (conjunto cerrado): `@test` sobre funciones `() -> bool` o `() -> unit`;
-  `@derive(Eq, Show, Hash)` sobre structs/enums **no genéricos** (Hash → `hash(self) -> int`,
-  combinando el `.hash()` de los campos; un campo `float`/array no es hashable). Cualquier otra es error.
+  `@derive(Eq, Show, Hash, ToJson)` sobre structs/enums **no genéricos** — `Hash` genera
+  `hash(self) -> int` combinando el `.hash()` de los campos (un campo `float`/array no es
+  hashable) y `ToJson` genera `to_json(self) -> string`. `Ord` **no** es derivable: se
+  implementa a mano. Cualquier otra anotación es error.
 - **`main`** es obligatoria en el programa de entrada: sin parámetros, retorno `int` o `unit`.
   El código de salida del proceso es ese `int` (`& 0xFF`) o `0`.
 
@@ -330,46 +340,80 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
 - **`panic(msg)`** aborta la ejecución con "pánico: msg" y la posición de la llamada; el
   proceso sale con 70.
 
-## 9. Concurrencia (solo VM)
+## 9. Concurrencia (VM y binario nativo; no en el intérprete)
 
-Modelo **CSP con green threads cooperativos M:1** y scheduler **determinista** (cola FIFO;
-puntos de cesión fijos). En el intérprete, estas primitivas dan error limpio ("requiere la VM").
+Modelo **CSP → actores con aislamiento de heap**: cada fibra tiene su propio heap y la única
+comunicación entre fibras son los **canales**, que **transfieren** el valor. No hay estado
+mutable compartido → *data-race freedom* **por construcción**, sin *ownership* en el sistema de
+tipos. En el intérprete estas primitivas dan un error limpio ("requires the VM").
+
+**Ejecución.** El scheduler es **M:N**: M fibras sobre N hilos worker.
+
+- En la **VM**, N se decide así, en orden: `--deterministic` → **1**; `RAYLANG_THREADS=N`
+  explícito → **N**; el programa **no usa `spawn`** → **1**; en otro caso →
+  `available_parallelism()` (**multicore por defecto**). N se acota a `1..=256`.
+- En el **binario nativo**, las fibras son corrutinas de pila propia sobre un reactor del SO
+  (por defecto); `ray build --native --without fibers` recupera el modelo hilo-por-tarea.
+- En `wasm32` (playground) N es siempre **1**: no hay hilos del sistema.
+
+**Garantías, y qué depende de N.** La semántica de cada primitiva (abajo) es la misma con
+cualquier N. Lo que **solo** se garantiza con **N = 1** (`--deterministic` o `RAYLANG_THREADS=1`)
+es el **orden observable** entre fibras: intercalado de la salida, orden de despertar y el
+resultado de `select` entre varios canales listos a la vez. Un programa cuya salida deba ser
+reproducible debe fijar N = 1 o sincronizar por canales. La cancelación es **cooperativa** (actúa
+en los puntos de cesión), nunca preemptiva.
 
 - `spawn(f: fn() -> T) -> Task<T>` lanza una fibra (no cede). `join(t: Task<T>) -> T` bloquea
-  hasta que termina y **re-lanza** su fallo.
+  hasta que termina y **re-lanza** su fallo; `try_join(t) -> Result<T, string>` lo devuelve como
+  valor en vez de re-lanzarlo.
 - `scope(body: fn() -> R) -> R` **posee** las tareas lanzadas dentro: al salir las une; si una
   falla, **cancela** a las hermanas pendientes (transitivo) y propaga el fallo original.
 - `channel() -> Channel<T>` (no acotado), `channel(n)` (acotado; `n = 0` rendezvous).
   `send(ch, v)` bloquea con la cola llena; `recv(ch) -> Option<T>` bloquea vacío-y-abierto,
   `None` cerrado-y-vacío; `close(ch)` despierta receptores (un `send` sobre cerrado es error;
   un `close` con emisor bloqueado es error). `select(chs: [Channel<T>]) -> int` bloquea hasta
-  que alguno esté listo para recibir y devuelve el **menor índice listo** (un canal cerrado
-  está listo para siempre).
-- El programa termina cuando **main retorna** (las fibras pendientes se abandonan). Si todas
-  las fibras quedan bloqueadas: error "deadlock". La cancelación es **cooperativa** (en los
-  puntos de cesión), no preemptiva.
+  que alguno esté listo para recibir y devuelve el **menor índice listo en el momento de la
+  comprobación** (un canal cerrado está listo para siempre).
+- `signals() -> Channel<int>` devuelve el canal **singleton** de señales del proceso (`SIGTERM`
+  = 15, `SIGINT` = 2 llegan como enteros), para apagado ordenado; compone con `recv`/`select`.
+  Solo unix.
+- El programa termina cuando **`main` retorna** (las fibras pendientes se abandonan). Si todas
+  las fibras quedan bloqueadas y ninguna puede progresar: error "deadlock" (las que esperan E/S
+  del exterior o el reloj no cuentan como bloqueadas).
 
 ## 10. Builtins y prelude (superficie estable)
 
-La superficie estable es la **unión** de los builtins visibles y las funciones/traits del
-prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el usuario puede
-*override*). Los primitivos `__nombre` son **internos e inestables** (no los uses).
+La superficie estable tiene **tres capas**, y solo las dos primeras las fija esta SPEC:
+
+1. **Global** (sin importar nada): los builtins visibles y las funciones/traits del **prelude**
+   (escritas en raylang e inyectadas salvo redefinición del usuario, que puede hacer *override*).
+2. **`std/…`** (opt-in con `import std/…;`): la biblioteca estándar, **embebida en el binario**
+   y versionada con el lenguaje. Importar un módulo es además una *pista de capacidad* legible
+   ("este archivo toca disco / red / procesos").
+3. **Paquetes** (`net`, `db`, `web`, `rpc`, …): fuera de esta SPEC; versionan por separado y se
+   instalan con el gestor de paquetes.
+
+Los primitivos `__nombre` son **internos e inestables** (no los uses): son el borde con el host
+sobre el que se escriben las capas 1 y 2.
+
+### 10.1 Global
 
 - **Núcleo**: `print eprint to_string len panic assert assert_eq` · tipos imprimibles: `int
-  float bool string char bytes u*` y (vía `mostrar`) tipos con `Show`.
-- **Caracteres**: `char_code(c) -> int` (code point Unicode). — **String**: `trim split chars contains replace starts_with ends_with to_upper to_lower
-  substring repeat index_of join to_bytes parse_int parse_float` · **Arreglos**: `push pop
-  reverse contains position sort map filter fold iter` (+ `a + b` concatena) · **Bytes**:
-  `bytes_of sub_bytes from_utf8` (+ `b1 + b2`, `to_string` → hex).
-- **Cripto de producción** (M43, respaldada por `ring`, tiempo constante): `sha256 sha512 sha1`
-  (`bytes -> bytes`; `sha1` es legado, solo para protocolos que lo exigen como el accept-key de
-  WebSocket) y `hmac_sha256(clave, mensaje) -> bytes` (base de JWT/SigV4). **Ed25519**:
-  `ed25519_public_key(seed) -> Option<bytes>` y `ed25519_sign(seed, msg) -> Option<bytes>` (`None` si la
-  semilla no mide 32 octetos), `ed25519_verify(pubkey, msg, sig) -> bool` (total). **AEAD**:
-  `chacha20poly1305_seal(key, nonce, aad, plaintext) -> Option<bytes>` (→ `cifrado||etiqueta`) y
-  `chacha20poly1305_open(key, nonce, aad, cifrado_y_etiqueta) -> Option<bytes>` (`None` si falla la
-  autenticación o los tamaños). Las implementaciones en raylang puro de `examples/web/` son demostración del
-  lenguaje, no producción (correctas pero no constant-time).
+  float bool string char bytes u*` y (vía `show`) tipos con `Show`.
+- **Recuperación de fallos** (M97): `try_call(f: fn() -> T) -> Result<T, string>` ejecuta `f` y
+  convierte un `panic` o error de ejecución en `Err(mensaje)` — el fallo **como valor**, sin
+  excepciones. La recuperación ocurre en la **misma fibra**: lo que `f` mutó antes de fallar
+  sigue mutado (mismo compromiso que `catch_unwind` de Rust); para aislamiento real, `spawn` +
+  `try_join(t) -> Result<T, string>` (§9, solo VM). `try_call` funciona en los tres motores.
+- **Caracteres**: `char_code(c) -> int` (code point Unicode) y `char_from_code(n) -> Option<char>`
+  (su inversa; `None` si `n` no es un code point válido). — **String**: `trim split chars contains
+  replace starts_with ends_with to_upper to_lower substring repeat index_of join to_bytes
+  parse_int parse_float` · **Arreglos**: `push pop reverse contains position sort map filter fold
+  any all iter` (+ `a + b` concatena) · **Bytes**: `bytes_of sub_bytes from_utf8` (+ `b1 + b2`,
+  `to_string` → hex).
+- **Entrada/entorno**: `args() -> [string]` (argumentos del programa), `env(name) ->
+  Option<string>`, `input() -> Option<string>` (una línea de stdin), `read_int() ->
+  Option<int>`. El disco vive en `std/fs`, no aquí.
 - **Iteradores** (M40.2b–f): `xs.iter()` y `range(a, b)` (semi-abierto) son iteradores de primera
   clase (`Iter<T>`, respaldados por un closure) recorribles con `for x in …`. **Adaptadores
   perezosos** (métodos de `Iterator`): `.map(f)`, `.filter(pred)`, `.take(n)`, `.skip(n)`,
@@ -380,27 +424,47 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   suma enteros. `enumerate`/`zip` se consumen con **patrón de tupla** en el `for`:
   `for (i, x) in it.enumerate() { … }`. No colisionan con el `map`/`filter`/`fold` **eager** de
   arreglos (`xs.map(f) -> [U]`): se desambigua por el tipo del receptor.
-- **Map**: `map_new insert get remove contains_key keys values len` (recorridos en orden de
-  clave).
-- **Set** (`Set<T>`, M40.3b; `T` debe derivar/implementar `Hash` + `Eq`): `set_new` (constructor
-  vacío, el tipo lo fija el contexto), `set_add set_has set_remove set_size set_items`. Tabla hash
-  escrita en el prelude; el prefijo `set_` evita chocar con builtins (`s.set_add(x)` por UFCS).
-- **StringBuilder** (M40.3c): `sb_new sb_push sb_build sb_count` — acumula trozos y los une una vez
-  (evita el O(n²) de `+` en bucle). **Deque** (`Deque<T>`, M40.3d): `deque_new deque_push_back
-  deque_push_front deque_pop_front deque_pop_back deque_peek_front deque_len deque_is_empty` (pop/peek
-  → `Option<T>`); cola/pila/doble-extremo sobre arreglo + índice `head`.
-- **Matemáticas**: `sqrt pow floor ceil round abs min max sin cos tan ln log10 exp pi e` ·
-  **Reloj/azar**: `now monotonic sleep random random_int`.
-- **Proceso/E-S**: `args env input read_int read_file write_file append_file exists
-  remove_file list_dir open read_line write close read_file_bytes write_file_bytes`.
-- **Red**: `tcp_connect tcp_listen tcp_accept local_port socket_read socket_write
-  socket_read_bytes socket_write_bytes udp_* tls_connect tls_accept tls_connect_h2`.
-- **Concurrencia**: §9. — **Traits del prelude**: `Eq(igual) Show(mostrar) Ord(menor) Hash(hash)
-  Add/Sub/Mul/Div/Neg From<S>(desde) Iterator<T>(next)` y `Option<T>`/`Result<T,E>`.
+- **Map** (`Map<K, V>`, claves primitivas: `int string char bool bytes`): `Map.new() insert get
+  get_or remove contains_key keys values len` — `keys()`/`values()` recorren en **orden de
+  clave** (el almacén interno no expone su orden). Para claves de usuario, `std/collections/dict`.
+- **Handles**: `close(h)` cierra un archivo, socket o canal (el mismo nombre para los tres).
+- **Concurrencia**: §9 (`spawn join try_join scope channel send recv close select signals`).
+- **Traits del prelude** (los métodos son los que se implementan y se llaman por UFCS):
+  `Eq(eq)` · `Show(show)` · `Ord(less)` · `Hash(hash)` · `Len(len)` · `Push(push)` ·
+  `Reverse(reverse)` · `Contains(contains)` · `From<S>(convert)` · `Iterator<T>(next)` ·
+  `Add(add)`/`Sub(sub)`/`Mul(mul)`/`Div(div)`/`Neg(neg)` (sobrecarga de operadores) ·
+  `StrOps`/`BytesOps`/`MapOps`/`OptionOps`/`ResultOps` (los métodos de string, bytes, `Map`,
+  `Option<T>` y `Result<T,E>`). **Derivables** con `@derive(…)`: `Eq`, `Show`, `Hash` y `ToJson`
+  — y solo esos cuatro (`Ord` se implementa a mano).
+
+### 10.2 La biblioteca estándar `std/`
+
+Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista en disco. Se usa
+**calificada** por el último segmento de la ruta (`math.sqrt(2.0)`, `set.add(s, x)`).
+
+| Módulo | Qué cubre |
+|---|---|
+| `std/fs` | disco: leer/escribir (texto y `bytes`), `append`, `exists`, `list_dir`, metadatos, copiar/renombrar/borrar, directorios, handles con `read_line`/`write` |
+| `std/net` | transporte: TCP (`tcp_connect`/`tcp_listen`/`tcp_accept`/`local_port`), I/O de sockets en texto y `bytes`, TLS (`tls_connect`/`tls_accept`/`tls_upgrade`) |
+| `std/process` | ejecución de procesos del SO **sin shell** (argv tipado): `run`, el builder `cmd` y el modo *streaming* `stream` (§ REFERENCE.md §10) |
+| `std/math` | `PI`/`E`, `sqrt pow sin cos tan asin acos atan atan2 ln log2 log10 exp floor ceil round trunc`, y `abs`/`min`/`max` genéricos |
+| `std/time` | reloj (`now`, `monotonic`), `sleep`, fechas UTC y formateo (ISO 8601/RFC 1123) |
+| `std/random` | PRNG del proceso: `next`, `below`, `between`, `choice`, `shuffle` y `seed` (semilla explícita → secuencia reproducible) |
+| `std/crypto` | cripto de **producción** respaldada por `ring` (tiempo constante): `sha256 sha512 sha1`, `hmac_sha256`, `ed25519_public_key`/`ed25519_sign`/`ed25519_verify`, `chacha20poly1305_seal`/`_open` y `random_bytes` (CSPRNG). Las versiones escritas en raylang puro (`examples/web/`) son **demostración del lenguaje**, no producción |
+| `std/collections/{set,deque,stringbuilder,dict}` | `Set<T>` y `Dict<K,V>` (claves de usuario vía `Hash`+`Eq`), `Deque<T>` y un constructor de strings que evita el O(n²) de concatenar en bucle |
+| `std/text`, `std/sort`, `std/regex`, `std/csv`, `std/toml`, `std/json`, `std/template` | procesamiento de texto y datos |
+| `std/hex`, `std/base64`, `std/url`, `std/uuid`, `std/protobuf` | codificaciones e identificadores |
+| `std/inflate`, `std/deflate`, `std/huffman` | compresión (gzip/zlib/DEFLATE) |
+| `std/kv`, `std/resilience` | almacén clave-valor persistente (compartible entre fibras) y utilidades de resiliencia: reintentos con política, *circuit breaker* y plazos (`deadline`/`expired`) |
+
+Un módulo `std/…` puede depender de que el binario incluya un subsistema (TLS/cripto necesitan
+`net-tls`; un binario *slim* o `--without` responde con un error de ejecución explícito). El
+catálogo con firmas está en [REFERENCE.md](REFERENCE.md) §10.
 
 **Decisiones de nombres, congeladas** (raylang **no tiene sobrecarga**; cada firma un nombre):
-`index_of` (string) vs `position` (arreglos); `fetch` (HTTP de la stdlib) porque `get` es de
-`Map` y colisionaría bajo UFCS; `bytes_of([int])` vs `to_bytes(string)` (entradas distintas);
+`index_of` (string) vs `position` (arreglos); `fetch` (el cliente HTTP del paquete `net`) porque
+`get` es de `Map` y colisionaría bajo UFCS; `bytes_of([int])` vs `to_bytes(string)` (entradas
+distintas);
 `join(arr, sep)` vs `join(task)` es la única dualidad *ad-hoc* (aridad), junto a `close`
 (handle/canal) y `len`/`contains`/`+` (polimórficos por tipo).
 
@@ -415,9 +479,11 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   siempre el mismo que en modo fail-fast.
 - Un **ICE** (bug del compilador) imprime "error interno del compilador (ICE): …" y pide
   reporte; **ningún programa de usuario debe provocarlo**.
-- **Códigos de salida**: el `int` de `main` (`& 0xFF`, 0 si unit) · **65** error de
-  compilación (léxico/sintaxis/tipos/carga de módulos) · **66** archivo ilegible · **70**
-  error de ejecución · **101** ICE.
+- **Códigos de salida**: el `int` de `main` (`& 0xFF`, 0 si unit) · **64** uso incorrecto del
+  CLI · **65** error de compilación (léxico/sintaxis/tipos/carga de módulos) · **66** archivo
+  ilegible · **69** el binario no incluye el subsistema que el comando necesita (build *slim*) ·
+  **70** error de ejecución · **73** no se pudo crear un archivo · **101** ICE. `ray test` sale
+  con el número de pruebas fallidas.
 
 ## 12. Versionado y estabilidad
 
@@ -432,15 +498,20 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   de la cabecera** (la línea/ventana/subrayado pueden mejorar en MENOR).
 - **Deprecación**: un elemento estable se marca *deprecado* en esta SPEC (con reemplazo) al
   menos una versión MENOR antes de retirarse en la siguiente MAYOR.
-- Las **librerías de `examples/`** (web, cripto, formatos…) aún **no** son stdlib versionada:
-  se congelan como `std/` en M40. Las escritas puras (`time`, `log`, `csv`, `toml`, …) están
-  cubiertas de facto por los oráculos.
+- **Qué versiona con el lenguaje y qué no.** El núcleo (§§1–11) y la **biblioteca estándar
+  `std/`** (§10.2) versionan **juntos**: van embebidos en el mismo binario y una SPEC dada
+  describe ambos. Los **paquetes** (`net`, `db`, `web`, `rpc`, …) versionan por separado con
+  semver propio y se resuelven por el gestor de paquetes; las librerías de `examples/` son
+  material de demostración y **no** tienen garantía de estabilidad, aunque algunas sean la
+  fuente de un módulo `std/` (en cuyo caso manda lo que dice §10.2, no el ejemplo).
 
 ## 13. Notas de implementación (informativas)
 
-Dos motores compartiendo el front-end; los genéricos/traits/bounds/dyn se **borran** en
-compilación (el runtime no conoce tipos); las posiciones `(línea, col)` acompañan a todo token,
-nodo y error; el binario ejecuta todo en un hilo con pila de 256 MiB. El compilador
-auto-alojado (`selfhost/`) implementa este mismo lenguaje y sirve de validador cruzado de esta
-gramática: el parser de Rust y el auto-alojado producen el mismo AST nodo a nodo sobre el
-corpus del repo.
+Tres motores compartiendo el mismo front-end (§Conformidad); los genéricos/traits/bounds/dyn se
+**borran** en compilación (el runtime no conoce tipos); las posiciones `(línea, col)` acompañan a
+todo token, nodo y error. El programa corre en un hilo de **pila grande** (256 MiB), para que la
+recursión profunda sea robusta, y la **recursión de cola se elimina** (TCO) tanto en el
+intérprete como en la VM; en el binario nativo cada fibra reserva su propia pila (128 MiB de
+reserva virtual por defecto, ajustable). El compilador auto-alojado (`selfhost/`) implementa este mismo lenguaje y sirve de
+validador cruzado de esta gramática: el parser de Rust y el auto-alojado producen el mismo AST
+nodo a nodo sobre el corpus del repo.

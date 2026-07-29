@@ -292,10 +292,16 @@ El runtime (VM y binarios nativos) **sube solo** el límite blando de fds al dur
 agotamiento real de descriptores (EMFILE) es **transitorio** para el accept: pausa y reintenta
 sin contar para la rendición por error persistente (antes, 100 EMFILE consecutivos —milisegundos
 bajo tormenta— apagaban el servidor). Medido (M3 Pro, binario nativo debug, `log_requests`
-activo): `wrk -t4 -c500 -d15s` → ~17.6k req/s, cero errores, servidor vivo. Con el **pool de
-hilos** del backend nativo (M96, §87) y el registro sin dup-bajo-lock (M96b, §87b), el webserver
-pelado da **~107k req/s** de pico; y a TASA FIJA (la medición de SLO correcta, §87c),
-**p99 = 2.2 ms al 60% de capacidad** (0.86 ms al 30%) — mismo hardware, binario `--release`. Con `ray dev` (M92) tienes watch+restart con drenado y **live-reload del
+activo): `wrk -t4 -c500 -d15s` → ~17.6k req/s, cero errores, servidor vivo. Desde el arco de
+**concurrencia nativa** (jul 2026, `docs/diseno-concurrencia-nativa.md`), el binario nativo corre
+las conexiones sobre **fibras M:N** (scheduler propio + reactor kqueue/epoll, el default de
+`ray build --native`): medido en **red real** con generador de carga dedicado (M3 Pro sirviendo,
+Mac mini M4 generando, `oha` con corrección de latencia), el webserver **pelado** da **~190.5k
+req/s de techo** (1.57× Go `net/http`, 92% de hyper) y el **framework** **~188k** — la capa de
+framework cuesta ~1%: **93% de axum, con p50/p99.9 en empate estadístico (0.48/1.05 ms contra
+0.47/1.04) y 1.51× Go+chi** (escalón `json`) — sirviendo con **14 hilos** y **~21 KB por
+conexión** (el modelo anterior de hilo-por-conexión usaba 1002 hilos y ~265 KB/conexión a
+`-c 1000`). Corridas archivadas en `benchmarks/web/results/`. Con `ray dev` (M92) tienes watch+restart con drenado y **live-reload del
 navegador** (la página se refresca sola al reiniciar; el snippet reintenta hasta que el servidor
 vuelve). Con `--port N` además el supervisor retiene el socket (cero conexiones rechazadas al
 reiniciar) y la app puede leer el puerto con `env("RAY_LISTEN_ADDR")` (`"host:puerto"`).

@@ -1708,7 +1708,7 @@ selfhost no conoce módulos con namespacing (su loader M14.7 es más simple) →
 
 ---
 
-## 53. Ejecución de comandos del SO — diseño hecho, APARCADA (jul 2026)
+## 53. Ejecución de comandos del SO — diseño hecho; SEGUNDA MIRADA en §53.7 (jul 2026)
 
 Lanzar procesos del sistema (`git`, `ffmpeg`, `rustc`) desde raylang. Se diseñó a fondo en una
 sesión de julio de 2026 y **se decidió no construirla antes de la 1.0**. Esta sección conserva el
@@ -1843,6 +1843,72 @@ máquina de desarrollo); el cambio es un `const` + su paso como argumento, y lo 
 **(0)** auditoría CLOEXEC (independiente, hacer ya) · **(1)** SIGCHLD por self-pipe sobre M88.1 ·
 **(2)** `run()` + `std/process` en los tres motores con golden VM≡nativo · **(3)** streaming sobre
 canal acotado, solo-VM.
+
+### 53.7 SEGUNDA MIRADA (28 jul 2026, post-arco de fibras) — dos conclusiones se INVIERTEN
+
+Releído con ojos frescos tras cerrar el arco de concurrencia nativa (fibras M:N por default en el
+nativo, #71-#79). Los pilares de API del §53.3 SOBREVIVEN enteros (Exit como enum, bytes, tope de
+salida, sin shell, salir-con-código ≠ error, grupos de proceso desde el día uno). Pero la
+restricción que ORGANIZABA el diseño — la asimetría VM-fibras / nativo-hilos — ya no existe, y
+con ella caen dos conclusiones y aparecen cuatro piezas nuevas.
+
+**Lo que se invierte:**
+
+1. **"En el nativo, bloquear está bien (tiene hilos)" — FALSO hoy, y al revés.** El nativo tiene
+   14 workers FIJOS: un `run()` bloqueante dentro de una fibra secuestra un worker, y 14
+   shell-outs concurrentes congelan el binario entero (la lección del livelock de connects, ya
+   pagada). `run()` DEBE aparcar la fibra también en el nativo. La buena noticia: la maquinaria
+   ya existe y está en producción — pipes del hijo son fds → `wait_readable` del reactor;
+   timeout → `wait_readable_timeout` (deadline en el park); espera de salida → pulso del
+   self-pipe de SIGCHLD como fd + `waitpid(pid, WNOHANG)` en bucle (el despertar-de-todos del
+   reactor es spurious-safe por diseño). Coste de implementación: una fracción del que el §53
+   presupuestaba, porque el arco ya construyó el 80%.
+2. **"Streaming solo-VM" — OBSOLETO.** La razón era la asimetría de motores. Hoy ambos motores de
+   producto tienen fibras: el streaming por `Channel<bytes>` acotado va a **VM + nativo con
+   paridad byte a byte** (el intérprete lo rechaza con su mensaje propio, precedente exacto de
+   `spawn`). El 100% de la feature queda bajo oráculo o bajo paridad-entre-productos.
+
+**Lo nuevo que la mirada fresca añade (no estaba en el §53):**
+
+3. **`Command::process_group(0)` de Rust std (estable), no `pre_exec`.** Verificado en esta
+   máquina: crea el grupo del hijo SIN closure `pre_exec`. Importa el doble ahora: el binario
+   nativo es un proceso de 14+ hilos con mimalloc — un `fork` con `pre_exec` solo puede ejecutar
+   código async-signal-safe entre fork y exec (un lock del asignador tomado por otro hilo =
+   deadlock del hijo), y evitar `pre_exec` deja a std usar su camino `posix_spawn` (más rápido y
+   sin esa clase de bug entera). La escalera de apagado del §53.5 (stdin → TERM al grupo → KILL
+   al grupo) queda igual, pero su mecanismo de creación de grupo es este.
+4. **stdin = /dev/null por defecto.** El §53 no lo decía. Un hijo que hereda el stdin del
+   servidor puede colgarse leyéndolo (o leer lo que no debe). `.stdin(bytes)` escribe y cierra;
+   heredar jamás. Es la opción moderna-y-segura para un lenguaje de servidores.
+5. **Cosecha de zombis sin destructores.** raylang no tiene drop: en v1, `run()` SIEMPRE cosecha
+   (incluso tras timeout: escalera + `waitpid` final). En v2 (streaming), el `Proc` es un hijo de
+   scope como las `Task` (M97.1: consumido-o-cosechado-al-cerrar-el-scope) — la cancelación
+   estructural del scope dispara la escalera de apagado. Eso es concurrencia estructurada DE
+   PROCESOS, que ni Go ni Python ofrecen de serie: la ventaja de diseñar esto DESPUÉS del arco.
+6. **El pulso de 10 ms ya existe** (F3, WaitList): la espera de salida del hijo hereda gratis la
+   cadencia de cancelación cooperativa (H21-N3) — una fibra esperando un hijo y cancelada por su
+   scope nota la cancelación en ≤10 ms y ejecuta la escalera. En el diseño del §53 esto habría
+   sido código nuevo.
+
+**Lo que NO cambia:** la cautela de API del §53.1 (nadie acierta una API de procesos a la
+primera; M34 congeló con semver) sigue siendo el mejor argumento para una v1 MÍNIMA: `run()` +
+builder acotado, streaming detrás, PTY jamás en v1. Y el reparto por tiers (primitivo builtin,
+ergonomía en `std/process` raylang) sigue intacto. La feature de Cargo como gating también —
+con un matiz nuevo: exec no trae NINGÚN crate (std::process basta), así que la exclusión es
+puramente de política ("este binario no puede lanzar procesos"), igual de verificable.
+
+**Demanda:** el disparador del §53.1 era "un servicio real que lo necesite / que el dueño
+reabra el tema". Este apartado existe porque se reabrió. El hueco además cambió de naturaleza:
+con el arco cerrado, raylang se posiciona como lenguaje de SERVICIOS de producción (92-93% de
+hyper/axum), y los servicios reales lanzan procesos (git, ffmpeg, migraciones, backups).
+
+**Orden de ataque revisado** (sustituye al del §53.6):
+**(1)** `run()` en los tres motores — interp bloquea (oráculo), VM y nativo APARCAN la fibra;
+`Exit`/`Output`, tope, timeout con escalera, `process_group(0)`, stdin=/dev/null; golden
+intérprete≡VM≡nativo (comandos deterministas: `sh -c 'echo hi; exit 3'`, muerte por señal) ·
+**(2)** streaming VM+NATIVO por `Channel<bytes>` acotado (modo `Merge` incluido) con paridad
+entre productos; `Proc` como hijo de scope · **(3)** menores: `env_clear`, Windows honesto,
+rlimits si alguien los pide.
 
 ## 54. Carrera de builds nativos concurrentes del MISMO fuente (jul 2026, impacto: BAJO)
 

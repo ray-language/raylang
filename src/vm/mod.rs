@@ -2748,17 +2748,7 @@ impl<'a> Vm<'a> {
                     // TA4: una variante SIN payload es inmutable y sin identidad observable → un solo
                     // objeto canónico por fibra, reusado en cada construcción (raíz del GC en collect).
                     if arity == 0 {
-                        let key = (*enum_id as u32, *tag as u32);
-                        let h = match self.cur.unit_enums.get(&key) {
-                            Some(&h) => h,
-                            None => {
-                                let h = self.cur.heap.allocate(Obj::Enum(VmEnum {
-                                    enum_id: key.0, tag: key.1, payload: Vec::new(),
-                                }));
-                                self.cur.unit_enums.insert(key, h);
-                                h
-                            }
-                        };
+                        let h = self.unit_enum(*enum_id, *tag);
                         self.push(HeapValue::Obj(h));
                     } else {
                         let mut payload = Vec::with_capacity(arity);
@@ -2782,6 +2772,109 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::MatchFail => {
                     return Err(runtime_error(pos!().0, pos!().1, "no match branch matched (should not happen)"));
+                }
+                // R7: el cuerpo completo de una `run_*` interna de std/regex — despacha al crate
+                // `regex` de ray-runtime (la MISMA traducción de dialecto y caché por hilo que el
+                // binario nativo, R5). Los argumentos se leen de los locales del marco SIN clonar
+                // los strings (el texto puede ser largo): préstamos directos, el resultado se
+                // materializa en datos Rust planos, y los préstamos terminan antes de tocar el heap.
+                #[cfg(all(feature = "regex", not(target_arch = "wasm32")))]
+                OpCode::RegexNative { f, opt } => {
+                    use crate::bytecode::RegexNativeFn as R;
+                    use ray_runtime::regex as rx;
+                    // Resultado intermedio plano: separa el préstamo de los argumentos (marco +
+                    // heap, inmutable) de la construcción del valor de retorno (heap, mutable).
+                    enum Out {
+                        Bool(bool),
+                        Str(String),
+                        Strs(Vec<String>),
+                        Span(Option<(i64, i64)>),
+                        Caps(Option<Vec<Option<(i64, i64)>>>),
+                        CapsStr(Option<Vec<Option<String>>>),
+                    }
+                    let out = {
+                        let frame = self.cur.frames.last().expect("hay un marco activo");
+                        // El cuerpo sintético no captura nada → los params son siempre Plain.
+                        let plain = |slot: usize| match &frame.locals[slot] {
+                            Local::Plain(v) => v,
+                            Local::Boxed(_) => unreachable!("the synthetic body captures nothing"),
+                        };
+                        let HeapValue::Obj(ph) = plain(0) else {
+                            unreachable!("the checker guarantees the Prog struct")
+                        };
+                        let Obj::Struct(s) = self.cur.heap.get(*ph) else {
+                            unreachable!("the checker guarantees a struct")
+                        };
+                        // El campo `pat` del Prog retiene el patrón FUENTE, ya validado por el
+                        // parser raylang de std/regex (R5): al crate solo llegan patrones válidos.
+                        let pat_pos = self.program.structs[s.struct_idx]
+                            .fields
+                            .iter()
+                            .position(|n| n == "pat")
+                            .expect("Prog retiene el patrón fuente (campo `pat`, R5)");
+                        let HeapValue::Str(pat) = &s.fields[pat_pos] else {
+                            unreachable!("the checker guarantees `pat` is a string")
+                        };
+                        let HeapValue::Str(text) = plain(1) else {
+                            unreachable!("the checker guarantees the text string")
+                        };
+                        match f {
+                            R::Full => Out::Bool(rx::full_match(pat, text)),
+                            R::Search => Out::Bool(rx::search(pat, text)),
+                            R::Find => Out::Span(rx::find(pat, text)),
+                            R::FindAll => Out::Strs(rx::find_all(pat, text)),
+                            R::ReplaceAll => {
+                                let HeapValue::Str(repl) = plain(2) else {
+                                    unreachable!("the checker guarantees the replacement string")
+                                };
+                                Out::Str(rx::replace_all(pat, text, repl))
+                            }
+                            R::Captures => Out::Caps(rx::captures(pat, text)),
+                            R::CapturesStr => Out::CapsStr(rx::captures_str(pat, text)),
+                        }
+                    };
+                    let v = match out {
+                        Out::Bool(b) => HeapValue::Bool(b),
+                        Out::Str(s) => HeapValue::Str(s),
+                        Out::Strs(xs) => {
+                            let elems: Vec<HeapValue> = xs.into_iter().map(HeapValue::Str).collect();
+                            HeapValue::Obj(self.cur.heap.allocate(Obj::Array(elems)))
+                        }
+                        Out::Span(sp) => {
+                            let payload = sp.map(|ab| self.regex_span(ab));
+                            self.regex_option(*opt, payload)
+                        }
+                        Out::Caps(c) => {
+                            let payload = c.map(|groups| {
+                                let elems: Vec<HeapValue> = groups
+                                    .into_iter()
+                                    .map(|g| {
+                                        let p = g.map(|ab| self.regex_span(ab));
+                                        self.regex_option(*opt, p)
+                                    })
+                                    .collect();
+                                HeapValue::Obj(self.cur.heap.allocate(Obj::Array(elems)))
+                            });
+                            self.regex_option(*opt, payload)
+                        }
+                        Out::CapsStr(c) => {
+                            let payload = c.map(|groups| {
+                                let elems: Vec<HeapValue> = groups
+                                    .into_iter()
+                                    .map(|g| self.regex_option(*opt, g.map(HeapValue::Str)))
+                                    .collect();
+                                HeapValue::Obj(self.cur.heap.allocate(Obj::Array(elems)))
+                            });
+                            self.regex_option(*opt, payload)
+                        }
+                    };
+                    self.push(v);
+                }
+                // Sin la feature `regex` el compilador nunca emite este opcode (la Pike VM
+                // raylang se compila y ejecuta tal cual — el fallback es la implementación real).
+                #[cfg(not(all(feature = "regex", not(target_arch = "wasm32"))))]
+                OpCode::RegexNative { .. } => {
+                    unreachable!("RegexNative is only emitted with the `regex` feature")
                 }
                 OpCode::GetField(name) => {
                     // TA1: el nombre se resuelve a POSICIÓN en la tabla de defs (compartida), no en
@@ -3237,6 +3330,43 @@ impl<'a> Vm<'a> {
             _ => unreachable!("the checker guarantees an array, string or bytes"),
         }
         Ok(())
+    }
+
+    /// TA4 (factorizado en R7): la variante SIN payload como objeto canónico por fibra — uno solo,
+    /// reusado en cada construcción (raíz del GC en `collect`). Lo usan `MakeEnum` y `RegexNative`.
+    fn unit_enum(&mut self, enum_id: usize, tag: usize) -> Handle {
+        let key = (enum_id as u32, tag as u32);
+        match self.cur.unit_enums.get(&key) {
+            Some(&h) => h,
+            None => {
+                let h = self.cur.heap.allocate(Obj::Enum(VmEnum {
+                    enum_id: key.0, tag: key.1, payload: Vec::new(),
+                }));
+                self.cur.unit_enums.insert(key, h);
+                h
+            }
+        }
+    }
+
+    /// R7: `(a, b)` como tupla de la VM — un `IntArray` de 2, la misma representación que
+    /// construiría `MakeArray` especializado para un literal de tupla de ints.
+    #[cfg(all(feature = "regex", not(target_arch = "wasm32")))]
+    fn regex_span(&mut self, ab: (i64, i64)) -> HeapValue {
+        HeapValue::Obj(self.cur.heap.allocate(Obj::IntArray(vec![ab.0, ab.1])))
+    }
+
+    /// R7: envuelve un payload ya construido en `Option.Some(..)`, o la variante canónica
+    /// `Option.None` si no lo hay. `opt` son los índices `(enum_id, tag_some, tag_none)`
+    /// resueltos al compilar.
+    #[cfg(all(feature = "regex", not(target_arch = "wasm32")))]
+    fn regex_option(&mut self, opt: (usize, usize, usize), payload: Option<HeapValue>) -> HeapValue {
+        let (enum_id, some, none) = opt;
+        match payload {
+            Some(v) => HeapValue::Obj(self.cur.heap.allocate(Obj::Enum(VmEnum {
+                enum_id: enum_id as u32, tag: some as u32, payload: vec![v],
+            }))),
+            None => HeapValue::Obj(self.unit_enum(enum_id, none)),
+        }
     }
 
     fn as_struct(&self, h: Handle) -> &VmStruct {

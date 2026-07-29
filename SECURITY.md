@@ -76,12 +76,14 @@ en el propio Rust del proyecto, sin crates.
 | `rusqlite` (`bundled`) | SQLite embebido: sin dependencia del sistema, versión determinista | feature `sqlite` |
 | `libloading` | carga de librerías nativas del FFI — reemplazó a `dlopen`/`dlsym` a mano (arregla Windows y da los errores reales del cargador) | feature `ffi` |
 | `corosensei` | cambio de contexto de las fibras del binario nativo: asm auditado de un solo crate en vez de `asm!` propio | binarios nativos con fibras |
-| `regex` | motor de regex acelerado del binario nativo; la semántica de referencia sigue siendo `std/regex`, escrito en raylang | binarios nativos que usan regex |
+| `regex` | motor de regex acelerado del binario nativo (R5) y de la VM (R7); la semántica de referencia sigue siendo `std/regex`, escrito en raylang (los patrones llegan ya validados por su parser) | feature `regex` de la toolchain (vía `ray-runtime/regex`) + binarios nativos que usan regex |
 | `mimalloc`, `ahash` | allocador y hasher, ambos por mejora **medida** y sin cambio semántico | núcleo (no-wasm) |
 
 Un build **slim** (`--no-default-features --features interp`) deja fuera TLS/cripto, SQLite y la
 carga de código nativo: los builtins afectados devuelven un error explícito y el CLI lo dice —
-nunca una verificación que "pasa" en silencio. `cargo audit` corre en CI.
+nunca una verificación que "pasa" en silencio. (Excepción deliberada: sin la feature `regex` no
+se pierde capacidad — `std/regex` cae a su implementación raylang, la Pike VM interpretada, con
+la misma salida.) `cargo audit` corre en CI.
 
 ### La frontera insegura: FFI
 

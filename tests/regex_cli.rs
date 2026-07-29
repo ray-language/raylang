@@ -160,3 +160,86 @@ fn regex_captures_both_engines() {
     assert_eq!(interp, EXPECTED_M81, "intérprete vs golden");
     assert_eq!(vm, EXPECTED_M81, "VM vs golden");
 }
+
+// ---------------------------------------------------------------------------
+// R7 — la VM despacha las `run_*` de std/regex al crate `regex` (feature `regex`).
+// ---------------------------------------------------------------------------
+
+/// R7: con la feature `regex`, la VM ejecuta std/regex con el crate de Rust vía ray-runtime (el
+/// MISMO borde que el binario nativo desde R5); el intérprete (`--interp`) conserva la Pike VM
+/// raylang. Este test es el ORÁCULO CONTINUO del dialecto entre ambos motores —clases ASCII
+/// fijas, escapes literales (`\b` es la letra b), `.` que casa '\n', índices por CARÁCTER,
+/// matches vacíos estilo std, grupos que no participan, errores como valores— y cubre además el
+/// escape `RAYLANG_REGEX_PIKE=1` (fuerza la Pike VM interpretada en la VM: byte-idéntico).
+#[test]
+fn regex_native_vm_matches_pike_interp() {
+    let dir = std::env::temp_dir().join("raylang_test_regex_r7");
+    std::fs::create_dir_all(&dir).unwrap();
+    let prog = dir.join("torture.ray");
+    std::fs::write(
+        &prog,
+        r#"import std/regex;
+
+fn main() {
+    print(regex.find_all("a*", "baa").join("|"));
+    print(regex.replace_all("x*", "ab", "-"));
+    print(regex.replace_all("a+", "banana", "[$0]"));
+    print(regex.find_str("h.la", "linea1\nh\nla fin").unwrap_or("no"));
+    print(regex.find_str("[\\d]+", "abc 123 def").unwrap_or("no"));
+    print(regex.find_str("\\bcd", "abcd").unwrap_or("no"));
+    print(regex.find_str("añ.€", "x añô€ y").unwrap_or("no"));
+    match (regex.find("ñ+", "añññb")) {
+        Option.Some(par) => { print(par.0); print(par.1); },
+        Option.None => { print(0 - 1); },
+    }
+    print(regex.find_all("[0-9]+?", "a123b45").join("|"));
+    var vacio: [Option<string>] = [];
+    let caps = regex.captures_str("(\\w+)@(\\w+)", "mail: ana@example fin").unwrap_or(vacio);
+    var i = 0;
+    while (i < caps.len()) { print(caps[i].unwrap_or("<none>")); i = i + 1; }
+    print(regex.full_match("us.r\\d+", "user42"));
+    print(regex.full_match("us.r\\d+", "user42x"));
+    print(regex.search("^ab|cd$", "zzcd"));
+    print(regex.replace_all("[aeiou]", "murciélago", "_"));
+    let rx = regex.compile("(\\d+)-(\\d+)").unwrap();
+    print(rx.find_all("1-2 33-44 5").join(","));
+    match (rx.captures("z 7-89 w")) {
+        Option.Some(gs) => {
+            var g = 0;
+            while (g < gs.len()) {
+                match (gs[g]) {
+                    Option.Some(par) => { print(`${par.0}..${par.1}`); },
+                    Option.None => { print("<none>"); },
+                }
+                g = g + 1;
+            }
+        },
+        Option.None => { print("sin match"); },
+    }
+    match (regex.captures("(a)|(b)", "zb")) {
+        Option.Some(gs) => { print(gs.len()); print(gs[1].is_none()); },
+        Option.None => { print("sin match"); },
+    }
+    print(regex.compile("(").is_err());
+    print(regex.compile("a{3,1}").is_err());
+}
+"#,
+    )
+    .unwrap();
+    let exec = |flags: &[&str], pike_env: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        cmd.args(flags).arg(&prog);
+        if pike_env {
+            cmd.env("RAYLANG_REGEX_PIKE", "1");
+        }
+        let out = cmd.output().expect("ejecuta torture.ray");
+        assert!(out.status.success(), "torture.ray falló: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    let vm = exec(&["--vm"], false);
+    let interp = exec(&["--interp"], false);
+    let pike = exec(&["--vm"], true);
+    assert!(!vm.is_empty(), "el programa de tortura imprime");
+    assert_eq!(vm, interp, "VM (crate regex) ≡ intérprete (Pike VM), byte a byte");
+    assert_eq!(vm, pike, "VM (crate regex) ≡ VM con RAYLANG_REGEX_PIKE=1 (Pike VM)");
+}

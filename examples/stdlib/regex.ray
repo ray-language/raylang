@@ -53,10 +53,12 @@ struct Prog {
     classes: [Class],
     nsaves: int,
     ngroups: int,
-    // R5 (perf, 22 jul 2026): el patrón FUENTE. En la VM no se usa (la Pike VM ejecuta insts);
-    // el backend nativo intercepta las funciones `run_*` y ejecuta este patrón —ya VALIDADO por
-    // el parser de arriba— con el crate `regex` de ray-runtime (semántica traducida; ver
-    // docs/bench-regex-plan.md §R5). El parseo/los errores siguen siendo los de esta librería.
+    // R5 (perf, 22 jul 2026): el patrón FUENTE. El backend nativo intercepta las funciones
+    // `run_*` y ejecuta este patrón —ya VALIDADO por el parser de arriba— con el crate `regex`
+    // de ray-runtime (semántica traducida; ver docs/bench-regex-plan.md §R5). R7 (29 jul): la VM
+    // hace lo mismo (feature `regex` de la toolchain, activa por defecto); la Pike VM de abajo
+    // corre en el intérprete (--interp, oráculo del dialecto), en builds slim sin la feature y
+    // con RAYLANG_REGEX_PIKE=1. El parseo/los errores siguen siendo los de esta librería.
     pat: string,
 }
 

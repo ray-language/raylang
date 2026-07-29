@@ -2996,9 +2996,10 @@ fn heap_cap_aborts_a_gluttonous_program() {
 fn build_native_regex_via_ray_runtime_matches_the_vm() {
     // R5 (bench regex): el nativo ejecuta std/regex con el crate `regex` de ray-runtime (feature
     // detectada por USO), traduciendo el dialecto (clases ASCII fijas, escapes literales, `.` que
-    // casa '\n', índices por carácter, matches vacíos estilo std). La VM sigue con la Pike VM
-    // raylang → este test es el ORÁCULO entre ambos motores sobre un programa de tortura del
-    // dialecto. También cubre el escape `--without regex` (fallback = Pike VM transpilada).
+    // casa '\n', índices por carácter, matches vacíos estilo std). R7: la VM también despacha al
+    // crate (mismo borde), así que la comparación fuerte de dialecto crate↔Pike VM vive en
+    // `regex_cli::regex_native_vm_matches_pike_interp` (VM vs intérprete); aquí el valor está en
+    // el escape `--without regex` (fallback = Pike VM transpilada, comparada byte a byte).
     if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
         eprintln!("saltando build_native regex: rustc no disponible");
         return;

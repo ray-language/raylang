@@ -6,7 +6,7 @@
   <img src="assets/raylang-lockup-horizontal.png" alt="raylang" width="380">
 </picture>
 
-**Un lenguaje de programación estáticamente tipado, orientado a expresiones y auto-alojado — escrito en Rust, con casi cero dependencias.**
+**Un lenguaje de programación estáticamente tipado, orientado a expresiones y auto-alojado — escrito en Rust, con una superficie de dependencias mínima y deliberada.**
 
 [![CI](https://github.com/roberto-ayala/raylang/actions/workflows/ci.yml/badge.svg)](https://github.com/roberto-ayala/raylang/actions/workflows/ci.yml)
 [![Licencia: MIT OR Apache-2.0](https://img.shields.io/badge/licencia-MIT%20OR%20Apache--2.0-blue.svg)](#licencia)
@@ -18,14 +18,18 @@
 
 ---
 
-**raylang** es un proyecto de aprendizaje llevado hasta sus últimas consecuencias: construir un lenguaje de
-programación de principio a fin, tocando **todas** las fases y problemáticas. El resultado es un lenguaje real
-—con genéricos, traits, pattern matching, concurrencia multicore por actores y un ecosistema de herramientas—
-que además se **compila a sí mismo** (self-hosting) y corre **en el navegador** vía WebAssembly.
+**raylang** es un lenguaje enfocado a **producción real**: genéricos, traits, pattern matching,
+concurrencia multicore por actores, un ecosistema de herramientas y **tres motores que coinciden byte a
+byte** — una VM de bytecode para desarrollar, un **binario nativo** para desplegar y un intérprete como
+oráculo de validación. Además se **compila a sí mismo** (self-hosting) y corre **en el navegador** vía
+WebAssembly.
 
-El anfitrión es **Rust** (una VM de bytecode con GC como motor de producto; un intérprete tree-walking como
-oráculo de validación). La invariante de diseño es **casi cero dependencias de Cargo**: la única excepción
-consciente es TLS/criptografía (`rustls`/`ring`).
+El anfitrión es **Rust**. La política de dependencias es *mínima y deliberada*: una dependencia entra
+solo cuando hacerla a mano sería peor ingeniería (TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`, el
+cambio de contexto de las fibras) o cuando la mejora está **medida** (`mimalloc`, `ahash`). Todo lo
+demás —HTTP/1.1 y HTTP/2, HPACK, JSON, TOML, DNS, WebSocket, protobuf, los clientes de BD, el LSP, el
+poller de E/S— está escrito en raylang o en el Rust del propio proyecto. Detalle en
+[`SECURITY.md`](SECURITY.md#política-de-dependencias).
 
 ```rust
 enum Arbol { Hoja, Nodo(Arbol, int, Arbol) }
@@ -67,6 +71,9 @@ fn main() -> int {
   el framework da **~188k req/s de techo — 93% de axum, con p50/p99.9 empatadas (0,48/1,05 ms vs
   0,47/1,04) y 1,5× Go+chi** (escalón `json`, generador de carga dedicado), sirviendo con **14 hilos y
   ~21 KB por conexión**. Guía: [`docs/web-framework.md`](docs/web-framework.md).
+- **Procesos del SO sin sorpresas.** `std/process` lanza comandos con **argv tipado, sin shell**
+  (`run`, un builder con plazo y topes, y *streaming* por canales acotados con contrapresión). El hijo
+  va en su propio grupo de procesos y es **hijo de scope**: nadie se queda huérfano.
 - **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable: **24–61× más rápido que la VM**, y en cómputo puro **le gana a node (V8) por 4,2×**
@@ -93,7 +100,9 @@ cd raylang
 cargo build --release          # target/release/ray
 ```
 
-> Rust se instala vía [rustup](https://rustup.rs/). Casi cero dependencias: solo `rustls`/`ring` (TLS/cripto).
+> Rust se instala vía [rustup](https://rustup.rs/). Para un binario mínimo (sin TLS/cripto, SQLite ni
+> carga de código nativo): `cargo build --release --no-default-features --features interp`. Ver
+> [`docs/build.md`](docs/build.md).
 
 ## Uso
 
@@ -110,13 +119,16 @@ ray doc src/main.ray   # genera documentación desde ///
 ray build --templates-only vistas/      # compila templates .ray.html a funciones raylang tipadas (SSR)
 ray repl               # REPL interactivo
 ray lsp                # servidor LSP (diagnósticos, hover, definición, refs, rename, completado, formateo, símbolos…)
+ray mcp                # servidor MCP para agentes LLM (check/run/test/fmt/doc, con el código confinado)
 ```
 
 **Gestor de paquetes** (manifiesto `ray.toml` + lockfile `ray.lock` con hashes SHA-256):
 
 ```sh
 ray add textutils@^1.2 # añade una dependencia del registro y la descarga
+ray remove textutils   # la quita (y su caché si nadie más la usa)
 ray search json        # busca en el registro
+ray fetch              # descarga a .ray-deps/ lo que declara ray.toml
 ray update             # re-resuelve a las más nuevas compatibles
 ray registry publish            # publica TU paquete (valida + chequea + hashea; --sign lo firma)
 ```
@@ -131,11 +143,12 @@ confinado: `ray run --fuel N` (límite de instrucciones) y `--heap N` (tope de o
 reproducible: `--deterministic`.
 
 **Deploy nativo** (*dev = VM / deploy = nativo*, como Rust): `ray build --native prog.ray` produce un
-ejecutable de código máquina, byte-idéntico a la VM. Los subsistemas con crate de producción (TLS,
-criptografía, SQLite) se enlazan **solo cuando el programa los usa** (vía un proyecto Cargo generado); si
-no toca ninguno, se compila con `rustc` pelado en ~0,2 s. `--release` sube el tier de optimización;
-`--without crypto,tls,sqlite` (o `[native] without = [...]` en `ray.toml`) excluye un subsistema para
-builds herméticos/cross-compile. Ver [Compilación a binario nativo](#documentación).
+ejecutable de código máquina, byte-idéntico a la VM, cuya concurrencia corre sobre un scheduler **M:N de
+fibras**. Los subsistemas con crate de producción (TLS, criptografía, SQLite, regex acelerada) se enlazan
+**solo cuando el programa los usa**; `--release` sube el tier de optimización, `--target` cross-compila y
+`--without crypto,tls,sqlite,regex,mimalloc,ahash,fibers,process` (o `[native] without = [...]` en
+`ray.toml`) excluye lo que no quieras dentro — quitando `mimalloc,ahash,fibers` se vuelve a la vía rápida
+de `rustc` pelado. Ver [`docs/transpilador-nativo.md`](docs/transpilador-nativo.md).
 
 ## Un vistazo al lenguaje
 
@@ -184,7 +197,7 @@ fn main() -> int {
 }
 ```
 
-Hay **171 ejemplos** en [`examples/`](examples/): desde `fib`/`fizzbuzz` hasta trait objects, structured
+Hay **173 ejemplos** en [`examples/`](examples/): desde `fib`/`fizzbuzz` hasta trait objects, structured
 concurrency, un servidor web, WebSockets, y el propio compilador auto-alojado en [`selfhost/`](selfhost/).
 
 ## Playground web
@@ -207,9 +220,12 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
   sin *ownership* en el tipo. Scheduler M:N con speedup real medido; `--deterministic` para tests.
 - **Tres motores que coinciden.** Un oráculo VM↔intérprete blinda cada cambio de runtime, y el binario
   nativo (`ray build --native`) verifica salida **byte-idéntica a la VM**.
-- **Casi cero dependencias.** La pila de red y formatos (HTTP/2, HPACK, JSON, TOML…) está **escrita en
-  raylang** (`packages/`), y el runtime (LSP, `dlopen`, `kqueue`/`epoll`, SHA del gestor de paquetes) en
-  el propio Rust del proyecto, sin crates; la única excepción es TLS/`ring`.
+- **Dependencias contadas y justificadas.** La pila de red y formatos (HTTP/2, HPACK, JSON, TOML, DNS…)
+  está **escrita en raylang** (`packages/`), y el runtime (LSP, poller `kqueue`/`epoll`, SHA del gestor
+  de paquetes, transpilador) en el propio Rust del proyecto, sin crates. Los crates que sí entran —TLS,
+  cripto, SQLite, carga de librerías, fibras, allocador y hasher— están enumerados con su porqué y su
+  alcance en [`SECURITY.md`](SECURITY.md#política-de-dependencias); un build *slim* deja fuera los tres
+  primeros.
 - **Robusto ante entrada arbitraria.** Compilador sin pánicos + **fuzzing continuo** del front-end.
 
 ## Documentación
@@ -224,29 +240,39 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
 | [`docs/mcp.md`](docs/mcp.md) | El **servidor MCP** (`ray mcp`): las tools check/run/test/fmt/doc para agentes LLM, con el código confinado (fuel/heap/plazo). |
 | [`docs/web-framework.md`](docs/web-framework.md) | La guía del **framework web** (estilo Express): rutas, middleware, SSR, deploy. |
 | [`docs/build.md`](docs/build.md) | La guía de **builds**: features slim, PGO, binario nativo. |
+| [`docs/transpilador-nativo.md`](docs/transpilador-nativo.md) | El **backend nativo** por dentro: cómo se transpila a Rust y cómo se garantiza la paridad. |
+| [`docs/diseno-concurrencia-nativa.md`](docs/diseno-concurrencia-nativa.md) | El **scheduler de fibras M:N** del binario nativo: corrutinas, reactor y decisiones. |
 | [`PERFORMANCE.md`](PERFORMANCE.md) | La **crónica de rendimiento**: cada arco de optimización, medido. |
+| [`PRODUCTION.md`](PRODUCTION.md) | El **contrato de producción**: ejes, invariantes y criterios de calidad vigentes. |
 | [`book/`](book/) | El **libro** (mdBook): cómo se **construyó** el lenguaje, fase a fase. |
 | [`DESIGN.md`](DESIGN.md) | La **crónica de diseño**: cada decisión y su porqué. |
 | [`IDEAS.md`](IDEAS.md) | Backlog de features y su clasificación de impacto. |
-| [`SECURITY.md`](SECURITY.md) | Política de seguridad y modelo de amenazas. |
-| [`RELEASE-1.0.md`](RELEASE-1.0.md) | Checklist del estado hacia la 1.0. |
+| [`docs/organizacion-codigo.md`](docs/organizacion-codigo.md) | Cómo está **organizado el código** del compilador (módulos-directorio, dónde viven los tests). |
+| [`SECURITY.md`](SECURITY.md) | Política de seguridad, política de dependencias y modelo de amenazas. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Qué cambió en cada versión. |
+| [`RELEASE-1.0.md`](RELEASE-1.0.md) | Estado del lanzamiento: qué está hecho y qué falta publicar. |
 
 Editores: extensión de [VSCode](editors/vscode/) (con cliente LSP), paquete de [Sublime Text](editors/sublime/),
 y config para Neovim/Helix (usan `ray lsp` directo).
 
 ## Estado
 
-**raylang 1.0.0.** Motor de producto = la VM; el intérprete es el oráculo de desarrollo. La suite tiene
-**610 tests unitarios** + **95 archivos de tests de integración** (incluido un fuzzer del front-end, los
-oráculos VM↔intérprete y el corpus de paridad del binario nativo). Ver [`CHANGELOG.md`](CHANGELOG.md).
+**raylang 1.0.0**, con trabajo continuo sobre esa línea (rendimiento, concurrencia nativa, framework web,
+procesos del SO). Motor de producto = la VM; el binario nativo es el destino de despliegue y el
+intérprete, el oráculo de desarrollo. La suite tiene **626 tests unitarios** + **101 archivos de tests de
+integración** (incluido un fuzzer del front-end, los oráculos VM↔intérprete y el corpus de paridad del
+binario nativo). Lo publicado y lo que está en camino, en [`CHANGELOG.md`](CHANGELOG.md).
 
-Es un **proyecto de aprendizaje**: real y cuidado, pero no pensado para producción crítica.
+El foco es **producción real**, con el alcance dicho de frente: lo hace un solo mantenedor y no ha pasado
+una auditoría externa (ver [`SECURITY.md`](SECURITY.md#alcance)).
 
 ## Contribuir
 
-Cada fase del proyecto es un commit con sus tests (Conventional Commits en español). El código y la
-documentación están en español. Antes de tocar comportamiento, lee los documentos-contrato (`SPEC.md`,
-`DESIGN.md`). Para reportar una vulnerabilidad, ver [`SECURITY.md`](SECURITY.md).
+Cada fase del proyecto es un commit con sus tests (Conventional Commits en español). Los identificadores
+van en **inglés** y los comentarios en español (la documentación `///`, en inglés). Antes de tocar
+comportamiento, lee los documentos-contrato: [`SPEC.md`](SPEC.md) manda sobre la semántica y
+[`DESIGN.md`](DESIGN.md) cuenta el porqué. Para reportar una vulnerabilidad, ver
+[`SECURITY.md`](SECURITY.md).
 
 ## Licencia
 

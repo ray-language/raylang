@@ -48,6 +48,10 @@ enum Park {
     Write(i32, Option<Instant>),
     /// Aparca hasta el instante dado (`sleep`).
     SleepUntil(Instant),
+    /// F3: aparca en una LISTA DE ESPERAS (canales/tareas/actividad del binario transpilado). El
+    /// u64 es la generación vista al decidir esperar: si al registrar ya cambió, hubo un despertar
+    /// entre soltar el lock de la condición y suspender → re-encolar (anti despertar-perdido).
+    WaitOn(WaitList, u64),
     /// Cede el turno y vuelve al final de la cola de listas.
     Yield,
 }
@@ -90,10 +94,12 @@ struct Task {
 //     que LLVM cachee a través de una suspensión (ver el doc del módulo).
 unsafe impl Send for Task {}
 
-/// Celda de terminación de una fibra: `None` mientras corre; `Ok`/`Err(mensaje del panic)` al acabar.
+/// Celda de terminación de una fibra: `None` mientras corre; `Ok`/`Err(mensaje del panic)` al
+/// acabar. `wl` (F3): los joins desde OTRA fibra esperan aquí aparcados de verdad.
 struct DoneCell {
     state: Mutex<Option<Result<(), String>>>,
     cv: Condvar,
+    wl: WaitList,
 }
 
 /// Asa de espera de una fibra. Desde un hilo plano (`main`, tests) bloquea en la condvar; desde
@@ -107,11 +113,17 @@ pub struct JoinHandle {
 impl JoinHandle {
     pub fn join(self) -> Result<(), String> {
         if in_fiber() {
+            // F3: espera de lista (aparcada de verdad), no ceder-en-bucle. prepare ANTES de
+            // soltar el lock del estado: el protocolo anti despertar-perdido de WaitList.
             loop {
-                if let Some(r) = self.done.state.lock().unwrap().take() {
-                    return r;
-                }
-                yield_now();
+                let seen = {
+                    let mut st = self.done.state.lock().unwrap();
+                    if let Some(r) = st.take() {
+                        return r;
+                    }
+                    self.done.wl.prepare()
+                };
+                block_on(&self.done.wl, seen);
             }
         }
         let mut st = self.done.state.lock().unwrap();
@@ -122,10 +134,79 @@ impl JoinHandle {
     }
 }
 
+/// F3 — LISTA DE ESPERAS: la primitiva de bloqueo de condición para fibras (canales, tareas,
+/// actividad). Sustituye al interino de F2 (ceder-en-bucle, que quemaba CPU con esperas ociosas).
+///
+/// Protocolo anti despertar-perdido (el clásico de las condvars, en versión fibras):
+/// el esperador lee la GENERACIÓN con el lock de su condición aún tomado (`prepare`), lo suelta y
+/// suspende con `block_on`; el worker, al registrar la fibra, re-lee la generación — si cambió
+/// entre el prepare y el registro, hubo un `wake_all` en la ventana y la fibra se re-encola en vez
+/// de dormirse (el llamador rechequea su condición en bucle, como con una condvar).
+///
+/// CANCELACIÓN (H21-N3): cada espera lleva un PULSO de 10 ms (temporizador del reactor): la fibra
+/// despierta, el llamador rechequea condición y cancelación, y re-espera. Es la MISMA cadencia que
+/// el `wait_timeout(10ms)` del modelo de hilos — una tarea cancelada nota su cancelación en ≤10 ms
+/// — pero con la fibra APARCADA de verdad entre pulsos (cero CPU), no cediendo en bucle.
+#[derive(Clone)]
+pub struct WaitList(Arc<WlInner>);
+
+struct WlInner {
+    generation: std::sync::atomic::AtomicU64,
+    waiters: Mutex<Vec<(u64, Task)>>,
+}
+
+impl Default for WaitList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WaitList {
+    pub fn new() -> WaitList {
+        WaitList(Arc::new(WlInner { generation: std::sync::atomic::AtomicU64::new(0), waiters: Mutex::new(Vec::new()) }))
+    }
+
+    /// Lee la generación actual. Llamar CON el lock de la condición tomado, antes de soltarlo.
+    pub fn prepare(&self) -> u64 {
+        self.0.generation.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Despierta a TODOS los esperadores (y avanza la generación, cerrando la ventana del
+    /// despertar perdido). Los pulsos de cancelación pendientes de los despertados quedan
+    /// huérfanos y se descartan solos al vencer (no encuentran su id).
+    pub fn wake_all(&self) {
+        self.0.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let woken: Vec<(u64, Task)> = std::mem::take(&mut *self.0.waiters.lock().unwrap());
+        if woken.is_empty() {
+            return;
+        }
+        let s = sched();
+        for (_, t) in woken {
+            s.enqueue(t);
+        }
+    }
+
+    /// Saca un esperador por id (lo usa el pulso de cancelación del reactor). `None` = ya despertó.
+    fn remove(&self, id: u64) -> Option<Task> {
+        let mut w = self.0.waiters.lock().unwrap();
+        w.iter().position(|(wid, _)| *wid == id).map(|pos| w.swap_remove(pos).1)
+    }
+}
+
+/// Suspende la fibra actual hasta el próximo `wake_all` de `wl` (o el pulso de 10 ms). `seen` es
+/// la generación devuelta por `prepare` ANTES de soltar el lock de la condición. Solo en fibra
+/// (el hilo `main` espera por la condvar de siempre; el runtime emitido elige la vía).
+pub fn block_on(wl: &WaitList, seen: u64) {
+    suspend(Park::WaitOn(wl.clone(), seen));
+}
+
 /// Operaciones que los workers encargan al reactor (via buzón + tubería de despertar).
 enum Op {
     Wait(i32, Dir, Option<Instant>, Task),
     Timer(Instant, Task),
+    /// Pulso de cancelación de una espera de lista (F3): al vencer, si el id sigue en la lista,
+    /// se despierta esa fibra (rechequeará condición y cancelación y re-esperará).
+    WaitPoll(Instant, WaitList, u64),
 }
 
 /// La cola de UN worker: solo su dueño saca; cualquiera (spawn, reactor) mete.
@@ -212,6 +293,9 @@ fn sched() -> &'static Scheduler {
     })
 }
 
+/// Ids de espera de lista (F3), globales y monótonos: casan el pulso de cancelación con su fibra.
+static NEXT_WAIT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 thread_local! {
     /// Yielder de la fibra actualmente en ejecución en ESTE worker (nulo fuera de fibra). Puntero
     /// crudo porque el tipo lleva lifetime; ver los SAFETY de `suspend`.
@@ -223,7 +307,7 @@ thread_local! {
 
 /// Lanza `f` como fibra. Llamable desde cualquier hilo (incluida otra fibra).
 pub fn spawn(f: impl FnOnce() + Send + 'static) -> JoinHandle {
-    let done = Arc::new(DoneCell { state: Mutex::new(None), cv: Condvar::new() });
+    let done = Arc::new(DoneCell { state: Mutex::new(None), cv: Condvar::new(), wl: WaitList::new() });
     let stack = DefaultStack::new(fiber_stack_size()).expect("could not map a fiber stack");
     let co = Coroutine::with_stack(stack, move |y: &Yielder<bool, Park>, _timed_out: bool| {
         // Prólogo: deja el yielder a mano para la cesión profunda (park desde N marcos más abajo).
@@ -346,6 +430,7 @@ pub fn yield_now() {
 fn finish(done: &DoneCell, result: Result<(), String>) {
     *done.state.lock().unwrap() = Some(result);
     done.cv.notify_all();
+    done.wl.wake_all();
 }
 
 fn panic_msg(p: &(dyn std::any::Any + Send)) -> String {
@@ -385,6 +470,22 @@ fn worker_loop(s: &'static Scheduler, me: usize) {
                 Park::Read(fd, dl) => s.to_reactor(Op::Wait(fd, Dir::Read, dl, task)),
                 Park::Write(fd, dl) => s.to_reactor(Op::Wait(fd, Dir::Write, dl, task)),
                 Park::SleepUntil(at) => s.to_reactor(Op::Timer(at, task)),
+                // F3: registrar en la lista de esperas — releyendo la generación BAJO el lock de
+                // la lista: si cambió desde el prepare del esperador, un wake_all ganó la carrera
+                // → re-encolar ya (el llamador rechequea su condición). Si no, queda registrado y
+                // se arma su pulso de cancelación (10 ms, cadencia del modelo de hilos).
+                Park::WaitOn(wl, seen) => {
+                    let mut waiters = wl.0.waiters.lock().unwrap();
+                    if wl.0.generation.load(std::sync::atomic::Ordering::SeqCst) != seen {
+                        drop(waiters);
+                        s.enqueue(task);
+                    } else {
+                        let id = NEXT_WAIT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        waiters.push((id, task));
+                        drop(waiters);
+                        s.to_reactor(Op::WaitPoll(Instant::now() + Duration::from_millis(10), wl.clone(), id));
+                    }
+                }
                 Park::Yield => s.enqueue(task),
             },
             Ok(CoroutineResult::Return(())) => finish(&task.done, Ok(())),
@@ -430,6 +531,9 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
     let mut fds: HashMap<i32, FdWaiters> = HashMap::new();
     // Sleeps: pocos y de vida legítima → Vec con barrido lineal basta.
     let mut sleeps: Vec<(Instant, Task)> = Vec::new();
+    // Pulsos de cancelación de las esperas de lista (F3): barrido lineal, acotado por el número
+    // de fibras esperando condiciones (no por el caudal).
+    let mut wait_polls: Vec<(Instant, WaitList, u64)> = Vec::new();
     // Deadlines de E/S: min-heap + cancelación explícita + compactación (ver F2: los huérfanos
     // del read-timeout llegaban a ~1M de entradas a 100k rps con barrido O(n)).
     let mut io_deadlines: std::collections::BinaryHeap<Reverse<IoDeadline>> = std::collections::BinaryHeap::new();
@@ -474,6 +578,7 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
                     }
                 }
                 Op::Timer(at, t) => sleeps.push((at, t)),
+                Op::WaitPoll(at, wl, id) => wait_polls.push((at, wl, id)),
             }
         }
         // 2) Despierta los vencidos y calcula el timeout hasta el siguiente plazo vivo.
@@ -485,6 +590,17 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
                 batches[t.home].push(t);
             } else {
                 i += 1;
+            }
+        }
+        let mut j = 0;
+        while j < wait_polls.len() {
+            if wait_polls[j].0 <= now {
+                let (_, wl, id) = wait_polls.swap_remove(j);
+                if let Some(t) = wl.remove(id) {
+                    batches[t.home].push(t); // pulso: rechequea condición/cancelación y re-espera
+                }
+            } else {
+                j += 1;
             }
         }
         while let Some(Reverse(dl)) = io_deadlines.peek() {
@@ -513,12 +629,10 @@ fn reactor_loop(s: &'static Scheduler, wake_rd: i32) {
         flush_batches(s, &mut batches);
         let next_sleep = sleeps.iter().map(|(at, _)| *at).min();
         let next_io = io_deadlines.peek().map(|Reverse(dl)| dl.at);
-        let timeout_ms: i32 = match (next_sleep, next_io) {
-            (None, None) => -1, // sin plazos: espera infinita; la tubería interrumpe con trabajo
-            (a, b) => {
-                let at = match (a, b) { (Some(x), Some(y)) => x.min(y), (Some(x), None) => x, (None, Some(y)) => y, _ => unreachable!() };
-                at.saturating_duration_since(now).as_millis().min(i32::MAX as u128) as i32
-            }
+        let next_poll = wait_polls.iter().map(|(at, _, _)| *at).min();
+        let timeout_ms: i32 = match [next_sleep, next_io, next_poll].into_iter().flatten().min() {
+            None => -1, // sin plazos: espera infinita; la tubería interrumpe con trabajo
+            Some(at) => at.saturating_duration_since(now).as_millis().min(i32::MAX as u128) as i32,
         };
         let mut rearm_all = false;
         for &(fd, dir) in poller.wait(timeout_ms) {

@@ -1,0 +1,90 @@
+// std/process — STREAMING (M100 v2): la salida del hijo llega por canales acotados MIENTRAS corre,
+// en vez de acumularse en un Output final. La contrapresión es parte del diseño: si dejas de
+// recibir, el canal se llena, la bomba deja de leer, el pipe del SO se llena y el hijo se bloquea
+// en su write — nadie acumula sin límite. Por eso stream() no tiene timeout_ms ni max_output:
+// el tope ES el canal, y el plazo lo compones tú (p. ej. deadline de std/resilience + kill()).
+//
+// Solo VM y binario nativo (usa fibras y canales, como todo spawn); el intérprete lo rechaza.
+import std/process;
+
+fn text(b: bytes) -> string {
+    match (from_utf8(b)) { Result.Ok(s) => s, Result.Err(e) => "?", }
+}
+
+// Acumula un flujo entero (el TROCEO de un pipe no es determinista; el contenido sí).
+fn drain_text(ch: Channel<bytes>) -> string {
+    var acc = "";
+    var going = true;
+    while (going) {
+        match (recv(ch)) {
+            Option.Some(b) => { acc = acc + text(b); },
+            Option.None => { going = false; },      // el fin del canal ES el fin del flujo
+        }
+    }
+    acc
+}
+
+fn drain_len(ch: Channel<bytes>) -> int {
+    var n = 0;
+    var going = true;
+    while (going) {
+        match (recv(ch)) {
+            Option.Some(b) => { n = n + b.len(); },
+            Option.None => { going = false; },
+        }
+    }
+    n
+}
+
+fn show_exit(e: process.Exit) -> string {
+    match (e) {
+        process.Exit.Code(c) => "code:" + c.to_string(),
+        process.Exit.Signal(s) => "signal:" + s.to_string(),
+    }
+}
+
+fn main() -> int {
+    // stdout y stderr por canales separados; wait() cosecha al final.
+    let p = match (process.cmd("sh", ["-c", "printf uno; printf dos >&2; printf tres; exit 4"]).stream()) {
+        Result.Ok(p) => p,
+        Result.Err(e) => { print("launch error: " + e); return 1; },
+    };
+    print("out=[" + drain_text(p.out) + "] err=[" + drain_text(p.err) + "]");
+    print(show_exit(p.wait()));
+
+    // merge_output: todo por out (orden real del kernel); err nace cerrado.
+    let m = match (process.cmd("sh", ["-c", "echo a; echo b >&2; echo c"]).merge_output().stream()) {
+        Result.Ok(p) => p,
+        Result.Err(e) => { print(e); return 1; },
+    };
+    match (recv(m.err)) {
+        Option.Some(b) => print("unexpected err data"),
+        Option.None => print("err closed (merge)"),
+    }
+    print("merged chars: " + drain_text(m.out).len().to_string());
+    print(show_exit(m.wait()));
+
+    // Volumen: 1 MB entero cruza el canal acotado, con la contrapresión trabajando.
+    let v = match (process.cmd("sh", ["-c", "yes | head -c 1000000"]).stream()) {
+        Result.Ok(p) => p,
+        Result.Err(e) => { print(e); return 1; },
+    };
+    print("bytes: " + drain_len(v.out).to_string());
+    let _ = drain_len(v.err);
+    print(show_exit(v.wait()));
+
+    // kill(): señal al GRUPO del hijo (nietos incluidos); wait() reporta la señal.
+    let k = match (process.cmd("sh", ["-c", "sleep 30 & wait"]).stream()) {
+        Result.Ok(p) => p,
+        Result.Err(e) => { print(e); return 1; },
+    };
+    k.kill(false);
+    print(show_exit(k.wait()));
+
+    // Err sigue reservado a "no se pudo lanzar", también en streaming.
+    match (process.cmd("no-such-binary-v2", []).stream()) {
+        Result.Ok(p) => print("unexpected ok"),
+        Result.Err(e) => print("stream launch failed as expected"),
+    }
+    0
+}

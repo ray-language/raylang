@@ -3249,3 +3249,82 @@ fn run_builtin_oracle_and_expected_value() {
     assert_eq!(interp, Value::Int(255), "intérprete: campos divergentes (bits apagados)");
     assert_eq!(vm, Value::Int(255), "VM: campos divergentes (bits apagados)");
 }
+
+/// M100 v2 fase 2a: los primitivos del streaming (__proc_spawn/__proc_try_wait/__proc_kill) y la
+/// lectura de un handle Pipe por __socket_read_bytes (que APARCA la fibra en WouldBlock — desde
+/// raylang una lectura simplemente bloquea hasta datos o EOF). Sin spawn/canales: el oráculo
+/// intérprete≡VM aplica; las bombas de verdad son de la fase 2b (std/process).
+#[cfg(unix)]
+#[test]
+fn proc_streaming_primitives_oracle() {
+    let src = r#"
+        fn handle_of(b: bytes) -> int {
+            match (from_utf8(b)) {
+                Result.Ok(s) => parse_int(s).unwrap_or(0 - 1),
+                Result.Err(e) => 0 - 1,
+            }
+        }
+        fn main() -> int {
+            let none: [string] = [];
+            let r = __proc_spawn("sh", ["-c", "printf abc; printf de >&2; exit 5"], "", none,
+                                 false, "".to_bytes(), false, false);
+            var score = 0;
+            if (r[0] == "ok".to_bytes()) { score = score + 1; }
+            let h_child = handle_of(r[1]);
+            let h_out = handle_of(r[2]);
+            let h_err = handle_of(r[3]);
+            if (h_child > 0 && h_out > 0 && h_err > 0) { score = score + 2; }
+            // Lectura del pipe: la primera da los datos (aparca hasta que lleguen), la segunda EOF.
+            let o1 = __socket_read_bytes(h_out);
+            if (o1[0] == "ok".to_bytes() && o1[1] == "abc".to_bytes()) { score = score + 4; }
+            let o2 = __socket_read_bytes(h_out);
+            if (o2[0] == "ok".to_bytes() && o2[1].len() == 0) { score = score + 8; }
+            let e1 = __socket_read_bytes(h_err);
+            if (e1[0] == "ok".to_bytes() && e1[1] == "de".to_bytes()) { score = score + 16; }
+            close(h_out);
+            close(h_err);
+            // Tras el EOF el hijo ya salió (o está a un tick): el try_wait cosecha en breve.
+            var tag = "".to_bytes();
+            var val = "".to_bytes();
+            var waiting = true;
+            while (waiting) {
+                let w = __proc_try_wait(h_child);
+                if (w[0] == "running".to_bytes()) { } else {
+                    tag = w[0];
+                    if (w.len() > 1) { val = w[1]; }
+                    waiting = false;
+                }
+            }
+            if (tag == "code".to_bytes() && val == "5".to_bytes()) { score = score + 32; }
+            // El handle cosechado se ELIMINA: un segundo try_wait es err, y kill es no-op.
+            let w2 = __proc_try_wait(h_child);
+            if (w2[0] == "err".to_bytes()) { score = score + 64; }
+            __proc_kill(h_child, false);
+            // Kill de verdad: al GRUPO, y el estado sale como signal.
+            let k = __proc_spawn("sleep", ["30"], "", none, false, "".to_bytes(), false, false);
+            let hk = handle_of(k[1]);
+            __proc_kill(hk, false);
+            var ktag = "".to_bytes();
+            var kval = "".to_bytes();
+            var kwait = true;
+            while (kwait) {
+                let w = __proc_try_wait(hk);
+                if (w[0] == "running".to_bytes()) { } else {
+                    ktag = w[0];
+                    if (w.len() > 1) { kval = w[1]; }
+                    kwait = false;
+                }
+            }
+            if (ktag == "signal".to_bytes() && kval == "15".to_bytes()) { score = score + 128; }
+            score
+        }
+    "#;
+    let tokens = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(tokens).expect("parse ok");
+    crate::checker::check(&mut prog).expect("check ok");
+    let interp = crate::interpreter::run(&prog).expect("intérprete ok");
+    let compiled = compile_program(&prog).expect("compila");
+    let vm = run_program(&compiled).expect("vm ok");
+    assert_eq!(interp, Value::Int(255), "intérprete: campos divergentes (bits apagados)");
+    assert_eq!(vm, Value::Int(255), "VM: campos divergentes (bits apagados)");
+}

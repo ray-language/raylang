@@ -590,6 +590,19 @@ pub enum OpCode {
     /// `[b"ok", b"code"|b"signal", valor, timed_out, truncated, stdout, stderr]` / `[b"err", msg]`.
     /// Primitivo `__run`; la ergonomía (`Cmd`/`Output`/`Exit`) vive en `std/process` (fase 1c).
     Run,
+    /// M100 v2: saca (en orden inverso) merge_output (bool), has_stdin (bool), stdin (bytes),
+    /// env_clear (bool), env ([string]), dir (string), args ([string]) y program (string); lanza el
+    /// hijo en modo STREAMING (pipes registrados como handles no-bloqueantes) y empuja
+    /// `[b"ok", h_child, h_out, h_err]` (`h_err = -1` con merge) / `[b"err", msg]`.
+    /// Primitivo `__proc_spawn`; las bombas viven en `std/process` (IDEAS §53.9).
+    ProcSpawn,
+    /// Saca el handle del hijo (int); `waitpid(WNOHANG)` y empuja `[b"running"]`,
+    /// `[b"code"|b"signal", n]` (cosechado; el handle se elimina) o `[b"err", msg]`.
+    /// Primitivo `__proc_try_wait`.
+    ProcTryWait,
+    /// Saca `force` (bool) y el handle del hijo (int); SIGTERM/SIGKILL al GRUPO y empuja unit.
+    /// Total e idempotente (handle cosechado = no-op). Primitivo `__proc_kill`.
+    ProcKill,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

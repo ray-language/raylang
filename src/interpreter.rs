@@ -1313,7 +1313,9 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M16.1c: lee del socket como bytes (bloqueante en el intérprete) → [b"ok", datos]/[b"err", msg].
-            "__socket_read_bytes" => {
+            // M100 v2: `__proc_read` es un alias con opcode compartido — el mismo camino lee un
+            // socket o el pipe de un proceso hijo (la variante bloqueante ya distingue el Pipe).
+            "__socket_read_bytes" | "__proc_read" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::socket_read_bytes_blocking(*h) {
                         Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
@@ -1396,6 +1398,41 @@ impl<'a> Interpreter<'a> {
                 let arr = crate::builtins::run_encoded(program, &as_strings(args), &opts)
                     .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M100 v2 (IDEAS §53.9): los primitivos del streaming son NO-bloqueantes y funcionan
+            // también aquí — pero las bombas de std/process usan spawn/canales, que el intérprete
+            // rechaza con su mensaje propio: stream() es de la VM y el nativo.
+            "__proc_spawn" => {
+                let (Value::Str(program), Value::Array(args), Value::Str(dir), Value::Array(env),
+                    Value::Bool(env_clear), Value::Bytes(stdin), Value::Bool(has_stdin),
+                    Value::Bool(merge_output)) =
+                    (&values[0], &values[1], &values[2], &values[3], &values[4], &values[5],
+                     &values[6], &values[7])
+                else { unreachable!("the checker guarantees the __proc_spawn signature") };
+                let as_strings = |rc: &Rc<RefCell<Vec<Value>>>| -> Vec<String> {
+                    rc.borrow().iter().map(|v| match v {
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("the checker guarantees [string]"),
+                    }).collect()
+                };
+                let opts = crate::builtins::run_opts_from_flat(
+                    dir, as_strings(env), *env_clear, stdin, *has_stdin, 0, 0, *merge_output,
+                );
+                let arr = crate::builtins::proc_spawn_encoded(program, &as_strings(args), &opts)
+                    .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__proc_try_wait" => {
+                let Value::Int(h) = &values[0] else { unreachable!("the checker guarantees an int") };
+                let arr = crate::builtins::proc_try_wait_encoded(*h)
+                    .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__proc_kill" => {
+                let (Value::Int(h), Value::Bool(force)) = (&values[0], &values[1])
+                else { unreachable!("the checker guarantees int, bool") };
+                crate::builtins::proc_kill(*h, *force);
+                Value::Unit
             }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
             "__contains" => match (&values[0], &values[1]) {

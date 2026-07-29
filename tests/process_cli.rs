@@ -37,3 +37,33 @@ fn process_example_is_golden_on_vm_and_interpreter() {
     assert_eq!(run(&[]), EXPECTED, "VM");
     assert_eq!(run(&["--interp"]), EXPECTED, "intérprete");
 }
+
+/// M100 v2 (fases 2b-2d): `stream()` — trozos por canal acotado (ACUMULADOS: el troceo del pipe
+/// no es determinista, el contenido sí), merge con `err` cerrado, 1 MB entero cruzando el canal,
+/// kill al grupo y ENOENT. Corre el MISMO ejemplo que recoge el corpus nativo
+/// (examples/stdlib/process_stream.ray) → VM y nativo quedan clavados al mismo texto. Solo VM
+/// (las bombas usan spawn/canales); el intérprete debe dar su error limpio de concurrencia.
+const STREAM_EXPECTED: &str = "out=[unotres] err=[dos]\n\
+    code:4\n\
+    err closed (merge)\n\
+    merged chars: 6\n\
+    code:0\n\
+    bytes: 1000000\n\
+    code:0\n\
+    signal:15\n\
+    stream launch failed as expected\n";
+
+#[test]
+fn process_stream_is_golden_on_vm_and_interp_rejects_cleanly() {
+    let prog = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/stdlib/process_stream.ray");
+
+    let out = Command::new(BIN).args(["run", prog.to_str().unwrap()]).output().expect("lanza el binario");
+    assert!(out.status.success(), "VM ok\nstderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), STREAM_EXPECTED, "VM");
+
+    // El intérprete rechaza el streaming con su error de concurrencia, no con uno confuso.
+    let out = Command::new(BIN).args(["run", "--interp", prog.to_str().unwrap()]).output().expect("lanza el binario");
+    assert!(!out.status.success(), "el intérprete debe rechazarlo");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("requires the VM"), "mensaje de concurrencia esperado, got: {err}");
+}

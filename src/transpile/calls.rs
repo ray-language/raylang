@@ -1696,6 +1696,36 @@ impl Transpiler {
                 }
                 out.push(')');
             }
+            // M100 v2 (IDEAS §53.9): los primitivos del streaming → __ray_proc_* (mismo gating de
+            // política que __run). La firma de __proc_spawn es la de __run sin timeout/max_output.
+            "proc_spawn" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_spawn(&");
+                self.emit_expr(out, eff[0])?;
+                for (i, e) in eff.iter().enumerate().skip(1) {
+                    out.push_str(match i {
+                        1..=3 => ", &",
+                        5 => ", &*",
+                        _ => ", ",
+                    });
+                    self.emit_expr(out, e)?;
+                }
+                out.push(')');
+            }
+            "proc_read" | "proc_try_wait" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                write!(out, "__ray_{}(", method).unwrap();
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "proc_kill" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_kill(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             _ => {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));

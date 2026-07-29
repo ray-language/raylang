@@ -8664,5 +8664,22 @@ truncated }`. `Err` = solo "no se pudo lanzar"; timeout y tope vuelven como DATO
 - `--without process` es gating de **política** (error de transpilación limpio), no de crate.
 - Windows: `Err` honesto de plataforma, como `packages/tz`.
 
-**v2 (diseñada, no ejecutada)**: `Cmd.stream() -> Proc` con canales acotados como contrapresión y
-`Proc` como hijo de scope (concurrencia estructurada de procesos), VM **y** nativo. Ver IDEAS §53.8.
+**v2 (EJECUTADA, 29 jul 2026 — diseño en IDEAS §53.9)**: `Cmd.stream() -> Result<Proc, string>`
+con `Proc { out, err: Channel<bytes> }`, `wait() -> Exit` y `kill(force)`. La decisión central:
+**las bombas se escriben EN raylang** (`std/process` spawnea una fibra por flujo: `__proc_read`
+del pipe-handle —la lectura APARCA la fibra— y `send` al `Channel.bounded(8)`); la contrapresión
+completa es composición de piezas existentes (canal lleno → bomba aparcada → pipe del SO lleno →
+hijo bloqueado en su write). El interinato del park multi-fd de la v1 quedó DISUELTO para el
+streaming: cada bomba espera UN fd. Host nuevo mínimo: variantes de registro `Pipe`/`Child` (el
+hijo vive en el registro; `try_wait` que cosecha lo elimina bajo el lock → `kill` posterior jamás
+señala a un pid reciclado) + builtins `__proc_spawn`/`__proc_read` (reusa el opcode
+`SocketReadBytes`)/`__proc_try_wait`/`__proc_kill`, con su gemelo emitido en el nativo (fibras:
+`wait_readable`; hilos: reintento cediendo). `stream()` no tiene `timeout_ms`/`max_output` (el
+canal acotado ES el tope; el plazo lo compone el llamador con deadline + `kill`). Golden:
+`examples/stdlib/process_stream.ray` clavado por `tests/process_cli.rs` (VM) y el corpus nativo;
+verificado byte-idéntico VM≡nativo-fibras≡nativo-hilos, con el intérprete rechazándolo con su
+error limpio de concurrencia. Pendiente consciente (fase 2e, si el gancho no es invasivo): la
+cancelación estructural que además MATE al grupo del hijo cuando una hermana falla — hoy las
+bombas se cancelan (son Tasks) pero el proceso sigue hasta que alguien lo cosecha o el programa
+muere. `run()` de la v1 sigue bloqueando el worker (su aparcado sería reescribirlo sobre las
+bombas; se evaluará tras medir el streaming en uso real).

@@ -257,7 +257,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +
     // mapa handle→archivo tras un Mutex/OnceLock; los mensajes de error son byte-idénticos a la VM.
     // Registro de handles (M11.8): compartido por archivos y sockets. Se emite si el programa usa cualquiera.
-    if t.needs_handles || t.needs_net || t.needs_rt_sqlite {
+    if t.needs_handles || t.needs_net || t.needs_rt_sqlite || t.needs_rt_process {
         // Variantes con-crate del registro, añadidas solo si el programa usa el subsistema: `Tls` (conexión
         // TLS bloqueante tras `Arc<Mutex>` propio → el I/O no retiene el lock global) y `Sqlite` (conexión
         // rusqlite; I/O local → se opera reteniendo el lock global, como la VM).
@@ -267,9 +267,17 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             ""
         };
         let sqlite_variant = if t.needs_rt_sqlite { ", Sqlite(ray_runtime::sqlite::Conn)" } else { "" };
+        // M100 v2: los handles del streaming de procesos — el pipe de lectura (Arc: se clona para
+        // leer FUERA del lock, como Tcp) y el Child (vive aquí, no un pid crudo: try_wait que
+        // cosecha lo elimina bajo el lock → kill posterior es no-op, jamás a un pid reusado).
+        let process_variant = if t.needs_rt_process {
+            ", Pipe(std::sync::Arc<std::fs::File>), Child(std::process::Child)"
+        } else {
+            ""
+        };
         writeln!(
             out,
-            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant} }}"
+            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant}{process_variant} }}"
         )
         .unwrap();
         out.push_str(concat!(
@@ -682,6 +690,76 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let elems: Vec<Rc<[u8]>> = ray_runtime::process::run_encoded(program, &args, &opts).into_iter().map(|b| Rc::<[u8]>::from(&b[..])).collect();\n",
             "    Rc::new(std::cell::RefCell::new(elems)) }\n",
         ));
+        // M100 v2 (IDEAS §53.9): el gemelo nativo de los primitivos del streaming. Los tags y los
+        // mensajes son byte-idénticos a los de la VM (builtins.rs: proc_spawn_encoded/
+        // proc_try_wait_encoded); el aparcado de la fibra vive en __ray_pipe_read.
+        out.push_str(concat!(
+            "fn __ray_proc_tag(v: Vec<Rc<[u8]>>) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> { Rc::new(std::cell::RefCell::new(v)) }\n",
+            "fn __ray_proc_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> { __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(msg.as_bytes())]) }\n",
+            "#[allow(clippy::too_many_arguments)]\n",
+            "fn __ray_proc_spawn(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool, stdin: &[u8], has_stdin: bool, merge_output: bool) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let env: Vec<String> = env.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, stdin, has_stdin, 0, 0, merge_output);\n",
+            "    match ray_runtime::process::spawn_streamed(program, &args, &opts) {\n",
+            "        Ok(s) => {\n",
+            "            let h_child = __ray_reg_insert(__RayHandle::Child(s.child));\n",
+            "            let h_out = s.out.map_or(-1, |f| __ray_reg_insert(__RayHandle::Pipe(std::sync::Arc::new(f))));\n",
+            "            let h_err = s.err.map_or(-1, |f| __ray_reg_insert(__RayHandle::Pipe(std::sync::Arc::new(f))));\n",
+            "            __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(h_child.to_string().as_bytes()), Rc::<[u8]>::from(h_out.to_string().as_bytes()), Rc::<[u8]>::from(h_err.to_string().as_bytes())])\n",
+            "        }\n",
+            "        Err(e) => __ray_proc_err(e) } }\n",
+            "fn __ray_proc_try_wait(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    let mut reg = __ray_reg().lock().unwrap();\n",
+            "    let Some(__RayHandle::Child(child)) = reg.open.get_mut(&h) else { return __ray_proc_err(format!(\"handle {} is not a child process\", h)); };\n",
+            "    let result = match ray_runtime::process::try_wait(child) {\n",
+            "        Ok(None) => return __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"running\"[..])]),\n",
+            "        Ok(Some(Ok(c))) => __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"code\"[..]), Rc::<[u8]>::from(c.to_string().as_bytes())]),\n",
+            "        Ok(Some(Err(s))) => __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"signal\"[..]), Rc::<[u8]>::from(s.to_string().as_bytes())]),\n",
+            "        Err(e) => __ray_proc_err(e) };\n",
+            "    reg.open.remove(&h);\n",
+            "    result }\n",
+            "fn __ray_proc_kill(h: i64, force: bool) {\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    if let Some(__RayHandle::Child(child)) = reg.open.get(&h) { ray_runtime::process::kill_group(child.id() as i32, force); } }\n",
+            "fn __ray_pipe_clone(h: i64) -> Option<std::sync::Arc<std::fs::File>> {\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Pipe(f)) => Some(std::sync::Arc::clone(f)), _ => None } }\n",
+        ));
+        // La lectura de la BOMBA: no-bloqueante; con fibras aparca la fibra en el fd (préstamo del
+        // búfer fuera de la cesión); sin fibras (hilo-por-tarea) reintenta cediendo 1 ms, como el
+        // intérprete. Búfer por HILO propio (el __RAY_RDBUF de la red no siempre se emite); tags y
+        // mensajes idénticos a la VM (SocketReadBytes sobre un Pipe).
+        out.push_str("thread_local! { static __RAY_PROC_RDBUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 65536]); }\n");
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_proc_read(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+                "    use std::io::Read;\n",
+                "    let Some(f) = __ray_pipe_clone(h) else { return __ray_proc_err(format!(\"handle {} is not a socket\", h)); };\n",
+                "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*f);\n",
+                "    loop {\n",
+                "        let res = __RAY_PROC_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); let mut r = &*f; match r.read(&mut buf[..]) {\n",
+                "            Ok(n) => Some(__ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&buf[..n])])),\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n",
+                "            Err(e) => Some(__ray_proc_err(e.to_string())) } });\n",
+                "        if let Some(v) = res { return v; }\n",
+                "        ray_runtime::fibers::wait_readable(fd);\n",
+                "    } }\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "fn __ray_proc_read(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+                "    use std::io::Read;\n",
+                "    let Some(f) = __ray_pipe_clone(h) else { return __ray_proc_err(format!(\"handle {} is not a socket\", h)); };\n",
+                "    loop {\n",
+                "        let res = __RAY_PROC_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); let mut r = &*f; match r.read(&mut buf[..]) {\n",
+                "            Ok(n) => Some(__ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&buf[..n])])),\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n",
+                "            Err(e) => Some(__ray_proc_err(e.to_string())) } });\n",
+                "        if let Some(v) = res { return v; }\n",
+                "        std::thread::sleep(std::time::Duration::from_millis(1)); } }\n",
+            ));
+        }
     }
     // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
     // canal thread-safe propio (Arc<Mutex+Condvar>) — sin deps, ya que el `.rs` es standalone — con

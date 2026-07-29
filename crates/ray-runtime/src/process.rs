@@ -53,15 +53,24 @@ pub struct RunOutput {
     pub truncated: bool,
 }
 
-/// Lanza `program` con `args` y devuelve su salida. `Err` = **no se pudo lanzar** (ENOENT/EACCES/
-/// dir inválido); todo lo demás es `Ok`, incluido un hijo que falló o murió por señal.
-///
-/// Esta es la versión BLOQUEANTE (intérprete, el oráculo secuencial). VM y nativo aparcan la fibra
-/// (fases siguientes de M100); la semántica observable —y por tanto el golden— es la misma.
+/// Un hijo lanzado con sus pipes de lectura, ya **no-bloqueantes**. Es el borde que comparten la
+/// v1 (`run` lo drena con `poll(2)`) y la v2 (streaming: cada motor registra los pipes como
+/// handles y las bombas en raylang los leen aparcando la fibra). `err` es `None` con
+/// `merge_output` (todo llega por `out`).
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, String> {
-    use std::io::{Read, Write};
-    use std::os::unix::process::{CommandExt, ExitStatusExt};
+pub struct SpawnedChild {
+    pub child: std::process::Child,
+    pub out: Option<std::fs::File>,
+    pub err: Option<std::fs::File>,
+}
+
+/// Lanza `program` con `args` y devuelve el hijo con sus pipes (sin drenar ni cosechar: eso es del
+/// llamador). `Err` = **no se pudo lanzar**. `timeout_ms`/`max_output` de `opts` NO se aplican
+/// aquí (son política del drenaje de `run`; el streaming no los tiene).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<SpawnedChild, String> {
+    use std::io::Write;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
     let mut cmd = Command::new(program);
@@ -91,49 +100,32 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
     }
-    // Grupo propio: la escalera del timeout mata al GRUPO, no solo al hijo directo.
+    // Grupo propio: la escalera del timeout (y el kill de la v2) matan al GRUPO, no solo al hijo.
     cmd.process_group(0);
 
     let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
     // `Command` RETIENE sus `Stdio` (permite re-spawn): con merge, mantendría vivos los extremos de
     // escritura y el EOF del pipe fusionado no llegaría jamás. Soltarlo cierra nuestras copias.
     drop(cmd);
-    let pid = child.id() as i32;
-    let deadline = if opts.timeout_ms > 0 {
-        Some(std::time::Instant::now() + std::time::Duration::from_millis(opts.timeout_ms as u64))
-    } else {
-        None
-    };
 
-    // El stdin se escribe ENTERO antes de drenar. Es correcto para el contrato de v1 (`stdin(bytes)`
-    // ya está en memoria) mientras quepa en el buffer del pipe; si el hijo no lee y el pipe se
-    // llena, el write bloquea — el caso de "alimentar megabytes a un hijo que no consume" es de la
-    // v2 (streaming), donde el canal acotado es la contrapresión. Un `Err` aquí NO aborta: el hijo
-    // ya corre y hay que cosecharlo, así que se ignora (el hijo verá EOF).
+    // El stdin se escribe ENTERO antes de devolver. Es correcto para el contrato (`stdin(bytes)` ya
+    // está en memoria) mientras quepa en el buffer del pipe; si el hijo no lee y el pipe se llena,
+    // el write bloquea — "alimentar megabytes a un hijo que no consume" pide un stdin por canal
+    // (v3). Un `Err` aquí NO aborta: el hijo ya corre (verá EOF).
     if let (Some(data), Some(mut si)) = (&opts.stdin, child.stdin.take()) {
         let _ = si.write_all(data);
     } // el drop de `si` cierra el pipe → EOF para el hijo
 
-    // Ambos flujos como `File`: la misma lógica de drenaje sirve para stdout, stderr y el pipe
-    // fusionado (con merge, `child.stderr` es None y todo llega por `merged`).
-    let mut out_pipe = match merged {
+    // Ambos flujos como `File` y NO-bloqueantes (un POLLIN espurio no debe clavar al lector; y las
+    // bombas de la v2 exigen WouldBlock para aparcar la fibra).
+    let out = match merged {
         Some(f) => Some(f),
         None => child.stdout.take().map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p))),
     };
-    let mut err_pipe = child.stderr.take().map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p)));
-    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-    let mut truncated = false;
-    let cap = opts.max_output.max(0) as usize;
-
-    // Drenaje CONCURRENTE de ambos pipes con poll(2) (nunca uno y luego el otro: el hijo podría
-    // llenar el que no leemos y bloquearse para siempre). Los pipes van no-bloqueantes para que un
-    // POLLIN espurio no nos clave.
-    let (ofd, efd) = (
-        out_pipe.as_ref().map_or(-1, std::os::fd::AsRawFd::as_raw_fd),
-        err_pipe.as_ref().map_or(-1, std::os::fd::AsRawFd::as_raw_fd),
-    );
-    for fd in [ofd, efd] {
-        if fd >= 0 {
+    let err = child.stderr.take().map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p)));
+    for f in [&out, &err].into_iter().flatten() {
+        {
+            let fd = std::os::fd::AsRawFd::as_raw_fd(f);
             // SAFETY: fcntl variádica (ver el self-pipe de M88.1: con aridad fija es UB en arm64);
             // el fd es de un pipe propio recién creado por std.
             unsafe {
@@ -142,6 +134,61 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
             }
         }
     }
+    Ok(SpawnedChild { child, out, err })
+}
+
+/// `waitpid(WNOHANG)` del hijo: `Ok(None)` = sigue corriendo; `Ok(Some(exit))` = terminó (y quedó
+/// COSECHADO), con el mismo `Result<code, signal>` de `RunOutput`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn try_wait(child: &mut std::process::Child) -> Result<Option<Result<i32, i32>>, String> {
+    use std::os::unix::process::ExitStatusExt;
+    match child.try_wait() {
+        Ok(None) => Ok(None),
+        Ok(Some(status)) => Ok(Some(match status.code() {
+            Some(c) => Ok(c),
+            None => Err(status.signal().unwrap_or(0)),
+        })),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Señal al GRUPO del hijo (creado con `process_group(0)`): `SIGTERM`, o `SIGKILL` con `force`.
+/// Para el timeout compuesto por el llamador y la cancelación estructural de la v2.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn kill_group(pid: i32, force: bool) {
+    // SAFETY: `kill` a un grupo propio (hijo lanzado por nosotros con process_group(0)).
+    unsafe { kill(-pid, if force { SIGKILL } else { SIGTERM }) };
+}
+
+/// Lanza `program` con `args` y devuelve su salida. `Err` = **no se pudo lanzar** (ENOENT/EACCES/
+/// dir inválido); todo lo demás es `Ok`, incluido un hijo que falló o murió por señal.
+///
+/// Esta es la versión BLOQUEANTE (intérprete, el oráculo secuencial; en VM/nativo bloquea el hilo
+/// del worker — la vía aparcada es el streaming de la v2, `spawn_streamed`).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, String> {
+    use std::io::Read;
+    use std::os::unix::process::ExitStatusExt;
+
+    let spawned = spawn_streamed(program, args, opts)?;
+    let (mut child, mut out_pipe, mut err_pipe) = (spawned.child, spawned.out, spawned.err);
+    let pid = child.id() as i32;
+    let deadline = if opts.timeout_ms > 0 {
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(opts.timeout_ms as u64))
+    } else {
+        None
+    };
+
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let mut truncated = false;
+    let cap = opts.max_output.max(0) as usize;
+
+    // Drenaje CONCURRENTE de ambos pipes con poll(2) (nunca uno y luego el otro: el hijo podría
+    // llenar el que no leemos y bloquearse para siempre).
+    let (ofd, efd) = (
+        out_pipe.as_ref().map_or(-1, std::os::fd::AsRawFd::as_raw_fd),
+        err_pipe.as_ref().map_or(-1, std::os::fd::AsRawFd::as_raw_fd),
+    );
     let mut timed_out = false;
     let mut buf = [0u8; 65536];
     let (mut o_open, mut e_open) = (ofd >= 0, efd >= 0);
@@ -363,7 +410,7 @@ unsafe fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32 {
 /// IDEAS §53.8; los comandos son deterministas (sh/cat/env) para que sirvan de base al golden.
 #[cfg(all(test, unix, not(target_arch = "wasm32")))]
 mod process_tests {
-    use super::{run, RunOpts};
+    use super::{run, spawn_streamed, RunOpts};
 
     fn opts() -> RunOpts {
         RunOpts {
@@ -398,6 +445,64 @@ mod process_tests {
         assert_eq!(o.exit, Err(15));
     }
 
+
+    // M100 v2 (fase 2a): el borde del streaming — spawn con pipes no-bloqueantes, cosecha con
+    // try_wait, y kill al grupo. Las bombas de verdad viven en std/process (fase 2b).
+    #[test]
+    fn spawn_streamed_reads_both_pipes_and_try_wait_reaps() {
+        use std::io::Read;
+        // Lee un pipe NO-bloqueante hasta EOF (reintenta en WouldBlock: es el papel de la fibra).
+        fn read_all_nb(f: &mut std::fs::File) -> Vec<u8> {
+            let (mut buf, mut acc) = ([0u8; 4096], Vec::new());
+            loop {
+                match f.read(&mut buf) {
+                    Ok(0) => return acc,
+                    Ok(n) => acc.extend_from_slice(&buf[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => return acc,
+                }
+            }
+        }
+        let s = spawn_streamed("sh", &sh("printf abc; printf de >&2; exit 5"), &opts()).unwrap();
+        let (mut child, mut out, mut err) = (s.child, s.out.unwrap(), s.err.unwrap());
+        assert_eq!(read_all_nb(&mut out), b"abc");
+        assert_eq!(read_all_nb(&mut err), b"de");
+        // Tras el EOF de ambos pipes el hijo ya salió (o está a un tick): try_wait cosecha.
+        let exit = loop {
+            match super::try_wait(&mut child).unwrap() {
+                Some(e) => break e,
+                None => std::thread::sleep(std::time::Duration::from_millis(2)),
+            }
+        };
+        assert_eq!(exit, Ok(5));
+    }
+
+    #[test]
+    fn spawn_streamed_merge_gives_one_pipe_and_kill_group_terminates() {
+        let mut o = opts();
+        o.merge_output = true;
+        let s = spawn_streamed("sleep", &["30".to_string()], &o).unwrap();
+        let mut child = s.child;
+        assert!(s.out.is_some() && s.err.is_none(), "merge: un solo pipe");
+        assert!(super::try_wait(&mut child).unwrap().is_none(), "sigue corriendo");
+        super::kill_group(child.id() as i32, false);
+        let exit = loop {
+            match super::try_wait(&mut child).unwrap() {
+                Some(e) => break e,
+                None => std::thread::sleep(std::time::Duration::from_millis(2)),
+            }
+        };
+        assert_eq!(exit, Err(15));
+    }
+
+    // ENOENT en el spawn del streaming: mismo contrato que run (Err = no se pudo lanzar).
+    #[test]
+    fn spawn_streamed_enoent_is_err() {
+        assert!(spawn_streamed("raylang-no-such-binary-v2", &[], &opts()).is_err());
+    }
     // ENOENT sí es Err: el hijo nunca llegó a existir.
     #[test]
     fn spawn_failure_is_err() {

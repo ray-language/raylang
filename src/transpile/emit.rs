@@ -253,6 +253,97 @@ impl Transpiler {
         }
     }
 
+    /// N6b: ¿el cuerpo de un `for` de rango es **puro-escalar**? Si lo es, devuelve los arreglos
+    /// (de elemento escalar) que indexa — candidatos a izar su `borrow()` fuera del loop, dejando
+    /// el cuerpo en aritmética pura que LLVM vectoriza (medido: el loop interno de matrixmul 5.5×).
+    ///
+    /// El recorte es deliberadamente conservador, porque izar un préstamo compartido por encima de
+    /// un `borrow_mut` convertiría código válido en pánico. Se acepta SOLO: `let`/`var` de tipo
+    /// escalar, asignación a escalares, y expresiones de literales/variables/aritmética/casts/
+    /// lecturas `a[i]` con receptor variable-local-no-celda. Cualquier otro nodo — llamadas,
+    /// mutación de arreglos, strings, control de flujo, closures — devuelve `None` y el loop se
+    /// emite como siempre. Requiere la variable del loop ya declarada en el ámbito.
+    fn hoistable_arrays(&self, body: &crate::ast::Block) -> Option<Vec<String>> {
+        fn is_scalar(t: &Type) -> bool {
+            matches!(t, Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_))
+        }
+        // Ámbito local del análisis: los `let` del cuerpo se registran aquí (el `lookup` de fuera
+        // sigue viendo el resto). Nota: un `let` del cuerpo solo puede ser escalar → no puede
+        // introducir (ni sombrear con) un arreglo.
+        let mut local: HashMap<String, Type> = HashMap::new();
+        let mut arrays: Vec<String> = Vec::new();
+
+        fn pure_expr(
+            t: &Transpiler,
+            local: &HashMap<String, Type>,
+            arrays: &mut Vec<String>,
+            e: &Expr,
+        ) -> Option<Type> {
+            match &e.kind {
+                ExprKind::Int(_) => Some(Type::Int),
+                ExprKind::Float(_) => Some(Type::Float),
+                ExprKind::Bool(_) => Some(Type::Bool),
+                ExprKind::Char(_) => Some(Type::Char),
+                ExprKind::Ident(n) => {
+                    let ty = local.get(n).or_else(|| t.lookup(n))?.clone();
+                    if is_scalar(&ty) { Some(ty) } else { None }
+                }
+                ExprKind::Unary { expr, .. } => pure_expr(t, local, arrays, expr),
+                ExprKind::Binary { left, right, .. } => {
+                    let lt = pure_expr(t, local, arrays, left)?;
+                    pure_expr(t, local, arrays, right)?;
+                    // el tipo del binario escalar es el del operando (o bool en comparaciones;
+                    // para el análisis basta con que ambos lados sean escalares puros).
+                    Some(lt)
+                }
+                ExprKind::Cast { expr, ty } => {
+                    pure_expr(t, local, arrays, expr)?;
+                    if is_scalar(ty) { Some(ty.clone()) } else { None }
+                }
+                ExprKind::Index { array, index } => {
+                    // Solo `variable[idx]` con la variable un arreglo LOCAL de elemento escalar y
+                    // no-celda (una celda lleva otro RefCell por medio: fuera del recorte).
+                    let ExprKind::Ident(name) = &array.kind else { return None };
+                    if local.contains_key(name) || t.cells.contains(name) {
+                        return None;
+                    }
+                    let Some(Type::Array(elem)) = t.lookup(name) else { return None };
+                    if !is_scalar(elem) {
+                        return None;
+                    }
+                    pure_expr(t, local, arrays, index)?;
+                    if !arrays.contains(name) {
+                        arrays.push(name.clone());
+                    }
+                    Some((**elem).clone())
+                }
+                _ => None,
+            }
+        }
+
+        if body.tail.is_some() {
+            return None;
+        }
+        for s in &body.statements {
+            match &s.kind {
+                StmtKind::Let { name, value, .. } => {
+                    let ty = pure_expr(self, &local, &mut arrays, value)?;
+                    local.insert(name.clone(), ty);
+                }
+                StmtKind::Assign { target, value } => {
+                    let ExprKind::Ident(n) = &target.kind else { return None };
+                    let tty = local.get(n).or_else(|| self.lookup(n))?.clone();
+                    if !is_scalar(&tty) {
+                        return None;
+                    }
+                    pure_expr(self, &local, &mut arrays, value)?;
+                }
+                _ => return None,
+            }
+        }
+        if arrays.is_empty() { None } else { Some(arrays) }
+    }
+
     pub(super) fn declare(&mut self, name: &str, ty: Type) {
         let t = normalize_type(&ty);
         // Un `Struct(n)` cuyo `n` es un enum del usuario → `Enum(n)` (el parser no distingue; el checker
@@ -489,15 +580,46 @@ impl Transpiler {
                 };
                 match iter {
                     ForIter::Range { start, end } => {
-                        write!(out, "for {} in ", var).unwrap();
-                        self.emit_expr(out, start)?;
-                        out.push_str("..");
-                        self.emit_expr(out, end)?;
-                        out.push(' ');
+                        // N6b: si el cuerpo es puro-escalar, se IZAN los `borrow()` de los arreglos
+                        // que indexa fuera del loop → el cuerpo queda en aritmética pura (vectoriza).
+                        // Los extremos del rango se evalúan a temporales ANTES de crear los guards
+                        // (si mutaran un arreglo, sería antes de tomar el préstamo, no durante).
+                        let hoist = {
+                            self.scopes.push(HashMap::new());
+                            self.declare(&var, Type::Int);
+                            let h = self.hoistable_arrays(body);
+                            self.scopes.pop();
+                            h
+                        };
+                        if let Some(arrays) = &hoist {
+                            out.push_str("{ let __rt_lo: i64 = ");
+                            self.emit_expr(out, start)?;
+                            out.push_str("; let __rt_hi: i64 = ");
+                            self.emit_expr(out, end)?;
+                            out.push_str(";\n");
+                            for (i, name) in arrays.iter().enumerate() {
+                                let guard = format!("__rt_bh_{i}");
+                                writeln!(out, "    let {} = {}.borrow();", guard, mangle(name)).unwrap();
+                                self.hoisted_borrows.insert(name.clone(), guard);
+                            }
+                            write!(out, "    for {} in __rt_lo..__rt_hi ", var).unwrap();
+                        } else {
+                            write!(out, "for {} in ", var).unwrap();
+                            self.emit_expr(out, start)?;
+                            out.push_str("..");
+                            self.emit_expr(out, end)?;
+                            out.push(' ');
+                        }
                         self.scopes.push(HashMap::new());
                         self.declare(&var, Type::Int);
                         self.emit_block(out, body)?;
                         self.scopes.pop();
+                        if let Some(arrays) = &hoist {
+                            for name in arrays {
+                                self.hoisted_borrows.remove(name);
+                            }
+                            out.push('}');
+                        }
                         out.push('\n');
                     }
                     // `for x in <arreglo>` → itera una copia del Vec (los elementos son Rc → bump barato)
@@ -965,8 +1087,26 @@ impl Transpiler {
                     }
                     // arreglo/Map: `a[i]` → el elemento (clon al leer; a través del RefCell).
                     _ => {
-                        self.emit_expr(out, array)?;
-                        out.push_str(".borrow()[");
+                        match &array.kind {
+                            // N6b: dentro de un loop puro-escalar el préstamo está IZADO → se indexa el
+                            // guard directamente (sin borrow por elemento; LLVM puede vectorizar).
+                            ExprKind::Ident(name) if self.hoisted_borrows.contains_key(name) => {
+                                out.push_str(&self.hoisted_borrows[name]);
+                            }
+                            // N6a: receptor = variable local (no celda) → `x.borrow()` directo, sin el
+                            // `Rc::clone` intermedio (`borrow` toma &self; el clon solo movía refcounts).
+                            ExprKind::Ident(name)
+                                if !self.cells.contains(name) && self.lookup(name).is_some() =>
+                            {
+                                out.push_str(&mangle(name));
+                                out.push_str(".borrow()");
+                            }
+                            _ => {
+                                self.emit_expr(out, array)?;
+                                out.push_str(".borrow()");
+                            }
+                        }
+                        out.push('[');
                         self.emit_expr(out, index)?;
                         out.push_str(" as usize].clone()");
                     }

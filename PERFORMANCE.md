@@ -38,14 +38,15 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 | `logparse` | 27.0 ms | 1.86× | 0.83× | **1.17×** | 3.3× |
 | `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
-| `matrixmul` | 11.6 ms | 2.05× | 0.66× | 0.50× | 57× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
 | `regex` | 70.7 ms | 0.87× | **1.08×** | 0.37× | 246× |
 
-*(× = veces más lento que `native`; <1 = nos gana.)*
+*(× = veces más lento que `native`; <1 = nos gana. La fila de `matrixmul` es la re-medición
+post-N6 — Fase 67, 29 jul: en la corrida original del día iba en 11.6 ms, 0.50× de rustc.)*
 
 - **Gana a node en 9 de 10** (1.1×–20×); pierde solo `regex` (0.87×, y node lleva su motor en C++).
-- **Gana a `rustc -O` en cinco** y **a Go en cuatro**. Los dos huecos claros son `jsondeserialize`
-  (0.52× de Go — búsqueda de substrings) y `matrixmul` (0.50× de rustc — punto flotante denso).
+- **Gana a `rustc -O` en cinco y empata en dos** (`loopsum`, `matrixmul`), y **a Go en cinco**. El
+  hueco claro que queda es `jsondeserialize` (0.52× de Go — búsqueda de substrings).
 - **Arranque**: `empty` **1.80 ms, #1 de 10** (rustc 1.92, Go 1.98), 1.8 MB de RSS.
 - **Ranking combinado tiempo×memoria: #2 en 10 de 12 programas**, #3 en los otros dos.
 
@@ -913,6 +914,34 @@ cuerpo e incremento antes del cuerpo (`continue` correcto). **Medido**: pico nat
 26.1 MB (−24 %)** y tiempo **23.3 → 20.4 ms (−12 %)**, salida idéntica; el nativo vuelve a quedar
 por debajo de la VM. Resto del gap con Rust (26 vs 17 MB): la semántica de `sort` (arreglo nuevo →
 original+ordenado vivos a la vez) — compartida con la VM, documentada sin acción.
+
+#### Fase 67 — N6: hoist de préstamos en loops puro-escalares del NATIVO (29 jul, matrixmul)
+
+La re-medición post-fibras (§0.1) dejó `matrixmul` como el hueco más claro del nativo (11.6 ms,
+2.0× rustc). El `--emit-rust` enseñó el porqué en una línea — el loop interno emitía
+`ai.clone().borrow()[k].clone() * bj.clone().borrow()[k].clone()`: dos `Rc::clone` + dos
+`RefCell::borrow` + dos bounds checks **por elemento**, y el guard del RefCell bloquea la
+autovectorización de LLVM. Micro-A/B aislado: izar los `borrow()` fuera del loop da **5.5× y
+alcanza el techo** del `Vec` plano (4.93 vs 4.91 ms) — el RefCell por elemento ERA todo el gap.
+
+Dos piezas en el emisor (`src/transpile/emit.rs`):
+
+- **N6a** — lectura `a[i]` sobre variable local no-celda → `a.borrow()[i]` directo, sin el
+  `Rc::clone` intermedio (solo movía refcounts; `borrow` toma `&self`). Universal.
+- **N6b** — en un `for` de rango cuyo cuerpo es **puro-escalar** (análisis conservador: solo
+  `let`/asignación a escalares y aritmética/casts/lecturas `a[i]` de arreglos-de-escalar locales
+  no-celda; una llamada, un `push`, un string o control de flujo lo desactivan), se IZAN los
+  `borrow()` a guards antes del loop y se indexa el guard. Los extremos del rango se evalúan a
+  temporales ANTES de crear los guards (si mutaran un arreglo, sería antes del préstamo). El
+  recorte importa: izar un préstamo compartido por encima de un `borrow_mut` convertiría código
+  válido en pánico — por eso "sin llamadas y sin mutación" es la condición, no una heurística.
+
+**Medido** (M3 Pro, mediana intercalada, salida byte-idéntica): `matrixmul` nativo **11.24 →
+5.72 ms (1.97×)** — **#1 de la mesa en tiempo** (rustc -O 5.70, empate estadístico; Go 7.59 queda
+1.35× detrás; node pasa de 2.05× a **4.12×**). Resto del banco neutro (±0.3% intercalado;
+sortnums/wordcount/jsonserialize/fibrec/loopsum/treealloc idénticos en salida). Corpus de paridad
+completo verde en ambas variantes (fibras e hilos). Tests de forma emitida: dispara en el loop
+puro-escalar, NO dispara con llamadas/push/strings.
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

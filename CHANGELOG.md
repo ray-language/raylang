@@ -16,7 +16,7 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
   lo compila a un ejecutable de código máquina — modelo *dev = VM / deploy = nativo*. Byte-idéntico a la
   VM (verificado con un corpus de paridad) y **3–4× más rápido que ella en cargas de servicio, 28–57× en
   cómputo puro**. En el banco poliglota (29 jul 2026) **gana a node en 9 de los 10 programas de cómputo**,
-  a `rustc -O` en cinco y a Go en cuatro, y arranca en 1,80 ms — el más rápido de la mesa; en tiempo ×
+  a `rustc -O` en cinco (empatando en otros dos) y a Go en cinco, y arranca en 1,80 ms — el más rápido de la mesa; en tiempo ×
   memoria queda #2 de 10 lenguajes en 10 de los 12 programas. Cubre el lenguaje completo (genéricos,
   traits, `dyn`, tuplas, closures
   con captura mutable, iteradores) + `std/fs`, sockets TCP/UDP, TLS, SQLite, procesos, FFI y toda la

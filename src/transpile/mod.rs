@@ -118,6 +118,11 @@ struct Transpiler {
     /// un clon del `Rc`. Se pueblan al entrar en cada función/closure (con su `cell_vars`) y se quitan al
     /// salir (set plano; el shadowing de una var-celda es una limitación conocida, raro en la práctica).
     cells: std::collections::HashSet<String>,
+    /// N6b (arco bench poliglota): arreglos con el **préstamo izado** fuera de un `for` de rango cuyo
+    /// cuerpo es puro-escalar (nombre del arreglo → nombre del guard `__rt_bh_N`). Mientras un nombre
+    /// está aquí, `a[i]` se emite como `__rt_bh_N[i]` (sin `borrow()` por elemento → LLVM vectoriza).
+    /// Solo se puebla dentro de `emit_stmt(For)`; ver `hoistable_arrays` (el análisis conservador).
+    hoisted_borrows: HashMap<String, String>,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -238,6 +243,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_rt_process: false,
         exclude: exclude.iter().cloned().collect(),
         cells: std::collections::HashSet::new(),
+        hoisted_borrows: HashMap::new(),
         fibers,
     };
 

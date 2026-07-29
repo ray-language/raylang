@@ -111,15 +111,19 @@ arco F enlaza **fibras M:N** por defecto.
 | `logparse` | 27.0 ms | 1.86× | 0.83× | **1.17×** | 3.3× |
 | `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
-| `matrixmul` | 11.6 ms | 2.05× | 0.66× | 0.50× | 57× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
 | `regex` | 70.7 ms | 0.87× | **1.08×** | 0.37× | 246× |
+
+> La fila de `matrixmul` es la **re-medición post-N6** (PERFORMANCE.md Fase 67, 29 jul: el
+> transpilador iza los `borrow()` de RefCell fuera de los loops puro-escalares → LLVM vectoriza).
+> En la corrida original del mismo día iba en 11.6 ms, 0.50× de rustc.
 
 - **Le gana a node en 9 de los 10** programas de cómputo (de 1.1× a 20×). El único que pierde es
   `regex`, y con matiz: node lleva un motor de regex en C++ mientras la variante `.ray` parsea a
   mano (ver la nota de arriba); el `native` va por el crate `regex` desde R5.
 - **Le gana a `rustc -O` en cinco** (`wordcount` 1.24×, `treealloc` 1.52×, `sortnums` 1.12×,
-  `logparse` 1.17×, `loopsum` empate) y **a Go en cuatro**. Donde pierde contra ambos es en
-  `jsondeserialize` y `matrixmul` — cómputo escalar denso y punto flotante.
+  `logparse` 1.17×) **y empata en dos** (`loopsum`, `matrixmul`), y **le gana a Go en cinco**.
+  Donde pierde contra ambos es en `jsondeserialize` — búsqueda de substrings.
 - **Arranque** (proceso completo, sin auto-medición): `empty` **1.80 ms 🥇 #1 de 10** — por
   delante de rustc (1.92 ms) y Go (1.98 ms), con 1.8 MB de RSS. Las fibras no lo penalizan.
 
@@ -141,8 +145,8 @@ tercer puesto, contra 9 lenguajes.
   ruido — y el arranque de `empty` incluso mejora (1.57 vs 1.97 ms, porque el modelo de fibras no
   levanta el hilo worker que sí crea el de hilo-por-tarea). Su beneficio está en concurrencia e
   I/O, y no se paga en los programas secuenciales.
-- **Dónde queda trabajo**: `jsondeserialize` (0.52× de Go) y `matrixmul` (0.50× de rustc) son los
-  dos huecos claros — búsqueda de substrings y punto flotante denso. Plan en
+- **Dónde queda trabajo**: `jsondeserialize` (0.52× de Go — búsqueda de substrings) es el hueco
+  claro que queda; `matrixmul` lo cerró N6 (Fase 67: hoist de borrows → vectorización). Plan en
   `raylang/PERFORMANCE.md`.
 
 ### Reproducir

@@ -86,9 +86,11 @@ zero-copy) — inherente a la semántica de valores, aceptable.
   VM es el despacho (P2.a).
 - **D4 — adoptar la variante B en el bench** (medida: −8.6 % VM / −12 % nativo,
   misma salida; más pareja con lo que hacen Go/JS/Rust).
-- **D5 — diferidos conscientes**: `index_of_from(s, sub, start)` (búsqueda con
-  offset; API nueva — solo si aparece demanda real: con D1 el re-escaneo ASCII es
-  barato); substring zero-copy (vistas/ropes) = cambio de representación,
+- **D5 — diferidos conscientes**: `index_of_from(s, sub, start)` — ✅ **superado por N-D2**
+  (29 jul, PERFORMANCE.md Fase 68): el emisor NATIVO fusiona `index_of(s.substring(k, …), aguja)`
+  a una búsqueda sobre el slice sin copiar la cola, sin API nueva (y N-D1 hace lo propio con
+  `parse_int(substring)`; de paso cazó que el nativo no trimeaba en parse_int/parse_float — bug de
+  paridad, arreglado). substring zero-copy (vistas/ropes) = cambio de representación,
   **descartado** (Opt.3/P1.4/interning, refutado 3×); `std/json` como librería
   (existe la ruta, pero este bench compara a propósito el parsing manual).
 

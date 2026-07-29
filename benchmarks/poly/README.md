@@ -105,27 +105,35 @@ arco F enlaza **fibras M:N** por defecto.
 |---|---|---|---|---|---|
 | `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 28× |
 | `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 54× |
-| `wordcount` | 48.6 ms | 2.60× | 0.90× | **1.24×** | 5.5× |
+| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 7.4× |
 | `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 3.4× |
-| `jsondeserialize` | 85.2 ms | 1.10× | 0.52× | 0.57× | 4.2× |
-| `logparse` | 27.0 ms | 1.86× | 0.83× | **1.17×** | 3.3× |
+| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 4.9× |
+| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 4.4× |
 | `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
-| `matrixmul` | 11.6 ms | 2.05× | 0.66× | 0.50× | 57× |
-| `regex` | 70.7 ms | 0.87× | **1.08×** | 0.37× | 246× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 284× |
 
-- **Le gana a node en 9 de los 10** programas de cómputo (de 1.1× a 20×). El único que pierde es
-  `regex`, y con matiz: node lleva un motor de regex en C++ mientras la variante `.ray` parsea a
-  mano (ver la nota de arriba); el `native` va por el crate `regex` desde R5.
-- **Le gana a `rustc -O` en cinco** (`wordcount` 1.24×, `treealloc` 1.52×, `sortnums` 1.12×,
-  `logparse` 1.17×, `loopsum` empate) y **a Go en cuatro**. Donde pierde contra ambos es en
-  `jsondeserialize` y `matrixmul` — cómputo escalar denso y punto flotante.
+> Las filas de `matrixmul` (Fase 67: hoist de borrows → vectorización) y de `wordcount`/
+> `jsondeserialize`/`logparse`/`regex` (Fase 68: fusiones de substring/split + el borde de
+> capturas) son las **re-mediciones del mismo día** con el arnés, tras esos arcos del
+> transpilador; la corrida original está en el historial de PERFORMANCE.md.
+
+- **Le gana a node en 9 de los 10** programas de cómputo (de 1.1× a 20×). El décimo, `regex`,
+  queda a un **5%** (0.95×) — y ahí node corre su motor C++; la variante `.ray` usa `std/regex`
+  con el crate `regex` (R5). Ojo con el 0.40× de la columna rust: `regex.rs` parsea **a mano**
+  (ver la nota de arriba) — con el crate `regex`, Rust puro cuesta ~49 ms, no 26.
+- **Le gana a Go en seis** (`sortnums` 3.51×, `treealloc` 1.59×, `matrixmul` 1.35×, `regex`
+  1.17×, `wordcount` 1.16×, `logparse` 1.05×) **y empata en dos** (`loopsum`, `jsonserialize`);
+  **a `rustc -O` en cuatro** (`wordcount` 1.60×, `treealloc` 1.52×, `logparse` 1.49×, `sortnums`
+  1.12×) **y empata en dos** (`loopsum`, `matrixmul`). Donde pierde contra ambos es en
+  `jsondeserialize` y `fibrec`.
 - **Arranque** (proceso completo, sin auto-medición): `empty` **1.80 ms 🥇 #1 de 10** — por
   delante de rustc (1.92 ms) y Go (1.98 ms), con 1.8 MB de RSS. Las fibras no lo penalizan.
 
-**Ranking combinado (tiempo × memoria, media geométrica)**: el binario nativo queda **#2 en 10 de
-los 12 programas** y #3 en los dos restantes (`jsonserialize`, `matrixmul`) — nunca por debajo del
-tercer puesto, contra 9 lenguajes.
+**Ranking combinado (tiempo × memoria, media geométrica)**: el binario nativo queda **#1 o #2 en
+11 de los 12 programas** (#1 absoluto en `wordcount` y `logparse`) y #3 en el restante
+(`jsonserialize`) — nunca por debajo del tercer puesto, contra 9 lenguajes.
 
 ### Lectura
 
@@ -141,9 +149,10 @@ tercer puesto, contra 9 lenguajes.
   ruido — y el arranque de `empty` incluso mejora (1.57 vs 1.97 ms, porque el modelo de fibras no
   levanta el hilo worker que sí crea el de hilo-por-tarea). Su beneficio está en concurrencia e
   I/O, y no se paga en los programas secuenciales.
-- **Dónde queda trabajo**: `jsondeserialize` (0.52× de Go) y `matrixmul` (0.50× de rustc) son los
-  dos huecos claros — búsqueda de substrings y punto flotante denso. Plan en
-  `raylang/PERFORMANCE.md`.
+- **Dónde queda trabajo**: `jsondeserialize` (0.60× de Go tras las fusiones N-D) es el hueco que
+  queda — lo restante es la construcción de la línea (`Rc<str>` desde `String` = doble alloc) y
+  que Go/Rust rebanan sin copiar; `matrixmul` lo cerró N6 y `logparse`/`wordcount` las fusiones de
+  split (Fases 67–68). Plan en `raylang/PERFORMANCE.md`.
 
 ### Reproducir
 

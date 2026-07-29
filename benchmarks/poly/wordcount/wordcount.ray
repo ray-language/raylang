@@ -8,8 +8,9 @@ fn main() {
     var m: Map<string, int> = Map.new();
     for r in 0..120000 {
         let line = to_string(r % 1000) + " " + base;
-        let words = line.split(" ");
-        for w in words {
+        // N-D4a (jul 2026): el split va INLINE en el for — la forma directa que el nativo itera
+        // sin materializar el arreglo intermedio (mismos tokens, mismo orden).
+        for w in line.split(" ") {
             m.add_to(w, 1);
         }
     }

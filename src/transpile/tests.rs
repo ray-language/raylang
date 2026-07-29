@@ -114,6 +114,152 @@ fn transpiles_for_range_loop() {
     assert!(rust.contains("let mut acc: i64 = 0i64"), "{}", rust); // anotación emitida (pina inferencia)
 }
 
+/// N6b: un `for` de rango con cuerpo puro-escalar IZA los `borrow()` de los arreglos que indexa
+/// (un guard por arreglo antes del loop; dentro se indexa el guard, sin RefCell por elemento).
+#[test]
+fn hoists_borrows_out_of_pure_scalar_range_loops() {
+    let rust = transpile_src(
+        "fn dot(a: [float], b: [float], n: int) -> float {\n\
+             var s = 0.0;\n\
+             for k in 0..n { s = s + a[k] * b[k]; }\n\
+             s\n\
+         }\n\
+         fn main() { print(dot([1.0, 2.0], [3.0, 4.0], 2) as int); }",
+    );
+    assert!(rust.contains("let __rt_bh_0 = a.borrow();"), "{}", rust);
+    assert!(rust.contains("let __rt_bh_1 = b.borrow();"), "{}", rust);
+    assert!(rust.contains("__rt_bh_0[k as usize]"), "{}", rust);
+    // los extremos del rango van a temporales ANTES de crear los guards (orden de efectos)
+    assert!(rust.contains("let __rt_lo: i64 = 0i64; let __rt_hi: i64 = n;"), "{}", rust);
+    // y dentro del cuerpo NO queda ningún borrow por elemento
+    assert!(!rust.contains("a.borrow()[k"), "{}", rust);
+}
+
+/// N6b (negativo): cualquier cosa fuera del recorte puro-escalar — una llamada, una mutación de
+/// arreglo (`push`), un string — desactiva el hoist: izar un préstamo por encima de un posible
+/// `borrow_mut` convertiría código válido en pánico.
+#[test]
+fn does_not_hoist_when_the_body_calls_or_mutates() {
+    // llamada a función de usuario en el cuerpo → sin hoist
+    let call = transpile_src(
+        "fn f(x: int) -> int { x }\n\
+         fn main() {\n\
+             let a = [1, 2, 3];\n\
+             var s = 0;\n\
+             for k in 0..3 { s = s + f(a[k]); }\n\
+             print(s);\n\
+         }",
+    );
+    assert!(!call.contains("__rt_bh_"), "{}", call);
+    // mutación de un arreglo (push) en el cuerpo → sin hoist
+    let push = transpile_src(
+        "fn main() {\n\
+             let a = [1, 2, 3];\n\
+             var out: [int] = [];\n\
+             for k in 0..3 { out.push(a[k]); }\n\
+             print(out.len());\n\
+         }",
+    );
+    assert!(!push.contains("__rt_bh_"), "{}", push);
+    // arreglo de elemento NO escalar (strings) → sin hoist (fuera del recorte v1)
+    let strings = transpile_src(
+        "fn main() {\n\
+             let a = [\"x\", \"y\"];\n\
+             var n = 0;\n\
+             for k in 0..2 { n = n + a[k].len(); }\n\
+             print(n);\n\
+         }",
+    );
+    assert!(!strings.contains("__rt_bh_"), "{}", strings);
+}
+
+/// N-D1/N-D2: `parse_int(s.substring(a, b))` e `index_of(s.substring(a, b), aguja)` se fusionan —
+/// el camino ASCII trabaja sobre el slice sin materializar el `Rc<str>` intermedio. Y `parse_int`
+/// TRIMEA (paridad con la VM: `parse_int(" 42 ")` es `Some(42)` en ambos motores).
+#[test]
+fn fuses_substring_into_parse_int_and_index_of() {
+    let rust = transpile_src(
+        "fn main() {\n\
+             let s = \"id=42;x\";\n\
+             print(parse_int(s.substring(3, 5)).unwrap_or(0));\n\
+             print(index_of(s.substring(3, s.len()), \";\").unwrap_or(0));\n\
+         }",
+    );
+    assert!(rust.contains("__rt_fs"), "{}", rust); // la fusión disparó
+    assert!(rust.contains(".trim().parse::<i64>()"), "{}", rust); // y trimea, como la VM
+    // el argumento fusionado no materializa la subcadena en el camino ASCII
+    assert!(rust.contains("__rt_fs[__rt_lo..__rt_hi]"), "{}", rust);
+}
+
+/// N-D4b: `let f = s.split(sep)` consumido SOLO por `f[const]` → extracción en una pasada, sin
+/// materializar el `Vec<Rc<str>>`; el pánico OOB replica el del indexado de Vec.
+#[test]
+fn fuses_split_consumed_by_constant_indexes() {
+    let rust = transpile_src(
+        "fn main() {\n\
+             let f = \"a b c d\".split(\" \");\n\
+             print(f[1]);\n\
+             print(f[3]);\n\
+         }",
+    );
+    assert!(rust.contains("__rt_sp0_len"), "{}", rust);
+    assert!(rust.contains("index out of bounds: the len is {} but the index is {}"), "{}", rust);
+    assert!(!rust.contains("__ray_split(&"), "{}", rust); // el Vec intermedio no se emite
+}
+
+/// N-D4b (negativo): un uso NO const-index (iterarlo, pasarlo, `len`, índice variable) o un `var`
+/// desactivan la fusión y el split se materializa como siempre.
+#[test]
+fn does_not_fuse_split_with_escaping_uses() {
+    // se itera → materializado
+    let iterated = transpile_src(
+        "fn main() {\n\
+             let f = \"a b\".split(\" \");\n\
+             for w in f { print(w); }\n\
+         }",
+    );
+    assert!(iterated.contains("__ray_split(&"), "{}", iterated);
+    assert!(!iterated.contains("__rt_sp0_len"), "{}", iterated);
+    // índice variable → materializado
+    let dynamic = transpile_src(
+        "fn main() {\n\
+             let f = \"a b\".split(\" \");\n\
+             var i = 0;\n\
+             print(f[i]);\n\
+         }",
+    );
+    assert!(dynamic.contains("__ray_split(&"), "{}", dynamic);
+}
+
+/// N-D4a: `for w in s.split(sep)` (inline) itera el iterador de split directo, sin el Vec.
+#[test]
+fn iterates_inline_split_without_materializing() {
+    let rust = transpile_src(
+        "fn main() {\n\
+             var n = 0;\n\
+             for w in \"a bb\".split(\" \") { n = n + w.len(); }\n\
+             print(n);\n\
+         }",
+    );
+    assert!(rust.contains("__rt_sps.split(&*__rt_spsep)"), "{}", rust);
+    assert!(!rust.contains("__ray_split(&"), "{}", rust);
+}
+
+/// N6a: la lectura `a[i]` sobre una variable local no-celda toma el préstamo directo
+/// (`a.borrow()`), sin el `Rc::clone` intermedio que solo movía refcounts.
+#[test]
+fn indexed_reads_borrow_without_cloning_the_rc() {
+    let rust = transpile_src(
+        "fn main() {\n\
+             let a = [10, 20];\n\
+             var i = 0;\n\
+             while (i < 2) { print(a[i]); i = i + 1; }\n\
+         }",
+    );
+    assert!(rust.contains("a.borrow()["), "{}", rust);
+    assert!(!rust.contains("a.clone().borrow()"), "{}", rust);
+}
+
 #[test]
 fn transpiles_string_concat_and_clone() {
     let rust = transpile_src(

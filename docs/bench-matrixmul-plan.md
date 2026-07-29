@@ -41,13 +41,13 @@ entero + naming, verdes.
   (p. ej. fusionar `Mul;Add` flotante o un opcode `MulAddLocals`; ROI decreciente,
   medir antes). `do_index`+`get_local`+`bounds_check` ≈ 25 % — micro-margen en
   evitar el doble `heap.get` del camino genérico del índice.
-- **Nativo (31 ms, 3.2× Go)**: el gap son los `borrow()` de `RefCell` + el salto
-  por `Rc` en cada acceso `a[i][k]` (3 borrows por iteración × 8M). La mejora
-  natural es **izar el préstamo de la fila** fuera del bucle interno
-  (loop-invariant: `a[i]` no cambia dentro del bucle `k`) — análisis de
-  invariantes en el transpilador; con eso el bucle interno queda en aritmética
-  pura y debería acercarse a Go. Documentado como candidato N6; exige su propia
-  medición y cuidado con el aliasing (si el cuerpo muta `a`/`b`, no aplica).
+- **Nativo**: ✅ **N6 EJECUTADO** (29 jul 2026, PERFORMANCE.md Fase 67). El gap eran los
+  `borrow()` de `RefCell` por elemento (bloqueaban la vectorización): N6a elide el
+  `Rc::clone` del receptor en lecturas indexadas y N6b iza los `borrow()` fuera de los
+  `for` de rango con cuerpo **puro-escalar** (análisis conservador: llamadas, mutación
+  de arreglos, strings o control de flujo lo desactivan — el cuidado con el aliasing
+  que pedía este plan). Medido: nativo **11.24 → 5.72 ms (1.97×)**, byte-idéntico —
+  **#1 de la mesa** (empate estadístico con `rustc -O`, Go 1.35× detrás).
 - Descartado implícito: cambiar la forma del bench (ya es idiomático y paralelo
   al resto de lenguas).
 

@@ -77,9 +77,10 @@ fn main() -> int {
 - **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable, con paridad byte-idéntica (*dev = VM / deploy = nativo*). En el banco poliglota de 14
-  programas (29 jul 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–20×), **a
-  `rustc -O` en cinco** y **a Go en cuatro**, y arranca en **1,80 ms — el más rápido de la mesa**.
-  En tiempo×memoria queda **#2 de 10 lenguajes en 10 de los 12 programas**. Frente a la propia VM:
+  programas (29 jul 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–20×), **a Go
+  en seis** y **a `rustc -O` en cuatro** (empatando con ambos en otros dos), y arranca en
+  **1,80 ms — el más rápido de la mesa**. En tiempo×memoria queda **#1 o #2 en 11 de los 12
+  programas** contra 9 lenguajes. Frente a la propia VM:
   3–4× en cargas de servicio y 28–57× en cómputo puro. Tablas:
   [`benchmarks/poly/README.md`](benchmarks/poly/README.md).
 - **Corre en el navegador.** La VM compilada a WebAssembly, sin `wasm-bindgen`.

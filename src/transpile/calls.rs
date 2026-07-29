@@ -681,6 +681,45 @@ impl Transpiler {
         Ok(())
     }
 
+    /// N-D (fusiones): si `e` es una llamada al BUILTIN `want` (no a una función de usuario que lo
+    /// sombree), devuelve sus argumentos efectivos (receptor UFCS primero). Reconoce las dos formas
+    /// (llamada libre y método) con la MISMA resolución que `emit_call`.
+    pub(super) fn as_builtin_call<'a>(&self, e: &'a Expr, want: &str) -> Option<Vec<&'a Expr>> {
+        let ExprKind::Call { callee, args } = &e.kind else { return None };
+        let (name, recv) = resolve_callee(callee).ok()?;
+        if self.funcs.contains_key(name) {
+            return None; // función de usuario homónima: sin fusión
+        }
+        let method = name.rsplit('#').next().unwrap_or(name).trim_start_matches("__");
+        if method != want {
+            return None;
+        }
+        Some(recv.into_iter().chain(args.iter()).collect())
+    }
+
+    /// N-D1/N-D2: emite el USO fusionado de un `substring(s, a, b)` que solo se consume (parsear,
+    /// buscar) — el camino ASCII trabaja sobre el **slice** `&s[lo..hi]` sin materializar el
+    /// `Rc<str>`; el no-ASCII cae en `__ray_substring` (corte por carácter, como hoy). El closure
+    /// `use_` recibe el TEXTO del receptor `&str` y emite la operación completa sobre él (se emite
+    /// en ambas ramas; en runtime solo corre una). El clamp espeja `__ray_substring` exactamente.
+    fn emit_substring_fused<F>(&mut self, out: &mut String, sub: &[&Expr], mut use_: F) -> Result<(), String>
+    where
+        F: FnMut(&mut Self, &mut String, &str) -> Result<(), String>,
+    {
+        out.push_str("{ let __rt_fs = ");
+        self.emit_expr(out, sub[0])?;
+        out.push_str("; let __rt_fa: i64 = ");
+        self.emit_expr(out, sub[1])?;
+        out.push_str("; let __rt_fb: i64 = ");
+        self.emit_expr(out, sub[2])?;
+        out.push_str("; if __rt_fs.is_ascii() { let __rt_fl = __rt_fs.len() as i64; let __rt_lo = __rt_fa.clamp(0, __rt_fl) as usize; let __rt_hi = __rt_fb.clamp(__rt_lo as i64, __rt_fl) as usize; ");
+        use_(self, out, "&__rt_fs[__rt_lo..__rt_hi]")?;
+        out.push_str(" } else { ");
+        use_(self, out, "&*__ray_substring(&__rt_fs, __rt_fa, __rt_fb)")?;
+        out.push_str(" } }");
+        Ok(())
+    }
+
     pub(super) fn emit_call(&mut self, out: &mut String, callee: &Expr, args: &[Expr]) -> Result<(), String> {
         let (name, recv) = resolve_callee(callee)?;
         // Despacho dinámico (M9.3b): el checker baja `obj.m(a)` a `(r.m)(r.data, a)` con `r: dyn`. Aquí el
@@ -782,9 +821,11 @@ impl Transpiler {
                         out.push_str(").map(|__rx_v| Rc::new(std::cell::RefCell::new(__rx_v)))");
                     }
                     "captures_str" => {
-                        out.push_str("ray_runtime::regex::captures_str(&*__rx_b.pat, &");
+                        // R6: rangos de bytes → los Rc<str> se cortan DIRECTO del texto (un alloc
+                        // por grupo, sin el Vec<Option<String>> intermedio ni su recopia).
+                        out.push_str("{ let __rx_t = ");
                         self.emit_expr(out, eff[1])?;
-                        out.push_str(").map(|__rx_v| Rc::new(std::cell::RefCell::new(__rx_v.into_iter().map(|__rx_o| __rx_o.map(Rc::<str>::from)).collect::<Vec<Option<Rc<str>>>>())))");
+                        out.push_str("; ray_runtime::regex::captures_byte_ranges(&*__rx_b.pat, &__rx_t).map(|__rx_v| Rc::new(std::cell::RefCell::new(__rx_v.into_iter().map(|__rx_o| __rx_o.map(|(__rx_s, __rx_e)| Rc::<str>::from(&__rx_t[__rx_s..__rx_e]))).collect::<Vec<Option<Rc<str>>>>()))) }");
                     }
                     _ => unreachable!("guarded by the matches! above"),
                 }
@@ -974,6 +1015,17 @@ impl Transpiler {
             }
             // index_of(s, sub) -> Option<int>: índice por carácter de la subcadena (helper del preámbulo).
             "index_of" => {
+                // N-D2: `index_of(s.substring(a, b), aguja)` busca sobre el SLICE, sin materializar
+                // la subcadena (`after_name` en el patrón de parsing manual copiaba toda la cola).
+                if let Some(sub) = self.as_builtin_call(eff[0], "substring") {
+                    let needle = eff[1];
+                    return self.emit_substring_fused(out, &sub, |t, out, recv| {
+                        write!(out, "__ray_index_of({}, &*", recv).unwrap();
+                        t.emit_expr(out, needle)?;
+                        out.push(')');
+                        Ok(())
+                    });
+                }
                 out.push_str("__ray_index_of(&*");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &*");
@@ -1079,6 +1131,18 @@ impl Transpiler {
             // D3: formas fusionadas de `<wrapper>(…).unwrap_or(d)` (las genera el checker). En
             // nativo el Option ya era barato, pero la forma fusionada llega como builtin propio.
             "index_of_or" => {
+                // N-D2 sobre la forma D3 (`index_of(sub(…), aguja).unwrap_or(d)` fusionada por el checker).
+                if let Some(sub) = self.as_builtin_call(eff[0], "substring") {
+                    let (needle, default) = (eff[1], eff[2]);
+                    return self.emit_substring_fused(out, &sub, |t, out, recv| {
+                        write!(out, "__ray_index_of({}, &*", recv).unwrap();
+                        t.emit_expr(out, needle)?;
+                        out.push_str(").unwrap_or(");
+                        t.emit_expr(out, default)?;
+                        out.push(')');
+                        Ok(())
+                    });
+                }
                 out.push_str("__ray_index_of(&");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &");
@@ -1088,6 +1152,16 @@ impl Transpiler {
                 out.push(')');
             }
             "parse_int_or" => {
+                // N-D1 sobre la forma D3.
+                if let Some(sub) = self.as_builtin_call(eff[0], "substring") {
+                    let default = eff[1];
+                    return self.emit_substring_fused(out, &sub, |t, out, recv| {
+                        write!(out, "({}).trim().parse::<i64>().unwrap_or(", recv).unwrap();
+                        t.emit_expr(out, default)?;
+                        out.push(')');
+                        Ok(())
+                    });
+                }
                 out.push('(');
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".trim().parse::<i64>().unwrap_or(");
@@ -1269,16 +1343,25 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            // parse_int(s) → Rust Option<i64>; se usa fusionado con `.unwrap_or(d)` (nativo de Option).
+            // parse_int(s) → Rust Option<i64>. Con `.trim()`: la VM trimea (`__parse_int`,
+            // vm/mod.rs) y el nativo no lo hacía — bug de paridad cazado con las fusiones N-D
+            // (`parse_int(" 42 ")`: VM Some(42), nativo None). `parse_int_or` ya trimeaba.
             "parse_int" => {
+                // N-D1: `parse_int(s.substring(a, b))` parsea el SLICE en sitio, sin el Rc<str>.
+                if let Some(sub) = self.as_builtin_call(eff[0], "substring") {
+                    return self.emit_substring_fused(out, &sub, |_, out, recv| {
+                        write!(out, "({}).trim().parse::<i64>().ok()", recv).unwrap();
+                        Ok(())
+                    });
+                }
                 out.push('(');
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".parse::<i64>().ok())");
+                out.push_str(".trim().parse::<i64>().ok())");
             }
             "parse_float" => {
                 out.push('(');
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".parse::<f64>().ok())");
+                out.push_str(".trim().parse::<f64>().ok())");
             }
             // contains ad-hoc: string → subcadena; bytes → subsecuencia; arreglo → pertenencia (==).
             "contains" => match self.type_of(eff[0])? {

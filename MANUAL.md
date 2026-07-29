@@ -1298,8 +1298,8 @@ ray build --native       # transpila a Rust y compila un binario nativo (deploy)
 puede **transpilar a Rust** y compilar a un ejecutable de código máquina — el modelo *dev = VM / deploy =
 nativo*, como el ciclo dev/release de Rust. El binario es **byte-idéntico a la VM** (verificado con
 oráculos) y mucho más rápido: **3–4× la VM** en cargas de servicio y **28–57×** en cómputo puro. En el
-banco poliglota le gana a node en 9 de los 10 programas de cómputo, a `rustc -O` en cinco y a Go en
-cuatro (medido 29 jul 2026; tablas en `benchmarks/poly/README.md`).
+banco poliglota le gana a node en 9 de los 10 programas de cómputo, a Go en seis y a `rustc -O` en
+cuatro, empatando con ambos en otros dos (medido 29 jul 2026; tablas en `benchmarks/poly/README.md`).
 
 ```sh
 ray build --native fib.ray            # → binario './fib' (rustc -O, ~0,2 s, portable)

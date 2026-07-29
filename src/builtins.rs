@@ -2757,12 +2757,27 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
     }
     // stdin: /dev/null por defecto (jamás heredado); con datos, un pipe que se escribe y se cierra.
     cmd.stdin(if opts.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
+    // stdout/stderr: pipes propios. Con `merge_output`, los DOS fds del hijo van al MISMO pipe (un
+    // `dup` del extremo de escritura) → el entrelazado es el REAL del kernel; fusionar en userspace
+    // dos pipes independientes inventa un orden. `std::io::pipe` pone CLOEXEC de forma atómica.
+    let mut merged = None;
+    if opts.merge_output {
+        let (r, w) = std::io::pipe().map_err(|e| format!("{program}: {e}"))?;
+        let w2 = w.try_clone().map_err(|e| format!("{program}: {e}"))?;
+        cmd.stdout(w);
+        cmd.stderr(w2);
+        merged = Some(std::fs::File::from(std::os::fd::OwnedFd::from(r)));
+    } else {
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+    }
     // Grupo propio: la escalera del timeout mata al GRUPO, no solo al hijo directo.
     cmd.process_group(0);
 
     let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    // `Command` RETIENE sus `Stdio` (permite re-spawn): con merge, mantendría vivos los extremos de
+    // escritura y el EOF del pipe fusionado no llegaría jamás. Soltarlo cierra nuestras copias.
+    drop(cmd);
     let pid = child.id() as i32;
     let deadline = if opts.timeout_ms > 0 {
         Some(std::time::Instant::now() + std::time::Duration::from_millis(opts.timeout_ms as u64))
@@ -2779,8 +2794,13 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
         let _ = si.write_all(data);
     } // el drop de `si` cierra el pipe → EOF para el hijo
 
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
+    // Ambos flujos como `File`: la misma lógica de drenaje sirve para stdout, stderr y el pipe
+    // fusionado (con merge, `child.stderr` es None y todo llega por `merged`).
+    let mut out_pipe = match merged {
+        Some(f) => Some(f),
+        None => child.stdout.take().map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p))),
+    };
+    let mut err_pipe = child.stderr.take().map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p)));
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let mut truncated = false;
     let cap = opts.max_output.max(0) as usize;
@@ -2841,7 +2861,7 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
             }
             // Una lectura del flujo elegido. Devuelve (sigue_abierto, se_truncó) para no mantener
             // dos préstamos mutables vivos a la vez (out_pipe/err_pipe son campos distintos).
-            let mut drain = |pipe: &mut Option<std::process::ChildStdout>, sink: &mut Vec<u8>| -> (bool, bool) {
+            let mut drain = |pipe: &mut Option<std::fs::File>, sink: &mut Vec<u8>| -> (bool, bool) {
                 let Some(p) = pipe.as_mut() else { return (false, false) };
                 match p.read(&mut buf) {
                     Ok(0) => (false, false), // EOF: ese extremo cerró
@@ -2863,26 +2883,7 @@ pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, 
             let (open, trunc) = if slot {
                 drain(&mut out_pipe, &mut stdout)
             } else {
-                // El stderr es ChildStderr, no ChildStdout: lectura propia (misma lógica).
-                match err_pipe.as_mut() {
-                    None => (false, false),
-                    Some(p) => match p.read(&mut buf) {
-                        Ok(0) => (false, false),
-                        Ok(k) => {
-                            let room = cap.saturating_sub(stderr.len());
-                            if room == 0 {
-                                (true, true)
-                            } else {
-                                let take = k.min(room);
-                                stderr.extend_from_slice(&buf[..take]);
-                                (true, take < k)
-                            }
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (true, false),
-                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => (true, false),
-                        Err(_) => (false, false),
-                    },
-                }
+                drain(&mut err_pipe, &mut stderr)
             };
             truncated |= trunc;
             if slot { o_open = open; } else { e_open = open; }
@@ -2986,4 +2987,132 @@ unsafe fn fcntl_get(fd: i32) -> i32 {
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 unsafe fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32 {
     unsafe { fcntl_raw(fd, cmd, arg) }
+}
+
+/// M100 fase 1a: los tests del primitivo `run`. Cada uno asevera un invariante del contrato de
+/// IDEAS §53.8; los comandos son deterministas (sh/cat/env) para que sirvan de base al golden.
+#[cfg(all(test, unix, not(target_arch = "wasm32")))]
+mod process_tests {
+    use super::{run, RunOpts};
+
+    fn opts() -> RunOpts {
+        RunOpts {
+            dir: None,
+            env: vec![],
+            env_clear: false,
+            stdin: None,
+            timeout_ms: 0,
+            max_output: 16 * 1024 * 1024,
+            merge_output: false,
+        }
+    }
+
+    fn sh(script: &str) -> Vec<String> {
+        vec!["-c".to_string(), script.to_string()]
+    }
+
+    // Salir con código ≠ 0 NO es Err: el Err queda reservado a "no se pudo lanzar".
+    #[test]
+    fn nonzero_exit_code_is_ok_not_err() {
+        let o = run("sh", &sh("echo hi; exit 3"), &opts()).unwrap();
+        assert_eq!(o.exit, Ok(3));
+        assert_eq!(o.stdout, b"hi\n");
+        assert!(o.stderr.is_empty());
+        assert!(!o.timed_out && !o.truncated);
+    }
+
+    // Muerte por señal = Err(sig) en el enum, jamás el 128+sig aplanado del shell.
+    #[test]
+    fn death_by_signal_reports_the_signal() {
+        let o = run("sh", &sh("kill -TERM $$"), &opts()).unwrap();
+        assert_eq!(o.exit, Err(15));
+    }
+
+    // ENOENT sí es Err: el hijo nunca llegó a existir.
+    #[test]
+    fn spawn_failure_is_err() {
+        assert!(run("raylang-no-such-binary-m100", &[], &opts()).is_err());
+    }
+
+    // stdin se escribe entero y SE CIERRA: `cat` termina por EOF, no se queda colgado.
+    #[test]
+    fn stdin_is_written_and_closed() {
+        let mut o = opts();
+        o.stdin = Some(b"a\nb\n".to_vec());
+        let out = run("cat", &[], &o).unwrap();
+        assert_eq!(out.exit, Ok(0));
+        assert_eq!(out.stdout, b"a\nb\n");
+    }
+
+    // Sin `.stdin(…)`, el hijo ve /dev/null: EOF inmediato, nunca el stdin del padre.
+    #[test]
+    fn default_stdin_is_dev_null() {
+        let o = run("cat", &[], &opts()).unwrap();
+        assert_eq!(o.exit, Ok(0));
+        assert!(o.stdout.is_empty());
+    }
+
+    // Ambos flujos por ENCIMA del buffer del pipe (64 KB): sin drenaje concurrente esto es el
+    // deadlock clásico de Go `cmd.Wait`/Python `Popen.wait`. Aquí es imposible por construcción.
+    #[test]
+    fn both_streams_drain_concurrently_past_pipe_capacity() {
+        let o = run("sh", &sh("yes | head -c 200000; yes | head -c 200000 >&2"), &opts()).unwrap();
+        assert_eq!(o.stdout.len(), 200_000);
+        assert_eq!(o.stderr.len(), 200_000);
+        assert!(!o.truncated);
+    }
+
+    // Tope de captura: se trunca al PREFIJO y se DICE; el hijo termina normal (nada de matarlo).
+    #[test]
+    fn max_output_truncates_and_says_so() {
+        let mut o = opts();
+        o.max_output = 10;
+        let out = run("sh", &sh("yes | head -c 1000"), &o).unwrap();
+        assert_eq!(out.exit, Ok(0));
+        assert_eq!(out.stdout.len(), 10);
+        assert!(out.truncated);
+    }
+
+    // Timeout NO es Err: Output PARCIAL con timed_out, y la escalera mata al GRUPO (el `sleep`
+    // en segundo plano es el nieto: si solo muriera el sh directo, este test dejaría huérfanos).
+    #[test]
+    fn timeout_returns_partial_output_and_kills_the_group() {
+        let mut o = opts();
+        o.timeout_ms = 200;
+        let out = run("sh", &sh("echo partial; sleep 30 & wait"), &o).unwrap();
+        assert!(out.timed_out);
+        assert_eq!(out.stdout, b"partial\n");
+        assert!(matches!(out.exit, Err(_)), "the ladder ends in a signal, got {:?}", out.exit);
+    }
+
+    // dir + env: el hijo ve el directorio pedido y la variable añadida sobre el entorno heredado.
+    #[test]
+    fn dir_and_env_are_applied() {
+        let mut o = opts();
+        o.dir = Some("/".to_string());
+        o.env = vec![("RAY_TEST_VAR".to_string(), "v1".to_string())];
+        let out = run("sh", &sh("printf '%s %s' \"$RAY_TEST_VAR\" \"$PWD\""), &o).unwrap();
+        assert_eq!(out.stdout, b"v1 /");
+    }
+
+    // env_clear: el entorno heredado se vacía; `env` imprime EXACTAMENTE lo que pusimos.
+    #[test]
+    fn env_clear_empties_the_inherited_environment() {
+        let mut o = opts();
+        o.env_clear = true;
+        o.env = vec![("ONLY_VAR".to_string(), "x".to_string())];
+        let out = run("env", &[], &o).unwrap();
+        assert_eq!(out.stdout, b"ONLY_VAR=x\n");
+    }
+
+    // merge_output: un solo pipe (dup) → el entrelazado stdout/stderr es el REAL del kernel.
+    #[test]
+    fn merge_output_preserves_kernel_order() {
+        let mut o = opts();
+        o.merge_output = true;
+        let out = run("sh", &sh("echo one; echo two >&2; echo three"), &o).unwrap();
+        assert_eq!(out.exit, Ok(0));
+        assert_eq!(out.stdout, b"one\ntwo\nthree\n");
+        assert!(out.stderr.is_empty());
+    }
 }

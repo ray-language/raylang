@@ -2551,6 +2551,15 @@ static BUILTINS: &[Builtin] = &[
         if a[7] != Type::Bool { return Err((Some(7), format!("__proc_spawn expects a bool (merge_output), not {}", a[7]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // __proc_read(h) -> [bytes] (M100 v2): una lectura del pipe del hijo — [b"ok", datos] (vacío =
+    // EOF) o [b"err", msg]. REUSA el opcode SocketReadBytes (la VM ya sabe leer un handle Pipe y
+    // aparcar la fibra); el nombre propio existe para que el NATIVO emita su lector de pipes
+    // (__ray_proc_read) sin pasar por la ruta de sockets.
+    Builtin { name: "__proc_read", opcode: OpCode::SocketReadBytes, check: |a| {
+        arity(a, 1, "__proc_read", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__proc_read expects an int (the pipe handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
     // __proc_try_wait(h) -> [bytes] (M100 v2): ["running"] | ["code"|"signal", n] | ["err", msg].
     Builtin { name: "__proc_try_wait", opcode: OpCode::ProcTryWait, check: |a| {
         arity(a, 1, "__proc_try_wait", "")?;

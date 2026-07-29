@@ -1313,7 +1313,9 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M16.1c: lee del socket como bytes (bloqueante en el intérprete) → [b"ok", datos]/[b"err", msg].
-            "__socket_read_bytes" => {
+            // M100 v2: `__proc_read` es un alias con opcode compartido — el mismo camino lee un
+            // socket o el pipe de un proceso hijo (la variante bloqueante ya distingue el Pipe).
+            "__socket_read_bytes" | "__proc_read" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::socket_read_bytes_blocking(*h) {
                         Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],

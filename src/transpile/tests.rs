@@ -45,14 +45,14 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__try_call",
     // M100: `__run` (procesos del SO, IDEAS §53.8) → `__ray_run` (ray_runtime::process, fase 1b).
     "__run",
-    // M100 v2: los primitivos del streaming (IDEAS §53.9). Nativo: fase 2c (hoy stubbeados).
-    "__proc_spawn", "__proc_try_wait", "__proc_kill",
+    // M100 v2: los primitivos del streaming (IDEAS §53.9) → helpers __ray_proc_* (fase 2c).
+    "__proc_spawn", "__proc_read", "__proc_try_wait", "__proc_kill",
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que
-/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Ocupada solo
-/// mientras un arco está a medias: hoy, los primitivos del streaming de M100 v2 esperan su fase 2c.
-const NATIVE_STUBBED_BUILTINS: &[&str] = &["__proc_spawn", "__proc_try_wait", "__proc_kill"];
+/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Vacío desde
+/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1).
+const NATIVE_STUBBED_BUILTINS: &[&str] = &[];
 
 use super::transpile;
 

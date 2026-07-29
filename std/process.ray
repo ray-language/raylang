@@ -226,7 +226,7 @@ impl ProcOps for Proc {
 fn pump(h: int, ch: Channel<bytes>) {
     var going = true;
     while (going) {
-        let r = __socket_read_bytes(h);
+        let r = __proc_read(h);
         if (r[0] == b"ok") {
             if (r[1].len() == 0) {
                 going = false;

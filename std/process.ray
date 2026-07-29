@@ -1,14 +1,16 @@
-// std/process — ejecución de procesos del SO (M100, IDEAS §53.8).
+// std/process — ejecución de procesos del SO (M100, IDEAS §53.8/§53.9).
 //
-// La superficie EXACTA de la v1 del contrato: `run` (el caso del 90 %) y `cmd` (el builder), nada
-// más (`stream` llega en v2). Ambos delegan en el primitivo `__run` (arreglo etiquetado `[bytes]`)
-// y este módulo solo decodifica a la forma tipada. Los invariantes los garantiza el primitivo:
-// sin shell (argv tipado), stdin = /dev/null salvo `.stdin(…)` (que escribe y CIERRA), drenaje
-// concurrente de ambos pipes (el deadlock clásico es imposible), timeout como DATO (`timed_out`
-// con el Output parcial, escalera SIGTERM→SIGKILL al GRUPO), tope de captura con `truncated`.
+// La superficie del contrato: `run` (el caso del 90 %), `cmd` (el builder) y `stream` (v2: la
+// salida del hijo por CANALES acotados, leída mientras corre). run/cmd delegan en el primitivo
+// `__run`; stream en `__proc_spawn` + las BOMBAS de este módulo (una fibra por flujo que lee el
+// pipe y publica en el canal). Los invariantes los garantiza el primitivo: sin shell (argv
+// tipado), stdin = /dev/null salvo `.stdin(…)` (que escribe y CIERRA), drenaje concurrente (v1)
+// o contrapresión por canal acotado (v2), timeout como DATO en run, `Exit` sin 128+sig.
 //
 // Los campos del builder llevan nombres distintos de sus métodos a propósito: el UFCS resuelve
 // campo → método → función libre, y un campo `dir` taparía al método `dir`.
+
+import std/time;
 
 /// How the child process terminated: a normal exit with its code, or death by a signal
 /// (never the shell's flattened `128 + signal`).
@@ -88,10 +90,16 @@ pub trait CmdOps {
     /// Capture cap per stream, in bytes (default ~16 MB). Exceeding it sets `truncated`.
     fn max_output(self, cap: int) -> Cmd;
     /// Sends stderr to the SAME pipe as stdout: the interleaving is the kernel's real order
-    /// (`stderr` comes back empty).
+    /// (`stderr` comes back empty; with `stream`, everything arrives on `Proc.out`).
     fn merge_output(self) -> Cmd;
     /// Launches the command. Same promises as `process.run`.
     fn run(self) -> Result<Output, string>;
+    /// Launches the command in STREAMING mode: the child's output arrives on `Proc.out`/`Proc.err`
+    /// (bounded channels) WHILE it runs. Backpressure is built in: if you stop receiving, the
+    /// channel fills, the pump stops reading, the OS pipe fills, and the child blocks on write.
+    /// `timeout_ms`/`max_output` do NOT apply here (compose a deadline + `kill` yourself; the
+    /// bounded channel IS the cap). VM and native binaries only (like all spawn/channel code).
+    fn stream(self) -> Result<Proc, string>;
 }
 
 impl CmdOps for Cmd {
@@ -136,21 +144,126 @@ impl CmdOps for Cmd {
         decode(__run(self.program, self.arg_list, self.work_dir, self.env_pairs, self.clear_env,
                      self.stdin_data, self.use_stdin, self.timeout, self.output_cap, self.merge))
     }
+
+    fn stream(self) -> Result<Proc, string> {
+        let r = __proc_spawn(self.program, self.arg_list, self.work_dir, self.env_pairs,
+                             self.clear_env, self.stdin_data, self.use_stdin, self.merge);
+        if (r[0] == b"err") {
+            return Result.Err(text_of(r[1]));
+        }
+        let h_child = int_of(r[1]);
+        let h_out = int_of(r[2]);
+        let h_err = int_of(r[3]);
+        // Canales ACOTADOS: la capacidad (8 trozos de hasta 64 KB) es el máximo en vuelo por
+        // flujo; el resto de la contrapresión la pone el kernel (el pipe lleno bloquea al hijo).
+        let out: Channel<bytes> = Channel.bounded(8);
+        let err: Channel<bytes> = Channel.bounded(8);
+        spawn(fn() { pump(h_out, out); });
+        if (h_err > 0) {
+            spawn(fn() { pump(h_err, err); });
+        } else {
+            // merge_output: no hay pipe de stderr; el canal nace cerrado (recv da None).
+            close(err);
+        }
+        Result.Ok(Proc { out: out, err: err, child: h_child })
+    }
+}
+
+/// A child process in streaming mode. Receive its output from `out`/`err` (`recv` yields
+/// `Option.Some(bytes)` per chunk, `Option.None` when that stream ends), then call `wait()`.
+/// The pumps run as tasks of YOUR scope: a `scope` does not finish while they are alive.
+pub struct Proc {
+    out: Channel<bytes>,
+    err: Channel<bytes>,
+    child: int,
+}
+
+/// The operations of a streaming process, in method-call style.
+pub trait ProcOps {
+    /// Waits for the child to exit and reaps it; returns how it terminated. Call it once, after
+    /// draining `out`/`err` (their end means the child is done or about to be). Calling `wait`
+    /// twice panics (the process was already reaped).
+    fn wait(self) -> Exit;
+    /// Sends SIGTERM (or SIGKILL with `force`) to the child's process GROUP — grandchildren
+    /// included. A no-op after `wait` (never a signal to a recycled pid).
+    fn kill(self, force: bool);
+}
+
+impl ProcOps for Proc {
+    fn wait(self) -> Exit {
+        var result = Exit.Code(0);
+        var waiting = true;
+        while (waiting) {
+            let w = __proc_try_wait(self.child);
+            if (w[0] == b"running") {
+                // Cesión cooperativa: en el camino feliz (tras drenar los canales) no se itera —
+                // el EOF de los pipes significa que el hijo ya salió o está a un tick.
+                time.sleep(2);
+            } else {
+                if (w[0] == b"code") {
+                    result = Exit.Code(int_of(w[1]));
+                } else {
+                    if (w[0] == b"signal") {
+                        result = Exit.Signal(int_of(w[1]));
+                    } else {
+                        panic("process.wait: " + text_of(w[1]));
+                    }
+                }
+                waiting = false;
+            }
+        }
+        result
+    }
+
+    fn kill(self, force: bool) {
+        __proc_kill(self.child, force);
+    }
+}
+
+// La BOMBA (una por flujo): lee el pipe —la lectura APARCA la fibra hasta datos o EOF— y publica
+// cada trozo en el canal —el send sobre canal acotado lleno APARCA hasta que el consumidor
+// reciba—. En EOF o error cierra pipe y canal: el fin del canal ES la señal de fin del flujo.
+fn pump(h: int, ch: Channel<bytes>) {
+    var going = true;
+    while (going) {
+        let r = __socket_read_bytes(h);
+        if (r[0] == b"ok") {
+            if (r[1].len() == 0) {
+                going = false;
+            } else {
+                send(ch, r[1]);
+            }
+        } else {
+            going = false;
+        }
+    }
+    let _ = close(h);
+    close(ch);
+}
+
+// El entero decimal de unos bytes ASCII del primitivo (0 si no decodifica: no ocurre en la práctica).
+fn int_of(b: bytes) -> int {
+    match (from_utf8(b)) {
+        Result.Ok(s) => parse_int(s).unwrap_or(0),
+        Result.Err(e) => 0,
+    }
+}
+
+// El texto de unos bytes del primitivo (mensajes de error; UTF-8 garantizado en la práctica).
+fn text_of(b: bytes) -> string {
+    match (from_utf8(b)) {
+        Result.Ok(s) => s,
+        Result.Err(e) => "process error",
+    }
 }
 
 // Decodifica el arreglo etiquetado del primitivo (ver `run_encoded` en el runtime):
 // [b"ok", b"code"|b"signal", valor, timed_out, truncated, stdout, stderr] o [b"err", msg].
 fn decode(r: [bytes]) -> Result<Output, string> {
     if (r[0] == b"err") {
-        match (from_utf8(r[1])) {
-            Result.Ok(m) => Result.Err(m),
-            Result.Err(e) => Result.Err("process error"),
-        }
+        Result.Err(text_of(r[1]))
     } else {
-        let value = match (from_utf8(r[2])) {
-            Result.Ok(s) => parse_int(s).unwrap_or(0),
-            Result.Err(e) => 0,
-        };
+        let value = int_of(r[2]);
         let exit = if (r[1] == b"code") { Exit.Code(value) } else { Exit.Signal(value) };
         Result.Ok(Output {
             exit: exit,

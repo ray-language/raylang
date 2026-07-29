@@ -52,6 +52,11 @@ pub(super) struct TryMarker {
 /// fibra. Al cerrarse (`ScopeEnd`), el scope une a todas (las espera) y propaga el primer fallo.
 pub(super) struct ScopeFrame {
     pub(super) children: Vec<Handle>,
+    /// M100 fase 2e: los procesos del SO lanzados con `stream()` bajo este scope (handles `Child`
+    /// del registro). Al cancelarse la fibra o cerrarse el scope, los que sigan sin cosechar se
+    /// matan (KILL al grupo) y cosechan — la eliminación del registro en `__proc_try_wait` es el
+    /// desatado natural (un handle ya esperado convierte el gancho en no-op).
+    pub(super) procs: Vec<i64>,
 }
 
 /// Qué espera una fibra **bloqueada** (el handle por el que espera va en `Parked.on`):
@@ -450,6 +455,10 @@ impl<'a> Vm<'a> {
                 .iter()
                 .flat_map(|s| s.children.iter().copied())
                 .collect();
+            // 2e: los procesos del SO de los scopes descartados se matan y cosechan aquí mismo.
+            for s in &self.cur.scopes[m.scopes_len..] {
+                for &h in &s.procs { crate::builtins::proc_kill_and_reap(h); }
+            }
             self.cur.scopes.truncate(m.scopes_len);
             if !orphans.is_empty() {
                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -488,6 +497,10 @@ impl<'a> Vm<'a> {
             let orphans: Vec<usize> = self.cur.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
             for c in orphans {
                 Self::cancel_task(&mut sh, c);
+            }
+            // 2e: ídem con los procesos del SO de los scopes de la fibra que falló.
+            for s in &self.cur.scopes {
+                for &h in &s.procs { crate::builtins::proc_kill_and_reap(h); }
             }
             sh.running -= 1; // esta fibra terminó (con fallo) → este worker queda ocioso
         }
@@ -689,17 +702,22 @@ impl<'a> Vm<'a> {
             let f = shared.ready.remove(pos).unwrap();
             for s in &f.scopes {
                 grandchildren.extend(s.children.iter().copied());
+                // 2e: la fibra muere sin ejecutar nada más → sus procesos del SO no pueden quedar
+                // vivos sin dueño (el registro es hoja: el lock de Shared nunca reentra por aquí).
+                for &h in &s.procs { crate::builtins::proc_kill_and_reap(h); }
             }
         } else if let Some(pos) = shared.parked.iter().position(|p| p.fiber.task == Some(task)) {
             let p = shared.parked.remove(pos);
             for s in &p.fiber.scopes {
                 grandchildren.extend(s.children.iter().copied());
+                for &h in &s.procs { crate::builtins::proc_kill_and_reap(h); }
             }
         } else if let Some(pos) = shared.io_parked.iter().position(|p| p.fiber.task == Some(task)) {
             // M15.5: la fibra cancelada podría estar esperando E/S de red.
             let p = shared.io_parked.remove(pos);
             for s in &p.fiber.scopes {
                 grandchildren.extend(s.children.iter().copied());
+                for &h in &s.procs { crate::builtins::proc_kill_and_reap(h); }
             }
         }
         for g in grandchildren {

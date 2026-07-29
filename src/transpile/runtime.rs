@@ -706,6 +706,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            let h_child = __ray_reg_insert(__RayHandle::Child(s.child));\n",
             "            let h_out = s.out.map_or(-1, |f| __ray_reg_insert(__RayHandle::Pipe(std::sync::Arc::new(f))));\n",
             "            let h_err = s.err.map_or(-1, |f| __ray_reg_insert(__RayHandle::Pipe(std::sync::Arc::new(f))));\n",
+            "            __ray_proc_bind(h_child);\n",
             "            __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(h_child.to_string().as_bytes()), Rc::<[u8]>::from(h_out.to_string().as_bytes()), Rc::<[u8]>::from(h_err.to_string().as_bytes())])\n",
             "        }\n",
             "        Err(e) => __ray_proc_err(e) } }\n",
@@ -726,6 +727,38 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get(&h) { Some(__RayHandle::Pipe(f)) => Some(std::sync::Arc::clone(f)), _ => None } }\n",
         ));
+        // M100 fase 2e: la cosecha ESTRUCTURAL. Un proceso lanzado con stream() se ATA al scope
+        // activo como un hijo más — vía el MISMO trait __RayScopeChild que las tareas: done()
+        // siempre-true (el scope no espera al proceso: espera a las bombas), cancel_task() (una
+        // hermana falló) y consume() (cierre con éxito: un proceso sin wait() no sobrevive al
+        // scope) hacen KILL al grupo + cosecha + baja del registro — no-op si ya fue esperado
+        // (la eliminación del registro en try_wait ES el desatado). Sin concurrencia emitida no
+        // hay scopes: el bind es un no-op.
+        if t.needs_concurrency {
+            out.push_str(concat!(
+                "fn __ray_proc_kill_reap(h: i64) {\n",
+                "    let mut reg = __ray_reg().lock().unwrap();\n",
+                "    if let Some(__RayHandle::Child(child)) = reg.open.get_mut(&h) {\n",
+                "        ray_runtime::process::kill_group(child.id() as i32, true);\n",
+                "        let _ = child.wait();\n",
+                "        reg.open.remove(&h);\n",
+                "    } }\n",
+                "struct __RayProcChild(i64);\n",
+                "impl __RayScopeChild for __RayProcChild {\n",
+                "    fn failed(&self) -> Option<String> { None }\n",
+                "    fn done(&self) -> bool { true }\n",
+                "    fn cancel_task(&self) { __ray_proc_kill_reap(self.0); }\n",
+                "    fn consume(&self) { __ray_proc_kill_reap(self.0); }\n",
+                "}\n",
+            ));
+            if t.fibers {
+                out.push_str("fn __ray_proc_bind(h: i64) { __ray_ctx(|c| { if let Some(fr) = c.scopes.last_mut() { fr.push(std::boxed::Box::new(__RayProcChild(h))); } }); }\n");
+            } else {
+                out.push_str("fn __ray_proc_bind(h: i64) { __SCOPES.with(|s| { if let Some(fr) = s.borrow_mut().last_mut() { fr.push(std::boxed::Box::new(__RayProcChild(h))); } }); }\n");
+            }
+        } else {
+            out.push_str("fn __ray_proc_bind(_h: i64) {}\n");
+        }
         // La lectura de la BOMBA: no-bloqueante; con fibras aparca la fibra en el fd (préstamo del
         // búfer fuera de la cesión); sin fibras (hilo-por-tarea) reintenta cediendo 1 ms, como el
         // intérprete. Búfer por HILO propio (el __RAY_RDBUF de la red no siempre se emite); tags y

@@ -1984,9 +1984,9 @@ intérprete≡VM≡nativo (comandos deterministas: `sh -c 'echo hi; exit 3'`, mu
 entre productos; `Proc` como hijo de scope · **(3)** menores: `env_clear`, Windows honesto,
 rlimits si alguien los pide.
 
-### 53.9 DISEÑO de la v2 (streaming), fijado 29 jul 2026 — **EJECUTADA** (fases 2a–2d, mismo día;
-crónica en DESIGN §89; queda 2e —cancelación estructural con kill al grupo— como pendiente
-consciente)
+### 53.9 DISEÑO de la v2 (streaming), fijado 29 jul 2026 — **EJECUTADA COMPLETA** (fases 2a–2e,
+29 jul; crónica en DESIGN §89 — la 2e resultó NO invasiva: kill-list en ScopeFrame en la VM y el
+trait __RayScopeChild reutilizado en el nativo)
 
 La superficie ya estaba en el contrato (§53.8): `Cmd.stream() -> Proc` con
 `Proc { out: Channel<bytes>, err: Channel<bytes> }` y `Proc.wait() -> Exit`; canal ACOTADO =

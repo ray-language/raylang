@@ -2730,16 +2730,14 @@ pub fn run_encoded(program: &str, _args: &[String], _opts: &RunOpts) -> Vec<Vec<
 // `ray_runtime::process::spawn_streamed/try_wait/kill_group` y los handles que ven los dos motores
 // del binario `ray`. El gemelo del nativo se emite en el preámbulo (fase 2c).
 
-/// Lanza el hijo en modo streaming y lo registra: `[b"ok", h_child, h_out, h_err]` (`h_err = -1`
-/// con merge: todo llega por `h_out`) o `[b"err", msg]`. Los pipes quedan como handles `Pipe`
-/// no-bloqueantes: las bombas de `std/process` los leen con `__socket_read_bytes` (aparcan la
-/// fibra) y los cierran con `close(h)`.
+/// Lanza el hijo en modo streaming y lo registra: `Ok((h_child, h_out, h_err))` (`h_err = -1` con
+/// merge: todo llega por `h_out`) o `Err(msg)`. Los pipes quedan como handles `Pipe`
+/// no-bloqueantes: las bombas de `std/process` los leen con `__proc_read` (aparcan la fibra) y los
+/// cierran con `close(h)`. La VM usa esta variante cruda para además ATAR `h_child` al scope
+/// activo (fase 2e); el intérprete usa la codificada.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-pub fn proc_spawn_encoded(program: &str, args: &[String], opts: &RunOpts) -> Vec<Vec<u8>> {
-    let s = match ray_runtime::process::spawn_streamed(program, args, opts) {
-        Ok(s) => s,
-        Err(e) => return vec![b"err".to_vec(), e.into_bytes()],
-    };
+pub fn proc_spawn_handles(program: &str, args: &[String], opts: &RunOpts) -> Result<(i64, i64, i64), String> {
+    let s = ray_runtime::process::spawn_streamed(program, args, opts)?;
     let mut reg = registry().lock().unwrap();
     let put = |reg: &mut FileRegistry, h: OpenHandle| -> i64 {
         let id = reg.next;
@@ -2750,13 +2748,43 @@ pub fn proc_spawn_encoded(program: &str, args: &[String], opts: &RunOpts) -> Vec
     let h_child = put(&mut reg, OpenHandle::Child(s.child));
     let h_out = s.out.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
     let h_err = s.err.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
-    vec![
-        b"ok".to_vec(),
-        h_child.to_string().into_bytes(),
-        h_out.to_string().into_bytes(),
-        h_err.to_string().into_bytes(),
-    ]
+    Ok((h_child, h_out, h_err))
 }
+
+/// El resultado de `proc_spawn_handles`, aplanado al arreglo etiquetado del builtin `__proc_spawn`:
+/// `[b"ok", h_child, h_out, h_err]` o `[b"err", msg]`.
+pub fn proc_spawn_encode(r: Result<(i64, i64, i64), String>) -> Vec<Vec<u8>> {
+    match r {
+        Ok((h_child, h_out, h_err)) => vec![
+            b"ok".to_vec(),
+            h_child.to_string().into_bytes(),
+            h_out.to_string().into_bytes(),
+            h_err.to_string().into_bytes(),
+        ],
+        Err(e) => vec![b"err".to_vec(), e.into_bytes()],
+    }
+}
+
+/// Spawn + codificación en un paso (el camino del intérprete, que no tiene scopes que atar).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn proc_spawn_encoded(program: &str, args: &[String], opts: &RunOpts) -> Vec<Vec<u8>> {
+    proc_spawn_encode(proc_spawn_handles(program, args, opts))
+}
+
+/// Cosecha ESTRUCTURAL (fase 2e): `SIGKILL` al GRUPO del hijo del handle + `wait` (tras el KILL
+/// retorna enseguida) + eliminación del registro. Total e idempotente: un handle ya cosechado por
+/// `__proc_try_wait` es un no-op — el registro ES el desatado. La llaman los ganchos de
+/// cancelación/cierre de scope de la VM y el `__RayScopeChild` del nativo.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn proc_kill_and_reap(h: i64) {
+    let mut reg = registry().lock().unwrap();
+    let Some(OpenHandle::Child(child)) = reg.open.get_mut(&h) else { return };
+    ray_runtime::process::kill_group(child.id() as i32, true);
+    let _ = child.wait();
+    reg.open.remove(&h);
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn proc_kill_and_reap(_h: i64) {}
 
 /// `waitpid(WNOHANG)` del hijo del handle: `[b"running"]`, `[b"code", n]` / `[b"signal", n]`
 /// (cosechado — y el handle se ELIMINA bajo el mismo lock: un `__proc_kill` posterior es no-op,

@@ -8702,8 +8702,21 @@ señala a un pid reciclado) + builtins `__proc_spawn`/`__proc_read` (reusa el op
 canal acotado ES el tope; el plazo lo compone el llamador con deadline + `kill`). Golden:
 `examples/stdlib/process_stream.ray` clavado por `tests/process_cli.rs` (VM) y el corpus nativo;
 verificado byte-idéntico VM≡nativo-fibras≡nativo-hilos, con el intérprete rechazándolo con su
-error limpio de concurrencia. Pendiente consciente (fase 2e, si el gancho no es invasivo): la
-cancelación estructural que además MATE al grupo del hijo cuando una hermana falla — hoy las
-bombas se cancelan (son Tasks) pero el proceso sigue hasta que alguien lo cosecha o el programa
-muere. `run()` de la v1 sigue bloqueando el worker (su aparcado sería reescribirlo sobre las
-bombas; se evaluará tras medir el streaming en uso real).
+error limpio de concurrencia.
+
+**Fase 2e (EJECUTADA, 29 jul 2026): la cosecha estructural.** El proceso es HIJO DE SCOPE de
+verdad: en la VM, `ScopeFrame` gana una kill-list (`procs: Vec<i64>`) que `__proc_spawn` alimenta
+y que se ejecuta (KILL al grupo + wait + baja del registro, vía `proc_kill_and_reap`) en TODOS los
+puntos donde un scope o su fibra mueren — `cancel_task` (las tres colas), `ScopeEnd` (fallo Y
+éxito: un proceso sin `wait()` no sobrevive a su scope), `fail_current_fiber` y
+`unwind_to_try_marker`; en el nativo, un wrapper `__RayProcChild` implementa el MISMO trait
+`__RayScopeChild` que las tareas (`done()` siempre-true — el scope espera a las bombas, no al
+proceso; `cancel_task()`/`consume()` = kill+reap) y se empuja al frame como una hija más — cero
+cambios en la forma del frame ni en `__ray_scope`. El desatado es la eliminación del registro en
+`try_wait`: un proceso ya esperado convierte todos los ganchos en no-op (y jamás se señala a un
+pid reciclado). Fuera de un `scope` no hay atadura (como un `spawn` de nivel superior). Test:
+hermana que falla → marker nunca escrito; hijo demonizado (pipes cerrados, scope con éxito) →
+ídem; VM y nativo (tests/process_cli.rs).
+
+Pendiente consciente: `run()` de la v1 sigue bloqueando el worker (su aparcado sería reescribirlo
+sobre las bombas; se evaluará tras medir el streaming en uso real).

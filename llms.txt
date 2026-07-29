@@ -170,7 +170,9 @@ boundaries are not deterministic — accumulate before comparing). Backpressure 
 built in (stop receiving → channel fills → child blocks on write), so `stream()` has
 NO `timeout_ms`/`max_output`. Then `p.wait() -> process.Exit` (call once, after
 draining) and `p.kill(force)` (signal to the process GROUP; no-op after wait). With
-`.merge_output()`, everything arrives on `out` and `err` starts closed.
+`.merge_output()`, everything arrives on `out` and `err` starts closed. Inside a
+`scope`, the process is a scope child: a failing sibling kills+reaps its process
+group, and a never-`wait()`ed process is killed+reaped on scope exit.
 
 Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
 for HTTP (because `get` belongs to Map); `bytes_of([int])` vs `to_bytes(string)`;

@@ -171,7 +171,10 @@ impl CmdOps for Cmd {
 
 /// A child process in streaming mode. Receive its output from `out`/`err` (`recv` yields
 /// `Option.Some(bytes)` per chunk, `Option.None` when that stream ends), then call `wait()`.
-/// The pumps run as tasks of YOUR scope: a `scope` does not finish while they are alive.
+/// The process is a SCOPE CHILD, like a task: the pumps keep the scope alive while the streams
+/// are open, a failing sibling kills the child's process GROUP (and reaps it), and a process you
+/// never `wait()`ed does not survive its scope (killed and reaped on scope exit). Outside any
+/// `scope`, none of that applies — you own the lifecycle via `wait`/`kill`.
 pub struct Proc {
     out: Channel<bytes>,
     err: Channel<bytes>,

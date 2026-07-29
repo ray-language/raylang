@@ -917,6 +917,10 @@ fn main() -> int {
 - `p.kill(force)` manda `SIGTERM` (o `SIGKILL` con `force`) al **grupo** del hijo; tras `wait()`
   es un no-op (jamás una señal a un pid reciclado). `wait()` se llama una vez, tras drenar.
 - Con `.merge_output()`, todo llega por `p.out` y `p.err` nace cerrado.
+- El proceso es **hijo del scope**, como una tarea: si una hermana falla, el grupo del hijo se
+  mata y cosecha con la cancelación; y un proceso al que nunca llamaste `wait()` **no sobrevive a
+  su scope** (se mata y cosecha al salir). Fuera de un `scope`, el ciclo de vida es tuyo
+  (`wait`/`kill`).
 - Solo **VM y binario nativo** (usa fibras y canales, como todo `spawn`); el intérprete lo
   rechaza con su error de concurrencia.
 

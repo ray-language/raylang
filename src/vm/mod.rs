@@ -1302,7 +1302,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::ScopeBegin => {
                     // Abre un scope (M12.3): las tareas spawneadas mientras esté activo se le adscriben.
-                    self.cur.scopes.push(ScopeFrame { children: Vec::new() });
+                    self.cur.scopes.push(ScopeFrame { children: Vec::new(), procs: Vec::new() });
                 }
                 OpCode::ScopeEnd => {
                     // Cierra el scope: el valor del cuerpo (R) ya está en la pila.
@@ -1328,6 +1328,11 @@ impl<'a> Vm<'a> {
                         for &c in &children {
                             sh.take_task(c);
                         }
+                        // 2e: el fallo del scope arrastra también a sus procesos del SO (KILL al
+                        // grupo + cosecha; no-op sobre los ya esperados).
+                        if let Some(scope) = self.cur.scopes.last() {
+                            for &h in &scope.procs { crate::builtins::proc_kill_and_reap(h); }
+                        }
                         drop(sh);
                         self.cur.scopes.pop();
                         return Err(runtime_error(pos!().0, pos!().1, &msg));
@@ -1350,6 +1355,12 @@ impl<'a> Vm<'a> {
                         // escapó del scope da el error TASK_CONSUMED (las hijas no sobreviven al scope).
                         for &c in &children {
                             sh.take_task(c);
+                        }
+                        // 2e: como con las tareas, los procesos del SO no sobreviven al scope: uno
+                        // sin `wait()` (p. ej. demonizado, con sus pipes ya cerrados) se mata y
+                        // cosecha aquí. El camino normal (wait() dentro del scope) es no-op.
+                        if let Some(scope) = self.cur.scopes.last() {
+                            for &h in &scope.procs { crate::builtins::proc_kill_and_reap(h); }
                         }
                         drop(sh);
                         self.cur.scopes.pop();
@@ -2246,7 +2257,14 @@ impl<'a> Vm<'a> {
                     let opts = crate::builtins::run_opts_from_flat(
                         &dir, as_strings(self, eh), env_clear, &stdin, has_stdin, 0, 0, merge_output,
                     );
-                    let elems = crate::builtins::proc_spawn_encoded(&program, &as_strings(self, ah), &opts)
+                    let spawned = crate::builtins::proc_spawn_handles(&program, &as_strings(self, ah), &opts);
+                    // 2e: el hijo se ATA al scope activo (como Spawn ata las tareas): si el scope
+                    // falla o se cierra sin `wait()`, el gancho lo mata y cosecha. Sin scope activo
+                    // (nivel superior de main) no hay atadura — como un spawn de nivel superior.
+                    if let (Ok((h_child, _, _)), Some(scope)) = (&spawned, self.cur.scopes.last_mut()) {
+                        scope.procs.push(*h_child);
+                    }
+                    let elems = crate::builtins::proc_spawn_encode(spawned)
                         .into_iter().map(HeapValue::Bytes).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));

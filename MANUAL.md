@@ -871,6 +871,49 @@ Detalles que evitan los errores clásicos de otras plataformas:
   en que el hijo escribió (fusionar después inventa un orden); `stderr` vuelve vacío.
 - Solo Unix (macOS/Linux); en Windows devuelve un `Err` honesto de plataforma.
 
+**Streaming** (`.stream()`): para consumir la salida MIENTRAS el hijo corre (logs largos, un
+`tail -f`, un proceso que no termina), en vez de esperar el `Output` final. Devuelve un `Proc`
+con dos canales acotados (`out`/`err`, trozos `bytes`; su cierre marca el fin del flujo) y
+`wait()`/`kill(force)`:
+
+```rust
+import std/process;
+
+fn main() -> int {
+    let p = match (process.cmd("sh", ["-c", "echo uno; echo dos"]).stream()) {
+        Result.Ok(p) => p,
+        Result.Err(e) => { print("no se pudo lanzar: ${e}"); return 1; },
+    };
+    var going = true;
+    while (going) {
+        match (recv(p.out)) {                       // bloquea hasta el siguiente trozo
+            Option.Some(chunk) => {
+                match (from_utf8(chunk)) {
+                    Result.Ok(s) => print("chunk: ${s.trim()}"),
+                    Result.Err(e) => print("chunk binario"),
+                }
+            },
+            Option.None => { going = false; },      // el canal cerró: fin de stdout
+        }
+    }
+    match (p.wait()) {                              // cosecha SIEMPRE al final
+        process.Exit.Code(c) => print("salió con ${c}"),
+        process.Exit.Signal(s) => print("señal ${s}"),
+    }
+    0
+}
+```
+
+- La **contrapresión** es parte del diseño: si dejas de recibir, el canal (acotado) se llena, la
+  bomba deja de leer, el pipe del SO se llena y el hijo se bloquea en su `write` — nadie acumula
+  memoria sin límite. Por eso `stream()` **no tiene** `timeout_ms` ni `max_output`: el tope ES el
+  canal, y un plazo lo compones tú (`deadline` de `std/resilience` + `p.kill(false)`).
+- `p.kill(force)` manda `SIGTERM` (o `SIGKILL` con `force`) al **grupo** del hijo; tras `wait()`
+  es un no-op (jamás una señal a un pid reciclado). `wait()` se llama una vez, tras drenar.
+- Con `.merge_output()`, todo llega por `p.out` y `p.err` nace cerrado.
+- Solo **VM y binario nativo** (usa fibras y canales, como todo `spawn`); el intérprete lo
+  rechaza con su error de concurrencia.
+
 ## 14. Red y bases de datos
 
 ### Sockets y TLS (`std/net`, embebida)

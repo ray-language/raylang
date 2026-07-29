@@ -27,8 +27,9 @@ fn main() {
         let id_val = parse_int(line.substring(id_start, id_end)).unwrap_or(0);
 
         let name_start = id_end + mid_len;
-        let after_name = line.substring(name_start, line.len());
-        let name_len = index_of(after_name, tail).unwrap_or(0);
+        // N-D2 (jul 2026): el substring va INLINE en el index_of — la forma directa que fusiona el
+        // nativo (busca sobre el slice sin materializar la cola) y la que usan Go/Rust/JS (offset).
+        let name_len = index_of(line.substring(name_start, line.len()), tail).unwrap_or(0);
         let name_val = line.substring(name_start, name_start + name_len);
 
         let score_start = name_start + name_len + tail_len;

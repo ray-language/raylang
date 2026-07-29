@@ -375,7 +375,14 @@ impl Transpiler {
     pub(super) fn emit_block(&mut self, out: &mut String, b: &Block) -> Result<(), String> {
         out.push_str("{\n");
         self.scopes.push(HashMap::new());
-        for s in &b.statements {
+        let mut fused_here: Vec<String> = Vec::new();
+        for (i, s) in b.statements.iter().enumerate() {
+            // N-D4b: `let f = s.split(sep)` + solo `f[const]` en el resto del bloque → extracción
+            // en una pasada, sin materializar el arreglo. Si no aplica, emisión normal.
+            if let Some(name) = self.try_fuse_split_let(out, s, &b.statements[i + 1..], b.tail.as_deref())? {
+                fused_here.push(name);
+                continue;
+            }
             self.emit_stmt(out, s)?;
         }
         if let Some(tail) = &b.tail {
@@ -383,9 +390,86 @@ impl Transpiler {
             self.emit_expr(out, tail)?;
             out.push('\n');
         }
+        for name in fused_here {
+            self.fused_splits.remove(&name);
+        }
         self.scopes.pop();
         out.push('}');
         Ok(())
+    }
+
+    /// N-D4b: si `s` es `let f = <string>.split(sep);` y TODO uso posterior de `f` en el bloque es
+    /// una lectura `f[entero literal ≥ 0]`, emite la extracción fusionada (una pasada del split que
+    /// materializa solo los campos usados + la longitud) y registra `f` en `fused_splits` para que
+    /// esas lecturas se emitan contra los temporales. Devuelve el nombre si fusionó.
+    ///
+    /// Fuera de banda (OOB): la lectura emite el MISMO pánico que el indexado de `Vec` ("index out
+    /// of bounds: the len is L but the index is K"), con la longitud total real — el pánico ocurre
+    /// en el punto de USO, como hoy (la extracción en sí nunca falla).
+    fn try_fuse_split_let(
+        &mut self,
+        out: &mut String,
+        s: &crate::ast::Stmt,
+        rest: &[crate::ast::Stmt],
+        tail: Option<&Expr>,
+    ) -> Result<Option<String>, String> {
+        let StmtKind::Let { name, value, mutable, .. } = &s.kind else { return Ok(None) };
+        if *mutable {
+            return Ok(None); // `var f = split(…)` podría reasignarse: fuera del recorte
+        }
+        let Some(sub) = self.as_builtin_call(value, "split") else { return Ok(None) };
+        if sub.len() != 2 || !matches!(self.type_of(sub[0]), Ok(Type::String)) {
+            return Ok(None);
+        }
+        let mut ks: Vec<i64> = Vec::new();
+        for st in rest {
+            if !split_uses_stmt(name, st, &mut ks) {
+                return Ok(None);
+            }
+        }
+        if tail.is_some_and(|t| !split_uses_expr(name, t, &mut ks)) {
+            return Ok(None);
+        }
+        if ks.is_empty() {
+            return Ok(None); // sin usos: nada que ganar (y hay que evaluar s/sep igualmente)
+        }
+        ks.sort_unstable();
+        ks.dedup();
+
+        let prefix = format!("__rt_sp{}", self.match_temp);
+        self.match_temp += 1;
+        // let (__rt_spN_len, __rt_spN_k…) = { una pasada del split, contando y extrayendo };
+        write!(out, "let ({}_len", prefix).unwrap();
+        for k in &ks {
+            write!(out, ", {}_{}", prefix, k).unwrap();
+        }
+        out.push_str("): (i64");
+        for _ in &ks {
+            out.push_str(", Option<Rc<str>>");
+        }
+        out.push_str(") = { let __rt_sps = ");
+        self.emit_expr(out, sub[0])?;
+        out.push_str("; let __rt_spsep = ");
+        self.emit_expr(out, sub[1])?;
+        out.push_str("; let mut __rt_spl: i64 = 0;");
+        for k in &ks {
+            write!(out, " let mut __rt_spv{}: Option<Rc<str>> = None;", k).unwrap();
+        }
+        out.push_str(" for __rt_spt in __rt_sps.split(&*__rt_spsep) { match __rt_spl { ");
+        for k in &ks {
+            write!(out, "{} => __rt_spv{} = Some(Rc::<str>::from(__rt_spt)), ", k, k).unwrap();
+        }
+        out.push_str("_ => {} } __rt_spl += 1; } (__rt_spl");
+        for k in &ks {
+            write!(out, ", __rt_spv{}", k).unwrap();
+        }
+        out.push_str(") };\n");
+
+        // La variable existe para el CHECKER de tipos del emisor (type_of de `f[k]`), aunque en el
+        // Rust emitido no haya ningún `f`: toda lectura va contra los temporales.
+        self.declare(name, Type::Array(Box::new(Type::String)));
+        self.fused_splits.insert(name.clone(), prefix);
+        Ok(Some(name.clone()))
     }
 
     pub(super) fn emit_stmt(&mut self, out: &mut String, s: &Stmt) -> Result<(), String> {
@@ -639,6 +723,24 @@ impl Transpiler {
                             self.declare(&var, ety);
                             self.emit_block(out, body)?;
                             self.scopes.pop();
+                        } else if let Some(sub) = self.as_builtin_call(expr, "split") {
+                            // N-D4a: `for w in s.split(sep)` itera el iterador de split DIRECTO, sin
+                            // materializar el `Vec<Rc<str>>` intermedio (el resultado es un temporal
+                            // fresco: nadie puede mutarlo, la equivalencia con SN2 es exacta —
+                            // mismos tokens, mismo orden, `""` → un token vacío en ambos).
+                            let (s, sep) = (sub[0], sub[1]);
+                            out.push_str("{ let __rt_sps = ");
+                            self.emit_expr(out, s)?;
+                            out.push_str("; let __rt_spsep = ");
+                            self.emit_expr(out, sep)?;
+                            out.push_str("; for __rt_spw in __rt_sps.split(&*__rt_spsep) { let ");
+                            out.push_str(&var);
+                            out.push_str(" = Rc::<str>::from(__rt_spw); ");
+                            self.scopes.push(HashMap::new());
+                            self.declare(&var, Type::String);
+                            self.emit_block(out, body)?;
+                            self.scopes.pop();
+                            out.push_str(" } }");
                         } else {
                             // SN2 (bench sortnums): iterar POR ÍNDICE sobre el arreglo VIVO (longitud
                             // tomada al entrar), sin clonar el Vec entero (antes: `.borrow().clone()`
@@ -1087,6 +1189,20 @@ impl Transpiler {
                     }
                     // arreglo/Map: `a[i]` → el elemento (clon al leer; a través del RefCell).
                     _ => {
+                        // N-D4b: lectura sobre un split FUSIONADO → el temporal extraído. El pánico
+                        // OOB replica byte a byte el del indexado de Vec (con la longitud real).
+                        if let (ExprKind::Ident(name), ExprKind::Int(k)) = (&array.kind, &index.kind)
+                            && let Some(prefix) = self.fused_splits.get(name)
+                        {
+                            write!(
+                                out,
+                                "{p}_{k}.clone().unwrap_or_else(|| panic!(\"index out of bounds: the len is {{}} but the index is {{}}\", {p}_len, {k}usize))",
+                                p = prefix,
+                                k = k
+                            )
+                            .unwrap();
+                            return Ok(());
+                        }
                         match &array.kind {
                             // N6b: dentro de un loop puro-escalar el préstamo está IZADO → se indexa el
                             // guard directamente (sin borrow por elemento; LLVM puede vectorizar).
@@ -1678,3 +1794,131 @@ pub(super) fn binop(op: BinaryOp) -> &'static str {
     }
 }
 
+
+// --- N-D4b: análisis de usos de un `let f = split(…)` (funciones libres, sin estado) ---
+
+/// ¿Todos los usos de `name` dentro de `e` son lecturas `name[entero literal ≥ 0]`? Acumula los
+/// índices en `ks`. Conservador: `match` (sus patrones pueden ligar `name`) y las funciones
+/// anónimas (sus parámetros pueden sombrearlo) descartan la fusión entera.
+fn split_uses_expr(name: &str, e: &Expr, ks: &mut Vec<i64>) -> bool {
+    match &e.kind {
+        ExprKind::Index { array, index } => {
+            if matches!(&array.kind, ExprKind::Ident(n) if n == name) {
+                return match &index.kind {
+                    ExprKind::Int(k) if *k >= 0 => {
+                        ks.push(*k);
+                        true
+                    }
+                    _ => false, // índice no constante (o negativo): sin fusión
+                };
+            }
+            split_uses_expr(name, array, ks) && split_uses_expr(name, index, ks)
+        }
+        ExprKind::Ident(n) => n != name, // cualquier otro uso (alias, arg, len, for-in…) descarta
+        ExprKind::Match { .. } => false, // un patrón podría ligar `name` y confundir el mapeo
+        ExprKind::Func(_) => false,      // parámetros/capturas podrían sombrearlo
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        | ExprKind::Char(_) | ExprKind::Bytes(_) => true,
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } | ExprKind::Try(expr) => {
+            split_uses_expr(name, expr, ks)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            split_uses_expr(name, left, ks) && split_uses_expr(name, right, ks)
+        }
+        ExprKind::Call { callee, args } => {
+            // el callee puede ser Ident (nombre de función ≠ variable) o Field (UFCS: el receptor
+            // SÍ es un uso). Un Ident-callee homónimo sería una función, no la variable → se salta.
+            let callee_ok = match &callee.kind {
+                ExprKind::Ident(_) => true,
+                ExprKind::Field { object, .. } => split_uses_expr(name, object, ks),
+                other_callee => {
+                    let fake = Expr { kind: other_callee.clone(), line: e.line, col: e.col };
+                    split_uses_expr(name, &fake, ks)
+                }
+            };
+            callee_ok && args.iter().all(|a| split_uses_expr(name, a, ks))
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            elems.iter().all(|x| split_uses_expr(name, x, ks))
+        }
+        ExprKind::MapLit(pairs) => pairs
+            .iter()
+            .all(|(k, v)| split_uses_expr(name, k, ks) && split_uses_expr(name, v, ks)),
+        ExprKind::StructLit { fields, .. } => {
+            fields.iter().all(|(_, x)| split_uses_expr(name, x, ks))
+        }
+        ExprKind::EnumLit { args, .. } => args.iter().all(|a| split_uses_expr(name, a, ks)),
+        ExprKind::Field { object, .. } => split_uses_expr(name, object, ks),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            split_uses_expr(name, cond, ks)
+                && split_uses_block(name, then_branch, ks)
+                && else_branch.as_ref().is_none_or(|x| split_uses_expr(name, x, ks))
+        }
+        ExprKind::While { cond, body } => {
+            split_uses_expr(name, cond, ks) && split_uses_block(name, body, ks)
+        }
+        ExprKind::Block(b) => split_uses_block(name, b, ks),
+    }
+}
+
+fn split_uses_block(name: &str, b: &Block, ks: &mut Vec<i64>) -> bool {
+    b.statements.iter().all(|s| split_uses_stmt(name, s, ks))
+        && b.tail.as_ref().is_none_or(|t| split_uses_expr(name, t, ks))
+}
+
+/// La base (variable raíz) de un lvalue: `a` en `a`, `a[i]`, `a.x.y[j]`.
+fn lvalue_base(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        ExprKind::Ident(n) => Some(n),
+        ExprKind::Index { array, .. } => lvalue_base(array),
+        ExprKind::Field { object, .. } => lvalue_base(object),
+        _ => None,
+    }
+}
+
+fn split_uses_stmt(name: &str, s: &crate::ast::Stmt, ks: &mut Vec<i64>) -> bool {
+    match &s.kind {
+        StmtKind::Let { name: n, value, .. } => n != name && split_uses_expr(name, value, ks),
+        StmtKind::LetTuple { names, value, .. } => {
+            !names.iter().flatten().any(|n| n == name) && split_uses_expr(name, value, ks)
+        }
+        StmtKind::For { pat, iter, body } => {
+            let binds = match pat {
+                crate::ast::ForPat::Single(n) => n == name,
+                crate::ast::ForPat::Tuple(ns) => ns.iter().flatten().any(|n| n == name),
+            };
+            if binds {
+                return false; // el for re-liga `name`: fuera
+            }
+            let iter_ok = match iter {
+                crate::ast::ForIter::Range { start, end } => {
+                    split_uses_expr(name, start, ks) && split_uses_expr(name, end, ks)
+                }
+                crate::ast::ForIter::In(e) | crate::ast::ForIter::Iter { expr: e, .. } => {
+                    split_uses_expr(name, e, ks)
+                }
+            };
+            iter_ok && split_uses_block(name, body, ks)
+        }
+        StmtKind::Assign { target, value } => {
+            // ESCRIBIR sobre `name` (o dentro de él) descarta; los índices del lvalue y el RHS
+            // son lecturas normales.
+            if lvalue_base(target) == Some(name) {
+                return false;
+            }
+            fn target_reads(name: &str, t: &Expr, ks: &mut Vec<i64>) -> bool {
+                match &t.kind {
+                    ExprKind::Ident(_) => true,
+                    ExprKind::Index { array, index } => {
+                        target_reads(name, array, ks) && split_uses_expr(name, index, ks)
+                    }
+                    ExprKind::Field { object, .. } => target_reads(name, object, ks),
+                    _ => split_uses_expr(name, t, ks),
+                }
+            }
+            target_reads(name, target, ks) && split_uses_expr(name, value, ks)
+        }
+        StmtKind::Return { value } => value.as_ref().is_none_or(|v| split_uses_expr(name, v, ks)),
+        StmtKind::Expr(e) => split_uses_expr(name, e, ks),
+    }
+}

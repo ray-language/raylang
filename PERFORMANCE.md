@@ -32,23 +32,29 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 |---|---|---|---|---|---|
 | `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 28× |
 | `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 54× |
-| `wordcount` | 48.6 ms | 2.60× | 0.90× | **1.24×** | 5.5× |
+| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 7.4× |
 | `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 3.4× |
-| `jsondeserialize` | 85.2 ms | 1.10× | 0.52× | 0.57× | 4.2× |
-| `logparse` | 27.0 ms | 1.86× | 0.83× | **1.17×** | 3.3× |
+| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 4.9× |
+| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 4.4× |
 | `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
 | `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
-| `regex` | 70.7 ms | 0.87× | **1.08×** | 0.37× | 246× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 284× |
 
-*(× = veces más lento que `native`; <1 = nos gana. La fila de `matrixmul` es la re-medición
-post-N6 — Fase 67, 29 jul: en la corrida original del día iba en 11.6 ms, 0.50× de rustc.)*
+*(× = veces más lento que `native`; <1 = nos gana. Las filas de `matrixmul` —Fase 67— y de
+`wordcount`/`jsondeserialize`/`logparse`/`regex` —Fase 68— son las re-mediciones tras N6 y las
+fusiones N-D/R6, del mismo día y el mismo arnés; la corrida original está en el historial.)*
 
-- **Gana a node en 9 de 10** (1.1×–20×); pierde solo `regex` (0.87×, y node lleva su motor en C++).
-- **Gana a `rustc -O` en cinco y empata en dos** (`loopsum`, `matrixmul`), y **a Go en cinco**. El
-  hueco claro que queda es `jsondeserialize` (0.52× de Go — búsqueda de substrings).
+- **Gana a node en 9 de 10**; el décimo (`regex`) queda a un 5% (0.95×) contra el motor C++ de V8,
+  y la variante rust de ese bench parsea A MANO (con el crate `regex`, Rust puro cuesta ~49 ms —
+  el 0.40× de la tabla no es motor contra motor).
+- **Gana a Go en seis** (`sortnums` 3.51×, `treealloc` 1.59×, `matrixmul` 1.35×, `regex` 1.17×,
+  `wordcount` 1.16×, `logparse` 1.05×) **y empata en dos** (`loopsum`, `jsonserialize`); **a
+  `rustc -O` en cuatro** (`wordcount` 1.60×, `treealloc` 1.52×, `logparse` 1.49×, `sortnums`
+  1.12×) **y empata en dos** (`loopsum`, `matrixmul`). El hueco que queda es `jsondeserialize`
+  (0.60× de Go — la construcción de la línea y el slicing sin vistas).
 - **Arranque**: `empty` **1.80 ms, #1 de 10** (rustc 1.92, Go 1.98), 1.8 MB de RSS.
-- **Ranking combinado tiempo×memoria: #2 en 10 de 12 programas**, #3 en los otros dos.
+- **Ranking combinado tiempo×memoria: #1 o #2 en 11 de los 12 programas** (#1 en `wordcount` y `logparse`), #3 en el restante (`jsonserialize`).
 
 **Las fibras salen gratis en cómputo** (A/B del mismo programa con y sin `--without fibers`,
 mediana de 15 corridas): `fibrec` +0.4%, `wordcount` +1.9%, `treealloc` −2.3% — ruido — y el
@@ -942,6 +948,41 @@ Dos piezas en el emisor (`src/transpile/emit.rs`):
 sortnums/wordcount/jsonserialize/fibrec/loopsum/treealloc idénticos en salida). Corpus de paridad
 completo verde en ambas variantes (fibras e hilos). Tests de forma emitida: dispara en el loop
 puro-escalar, NO dispara con llamadas/push/strings.
+
+#### Fase 68 — N-D/R6: fusiones de substring/split y el borde de capturas (29 jul, jsondeserialize/logparse/wordcount/regex)
+
+La segunda mitad del análisis post-fibras: los cuatro benches de parsing pagaban **allocs que el
+programa no pide**. Tres familias de fusión en el emisor + una en el borde regex, cada una con su
+micro-A/B previo y su medición final (salida idéntica en todas; corpus de paridad verde ×2):
+
+- **N-D1/N-D2** (`calls.rs`): `parse_int(s.substring(a,b))` e `index_of(s.substring(a,b), aguja)`
+  — incluidas las formas `_or` que ya fusionaba D3 — trabajan sobre el **slice** `&s[lo..hi]` en el
+  camino ASCII, sin materializar el `Rc<str>` (el `after_name` del parsing manual copiaba toda la
+  cola de la línea solo para buscar en ella). El clamp espeja `__ray_substring` exactamente.
+- **N-D4a/N-D4b** (`emit.rs`): `for w in s.split(sep)` itera el iterador de split **directo**; y
+  `let f = s.split(sep)` consumido solo por `f[const]` se emite como **una pasada** que extrae
+  únicamente los campos usados + la longitud (el pánico OOB replica byte a byte el del indexado de
+  `Vec`, con la longitud real, en el punto de USO). El análisis es conservador: cualquier uso no
+  const-index —iterarlo, pasarlo, `len`, índice variable, sombras— lo desactiva.
+- **R6** (`ray-runtime/regex.rs` + borde): `captures_str` construye los `Rc<str>` **directo de los
+  rangos de bytes** del match (un alloc por grupo), sin el `Vec<Option<String>>` intermedio ni su
+  recopia. (R6b —reusar `CaptureLocations` por patrón— midió PEOR (+3 ms/200k, intercalado) y se
+  descartó: el hash extra del patrón por llamada comía el ahorro.)
+- **De regalo, un bug de paridad**: el `parse_int`/`parse_float` del nativo **no trimeaba** y la VM
+  sí (`parse_int(" 42 ")`: VM `Some(42)`, nativo `None`). Cazado al escribir N-D1; arreglado, y el
+  ejemplo nuevo `examples/stdlib/parse_fusion.ray` lo fija en el corpus para los tres motores.
+- Dos fuentes del banco pasan a la forma **inline** (`index_of(line.substring(…), tail)`,
+  `for w in line.split(" ")`) — la directa que fusiona el emisor y la que ya usaban las variantes
+  de Go/Rust/JS (el mismo movimiento que hizo D4); checksums idénticos.
+
+**Medido** (M3 Pro, mediana; fila completa re-corrida con el arnés):
+
+| bench | antes | después | y la mesa |
+|---|---|---|---|
+| `logparse` | 27.1 ms | **21.5 ms (−20%)** | **#1 — bate a Go** (22.6) y el combinado tiempo×memoria también es #1 |
+| `wordcount` | 46.7 ms | **38.4 ms (−19%)** | **#1 — bate a Go** (44.5) por 1.16×; combinado #1 |
+| `jsondeserialize` | 83.2 ms | **74.4 ms (−12%)** | del 0.52× al 0.60× de Go; el hueco restante es la construcción de la línea y el slicing sin vistas |
+| `regex` | 74.1 ms | **65.2 ms (−12%)** | pasa a **ganar a Go** (76.4); node conserva un 5% (0.95×) — motor contra motor, ver la nota del banco |
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

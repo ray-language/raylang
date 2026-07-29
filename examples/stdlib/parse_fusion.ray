@@ -1,0 +1,36 @@
+// Ejercita los caminos FUSIONADOS del backend nativo (N-D1/N-D2/N-D4) y el trim de
+// parse_int/parse_float — con salida determinista: el corpus de paridad verifica que
+// intérprete ≡ VM ≡ nativo byte a byte también por estos caminos.
+
+fn main() {
+    // parse_int/parse_float TRIMEAN (paridad VM↔nativo cazada en N-D: el nativo no trimeaba).
+    print(parse_int(" 42 ").unwrap_or(-1));
+    print(parse_int("x42").unwrap_or(-1));
+    print(parse_float(" 2.5 ").unwrap_or(-1.0) as int);
+
+    // N-D1: parse_int(substring) — en sitio en el nativo; camino no-ASCII incluido.
+    let s = "id=123;name=ñoño;score=45";
+    print(parse_int(s.substring(3, 6)).unwrap_or(-1));
+    let accented = "ñ7ñ";
+    print(parse_int(accented.substring(1, 2)).unwrap_or(-1));
+
+    // N-D2: index_of(substring) — búsqueda sobre el slice, con y sin default (forma D3).
+    print(index_of(s.substring(7, s.len()), "score").unwrap_or(-1));
+    print(index_of(s.substring(7, s.len()), "missing").unwrap_or(-1));
+
+    // N-D4b: split consumido SOLO por índices constantes → extracción en una pasada.
+    let f = "GET /api/7 200 33".split(" ");
+    print(f[1]);
+    print(parse_int(f[3]).unwrap_or(-1));
+
+    // N-D4a: for directo sobre un split inline.
+    var total = 0;
+    for w in "a bb ccc".split(" ") {
+        total = total + w.len();
+    }
+    print(total);
+
+    // Bordes del clamp de substring (espejado en la fusión): fuera de rango y j < i.
+    print(parse_int(s.substring(100, 200)).unwrap_or(-1));
+    print(index_of(s.substring(5, 2), "x").unwrap_or(-1));
+}

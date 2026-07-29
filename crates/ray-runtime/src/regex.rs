@@ -81,20 +81,23 @@ mod imp {
     }
 
     /// Compila (con caché) el patrón traducido. `full` envuelve en `^(?:…)$` (full_match).
+    /// Compila (una vez) el patrón TRADUCIDO al dialecto del crate.
+    fn build(pat: &str, full: bool) -> Regex {
+        let t = translate(pat);
+        let t = if full { format!("^(?:{t})$") } else { t };
+        RegexBuilder::new(&t)
+            .dot_matches_new_line(true) // el `.` de std/regex casa TAMBIÉN '\n'
+            .build()
+            // El parser de std/regex ya validó el patrón; si la traducción no compila,
+            // es un bug NUESTRO de traducción, no del usuario.
+            .unwrap_or_else(|e| panic!("ray-runtime regex: internal translation error for validated pattern {pat:?}: {e}"))
+    }
+
     fn compiled<R>(pat: &str, full: bool, f: impl FnOnce(&Regex) -> R) -> R {
         CACHE.with(|c| {
             let mut map = c.borrow_mut();
             let key = (pat.to_string(), full);
-            let rx = map.entry(key).or_insert_with(|| {
-                let t = translate(pat);
-                let t = if full { format!("^(?:{t})$") } else { t };
-                RegexBuilder::new(&t)
-                    .dot_matches_new_line(true) // el `.` de std/regex casa TAMBIÉN '\n'
-                    .build()
-                    // El parser de std/regex ya validó el patrón; si la traducción no compila,
-                    // es un bug NUESTRO de traducción, no del usuario.
-                    .unwrap_or_else(|e| panic!("ray-runtime regex: internal translation error for validated pattern {pat:?}: {e}"))
-            });
+            let rx = map.entry(key).or_insert_with(|| build(pat, full));
             f(rx)
         })
     }
@@ -199,6 +202,20 @@ mod imp {
         compiled(pat, false, |rx| {
             rx.captures(text).map(|caps| {
                 (0..caps.len()).map(|i| caps.get(i).map(|m| m.as_str().to_string())).collect()
+            })
+        })
+    }
+
+    /// R6 (bench regex): los rangos de **bytes** de cada captura. El borde nativo construye los
+    /// `Rc<str>` directamente del texto con ellos (un alloc por grupo), sin pasar por el
+    /// `Vec<Option<String>>` intermedio de `captures_str` (String + recopia a Rc por grupo).
+    /// Los límites de un `Match` caen siempre en fronteras de carácter → el slice es seguro.
+    /// (Se probó además reusar `CaptureLocations` por patrón —R6b—: midió PEOR que el
+    /// `captures` normal (+3 ms en 200k matches, intercalado) y se descartó.)
+    pub fn captures_byte_ranges(pat: &str, text: &str) -> Option<Vec<Option<(usize, usize)>>> {
+        compiled(pat, false, |rx| {
+            rx.captures(text).map(|caps| {
+                (0..caps.len()).map(|i| caps.get(i).map(|m| (m.start(), m.end()))).collect()
             })
         })
     }

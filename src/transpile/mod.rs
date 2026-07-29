@@ -123,6 +123,11 @@ struct Transpiler {
     /// está aquí, `a[i]` se emite como `__rt_bh_N[i]` (sin `borrow()` por elemento → LLVM vectoriza).
     /// Solo se puebla dentro de `emit_stmt(For)`; ver `hoistable_arrays` (el análisis conservador).
     hoisted_borrows: HashMap<String, String>,
+    /// N-D4b: `let f = s.split(sep)` cuyo resto de bloque solo hace `f[const]` → el split se emite
+    /// como UNA pasada que extrae solo los campos usados (sin materializar el Vec ni los tokens que
+    /// nadie lee). Nombre de la variable → prefijo de los temporales (`__rt_spN`); el análisis
+    /// (`split_const_index_uses`) garantiza que todo uso es `f[entero literal]` de lectura.
+    fused_splits: HashMap<String, String>,
 }
 
 /// Transpila un programa (ya chequeado) a Rust autocontenido, o un error si usa algo fuera del subconjunto.
@@ -244,6 +249,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         exclude: exclude.iter().cloned().collect(),
         cells: std::collections::HashSet::new(),
         hoisted_borrows: HashMap::new(),
+        fused_splits: HashMap::new(),
         fibers,
     };
 

@@ -173,6 +173,78 @@ fn does_not_hoist_when_the_body_calls_or_mutates() {
     assert!(!strings.contains("__rt_bh_"), "{}", strings);
 }
 
+/// N-D1/N-D2: `parse_int(s.substring(a, b))` e `index_of(s.substring(a, b), aguja)` se fusionan —
+/// el camino ASCII trabaja sobre el slice sin materializar el `Rc<str>` intermedio. Y `parse_int`
+/// TRIMEA (paridad con la VM: `parse_int(" 42 ")` es `Some(42)` en ambos motores).
+#[test]
+fn fuses_substring_into_parse_int_and_index_of() {
+    let rust = transpile_src(
+        "fn main() {\n\
+             let s = \"id=42;x\";\n\
+             print(parse_int(s.substring(3, 5)).unwrap_or(0));\n\
+             print(index_of(s.substring(3, s.len()), \";\").unwrap_or(0));\n\
+         }",
+    );
+    assert!(rust.contains("__rt_fs"), "{}", rust); // la fusión disparó
+    assert!(rust.contains(".trim().parse::<i64>()"), "{}", rust); // y trimea, como la VM
+    // el argumento fusionado no materializa la subcadena en el camino ASCII
+    assert!(rust.contains("__rt_fs[__rt_lo..__rt_hi]"), "{}", rust);
+}
+
+/// N-D4b: `let f = s.split(sep)` consumido SOLO por `f[const]` → extracción en una pasada, sin
+/// materializar el `Vec<Rc<str>>`; el pánico OOB replica el del indexado de Vec.
+#[test]
+fn fuses_split_consumed_by_constant_indexes() {
+    let rust = transpile_src(
+        "fn main() {\n\
+             let f = \"a b c d\".split(\" \");\n\
+             print(f[1]);\n\
+             print(f[3]);\n\
+         }",
+    );
+    assert!(rust.contains("__rt_sp0_len"), "{}", rust);
+    assert!(rust.contains("index out of bounds: the len is {} but the index is {}"), "{}", rust);
+    assert!(!rust.contains("__ray_split(&"), "{}", rust); // el Vec intermedio no se emite
+}
+
+/// N-D4b (negativo): un uso NO const-index (iterarlo, pasarlo, `len`, índice variable) o un `var`
+/// desactivan la fusión y el split se materializa como siempre.
+#[test]
+fn does_not_fuse_split_with_escaping_uses() {
+    // se itera → materializado
+    let iterated = transpile_src(
+        "fn main() {\n\
+             let f = \"a b\".split(\" \");\n\
+             for w in f { print(w); }\n\
+         }",
+    );
+    assert!(iterated.contains("__ray_split(&"), "{}", iterated);
+    assert!(!iterated.contains("__rt_sp0_len"), "{}", iterated);
+    // índice variable → materializado
+    let dynamic = transpile_src(
+        "fn main() {\n\
+             let f = \"a b\".split(\" \");\n\
+             var i = 0;\n\
+             print(f[i]);\n\
+         }",
+    );
+    assert!(dynamic.contains("__ray_split(&"), "{}", dynamic);
+}
+
+/// N-D4a: `for w in s.split(sep)` (inline) itera el iterador de split directo, sin el Vec.
+#[test]
+fn iterates_inline_split_without_materializing() {
+    let rust = transpile_src(
+        "fn main() {\n\
+             var n = 0;\n\
+             for w in \"a bb\".split(\" \") { n = n + w.len(); }\n\
+             print(n);\n\
+         }",
+    );
+    assert!(rust.contains("__rt_sps.split(&*__rt_spsep)"), "{}", rust);
+    assert!(!rust.contains("__ray_split(&"), "{}", rust);
+}
+
 /// N6a: la lectura `a[i]` sobre una variable local no-celda toma el préstamo directo
 /// (`a.borrow()`), sin el `Rc::clone` intermedio que solo movía refcounts.
 #[test]

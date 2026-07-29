@@ -78,6 +78,14 @@ VM (P2.a) o de R5. Para regex en caliente, la respuesta de la VM sigue siendo
   Oráculo e2e `build_native_regex_via_ray_runtime_matches_the_vm` (tortura del
   dialecto VM↔nativo byte a byte + fallback). La VM sigue con la Pike VM
   (motor raylang puro, R1–R4a).
+- **R6 — el borde de capturas, desde rangos** ✅ **HECHA** (29 jul; PERFORMANCE.md
+  Fase 68). `captures_str` construía `Vec<Option<String>>` y lo recopiaba a
+  `Rc<str>` (2 allocs por grupo); ahora el borde corta los `Rc<str>` DIRECTO de
+  los rangos de bytes del match (`captures_byte_ranges`, 1 alloc por grupo).
+  **Medido: 74.1 → 65.2 ms — pasa a ganar a Go (76.4); node conserva un 5%
+  (0.95×)**, y esa comparación sí es motor contra motor (la variante rust del
+  bench parsea a mano: con el crate, Rust puro cuesta ~49 ms). R6b (reusar
+  `CaptureLocations` por patrón) midió PEOR (+3 ms intercalado) y se descartó.
 
 ## 4. La variante `regex-std.ray` usada (para el set del bench, si se quiere añadir)
 

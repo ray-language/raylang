@@ -1,8 +1,13 @@
-# Camino a raylang 1.0
+# Estado del lanzamiento de raylang 1.0
 
-Checklist viva hacia el lanzamiento de la **1.0**. Los criterios los fija PRODUCTION.md (arco D → 1.0); aquí
-se rastrea su estado honesto. Versión: **`1.0.0`** (bump hecho en `Cargo.toml`/`SPEC.md`; falta empujar el
-tag `v1.0.0` para publicar la Release).
+Checklist viva. **Los criterios técnicos de la 1.0 están cumplidos en el repo** (los fijó el arco D
+del plan de producción, hoy resumido en [PRODUCTION.md](PRODUCTION.md)); lo que queda es
+**publicación**: empujar el tag `v1.0.0` —que dispara el workflow de release— y las piezas que
+dependen de cuentas del mantenedor. La versión ya es `1.0.0` en `Cargo.toml` y en `SPEC.md`.
+
+> Desde entonces el trabajo ha seguido sobre esa línea (binario nativo, fibras, framework web,
+> `std/process`…): lo entregado y aún sin publicar se lee en [CHANGELOG.md](CHANGELOG.md). Cuando
+> se decida publicar, este documento es la lista de comprobación previa.
 
 Leyenda: ✅ hecho · 🟡 hecho en el repo, falta publicar/ejecutar fuera · ⬜ pendiente · 🌐 requiere cuentas/
 servicios externos (del mantenedor).
@@ -24,16 +29,16 @@ servicios externos (del mantenedor).
       `SECURITY.md` (modelo de seguridad, alcance, proceso de reporte).
 - [x] **Motor único de producto + oráculo en desarrollo** — ✅
       La VM es el motor de producto (M35); el intérprete es el oráculo de validación cruzada (verde). Suite
-      completa verde (442 lib + integración).
+      completa verde: **626 tests unitarios + 101 archivos de integración**. (Después de la 1.0 se sumó un
+      tercer motor, el **binario nativo**, con su propio corpus de paridad byte-idéntica.)
 - [ ] **SPEC publicada** — 🟡
       `SPEC.md` está **escrita y es normativa** (versiona con el lenguaje). Falta **publicarla** (hostearla
       como sitio/página). El parser auto-alojado (M14) valida la gramática descrita.
-- [ ] **Benchmarks dentro del presupuesto** — 🟡
-      Hay banco (`benchmarks/`) + **guarda de regresión** (`tests/perf_regression.rs`, opt-in) que falla si
-      degrada >5%. M36.1 (superinstrucciones) dio un win real medido. El presupuesto **aspiracional** de M36
-      (3–5× acumulado vía `HeapValue` 16 B / inline caches) **no se persiguió completo** — decisión de
-      priorización. *Interpretación para 1.0*: "dentro del presupuesto" = sin regresión respecto al baseline;
-      cumplido. (Optimización profunda de la VM queda como trabajo post-1.0, medido.)
+- [x] **Benchmarks dentro del presupuesto** — ✅
+      Hay banco (`benchmarks/`, con el poliglota y el de carga web) + **guardas de regresión** de tiempo
+      (`tests/perf_regression.rs`, falla si degrada >5%) y de **memoria** (pico de RSS). El criterio de la
+      1.0 —"sin regresión respecto al baseline"— se cumplió entonces, y el trabajo posterior lo superó con
+      creces: el rendimiento pasó a ser el objetivo nº 1 el 14 jul (ver [PERFORMANCE.md](PERFORMANCE.md)).
 
 ## Distribución y lanzamiento (M44)
 
@@ -56,13 +61,17 @@ servicios externos (del mantenedor).
       El libro (`book/`, mdBook) existe; falta hostearlo + un sitio de aterrizaje (que puede alojar el
       playground y la SPEC).
 - [ ] **Declarar `1.0.0`** — 🟡
-      Versión subida a `1.0.0` en `Cargo.toml`/`SPEC.md`; notas en `CHANGELOG.md`; licencia MIT OR
-      Apache-2.0 (`LICENSE-MIT`/`LICENSE-APACHE`). Falta **empujar el tag `v1.0.0`** (dispara la Release).
+      Versión subida a `1.0.0` en `Cargo.toml`/`SPEC.md`; licencia MIT OR Apache-2.0
+      (`LICENSE-MIT`/`LICENSE-APACHE`). Falta **empujar el tag `v1.0.0`** (dispara la Release). Antes de
+      hacerlo: cerrar el bloque "Sin publicar" del `CHANGELOG.md` con el número de versión que toque —
+      lo acumulado desde la 1.0.0 es material de una **1.1** larga, no de un parche.
 
 ## Notas
 
 - Buena parte de "Distribución" es **externa** (🌐): requiere cuentas del mantenedor (GitHub Releases, brew
   tap, marketplace de VSCode, hosting). Lo **en-repo** (instalador, workflow de release, `SECURITY.md`, subir
-  la versión) se puede preparar aquí y ejecutar/publicar cuando se decida.
-- Los criterios técnicos que faltan (SPEC/benchmarks) están **hechos en el repo**; su ⬜ es de publicación o
-  de decisión de alcance, no de trabajo de código pendiente.
+  la versión) está preparado y se ejecuta cuando se decida.
+- **Ningún criterio técnico está pendiente de código**: los ⬜/🟡 que quedan son de publicación (hostear la
+  SPEC y el libro, subir la extensión, empujar el tag).
+- El repositorio **no tiene todavía ningún tag `v*`**: la primera Release está por hacer, y con ella la
+  comprobación de que el workflow funciona de punta a punta.

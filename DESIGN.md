@@ -1,9 +1,19 @@
 # raylang — Documento de diseño
 
-> Borrador v0.2 · lenguaje de aprendizaje · host: Rust
-> Este documento es el **contrato** del lenguaje. Lexer, parser, type checker,
-> intérprete y VM deben respetarlo. Cambiarlo es una decisión deliberada, no un
-> accidente de implementación.
+> **La crónica de diseño del lenguaje** · host: Rust
+>
+> Este documento cuenta **cada decisión y su porqué**, fase a fase, desde el primer lexer hasta el
+> estado actual. Es la memoria del proyecto: si te preguntas por qué algo es como es, la respuesta
+> está aquí.
+>
+> **No es el documento normativo.** Desde M34 lo normativo es [SPEC.md](SPEC.md), que define qué
+> programa es válido y qué hace; ante un conflicto, manda la SPEC. El contrato de producción
+> vigente (ejes, invariantes, guardas) es [PRODUCTION.md](PRODUCTION.md), y las mediciones,
+> [PERFORMANCE.md](PERFORMANCE.md). Cambiar el lenguaje = tocar la SPEC **y** dejar aquí el porqué.
+>
+> Las secciones están ordenadas cronológicamente por fase (§0–§2 son los cimientos y la hoja de
+> ruta histórica; a partir de §21 cada arco tiene la suya). Las afirmaciones de una sección
+> reflejan lo que era cierto **cuando se escribió**: son historia, no estado actual.
 
 ## 0. Decisiones fundacionales (cerradas)
 
@@ -24,11 +34,18 @@ se deriva de ellas.
 ## 1. Filosofía y objetivos
 
 raylang es un lenguaje pequeño, **estáticamente tipado** con anotaciones
-explícitas, sintaxis de llaves, **orientado a expresiones**, pensado para
-**aprender a construir lenguajes**. No busca ser original ni práctico: busca tocar
-de forma honesta cada fase de un compilador/intérprete.
+explícitas, sintaxis de llaves y **orientado a expresiones**.
 
-Principios de diseño:
+> **El norte cambió en julio de 2026.** El proyecto nació para *aprender a construir lenguajes*
+> —"no busca ser original ni práctico: busca tocar de forma honesta cada fase de un
+> compilador"— y esa fase quedó cerrada: hoy el objetivo es **producción real**, con el
+> rendimiento como prioridad nº 1 (§37 y [PRODUCTION.md](PRODUCTION.md); el arco de rendimiento,
+> en [PERFORMANCE.md](PERFORMANCE.md)). Las decisiones se toman por **mejor ingeniería**, no por
+> valor pedagógico — por eso hoy hay dependencias escogidas donde antes había regla de
+> cero-deps. El relato de cómo se construyó, que era el producto original, vive en el libro
+> (`book/`).
+
+Principios de diseño (los cinco siguen vigentes tal cual):
 
 1. **Sin ambigüedad sintáctica.** Toda construcción debe ser parseable sin
    adivinanzas. Preferimos verboso pero claro.
@@ -42,6 +59,13 @@ Principios de diseño:
    **extensibles** para admitir genéricos y tipos suma más adelante sin cirugía.
 
 ## 2. Hoja de ruta (hitos)
+
+> ⚠️ **Esta tabla es histórica**: cubre M1–M20 y el transversal de optimización, que era el
+> horizonte cuando se escribió. El proyecto va por **M100** y cada hito posterior tiene su propia
+> sección en este documento (§21 en adelante) — el índice real de lo hecho son esas secciones, el
+> [CHANGELOG.md](CHANGELOG.md) y el historial de git. Los hitos M1–M14 (núcleo + self-hosting),
+> M15–M32 (librerías, red, ergonomía y tooling), M33–M43 (los arcos A–D hacia la 1.0) y todo lo
+> posterior están **completos**; los únicos ✋ son los explícitamente aparcados o descartados.
 
 El front-end (lexer, parser, checker) se comparte. Los hitos M3+ son features del
 lenguaje; el orden puede flexibilizarse al avanzar.

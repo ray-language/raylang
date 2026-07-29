@@ -6,6 +6,23 @@
 > radical — ordenadas en arcos ejecutables. La disciplina de siempre se mantiene:
 > **incremental, midiendo** (benchmarks + oráculo), se conserva solo lo que supera el ruido.
 
+## 0. Dónde estamos (resumen, jul 2026)
+
+⚠️ **La tabla de §1 es el PUNTO DE PARTIDA del 14 de julio, no el estado actual.** Se conserva
+porque es la línea base contra la que se mide todo lo demás. Lo conseguido desde entonces, arco a
+arco (el detalle y las mediciones, en §3):
+
+| Frente | Dónde estábamos | Dónde estamos |
+|---|---|---|
+| **Motor** | solo la VM | **binario nativo** (`ray build --native`): 24–61× la VM, byte-idéntico; en cómputo puro 4,2× node (5,1× con `--fast`) |
+| **VM** | `Map` alocando en el camino caliente, SipHash | aHash + `get_or`/`add_to`, superinstrucciones por histograma (−19/−28%), PGO (−5/−9%), `ConcatN`, fusión de `Option`, fast-paths ASCII, `IntArray` (−68% RSS) |
+| **Concurrencia nativa** | hilo por tarea (~265 KB/conexión) | **fibras M:N** por defecto (corosensei + reactor), ~21 KB/conexión y 350× menos CPU en esperas ociosas |
+| **Web** | servidor propio sin cifra comparable | framework a **~188k req/s** — 93% de axum, p50/p99.9 empatadas, 1,5× Go+chi |
+| **Memoria** | fuga de ~1 KB por request en la VM | almacenes de tareas y canales que liberan; gate de RSS en el banco |
+| **Banco** | script del usuario, fuera del repo | `benchmarks/poly/` + banco de carga web con generador remoto, medianas y MAD, y gates de regresión de tiempo y memoria |
+
+Lo que **sigue abierto** está en §3 (arcos no cerrados) y §4 (ideas fuera de la caja).
+
 ## 1. Punto de partida (medido, jul 2026)
 
 Benchmark poliglota (M3) contra node/php/lua/python/ruby/perl/go/rust. El arnés vive **en el

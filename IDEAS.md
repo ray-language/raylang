@@ -10,19 +10,20 @@
 
 ## Resumen de impacto
 
-> **Estado tras M26** (núcleo M1–M14 completo con **meta-circularidad** y **concurrencia CSP**; luego el
-> gran arco de **librerías aplicadas** M15–M26: red/cloud/cripto/compresión/observabilidad —DNS(7 tipos+
-> caché)/HTTP(S)/WebSocket(ws+wss)/TLS/Redis/UDP/OAuth2/protobuf/HTTP2-framing+HPACK, más logging+métricas—,
-> todo como librería en el propio lenguaje). La columna *Cuándo* refleja la hoja de ruta (ver
-> [DESIGN.md](DESIGN.md) §2 y el **plan post-M26 en §36**). **Siguiente arco (M27–M32)**: volver a la
-> **ergonomía del lenguaje** (tuplas, `for`/iteradores, interpolación… lo que destaparon las librerías) →
-> **tooling** (regex, formateador, optimización VM) → **más librerías** (cripto avanzada, cerrar gRPC,
-> PostgreSQL). Detalle y orden razonado en §36.
+> ⚠️ **Esta tabla es un registro histórico de clasificación**, no el estado del proyecto. Se escribió
+> "tras M26" y cada fila anota el impacto que una idea **tenía sobre el diseño de entonces**, junto con
+> lo que se decidió. Casi todas están ya ✅ COMPLETO (el proyecto va por **M100**): consérvala para
+> saber *por qué* algo se aceptó, se difirió o se descartó, no para saber qué existe hoy — eso está en
+> [SPEC.md](SPEC.md) (lo normativo), [REFERENCE.md](REFERENCE.md) (el catálogo) y
+> [CHANGELOG.md](CHANGELOG.md) (lo entregado).
+>
+> Las ideas **vivas** (las que aún no se han hecho) están en las secciones numeradas de más abajo, no
+> en esta tabla.
 
 | Idea | ¿Dónde pega? | Cuándo | Estado |
 |------|--------------|--------|--------|
 | Concurrencia (goroutines / async / suspend) | **Arquitectura de la VM** | **M12** | ✅ **COMPLETO** (DESIGN §21): **CSP sobre la VM** — green threads cooperativos M:1, canales tipados, structured concurrency; data-race freedom **vía CSP** (no ownership); scheduler determinista; intérprete = oráculo secuencial. Surface: `spawn(closure)->Task<T>`, `channel()`/`channel(n)`/`send`/`recv->Option<T>`/`close`, `join`, `scope`, `select` (builtins). Sub-fases: ✅ **M12.1** slice CSP (spawn + canales no acotados + scheduler determinista; solo VM, intérprete da error limpio; `close` ad-hoc polimórfico con el de handles; GC multi-raíz) · ✅ **M12.2** acotados/backpressure (`channel(n)`, `n≥0`; `n=0` rendezvous; `send` se vuelve punto de yield al llenarse la cola; `recv` despierta al emisor bloqueado; `VmChannel.cap`; `Waiting::Recv`/`Send(v)`; el valor del emisor aparcado es raíz del GC) · ✅ **M12.3** structured concurrency (`Task<T>`+`join(t)->T`+`scope(fn()->R)->R`; `spawn` pasa a devolver `Task<T>`; el scope posee las tareas lanzadas dentro y las une al salir; propagación del fallo de una hija vía captura en la `Task` y re-lanzado en `join`/`ScopeEnd`; estado por fibra `task`/`scopes`; GC multi-raíz; diferido: cancelación de hermanas) · ✅ **M12.4** `select(chs: [Channel<T>]) -> int` (bloquea hasta que un canal esté listo para recibir; devuelve el índice del primero listo, determinista; `recv(chs[i])` toma el valor; `Waiting::Select`, `wake_select_waiters`; solo VM) · ✅ **M12.5** cancelación de hermanas (semántica, sin superficie: al fallar una tarea del `scope`, se cancelan las hermanas pendientes —`cancel_task` recursivo: las saca de ready/parked y cancela nietos— y se propaga el fallo original; `ScopeEnd` cancela en vez de esperar; `fail_current_fiber` cancela los hijos de una fibra-hija que falla; cooperativa, no preemptiva). **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>` índice+valor, select de send, `cancel(t)` explícito). Diferido: algebraic effects (intérprete a pila explícita), M:N paralelo (GC thread-safe). Descartado: ownership/regiones |
-| **raylang de producción** (cambio de norte) | Todo el runtime | **rama `feature/improvements`** | 🚧 **PLAN FIJADO** — análisis a fondo + plan M33–M43 en **[PRODUCTION.md](PRODUCTION.md)** (DESIGN §37). Arcos: A estabilidad (spans/no-ICE/SPEC/un motor) · B rendimiento+M:N por actores · C ecosistema (`ray`+paquetes+std/+FFI) · D endurecimiento+1.0. Fuera de 1.0: JIT/nativo, macros, effects, reflection (siguen aquí) |
+| **raylang de producción** (cambio de norte) | Todo el runtime | **M33–M43** | ✅ **COMPLETO** — los cuatro arcos ejecutados: A estabilidad (spans/no-ICE/SPEC/un motor) · B rendimiento + M:N por actores · C ecosistema (`ray` + paquetes + `std/` + FFI) · D endurecimiento + 1.0. El contrato vigente que salió de ahí es **[PRODUCTION.md](PRODUCTION.md)** (crónica en DESIGN §37). De lo que quedó fuera de la 1.0: el **backend nativo** acabó haciéndose (y es el destino de despliegue); macros, effects y reflection siguen aquí sin hacer |
 | Null safety | Sistema de tipos | hecho | ✅ no hay `null` (`Option<T>`, M6) |
 | Introspección / reflection | Modelo de valores de la VM | post-M11 | 💤 puerta abierta (los valores cargan tipo en runtime) |
 | Structs vs interfaces/**traits** | Sistema de tipos / polimorfismo | **M9** | 📌 recomendación fijada (traits estilo Rust) |
@@ -1457,17 +1458,6 @@ magia posicional de `recover` es lo menos elegante de Go). La forma raylang es *
 la única decisión que conviene fijar pronto es la semántica de 97.1 (try_join vs cancelación de
 hermanas), porque el webserver ya depende de ella en producción.
 
-## Cómo usar este archivo
-
-- Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)
-  (hoja de ruta §2 o norte de diseño §10) con su hito.
-- Cuando aparezca una idea nueva, se **agrega aquí** con su clasificación de
-  impacto, no directamente al diseño.
-- Antes de cada hito grande (sobre todo **M2**), revisar este archivo: puede que
-  alguna decisión "tardía" deba adelantarse por una restricción de arquitectura.
-
----
-
 ## 39. Posición-del-llamador — stack trace de runtime (jul 2026) — M79
 
 El diferido de DX más transversal ([[§21]]/[[§25]]): `assert` fallido reporta la posición del
@@ -1708,11 +1698,13 @@ selfhost no conoce módulos con namespacing (su loader M14.7 es más simple) →
 
 ---
 
-## 53. Ejecución de comandos del SO — diseño hecho; SEGUNDA MIRADA en §53.7 (jul 2026)
+## 53. Ejecución de comandos del SO — ✅ EJECUTADA como M100 (jul 2026)
 
 Lanzar procesos del sistema (`git`, `ffmpeg`, `rustc`) desde raylang. Se diseñó a fondo en una
-sesión de julio de 2026 y **se decidió no construirla antes de la 1.0**. Esta sección conserva el
-diseño para no rehacerlo el día que haya demanda.
+sesión de julio de 2026, se difirió, se revisó (§53.7) y finalmente **se construyó**: el contrato
+v1 (§53.8) y el streaming v2 (§53.9) están **ejecutados** y son hoy `std/process` (crónica en
+DESIGN §89, superficie en REFERENCE.md §10). Lo que sigue es el registro del diseño y de cómo
+llegó a fijarse — incluidas las conclusiones que la segunda mirada invirtió.
 
 ### 53.1 Por qué se aparca
 
@@ -2059,3 +2051,17 @@ se serializaron con un mutex (`tests/native_corpus.rs`). El caso real (dos termi
 compilando el mismo fuente a la vez en una máquina) es raro y el fallo es ruidoso, no silencioso:
 clasificación BAJO. Arreglo natural si se reabre: copiar con nombre temporal + rename atómico, o
 un flock por pkg alrededor del `cargo build` + copia.
+
+---
+
+## Cómo usar este archivo
+
+- Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo
+  que quede aquí es su clasificación de impacto.
+- Cuando aparezca una idea nueva, se **agrega aquí** con su clasificación de impacto, no
+  directamente al diseño.
+- Antes de cada arco grande, revisar este archivo: puede que alguna decisión "tardía" deba
+  adelantarse por una restricción de arquitectura.
+- El **orden de las secciones numeradas es cronológico** (por cuándo se clasificó la idea), no por
+  importancia ni por estado: una sección puede estar ya ✅ ejecutada. Lo entregado se lee en
+  [CHANGELOG.md](CHANGELOG.md); lo vigente, en [SPEC.md](SPEC.md) y [REFERENCE.md](REFERENCE.md).

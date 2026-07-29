@@ -616,6 +616,17 @@ enum OpenHandle {
     /// helper). No existe en `wasm32` (rusqlite compila C) ni sin la feature `sqlite` (M89: build slim).
     #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
     Sqlite(rusqlite::Connection),
+    /// M100 v2: el extremo de LECTURA de un pipe de un proceso hijo, ya NO-bloqueante. Las bombas de
+    /// `std/process` lo leen con `__socket_read_bytes`: el WouldBlock aparca la fibra en el poller
+    /// exactamente como un socket (el `IoParked` de la VM es fd+deadline, nada socket-específico).
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    Pipe(std::fs::File),
+    /// M100 v2: un proceso hijo lanzado con `__proc_spawn`. Vive en el registro (no un pid crudo en
+    /// el borde) para que `try_wait`/`kill` operen sobre el `Child` real — sin carreras de reuso de
+    /// pid. `close(h)` lo quita del mapa SIN matar ni cosechar (el `Drop` de `Child` no hace nada);
+    /// la cosecha es de `__proc_try_wait` y la estructura la pone `std/process` (bombas + wait).
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    Child(std::process::Child),
 }
 
 /// Una conexión TLS: la sesión rustls (cliente **o** servidor, vía el enum unificado `Connection`) +
@@ -685,6 +696,12 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         #[cfg(not(target_arch = "wasm32"))]
         #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
         Some(OpenHandle::Sqlite(_)) => Err("the handle is a SQLite connection; use db/sqlite".to_string()),
+        // M100 v2: los handles de proceso no son escribibles (el stdin de v2 sigue siendo
+        // escribir-y-cerrar en el spawn; un stdin por canal sería v3).
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        Some(OpenHandle::Pipe(_)) => Err("the handle is a child process pipe; read it with socket_read_bytes".to_string()),
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        Some(OpenHandle::Child(_)) => Err("the handle is a child process; it is not writable".to_string()),
         None => Err(format!("invalid file handle: {}", h)),
     }
 }
@@ -1183,6 +1200,21 @@ pub fn socket_read_bytes_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
     if take_read_expired(h) {
         return Err(READ_TIMEOUT_MSG.to_string());
     }
+    // M100 v2: un pipe de proceso se lee AQUÍ mismo, bajo el lock (la lectura es no-bloqueante por
+    // construcción → nunca retiene el registro; clonar, como con Tcp, no hace falta).
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        let mut reg = registry().lock().unwrap();
+        if let Some(OpenHandle::Pipe(f)) = reg.open.get_mut(&h) {
+            let mut buf = [0u8; 65536];
+            return match f.read(&mut buf) {
+                Ok(n) => Ok(Some(buf[..n].to_vec())),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Ok(None),
+                Err(e) => Err(e.to_string()),
+            };
+        }
+    }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
     match stream.read(&mut buf) {
@@ -1204,6 +1236,28 @@ pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
             Some(data) => Ok(data),
             None => Err(READ_TIMEOUT_MSG.to_string()),
         };
+    }
+    // M100 v2: un pipe de proceso (fd no-bloqueante por construcción) se lee aquí BLOQUEANDO:
+    // reintento en WouldBlock con cesión de 1 ms, SOLTANDO el lock entre intentos. Es el camino
+    // del oráculo secuencial; la VM aparca la fibra por la variante nb.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    loop {
+        {
+            let mut reg = registry().lock().unwrap();
+            match reg.open.get_mut(&h) {
+                Some(OpenHandle::Pipe(f)) => {
+                    let mut buf = [0u8; 65536];
+                    match f.read(&mut buf) {
+                        Ok(n) => return Ok(buf[..n].to_vec()),
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) => return Err(e.to_string()),
+                    }
+                }
+                _ => break,
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
@@ -1323,6 +1377,8 @@ pub fn raw_fd(h: i64) -> Option<i32> {
         #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
         Some(OpenHandle::Tls(tc)) => Some(tc.sock.as_raw_fd()),
         Some(OpenHandle::Udp(s)) => Some(s.as_raw_fd()), // M20.11: cesión de udp_recv_from
+        // M100 v2: el fd del pipe de un hijo, para que la bomba aparque la fibra en el poller.
+        Some(OpenHandle::Pipe(f)) => Some(f.as_raw_fd()),
         _ => None,
     }
 }
@@ -2479,6 +2535,35 @@ static BUILTINS: &[Builtin] = &[
         if a[9] != Type::Bool { return Err((Some(9), format!("__run expects a bool (merge_output), not {}", a[9]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // __proc_spawn(program, args, dir, env, env_clear, stdin, has_stdin, merge_output) -> [bytes]
+    // (M100 v2, IDEAS §53.9): lanza en modo STREAMING → [b"ok", h_child, h_out, h_err] o
+    // [b"err", msg]. Sin timeout_ms/max_output: el streaming no los tiene (canal acotado = tope).
+    Builtin { name: "__proc_spawn", opcode: OpCode::ProcSpawn, check: |a| {
+        arity(a, 8, "__proc_spawn", " (program, args, dir, env, env_clear, stdin, has_stdin, merge_output)")?;
+        let str_arr = Type::Array(Box::new(Type::String));
+        if a[0] != Type::String { return Err((Some(0), format!("__proc_spawn expects a string (the program), not {}", a[0]))); }
+        if a[1] != str_arr { return Err((Some(1), format!("__proc_spawn expects a [string] (the arguments), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__proc_spawn expects a string (the directory, \"\" = inherited), not {}", a[2]))); }
+        if a[3] != str_arr { return Err((Some(3), format!("__proc_spawn expects a [string] (the flattened env pairs), not {}", a[3]))); }
+        if a[4] != Type::Bool { return Err((Some(4), format!("__proc_spawn expects a bool (env_clear), not {}", a[4]))); }
+        if a[5] != Type::Bytes { return Err((Some(5), format!("__proc_spawn expects bytes (the stdin data), not {}", a[5]))); }
+        if a[6] != Type::Bool { return Err((Some(6), format!("__proc_spawn expects a bool (has_stdin), not {}", a[6]))); }
+        if a[7] != Type::Bool { return Err((Some(7), format!("__proc_spawn expects a bool (merge_output), not {}", a[7]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __proc_try_wait(h) -> [bytes] (M100 v2): ["running"] | ["code"|"signal", n] | ["err", msg].
+    Builtin { name: "__proc_try_wait", opcode: OpCode::ProcTryWait, check: |a| {
+        arity(a, 1, "__proc_try_wait", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__proc_try_wait expects an int (the child handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __proc_kill(h, force) -> unit (M100 v2): SIGTERM/SIGKILL al GRUPO; no-op si ya cosechado.
+    Builtin { name: "__proc_kill", opcode: OpCode::ProcKill, check: |a| {
+        arity(a, 2, "__proc_kill", " (handle, force)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__proc_kill expects an int (the child handle), not {}", a[0]))); }
+        if a[1] != Type::Bool { return Err((Some(1), format!("__proc_kill expects a bool (force = SIGKILL), not {}", a[1]))); }
+        Ok(Type::Unit)
+    } },
 ];
 
 
@@ -2595,6 +2680,119 @@ pub fn signals_read_one(fd: i32) -> Option<i32> {
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
 pub fn signals_read_one(_fd: i32) -> Option<i32> { None }
 
+// --- Ejecución de procesos del SO (M100, IDEAS §53.8) ---
+//
+// La implementación vive en `ray_runtime::process` (feature `process`, siempre activa para este
+// binario): el MISMO código para la VM/intérprete y para el binario transpilado (`__ray_run`) =
+// paridad byte-idéntica por construcción, como crypto/tls/sqlite. Aquí solo el reexport y el stub
+// de wasm (el playground no trae ray-runtime; `run` responde con el Err honesto de plataforma).
+#[cfg(not(target_arch = "wasm32"))]
+pub use ray_runtime::process::{run, run_encoded, run_opts_from_flat, RunOpts, RunOutput};
+
+/// Stub de wasm: la firma completa, con el `Err` honesto de plataforma en `run_encoded` (los
+/// motores no distinguen — es la misma codificación etiquetada del camino real).
+#[cfg(target_arch = "wasm32")]
+pub struct RunOpts;
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)] // espejo exacto de la firma real (ver ray_runtime::process)
+pub fn run_opts_from_flat(
+    _dir: &str,
+    _env_flat: Vec<String>,
+    _env_clear: bool,
+    _stdin: &[u8],
+    _has_stdin: bool,
+    _timeout_ms: i64,
+    _max_output: i64,
+    _merge_output: bool,
+) -> RunOpts {
+    RunOpts
+}
+#[cfg(target_arch = "wasm32")]
+pub fn run_encoded(program: &str, _args: &[String], _opts: &RunOpts) -> Vec<Vec<u8>> {
+    vec![
+        b"err".to_vec(),
+        format!("{program}: running OS processes is not supported on this platform").into_bytes(),
+    ]
+}
+
+// --- Streaming de procesos (M100 v2, IDEAS §53.9): los primitivos de host ---
+//
+// El registro de handles vive AQUÍ (no en ray-runtime): estos helpers son el pegamento entre
+// `ray_runtime::process::spawn_streamed/try_wait/kill_group` y los handles que ven los dos motores
+// del binario `ray`. El gemelo del nativo se emite en el preámbulo (fase 2c).
+
+/// Lanza el hijo en modo streaming y lo registra: `[b"ok", h_child, h_out, h_err]` (`h_err = -1`
+/// con merge: todo llega por `h_out`) o `[b"err", msg]`. Los pipes quedan como handles `Pipe`
+/// no-bloqueantes: las bombas de `std/process` los leen con `__socket_read_bytes` (aparcan la
+/// fibra) y los cierran con `close(h)`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn proc_spawn_encoded(program: &str, args: &[String], opts: &RunOpts) -> Vec<Vec<u8>> {
+    let s = match ray_runtime::process::spawn_streamed(program, args, opts) {
+        Ok(s) => s,
+        Err(e) => return vec![b"err".to_vec(), e.into_bytes()],
+    };
+    let mut reg = registry().lock().unwrap();
+    let put = |reg: &mut FileRegistry, h: OpenHandle| -> i64 {
+        let id = reg.next;
+        reg.next += 1;
+        reg.open.insert(id, h);
+        id
+    };
+    let h_child = put(&mut reg, OpenHandle::Child(s.child));
+    let h_out = s.out.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
+    let h_err = s.err.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
+    vec![
+        b"ok".to_vec(),
+        h_child.to_string().into_bytes(),
+        h_out.to_string().into_bytes(),
+        h_err.to_string().into_bytes(),
+    ]
+}
+
+/// `waitpid(WNOHANG)` del hijo del handle: `[b"running"]`, `[b"code", n]` / `[b"signal", n]`
+/// (cosechado — y el handle se ELIMINA bajo el mismo lock: un `__proc_kill` posterior es no-op,
+/// nunca una señal a un pid REUSADO por otro proceso) o `[b"err", msg]` (handle inválido).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn proc_try_wait_encoded(h: i64) -> Vec<Vec<u8>> {
+    let mut reg = registry().lock().unwrap();
+    let Some(OpenHandle::Child(child)) = reg.open.get_mut(&h) else {
+        return vec![b"err".to_vec(), format!("handle {h} is not a child process").into_bytes()];
+    };
+    let result = match ray_runtime::process::try_wait(child) {
+        Ok(None) => return vec![b"running".to_vec()],
+        Ok(Some(Ok(c))) => vec![b"code".to_vec(), c.to_string().into_bytes()],
+        Ok(Some(Err(s))) => vec![b"signal".to_vec(), s.to_string().into_bytes()],
+        Err(e) => vec![b"err".to_vec(), e.into_bytes()],
+    };
+    reg.open.remove(&h); // cosechado (o irrecuperable): fuera del registro
+    result
+}
+
+/// `SIGTERM` (o `SIGKILL` con `force`) al GRUPO del hijo del handle. Total e idempotente: un
+/// handle ya cosechado/cerrado es un no-op (matar a un muerto no es un error).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn proc_kill(h: i64, force: bool) {
+    let reg = registry().lock().unwrap();
+    if let Some(OpenHandle::Child(child)) = reg.open.get(&h) {
+        ray_runtime::process::kill_group(child.id() as i32, force);
+    }
+}
+
+/// Stubs de plataforma (Windows/wasm): el mismo `Err` honesto que `run`.
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn proc_spawn_encoded(program: &str, _args: &[String], _opts: &RunOpts) -> Vec<Vec<u8>> {
+    vec![
+        b"err".to_vec(),
+        format!("{program}: running OS processes is not supported on this platform").into_bytes(),
+    ]
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn proc_try_wait_encoded(h: i64) -> Vec<Vec<u8>> {
+    vec![b"err".to_vec(), format!("handle {h} is not a child process").into_bytes()]
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn proc_kill(_h: i64, _force: bool) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2702,37 +2900,3 @@ mod tests {
     }
 }
 
-// --- Ejecución de procesos del SO (M100, IDEAS §53.8) ---
-//
-// La implementación vive en `ray_runtime::process` (feature `process`, siempre activa para este
-// binario): el MISMO código para la VM/intérprete y para el binario transpilado (`__ray_run`) =
-// paridad byte-idéntica por construcción, como crypto/tls/sqlite. Aquí solo el reexport y el stub
-// de wasm (el playground no trae ray-runtime; `run` responde con el Err honesto de plataforma).
-#[cfg(not(target_arch = "wasm32"))]
-pub use ray_runtime::process::{run, run_encoded, run_opts_from_flat, RunOpts, RunOutput};
-
-/// Stub de wasm: la firma completa, con el `Err` honesto de plataforma en `run_encoded` (los
-/// motores no distinguen — es la misma codificación etiquetada del camino real).
-#[cfg(target_arch = "wasm32")]
-pub struct RunOpts;
-#[cfg(target_arch = "wasm32")]
-#[allow(clippy::too_many_arguments)] // espejo exacto de la firma real (ver ray_runtime::process)
-pub fn run_opts_from_flat(
-    _dir: &str,
-    _env_flat: Vec<String>,
-    _env_clear: bool,
-    _stdin: &[u8],
-    _has_stdin: bool,
-    _timeout_ms: i64,
-    _max_output: i64,
-    _merge_output: bool,
-) -> RunOpts {
-    RunOpts
-}
-#[cfg(target_arch = "wasm32")]
-pub fn run_encoded(program: &str, _args: &[String], _opts: &RunOpts) -> Vec<Vec<u8>> {
-    vec![
-        b"err".to_vec(),
-        format!("{program}: running OS processes is not supported on this platform").into_bytes(),
-    ]
-}

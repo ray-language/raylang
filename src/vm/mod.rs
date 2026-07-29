@@ -2219,6 +2219,57 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // M100 v2 (IDEAS §53.9): los primitivos del streaming. Los tres son NO-bloqueantes
+                // (spawn lanza y vuelve; try_wait es WNOHANG; kill es una señal) — el aparcado de
+                // verdad ocurre en las bombas de std/process, que leen los handles Pipe con
+                // __socket_read_bytes (camino ya existente).
+                OpCode::ProcSpawn => {
+                    let merge_output = self.pop();
+                    let has_stdin = self.pop();
+                    let stdin = self.pop();
+                    let env_clear = self.pop();
+                    let env = self.pop();
+                    let dir = self.pop();
+                    let args = self.pop();
+                    let program = self.pop();
+                    let (HeapValue::Str(program), HeapValue::Obj(ah), HeapValue::Str(dir),
+                        HeapValue::Obj(eh), HeapValue::Bool(env_clear), HeapValue::Bytes(stdin),
+                        HeapValue::Bool(has_stdin), HeapValue::Bool(merge_output)) =
+                        (program, args, dir, env, env_clear, stdin, has_stdin, merge_output)
+                    else { unreachable!("the checker guarantees the __proc_spawn signature") };
+                    let as_strings = |vm: &mut Self, h| -> Vec<String> {
+                        vm.as_array(h).iter().map(|v| match v {
+                            HeapValue::Str(s) => s.clone(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        }).collect()
+                    };
+                    let opts = crate::builtins::run_opts_from_flat(
+                        &dir, as_strings(self, eh), env_clear, &stdin, has_stdin, 0, 0, merge_output,
+                    );
+                    let elems = crate::builtins::proc_spawn_encoded(&program, &as_strings(self, ah), &opts)
+                        .into_iter().map(HeapValue::Bytes).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ProcTryWait => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = crate::builtins::proc_try_wait_encoded(handle)
+                        .into_iter().map(HeapValue::Bytes).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ProcKill => {
+                    let force = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Bool(force)) = (handle, force) else {
+                        unreachable!("the checker guarantees int, bool");
+                    };
+                    crate::builtins::proc_kill(handle, force);
+                    self.push(HeapValue::Unit);
+                }
+
                 // --- I/O con buffering: handles de archivo (M11.8) ---
                 OpCode::Open => {
                     let mode = self.pop();

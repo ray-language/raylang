@@ -481,6 +481,7 @@ Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs
 | `ray registry verify [dir]` | audita las firmas de un índice contra sus dueños (CI del repo del índice) |
 | `ray registry yank <nom>@<ver> [--undo]` | retira/restaura una versión publicada |
 | `ray version` | versión |
+| `ray help` | la ayuda: todos los subcomandos con sus flags (también sin argumentos) |
 
 Flags de `run`:
 

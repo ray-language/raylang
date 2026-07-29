@@ -1992,6 +1992,61 @@ intérprete≡VM≡nativo (comandos deterministas: `sh -c 'echo hi; exit 3'`, mu
 entre productos; `Proc` como hijo de scope · **(3)** menores: `env_clear`, Windows honesto,
 rlimits si alguien los pide.
 
+### 53.9 DISEÑO de la v2 (streaming), fijado 29 jul 2026
+
+La superficie ya estaba en el contrato (§53.8): `Cmd.stream() -> Proc` con
+`Proc { out: Channel<bytes>, err: Channel<bytes> }` y `Proc.wait() -> Exit`; canal ACOTADO =
+contrapresión; `Proc` hijo de scope. Lo que se fija aquí es el CÓMO, tras auditar la maquinaria:
+
+**La decisión central: las BOMBAS se escriben EN raylang.** `stream()` (en `std/process`) spawnea
+una fibra por flujo que hace `loop { read(handle) → send(canal) }` y cierra el canal en EOF. Todo
+lo difícil ya existe y se reusa tal cual:
+
+- **Contrapresión**: `send` sobre `Channel.bounded(n)` lleno APARCA la fibra de la bomba
+  (`vm/mod.rs` ChanSend / `__RayChan` nativo con cap) → la bomba deja de leer → el pipe del SO se
+  llena → el hijo se bloquea en su write. La cadena entera es el diseño; no hay código nuevo.
+- **Aparcado por fd**: la lectura no-bloqueante de un pipe aparca la fibra igual que un socket
+  (VM: `IoParked` es fd+deadline, `poll::wait` acepta cualquier fd; nativo: `wait_readable`).
+  **El interinato del "park multi-fd" de la v1 se DISUELVE**: cada bomba espera UN fd.
+- **Estructura**: las bombas son `spawn` ordinarios → hijas del scope del llamador (join implícito
+  en `ScopeEnd`, canceladas si una hermana falla). El precedente de `spawn` dentro de la std es
+  `std/kv.share` (actor) y el webserver.
+
+**Host nuevo, mínimo** (por motor: registro de la VM en `builtins.rs` + su gemelo emitido del
+nativo, como se hizo con Udp/Sqlite):
+
+1. Variante **`OpenHandle::Pipe(File)`** + brazo en `raw_fd` + brazo en la lectura no-bloqueante
+   (reusa el camino de `__socket_read_bytes`; `close(h)` genérico ya funciona).
+2. **`__proc_spawn(program, args, dir, env, env_clear, stdin, has_stdin, merge) -> [bytes]`**:
+   lanza (mismo `Command` de la v1: process_group, /dev/null, merge por dup) y devuelve
+   `[b"ok", pid, h_out, h_err]` con los pipes YA no-bloqueantes y registrados (con merge, h_err
+   es -1 y el canal `err` nace cerrado). El stdin sigue siendo escribir-y-cerrar en el spawn
+   (misma limitación documentada que la v1; un stdin por canal sería v3).
+3. **`__proc_try_wait(pid) -> [bytes]`**: `waitpid(WNOHANG)` → `[b"running"]` o
+   `[b"code"|b"signal", valor]`. `Proc.wait()` en raylang: bucle try_wait + `time.sleep(2)`
+   (cooperativo en ambos motores). En el camino feliz no itera: se llama tras drenar los canales,
+   y EOF de ambos pipes ≈ el hijo ya salió.
+4. **`__proc_kill(pid) -> unit`**: SIGTERM/SIGKILL al GRUPO (para timeout/cancelación).
+
+**Reparto de opciones del builder**: `stream()` honra `dir/env/env_clear/stdin/merge_output`.
+`max_output` NO aplica (la contrapresión del canal ES el tope) y `timeout_ms` NO aplica en v2
+(el llamador compone: `deadline` de std/resilience + `kill()`); documentado en el módulo.
+
+**Cosecha y cancelación estructural, por fases**: la fase base entrega `Proc.wait()` explícito +
+las bombas como hijas de scope (el scope no termina con bombas vivas). La cancelación que MATA al
+grupo del hijo (hermana falla → `__proc_kill` + cosecha) necesita un gancho de host en
+`cancel_task` — va en fase propia y si resulta invasiva se documenta como pendiente (el zombi es
+finito: se cosecha al morir el programa).
+
+**Intérprete**: fuera, como todo spawn/canal (mensaje limpio ya existente); el oráculo de la v2 es
+VM≡nativo (golden con los mismos comandos deterministas de la v1).
+
+**Orden de ataque v2**: **(2a)** host: `OpenHandle::Pipe` + `__proc_spawn`/`__proc_try_wait`/
+`__proc_kill` en VM (+ tests unitarios) · **(2b)** `std/process.stream()` + `Proc` + bombas en
+raylang; ejemplo determinista · **(2c)** gemelo nativo (registro emitido + helpers `__ray_proc_*`)
+· **(2d)** golden VM≡nativo + docs (MANUAL/REFERENCIA/llms.txt/DESIGN) · **(2e)** cancelación
+estructural con kill al grupo, si el gancho no es invasivo.
+
 ## 54. Carrera de builds nativos concurrentes del MISMO fuente (jul 2026, impacto: BAJO)
 
 Dos `ray build --native` simultáneos del mismo archivo comparten el pkg de la caché Cargo (H14: el

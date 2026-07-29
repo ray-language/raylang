@@ -236,16 +236,19 @@ impl<'a> Compiler<'a> {
             fuse_round2(&mut self.cur().chunk); // A4: guardas y aritmética local-const
             fuse_guard_round3(&mut self.cur().chunk); // P0.6: GetLocalConst;CmpJump → guarda en 1 opcode
             fuse_index_round4(&mut self.cur().chunk); // MM2: [GetLocalLocal|GetLocal, Index] → IndexLL/IndexLocal
+            fuse_loop_round5(&mut self.cur().chunk); // V9: [AddLocalConst, SetLocal(, Jump)] → IncLocalConst/IncJump
             discard_spawn_results(&mut self.cur().chunk); // M98.1: spawn fire-and-forget sin Task retenida
         }
 
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
+        let has_captured = scope.captured_slots.iter().any(|&b| b);
         self.functions[idx] = Some(CompiledFn {
             name,
             arity: params.len(),
             num_locals: scope.max_slots,
             captured: scope.captured_slots,
+            has_captured,
             upvalues: scope.upvalues,
             chunk: scope.chunk,
         });
@@ -1212,6 +1215,76 @@ impl<'a> Compiler<'a> {
 /// El compilador ya emite ese patrón de forma natural: la rama-else de un `if` cae al `Return` final
 /// de la función, una rama-then salta a él, un `return e` lo emite tras `e`. Por eso basta con
 /// reconocer el patrón en el bytecode ya generado, sin tocar la emisión.
+/// V9 (ronda 5): el CIERRE del bucle contado. Corre tras la ronda 4:
+///   - `[AddLocalConst(s, c), SetLocal(s), Jump(t)]` → `IncJump(s, c, t)` — el `i = i + 1;
+///     salta a la guarda` de TODO for-range, en una instrucción.
+///   - `[AddLocalConst(s, c), SetLocal(s)]` (sin salto detrás) → `IncLocalConst(s, c)` — el
+///     incremento a secas (i = i + paso en un `while` manual).
+/// Solo si el `SetLocal` escribe el MISMO slot que lee el `AddLocalConst`, y como siempre los
+/// opcodes consumidos (i+1, i+2) no pueden ser destino de salto. Mismo esquema de remapeo.
+fn fuse_loop_round5(chunk: &mut Chunk) {
+    let n = chunk.code.len();
+    if n == 0 {
+        return;
+    }
+    let mut is_target = vec![false; n];
+    for op in &chunk.code {
+        match op {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t) => is_target[*t] = true,
+            OpCode::DotRange { exit, .. } => is_target[*exit] = true,
+            _ => {}
+        }
+    }
+    let mut old_a_new = vec![0usize; n + 1];
+    let mut code = Vec::with_capacity(n);
+    let mut lines = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        old_a_new[i] = code.len();
+        if i + 1 < n && !is_target[i + 1] {
+            if let (OpCode::AddLocalConst(s, c), OpCode::SetLocal(s2)) =
+                (&chunk.code[i], &chunk.code[i + 1])
+            {
+                if s == s2 {
+                    // ¿Y el salto de vuelta justo detrás? → el cierre entero en una.
+                    if i + 2 < n && !is_target[i + 2] {
+                        if let OpCode::Jump(t) = &chunk.code[i + 2] {
+                            code.push(OpCode::IncJump(*s, *c, *t)); // t en coords viejas
+                            lines.push(chunk.lines[i]); // posición del Add (su overflow)
+                            i += 3;
+                            continue;
+                        }
+                    }
+                    code.push(OpCode::IncLocalConst(*s, *c));
+                    lines.push(chunk.lines[i]);
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        code.push(chunk.code[i].clone());
+        lines.push(chunk.lines[i]);
+        i += 1;
+    }
+    old_a_new[n] = code.len();
+    for op in &mut code {
+        match op {
+            OpCode::Jump(t)
+            | OpCode::JumpIfFalse(t)
+            | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t)
+            | OpCode::IncJump(_, _, t) => *t = old_a_new[*t],
+            OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
+            _ => {}
+        }
+    }
+    chunk.code = code;
+    chunk.lines = lines;
+}
+
 /// MM4: ¿`e` es `Ident[Ident]`? Devuelve `(arreglo, índice)` por nombre.
 fn dot_index_shape(e: &Expr) -> Option<(&str, &str)> {
     let ExprKind::Index { array, index } = &e.kind else { return None };
@@ -1515,13 +1588,24 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
     while i < n {
         old_a_new[i] = code.len();
         // [GetLocalConst(s, c), CmpJump(op, t)] → GetLocalConstCmpJump(s, c, op, t)
+        // V9: y la hermana con tope en VARIABLE:
+        // [GetLocalLocal(a, b), CmpJump(op, t)] → LocalLocalCmpJump(a, b, op, t)
         if i + 1 < n && !is_target[i + 1] {
-            if let OpCode::GetLocalConst(s, c) = &chunk.code[i] {
-                if let OpCode::CmpJump(op, t) = &chunk.code[i + 1] {
-                    code.push(OpCode::GetLocalConstCmpJump(*s, *c, *op, *t)); // t en coords viejas
-                    lines.push(chunk.lines[i + 1]); // posición del CmpJump
-                    i += 2;
-                    continue;
+            if let OpCode::CmpJump(op, t) = &chunk.code[i + 1] {
+                match &chunk.code[i] {
+                    OpCode::GetLocalConst(s, c) => {
+                        code.push(OpCode::GetLocalConstCmpJump(*s, *c, *op, *t)); // t en coords viejas
+                        lines.push(chunk.lines[i + 1]); // posición del CmpJump
+                        i += 2;
+                        continue;
+                    }
+                    OpCode::GetLocalLocal(a, b) => {
+                        code.push(OpCode::LocalLocalCmpJump(*a, *b, *op, *t)); // t en coords viejas
+                        lines.push(chunk.lines[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1535,7 +1619,9 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
             OpCode::Jump(t)
             | OpCode::JumpIfFalse(t)
             | OpCode::CmpJump(_, t)
-            | OpCode::GetLocalConstCmpJump(_, _, _, t) => *t = old_a_new[*t],
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t)
+            | OpCode::IncJump(_, _, t) => *t = old_a_new[*t],
             OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }
@@ -1562,7 +1648,8 @@ fn fuse_index_round4(chunk: &mut Chunk) {
     for op in &chunk.code {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t)
-            | OpCode::GetLocalConstCmpJump(_, _, _, t) => is_target[*t] = true,
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t) => is_target[*t] = true,
             OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
@@ -1600,7 +1687,9 @@ fn fuse_index_round4(chunk: &mut Chunk) {
             OpCode::Jump(t)
             | OpCode::JumpIfFalse(t)
             | OpCode::CmpJump(_, t)
-            | OpCode::GetLocalConstCmpJump(_, _, _, t) => *t = old_a_new[*t],
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t)
+            | OpCode::IncJump(_, _, t) => *t = old_a_new[*t],
             OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }

@@ -151,6 +151,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
             arity: 0,
             num_locals: 0,
             captured: Vec::new(),
+            has_captured: false,
             upvalues: Vec::new(),
             chunk: chunk.clone(),
         }],
@@ -593,6 +594,38 @@ impl<'a> Vm<'a> {
                 // A4 (ronda 2): la guarda de if/while en UNA instrucción. Semántica idéntica a
                 // [Cmp, JumpIfFalse(t), Pop]: saca ambos operandos, compara, y si es falso salta
                 // (el destino ya viene ajustado tras el Pop del lado else). El bool nunca se apila.
+                // V9 (ronda 5): la guarda `local op local` (`i < n` con tope en variable) sin
+                // tocar la pila. Mismo fast-path entero y mismo fallback que CmpJump.
+                OpCode::LocalLocalCmpJump(a, b, op, target) => {
+                    let left = self.get_local(fi, *a);
+                    let right = self.get_local(fi, *b);
+                    let res = if let (HeapValue::Int(x), HeapValue::Int(y)) = (&left, &right) {
+                        match op {
+                            CmpOp::Less => x < y,
+                            CmpOp::LessEqual => x <= y,
+                            CmpOp::Greater => x > y,
+                            CmpOp::GreaterEqual => x >= y,
+                            CmpOp::Equal => x == y,
+                            CmpOp::NotEqual => x != y,
+                        }
+                    } else {
+                        let legacy = match op {
+                            CmpOp::Less => &OpCode::Less,
+                            CmpOp::LessEqual => &OpCode::LessEqual,
+                            CmpOp::Greater => &OpCode::Greater,
+                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
+                            CmpOp::Equal => &OpCode::Equal,
+                            CmpOp::NotEqual => &OpCode::NotEqual,
+                        };
+                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
+                            HeapValue::Bool(b) => b,
+                            _ => unreachable!("a comparison produces bool"),
+                        }
+                    };
+                    if !res {
+                        self.cur.frames[fi].ip = *target;
+                    }
+                }
                 OpCode::CmpJump(op, target) => {
                     let right = self.pop();
                     let left = self.pop();
@@ -625,6 +658,37 @@ impl<'a> Vm<'a> {
                     }
                 }
                 // A4 (ronda 2): local[s] + const / local[s] - const, en una instrucción.
+                // V9 (ronda 5): `local[s] = local[s] + const` sin pasar por la pila — el
+                // incremento del bucle contado. Misma aritmética (checked / apply_binary) que
+                // AddLocalConst y el mismo destino (respetando boxing) que SetLocal.
+                OpCode::IncLocalConst(s, c) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?)
+                    } else {
+                        self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
+                    };
+                    self.set_local(fi, *s, r);
+                }
+                // V9 (ronda 5): el cierre completo del bucle — incrementa y salta a la guarda.
+                OpCode::IncJump(s, c, target) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?)
+                    } else {
+                        self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
+                    };
+                    self.set_local(fi, *s, r);
+                    self.cur.frames[fi].ip = *target;
+                }
                 OpCode::AddLocalConst(s, c) => {
                     let left = self.get_local(fi, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
@@ -3206,13 +3270,21 @@ impl<'a> Vm<'a> {
     /// Crea el arreglo de locales de un marco nuevo: cada slot capturado nace
     /// **boxeado** (su celda en el heap), los demás como `Plain(Unit)`.
     fn new_locals(&mut self, fn_idx: usize) -> Vec<Local> {
-        let n = self.program.functions[fn_idx].num_locals;
+        let program = self.program;
+        let f = &program.functions[fn_idx];
+        let n = f.num_locals;
         // Opt.2: reusa un `Vec` del pool (conserva su capacidad) en vez de asignar uno nuevo. Lo vaciamos
         // y lo reconstruimos entero, así no se lee ninguna basura que arrastrara del uso anterior.
         let mut locals = self.locals_pool.pop().unwrap_or_default();
         locals.clear();
+        // V9: lo común es que NINGÚN slot esté capturado (el bool viene precomputado del
+        // compilador) → relleno plano, sin consultar `captured` slot a slot ni tocar el heap.
+        if !f.has_captured {
+            locals.resize_with(n, || Local::Plain(HeapValue::Unit));
+            return locals;
+        }
         for s in 0..n {
-            if self.program.functions[fn_idx].captured.get(s).copied().unwrap_or(false) {
+            if f.captured.get(s).copied().unwrap_or(false) {
                 let cell = self.cur.heap.allocate(Obj::Cell(HeapValue::Unit));
                 locals.push(Local::Boxed(cell));
             } else {

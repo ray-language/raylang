@@ -14,12 +14,53 @@ arco (el detalle y las mediciones, en §3):
 
 | Frente | Dónde estábamos | Dónde estamos |
 |---|---|---|
-| **Motor** | solo la VM | **binario nativo** (`ray build --native`): 24–61× la VM, byte-idéntico; en cómputo puro 4,2× node (5,1× con `--fast`) |
+| **Motor** | solo la VM | **binario nativo** (`ray build --native`), byte-idéntico: 3–4× la VM en cargas de servicio y 28–57× en cómputo puro; gana a node en 9 de 10 programas, a `rustc -O` en 5 y a Go en 4 (§0.1) |
 | **VM** | `Map` alocando en el camino caliente, SipHash | aHash + `get_or`/`add_to`, superinstrucciones por histograma (−19/−28%), PGO (−5/−9%), `ConcatN`, fusión de `Option`, fast-paths ASCII, `IntArray` (−68% RSS) |
 | **Concurrencia nativa** | hilo por tarea (~265 KB/conexión) | **fibras M:N** por defecto (corosensei + reactor), ~21 KB/conexión y 350× menos CPU en esperas ociosas |
 | **Web** | servidor propio sin cifra comparable | framework a **~188k req/s** — 93% de axum, p50/p99.9 empatadas, 1,5× Go+chi |
 | **Memoria** | fuga de ~1 KB por request en la VM | almacenes de tareas y canales que liberan; gate de RSS en el banco |
 | **Banco** | script del usuario, fuera del repo | `benchmarks/poly/` + banco de carga web con generador remoto, medianas y MAD, y gates de regresión de tiempo y memoria |
+
+### 0.1 Medición de referencia — suite poliglota completa (29 jul 2026, post-fibras)
+
+Primera corrida completa de los 14 programas con el arnés actual **después** del arco F (fibras
+por defecto en el binario nativo). M3 Pro, mediana de 10 corridas + 5 de calentamiento; los 12
+programas de cómputo se **auto-cronometran** (no cuentan el arranque del runtime), `empty`/`print`
+miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
+
+| Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
+|---|---|---|---|---|---|
+| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 28× |
+| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 54× |
+| `wordcount` | 48.6 ms | 2.60× | 0.90× | **1.24×** | 5.5× |
+| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 3.4× |
+| `jsondeserialize` | 85.2 ms | 1.10× | 0.52× | 0.57× | 4.2× |
+| `logparse` | 27.0 ms | 1.86× | 0.83× | **1.17×** | 3.3× |
+| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
+| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
+| `matrixmul` | 11.6 ms | 2.05× | 0.66× | 0.50× | 57× |
+| `regex` | 70.7 ms | 0.87× | **1.08×** | 0.37× | 246× |
+
+*(× = veces más lento que `native`; <1 = nos gana.)*
+
+- **Gana a node en 9 de 10** (1.1×–20×); pierde solo `regex` (0.87×, y node lleva su motor en C++).
+- **Gana a `rustc -O` en cinco** y **a Go en cuatro**. Los dos huecos claros son `jsondeserialize`
+  (0.52× de Go — búsqueda de substrings) y `matrixmul` (0.50× de rustc — punto flotante denso).
+- **Arranque**: `empty` **1.80 ms, #1 de 10** (rustc 1.92, Go 1.98), 1.8 MB de RSS.
+- **Ranking combinado tiempo×memoria: #2 en 10 de 12 programas**, #3 en los otros dos.
+
+**Las fibras salen gratis en cómputo** (A/B del mismo programa con y sin `--without fibers`,
+mediana de 15 corridas): `fibrec` +0.4%, `wordcount` +1.9%, `treealloc` −2.3% — ruido — y el
+arranque de `empty` **mejora** (1.57 vs 1.97 ms: el modelo de fibras no levanta el hilo worker que
+sí crea el de hilo-por-tarea). Su beneficio vive en concurrencia/IO (F1–F5), y no lo pagan los
+programas secuenciales.
+
+> ⚠️ **Corrección de una cifra publicada.** Hasta hoy se citaba "el nativo le gana a node por
+> **4.2×** en cómputo puro" (§3, re-medición del 19 jul con hyperfine). Ese número medía el
+> **proceso completo**, así que incluía los ~45 ms de arranque de node. Con el arnés actual, que
+> cronometra solo el workload, la ventaja real en `fibrec` es **2.21×**; la ventaja de arranque
+> sigue siendo real pero se cuenta aparte, en `empty`/`print`. La cifra vigente para cómputo puro
+> es **2.2× (fibrec) y 9.1× (loopsum)**.
 
 Lo que **sigue abierto** está en §3 (arcos no cerrados) y §4 (ideas fuera de la caja).
 
@@ -175,9 +216,14 @@ un programa pequeño: **0.03 s** (el modelo dev=VM / deploy=nativo, como Rust). 
 
 > **Re-medido 19 jul 2026 (post-H6)**: la auditoría hizo la aritmética de int **checked por defecto**
 > (paridad de semántica con la VM; commit e76c332) y eso cuesta ~25% justo en fib (una suma y dos restas
-> por llamada). Hoy (hyperfine, M3 Pro, `ray build --native --release`): default **21.5 ms = 4.2× sobre
-> node** (89.3 ms); con `--fast` (aritmética envolvente, la semántica del spike) **17.6 ms = 5.1×**. La
-> tabla de arriba queda como registro del spike; la cifra vigente para el build por defecto es **4.2×**.
+> por llamada). Entonces (hyperfine, M3 Pro, `ray build --native --release`): default **21.5 ms = 4.2×
+> sobre node** (89.3 ms); con `--fast` (aritmética envolvente, la semántica del spike) **17.6 ms = 5.1×**.
+>
+> ⚠️ **Superado por §0.1 (29 jul 2026)**: aquellas cifras median el **proceso completo**, así que el
+> 4.2× incluía los ~45 ms de arranque de node. Con la auto-medición del arnés actual (solo el
+> workload), la ventaja en cómputo puro es **2.21× en `fibrec`** y **9.06× en `loopsum`**; el arranque
+> se contabiliza aparte, y ahí el nativo es **#1 de la mesa**. Esta tabla y la del spike quedan como
+> registro histórico.
 
 **Conclusión**: P2.b es EL camino, validado. La tesis "raylang mapea a Rust → velocidad nativa" es cierta
 y espectacular para el núcleo de cómputo. Confirma el veredicto de P0/P1: lo único que el HW cobra es el

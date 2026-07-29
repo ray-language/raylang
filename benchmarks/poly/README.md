@@ -91,40 +91,59 @@ hash y construir respuestas — ejercita la **stdlib**, no la aritmética.
 > usuario/config reales (no conocidos de antemano, que es donde importa tener un motor de
 > verdad en vez de parsing ad-hoc), `std/regex` es la herramienta idiomática correcta.
 
-## Resultados (best-of-5, M3, jul 2026 — arco P0 completo, build de release/PGO)
+## Resultados (29 jul 2026 — M3 Pro, mediana de 10 corridas, 5 de calentamiento)
 
-| Workload | Líder | ray | ray vs líder | Puesto |
-|---|---|---|---|---|
-| `jsonserialize` | perl 73 ms | 142 ms | **1.9×** | **5/7 — bate a Python y Ruby** |
-| `logparse` | perl 70 ms | 140 ms | **2.0×** | **5/7 — bate a Lua y Ruby** |
-| `wordcount` | php 118 ms | 290 ms | **2.5×** | **6/7 — bate a Ruby** |
+Suite completa con el arnés actual (auto-medición: los 12 programas de cómputo cronometran su
+propio workload, así que **no** cuentan el arranque del runtime; `empty`/`print` sí lo miden, que
+es justo lo que evalúan). `ray` = la VM; `native` = `ray build --native --release`, que desde el
+arco F enlaza **fibras M:N** por defecto.
 
-> **Arco de optimización P0 (14 jul 2026) — CERRADO** — todos los pasos medidos, oráculo
-> VM↔intérprete intacto, build de release con PGO:
-> - **P0.1** hasher aHash · **P0.2** `get_or` (get sin alocar) · **P0.3** `add_to`
->   (upsert en 1 lookup) · **P0.4** allocador **mimalloc** (el `split` era 82% del coste, puro
->   malloc churn; −17 a −21% en todo) · **P0.6** superinstrucción de guarda `GetLocalConstCmpJump`
->   (fib +11%; elegida por histograma dinámico de pares).
-> - Cada lenguaje usa su **acumulador idiomático**: ray `m.add_to(k, 1)`; Ruby `Hash.new(0);
->   h[k]+=1`; Perl `$h{k}++`; Python `defaultdict(int)`; JS/PHP/Lua get-or-default.
-> - **Progreso de ray**: `wordcount` **9.7×→2.5×**, `logparse` **4.9×→2.0×**, `jsonserialize`
->   **2.9×→1.9×** — de "malísimo" a la liga de los intérpretes maduros. Los micro-CPU (fibrec
->   12.5×→10.1×, loopsum) siguen capados sin un backend nativo/JIT. Detalle en
->   `raylang/PERFORMANCE.md` (arco P0 + plan P1/P2).
+**Tiempo del binario nativo frente a los compilados y a node** (× = cuántas veces más lento que
+`native`; <1 significa que nos gana):
+
+| Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
+|---|---|---|---|---|---|
+| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 28× |
+| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 54× |
+| `wordcount` | 48.6 ms | 2.60× | 0.90× | **1.24×** | 5.5× |
+| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 3.4× |
+| `jsondeserialize` | 85.2 ms | 1.10× | 0.52× | 0.57× | 4.2× |
+| `logparse` | 27.0 ms | 1.86× | 0.83× | **1.17×** | 3.3× |
+| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
+| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
+| `matrixmul` | 11.6 ms | 2.05× | 0.66× | 0.50× | 57× |
+| `regex` | 70.7 ms | 0.87× | **1.08×** | 0.37× | 246× |
+
+- **Le gana a node en 9 de los 10** programas de cómputo (de 1.1× a 20×). El único que pierde es
+  `regex`, y con matiz: node lleva un motor de regex en C++ mientras la variante `.ray` parsea a
+  mano (ver la nota de arriba); el `native` va por el crate `regex` desde R5.
+- **Le gana a `rustc -O` en cinco** (`wordcount` 1.24×, `treealloc` 1.52×, `sortnums` 1.12×,
+  `logparse` 1.17×, `loopsum` empate) y **a Go en cuatro**. Donde pierde contra ambos es en
+  `jsondeserialize` y `matrixmul` — cómputo escalar denso y punto flotante.
+- **Arranque** (proceso completo, sin auto-medición): `empty` **1.80 ms 🥇 #1 de 10** — por
+  delante de rustc (1.92 ms) y Go (1.98 ms), con 1.8 MB de RSS. Las fibras no lo penalizan.
+
+**Ranking combinado (tiempo × memoria, media geométrica)**: el binario nativo queda **#2 en 10 de
+los 12 programas** y #3 en los dos restantes (`jsonserialize`, `matrixmul`) — nunca por debajo del
+tercer puesto, contra 9 lenguajes.
 
 ### Lectura
 
-- **El nicho cuenta una historia MUY distinta** a fib/loopsum (8–12×): tras el arco P0 ray va
-  **2.0–2.7×**, **le gana a Ruby en los tres**, y a **Python y Lua** en `jsonserialize`/`logparse`.
-  Está firmemente en la liga de los intérpretes maduros (Python/Lua/JS), no ya "malísimo". La
-  ventaja de arranque (~3 ms, binario nativo) se nota más cuanto más corto es el workload.
-- **De dónde vino la mejora**: el Map de raylang era lento por **asignar basura, no por
-  hashear**. `MapGet` construía un arreglo `[V]` + un `Option` por acceso (P0.2 los mató con
-  `get_or`), y el patrón contador hacía 2 lookups + 2 clones de la clave (P0.3 → 1 con `add_to`).
-- **Lo que queda** es el impuesto general de intérprete (~2–3×, el mismo de `jsonserialize`,
-  sin map): solo lo mueve **P2** (codegen nativo: transpile-a-Rust o JIT) o **P1** (representación
-  de datos). Siguientes palancas del arco P0: **P0.4** (interning de strings del split), **P0.6**
-  (superinstrucciones ronda 3). Plan completo en `raylang/PERFORMANCE.md`.
+- **El backend nativo cambió la categoría del proyecto.** La tabla anterior de este README (arco
+  P0, 14 jul) medía la VM contra intérpretes y celebraba "2.0–2.7× del líder". Hoy la comparación
+  relevante es contra **binarios compilados**, y ahí se pelea de tú a tú con Go y Rust.
+- **La VM sigue siendo el motor de desarrollo**, y su distancia al nativo dice para qué es cada
+  uno: 3–4× en los workloads de servicio (donde el coste real está en la stdlib, compartida) y
+  28–57× en los micro de cómputo puro (donde solo se mide el bucle de despacho). El modelo
+  *dev = VM / deploy = nativo* no es un eslogan: es esta tabla.
+- **Las fibras M:N salen gratis en cómputo.** A/B del mismo programa con y sin `--without fibers`
+  (mediana de 15 corridas): `fibrec` +0.4%, `wordcount` +1.9%, `treealloc` −2.3% — todo dentro del
+  ruido — y el arranque de `empty` incluso mejora (1.57 vs 1.97 ms, porque el modelo de fibras no
+  levanta el hilo worker que sí crea el de hilo-por-tarea). Su beneficio está en concurrencia e
+  I/O, y no se paga en los programas secuenciales.
+- **Dónde queda trabajo**: `jsondeserialize` (0.52× de Go) y `matrixmul` (0.50× de rustc) son los
+  dos huecos claros — búsqueda de substrings y punto flotante denso. Plan en
+  `raylang/PERFORMANCE.md`.
 
 ### Reproducir
 

@@ -76,9 +76,12 @@ fn main() -> int {
   va en su propio grupo de procesos y es **hijo de scope**: nadie se queda huérfano.
 - **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
-  ejecutable: **24–61× más rápido que la VM**, y en cómputo puro **le gana a node (V8) por 4,2×**
-  (5,1× con `--fast`, que cambia la aritmética chequeada por envolvente; medido 19 jul 2026). Modelo
-  *dev = VM / deploy = nativo*, con paridad byte-idéntica.
+  ejecutable, con paridad byte-idéntica (*dev = VM / deploy = nativo*). En el banco poliglota de 14
+  programas (29 jul 2026, M3 Pro) **le gana a node en 9 de los 10 de cómputo** (1,1×–20×), **a
+  `rustc -O` en cinco** y **a Go en cuatro**, y arranca en **1,80 ms — el más rápido de la mesa**.
+  En tiempo×memoria queda **#2 de 10 lenguajes en 10 de los 12 programas**. Frente a la propia VM:
+  3–4× en cargas de servicio y 28–57× en cómputo puro. Tablas:
+  [`benchmarks/poly/README.md`](benchmarks/poly/README.md).
 - **Corre en el navegador.** La VM compilada a WebAssembly, sin `wasm-bindgen`.
 
 ## Instalación
@@ -112,7 +115,7 @@ cd hola
 ray run                # ejecuta src/main.ray en la VM
 ray dev                # modo desarrollo: recompila y reinicia ante cambios (+ live-reload del navegador)
 ray build              # chequea y compila sin ejecutar
-ray build --native     # transpila a Rust y compila un binario nativo (24–61× la VM)
+ray build --native     # transpila a Rust y compila un binario nativo (3–57× la VM, según la carga)
 ray test               # corre las funciones @test
 ray fmt src/main.ray   # formatea
 ray doc src/main.ray   # genera documentación desde /// 

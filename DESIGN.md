@@ -8625,3 +8625,44 @@ Cambio mecánico, sin lógica nueva: la tabla de dispatch de `src/cli.rs` (§41.
 `registry` y `print_help` se secciona. Fuera del código, los usos a renombrar están en `DESIGN.md`,
 `PUBLICAR.md` (la guía del publicador, la más afectada), `MANUAL.md`, `REFERENCIA.md`, `README.md`,
 `IDEAS.md` y las suites `tests/registry_cli.rs` y `tests/deps_cli.rs`.
+
+## 89. M100 — ejecución de procesos del SO, v1 (EJECUTADA, jul 2026)
+
+> El contrato completo (superficie, invariantes y la tabla de errores ajenos que cada decisión
+> esquiva) vive en **IDEAS §53.8** y se ejecutó tal cual, sin desviaciones. Aquí, el resumen de lo
+> que existe y dónde.
+
+**Superficie** (`import std/process;`): `process.run(program, args) -> Result<Output, string>` y
+el builder `process.cmd(...)` con `dir/env/env_clear/stdin/timeout_ms/max_output/merge_output/run`.
+`Exit { Code(int), Signal(int) }` (nunca `128+sig`); `Output { exit, stdout, stderr, timed_out,
+truncated }`. `Err` = solo "no se pudo lanzar"; timeout y tope vuelven como DATOS en el `Output`.
+
+**Reparto por capas** (fases 1a–1d, rama `feat/process-exec-v1`):
+
+- **Primitivo** `ray_runtime::process::run` (feature `process`, sin deps externas): sin shell,
+  stdin=/dev/null o escribir-y-cerrar, drenaje concurrente de ambos pipes con `poll(2)` (el
+  deadlock clásico es imposible por construcción), tope por flujo con `truncated`, escalera de
+  timeout `SIGTERM`→`SIGKILL` al **grupo** (`process_group(0)`, sin `pre_exec`), cosecha siempre,
+  `merge_output` = un solo pipe (`dup`, orden real del kernel). `ray-runtime` pasó a dependencia
+  NO-opcional del binario (sin features extra no arrastra crates; el slim queda igual).
+- **Builtin `__run`** (opcode `Run`): firma plana de 10 args; la codificación (arreglo etiquetado
+  `[bytes]`) y la decodificación de opciones viven UNA vez en el runtime compartido
+  (`run_encoded`/`run_opts_from_flat`) → los tres motores no pueden divergir.
+- **`std/process`**: la forma tipada. `Cmd.run()` convive con `process.run()` por la prioridad
+  UFCS campo → método de trait → función libre (trait `CmdOps`); los campos del builder llevan
+  nombres distintos de sus métodos (un campo `dir` taparía al método).
+- **Golden triple**: `tests/process_cli.rs` (VM≡intérprete, literal) sobre
+  `examples/stdlib/process_run.ray`, que el corpus nativo recoge solo (byte-idéntico verificado
+  también en nativo, con y sin fibras). Los 11 invariantes del primitivo tienen test unitario en
+  el crate (`cargo test -p ray-runtime --features process`).
+
+**Interinatos documentados** (dentro del contrato, pendientes de su fase):
+
+- VM y nativo hoy **bloquean el hilo del worker** durante `run()` (el precedente es SQLite); el
+  contrato pide aparcar la fibra sobre los fds de los pipes. Requiere un park **multi-fd** que no
+  existe aún en ningún motor — es la siguiente fase natural de M100 antes de la v2.
+- `--without process` es gating de **política** (error de transpilación limpio), no de crate.
+- Windows: `Err` honesto de plataforma, como `packages/tz`.
+
+**v2 (diseñada, no ejecutada)**: `Cmd.stream() -> Proc` con canales acotados como contrapresión y
+`Proc` como hijo de scope (concurrencia estructurada de procesos), VM **y** nativo. Ver IDEAS §53.8.

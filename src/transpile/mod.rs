@@ -103,6 +103,9 @@ struct Transpiler {
     needs_rt_sqlite: bool,
     /// R5: el programa ejecuta std/regex → feature `regex` de ray-runtime (motor acelerado).
     pub(super) needs_rt_regex: bool,
+    /// M100: ¿usa `__run` (procesos del SO)? El helper `__ray_run` llama a `ray_runtime::process`
+    /// (el MISMO código que la VM). Activa la feature `process` (sin deps; fuerza la vía Cargo).
+    needs_rt_process: bool,
     /// Subsistemas con-crate EXCLUIDOS por `--without` (crypto/tls/sqlite): sus builtins no se interceptan
     /// (caen en stub que panica) → el binario puede usar la vía rápida `rustc`. Ver `transpile_with`.
     exclude: std::collections::HashSet<String>,
@@ -232,6 +235,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_rt_tls: false,
         needs_rt_sqlite: false,
         needs_rt_regex: false,
+        needs_rt_process: false,
         exclude: exclude.iter().cloned().collect(),
         cells: std::collections::HashSet::new(),
         fibers,
@@ -467,6 +471,11 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     // `--without regex` ya evitó marcar el flag y la Pike VM raylang se transpila tal cual).
     if t.needs_rt_regex {
         rt_features.push("regex");
+    }
+    // M100: procesos del SO (detectado por USO de `__run`, como crypto/tls/sqlite; `--without
+    // process` es gating de POLÍTICA — el builtin cae al Err de "no soportado", no hay crate detrás).
+    if t.needs_rt_process {
+        rt_features.push("process");
     }
     // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
     // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,

@@ -14,6 +14,11 @@ pub mod crypto;
 // es el hilo-por-conexión actual), así que el cfg evita compilar el scheduler en builds que no lo usan.
 #[cfg(feature = "fibers")]
 pub mod fibers;
+// M100 (IDEAS §53.8): ejecución de procesos del SO. Como `fibers`, sin stub sin-feature: los
+// consumidores solo lo referencian con la feature activa (`builtins.rs` la activa siempre para el
+// binario `ray`; el transpilado la empuja a `rt_features` cuando el programa usa `__run`).
+#[cfg(feature = "process")]
+pub mod process;
 pub mod regex;
 pub mod sqlite;
 pub mod tls;

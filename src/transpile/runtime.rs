@@ -667,6 +667,22 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    match r { Ok((ncols, cells)) => { let mut v = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ncols.to_string())]; for cell in cells { v.push(Rc::<str>::from(cell)); } __ray_sqlite_tag(v) } Err(e) => __ray_sqlite_err(e) } }\n",
         ));
     }
+    // Helper de procesos del SO (M100, IDEAS §53.8), solo si el programa usa `__run`. Llama al MISMO
+    // `ray_runtime::process` que la VM (run_opts_from_flat/run_encoded) → paridad por construcción;
+    // aquí solo el marshalling de los tipos transpilados. Interinamente BLOQUEA el hilo del worker
+    // (como SQLite; también bajo fibras) — el aparcado sobre los fds de los pipes es una fase
+    // posterior de M100.
+    if t.needs_rt_process {
+        out.push_str(concat!(
+            "#[allow(clippy::too_many_arguments)]\n",
+            "fn __ray_run(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool, stdin: &[u8], has_stdin: bool, timeout_ms: i64, max_output: i64, merge_output: bool) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let env: Vec<String> = env.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, stdin, has_stdin, timeout_ms, max_output, merge_output);\n",
+            "    let elems: Vec<Rc<[u8]>> = ray_runtime::process::run_encoded(program, &args, &opts).into_iter().map(|b| Rc::<[u8]>::from(&b[..])).collect();\n",
+            "    Rc::new(std::cell::RefCell::new(elems)) }\n",
+        ));
+    }
     // Runtime de canales MPMC (concurrencia, M12.1/M12.2), solo si el programa usa spawn/canales. Es un
     // canal thread-safe propio (Arc<Mutex+Condvar>) — sin deps, ya que el `.rs` es standalone — con
     // backpressure (bounded) y cierre. FIFO como la VM. `T: Send` (primitivos en v1).

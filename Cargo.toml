@@ -43,7 +43,9 @@ sqlite = ["dep:rusqlite"]
 # La cripto (SHA/HMAC/Ed25519/ChaCha) vive ahora en `ray-runtime` (feature `crypto`) → mismo código que el
 # binario transpilado. `ring` ya no se declara directo aquí: llega vía `ray-runtime/crypto` (+ transitivo de
 # rustls). El *stub* de slim/wasm sigue en `builtins.rs` (rama `not(net-tls)`).
-net-tls = ["dep:ray-runtime", "ray-runtime?/crypto", "dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+# (M100: `ray-runtime` dejó de ser opcional — el primitivo de procesos vive ahí y es del núcleo;
+# sin features extra el crate no arrastra ninguna dependencia → el build slim queda igual.)
+net-tls = ["ray-runtime/crypto", "dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 # M89.3: la carga de librerías nativas (extern/FFI, libloading) tras una feature (activa por
 # defecto). El slim sin ella tiene la propiedad "no puede cargar código nativo" (contenedores
 # endurecidos); un `extern fn` chequea igual y su llamada da un error de ejecución claro.
@@ -62,10 +64,11 @@ ffi = ["dep:libloading"]
 ahash = "0.8"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# P2.b — el runtime compartido con crates de producción (crypto/tls/sqlite tras features). Opcional: solo se
-# enlaza cuando una feature de raylang lo pide (`net-tls` → `crypto`); el build slim/wasm no lo trae. No en
-# wasm (ring no compila a wasm32; el playground embarca solo el núcleo).
-ray-runtime = { path = "crates/ray-runtime", optional = true, default-features = false }
+# P2.b — el runtime compartido con crates de producción (crypto/tls/sqlite tras features). M100 lo hace
+# NO-opcional: el primitivo de procesos (`process`, solo std+libc) es del núcleo, y sin más features el
+# crate no arrastra ninguna dependencia externa (el build slim queda igual). No en wasm (ring no compila
+# a wasm32 y `process` es unix; el playground embarca solo el núcleo — el stub wasm vive en builtins.rs).
+ray-runtime = { path = "crates/ray-runtime", default-features = false, features = ["process"] }
 # P0.4 (perf, jul 2026): allocador global mimalloc. El malloc del sistema (macOS libmalloc en
 # particular) es lento para el CHURN de objetos pequeños del intérprete —`split`/`to_string`/arrays
 # alocan millones de `String` pequeños (en `wordcount`, `split` es el 82% del tiempo, todo malloc)—.

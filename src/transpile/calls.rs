@@ -1678,6 +1678,24 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
+            // M100: `__run` (procesos del SO) → `__ray_run` (ray_runtime::process, el MISMO código que
+            // la VM) + activa `needs_rt_process`. `--without process` es gating de POLÍTICA: sin
+            // interceptar, cae al Err de "no soportado" de abajo. Strings/arreglos por referencia
+            // (coerción a &str / &Rc<…>), bytes como `&*` (Rc<[u8]> → &[u8]); los escalares, tal cual.
+            "run" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_run(&");
+                self.emit_expr(out, eff[0])?;
+                for (i, e) in eff.iter().enumerate().skip(1) {
+                    out.push_str(match i {
+                        1..=3 => ", &",
+                        5 => ", &*",
+                        _ => ", ",
+                    });
+                    self.emit_expr(out, e)?;
+                }
+                out.push(')');
+            }
             _ => {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));

@@ -40,6 +40,10 @@ ahash = ["dep:ahash"]
 # 23 KB del mismo modelo en la VM). corosensei y no `asm!` propio: el unsafe de cambio de contexto es
 # la clase de código donde un error es corrupción de memoria silenciosa, no una excepción.
 fibers = ["dep:corosensei"]
+# M100 (IDEAS §53.8): ejecución de procesos del SO. SIN dependencias externas (std + libc a mano):
+# la feature no gatea un crate sino la COMPILACIÓN del módulo, y en el transpilado fuerza la vía
+# Cargo (como `fibers`). El binario `ray` la activa siempre (el primitivo `__run` es del núcleo).
+process = []
 # R5 (bench regex, jul 2026): motor de regex ACELERADO del binario transpilado (crate `regex`,
 # la liga de Rust: ~27 ms donde la Pike VM transpilada tarda ~580 ms). Detectada POR USO (import
 # std/regex ejecutado), como crypto/tls/sqlite. `--without regex` NO stubbea: el fallback es la

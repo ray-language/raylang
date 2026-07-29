@@ -43,14 +43,14 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__task_failed",
     // M97.2: `__try_call` (el primitivo tras `try_call`) → `catch_unwind` en el MISMO hilo.
     "__try_call",
-    // M100: `__run` (procesos del SO, IDEAS §53.8). Nativo: fase 1b (hoy stubbeado).
+    // M100: `__run` (procesos del SO, IDEAS §53.8) → `__ray_run` (ray_runtime::process, fase 1b).
     "__run",
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que
 /// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Vacío desde
-/// H21-N2 hasta M100: `__run` espera su fase 1b (el port nativo de procesos).
-const NATIVE_STUBBED_BUILTINS: &[&str] = &["__run"];
+/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1).
+const NATIVE_STUBBED_BUILTINS: &[&str] = &[];
 
 use super::transpile;
 

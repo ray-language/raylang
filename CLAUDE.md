@@ -12,11 +12,24 @@ expresiones, sintaxis de llaves.
 
 ## Documentos-contrato (fuente de verdad — leer antes de tocar comportamiento)
 
-- **`DESIGN.md`** — especificación, decisiones fundacionales (§0), gramática (§7),
-  reglas semánticas (§8) y hoja de ruta. **Cambiar el lenguaje = actualizar este
-  archivo primero.**
+- **`SPEC.md`** — **lo NORMATIVO**: qué programa es válido y qué hace (léxico,
+  gramática, tipos, semántica, concurrencia, superficie estable, diagnósticos).
+  **Cambiar el lenguaje = actualizar la SPEC primero.** Ante un conflicto entre la
+  SPEC y la implementación, uno de los dos es un bug y se resuelve explícitamente.
+- **`DESIGN.md`** — la **crónica de diseño**: decisiones fundacionales (§0) y el
+  porqué de cada fase, en orden cronológico (§21+ = un arco por sección). Es
+  historia razonada, no estado actual: todo cambio de comportamiento deja aquí su
+  motivo.
+- **`PRODUCTION.md`** — el **contrato de producción vigente**: ejes, invariantes no
+  negociables, estado medido y las guardas de CI que lo sostienen.
 - **`IDEAS.md`** — backlog de features futuras con su clasificación de impacto.
 - **`PERFORMANCE.md`** — crónica de rendimiento (arcos, mediciones, decisiones).
+- **`REFERENCE.md`** / **`MANUAL.md`** — el catálogo con firmas y la guía práctica:
+  lo que ve el usuario. Toda superficie nueva se documenta en ambos.
+- **`SECURITY.md`** — modelo de seguridad, política de dependencias e inventario de
+  `unsafe`. Una dependencia nueva o un `unsafe` nuevo se anotan aquí.
+- **`CHANGELOG.md`** — lo entregado. Los arcos que el usuario notaría van al bloque
+  "Sin publicar".
 
 ## Comandos
 

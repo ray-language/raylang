@@ -108,6 +108,11 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   borde de `ray-runtime` que el binario nativo (feature `regex` de la toolchain, activa por defecto) —
   bench regex **18,05 s → 348 ms (52×)**, misma salida byte a byte. El intérprete (`--interp`), los
   builds slim y `RAYLANG_REGEX_PIKE=1` conservan la Pike VM escrita en raylang (oráculo del dialecto).
+- **Kernel `DotRange` con deopt en la VM** (MM4): el bucle del producto punto
+  (`for k in lo..hi { s = s + a[k]*b[k]; }`) se ejecuta como UN opcode cuando los arreglos son de
+  floats (resultado bit a bit idéntico); cualquier otra forma cae al bytecode normal, que conserva la
+  semántica de errores. Bench matrixmul **664 → 23,9 ms (28×)** — de 117× a 4,1× del nativo, empate
+  estadístico con node (V8).
 - **Binario nativo (arcos N/R/M96/SN/F)**: `mimalloc` y aHash en el transpilado (wordcount/logparse
   −40%, −8,5% extra), `join` y `concat` sin recopia, `for` sin clonar, `std/regex` sobre el crate
   `regex` (570 → 71 ms), pool de hilos shardeado y `print` sin lock global (18k → 58k req/s antes de

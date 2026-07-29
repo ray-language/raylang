@@ -2773,6 +2773,17 @@ impl<'a> Vm<'a> {
                 OpCode::MatchFail => {
                     return Err(runtime_error(pos!().0, pos!().1, "no match branch matched (should not happen)"));
                 }
+                // MM4: kernel del producto punto (`for k in lo..hi { s = s + a[k]*b[k]; }`).
+                // Si los locales tienen la forma rápida, el bucle ENTERO corre en dot_range_fast
+                // (misma secuencia mul→add, mismo orden → resultado bit a bit idéntico) y se
+                // salta el bytecode del bucle. Si no, NO hace nada y cae al bucle interpretado
+                // de detrás: deopt — la semántica de errores es la del bytecode normal, no una
+                // segunda implementación.
+                OpCode::DotRange { acc, a, b, k, end, exit } => {
+                    if let Some(target) = self.dot_range_fast(*acc, *a, *b, *k, *end, *exit) {
+                        self.cur.frames[fi].ip = target;
+                    }
+                }
                 // R7: el cuerpo completo de una `run_*` interna de std/regex — despacha al crate
                 // `regex` de ray-runtime (la MISMA traducción de dialecto y caché por hilo que el
                 // binario nativo, R5). Los argumentos se leen de los locales del marco SIN clonar
@@ -3330,6 +3341,40 @@ impl<'a> Vm<'a> {
             _ => unreachable!("the checker guarantees an array, string or bytes"),
         }
         Ok(())
+    }
+
+    /// MM4: el camino rápido de `DotRange`. Devuelve `Some(exit)` si pudo ejecutar el bucle
+    /// entero (dejando `acc` y `k` exactamente como los dejaría el bytecode), o `None` para
+    /// caer al bucle interpretado que viene detrás. Condiciones: locales sin boxear, `acc`
+    /// Float, `k`/`end` Int, `a`/`b` FloatArray y el rango dentro de AMBOS arreglos — con eso,
+    /// dentro del kernel no puede nacer ningún error (los floats no desbordan).
+    fn dot_range_fast(&mut self, acc: usize, a: usize, b: usize, k: usize, end: usize, exit: usize) -> Option<usize> {
+        let (s, hi) = {
+            let frame = self.cur.frames.last().expect("hay un marco activo");
+            let Local::Plain(HeapValue::Int(k0)) = &frame.locals[k] else { return None };
+            let Local::Plain(HeapValue::Int(hi)) = &frame.locals[end] else { return None };
+            let (k0, hi) = (*k0, *hi);
+            if k0 >= hi {
+                return Some(exit); // rango vacío: el bucle no correría ni una vez; k queda como está
+            }
+            let Local::Plain(HeapValue::Float(s0)) = &frame.locals[acc] else { return None };
+            let Local::Plain(HeapValue::Obj(ha)) = &frame.locals[a] else { return None };
+            let Local::Plain(HeapValue::Obj(hb)) = &frame.locals[b] else { return None };
+            let Obj::FloatArray(xa) = self.cur.heap.get(*ha) else { return None };
+            let Obj::FloatArray(xb) = self.cur.heap.get(*hb) else { return None };
+            if k0 < 0 || hi as usize > xa.len() || hi as usize > xb.len() {
+                return None; // el bucle normal produce su error de índice con la posición exacta
+            }
+            let mut s = *s0;
+            for i in k0 as usize..hi as usize {
+                s = s + xa[i] * xb[i]; // mismo orden mul→add que el bytecode (sin FMA)
+            }
+            (s, hi)
+        };
+        let fi = self.cur.frames.len() - 1;
+        self.set_local(fi, acc, HeapValue::Float(s));
+        self.set_local(fi, k, HeapValue::Int(hi));
+        Some(exit)
     }
 
     /// TA4 (factorizado en R7): la variante SIN payload como objeto canónico por fibra — uno solo,

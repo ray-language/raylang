@@ -3328,3 +3328,204 @@ fn proc_streaming_primitives_oracle() {
     assert_eq!(interp, Value::Int(255), "intérprete: campos divergentes (bits apagados)");
     assert_eq!(vm, Value::Int(255), "VM: campos divergentes (bits apagados)");
 }
+
+// ── MM4: kernel DotRange (producto punto con deopt) ──────────────────────────
+
+/// Oráculo de ERROR a nivel de programa: ambos motores fallan con el mismo mensaje y en la
+/// misma LÍNEA. (La columna puede diferir en un indexado fusionado: `IndexLL` registra la
+/// posición del primer opcode del par — divergencia PREEXISTENTE de las superinstrucciones,
+/// verificada también sin kernel; no la introduce MM4.)
+fn oracle_error(src: &str) {
+    let tokens = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(tokens).expect("parse ok");
+    crate::checker::check(&mut prog).expect("check ok");
+    let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe fallar");
+    let compiled = compile_program(&prog).expect("compila");
+    let vm = run_program(&compiled).expect_err("la VM debe fallar");
+    assert_eq!(
+        (interp.msg.as_str(), interp.line),
+        (vm.msg.as_str(), vm.line),
+        "intérprete y VM difieren en el error"
+    );
+}
+
+/// ¿El bytecode de alguna función del programa contiene un `DotRange`?
+fn has_dot_range(src: &str) -> bool {
+    let tokens = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(tokens).expect("parse ok");
+    crate::checker::check(&mut prog).expect("check ok");
+    let compiled = compile_program(&prog).expect("compila");
+    compiled.functions.iter().any(|f| {
+        f.chunk.code.iter().any(|op| matches!(op, OpCode::DotRange { .. }))
+    })
+}
+
+/// El camino rápido: arreglos de floats, resultado bit a bit idéntico al intérprete.
+#[test]
+fn dot_range_kernel_floats_oracle() {
+    let src = r#"
+        fn main() -> int {
+            var a: [float] = [];
+            var b: [float] = [];
+            for i in 0..97 {
+                a.push(((i * 7) % 13) as float);
+                b.push(((i * 11) % 17) as float);
+            }
+            var s = 0.0;
+            for k in 0..97 {
+                s = s + a[k] * b[k];
+            }
+            (s * 1000.0) as int
+        }
+    "#;
+    assert!(has_dot_range(src), "el patrón exacto emite el kernel");
+    oracle_program(src);
+}
+
+/// dot(a, a) — el mismo arreglo en ambos lados es válido (nada muta dentro del bucle).
+#[test]
+fn dot_range_kernel_same_array_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            var a: [float] = [];
+            for i in 0..31 { a.push((i % 7) as float); }
+            var s = 0.0;
+            for k in 0..31 { s = s + a[k] * a[k]; }
+            s as int
+        }
+    "#,
+    );
+}
+
+/// Rango vacío (lo >= hi): el kernel no toca nada, como el bucle normal.
+#[test]
+fn dot_range_kernel_empty_range_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            var a: [float] = [];
+            var b: [float] = [];
+            a.push(1.0);
+            b.push(2.0);
+            var s = 10.0;
+            for k in 5..3 { s = s + a[k] * b[k]; }
+            s as int
+        }
+    "#,
+    );
+}
+
+/// DEOPT por representación: arreglos de INTS (acc int) — cae al bucle interpretado
+/// y el resultado (con la aritmética checked de int) coincide con el intérprete.
+#[test]
+fn dot_range_deopt_int_arrays_oracle() {
+    let src = r#"
+        fn main() -> int {
+            var a: [int] = [];
+            var b: [int] = [];
+            for i in 0..50 { a.push(i % 9); b.push(i % 5); }
+            var s = 0;
+            for k in 0..50 { s = s + a[k] * b[k]; }
+            s
+        }
+    "#;
+    assert!(has_dot_range(src), "el kernel se emite (la forma es la misma); en runtime deopta");
+    oracle_program(src);
+}
+
+/// DEOPT por rango: el arreglo es más corto que el rango → el error de índice nace en el
+/// bucle NORMAL, con el mismo mensaje y la misma posición que el intérprete.
+#[test]
+fn dot_range_deopt_out_of_bounds_error_parity() {
+    oracle_error(
+        r#"
+        fn main() -> int {
+            var a: [float] = [];
+            var b: [float] = [];
+            for i in 0..10 { a.push(i as float); b.push(i as float); }
+            var s = 0.0;
+            for k in 0..20 { s = s + a[k] * b[k]; }
+            s as int
+        }
+    "#,
+    );
+}
+
+/// DEOPT por overflow de int: el trap (con su posición) lo da el bucle normal.
+#[test]
+fn dot_range_deopt_int_overflow_error_parity() {
+    oracle_error(
+        r#"
+        fn main() -> int {
+            var a: [int] = [];
+            var b: [int] = [];
+            a.push(4611686018427387904);
+            b.push(4);
+            var s = 0;
+            for k in 0..1 { s = s + a[k] * b[k]; }
+            s
+        }
+    "#,
+    );
+}
+
+/// DEOPT por acumulador BOXEADO (capturado por una closure): el kernel exige Plain.
+#[test]
+fn dot_range_deopt_boxed_acc_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            var a: [float] = [];
+            var b: [float] = [];
+            for i in 0..20 { a.push((i % 4) as float); b.push((i % 3) as float); }
+            var s = 0.0;
+            let lee = fn() -> float { s };
+            for k in 0..20 { s = s + a[k] * b[k]; }
+            (s + lee() * 0.0) as int
+        }
+    "#,
+    );
+}
+
+/// Los NO-patrones no emiten el kernel: índices distintos, otro operador, acumulador aliado.
+#[test]
+fn dot_range_not_emitted_for_non_patterns() {
+    // b[j] con j fijo: no es el índice del rango.
+    assert!(!has_dot_range(
+        r#"
+        fn main() -> int {
+            var a: [float] = []; var b: [float] = []; a.push(1.0); b.push(1.0);
+            let j = 0;
+            var s = 0.0;
+            for k in 0..1 { s = s + a[k] * b[j]; }
+            s as int
+        }
+    "#
+    ));
+    // Resta en vez de suma.
+    assert!(!has_dot_range(
+        r#"
+        fn main() -> int {
+            var a: [float] = []; var b: [float] = []; a.push(1.0); b.push(1.0);
+            var s = 0.0;
+            for k in 0..1 { s = s - a[k] * b[k]; }
+            s as int
+        }
+    "#
+    ));
+    // El acumulador es uno de los arreglos... (tipos no lo permiten con floats; la
+    // guarda sintáctica s != a se cubre con el índice como acumulador imposible de
+    // tipar — basta con verificar que el patrón con cuerpo extra tampoco fusiona):
+    assert!(!has_dot_range(
+        r#"
+        fn main() -> int {
+            var a: [float] = []; var b: [float] = []; a.push(1.0); b.push(1.0);
+            var s = 0.0;
+            var t = 0.0;
+            for k in 0..1 { s = s + a[k] * b[k]; t = t + 1.0; }
+            (s + t) as int
+        }
+    "#
+    ));
+}

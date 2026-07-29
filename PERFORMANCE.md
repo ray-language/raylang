@@ -38,14 +38,16 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 | `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 4.4× |
 | `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
-| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 4.1× |
 | `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 5.5× |
 
 *(× = veces más lento que `native`; <1 = nos gana. Las filas de `matrixmul` —Fase 67— y de
 `wordcount`/`jsondeserialize`/`logparse`/`regex` —Fase 68— son las re-mediciones tras N6 y las
 fusiones N-D/R6, del mismo día y el mismo arnés; la corrida original está en el historial. El
 `VM ÷ native` de `regex` era 284× hasta R7 —Fase 69: la VM despacha al crate `regex` como el
-nativo— que lo dejó en 5.5× (18.05 s → 348 ms, arnés del banco).)*
+nativo— que lo dejó en 5.5× (18.05 s → 348 ms, arnés del banco); el de `matrixmul` era 117×
+hasta MM4 —Fase 70: kernel `DotRange` con deopt— que lo dejó en 4.1× (664 → 23.9 ms, empate
+estadístico con node).)*
 
 - **Gana a node en 9 de 10**; el décimo (`regex`) queda a un 5% (0.95×) contra el motor C++ de V8,
   y la variante rust de ese bench parsea A MANO (con el crate `regex`, Rust puro cuesta ~49 ms —
@@ -1009,6 +1011,31 @@ rustc); build slim sin la feature o `RAYLANG_REGEX_PIKE=1` → la Pike VM interp
 **combinado tiempo×memoria sube del #10 al #8** (9.7 MB de pico, +0.9 sobre la Pike VM: la caché
 del crate). El resto ya no es regex, es el bucle del bench interpretado (plantilla de string +
 4 `parse_int` por línea); en tiempo puro sigue detrás de los scripting (todos bindean motores C).
+
+#### Fase 70 — MM4: kernel `DotRange` con deopt — el bucle del producto punto en un opcode (29 jul, bench matrixmul)
+
+El 117× de `matrixmul` no tenía hotspot: el bucle interno (`s = s + ai[k] * bj[k]`, 8M
+iteraciones) eran **11 opcodes por iteración** (~79 ns) de pura maquinaria — otro peephole habría
+dado ~2×, no órdenes de magnitud. El movimiento nuevo es un **kernel de bucle con deopt**, el
+primer opcode que ejecuta un BUCLE entero: el compilador de bytecode reconoce el cuerpo exacto
+`s = s + A[k] * B[k];` de un `for k in lo..hi` (s/A/B locales distintos entre sí y del índice) y
+emite `DotRange` **delante de la guarda**, dejando el bucle completo emitido detrás. En runtime,
+si los locales tienen la forma rápida (acc `Float` sin boxear, `A`/`B` `FloatArray`, rango dentro
+de AMBOS arreglos), el producto punto corre en Rust —misma secuencia mul→add, mismo orden: el
+float es **bit a bit idéntico**— y salta al final del bucle; si NO (arreglos de ints o degradados,
+acumulador capturado, rango que se saldría), **no hace nada y cae al bytecode de siempre**: la
+semántica de errores (índice fuera de rango con su posición, overflow checked del int) la da el
+bucle normal — deopt de verdad, no una segunda implementación que pueda divergir. Los pases de
+fusión aprenden que `DotRange.exit` es un destino de salto más (marcado + remapeo en los 4 pases
+con desplazamiento). Tests: oráculo bit a bit del camino rápido, dot(a,a), rango vacío, y los
+cuatro deopts (ints, OOB con paridad de error, overflow, acumulador boxeado); de paso quedó
+documentada una divergencia PREEXISTENTE de columna en el error de un indexado fusionado
+(`IndexLL` registra la posición del primer opcode del par — verificada sin kernel).
+**Medido** (arnés del banco, ray PGO): `matrixmul` VM **664 → 23.9 ms (28×)** — de 117× a
+**4.1× del nativo**, **empate estadístico con node** (23.87 ms, el JIT de V8) y **#4 del
+combinado** tiempo×memoria (tras rs/native/go, por delante de lua/js/py). El límite ya no es el
+bucle interno: es el resto del programa interpretado (construcción de filas con push, transpuesta,
+checksum).
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

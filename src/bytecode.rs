@@ -631,6 +631,18 @@ pub enum OpCode {
     /// válidos.
     MatchFail,
 
+    // --- MM4: kernel de bucle con deopt ---
+    /// El PRODUCTO PUNTO `for k in lo..hi { acc = acc + a[k] * b[k]; }` como un solo opcode,
+    /// emitido justo ANTES de la guarda del bucle (que sigue emitido completo detrás). En
+    /// runtime, si los locales tienen la forma rápida (acc Float, a/b FloatArray, k/end Int,
+    /// `0 <= k` y `end <= len` de ambos), ejecuta el bucle entero en Rust —misma secuencia
+    /// mul→add, mismo orden: resultado bit a bit idéntico— , deja `k = end` y salta a `exit`
+    /// (justo después del bucle). Si NO (arrays degradados/de ints, locales boxeados, rango
+    /// que se saldría), NO hace nada y cae al bucle interpretado de siempre: la semántica de
+    /// errores (índice fuera de rango, overflow de int) la da el bytecode normal — deopt, no
+    /// una segunda implementación.
+    DotRange { acc: usize, a: usize, b: usize, k: usize, end: usize, exit: usize },
+
     // --- R7: std/regex sobre el crate `regex` (feature `regex`) ---
     /// El CUERPO completo de una de las 7 funciones internas `run_*` de std/regex: lee sus
     /// argumentos de los locales del marco (slot 0 = el `Prog`, cuyo campo `pat` retiene el

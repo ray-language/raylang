@@ -2682,3 +2682,308 @@ mod tests {
         assert_eq!(char_index_of("añô", "z"), None);
     }
 }
+
+// --- Ejecución de procesos del SO (M100, IDEAS §53.8) ---
+//
+// Contrato completo en `IDEAS.md` §53.8. Lo que este módulo implementa, y POR QUÉ (cada punto
+// esquiva un error documentado de otro lenguaje):
+//
+// - **Sin shell**: `argv` tipado. Una tubería se escribe `run("sh", ["-c", …])`, visible en el código.
+// - **stdin = /dev/null** salvo que se pase `stdin`, que se escribe y se CIERRA. Heredar el stdin
+//   del proceso (un servidor) cuelga al hijo o le da datos que no le tocan.
+// - **Los dos pipes se drenan CONCURRENTEMENTE** con `poll(2)`: el deadlock clásico ("wait antes de
+//   leer" con un pipe lleno — Go `cmd.Wait`, Python `Popen.wait`) es imposible por construcción.
+// - **Tope de captura** con `truncated`: un `Vec` sin límite es vía de OOM en un servidor. Truncar y
+//   DECIRLO, en vez de matar al hijo con un error confuso (el `maxBuffer` de Node).
+// - **Timeout NO es error**: devuelve el `Output` PARCIAL con `timed_out`. La escalera de apagado
+//   cierra stdin → `SIGTERM` al GRUPO → margen → `SIGKILL` al GRUPO: los nietos de un `sh -c "a | b"`
+//   mueren también (Go, vía context, mata solo al hijo directo).
+// - **El grupo se crea con `Command::process_group(0)` de std, SIN `pre_exec`**: entre `fork` y
+//   `exec` solo es legal código async-signal-safe, y este proceso tiene ~14 hilos y mimalloc (un
+//   lock del asignador tomado por otro hilo colgaría al hijo para siempre). Sin `pre_exec`, std usa
+//   su camino `posix_spawn`.
+// - **Siempre se cosecha** (raylang no tiene destructores): también tras el timeout.
+// - `bytes` en todo el borde: decodificar es decisión del llamador.
+
+/// Opciones de una ejecución (las pone `std/process` desde el builder; el primitivo no las inventa).
+pub struct RunOpts {
+    pub dir: Option<String>,
+    /// Pares (clave, valor) a AÑADIR/pisar sobre el entorno heredado.
+    pub env: Vec<(String, String)>,
+    /// ¿Vaciar el entorno heredado antes de aplicar `env`?
+    pub env_clear: bool,
+    /// `Some(data)` = escribir eso en el stdin del hijo y cerrarlo; `None` = `/dev/null`.
+    pub stdin: Option<Vec<u8>>,
+    /// Presupuesto total en ms (`<= 0` = sin plazo).
+    pub timeout_ms: i64,
+    /// Tope de captura por flujo, en octetos.
+    pub max_output: i64,
+    /// `dup2` de stderr al MISMO pipe que stdout → orden REAL del kernel (fusionarlos en userspace
+    /// da un orden inventado: los buffers de los dos pipes son independientes).
+    pub merge_output: bool,
+}
+
+/// El resultado de una ejecución que SÍ llegó a lanzarse (salir con código ≠ 0 no es un error).
+pub struct RunOutput {
+    /// `Ok(code)` si terminó normalmente; `Err(sig)` si lo mató una señal (nunca `128+sig`).
+    pub exit: Result<i32, i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub timed_out: bool,
+    pub truncated: bool,
+}
+
+/// Lanza `program` con `args` y devuelve su salida. `Err` = **no se pudo lanzar** (ENOENT/EACCES/
+/// dir inválido); todo lo demás es `Ok`, incluido un hijo que falló o murió por señal.
+///
+/// Esta es la versión BLOQUEANTE (intérprete, el oráculo secuencial). VM y nativo aparcan la fibra
+/// (fases siguientes de M100); la semántica observable —y por tanto el golden— es la misma.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn run(program: &str, args: &[String], opts: &RunOpts) -> Result<RunOutput, String> {
+    use std::io::{Read, Write};
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    if let Some(d) = &opts.dir {
+        cmd.current_dir(d);
+    }
+    if opts.env_clear {
+        cmd.env_clear();
+    }
+    for (k, v) in &opts.env {
+        cmd.env(k, v);
+    }
+    // stdin: /dev/null por defecto (jamás heredado); con datos, un pipe que se escribe y se cierra.
+    cmd.stdin(if opts.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    // Grupo propio: la escalera del timeout mata al GRUPO, no solo al hijo directo.
+    cmd.process_group(0);
+
+    let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    let pid = child.id() as i32;
+    let deadline = if opts.timeout_ms > 0 {
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(opts.timeout_ms as u64))
+    } else {
+        None
+    };
+
+    // El stdin se escribe ENTERO antes de drenar. Es correcto para el contrato de v1 (`stdin(bytes)`
+    // ya está en memoria) mientras quepa en el buffer del pipe; si el hijo no lee y el pipe se
+    // llena, el write bloquea — el caso de "alimentar megabytes a un hijo que no consume" es de la
+    // v2 (streaming), donde el canal acotado es la contrapresión. Un `Err` aquí NO aborta: el hijo
+    // ya corre y hay que cosecharlo, así que se ignora (el hijo verá EOF).
+    if let (Some(data), Some(mut si)) = (&opts.stdin, child.stdin.take()) {
+        let _ = si.write_all(data);
+    } // el drop de `si` cierra el pipe → EOF para el hijo
+
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let mut truncated = false;
+    let cap = opts.max_output.max(0) as usize;
+
+    // Drenaje CONCURRENTE de ambos pipes con poll(2) (nunca uno y luego el otro: el hijo podría
+    // llenar el que no leemos y bloquearse para siempre). Los pipes van no-bloqueantes para que un
+    // POLLIN espurio no nos clave.
+    let (ofd, efd) = (
+        out_pipe.as_ref().map_or(-1, std::os::fd::AsRawFd::as_raw_fd),
+        err_pipe.as_ref().map_or(-1, std::os::fd::AsRawFd::as_raw_fd),
+    );
+    for fd in [ofd, efd] {
+        if fd >= 0 {
+            // SAFETY: fcntl variádica (ver el self-pipe de M88.1: con aridad fija es UB en arm64);
+            // el fd es de un pipe propio recién creado por std.
+            unsafe {
+                let fl = fcntl_get(fd);
+                let _ = fcntl(fd, F_SETFL_P, fl | O_NONBLOCK_P);
+            }
+        }
+    }
+    let mut timed_out = false;
+    let mut buf = [0u8; 65536];
+    let (mut o_open, mut e_open) = (ofd >= 0, efd >= 0);
+    while o_open || e_open {
+        // Plazo restante para el poll: al vencer, se rompe el drenaje y actúa la escalera.
+        let wait_ms: i32 = match deadline {
+            None => -1,
+            Some(d) => {
+                let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis();
+                if rem == 0 {
+                    timed_out = true;
+                    break;
+                }
+                rem.min(i32::MAX as u128) as i32
+            }
+        };
+        let mut fds = [
+            PollFd { fd: if o_open { ofd } else { -1 }, events: POLLIN, revents: 0 },
+            PollFd { fd: if e_open { efd } else { -1 }, events: POLLIN, revents: 0 },
+        ];
+        // SAFETY: `poll` sobre un array local de 2 entradas, vivo durante la llamada.
+        let n = unsafe { poll(fds.as_mut_ptr(), 2, wait_ms) };
+        if n < 0 {
+            // SAFETY: errno del hilo actual.
+            if unsafe { *errno_ptr() } == EINTR {
+                continue;
+            }
+            break; // error no transitorio: se corta el drenaje y se cosecha igual
+        }
+        if n == 0 {
+            timed_out = true;
+            break;
+        }
+        for (i, slot) in [(0usize, true), (1usize, false)] {
+            if fds[i].revents == 0 {
+                continue;
+            }
+            // Una lectura del flujo elegido. Devuelve (sigue_abierto, se_truncó) para no mantener
+            // dos préstamos mutables vivos a la vez (out_pipe/err_pipe son campos distintos).
+            let mut drain = |pipe: &mut Option<std::process::ChildStdout>, sink: &mut Vec<u8>| -> (bool, bool) {
+                let Some(p) = pipe.as_mut() else { return (false, false) };
+                match p.read(&mut buf) {
+                    Ok(0) => (false, false), // EOF: ese extremo cerró
+                    Ok(k) => {
+                        // Tope por flujo: se trunca y se DICE (nunca se mata al hijo por pasarse).
+                        let room = cap.saturating_sub(sink.len());
+                        if room == 0 {
+                            return (true, true);
+                        }
+                        let take = k.min(room);
+                        sink.extend_from_slice(&buf[..take]);
+                        (true, take < k)
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (true, false),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => (true, false),
+                    Err(_) => (false, false),
+                }
+            };
+            let (open, trunc) = if slot {
+                drain(&mut out_pipe, &mut stdout)
+            } else {
+                // El stderr es ChildStderr, no ChildStdout: lectura propia (misma lógica).
+                match err_pipe.as_mut() {
+                    None => (false, false),
+                    Some(p) => match p.read(&mut buf) {
+                        Ok(0) => (false, false),
+                        Ok(k) => {
+                            let room = cap.saturating_sub(stderr.len());
+                            if room == 0 {
+                                (true, true)
+                            } else {
+                                let take = k.min(room);
+                                stderr.extend_from_slice(&buf[..take]);
+                                (true, take < k)
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (true, false),
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => (true, false),
+                        Err(_) => (false, false),
+                    },
+                }
+            };
+            truncated |= trunc;
+            if slot { o_open = open; } else { e_open = open; }
+        }
+    }
+    // Cierra nuestros extremos: si el hijo sigue vivo escribiendo, verá EPIPE.
+    drop(out_pipe);
+    drop(err_pipe);
+
+    // Escalera de apagado (solo si venció el plazo): SIGTERM al GRUPO → margen → SIGKILL al GRUPO.
+    // El grupo es -pid porque `process_group(0)` hizo al hijo líder de su propio grupo.
+    if timed_out {
+        // SAFETY: `kill` a un grupo propio (creado por nosotros con process_group(0)).
+        unsafe { kill(-pid, SIGTERM) };
+        let grace = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) => {
+                    if std::time::Instant::now() >= grace {
+                        // SAFETY: idem; SIGKILL no se puede ignorar.
+                        unsafe { kill(-pid, SIGKILL) };
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    // SIEMPRE se cosecha (sin destructores, un `wait` omitido deja un zombi para toda la vida del
+    // proceso). Tras la escalera, este wait retorna de inmediato.
+    let status = child.wait().map_err(|e| format!("{program}: {e}"))?;
+    let exit = match status.code() {
+        Some(c) => Ok(c),
+        None => Err(status.signal().unwrap_or(0)),
+    };
+    Ok(RunOutput { exit, stdout, stderr, timed_out, truncated })
+}
+
+/// Sin unix (Windows, wasm): un `Err` honesto, como `packages/tz` en plataformas sin TZif.
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn run(program: &str, _args: &[String], _opts: &RunOpts) -> Result<RunOutput, String> {
+    Err(format!("{program}: running OS processes is not supported on this platform"))
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[repr(C)]
+struct PollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const POLLIN: i16 = 0x0001;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const EINTR: i32 = 4;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const SIGTERM: i32 = 15;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const SIGKILL: i32 = 9;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const F_GETFL: i32 = 3;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const F_SETFL_P: i32 = 4;
+#[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
+const O_NONBLOCK_P: i32 = 0x0004;
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+const O_NONBLOCK_P: i32 = 0o4000;
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+type Nfds = u64;
+#[cfg(all(unix, not(target_os = "linux"), not(target_arch = "wasm32")))]
+type Nfds = u32;
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    fn poll(fds: *mut PollFd, n: Nfds, timeout: i32) -> i32;
+    fn kill(pid: i32, sig: i32) -> i32;
+    // Variádica a propósito (lección de arm64: con aridad fija los varargs van mal por la pila).
+    #[link_name = "fcntl"]
+    fn fcntl_raw(fd: i32, cmd: i32, ...) -> i32;
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "__errno_location"]
+    fn errno_ptr() -> *mut i32;
+}
+#[cfg(all(unix, not(target_os = "linux"), not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "__error"]
+    fn errno_ptr() -> *mut i32;
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+unsafe fn fcntl_get(fd: i32) -> i32 {
+    unsafe { fcntl_raw(fd, F_GETFL) }
+}
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+unsafe fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32 {
+    unsafe { fcntl_raw(fd, cmd, arg) }
+}

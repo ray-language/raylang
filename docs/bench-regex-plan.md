@@ -131,8 +131,9 @@ bench). El perfil del 29 jul descompuso ese gap en ~9× de algoritmo × ~33× de
 (sin hotspot único: despacho ~50%, push/pop ~15%, get_local ~10%; el GetField por nombre solo
 ~4%). R7 cierra por el mismo borde: la feature `regex` de la toolchain hace que el compilador de
 bytecode compile las 7 `run_*` a `[RegexNative, Return]` — el opcode lee `Prog.pat` (ya validado)
-y el texto de los locales sin clonar y llama a `ray_runtime::regex::*`. Medido: **18.05 s →
-~0.38 s (47×; 5.9× del nativo)**. La Pike VM queda como motor del intérprete (`--interp`), de los
+y el texto de los locales sin clonar y llama a `ray_runtime::regex::*`. Medido (arnés del banco,
+ray PGO): **18.05 s → 347.8 ms (52×; 5.5× del nativo; combinado #10 → #8)**. La Pike VM queda
+como motor del intérprete (`--interp`), de los
 builds slim y de `RAYLANG_REGEX_PIKE=1`; el oráculo continuo del dialecto es
 `regex_cli::regex_native_vm_matches_pike_interp` (VM↔interp, sin rustc). Detalle:
 PERFORMANCE.md Fase 69.

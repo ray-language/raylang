@@ -39,13 +39,13 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 | `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
 | `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 5.9× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 5.5× |
 
 *(× = veces más lento que `native`; <1 = nos gana. Las filas de `matrixmul` —Fase 67— y de
 `wordcount`/`jsondeserialize`/`logparse`/`regex` —Fase 68— son las re-mediciones tras N6 y las
 fusiones N-D/R6, del mismo día y el mismo arnés; la corrida original está en el historial. El
 `VM ÷ native` de `regex` era 284× hasta R7 —Fase 69: la VM despacha al crate `regex` como el
-nativo— que lo dejó en ~5.9× (18.05 s → ~0.38 s).)*
+nativo— que lo dejó en 5.5× (18.05 s → 348 ms, arnés del banco).)*
 
 - **Gana a node en 9 de 10**; el décimo (`regex`) queda a un 5% (0.95×) contra el motor C++ de V8,
   y la variante rust de ese bench parsea A MANO (con el crate `regex`, Rust puro cuesta ~49 ms —
@@ -1004,9 +1004,11 @@ hilo). Los índices de `Option` se resuelven al compilar (nada se busca por nomb
 especializado). El reparto de oráculos queda: **intérprete = Pike VM siempre** (el test nuevo
 `regex_native_vm_matches_pike_interp` tortura el dialecto VM↔interp en cada `cargo test`, sin
 rustc); build slim sin la feature o `RAYLANG_REGEX_PIKE=1` → la Pike VM interpretada tal cual
-(fallback real, sin stubs). **Medido** (bench regex 200k, checksum idéntico): VM **18.05 s →
-~0.38 s (47×)** — de 284× a **5.9× del nativo**; el resto ya no es regex, es el bucle del bench
-interpretado (plantilla de string + 4 `parse_int` por línea).
+(fallback real, sin stubs). **Medido** (arnés del banco, ray PGO, checksum idéntico): VM
+**18.05 s → 347.8 ms (52×)** — de 284× a **5.5× del nativo** (62.8 ms esa corrida) — y en el
+**combinado tiempo×memoria sube del #10 al #8** (9.7 MB de pico, +0.9 sobre la Pike VM: la caché
+del crate). El resto ya no es regex, es el bucle del bench interpretado (plantilla de string +
+4 `parse_int` por línea); en tiempo puro sigue detrás de los scripting (todos bindean motores C).
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

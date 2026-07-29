@@ -106,7 +106,7 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   `iter` perezoso de 1M).
 - **`std/regex` en la VM sobre el crate `regex`** (R7): la VM despacha las `run_*` internas al mismo
   borde de `ray-runtime` que el binario nativo (feature `regex` de la toolchain, activa por defecto) —
-  bench regex **18,05 s → ~0,38 s (47×)**, misma salida byte a byte. El intérprete (`--interp`), los
+  bench regex **18,05 s → 348 ms (52×)**, misma salida byte a byte. El intérprete (`--interp`), los
   builds slim y `RAYLANG_REGEX_PIKE=1` conservan la Pike VM escrita en raylang (oráculo del dialecto).
 - **Binario nativo (arcos N/R/M96/SN/F)**: `mimalloc` y aHash en el transpilado (wordcount/logparse
   −40%, −8,5% extra), `join` y `concat` sin recopia, `for` sin clonar, `std/regex` sobre el crate

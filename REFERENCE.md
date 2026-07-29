@@ -169,37 +169,24 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `signals` | `() -> Channel<int>` | M88.1: el canal de señales del SO (SIGTERM=15, SIGINT=2); singleton del proceso, para el apagado ordenado — compone con `recv`/`select`. Solo VM, unix |
 | `close` | `(ch \| handle) -> …` | cierra un canal (los valores pendientes aún se reciben) **o** un handle de archivo/socket |
 
-### Matemáticas, reloj y azar
-
-También expuestas con nombre calificado en `std/math`, `std/time` y `std/random`.
+### Recuperación de fallos
 
 | Función | Firma | Descripción |
 |---|---|---|
-| `sqrt` `sin` `cos` `tan` `ln` `log10` `exp` `floor` `ceil` `round` | `(float) -> float` | las de siempre (radianes; `round` mitad-fuera) |
-| `pow` | `(base: float, exp: float) -> float` | potencia |
-| `abs` | `(int) -> int` · `(float) -> float` | valor absoluto (*ad-hoc* por tipo) |
-| `min` / `max` | `(a, b) -> …` | de dos ints o dos floats |
-| `pi` / `e` | `() -> float` | constantes (prefiere `math.PI`/`math.E`) |
-| `now` | `() -> int` | reloj de pared, ms desde el epoch |
-| `monotonic` | `() -> int` | reloj monótono, ms (para medir duraciones) |
-| `sleep` | `(ms: int) -> unit` | suspende la fibra actual |
-| `random` | `() -> float` | pseudoaleatorio en `[0, 1)` |
-| `random_int` | `(n: int) -> int` | pseudoaleatorio en `[0, n)` |
+| `try_call` | `(f: fn() -> T) -> Result<T, string>` | ejecuta `f` y convierte un `panic`/error de ejecución en `Err(mensaje)`. Recupera en la **misma fibra**: lo que `f` mutó sigue mutado (como el `catch_unwind` de Rust). Los tres motores |
+| `try_join` | `(t: Task<T>) -> Result<T, string>` | el fallo de una tarea como valor, en vez de re-lanzarlo. Aísla de verdad (heap propio de la fibra). Solo VM |
 
-### Cripto de producción (respaldada por `ring`, tiempo constante)
+> ⚠️ **Matemáticas, reloj, azar, cripto, disco y red NO son builtins globales.** Viven en módulos
+> `std/` desde M49/M50 y se usan calificados: `math.sqrt(2.0)`, `time.now()`, `random.below(10)`,
+> `crypto.sha256(b)`, `fs.read_file(p)`, `net.tcp_connect(h, p)`. Catálogo en §10.
 
-Expuestas con nombre calificado en `std/crypto`.
+### Entrada y entorno
 
 | Función | Firma | Descripción |
 |---|---|---|
-| `sha256` / `sha512` | `(bytes) -> bytes` | digest (32/64 octetos) |
-| `sha1` | `(bytes) -> bytes` | **legado** (20 octetos): solo para protocolos que lo exigen (WebSocket) |
-| `hmac_sha256` | `(key: bytes, msg: bytes) -> bytes` | MAC (32 octetos); base de JWT/SigV4 |
-| `ed25519_public_key` | `(seed: bytes) -> Option<bytes>` | clave pública desde la semilla (32 octetos; si no, `None`) |
-| `ed25519_sign` | `(seed: bytes, msg: bytes) -> Option<bytes>` | firma (64 octetos) |
-| `ed25519_verify` | `(pubkey, msg, sig) -> bool` | verificación (total: nunca falla) |
-| `chacha20poly1305_seal` | `(key, nonce, aad, plaintext) -> Option<bytes>` | AEAD: cifra y autentica (`cifrado ‖ etiqueta`) |
-| `chacha20poly1305_open` | `(key, nonce, aad, ciphertext) -> Option<bytes>` | descifra; `None` si la autenticación falla |
+| `env` | `(name: string) -> Option<string>` | variable de entorno; `None` si no está definida |
+| `input` | `() -> Option<string>` | una línea de stdin (sin el salto); `None` en EOF |
+| `read_int` | `() -> Option<int>` | una línea de stdin parseada como entero |
 
 ### Otros
 
@@ -207,8 +194,13 @@ Expuestas con nombre calificado en `std/crypto`.
 |---|---|---|
 | `bytes_of` | `([int]) -> bytes` | arma bytes desde octetos 0–255 |
 | `char_code` | `(char) -> int` | code point Unicode |
+| `char_from_code` | `(int) -> Option<char>` | la inversa; `None` si no es un code point válido |
 | `range` | `(a: int, b: int) -> Iter<int>` | iterador semiabierto `[a, b)` (del prelude) |
-| `sum` | `(Iter<int>) -> int` | suma un iterador de ints (vía UFCS: `it.sum()`) |
+| `iter` | `(xs: [T]) -> Iter<T>` | iterador perezoso sobre un arreglo |
+| `sum` / `sum_float` | `(Iter<int>) -> int` · `(Iter<float>) -> float` | suma un iterador (vía UFCS: `it.sum()`) |
+| `min` / `max` | `(Iter<T: Ord>) -> Option<T>` | **terminales de iterador** (no son el mínimo de dos valores: eso es `math.min`) |
+| `sort` | `(xs: [T: Ord]) -> [T]` | ordena un arreglo (copia ordenada) |
+| `assert` / `assert_eq` | `(bool)` · `(a: T, b: T)` | aserciones del runner de tests; fallan con `panic` |
 
 ## 6. Métodos por tipo de receptor
 
@@ -305,10 +297,11 @@ definiendo el mismo nombre).
 | `input` | `() -> Option<string>` | una línea de stdin (`None` en EOF) |
 | `read_int` | `() -> Option<int>` | `input` + `parse_int` |
 | `env` | `(name: string) -> Option<string>` | variable de entorno |
-| `map` / `filter` / `fold` | eager sobre `[T]` | ver §6 |
-| `sort` | `([T]) -> [T]` con `T: Ord` | insertion sort estable |
-| `iter` / `range` / `sum` | iteradores | ver §9 |
-| `get` / `remove` | sobre `Map` | ver §6 |
+| `map` / `filter` / `fold` / `any` / `all` | eager sobre `[T]` | ver §6 |
+| `sort` | `([T]) -> [T]` con `T: Ord` | merge sort bottom-up, estable, O(n log n); devuelve un arreglo nuevo |
+| `iter` / `range` / `sum` / `sum_float` / `min` / `max` | iteradores | ver §9 (`min`/`max` son terminales: `Iter<T> -> Option<T>`) |
+| `get` / `get_or` / `remove` | sobre `Map` | ver §6 |
+| `try_call` / `try_join` | recuperación de fallos | ver §5 |
 | `recv` | `(Channel<T>) -> Option<T>` | ver §5 |
 | `assert` | `(bool) -> unit` | aborta si es falso |
 | `assert_eq` | `(a: T, b: T)` con `T: Eq + Show` | aborta mostrando ambos valores |
@@ -434,9 +427,11 @@ todos.
 | `@test` | `fn () -> bool` o `fn () -> unit` | la corre `ray test`: bool pasa si `true`; unit pasa si no dispara `assert`/`panic`. Cada test corre aislado |
 | `@derive(Eq)` | struct/enum no genérico | genera `impl Eq` (igualdad estructural) |
 | `@derive(Show)` | struct/enum no genérico | genera `impl Show` (`Nombre { c: v }` / `Nombre.Variante(v)`); soporta enums recursivos |
-| `@derive(Hash)` | struct/enum no genérico | genera `impl Hash` (para claves de `Set`) |
+| `@derive(Hash)` | struct/enum no genérico | genera `impl Hash` (para claves de `Set`/`Dict`) |
+| `@derive(ToJson)` | struct/enum no genérico | genera `impl ToJson` (`to_json(self) -> string`), que usan las respuestas JSON tipadas del framework web. El trait vive en `std/json`: hay que tenerlo en ámbito (`from std/json import ToJson;`) |
 
-Se combinan: `@derive(Eq, Show, Hash)`.
+Se combinan: `@derive(Eq, Show, Hash, ToJson)`. Son las **cuatro** derivables; `Ord` se implementa
+a mano (cualquier otro nombre es error de compilación).
 
 ## 13. FFI: tipos marshalables
 
@@ -475,6 +470,7 @@ Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs
 | `ray doc <archivo>` | documentación Markdown de la superficie pública (`///`) |
 | `ray repl` | REPL interactivo |
 | `ray lsp` | Language Server (diagnósticos, hover, ir-a-definición, references, rename, completion, signature help) |
+| `ray mcp` | servidor MCP para agentes LLM: tools `check`/`run`/`test`/`fmt`/`doc`, con el código confinado (fuel + heap + plazo). Guía: [`docs/mcp.md`](docs/mcp.md) |
 | `ray add <nombre>[@req]` | añade una dependencia del registro (`1.2.0`, `^1.2`, `~1.2.3`, `*`) |
 | `ray remove <nombre>` | la elimina (y su caché si nadie más la usa) |
 | `ray search [patrón]` | lista paquetes del registro |
@@ -501,15 +497,21 @@ Flags de `build --native`:
 |---|---|
 | `-o <ruta>` | nombre del binario de salida (por defecto, el *stem* del archivo) |
 | `--release` | tier de optimización `opt-level=3 + lto=fat + codegen-units=1 + target-cpu=native` (más lento de compilar, no portable) |
-| `--without <lista>` | excluye subsistemas con-crate `crypto,tls,sqlite` (caen en un *stub* que panica → vía rápida `rustc`); se une a `[native] without` del `ray.toml` |
+| `--fast` | cambia la aritmética **chequeada** por **envolvente** (no detecta desbordamientos): más rendimiento a cambio de una garantía; para código propio, no para entrada hostil |
+| `--target <triple>` | *cross-compile* al triple indicado (requiere el target instalado en la toolchain) |
+| `--without <lista>` | excluye subsistemas: `crypto,tls,sqlite,regex` (caen en un *stub* con error claro o en la implementación en raylang) y `mimalloc,ahash,fibers,process` (que van por defecto). Se une a `[native] without` del `ray.toml` |
 
-Los subsistemas con crate de producción (TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`) se enlazan **solo
-cuando el programa los usa** (proyecto Cargo generado; el binario llama al mismo código que la VM vía el
-crate `ray-runtime`). Sin ninguno → `rustc` pelado. `[native] without = ["tls", …]` en `ray.toml` fija una
-política de exclusión estable del proyecto.
+Los subsistemas con crate de producción (TLS/`rustls`, cripto/`ring`, SQLite/`rusqlite`, regex acelerada)
+se enlazan **solo cuando el programa los usa** (proyecto Cargo generado; el binario llama al mismo código
+que la VM vía el crate `ray-runtime`). **mimalloc, aHash y las fibras van por defecto** — son las que
+hacen que el default sea la vía Cargo; `--without mimalloc,ahash,fibers` recupera el `rustc` pelado con
+hilo-por-tarea. `[native] without = ["tls", …]` en `ray.toml` fija una política de exclusión estable del
+proyecto.
 
-Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (registro de paquetes),
-`RAY_MIRROR` (mirror de descarga de paquetes), `RAYLANG_THREADS`.
+Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (índice de paquetes),
+`RAY_MIRROR` (mirror de descarga), `RAY_KEY` (clave Ed25519 de publicación),
+`RAYLANG_THREADS` (nº de hilos worker del scheduler; `1` = determinista),
+`RAY_FIBER_STACK_KIB` (reserva de pila por fibra en el binario nativo).
 
 ## 15. Códigos de salida
 
@@ -519,6 +521,7 @@ Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (registr
 | 64 | uso incorrecto del CLI |
 | 65 | error de compilación (léxico/sintaxis/tipos) o de configuración |
 | 66 | archivo de entrada no encontrado |
+| 69 | el binario no incluye el subsistema que el comando necesita (build *slim* sin TLS/cripto: `registry keygen`/`verify`) |
 | 70 | error de ejecución (panic, overflow, índice fuera de rango, deadlock…) |
 | 73 | no se pudo crear un archivo (`ray new`) |
 | 101 | ICE (error interno del compilador — repórtalo) |

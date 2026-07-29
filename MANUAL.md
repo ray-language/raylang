@@ -601,13 +601,19 @@ Más allá de lo básico:
 Traits derivables con `@derive` (struct/enum no genéricos):
 
 ```rust
-@derive(Eq, Show, Hash)
+from std/json import ToJson;      // ToJson vive en std/json: derivarlo exige tenerlo en ámbito
+
+@derive(Eq, Show, Hash, ToJson)
 struct Par { a: int, b: int }
 
-// Eq   → habilita == y assert_eq
-// Show → habilita print/to_string ("Par { a: 1, b: 2 }")
-// Hash → habilita usarlo como elemento de Set
+// Eq     → habilita == y assert_eq
+// Show   → habilita print/to_string ("Par { a: 1, b: 2 }")
+// Hash   → habilita usarlo como elemento de Set (o clave de Dict)
+// ToJson → genera to_json(self) -> string (respuestas JSON tipadas del framework web)
 ```
+
+Son las **cuatro** derivables. `Ord` no lo es: se implementa a mano (`fn less(self, other: Self)
+-> bool`), porque el criterio de orden rara vez es "campo a campo en el orden declarado".
 
 ## 10. Pattern matching
 
@@ -1279,6 +1285,7 @@ ray doc archivo.ray      # documentación Markdown desde ///
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
 ray repl                 # REPL interactivo
 ray lsp                  # servidor LSP (diagnósticos, hover, definición, rename, completion…)
+ray mcp                  # servidor MCP: expone check/run/test/fmt/doc a un agente LLM (docs/mcp.md)
 ray build                # chequea + compila sin ejecutar (para CI: 0 ok / 65 error)
 ray build --native       # transpila a Rust y compila un binario nativo (deploy)
 ```
@@ -1295,18 +1302,24 @@ ray build --native fib.ray --release  # tier opt3+lto+target-cpu=native (~10% ex
 ```
 
 Transpila el **lenguaje completo** (genéricos, traits, `dyn`, closures, `Map`, `match`…) + toda la I/O de
-`std/fs`, sockets TCP/UDP, la concurrencia CSP (con **hilos de SO reales**) y FFI. Los subsistemas con un
-**crate de producción** —TLS (`rustls`), criptografía (`ring`), SQLite (`rusqlite`)— se enlazan **solo
+`std/fs`, sockets TCP/UDP, procesos del SO, FFI y la concurrencia: por defecto sobre el **scheduler M:N
+de fibras** (corrutinas de pila propia + reactor `kqueue`/`epoll`, el mismo modelo que la VM), con
+`--without fibers` como escape al modelo hilo-por-tarea. Los subsistemas con un
+**crate de producción** —TLS (`rustls`), criptografía (`ring`), SQLite (`rusqlite`), regex acelerada— se enlazan **solo
 cuando el programa los usa**: el transpilador genera un proyecto Cargo y compila con `cargo` enlazando solo
 ese crate (mensaje `ok: … [ray-runtime: crypto]`). Si tu programa no toca ninguno, se compila con `rustc`
 pelado (rápido, sin red). El binario nativo llama **al mismo código** que la VM (vía el crate compartido
 `ray-runtime`) → paridad por construcción.
 
 Para excluir un subsistema (build hermético, *cross-compile*, contenedor endurecido, o cuando el camino
-con-crate es inalcanzable), `--without` fuerza el *stub* que panica y devuelve el binario a la vía rápida:
+con-crate es inalcanzable), `--without` lo deja fuera: los detectados por uso (`crypto`, `tls`, `sqlite`)
+caen en un *stub* con error claro, `regex` vuelve al motor escrito en raylang, y los que van **por
+defecto** (`mimalloc`, `ahash`, `fibers`, `process`) se desactivan — quitar los tres primeros devuelve el
+binario a la vía rápida de `rustc` pelado con hilo-por-tarea:
 
 ```sh
 ray build --native app.ray --without tls,sqlite
+ray build --native app.ray --without mimalloc,ahash,fibers   # rustc pelado, sin proyecto Cargo
 ```
 
 Cuando es una **política estable** del proyecto, decláralala en `ray.toml` (el `--without` de CLI se

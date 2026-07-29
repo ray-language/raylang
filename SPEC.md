@@ -90,8 +90,9 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
 - **Anotaciones** (conjunto cerrado): `@test` sobre funciones `() -> bool` o `() -> unit`;
   `@derive(Eq, Show, Hash, ToJson)` sobre structs/enums **no genéricos** — `Hash` genera
   `hash(self) -> int` combinando el `.hash()` de los campos (un campo `float`/array no es
-  hashable) y `ToJson` genera `to_json(self) -> string`. `Ord` **no** es derivable: se
-  implementa a mano. Cualquier otra anotación es error.
+  hashable) y `ToJson` genera `to_json(self) -> string` (su trait vive en `std/json` y debe estar
+  en ámbito para derivarlo). `Ord` **no** es derivable: se implementa a mano. Cualquier otra
+  anotación es error.
 - **`main`** es obligatoria en el programa de entrada: sin parámetros, retorno `int` o `unit`.
   El código de salida del proceso es ese `int` (`& 0xFF`) o `0`.
 

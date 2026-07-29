@@ -63,8 +63,10 @@ fn main() -> int {
   scheduler **M:N multicore** con *data-race freedom* por construcción.
 - **Web de producción.** Un **framework estilo Express** (`web/framework`: rutas con parámetros,
   middleware, CORS, estáticos con ETag, cookies, JSON tipado vía `ToJson`) sobre un servidor HTTP/1.1
-  concurrente con keep-alive, TLS y apagado ordenado — el webserver nativo da **~107k req/s** (M3 Pro,
-  p99 = 2,2 ms al 60% de capacidad). Guía: [`docs/web-framework.md`](docs/web-framework.md).
+  concurrente con keep-alive, TLS y apagado ordenado. El nativo corre sobre **fibras M:N** (jul 2026):
+  el framework da **~188k req/s de techo — 93% de axum, con p50/p99.9 empatadas (0,48/1,05 ms vs
+  0,47/1,04) y 1,5× Go+chi** (escalón `json`, generador de carga dedicado), sirviendo con **14 hilos y
+  ~21 KB por conexión**. Guía: [`docs/web-framework.md`](docs/web-framework.md).
 - **Auto-alojado.** El lexer, parser, checker, intérprete y VM de raylang están escritos **en raylang**.
 - **Compila a binario nativo.** `ray build --native` transpila el programa a Rust y lo compila a un
   ejecutable: **24–61× más rápido que la VM**, y en cómputo puro **le gana a node (V8) por 4,2×**

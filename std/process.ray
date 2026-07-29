@@ -1,0 +1,163 @@
+// std/process — ejecución de procesos del SO (M100, IDEAS §53.8).
+//
+// La superficie EXACTA de la v1 del contrato: `run` (el caso del 90 %) y `cmd` (el builder), nada
+// más (`stream` llega en v2). Ambos delegan en el primitivo `__run` (arreglo etiquetado `[bytes]`)
+// y este módulo solo decodifica a la forma tipada. Los invariantes los garantiza el primitivo:
+// sin shell (argv tipado), stdin = /dev/null salvo `.stdin(…)` (que escribe y CIERRA), drenaje
+// concurrente de ambos pipes (el deadlock clásico es imposible), timeout como DATO (`timed_out`
+// con el Output parcial, escalera SIGTERM→SIGKILL al GRUPO), tope de captura con `truncated`.
+//
+// Los campos del builder llevan nombres distintos de sus métodos a propósito: el UFCS resuelve
+// campo → método → función libre, y un campo `dir` taparía al método `dir`.
+
+/// How the child process terminated: a normal exit with its code, or death by a signal
+/// (never the shell's flattened `128 + signal`).
+pub enum Exit {
+    Code(int),
+    Signal(int),
+}
+
+/// The result of a process run that DID launch. A non-zero exit code is NOT an error:
+/// `Err` is reserved for "could not launch" (missing binary, permissions, bad directory).
+pub struct Output {
+    exit: Exit,
+    stdout: bytes,
+    stderr: bytes,
+    /// The timeout ladder acted (`exit` will be a `Signal`); `stdout`/`stderr` hold the
+    /// PARTIAL output produced before the deadline.
+    timed_out: bool,
+    /// `max_output` was reached; the captured output is the PREFIX (the child was never killed
+    /// for producing too much).
+    truncated: bool,
+}
+
+/// A command under construction: build with `process.cmd`, configure with the chainable
+/// methods, and launch with `.run()`.
+pub struct Cmd {
+    program: string,
+    arg_list: [string],
+    work_dir: string,
+    env_pairs: [string],
+    clear_env: bool,
+    stdin_data: bytes,
+    use_stdin: bool,
+    timeout: int,
+    output_cap: int,
+    merge: bool,
+}
+
+/// Runs `program` with `args` (no shell — a pipeline is written `run("sh", ["-c", …])`,
+/// visibly). `Ok(Output)` even when the child failed or died by signal; `Err(message)` only
+/// when it could not launch.
+pub fn run(program: string, args: [string]) -> Result<Output, string> {
+    cmd(program, args).run()
+}
+
+/// A `Cmd` builder for everything beyond the 90 % case: working directory, environment,
+/// stdin, timeout, output cap, merged output.
+pub fn cmd(program: string, args: [string]) -> Cmd {
+    let env: [string] = [];
+    Cmd {
+        program: program,
+        arg_list: args,
+        work_dir: "",
+        env_pairs: env,
+        clear_env: false,
+        stdin_data: b"",
+        use_stdin: false,
+        timeout: 0,
+        output_cap: 16777216,
+        merge: false,
+    }
+}
+
+/// The chainable configuration of a `Cmd`, in method-call style.
+pub trait CmdOps {
+    /// Sets the child's working directory.
+    fn dir(self, path: string) -> Cmd;
+    /// Adds (or overrides) one environment variable on top of the inherited environment.
+    fn env(self, key: string, value: string) -> Cmd;
+    /// Empties the inherited environment before applying the `env` additions.
+    fn env_clear(self) -> Cmd;
+    /// Feeds `data` to the child's stdin, then CLOSES it (the child sees EOF). Without this,
+    /// stdin is `/dev/null` — never the parent's stdin.
+    fn stdin(self, data: bytes) -> Cmd;
+    /// Total time budget in milliseconds. On expiry the run returns the PARTIAL `Output` with
+    /// `timed_out: true` (not an `Err`); the shutdown ladder kills the child's process GROUP.
+    fn timeout_ms(self, ms: int) -> Cmd;
+    /// Capture cap per stream, in bytes (default ~16 MB). Exceeding it sets `truncated`.
+    fn max_output(self, cap: int) -> Cmd;
+    /// Sends stderr to the SAME pipe as stdout: the interleaving is the kernel's real order
+    /// (`stderr` comes back empty).
+    fn merge_output(self) -> Cmd;
+    /// Launches the command. Same promises as `process.run`.
+    fn run(self) -> Result<Output, string>;
+}
+
+impl CmdOps for Cmd {
+    fn dir(self, path: string) -> Cmd {
+        self.work_dir = path;
+        self
+    }
+
+    fn env(self, key: string, value: string) -> Cmd {
+        self.env_pairs.push(key);
+        self.env_pairs.push(value);
+        self
+    }
+
+    fn env_clear(self) -> Cmd {
+        self.clear_env = true;
+        self
+    }
+
+    fn stdin(self, data: bytes) -> Cmd {
+        self.stdin_data = data;
+        self.use_stdin = true;
+        self
+    }
+
+    fn timeout_ms(self, ms: int) -> Cmd {
+        self.timeout = ms;
+        self
+    }
+
+    fn max_output(self, cap: int) -> Cmd {
+        self.output_cap = cap;
+        self
+    }
+
+    fn merge_output(self) -> Cmd {
+        self.merge = true;
+        self
+    }
+
+    fn run(self) -> Result<Output, string> {
+        decode(__run(self.program, self.arg_list, self.work_dir, self.env_pairs, self.clear_env,
+                     self.stdin_data, self.use_stdin, self.timeout, self.output_cap, self.merge))
+    }
+}
+
+// Decodifica el arreglo etiquetado del primitivo (ver `run_encoded` en el runtime):
+// [b"ok", b"code"|b"signal", valor, timed_out, truncated, stdout, stderr] o [b"err", msg].
+fn decode(r: [bytes]) -> Result<Output, string> {
+    if (r[0] == b"err") {
+        match (from_utf8(r[1])) {
+            Result.Ok(m) => Result.Err(m),
+            Result.Err(e) => Result.Err("process error"),
+        }
+    } else {
+        let value = match (from_utf8(r[2])) {
+            Result.Ok(s) => parse_int(s).unwrap_or(0),
+            Result.Err(e) => 0,
+        };
+        let exit = if (r[1] == b"code") { Exit.Code(value) } else { Exit.Signal(value) };
+        Result.Ok(Output {
+            exit: exit,
+            stdout: r[5],
+            stderr: r[6],
+            timed_out: r[3] == b"1",
+            truncated: r[4] == b"1",
+        })
+    }
+}

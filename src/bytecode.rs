@@ -582,6 +582,15 @@ pub enum OpCode {
     /// (`[b"ok", host, puerto, datos]`/`[b"err", msg]`). Primitivo `__udp_recv_from` (M20.8).
     UdpRecvFrom,
 
+    // --- Procesos del SO (M100, IDEAS §53.8) ---
+    /// Saca (en orden inverso al empuje) merge_output (bool), max_output (int), timeout_ms (int),
+    /// has_stdin (bool), stdin (bytes), env_clear (bool), env ([string], pares clave/valor
+    /// aplanados), dir (string, "" = heredado), args ([string]) y program (string); ejecuta el
+    /// proceso y empuja un `[bytes]` etiquetado (ver `builtins::run_encoded`):
+    /// `[b"ok", b"code"|b"signal", valor, timed_out, truncated, stdout, stderr]` / `[b"err", msg]`.
+    /// Primitivo `__run`; la ergonomía (`Cmd`/`Output`/`Exit`) vive en `std/process` (fase 1c).
+    Run,
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.

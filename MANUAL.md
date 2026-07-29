@@ -752,7 +752,7 @@ Tres capas (catálogo completo en [`REFERENCIA.md`](REFERENCIA.md#10-la-bibliote
    import std/random;        // random.below(6)
    ```
 
-   El catálogo: `math` `text` `sort` `fs` `net` `time` `random` `crypto` `resilience`
+   El catálogo: `math` `text` `sort` `fs` `net` `process` `time` `random` `crypto` `resilience`
    `collections/{set,deque,stringbuilder}` `json` `hex` `base64` `url` `regex` `csv` `toml` `template`
    `inflate` `deflate` `huffman` `protobuf` `uuid`.
 
@@ -807,6 +807,69 @@ let n = read_int();                // Option<int>
 let home = env("HOME");            // Option<string>
 let argv = args();                 // [string]
 ```
+
+### Procesos del SO (`std/process`)
+
+Ejecuta comandos externos **sin shell**: el `argv` es tipado, así que la inyección clásica no es
+posible por construcción (una tubería se escribe `run("sh", ["-c", …])`, visible en el código).
+La regla central: **`Err` significa "no se pudo lanzar"** (binario inexistente, permisos). Un hijo
+que corrió y salió con código ≠ 0 —o murió por señal— es `Ok`: el estado va DENTRO del `Output`.
+
+```rust
+import std/process;
+
+fn main() -> int {
+    // El caso del 90 %:
+    match (process.run("git", ["rev-parse", "HEAD"])) {
+        Result.Ok(o) => {
+            match (o.exit) {
+                process.Exit.Code(c) => {
+                    if (c == 0) {
+                        match (from_utf8(o.stdout)) {           // stdout/stderr son bytes
+                            Result.Ok(s) => print(s.trim()),
+                            Result.Err(e) => print("salida no UTF-8"),
+                        }
+                    } else {
+                        print("git salió con ${c}");
+                    }
+                },
+                process.Exit.Signal(s) => print("git murió por la señal ${s}"),  // nunca 128+sig
+            }
+        },
+        Result.Err(e) => print("no se pudo lanzar: ${e}"),
+    }
+
+    // El builder, para todo lo demás:
+    let r = process.cmd("wc", ["-l"])
+        .dir("/tmp")                       // directorio de trabajo
+        .env("LC_ALL", "C")                // añade/pisa sobre el entorno heredado (.env_clear() lo vacía)
+        .stdin("a\nb\n".to_bytes())        // se escribe entero y se CIERRA (el hijo ve EOF)
+        .timeout_ms(5000)                  // presupuesto total; al vencer, mata al GRUPO del hijo
+        .max_output(1048576)               // tope de captura por flujo (default ~16 MB)
+        .run();
+    match (r) {
+        Result.Ok(o) => {
+            if (o.timed_out) { print("se pasó del plazo (salida parcial abajo)"); }
+            if (o.truncated) { print("salida truncada al tope"); }
+        },
+        Result.Err(e) => print(e),
+    }
+    0
+}
+```
+
+Detalles que evitan los errores clásicos de otras plataformas:
+
+- **stdin es `/dev/null`** salvo que llames a `.stdin(…)` — el hijo jamás hereda el stdin de tu
+  proceso (un `cat` accidental no se queda colgado esperando tu terminal).
+- **Los dos flujos se drenan a la vez**: el deadlock de "esperar antes de leer con el pipe lleno"
+  no puede ocurrir, produzca lo que produzca el hijo.
+- **El timeout no es una excepción**: devuelve el `Output` PARCIAL con `timed_out: true` (puedes
+  diagnosticar con lo que el hijo alcanzó a imprimir). La escalera de apagado mata al **grupo**
+  completo (los nietos de un `sh -c "a | b"` también).
+- **`.merge_output()`** manda stderr al MISMO pipe que stdout: el entrelazado es el orden real
+  en que el hijo escribió (fusionar después inventa un orden); `stderr` vuelve vacío.
+- Solo Unix (macOS/Linux); en Windows devuelve un `Err` honesto de plataforma.
 
 ## 14. Red y bases de datos
 

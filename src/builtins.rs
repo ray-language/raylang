@@ -2460,6 +2460,25 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__append_file expects a string (the content), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // __run(program, args, dir, env, env_clear, stdin, has_stdin, timeout_ms, max_output,
+    // merge_output) -> [bytes] (M100, IDEAS §53.8): las opciones van APLANADAS (el borde de builtins
+    // solo ve escalares y arreglos); el resultado es el arreglo etiquetado de `run_encoded`.
+    // `std/process` (fase 1c) es quien arma el builder y decodifica a Result<Output, string>.
+    Builtin { name: "__run", opcode: OpCode::Run, check: |a| {
+        arity(a, 10, "__run", " (program, args, dir, env, env_clear, stdin, has_stdin, timeout_ms, max_output, merge_output)")?;
+        let str_arr = Type::Array(Box::new(Type::String));
+        if a[0] != Type::String { return Err((Some(0), format!("__run expects a string (the program), not {}", a[0]))); }
+        if a[1] != str_arr { return Err((Some(1), format!("__run expects a [string] (the arguments), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__run expects a string (the directory, \"\" = inherited), not {}", a[2]))); }
+        if a[3] != str_arr { return Err((Some(3), format!("__run expects a [string] (the flattened env pairs), not {}", a[3]))); }
+        if a[4] != Type::Bool { return Err((Some(4), format!("__run expects a bool (env_clear), not {}", a[4]))); }
+        if a[5] != Type::Bytes { return Err((Some(5), format!("__run expects bytes (the stdin data), not {}", a[5]))); }
+        if a[6] != Type::Bool { return Err((Some(6), format!("__run expects a bool (has_stdin), not {}", a[6]))); }
+        if a[7] != Type::Int { return Err((Some(7), format!("__run expects an int (the timeout in ms), not {}", a[7]))); }
+        if a[8] != Type::Int { return Err((Some(8), format!("__run expects an int (max_output), not {}", a[8]))); }
+        if a[9] != Type::Bool { return Err((Some(9), format!("__run expects a bool (merge_output), not {}", a[9]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
 ];
 
 
@@ -2681,4 +2700,39 @@ mod tests {
         assert_eq!(substring_chars("añô€x", 1, 4), "ñô€");
         assert_eq!(char_index_of("añô", "z"), None);
     }
+}
+
+// --- Ejecución de procesos del SO (M100, IDEAS §53.8) ---
+//
+// La implementación vive en `ray_runtime::process` (feature `process`, siempre activa para este
+// binario): el MISMO código para la VM/intérprete y para el binario transpilado (`__ray_run`) =
+// paridad byte-idéntica por construcción, como crypto/tls/sqlite. Aquí solo el reexport y el stub
+// de wasm (el playground no trae ray-runtime; `run` responde con el Err honesto de plataforma).
+#[cfg(not(target_arch = "wasm32"))]
+pub use ray_runtime::process::{run, run_encoded, run_opts_from_flat, RunOpts, RunOutput};
+
+/// Stub de wasm: la firma completa, con el `Err` honesto de plataforma en `run_encoded` (los
+/// motores no distinguen — es la misma codificación etiquetada del camino real).
+#[cfg(target_arch = "wasm32")]
+pub struct RunOpts;
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)] // espejo exacto de la firma real (ver ray_runtime::process)
+pub fn run_opts_from_flat(
+    _dir: &str,
+    _env_flat: Vec<String>,
+    _env_clear: bool,
+    _stdin: &[u8],
+    _has_stdin: bool,
+    _timeout_ms: i64,
+    _max_output: i64,
+    _merge_output: bool,
+) -> RunOpts {
+    RunOpts
+}
+#[cfg(target_arch = "wasm32")]
+pub fn run_encoded(program: &str, _args: &[String], _opts: &RunOpts) -> Vec<Vec<u8>> {
+    vec![
+        b"err".to_vec(),
+        format!("{program}: running OS processes is not supported on this platform").into_bytes(),
+    ]
 }

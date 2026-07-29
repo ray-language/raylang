@@ -148,10 +148,21 @@ contains_key keys values` · math: `sqrt pow floor ceil round abs min max` · pr
 `args env input read_file write_file exists` · crypto (ring-backed): `sha256 sha512
 hmac_sha256 ed25519_sign ed25519_verify chacha20poly1305_seal/open`.
 
-Import-on-demand modules: `std/fs std/net std/math std/random std/time std/crypto
-std/text std/sort std/kv std/json std/hex std/base64 std/url std/regex std/csv
-std/toml std/template std/protobuf std/uuid std/inflate std/deflate std/huffman
-std/collections/{set,deque,stringbuilder,dict} std/resilience`.
+Import-on-demand modules: `std/fs std/net std/process std/math std/random std/time
+std/crypto std/text std/sort std/kv std/json std/hex std/base64 std/url std/regex
+std/csv std/toml std/template std/protobuf std/uuid std/inflate std/deflate
+std/huffman std/collections/{set,deque,stringbuilder,dict} std/resilience`.
+
+OS processes (`import std/process;`, no shell — argv is typed; a pipeline is written
+`process.run("sh", ["-c", ...])`): `process.run(program, args) -> Result<Output, string>`
+for the 90% case; `process.cmd(program, args)` returns a chainable `Cmd` builder with
+`.dir(path) .env(k, v) .env_clear() .stdin(bytes) .timeout_ms(ms) .max_output(bytes)
+.merge_output() .run()`. `Err` ONLY means "could not launch" (ENOENT/permissions); a
+child that ran and exited non-zero or died by signal is `Ok`. `Output { exit, stdout,
+stderr, timed_out, truncated }` with `exit: process.Exit` (`Exit.Code(int)` |
+`Exit.Signal(int)`, never 128+sig); stdout/stderr are `bytes` (decode with `from_utf8`).
+Timeout returns the PARTIAL Output with `timed_out: true` (not an Err) after killing
+the child's process group; without `.stdin(...)` the child reads `/dev/null`.
 
 Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
 for HTTP (because `get` belongs to Map); `bytes_of([int])` vs `to_bytes(string)`;

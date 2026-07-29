@@ -1902,7 +1902,14 @@ reabra el tema". Este apartado existe porque se reabrió. El hueco además cambi
 con el arco cerrado, raylang se posiciona como lenguaje de SERVICIOS de producción (92-93% de
 hyper/axum), y los servicios reales lanzan procesos (git, ffmpeg, migraciones, backups).
 
-### 53.8 CONTRATO de la v1 (fijado 28 jul 2026, aprobado por el dueño)
+### 53.8 CONTRATO de la v1 (fijado 28 jul 2026, aprobado por el dueño) — **v1 EJECUTADA**
+
+> **Estado (28 jul 2026)**: el punto (1) del orden de ataque está COMPLETO (fases 1a–1d, rama
+> `feat/process-exec-v1`; crónica en DESIGN.md §89): primitivo en `ray_runtime::process`, builtin
+> `__run` en los tres motores, `std/process` con la superficie exacta de abajo, golden triple
+> automatizado. Interinato consciente: VM y nativo bloquean el hilo del worker durante `run()`
+> (como SQLite) — el aparcado de la fibra necesita un park multi-fd que aún no existe; es la
+> siguiente fase de M100. El punto (2) (streaming v2) sigue sin ejecutar.
 
 Superficie EXACTA. Dos entradas y nada más; `stream()` llega en v2. Cada línea esquiva un error
 documentado de otro lenguaje (tabla al final).

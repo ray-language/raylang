@@ -3214,3 +3214,38 @@ fn option_unwrap_or_fusion_oracle() {
         "#,
     );
 }
+
+/// M100 fase 1a-bis: el builtin `__run` (procesos del SO) da lo MISMO en los dos motores. El score
+/// en bits detecta qué campo del arreglo etiquetado divergió; además se asevera el valor esperado
+/// (no solo la paridad) para que un fallo compartido de ambos motores no pase en silencio.
+#[cfg(unix)]
+#[test]
+fn run_builtin_oracle_and_expected_value() {
+    let src = r#"
+        fn main() -> int {
+            let none: [string] = [];
+            let r = __run("sh", ["-c", "printf abc; printf de >&2; exit 7"], "", none, false,
+                          "".to_bytes(), false, 0, 1048576, false);
+            var score = 0;
+            if (r[0] == "ok".to_bytes()) { score = score + 1; }
+            if (r[1] == "code".to_bytes()) { score = score + 2; }
+            if (r[2] == "7".to_bytes()) { score = score + 4; }
+            if (r[3] == "0".to_bytes()) { score = score + 8; }
+            if (r[4] == "0".to_bytes()) { score = score + 16; }
+            if (r[5] == "abc".to_bytes()) { score = score + 32; }
+            if (r[6] == "de".to_bytes()) { score = score + 64; }
+            // stdin: se escribe y se cierra; `cat` lo devuelve entero.
+            let c = __run("cat", none, "", none, false, "hola".to_bytes(), true, 0, 1048576, false);
+            if (c[5] == "hola".to_bytes()) { score = score + 128; }
+            score
+        }
+    "#;
+    let tokens = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(tokens).expect("parse ok");
+    crate::checker::check(&mut prog).expect("check ok");
+    let interp = crate::interpreter::run(&prog).expect("intérprete ok");
+    let compiled = compile_program(&prog).expect("compila");
+    let vm = run_program(&compiled).expect("vm ok");
+    assert_eq!(interp, Value::Int(255), "intérprete: campos divergentes (bits apagados)");
+    assert_eq!(vm, Value::Int(255), "VM: campos divergentes (bits apagados)");
+}

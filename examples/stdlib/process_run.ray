@@ -1,0 +1,54 @@
+// std/process — ejecutar comandos del SO (M100): sin shell (argv tipado), errores como valores.
+// Salir con código != 0 NO es error: `Err` queda reservado a "no se pudo lanzar". El timeout y el
+// tope de captura vuelven como DATOS (`timed_out`/`truncated`), nunca como excepciones.
+import std/process;
+
+fn show_exit(e: process.Exit) -> string {
+    match (e) {
+        process.Exit.Code(c) => "code:" + c.to_string(),
+        process.Exit.Signal(s) => "signal:" + s.to_string(),
+    }
+}
+
+fn show(r: Result<process.Output, string>) {
+    match (r) {
+        Result.Ok(o) => {
+            var line = show_exit(o.exit);
+            if (o.timed_out) { line = line + " timed_out"; }
+            if (o.truncated) { line = line + " truncated"; }
+            match (from_utf8(o.stdout)) {
+                Result.Ok(s) => { line = line + " [" + s + "]"; },
+                Result.Err(e) => { line = line + " [binario]"; },
+            }
+            print(line);
+        },
+        Result.Err(e) => print("no se pudo lanzar"),
+    }
+}
+
+fn main() -> int {
+    // El caso del 90 %: process.run(programa, args). Una tubería se escribe sh -c, visible.
+    show(process.run("sh", ["-c", "printf hi; exit 3"]));
+
+    // El builder: directorio + entorno + stdin (se escribe y se CIERRA) + salida fusionada
+    // (stderr al MISMO pipe -> el orden es el real del kernel, no uno inventado).
+    show(process.cmd("sh", ["-c", "printf start:; cat; printf \":$V:$PWD\"; printf X >&2"])
+        .dir("/")
+        .env("V", "v1")
+        .stdin("IN".to_bytes())
+        .merge_output()
+        .run());
+
+    // Muerte por señal: Exit.Signal(n), jamás el 128+n aplanado del shell.
+    show(process.run("sh", ["-c", "kill -TERM $$"]));
+
+    // Un binario inexistente SÍ es Err: el hijo nunca llegó a existir.
+    show(process.run("no-such-binary-raylang", []));
+
+    // Timeout: el Output PARCIAL con timed_out=true (la escalera mata al GRUPO del hijo).
+    show(process.cmd("sh", ["-c", "printf partial; sleep 30"]).timeout_ms(300).run());
+
+    // Tope de captura: se trunca al prefijo y se DICE (el hijo nunca muere por hablar de más).
+    show(process.cmd("sh", ["-c", "yes | head -c 1000"]).max_output(10).run());
+    0
+}

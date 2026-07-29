@@ -104,6 +104,10 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   fusión de indexado (matrixmul −35%), structs sin metadatos y `Slot` de 88→48 B (treealloc −15%),
   arreglos homogéneos de ints (−68% de RSS) y GC con umbral amortizado por trabajo trazado (17× en un
   `iter` perezoso de 1M).
+- **`std/regex` en la VM sobre el crate `regex`** (R7): la VM despacha las `run_*` internas al mismo
+  borde de `ray-runtime` que el binario nativo (feature `regex` de la toolchain, activa por defecto) —
+  bench regex **18,05 s → 348 ms (52×)**, misma salida byte a byte. El intérprete (`--interp`), los
+  builds slim y `RAYLANG_REGEX_PIKE=1` conservan la Pike VM escrita en raylang (oráculo del dialecto).
 - **Binario nativo (arcos N/R/M96/SN/F)**: `mimalloc` y aHash en el transpilado (wordcount/logparse
   −40%, −8,5% extra), `join` y `concat` sin recopia, `for` sin clonar, `std/regex` sobre el crate
   `regex` (570 → 71 ms), pool de hilos shardeado y `print` sin lock global (18k → 58k req/s antes de

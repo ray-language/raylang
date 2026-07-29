@@ -27,7 +27,7 @@ crate-type = ["cdylib", "rlib"]
 # producto es la VM (M35a); el intérprete existe como **oráculo de desarrollo** (validación
 # cruzada) y como `--interp`. Una *release* mínima puede excluirlo con `--no-default-features`,
 # quedándose solo con la VM. El modelo de valores (`runtime`) se compila siempre.
-default = ["interp", "sqlite", "net-tls", "ffi"]
+default = ["interp", "sqlite", "net-tls", "ffi", "regex"]
 interp = []
 # M89 (IDEAS §47): SQLite embebido tras una feature (activa por defecto → el binario normal es
 # idéntico). Un build "slim" para contenedores/embedding la excluye (--no-default-features
@@ -50,6 +50,14 @@ net-tls = ["ray-runtime/crypto", "dep:rustls", "dep:webpki-roots", "dep:rustls-p
 # defecto). El slim sin ella tiene la propiedad "no puede cargar código nativo" (contenedores
 # endurecidos); un `extern fn` chequea igual y su llamada da un error de ejecución claro.
 ffi = ["dep:libloading"]
+# R7 (perf, jul 2026): el motor de `std/regex` en la VM. Con la feature activa, el compilador de
+# bytecode intercepta las 7 funciones internas `run_*` de std/regex y las despacha al crate `regex`
+# vía `ray-runtime` — el MISMO borde que usa el binario nativo desde R5 (misma traducción de
+# dialecto, misma caché por hilo → misma salida byte a byte). El parseo/validación del patrón y sus
+# errores siguen siendo los de la librería raylang. El build slim la excluye y la Pike VM raylang
+# se ejecuta tal cual (fallback = la implementación real, sin stubs); el intérprete (`--interp`)
+# NUNCA intercepta: conserva la Pike VM como oráculo continuo del dialecto.
+regex = ["ray-runtime/regex"]
 
 # M44a — TLS/cripto SOLO para targets NO-wasm. `ring`/`rustls` no compilan a `wasm32-unknown-unknown`
 # (asm/C específico de arquitectura), y el **playground web** (M44) embarca solo el lenguaje NÚCLEO

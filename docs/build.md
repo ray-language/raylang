@@ -20,7 +20,7 @@ siempre, no hace falta `strip` manual. El symlink `~/.local/bin/ray` apunta a
 
 ## 2. Features de compilación (arco M89)
 
-Cuatro features, todas activas por defecto (el binario normal es idéntico a siempre).
+Cinco features, todas activas por defecto (el binario normal es idéntico a siempre).
 Cada una se puede excluir para adelgazar el binario o reducir superficie de ataque;
 un programa que use la capacidad excluida recibe un **error claro como valor** (nunca
 un fallo silencioso) y el checker acepta el programa igual (la tabla BUILTINS se
@@ -32,13 +32,14 @@ registra siempre).
 | `sqlite` | rusqlite `bundled` (el C de SQLite embebido) | `db/sqlite` → `Err` claro en `connect` |
 | `net-tls` | rustls+ring+webpki: https/wss + sha/hmac/ed25519/chacha | TLS falible → `Err`-valor; cripto infalible → aborta con error claro; `ray publish --sign`/verificación de firmas no disponibles (fail-closed, explícito). El hash del lockfile NO depende de esto (`src/sha256.rs` es Rust puro) |
 | `ffi` | `libloading`: carga de librerías nativas (`extern fn`) | propiedad "no puede cargar código nativo" (contenedores endurecidos); llamar un `extern fn` → error de ejecución claro |
+| `regex` | el crate `regex` vía `ray-runtime`: la VM despacha las `run_*` de `std/regex` al motor nativo (R7; mismo borde y dialecto que el binario transpilado, R5) | `std/regex` funciona IGUAL (misma salida): la Pike VM raylang se interpreta tal cual — más lenta (~30×), sin pérdida de capacidad. `RAYLANG_REGEX_PIKE=1` fuerza este camino aun con la feature |
 
 ### Combos medidos (M3 Pro, jul 2026)
 
 | Combo | Comando | Tamaño |
 |---|---|---|
 | Default | `cargo build --release` | 6,1 MB |
-| Sin SQLite | `cargo build --release --no-default-features --features interp,net-tls,ffi` | 4,4 MB (−28%) |
+| Sin SQLite | `cargo build --release --no-default-features --features interp,net-tls,ffi,regex` | 4,4 MB (−28%; medido antes de la feature `regex`) |
 | **Slim total** | `cargo build --release --no-default-features --features interp` | **2,9 MB (−53%)** |
 | Slim sin oráculo | `cargo build --release --no-default-features` | el mínimo; solo VM |
 

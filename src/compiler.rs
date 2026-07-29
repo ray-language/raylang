@@ -216,19 +216,28 @@ impl<'a> Compiler<'a> {
         for p in params {
             self.declare_local(&p.name);
         }
-        self.emit_block(body)?;
-        self.emit(OpCode::Return, line, col);
+        // R7: las `run_*` internas de std/regex se despachan al crate `regex` de ray-runtime (el
+        // mismo borde que el binario nativo, R5): su cuerpo se compila a `[RegexNative, Return]`.
+        // El cuerpo raylang (la Pike VM) solo se compila como fallback — build sin la feature
+        // `regex` o con RAYLANG_REGEX_PIKE=1 (A/B y depuración).
+        if let Some(op) = self.regex_native_op(&name) {
+            self.emit(op, line, col);
+            self.emit(OpCode::Return, line, col);
+        } else {
+            self.emit_block(body)?;
+            self.emit(OpCode::Return, line, col);
 
-        // M13.3b: optimización de llamadas en cola. Toda llamada cuya continuación es un `Return`
-        // (directo o a través de saltos incondicionales) se convierte en `TailCall`, que reutiliza
-        // el marco en vez de apilar uno nuevo → recursión de cola en O(1) marcos.
-        optimize_tail_calls(&mut self.cur().chunk);
-        // M36.1: superinstrucciones (tras el TCO → no fusiona a través de una llamada).
-        fuse_superinstructions(&mut self.cur().chunk);
-        fuse_round2(&mut self.cur().chunk); // A4: guardas y aritmética local-const
-        fuse_guard_round3(&mut self.cur().chunk); // P0.6: GetLocalConst;CmpJump → guarda en 1 opcode
-        fuse_index_round4(&mut self.cur().chunk); // MM2: [GetLocalLocal|GetLocal, Index] → IndexLL/IndexLocal
-        discard_spawn_results(&mut self.cur().chunk); // M98.1: spawn fire-and-forget sin Task retenida
+            // M13.3b: optimización de llamadas en cola. Toda llamada cuya continuación es un `Return`
+            // (directo o a través de saltos incondicionales) se convierte en `TailCall`, que reutiliza
+            // el marco en vez de apilar uno nuevo → recursión de cola en O(1) marcos.
+            optimize_tail_calls(&mut self.cur().chunk);
+            // M36.1: superinstrucciones (tras el TCO → no fusiona a través de una llamada).
+            fuse_superinstructions(&mut self.cur().chunk);
+            fuse_round2(&mut self.cur().chunk); // A4: guardas y aritmética local-const
+            fuse_guard_round3(&mut self.cur().chunk); // P0.6: GetLocalConst;CmpJump → guarda en 1 opcode
+            fuse_index_round4(&mut self.cur().chunk); // MM2: [GetLocalLocal|GetLocal, Index] → IndexLL/IndexLocal
+            discard_spawn_results(&mut self.cur().chunk); // M98.1: spawn fire-and-forget sin Task retenida
+        }
 
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
@@ -241,6 +250,37 @@ impl<'a> Compiler<'a> {
             chunk: scope.chunk,
         });
         Ok(())
+    }
+
+    /// R7: si `name` es una de las 7 funciones internas `run_*` de std/regex (la misma lista que
+    /// intercepta el transpilador nativo, R5), el opcode que la despacha al crate `regex` — o
+    /// `None` para compilar el cuerpo raylang (la Pike VM) normal. Resuelve aquí los índices de
+    /// `Option` (del prelude, siempre presente) para que el camino caliente no busque por nombre.
+    #[cfg(all(feature = "regex", not(target_arch = "wasm32")))]
+    fn regex_native_op(&self, name: &str) -> Option<OpCode> {
+        use crate::bytecode::RegexNativeFn as R;
+        if std::env::var_os("RAYLANG_REGEX_PIKE").is_some() {
+            return None; // escape de A/B y depuración: fuerza la Pike VM interpretada
+        }
+        let f = match name.strip_prefix("std::regex::run_")? {
+            "full" => R::Full,
+            "search" => R::Search,
+            "find" => R::Find,
+            "find_all" => R::FindAll,
+            "replace_all" => R::ReplaceAll,
+            "captures" => R::Captures,
+            "captures_str" => R::CapturesStr,
+            _ => return None, // p. ej. run_find_str no existe; cualquier otra run_* va normal
+        };
+        let (enum_id, variants) = self.enums.get("Option")?;
+        let some = variants.get("Some")?.0;
+        let none = variants.get("None")?.0;
+        Some(OpCode::RegexNative { f, opt: (*enum_id, some, none) })
+    }
+
+    #[cfg(not(all(feature = "regex", not(target_arch = "wasm32"))))]
+    fn regex_native_op(&self, _name: &str) -> Option<OpCode> {
+        None
     }
 
     // ----- Acceso al ámbito actual -----

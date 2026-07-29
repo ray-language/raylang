@@ -631,8 +631,31 @@ pub enum OpCode {
     /// válidos.
     MatchFail,
 
+    // --- R7: std/regex sobre el crate `regex` (feature `regex`) ---
+    /// El CUERPO completo de una de las 7 funciones internas `run_*` de std/regex: lee sus
+    /// argumentos de los locales del marco (slot 0 = el `Prog`, cuyo campo `pat` retiene el
+    /// patrón FUENTE ya validado; slot 1 = el texto; slot 2 = el reemplazo en `replace_all`),
+    /// ejecuta el crate `regex` vía ray-runtime (la MISMA traducción de dialecto que el binario
+    /// nativo, R5) y empuja el resultado. Le sigue siempre un `Return`. `opt` trae los índices
+    /// `(enum_id, tag_some, tag_none)` de `Option`, resueltos al compilar, para construir los
+    /// retornos `Option<...>` sin buscar por nombre en caliente.
+    RegexNative { f: RegexNativeFn, opt: (usize, usize, usize) },
+
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
+}
+
+/// R7: cuál de las 7 `run_*` de std/regex despacha una `RegexNative` (misma lista que
+/// intercepta el transpilador nativo desde R5).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RegexNativeFn {
+    Full,
+    Search,
+    Find,
+    FindAll,
+    ReplaceAll,
+    Captures,
+    CapturesStr,
 }
 
 /// A4: el comparador de una `CmpJump` (los seis de la familia de comparación).

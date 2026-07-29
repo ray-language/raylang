@@ -39,11 +39,13 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 | `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
 | `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 284× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 5.5× |
 
 *(× = veces más lento que `native`; <1 = nos gana. Las filas de `matrixmul` —Fase 67— y de
 `wordcount`/`jsondeserialize`/`logparse`/`regex` —Fase 68— son las re-mediciones tras N6 y las
-fusiones N-D/R6, del mismo día y el mismo arnés; la corrida original está en el historial.)*
+fusiones N-D/R6, del mismo día y el mismo arnés; la corrida original está en el historial. El
+`VM ÷ native` de `regex` era 284× hasta R7 —Fase 69: la VM despacha al crate `regex` como el
+nativo— que lo dejó en 5.5× (18.05 s → 348 ms, arnés del banco).)*
 
 - **Gana a node en 9 de 10**; el décimo (`regex`) queda a un 5% (0.95×) contra el motor C++ de V8,
   y la variante rust de ese bench parsea A MANO (con el crate `regex`, Rust puro cuesta ~49 ms —
@@ -983,6 +985,30 @@ micro-A/B previo y su medición final (salida idéntica en todas; corpus de pari
 | `wordcount` | 46.7 ms | **38.4 ms (−19%)** | **#1 — bate a Go** (44.5) por 1.16×; combinado #1 |
 | `jsondeserialize` | 83.2 ms | **74.4 ms (−12%)** | del 0.52× al 0.60× de Go; el hueco restante es la construcción de la línea y el slicing sin vistas |
 | `regex` | 74.1 ms | **65.2 ms (−12%)** | pasa a **ganar a Go** (76.4); node conserva un 5% (0.95×) — motor contra motor, ver la nota del banco |
+
+#### Fase 69 — R7: el crate `regex` como motor de std/regex también en la VM (29 jul, bench regex)
+
+El último 284× de la tabla. El perfil del día lo descompuso limpio: 18.05 s del bench regex en la
+VM = 65 ms del motor nativo × **~9× de algoritmo** (la Pike VM raylang con capturas copy-on-write
+vs el crate, ambos compilados: 54 ms/20k con `--without regex`) × **~33× de interpretación** — y
+ese 33× es la maquinaria genérica del intérprete repartida (despacho ~50%, push/pop ~15%,
+get_local ~10%, GetField con búsqueda lineal por nombre solo ~4% → P1.3/GetFieldIdx no salva este
+bench). Sin hotspot único que optimizar, se cerró por el mismo camino que el nativo (R5): la
+**feature `regex` de la toolchain** (default; `ray-runtime/regex`) hace que el compilador de
+bytecode intercepte las 7 `run_*` internas de std/regex — su cuerpo pasa a ser
+`[RegexNative, Return]`, un opcode que lee el `Prog` (campo `pat`: el patrón fuente YA validado
+por el parser raylang) y el texto de los locales del marco **sin clonar strings**, y despacha al
+MISMO borde de ray-runtime que el binario nativo (idéntica traducción de dialecto, caché por
+hilo). Los índices de `Option` se resuelven al compilar (nada se busca por nombre en caliente);
+`Some((a,b))` se materializa como `IntArray` (la misma representación que daría `MakeArray`
+especializado). El reparto de oráculos queda: **intérprete = Pike VM siempre** (el test nuevo
+`regex_native_vm_matches_pike_interp` tortura el dialecto VM↔interp en cada `cargo test`, sin
+rustc); build slim sin la feature o `RAYLANG_REGEX_PIKE=1` → la Pike VM interpretada tal cual
+(fallback real, sin stubs). **Medido** (arnés del banco, ray PGO, checksum idéntico): VM
+**18.05 s → 347.8 ms (52×)** — de 284× a **5.5× del nativo** (62.8 ms esa corrida) — y en el
+**combinado tiempo×memoria sube del #10 al #8** (9.7 MB de pico, +0.9 sobre la Pike VM: la caché
+del crate). El resto ya no es regex, es el bucle del bench interpretado (plantilla de string +
+4 `parse_int` por línea); en tiempo puro sigue detrás de los scripting (todos bindean motores C).
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

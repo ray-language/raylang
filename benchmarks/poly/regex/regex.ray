@@ -6,10 +6,10 @@
 // porque std/regex costaba ~59s VM / ~2.3s nativo. Tras optimizar la Pike VM de la
 // librería (seen por generaciones, sin siembra bajo ^, PERFORMANCE.md Fase 62) y R5
 // (Fase 63: en el binario NATIVO el motor es el crate `regex` de Rust vía ray-runtime,
-// con la validación y el dialecto de std/regex), el nativo corre en ~71 ms — por delante
-// de Go (~76 ms). La VM (~17 s) sigue interpretando la Pike VM escrita en raylang: es el
-// modelo del proyecto (dev = VM, deploy = nativo), y el único motor del bench escrito en
-// el propio lenguaje que compara.
+// con la validación y el dialecto de std/regex), el nativo corre en ~65 ms — por delante
+// de Go (~76 ms). R7 (Fase 69): la VM despacha al MISMO borde del crate (feature `regex`
+// de la toolchain) y baja de ~18 s a ~0.35 s (combinado #10 → #8); la Pike VM escrita en
+// raylang sigue siendo el motor del intérprete (--interp, oráculo del dialecto) y slim.
 import std/regex;
 import std/time;
 

@@ -1902,6 +1902,81 @@ reabra el tema". Este apartado existe porque se reabrió. El hueco además cambi
 con el arco cerrado, raylang se posiciona como lenguaje de SERVICIOS de producción (92-93% de
 hyper/axum), y los servicios reales lanzan procesos (git, ffmpeg, migraciones, backups).
 
+### 53.8 CONTRATO de la v1 (fijado 28 jul 2026, aprobado por el dueño)
+
+Superficie EXACTA. Dos entradas y nada más; `stream()` llega en v2. Cada línea esquiva un error
+documentado de otro lenguaje (tabla al final).
+
+```raylang
+enum Exit { Code(int), Signal(int) }
+
+struct Output {
+    exit: Exit,
+    stdout: bytes,
+    stderr: bytes,
+    timed_out: bool,   // la escalera actuó; exit será Signal(15|9)
+    truncated: bool,   // se alcanzó max_output; lo capturado es el PREFIJO
+}
+
+// (1) El caso del 90 %:
+process.run(program: string, args: [string]) -> Result<Output, string>
+
+// (2) El builder, para todo lo demás:
+process.cmd(program: string, args: [string]) -> Cmd
+Cmd.dir(path: string) -> Cmd
+Cmd.env(key: string, value: string) -> Cmd
+Cmd.env_clear() -> Cmd
+Cmd.stdin(data: bytes) -> Cmd          // se escribe y SE CIERRA
+Cmd.timeout_ms(ms: int) -> Cmd
+Cmd.max_output(bytes: int) -> Cmd      // default ~16 MB
+Cmd.merge_output() -> Cmd              // dup2 al MISMO pipe → orden real del kernel
+Cmd.run() -> Result<Output, string>
+```
+
+**Invariantes del contrato** (lo que el `Result`/los campos PROMETEN):
+
+- `Err` significa **no se pudo lanzar** (ENOENT/EACCES/dir inválido). Un hijo que corrió y salió
+  siempre es `Ok`, aunque su código sea ≠ 0 o muriera por señal.
+- **Sin shell**, ni opt-in: `argv` tipado. Una tubería se escribe `run("sh", ["-c", …])`, visible.
+- **stdin = `/dev/null`** si no se llama a `.stdin(…)`. Heredar el stdin del proceso: NUNCA.
+- **Ambos pipes se drenan concurrentemente** aparcando fibras (VM y nativo) o con `poll(2)` en el
+  intérprete → el deadlock clásico "wait antes de leer" es imposible por construcción; el usuario
+  no ordena nada.
+- **Timeout ⇒ NO es `Err`**: `timed_out: true` con el `Output` PARCIAL (diagnóstico con los datos).
+  La escalera es: cerrar stdin → `SIGTERM` al **grupo** → margen → `SIGKILL` al **grupo**.
+- **El grupo se crea con `Command::process_group(0)` de std** (sin `pre_exec`: en un proceso de
+  14 hilos con mimalloc, el código entre `fork` y `exec` debe ser async-signal-safe).
+- **`run()` SIEMPRE cosecha** (raylang no tiene destructores): también tras timeout.
+- Salida capturada con **tope** y `truncated` explícito; nunca un `Vec` sin límite.
+- `bytes` en todo el borde; decodificar es decisión del llamador (`from_utf8`).
+- **Reparto por tiers**: primitivo `__run` builtin (host + transpilador), ergonomía en
+  `std/process` escrito en raylang. Gating por `--without process` (política, no crate).
+
+**v2 (fuera de este contrato, diseñado para no romperlo)**: `Cmd.stream() -> Proc` con
+`Proc { out: Channel<bytes>, err: Channel<bytes> }` y `Proc.wait() -> Exit`; el canal ACOTADO es la
+contrapresión; `Proc` es **hijo de scope** (cosechado o cancelado estructuralmente, como `Task`) →
+concurrencia estructurada de procesos. VM **y nativo** (ambos tienen fibras), no solo-VM.
+
+**Errores ajenos que cada decisión esquiva** (la razón de ser del contrato):
+
+| Error histórico | Quién lo pagó | Decisión |
+|---|---|---|
+| Shell por defecto → inyección | `os.system`, `child_process.exec` | sin shell, ni opt-in |
+| API multiplicada | Python `call/check_call/check_output/run/Popen`, Node `exec/execFile/spawn/fork`×`Sync` | dos entradas (+`stream` en v2) |
+| `128+señal` aplana la muerte | POSIX shell y sus imitadores | `Exit` enum |
+| Deadlock del pipe lleno | Go `cmd.Wait`, Python `Popen.wait` | drenaje concurrente; el usuario no ordena |
+| Timeout ausente o añadido después | Python (13 años), Go (mata solo al hijo directo) | `timeout_ms` + escalera al GRUPO desde el día uno |
+| Timeout = excepción que esconde el parcial | `subprocess.TimeoutExpired` | `timed_out` EN el Output |
+| Captura sin límite → OOM | Rust `output()`, Python | tope + `truncated` |
+| `maxBuffer` mata en silencio | Node | trunca y lo DICE |
+| Texto forzado en el borde | Python 2/3, encodings de Node | `bytes` siempre |
+| Exit ≠ 0 como excepción | `check_output`, `execSync` | salir con código no es error |
+| stdin heredado → hijo colgado | casi todos | `/dev/null` por defecto |
+| fds del padre filtrados | clásico universal | CLOEXEC auditado (§53.4) |
+| `fork` en multihilo → deadlock del asignador | cualquiera con `pre_exec` | `process_group(0)`, sin `pre_exec` |
+| Zombis sin `wait` | C, Node `detached` | `run()` cosecha; v2: hijo de scope |
+| stdout/stderr con orden inventado | quien fusiona en userspace | `merge_output()` = un pipe (`dup2`) |
+
 **Orden de ataque revisado** (sustituye al del §53.6):
 **(1)** `run()` en los tres motores — interp bloquea (oráculo), VM y nativo APARCAN la fibra;
 `Exit`/`Output`, tope, timeout con escalera, `process_group(0)`, stdin=/dev/null; golden

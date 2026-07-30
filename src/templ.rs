@@ -1,7 +1,7 @@
 //! Templates compilados (M55) — un archivo `.ray.html` se compila a una FUNCIÓN raylang tipada, en
-//! la línea de `templ` (Go) o `askama` (Rust). Vía explícita: `ray build --templates-only` (era el
-//! subcomando `ray templ` hasta M99); implícita: `run`/`build`/`test` regeneran los desactualizados.
-//! Es la versión "limpia" de la
+//! la línea de `templ` (Go) o `askama` (Rust). Vía normal (M102): el LOADER lo compila EN MEMORIA
+//! al resolver su import; `ray build --templates-only` (era el subcomando `ray templ` hasta M99)
+//! materializa el generado para inspección. Es la versión "limpia" de la
 //! localidad de PHP: el archivo es la página, pero el código incrustado se limita a la sintaxis
 //! restringida del template y las variables son PARÁMETROS TIPADOS (un typo en `{{ var }}` o un
 //! tipo equivocado es error de compilación, no un "" silencioso como en el motor runtime).
@@ -15,9 +15,9 @@
 //!   - `{% for x in expr %} … {% endfor %}` — cualquier iterable del `for` de raylang
 //!     (arreglos, rangos `a..b`, `Map` con `(k, v)`, iteradores).
 //!
-//! `views/list.ray.html` genera `views/list.ray` con `pub fn render_list(…) -> string`, que se
-//! importa como cualquier módulo (`import views/list;` → `list.render_list(…)`). El archivo
-//! generado se commitea (inspeccionable, cero magia); el escape reusa el `escape_html` de
+//! `views/list.ray.html` ES el módulo `views/list` con `pub fn render(…) -> string` (M103: el
+//! nombre es fijo — el módulo ya namespacea), que se importa como cualquier módulo
+//! (`import views/list;` → `list.render(…)`). El escape reusa el `escape_html` de
 //! `std/template` (pub). Es un cliente del front-end (como `ray fmt`/`ray doc`): el `.ray` generado
 //! lo valida el pipeline entero al compilarse; aquí solo se comprueba que **parsea** para dar el
 //! error temprano contra el template.
@@ -71,12 +71,19 @@ impl Tok {
 /// sin tocar el disco. Es la vía del loader (M102): al resolver un import a un `.ray.html`, el
 /// template es la única fuente de verdad — no hay `.ray` generado en el proyecto.
 pub fn generate_module_source(input: &Path) -> Result<String, String> {
+    generate_module_with_map(input).map(|(code, _, _)| code)
+}
+
+/// Como `generate_module_source`, devolviendo además el fuente del TEMPLATE y su line map
+/// (línea-generada → línea-del-template, 1-basadas): lo que el loader guarda para traducir los
+/// diagnósticos posteriores del módulo generado de vuelta al `.ray.html` (M102-A2).
+pub fn generate_module_with_map(input: &Path) -> Result<(String, String, Vec<usize>), String> {
     let src = std::fs::read_to_string(input)
         .map_err(|e| format!("could not read '{}': {e}", input.display()))?;
     let name = fn_suffix_of(input)?;
-    let (code, _map) = generate_with_map_at(&src, &name, input.parent())
+    let (code, map) = generate_with_map_at(&src, &name, input.parent())
         .map_err(|e| format!("{}: line {}: {}", input.display(), e.line, e.msg))?;
-    Ok(code)
+    Ok((code, src, map))
 }
 
 /// Compila `input` (`*.ray.html`) y escribe el módulo generado al lado (`*.ray`). Devuelve la ruta
@@ -106,9 +113,10 @@ fn output_path(input: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(format!("{base}.ray")))
 }
 
-/// El sufijo del nombre de la función generada: el *stem* del archivo, saneado a identificador
-/// (`lista-de-usuarios.ray.html` → `lista_de_usuarios` → `render_lista_de_usuarios`). Lo usa
-/// también el LSP para nombrar la función al analizar un buffer `.ray.html`.
+/// El **nombre del template**: el *stem* del archivo, saneado y validado como identificador
+/// (`lista-de-usuarios.ray.html` → `lista_de_usuarios`). Desde M103 la función generada se llama
+/// siempre `render` (el módulo namespacea); el nombre queda para el doc comment del generado y
+/// para validar que el archivo puede ser un módulo.
 pub fn fn_suffix_of(input: &Path) -> Result<String, String> {
     let s = input
         .file_name()
@@ -819,7 +827,7 @@ fn generate_body(
                     }
                     // `{% include ruta/al/template(args) %}`: incluye OTRO template. Quien escribe
                     // el template no tiene por qué conocer el nombre de la función generada: el
-                    // generador importa el módulo (si no está ya) y llama a su `render_<leaf>`.
+                    // generador importa el módulo (si no está ya) y llama a su `render` (M103).
                     // La otra forma, `{% include expr %}` (sin la forma `ruta(args)`), empalma el
                     // string de `expr` SIN escapar — HTML ya renderizado (p. ej. el `contenido`
                     // de un layout). Para una expresión arbitraria inline está `{{& expr }}`.
@@ -829,11 +837,10 @@ fn generate_body(
                         }
                         if let Some((path, args)) = template_ref(rest) {
                             let leaf = path.rsplit('/').next().unwrap_or(path);
-                            let f: String = leaf.chars().map(|c| if c == '-' { '_' } else { c }).collect();
                             if !imports.iter().any(|(p, _)| p == path) {
                                 imports.push((path.to_string(), l));
                             }
-                            emit_line(&mut body, depth, l, format!("out.push(to_string({leaf}.render_{f}({args})));"));
+                            emit_line(&mut body, depth, l, format!("out.push(to_string({leaf}.render({args})));"));
                         } else {
                             emit_line(&mut body, depth, l, format!("out.push(to_string({rest}));"));
                         }
@@ -872,7 +879,7 @@ fn generate_body(
     header.push_str(&format!(
         "\n\
          /// Renders the `{name}` template (generated; the `.ray.html` file is the source of truth).\n\
-         pub fn render_{name}({params}) -> string {{\n\
+         pub fn render({params}) -> string {{\n\
          \x20   var out: [string] = [];\n"
     ));
     map.extend([params_line; 4]);
@@ -900,7 +907,7 @@ mod tests {
     fn generates_typed_function() {
         let tpl = "{% params title: string, n: int %}\n<h1>{{ title }}</h1>{% if n > 0 %}<p>{{ n }}</p>{% endif %}";
         let code = generate(tpl, "vista").unwrap();
-        assert!(code.contains("pub fn render_vista(title: string, n: int) -> string {"), "{code}");
+        assert!(code.contains("pub fn render(title: string, n: int) -> string {"), "{code}");
         assert!(code.contains("out.push(escape_html(to_string(title)));"), "{code}");
         assert!(code.contains("if (n > 0) {"), "{code}");
         // Y el generado parsea como raylang válido.
@@ -940,13 +947,13 @@ mod tests {
     #[test]
     fn include_by_path_does_not_expose_generated_name() {
         // `{% include ruta/al/template(args) %}`: quien escribe el template NO conoce el
-        // `render_<x>` generado — el generador importa el módulo solo (dedup con un import
+        // `render` generado (M103) — el generador importa el módulo solo (dedup con un import
         // explícito) y llama a la función por él.
         let tpl = "{% params p: string %}\n<div>{% include vistas/tarjeta(p) %}</div>\n{% include vistas/tarjeta(p + \"!\") %}\n";
         let (code, _) = generate_with_map(tpl, "pagina").unwrap();
         assert_eq!(code.matches("import vistas/tarjeta;\n").count(), 1, "auto-import, sin duplicate\n{code}");
-        assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p)));"), "{code}");
-        assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p + \"!\")));"), "{code}");
+        assert!(code.contains("out.push(to_string(tarjeta.render(p)));"), "{code}");
+        assert!(code.contains("out.push(to_string(tarjeta.render(p + \"!\")));"), "{code}");
         let tokens = crate::lexer::lex(&code).unwrap();
         assert!(crate::parser::parse(tokens).is_ok());
         // template_ref: la forma con `.` NO es referencia (expresión ordinaria, cruda).
@@ -961,11 +968,11 @@ mod tests {
         // `{% import %}` se hoistea a la cabecera (con su línea en el map) y el `{% include %}`
         // de EXPRESIÓN empalma sin escapar (HTML ya renderizado, p. ej. el `contenido` de un
         // layout o una llamada explícita).
-        let tpl = "{% params p: string %}\n{% import vistas/tarjeta %}\n{% import util/fmt as f %}\n<div>{% include tarjeta.render_tarjeta(p) %}</div>\n";
+        let tpl = "{% params p: string %}\n{% import vistas/tarjeta %}\n{% import util/fmt as f %}\n<div>{% include tarjeta.render(p) %}</div>\n";
         let (code, map) = generate_with_map(tpl, "pagina").unwrap();
         assert!(code.contains("import vistas/tarjeta;\n"), "{code}");
         assert!(code.contains("import util/fmt as f;\n"), "{code}");
-        assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p)));"), "{code}");
+        assert!(code.contains("out.push(to_string(tarjeta.render(p)));"), "{code}");
         // Los imports van ANTES de la función y su línea del map es la del template.
         let lines: Vec<&str> = code.lines().collect();
         let (i, _) = lines.iter().enumerate().find(|(_, l)| l.contains("import vistas/tarjeta")).unwrap();
@@ -1001,7 +1008,7 @@ mod tests {
         // El hijo solo aporta bloques; hereda la estructura (y el bloque `pie` queda con su defecto).
         let child = "{% params title: string, n: int %}\n{% extends base %}\n{% block body %}<b>{{ n }}</b>{% endblock %}\n";
         let (code, map) = generate_with_map_at(child, "pagina", Some(&base)).unwrap();
-        assert!(code.contains("pub fn render_pagina(title: string, n: int) -> string"), "la signature es la del HIJO\n{code}");
+        assert!(code.contains("pub fn render(title: string, n: int) -> string"), "la signature es la del HIJO\n{code}");
         assert!(code.contains("out.push(escape_html(to_string(n)));"), "el block del child\n{code}");
         assert!(code.contains("pie com"), "el default del layout queda\n{code}");
         assert!(!code.contains("default"), "el block sobreescrito NO deja su default\n{code}");
@@ -1051,7 +1058,7 @@ mod tests {
         // Cada `{% %}` en su línea, indentación por bloques, `{{ }}` inline, delimitadores
         // normalizados, blancos conservados.
         let tpl = "{% params xs: [string], ok: bool %}\n\
-                   <ul>{% for lang in xs %}  {%include tarjeta.render_tarjeta(lang)%}\n\
+                   <ul>{% for lang in xs %}  {%include tarjeta.render(lang)%}\n\
                    {% endfor %}</ul>\n\
                    \n\
                    {%if ok%}<p>{{titulo}} y {{& crudo }}</p>{%else%}<i>no</i>{%endif%}\n";
@@ -1059,7 +1066,7 @@ mod tests {
         let expected = "{% params xs: [string], ok: bool %}\n\
                         <ul>\n\
                         {% for lang in xs %}\n\
-                        \x20   {% include tarjeta.render_tarjeta(lang) %}\n\
+                        \x20   {% include tarjeta.render(lang) %}\n\
                         {% endfor %}\n\
                         </ul>\n\
                         \n\

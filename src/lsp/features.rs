@@ -582,7 +582,7 @@ pub(super) fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json 
     };
     if is_template_uri(&uri) {
         // M55: renombrar un param o una var de for DENTRO del template (declaración + usos). Es
-        // seguro hacia afuera: los llamadores del `render_<x>` generado pasan args POSICIONALES.
+        // seguro hacia afuera: los llamadores del `render` generado pasan args POSICIONALES.
         let valid = new_name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
             && new_name.chars().all(is_ident_char);
         if !valid {
@@ -1978,7 +1978,7 @@ pub(super) fn template_pos_to_generated(src: &str, code: &str, map: &[usize], li
     } else {
         content.trim()
     };
-    // `{% include ruta(args) %}`: en el generado la ruta se vuelve `leaf.render_leaf(args)` — solo
+    // `{% include ruta(args) %}`: en el generado la ruta se vuelve `leaf.render(args)` — solo
     // los ARGS aparecen verbatim, así que la aguja son los args (se empalman tal cual, recortados).
     if is_tag && content.trim_start().starts_with("include")
         && let Some((_, args)) = crate::templ::template_ref(needle)
@@ -2683,12 +2683,10 @@ pub(super) fn document_symbol_result(msg: &Json, docs: &HashMap<String, String>)
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
     if uri.is_some_and(is_template_uri) {
-        // M55: outline del template — la función `render_<stem>` como raíz (abarca el documento)
-        // y, como hijos, cada param de la cabecera y cada variable de `{% for %}` (kind Variable).
-        let name = uri.and_then(uri_to_path)
-            .and_then(|p| crate::templ::fn_suffix_of(&p).ok())
-            .map(|s| format!("render_{s}"))
-            .unwrap_or_else(|| "render".to_string());
+        // M55: outline del template — la función `render` como raíz (abarca el documento; desde
+        // M103 el nombre es fijo, el módulo namespacea) y, como hijos, cada param de la cabecera
+        // y cada variable de `{% for %}` (kind Variable).
+        let name = "render".to_string();
         let lines: Vec<&str> = src.split('\n').collect();
         let text_at = |l: usize, c: usize, len: usize| -> String {
             lines.get(l).map(|s| s.chars().skip(c).take(len).collect()).unwrap_or_default()

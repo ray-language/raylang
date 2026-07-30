@@ -99,7 +99,7 @@ Los handlers **mutan** `r` (semántica de referencia); los helpers que devuelven
 ```raylang
 r.text("plano");                          // text/plain
 r.json("{\"ok\": true}");                 // application/json (componlo con std/json)
-r.html(render_pagina(...));               // text/html (casa con los templates de `ray templ`)
+r.html(pagina.render(...));               // text/html (casa con los templates compilados)
 r.status(201).text("creado");             // código de estado
 r.header("X-Version", "2").text("hola");  // cabecera extra (gana sobre el Content-Type derivado)
 r.cookie("sid=abc; HttpOnly");            // una línea Set-Cookie por llamada

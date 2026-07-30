@@ -176,7 +176,12 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   directamente el módulo `vistas/x` — el loader lo compila al resolver el import, sin generar
   ningún `.ray` en el proyecto (y si queda uno viejo, lo ignora). Desaparecen la regeneración por
   mtime y los generados commiteados; `ray build --templates-only` queda como materialización
-  opcional para inspección.
+  opcional para inspección. Y **todos los diagnósticos apuntan al template** (A2): un error de
+  tipos, de runtime (con su traza) o de sintaxis en una expresión empalmada se reporta con la
+  línea y el fuente del `.ray.html`, no con los del módulo generado invisible.
+- **La función generada de un template se llama `render`** (M103): `import vistas/lista;` →
+  `lista.render(…)` — el módulo ya namespacea, el sufijo `render_<stem>` de M55 era un artefacto
+  de la era del generado commiteado. Sin alias de compatibilidad (criterio M99).
 - **Todos los mensajes que el lenguaje entrega al usuario están en inglés** (compilador, runtime,
   tooling y stdlib), incluidos los espejos del compilador auto-alojado. Los comentarios del código
   siguen en español.

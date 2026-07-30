@@ -44,7 +44,7 @@ una variable **no compila** (a diferencia del motor runtime `std/template`, que 
 deben estar en sus params, el checker lo exige); e **incluye** el partial por su ruta con
 `{% include vistas/tarjeta(lang) %}` — sin imports manuales ni conocer el nombre de la función
 generada (empalma HTML ya renderizado, sin re-escapar: cada nivel escapó sus datos). `main.ray`
-solo llama `vista_inicio.render_vista_inicio(…)` — la página ya sale completa.
+solo llama `vista_inicio.render(…)` — la página ya sale completa.
 
 ## Correrlo
 

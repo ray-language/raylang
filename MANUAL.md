@@ -1554,21 +1554,23 @@ la opción por defecto (tipados, y solo ellos soportan `{% include %}`/`{% exten
 ```
 
 No hay nada que regenerar ni commitear: `ray run`/`ray build`/`ray test` compilan el template al
-vuelo cada vez (el template es la única fuente de verdad). Para **inspeccionar** el módulo
-generado, `ray build --templates-only vistas/` lo materializa al lado
-(`vistas/lista.ray`, `pub fn render_lista(...) -> string`); si ese `.ray` queda en el proyecto, el
+vuelo cada vez (el template es la única fuente de verdad), y **los errores apuntan al template**:
+un typo en `{{ titluo }}`, una expresión mal formada o un error de runtime se reportan con la
+línea y el fuente del `.ray.html`. Para **inspeccionar** el módulo generado,
+`ray build --templates-only vistas/` lo materializa al lado
+(`vistas/lista.ray`, `pub fn render(...) -> string`); si ese `.ray` queda en el proyecto, el
 loader lo ignora y sigue prefiriendo el template.
 
 ```rust
 import vistas/lista;
-let html = lista.render_lista("Informe", filas);
+let html = lista.render("Informe", filas);
 ```
 
 Los `{{ expr }}` admiten expresiones raylang (`{{ p.nombre }}`, `{{ n + 1 }}`) con autoescape HTML
 (`{{& expr }}` crudo); `{% if/elif/else %}`, `{% for %}` y `{% let nombre = expr %}` (local
 inmutable) son los de raylang. Los templates **componen**: `{% include vistas/tarjeta(n) %}`
 incluye otro template **por su ruta** — sin conocer el nombre de la función generada ni importar
-nada (el generador importa y llama al `render_<x>` él) — y empalma su HTML **sin re-escapar** (el
+nada (el generador importa y llama al `render` él) — y empalma su HTML **sin re-escapar** (el
 partial ya escapó sus datos). Un `{% include expr %}` sin la forma `ruta(args)` empalma la
 expresión cruda (p. ej. el `contenido` de un layout); `{% import ruta [as x] %}` sigue disponible
 para usar funciones de otro módulo en las expresiones. Y **heredan** (estilo Jinja, resuelto en

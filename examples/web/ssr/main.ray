@@ -1,7 +1,7 @@
-// Demo de SSR (server-side rendering) con TEMPLATES COMPILADOS (M55): el servidor web del paquete
-// `net` sirve una página renderizada por las funciones que `ray templ` genera desde los
-// `vistas/*.ray.html` — parámetros TIPADOS (un typo en el template no compila) y cero parseo en
-// runtime. Los templates COMPONEN: `vista_inicio.ray.html` HEREDA de `layout.ray.html`
+// Demo de SSR (server-side rendering) con TEMPLATES COMPILADOS (M55/M102): el servidor web del
+// paquete `net` sirve una página renderizada por las funciones que el loader compila EN MEMORIA
+// desde los `vistas/*.ray.html` — parámetros TIPADOS (un typo en el template no compila) y cero
+// parseo en runtime. Los templates COMPONEN: `vista_inicio.ray.html` HEREDA de `layout.ray.html`
 // (`{% extends layout %}` + `{% block cuerpo %}`) e importa e incluye el partial
 // `tarjeta.ray.html` por cada elemento.
 //
@@ -10,7 +10,7 @@
 // conexión corre en su propia fibra sin estado mutable compartido; por eso el handler es una función
 // PURA de la petición (lo idiomático para SSR), no un contador global.
 //
-// Uso (los .ray generados van commiteados; `ray run` regenera solo los desactualizados):
+// Uso (solo existen los templates; se compilan al vuelo en cada run):
 //   cd examples/web/ssr
 //   ray run                                  # escucha en el puerto 8080
 //   curl http://127.0.0.1:8080/
@@ -29,10 +29,10 @@ fn es_popular(lang: string) -> bool {
     lang == "rust" || lang == "python" || lang == "javascript"
 }
 
-// La vista HEREDA del layout en compilación ({% extends %}): render_vista_inicio ya devuelve la
+// La vista HEREDA del layout en compilación ({% extends %}): vista_inicio.render ya devuelve la
 // página completa (estructura del layout + su bloque `cuerpo` + el partial por lenguaje).
 fn render(titulo: string, saludo: string, popular: bool, lenguajes: [string]) -> string {
-    vista_inicio.render_vista_inicio(titulo, saludo, popular, lenguajes)
+    vista_inicio.render(titulo, saludo, popular, lenguajes)
 }
 
 fn pagina(req: webserver.Request) -> webserver.Response {

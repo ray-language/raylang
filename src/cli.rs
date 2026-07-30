@@ -782,10 +782,11 @@ fn cmd_build(args: &[String]) {
     match compiler::compile_program(&program) {
         Ok(_) => println!("ok: '{path}' compiles"),
         Err(mut e) => {
-            let (source, name, local) = locate(e.line);
+            let (source, name, local, col, len) = locate(e.line, e.col, 1);
             e.line = local;
+            e.col = col;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-            eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
+            eprintln!("{}", diagnostic::render(&source, local, col, len, &head));
             process::exit(65);
         }
     }
@@ -1680,7 +1681,7 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
         .map_err(|e| format!("the package does not load: {}", e.message))?;
     let errors = crate::checker::check_all_modulo(&mut loaded.program);
     if let Some(e) = errors.first() {
-        let (modulo, _source, linea) = loaded.locate(e.line);
+        let (modulo, _source, linea, _col, _len) = loaded.locate(e.line, 1, 1);
         return Err(format!(
             "the package does not pass the semantic check ({modulo}.ray, line {linea}): {}",
             e.msg
@@ -2140,12 +2141,15 @@ fn resolve_indent(file: &std::path::Path) -> String {
     }
 }
 
-/// Un localizador de líneas globales→(fuente del módulo, nombre, línea local), para
-/// renderizar errores contra el archivo correcto en programas multi-módulo (L3).
-type Locate = Box<dyn Fn(usize) -> (String, String, usize)>;
+/// Un localizador de posiciones globales `(línea, col, len)` → `(fuente del módulo, nombre, línea
+/// local, col, len)`, para renderizar errores contra el archivo correcto en programas multi-módulo
+/// (L3). `col`/`len` viajan por él porque un módulo-TEMPLATE (M102-A2) los reescribe: la línea se
+/// traduce al `.ray.html`, la fuente devuelta es la del template y el cursor degrada a línea
+/// completa (col 1) — usar SIEMPRE los valores devueltos.
+type Locate = Box<dyn Fn(usize, usize, usize) -> (String, String, usize, usize, usize)>;
 
 /// Carga el archivo de entrada y sus imports (loader, M11.3), devolviendo el programa
-/// fusionado, un localizador de líneas y si hay más de un módulo.
+/// fusionado, un localizador de posiciones y si hay más de un módulo.
 fn load_and_locate(path: &str) -> (crate::ast::Program, Locate, bool) {
     let loaded = match loader::load_with_deps(Path::new(path), &dependency_roots()) {
         Ok(l) => l,
@@ -2156,12 +2160,14 @@ fn load_and_locate(path: &str) -> (crate::ast::Program, Locate, bool) {
     };
     let modules = loaded.modules;
     let multi = modules.len() > 1;
-    let locate: Locate = Box::new(move |gline: usize| {
+    let locate: Locate = Box::new(move |gline: usize, col: usize, len: usize| {
         let m = modules.iter().rev().find(|m| m.start_line <= gline).unwrap_or(&modules[0]);
         // `saturating_sub`: una posición fallback `(0,0)` (p.ej. un error de runtime sin línea concreta,
         // como el deadlock declarado por un worker ocioso en M:N, o el fallback de fuel) da `gline < start_line`
         // → sin esto, restar underflowaría (usize). Para posiciones válidas (`gline >= start_line`) es idéntico.
-        (m.source.clone(), m.name.clone(), gline.saturating_sub(m.start_line) + 1)
+        let local = gline.saturating_sub(m.start_line) + 1;
+        let (source, local, col, len) = m.present(local, col, len);
+        (source.to_string(), m.name.clone(), local, col, len)
     });
     (loaded.program, locate, multi)
 }
@@ -2173,10 +2179,11 @@ fn check_or_exit(program: &mut crate::ast::Program, locate: &Locate, multi: bool
     if checker::check(program).is_err() {
         let mut copy = backup;
         for mut e in checker::check_all(&mut copy) {
-            let (source, name, local) = locate(e.line);
+            let (source, name, local, col, len) = locate(e.line, e.col, e.len);
             e.line = local;
+            e.col = col;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-            eprintln!("{}", diagnostic::render(&source, local, e.col, e.len, &head));
+            eprintln!("{}", diagnostic::render(&source, local, col, len, &head));
         }
         process::exit(65);
     }
@@ -2212,10 +2219,11 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
         match compiler::compile_program(&program) {
             Ok(compiled) => vm::run_program_with_limit(&compiled, fuel, heap),
             Err(mut e) => {
-                let (source, name, local) = locate(e.line);
+                let (source, name, local, col, len) = locate(e.line, e.col, 1);
                 e.line = local;
+                e.col = col;
                 let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-                eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
+                eprintln!("{}", diagnostic::render(&source, local, col, len, &head));
                 process::exit(65);
             }
         }
@@ -2235,10 +2243,11 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
                 e.line = line;
                 e.col = col;
             }
-            let (source, name, local) = locate(e.line);
+            let (source, name, local, col, len) = locate(e.line, e.col, 1);
             e.line = local;
+            e.col = col;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-            eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
+            eprintln!("{}", diagnostic::render(&source, local, col, len, &head));
             for l in render_trace(&trace, &locate) {
                 eprintln!("{}", l);
             }
@@ -2253,7 +2262,7 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
 /// hay traza o ningún marco califica.
 fn first_user_frame(trace: &[runtime::TraceFrame], locate: &Locate) -> Option<(usize, usize)> {
     trace.iter().find_map(|f| {
-        let (source, name, local) = locate(f.line);
+        let (source, name, local, _col, _len) = locate(f.line, f.col, 1);
         let in_band = local <= source.lines().count();
         let is_std = name == "std" || name.starts_with("std/");
         if in_band && !is_std { Some((f.line, f.col)) } else { None }
@@ -2272,11 +2281,13 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
         return Vec::new();
     }
     let render_frame = |prefix: &str, f: &runtime::TraceFrame| {
-        let (source, name, local) = locate(f.line);
+        // `col` sale del locate: en un módulo-template es 1 (la columna del generado no existe
+        // en el `.ray.html`); en uno normal es la de la traza (M102-A2).
+        let (source, name, local, col, _len) = locate(f.line, f.col, 1);
         if local > source.lines().count() {
             format!("  {} {} (prelude:{}:{})", prefix, f.name, f.line, f.col)
         } else {
-            format!("  {} {} ({}:{}:{})", prefix, f.name, name, local, f.col)
+            format!("  {} {} ({}:{}:{})", prefix, f.name, name, local, col)
         }
     };
     let mut out = Vec::new();

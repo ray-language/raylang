@@ -70,6 +70,34 @@ pub struct LoadedModule {
     /// Ruta del archivo del módulo (M10.2h): permite al LSP devolver la `Location` en el archivo
     /// correcto al navegar cruzando módulos (ir-a-definición / references).
     pub path: PathBuf,
+    /// El origen-template del módulo, si es un `.ray.html` compilado en memoria (M102-A2).
+    pub template: Option<TemplateOrigin>,
+}
+
+/// El origen de un módulo-template (M102-A2): el fuente del `.ray.html` y el line map
+/// línea-generada → línea-del-template (1-basadas), para traducir los diagnósticos del módulo
+/// generado (checker/runtime) de vuelta al template — el generado no existe en disco.
+pub struct TemplateOrigin {
+    pub source: String,
+    pub line_map: Vec<usize>,
+}
+
+/// La línea del template correspondiente a la línea `line` (1-basada) del generado.
+fn template_line(map: &[usize], line: usize) -> usize {
+    map.get(line.saturating_sub(1)).copied().unwrap_or(1).max(1)
+}
+
+impl LoadedModule {
+    /// La presentación REAL de una posición **local** del módulo: `(fuente, línea, col, len)` para
+    /// renderizar un diagnóstico. Para un módulo-template (M102-A2) traduce la línea del generado
+    /// al `.ray.html` y degrada el cursor a **línea completa** (col 1, extensión hasta el final:
+    /// la columna del generado no existe en el template); para un módulo normal es la identidad.
+    pub fn present(&self, local: usize, col: usize, len: usize) -> (&str, usize, usize, usize) {
+        match &self.template {
+            Some(t) => (t.source.as_str(), template_line(&t.line_map, local), 1, usize::MAX),
+            None => (self.source.as_str(), local, col, len),
+        }
+    }
 }
 
 impl Loaded {
@@ -79,14 +107,19 @@ impl Loaded {
     }
 
     /// Localiza una línea **global** del programa fusionado: devuelve `(módulo, fuente, línea
-    /// local)`. La línea local renumera respecto al inicio de la banda del módulo, así un error
-    /// se renderiza contra el archivo correcto con su número de línea real.
-    pub fn locate(&self, line: usize) -> (&str, &str, usize) {
+    /// local, col, len)`. La línea local renumera respecto al inicio de la banda del módulo, así
+    /// un error se renderiza contra el archivo correcto con su número de línea real. `col`/`len`
+    /// entran para poder presentarlos: en un módulo normal salen tal cual; en un módulo-TEMPLATE
+    /// (M102-A2) la línea se traduce al `.ray.html` con el line map, la fuente devuelta es la del
+    /// template y el cursor degrada a línea completa (col 1) — usar SIEMPRE los devueltos.
+    pub fn locate(&self, line: usize, col: usize, len: usize) -> (&str, &str, usize, usize, usize) {
         let m = self.modules.iter().rev().find(|m| m.start_line <= line)
             .unwrap_or_else(|| &self.modules[0]);
         // `saturating_sub`: una posición `(0,0)` (error de runtime sin línea concreta) daría `line < start_line`
         // → sin esto underflowaría (usize). Para posiciones válidas (`line >= start_line`) es idéntico.
-        (&m.name, &m.source, line.saturating_sub(m.start_line) + 1)
+        let local = line.saturating_sub(m.start_line) + 1;
+        let (source, local, col, len) = m.present(local, col, len);
+        (&m.name, source, local, col, len)
     }
 }
 
@@ -98,6 +131,8 @@ struct Module {
     source: String,
     /// Ruta del archivo del módulo (para que el LSP navegue cruzando archivos, M10.2h).
     path: PathBuf,
+    /// El origen-template si el módulo es un `.ray.html` compilado en memoria (M102-A2).
+    template: Option<TemplateOrigin>,
 }
 
 /// Carga el archivo de entrada y sus imports (transitivos), y devuelve el programa fusionado.
@@ -163,6 +198,9 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         }
         // El archivo de entrada puede venir de un buffer en memoria (LSP); un módulo de la stdlib,
         // de la fuente **embebida** en el binario (M40.5, auto-contención); el resto, del disco.
+        // M102-A2: el origen-template del módulo (fuente del `.ray.html` + line map), guardado
+        // para traducir los diagnósticos del generado de vuelta al template.
+        let mut template: Option<TemplateOrigin> = None;
         let source = match entry_source {
             Some(s) if is_entry => s.to_string(),
             _ => match crate::stdlib::embedded(&name) {
@@ -170,14 +208,24 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                 // M102: un módulo-template (`.ray.html`) se compila EN MEMORIA — el template es la
                 // única fuente de verdad, sin `.ray` generado en el proyecto. Un error del template
                 // (sintaxis de directivas) aborta aquí con su archivo y línea.
-                None if is_template(&path) => crate::templ::generate_module_source(&path)
-                    .map_err(|message| LoadError { message })?,
+                None if is_template(&path) => {
+                    let (code, tpl_src, map) = crate::templ::generate_module_with_map(&path)
+                        .map_err(|message| LoadError { message })?;
+                    template = Some(TemplateOrigin { source: tpl_src, line_map: map });
+                    code
+                }
                 None => std::fs::read_to_string(&path).map_err(|e| LoadError {
                     message: format!("could not read module '{}' ({}): {}", name, path.display(), e),
                 })?,
             },
         };
-        let program = parse_source(&name, &source)?;
+        // Un error de este módulo, renderizado contra su fuente REAL: la del template (con la
+        // línea traducida, a nivel de línea) si es un módulo-template; la propia si no (M102-A2).
+        let rend = |line: usize, col: usize, len: usize, msg: &str| match &template {
+            Some(t) => render(&t.source, template_line(&t.line_map, line), 1, usize::MAX, &name, msg),
+            None => render(&source, line, col, len, &name, msg),
+        };
+        let program = parse_source(&name, &source, template.as_ref())?;
         // Dependencias del módulo: tanto `import M;` como `from M import …;` cargan `M`.
         let deps = program.imports.iter().map(|i| (&i.module, i.line, i.col))
             .chain(program.from_imports.iter().map(|f| (&f.module, f.line, f.col)));
@@ -185,7 +233,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
             // M11.6b: la arista de import debe respetar el borde de cápsula (aunque `dep` ya
             // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
             if let Some(c) = capsule_violated(&roots, &name, dep) {
-                return Err(render(&source, line, col, 1, &name, &format!(
+                return Err(rend(line, col, 1, &format!(
                     "module '{}' is internal to capsule '{}'; import it with 'import {};'",
                     dep, c, c
                 )));
@@ -209,17 +257,17 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                     .filter(|dir| dep == *dir || dep.starts_with(&format!("{dir}/")))
                     .and_then(|_| project_root.parent().map(|p| vec![p.to_path_buf()]));
                 let resolved = match resolve_module_path(&roots, dep) {
-                    Err(msg) => return Err(render(&source, line, col, 1, &name, &msg)),
+                    Err(msg) => return Err(rend(line, col, 1, &msg)),
                     Ok(Some(mp)) => Some(mp),
                     Ok(None) => match self_root.as_deref().map(|r| resolve_module_path(r, dep)) {
-                        Some(Err(msg)) => return Err(render(&source, line, col, 1, &name, &msg)),
+                        Some(Err(msg)) => return Err(rend(line, col, 1, &msg)),
                         Some(Ok(mp)) => mp,
                         None => None,
                     },
                 };
                 match resolved {
                     Some(mp) => pending.push((dep.clone(), mp, false)),
-                    None => return Err(render(&source, line, col, 1, &name, &format!(
+                    None => return Err(rend(line, col, 1, &format!(
                         "module '{}' not found (expected '{}.ray' or '{}/mod.ray' in: {})",
                         dep, dep, dep,
                         roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
@@ -227,7 +275,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                 }
             }
         }
-        modules.push(Module { name, is_entry, program, source, path });
+        modules.push(Module { name, is_entry, program, source, path, template });
     }
 
     // --- Fase 2: tipos únicos **dentro de cada módulo** (M11.3c: ya no globales) ---
@@ -335,7 +383,9 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         merged.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
         merged.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
 
-        loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start, path: m.path });
+        loaded_modules.push(LoadedModule {
+            name: m.name, source: m.source, start_line: start, path: m.path, template: m.template,
+        });
     }
     loaded_modules.sort_by_key(|m| m.start_line);
     for ambiguous in &ufcs_ambiguous {
@@ -721,9 +771,26 @@ fn rename_type_defs(program: &mut Program, own_types: &NameMap) {
     }
 }
 
-fn parse_source(name: &str, source: &str) -> Result<Program, LoadError> {
-    let tokens = crate::lexer::lex(source).map_err(|e| render(source, e.line, e.col, e.len, name, &e.to_string()))?;
-    crate::parser::parse(tokens).map_err(|e| render(source, e.line, e.col, e.len, name, &e.to_string()))
+fn parse_source(name: &str, source: &str, template: Option<&TemplateOrigin>) -> Result<Program, LoadError> {
+    // M102-A2: en un módulo-template, un error de lex/parse del GENERADO (una expresión empalmada
+    // mal formada) se reubica a la línea del `.ray.html` ANTES de formatear la cabecera (así el
+    // `at L:C` del mensaje también es el del template) y se renderiza contra el template.
+    let tokens = crate::lexer::lex(source).map_err(|mut e| match template {
+        Some(t) => {
+            e.line = template_line(&t.line_map, e.line);
+            e.col = 1;
+            render(&t.source, e.line, 1, usize::MAX, name, &e.to_string())
+        }
+        None => render(source, e.line, e.col, e.len, name, &e.to_string()),
+    })?;
+    crate::parser::parse(tokens).map_err(|mut e| match template {
+        Some(t) => {
+            e.line = template_line(&t.line_map, e.line);
+            e.col = 1;
+            render(&t.source, e.line, 1, usize::MAX, name, &e.to_string())
+        }
+        None => render(source, e.line, e.col, e.len, name, &e.to_string()),
+    })
 }
 
 /// Construye un `LoadError` renderizado: antepone `[módulo]` y dibuja el contexto de fuente.

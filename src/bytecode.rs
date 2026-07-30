@@ -186,6 +186,9 @@ pub enum OpCode {
     /// argumentos de la pila, los marshala, llama a la función C descrita por `externs[extern_idx]`
     /// (`dlopen`/`dlsym` + transmutación de firma) y empuja el resultado. La frontera insegura.
     CallExtern(usize, usize),
+    /// Builtin `__ffi_errno` (std/ffi.errno): empuja el `errno` del hilo actual como int — el
+    /// motivo del último fallo de una extern C estilo POSIX. Leer inmediatamente tras la llamada.
+    FfiErrno,
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 

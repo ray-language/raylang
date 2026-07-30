@@ -2884,6 +2884,9 @@ impl<'a> Vm<'a> {
 
                 // --- Reloj y aleatoriedad (M15.1b): delegan en los helpers compartidos. ---
                 OpCode::Now => self.push(HeapValue::Int(crate::builtins::now_millis())),
+                // errno del hilo actual (std/ffi.errno): las fibras de la VM no se mueven de hilo
+                // dentro de una secuencia sin cesión → leído justo tras la extern, es el suyo.
+                OpCode::FfiErrno => self.push(HeapValue::Int(crate::ffi::errno())),
                 OpCode::Monotonic => self.push(HeapValue::Int(crate::builtins::monotonic_millis())),
                 OpCode::MonotonicNanos => self.push(HeapValue::Int(crate::builtins::monotonic_nanos())),
                 OpCode::Sleep => match self.pop() {

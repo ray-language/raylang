@@ -38,6 +38,40 @@ use std::sync::Mutex;
 /// (el catálogo duplica su tamaño por nivel).
 pub const MAX_ARITY: usize = 6;
 
+// El puntero al `errno` del hilo actual (siempre válido). Mismo trío de plataformas que
+// ray-runtime (process.rs): __errno_location en Linux, __error en el resto de unix, _errno en la
+// CRT de Windows. Viven en la libc, siempre enlazada.
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "__errno_location"]
+    fn errno_ptr() -> *mut i32;
+}
+#[cfg(all(unix, not(target_os = "linux"), not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "__error"]
+    fn errno_ptr() -> *mut i32;
+}
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "_errno"]
+    fn errno_ptr() -> *mut i32;
+}
+
+/// El `errno` del hilo actual — builtin `__ffi_errno` (envuelto por `std/ffi.errno()`): el motivo
+/// del último fallo de una extern C estilo POSIX (`fopen`/`unlink`/…). REGLA de uso (documentada):
+/// leerlo INMEDIATAMENTE tras la llamada, sin E/S de raylang en medio — cualquier operación que
+/// aparque la fibra deja correr a las hermanas del mismo hilo, que pueden pisarlo. En wasm no hay
+/// FFI (ni libc): 0.
+pub fn errno() -> i64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    // SAFETY: errno_ptr devuelve el puntero al errno del hilo actual, siempre válido.
+    unsafe {
+        *errno_ptr() as i64
+    }
+    #[cfg(target_arch = "wasm32")]
+    0
+}
+
 /// La clase de un valor en la frontera FFI. `Bool` se marshala como entero C (`int`), pero se
 /// conserva aparte para reconstruir un `bool` de raylang al volver. `Unit` solo como retorno (void).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,6 +523,23 @@ mod tests {
         let args = vec![FfiVal::Int(1); MAX_ARITY + 1];
         let err = call(&d, &args).unwrap_err();
         assert!(err.contains("arity 0..=6"), "mensaje con el límite: {err}");
+    }
+
+    #[test]
+    fn errno_reports_the_reason_of_the_last_failed_call() {
+        // fopen de una ruta inexistente → NULL y errno = ENOENT (2 en Linux y macOS).
+        let d = ExternDesc {
+            name: "fopen".into(),
+            lib: "c".into(),
+            arg_kinds: vec![CKind::Str, CKind::Str],
+            ret_kind: CKind::OptPtr,
+            blocking: false,
+        };
+        match call(&d, &[FfiVal::Str("/nonexistent_ray_dir/nope.txt"), FfiVal::Str("r")]).unwrap() {
+            FfiRet::OptPtr(None) => {}
+            other => panic!("expected None, {other:?}"),
+        }
+        assert_eq!(errno(), 2, "ENOENT tras el fopen fallido");
     }
 
     #[test]

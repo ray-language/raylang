@@ -1199,6 +1199,19 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    }).clone()\n}\n",
         ));
     }
+    // std/ffi.errno (revisión FFI jul 2026): lectura del errno del hilo actual. Mismo trío de
+    // plataformas que src/ffi.rs (la impl de la VM) → mismo valor en ambos motores. Con externs
+    // `blocking`, run_blocking (ray-runtime) ya repone en el worker el errno del hilo del pool.
+    if t.needs_ffi_errno {
+        out.push_str(concat!(
+            "fn __ray_ffi_errno() -> i64 {\n",
+            "    #[cfg(target_os = \"linux\")] unsafe extern \"C\" { #[link_name = \"__errno_location\"] fn __ray_errno_ptr() -> *mut i32; }\n",
+            "    #[cfg(all(unix, not(target_os = \"linux\")))] unsafe extern \"C\" { #[link_name = \"__error\"] fn __ray_errno_ptr() -> *mut i32; }\n",
+            "    #[cfg(windows)] unsafe extern \"C\" { #[link_name = \"_errno\"] fn __ray_errno_ptr() -> *mut i32; }\n",
+            "    unsafe { *__ray_errno_ptr() as i64 }\n",
+            "}\n",
+        ));
+    }
     // PRNG (SplitMix64, mismo que la VM) + reloj monotónico, solo si el programa usa monotonic/random.
     // M96d: estado THREAD-LOCAL (antes: un único Mutex<u64> global). Bajo `log_requests` cada
     // request genera un trace_id/span_id vía `random.below` (net/trace.ray: 32+16 dígitos hex =

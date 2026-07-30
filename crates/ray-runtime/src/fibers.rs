@@ -524,17 +524,41 @@ fn blocking_worker_loop() {
     }
 }
 
+// El puntero al `errno` del hilo actual (para transportarlo a través del pool bloqueante). Mismo
+// trío de plataformas que process.rs; viven en la libc, siempre enlazada.
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    #[link_name = "__errno_location"]
+    fn blocking_errno_ptr() -> *mut i32;
+}
+#[cfg(all(unix, not(target_os = "linux")))]
+unsafe extern "C" {
+    #[link_name = "__error"]
+    fn blocking_errno_ptr() -> *mut i32;
+}
+#[cfg(windows)]
+unsafe extern "C" {
+    #[link_name = "_errno"]
+    fn blocking_errno_ptr() -> *mut i32;
+}
+
 /// Ejecuta `f` (presumiblemente bloqueante: una extern fn C marcada `blocking`) sin bloquear el
 /// worker de fibras: en fibra, `f` corre en un hilo del pool bloqueante y la fibra queda APARCADA
 /// (cero CPU) hasta el resultado; fuera de fibra, llama directo. Un panic dentro de `f` se
 /// re-propaga en el llamador (mismo comportamiento que la llamada directa).
+///
+/// El `errno` VIAJA con el resultado: una extern C estilo POSIX deja su motivo en el errno del
+/// hilo del POOL — se captura allí tras `f` y se repone en el hilo del llamador al despertar, de
+/// modo que `std/ffi.errno()` tras una extern `blocking` lee lo que dejó ESA llamada (misma
+/// semántica que la llamada directa).
 pub fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     if !in_fiber() {
         return f();
     }
-    // El slot del resultado + su lista de esperas (el protocolo anti despertar-perdido de F3).
+    // El slot del resultado (+ el errno del hilo del pool) + su lista de esperas (el protocolo
+    // anti despertar-perdido de F3).
     struct Slot<T> {
-        state: Mutex<Option<std::thread::Result<T>>>,
+        state: Mutex<Option<(std::thread::Result<T>, i32)>>,
         wl: WaitList,
     }
     let slot = Arc::new(Slot::<T> { state: Mutex::new(None), wl: WaitList::new() });
@@ -543,13 +567,18 @@ pub fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -
         // AssertUnwindSafe: el resultado (o el panic) se transporta entero al llamador; nadie
         // observa estado a medias.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        *s2.state.lock().unwrap() = Some(r);
+        // SAFETY: puntero al errno de ESTE hilo del pool, siempre válido.
+        let e = unsafe { *blocking_errno_ptr() };
+        *s2.state.lock().unwrap() = Some((r, e));
         s2.wl.wake_all();
     }));
     loop {
         let seen = {
             let mut st = slot.state.lock().unwrap();
-            if let Some(r) = st.take() {
+            if let Some((r, e)) = st.take() {
+                // SAFETY: puntero al errno del hilo del llamador, siempre válido. Reponerlo ANTES
+                // de devolver: el llamador puede leerlo justo después (std/ffi.errno()).
+                unsafe { *blocking_errno_ptr() = e };
                 match r {
                     Ok(v) => return v,
                     Err(p) => std::panic::resume_unwind(p),
@@ -1276,6 +1305,19 @@ mod tests {
     #[test]
     fn run_blocking_outside_a_fiber_calls_directly() {
         assert_eq!(run_blocking(|| 7), 7);
+    }
+
+    #[test]
+    fn run_blocking_carries_the_pool_thread_errno_back_to_the_caller() {
+        // Una extern C estilo POSIX deja su motivo en el errno del hilo del POOL; run_blocking lo
+        // repone en el hilo del llamador al despertar. Aquí se escribe un valor centinela directo.
+        let h = spawn(|| {
+            // SAFETY: errno del hilo actual, siempre válido (escritura previa para distinguir).
+            unsafe { *blocking_errno_ptr() = 0 };
+            run_blocking(|| unsafe { *blocking_errno_ptr() = 4242 });
+            assert_eq!(unsafe { *blocking_errno_ptr() }, 4242, "el errno del pool viaja al llamador");
+        });
+        h.join().expect("la fibra termina sin panic");
     }
 
     #[test]

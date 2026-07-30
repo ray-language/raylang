@@ -379,16 +379,64 @@ impl<'a> Vm<'a> {
             // La instrucción se toma PRESTADA del programa (Opt.1: sin clonar). `instr` vive lo que
             // `program` (toda la VM), así que no estorba a las mutaciones de `self` del cuerpo.
             let instr = &program.functions[func].chunk.code[ip];
-            // Opt.7: la posición `(línea, col)` NO se lee por instrucción —el camino caliente
-            // (locales/constantes/aritmética/saltos) nunca la usa, solo los sitios de error o de cesión—.
-            // Se resuelve **bajo demanda** con `pos!()`, leyendo `lines[ip]` solo donde hace falta.
-            macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
             self.cur.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
 
             // M12.3: ejecutamos la instrucción dentro de un cierre que devuelve `Ok(Some(v))` (fin del
             // programa), `Ok(None)` (seguir) o `Err` (fallo). Así el bucle puede CAPTURAR el error de una
             // fibra hija (propagación structured concurrency) en vez de abortar siempre.
-            let outcome: Result<Option<HeapValue>, RuntimeError> = (|| {
+            // V10: el cuerpo del despacho vive en `exec_instr` (#[inline(always)], un solo
+            // call-site). Antes era una closure inmediatamente invocada que LLVM NO inlineaba:
+            // cada instrucción pagaba un `bl` + el armado del entorno en la pila (el ~23% del
+            // perfil en top-of-stack de run_worker). Semántica idéntica (M12.3): Ok(Some(v)) =
+            // fin del programa, Ok(None) = seguir, Err = fallo de la instrucción (capturable).
+            let outcome = self.exec_instr(instr, fi, func, ip);
+
+            match outcome {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => {}
+                Err(mut e) => {
+                    // M79: la traza de llamadas se compone AQUÍ, donde los marcos siguen
+                    // intactos (el `Err` no los desenrolla) — coste cero en el camino
+                    // caliente. `is_empty` respeta una traza ya adjunta (no hay hoy, pero
+                    // es la misma disciplina que el intérprete).
+                    if e.trace.is_empty() {
+                        e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
+                    }
+                    // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se
+                    // desenrolla hasta su marcador y se entrega `[msg]` como valor. Va ANTES del
+                    // reparto main/hija de abajo a propósito: un `try_call` en `main` también
+                    // recupera (es justo su razón de ser), y para eso tiene que ganarle al
+                    // `return Err(e)` que aborta el programa.
+                    if !self.cur.try_markers.is_empty() {
+                        self.unwind_to_try_marker(e);
+                        continue;
+                    }
+                    // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
+                    // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
+                    // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
+                    // error es un deadlock, no un fallo de la fibra actual).
+                    if self.cur.frames.is_empty() || self.cur.is_main {
+                        return Err(e);
+                    }
+                    self.fail_current_fiber(e)?;
+                }
+            }
+        }
+    }
+
+    /// V10: ejecuta UNA instrucción del bytecode. Es el antiguo cuerpo de la closure de
+    /// `run_loop` (M12.3: el `?` de los brazos produce el `outcome` sin abortar el bucle,
+    /// para poder capturar el fallo de una fibra hija). Método con `#[inline(always)]` y un
+    /// único call-site: el inliner lo funde en el bucle y desaparecen la llamada por
+    /// instrucción y los spills del entorno que el perfil señaló.
+    #[inline(always)]
+    fn exec_instr(&mut self, instr: &OpCode, fi: usize, func: usize, ip: usize) -> Result<Option<HeapValue>, RuntimeError> {
+        let program = self.program;
+        // Opt.7: la posición `(línea, col)` NO se lee por instrucción —el camino caliente
+        // (locales/constantes/aritmética/saltos) nunca la usa, solo los sitios de error o de
+        // cesión—. Se resuelve **bajo demanda** con `pos!()`, leyendo `lines[ip]` solo donde
+        // hace falta.
+        macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
             match instr {
                 OpCode::Constant(idx) => {
                     let v = const_to_heap(&self.program.functions[func].chunk.constants[*idx]);
@@ -3137,41 +3185,7 @@ impl<'a> Vm<'a> {
                 }
             }
             Ok(None)
-            })();
-
-            match outcome {
-                Ok(Some(v)) => return Ok(v),
-                Ok(None) => {}
-                Err(mut e) => {
-                    // M79: la traza de llamadas se compone AQUÍ, donde los marcos siguen
-                    // intactos (el `Err` no los desenrolla) — coste cero en el camino
-                    // caliente. `is_empty` respeta una traza ya adjunta (no hay hoy, pero
-                    // es la misma disciplina que el intérprete).
-                    if e.trace.is_empty() {
-                        e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
-                    }
-                    // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se
-                    // desenrolla hasta su marcador y se entrega `[msg]` como valor. Va ANTES del
-                    // reparto main/hija de abajo a propósito: un `try_call` en `main` también
-                    // recupera (es justo su razón de ser), y para eso tiene que ganarle al
-                    // `return Err(e)` que aborta el programa.
-                    if !self.cur.try_markers.is_empty() {
-                        self.unwind_to_try_marker(e);
-                        continue;
-                    }
-                    // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
-                    // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
-                    // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
-                    // error es un deadlock, no un fallo de la fibra actual).
-                    if self.cur.frames.is_empty() || self.cur.is_main {
-                        return Err(e);
-                    }
-                    self.fail_current_fiber(e)?;
-                }
-            }
-        }
     }
-
     /// M79: compone la traza de llamadas a partir de los marcos vivos de la fibra en
     /// curso. La entrada 0 es el marco más interno (su nombre + la posición del error);
     /// cada llamador aporta su nombre + la posición de su llamada en vuelo: su `ip`

@@ -30,16 +30,16 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 28× |
-| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 54× |
-| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 7.4× |
-| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 3.4× |
-| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 4.9× |
-| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 4.4× |
-| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
-| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
-| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 4.1× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 5.5× |
+| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 15× |
+| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 36× |
+| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.8× |
+| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.7× |
+| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.6× |
+| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.2× |
+| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 27× |
+| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.8× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.9× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.2× |
 
 *(× = veces más lento que `native`; <1 = nos gana. Las filas de `matrixmul` —Fase 67— y de
 `wordcount`/`jsondeserialize`/`logparse`/`regex` —Fase 68— son las re-mediciones tras N6 y las
@@ -47,7 +47,10 @@ fusiones N-D/R6, del mismo día y el mismo arnés; la corrida original está en 
 `VM ÷ native` de `regex` era 284× hasta R7 —Fase 69: la VM despacha al crate `regex` como el
 nativo— que lo dejó en 5.5× (18.05 s → 348 ms, arnés del banco); el de `matrixmul` era 117×
 hasta MM4 —Fase 70: kernel `DotRange` con deopt— que lo dejó en 4.1× (664 → 23.9 ms, empate
-estadístico con node).)*
+estadístico con node); la columna entera se re-midió tras V9
+—Fase 71: ronda 5 de superinstrucciones + camino de llamada— y V10 —Fase 72: el cuerpo del
+despacho inlineado (la closure por instrucción que LLVM no fundía)— que juntas la bajaron un
+25–45% en toda la tabla.)*
 
 - **Gana a node en 9 de 10**; el décimo (`regex`) queda a un 5% (0.95×) contra el motor C++ de V8,
   y la variante rust de ese bench parsea A MANO (con el crate `regex`, Rust puro cuesta ~49 ms —
@@ -1036,6 +1039,63 @@ documentada una divergencia PREEXISTENTE de columna en el error de un indexado f
 combinado** tiempo×memoria (tras rs/native/go, por delante de lua/js/py). El límite ya no es el
 bucle interno: es el resto del programa interpretado (construcción de filas con push, transpuesta,
 checksum).
+
+#### Fase 71 — V9: revisión del intérprete — ronda 5 de superinstrucciones y camino de llamada (29 jul, todo el banco)
+
+Revisión general de la VM tras R7/MM4, guiada por perfil (sample con símbolos sobre
+loopsum/fibrec/treealloc/sortnums): el tiempo está repartido entre el despacho (~50%), el
+andamiaje por instrucción (~20-27% en top-of-stack de `run_worker`) y los accesores
+(`push`/`pop`/`get_local`). Sin hotspot único, se atacó el NÚMERO de despachos y el camino de
+llamada, con A/B intercalado del mismo binario en cada paso (gotcha de la Fase 57):
+
+- **Ronda 5 de superinstrucciones** (el overhead de bucle a 2 instrucciones/iteración):
+  `[GetLocalLocal, CmpJump]` → `LocalLocalCmpJump` (la guarda `i < n` con tope en VARIABLE —
+  la ronda 3 solo cubría `local op const`); `[AddLocalConst(s,c), SetLocal(s), Jump]` →
+  `IncJump` (el cierre completo del bucle contado en UNA instrucción) y sin salto detrás →
+  `IncLocalConst`. El bucle de loopsum pasa de 10 a 7 despachos por iteración.
+- **Camino de llamada**: `CompiledFn.has_captured` precomputado al compilar → `new_locals`
+  decide con UN bool y rellena plano (`resize_with`), sin consultar `captured` slot a slot ni
+  tocar el heap en el caso común (ninguna captura).
+- **DESCARTADO por medición** (dos veces, no reabrir sin re-medir): `#[inline(always)]` en los
+  accesores calientes (push/pop/get_local/…) — loopsum mejoraba pero fibrec/treealloc/
+  jsondeserialize pagaban +4-7% (el `run_loop` gigante pierde layout/registros); el llenado de
+  argumentos vía `drain`/helper `fill_args` (jsondeserialize +6-8% consistente); y el
+  adelgazamiento del preámbulo del despacho (una indexación del marco, fetch con `get`, fuel
+  condicional) — neutro donde debía ganar y +3% en jsondeserialize.
+
+**Medido** (A/B intercalado, release plano): loopsum **−22.8%**, sortnums **−16.3%**, wordcount
+**−13.4%**, matrixmul **−10.6%**, treealloc −2.2%, jsondeserialize 0%, fibrec +3% (layout: sus
+opcodes no cambian... y bajo PGO se vuelve MEJORA). **Con el arnés del banco (ray PGO)**:
+loopsum 623 ms (28× → **23×** del nativo), sortnums 178 (12× → **9.9×**), wordcount 217
+(7.4× → **5.6×**), treealloc 682 (42× → **37×**), fibrec 878 (54× → **46×**), matrixmul 22.4
+(4.1× → **3.9×**). El siguiente escalón del despacho (ip local al bucle con sync en los saltos
+de marco, o punteros directos al chunk) queda anotado como el arco estructural pendiente.
+
+#### Fase 72 — V10: el cuerpo del despacho, inlineado — la llamada oculta por instrucción (29 jul, todo el banco)
+
+La continuación estructural de la Fase 71. El plan era el "ip local al bucle de despacho", pero
+el perfil a nivel de INSTRUCCIÓN lo desmontó: el 23% de top-of-stack en `run_worker` era **un
+único PC — el retorno de un `bl`**. El desensamblado lo dejó desnudo: el cuerpo del `match` de
+instrucciones vivía en una **closure inmediatamente invocada** (M12.3: el `?` de los brazos
+produce el `outcome` sin abortar el bucle, para capturar el fallo de una fibra hija), y LLVM
+**no la inlineaba** — con lo que CADA instrucción del bytecode pagaba una llamada de función
+real: ~12 stores para armar el entorno de la closure en la pila, `bl`, y la decodificación del
+`outcome` al volver. La VM llevaba así desde M12.3, invisible hasta mirar el PC.
+
+El fix es mínimo y mecánico: la closure pasa a ser un método `exec_instr(&mut self, instr, fi,
+func, ip)` con `#[inline(always)]` y un ÚNICO call-site — el inliner lo funde en el bucle
+(siempre honra `alwaysinline` con un solo sitio) y la capa desaparece entera. La semántica es
+idéntica: `Ok(Some(v))` = fin, `Ok(None)` = seguir, `Err` = fallo capturable; `pos!()` se muda
+con el cuerpo. Cero cambios en opcodes, compilador o modelo de errores.
+
+**Medido** (A/B intercalado, release plano): **−16% a −27% en TODO el banco** — loopsum −25%,
+sortnums −27%, treealloc −24%, fibrec −23%, matrixmul −19%, jsondeserialize −18%, wordcount −16%.
+**Con el arnés (ray PGO), la tabla completa vs lo publicado esta mañana**: loopsum 421 ms
+(28× → **15×**), fibrec 636 (54× → **36×**), sortnums 121 (12× → **6.8×**), wordcount 183
+(7.4× → **4.8×**), treealloc 502 (42× → **27×**), jsondeserialize 269 (4.9× → **3.6×**),
+logparse 67 (4.4× → **3.2×**), jsonserialize 74 (3.4× → **2.7×**), matrixmul 16.8 (→ **2.9×**),
+regex 271 (→ **4.2×**). El "ip local" original queda sin motivo aparente tras esto (los reads
+del marco ya no cruzan una frontera de llamada); si se reabre, que sea con un perfil nuevo.
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

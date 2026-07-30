@@ -151,6 +151,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
             arity: 0,
             num_locals: 0,
             captured: Vec::new(),
+            has_captured: false,
             upvalues: Vec::new(),
             chunk: chunk.clone(),
         }],
@@ -378,16 +379,64 @@ impl<'a> Vm<'a> {
             // La instrucción se toma PRESTADA del programa (Opt.1: sin clonar). `instr` vive lo que
             // `program` (toda la VM), así que no estorba a las mutaciones de `self` del cuerpo.
             let instr = &program.functions[func].chunk.code[ip];
-            // Opt.7: la posición `(línea, col)` NO se lee por instrucción —el camino caliente
-            // (locales/constantes/aritmética/saltos) nunca la usa, solo los sitios de error o de cesión—.
-            // Se resuelve **bajo demanda** con `pos!()`, leyendo `lines[ip]` solo donde hace falta.
-            macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
             self.cur.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
 
             // M12.3: ejecutamos la instrucción dentro de un cierre que devuelve `Ok(Some(v))` (fin del
             // programa), `Ok(None)` (seguir) o `Err` (fallo). Así el bucle puede CAPTURAR el error de una
             // fibra hija (propagación structured concurrency) en vez de abortar siempre.
-            let outcome: Result<Option<HeapValue>, RuntimeError> = (|| {
+            // V10: el cuerpo del despacho vive en `exec_instr` (#[inline(always)], un solo
+            // call-site). Antes era una closure inmediatamente invocada que LLVM NO inlineaba:
+            // cada instrucción pagaba un `bl` + el armado del entorno en la pila (el ~23% del
+            // perfil en top-of-stack de run_worker). Semántica idéntica (M12.3): Ok(Some(v)) =
+            // fin del programa, Ok(None) = seguir, Err = fallo de la instrucción (capturable).
+            let outcome = self.exec_instr(instr, fi, func, ip);
+
+            match outcome {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => {}
+                Err(mut e) => {
+                    // M79: la traza de llamadas se compone AQUÍ, donde los marcos siguen
+                    // intactos (el `Err` no los desenrolla) — coste cero en el camino
+                    // caliente. `is_empty` respeta una traza ya adjunta (no hay hoy, pero
+                    // es la misma disciplina que el intérprete).
+                    if e.trace.is_empty() {
+                        e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
+                    }
+                    // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se
+                    // desenrolla hasta su marcador y se entrega `[msg]` como valor. Va ANTES del
+                    // reparto main/hija de abajo a propósito: un `try_call` en `main` también
+                    // recupera (es justo su razón de ser), y para eso tiene que ganarle al
+                    // `return Err(e)` que aborta el programa.
+                    if !self.cur.try_markers.is_empty() {
+                        self.unwind_to_try_marker(e);
+                        continue;
+                    }
+                    // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
+                    // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
+                    // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
+                    // error es un deadlock, no un fallo de la fibra actual).
+                    if self.cur.frames.is_empty() || self.cur.is_main {
+                        return Err(e);
+                    }
+                    self.fail_current_fiber(e)?;
+                }
+            }
+        }
+    }
+
+    /// V10: ejecuta UNA instrucción del bytecode. Es el antiguo cuerpo de la closure de
+    /// `run_loop` (M12.3: el `?` de los brazos produce el `outcome` sin abortar el bucle,
+    /// para poder capturar el fallo de una fibra hija). Método con `#[inline(always)]` y un
+    /// único call-site: el inliner lo funde en el bucle y desaparecen la llamada por
+    /// instrucción y los spills del entorno que el perfil señaló.
+    #[inline(always)]
+    fn exec_instr(&mut self, instr: &OpCode, fi: usize, func: usize, ip: usize) -> Result<Option<HeapValue>, RuntimeError> {
+        let program = self.program;
+        // Opt.7: la posición `(línea, col)` NO se lee por instrucción —el camino caliente
+        // (locales/constantes/aritmética/saltos) nunca la usa, solo los sitios de error o de
+        // cesión—. Se resuelve **bajo demanda** con `pos!()`, leyendo `lines[ip]` solo donde
+        // hace falta.
+        macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
             match instr {
                 OpCode::Constant(idx) => {
                     let v = const_to_heap(&self.program.functions[func].chunk.constants[*idx]);
@@ -593,6 +642,38 @@ impl<'a> Vm<'a> {
                 // A4 (ronda 2): la guarda de if/while en UNA instrucción. Semántica idéntica a
                 // [Cmp, JumpIfFalse(t), Pop]: saca ambos operandos, compara, y si es falso salta
                 // (el destino ya viene ajustado tras el Pop del lado else). El bool nunca se apila.
+                // V9 (ronda 5): la guarda `local op local` (`i < n` con tope en variable) sin
+                // tocar la pila. Mismo fast-path entero y mismo fallback que CmpJump.
+                OpCode::LocalLocalCmpJump(a, b, op, target) => {
+                    let left = self.get_local(fi, *a);
+                    let right = self.get_local(fi, *b);
+                    let res = if let (HeapValue::Int(x), HeapValue::Int(y)) = (&left, &right) {
+                        match op {
+                            CmpOp::Less => x < y,
+                            CmpOp::LessEqual => x <= y,
+                            CmpOp::Greater => x > y,
+                            CmpOp::GreaterEqual => x >= y,
+                            CmpOp::Equal => x == y,
+                            CmpOp::NotEqual => x != y,
+                        }
+                    } else {
+                        let legacy = match op {
+                            CmpOp::Less => &OpCode::Less,
+                            CmpOp::LessEqual => &OpCode::LessEqual,
+                            CmpOp::Greater => &OpCode::Greater,
+                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
+                            CmpOp::Equal => &OpCode::Equal,
+                            CmpOp::NotEqual => &OpCode::NotEqual,
+                        };
+                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
+                            HeapValue::Bool(b) => b,
+                            _ => unreachable!("a comparison produces bool"),
+                        }
+                    };
+                    if !res {
+                        self.cur.frames[fi].ip = *target;
+                    }
+                }
                 OpCode::CmpJump(op, target) => {
                     let right = self.pop();
                     let left = self.pop();
@@ -625,6 +706,37 @@ impl<'a> Vm<'a> {
                     }
                 }
                 // A4 (ronda 2): local[s] + const / local[s] - const, en una instrucción.
+                // V9 (ronda 5): `local[s] = local[s] + const` sin pasar por la pila — el
+                // incremento del bucle contado. Misma aritmética (checked / apply_binary) que
+                // AddLocalConst y el mismo destino (respetando boxing) que SetLocal.
+                OpCode::IncLocalConst(s, c) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?)
+                    } else {
+                        self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
+                    };
+                    self.set_local(fi, *s, r);
+                }
+                // V9 (ronda 5): el cierre completo del bucle — incrementa y salta a la guarda.
+                OpCode::IncJump(s, c, target) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?)
+                    } else {
+                        self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
+                    };
+                    self.set_local(fi, *s, r);
+                    self.cur.frames[fi].ip = *target;
+                }
                 OpCode::AddLocalConst(s, c) => {
                     let left = self.get_local(fi, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
@@ -3073,41 +3185,7 @@ impl<'a> Vm<'a> {
                 }
             }
             Ok(None)
-            })();
-
-            match outcome {
-                Ok(Some(v)) => return Ok(v),
-                Ok(None) => {}
-                Err(mut e) => {
-                    // M79: la traza de llamadas se compone AQUÍ, donde los marcos siguen
-                    // intactos (el `Err` no los desenrolla) — coste cero en el camino
-                    // caliente. `is_empty` respeta una traza ya adjunta (no hay hoy, pero
-                    // es la misma disciplina que el intérprete).
-                    if e.trace.is_empty() {
-                        e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
-                    }
-                    // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se
-                    // desenrolla hasta su marcador y se entrega `[msg]` como valor. Va ANTES del
-                    // reparto main/hija de abajo a propósito: un `try_call` en `main` también
-                    // recupera (es justo su razón de ser), y para eso tiene que ganarle al
-                    // `return Err(e)` que aborta el programa.
-                    if !self.cur.try_markers.is_empty() {
-                        self.unwind_to_try_marker(e);
-                        continue;
-                    }
-                    // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
-                    // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
-                    // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
-                    // error es un deadlock, no un fallo de la fibra actual).
-                    if self.cur.frames.is_empty() || self.cur.is_main {
-                        return Err(e);
-                    }
-                    self.fail_current_fiber(e)?;
-                }
-            }
-        }
     }
-
     /// M79: compone la traza de llamadas a partir de los marcos vivos de la fibra en
     /// curso. La entrada 0 es el marco más interno (su nombre + la posición del error);
     /// cada llamador aporta su nombre + la posición de su llamada en vuelo: su `ip`
@@ -3206,13 +3284,21 @@ impl<'a> Vm<'a> {
     /// Crea el arreglo de locales de un marco nuevo: cada slot capturado nace
     /// **boxeado** (su celda en el heap), los demás como `Plain(Unit)`.
     fn new_locals(&mut self, fn_idx: usize) -> Vec<Local> {
-        let n = self.program.functions[fn_idx].num_locals;
+        let program = self.program;
+        let f = &program.functions[fn_idx];
+        let n = f.num_locals;
         // Opt.2: reusa un `Vec` del pool (conserva su capacidad) en vez de asignar uno nuevo. Lo vaciamos
         // y lo reconstruimos entero, así no se lee ninguna basura que arrastrara del uso anterior.
         let mut locals = self.locals_pool.pop().unwrap_or_default();
         locals.clear();
+        // V9: lo común es que NINGÚN slot esté capturado (el bool viene precomputado del
+        // compilador) → relleno plano, sin consultar `captured` slot a slot ni tocar el heap.
+        if !f.has_captured {
+            locals.resize_with(n, || Local::Plain(HeapValue::Unit));
+            return locals;
+        }
         for s in 0..n {
-            if self.program.functions[fn_idx].captured.get(s).copied().unwrap_or(false) {
+            if f.captured.get(s).copied().unwrap_or(false) {
                 let cell = self.cur.heap.allocate(Obj::Cell(HeapValue::Unit));
                 locals.push(Local::Boxed(cell));
             } else {

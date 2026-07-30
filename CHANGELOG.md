@@ -108,6 +108,14 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   borde de `ray-runtime` que el binario nativo (feature `regex` de la toolchain, activa por defecto) —
   bench regex **18,05 s → 348 ms (52×)**, misma salida byte a byte. El intérprete (`--interp`), los
   builds slim y `RAYLANG_REGEX_PIKE=1` conservan la Pike VM escrita en raylang (oráculo del dialecto).
+- **Revisión del intérprete** (V9): ronda 5 de superinstrucciones — guarda `i < n` con tope en
+  variable y el cierre del bucle contado en UNA instrucción — y el camino de llamada sin consultar
+  capturas slot a slot. En el banco (ray PGO): loopsum −22%, sortnums −16%, wordcount −13%,
+  fibrec −8%, treealloc −11% respecto a lo publicado; la columna VM÷native baja en toda la tabla.
+- **La llamada oculta por instrucción, eliminada** (V10): el cuerpo del despacho era una closure
+  que LLVM no inlineaba — cada opcode pagaba una llamada de función real desde M12.3. Como método
+  `#[inline(always)]` de un solo call-site: **−16% a −27% en TODO el banco** (con V9: loopsum
+  15× del nativo, sortnums 6.8×, wordcount 4.8×, matrixmul 2.9×, regex 4.2×, jsonserialize 2.7×).
 - **Kernel `DotRange` con deopt en la VM** (MM4): el bucle del producto punto
   (`for k in lo..hi { s = s + a[k]*b[k]; }`) se ejecuta como UN opcode cuando los arreglos son de
   floats (resultado bit a bit idéntico); cualquier otra forma cae al bytecode normal, que conserva la

@@ -3529,3 +3529,108 @@ fn dot_range_not_emitted_for_non_patterns() {
     "#
     ));
 }
+
+// ── V9: ronda 5 de superinstrucciones (guarda local-local y cierre de bucle) ──
+
+/// ¿El bytecode de alguna función contiene el opcode indicado (por matcher)?
+fn has_op(src: &str, pred: fn(&OpCode) -> bool) -> bool {
+    let tokens = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(tokens).expect("parse ok");
+    crate::checker::check(&mut prog).expect("check ok");
+    let compiled = compile_program(&prog).expect("compila");
+    compiled.functions.iter().any(|f| f.chunk.code.iter().any(|op| pred(op)))
+}
+
+/// El for-range con tope en VARIABLE fusiona la guarda (LocalLocalCmpJump) y el cierre
+/// (IncJump); el resultado coincide con el intérprete.
+#[test]
+fn round5_counted_loop_oracle() {
+    let src = r#"
+        fn main() -> int {
+            let n = 1000;
+            var s = 0;
+            for i in 0..n { s = (s + i * i) % 97; }
+            s
+        }
+    "#;
+    assert!(has_op(src, |op| matches!(op, OpCode::LocalLocalCmpJump(..))), "guarda fusionada");
+    assert!(has_op(src, |op| matches!(op, OpCode::IncJump(..))), "cierre fusionado");
+    oracle_program(src);
+}
+
+/// El incremento manual de un `while` (sin salto justo detrás por el cuerpo) fusiona a
+/// IncLocalConst; mismo valor que el intérprete.
+#[test]
+fn round5_manual_increment_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            var i = 0;
+            var s = 0;
+            while (i < 500) {
+                s = s + i;
+                i = i + 3;
+            }
+            s + i
+        }
+    "#,
+    );
+}
+
+/// El overflow del incremento fusionado conserva el error (mensaje y línea) del intérprete.
+#[test]
+fn round5_increment_overflow_error_parity() {
+    oracle_error(
+        r#"
+        fn main() -> int {
+            var i = 9223372036854775800;
+            var s = 0;
+            while (s < 3) {
+                s = s + 1;
+                i = i + 100;
+            }
+            s
+        }
+    "#,
+    );
+}
+
+/// Un contador CAPTURADO por una closure va boxeado: IncLocalConst/IncJump escriben vía la
+/// celda (set_local) y la closure observa el valor final correcto.
+#[test]
+fn round5_boxed_counter_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            var i = 0;
+            let lee = fn() -> int { i };
+            var s = 0;
+            while (i < 100) {
+                s = s + 2;
+                i = i + 1;
+            }
+            s + lee()
+        }
+    "#,
+    );
+}
+
+/// Guarda local-local con tipos NO enteros (floats): cae al fallback de apply_binary y
+/// coincide con el intérprete.
+#[test]
+fn round5_float_guard_oracle() {
+    oracle_program(
+        r#"
+        fn main() -> int {
+            var x = 0.0;
+            let tope = 10.5;
+            var vueltas = 0;
+            while (x < tope) {
+                x = x + 1.25;
+                vueltas = vueltas + 1;
+            }
+            vueltas
+        }
+    "#,
+    );
+}

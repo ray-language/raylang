@@ -30,16 +30,16 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 16× |
-| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 43× |
-| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.8× |
-| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.7× |
-| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.6× |
-| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.2× |
-| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 33× |
-| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.8× |
-| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.9× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.2× |
+| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 13× |
+| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 26× |
+| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.6× |
+| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.4× |
+| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.4× |
+| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.0× |
+| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 25× |
+| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.0× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.7× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.0× |
 
 *(× = veces más lento que `native`; <1 = nos gana. Las filas de `matrixmul` —Fase 67— y de
 `wordcount`/`jsondeserialize`/`logparse`/`regex` —Fase 68— son las re-mediciones tras N6 y las
@@ -1123,6 +1123,40 @@ loopsum **439 ms (16×)** —se citó 421/15×—, fibrec **~755 ms (43×)** —
 treealloc **571 ms (33×)** —se citó 502/27×—. El resto de filas `.ray` no se recortaba (coste ×
 15 corridas < 5 s) y sus cifras siguen vigentes; los recortes en variantes de OTROS lenguajes
 (p. ej. `sortnums.js`, `matrixmul.rb/pl`) también quedan ahora repartidos y visibles.
+
+#### Fase 74 — V11: camino de llamada e inlining selectivo — fibrec 43× → 26× (30 jul, todo el banco)
+
+Tras V10, el perfil de fibrec repartía ~30% en helpers fuera de línea (`get_local` 12%,
+`new_locals` 7%, `push` 6%, `recycle_locals` 5%, `const_to_heap` 3%). La lección de la Fase 71
+(inline(always) global = regresión por layout) se refinó a REGLA: **inlinear por número de
+call-sites, no por frecuencia** — probado en ambos sentidos con A/B:
+
+- `#[inline(always)]` en `new_locals`/`recycle_locals` (≤8 sitios): −3/−5% transversal ✓.
+- `#[inline(always)]` en `get_local` (~30 sitios dentro del exec_instr gigante): +2/+4% ✗
+  (mismo veredicto que en la Fase 71 — el tamaño manda).
+- La alternativa para lo frecuente: **fast-paths por REFERENCIA escritos a mano en los brazos
+  calientes** — helpers mínimos `local_int`/`const_int` (`Option<i64>` sin clonar el HeapValue
+  ni materializar la constante con `const_to_heap`) en las dos guardas fusionadas
+  (`GetLocalConstCmpJump`, `LocalLocalCmpJump`), la aritmética local-const (`Add/SubLocalConst`)
+  y los incrementos (`IncLocalConst`/`IncJump`, con escritura directa Plain→Plain); y el caso
+  Plain inline en los tres opcodes de carga (`GetLocal`/`GetLocalLocal`/`GetLocalConst`). El
+  camino general (celdas boxeadas, floats, strings) queda tal cual debajo — misma semántica y
+  los MISMOS errores (overflow con su posición).
+- La sonda de picos del heap (`probe_*`, 4 contadores por `allocate`) pasa tras un bool leído
+  de `RAY_HEAP_STATS` al crear el heap (la sonda es diagnóstico; el camino caliente paga una
+  rama predecible).
+- **DESCARTADO por medición (tercera vez — no reabrir)**: mover operandos con `drain` en
+  MakeStruct/MakeEnum (+2% vs pop+reverse).
+
+**Medido** (A/B intercalado, release plano): fibrec −10%, loopsum −12%, sortnums −7.5%,
+wordcount −6%, matrixmul −5%, jsonserialize −4%, logparse −3%, treealloc −3%, resto ~0. **Con
+el arnés (PGO, que amplifica los fast-paths): fibrec 490 ms (43× → 26×), treealloc 465
+(33× → 25×), loopsum 346 (16× → 13×), sortnums 109 (6.0×), wordcount 177 (4.6×), matrixmul
+15.8 (2.7×), regex 261 (4.0×), jsonserialize 69.6 (2.4×), jsondeserialize 255 (3.4×), logparse
+66 (3.0×)**. El perfil de fibrec queda con run_loop al 76% y los helpers fuera del top — lo
+que resta del 26× es la maquinaria de marco (push/pop de CallFrame, locals del pool) y el
+despacho: el siguiente escalón sería el layout del marco (locals inline en el CallFrame para
+aridades pequeñas), anotado sin abrir.
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

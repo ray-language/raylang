@@ -585,19 +585,34 @@ impl<'a> Vm<'a> {
                     }
                 }
 
+                // V11: en los tres opcodes de CARGA, el caso común (slot Plain) va inline —
+                // el clone + push sin cruzar la llamada a get_local; la celda boxeada, por
+                // el camino de siempre.
                 OpCode::GetLocal(slot) => {
-                    let v = self.get_local(fi, *slot);
+                    let v = match &self.cur.frames[fi].locals[*slot] {
+                        Local::Plain(v) => v.clone(),
+                        Local::Boxed(_) => self.get_local(fi, *slot),
+                    };
                     self.push(v);
                 }
                 // M36.1: superinstrucciones — dos empujes en una iteración del lazo.
                 OpCode::GetLocalLocal(s, t) => {
-                    let a = self.get_local(fi, *s);
-                    let b = self.get_local(fi, *t);
+                    let a = match &self.cur.frames[fi].locals[*s] {
+                        Local::Plain(v) => v.clone(),
+                        Local::Boxed(_) => self.get_local(fi, *s),
+                    };
+                    let b = match &self.cur.frames[fi].locals[*t] {
+                        Local::Plain(v) => v.clone(),
+                        Local::Boxed(_) => self.get_local(fi, *t),
+                    };
                     self.push(a);
                     self.push(b);
                 }
                 OpCode::GetLocalConst(s, c) => {
-                    let a = self.get_local(fi, *s);
+                    let a = match &self.cur.frames[fi].locals[*s] {
+                        Local::Plain(v) => v.clone(),
+                        Local::Boxed(_) => self.get_local(fi, *s),
+                    };
                     let b = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     self.push(a);
                     self.push(b);
@@ -610,6 +625,22 @@ impl<'a> Vm<'a> {
                 // Semántica idéntica a [GetLocalConst(s,c), CmpJump(op,t)]: compara local[s] con
                 // const[c] y, si es falso, salta a t — sin apilar/sacar los operandos.
                 OpCode::GetLocalConstCmpJump(s, c, op, target) => {
+                    // V11: fast-path por REFERENCIA (slot Plain(Int) + constante Int): ni clona
+                    // el HeapValue ni materializa la constante. El caso general, debajo.
+                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                        let res = match op {
+                            CmpOp::Less => a < b,
+                            CmpOp::LessEqual => a <= b,
+                            CmpOp::Greater => a > b,
+                            CmpOp::GreaterEqual => a >= b,
+                            CmpOp::Equal => a == b,
+                            CmpOp::NotEqual => a != b,
+                        };
+                        if !res {
+                            self.cur.frames[fi].ip = *target;
+                        }
+                        return Ok(None);
+                    }
                     let left = self.get_local(fi, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
@@ -645,6 +676,21 @@ impl<'a> Vm<'a> {
                 // V9 (ronda 5): la guarda `local op local` (`i < n` con tope en variable) sin
                 // tocar la pila. Mismo fast-path entero y mismo fallback que CmpJump.
                 OpCode::LocalLocalCmpJump(a, b, op, target) => {
+                    // V11: fast-path por referencia — dos slots Plain(Int), cero clones.
+                    if let (Some(x), Some(y)) = (self.local_int(fi, *a), self.local_int(fi, *b)) {
+                        let res = match op {
+                            CmpOp::Less => x < y,
+                            CmpOp::LessEqual => x <= y,
+                            CmpOp::Greater => x > y,
+                            CmpOp::GreaterEqual => x >= y,
+                            CmpOp::Equal => x == y,
+                            CmpOp::NotEqual => x != y,
+                        };
+                        if !res {
+                            self.cur.frames[fi].ip = *target;
+                        }
+                        return Ok(None);
+                    }
                     let left = self.get_local(fi, *a);
                     let right = self.get_local(fi, *b);
                     let res = if let (HeapValue::Int(x), HeapValue::Int(y)) = (&left, &right) {
@@ -710,6 +756,15 @@ impl<'a> Vm<'a> {
                 // incremento del bucle contado. Misma aritmética (checked / apply_binary) que
                 // AddLocalConst y el mismo destino (respetando boxing) que SetLocal.
                 OpCode::IncLocalConst(s, c) => {
+                    // V11: fast-path por referencia, con escritura directa (Plain sigue Plain).
+                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                        let r = a.checked_add(b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?;
+                        self.cur.frames[fi].locals[*s] = Local::Plain(HeapValue::Int(r));
+                        return Ok(None);
+                    }
                     let left = self.get_local(fi, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
@@ -724,6 +779,16 @@ impl<'a> Vm<'a> {
                 }
                 // V9 (ronda 5): el cierre completo del bucle — incrementa y salta a la guarda.
                 OpCode::IncJump(s, c, target) => {
+                    // V11: fast-path por referencia + escritura directa + salto.
+                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                        let r = a.checked_add(b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?;
+                        self.cur.frames[fi].locals[*s] = Local::Plain(HeapValue::Int(r));
+                        self.cur.frames[fi].ip = *target;
+                        return Ok(None);
+                    }
                     let left = self.get_local(fi, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
@@ -738,6 +803,15 @@ impl<'a> Vm<'a> {
                     self.cur.frames[fi].ip = *target;
                 }
                 OpCode::AddLocalConst(s, c) => {
+                    // V11: fast-path por referencia (slot Plain(Int) + constante Int).
+                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                        let r = a.checked_add(b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?;
+                        self.push(HeapValue::Int(r));
+                        return Ok(None);
+                    }
                     let left = self.get_local(fi, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
@@ -751,6 +825,15 @@ impl<'a> Vm<'a> {
                     self.push(r);
                 }
                 OpCode::SubLocalConst(s, c) => {
+                    // V11: fast-path por referencia (slot Plain(Int) + constante Int).
+                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                        let r = a.checked_sub(b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "arithmetic overflow on int")
+                        })?;
+                        self.push(HeapValue::Int(r));
+                        return Ok(None);
+                    }
                     let left = self.get_local(fi, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
@@ -3283,6 +3366,7 @@ impl<'a> Vm<'a> {
 
     /// Crea el arreglo de locales de un marco nuevo: cada slot capturado nace
     /// **boxeado** (su celda en el heap), los demás como `Plain(Unit)`.
+    #[inline(always)]
     fn new_locals(&mut self, fn_idx: usize) -> Vec<Local> {
         let program = self.program;
         let f = &program.functions[fn_idx];
@@ -3310,6 +3394,7 @@ impl<'a> Vm<'a> {
 
     /// Opt.2: devuelve al pool el arreglo de locales de un marco que se descarta (Return, llamada en cola,
     /// fin de chunk). Acotado para no crecer sin límite; el GC no lo traza (contenido basura hasta reusar).
+    #[inline(always)]
     fn recycle_locals(&mut self, locals: Vec<Local>) {
         if self.locals_pool.len() < 256 {
             self.locals_pool.push(locals);
@@ -3321,6 +3406,26 @@ impl<'a> Vm<'a> {
         match &locals[slot] {
             Local::Boxed(h) => self.cell_set(*h, v),
             Local::Plain(_) => locals[slot] = Local::Plain(v),
+        }
+    }
+
+    /// V11: el int de un local SIN clonar ni pasar por `get_local` (None si el slot está
+    /// boxeado o no es Int). Cuerpo mínimo → `inline(always)` no infla: es el fast-path de
+    /// los opcodes fusionados (guardas, incrementos, aritmética local-const).
+    #[inline(always)]
+    fn local_int(&self, fi: usize, slot: usize) -> Option<i64> {
+        match &self.cur.frames[fi].locals[slot] {
+            Local::Plain(HeapValue::Int(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// V11: la constante int del chunk sin materializarla (`const_to_heap`).
+    #[inline(always)]
+    fn const_int(&self, func: usize, c: usize) -> Option<i64> {
+        match &self.program.functions[func].chunk.constants[c] {
+            Value::Int(n) => Some(*n),
+            _ => None,
         }
     }
 

@@ -8914,3 +8914,26 @@ bajo demanda (la inspección "cero magia" de M55, ahora opcional y no permanente
   template.
 - **LSP gratis**: el completion de imports lista también los `.ray.html`, y analizar un `.ray` que
   importa un template ya no exige el generado en disco (el loader lo compila igual en memoria).
+
+## 94. M103 — la función del template se llama `render` (jul 2026)
+
+**El síntoma (DX, señalado por el usuario).** `import vistas/vista_inicio;` seguido de
+`vista_inicio.render_vista_inicio(…)` no es intuitivo: el nombre repite el módulo y "sale
+mágicamente de cualquier parte" — lo natural es `vista_inicio.render(…)`.
+
+**El diagnóstico.** `render_<stem>` fue una decisión de superficie de M55 (§59, punto 3), de la
+era del **archivo generado commiteado**: un nombre distintivo era auto-documentado y grepeable en
+el `.ray` de al lado. NO lo forzaba ningún problema técnico — la llamada `modulo.f(…)` es
+**calificada por módulo** (resuelta por el import map del loader, no por UFCS), y los módulos ya
+namespacean: `vistas::vista_inicio::render` y `vistas::tarjeta::render` no colisionan. Con M102
+(el generado ya no existe en disco), el sufijo pasó a ser un artefacto de compilación filtrándose
+a la API del usuario.
+
+**La forma.** El generador emite `pub fn render(params) -> string` — nombre **fijo**; el módulo
+es el nombre. `{% include vistas/tarjeta(n) %}` genera `tarjeta.render(n)`. `fn_suffix_of` queda
+para el doc comment del generado y para validar que el stem puede ser módulo. El outline del LSP
+muestra `render` como raíz. **Sin alias de compatibilidad** (el lenguaje no está publicado, el
+mismo criterio que M99); quien quiera dos vistas en el mismo ámbito plano las from-importa con
+`as` (`from vistas/lista import render as lista_html`), como cualquier colisión de nombres. La
+demo SSR gana además la prueba de convivencia: `main.ray` define su propio `fn render` libre y
+llama `vista_inicio.render(…)` calificado sin conflicto.

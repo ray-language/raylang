@@ -1433,10 +1433,10 @@ fn rename_references_highlight_y_outline_en_templates() {
     let hl = document_highlight_result(&at(2, col_usage + 1, ""), &docs);
     assert_eq!(hl.as_array().unwrap().len(), 2);
     assert!(hl.serialize().contains("\"kind\":3"), "{}", hl.serialize());
-    // Outline: raíz `render_lista` con las decls como hijas (2 params + 1 var de for).
+    // Outline: raíz `render` (M103: nombre fijo) con las decls como hijas (2 params + 1 var de for).
     let syms = document_symbol_result(&at(0, 0, ""), &docs);
     let ser = syms.serialize();
-    assert!(ser.contains("render_list"), "{ser}");
+    assert!(ser.contains("\"name\":\"render\""), "{ser}");
     assert_eq!(ser.matches("\"kind\":13").count(), 3, "{ser}");
 }
 

@@ -29,10 +29,10 @@ fn es_popular(lang: string) -> bool {
     lang == "rust" || lang == "python" || lang == "javascript"
 }
 
-// La vista HEREDA del layout en compilación ({% extends %}): render_vista_inicio ya devuelve la
+// La vista HEREDA del layout en compilación ({% extends %}): vista_inicio.render ya devuelve la
 // página completa (estructura del layout + su bloque `cuerpo` + el partial por lenguaje).
 fn render(titulo: string, saludo: string, popular: bool, lenguajes: [string]) -> string {
-    vista_inicio.render_vista_inicio(titulo, saludo, popular, lenguajes)
+    vista_inicio.render(titulo, saludo, popular, lenguajes)
 }
 
 fn pagina(req: webserver.Request) -> webserver.Response {

@@ -123,51 +123,56 @@ fn a_typo_in_a_variable_is_a_compile_error() {
 }
 
 #[test]
-fn run_and_build_regenerate_stale_templates() {
-    // M55: `ray run`/`ray build` regeneran los `.ray.html` cuyo `.ray` falte o esté viejo — no hay
-    // que acordarse de `ray build --templates-only`. El aviso va por stderr (stdout es del programa).
-    let base = TmpDir::new("ray_templ_autoregen");
+fn run_and_build_compile_templates_in_memory() {
+    // M102: el loader compila cada `.ray.html` EN MEMORIA al resolver su import — sin `.ray`
+    // generado en el proyecto, sin staleness por mtime, sin avisos de regeneración.
+    let base = TmpDir::new("ray_templ_in_memory");
     let tpl = "{% params t: string %}<h1>{{ t }}</h1>\n";
     let main = "import vistas/list;\n\nfn main() -> int {\n    print(list.render_list(\"hello\"));\n    0\n}\n";
     let app = project(&base, tpl, main);
 
-    // 1) Sin `ray build --templates-only` previo: el generado FALTA → `ray run` lo genera y el programa corre.
+    // 1) Sin `ray build --templates-only`: el programa corre y NO aparece ningún `.ray` generado.
     let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("<h1>hello</h1>"));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("template regenerated"), "aviso por stderr");
+    assert!(!app.join("vistas/list.ray").exists(), "no debe materializar el generado");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("regenerated"), "sin avisos de regen");
 
-    // 2) Editar el template → el generado queda VIEJO → `ray run` lo regenera solo.
-    std::thread::sleep(std::time::Duration::from_millis(30)); // mtime estrictamente posterior
+    // 2) Editar el template → el siguiente run sirve lo NUEVO (no hay artefacto que caduque).
     std::fs::write(app.join("vistas/list.ray.html"), "{% params t: string %}<h2>{{ t }}</h2>\n").unwrap();
     let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("<h2>hello</h2>"), "runs el template NUEVO");
 
-    // 3) Sin cambios: nada que regenerar (ni aviso).
-    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
-    assert!(out.status.success());
-    assert!(!String::from_utf8_lossy(&out.stderr).contains("regenerated"), "al día → silencio");
-
-    // 4) Un template ROTO aborta el build con 65 y el error del template (mejor señal que
-    //    compilar el generado viejo).
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    // 3) Un template ROTO aborta el build con 65 y el error del template (archivo + línea).
     std::fs::write(app.join("vistas/list.ray.html"), "{% params t: string %}{% if t %}sin cierre\n").unwrap();
     let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
     assert_eq!(out.status.code(), Some(65));
     assert!(String::from_utf8_lossy(&out.stderr).contains("endif"), "{}", String::from_utf8_lossy(&out.stderr));
-    // Limpieza: el template ROTO no debe quedar en el /tmp compartido — otro test que resuelva una
-    // entrada bajo temp_dir (p. ej. el `ray_check` del MCP) dispararía la regeneración sobre él y
-    // fallaría con este 65 (flake real observado en la batería paralela).
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
-fn editing_the_layout_regenerates_views_that_extend_it() {
-    // `{% extends %}` fusiona el layout EN COMPILACIÓN: su HTML vive dentro del `.ray` generado
-    // del hijo. Editar solo el layout debe dejar VIEJO también el generado del hijo (antes solo
-    // se comparaba cada template contra su propio `.ray` → el hijo servía el layout viejo).
-    let base = TmpDir::new("ray_templ_layout_stale");
+fn a_stale_generated_sibling_is_ignored() {
+    // M102: si junto al template queda un `.ray` generado viejo (de `ray build --templates-only`
+    // o de un repo anterior a la compilación en memoria), el loader prefiere SIEMPRE el template.
+    let base = TmpDir::new("ray_templ_stale_sibling");
+    let tpl = "{% params t: string %}<h1>{{ t }}</h1>\n";
+    let main = "import vistas/list;\n\nfn main() -> int {\n    print(list.render_list(\"hello\"));\n    0\n}\n";
+    let app = project(&base, tpl, main);
+    // Un hermano generado VIEJO y además ROTO: si el loader lo leyera, el build fallaría.
+    std::fs::write(app.join("vistas/list.ray"), "this is not raylang {{{").unwrap();
+
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("<h1>hello</h1>"), "gana el template");
+}
+
+#[test]
+fn editing_the_layout_reaches_views_that_extend_it() {
+    // `{% extends %}` fusiona el layout EN COMPILACIÓN: su HTML vive dentro del módulo generado
+    // del hijo. Con la compilación en memoria (M102) no hay artefacto que caduque: editar solo el
+    // layout debe verse en el siguiente run del hijo.
+    let base = TmpDir::new("ray_templ_layout_edit");
     let app = base.join("app");
     std::fs::create_dir_all(app.join("vistas")).unwrap();
     std::fs::write(app.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
@@ -182,19 +187,13 @@ fn editing_the_layout_regenerates_views_that_extend_it() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(String::from_utf8_lossy(&out.stdout).contains("<title>hola</title>"));
 
-    // Editar SOLO el layout (añade un <style> al head) → el hijo debe regenerarse y servirlo.
-    std::thread::sleep(std::time::Duration::from_millis(30)); // mtime estrictamente posterior
+    // Editar SOLO el layout (añade un <style> al head) → el hijo debe servirlo en el acto.
     std::fs::write(app.join("vistas/base.ray.html"),
         "{% params titulo: string %}<html><head><title>{{ titulo }}</title><style>body { margin: 0; }</style></head><body>{% block body %}{% endblock %}</body></html>\n").unwrap();
     let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("<style>body { margin: 0; }</style>"), "el hijo sirve el layout NUEVO:\n{stdout}");
-
-    // Sin cambios: nada que regenerar.
-    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
-    assert!(out.status.success());
-    assert!(!String::from_utf8_lossy(&out.stderr).contains("regenerated"), "al día → silencio");
 }
 
 #[test]
@@ -214,7 +213,7 @@ fn include_and_import_compose_views_and_layout() {
     std::fs::write(app.join("main.ray"),
         "import vistas/pagina;\nimport vistas/layout;\n\nfn main() -> int {\n    print(layout.render_layout(\"Equipo\", pagina.render_pagina([\"Ada\", \"Lin<us\"])));\n    0\n}\n").unwrap();
 
-    // Sin `ray build --templates-only` explícito: la regeneración automática de `ray run` compila los tres.
+    // Sin `ray build --templates-only` explícito: el loader compila los tres en memoria (M102).
     let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);

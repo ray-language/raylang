@@ -375,7 +375,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/regex` | motor Thompson NFA (tiempo lineal): `full_match search find find_str find_all replace_all`. Soporta `. * + ? \| ( ) [a-z] [^…] \d \w \s ^ $` |
 | `std/csv` | `parse_csv -> Result<[[string]], string>` (RFC 4180) · `write_csv` |
 | `std/toml` | `parse_toml toml_get toml_show` (subconjunto: tablas, escalares, arrays) |
-| `std/template` | plantillas estilo Jinja: `compile(tpl) -> Result<Template, _>` + `render(t, ctx)` (SSR: compilar 1 vez) · `render_template` (una vez) · `{{ var }}` (autoescape), `{{& var }}`, `{% if/elif/else %}`, `{% for %}` · contexto: `ctx_str ctx_int ctx_bool ctx_list val_str val_int` · `escape_html` · templates COMPILADOS: `ray build --templates-only` (§14) |
+| `std/template` | plantillas estilo Jinja: `compile(tpl) -> Result<Template, _>` + `render(t, ctx)` (SSR: compilar 1 vez) · `render_template` (una vez) · `{{ var }}` (autoescape), `{{& var }}`, `{% if/elif/else %}`, `{% for %}` · contexto: `ctx_str ctx_int ctx_bool ctx_list val_str val_int` · `escape_html` · templates COMPILADOS: `.ray.html` importables, compilados en memoria (§14) |
 | `std/inflate` | `inflate_raw gunzip zlib_inflate` (→ `Result<bytes, string>`) · `crc32` |
 | `std/deflate` | `deflate_raw gzip_compress zlib_compress` |
 | `std/huffman` | `huffman_encode huffman_decode` (la tabla HPACK del RFC 7541) |
@@ -485,7 +485,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray build [archivo] [--native …]` | chequea y compila sin ejecutar (0 ok / 65 error); `--native` transpila a Rust y produce un **binario nativo** (24–61× la VM, byte-idéntico) |
 | `ray test [archivo] [filtro]` | corre las `@test` del proyecto: la entrada y todos sus módulos (calificadas: `math.t`) + cada `tests/*.ray` como suite de integración; filtro por subcadena; sale con 0/1 (65 si algo no compila) |
 | `ray fmt <archivo>` | imprime la versión canónica |
-| `ray build --templates-only [ruta…]` | compila templates `.ray.html` (firma `{% params %}`) a módulos raylang tipados; **fuerza** la regeneración (sin rutas: la raíz del proyecto). `run`/`build`/`test` ya regeneran los desactualizados por mtime |
+| `ray build --templates-only [ruta…]` | **materializa** en disco el módulo generado de cada template `.ray.html` (firma `{% params %}`), para inspección (sin rutas: la raíz del proyecto). La vía normal no lo necesita: el loader compila los templates **en memoria** al resolver sus imports (M102) e ignora un `.ray` hermano |
 | `ray doc <archivo>` | documentación Markdown de la superficie pública (`///`) |
 | `ray repl` | REPL interactivo |
 | `ray lsp` | Language Server (diagnósticos, hover, ir-a-definición, references, rename, completion, signature help) |

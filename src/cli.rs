@@ -199,7 +199,6 @@ fn cmd_run(args: &[String]) {
         None => (None, Vec::new()),
     };
     let path = resolve_entry(explicit, false);
-    regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     run_file(&path, prog_args, use_interp, fuel, heap.map(|n| n as usize));
 }
 
@@ -207,8 +206,8 @@ fn cmd_run(args: &[String]) {
 
 /// `ray dev [archivo] [flags de run] [args...]`: corre el programa como `ray run` y lo REINICIA
 /// ante cambios en los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`). El watcher es
-/// POLLING de mtimes (~200 ms): portable y cero deps — el mismo mecanismo que la regeneración de
-/// templates, que el hijo ejecuta al arrancar (un `.ray.html` editado dispara reinicio → regen).
+/// POLLING de mtimes (~200 ms): portable y cero deps. Un `.ray.html` editado dispara reinicio; el
+/// hijo lo compila en memoria al arrancar (M102: sin `.ray` generado en disco).
 /// El reinicio manda **SIGTERM** — un servidor con `serve_graceful` (M88.1b) drena sus conexiones
 /// antes de morir — y escala a SIGKILL a los 3 s. Un programa que termina solo (un CLI, un crash)
 /// queda a la espera y se relanza al siguiente cambio.
@@ -546,9 +545,9 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
                 }
                 pending.push(path);
             } else if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
-                // Un `.ray` con un `.ray.html` hermano es el módulo GENERADO por `ray build --templates-only`
-                // (derivado): se vigila el fuente (el .html), no el artefacto — si no, cada
-                // edición de template causaría un segundo reinicio al regenerarlo el hijo.
+                // Un `.ray` con un `.ray.html` hermano es un generado de `ray build
+                // --templates-only` (derivado, además IGNORADO por el loader desde M102): se
+                // vigila el fuente (el .html), no el artefacto.
                 if name.ends_with(".ray") && !name.ends_with(".ray.html") {
                     let html = path.with_extension("ray.html");
                     if html.exists() {
@@ -774,7 +773,6 @@ fn cmd_build(args: &[String]) {
         })
         .map(String::as_str);
     let path = resolve_entry(file, true);
-    regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
@@ -1075,7 +1073,6 @@ fn cmd_test_sub(args: &[String]) {
         first => (None, first),
     };
     let entry = resolve_entry(explicit, false);
-    regen_stale_templates(Path::new(&entry)); // M55: los .ray.html desactualizados, al día
 
     let mut suites = vec![PathBuf::from(&entry)];
     if explicit.is_none() {
@@ -1883,60 +1880,10 @@ fn collect_templates(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// M55: **regeneración automática de templates** — antes de compilar/correr, cada `.ray.html` bajo
-/// el directorio de la entrada cuyo `.ray` generado **falte** o esté **desactualizado** (mtime
-/// anterior al del template) se regenera, como si se hubiera corrido `ray build --templates-only`. El aviso va por
-/// **stderr** (stdout es del programa). Un template con error de sintaxis aborta con 65 (el build
-/// habría fallado igual al compilar el generado viejo, pero con peor señal). Con los generados al
-/// día el coste es un stat por template (cero sin `.ray.html`).
-fn regen_stale_templates(entry: &Path) {
-    let dir = match entry.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    // Guardia: si la entrada vive DIRECTAMENTE en el temp dir del sistema (un snippet suelto en
-    // /tmp — el patrón del MCP viejo, o un `ray run /tmp/x.ray` a mano), NO se escanea: el /tmp
-    // compartido acumula `.ray.html` residuales de OTROS procesos (algunos rotos a propósito, como
-    // los de los tests de templates) y un template ajeno abortaría el build con un error que no es
-    // del programa. Nadie tiene proyectos de templates en la RAÍZ de /tmp; los proyectos reales
-    // (con subdirectorio propio) no cambian.
-    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    if canon(dir) == canon(&std::env::temp_dir()) {
-        return;
-    }
-    let mut tpls = Vec::new();
-    collect_templates(dir, &mut tpls);
-    tpls.sort();
-    for t in tpls {
-        let generated = PathBuf::from(t.to_string_lossy().trim_end_matches(".html").to_string());
-        let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified());
-        let stale = match (mtime(&t), mtime(&generated)) {
-            // El `.ray` también caduca si el LAYOUT del que hereda es más nuevo: `{% extends %}`
-            // fusiona el layout en compilación, así que su HTML vive dentro del generado del hijo.
-            (Ok(tm), Ok(gm)) => gm < tm || layout_mtime_of(&t).is_some_and(|lm| gm < lm),
-            (_, Err(_)) => true,  // no hay generado
-            (Err(_), _) => false, // el template ni se puede leer: lo reportará quien lo importe
-        };
-        if !stale {
-            continue;
-        }
-        match crate::templ::generate_file(&t) {
-            Ok(out) => eprintln!("template regenerated: {}", out.display()),
-            Err(msg) => {
-                eprintln!("{msg}");
-                process::exit(65);
-            }
-        }
-    }
-}
-
-// El mtime del layout del que hereda el template `t` (`{% extends %}`), si hereda.
-fn layout_mtime_of(t: &Path) -> Option<std::time::SystemTime> {
-    let src = fs::read_to_string(t).ok()?;
-    let dir = t.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let layout = crate::templ::extends_target(&src, dir)?;
-    fs::metadata(&layout).and_then(|m| m.modified()).ok()
-}
+// M102: la regeneración automática de templates (M55, `regen_stale_templates`) desapareció — el
+// loader compila cada `.ray.html` EN MEMORIA al resolver su import; no hay `.ray` generado en el
+// proyecto ni staleness por mtime. `ray build --templates-only` sigue materializando el generado
+// bajo demanda (inspección).
 
 fn cmd_doc(args: &[String]) {
     let Some(path) = args.first() else {

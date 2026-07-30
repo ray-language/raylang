@@ -176,6 +176,10 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- LSP: la completion tras `from std/M import ` y las rutas `std/…` en posición de import ahora
+  funcionan también para la stdlib **embebida** (antes la resolución iba solo a disco y devolvía
+  vacío fuera del repo) — el sitio clave de la forma UFCS de los constructores de unidades, que
+  exige el import sin calificar.
 - Contención de fallos por tarea y `try_join` en el backend nativo; un fallo observado con `try_join`
   cuenta como manejado por el scope (M97.1).
 - El almacén de tareas y el de canales liberan al consumirse/cerrarse (M98.1–M98.3): fugas de memoria en

@@ -590,6 +590,8 @@ pub fn available_modules(roots: &[PathBuf], entry: &Path) -> Vec<String> {
     for root in roots {
         collect_modules(root, root, &mut set);
     }
+    // La stdlib embebida también es importable (LSP, IDEAS §56): sus rutas no viven en disco.
+    set.extend(crate::stdlib::names().into_iter().map(|s| s.to_string()));
     set.into_iter()
         .filter(|m| m != imp && m != "main")
         .filter(|m| capsule_violated(roots, imp, m).is_none())

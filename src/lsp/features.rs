@@ -925,10 +925,20 @@ pub(super) fn code_block_snippets() -> Vec<Json> {
     }).collect()
 }
 
+/// La fuente del módulo `path` (IDEAS §56): la stdlib **embebida** primero — `std/…` no existe en
+/// disco fuera del repo, el mismo orden de resolución que el loader — y si no, el archivo resuelto
+/// en las raíces del proyecto.
+pub(super) fn module_source(roots: &[PathBuf], path: &str) -> Option<String> {
+    if let Some(src) = crate::stdlib::embedded(path) {
+        return Some(src.to_string());
+    }
+    let file = loader::resolve_module_path(roots, path).ok()??;
+    std::fs::read_to_string(file).ok()
+}
+
 pub(super) fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
     let roots = import_roots(entry);
-    let path = loader::resolve_module_path(&roots, path).ok()??;
-    let source = std::fs::read_to_string(&path).ok()?;
+    let source = module_source(&roots, path)?;
     let tokens = lexer::lex(&source).ok()?;
     let (program, _errs) = parser::parse_all(tokens);
     let mut items: Vec<(String, i64, Option<(Vec<String>, String)>)> = Vec::new();
@@ -954,8 +964,7 @@ pub(super) fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String
     // en `mod.ray`); si no se resuelve, se cae a función sin firma.
     for fi in &program.from_imports {
         if fi.is_pub {
-            let origin = loader::resolve_module_path(&roots, &fi.module).ok().flatten()
-                .and_then(|p| std::fs::read_to_string(p).ok());
+            let origin = module_source(&roots, &fi.module);
             for n in &fi.names {
                 let (kind, signature) = origin.as_deref()
                     .and_then(|s| classify_source_symbol(s, &n.name))
@@ -1004,9 +1013,7 @@ pub(super) fn import_completion_items(uri: Option<&str>, src: &str, line0: usize
 /// para el *fuzzy match* contra `filterText`, y al aceptar reemplaza la ruta entera.
 pub(super) fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &[char]) -> Option<Json> {
     let roots = import_roots(entry);
-    if roots.is_empty() {
-        return Some(Json::Arr(vec![]));
-    }
+    // Sin raíces de proyecto la lista igual sirve: la stdlib embebida siempre es importable (§56).
     // Inicio de la ruta parcial que se está escribiendo: el último tramo sin espacios antes del cursor.
     let mut start = col;
     while start > 0 && !chars[start - 1].is_whitespace() {
@@ -1607,8 +1614,7 @@ pub(super) fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> J
         let mut cache: HashMap<String, Option<String>> = HashMap::new();
         for fi in &program.from_imports {
             let origin = cache.entry(fi.module.clone()).or_insert_with(|| {
-                loader::resolve_module_path(&roots, &fi.module).ok().flatten()
-                    .and_then(|p| std::fs::read_to_string(p).ok())
+                module_source(&roots, &fi.module)
             }).clone();
             for n in &fi.names {
                 let kind = origin.as_deref()

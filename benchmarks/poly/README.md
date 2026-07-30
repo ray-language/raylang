@@ -89,6 +89,10 @@ hash y construir respuestas — ejercita la **stdlib**, no la aritmética.
 
 ## Resultados (29 jul 2026 — M3 Pro, mediana de 10 corridas, 5 de calentamiento)
 
+> Corrida archivada completa (export de `bench.py --export-md`, todas las tablas y el entorno):
+> [`results/2026-07-30-arco-vm.md`](results/2026-07-30-arco-vm.md) — la referencia post-arco de
+> la VM (Fases 69-75) con el arnés corregido, todas las filas `10/10`.
+
 Suite completa con el arnés actual (auto-medición: los 12 programas de cómputo cronometran su
 propio workload, así que **no** cuentan el arranque del runtime; `empty`/`print` sí lo miden, que
 es justo lo que evalúan). `ray` = la VM; `native` = `ray build --native --release`, que desde el

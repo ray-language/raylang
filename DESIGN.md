@@ -8810,3 +8810,26 @@ en compilación cualquier extern por encima del límite, en todos los motores po
 aridad 4–6 usan el truco honesto de SysV/AAPCS64: un callee que declara menos argumentos no lee los
 registros sobrantes, así que `pow` llamado con moldes de aridad 4–6 verifica el despacho real con
 resultado comprobable.
+
+## 91. Constructores de duración en `std/time` (jul 2026)
+
+**El azúcar que ya existía.** La propuesta era "atajos numéricos" tipo `64.kb` / `24.minutes`
+(Kotlin, Ruby ActiveSupport). El hallazgo que decidió el diseño: en raylang **UFCS ya lo da
+gratis** — `30.seconds()` es `seconds(30)` con una función ordinaria, y el lexer no se confunde
+(solo trata `.` como decimal si le sigue un dígito). Se descartaron las dos variantes con sintaxis
+nueva: la forma **sin paréntesis** (`64.kb`) rompería la uniformidad campo-vs-llamada y tocaría la
+resolución campo/UFCS del checker (la zona más delicada, con espejo selfhost), además de hipotecar
+el lexer si algún día hay exponentes (`64.e3`); los **sufijos de literal** (`64kb`) quemarían el
+espacio de sufijos que conviene reservar para tipos numéricos futuros (`64i32`). Dos paréntesis no
+justifican ninguna de las dos hipotecas.
+
+**Dónde y qué devuelven.** En `std/time` (no un `std/units` nuevo): la moneda de duración de la
+stdlib ya es el **int en milisegundos** y está definida ahí, junto a sus consumidores (`sleep`) y
+a `format_duration`, que es el inverso conceptual (ms → texto). Además el import es único —
+`from std/time import sleep, seconds` — y "time" es donde cualquiera busca `minutes`; un módulo
+"units" no lo adivina nadie. Restricción que fija esa ergonomía: UFCS solo alcanza nombres **sin
+calificar**, así que `30.seconds()` requiere `from std/time import seconds` (con `import std/time;`
+queda `time.seconds(30)`). La superficie: `millis` (identidad, para explicitar la unidad),
+`seconds`, `minutes`, `hours`, `days` (de 24 h exactas: los calendarios son asunto de `DateTime`).
+Los tamaños (`kb`/`mb`/`gb`) quedaron fuera de este paso y clasificados en IDEAS.md — arrastran su
+propia decisión (1024 vs 1000) y no tienen hogar obvio.

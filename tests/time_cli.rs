@@ -29,6 +29,13 @@ const EXPECTED: &[&str] = &[
     "1h2m3s",
     "45s",
     "500ms",
+    // Constructores de duración (azúcar UFCS → ms)
+    "500",
+    "30000",
+    "300000",
+    "7200000",
+    "86400000",
+    "1h2m3s",
 ];
 
 fn run(flags: &[&str]) -> Vec<String> {

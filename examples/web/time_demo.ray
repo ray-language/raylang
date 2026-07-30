@@ -1,6 +1,7 @@
 // Demo/verificación de fechas/horas UTC (M20.5). Salida determinista (timestamps fijos), la ejecuta
 // `tests/time_cli.rs`. Referencias de `datetime.utcfromtimestamp` (Python).
 from time import from_epoch_millis, to_iso8601, to_rfc1123, to_epoch_millis, parse_iso8601, parse_iso8601_millis, now_utc, format_duration;
+from std/time import millis, seconds, minutes, hours, days;
 import std/time;
 
 fn main() {
@@ -61,6 +62,15 @@ fn main() {
     print(format_duration(3723000));  // 1h2m3s
     print(format_duration(45000));  // 45s
     print(format_duration(500));  // 500ms
+
+    // --- constructores de duración (azúcar UFCS → ms) ---
+    print(500.millis());  // 500
+    print(30.seconds());  // 30000
+    print(5.minutes());  // 300000
+    print(2.hours());  // 7200000
+    print(1.days());  // 86400000
+    // Componen con format_duration (el inverso: ms → texto).
+    print(format_duration(1.hours() + 2.minutes() + 3.seconds()));  // 1h2m3s
 }
 
 fn iso(ms: int) -> string { to_iso8601(from_epoch_millis(ms)) }

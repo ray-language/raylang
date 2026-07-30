@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **FFI `blocking`**: `extern "lib" blocking { … }` marca llamadas C **bloqueantes de verdad** (E/S,
+  C-libs lentas). En el binario nativo con fibras (el default) la llamada se descarga a un pool
+  bloqueante y la fibra espera aparcada — el worker M:N no se vara; mismos tipos y valores en todos
+  los motores (donde no hay scheduler que proteger, la marca es inerte). `blocking` es contextual
+  (sigue valiendo como identificador).
 - **`try_call(f) -> Result<T, string>`** (M97): recuperación de un `panic`/error de ejecución **en la
   misma fibra**, el fallo como valor. En los tres motores. `try_join` hace lo propio con una tarea.
 - **Cadenas plantilla con backticks** (M95): `` `…` `` es multilínea y admite `"` literal, con la misma

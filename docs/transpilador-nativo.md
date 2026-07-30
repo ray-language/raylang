@@ -69,7 +69,12 @@ web-demos 24 → 38 byte-idénticos).
   inferencia genérica `unify`/`subst_type` recorre Struct/Enum/Tuple con argumentos).
 - **FFI** (fase 49): `extern "lib" { … }` emite el bloque `#[link(name = "lib")] extern "C"` +
   un wrapper que marshala (string→`CString`, retorno `int` = **`c_int` de 32 bits con extensión
-  de signo** — el gotcha de ABI que convertía el EOF de `fgetc` en bucle infinito).
+  de signo** — el gotcha de ABI que convertía el EOF de `fgetc` en bucle infinito). Nota: la
+  resolución difiere de la VM a propósito (allí `dlopen` en runtime con fallbacks; aquí `#[link]`
+  en build — la librería debe existir al compilar). Un bloque **`blocking`** (jul 2026, DESIGN §90)
+  emite el wrapper sobre `ray_runtime::fibers::run_blocking` cuando el binario corre con fibras:
+  la llamada C va a un hilo del pool bloqueante y la fibra aparca (captura `Send` de los punteros
+  como `usize`; los dueños viven en el marco aparcado). Sin fibras, llamada directa.
 
 ### 2.3 Cobertura y verificación
 

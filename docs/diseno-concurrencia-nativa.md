@@ -260,7 +260,9 @@ respaldo y como grupo de control para el A/B.
 
 Nota asumida: las operaciones que siguen siendo bloqueantes de verdad (ficheros, SQLite, DNS del
 sistema) bloquean un worker mientras duran, igual que hoy bloquean un hilo. Es el mismo compromiso
-que acepta la VM y no forma parte de este arco.
+que acepta la VM y no forma parte de este arco. (Post-arco, jul 2026: para el FFI de **usuario** —
+llamadas C arbitrarias — ese compromiso ya no se impone: `extern "lib" blocking { … }` descarga la
+llamada a un pool bloqueante vía `fibers::run_blocking` y la fibra espera aparcada; DESIGN §90.)
 
 ## 6. F2, EJECUTADA (28 jul 2026) — resultados y lecciones
 

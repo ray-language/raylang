@@ -597,6 +597,24 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   catálogo de aridad 3 completado (faltaban 5 de 8 combinaciones). Pendiente conocido: las
   **variádicas** (printf) transmutan "bien" pero son UB en arm64 (la ABI difiere) — sin detección
   posible desde la firma; documentado como fuera de contrato.
+- **Revisión FFI bajo fibras (30 jul 2026)** — con las fibras por default en el binario nativo
+  (fijadas a su worker, sin work-stealing), una extern C bloqueante vara al worker entero. Hallazgos
+  y estado:
+  - ✅ **`extern "lib" blocking { … }`** (DESIGN §90): descarga al pool bloqueante de
+    `ray_runtime::fibers::run_blocking` + fibra aparcada; inerte donde no hay scheduler que proteger.
+  - **Pendiente — descarga en la VM**: la VM también es M:N y sufre el mismo varamiento; aparcar la
+    fibra de la VM durante la llamada exige integrar la finalización con `poll.rs` (una tubería de
+    completado o similar). Hacerlo cuando haya un caso real de FFI bloqueante intensivo sobre la VM.
+  - **Pendiente — paridad de aridad VM↔nativo**: el catálogo de la VM cubre aridad 0..=3 pero el
+    nativo emite cualquier aridad → un extern de 4 args funciona nativo y falla en runtime en la VM.
+    Arreglo doble: extender el catálogo (macro por niveles) y/o diagnóstico de aridad en el checker.
+  - **Pendiente — pila de fibra y código C**: el C corre sobre los 128 KiB de la fibra (guard page →
+    SIGSEGV limpio pero mudo). Barato: subir el default cuando `prog.externs` no está vacío (el
+    transpilador lo sabe estático) + documentar `RAY_FIBER_STACK_KIB` en la sección FFI.
+  - **Pendiente — `ffi_errno()`**: builtin para leer errno inmediatamente tras una extern (regla:
+    sin park en medio; dos sentencias consecutivas sin E/S no aparcan).
+  - Nota positiva documentada: la **fijación** hace seguras las C-libs con afinidad de hilo usadas
+    desde una sola fibra.
 
 ---
 

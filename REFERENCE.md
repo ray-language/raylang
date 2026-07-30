@@ -454,6 +454,12 @@ Aridad **0 a 3**. Es la única frontera insegura del lenguaje: la firma declarad
 Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs por valor, callbacks
 (anotados para un FFI v2). No disponible en el playground wasm.
 
+**`extern "lib" blocking { … }`** marca las firmas del bloque como llamadas **bloqueantes de verdad**
+(E/S, C-libs lentas). Mismos tipos y valores; solo cambia la planificación: en el binario nativo con
+fibras (el default) la llamada se descarga a un pool bloqueante y la fibra aparca (el worker M:N no
+se vara). Donde no hay scheduler que proteger (VM, intérprete, `--without fibers`, fuera de fibra) es
+inerte. `blocking` es contextual: sigue valiendo como identificador.
+
 ## 14. El CLI `ray`
 
 (`raylang` es un alias del mismo binario.)

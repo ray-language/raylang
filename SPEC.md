@@ -142,7 +142,7 @@ trait    = 'trait' IDENT [ '<' IDENT { ',' IDENT } '>' ] '{' { firma_metodo } '}
 firma_metodo = 'fn' IDENT '(' 'self' { ',' param } ')' [ '->' tipo ] ( ';' | bloque ) ;
 impl     = 'impl' [ genericos ] IDENT [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
 const    = 'const' IDENT ':' tipo '=' literal ';' ;
-extern   = 'extern' STRING '{' { firma_extern } '}' ;
+extern   = 'extern' STRING [ 'blocking' ] '{' { firma_extern } '}' ;
 firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 ```
 
@@ -175,6 +175,14 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   Llamar a una `extern fn` se ve como cualquier llamada. **Declarar una `extern fn` es la única
   operación insegura del lenguaje**: cruzar a C anula las garantías (memoria, firmas); todo lo demás es
   seguro por construcción.
+- **`extern "lib" blocking { … }`**: marca todas las firmas del bloque como llamadas **bloqueantes de
+  verdad** (E/S, librerías C lentas). `blocking` es una palabra **contextual** (no reservada: sigue
+  siendo un identificador válido). La marca **no cambia los valores** — tipos, marshalling y resultado
+  son idénticos a un bloque sin marcar —; es una directiva de **planificación**: en el binario nativo
+  con fibras (el default), la llamada se descarga a un hilo de un pool bloqueante y la fibra queda
+  aparcada, de modo que el worker M:N no se bloquea ni vara a las fibras hermanas fijadas a él. Donde
+  no hay scheduler que proteger (la VM, el intérprete, un binario `--without fibers`, o una llamada
+  fuera de fibra) la marca es inerte y la llamada es directa.
 
 ## 5. Sentencias
 

@@ -201,6 +201,35 @@ let w = 300 as u8;      // 44  (enmascara al ancho)
 print(w);               // los u8/u32/u64 se imprimen directo (decimal sin signo)
 ```
 
+### Conversiones con string
+
+`as` no convierte hacia ni desde `string` — a propósito: sus casts son totales (truncar, enmascarar,
+validar), mientras que parsear un string **puede fallar** y formatear un valor es otra operación.
+Cada dirección tiene su herramienta:
+
+**Hacia string** (formateo, nunca falla): `to_string(v)` o interpolación `"${v}"` — que es azúcar
+del mismo `to_string`, con la misma representación que `print`:
+
+```rust
+let s = to_string(42);          // "42"
+let msg = "total: ${3.5}";      // "total: 3.5"
+```
+
+Para tus propios tipos, implementa (o deriva) el trait `Show` y quedan admitidos por
+`print`/`to_string`/`${}` (§9).
+
+**Desde string** (parseo, puede fallar): `parse_int` / `parse_float` devuelven `Option` — el fallo
+es un valor, no una excepción ni un cero silencioso:
+
+```rust
+let n = "42".parse_int();               // Some(42) : Option<int>
+let m = "abc".parse_int();              // None
+let k = entrada.parse_int().unwrap_or(0);
+let f = "2.5".parse_float();            // Some(2.5) : Option<float>
+```
+
+Para el caso interactivo, `read_int()` ya combina `input` + `parse_int` (→ `Option<int>`).
+
 ### Sobrecarga de operadores
 
 `+ - * /` y el `-` unario se sobrecargan implementando los traits `Add`/`Sub`/`Mul`/`Div`/`Neg`:

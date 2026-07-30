@@ -8900,9 +8900,17 @@ bajo demanda (la inspección "cero magia" de M55, ahora opcional y no permanente
   repo anterior a M102), **gana el template** — por convención un `.ray` con hermano `.ray.html`
   es artefacto, no módulo a mano (la misma que ya aplicaba el watcher de `ray dev`). Template vs
   `dep/mod.ray` sigue siendo ambigüedad (error), como archivo-vs-directorio.
-- **Errores**: los del template mismo (directivas) salen del loader con archivo y línea del
-  `.ray.html`, como antes. Los de **tipos** dentro del módulo generado reportan la línea del
-  generado (que ya no está en disco): la traducción vía line map —que el LSP ya hace para buffers
-  `.ray.html`— a la vía normal de diagnósticos queda como fase A2 (IDEAS).
+- **Errores (fase A2, mismo día)**: los del template mismo (directivas) salen del loader con
+  archivo y línea del `.ray.html`, como antes. Para el resto, el loader guarda por módulo-template
+  su **`TemplateOrigin`** (fuente del template + el line map de `generate_with_map`, el mismo que
+  ya usaba el LSP), y la traducción vive en **`locate`** — el único punto por el que pasan todos
+  los diagnósticos post-carga (CLI y test runner): la firma creció a `(línea, col, len) → (módulo,
+  fuente, línea, col, len)` y para un módulo-template devuelve la fuente del template, la línea
+  traducida y el cursor degradado a **línea completa** (col 1: la columna del generado no existe
+  en el template — la misma convención que el LSP). Cubre checker, runtime (cabecera y traza),
+  lex/parse del generado (una expresión empalmada mal formada) y los errores de import del BFS
+  (un `{% include %}` a un template inexistente apunta a la línea del include). Los sitios
+  mutan también `e.col` antes de formatear la cabecera, así el `at L:C` del mensaje es el del
+  template.
 - **LSP gratis**: el completion de imports lista también los `.ray.html`, y analizar un `.ray` que
   importa un template ya no exige el generado en disco (el loader lo compila igual en memoria).

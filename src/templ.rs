@@ -71,12 +71,19 @@ impl Tok {
 /// sin tocar el disco. Es la vía del loader (M102): al resolver un import a un `.ray.html`, el
 /// template es la única fuente de verdad — no hay `.ray` generado en el proyecto.
 pub fn generate_module_source(input: &Path) -> Result<String, String> {
+    generate_module_with_map(input).map(|(code, _, _)| code)
+}
+
+/// Como `generate_module_source`, devolviendo además el fuente del TEMPLATE y su line map
+/// (línea-generada → línea-del-template, 1-basadas): lo que el loader guarda para traducir los
+/// diagnósticos posteriores del módulo generado de vuelta al `.ray.html` (M102-A2).
+pub fn generate_module_with_map(input: &Path) -> Result<(String, String, Vec<usize>), String> {
     let src = std::fs::read_to_string(input)
         .map_err(|e| format!("could not read '{}': {e}", input.display()))?;
     let name = fn_suffix_of(input)?;
-    let (code, _map) = generate_with_map_at(&src, &name, input.parent())
+    let (code, map) = generate_with_map_at(&src, &name, input.parent())
         .map_err(|e| format!("{}: line {}: {}", input.display(), e.line, e.msg))?;
-    Ok(code)
+    Ok((code, src, map))
 }
 
 /// Compila `input` (`*.ray.html`) y escribe el módulo generado al lado (`*.ray`). Devuelve la ruta

@@ -2646,6 +2646,31 @@ fn ffi_llama_a_libm() {
 }
 
 #[test]
+fn ffi_errno_reads_the_last_failure_reason() {
+    // Revisión FFI jul 2026: `std/ffi.errno()` lee el errno del hilo justo tras la extern. fopen
+    // de una ruta inexistente → None + ENOENT (2 en Linux y macOS). Determinista → e2e por
+    // subproceso en la VM (motor de producto); la regla "leer inmediatamente" se cumple aquí.
+    let base = tmp("ffi_errno");
+    let file = base.join("main.ray");
+    std::fs::write(
+        &file,
+        "import std/ffi;\n\
+         extern \"c\" { fn fopen(path: string, mode: string) -> Option<ptr>; }\n\
+         fn main() -> int {\n\
+         \x20 match (fopen(\"/nonexistent_ray_dir/nope.txt\", \"r\")) {\n\
+         \x20   Option.Some(_) => print(\"opened?\"),\n\
+         \x20   Option.None => print(ffi.errno()),\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con std/ffi.errno must salir 0\n{err}");
+    assert!(out.contains("2"), "ENOENT tras el fopen fallido\n{out}");
+}
+
+#[test]
 fn ffi_marshala_strings_a_char_ptr() {
     // M41.2: un `string` de raylang se pasa como `char*` (NUL-terminado) a una función C.
     let base = tmp("ffi_str");

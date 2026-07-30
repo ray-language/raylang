@@ -774,6 +774,12 @@ impl Transpiler {
         if let Some(mfn) = name.strip_prefix("std::math::") {
             return self.emit_math(out, mfn, &eff);
         }
+        // std/ffi (revisión FFI jul 2026): `errno()` → helper emitido que lee el errno del hilo.
+        if name == "std::ffi::errno" {
+            self.needs_ffi_errno = true;
+            out.push_str("__ray_ffi_errno()");
+            return Ok(());
+        }
         // R5 (bench regex): las funciones INTERNAS `run_*` de std/regex (reciben el `Prog`, que
         // retiene el patrón FUENTE ya validado por el parser raylang) se ejecutan con el crate
         // `regex` de ray-runtime — la validación y sus errores siguen siendo los de std/regex

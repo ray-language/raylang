@@ -26,6 +26,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
     "__monotonic", "__monotonic_nanos", "__now", "__random", "__random_int", "__random_seed", "__sleep",
+    // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).
+    "__ffi_errno",
     // Sockets TCP/UDP (interceptados vía `std::net::*`).
     "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_read_timeout",
     "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_listen",
@@ -510,6 +512,28 @@ fn ffi_with_fibers_raises_the_default_fiber_stack() {
          fn main() { print(sqrt(2.0)); }",
     );
     assert!(!without_fibers.contains("set_default_fiber_stack_kib"), "sin fibras no hay pila de fibra: {}", without_fibers);
+}
+
+#[test]
+fn ffi_errno_emits_the_thread_errno_helper() {
+    // std/ffi.errno → __ray_ffi_errno() (lectura del errno del hilo), y el helper solo se anexa si
+    // el programa lo usa. `import std/ffi` necesita el loader (como el test de sockets).
+    let dir = std::env::temp_dir().join(format!("ray_ffi_errno_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = "import std/ffi;\nfn main() -> int { print(ffi.errno()); 0 }\n";
+    std::fs::write(dir.join("main.ray"), src).unwrap();
+    let loaded = match crate::loader::load(&dir.join("main.ray")) {
+        Ok(l) => l,
+        Err(_) => panic!("no se pudo cargar el programa de std/ffi"),
+    };
+    let mut prog = loaded.program;
+    crate::checker::check(&mut prog).expect("check");
+    let with = transpile(&prog).expect("transpile").source;
+    assert!(with.contains("__ray_ffi_errno()"), "call site interceptado: {}", with);
+    assert!(with.contains("fn __ray_ffi_errno() -> i64"), "helper emitido: {}", with);
+    let without = transpile_src("fn main() { print(0); }");
+    assert!(!without.contains("__ray_ffi_errno"), "sin uso no se emite: {}", without);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

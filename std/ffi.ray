@@ -1,0 +1,8 @@
+// std/ffi — helpers de la frontera C (FFI, M41). Complementa a los bloques `extern "lib" { … }`
+// del lenguaje: aquí vive lo que acompaña a una llamada C pero no es una llamada C.
+
+/// Reads the calling thread's C `errno`: the reason of the last failed POSIX-style extern call
+/// (`fopen`, `unlink`, ...). Read it IMMEDIATELY after the extern call, with no raylang I/O in
+/// between: any operation that parks the fiber lets its siblings run on the same thread, and they
+/// may overwrite it. Returns 0 in the wasm playground (no FFI there).
+pub fn errno() -> int { __ffi_errno() }

@@ -85,6 +85,8 @@ struct Transpiler {
     /// ¿Usa `std::time::monotonic`/`std::random::*`? Si es cierto, se anexa el PRNG (SplitMix64) + el
     /// reloj monotónico (necesitan estado global; `now`/`sleep` son inline y no lo activan).
     needs_time_rng: bool,
+    /// ¿Usa `std::ffi::errno`? Se anexa el helper `__ray_ffi_errno` (lectura del errno del hilo).
+    pub(super) needs_ffi_errno: bool,
     /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
     /// de socket (`std::net::TcpStream`/`TcpListener`).
     needs_net: bool,
@@ -240,6 +242,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_concurrency: false,
         needs_signals: false,
         needs_time_rng: false,
+        needs_ffi_errno: false,
         needs_net: false,
         needs_rt_crypto: false,
         needs_rt_tls: false,

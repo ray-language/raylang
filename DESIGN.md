@@ -8774,6 +8774,20 @@ crate competiría con los demás tests de fibras; la recursión de ~1 MiB lógic
 pelado y cabe holgada en el programático. (La VM no tiene este problema: sus fibras son marcos de
 bytecode en el heap y el C corre sobre la pila del hilo worker del SO.)
 
+**`std/ffi.errno()` (mismo arco, 30 jul 2026).** Cuarto hallazgo: las APIs C estilo POSIX
+(`fopen`/`unlink`/…) devuelven -1/NULL y dejan el motivo en `errno`, ilegible desde raylang.
+Superficie: builtin interno `__ffi_errno` (opcode `FfiErrno`; el mismo lector de errno por
+plataforma — `__errno_location`/`__error`/`_errno` — en los tres motores) envuelto por el módulo
+nuevo `std/ffi` (`pub fn errno() -> int`). La REGLA documentada: leerlo **inmediatamente** tras la
+extern, sin E/S en medio — con fibras cooperativas, dos sentencias consecutivas sin E/S no aparcan,
+así que el patrón `f(); errno()` es seguro por construcción; una fibra hermana del mismo hilo solo
+puede pisarlo a través de un park. La pieza sutil: con una extern **`blocking`**, la llamada C corre
+en un hilo del POOL y su errno se queda allí — `run_blocking` lo captura tras `f` en el hilo del
+pool y lo **repone en el hilo del llamador** al despertar (errno es escribible por POSIX), de modo
+que la regla del usuario es la misma con y sin `blocking`. Verificado con paridad e2e byte a byte
+VM≡nativo-fibras: `fopen` fallido dentro y fuera de fibra → `errno() == 2` (ENOENT) en ambos
+motores, cruzando el pool.
+
 **Cierre de paridad de aridad (mismo arco, 30 jul 2026).** El segundo hallazgo de la revisión: el
 catálogo de moldes de la VM llegaba a aridad 3 (16 brazos a mano) pero el nativo emite la declaración
 `extern "C"` con **cualquier** aridad → un extern legítimo de 4+ argumentos compilaba y corría nativo

@@ -465,6 +465,7 @@ Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista
 | `std/hex`, `std/base64`, `std/url`, `std/uuid`, `std/protobuf` | codificaciones e identificadores |
 | `std/inflate`, `std/deflate`, `std/huffman` | compresión (gzip/zlib/DEFLATE) |
 | `std/kv`, `std/resilience` | almacén clave-valor persistente (compartible entre fibras) y utilidades de resiliencia: reintentos con política, *circuit breaker* y plazos (`deadline`/`expired`) |
+| `std/ffi` | helpers de la frontera C: `errno()` (el `errno` del hilo tras una extern estilo POSIX; leerlo inmediatamente tras la llamada) |
 
 Un módulo `std/…` puede depender de que el binario incluya un subsistema (TLS/cripto necesitan
 `net-tls`; un binario *slim* o `--without` responde con un error de ejecución explícito). El

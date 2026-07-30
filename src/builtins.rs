@@ -2176,6 +2176,9 @@ static BUILTINS: &[Builtin] = &[
 
     // --- Reloj (M15.1b) y aleatoriedad → M49.2: `std/time` (now/monotonic/sleep) y `std/random`. Aquí
     // solo los primitivos internos `__now`/`__monotonic`/`__sleep`/`__random`/`__random_int`. ---
+    // --- FFI (M41 + revisión jul 2026): errno del hilo, envuelto por `std/ffi.errno()`. ---
+    Builtin { name: "__ffi_errno", opcode: OpCode::FfiErrno, check: |a| { nullary(a, "__ffi_errno")?; Ok(Type::Int) } },
+
     Builtin { name: "__now",       opcode: OpCode::Now,       check: |a| { nullary(a, "__now")?; Ok(Type::Int) } },
     Builtin { name: "__monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "__monotonic")?; Ok(Type::Int) } },
     Builtin { name: "__monotonic_nanos", opcode: OpCode::MonotonicNanos, check: |a| { nullary(a, "__monotonic_nanos")?; Ok(Type::Int) } },

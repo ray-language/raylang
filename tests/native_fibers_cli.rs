@@ -504,3 +504,34 @@ fn main() -> int {
 "#,
     );
 }
+
+#[test]
+fn blocking_extern_errno_crosses_the_pool_byte_identical() {
+    // std/ffi.errno tras una extern `blocking` DENTRO de una fibra: la llamada C corre en un hilo
+    // del pool y deja allí su errno; run_blocking lo repone en el worker al despertar, así que
+    // errno() lee ENOENT (2) igual que la VM (que llama directo en su hilo). Paridad byte a byte.
+    assert_fibers_matches_vm(
+        "blocking_errno",
+        r#"
+import std/ffi;
+
+extern "c" blocking {
+    fn fopen(path: string, mode: string) -> Option<ptr>;
+}
+
+fn probe() -> int {
+    match (fopen("/nonexistent_ray_dir/nope.txt", "r")) {
+        Option.Some(_) => 0 - 1,
+        Option.None => ffi.errno(),
+    }
+}
+
+fn main() -> int {
+    let t = spawn(fn() -> int { probe() });
+    print(join(t));
+    print(probe());
+    0
+}
+"#,
+    );
+}

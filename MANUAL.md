@@ -1294,6 +1294,28 @@ La marca no cambia valores ni tipos; donde no hay fibras (VM, `--without fibers`
 `spawn`) es inerte. Para llamadas cortas de CPU (`sqrt`, `strlen`) no la uses: el viaje al pool cuesta
 más que la llamada.
 
+**¿La función C falló y quieres saber por qué?** Las APIs POSIX dejan el motivo en `errno`:
+
+```rust
+import std/ffi;
+
+extern "c" {
+    fn fopen(path: string, mode: string) -> Option<ptr>;
+}
+
+fn main() -> int {
+    match (fopen("/no/existe.txt", "r")) {
+        Option.Some(f) => print("open ok"),
+        Option.None => print(ffi.errno()),   // 2 = ENOENT; leerlo JUSTO tras la llamada
+    }
+    0
+}
+```
+
+La regla: lee `ffi.errno()` **inmediatamente** después de la extern, sin E/S de raylang en medio
+(cualquier operación que aparque la fibra deja correr a sus hermanas, que pueden pisarlo). Funciona
+igual tras una extern `blocking` (el runtime trae el errno del hilo del pool de vuelta).
+
 **Pila**: en el binario nativo con fibras, tu llamada C corre sobre la pila de la fibra. Con externs
 declaradas, el default sube solo a **1 MiB** por fibra (de los 128 KiB habituales; reserva virtual,
 solo cuestan las páginas que se tocan). Si una C-lib necesita aún más, `RAY_FIBER_STACK_KIB=4096`

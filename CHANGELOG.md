@@ -49,6 +49,9 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 - **FFI: pila de fibra dimensionada para C**: en el binario nativo con fibras, un programa con externs
   fija solo un default de **1 MiB** de pila por fibra (reserva virtual; antes 128 KiB, que el código C
   podía desbordar con SIGSEGV mudo). `RAY_FIBER_STACK_KIB` siempre gana al default.
+- **`std/ffi` con `errno()`**: el `errno` del hilo tras una extern C estilo POSIX (`fopen` fallido →
+  `ffi.errno()` = ENOENT), en los tres motores. Regla: leerlo inmediatamente tras la llamada. Con una
+  extern `blocking`, el runtime nativo trae de vuelta el errno del hilo del pool — misma regla.
 - **`try_call(f) -> Result<T, string>`** (M97): recuperación de un `panic`/error de ejecución **en la
   misma fibra**, el fallo como valor. En los tres motores. `try_join` hace lo propio con una tarea.
 - **Cadenas plantilla con backticks** (M95): `` `…` `` es multilínea y admite `"` literal, con la misma

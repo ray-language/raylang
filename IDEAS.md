@@ -613,8 +613,9 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
     `set_default_fiber_stack_kib(1024)` (1 MiB, reserva virtual) antes de la primera fibra;
     precedencia `RAY_FIBER_STACK_KIB` > default programático > 128 KiB. Documentado en la sección
     FFI de REFERENCE/MANUAL. DESIGN §90.
-  - **Pendiente — `ffi_errno()`**: builtin para leer errno inmediatamente tras una extern (regla:
-    sin park en medio; dos sentencias consecutivas sin E/S no aparcan).
+  - ✅ **`std/ffi.errno()`** (30 jul 2026): builtin `__ffi_errno` + módulo `std/ffi`; mismo lector
+    por plataforma en los tres motores, y `run_blocking` repone en el worker el errno del hilo del
+    pool (la regla "leer inmediatamente" vale igual con `blocking`). DESIGN §90.
   - Nota positiva documentada: la **fijación** hace seguras las C-libs con afinidad de hilo usadas
     desde una sola fibra.
 

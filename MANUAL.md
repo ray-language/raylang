@@ -1273,7 +1273,7 @@ fn main() -> int {
 
 Reglas (tabla completa en [`REFERENCE.md` §13](REFERENCE.md#13-ffi-tipos-marshalables)):
 
-- Aridad 0 a 3; tipos: `int` (C `int`), `u64` (C `long`/`size_t`), `float`, `bool`, `string`/`bytes`
+- Aridad 0 a 6 (el checker rechaza más parámetros); tipos: `int` (C `int`), `u64` (C `long`/`size_t`), `float`, `bool`, `string`/`bytes`
   (solo argumento), `ptr`, `unit`; retornos falibles como `Option<string>`/`Option<bytes>`/`Option<ptr>`.
 - Los `bytes` que pases NUL-termínalos tú si el C lo espera (`b"texto\x00"`).
 - Fuera de contrato: variádicas (`printf`), structs por valor, callbacks.

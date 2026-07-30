@@ -233,6 +233,14 @@ impl Checker {
                 return Err(self.err(e.line, e.col, format!(
                     "'{}' is already declared (collision between a function and an 'extern fn')", e.name)));
             }
+            // Paridad de aridad entre motores: el catálogo de la VM llega hasta MAX_ARITY, y el
+            // nativo (que emitiría cualquier aridad) se somete al MISMO límite aquí — un extern
+            // fuera de rango no compila en ningún motor, en vez de fallar en runtime solo en la VM.
+            if e.params.len() > crate::ffi::MAX_ARITY {
+                return Err(self.err(e.line, e.col, format!(
+                    "'extern fn {}' has {} parameters; the FFI supports arity 0..={}",
+                    e.name, e.params.len(), crate::ffi::MAX_ARITY)));
+            }
             for p in &e.params {
                 self.ensure_type(&p.ty, p.line, p.col)?;
                 let pt = self.resolve_type(&p.ty);

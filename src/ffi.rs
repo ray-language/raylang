@@ -9,8 +9,9 @@
 //! podemos depender de ella, raylang soporta un **catálogo acotado de firmas**: obtenemos el puntero
 //! del símbolo con `dlsym` y lo **transmutamos** a un tipo `extern "C" fn(...)` concreto —uno por
 //! combinación de aridad y clases de argumento que soportamos— y lo llamamos. Es una limitación honesta
-//! (documentada): la mayoría de las APIs C útiles caen en unas pocas formas. M41.1 cubre **primitivos**
-//! (int/float/bool) con aridad 0..=3; `bytes`/punteros llegan en M41.2+.
+//! (documentada): la mayoría de las APIs C útiles caen en unas pocas formas. El catálogo se genera
+//! por macro hasta `MAX_ARITY` (= 6, cubre `mmap`/`sendto`/`recvfrom`), y el checker impone el mismo
+//! límite en compilación — paridad con el nativo, que emitiría cualquier aridad.
 //!
 //! La **carga** de librerías va por `libloading` (endurecimiento jul 2026; antes `dlopen`/`dlsym`
 //! declarados a mano, que no existían en Windows/MSVC → el binario no linkeaba allí): puro Rust
@@ -28,6 +29,14 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 #[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
 use std::sync::Mutex;
+
+/// Aridad máxima de una `extern fn`. Es el **contrato entre motores**: el catálogo de moldes de la
+/// VM se genera hasta esta profundidad (`catalog!` en `call`, con una unidad `()` por nivel), y el
+/// checker rechaza en compilación cualquier extern que la exceda — así el nativo (que podría emitir
+/// aridad libre) nunca acepta un programa que la VM rompería en runtime. Cubre las APIs C reales
+/// (`mmap`, `sendto`, `recvfrom` = 6); subirla es añadir unidades a la invocación de `catalog!`
+/// (el catálogo duplica su tamaño por nivel).
+pub const MAX_ARITY: usize = 6;
 
 /// La clase de un valor en la frontera FFI. `Bool` se marshala como entero C (`int`), pero se
 /// conserva aparte para reconstruir un `bool` de raylang al volver. `Unit` solo como retorno (void).
@@ -337,48 +346,77 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
             FfiVal::Bytes(b) => Reg::I(b.as_ptr() as i64),
         });
     }
-    // Los enteros/flotantes de cada argumento, ya listos para pasar por registro.
-    let i = |n: usize| match &regs[n] { Reg::I(v) => *v, Reg::F(v) => *v as i64 };
-    let f = |n: usize| match &regs[n] { Reg::F(v) => *v, Reg::I(v) => *v as f64 };
+    // Lectores en ORDEN de los registros materializados: los argumentos de una llamada Rust se
+    // evalúan izquierda→derecha, así que `next_i`/`next_f` consumen `regs` posicionalmente sin que
+    // la macro necesite aritmética de índices.
+    fn next_i(it: &mut std::slice::Iter<Reg>) -> i64 {
+        match it.next().expect("catalog and regs agree in arity") { Reg::I(v) => *v, Reg::F(v) => *v as i64 }
+    }
+    fn next_f(it: &mut std::slice::Iter<Reg>) -> f64 {
+        match it.next().expect("catalog and regs agree in arity") { Reg::F(v) => *v, Reg::I(v) => *v as f64 }
+    }
 
-    // El catálogo acotado de firmas. Cada brazo transmuta el puntero al tipo `extern "C" fn(...)`
-    // concreto y llama. `unsafe`: confiamos en que la firma declarada casa con la función real.
-    // Despacho: la firma de **argumentos** (molde `I`/`F` por posición) elige el tipo `extern "C"`; la
-    // macro transmuta y llama con la anchura de **retorno** correcta (i32→signo-extendido, i64, o f64).
-    // `int_return` interpreta el i64 resultante según `ret_kind`. `unsafe`: confiamos en la firma declarada.
-    macro_rules! dispatch {
-        ( ($($aty:ty),*), ($($aval:expr),*) ) => {{
+    // El tipo Rust de un molde de argumento.
+    macro_rules! mold_ty { (I) => { i64 }; (F) => { f64 }; }
+    // El valor de un molde: consume el siguiente registro (en orden).
+    macro_rules! mold_val { (I, $it:ident) => { next_i(&mut $it) }; (F, $it:ident) => { next_f(&mut $it) }; }
+
+    // Llama con UNA combinación concreta de moldes: transmuta el puntero al tipo `extern "C"
+    // fn(...)` con la anchura de **retorno** correcta (i32→signo-extendido, i64, o f64) y llama;
+    // `int_return` interpreta el i64 resultante según `ret_kind`. `unsafe`: confiamos en que la
+    // firma declarada casa con la función real (el contrato del FFI).
+    macro_rules! call_combo {
+        ($($m:ident)*) => {{
             match ret_mold(desc.ret_kind) {
-                RetMold::I32 => { let g: extern "C" fn($($aty),*) -> i32 = unsafe { std::mem::transmute(sym) }; int_return(desc, g($($aval),*) as i64) }
-                RetMold::I64 => { let g: extern "C" fn($($aty),*) -> i64 = unsafe { std::mem::transmute(sym) }; int_return(desc, g($($aval),*)) }
-                RetMold::F   => { let g: extern "C" fn($($aty),*) -> f64 = unsafe { std::mem::transmute(sym) }; FfiRet::Float(g($($aval),*)) }
+                RetMold::I32 => {
+                    let g: extern "C" fn($(mold_ty!($m)),*) -> i32 = unsafe { std::mem::transmute(sym) };
+                    let mut it = regs.iter(); let _ = &mut it;
+                    int_return(desc, g($(mold_val!($m, it)),*) as i64)
+                }
+                RetMold::I64 => {
+                    let g: extern "C" fn($(mold_ty!($m)),*) -> i64 = unsafe { std::mem::transmute(sym) };
+                    let mut it = regs.iter(); let _ = &mut it;
+                    int_return(desc, g($(mold_val!($m, it)),*))
+                }
+                RetMold::F => {
+                    let g: extern "C" fn($(mold_ty!($m)),*) -> f64 = unsafe { std::mem::transmute(sym) };
+                    let mut it = regs.iter(); let _ = &mut it;
+                    FfiRet::Float(g($(mold_val!($m, it)),*))
+                }
             }
         }};
     }
-    use ArgMold::{F, I};
-    Ok(match molds.as_slice() {
-        [] => dispatch!((), ()),
-        [I] => dispatch!((i64), (i(0))),
-        [F] => dispatch!((f64), (f(0))),
-        [I, I] => dispatch!((i64, i64), (i(0), i(1))),
-        [I, F] => dispatch!((i64, f64), (i(0), f(1))),
-        [F, I] => dispatch!((f64, i64), (f(0), i(1))),
-        [F, F] => dispatch!((f64, f64), (f(0), f(1))),
-        // Aridad 3: las 8 combinaciones (endurecimiento jul 2026 — faltaban 5 y un
-        // `extern fn f(float, int, int)` legítimo caía en "no soportada").
-        [I, I, I] => dispatch!((i64, i64, i64), (i(0), i(1), i(2))),
-        [I, I, F] => dispatch!((i64, i64, f64), (i(0), i(1), f(2))),
-        [I, F, I] => dispatch!((i64, f64, i64), (i(0), f(1), i(2))),
-        [I, F, F] => dispatch!((i64, f64, f64), (i(0), f(1), f(2))),
-        [F, I, I] => dispatch!((f64, i64, i64), (f(0), i(1), i(2))),
-        [F, I, F] => dispatch!((f64, i64, f64), (f(0), i(1), f(2))),
-        [F, F, I] => dispatch!((f64, f64, i64), (f(0), f(1), i(2))),
-        [F, F, F] => dispatch!((f64, f64, f64), (f(0), f(1), f(2))),
-        _ => return Err(format!(
-            "the signature of '{}' is not in the supported FFI catalog (int/u64/float/bool/pointer, arity 0..=3)",
-            desc.name
-        )),
-    })
+
+    // El catálogo COMPLETO hasta MAX_ARITY, generado por recursión: cada nodo del árbol binario de
+    // moldes (extender con `I` o con `F`) es una firma; la lista de unidades `()` es la profundidad
+    // restante (macro_rules no hace aritmética). 2^(n+1)−1 = 127 firmas con MAX_ARITY = 6.
+    // Antes (M41→jul 2026) era un match escrito a mano hasta aridad 3, y un extern legítimo de 4+
+    // argumentos compilaba en el nativo pero caía aquí en "not supported" — la paridad la cierra
+    // este catálogo + el límite del checker (los DOS leen MAX_ARITY).
+    macro_rules! catalog {
+        // Caso base (sin profundidad restante): prueba esta combinación exacta.
+        ([$($done:ident)*] []) => {
+            {
+                let want: &[ArgMold] = &[$(ArgMold::$done),*];
+                if molds.as_slice() == want {
+                    return Ok(call_combo!($($done)*));
+                }
+            }
+        };
+        // Paso: prueba la combinación con la longitud actual y extiende un nivel con I y con F.
+        ([$($done:ident)*] [$_depth:tt $($rest:tt)*]) => {
+            catalog!([$($done)*] []);
+            catalog!([$($done)* I] [$($rest)*]);
+            catalog!([$($done)* F] [$($rest)*]);
+        };
+    }
+    catalog!([] [() () () () () ()]); // 6 unidades = MAX_ARITY (mantener en tándem)
+
+    // Solo alcanzable por encima de MAX_ARITY (el checker ya lo rechaza; defensa en profundidad).
+    Err(format!(
+        "the signature of '{}' is not in the supported FFI catalog (int/u64/float/bool/pointer, arity 0..={})",
+        desc.name, MAX_ARITY
+    ))
 }
 
 /// M44a/M89.3: sin carga dinámica de librerías — en el playground web (wasm) o en un binario slim
@@ -418,6 +456,39 @@ mod tests {
             FfiRet::Float(v) => assert!((v - 1024.0).abs() < 1e-9),
             other => panic!("expected float, {other:?}"),
         }
+    }
+
+    // Truco de los tests de aridad alta: en SysV/AAPCS64 los argumentos van por registros y un
+    // callee que declara menos simplemente NO LEE los sobrantes — llamar a `pow(x, y)` con moldes
+    // de aridad 4..6 ejercita el despacho real de esas combinaciones (transmutación + paso por
+    // los dos bancos de registros) con un resultado verificable.
+    #[test]
+    fn arity_4_mixed_molds_dispatch() {
+        let d = desc("pow", vec![CKind::Float, CKind::Float, CKind::Int, CKind::Int], CKind::Float);
+        match call(&d, &[FfiVal::Float(2.0), FfiVal::Float(10.0), FfiVal::Int(7), FfiVal::Int(9)]).unwrap() {
+            FfiRet::Float(v) => assert!((v - 1024.0).abs() < 1e-9),
+            other => panic!("expected float, {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arity_6_all_int_molds_dispatch() {
+        // `abs` lee solo el primer registro entero; los otros cinco moldes I van y se ignoran.
+        let d = desc("abs", vec![CKind::Int; 6], CKind::Int);
+        let args = [FfiVal::Int(-5), FfiVal::Int(1), FfiVal::Int(2), FfiVal::Int(3), FfiVal::Int(4), FfiVal::Int(5)];
+        match call(&d, &args).unwrap() {
+            FfiRet::Int(n) => assert_eq!(n, 5),
+            other => panic!("expected int, {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arity_above_max_is_a_catalog_error() {
+        // Defensa en profundidad (el checker ya rechaza >MAX_ARITY en compilación).
+        let d = desc("abs", vec![CKind::Int; MAX_ARITY + 1], CKind::Int);
+        let args = vec![FfiVal::Int(1); MAX_ARITY + 1];
+        let err = call(&d, &args).unwrap_err();
+        assert!(err.contains("arity 0..=6"), "mensaje con el límite: {err}");
     }
 
     #[test]

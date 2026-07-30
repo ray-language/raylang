@@ -436,7 +436,7 @@ a mano (cualquier otro nombre es error de compilación).
 ## 13. FFI: tipos marshalables
 
 `extern "lib" { fn nombre(args) -> ret; }` declara funciones C (dlopen/LoadLibrary en runtime).
-Aridad **0 a 3**. Es la única frontera insegura del lenguaje: la firma declarada se **confía**.
+Aridad **0 a 6** (la rechaza el checker más allá: mismo límite en todos los motores). Es la única frontera insegura del lenguaje: la firma declarada se **confía**.
 
 | Tipo raylang | En C (argumento) | En C (retorno) |
 |---|---|---|

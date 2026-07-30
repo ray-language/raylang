@@ -8760,3 +8760,17 @@ con externs `blocking` dentro y fuera de fibras (`tests/native_fibers_cli.rs`).
 **Pendiente consciente.** La VM también es M:N y sufre el mismo varamiento con externs bloqueantes;
 descargarlos allí exige aparcar la fibra de la VM a mitad de instrucción (integrarlo con `poll.rs`).
 Anotado en IDEAS.md con el resto de la revisión FFI-bajo-fibras.
+
+**Cierre de paridad de aridad (mismo arco, 30 jul 2026).** El segundo hallazgo de la revisión: el
+catálogo de moldes de la VM llegaba a aridad 3 (16 brazos a mano) pero el nativo emite la declaración
+`extern "C"` con **cualquier** aridad → un extern legítimo de 4+ argumentos compilaba y corría nativo
+y reventaba en runtime solo en la VM — paridad rota por la puerta de atrás. Arreglo doble leyendo la
+MISMA constante `ffi::MAX_ARITY` (= 6, cubre `mmap`/`sendto`/`recvfrom`): (1) el catálogo se genera
+ahora por **macro cartesiana recursiva** (`catalog!`: cada nodo del árbol binario extender-con-I /
+extender-con-F es una firma; 2⁷−1 = 127 combinaciones) — sin aritmética de índices en la macro: los
+argumentos de la llamada transmutada consumen los registros **en orden** (`next_i`/`next_f` sobre un
+iterador; la evaluación izquierda→derecha de Rust garantiza la posición); (2) el **checker** rechaza
+en compilación cualquier extern por encima del límite, en todos los motores por igual. Los tests de
+aridad 4–6 usan el truco honesto de SysV/AAPCS64: un callee que declara menos argumentos no lee los
+registros sobrantes, así que `pow` llamado con moldes de aridad 4–6 verifica el despacho real con
+resultado comprobable.

@@ -9,6 +9,24 @@ fn check_src(src: &str) -> Result<(), TypeError> {
     check(&mut prog)
 }
 
+#[test]
+fn extern_fn_arity_is_bounded_by_the_ffi_catalog() {
+    // Paridad de motores: un extern por encima de MAX_ARITY se rechaza en COMPILACIÓN (antes
+    // compilaba en el nativo y caía en runtime solo en la VM). El límite exacto (6) sí pasa.
+    let ok = check_src(
+        "extern \"c\" { fn six(a: int, b: int, c: int, d: int, e: int, f: int) -> int; }\nfn main() -> int { 0 }",
+    );
+    assert!(ok.is_ok(), "aridad 6 está en el catálogo: {ok:?}");
+    let err = check_src(
+        "extern \"c\" { fn seven(a: int, b: int, c: int, d: int, e: int, f: int, g: int) -> int; }\nfn main() -> int { 0 }",
+    )
+    .expect_err("aridad 7 excede el catálogo");
+    assert!(
+        err.msg.contains("has 7 parameters; the FFI supports arity 0..=6"),
+        "mensaje con el límite: {}", err.msg
+    );
+}
+
 /// M45: etiquetas de `member_completion` sobre una fuente que YA lleva el centinela.
 fn members(src: &str) -> Vec<String> {
     let tokens = crate::lexer::lex(src).expect("lex ok");

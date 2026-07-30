@@ -99,16 +99,16 @@ arco F enlaza **fibras M:N** por defecto.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 16× |
-| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 43× |
-| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.8× |
-| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.7× |
-| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.6× |
-| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.2× |
-| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 33× |
-| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.8× |
-| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.9× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.2× |
+| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 13× |
+| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 26× |
+| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.6× |
+| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.4× |
+| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.4× |
+| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.0× |
+| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 25× |
+| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.0× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.7× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.0× |
 
 > Las filas de `matrixmul` (Fase 67: hoist de borrows → vectorización) y de `wordcount`/
 > `jsondeserialize`/`logparse`/`regex` (Fase 68: fusiones de substring/split + el borde de

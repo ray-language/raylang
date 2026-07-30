@@ -286,6 +286,9 @@ pub struct Heap {
     probe_peak_bytes: usize,
     probe_total_allocs: usize,
     probe_total_bytes: usize,
+    /// V11: ¿la sonda está activa (RAY_HEAP_STATS=1)? Leído UNA vez al crear el heap —
+    /// el camino caliente de `allocate` paga una rama predecible en vez de 4 contadores.
+    probes_on: bool,
 }
 
 impl Default for Heap {
@@ -305,6 +308,7 @@ impl Default for Heap {
             probe_peak_bytes: 0,
             probe_total_allocs: 0,
             probe_total_bytes: 0,
+            probes_on: std::env::var_os("RAY_HEAP_STATS").is_some(),
         }
     }
 }
@@ -319,10 +323,12 @@ impl Heap {
         self.live += 1;
         let bytes = obj_bytes(&obj).min(u32::MAX as usize) as u32;
         self.live_bytes += bytes as usize;
-        self.probe_total_allocs += 1;
-        self.probe_total_bytes += bytes as usize;
-        if self.live > self.probe_peak_live { self.probe_peak_live = self.live; }
-        if self.live_bytes > self.probe_peak_bytes { self.probe_peak_bytes = self.live_bytes; }
+        if self.probes_on {
+            self.probe_total_allocs += 1;
+            self.probe_total_bytes += bytes as usize;
+            if self.live > self.probe_peak_live { self.probe_peak_live = self.live; }
+            if self.live_bytes > self.probe_peak_bytes { self.probe_peak_bytes = self.live_bytes; }
+        }
         let slot = Slot { obj, marked: false, bytes };
         if let Some(h) = self.free.pop() {
             self.slots[h] = Some(slot);

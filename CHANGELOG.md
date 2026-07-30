@@ -116,6 +116,11 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   que LLVM no inlineaba — cada opcode pagaba una llamada de función real desde M12.3. Como método
   `#[inline(always)]` de un solo call-site: **−16% a −27% en TODO el banco** (con V9: loopsum
   16× del nativo, sortnums 6.8×, wordcount 4.8×, matrixmul 2.9×, regex 4.2×, jsonserialize 2.7×).
+- **Camino de llamada e inlining selectivo** (V11): fast-paths por referencia en las guardas,
+  la aritmética local-const y los incrementos fusionados (sin clonar valores ni materializar
+  constantes), `new_locals`/`recycle` inlineados y la sonda del heap tras `RAY_HEAP_STATS`.
+  En el banco (PGO): **fibrec 43× → 26×, treealloc 33× → 25×, loopsum 16× → 13×** y mejoras
+  del 3-7% en el resto.
 - **Arnés del banco poliglota**: el presupuesto por variante ya no corta las últimas rondas
   (sesgaba la mediana de las variantes lentas hasta un −17% ficticio y sin marcarlo) — ahora
   reparte las muestras que caben por TODA la sesión, y la columna **Corridas** (`n/runs ⚠`) más

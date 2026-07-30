@@ -173,11 +173,11 @@ fn check_suite(suite: &Suite) -> Result<(), String> {
     let body = Block { statements, tail: Some(Box::new(expr(ExprKind::Int(0)))), line: 1, col: 1, end_line: 1 };
     let mut program = swap_main(suite.loaded.program.clone(), synth_main(body));
     checker::check(&mut program).map_err(|mut e| {
-        let (module, source, local) = suite.loaded.locate(e.line);
-        let global_col = e.col;
+        let (module, source, local, col, len) = suite.loaded.locate(e.line, e.col, e.len);
         e.line = local;
+        e.col = col;
         let head = if suite.loaded.multi_module() { format!("[{}] {}", module, e) } else { e.to_string() };
-        diagnostic::render(source, local, global_col, e.len, &head)
+        diagnostic::render(source, local, col, len, &head)
     })
 }
 
@@ -227,7 +227,7 @@ fn run_one(suite: &Suite, test: &Test) -> Result<(), Vec<String>> {
             // prelude. Sin marco de usuario ni posición en banda, no se imprime ubicación.
             let (line, col) = first_user_frame(&trace, &suite.loaded).unwrap_or((e.line, e.col));
             if line > 0 {
-                let (module, source, local) = suite.loaded.locate(line);
+                let (module, source, local, col, _len) = suite.loaded.locate(line, col, 1);
                 if local <= source.lines().count() {
                     lines.push(format!("at {}:{}:{}", module, local, col));
                 }
@@ -241,7 +241,7 @@ fn run_one(suite: &Suite, test: &Test) -> Result<(), Vec<String>> {
 /// inyectado sin banda propia) y fuera de la std embebida (`std`/`std/…`). Posición **global**.
 fn first_user_frame(trace: &[TraceFrame], loaded: &Loaded) -> Option<(usize, usize)> {
     trace.iter().find_map(|f| {
-        let (module, source, local) = loaded.locate(f.line);
+        let (module, source, local, _col, _len) = loaded.locate(f.line, f.col, 1);
         let in_band = local <= source.lines().count();
         let is_std = module == "std" || module.starts_with("std/");
         if in_band && !is_std { Some((f.line, f.col)) } else { None }

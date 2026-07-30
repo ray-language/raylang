@@ -2161,17 +2161,17 @@ salida machine-readable, ejecución paralela de la batería — a demanda cuando
 
 ---
 
-## 59. Diagnósticos de templates traducidos al `.ray.html` (jul 2026, impacto: MEDIO — DX) — fase A2 de M102
+## 59. Diagnósticos de templates traducidos al `.ray.html` — ✅ EJECUTADA (jul 2026) — fase A2 de M102
 
 Con M102 (templates compilados **en memoria** por el loader; DESIGN §93) el `.ray` generado ya no
-existe en disco. Los errores del template mismo (directivas) ya salen con archivo y línea del
-`.ray.html`; pero un error de **tipos** dentro del módulo generado (p. ej. el typo en `{{ titluo }}`
-al compilar el programa) reporta la línea del **generado**, que el usuario no puede abrir. La pieza
-que falta: aplicar el **line map** de `templ::generate_with_map` (que el LSP ya usa para traducir
-diagnósticos en buffers `.ray.html`) a la vía normal de diagnósticos del loader/checker, de modo
-que todo error de un módulo-template apunte a la línea real del template. Requiere llevar el mapa
-junto al módulo cargado y traducir en `locate`/render. Mientras tanto, `ray build --templates-only`
-materializa el generado para inspección.
+existía en disco, pero un error de **tipos**/runtime dentro del módulo generado reportaba la línea
+del generado, que el usuario no puede abrir. **Ejecutada el mismo día (30 jul)**: el loader guarda
+por módulo-template su `TemplateOrigin` (fuente del `.ray.html` + line map de
+`templ::generate_with_map`, el mismo que ya usaba el LSP), y `locate` — la vía única de
+presentación de diagnósticos (CLI y test runner) — traduce línea, fuente y cursor: todo error de
+un módulo-template (checker, runtime con traza, lex/parse del generado, imports de un include
+roto) apunta a la línea real del template, a nivel de línea (col 1, subrayado completo — la
+columna del generado no existe en el template). Detalle en DESIGN §93.
 
 ---
 

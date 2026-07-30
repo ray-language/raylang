@@ -152,6 +152,51 @@ fn run_and_build_compile_templates_in_memory() {
 }
 
 #[test]
+fn diagnostics_point_to_the_template_line() {
+    // M102-A2: el generado no existe en disco, así que TODO diagnóstico de un módulo-template se
+    // traduce por el line map a la línea del `.ray.html` (a nivel de línea: col 1, subrayado
+    // completo) y se renderiza contra el fuente del TEMPLATE, no contra el generado invisible.
+    let base = TmpDir::new("ray_templ_diag_lines");
+    let main = "import vistas/list;\n\nfn main() -> int {\n    print(list.render_list(\"x\"));\n    0\n}\n";
+
+    // 1) Error de TIPOS (el typo clásico): línea 3 del template, con su fuente.
+    let app = project(&base, "{% params titulo: string %}\n<html>\n<h1>{{ titluo }}</h1>\n</html>\n", main);
+    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("type error at 3:1"), "la cabecera lleva la línea del TEMPLATE:\n{err}");
+    assert!(err.contains("<h1>{{ titluo }}</h1>"), "se muestra el fuente del template:\n{err}");
+
+    // 2) Expresión empalmada MAL FORMADA: el error de sintaxis del generado vuelve al template.
+    std::fs::write(app.join("vistas/list.ray.html"), "{% params titulo: string %}\n<p>{{ 1 + }}</p>\n").unwrap();
+    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("syntax error at 2:1"), "{err}");
+    assert!(err.contains("<p>{{ 1 + }}</p>"), "{err}");
+
+    // 3) Error de RUNTIME dentro del template: cabecera y traza con la línea del template.
+    std::fs::write(app.join("vistas/list.ray.html"),
+        "{% params titulo: string %}\n<ol>\n<li>{{ [1,2,3][9] }}</li>\n</ol>\n").unwrap();
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert_eq!(out.status.code(), Some(70));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("runtime error at 3:1"), "{err}");
+    assert!(err.contains("<li>{{ [1,2,3][9] }}</li>"), "{err}");
+    assert!(err.contains("(vistas/list:3:1)"), "la traza también traduce:\n{err}");
+
+    // 4) Include de un template INEXISTENTE: el import generado no existe en el template; el
+    //    error apunta a la línea del {% include %}.
+    std::fs::write(app.join("vistas/list.ray.html"),
+        "{% params titulo: string %}\n<div>\n{% include vistas/typo(titulo) %}\n</div>\n").unwrap();
+    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("module 'vistas/typo' not found"), "{err}");
+    assert!(err.contains("{% include vistas/typo(titulo) %}"), "{err}");
+}
+
+#[test]
 fn a_stale_generated_sibling_is_ignored() {
     // M102: si junto al template queda un `.ray` generado viejo (de `ray build --templates-only`
     // o de un repo anterior a la compilación en memoria), el loader prefiere SIEMPRE el template.

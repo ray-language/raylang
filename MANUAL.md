@@ -1554,8 +1554,10 @@ la opción por defecto (tipados, y solo ellos soportan `{% include %}`/`{% exten
 ```
 
 No hay nada que regenerar ni commitear: `ray run`/`ray build`/`ray test` compilan el template al
-vuelo cada vez (el template es la única fuente de verdad). Para **inspeccionar** el módulo
-generado, `ray build --templates-only vistas/` lo materializa al lado
+vuelo cada vez (el template es la única fuente de verdad), y **los errores apuntan al template**:
+un typo en `{{ titluo }}`, una expresión mal formada o un error de runtime se reportan con la
+línea y el fuente del `.ray.html`. Para **inspeccionar** el módulo generado,
+`ray build --templates-only vistas/` lo materializa al lado
 (`vistas/lista.ray`, `pub fn render_lista(...) -> string`); si ese `.ray` queda en el proyecto, el
 loader lo ignora y sigue prefiriendo el template.
 

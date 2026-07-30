@@ -149,9 +149,16 @@ contains_key keys values` · math: `sqrt pow floor ceil round abs min max` · pr
 hmac_sha256 ed25519_sign ed25519_verify chacha20poly1305_seal/open`.
 
 Import-on-demand modules: `std/fs std/net std/process std/math std/random std/time
-std/crypto std/text std/sort std/kv std/json std/hex std/base64 std/url std/regex
-std/csv std/toml std/template std/protobuf std/uuid std/inflate std/deflate
-std/huffman std/collections/{set,deque,stringbuilder,dict} std/resilience`.
+std/units std/crypto std/text std/sort std/kv std/json std/hex std/base64 std/url
+std/regex std/csv std/toml std/template std/protobuf std/uuid std/inflate std/deflate
+std/huffman std/collections/{set,deque,stringbuilder,dict} std/ffi std/resilience`.
+
+Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in
+`std/time` — `millis seconds minutes hours days` → int in **ms** (the stdlib's duration
+currency): `from std/time import seconds; time.sleep(30.seconds());`. Sizes in
+`std/units` — `kb mb gb` → **bytes**, binary convention (1 KB = 1024): `64.kb()`.
+With only `import std/time;` use the qualified form `time.seconds(30)` (UFCS does not
+reach qualified names).
 
 OS processes (`import std/process;`, no shell — argv is typed; a pipeline is written
 `process.run("sh", ["-c", ...])`): `process.run(program, args) -> Result<Output, string>`

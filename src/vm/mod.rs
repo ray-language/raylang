@@ -174,7 +174,9 @@ enum Local {
 struct CallFrame {
     function: usize,
     ip: usize,
-    locals: Vec<Local>,
+    /// V12: base de la ventana de locales de este marco dentro del register file de la fibra
+    /// (`Fiber.locals`). Los slots del marco son `locals[base .. base + num_locals]`.
+    locals_base: usize,
     /// Upvalues de la closure en ejecución (handles a celdas); vacío si no lo es.
     upvalues: Vec<Handle>,
     /// Profundidad de la pila de operandos de la fibra al entrar (tras sacar los argumentos).
@@ -199,10 +201,6 @@ struct Vm<'a> {
     /// scheduler bloquea UNA vez (`self.sched()`) y pasa el guard a la cadena de helpers (que ya toman
     /// `&mut Shared`), evitando la reentrancia (el `Mutex` no es reentrante).
     shared: Arc<Mutex<Shared>>,
-    /// Opt.2: pool de `Vec<Local>` reutilizables. Cada llamada necesita un arreglo de locales; en vez de
-    /// asignar/liberar uno por llamada (millones en recursión), reciclamos los de los marcos que retornan.
-    /// NO es raíz del GC (sus contenidos son basura entre reciclar y reusar; `new_locals` los reconstruye).
-    locals_pool: Vec<Vec<Local>>,
     /// M42.1: **fuel** — presupuesto de instrucciones restante (límite de recursos para embeber raylang
     /// como lenguaje de scripts confinado). Decrece una por instrucción; al llegar a 0 se aborta con un
     /// error limpio. `u64::MAX` = **sin límite** (el default): nunca se agota en la práctica, así que el
@@ -227,6 +225,7 @@ impl<'a> Vm<'a> {
             cur: Fiber {
                 frames: Vec::new(),
                 stack: Vec::new(),
+                locals: Vec::new(),
                 heap: Heap::new(),
                 is_main: true,
                 task: None,
@@ -235,7 +234,6 @@ impl<'a> Vm<'a> {
                 try_markers: Vec::new(),
             },
             shared: Arc::new(Mutex::new(Shared::default())),
-            locals_pool: Vec::new(),
             fuel: u64::MAX, // sin límite por defecto
             gc_count: 0,
             gc_max_pause_ns: 0,
@@ -253,7 +251,6 @@ impl<'a> Vm<'a> {
             program,
             cur: Fiber::default(), // sin fibra aún; `poll_next` cargará la primera de `ready`
             shared,
-            locals_pool: Vec::new(),
             fuel: u64::MAX,
             gc_count: 0,
             gc_max_pause_ns: 0,
@@ -279,9 +276,9 @@ impl<'a> Vm<'a> {
         // `self.cur`** (no un `Heap::new()`): `run_program_with_limit` fija ahí el tope de heap (M42.2) antes
         // de `run()`, y hay que conservarlo.
         let main = self.program.main;
-        let locals = self.new_locals(main);
         let mut main_fiber = std::mem::take(&mut self.cur); // is_main: true, heap con el tope preconfigurado
-        main_fiber.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new(), stack_base: 0 });
+        build_locals(self.program, &mut main_fiber.heap, &mut main_fiber.locals, main);
+        main_fiber.frames.push(CallFrame { function: main, ip: 0, locals_base: 0, upvalues: Vec::new(), stack_base: 0 });
         self.sched().ready.push_back(main_fiber);
 
         let n = num_workers(self.program);
@@ -351,6 +348,7 @@ impl<'a> Vm<'a> {
             let fi = self.cur.frames.len() - 1;
             let func = self.cur.frames[fi].function;
             let ip = self.cur.frames[fi].ip;
+            let base = self.cur.frames[fi].locals_base; // V12: base del marco, UNA vez por instrucción
 
             // M42.1: fuel. Sin límite (`u64::MAX`) nunca dispara; con límite, aborta al agotarse. La
             // posición es la de la instrucción en curso (para el diagnóstico).
@@ -364,7 +362,7 @@ impl<'a> Vm<'a> {
             if ip >= program.functions[func].chunk.code.len() {
                 if let Some(frame) = self.cur.frames.pop() {
                     self.cur.stack.truncate(frame.stack_base);
-                    self.recycle_locals(frame.locals); // Opt.2
+                    self.cur.locals.truncate(frame.locals_base); // V12
                 }
                 if self.cur.frames.is_empty() {
                     match self.on_fiber_done(HeapValue::Unit)? {
@@ -389,7 +387,7 @@ impl<'a> Vm<'a> {
             // cada instrucción pagaba un `bl` + el armado del entorno en la pila (el ~23% del
             // perfil en top-of-stack de run_worker). Semántica idéntica (M12.3): Ok(Some(v)) =
             // fin del programa, Ok(None) = seguir, Err = fallo de la instrucción (capturable).
-            let outcome = self.exec_instr(instr, fi, func, ip);
+            let outcome = self.exec_instr(instr, fi, base, func, ip);
 
             match outcome {
                 Ok(Some(v)) => return Ok(v),
@@ -430,7 +428,7 @@ impl<'a> Vm<'a> {
     /// único call-site: el inliner lo funde en el bucle y desaparecen la llamada por
     /// instrucción y los spills del entorno que el perfil señaló.
     #[inline(always)]
-    fn exec_instr(&mut self, instr: &OpCode, fi: usize, func: usize, ip: usize) -> Result<Option<HeapValue>, RuntimeError> {
+    fn exec_instr(&mut self, instr: &OpCode, fi: usize, base: usize, func: usize, ip: usize) -> Result<Option<HeapValue>, RuntimeError> {
         let program = self.program;
         // Opt.7: la posición `(línea, col)` NO se lee por instrucción —el camino caliente
         // (locales/constantes/aritmética/saltos) nunca la usa, solo los sitios de error o de
@@ -589,29 +587,29 @@ impl<'a> Vm<'a> {
                 // el clone + push sin cruzar la llamada a get_local; la celda boxeada, por
                 // el camino de siempre.
                 OpCode::GetLocal(slot) => {
-                    let v = match &self.cur.frames[fi].locals[*slot] {
+                    let v = match &self.cur.locals[base + *slot] {
                         Local::Plain(v) => v.clone(),
-                        Local::Boxed(_) => self.get_local(fi, *slot),
+                        Local::Boxed(_) => self.get_local(base, *slot),
                     };
                     self.push(v);
                 }
                 // M36.1: superinstrucciones — dos empujes en una iteración del lazo.
                 OpCode::GetLocalLocal(s, t) => {
-                    let a = match &self.cur.frames[fi].locals[*s] {
+                    let a = match &self.cur.locals[base + *s] {
                         Local::Plain(v) => v.clone(),
-                        Local::Boxed(_) => self.get_local(fi, *s),
+                        Local::Boxed(_) => self.get_local(base, *s),
                     };
-                    let b = match &self.cur.frames[fi].locals[*t] {
+                    let b = match &self.cur.locals[base + *t] {
                         Local::Plain(v) => v.clone(),
-                        Local::Boxed(_) => self.get_local(fi, *t),
+                        Local::Boxed(_) => self.get_local(base, *t),
                     };
                     self.push(a);
                     self.push(b);
                 }
                 OpCode::GetLocalConst(s, c) => {
-                    let a = match &self.cur.frames[fi].locals[*s] {
+                    let a = match &self.cur.locals[base + *s] {
                         Local::Plain(v) => v.clone(),
-                        Local::Boxed(_) => self.get_local(fi, *s),
+                        Local::Boxed(_) => self.get_local(base, *s),
                     };
                     let b = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     self.push(a);
@@ -619,7 +617,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::SetLocal(slot) => {
                     let v = self.pop();
-                    self.set_local(fi, *slot, v);
+                    self.set_local(base, *slot, v);
                 }
                 // P0.6 (ronda 3): la guarda entera `local op const` de if/while en UNA instrucción.
                 // Semántica idéntica a [GetLocalConst(s,c), CmpJump(op,t)]: compara local[s] con
@@ -627,7 +625,7 @@ impl<'a> Vm<'a> {
                 OpCode::GetLocalConstCmpJump(s, c, op, target) => {
                     // V11: fast-path por REFERENCIA (slot Plain(Int) + constante Int): ni clona
                     // el HeapValue ni materializa la constante. El caso general, debajo.
-                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                    if let (Some(a), Some(b)) = (self.local_int(base, *s), self.const_int(func, *c)) {
                         let res = match op {
                             CmpOp::Less => a < b,
                             CmpOp::LessEqual => a <= b,
@@ -641,7 +639,7 @@ impl<'a> Vm<'a> {
                         }
                         return Ok(None);
                     }
-                    let left = self.get_local(fi, *s);
+                    let left = self.get_local(base, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         match op {
@@ -677,7 +675,7 @@ impl<'a> Vm<'a> {
                 // tocar la pila. Mismo fast-path entero y mismo fallback que CmpJump.
                 OpCode::LocalLocalCmpJump(a, b, op, target) => {
                     // V11: fast-path por referencia — dos slots Plain(Int), cero clones.
-                    if let (Some(x), Some(y)) = (self.local_int(fi, *a), self.local_int(fi, *b)) {
+                    if let (Some(x), Some(y)) = (self.local_int(base, *a), self.local_int(base, *b)) {
                         let res = match op {
                             CmpOp::Less => x < y,
                             CmpOp::LessEqual => x <= y,
@@ -691,8 +689,8 @@ impl<'a> Vm<'a> {
                         }
                         return Ok(None);
                     }
-                    let left = self.get_local(fi, *a);
-                    let right = self.get_local(fi, *b);
+                    let left = self.get_local(base, *a);
+                    let right = self.get_local(base, *b);
                     let res = if let (HeapValue::Int(x), HeapValue::Int(y)) = (&left, &right) {
                         match op {
                             CmpOp::Less => x < y,
@@ -757,15 +755,15 @@ impl<'a> Vm<'a> {
                 // AddLocalConst y el mismo destino (respetando boxing) que SetLocal.
                 OpCode::IncLocalConst(s, c) => {
                     // V11: fast-path por referencia, con escritura directa (Plain sigue Plain).
-                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                    if let (Some(a), Some(b)) = (self.local_int(base, *s), self.const_int(func, *c)) {
                         let r = a.checked_add(b).ok_or_else(|| {
                             let (l, c2) = pos!();
                             runtime_error(l, c2, "arithmetic overflow on int")
                         })?;
-                        self.cur.frames[fi].locals[*s] = Local::Plain(HeapValue::Int(r));
+                        self.cur.locals[base + *s] = Local::Plain(HeapValue::Int(r));
                         return Ok(None);
                     }
-                    let left = self.get_local(fi, *s);
+                    let left = self.get_local(base, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
@@ -775,21 +773,21 @@ impl<'a> Vm<'a> {
                     } else {
                         self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
                     };
-                    self.set_local(fi, *s, r);
+                    self.set_local(base, *s, r);
                 }
                 // V9 (ronda 5): el cierre completo del bucle — incrementa y salta a la guarda.
                 OpCode::IncJump(s, c, target) => {
                     // V11: fast-path por referencia + escritura directa + salto.
-                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                    if let (Some(a), Some(b)) = (self.local_int(base, *s), self.const_int(func, *c)) {
                         let r = a.checked_add(b).ok_or_else(|| {
                             let (l, c2) = pos!();
                             runtime_error(l, c2, "arithmetic overflow on int")
                         })?;
-                        self.cur.frames[fi].locals[*s] = Local::Plain(HeapValue::Int(r));
+                        self.cur.locals[base + *s] = Local::Plain(HeapValue::Int(r));
                         self.cur.frames[fi].ip = *target;
                         return Ok(None);
                     }
-                    let left = self.get_local(fi, *s);
+                    let left = self.get_local(base, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
@@ -799,12 +797,12 @@ impl<'a> Vm<'a> {
                     } else {
                         self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
                     };
-                    self.set_local(fi, *s, r);
+                    self.set_local(base, *s, r);
                     self.cur.frames[fi].ip = *target;
                 }
                 OpCode::AddLocalConst(s, c) => {
                     // V11: fast-path por referencia (slot Plain(Int) + constante Int).
-                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                    if let (Some(a), Some(b)) = (self.local_int(base, *s), self.const_int(func, *c)) {
                         let r = a.checked_add(b).ok_or_else(|| {
                             let (l, c2) = pos!();
                             runtime_error(l, c2, "arithmetic overflow on int")
@@ -812,7 +810,7 @@ impl<'a> Vm<'a> {
                         self.push(HeapValue::Int(r));
                         return Ok(None);
                     }
-                    let left = self.get_local(fi, *s);
+                    let left = self.get_local(base, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
@@ -826,7 +824,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::SubLocalConst(s, c) => {
                     // V11: fast-path por referencia (slot Plain(Int) + constante Int).
-                    if let (Some(a), Some(b)) = (self.local_int(fi, *s), self.const_int(func, *c)) {
+                    if let (Some(a), Some(b)) = (self.local_int(base, *s), self.const_int(func, *c)) {
                         let r = a.checked_sub(b).ok_or_else(|| {
                             let (l, c2) = pos!();
                             runtime_error(l, c2, "arithmetic overflow on int")
@@ -834,7 +832,7 @@ impl<'a> Vm<'a> {
                         self.push(HeapValue::Int(r));
                         return Ok(None);
                     }
-                    let left = self.get_local(fi, *s);
+                    let left = self.get_local(base, *s);
                     let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_sub(*b).ok_or_else(|| {
@@ -851,7 +849,7 @@ impl<'a> Vm<'a> {
                     // seguro); si no, guarda el valor directamente.
                     let v = self.pop();
                     let boxed = self.program.functions[func].captured.get(*slot).copied().unwrap_or(false);
-                    self.cur.frames[fi].locals[*slot] = if boxed {
+                    self.cur.locals[base + *slot] = if boxed {
                         Local::Boxed(self.cur.heap.allocate(Obj::Cell(v)))
                     } else {
                         Local::Plain(v)
@@ -964,20 +962,20 @@ impl<'a> Vm<'a> {
                 // MM2 (ronda 4, bench matrixmul): las formas fusionadas de la indexación. Misma
                 // semántica que Index (comparten `do_index`); solo cambia de dónde salen base/índice.
                 OpCode::IndexLL(s, t) => {
-                    let base = self.get_local(fi, *s);
-                    let HeapValue::Int(i) = self.get_local(fi, *t) else {
+                    let arr = self.get_local(base, *s);
+                    let HeapValue::Int(i) = self.get_local(base, *t) else {
                         unreachable!("the checker guarantees an int index");
                     };
                     let (l, c) = pos!();
-                    self.do_index(base, i, l, c)?;
+                    self.do_index(arr, i, l, c)?;
                 }
                 OpCode::IndexLocal(t) => {
-                    let base = self.pop();
-                    let HeapValue::Int(i) = self.get_local(fi, *t) else {
+                    let arr = self.pop();
+                    let HeapValue::Int(i) = self.get_local(base, *t) else {
                         unreachable!("the checker guarantees an int index");
                     };
                     let (l, c) = pos!();
-                    self.do_index(base, i, l, c)?;
+                    self.do_index(arr, i, l, c)?;
                 }
                 OpCode::SetIndex => {
                     let v = self.pop();
@@ -1201,8 +1199,9 @@ impl<'a> Vm<'a> {
                     let upvalues: Vec<Handle> = upvalues.iter()
                         .map(|&up| transfer_obj(&self.cur.heap, &mut new_heap, up, &mut remap))
                         .collect();
-                    let locals = self.new_locals(fn_idx);
-                    let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues, stack_base: 0 };
+                    let mut child_locals: Vec<Local> = Vec::new();
+                    build_locals(self.program, &mut self.cur.heap, &mut child_locals, fn_idx);
+                    let frame = CallFrame { function: fn_idx, ip: 0, locals_base: 0, upvalues, stack_base: 0 };
                     // M38.3b paso 3: alojar la Task y encolar la fibra hija en UN solo lock (bajo M:N real,
                     // dos `self.sched()` —len y push— tendrían un TOCTOU en el id de la tarea).
                     // M98.1: fire-and-forget fuera de scope → fibra sin Task (nada que retener).
@@ -1216,7 +1215,7 @@ impl<'a> Vm<'a> {
                             None
                         };
                         sh.ready.push_back(Fiber {
-                            frames: vec![frame], stack: Vec::new(), heap: new_heap, is_main: false,
+                            frames: vec![frame], stack: Vec::new(), locals: child_locals, heap: new_heap, is_main: false,
                             task, scopes: Vec::new(), unit_enums: Default::default(),
                             try_markers: Vec::new(),
                         });
@@ -2999,9 +2998,9 @@ impl<'a> Vm<'a> {
                         CapsStr(Option<Vec<Option<String>>>),
                     }
                     let out = {
-                        let frame = self.cur.frames.last().expect("hay un marco activo");
+                        let base = self.cur.frames.last().expect("hay un marco activo").locals_base;
                         // El cuerpo sintético no captura nada → los params son siempre Plain.
-                        let plain = |slot: usize| match &frame.locals[slot] {
+                        let plain = |slot: usize| match &self.cur.locals[base + slot] {
                             Local::Plain(v) => v,
                             Local::Boxed(_) => unreachable!("the synthetic body captures nothing"),
                         };
@@ -3105,13 +3104,13 @@ impl<'a> Vm<'a> {
                     if self.cur.frames.len() >= MAX_FRAMES {
                         return Err(runtime_error(pos!().0, pos!().1, "stack overflow (recursion too deep)"));
                     }
-                    let mut locals = self.new_locals(*idx);
+                    let base = self.push_locals(*idx);
                     for i in (0..*argc).rev() {
                         let v = self.pop();
-                        self.put_arg(&mut locals, i, v);
+                        self.put_arg_at(base + i, v);
                     }
                     self.cur.frames.push(CallFrame {
-                        function: *idx, ip: 0, locals, upvalues: Vec::new(), stack_base: self.cur.stack.len(),
+                        function: *idx, ip: 0, locals_base: base, upvalues: Vec::new(), stack_base: self.cur.stack.len(),
                     });
                 }
                 // M13.3b: llamada en cola — REUTILIZA el marco actual (no crece la pila de marcos).
@@ -3119,15 +3118,18 @@ impl<'a> Vm<'a> {
                 // el resultado caerá en la misma posición de la pila. No hay límite que comprobar:
                 // ese es justo el punto (recursión de cola en O(1) marcos).
                 OpCode::TailCall(idx, argc) => {
-                    let mut locals = self.new_locals(*idx);
+                    // V12: el marco actual es el TOPE del register file → su ventana se trunca y
+                    // la de la nueva función se abre en el mismo sitio (los argumentos viven en
+                    // la pila de OPERANDOS, aparte, así que sobreviven al truncado).
+                    self.cur.locals.truncate(self.cur.frames[fi].locals_base);
+                    let nbase = self.push_locals(*idx);
                     for i in (0..*argc).rev() {
                         let v = self.pop();
-                        self.put_arg(&mut locals, i, v);
+                        self.put_arg_at(nbase + i, v);
                     }
                     self.cur.frames[fi].function = *idx;
                     self.cur.frames[fi].ip = 0;
-                    let old = std::mem::replace(&mut self.cur.frames[fi].locals, locals);
-                    self.recycle_locals(old); // Opt.2: la llamada en cola reemplaza las locales → recicla
+                    self.cur.frames[fi].locals_base = nbase;
                     self.cur.frames[fi].upvalues = Vec::new();
                 }
 
@@ -3149,12 +3151,12 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("the checker guarantees a function"),
                     };
-                    let mut locals = self.new_locals(fn_idx);
+                    let base = self.push_locals(fn_idx);
                     for (j, val) in args_rev.into_iter().enumerate() {
-                        self.put_arg(&mut locals, *argc - 1 - j, val);
+                        self.put_arg_at(base + *argc - 1 - j, val);
                     }
                     self.cur.frames.push(CallFrame {
-                        function: fn_idx, ip: 0, locals, upvalues, stack_base: self.cur.stack.len(),
+                        function: fn_idx, ip: 0, locals_base: base, upvalues, stack_base: self.cur.stack.len(),
                     });
                 }
                 // M97.2: `__try_call(f)` — llama a `f` en ESTA fibra dejando un marcador de
@@ -3181,9 +3183,9 @@ impl<'a> Vm<'a> {
                         stack_len: self.cur.stack.len(),
                         scopes_len: self.cur.scopes.len(),
                     });
-                    let locals = self.new_locals(fn_idx);
+                    let base = self.push_locals(fn_idx);
                     self.cur.frames.push(CallFrame {
-                        function: fn_idx, ip: 0, locals, upvalues, stack_base: self.cur.stack.len(),
+                        function: fn_idx, ip: 0, locals_base: base, upvalues, stack_base: self.cur.stack.len(),
                     });
                 }
                 // M13.3b: llamada indirecta en cola — reutiliza el marco actual.
@@ -3200,14 +3202,14 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("the checker guarantees a function"),
                     };
-                    let mut locals = self.new_locals(fn_idx);
+                    self.cur.locals.truncate(self.cur.frames[fi].locals_base); // V12: ver TailCall
+                    let nbase = self.push_locals(fn_idx);
                     for (j, val) in args_rev.into_iter().enumerate() {
-                        self.put_arg(&mut locals, *argc - 1 - j, val);
+                        self.put_arg_at(nbase + *argc - 1 - j, val);
                     }
                     self.cur.frames[fi].function = fn_idx;
                     self.cur.frames[fi].ip = 0;
-                    let old = std::mem::replace(&mut self.cur.frames[fi].locals, locals);
-                    self.recycle_locals(old); // Opt.2
+                    self.cur.frames[fi].locals_base = nbase;
                     self.cur.frames[fi].upvalues = upvalues;
                 }
 
@@ -3220,7 +3222,7 @@ impl<'a> Vm<'a> {
                     let mut upvalues = Vec::with_capacity(descs.len());
                     for d in &descs {
                         let cell = match d.source {
-                            UpvalueSource::Local(slot) => match &self.cur.frames[fi].locals[slot] {
+                            UpvalueSource::Local(slot) => match &self.cur.locals[base + slot] {
                                 Local::Boxed(h) => *h,
                                 Local::Plain(_) => unreachable!("a captured local must be boxed"),
                             },
@@ -3239,7 +3241,7 @@ impl<'a> Vm<'a> {
                         // pendientes de este marco quedan por encima de su base y hay que descartarlos,
                         // o desalinean los argumentos de la siguiente llamada del llamador (M64.1).
                         self.cur.stack.truncate(frame.stack_base);
-                        self.recycle_locals(frame.locals); // Opt.2: el marco se descarta → recicla sus locales
+                        self.cur.locals.truncate(frame.locals_base); // V12: cierra la ventana del marco
                     }
                     // M97.2: ¿este `Return` cierra un `try_call`? El marcador guardó la altura de
                     // marcos ANTES de la llamada, así que coincide justo tras sacar el marco del
@@ -3325,7 +3327,7 @@ impl<'a> Vm<'a> {
         // fibras tienen su propio heap (se recolecta cuando cada una corre); los valores en tránsito viven
         // en el heap del canal/tarea. Así la pausa la acota el tamaño del heap de una sola fibra.
         let mut roots: Vec<Handle> = Vec::new();
-        gather_roots(&self.cur.frames, &self.cur.stack, &mut roots);
+        gather_roots(&self.cur.frames, &self.cur.locals, &self.cur.stack, &mut roots);
         // TA4: los handles canónicos de variantes sin payload son raíces (viven toda la fibra).
         roots.extend(self.cur.unit_enums.values().copied());
 
@@ -3366,55 +3368,47 @@ impl<'a> Vm<'a> {
 
     /// Crea el arreglo de locales de un marco nuevo: cada slot capturado nace
     /// **boxeado** (su celda en el heap), los demás como `Plain(Unit)`.
+    /// V12: abre la ventana de locales de una llamada en el register file de la fibra
+    /// (`Fiber.locals`) y devuelve su base. Lo común (sin capturas): un `resize_with` plano.
     #[inline(always)]
-    fn new_locals(&mut self, fn_idx: usize) -> Vec<Local> {
+    fn push_locals(&mut self, fn_idx: usize) -> usize {
         let program = self.program;
+        let base = self.cur.locals.len();
         let f = &program.functions[fn_idx];
-        let n = f.num_locals;
-        // Opt.2: reusa un `Vec` del pool (conserva su capacidad) en vez de asignar uno nuevo. Lo vaciamos
-        // y lo reconstruimos entero, así no se lee ninguna basura que arrastrara del uso anterior.
-        let mut locals = self.locals_pool.pop().unwrap_or_default();
-        locals.clear();
-        // V9: lo común es que NINGÚN slot esté capturado (el bool viene precomputado del
-        // compilador) → relleno plano, sin consultar `captured` slot a slot ni tocar el heap.
         if !f.has_captured {
-            locals.resize_with(n, || Local::Plain(HeapValue::Unit));
-            return locals;
-        }
-        for s in 0..n {
-            if f.captured.get(s).copied().unwrap_or(false) {
-                let cell = self.cur.heap.allocate(Obj::Cell(HeapValue::Unit));
-                locals.push(Local::Boxed(cell));
-            } else {
-                locals.push(Local::Plain(HeapValue::Unit));
+            self.cur.locals.resize_with(base + f.num_locals, || Local::Plain(HeapValue::Unit));
+        } else {
+            for st in 0..f.num_locals {
+                if f.captured.get(st).copied().unwrap_or(false) {
+                    let cell = self.cur.heap.allocate(Obj::Cell(HeapValue::Unit));
+                    self.cur.locals.push(Local::Boxed(cell));
+                } else {
+                    self.cur.locals.push(Local::Plain(HeapValue::Unit));
+                }
             }
         }
-        locals
+        base
     }
 
-    /// Opt.2: devuelve al pool el arreglo de locales de un marco que se descarta (Return, llamada en cola,
-    /// fin de chunk). Acotado para no crecer sin límite; el GC no lo traza (contenido basura hasta reusar).
+    /// V12: coloca un argumento en el slot ABSOLUTO `idx` del register file (respeta el boxing).
     #[inline(always)]
-    fn recycle_locals(&mut self, locals: Vec<Local>) {
-        if self.locals_pool.len() < 256 {
-            self.locals_pool.push(locals);
-        }
-    }
-
-    /// Coloca un argumento en un slot recién creado (respeta el boxing).
-    fn put_arg(&mut self, locals: &mut [Local], slot: usize, v: HeapValue) {
-        match &locals[slot] {
-            Local::Boxed(h) => self.cell_set(*h, v),
-            Local::Plain(_) => locals[slot] = Local::Plain(v),
+    fn put_arg_at(&mut self, idx: usize, v: HeapValue) {
+        match &self.cur.locals[idx] {
+            Local::Boxed(h) => {
+                let h = *h;
+                self.cell_set(h, v);
+            }
+            Local::Plain(_) => self.cur.locals[idx] = Local::Plain(v),
         }
     }
 
     /// V11: el int de un local SIN clonar ni pasar por `get_local` (None si el slot está
     /// boxeado o no es Int). Cuerpo mínimo → `inline(always)` no infla: es el fast-path de
     /// los opcodes fusionados (guardas, incrementos, aritmética local-const).
+    /// V12: `base` es la base del marco en el register file (`Fiber.locals`).
     #[inline(always)]
-    fn local_int(&self, fi: usize, slot: usize) -> Option<i64> {
-        match &self.cur.frames[fi].locals[slot] {
+    fn local_int(&self, base: usize, slot: usize) -> Option<i64> {
+        match &self.cur.locals[base + slot] {
             Local::Plain(HeapValue::Int(n)) => Some(*n),
             _ => None,
         }
@@ -3429,20 +3423,20 @@ impl<'a> Vm<'a> {
         }
     }
 
-    fn get_local(&self, fi: usize, slot: usize) -> HeapValue {
-        match &self.cur.frames[fi].locals[slot] {
+    fn get_local(&self, base: usize, slot: usize) -> HeapValue {
+        match &self.cur.locals[base + slot] {
             Local::Plain(v) => v.clone(),
             Local::Boxed(h) => self.cell_get(*h),
         }
     }
 
-    fn set_local(&mut self, fi: usize, slot: usize, v: HeapValue) {
-        match &self.cur.frames[fi].locals[slot] {
+    fn set_local(&mut self, base: usize, slot: usize, v: HeapValue) {
+        match &self.cur.locals[base + slot] {
             Local::Boxed(h) => {
                 let h = *h;
                 self.cell_set(h, v);
             }
-            Local::Plain(_) => self.cur.frames[fi].locals[slot] = Local::Plain(v),
+            Local::Plain(_) => self.cur.locals[base + slot] = Local::Plain(v),
         }
     }
 
@@ -3541,16 +3535,16 @@ impl<'a> Vm<'a> {
     /// dentro del kernel no puede nacer ningún error (los floats no desbordan).
     fn dot_range_fast(&mut self, acc: usize, a: usize, b: usize, k: usize, end: usize, exit: usize) -> Option<usize> {
         let (s, hi) = {
-            let frame = self.cur.frames.last().expect("hay un marco activo");
-            let Local::Plain(HeapValue::Int(k0)) = &frame.locals[k] else { return None };
-            let Local::Plain(HeapValue::Int(hi)) = &frame.locals[end] else { return None };
+            let base = self.cur.frames.last().expect("hay un marco activo").locals_base;
+            let Local::Plain(HeapValue::Int(k0)) = &self.cur.locals[base + k] else { return None };
+            let Local::Plain(HeapValue::Int(hi)) = &self.cur.locals[base + end] else { return None };
             let (k0, hi) = (*k0, *hi);
             if k0 >= hi {
                 return Some(exit); // rango vacío: el bucle no correría ni una vez; k queda como está
             }
-            let Local::Plain(HeapValue::Float(s0)) = &frame.locals[acc] else { return None };
-            let Local::Plain(HeapValue::Obj(ha)) = &frame.locals[a] else { return None };
-            let Local::Plain(HeapValue::Obj(hb)) = &frame.locals[b] else { return None };
+            let Local::Plain(HeapValue::Float(s0)) = &self.cur.locals[base + acc] else { return None };
+            let Local::Plain(HeapValue::Obj(ha)) = &self.cur.locals[base + a] else { return None };
+            let Local::Plain(HeapValue::Obj(hb)) = &self.cur.locals[base + b] else { return None };
             let Obj::FloatArray(xa) = self.cur.heap.get(*ha) else { return None };
             let Obj::FloatArray(xb) = self.cur.heap.get(*hb) else { return None };
             if k0 < 0 || hi as usize > xa.len() || hi as usize > xb.len() {
@@ -3562,9 +3556,9 @@ impl<'a> Vm<'a> {
             }
             (s, hi)
         };
-        let fi = self.cur.frames.len() - 1;
-        self.set_local(fi, acc, HeapValue::Float(s));
-        self.set_local(fi, k, HeapValue::Int(hi));
+        let base = self.cur.frames.last().expect("hay un marco activo").locals_base;
+        self.set_local(base, acc, HeapValue::Float(s));
+        self.set_local(base, k, HeapValue::Int(hi));
         Some(exit)
     }
 
@@ -3768,26 +3762,47 @@ fn option_variant(enums: &[crate::bytecode::CompiledEnum], variant: &str) -> Opt
     Some((ei, tag))
 }
 
+/// V12: construye la ventana de locales inicial de una FIBRA nueva (main o spawn) sobre su
+/// register file, con las celdas en el heap dado — el gemelo de `push_locals` fuera de `self`.
+fn build_locals(program: &CompiledProgram, heap: &mut Heap, locals: &mut Vec<Local>, fn_idx: usize) {
+    let f = &program.functions[fn_idx];
+    let base = locals.len();
+    if !f.has_captured {
+        locals.resize_with(base + f.num_locals, || Local::Plain(HeapValue::Unit));
+    } else {
+        for st in 0..f.num_locals {
+            if f.captured.get(st).copied().unwrap_or(false) {
+                let cell = heap.allocate(Obj::Cell(HeapValue::Unit));
+                locals.push(Local::Boxed(cell));
+            } else {
+                locals.push(Local::Plain(HeapValue::Unit));
+            }
+        }
+    }
+}
+
 /// Reúne las raíces del GC (handles) de una fibra: los valores en su pila de operandos y, por cada marco,
 /// sus locales (los `Boxed` son celdas del heap) y sus upvalues. Compartida por la fibra en ejecución y
 /// las suspendidas (M12.1). Función libre para no tomar prestado `self` entero durante la recolección.
-fn gather_roots(frames: &[CallFrame], stack: &[HeapValue], roots: &mut Vec<Handle>) {
+fn gather_roots(frames: &[CallFrame], locals: &[Local], stack: &[HeapValue], roots: &mut Vec<Handle>) {
     for v in stack {
         if let Some(h) = v.handle() {
             roots.push(h);
         }
     }
-    for frame in frames {
-        for slot in &frame.locals {
-            match slot {
-                Local::Plain(v) => {
-                    if let Some(h) = v.handle() {
-                        roots.push(h);
-                    }
+    // V12: los locales de TODOS los marcos viven contiguos en el register file — un solo
+    // recorrido lineal (antes: un Vec por marco).
+    for slot in locals {
+        match slot {
+            Local::Plain(v) => {
+                if let Some(h) = v.handle() {
+                    roots.push(h);
                 }
-                Local::Boxed(h) => roots.push(*h),
             }
+            Local::Boxed(h) => roots.push(*h),
         }
+    }
+    for frame in frames {
         roots.extend(frame.upvalues.iter().copied());
     }
 }

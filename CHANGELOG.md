@@ -121,6 +121,9 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   constantes), `new_locals`/`recycle` inlineados y la sonda del heap tras `RAY_HEAP_STATS`.
   En el banco (PGO): **fibrec 43× → 26×, treealloc 33× → 25×, loopsum 16× → 13×** y mejoras
   del 3-7% en el resto.
+- **Register file por fibra** (V12): los locales de todos los marcos en una sola pila contigua
+  (el marco guarda su base) — el camino de llamada no aloca, el GC rootea lineal y el pool de
+  locales desaparece. fibrec −5%, y mejoras de 2-3% en la mitad del banco.
 - **Arnés del banco poliglota**: el presupuesto por variante ya no corta las últimas rondas
   (sesgaba la mediana de las variantes lentas hasta un −17% ficticio y sin marcarlo) — ahora
   reparte las muestras que caben por TODA la sesión, y la columna **Corridas** (`n/runs ⚠`) más

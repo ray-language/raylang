@@ -2405,11 +2405,10 @@ impl SigCtx {
                 if !visited.insert(r.clone()) {
                     continue;
                 }
-                if let Ok(Some(path)) = loader::resolve_module_path(&roots, &r) {
-                    if let Ok(source) = std::fs::read_to_string(&path) {
-                        queue.extend(imported_paths(&source));
-                        sources.push(source);
-                    }
+                // La stdlib embebida también resuelve (IDEAS §56, mismo orden que el loader).
+                if let Some(source) = module_source(&roots, &r) {
+                    queue.extend(imported_paths(&source));
+                    sources.push(source);
                 }
             }
         }

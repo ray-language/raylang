@@ -164,7 +164,7 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre corto `"m"` se
   resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: los primitivos
   `int`↔C `int` (32 bits, con signo), `u64`↔C `long`/`size_t` (64 bits), `float`↔double, `bool`↔int
-  (aridad 0..=3), y como **argumento** `string`↔`char*` (NUL-terminado) y `bytes`↔puntero al buffer
+  (aridad 0..=6 — límite del checker, idéntico en todos los motores), y como **argumento** `string`↔`char*` (NUL-terminado) y `bytes`↔puntero al buffer
   (M41.2). Un puntero opaco (`FILE*`, handle) se pasa como `u64` o, con seguridad de tipos, como **`ptr`**
   (M41.4b: un puntero **opaco** — se recibe/pasa/compara por identidad, pero no se desreferencia ni opera).
   El **retorno** admite `int`/`u64`/`float`/`bool`/`unit`, `ptr`/`Option<ptr>` (`NULL → None`, p. ej.

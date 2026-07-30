@@ -42,6 +42,10 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
   bloqueante y la fibra espera aparcada — el worker M:N no se vara; mismos tipos y valores en todos
   los motores (donde no hay scheduler que proteger, la marca es inerte). `blocking` es contextual
   (sigue valiendo como identificador).
+- **FFI: aridad 0..=6 con paridad entre motores**: el catálogo de firmas de la VM se genera por macro
+  hasta `MAX_ARITY` = 6 (antes 0..=3 a mano; cubre `mmap`/`sendto`/`recvfrom`) y el checker rechaza en
+  compilación cualquier `extern fn` que lo exceda — antes un extern de 4+ argumentos compilaba en el
+  binario nativo y fallaba en runtime solo en la VM.
 - **`try_call(f) -> Result<T, string>`** (M97): recuperación de un `panic`/error de ejecución **en la
   misma fibra**, el fallo como valor. En los tres motores. `try_join` hace lo propio con una tarea.
 - **Cadenas plantilla con backticks** (M95): `` `…` `` es multilínea y admite `"` literal, con la misma

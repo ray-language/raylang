@@ -605,9 +605,10 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   - **Pendiente — descarga en la VM**: la VM también es M:N y sufre el mismo varamiento; aparcar la
     fibra de la VM durante la llamada exige integrar la finalización con `poll.rs` (una tubería de
     completado o similar). Hacerlo cuando haya un caso real de FFI bloqueante intensivo sobre la VM.
-  - **Pendiente — paridad de aridad VM↔nativo**: el catálogo de la VM cubre aridad 0..=3 pero el
-    nativo emite cualquier aridad → un extern de 4 args funciona nativo y falla en runtime en la VM.
-    Arreglo doble: extender el catálogo (macro por niveles) y/o diagnóstico de aridad en el checker.
+  - ✅ **Paridad de aridad VM↔nativo** (30 jul 2026): catálogo de la VM generado por macro
+    cartesiana hasta `ffi::MAX_ARITY` (= 6, cubre `mmap`/`sendto`/`recvfrom`; 127 firmas) +
+    diagnóstico del checker por encima del límite — un extern fuera de rango ya no compila en
+    ningún motor (antes: nativo OK, VM reventaba en runtime). DESIGN §90.
   - **Pendiente — pila de fibra y código C**: el C corre sobre los 128 KiB de la fibra (guard page →
     SIGSEGV limpio pero mudo). Barato: subir el default cuando `prog.externs` no está vacío (el
     transpilador lo sabe estático) + documentar `RAY_FIBER_STACK_KIB` en la sección FFI.

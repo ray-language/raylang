@@ -966,6 +966,29 @@ fn completion_and_signature_of_associated_functions() {
 }
 
 #[test]
+fn signature_help_of_embedded_std_functions() {
+    // IDEAS §56 (2ª tanda): el BFS de SigCtx resolvía imports solo por disco → sin firma para las
+    // funciones de la stdlib EMBEBIDA. Cubre la calificada (`units.kb(`) y la UFCS (`64.kb(`,
+    // receptor-valor: se recorta el primer parámetro).
+    let sig = |src: &str, line: usize, ch: usize| -> Option<String> {
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let msg = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+        )).unwrap();
+        let r = signature_help_result(&msg, &docs);
+        r.get("signatures").and_then(|s| s.as_array()).and_then(|a| a.first())
+            .and_then(|s| s.get("label")).and_then(Json::as_str).map(|s| s.to_string())
+    };
+    let src = "import std/units;\nfn main() {\n    print(units.kb(\n}\n";
+    assert_eq!(sig(src, 2, 19).as_deref(), Some("fn kb(n: int) -> int"), "calificada units.kb(");
+    let src = "from std/units import kb;\nfn main() {\n    print(64.kb(\n}\n";
+    assert_eq!(sig(src, 2, 16).as_deref(), Some("fn kb() -> int"), "UFCS 64.kb( (receptor recortado)");
+    let src = "from std/time import seconds;\nfn main() {\n    print(30.seconds(\n}\n";
+    assert_eq!(sig(src, 2, 21).as_deref(), Some("fn seconds() -> int"), "UFCS 30.seconds(");
+}
+
+#[test]
 fn signature_help_methods_y_prelude() {
     // M46b: el signature help resuelve funciones del prelude y recorta el receptor en un método,
     // pero NO en una llamada calificada de módulo (esa parte cross-módulo se cubre en el CLI).

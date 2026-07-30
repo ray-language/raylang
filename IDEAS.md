@@ -2106,6 +2106,13 @@ donde más se escribe: la forma UFCS de los constructores de unidades exige el i
 calificar. Tests: unitarios (`completion_of_from_import_symbols_of_embedded_std`,
 `completion_of_module_path_includes_embedded_std`) + integración por protocolo real (`lsp_cli`).
 
+**2ª tanda (mismo día): el 4º sitio.** Al probar el **signature help** con los constructores
+apareció el mismo bug en `SigCtx::new` — el BFS del cierre de imports resolvía solo por disco →
+las funciones de la stdlib embebida no tenían firma que mostrar (`units.kb(` y `64.kb(` daban
+null). Mismo arreglo (`module_source` en el BFS); con él quedan alineados los CUATRO resolutores
+de fuente de módulo del LSP. Test: `signature_help_of_embedded_std_functions` (calificada + UFCS
+con receptor recortado).
+
 ---
 
 ## Cómo usar este archivo

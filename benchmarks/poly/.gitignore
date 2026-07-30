@@ -12,5 +12,7 @@
 !/*/*.lua
 !/*/*.php
 !/*/*.pl
+# Corridas archivadas (exports de bench.py --export-md): sí se commitean.
+!/results/*.md
 
 __pycache__/

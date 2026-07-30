@@ -42,7 +42,8 @@ FALLO falla_a_proposito
 resultado: 1 fallo(s) ✗
 ```
 
-El código de salida es el **número de fallos** (0 = todas pasaron), útil en CI. El único
+El código de salida distingue verde de rojo (hoy: **0** = todas pasaron, **1** = hubo fallos),
+útil en CI. El único
 toque al núcleo fue la *validación* de la firma `@test`; el runner vive aparte
 (`src/test_runner.rs`).
 

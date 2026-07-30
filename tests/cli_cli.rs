@@ -2138,7 +2138,7 @@ fn test_subcomando_runs_las_tests() {
     .unwrap();
     let (out, _err, code) = ray(&base, &["test", "suite.ray"]);
     assert!(out.contains("pasa") && out.contains("fails"), "informa ambas tests\n{out}");
-    assert_eq!(code, 1, "el código de output es el número de fallos (1)");
+    assert_eq!(code, 1, "hubo fallos → exit 1 (M101)");
     // Filtro por subcadena: solo la que pasa.
     let (out, _err, code) = ray(&base, &["test", "suite.ray", "pasa"]);
     assert!(out.contains("pasa") && !out.contains("FALLO"), "el filtro deja solo 'pasa'\n{out}");

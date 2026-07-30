@@ -84,7 +84,7 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 | `src/interpreter.rs` | ejecución | tree-walking; `return` como señal de flujo. **Oráculo de desarrollo** (feature `interp`, default); el motor de producto es la VM |
 | `src/diagnostic.rs` | presentación | `render` añade la línea de fuente y un `^` bajo la posición. Solo presentación; no toca las fases |
 | `src/repl.rs` | cliente externo | REPL: acumula y re-ejecuta `fn main` vía la API pública; muestra el valor con `print`. No toca el core |
-| `src/test_runner.rs` | cliente externo | runner `@test`: sintetiza un `main` que corre las pruebas; código de salida = nº de fallos. No toca el core |
+| `src/test_runner.rs` | cliente externo | runner `@test` a nivel proyecto (M101): carga cada suite por el loader (imports ok, tests de módulos calificados), sintetiza un `main` **como AST** por prueba; exit 0/1 (65 si no compila). No toca el core |
 | `src/lsp.rs` | cliente externo | LSP: `raylang --lsp`. JSON-RPC a mano (`mod json` + framing) + diagnósticos; `analizar` reusa lex/parse/check. No toca el core |
 | `src/lib.rs`, `src/main.rs` | librería + CLI | el binario es un cliente delgado (sin archivo → REPL) |
 

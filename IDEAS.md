@@ -2132,6 +2132,35 @@ features (imports de la stdlib embebida; autocompletado con editor de verdad).
 
 ---
 
+## 58. Tests de producción: runner `@test` sobre el loader (jul 2026, impacto: ALTO — DX/producción) — arco M101
+
+Auditoría (30 jul 2026): `@test` era un runner de **un archivo** heredado del self-hosting (M13.2) —
+insuficiente para un proyecto real. Hallazgos, por severidad:
+
+1. **El runner no pasaba por el loader** (`test_runner::run` lexeaba el fuente crudo): un archivo de
+   tests con `import` fallaba con `name 'math' not declared` mientras `ray run` lo resolvía. Solo se
+   podía testear código del mismo archivo → invalida el caso central (testear tus módulos, o usar
+   `import std/...` en un test). **La brecha nº 1.**
+2. **Sin descubrimiento a nivel proyecto**: un archivo por invocación; nada de barrer los módulos del
+   proyecto ni una convención `tests/`.
+3. **Exit code = `failures & 0xFF`**: 256 fallos → exit 0 → CI en verde (y >125 colisiona con los
+   códigos de señal del shell).
+4. **Fallos sin ubicación** (`assert_eq failed: 4 != 5`, sin archivo:línea) — contradice el principio
+   "todo error reporta ubicación".
+5. Coste O(n²) al escalar (re-check del programa completo por prueba) y faltan comodidades
+   (`--list`, skip, should-panic, salida JUnit/JSON, paralelismo).
+
+**Arco M101 (1–4; ejecutado):** el runner carga vía `loader::load_with_deps` (imports resuelven,
+tests recolectados de TODOS los módulos fusionados con nombre calificado `math.t`, el main sintético
+se construye como AST — un nombre global `math::t` no lexea — y esquiva la visibilidad `pub`
+llamando por nombre global post-resolver); descubrimiento `tests/*.ray` como suites de integración
+(cada una una entrada, con la raíz de `src/` como raíz extra de módulos); exit **0/1** (65/66 se
+conservan); fallos con `at módulo:línea:col` (reposicionado al primer marco de usuario, estilo M79c)
+y duración por prueba. **Diferido** (5): re-check incremental por prueba, `--list`/skip/should-panic,
+salida machine-readable, ejecución paralela de la batería — a demanda cuando haya baterías grandes.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

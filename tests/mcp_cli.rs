@@ -104,13 +104,13 @@ fn handshake_y_las_cinco_tools() {
     assert!(!bomb.contains("exit: 0"), "el bucle infinito no sale 0: {bomb}");
     assert!(bomb.contains("fuel"), "el corte es por fuel: {bomb}");
 
-    // ray_test: un test que pasa y uno que falla → exit 1 (nº de fallos) + reporte.
+    // ray_test: un test que pasa y uno que falla → exit 1 (hubo fallos, M101) + reporte.
     let tests = mcp.call(
         7,
         "ray_test",
         r#"{"code":"@test\nfn pasa() { assert_eq(2 + 2, 4); }\n@test\nfn falla() { assert_eq(1, 2); }\nfn main() { }"}"#,
     );
-    assert!(tests.contains("exit: 1"), "exit = nº de fallos: {tests}");
+    assert!(tests.contains("exit: 1"), "exit 1 = hubo fallos: {tests}");
 
     // ray_fmt: devuelve el fuente canónico.
     let fmt = mcp.call(8, "ray_fmt", r#"{"code":"fn main(){print(1);}"}"#);

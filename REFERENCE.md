@@ -426,7 +426,7 @@ todos.
 
 | Anotación | Sobre | Efecto |
 |---|---|---|
-| `@test` | `fn () -> bool` o `fn () -> unit` | la corre `ray test`: bool pasa si `true`; unit pasa si no dispara `assert`/`panic`. Cada test corre aislado |
+| `@test` | `fn () -> bool` o `fn () -> unit` | la corre `ray test`: bool pasa si `true`; unit pasa si no dispara `assert`/`panic`. Cada test corre aislado; puede vivir en cualquier módulo del proyecto (corre calificada: `math.t`) y usar `import`; un fallo reporta `at módulo:línea:col` |
 | `@derive(Eq)` | struct/enum no genérico | genera `impl Eq` (igualdad estructural) |
 | `@derive(Show)` | struct/enum no genérico | genera `impl Show` (`Nombre { c: v }` / `Nombre.Variante(v)`); soporta enums recursivos |
 | `@derive(Hash)` | struct/enum no genérico | genera `impl Hash` (para claves de `Set`/`Dict`) |
@@ -483,7 +483,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray run [archivo] [args…]` | ejecuta (por defecto `src/main.ray`); resuelve dependencias |
 | `ray dev [archivo] [args…]` | como `run`, pero reinicia ante cambios en `.ray`/`.ray.html`/`ray.toml` (SIGTERM → drenado con `serve_graceful`) |
 | `ray build [archivo] [--native …]` | chequea y compila sin ejecutar (0 ok / 65 error); `--native` transpila a Rust y produce un **binario nativo** (24–61× la VM, byte-idéntico) |
-| `ray test [archivo] [filtro]` | corre las `@test` (filtro por subcadena del nombre) |
+| `ray test [archivo] [filtro]` | corre las `@test` del proyecto: la entrada y todos sus módulos (calificadas: `math.t`) + cada `tests/*.ray` como suite de integración; filtro por subcadena; sale con 0/1 (65 si algo no compila) |
 | `ray fmt <archivo>` | imprime la versión canónica |
 | `ray build --templates-only [ruta…]` | compila templates `.ray.html` (firma `{% params %}`) a módulos raylang tipados; **fuerza** la regeneración (sin rutas: la raíz del proyecto). `run`/`build`/`test` ya regeneran los desactualizados por mtime |
 | `ray doc <archivo>` | documentación Markdown de la superficie pública (`///`) |
@@ -545,4 +545,4 @@ Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (índice
 | 70 | error de ejecución (panic, overflow, índice fuera de rango, deadlock…) |
 | 73 | no se pudo crear un archivo (`ray new`) |
 | 101 | ICE (error interno del compilador — repórtalo) |
-| nº de fallos | `ray test` sale con la cantidad de tests fallidos |
+| 0 / 1 | `ray test` sale con 0 (todo verde) o 1 (hubo fallos); 65 si una suite no compila |

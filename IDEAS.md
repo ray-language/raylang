@@ -2091,16 +2091,20 @@ de tipo — `import ...bytes;` muere en el parser). Entregada junto a las duraci
 
 ---
 
-## 56. LSP: completion en posición de from-import (jul 2026, impacto: BAJO — solo LSP, DX)
+## 56. LSP: completion en posición de from-import — ✅ EJECUTADA (jul 2026)
 
-Detectado al verificar `std/units`: tras `from std/M import ` el LSP devuelve `[]` — para TODOS
-los módulos (no es cosa de units; la completion de miembros `M.` sí funciona y ya ofrece
-`kb/mb/gb`). El hueco pica justo donde más se escribe ahora: la forma UFCS de los constructores
-de unidades (`30.seconds()`, `64.kb()`) exige el import SIN calificar, así que la línea
-`from std/time import seconds, minutes` es el sitio sin ayuda. Implementación natural: detectar el
-contexto `from <ruta> import` en la línea del cursor y ofrecer los ítems `pub` del módulo (la misma
-fuente que la completion de `M.`), filtrando los ya importados. Solo toca `src/lsp/` (cliente
-externo, sin espejo selfhost ni motores). BAJO pero alineado con la prioridad DX.
+Detectado al verificar `std/units`: tras `from std/M import ` el LSP devolvía `[]` — para TODOS
+los módulos de la stdlib. El diagnóstico cambió al abrir el código: la feature YA existía (M45c,
+`ImportCtx::Symbols`), pero `module_pub_symbols` resolvía el módulo **solo por disco**
+(`resolve_module_path` + `read_to_string`) → los módulos **embebidos** (`std/…`, sin archivo fuera
+del repo) devolvían `None` y la lista salía vacía. Era un BUG de resolución, no un hueco de
+feature. Arreglo: helper `module_source` (stdlib embebida primero, disco después — el mismo orden
+que el loader) usado en `module_pub_symbols`, en la clasificación de re-exports y en la de
+from-imports del documento; además `loader::available_modules` ofrece también las rutas embebidas
+(→ `from std/` completa `std/units` incluso en un buffer sin proyecto). El hueco picaba justo
+donde más se escribe: la forma UFCS de los constructores de unidades exige el import sin
+calificar. Tests: unitarios (`completion_of_from_import_symbols_of_embedded_std`,
+`completion_of_module_path_includes_embedded_std`) + integración por protocolo real (`lsp_cli`).
 
 ---
 

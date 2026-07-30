@@ -653,6 +653,32 @@ fn completion_labels(src: &str, line: usize, character: usize) -> Vec<String> {
 }
 
 #[test]
+fn completion_of_from_import_symbols_of_embedded_std() {
+    // IDEAS §56: tras `from std/M import ` se ofrecen los `pub` del módulo aunque sea EMBEBIDO
+    // (sin archivo en disco — antes la resolución iba solo a disco y devolvía []).
+    let src = "from std/units import \nfn main() { print(1) }\n";
+    let labels = completion_labels(src, 0, 22);
+    for expected in ["kb", "mb", "gb"] {
+        assert!(labels.contains(&expected.to_string()), "ofrece {expected}: {labels:?}");
+    }
+    let src = "from std/time import \nfn main() { print(1) }\n";
+    let labels = completion_labels(src, 0, 21);
+    for expected in ["seconds", "minutes", "sleep"] {
+        assert!(labels.contains(&expected.to_string()), "ofrece {expected}: {labels:?}");
+    }
+}
+
+#[test]
+fn completion_of_module_path_includes_embedded_std() {
+    // IDEAS §56: en posición de RUTA (`from <cursor>`) la stdlib embebida se ofrece aunque no haya
+    // raíces de proyecto (un buffer suelto sin main.ray ancestro).
+    let src = "from std/uni\nfn main() { print(1) }\n";
+    let labels = completion_labels(src, 0, 12);
+    assert!(labels.contains(&"std/units".to_string()), "ofrece std/units: {labels:?}");
+    assert!(labels.contains(&"std/time".to_string()), "ofrece std/time: {labels:?}");
+}
+
+#[test]
 fn completion_of_struct_members() {
     // M45: `p.` sobre un struct ofrece sus campos y sus métodos de trait, no los símbolos de archivo.
     let src = "struct P { x: int, y: int }\ntrait Ver { fn see(self) -> int; }\nimpl Ver for P { fn see(self) -> int { self.x } }\nfn sum(p: P) -> int { p.x + p.y }\nfn main() -> int {\n    let p = P { x: 1, y: 2 };\n    p.\n    0\n}\n";

@@ -124,6 +124,32 @@ fn hover_of_module_member_includes_doc() {
 }
 
 #[test]
+fn completion_of_from_import_symbols() {
+    // IDEAS §56: tras `from std/units import ` el LSP ofrece los `pub` del módulo embebido —
+    // el sitio clave de la forma UFCS (`64.kb()` exige el import sin calificar).
+    let dir = std::env::temp_dir().join("ray_lsp_fromimp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("f.ray");
+    let src = "from std/units import \nfn main() {\n    print(1)\n}";
+    std::fs::write(&file, src).unwrap();
+    let uri = format!("file://{}", file.display());
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"from std/units import \nfn main() {{\n    print(1)\n}}"}}}}}}"#
+    );
+    // completion con el cursor justo tras `import ` (línea 0, char 22).
+    let comp = format!(
+        r#"{{"jsonrpc":"2.0","id":20,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":0,"character":22}}}}}}"#
+    );
+    let entry = frame(&open) + &frame(&comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entry);
+    for label in [r#""label":"kb""#, r#""label":"mb""#, r#""label":"gb""#] {
+        assert!(out.contains(label), "ofrece {label}\n{out}");
+    }
+    // Con la firma extraída del módulo embebido (M46a).
+    assert!(out.contains(r#""detail":"(n: int) -> int""#), "incluye la firma\n{out}");
+}
+
+#[test]
 fn completion_of_module_members() {
     // M49.1: tras `math.` (módulo importado) el LSP ofrece los ítems pub del módulo: funciones, consts.
     // Usa un archivo real (la resolución del `import` necesita un path de proyecto válido, no `/t.ray`).

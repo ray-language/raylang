@@ -8761,6 +8761,19 @@ con externs `blocking` dentro y fuera de fibras (`tests/native_fibers_cli.rs`).
 descargarlos allí exige aparcar la fibra de la VM a mitad de instrucción (integrarlo con `poll.rs`).
 Anotado en IDEAS.md con el resto de la revisión FFI-bajo-fibras.
 
+**Pila para el código C (mismo arco, 30 jul 2026).** Tercer hallazgo de la revisión: las llamadas C
+corren sobre la pila de la fibra (128 KiB de reserva) y el C asume pilas de hilo grandes — el
+desborde da SIGSEGV limpio por página de guarda, pero mudo. El transpilador sabe **estáticamente** si
+el programa declara externs, así que con `--fibers` + externs el `main` emitido fija
+`ray_runtime::fibers::set_default_fiber_stack_kib(1024)` (1 MiB) antes de la primera fibra; como es
+reserva **virtual** con página de guarda, solo cuestan las páginas tocadas — subir el default no
+cuesta memoria real. Precedencia: `RAY_FIBER_STACK_KIB` (el usuario) > default programático > 128
+KiB. El test del setter vive en un binario de integración PROPIO de ray-runtime
+(`tests/fiber_stack_default.rs`): el tamaño se decide una vez por proceso (OnceLock) y dentro del
+crate competiría con los demás tests de fibras; la recursión de ~1 MiB lógico revienta el default
+pelado y cabe holgada en el programático. (La VM no tiene este problema: sus fibras son marcos de
+bytecode en el heap y el C corre sobre la pila del hilo worker del SO.)
+
 **Cierre de paridad de aridad (mismo arco, 30 jul 2026).** El segundo hallazgo de la revisión: el
 catálogo de moldes de la VM llegaba a aridad 3 (16 brazos a mano) pero el nativo emite la declaración
 `extern "C"` con **cualquier** aridad → un extern legítimo de 4+ argumentos compilaba y corría nativo

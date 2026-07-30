@@ -395,6 +395,13 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     out.push_str("        let mut r = RL { cur: 0, max: 0 };\n");
     out.push_str("        if getrlimit(NOFILE, &mut r) == 0 { let o = r.max.min(cap); if o > r.cur { let n = RL { cur: o, max: r.max }; let _ = setrlimit(NOFILE, &n); } }\n");
     out.push_str("    }\n");
+    // FFI × fibras: el programa declara externs → el código C correrá sobre pilas de fibra, y el C
+    // asume pilas de hilo grandes (los 128 KiB del default pueden quedarse cortos: la página de
+    // guarda da un SIGSEGV limpio pero mudo). Default de 1 MiB — reserva VIRTUAL, solo cuestan las
+    // páginas tocadas — fijado antes de la primera fibra; `RAY_FIBER_STACK_KIB` siempre gana.
+    if fibers && !prog.externs.is_empty() {
+        out.push_str("    ray_runtime::fibers::set_default_fiber_stack_kib(1024);\n");
+    }
     out.push_str("    let __rt_hook = std::panic::take_hook();\n");
     // M97.2: el hook también calla dentro de un `try_call` — el fallo se va a convertir en valor,
     // así que imprimir "thread panicked at …" sería ruido que la VM no emite.

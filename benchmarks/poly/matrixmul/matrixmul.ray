@@ -6,7 +6,9 @@
 // acceso a cada elemento en el loop más interno sea UN solo indexado de array
 // en vez de dos (a[i][k] repetía la búsqueda de la fila i en cada iteración de
 // k, n² veces de más). Medido: nativo 35.5ms -> 15.7ms (2.3x), VM 922ms ->
-// 664ms (28%) para n=200, mismo checksum.
+// 664ms (28%) para n=200, mismo checksum. MM4 (PERFORMANCE.md Fase 70): la VM
+// reconoce este bucle interno (kernel DotRange con deopt) -> 664 -> 23.9 ms,
+// empate estadístico con node.
 import std/time;
 
 fn main() {

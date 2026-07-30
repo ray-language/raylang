@@ -386,6 +386,11 @@ impl<'a> Compiler<'a> {
                 self.emit_expr(end)?;
                 let end_slot = self.declare_local("$end");
                 self.emit(OpCode::InitLocal(end_slot), line, col);
+                // MM4: si el cuerpo es EXACTAMENTE `s = s + A[k] * B[k];`, emite el kernel
+                // DotRange delante del bucle (que sigue completo detrás: es el camino de deopt
+                // y el dueño de la semántica de errores). Solo si s/A/B resuelven a locales
+                // distintos entre sí y del índice — cualquier otra cosa, bucle normal.
+                let dot_at = self.dot_kernel(body, &name, i_slot, end_slot, line, col);
                 let loop_start = self.cur().chunk.code.len();
                 self.emit(OpCode::GetLocal(i_slot), line, col);
                 self.emit(OpCode::GetLocal(end_slot), line, col);
@@ -402,6 +407,13 @@ impl<'a> Compiler<'a> {
                 self.emit(OpCode::Jump(loop_start), line, col);
                 self.patch_jump(exit);
                 self.emit(OpCode::Pop, line, col);
+                // MM4: el kernel salta AQUÍ (tras el Pop del bool de la guarda) cuando corre.
+                if let Some(at) = dot_at {
+                    let after = self.cur().chunk.code.len();
+                    if let OpCode::DotRange { exit, .. } = &mut self.cur().chunk.code[at] {
+                        *exit = after;
+                    }
+                }
             }
             ForIter::In(e) => {
                 // El valor a iterar. Para arreglo/string se recorre por índice; para Map, keys+values.
@@ -498,6 +510,51 @@ impl<'a> Compiler<'a> {
             }
         }
         Ok(())
+    }
+
+    /// MM4: si `body` es exactamente `s = s + A[k] * B[k];` (con `k` = la variable del rango y
+    /// s/A/B locales de esta función, distintos entre sí y de `k`), emite el opcode `DotRange`
+    /// (con `exit` provisional, parcheado al cerrar el bucle) y devuelve su índice. Si no, `None`.
+    fn dot_kernel(
+        &mut self,
+        body: &Block,
+        k: &str,
+        k_slot: usize,
+        end_slot: usize,
+        line: usize,
+        col: usize,
+    ) -> Option<usize> {
+        // La forma sintáctica: una sola sentencia, sin expresión de cola.
+        if body.statements.len() != 1 || body.tail.is_some() {
+            return None;
+        }
+        let StmtKind::Assign { target, value } = &body.statements[0].kind else { return None };
+        let ExprKind::Ident(s) = &target.kind else { return None };
+        let ExprKind::Binary { op: BinaryOp::Add, left, right } = &value.kind else { return None };
+        let ExprKind::Ident(s2) = &left.kind else { return None };
+        if s2 != s {
+            return None;
+        }
+        let ExprKind::Binary { op: BinaryOp::Mul, left: fa, right: fb } = &right.kind else { return None };
+        let (a, ka) = dot_index_shape(fa)?;
+        let (b, kb) = dot_index_shape(fb)?;
+        if ka != k || kb != k {
+            return None;
+        }
+        // Los cuatro nombres deben ser locales DISTINTOS (un alias con el índice o el acumulador
+        // cambiaría la semántica del kernel; el bucle normal lo cubre igual).
+        if s == a || s == b || s == k || a == k || b == k {
+            return None;
+        }
+        let acc = self.resolve_local(s)?;
+        let a_slot = self.resolve_local(a)?;
+        let b_slot = self.resolve_local(b)?;
+        let at = self.emit(
+            OpCode::DotRange { acc, a: a_slot, b: b_slot, k: k_slot, end: end_slot, exit: 0 },
+            line,
+            col,
+        );
+        Some(at)
     }
 
     /// Emite un bucle `idx: 0..len(arr_slot)` que, en cada iteración, ejecuta `bind` (que liga la(s)
@@ -1155,6 +1212,14 @@ impl<'a> Compiler<'a> {
 /// El compilador ya emite ese patrón de forma natural: la rama-else de un `if` cae al `Return` final
 /// de la función, una rama-then salta a él, un `return e` lo emite tras `e`. Por eso basta con
 /// reconocer el patrón en el bytecode ya generado, sin tocar la emisión.
+/// MM4: ¿`e` es `Ident[Ident]`? Devuelve `(arreglo, índice)` por nombre.
+fn dot_index_shape(e: &Expr) -> Option<(&str, &str)> {
+    let ExprKind::Index { array, index } = &e.kind else { return None };
+    let ExprKind::Ident(a) = &array.kind else { return None };
+    let ExprKind::Ident(i) = &index.kind else { return None };
+    Some((a, i))
+}
+
 fn optimize_tail_calls(chunk: &mut Chunk) {
     for i in 0..chunk.code.len() {
         let new = match &chunk.code[i] {
@@ -1272,6 +1337,7 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
     for op in &chunk.code {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) => is_target[*t] = true,
+            OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
     }
@@ -1304,6 +1370,7 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
     for op in &mut code {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) => *t = old_a_new[*t],
+            OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }
     }
@@ -1329,6 +1396,7 @@ fn fuse_round2(chunk: &mut Chunk) {
     for op in &chunk.code {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) => is_target[*t] = true,
+            OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
     }
@@ -1395,6 +1463,7 @@ fn fuse_round2(chunk: &mut Chunk) {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => {
                 *t = old_a_new[*t]
             }
+            OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }
     }
@@ -1435,6 +1504,7 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
     for op in &chunk.code {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => is_target[*t] = true,
+            OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
     }
@@ -1466,6 +1536,7 @@ fn fuse_guard_round3(chunk: &mut Chunk) {
             | OpCode::JumpIfFalse(t)
             | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t) => *t = old_a_new[*t],
+            OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }
     }
@@ -1492,6 +1563,7 @@ fn fuse_index_round4(chunk: &mut Chunk) {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t) => is_target[*t] = true,
+            OpCode::DotRange { exit, .. } => is_target[*exit] = true,
             _ => {}
         }
     }
@@ -1529,6 +1601,7 @@ fn fuse_index_round4(chunk: &mut Chunk) {
             | OpCode::JumpIfFalse(t)
             | OpCode::CmpJump(_, t)
             | OpCode::GetLocalConstCmpJump(_, _, _, t) => *t = old_a_new[*t],
+            OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }
     }

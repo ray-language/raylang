@@ -2078,13 +2078,17 @@ un flock por pkg alrededor del `cargo build` + copia.
 ## 55. Constructores de tamaño — `kb`/`mb`/`gb` vía UFCS (jul 2026, impacto: BAJO)
 
 El hermano de los constructores de duración de `std/time` (DESIGN §91): `64.kb()` → bytes, como
-funciones ordinarias vía UFCS, sin sintaxis nueva. Quedó fuera de aquel paso porque arrastra dos
-decisiones propias: (1) **1024 vs 1000** — recomendación: `kb/mb/gb = 1024ⁿ` documentado en grande
+funciones ordinarias vía UFCS, sin sintaxis nueva. Quedó fuera de aquel paso porque arrastra su
+decisión propia: **1024 vs 1000** — recomendación: `kb/mb/gb = 1024ⁿ` documentado en grande
 (el uso real en código de sistemas: buffers, límites de memoria), o nombres binarios explícitos
-`kib/mib/gib` si se prefiere lo inequívoco; (2) **el hogar** — no hay módulo obvio (¿un `std/units`
-mínimo de tres funciones? ¿`std/fs`? ninguno convence). Impacto BAJO: no bloquea nada, es un archivo
-`.ray` + docs cuando haya más "unidades" que lo justifiquen o un consumidor claro (p. ej. límites de
-`process.max_output`).
+`kib/mib/gib` si se prefiere lo inequívoco. **El hogar ESTÁ decidido (30 jul 2026): `std/units`,
+PLANO** — sin submódulo `units/size` de arranque (YAGNI: las duraciones ya viven en `std/time` y el
+catálogo realista de unidades restantes es corto; un directorio con un único submódulo sería
+ceremonia). Si algún día llega otra familia grande, entra como `std/units/<familia>` hermana o se
+reexporta al estilo `net/time` → `std/time`. Vetos sintácticos anotados: ni el módulo ni un
+submódulo pueden llamarse `bytes` (palabra reservada de tipo — `import ...bytes;` muere en el
+parser). Impacto BAJO: no bloquea nada, es un archivo `.ray` + docs cuando haya un consumidor claro
+(p. ej. límites de `process.max_output`).
 
 ---
 

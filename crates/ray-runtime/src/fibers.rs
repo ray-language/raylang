@@ -427,6 +427,121 @@ pub fn yield_now() {
     suspend(Park::Yield);
 }
 
+// ============================================================================
+// Pool bloqueante (extern fn blocking, FFI): descarga llamadas C bloqueantes
+// ============================================================================
+//
+// Con las fibras FIJADAS a su worker (sin work-stealing), una llamada C bloqueante dentro de una
+// fibra bloquearía el worker entero y VARARÍA a todas sus fibras hermanas aunque haya otros workers
+// ociosos. `run_blocking` es la válvula: ejecuta el closure en un hilo de un pool aparte y APARCA la
+// fibra (WaitList) hasta el resultado — el worker queda libre. Fuera de fibra (hilo `main`) llama
+// directo: bloquear un hilo plano es el statu quo y no vara a nadie.
+//
+// El pool cachea hilos ociosos (un despacho caliente es un lock+condvar, sin `thread::spawn`) y
+// crece bajo demanda sin tope: cada trabajo pendiente representa una fibra ya aparcada, así que el
+// número de hilos queda acotado por la concurrencia real de llamadas bloqueantes en vuelo (el mismo
+// compromiso que el hilo-por-tarea que las fibras sustituyen). Un hilo ocioso muere tras 10 s.
+
+/// Un trabajo encargado al pool bloqueante.
+type BlockingJob = Box<dyn FnOnce() + Send>;
+
+struct BlockingPool {
+    state: Mutex<BlockingState>,
+    cv: Condvar,
+}
+
+struct BlockingState {
+    jobs: VecDeque<BlockingJob>,
+    /// Hilos esperando trabajo en la condvar (para decidir spawn vs notify).
+    idle: usize,
+}
+
+fn blocking_pool() -> &'static BlockingPool {
+    static P: OnceLock<BlockingPool> = OnceLock::new();
+    P.get_or_init(|| BlockingPool { state: Mutex::new(BlockingState { jobs: VecDeque::new(), idle: 0 }), cv: Condvar::new() })
+}
+
+/// Encola un trabajo: lo toma un hilo ocioso, o se levanta uno nuevo si no lo hay.
+fn blocking_submit(job: BlockingJob) {
+    let p = blocking_pool();
+    let needs_thread = {
+        let mut st = p.state.lock().unwrap();
+        st.jobs.push_back(job);
+        if st.idle > 0 {
+            p.cv.notify_one();
+            false
+        } else {
+            true
+        }
+    };
+    if needs_thread {
+        std::thread::Builder::new()
+            .name("ray-blocking".into())
+            .spawn(blocking_worker_loop)
+            .expect("could not start a blocking pool thread");
+    }
+}
+
+fn blocking_worker_loop() {
+    let p = blocking_pool();
+    loop {
+        let job = {
+            let mut st = p.state.lock().unwrap();
+            loop {
+                if let Some(j) = st.jobs.pop_front() {
+                    break j;
+                }
+                st.idle += 1;
+                let (next, timeout) = p.cv.wait_timeout(st, Duration::from_secs(10)).unwrap();
+                st = next;
+                st.idle -= 1;
+                // Venció ocioso y sin trabajo pendiente → el hilo muere (el pool se encoge solo).
+                if timeout.timed_out() && st.jobs.is_empty() {
+                    return;
+                }
+            }
+        };
+        job();
+    }
+}
+
+/// Ejecuta `f` (presumiblemente bloqueante: una extern fn C marcada `blocking`) sin bloquear el
+/// worker de fibras: en fibra, `f` corre en un hilo del pool bloqueante y la fibra queda APARCADA
+/// (cero CPU) hasta el resultado; fuera de fibra, llama directo. Un panic dentro de `f` se
+/// re-propaga en el llamador (mismo comportamiento que la llamada directa).
+pub fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    if !in_fiber() {
+        return f();
+    }
+    // El slot del resultado + su lista de esperas (el protocolo anti despertar-perdido de F3).
+    struct Slot<T> {
+        state: Mutex<Option<std::thread::Result<T>>>,
+        wl: WaitList,
+    }
+    let slot = Arc::new(Slot::<T> { state: Mutex::new(None), wl: WaitList::new() });
+    let s2 = slot.clone();
+    blocking_submit(Box::new(move || {
+        // AssertUnwindSafe: el resultado (o el panic) se transporta entero al llamador; nadie
+        // observa estado a medias.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        *s2.state.lock().unwrap() = Some(r);
+        s2.wl.wake_all();
+    }));
+    loop {
+        let seen = {
+            let mut st = slot.state.lock().unwrap();
+            if let Some(r) = st.take() {
+                match r {
+                    Ok(v) => return v,
+                    Err(p) => std::panic::resume_unwind(p),
+                }
+            }
+            slot.wl.prepare()
+        };
+        block_on(&slot.wl, seen);
+    }
+}
+
 fn finish(done: &DoneCell, result: Result<(), String>) {
     *done.state.lock().unwrap() = Some(result);
     done.cv.notify_all();
@@ -1128,6 +1243,56 @@ mod tests {
                 Err(e) => panic!("write: {e}"),
             }
         }
+    }
+
+    #[test]
+    fn run_blocking_returns_the_value_from_a_fiber() {
+        let h = spawn(|| {
+            let v = run_blocking(|| 40 + 2);
+            assert_eq!(v, 42);
+        });
+        h.join().expect("la fibra termina sin panic");
+    }
+
+    #[test]
+    fn run_blocking_outside_a_fiber_calls_directly() {
+        assert_eq!(run_blocking(|| 7), 7);
+    }
+
+    #[test]
+    fn run_blocking_propagates_the_panic_to_the_caller() {
+        let h = spawn(|| {
+            run_blocking(|| panic!("boom del pool"));
+        });
+        let err = h.join().expect_err("el panic del closure llega a la fibra");
+        assert!(err.contains("boom del pool"), "mensaje: {err}");
+    }
+
+    #[test]
+    fn run_blocking_does_not_stall_sibling_fibers_on_the_same_worker() {
+        // El closure bloqueante (en un hilo del pool) espera a que TODAS las hermanas hayan
+        // corrido. Si `run_blocking` bloqueara el worker en vez de aparcar la fibra, las hermanas
+        // fijadas a ese mismo worker no correrían jamás y el test COLGARÍA (64 fibras > nº de
+        // workers garantiza que varias cohabitan con la bloqueante). Determinista, sin tiempos.
+        static RAN: AtomicUsize = AtomicUsize::new(0);
+        let blocker = spawn(|| {
+            run_blocking(|| {
+                while RAN.load(Ordering::SeqCst) < 64 {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            });
+        });
+        let handles: Vec<_> = (0..64)
+            .map(|_| {
+                spawn(|| {
+                    RAN.fetch_add(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("la fibra hermana termina");
+        }
+        blocker.join().expect("la fibra bloqueante termina");
     }
 
     #[test]

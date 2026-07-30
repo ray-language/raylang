@@ -82,6 +82,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — ecosistema y aplicaciones
 
+- **Tests a nivel proyecto** (M101): `ray test` ahora pasa por el loader — las `@test` pueden vivir
+  en **cualquier módulo** (corren calificadas: `math.suma_ok`) y usar `import`; cada `tests/*.ray`
+  junto al `ray.toml` corre como **suite de integración** que importa los módulos del proyecto. Un
+  fallo reporta su **ubicación** (`at módulo:línea:col`, apuntando al assert del usuario) y cada
+  prueba su duración. El código de salida pasa a **0/1** (antes era el número de fallos: 256 fallos
+  daban exit 0 — un falso verde en CI); 65 si alguna suite no compila. `ray test <filtro>` filtra
+  sin necesidad de dar el archivo.
 - **Paquete `web`** (M93): framework de aplicación estilo Express sobre el servidor HTTP/1.1 —
   enrutado (parámetros, catch-all, `mount`, rutas regex, 405 + `Allow`), middleware componible, contexto
   (`header_of`/`cookie_of`/`form`/`json_body`), presets de CORS, `Cache-Control`, trace-id en el log y

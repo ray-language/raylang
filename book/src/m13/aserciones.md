@@ -76,8 +76,8 @@ El runner (`test_runner.rs`, un cliente externo que no toca el core) se rehízo:
 - **`@test` admite `() -> unit`** además de `() -> bool`. El checker relaja la firma; el runner lee
   el tipo del AST: una prueba `bool` pasa si devuelve `true`; una `unit` pasa si no dispara ninguna
   aserción.
-- **Reporte por prueba + resumen**, y el **código de salida = número de fallos** (compatible con lo
-  anterior).
+- **Reporte por prueba + resumen**, y un código de salida apto para CI (en M13 era el número de
+  fallos; desde M101 es **0/1** — 256 fallos ya no dan un falso verde).
 - **Filtro por subcadena** del nombre: `raylang --test archivo.ray patron`.
 
 ```rust

@@ -89,7 +89,7 @@ Project:
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process]] [--templates-only [path...]]
-  test [file]       run the @test functions [filter]
+  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter]
   fmt <file>        print the canonical version to stdout
   doc <file>        generate the Markdown documentation of its public surface
 
@@ -1064,12 +1064,49 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     }
 }
 
-/// `ray test [archivo] [filtro]`: corre las funciones `@test`.
+/// `ray test [archivo] [filtro]`: corre las funciones `@test` (a nivel proyecto, M101).
+/// Sin archivo explícito, las suites son la **entrada del proyecto** (sus `@test` y las de todos
+/// los módulos que importa) más cada **`tests/*.ray`** junto al `ray.toml` (pruebas de
+/// integración: importan los módulos del proyecto porque la raíz de la entrada va como raíz
+/// extra del loader). Un primer argumento que no termina en `.ray` se toma como filtro.
 fn cmd_test_sub(args: &[String]) {
-    let path = resolve_entry(args.first().map(String::as_str), false);
-    regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
-    let filter = args.get(1).map(String::as_str);
-    run_tests(&path, filter);
+    let (explicit, filter) = match args.first().map(String::as_str) {
+        Some(a) if a.ends_with(".ray") => (Some(a), args.get(1).map(String::as_str)),
+        first => (None, first),
+    };
+    let entry = resolve_entry(explicit, false);
+    regen_stale_templates(Path::new(&entry)); // M55: los .ray.html desactualizados, al día
+
+    let mut suites = vec![PathBuf::from(&entry)];
+    if explicit.is_none() {
+        let root = load_manifest().map(|m| m.root).unwrap_or_else(|| PathBuf::from("."));
+        suites.extend(discover_test_files(&root.join("tests")));
+    }
+    // La raíz de la entrada como raíz extra: un `tests/*.ray` resuelve `import m;` contra `src/`.
+    let mut roots = dependency_roots();
+    if let Some(parent) = Path::new(&entry).parent() {
+        roots.push(parent.to_path_buf());
+    }
+    process::exit(test_runner::run(&suites, &roots, filter));
+}
+
+/// Los archivos `.ray` bajo `dir` (recursivo, orden estable por ruta): las suites de integración
+/// de `ray test`. Un directorio inexistente devuelve `[]` (la convención `tests/` es opcional).
+fn discover_test_files(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return found;
+    };
+    let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            found.extend(discover_test_files(&path));
+        } else if path.extension().is_some_and(|e| e == "ray") {
+            found.push(path);
+        }
+    }
+    found
 }
 
 /// `ray add <nombre>[@<req>]`: añade una dependencia **del índice** (por nombre) a `ray.toml` y la
@@ -2089,9 +2126,15 @@ fn read_source(path: &str) -> String {
     }
 }
 
-/// Runner de `@test` (M10.1): sale con el número de fallos como código.
+/// Runner de `@test` (M10.1; sobre el loader desde M101): sale con 0 (verde), 1 (fallos) o 65
+/// (no compila). Interfaz legada `--test <archivo>`: una sola suite, con la raíz del archivo y
+/// la caché de dependencias como raíces del loader.
 fn run_tests(path: &str, filter: Option<&str>) {
-    process::exit(test_runner::run(&read_source(path), filter));
+    if !Path::new(path).is_file() {
+        eprintln!("could not read '{}': no such file", path);
+        process::exit(66); // EX_NOINPUT
+    }
+    process::exit(test_runner::run(&[PathBuf::from(path)], &dependency_roots(), filter));
 }
 
 /// Formateador (M29.2): imprime la versión canónica o aborta con el error.

@@ -8839,3 +8839,43 @@ por YAGNI — con las duraciones en `time`, el catálogo restante no justifica j
 familia futura entra como submódulo hermano o vía reexport de compat estilo `net/time`→`std/time`),
 con **convención binaria `kb/mb/gb = 1024ⁿ`** (la lectura de código de sistemas: buffers, límites
 de memoria) documentada en la firma de cada función.
+
+## 92. M101 — runner de tests a nivel proyecto (jul 2026)
+
+**El síntoma.** Auditoría del 30 jul (IDEAS §58): `@test` seguía siendo el runner de **un archivo**
+del arco de self-hosting (M13.2). `test_runner::run` lexeaba el fuente crudo — nunca pasaba por el
+loader — así que un archivo de tests con `import` fallaba con `name 'math' not declared` mientras
+`ray run` lo resolvía sin problema. Solo se podía testear código del propio archivo: inservible
+para un proyecto con módulos. Encima, el código de salida era `fallos & 0xFF` (256 fallos → exit 0
+→ falso verde en CI) y un fallo no reportaba archivo:línea — contra el principio fundacional de
+que todo error lleva ubicación.
+
+**La forma.** El runner sigue siendo un **cliente externo** (usa la API pública; cero cambios en
+checker/VM), pero ahora carga cada *suite* con `loader::load_with_deps`, igual que `ray run`:
+
+- **Suites.** `ray test` (sin archivo) corre (1) la **entrada del proyecto**, que recolecta las
+  `@test` de todos sus módulos fusionados — pruebas unitarias junto al código, reportadas con
+  nombre calificado (`math.double_ok`) —, y (2) cada **`tests/*.ray`** junto al `ray.toml` como
+  suite de **integración** (la raíz de la entrada va como raíz extra del loader, así `import math;`
+  resuelve contra `src/`). Una suite de integración recolecta **solo sus propias** `@test`: las
+  inline de los módulos que importa ya corren en la suite del proyecto (sin dedup, cada import las
+  repetiría). Corolario honesto: un módulo que nadie importa no corre — no es parte del programa.
+- **El `main` sintético es AST, no fuente.** El nombre global de una prueba de módulo
+  (`math::double_ok`) contiene `::`, ilegal en el léxico de usuario: no puede pasar por el lexer
+  como hacía el runner viejo (que parseaba un `main` sintetizado como texto). Construirlo como AST
+  resuelve eso y, de paso, la **visibilidad**: el resolver del loader (que es quien aplica `pub`)
+  ya corrió, así que una `@test` privada de su módulo es llamable por su nombre global — como debe
+  ser: las pruebas de un módulo no forman parte de su API.
+- **Ubicación en los fallos.** Un fallo imprime su mensaje y `at módulo:línea:col`, con la
+  posición **reposicionada al primer marco de usuario** de la traza (el mecanismo de M79c): el
+  `assert_eq` fallido apunta al assert del usuario, no al `panic` del prelude. Y cada prueba
+  reporta su duración.
+- **Exit 0/1.** 0 = verde, 1 = hubo fallos, 65 = alguna suite no compila (las demás corren igual;
+  el resumen cuenta solo lo ejecutado). Se mantienen 66 (archivo ilegible) y el resto de sysexits.
+- **CLI.** `ray test [archivo] [filtro]`: un primer argumento que no termina en `.ray` es filtro
+  (antes se tomaba como archivo y moría en "could not read"). La interfaz legada `--test` se
+  conserva.
+
+**Lo diferido** (IDEAS §58): re-check incremental (hoy cada prueba re-chequea el programa clonado
+— O(n²) con baterías enormes), `--list`/skip/should-panic, salida machine-readable (JUnit/JSON) y
+paralelismo de la batería. A demanda cuando existan baterías que lo pidan.

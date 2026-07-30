@@ -494,7 +494,7 @@ distintas);
   CLI · **65** error de compilación (léxico/sintaxis/tipos/carga de módulos) · **66** archivo
   ilegible · **69** el binario no incluye el subsistema que el comando necesita (build *slim*) ·
   **70** error de ejecución · **73** no se pudo crear un archivo · **101** ICE. `ray test` sale
-  con el número de pruebas fallidas.
+  con **0** (todo pasó), **1** (alguna prueba falló) o **65** (alguna suite no compila).
 
 ## 12. Versionado y estabilidad
 

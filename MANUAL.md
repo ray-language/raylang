@@ -1526,7 +1526,16 @@ fn con_assert() {
 }
 ```
 
-`ray test` sale con el número de fallos como código (0 = todo verde, ideal para CI).
+Las `@test` pueden vivir **en cualquier módulo** del proyecto (junto al código que prueban): `ray
+test` corre las de la entrada y las de todos los módulos que importa, calificadas por su módulo
+(`math.suma_ok`). Además, cada archivo `tests/*.ray` junto al `ray.toml` es una **suite de
+integración**: importa los módulos del proyecto (`import math;`) y sus `@test` corren como una
+suite aparte. Un fallo reporta su mensaje **y su ubicación** (`at módulo:línea:col`, apuntando a tu
+`assert`, no al prelude).
+
+`ray test` sale con **0** (todo verde) o **1** (hubo fallos) — ideal para CI; 65 si algo no
+compila. Un filtro (`ray test suma`, o `ray test archivo.ray suma`) selecciona por subcadena del
+nombre.
 
 ### Templates compilados (`ray build --templates-only`)
 

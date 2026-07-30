@@ -28,7 +28,7 @@ por línea), sin dependencias ni estado.
 |---|---|---|
 | `ray_check` | `code` | `ok` o los diagnósticos exactos del compilador (posición + línea + `^`) |
 | `ray_run` | `code`, `stdin?` | `exit` (el `int` de `main`) + stdout + stderr |
-| `ray_test` | `code` | el reporte del runner `@test`; `exit` = nº de fallos |
+| `ray_test` | `code` | el reporte del runner `@test`; `exit` 0 = verde, 1 = fallos |
 | `ray_fmt` | `code` | el fuente canónico (`ray fmt`) |
 | `ray_doc` | `symbol` | firma + doc de un builtin (`len`, `parse_int`, `sha256`…) |
 

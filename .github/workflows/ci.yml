@@ -57,6 +57,14 @@ jobs:
       # comparan intérprete↔VM y necesitan la feature `interp`; basta con verificar que compila.
       - name: Build solo-VM (sin intérprete)
         run: cargo build --release --no-default-features
+      # Guarda del playground web (IDEAS §57): el target wasm no compila en ningún otro paso y ya se
+      # rompió en silencio dos veces (P0.1 metió aHash→getrandom incondicional; M98/M100 desbordes de
+      # usize de 32 bits y un stub ausente — reparado en el PR #102). El artefacto no va al repo
+      # (se construye con `sh playground/build.sh`); aquí basta con que el lib compile al target.
+      - name: Build wasm32 (playground)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build --target wasm32-unknown-unknown --lib --release
 
   # Auditoría de dependencias contra la base de avisos de seguridad de RustSec. Se aparta del job
   # principal porque instala una herramienta y consulta una base remota (más lento, distinto fallo).

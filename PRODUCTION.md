@@ -71,6 +71,7 @@ Lo que impide que el contrato se erosione en silencio; todo corre en CI:
 | `tests/perf_regression.rs` | que ningún cambio degrade el banco más de un 5% |
 | Gate de memoria del banco | que no crezca el pico de RSS sin darse cuenta |
 | `cargo clippy --all-targets` + `cargo audit` | lints y avisos de seguridad de las dependencias |
+| Build wasm32 del playground | que el target del playground web no vuelva a romperse en silencio (una dep o un `usize` de 64 bits asumido lo rompen sin que ningún otro paso lo vea) |
 | Meta-circularidad del `selfhost/` | que el lenguaje siga siendo capaz de compilarse a sí mismo |
 
 ## 5. Qué NO se promete

@@ -2126,9 +2126,9 @@ en silencio y el error aparece en el USO (confuso); (2) **autocompletado**: exig
 verdad (CodeMirror ~vendorizable) + exponer una función de completion del wasm (el LSP entero por
 stdio no aplica en el navegador; la lógica de `lsp/features.rs` sí es reusable). Contexto: la
 CADENA DE BUILD del playground se reparó en esta fecha (aHash/getrandom, handles de 32 bits, stub
-de procesos — CHANGELOG); sin CI que lo compile, volverá a romperse en silencio → si el playground
-importa, añadir `cargo build --target wasm32-unknown-unknown --lib` como guarda (necesita el
-target de rustup en CI).
+de procesos — CHANGELOG, PR #102) y la guarda CI del target wasm quedó AÑADIDA (paso "Build wasm32
+(playground)" en ci.yml + fila en PRODUCTION §4): lo pendiente de esta idea son solo las dos
+features (imports de la stdlib embebida; autocompletado con editor de verdad).
 
 ---
 

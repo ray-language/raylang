@@ -8720,3 +8720,43 @@ hermana que falla → marker nunca escrito; hijo demonizado (pipes cerrados, sco
 
 Pendiente consciente: `run()` de la v1 sigue bloqueando el worker (su aparcado sería reescribirlo
 sobre las bombas; se evaluará tras medir el streaming en uso real).
+
+## 90. FFI `blocking` — externs bloqueantes sobre el pool (jul 2026)
+
+**El problema que trajo el default de fibras.** El FFI (M41) nació en la era hilo-por-tarea: una
+llamada C que bloquea (E/S, una C-lib lenta) bloqueaba *su* hilo y nadie más sufría. Con el arco F,
+la concurrencia nativa corre por default sobre fibras **fijadas** a su worker (sin work-stealing): la
+misma llamada ahora bloquea el worker entero y **vara a todas sus fibras hermanas** aunque haya otros
+workers ociosos. El runtime asume ese compromiso para sus propias operaciones bloqueantes (ficheros,
+SQLite), que son conocidas y acotadas; el FFI de usuario es arbitrario y no estaba avisado. (La
+revisión completa del FFI bajo fibras — 30 jul 2026 — dejó además anotados: paridad de aridad VM↔
+nativo, pila de fibra para código C, `ffi_errno()`.)
+
+**La decisión: una marca declarativa, semántica solo de planificación.** `extern "lib" blocking
+{ … }` marca las firmas del bloque como bloqueantes de verdad. `blocking` es **contextual** (no
+reservada: `let blocking = 1` sigue valiendo) — la gramática lo admite solo entre el string de la
+librería y el `{`. La marca **no cambia valores ni tipos** (mismo marshalling, mismo catálogo): donde
+hay un scheduler que proteger (binario nativo con fibras, llamada dentro de fibra) la llamada se
+descarga; donde no (VM, intérprete, `--without fibers`, el hilo `main`) es **inerte** y la llamada es
+directa. Por eso la paridad byte a byte entre motores se conserva sin tocar VM ni intérprete.
+
+**La mecánica nativa.** `ray_runtime::fibers::run_blocking(f)`: en fibra, encola `f` en un **pool
+bloqueante** (hilos `ray-blocking` cacheados, crecen bajo demanda y mueren tras 10 s ociosos — el
+número queda acotado por las llamadas bloqueantes EN VUELO, el mismo compromiso que el
+hilo-por-tarea que las fibras sustituyen) y la fibra espera **aparcada** en una `WaitList` (el
+protocolo anti despertar-perdido de F3); un panic del closure se re-propaga en el llamador. El
+wrapper emitido cruza al pool como `Send`: los punteros de los argumentos (`CString` de un `string`,
+buffer `Rc` de un `bytes`) viajan como `usize` — sus **dueños quedan vivos en el marco de la fibra,
+aparcado durante la llamada** — y los retornos-puntero se convierten a tipos `Send` **dentro** del
+closure (la copia hasta el NUL se hace en el hilo del pool; la validación UTF-8 de `Option<string>`,
+fuera, para conservar el mensaje de error de siempre).
+
+**Guía de uso** (MANUAL §16): marcar lo que bloquea de verdad; para llamadas cortas de CPU (`sqrt`,
+`strlen`) el viaje al pool cuesta más que la llamada. Verificado: unit tests del pool (incluido el
+determinista de no-varamiento: el closure bloqueante espera a que corran 64 hermanas — si el worker
+se bloqueara, colgaría), tests de parser/fmt/transpilación, y paridad e2e byte a byte VM≡nativo-fibras
+con externs `blocking` dentro y fuera de fibras (`tests/native_fibers_cli.rs`).
+
+**Pendiente consciente.** La VM también es M:N y sufre el mismo varamiento con externs bloqueantes;
+descargarlos allí exige aparcar la fibra de la VM a mitad de instrucción (integrarlo con `poll.rs`).
+Anotado en IDEAS.md con el resto de la revisión FFI-bajo-fibras.

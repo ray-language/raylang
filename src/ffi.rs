@@ -70,6 +70,9 @@ pub struct ExternDesc {
     pub lib: String,
     pub arg_kinds: Vec<CKind>,
     pub ret_kind: CKind,
+    /// Declarada en un bloque `extern "lib" blocking { … }`: la llamada es bloqueante de verdad.
+    /// Solo scheduling (el backend nativo con fibras la descarga a un pool); los valores no cambian.
+    pub blocking: bool,
 }
 
 /// Clasifica un tipo de raylang para la frontera FFI (M41.1: solo primitivos). `None` si el tipo no
@@ -125,6 +128,7 @@ pub fn desc_of(ext: &crate::ast::ExternFn) -> Option<ExternDesc> {
         lib: ext.lib.clone(),
         arg_kinds: arg_kinds?,
         ret_kind: ret_ckind(&ext.return_type)?,
+        blocking: ext.blocking,
     })
 }
 
@@ -395,7 +399,7 @@ mod tests {
     use super::*;
 
     fn desc(name: &str, args: Vec<CKind>, ret: CKind) -> ExternDesc {
-        ExternDesc { name: name.into(), lib: "m".into(), arg_kinds: args, ret_kind: ret }
+        ExternDesc { name: name.into(), lib: "m".into(), arg_kinds: args, ret_kind: ret, blocking: false }
     }
 
     #[test]
@@ -424,7 +428,7 @@ mod tests {
 
     #[test]
     fn strlen_marshala_string_a_char_ptr() {
-        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int };
+        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int, blocking: false };
         match call(&d, &[FfiVal::Str("hello mundo")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 11),
             other => panic!("expected int, {other:?}"),
@@ -433,7 +437,7 @@ mod tests {
 
     #[test]
     fn strlen_marshals_nul_terminated_bytes() {
-        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Bytes], ret_kind: CKind::Int };
+        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Bytes], ret_kind: CKind::Int, blocking: false };
         match call(&d, &[FfiVal::Bytes(b"abcde\x00")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 5),
             other => panic!("expected int, {other:?}"),
@@ -442,7 +446,7 @@ mod tests {
 
     #[test]
     fn strstr_returns_char_ptr_as_optbytes() {
-        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes };
+        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes, blocking: false };
         // Encontrado → Some(bytes desde la coincidencia).
         match call(&d, &[FfiVal::Str("hello world"), FfiVal::Str("world")]).unwrap() {
             FfiRet::OptBytes(Some(b)) => assert_eq!(b, b"world"),
@@ -458,7 +462,7 @@ mod tests {
     #[test]
     fn strstr_returns_option_ptr() {
         // M41.4b: el mismo char* como puntero OPACO. No se desreferencia: solo Some(dirección≠0)/None.
-        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptPtr };
+        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptPtr, blocking: false };
         match call(&d, &[FfiVal::Str("hello"), FfiVal::Str("ll")]).unwrap() {
             FfiRet::OptPtr(Some(p)) => assert_ne!(p, 0),
             other => panic!("expected Some, {other:?}"),

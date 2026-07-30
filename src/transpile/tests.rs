@@ -460,6 +460,40 @@ fn ffi_emits_extern_c_and_wrapper_with_marshalling() {
     assert!(rust.contains("unsafe { __ffi_sqrt("), "wrapper llama en unsafe: {}", rust);
 }
 
+/// Como `transpile_src`, pero en modo `--fibers` (scheduler M:N de ray-runtime).
+fn transpile_src_fibers(src: &str) -> String {
+    let tokens = crate::lexer::lex(src).expect("lex");
+    let mut prog = crate::parser::parse(tokens).expect("parse");
+    crate::checker::check(&mut prog).expect("check");
+    super::transpile_full(&prog, &[], false, true).expect("transpile").source
+}
+
+#[test]
+fn ffi_blocking_extern_offloads_to_the_blocking_pool_under_fibers() {
+    // `extern "c" blocking { … }` con fibras: el wrapper NO llama en el sitio — descarga a
+    // `run_blocking` (pool bloqueante) y la fibra aparca. El closure cruza al pool como Send: el
+    // puntero del CString del argumento `string` viaja como usize (el dueño vive en el marco), y el
+    // retorno `Option<string>` se copia a Vec DENTRO del closure (la validación UTF-8 queda fuera).
+    let rust = transpile_src_fibers(
+        "extern \"c\" blocking { fn getenv(name: string) -> Option<string>; }\n\
+         fn main() { print(0); }",
+    );
+    assert!(rust.contains("ray_runtime::fibers::run_blocking(move ||"), "descarga al pool: {}", rust);
+    assert!(rust.contains(".as_ptr() as usize"), "captura Send del puntero: {}", rust);
+    assert!(rust.contains(".to_bytes().to_vec()"), "la copia hasta el NUL va dentro del closure: {}", rust);
+}
+
+#[test]
+fn ffi_blocking_extern_calls_directly_without_fibers() {
+    // Sin `--fibers` no hay worker M:N que proteger: `blocking` degrada a la llamada directa.
+    let rust = transpile_src(
+        "extern \"c\" blocking { fn getenv(name: string) -> Option<string>; }\n\
+         fn main() { print(0); }",
+    );
+    assert!(!rust.contains("run_blocking"), "sin fibras, llamada directa: {}", rust);
+    assert!(rust.contains("unsafe { __ffi_getenv("), "wrapper directo: {}", rust);
+}
+
 #[test]
 fn ffi_int_return_is_a_32_bit_c_int() {
     // El retorno `int` de una extern es C `int` (32 bits, sign-extendido), NO `long`: declararlo i64

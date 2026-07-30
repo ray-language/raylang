@@ -223,6 +223,10 @@ pub struct ExternFn {
     pub lib: String,
     pub params: Vec<Param>,
     pub return_type: Type,
+    /// ¿El bloque se declaró `extern "lib" blocking { … }`? Marca las llamadas como bloqueantes de
+    /// verdad (E/S, C-libs lentas): el backend nativo con fibras las descarga a un pool aparte y
+    /// aparca la fibra (el worker M:N queda libre). Sin efecto en los valores; solo scheduling.
+    pub blocking: bool,
     pub line: usize,
     pub col: usize,
 }

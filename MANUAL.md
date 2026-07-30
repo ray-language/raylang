@@ -1279,6 +1279,21 @@ Reglas (tabla completa en [`REFERENCE.md` §13](REFERENCE.md#13-ffi-tipos-marsha
 - Fuera de contrato: variádicas (`printf`), structs por valor, callbacks.
 - No disponible en el playground web (wasm).
 
+**¿La función C bloquea?** Márcala: `extern "c" blocking { … }`. En el binario nativo la concurrencia
+corre sobre fibras fijadas a pocos workers; una llamada C que bloquea (E/S, una C-lib lenta) dejaría
+varadas a las demás fibras de su worker. Con `blocking`, la llamada corre en un hilo de un pool aparte
+y la fibra espera aparcada — mismo resultado, worker libre:
+
+```rust
+extern "c" blocking {
+    fn sleep(seconds: int) -> int;             // bloquea de verdad → al pool
+}
+```
+
+La marca no cambia valores ni tipos; donde no hay fibras (VM, `--without fibers`, fuera de una tarea
+`spawn`) es inerte. Para llamadas cortas de CPU (`sqrt`, `strlen`) no la uses: el viaje al pool cuesta
+más que la llamada.
+
 ## 17. Herramientas
 
 ```sh

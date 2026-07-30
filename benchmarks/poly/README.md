@@ -80,16 +80,12 @@ hash y construir respuestas — ejercita la **stdlib**, no la aritmética.
 
 > **Nota sobre `regex`**: `regex.rs` parsea a mano el mismo patrón fijo porque el crate `regex`
 > de Rust requeriría Cargo + red, rompiendo el build de un solo archivo con `rustc` usado para
-> el resto de la suite. `regex.ray` también parsea a mano, pero por una razón distinta: raylang
-> **sí tiene** un motor de regex real en su stdlib (`import std/regex;` — Thompson NFA/Pike VM,
-> sin backtracking, en `examples/stdlib/regex.ray` del repo del lenguaje), con `compile()` +
-> trait `Matcher` para no recompilar el patrón en cada llamada. Se probó: el checksum coincide,
-> pero al estar el motor escrito en el propio raylang (no bindea una lib en C como los demás
-> lenguajes) resultó **~300× más lento** que el parseo manual en este workload (~59 s
-> interpretado / ~2.3 s nativo contra ~0.2 s, para 200 000 líneas) — se optó por el parseo
-> manual para no distorsionar los tiempos de `bench.py all`. Para patrones de
-> usuario/config reales (no conocidos de antemano, que es donde importa tener un motor de
-> verdad en vez de parsing ad-hoc), `std/regex` es la herramienta idiomática correcta.
+> el resto de la suite (con el crate, Rust puro cuesta ~49 ms, no ~26). `regex.ray` usa el motor
+> REAL de la stdlib (`import std/regex;` con `compile()` + trait `Matcher`): desde R5/R7
+> (PERFORMANCE.md Fases 63 y 69) tanto el binario nativo como la VM lo despachan al crate
+> `regex` vía ray-runtime — con la validación y el dialecto de la librería raylang —, así que la
+> variante compite motor contra motor. La Pike VM escrita en raylang (la implementación de
+> referencia) sigue siendo el motor del intérprete (`--interp`) y de los builds slim.
 
 ## Resultados (29 jul 2026 — M3 Pro, mediana de 10 corridas, 5 de calentamiento)
 
@@ -103,21 +99,24 @@ arco F enlaza **fibras M:N** por defecto.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 28× |
-| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 54× |
-| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 7.4× |
-| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 3.4× |
-| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 4.9× |
-| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 4.4× |
-| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 42× |
-| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 12× |
-| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 117× |
-| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 284× |
+| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 16× |
+| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 43× |
+| `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.8× |
+| `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.7× |
+| `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.6× |
+| `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.2× |
+| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 33× |
+| `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.8× |
+| `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.9× |
+| `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.2× |
 
 > Las filas de `matrixmul` (Fase 67: hoist de borrows → vectorización) y de `wordcount`/
 > `jsondeserialize`/`logparse`/`regex` (Fase 68: fusiones de substring/split + el borde de
 > capturas) son las **re-mediciones del mismo día** con el arnés, tras esos arcos del
-> transpilador; la corrida original está en el historial de PERFORMANCE.md.
+> transpilador; la corrida original está en el historial de PERFORMANCE.md. La columna
+> **VM ÷ native** es del 29–30 jul, tras los arcos de la VM (Fases 69–72: regex sobre el crate,
+> kernel DotRange, ronda 5 de superinstrucciones y el despacho inlineado) y con la corrección
+> del sesgo de presupuesto del arnés (Fase 73).
 
 - **Le gana a node en 9 de los 10** programas de cómputo (de 1.1× a 20×). El décimo, `regex`,
   queda a un **5%** (0.95×) — y ahí node corre su motor C++; la variante `.ray` usa `std/regex`
@@ -198,14 +197,18 @@ arco F enlaza **fibras M:N** por defecto.
   a este cambio.)*
 - **Presupuesto de tiempo por variante** (`budget_s` en `[bench]`, `--budget` en CLI, default
   5 s; 0 = sin límite): estilo hyperfine, el número de corridas se adapta al costo de cada
-  variante. Cuando la pared acumulada de una variante (proceso completo, warmup incluido) supera
-  el presupuesto, deja de correr — nunca con menos de 5 muestras medidas. Las variantes rápidas
-  hacen sus `runs` completas; las lentas no marcan el ritmo de la sesión. Mediana y MAD funcionan
-  con n variable, y una variante lenta necesita menos muestras (su ruido relativo es menor).
-  **Salvedad conocida** (sin resolver): la tabla no marca qué filas se cortaron por presupuesto,
-  así que un MAD calculado sobre 5 muestras aparece junto a uno calculado sobre 20 sin
-  distinguirse. Para una medición que vaya a citarse en `PERFORMANCE.md`, corre con `--budget 0`
-  y `--runs` explícito, o comprueba a mano que ninguna variante se truncó.
+  variante. Al coste observado (pared ÷ corridas, warmup incluido) se planifican cuantas muestras
+  quepan en el presupuesto —nunca menos de 5 medidas ni de 1 warmup— y se **reparten
+  uniformemente entre las rondas de la sesión** (la variante salta las rondas que no le tocan).
+  Las rápidas hacen sus `runs` completas; las lentas no marcan el ritmo de la sesión.
+  *(Corrección, 30 jul 2026: hasta esa fecha el presupuesto cortaba la COLA — la variante corría
+  las primeras N rondas y paraba — lo que bajo deriva de la sesión sesgaba su mediana respecto a
+  las que muestreaban la sesión entera, de forma aleatoria y **sin marcarlo en la tabla**. Medido
+  al arreglarlo: `fibrec.ray` daba 636 ms con el corte por prefijo y 750–762 ms con muestreo
+  completo o repartido — un −17% ficticio. Las filas recortadas ahora muestrean el mismo entorno
+  que las completas, la columna **Corridas** (`n/runs ⚠`) lo hace visible en todas las tablas, y
+  el pie avisa por cada variante recortada.)* Para una medición que vaya a citarse en
+  `PERFORMANCE.md`, sigue valiendo la regla de oro: `--budget 0` y que Corridas marque `n/n`.
 - **Rondas intercaladas con rotación** (`A B C / B C A / ...`): el drift ambiental (térmico,
   procesos de fondo) se reparte entre todas las variantes en vez de caer entero sobre una, y la
   rotación elimina el sesgo de posición. El warmup son las primeras rondas completas.

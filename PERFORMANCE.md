@@ -30,13 +30,13 @@ miden proceso completo. Tablas completas en `benchmarks/poly/README.md`.
 
 | Programa | native | vs node | vs go | vs rustc -O | VM ÷ native |
 |---|---|---|---|---|---|
-| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 15× |
-| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 36× |
+| `loopsum` | **27.3 ms** 🥇 | 9.06× | 1.01× | 1.00× | 16× |
+| `fibrec` | 17.7 ms | 2.21× | 0.91× | 0.79× | 43× |
 | `wordcount` | **38.4 ms** 🥇 | 3.28× | **1.16×** | **1.60×** | 4.8× |
 | `jsonserialize` | 28.6 ms | 2.50× | 0.96× | 0.92× | 2.7× |
 | `jsondeserialize` | 74.4 ms | 2.11× | 0.60× | 0.66× | 3.6× |
 | `logparse` | **21.5 ms** 🥇 | 2.38× | **1.05×** | **1.49×** | 3.2× |
-| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 27× |
+| `treealloc` | **18.1 ms** 🥇 | 1.13× | **1.59×** | **1.52×** | 33× |
 | `sortnums` | **18.0 ms** 🥇 | 19.99× | **3.51×** | **1.12×** | 6.8× |
 | `matrixmul` | **5.6 ms** 🥇 | **4.12×** | **1.35×** | 1.01× (empate) | 2.9× |
 | `regex` | 65.2 ms | 0.95× | **1.17×** | 0.40× | 4.2× |
@@ -1094,8 +1094,35 @@ sortnums −27%, treealloc −24%, fibrec −23%, matrixmul −19%, jsondeserial
 (28× → **15×**), fibrec 636 (54× → **36×**), sortnums 121 (12× → **6.8×**), wordcount 183
 (7.4× → **4.8×**), treealloc 502 (42× → **27×**), jsondeserialize 269 (4.9× → **3.6×**),
 logparse 67 (4.4× → **3.2×**), jsonserialize 74 (3.4× → **2.7×**), matrixmul 16.8 (→ **2.9×**),
-regex 271 (→ **4.2×**). El "ip local" original queda sin motivo aparente tras esto (los reads
+regex 271 (→ **4.2×**). ⚠ Las cifras de loopsum/fibrec/treealloc de esta corrida las
+infravaloraba el sesgo de prefijo del presupuesto del arnés — corregidas en la **Fase 73**
+(439 ms/16×, ~755 ms/43×, 571 ms/33×). El "ip local" original queda sin motivo aparente tras esto (los reads
 del marco ya no cruzan una frontera de llamada); si se reabre, que sea con un perfil nuevo.
+
+#### Fase 73 — el arnés: el presupuesto cortaba por prefijo y sesgaba (30 jul, benchmarks/poly)
+
+Bug del ARNÉS cazado por el usuario, no del lenguaje: el presupuesto de 5 s por variante
+(`budget_s`, estilo hyperfine) cortaba la **cola** — la variante corría las primeras N rondas y
+paraba (contador `8/15`, `12/15`), de forma aleatoria (el ruido decidía cuántas cabían) y **sin
+marcarlo en las tablas**: la mediana sobre 5 muestras del prefijo se presentaba igual que una
+sesión completa. Bajo deriva dentro de la sesión eso sesga: la variante recortada muestrea un
+entorno distinto del de las completas. **Medido el sesgo** (mismo binario, controles `.native`
+idénticos entre sesiones): `fibrec.ray` daba 636 ms con corte por prefijo y **750–762 ms** con
+muestreo repartido o completo (`--budget 0`) — un −17% FICTICIO a favor de la variante lenta.
+
+El fix, en `benchlib.run_variants`: el presupuesto ya no corta — **planifica**. Al coste
+observado (pared ÷ corridas, en vivo) se calcula cuántas muestras caben (mínimo 5) y se
+**reparten uniformemente entre las rondas** de la sesión (la variante salta las rondas que no le
+tocan y sigue activa hasta el final): una recortada muestrea el MISMO entorno que las completas.
+Y la honestidad: columna **Corridas** (`n/runs`, con ⚠ si hubo recorte) en todas las tablas
+(CLI, TUI y exports) + un aviso al pie por cada variante recortada. Verificado con un arnés
+sintético (la lenta cae en las rondas 0/3/6/9/12/15, no en el prefijo) y en vivo.
+
+**Corrección de cifras publicadas** (Fase 72, filas `.ray` que excedían el presupuesto):
+loopsum **439 ms (16×)** —se citó 421/15×—, fibrec **~755 ms (43×)** —se citó 636/36×—,
+treealloc **571 ms (33×)** —se citó 502/27×—. El resto de filas `.ray` no se recortaba (coste ×
+15 corridas < 5 s) y sus cifras siguen vigentes; los recortes en variantes de OTROS lenguajes
+(p. ej. `sortnums.js`, `matrixmul.rb/pl`) también quedan ahora repartidos y visibles.
 
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 

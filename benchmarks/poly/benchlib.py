@@ -350,11 +350,17 @@ def run_variants(variants, runs, warmup, prepare=None, progress=None, check_canc
     Cada variante corre `warmup` corridas descartadas y `runs` medidas.
 
     budget_s > 0 activa el presupuesto de tiempo por variante (estilo
-    hyperfine): cuando el tiempo de PARED acumulado de una variante (proceso
-    completo, warmup incluido — lo que de verdad cuesta la sesión) supera el
-    presupuesto, deja de correr — pero nunca con menos de MIN_BUDGET_RUNS
-    muestras medidas (y de 1 warmup). Las rápidas hacen sus `runs` completas;
-    las lentas no marcan el ritmo de toda la sesión. budget_s=0 = sin límite.
+    hyperfine): al coste observado (pared acumulada ÷ corridas, warmup
+    incluido), se PLANIFICAN cuantas muestras quepan en el presupuesto
+    —nunca menos de MIN_BUDGET_RUNS (ni de 1 warmup)— y se REPARTEN
+    uniformemente entre las rondas de la sesión. Antes el presupuesto cortaba
+    la COLA (la variante corría las primeras N rondas y paraba): bajo deriva
+    ambiental —térmica, procesos de fondo— eso sesgaba su mediana respecto a
+    las variantes que muestreaban la sesión entera, y de forma aleatoria
+    (el ruido decidía cuántas corridas cabían). Con el reparto, una variante
+    recortada muestrea el MISMO entorno que las completas; el plan se
+    recalcula en vivo con cada corrida. Las rápidas hacen sus `runs`
+    completas; las lentas no marcan el ritmo. budget_s=0 = sin límite.
 
     progress(label, counts, cancelled, completed): llamado tras cada corrida;
     `counts` es {label: corridas completadas} (incluye warmup); `completed` es
@@ -371,11 +377,21 @@ def run_variants(variants, runs, warmup, prepare=None, progress=None, check_canc
     counts = {label: 0 for label, _ in variants}
     warmups_done = {label: 0 for label, _ in variants}
     spent = {label: 0.0 for label, _ in variants}  # pared real acumulada
+    slots_seen = {label: 0 for label, _ in variants}  # rondas de medición vistas (corra o salte)
     cancelled = set()
     completed = set()
 
     min_runs = min(MIN_BUDGET_RUNS, runs)
-    over_budget = lambda label: budget_s > 0 and spent[label] >= budget_s
+
+    def planned(label):
+        # Muestras que caben en el presupuesto al coste observado hasta ahora
+        # (pared ÷ corridas, warmup incluido), acotadas a [min_runs, runs].
+        if budget_s <= 0 or counts[label] == 0:
+            return runs
+        cost = spent[label] / counts[label]
+        if cost <= 0:
+            return runs
+        return max(min_runs, min(runs, int(budget_s // cost)))
 
     round_idx = 0
     while True:
@@ -386,6 +402,22 @@ def run_variants(variants, runs, warmup, prepare=None, progress=None, check_canc
         for label, cmd in active[pivot:] + active[:pivot]:
             if label in cancelled or label in completed:
                 continue
+            # Fase warmup: completa para las variantes que van a hacer sus `runs`;
+            # una recortada por presupuesto calienta UNA vez y no quema más ahí.
+            in_warmup = warmups_done[label] < warmup and not (planned(label) < runs and warmups_done[label] >= 1)
+            if not in_warmup:
+                # Fase medida: reparto uniforme de planned() entre las `runs` rondas.
+                # Si en esta ronda no le toca muestra, SALTA (sigue activa): así sus
+                # muestras cubren toda la sesión, no solo el prefijo.
+                slot = slots_seen[label]
+                slots_seen[label] += 1
+                due = -(-(slot + 1) * planned(label) // runs)  # ceil
+                if len(times[label]) >= due:
+                    if slots_seen[label] >= runs or len(times[label]) >= planned(label):
+                        completed.add(label)
+                    if progress:
+                        progress(label, counts, cancelled, completed)
+                    continue
             cancel = (lambda l=label: check_cancel(l)) if check_cancel else None
             wall_start = time.perf_counter()
             t, m, c = measure_once(cmd, prepare, check_cancel=cancel)
@@ -394,16 +426,14 @@ def run_variants(variants, runs, warmup, prepare=None, progress=None, check_canc
                 cancelled.add(label)
             else:
                 counts[label] += 1
-                # Fase warmup: se corre completa salvo que el presupuesto ya se
-                # haya agotado (basta 1 warmup para calentar caches del SO).
-                if warmups_done[label] < warmup and not (over_budget(label) and warmups_done[label] >= 1):
+                if in_warmup:
                     warmups_done[label] += 1
                 else:
                     times[label].append(t)
                     cpus[label].append(c)
                     if m is not None:
                         mems[label].append(m)
-                    if len(times[label]) >= runs or (over_budget(label) and len(times[label]) >= min_runs):
+                    if len(times[label]) >= runs or slots_seen[label] >= runs or len(times[label]) >= planned(label):
                         completed.add(label)
             if progress:
                 progress(label, counts, cancelled, completed)
@@ -463,6 +493,8 @@ def resolve(arg, names):
 
 
 HEADERS = ("Variante", "Mediana", "Mín", "Máx", "MAD", "Ratio")
+# Con expected_runs en build_rows, la tabla gana la columna de muestras.
+HEADERS_N = HEADERS + ("Corridas",)
 
 
 def _mad(samples, med):
@@ -471,20 +503,24 @@ def _mad(samples, med):
     return statistics.median(abs(s - med) for s in samples)
 
 
-def build_rows(results, fmt):
+def build_rows(results, fmt, expected_runs=0):
     """results: [(etiqueta, muestras), ...]. Ordena por mediana ascendente.
 
     Mediana y MAD en vez de media y σ: en un workload determinista el ruido es
     siempre aditivo (una pausa del scheduler solo puede sumar), así que un solo
     outlier arrastra la media pero no la mediana. El mínimo queda como el mejor
-    estimador del costo sin interferencia."""
+    estimador del costo sin interferencia.
+
+    expected_runs > 0 añade la columna "Corridas" (n/expected, con ⚠ si el
+    presupuesto recortó la variante): la mediana sobre menos muestras se VE,
+    nunca se presenta como una sesión completa."""
     stats = []
     for label, samples in results:
         if not samples:
-            stats.append((label, None))
+            stats.append((label, None, 0))
             continue
         med = statistics.median(samples)
-        stats.append((label, (med, min(samples), max(samples), _mad(samples, med))))
+        stats.append((label, (med, min(samples), max(samples), _mad(samples, med)), len(samples)))
 
     ok = [s for s in stats if s[1] is not None]
     failed = [s for s in stats if s[1] is None]
@@ -492,12 +528,31 @@ def build_rows(results, fmt):
 
     baseline = ok[0][1][0] if ok else None
     rows = []
-    for label, (med, mn, mx, mad) in ok:
+    for label, (med, mn, mx, mad), n in ok:
         ratio = f"{med / baseline:.2f}x" if baseline else "-"
-        rows.append([label, fmt(med), fmt(mn), fmt(mx), fmt(mad), ratio])
-    for label, _ in failed:
-        rows.append([label, "sin datos", "-", "-", "-", "-"])
+        row = [label, fmt(med), fmt(mn), fmt(mx), fmt(mad), ratio]
+        if expected_runs > 0:
+            row.append(f"{n}/{expected_runs}" + (" ⚠" if n < expected_runs else ""))
+        rows.append(row)
+    for label, _, _ in failed:
+        row = [label, "sin datos", "-", "-", "-", "-"]
+        if expected_runs > 0:
+            row.append("0/%d ⚠" % expected_runs)
+        rows.append(row)
     return rows
+
+
+def budget_warnings(time_results, runs):
+    """Aviso por variante recortada por el presupuesto: su mediana sale de menos
+    muestras (repartidas por toda la sesión) y hay que leerla con ese contexto."""
+    warns = []
+    for label, samples in time_results:
+        if 0 < len(samples) < runs:
+            warns.append(
+                f"{label}: presupuesto agotado — mediana sobre {len(samples)}/{runs} corridas"
+                " (repartidas por toda la sesión)"
+            )
+    return warns
 
 
 def quality_warnings(time_results, cpu_results):

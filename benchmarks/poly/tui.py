@@ -323,7 +323,7 @@ def _ranking_lines(scored, w):
     return lines
 
 
-def show_results(stdscr, name, time_results, mem_results, cpu_results):
+def show_results(stdscr, name, time_results, mem_results, cpu_results, runs=0):
     curses.curs_set(0)
     scroll = 0
     warn_attr = curses.color_pair(3) if curses.has_colors() else curses.A_BOLD
@@ -339,7 +339,8 @@ def show_results(stdscr, name, time_results, mem_results, cpu_results):
         content += _bar_lines("Memoria pico (menor es mejor)", mem_results, benchlib.human_bytes)
         content.append(("", curses.A_NORMAL))
         content += _ranking_lines(scored, w)
-        warnings = benchlib.quality_warnings(time_results, cpu_results)
+        warnings = (benchlib.budget_warnings(time_results, runs) if runs else []) \
+            + benchlib.quality_warnings(time_results, cpu_results)
         if warnings:
             content.append(("", curses.A_NORMAL))
             for warning in warnings:
@@ -502,7 +503,7 @@ def main(stdscr):
         results = run_benchmark(stdscr, selected_names, run_exclude, settings["runs"], settings["warmup"],
                                 settings["budget_s"])
         for name, (time_results, mem_results, cpu_results) in results.items():
-            show_results(stdscr, name, time_results, mem_results, cpu_results)
+            show_results(stdscr, name, time_results, mem_results, cpu_results, runs=settings["runs"])
 
 
 if __name__ == "__main__":

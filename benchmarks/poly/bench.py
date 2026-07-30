@@ -65,25 +65,27 @@ def bench(names, runs, warmup, budget_s, prepare, exclude, export_md, export_csv
                 csv_rows.append([name, label, i, t, mem_val])
 
         print(f"\n=== {name} (tiempo de ejecución) ===")
-        time_rows = benchlib.build_rows(time_results, benchlib.human_time)
-        benchlib.print_table(time_rows)
+        time_rows = benchlib.build_rows(time_results, benchlib.human_time, expected_runs=runs)
+        benchlib.print_table(time_rows, headers=benchlib.HEADERS_N)
 
         print(f"\n=== {name} (memoria pico) ===")
-        mem_rows = benchlib.build_rows(mem_results, benchlib.human_bytes)
-        benchlib.print_table(mem_rows)
+        mem_rows = benchlib.build_rows(mem_results, benchlib.human_bytes, expected_runs=runs)
+        benchlib.print_table(mem_rows, headers=benchlib.HEADERS_N)
 
         print(f"\n=== {name} (ranking combinado: tiempo + memoria) ===")
         print(benchlib.RANKING_EXPLANATION)
         ranking_rows = benchlib.build_ranking(time_results, mem_results)
         benchlib.print_table(ranking_rows, headers=benchlib.RANKING_HEADERS)
 
+        for warning in benchlib.budget_warnings(time_results, runs):
+            print(f"⚠ {warning}")
         for warning in benchlib.quality_warnings(time_results, cpu_results):
             print(f"⚠ {warning}")
         print()
 
         if export_md:
-            benchlib.write_markdown(export_md, f"{name} — tiempo de ejecución", time_rows)
-            benchlib.write_markdown(export_md, f"{name} — memoria pico", mem_rows)
+            benchlib.write_markdown(export_md, f"{name} — tiempo de ejecución", time_rows, headers=benchlib.HEADERS_N)
+            benchlib.write_markdown(export_md, f"{name} — memoria pico", mem_rows, headers=benchlib.HEADERS_N)
             benchlib.write_markdown(export_md, f"{name} — ranking combinado", ranking_rows,
                                      headers=benchlib.RANKING_HEADERS, note=benchlib.RANKING_EXPLANATION)
         if export_csv:

@@ -182,8 +182,15 @@ impl Transpiler {
             }
             out.push_str("}\n");
         }
-        // (2) Wrappers con la firma raylang + marshalling.
+        // (2) Wrappers con la firma raylang + marshalling. Una extern `blocking` bajo `--fibers` no
+        // llama en el sitio: DESCARGA la llamada C a `ray_runtime::fibers::run_blocking` (un hilo del
+        // pool bloqueante) y aparca la fibra — el worker M:N queda libre. El closure que cruza al pool
+        // debe ser Send + 'static, así que los punteros de los argumentos (CString, buffers Rc) se
+        // capturan como `usize` (los DUEÑOS quedan vivos en este marco, aparcado durante la llamada) y
+        // los retornos-puntero se convierten a tipos Send DENTRO del closure (la copia hasta el NUL se
+        // hace en el hilo del pool). Sin fibras, `blocking` no protege a nadie → llamada directa.
         for e in &prog.externs {
+            let blocking = e.blocking && self.fibers;
             let params: Vec<String> = e
                 .params
                 .iter()
@@ -201,31 +208,67 @@ impl Transpiler {
                     Type::String => {
                         // mismo texto que la VM (src/ffi.rs; allí es error de ejecución, aquí panic).
                         writeln!(out, "    let __rt_c{} = std::ffi::CString::new(&*__p{} as &str).expect(\"the string argument of '{}' contains an interior NUL\");", i, i, e.name).unwrap();
-                        passes.push(format!("__rt_c{}.as_ptr()", i));
+                        if blocking {
+                            // Captura Send: la dirección como usize; el CString vive en este marco.
+                            writeln!(out, "    let __rt_a{} = __rt_c{}.as_ptr() as usize;", i, i).unwrap();
+                            passes.push(format!("(__rt_a{} as *const std::os::raw::c_char)", i));
+                        } else {
+                            passes.push(format!("__rt_c{}.as_ptr()", i));
+                        }
                     }
-                    Type::Bytes => passes.push(format!("__p{}.as_ptr()", i)),
+                    Type::Bytes => {
+                        if blocking {
+                            // Captura Send: el Rc<[u8]> dueño queda vivo en este marco aparcado.
+                            writeln!(out, "    let __rt_a{} = __p{}.as_ptr() as usize;", i, i).unwrap();
+                            passes.push(format!("(__rt_a{} as *const u8)", i));
+                        } else {
+                            passes.push(format!("__p{}.as_ptr()", i));
+                        }
+                    }
                     Type::Ptr => passes.push(format!("(__p{} as *mut std::ffi::c_void)", i)),
                     other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
                 }
             }
-            writeln!(out, "    let __rt_r = unsafe {{ __ffi_{}({}) }};", mangle(&e.name), passes.join(", ")).unwrap();
-            // Marshalling del retorno C → valor raylang.
+            let raw_call = format!("unsafe {{ __ffi_{}({}) }}", mangle(&e.name), passes.join(", "));
+            if blocking {
+                // Conversión DENTRO del closure a un tipo Send (los punteros crudos no lo son).
+                let inner = match normalize_type(&e.return_type) {
+                    Type::Int | Type::Float | Type::Bool | Type::Unit => raw_call,
+                    Type::Ptr => format!("({}) as i64", raw_call),
+                    Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
+                        // char* → Option<Vec<u8>>: la copia hasta el NUL se hace en el hilo del pool.
+                        Type::Bytes | Type::String => format!("{{ let __rt_p = {}; if __rt_p.is_null() {{ None }} else {{ Some(unsafe {{ std::ffi::CStr::from_ptr(__rt_p) }}.to_bytes().to_vec()) }} }}", raw_call),
+                        Type::Ptr => format!("{{ let __rt_p = {}; if __rt_p.is_null() {{ None }} else {{ Some(__rt_p as i64) }} }}", raw_call),
+                        other => return Err(format!("FFI return type Option<{:?}> is not supported", other)),
+                    },
+                    other => return Err(format!("FFI return type is not marshalable: {:?}", other)),
+                };
+                writeln!(out, "    let __rt_r = ray_runtime::fibers::run_blocking(move || {});", inner).unwrap();
+            } else {
+                writeln!(out, "    let __rt_r = {};", raw_call).unwrap();
+            }
+            // Marshalling del retorno C → valor raylang. En modo blocking los retornos-puntero ya
+            // llegaron convertidos a tipos Send (i64 / Option<Vec<u8>> / Option<i64>) por el closure.
             let ret_expr = match normalize_type(&e.return_type) {
                 // `__rt_r` es `c_int` (i32) para Int → extiende el signo a i64 (como la VM).
                 Type::Int => "__rt_r as i64".to_string(),
                 Type::Float => "__rt_r".to_string(),
                 Type::Bool => "__rt_r != 0".to_string(),
                 Type::Unit => "()".to_string(),
+                Type::Ptr if blocking => "__rt_r".to_string(),
                 Type::Ptr => "__rt_r as i64".to_string(),
-                Type::Enum(n, args) if n == "Option" && args.len() == 1 => match normalize_type(&args[0]) {
+                Type::Enum(n, args) if n == "Option" && args.len() == 1 => match (normalize_type(&args[0]), blocking) {
                     // char* → Option<bytes>: NULL→None; si no, copia los bytes hasta el NUL (nunca libera).
-                    Type::Bytes => "if __rt_r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes())) }".to_string(),
+                    (Type::Bytes, false) => "if __rt_r.is_null() { None } else { Some(Rc::<[u8]>::from(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes())) }".to_string(),
+                    (Type::Bytes, true) => "__rt_r.map(Rc::<[u8]>::from)".to_string(),
                     // char* → Option<string>: como bytes, validando UTF-8. Mismo texto que la VM
                     // (src/interpreter.rs, ffi_to_value; allí es error de ejecución, aquí panic).
-                    Type::String => "if __rt_r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes()).expect(\"the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)\"))) }".to_string(),
+                    (Type::String, false) => "if __rt_r.is_null() { None } else { Some(Rc::<str>::from(std::str::from_utf8(unsafe { std::ffi::CStr::from_ptr(__rt_r) }.to_bytes()).expect(\"the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)\"))) }".to_string(),
+                    (Type::String, true) => "__rt_r.map(|__rt_v| Rc::<str>::from(std::str::from_utf8(&__rt_v).expect(\"the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)\")))".to_string(),
                     // ptr fallible → Option<ptr>: NULL→None; si no, la dirección opaca.
-                    Type::Ptr => "if __rt_r.is_null() { None } else { Some(__rt_r as i64) }".to_string(),
-                    other => return Err(format!("FFI return type Option<{:?}> is not supported", other)),
+                    (Type::Ptr, false) => "if __rt_r.is_null() { None } else { Some(__rt_r as i64) }".to_string(),
+                    (Type::Ptr, true) => "__rt_r".to_string(),
+                    (other, _) => return Err(format!("FFI return type Option<{:?}> is not supported", other)),
                 },
                 other => return Err(format!("FFI return type is not marshalable: {:?}", other)),
             };

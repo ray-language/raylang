@@ -459,3 +459,48 @@ fn main() -> int {
 "#,
     );
 }
+
+#[test]
+fn blocking_externs_offload_and_stay_byte_identical() {
+    // FFI `blocking` (extensión de M41): un `extern "lib" blocking { … }` llamado DENTRO de una
+    // fibra se descarga al pool bloqueante (`run_blocking`) y aparca la fibra; los VALORES no
+    // cambian → paridad byte a byte con la VM (que llama directo). Cubre argumentos float, string
+    // (captura Send del CString por usize) y retorno Option<string> (copia dentro del closure),
+    // más una llamada blocking desde `main` (fuera de fibra → vía directa del pool).
+    assert_fibers_matches_vm(
+        "blocking_externs",
+        r#"
+extern "m" blocking {
+    fn sqrt(x: float) -> float;
+    fn pow(x: float, y: float) -> float;
+}
+
+extern "c" blocking {
+    fn strstr(h: string, n: string) -> Option<string>;
+}
+
+fn find(h: string, n: string) -> string {
+    match (strstr(h, n)) {
+        Option.Some(s) => s,
+        Option.None => "none",
+    }
+}
+
+fn main() -> int {
+    var tasks: [Task<float>] = [];
+    var i: int = 0;
+    while (i < 8) {
+        tasks.push(spawn(fn() -> float { sqrt(pow(2.0, 10.0)) }));
+        i = i + 1;
+    }
+    var total: float = 0.0;
+    for t in tasks { total = total + join(t); }
+    print(total);
+    let finder = spawn(fn() -> string { find("hello world", "wor") });
+    print(join(finder));
+    print(find("hello", "zzz"));
+    0
+}
+"#,
+    );
+}

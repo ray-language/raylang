@@ -2075,6 +2075,19 @@ un flock por pkg alrededor del `cargo build` + copia.
 
 ---
 
+## 55. Constructores de tamaño — `kb`/`mb`/`gb` vía UFCS (jul 2026, impacto: BAJO)
+
+El hermano de los constructores de duración de `std/time` (DESIGN §91): `64.kb()` → bytes, como
+funciones ordinarias vía UFCS, sin sintaxis nueva. Quedó fuera de aquel paso porque arrastra dos
+decisiones propias: (1) **1024 vs 1000** — recomendación: `kb/mb/gb = 1024ⁿ` documentado en grande
+(el uso real en código de sistemas: buffers, límites de memoria), o nombres binarios explícitos
+`kib/mib/gib` si se prefiere lo inequívoco; (2) **el hogar** — no hay módulo obvio (¿un `std/units`
+mínimo de tres funciones? ¿`std/fs`? ninguno convence). Impacto BAJO: no bloquea nada, es un archivo
+`.ray` + docs cuando haya más "unidades" que lo justifiquen o un consumidor claro (p. ej. límites de
+`process.max_output`).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

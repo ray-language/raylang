@@ -37,6 +37,9 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Constructores de duración en `std/time`**: `millis seconds minutes hours days` convierten a la
+  moneda de duración de la stdlib (int en **ms**) y, importados sin calificar, se leen en UFCS:
+  `sleep(30.seconds())`, `2.hours() + 30.minutes()`. Sin sintaxis nueva: funciones ordinarias.
 - **FFI `blocking`**: `extern "lib" blocking { … }` marca llamadas C **bloqueantes de verdad** (E/S,
   C-libs lentas). En el binario nativo con fibras (el default) la llamada se descarga a un pool
   bloqueante y la fibra espera aparcada — el worker M:N no se vara; mismos tipos y valores en todos

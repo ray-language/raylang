@@ -31,6 +31,27 @@ pub fn monotonic_nanos() -> int { __monotonic_nanos() }
 /// it blocks the whole program.
 pub fn sleep(ms: int) { __sleep(ms) }
 
+// --- Constructores de duración (azúcar UFCS: `30.seconds()`) ---
+// La moneda de duración de la stdlib es el int en MILISEGUNDOS; estas funciones convierten a esa
+// moneda desde la unidad que se lee natural. Importadas sin calificar (`from std/time import
+// seconds, minutes`) habilitan la forma UFCS: `sleep(30.seconds())`, `retry_after(5.minutes())`.
+
+/// `n` milliseconds as milliseconds — the identity, for call sites that want the unit spelled
+/// out: `sleep(500.millis())` reads better than a bare `500`.
+pub fn millis(n: int) -> int { n }
+
+/// `n` seconds as **milliseconds** (the stdlib's duration currency): `30.seconds()` is `30000`.
+pub fn seconds(n: int) -> int { n * 1000 }
+
+/// `n` minutes as **milliseconds**: `5.minutes()` is `300000`.
+pub fn minutes(n: int) -> int { n * 60000 }
+
+/// `n` hours as **milliseconds**: `2.hours()` is `7200000`.
+pub fn hours(n: int) -> int { n * 3600000 }
+
+/// `n` days (of exactly 24 hours; civil time is `DateTime`'s business) as **milliseconds**.
+pub fn days(n: int) -> int { n * 86400000 }
+
 // --- Fechas civiles UTC (M20.5, promovidas en M57.1) ---
 
 /// A civil UTC date-time: year, month (1..12), day (1..31), hour (0..23), minute/second (0..59)

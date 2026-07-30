@@ -457,7 +457,7 @@ Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista
 | `std/net` | transporte: TCP (`tcp_connect`/`tcp_listen`/`tcp_accept`/`local_port`), I/O de sockets en texto y `bytes`, TLS (`tls_connect`/`tls_accept`/`tls_upgrade`) |
 | `std/process` | ejecución de procesos del SO **sin shell** (argv tipado): `run`, el builder `cmd` y el modo *streaming* `stream` (§ REFERENCE.md §10) |
 | `std/math` | `PI`/`E`, `sqrt pow sin cos tan asin acos atan atan2 ln log2 log10 exp floor ceil round trunc`, y `abs`/`min`/`max` genéricos |
-| `std/time` | reloj (`now`, `monotonic`), `sleep`, fechas UTC y formateo (ISO 8601/RFC 1123) |
+| `std/time` | reloj (`now`, `monotonic`), `sleep`, fechas UTC y formateo (ISO 8601/RFC 1123), constructores de duración a ms (`millis`/`seconds`/`minutes`/`hours`/`days`) |
 | `std/random` | PRNG del proceso: `next`, `below`, `between`, `choice`, `shuffle` y `seed` (semilla explícita → secuencia reproducible) |
 | `std/crypto` | cripto de **producción** respaldada por `ring` (tiempo constante): `sha256 sha512 sha1`, `hmac_sha256`, `ed25519_public_key`/`ed25519_sign`/`ed25519_verify`, `chacha20poly1305_seal`/`_open` y `random_bytes` (CSPRNG). Las versiones escritas en raylang puro (`examples/web/`) son **demostración del lenguaje**, no producción |
 | `std/collections/{set,deque,stringbuilder,dict}` | `Set<T>` y `Dict<K,V>` (claves de usuario vía `Hash`+`Eq`), `Deque<T>` y un constructor de strings que evita el O(n²) de concatenar en bucle |

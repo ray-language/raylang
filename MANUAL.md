@@ -1001,6 +1001,29 @@ fn main() -> int {
 - Solo **VM y binario nativo** (usa fibras y canales, como todo `spawn`); el intérprete lo
   rechaza con su error de concurrencia.
 
+### Tiempo y duraciones (`std/time`)
+
+Relojes (`now()` epoch-ms, `monotonic()` para medir intervalos), `sleep(ms)` cooperativo, y las
+fechas civiles UTC (`DateTime`, ISO 8601/RFC 1123). La **moneda de duración** de toda la stdlib es
+el `int` en **milisegundos**; para no escribir `300000` a mano están los **constructores de
+duración**, pensados para leerse en UFCS:
+
+```rust
+import std/time;
+from std/time import seconds, minutes, hours;
+
+fn main() {
+    time.sleep(2.seconds());                      // 2000 ms
+    let ttl = 15.minutes();                       // 900000
+    print(time.format_duration(1.hours() + 30.minutes()));  // 1h30m
+}
+```
+
+`millis(n)` (identidad, para explicitar la unidad), `seconds`, `minutes`, `hours` y `days` (de 24
+horas exactas; los calendarios son asunto de `DateTime`). Nota: la forma `2.seconds()` requiere el
+import **sin calificar** (`from std/time import seconds`); con `import std/time;` se usa
+`time.seconds(2)`.
+
 ## 14. Red y bases de datos
 
 ### Sockets y TLS (`std/net`, embebida)

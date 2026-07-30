@@ -67,14 +67,24 @@ impl Tok {
     }
 }
 
-/// Compila `input` (`*.ray.html`) y escribe el módulo generado al lado (`*.ray`). Devuelve la ruta
-/// generada. `Err` con el archivo, la línea y el motivo si el template está mal formado.
-pub fn generate_file(input: &Path) -> Result<PathBuf, String> {
+/// Compila `input` (`*.ray.html`) **en memoria** y devuelve el fuente raylang del módulo generado,
+/// sin tocar el disco. Es la vía del loader (M102): al resolver un import a un `.ray.html`, el
+/// template es la única fuente de verdad — no hay `.ray` generado en el proyecto.
+pub fn generate_module_source(input: &Path) -> Result<String, String> {
     let src = std::fs::read_to_string(input)
         .map_err(|e| format!("could not read '{}': {e}", input.display()))?;
     let name = fn_suffix_of(input)?;
     let (code, _map) = generate_with_map_at(&src, &name, input.parent())
         .map_err(|e| format!("{}: line {}: {}", input.display(), e.line, e.msg))?;
+    Ok(code)
+}
+
+/// Compila `input` (`*.ray.html`) y escribe el módulo generado al lado (`*.ray`). Devuelve la ruta
+/// generada. `Err` con el archivo, la línea y el motivo si el template está mal formado. Es la vía
+/// **explícita** (`ray build --templates-only`): materializa el generado para inspección; la vía
+/// normal (run/build/test) compila en memoria vía `generate_module_source`.
+pub fn generate_file(input: &Path) -> Result<PathBuf, String> {
+    let code = generate_module_source(input)?;
     let out_path = output_path(input)?;
     std::fs::write(&out_path, &code)
         .map_err(|e| format!("could not write '{}': {e}", out_path.display()))?;

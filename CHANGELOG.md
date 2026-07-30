@@ -172,6 +172,11 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Cambiado
 
+- **Los templates `.ray.html` se compilan en memoria** (M102): un `vistas/x.ray.html` es
+  directamente el módulo `vistas/x` — el loader lo compila al resolver el import, sin generar
+  ningún `.ray` en el proyecto (y si queda uno viejo, lo ignora). Desaparecen la regeneración por
+  mtime y los generados commiteados; `ray build --templates-only` queda como materialización
+  opcional para inspección.
 - **Todos los mensajes que el lenguaje entrega al usuario están en inglés** (compilador, runtime,
   tooling y stdlib), incluidos los espejos del compilador auto-alojado. Los comentarios del código
   siguen en español.

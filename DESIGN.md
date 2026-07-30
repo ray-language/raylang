@@ -8879,3 +8879,30 @@ checker/VM), pero ahora carga cada *suite* con `loader::load_with_deps`, igual q
 **Lo diferido** (IDEAS §58): re-check incremental (hoy cada prueba re-chequea el programa clonado
 — O(n²) con baterías enormes), `--list`/skip/should-panic, salida machine-readable (JUnit/JSON) y
 paralelismo de la batería. A demanda cuando existan baterías que lo pidan.
+
+## 93. M102 — templates compilados en memoria (jul 2026)
+
+**El síntoma (DX).** El modelo de M55 —cada `vistas/x.ray.html` genera un `vistas/x.ray` hermano
+que **se commitea** ("inspeccionable, cero magia", en la línea de `templ` de Go)— resultó incómodo
+en el uso real: el directorio de vistas mezcla fuente y artefacto, los diffs arrastran generados,
+y el archivo equivocado invita a editarse. Encima exigía toda una maquinaria de staleness (regen
+por mtime en `run`/`build`/`test`, el caso del layout heredado, la guardia del `/tmp` compartido
+para el MCP, el caso especial del watcher de `ray dev`).
+
+**La forma.** El template pasa a ser la **única fuente de verdad** (modelo askama/Phoenix): un
+`dep.ray.html` **es** el módulo `dep`. `resolve_module_path` lo resuelve directamente y el loader
+lo compila **en memoria** (`templ::generate_module_source`, el mismo generador de M55) al leer el
+módulo — nada se escribe a disco. Piezas que caen: `regen_stale_templates` entera (mtimes, layout,
+guardia de `/tmp`); piezas que quedan: `ray build --templates-only` **materializa** el generado
+bajo demanda (la inspección "cero magia" de M55, ahora opcional y no permanente).
+
+- **Prioridad de resolución**: si junto al template existe un `dep.ray` (un generado viejo, o un
+  repo anterior a M102), **gana el template** — por convención un `.ray` con hermano `.ray.html`
+  es artefacto, no módulo a mano (la misma que ya aplicaba el watcher de `ray dev`). Template vs
+  `dep/mod.ray` sigue siendo ambigüedad (error), como archivo-vs-directorio.
+- **Errores**: los del template mismo (directivas) salen del loader con archivo y línea del
+  `.ray.html`, como antes. Los de **tipos** dentro del módulo generado reportan la línea del
+  generado (que ya no está en disco): la traducción vía line map —que el LSP ya hace para buffers
+  `.ray.html`— a la vía normal de diagnósticos queda como fase A2 (IDEAS).
+- **LSP gratis**: el completion de imports lista también los `.ray.html`, y analizar un `.ray` que
+  importa un template ya no exige el generado en disco (el loader lo compila igual en memoria).

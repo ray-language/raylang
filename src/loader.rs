@@ -167,6 +167,11 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
             Some(s) if is_entry => s.to_string(),
             _ => match crate::stdlib::embedded(&name) {
                 Some(s) => s.to_string(),
+                // M102: un módulo-template (`.ray.html`) se compila EN MEMORIA — el template es la
+                // única fuente de verdad, sin `.ray` generado en el proyecto. Un error del template
+                // (sintaxis de directivas) aborta aquí con su archivo y línea.
+                None if is_template(&path) => crate::templ::generate_module_source(&path)
+                    .map_err(|message| LoadError { message })?,
                 None => std::fs::read_to_string(&path).map_err(|e| LoadError {
                     message: format!("could not read module '{}' ({}): {}", name, path.display(), e),
                 })?,
@@ -545,13 +550,19 @@ fn module_name(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("main").to_string()
 }
 
+/// ¿La ruta es un template compilado (`*.ray.html`)? El loader lo compila en memoria (M102).
+fn is_template(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".ray.html"))
+}
+
 /// La **identidad de módulo** de `path` como su ruta relativa a `root`, con separador `/` y sin la
 /// extensión `.ray` (`.../geo/formas/circulo.ray` bajo `.../` → `geo/formas/circulo`). Un `mod.ray`
 /// toma la identidad de su **directorio** (`geo/mod.ray` → `geo`), como al resolverlo por su ruta de
 /// import. `None` si `path` no está bajo `root`. Lo usa el LSP para nombrar la entrada (un submódulo).
 fn rel_module_name(path: &Path, root: &Path) -> Option<String> {
     let rel = path.strip_prefix(root).ok()?.to_str()?.replace('\\', "/");
-    let base = rel.strip_suffix(".ray").unwrap_or(&rel);
+    // Un template compilado (`.ray.html`, M102) toma la misma identidad que tomaría su módulo.
+    let base = rel.strip_suffix(".ray.html").or_else(|| rel.strip_suffix(".ray")).unwrap_or(&rel);
     let ident = base.strip_suffix("/mod").unwrap_or(base);
     (!ident.is_empty()).then(|| ident.to_string())
 }
@@ -605,7 +616,8 @@ fn collect_modules(dir: &Path, root: &Path, out: &mut std::collections::BTreeSet
         let p = e.path();
         if p.is_dir() {
             collect_modules(&p, root, out);
-        } else if p.extension().and_then(|s| s.to_str()) == Some("ray") {
+        } else if p.extension().and_then(|s| s.to_str()) == Some("ray") || is_template(&p) {
+            // Los templates (`.ray.html`, M102) también son módulos importables.
             if let Some(m) = rel_module_name(&p, root) {
                 out.insert(m);
             }
@@ -624,6 +636,20 @@ pub fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBu
     for root in roots {
         let as_file = root.join(format!("{}.ray", dep));
         let as_dir = root.join(dep).join("mod.ray");
+        // M102: un template `dep.ray.html` ES el módulo `dep` (el loader lo compila en memoria).
+        // Si además existe `dep.ray`, gana el TEMPLATE: por convención, un `.ray` con un
+        // `.ray.html` hermano es un generado viejo de `ray build --templates-only`, no un módulo
+        // escrito a mano (la misma convención que aplica el watcher de `ray dev`).
+        let as_tpl = root.join(format!("{}.ray.html", dep));
+        if as_tpl.exists() {
+            if as_dir.exists() {
+                return Err(format!(
+                    "module '{}' is ambiguous: both '{}' and '{}' exist; leave only one",
+                    dep, as_tpl.display(), as_dir.display()
+                ));
+            }
+            return Ok(Some(as_tpl));
+        }
         match (as_file.exists(), as_dir.exists()) {
             (true, true) => return Err(format!(
                 "module '{}' is ambiguous: both '{}' and '{}' exist; leave only one",

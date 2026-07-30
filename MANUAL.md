@@ -1537,11 +1537,12 @@ suite aparte. Un fallo reporta su mensaje **y su ubicación** (`at módulo:líne
 compila. Un filtro (`ray test suma`, o `ray test archivo.ray suma`) selecciona por subcadena del
 nombre.
 
-### Templates compilados (`ray build --templates-only`)
+### Templates compilados (`.ray.html`)
 
 Para SSR, además del motor runtime (`std/template`, §12), un template puede **compilarse a una
 función raylang tipada**: el archivo `vistas/lista.ray.html` declara su firma en la primera línea y
-`ray build --templates-only` genera `vistas/lista.ray` al lado (commiteable). Reparto de roles: los compilados son
+**es un módulo importable tal cual** — el loader lo compila en memoria al resolver `import
+vistas/lista;`, sin generar ningún archivo en el proyecto. Reparto de roles: los compilados son
 la opción por defecto (tipados, y solo ellos soportan `{% include %}`/`{% extends %}`/`{% block %}`/
 `{% let %}`); el motor runtime es un subconjunto (interpolación + `if`/`for`) para plantillas
 **dinámicas** — cargadas de disco o BD en caliente — que no existen en build time:
@@ -1552,12 +1553,11 @@ la opción por defecto (tipados, y solo ellos soportan `{% include %}`/`{% exten
 <ul>{% for fila in filas %}<li>{{ fila }}</li>{% endfor %}</ul>
 ```
 
-```sh
-ray build --templates-only vistas/        # genera vistas/lista.ray (pub fn render_lista(...) -> string)
-```
-
-No hace falta acordarse de regenerar: `ray run`/`ray build`/`ray test` **regeneran solos** los
-templates cuyo `.ray` falte o esté desactualizado (aviso por stderr).
+No hay nada que regenerar ni commitear: `ray run`/`ray build`/`ray test` compilan el template al
+vuelo cada vez (el template es la única fuente de verdad). Para **inspeccionar** el módulo
+generado, `ray build --templates-only vistas/` lo materializa al lado
+(`vistas/lista.ray`, `pub fn render_lista(...) -> string`); si ese `.ray` queda en el proyecto, el
+loader lo ignora y sigue prefiriendo el template.
 
 ```rust
 import vistas/lista;

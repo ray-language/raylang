@@ -2161,6 +2161,20 @@ salida machine-readable, ejecución paralela de la batería — a demanda cuando
 
 ---
 
+## 59. Diagnósticos de templates traducidos al `.ray.html` (jul 2026, impacto: MEDIO — DX) — fase A2 de M102
+
+Con M102 (templates compilados **en memoria** por el loader; DESIGN §93) el `.ray` generado ya no
+existe en disco. Los errores del template mismo (directivas) ya salen con archivo y línea del
+`.ray.html`; pero un error de **tipos** dentro del módulo generado (p. ej. el typo en `{{ titluo }}`
+al compilar el programa) reporta la línea del **generado**, que el usuario no puede abrir. La pieza
+que falta: aplicar el **line map** de `templ::generate_with_map` (que el LSP ya usa para traducir
+diagnósticos en buffers `.ray.html`) a la vía normal de diagnósticos del loader/checker, de modo
+que todo error de un módulo-template apunte a la línea real del template. Requiere llevar el mapa
+junto al módulo cargado y traducir en `locate`/render. Mientras tanto, `ray build --templates-only`
+materializa el generado para inspección.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

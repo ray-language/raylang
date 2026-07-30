@@ -2091,6 +2091,19 @@ de tipo — `import ...bytes;` muere en el parser). Entregada junto a las duraci
 
 ---
 
+## 56. LSP: completion en posición de from-import (jul 2026, impacto: BAJO — solo LSP, DX)
+
+Detectado al verificar `std/units`: tras `from std/M import ` el LSP devuelve `[]` — para TODOS
+los módulos (no es cosa de units; la completion de miembros `M.` sí funciona y ya ofrece
+`kb/mb/gb`). El hueco pica justo donde más se escribe ahora: la forma UFCS de los constructores
+de unidades (`30.seconds()`, `64.kb()`) exige el import SIN calificar, así que la línea
+`from std/time import seconds, minutes` es el sitio sin ayuda. Implementación natural: detectar el
+contexto `from <ruta> import` en la línea del cursor y ofrecer los ítems `pub` del módulo (la misma
+fuente que la completion de `M.`), filtrando los ya importados. Solo toca `src/lsp/` (cliente
+externo, sin espejo selfhost ni motores). BAJO pero alineado con la prioridad DX.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

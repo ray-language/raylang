@@ -1,0 +1,15 @@
+// std/units — constructores de unidades como funciones ordinarias (IDEAS §55, hermano de los
+// constructores de duración de std/time). Importados sin calificar habilitan la lectura UFCS:
+// `from std/units import kb, mb;  let buf_max = 64.kb();`. Módulo PLANO a propósito (sin
+// submódulo units/size): si algún día llega otra familia de unidades, entra como submódulo
+// hermano o con un reexport de compat (la crónica de la decisión, en IDEAS §55).
+
+/// `n` kilobytes as **bytes**, binary convention (1 KB = 1024 bytes — the systems-code reading:
+/// buffers, memory limits): `64.kb()` is `65536`.
+pub fn kb(n: int) -> int { n * 1024 }
+
+/// `n` megabytes as **bytes** (1 MB = 1024² = 1048576 bytes): `16.mb()` is `16777216`.
+pub fn mb(n: int) -> int { n * 1048576 }
+
+/// `n` gigabytes as **bytes** (1 GB = 1024³ = 1073741824 bytes): `2.gb()` is `2147483648`.
+pub fn gb(n: int) -> int { n * 1073741824 }

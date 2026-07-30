@@ -16,7 +16,11 @@ use std::collections::HashMap;
 
 /// Almacén interno de un `Map` en el intérprete (P0.1, perf): `HashMap` con el hasher **aHash** en
 /// vez del SipHash de std — 2–5× más rápido sobre claves cortas. Espeja [`crate::gc::MapStore`] (VM).
+/// En wasm (playground) no hay aHash (su runtime-rng exige getrandom) → SipHash de std, como pre-P0.1.
+#[cfg(not(target_arch = "wasm32"))]
 pub type MapStore = HashMap<MapKey, Value, ahash::RandomState>;
+#[cfg(target_arch = "wasm32")]
+pub type MapStore = HashMap<MapKey, Value>;
 use std::rc::Rc;
 
 use crate::ast::{Expr, ExprKind, UnaryOp};

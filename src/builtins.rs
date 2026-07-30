@@ -2754,6 +2754,11 @@ pub fn proc_spawn_handles(program: &str, args: &[String], opts: &RunOpts) -> Res
     Ok((h_child, h_out, h_err))
 }
 
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn proc_spawn_handles(program: &str, _args: &[String], _opts: &RunOpts) -> Result<(i64, i64, i64), String> {
+    Err(format!("{program}: running OS processes is not supported on this platform"))
+}
+
 /// El resultado de `proc_spawn_handles`, aplanado al arreglo etiquetado del builtin `__proc_spawn`:
 /// `[b"ok", h_child, h_out, h_err]` o `[b"err", msg]`.
 pub fn proc_spawn_encode(r: Result<(i64, i64, i64), String>) -> Vec<Vec<u8>> {

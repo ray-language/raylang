@@ -153,6 +153,20 @@ pub enum OpCode {
     /// MM2 (ronda 4): `[GetLocal(t), Index]` → `IndexLocal(t)`: saca la base de la pila e indexa por
     /// `local[t]`. Es el segundo nivel de `a[i][k]` (la base ya está en la pila) y el `x[k]` suelto.
     IndexLocal(usize),
+    /// V9 (ronda 5): la guarda entera de `if`/`while` sobre DOS locales en una instrucción
+    /// (`[GetLocalLocal(a, b), CmpJump(op, target)]`): compara `local[a] op local[b]` y si es
+    /// falso salta a `target`, sin apilar ni sacar operandos. Es la guarda `i < n` con tope en
+    /// VARIABLE — el patrón de todo for-range cuyo límite no es constante (la ronda 3 solo
+    /// cubría `local op const`).
+    LocalLocalCmpJump(usize, usize, CmpOp, usize),
+    /// V9 (ronda 5): `local[s] = local[s] + const[c]` sin pasar por la pila
+    /// (`[AddLocalConst(s, c), SetLocal(s)]`): el incremento de todo bucle contado.
+    IncLocalConst(usize, usize),
+    /// V9 (ronda 5): el CIERRE completo de un bucle contado en una instrucción
+    /// (`[AddLocalConst(s, c), SetLocal(s), Jump(target)]`): incrementa el índice y salta
+    /// atrás a la guarda. Junto a las guardas fusionadas deja el overhead de bucle en 1+1
+    /// instrucciones por iteración.
+    IncJump(usize, usize, usize),
     /// A4 (ronda 2): `local[slot] + const` en una instrucción (`[GetLocalConst, Add]`).
     AddLocalConst(usize, usize),
     /// A4 (ronda 2): `local[slot] - const` en una instrucción (`[GetLocalConst, Sub]`).
@@ -765,6 +779,10 @@ pub struct CompiledFn {
     /// `captured[s] == true` si el slot local `s` es capturado por alguna closure
     /// anidada y, por tanto, debe **boxearse** (vivir en una celda) (M4.2).
     pub captured: Vec<bool>,
+    /// V9: ¿algún slot capturado? Precomputado al compilar — el camino de llamada de la VM
+    /// decide con UN bool (lo común: ninguno → locales y argumentos van directos, sin mirar
+    /// `captured` slot a slot).
+    pub has_captured: bool,
     /// Los upvalues de esta función: cómo construir su entorno al crearla (M4.2).
     pub upvalues: Vec<UpvalueRef>,
     pub chunk: Chunk,

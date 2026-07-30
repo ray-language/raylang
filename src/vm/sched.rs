@@ -12,6 +12,11 @@ use super::*;
 pub(super) struct Fiber {
     pub(super) frames: Vec<CallFrame>,
     pub(super) stack: Vec<HeapValue>,
+    /// V12: el **register file** de la fibra — los locales de TODOS sus marcos, contiguos en
+    /// una sola pila (cada `CallFrame` guarda solo su `locals_base`). Entrar a una función =
+    /// extender; salir = truncar a la base del marco. Sin `Vec` por marco ni pool: el camino
+    /// de llamada no aloca, y los locales de la cadena viva comparten líneas de caché.
+    pub(super) locals: Vec<Local>,
     /// M38.1b-2: el **heap propio** de la fibra (aislamiento por actores, §46.2). `Vm.heap` es el de la
     /// fibra en curso; al conmutar se salva aquí y se restaura el de la siguiente. Un objeto de este heap
     /// solo lo alcanzan los marcos/pila de esta fibra (invariante: sin handles cruzados entre heaps).
@@ -442,11 +447,11 @@ impl<'a> Vm<'a> {
             .try_markers
             .pop()
             .expect("the caller checks there is a marker");
-        // Los marcos del tramo abortado se descartan reciclando sus locales, como hace `Return`:
-        // sin esto el pool de locales (Opt.2) los perdería en cada recuperación.
+        // Los marcos del tramo abortado se descartan truncando sus ventanas de locales,
+        // como hace `Return` (V12: el register file vuelve a la base del marcador).
         while self.cur.frames.len() > m.frames_len {
             if let Some(f) = self.cur.frames.pop() {
-                self.recycle_locals(f.locals);
+                self.cur.locals.truncate(f.locals_base); // V12: descarta la ventana del marco
             }
         }
         // Scopes abiertos dentro del cuerpo que falló: sus hijas no pueden quedar huérfanas.
@@ -505,6 +510,7 @@ impl<'a> Vm<'a> {
             sh.running -= 1; // esta fibra terminó (con fallo) → este worker queda ocioso
         }
         self.cur.frames.clear();
+        self.cur.locals.clear(); // V12: el register file muere con los marcos
         self.cur.stack.clear();
         self.cur.scopes.clear();
         if !self.poll_next(e.line, e.col)? { self.stop = true; }

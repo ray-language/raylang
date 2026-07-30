@@ -1158,6 +1158,29 @@ que resta del 26× es la maquinaria de marco (push/pop de CallFrame, locals del 
 despacho: el siguiente escalón sería el layout del marco (locals inline en el CallFrame para
 aridades pequeñas), anotado sin abrir.
 
+#### Fase 75 — V12: register file por fibra — los locales de todos los marcos, contiguos (30 jul, banco)
+
+El escalón anotado en la Fase 74. Los locales dejan de ser un `Vec<Local>` POR MARCO (con pool
+de reciclaje, Opt.2) y pasan a un **register file por fibra**: una sola pila contigua
+(`Fiber.locals`) donde cada `CallFrame` guarda solo su `locals_base`. Entrar a una función =
+`resize_with` al final; salir = `truncate` a la base — el camino de llamada no aloca NADA y los
+locales de la cadena viva comparten líneas de caché. La base del marco se lee UNA vez por
+instrucción (parámetro de `exec_instr`); el GC rootea los locales con un solo recorrido lineal
+(antes: un Vec por marco); el pool (`locals_pool`) desaparece. `TailCall` trunca su propia
+ventana (es el tope) y abre la nueva en el mismo sitio — los argumentos viven en la pila de
+operandos, aparte, y sobreviven al truncado. El spawn construye la ventana de la fibra hija con
+`build_locals` (mismo comportamiento que antes, celdas incluidas); el desenrollado de
+`try_call` y `fail_current_fiber` truncan el register file con los marcos.
+
+**Medido** (A/B intercalado, release plano): fibrec **−5.0%**, sortnums −3.3%, loopsum −2.9%,
+wordcount −2.9%, treealloc −2.4%, matrixmul −1.7%; jsonserialize/jsondeserialize/regex oscilan
++0-3% entre corridas (dentro del ruido de layout; los controles `.native` bailan lo mismo). Con
+el arnés (PGO): fibrec 470 ms, loopsum 339, treealloc 464 — mejoras de un dígito. La hipótesis
+del escalón era buena pero V11 ya había comido casi todo el margen del camino de llamada: lo
+que queda del 26× de fibrec es el despacho en sí y el push/pop del `CallFrame`. El valor
+duradero de V12 es ESTRUCTURAL: cero allocs por llamada, GC roots lineal y una representación
+lista para futuros pasos (marcos sin Vec de upvalues, bytecode con offsets absolutos).
+
 #### Fase 2 — strings (14 jul, arco P2.b en marcha)
 
 Extendido el transpilador a **strings** (`Type::String` → `Rc<str>`; concat, `to_string`, `len`, params/

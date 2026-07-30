@@ -835,7 +835,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    import std/random;        // random.below(6)
    ```
 
-   El catálogo: `math` `text` `sort` `fs` `net` `process` `time` `random` `crypto` `resilience`
+   El catálogo: `math` `text` `sort` `fs` `net` `process` `time` `units` `random` `crypto` `resilience`
    `collections/{set,deque,stringbuilder}` `json` `hex` `base64` `url` `regex` `csv` `toml` `template`
    `inflate` `deflate` `huffman` `protobuf` `uuid`.
 
@@ -1023,6 +1023,16 @@ fn main() {
 horas exactas; los calendarios son asunto de `DateTime`). Nota: la forma `2.seconds()` requiere el
 import **sin calificar** (`from std/time import seconds`); con `import std/time;` se usa
 `time.seconds(2)`.
+
+El hermano para los **tamaños** es `std/units`: `kb`, `mb`, `gb` → bytes, en convención **binaria**
+(1 KB = 1024 bytes, la lectura habitual en código de sistemas — buffers, límites de memoria):
+
+```rust
+from std/units import kb, mb;
+
+let buf_max = 64.kb();     // 65536
+let upload_cap = 16.mb();  // 16777216
+```
 
 ## 14. Red y bases de datos
 

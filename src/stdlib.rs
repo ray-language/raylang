@@ -40,6 +40,8 @@ const MODULES: &[(&str, &str)] = &[
     ("std/kv", include_str!("../std/kv.ray")),
     // Revisión FFI jul 2026: helpers de la frontera C (errno).
     ("std/ffi", include_str!("../std/ffi.ray")),
+    // IDEAS §55: constructores de unidades (tamaños en bytes, convención binaria 1024ⁿ).
+    ("std/units", include_str!("../std/units.ray")),
     // Librerías **promovidas** desde `examples/` (M40.7): se embeben apuntando al archivo original —fuente
     // ÚNICA, sin duplicar—; el ejemplo sigue siendo el artefacto pedagógico y a la vez la fuente de `std/`.
     // Solo se promueven así las **hojas** (sin `import`); las que tienen dependencias se namespacan (M40.7b+).

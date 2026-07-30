@@ -8831,5 +8831,11 @@ a `format_duration`, que es el inverso conceptual (ms → texto). Además el imp
 calificar**, así que `30.seconds()` requiere `from std/time import seconds` (con `import std/time;`
 queda `time.seconds(30)`). La superficie: `millis` (identidad, para explicitar la unidad),
 `seconds`, `minutes`, `hours`, `days` (de 24 h exactas: los calendarios son asunto de `DateTime`).
-Los tamaños (`kb`/`mb`/`gb`) quedaron fuera de este paso y clasificados en IDEAS.md — arrastran su
-propia decisión (1024 vs 1000) y no tienen hogar obvio.
+Los tamaños (`kb`/`mb`/`gb`) quedaron primero clasificados en IDEAS §55 — arrastraban su propia
+decisión (1024 vs 1000) y no tenían hogar obvio — y se ejecutaron en el mismo arco al resolverse
+ambas: **`std/units`, plano** (el candidato natural `std/bytes` está vetado por sintaxis: `bytes`
+es palabra reservada de tipo y no puede nombrar un módulo; el submódulo `units/size` se descartó
+por YAGNI — con las duraciones en `time`, el catálogo restante no justifica jerarquía, y una
+familia futura entra como submódulo hermano o vía reexport de compat estilo `net/time`→`std/time`),
+con **convención binaria `kb/mb/gb = 1024ⁿ`** (la lectura de código de sistemas: buffers, límites
+de memoria) documentada en la firma de cada función.

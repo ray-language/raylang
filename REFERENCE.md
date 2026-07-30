@@ -380,6 +380,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/huffman` | `huffman_encode huffman_decode` (la tabla HPACK del RFC 7541) |
 | `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` `get_int get_bytes get_string` · framing gRPC: `grpc_frame grpc_unframe` |
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
+| `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 |
 
 ## 11. Paquetes adicionales (`net`, `rpc`, `db`)
 
@@ -453,6 +454,12 @@ Aridad **0 a 6** (la rechaza el checker más allá: mismo límite en todos los m
 
 Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs por valor, callbacks
 (anotados para un FFI v2). No disponible en el playground wasm.
+
+**`errno`**: `import std/ffi;` + `ffi.errno()` lee el `errno` del hilo (el motivo del último fallo
+POSIX). Regla: **inmediatamente** después de la extern, sin E/S de raylang en medio (una operación
+que aparque la fibra deja correr a sus hermanas del mismo hilo, que pueden pisarlo; dos sentencias
+consecutivas sin E/S no aparcan). Tras una extern `blocking`, el runtime repone en el worker el
+errno del hilo del pool — la regla es la misma.
 
 **Pila para el código C** (binario nativo con fibras): las llamadas C corren sobre la pila de la
 fibra. Con externs declaradas, el default sube solo de 128 KiB a **1 MiB** por fibra (reserva

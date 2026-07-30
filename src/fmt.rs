@@ -255,7 +255,7 @@ enum Top<'a> {
     Trait(&'a TraitDef),
     Impl(&'a ImplBlock),
     Fn(&'a Function),
-    Extern(String), // nombre de la librería (bloque `extern "lib" { … }`)
+    Extern(String, bool), // librería + blocking (bloque `extern "lib" [blocking] { … }`)
 }
 
 fn format_program(p: &Program, cur: &mut Cur) -> String {
@@ -285,9 +285,10 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
     for it in &p.functions {
         tops.push((it.line, Top::Fn(it)));
     }
-    // M41: los `extern "lib" { … }` se reagrupan por librería (orden de primera aparición).
-    for (lib, line) in extern_libs_in_order(&p.externs) {
-        tops.push((line, Top::Extern(lib)));
+    // M41: los `extern "lib" { … }` se reagrupan por (librería, blocking) en orden de primera
+    // aparición (un bloque `blocking` no se fusiona con uno normal de la misma librería).
+    for (lib, blocking, line) in extern_libs_in_order(&p.externs) {
+        tops.push((line, Top::Extern(lib, blocking)));
     }
     tops.sort_by_key(|(line, _)| *line);
 
@@ -315,7 +316,7 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
             Top::Trait(it) => fmt_trait(cur, it),
             Top::Impl(it) => fmt_impl(cur, it),
             Top::Fn(it) => fmt_function(cur, it),
-            Top::Extern(lib) => fmt_extern_block(lib, &p.externs),
+            Top::Extern(lib, blocking) => fmt_extern_block(lib, *blocking, &p.externs),
         };
         out.push_str(&text);
         if !text.contains('\n') {
@@ -361,22 +362,23 @@ fn fmt_const(cur: &mut Cur, it: &ConstDef) -> String {
     format!("{}const {}: {} = {};", pref, it.name, fmt_type(&it.ty), fmt_expr(cur, &it.value, 0))
 }
 
-/// Las librerías de los bloques `extern` en orden de primera aparición, con la línea de esa primera
-/// firma (para ordenar el bloque entre los ítems de nivel superior). (M41)
-fn extern_libs_in_order(externs: &[ExternFn]) -> Vec<(String, usize)> {
-    let mut seen: Vec<(String, usize)> = Vec::new();
+/// Los pares (librería, blocking) de los bloques `extern` en orden de primera aparición, con la
+/// línea de esa primera firma (para ordenar el bloque entre los ítems de nivel superior). (M41)
+fn extern_libs_in_order(externs: &[ExternFn]) -> Vec<(String, bool, usize)> {
+    let mut seen: Vec<(String, bool, usize)> = Vec::new();
     for e in externs {
-        if !seen.iter().any(|(l, _)| *l == e.lib) {
-            seen.push((e.lib.clone(), e.line));
+        if !seen.iter().any(|(l, b, _)| *l == e.lib && *b == e.blocking) {
+            seen.push((e.lib.clone(), e.blocking, e.line));
         }
     }
     seen
 }
 
-/// Formatea un bloque `extern "lib" { fn …; … }` con todas las firmas de esa librería. (M41)
-fn fmt_extern_block(lib: &str, externs: &[ExternFn]) -> String {
-    let mut s = format!("extern {:?} {{\n", lib);
-    for e in externs.iter().filter(|e| e.lib == lib) {
+/// Formatea un bloque `extern "lib" [blocking] { fn …; … }` con todas las firmas de esa librería
+/// y esa marca. (M41)
+fn fmt_extern_block(lib: &str, blocking: bool, externs: &[ExternFn]) -> String {
+    let mut s = format!("extern {:?}{} {{\n", lib, if blocking { " blocking" } else { "" });
+    for e in externs.iter().filter(|e| e.lib == lib && e.blocking == blocking) {
         s.push_str(&format!(
             "{}fn {}({}){};\n",
             INDENT, e.name, fmt_params(&e.params), fmt_return(&e.return_type)
@@ -1166,6 +1168,15 @@ mod tests {
 
     fn fmt(src: &str) -> String {
         format_source(src).expect("formatea")
+    }
+
+    #[test]
+    fn extern_blocking_roundtrips_and_does_not_merge_with_plain_blocks() {
+        // Un bloque `extern "c" blocking { … }` conserva su marca al reformatear, y NO se fusiona
+        // con un bloque normal de la MISMA librería (la reagrupación es por (lib, blocking)).
+        let src = "extern \"c\" blocking {\n    fn sleep(s: int) -> int;\n}\n\nextern \"c\" {\n    fn abs(x: int) -> int;\n}\n\nfn main() -> int {\n    0\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
     }
 
     #[test]

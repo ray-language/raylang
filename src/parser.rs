@@ -435,12 +435,14 @@ impl Parser {
         })
     }
 
-    /// extern_block = 'extern' STRING '{' { extern_sig } '}'   (M41, FFI)
+    /// extern_block = 'extern' STRING [ 'blocking' ] '{' { extern_sig } '}'   (M41, FFI)
     /// extern_sig   = 'fn' IDENT '(' [ params ] ')' [ '->' type ] ';'
     ///
     /// Declara funciones C de una librería. Cada firma va sin cuerpo (termina en `;`); su nombre es a
     /// la vez el identificador en raylang y el símbolo a resolver con `dlsym`. El nombre de la librería
-    /// es el string literal tras `extern` (`extern "m"` → `libm`).
+    /// es el string literal tras `extern` (`extern "m"` → `libm`). `blocking` es una palabra
+    /// CONTEXTUAL (no reservada: un identificador `blocking` sigue siendo válido) que marca todas las
+    /// firmas del bloque como llamadas bloqueantes de verdad (ver `ExternFn::blocking`).
     fn extern_block(&mut self, acc: &mut Program) -> Result<(), ParseError> {
         self.expect(&TokenKind::Extern, "'extern'")?;
         let lib_tok = self.advance();
@@ -451,6 +453,10 @@ impl Parser {
                 line: lib_tok.line, col: lib_tok.col, len: 1,
             }),
         };
+        let blocking = matches!(&self.peek().kind, TokenKind::Ident(s) if s == "blocking");
+        if blocking {
+            self.advance();
+        }
         self.expect(&TokenKind::LBrace, "'{' after extern \"lib\"")?;
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
             let kw = self.expect(&TokenKind::Fn, "'fn' in the extern block")?;
@@ -460,7 +466,7 @@ impl Parser {
             self.expect(&TokenKind::RParen, "')'")?;
             let return_type = if self.eat(&TokenKind::Arrow) { self.parse_type()? } else { Type::Unit };
             self.expect(&TokenKind::Semicolon, "';' at the end of the extern signature (it has no body)")?;
-            acc.externs.push(ExternFn { name, lib: lib.clone(), params, return_type, line: kw.line, col: kw.col });
+            acc.externs.push(ExternFn { name, lib: lib.clone(), params, return_type, blocking, line: kw.line, col: kw.col });
         }
         self.expect(&TokenKind::RBrace, "'}' to close the extern block")?;
         Ok(())
@@ -1891,6 +1897,24 @@ mod tests {
     fn parse_prog(src: &str) -> Program {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         parse(tokens).expect("parse ok")
+    }
+
+    #[test]
+    fn extern_block_accepts_the_blocking_marker() {
+        // `extern "lib" blocking { … }` marca todas las firmas del bloque; sin la marca, false.
+        let prog = parse_prog(
+            "extern \"c\" blocking { fn sleep(s: int) -> int; }\nextern \"m\" { fn sqrt(x: float) -> float; }\nfn main() -> int { 0 }",
+        );
+        assert_eq!(prog.externs.len(), 2);
+        assert!(prog.externs[0].blocking, "el bloque blocking marca sus firmas");
+        assert!(!prog.externs[1].blocking, "un bloque normal no queda marcado");
+    }
+
+    #[test]
+    fn blocking_is_contextual_and_remains_a_valid_identifier() {
+        // `blocking` NO es palabra reservada: sigue sirviendo como nombre de variable/función.
+        let prog = parse_prog("fn blocking(blocking: int) -> int { let x = blocking; x }\nfn main() -> int { blocking(1) }");
+        assert!(prog.functions.iter().any(|f| f.name == "blocking"));
     }
 
     #[test]

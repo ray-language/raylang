@@ -64,14 +64,15 @@ regex = ["ray-runtime/regex"]
 # (sin red/TLS/cripto). Al declararlas como dependencias condicionadas por target, el build nativo queda
 # IDÉNTICO y el de wasm simplemente no las trae. El uso en `builtins.rs` va tras `cfg(not(wasm32))`.
 [dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # P0.1 (perf, jul 2026): hasher aHash para el almacén interno de `Map`. 2–5× más rápido que el
 # SipHash de std sobre claves cortas (int/string), conservando resistencia a hash-flooding (semilla
 # aleatoria por proceso vía runtime-rng). Ya estaba en el árbol como transitiva (rustls/ring) → cero
-# crate nuevo. Core (no opcional): `Map` es del núcleo, en todos los targets. El orden de iteración
-# nunca se observa (keys()/values() ordenan) → sin regresión de determinismo (std ya era aleatorio).
+# crate nuevo. El orden de iteración nunca se observa (keys()/values() ordenan) → sin regresión de
+# determinismo (std ya era aleatorio). NO en wasm (su runtime-rng exige getrandom, que no compila a
+# wasm32-unknown-unknown sin glue JS): el playground vuelve al SipHash de std (M44a — lo que usaba
+# antes de P0.1; el rendimiento del Map no es crítico ahí).
 ahash = "0.8"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # P2.b — el runtime compartido con crates de producción (crypto/tls/sqlite tras features). M100 lo hace
 # NO-opcional: el primitivo de procesos (`process`, solo std+libc) es del núcleo, y sin más features el
 # crate no arrastra ninguna dependencia externa (el build slim queda igual). No en wasm (ring no compila

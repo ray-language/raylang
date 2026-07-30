@@ -176,6 +176,10 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- Playground web: el build wasm estaba **roto desde P0.1/M100** (aHash arrastra `getrandom`, que no
+  compila a wasm32; el empaquetado `gen << 32` de handles de tareas/canales desborda el `usize` de
+  32 bits; un builtin de procesos sin stub) — recompilado y verificado (núcleo + concurrencia M:1 +
+  diagnósticos en inglés); el `.wasm` embarcado llevaba desde el 7 jul con mensajes en español.
 - LSP: la completion tras `from std/M import `, las rutas `std/…` en posición de import y el
   **signature help** de funciones importadas de la stdlib ahora funcionan también para los módulos
   **embebidos** (antes la resolución iba solo a disco y devolvía vacío fuera del repo) — el sitio

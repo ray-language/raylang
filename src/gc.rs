@@ -31,9 +31,16 @@ use std::collections::{HashMap, VecDeque};
 
 /// Almacén interno de un `Map` en la VM (P0.1, perf): `HashMap` con el hasher **aHash** en vez del
 /// SipHash de std — 2–5× más rápido sobre claves cortas (int/string), con resistencia a hash-flooding.
+/// En wasm (playground) no hay aHash (su runtime-rng exige getrandom) → SipHash de std, como pre-P0.1.
+#[cfg(not(target_arch = "wasm32"))]
 pub type MapStore = HashMap<MapKey, HeapValue, ahash::RandomState>;
+#[cfg(target_arch = "wasm32")]
+pub type MapStore = HashMap<MapKey, HeapValue>;
 /// TA4: mapa (enum_id, tag) → handle canónico de la variante SIN payload (ver `Fiber.unit_enums`).
+#[cfg(not(target_arch = "wasm32"))]
 pub type MapStore2 = HashMap<(u32, u32), Handle, ahash::RandomState>;
+#[cfg(target_arch = "wasm32")]
+pub type MapStore2 = HashMap<(u32, u32), Handle>;
 
 /// Un *handle*: la referencia a un objeto del heap (su índice de ranura).
 pub type Handle = usize;

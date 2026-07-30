@@ -180,15 +180,41 @@ pub(super) struct Shared {
     pub(super) outcome: Option<Result<HeapValue, RuntimeError>>,
 }
 
+// El reparto de bits del handle empaquetado `gen | idx` (tareas y canales; viaja como `usize` en
+// `HeapValue::Task`/`Channel`). En 64 bits, 32/32 — el esquema original de M98.1. En wasm32
+// (playground, `usize` de 32 bits, donde `<< 32` desbordaría): 12 bits de generación | 20 de
+// índice — hasta ~1M slots y detección de stale módulo 4096 reusos, de sobra bajo el fuel del
+// sandbox. La generación se enmascara igual al empaquetar y al comparar, así ambos lados coinciden.
+#[cfg(target_pointer_width = "64")]
+const HANDLE_IDX_BITS: u32 = 32;
+#[cfg(not(target_pointer_width = "64"))]
+const HANDLE_IDX_BITS: u32 = 20;
+const HANDLE_IDX_MASK: usize = (1usize << HANDLE_IDX_BITS) - 1;
+
+/// Empaqueta `(generación, índice)` en un handle.
+fn pack_handle(generation: u32, idx: usize) -> usize {
+    (generation as usize & (usize::MAX >> HANDLE_IDX_BITS)) << HANDLE_IDX_BITS | idx
+}
+
+/// ¿El handle `h` lleva la generación `generation`? (misma máscara que `pack_handle`).
+fn handle_generation_matches(h: usize, generation: u32) -> bool {
+    h >> HANDLE_IDX_BITS == generation as usize & (usize::MAX >> HANDLE_IDX_BITS)
+}
+
+/// El índice de slot de un handle.
+fn handle_idx(h: usize) -> usize {
+    h & HANDLE_IDX_MASK
+}
+
 impl Shared {
     /// M98.1: aloja una tarea nueva (reusa un slot libre si hay) y devuelve su handle
-    /// (`gen << 32 | idx`). El `HeapValue::Task(usize)` transporta el handle tal cual.
+    /// (`gen | idx`, ver `pack_handle`). El `HeapValue::Task(usize)` transporta el handle tal cual.
     pub(super) fn alloc_task(&mut self) -> usize {
         let vt = VmTask { state: TaskState::Pending, heap: Heap::new() };
         if let Some(idx) = self.free_tasks.pop() {
             let slot = &mut self.tasks[idx];
             slot.task = Some(vt);
-            (slot.generation as usize) << 32 | idx
+            pack_handle(slot.generation, idx)
         } else {
             self.tasks.push(TaskSlot { generation: 0, task: Some(vt) });
             self.tasks.len() - 1
@@ -197,8 +223,8 @@ impl Shared {
 
     /// La tarea viva de un handle, o `None` si el handle es stale (slot liberado o reusado).
     pub(super) fn task(&self, h: usize) -> Option<&VmTask> {
-        let slot = self.tasks.get(h & 0xFFFF_FFFF)?;
-        if slot.generation as usize != h >> 32 {
+        let slot = self.tasks.get(handle_idx(h))?;
+        if !handle_generation_matches(h, slot.generation) {
             return None;
         }
         slot.task.as_ref()
@@ -206,8 +232,8 @@ impl Shared {
 
     /// Versión mutable de `task`.
     pub(super) fn task_mut(&mut self, h: usize) -> Option<&mut VmTask> {
-        let slot = self.tasks.get_mut(h & 0xFFFF_FFFF)?;
-        if slot.generation as usize != h >> 32 {
+        let slot = self.tasks.get_mut(handle_idx(h))?;
+        if !handle_generation_matches(h, slot.generation) {
             return None;
         }
         slot.task.as_mut()
@@ -216,9 +242,9 @@ impl Shared {
     /// M98.1: **consume** la tarea — saca el `VmTask` (con su heap: al soltarlo se libera la memoria
     /// del resultado), incrementa la generación (mata handles viejos) y encola el slot como libre.
     pub(super) fn take_task(&mut self, h: usize) -> Option<VmTask> {
-        let idx = h & 0xFFFF_FFFF;
+        let idx = handle_idx(h);
         let slot = self.tasks.get_mut(idx)?;
-        if slot.generation as usize != h >> 32 || slot.task.is_none() {
+        if !handle_generation_matches(h, slot.generation) || slot.task.is_none() {
             return None;
         }
         slot.generation = slot.generation.wrapping_add(1);
@@ -228,13 +254,13 @@ impl Shared {
 
     // --- M98.3: el almacén de canales, misma anatomía que el de tareas ---
 
-    /// Aloja un canal nuevo (reusa un slot libre si hay) y devuelve su handle (`gen << 32 | idx`).
+    /// Aloja un canal nuevo (reusa un slot libre si hay) y devuelve su handle (`gen | idx`).
     pub(super) fn alloc_channel(&mut self, cap: Option<usize>) -> usize {
         let vc = VmChannel { queue: VecDeque::new(), closed: false, cap, heap: Heap::new() };
         if let Some(idx) = self.free_channels.pop() {
             let slot = &mut self.channels[idx];
             slot.chan = Some(vc);
-            (slot.generation as usize) << 32 | idx
+            pack_handle(slot.generation, idx)
         } else {
             self.channels.push(ChanSlot { generation: 0, chan: Some(vc) });
             self.channels.len() - 1
@@ -243,8 +269,8 @@ impl Shared {
 
     /// El canal vivo de un handle, o `None` si es stale (liberado: se comporta como cerrado y vacío).
     pub(super) fn chan(&self, h: usize) -> Option<&VmChannel> {
-        let slot = self.channels.get(h & 0xFFFF_FFFF)?;
-        if slot.generation as usize != h >> 32 {
+        let slot = self.channels.get(handle_idx(h))?;
+        if !handle_generation_matches(h, slot.generation) {
             return None;
         }
         slot.chan.as_ref()
@@ -252,8 +278,8 @@ impl Shared {
 
     /// Versión mutable de `chan`.
     pub(super) fn chan_mut(&mut self, h: usize) -> Option<&mut VmChannel> {
-        let slot = self.channels.get_mut(h & 0xFFFF_FFFF)?;
-        if slot.generation as usize != h >> 32 {
+        let slot = self.channels.get_mut(handle_idx(h))?;
+        if !handle_generation_matches(h, slot.generation) {
             return None;
         }
         slot.chan.as_mut()
@@ -262,9 +288,9 @@ impl Shared {
     /// M98.3: libera el canal (cerrado y drenado): suelta su heap, incrementa la generación y
     /// encola el slot como libre. Idempotente sobre handles stale.
     pub(super) fn free_channel(&mut self, h: usize) {
-        let idx = h & 0xFFFF_FFFF;
+        let idx = handle_idx(h);
         if let Some(slot) = self.channels.get_mut(idx) {
-            if slot.generation as usize == h >> 32 && slot.chan.is_some() {
+            if handle_generation_matches(h, slot.generation) && slot.chan.is_some() {
                 slot.chan = None;
                 slot.generation = slot.generation.wrapping_add(1);
                 self.free_channels.push(idx);

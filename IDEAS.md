@@ -2115,6 +2115,23 @@ con receptor recortado).
 
 ---
 
+## 57. Playground web: autocompletado e imports de la stdlib (jul 2026, impacto: BAJO — DX)
+
+Detectado al "probar el autocompletado en el playground": no existe — el editor es un `<textarea>`
+plano (sin Monaco/CodeMirror ni puente con el LSP). Dos features separables, por orden de valor:
+(1) **imports de la stdlib embebida**: el pipeline wasm es sin loader a propósito (un solo archivo,
+núcleo), pero `stdlib::embedded` es puro (sin fs) — un merge mínimo de los `std/…` importados
+haría funcionar `from std/time import seconds` en el navegador, donde hoy el from-import se ignora
+en silencio y el error aparece en el USO (confuso); (2) **autocompletado**: exigiría un editor de
+verdad (CodeMirror ~vendorizable) + exponer una función de completion del wasm (el LSP entero por
+stdio no aplica en el navegador; la lógica de `lsp/features.rs` sí es reusable). Contexto: la
+CADENA DE BUILD del playground se reparó en esta fecha (aHash/getrandom, handles de 32 bits, stub
+de procesos — CHANGELOG); sin CI que lo compile, volverá a romperse en silencio → si el playground
+importa, añadir `cargo build --target wasm32-unknown-unknown --lib` como guarda (necesita el
+target de rustup en CI).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

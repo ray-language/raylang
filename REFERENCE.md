@@ -454,6 +454,11 @@ Aridad **0 a 6** (la rechaza el checker más allá: mismo límite en todos los m
 Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs por valor, callbacks
 (anotados para un FFI v2). No disponible en el playground wasm.
 
+**Pila para el código C** (binario nativo con fibras): las llamadas C corren sobre la pila de la
+fibra. Con externs declaradas, el default sube solo de 128 KiB a **1 MiB** por fibra (reserva
+virtual: solo cuestan las páginas tocadas); `RAY_FIBER_STACK_KIB` lo ajusta y siempre gana. Un
+desborde da SIGSEGV por página de guarda (nunca corrupción silenciosa).
+
 **`extern "lib" blocking { … }`** marca las firmas del bloque como llamadas **bloqueantes de verdad**
 (E/S, C-libs lentas). Mismos tipos y valores; solo cambia la planificación: en el binario nativo con
 fibras (el default) la llamada se descarga a un pool bloqueante y la fibra aparca (el worker M:N no

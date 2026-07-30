@@ -250,8 +250,22 @@ impl Scheduler {
     }
 }
 
+/// Default PROGRAMÁTICO de la pila de fibra en KiB (0 = no fijado). Lo fija el binario emitido
+/// ANTES de la primera fibra — p. ej. 1 MiB cuando el programa declara externs (FFI): el código C
+/// asume pilas de hilo grandes y los 128 KiB de una fibra pueden quedarse cortos (la página de
+/// guarda convierte el desborde en SIGSEGV limpio, pero mudo). Reserva virtual: solo cuestan las
+/// páginas tocadas.
+static DEFAULT_STACK_KIB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Fija el default de pila de fibra (KiB). Llamar ANTES de la primera fibra (el tamaño se decide
+/// una sola vez); después es inerte. `RAY_FIBER_STACK_KIB` (el mando del usuario) siempre gana.
+pub fn set_default_fiber_stack_kib(kib: usize) {
+    DEFAULT_STACK_KIB.store(kib, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Tamaño de RESERVA de la pila de cada fibra. Reserva virtual: con página de guarda, solo cuestan
-/// las páginas tocadas. `RAY_FIBER_STACK_KIB` lo ajusta (mínimo 32 KiB, por seguridad).
+/// las páginas tocadas. Precedencia: `RAY_FIBER_STACK_KIB` (usuario) > default programático
+/// (`set_default_fiber_stack_kib`, p. ej. FFI) > 128 KiB. Mínimo 32 KiB, por seguridad.
 fn fiber_stack_size() -> usize {
     static SIZE: OnceLock<usize> = OnceLock::new();
     *SIZE.get_or_init(|| {
@@ -259,7 +273,12 @@ fn fiber_stack_size() -> usize {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .map(|k| k.max(32) * 1024)
-            .unwrap_or(128 * 1024)
+            .unwrap_or_else(|| {
+                match DEFAULT_STACK_KIB.load(std::sync::atomic::Ordering::Relaxed) {
+                    0 => 128 * 1024,
+                    kib => kib.max(32) * 1024,
+                }
+            })
     })
 }
 

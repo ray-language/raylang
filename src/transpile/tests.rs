@@ -495,6 +495,24 @@ fn ffi_blocking_extern_calls_directly_without_fibers() {
 }
 
 #[test]
+fn ffi_with_fibers_raises_the_default_fiber_stack() {
+    // FFI × fibras: el C asume pilas grandes → con externs, el main emitido fija 1 MiB de default
+    // (RAY_FIBER_STACK_KIB del usuario sigue ganando). Sin externs, o sin fibras, no se emite.
+    let with_externs = transpile_src_fibers(
+        "extern \"m\" { fn sqrt(x: float) -> float; }\n\
+         fn main() { print(sqrt(2.0)); }",
+    );
+    assert!(with_externs.contains("set_default_fiber_stack_kib(1024)"), "externs+fibras fijan 1 MiB: {}", with_externs);
+    let without_externs = transpile_src_fibers("fn main() { print(0); }");
+    assert!(!without_externs.contains("set_default_fiber_stack_kib"), "sin externs no se toca: {}", without_externs);
+    let without_fibers = transpile_src(
+        "extern \"m\" { fn sqrt(x: float) -> float; }\n\
+         fn main() { print(sqrt(2.0)); }",
+    );
+    assert!(!without_fibers.contains("set_default_fiber_stack_kib"), "sin fibras no hay pila de fibra: {}", without_fibers);
+}
+
+#[test]
 fn ffi_int_return_is_a_32_bit_c_int() {
     // El retorno `int` de una extern es C `int` (32 bits, sign-extendido), NO `long`: declararlo i64
     // rompería el ABI (el EOF -1 de `fgetc` se vería positivo). Debe ir por `c_int` + `as i64`.

@@ -609,9 +609,10 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
     cartesiana hasta `ffi::MAX_ARITY` (= 6, cubre `mmap`/`sendto`/`recvfrom`; 127 firmas) +
     diagnóstico del checker por encima del límite — un extern fuera de rango ya no compila en
     ningún motor (antes: nativo OK, VM reventaba en runtime). DESIGN §90.
-  - **Pendiente — pila de fibra y código C**: el C corre sobre los 128 KiB de la fibra (guard page →
-    SIGSEGV limpio pero mudo). Barato: subir el default cuando `prog.externs` no está vacío (el
-    transpilador lo sabe estático) + documentar `RAY_FIBER_STACK_KIB` en la sección FFI.
+  - ✅ **Pila de fibra y código C** (30 jul 2026): con externs declaradas, el main emitido fija
+    `set_default_fiber_stack_kib(1024)` (1 MiB, reserva virtual) antes de la primera fibra;
+    precedencia `RAY_FIBER_STACK_KIB` > default programático > 128 KiB. Documentado en la sección
+    FFI de REFERENCE/MANUAL. DESIGN §90.
   - **Pendiente — `ffi_errno()`**: builtin para leer errno inmediatamente tras una extern (regla:
     sin park en medio; dos sentencias consecutivas sin E/S no aparcan).
   - Nota positiva documentada: la **fijación** hace seguras las C-libs con afinidad de hilo usadas

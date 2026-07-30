@@ -74,7 +74,10 @@ web-demos 24 → 38 byte-idénticos).
   en build — la librería debe existir al compilar). Un bloque **`blocking`** (jul 2026, DESIGN §90)
   emite el wrapper sobre `ray_runtime::fibers::run_blocking` cuando el binario corre con fibras:
   la llamada C va a un hilo del pool bloqueante y la fibra aparca (captura `Send` de los punteros
-  como `usize`; los dueños viven en el marco aparcado). Sin fibras, llamada directa.
+  como `usize`; los dueños viven en el marco aparcado). Sin fibras, llamada directa. Con externs
+  y fibras, el `main` emitido fija además **1 MiB** de pila por fibra
+  (`set_default_fiber_stack_kib`; el C asume pilas grandes — reserva virtual, `RAY_FIBER_STACK_KIB`
+  gana).
 
 ### 2.3 Cobertura y verificación
 

@@ -46,6 +46,9 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
   hasta `MAX_ARITY` = 6 (antes 0..=3 a mano; cubre `mmap`/`sendto`/`recvfrom`) y el checker rechaza en
   compilación cualquier `extern fn` que lo exceda — antes un extern de 4+ argumentos compilaba en el
   binario nativo y fallaba en runtime solo en la VM.
+- **FFI: pila de fibra dimensionada para C**: en el binario nativo con fibras, un programa con externs
+  fija solo un default de **1 MiB** de pila por fibra (reserva virtual; antes 128 KiB, que el código C
+  podía desbordar con SIGSEGV mudo). `RAY_FIBER_STACK_KIB` siempre gana al default.
 - **`try_call(f) -> Result<T, string>`** (M97): recuperación de un `panic`/error de ejecución **en la
   misma fibra**, el fallo como valor. En los tres motores. `try_join` hace lo propio con una tarea.
 - **Cadenas plantilla con backticks** (M95): `` `…` `` es multilínea y admite `"` literal, con la misma

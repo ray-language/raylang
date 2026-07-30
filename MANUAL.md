@@ -1294,6 +1294,11 @@ La marca no cambia valores ni tipos; donde no hay fibras (VM, `--without fibers`
 `spawn`) es inerte. Para llamadas cortas de CPU (`sqrt`, `strlen`) no la uses: el viaje al pool cuesta
 más que la llamada.
 
+**Pila**: en el binario nativo con fibras, tu llamada C corre sobre la pila de la fibra. Con externs
+declaradas, el default sube solo a **1 MiB** por fibra (de los 128 KiB habituales; reserva virtual,
+solo cuestan las páginas que se tocan). Si una C-lib necesita aún más, `RAY_FIBER_STACK_KIB=4096`
+manda — la variable siempre gana al default.
+
 ## 17. Herramientas
 
 ```sh

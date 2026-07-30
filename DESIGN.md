@@ -215,6 +215,15 @@ Ejemplo del estilo:
 let abs: int = if (x < 0) { -x } else { x };   // if como expresión
 ```
 
+- **Sin `break`/`continue` (decisión explícita, 30 jul 2026).** Nacieron como omisión del diseño
+  mínimo de M1 y, al reevaluarlo, se **descartaron** en vez de añadirse: (1) `return` ya da la
+  salida temprana — extraer el bucle a una función es el reemplazo canónico de `break` y produce
+  código con mejor nombre; (2) el estilo idiomático (for/iteradores, `map`/`filter`/`fold`,
+  `position`/`any`) cubre la mayoría de los usos reales; (3) en un lenguaje orientado a expresiones
+  añadirlos obliga a decidir el tipo de `break`, tocar el análisis de divergencia del checker y
+  portarlo a los tres motores + el espejo selfhost, por un beneficio marginal. Los patrones de
+  reemplazo quedan documentados en MANUAL §4 ("Salir temprano sin `break`").
+
 ## 7. Gramática (EBNF, M1)
 
 Notación: `{ X }` = cero o más, `[ X ]` = opcional, `|` = alternativa,

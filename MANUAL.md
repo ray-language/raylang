@@ -227,7 +227,7 @@ Todo `if`, bloque y `match` **produce un valor**.
 let max = if (a > b) { a } else { b };        // if como expresión
 ```
 
-`while` (no hay `break`/`continue`; ver §19):
+`while` (no hay `break`/`continue`; patrones abajo):
 
 ```rust
 var i = 0;
@@ -240,6 +240,54 @@ while (i < 5) { print(i); i = i + 1; }
 for x in [10, 20, 30] { print(x); }
 for i in 0..5 { print(i); }                   // rango semiabierto: 0,1,2,3,4
 for (k, v) in edades { print("${k}: ${v}"); } // Map, en orden de clave
+```
+
+### Salir temprano sin `break`
+
+raylang no tiene `break` ni `continue` (decisión de diseño: `return` ya es la salida temprana).
+Los patrones idiomáticos, del más al menos frecuente:
+
+**1. Extrae el bucle a una función: `return` ES tu `break`.** Es el reemplazo canónico y suele
+dejar una función con nombre propio que el código llamador lee mejor:
+
+```rust
+fn primer_negativo(xs: [int]) -> Option<int> {
+    for x in xs {
+        if (x < 0) { return Option.Some(x); }   // "break" con el resultado en la mano
+    }
+    Option.None
+}
+```
+
+**2. Muchas búsquedas ya están resueltas: ni siquiera escribas el bucle.**
+
+```rust
+xs.position(99);          // Option<int>: índice de la primera ocurrencia
+s.index_of("clave");      // Option<int>: lo mismo en strings
+xs.any(es_par);           // bool: ¿alguno cumple?
+xs.all(es_par);           // bool: ¿todos cumplen?
+```
+
+**3. `continue` ≈ invertir la condición.** En vez de saltarte el elemento, procesa solo los que
+te interesan:
+
+```rust
+for x in xs {
+    if (x >= 0) {         // en vez de `if (x < 0) { continue; }`
+        procesar(x);
+    }
+}
+```
+
+**4. Corta el iterador o compón la condición del `while`.**
+
+```rust
+for x in xs.iter().take(3) { print(x); }        // solo los 3 primeros
+
+var seguir = true;                              // el "break" de un while de servidor/REPL
+while (seguir) {
+    // … en el punto de salida: seguir = false;
+}
 ```
 
 `match` **destructura enums** (`Option`/`Result`/los tuyos), como expresión (§10 a fondo). El escrutinio
@@ -1516,8 +1564,9 @@ del editor.
 
 Cosas que sorprenden viniendo de otros lenguajes:
 
-- **No hay `break` ni `continue`.** Estructura el bucle con una variable de control (`var seguir = true;
-  while (seguir) { … seguir = false; … }`) o extrae la condición.
+- **No hay `break` ni `continue`.** El reemplazo canónico es extraer el bucle a una función y usar
+  `return`; los demás patrones (búsquedas de la stdlib, invertir la condición, `.take(n)`, variable
+  de control) están en §4, "Salir temprano sin `break`".
 - **`match` es solo para enums.** Destructura `Option`/`Result`/tus enums; **no** hay patrones de literal ni
   `match` sobre `int`/`bool`/`string`. Para despachar sobre un primitivo, usa `if/else`. Las guardas
   (`patrón if cond`) sí permiten condiciones dentro de un `match` de enum.

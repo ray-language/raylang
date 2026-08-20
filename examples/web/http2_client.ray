@@ -74,7 +74,12 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
     // Petición: preface + SETTINGS del cliente + HEADERS (stream 1, END_STREAM porque el GET no lleva
     // cuerpo). Las pseudo-cabeceras van en orden: :method, :path, :scheme, :authority.
     let enc = new_hpack();
-    let reqhdrs = [header(":method", "GET"), header(":path", path), header(":scheme", "https"), header(":authority", host)];
+    let reqhdrs = [
+        header(":method", "GET"),
+        header(":path", path),
+        header(":scheme", "https"),
+        header(":authority", host)
+    ];
     let block = encode(enc, reqhdrs);
     let salida = preface() + settings_empty() + headers_frame(1, block, true);
     match (net.socket_write_bytes(h, salida)) {
@@ -107,13 +112,19 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
         // M73: un frame que declara más que el tope se rechaza antes de acumular sus octetos.
         if (frame_size(buf) > max_frame()) {
             close(h);
-            return Result.Err("HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " octetos)");
+            return Result.Err(
+                "HTTP/2 frame exceeds the limit (" + to_string(frame_size(buf)) + " octetos)"
+            );
         }
-        while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
+        while (frame_size(
+        buf
+    ) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
             let fbytes = buf.sub_bytes(0, fsz);
             buf = buf.sub_bytes(fsz, buf.len());
-            match (parse_frame(fbytes)) {
+            match (parse_frame(
+        fbytes
+    )) {
                 Result.Ok(fr) => {
                     if (fr.ftype == ft_settings()) {
                         if ((fr.flags & fl_ack()) == 0) {
@@ -140,7 +151,9 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                         // M73: tope de respuesta acumulada (anti-bomba de memoria).
                         if (body.len() + fr.payload.len() > max_response()) {
                             close(h);
-                            return Result.Err("respuesta HTTP/2 excede el límite (posible bomba de memoria)");
+                            return Result.Err(
+                                "respuesta HTTP/2 excede el límite (posible bomba de memoria)"
+                            );
                         }
                         body = body + fr.payload;
                         // M58.3 — flow control: devolver la ventana consumida (conexión + stream);
@@ -148,7 +161,10 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                         // Best effort: si el peer ya envió todo y cerró, el crédito es irrelevante
                         // (el EOF/fin de stream sale por la lectura, no por esta escritura).
                         if (fr.payload.len() > 0) {
-                            let wu = window_update_frame(0, fr.payload.len()) + window_update_frame(fr.stream_id, fr.payload.len());
+                            let wu = window_update_frame(
+                                0,
+                                fr.payload.len()
+                            ) + window_update_frame(fr.stream_id, fr.payload.len());
                             match (net.socket_write_bytes(h, wu)) {
                                 Result.Ok(x) => { },
                                 Result.Err(x) => { },
@@ -166,7 +182,9 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                         // M58.3: un stream reseteado es un error con causa (antes: leer hasta EOF).
                         if (fr.stream_id == 1) {
                             close(h);
-                            return Result.Err("the server reset the stream (RST_STREAM, code " + to_string(rst_error_code(fr.payload)) + ")");
+                            return Result.Err(
+                                "the server reset the stream (RST_STREAM, code " + to_string(rst_error_code(fr.payload)) + ")"
+                            );
                         }
                     } else if (fr.ftype == ft_goaway()) {
                         close(h);

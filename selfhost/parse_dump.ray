@@ -125,7 +125,9 @@ fn dump_unop(op: UnOp) -> string {
 fn dump_expr(e: Expr) -> string {
     let pp = pos(e.line, e.col);
     match (e.kind) {
-        EKind.EInt(n) => "(int " + to_string(n) + ")" + pp,
+        EKind.EInt(n) => "(int " + to_string(
+            n
+        ) + ")" + pp,
         EKind.EFloat(f) => "(float " + to_string(f) + ")" + pp,
         EKind.EBool(b) => "(bool " + to_string(b) + ")" + pp,
         EKind.EStr(s) => "(str \"" + escape(s) + "\")" + pp,
@@ -160,7 +162,9 @@ fn dump_inits(fields: [FieldInit]) -> string {
 }
 
 fn dump_fnexpr(fe: FnExpr) -> string {
-    "(fn-expr " + to_string(fe.id) + " (params" + dump_params(fe.params) + ") " + dump_type(fe.ret) + " " + dump_block(fe.body) + ")" + pos(fe.line, fe.col)
+    "(fn-expr " + to_string(
+        fe.id
+    ) + " (params" + dump_params(fe.params) + ") " + dump_type(fe.ret) + " " + dump_block(fe.body) + ")" + pos(fe.line, fe.col)
 }
 
 // Brazos de match, cada uno precedido de un espacio.
@@ -309,7 +313,9 @@ fn dump_generics(tparams: [string], bounds: [Bound]) -> string {
 }
 
 fn dump_func(f: Func) -> string {
-    "(fn" + dump_pub(f.is_pub) + dump_anns(f.annotations) + " " + f.name + dump_generics(f.type_params, f.bounds) + " (params" + dump_params(f.params) + ") " + dump_type(f.ret) + " " + dump_block(f.body) + ")" + pos(f.line, f.col)
+    "(fn" + dump_pub(
+        f.is_pub
+    ) + dump_anns(f.annotations) + " " + f.name + dump_generics(f.type_params, f.bounds) + " (params" + dump_params(f.params) + ") " + dump_type(f.ret) + " " + dump_block(f.body) + ")" + pos(f.line, f.col)
 }
 
 fn dump_struct(s: StructDef) -> string {
@@ -320,7 +326,9 @@ fn dump_struct(s: StructDef) -> string {
         inner = inner + " (field " + fd.name + " " + dump_type(fd.ty) + ")";
         i = i + 1;
     }
-    "(struct" + dump_pub(s.is_pub) + dump_anns(s.annotations) + " " + s.name + dump_generics(s.type_params, s.bounds) + " (fields" + inner + "))" + pos(s.line, s.col)
+    "(struct" + dump_pub(
+        s.is_pub
+    ) + dump_anns(s.annotations) + " " + s.name + dump_generics(s.type_params, s.bounds) + " (fields" + inner + "))" + pos(s.line, s.col)
 }
 
 fn dump_enum(e: EnumDef) -> string {
@@ -337,7 +345,9 @@ fn dump_enum(e: EnumDef) -> string {
         inner = inner + " (variant " + v.name + payload + ")" + pos(v.line, v.col);
         i = i + 1;
     }
-    "(enum" + dump_pub(e.is_pub) + dump_anns(e.annotations) + " " + e.name + dump_generics(e.type_params, e.bounds) + inner + ")" + pos(e.line, e.col)
+    "(enum" + dump_pub(
+        e.is_pub
+    ) + dump_anns(e.annotations) + " " + e.name + dump_generics(e.type_params, e.bounds) + inner + ")" + pos(e.line, e.col)
 }
 
 fn dump_methodsig(m: MethodSig) -> string {
@@ -368,7 +378,10 @@ fn dump_impl(b: ImplBlock) -> string {
         inner = inner + " " + dump_func(b.methods[i]);
         i = i + 1;
     }
-    "(impl " + b.trait_name + dump_generics(b.type_params, b.bounds) + " " + dump_type(b.target) + inner + ")" + pos(b.line, b.col)
+    "(impl " + b.trait_name + dump_generics(
+        b.type_params,
+        b.bounds
+    ) + " " + dump_type(b.target) + inner + ")" + pos(b.line, b.col)
 }
 
 fn dump_import(d: ImportDecl) -> string {
@@ -460,16 +473,22 @@ fn main() -> int {
         eprint("use: raylang selfhost/parse_dump.ray <file>");
         return 1;
     }
-    match (read_file(argv[0])) {
+    match (read_file(
+    argv[0]
+)) {
         Result.Ok(src) => {
             // Volcado canónico: en caso feliz el AST; ante un error de sintaxis, una línea con el
             // mismo formato que el `Display` de `ParseError` en Rust (el oráculo compara también esto).
-            match (parse(lex_or_die(src))) {
+            match (parse(
+                lex_or_die(src)
+            )) {
                 Result.Ok(prog) => {
                     dump_program(prog);
                 },
                 Result.Err(pe) => {
-                    print("syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                    print(
+                        "syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg
+                    );
                 },
             }
             0

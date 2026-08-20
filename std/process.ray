@@ -9,7 +9,6 @@
 //
 // Los campos del builder llevan nombres distintos de sus métodos a propósito: el UFCS resuelve
 // campo → método → función libre, y un campo `dir` taparía al método `dir`.
-
 import std/time;
 
 /// How the child process terminated: a normal exit with its code, or death by a signal
@@ -25,14 +24,14 @@ pub struct Output {
     exit: Exit,
     stdout: bytes,
     stderr: bytes,
-    /// The timeout ladder acted (`exit` will be a `Signal`); `stdout`/`stderr` hold the
-    /// PARTIAL output produced before the deadline.
     timed_out: bool,
-    /// `max_output` was reached; the captured output is the PREFIX (the child was never killed
-    /// for producing too much).
     truncated: bool,
 }
 
+/// The timeout ladder acted (`exit` will be a `Signal`); `stdout`/`stderr` hold the
+/// PARTIAL output produced before the deadline.
+/// `max_output` was reached; the captured output is the PREFIX (the child was never killed
+/// for producing too much).
 /// A command under construction: build with `process.cmd`, configure with the chainable
 /// methods, and launch with `.run()`.
 pub struct Cmd {
@@ -69,7 +68,7 @@ pub fn cmd(program: string, args: [string]) -> Cmd {
         use_stdin: false,
         timeout: 0,
         output_cap: 16777216,
-        merge: false,
+        merge: false
     }
 }
 
@@ -141,13 +140,33 @@ impl CmdOps for Cmd {
     }
 
     fn run(self) -> Result<Output, string> {
-        decode(__run(self.program, self.arg_list, self.work_dir, self.env_pairs, self.clear_env,
-                     self.stdin_data, self.use_stdin, self.timeout, self.output_cap, self.merge))
+        decode(
+            __run(
+                self.program,
+                self.arg_list,
+                self.work_dir,
+                self.env_pairs,
+                self.clear_env,
+                self.stdin_data,
+                self.use_stdin,
+                self.timeout,
+                self.output_cap,
+                self.merge
+            )
+        )
     }
 
     fn stream(self) -> Result<Proc, string> {
-        let r = __proc_spawn(self.program, self.arg_list, self.work_dir, self.env_pairs,
-                             self.clear_env, self.stdin_data, self.use_stdin, self.merge);
+        let r = __proc_spawn(
+            self.program,
+            self.arg_list,
+            self.work_dir,
+            self.env_pairs,
+            self.clear_env,
+            self.stdin_data,
+            self.use_stdin,
+            self.merge
+        );
         if (r[0] == b"err") {
             return Result.Err(text_of(r[1]));
         }
@@ -158,9 +177,13 @@ impl CmdOps for Cmd {
         // flujo; el resto de la contrapresión la pone el kernel (el pipe lleno bloquea al hijo).
         let out: Channel<bytes> = Channel.bounded(8);
         let err: Channel<bytes> = Channel.bounded(8);
-        spawn(fn() { pump(h_out, out); });
+        spawn(fn() {
+            pump(h_out, out);
+        });
         if (h_err > 0) {
-            spawn(fn() { pump(h_err, err); });
+            spawn(fn() {
+                pump(h_err, err);
+            });
         } else {
             // merge_output: no hay pipe de stderr; el canal nace cerrado (recv da None).
             close(err);
@@ -268,12 +291,14 @@ fn decode(r: [bytes]) -> Result<Output, string> {
     } else {
         let value = int_of(r[2]);
         let exit = if (r[1] == b"code") { Exit.Code(value) } else { Exit.Signal(value) };
-        Result.Ok(Output {
-            exit: exit,
-            stdout: r[5],
-            stderr: r[6],
-            timed_out: r[3] == b"1",
-            truncated: r[4] == b"1",
-        })
+        Result.Ok(
+            Output {
+                exit: exit,
+                stdout: r[5],
+                stderr: r[6],
+                timed_out: r[3] == b"1",
+                truncated: r[4] == b"1"
+            }
+        )
     }
 }

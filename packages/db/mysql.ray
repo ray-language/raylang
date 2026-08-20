@@ -17,7 +17,6 @@
 // `query(c, sql, params)` → filas `[[string]]`, `exec(c, sql, params)` → filas afectadas,
 // `disconnect` (no se llama `close` para no tapar, dentro del módulo, al builtin global `close`
 // que cierra el socket).
-
 import std/net;
 import std/crypto;
 import std/math;
@@ -32,7 +31,6 @@ pub struct Conn {
 }
 
 // ── Búfer de lectura: cantidades exactas sobre trozos arbitrarios ─────────────────────
-
 // Asegura que el búfer tenga al menos `need` octetos sin consumir (lee del socket si faltan).
 fn fill(c: Conn, need: int) -> Result<int, string> {
     while (c.buf.len() - c.pos < need) {
@@ -63,7 +61,6 @@ fn take(c: Conn, n: int) -> Result<[int], string> {
 }
 
 // ── Framing de paquetes ────────────────────────────────────────────────────────────────
-
 // Lee un paquete completo: cabecera [len:3 LE][seq:1] + carga. Actualiza la secuencia esperada.
 fn read_packet(c: Conn) -> Result<[int], string> {
     let hdr = take(c, 4)?;
@@ -86,13 +83,14 @@ fn write_packet(c: Conn, payload: [int]) -> Result<int, string> {
 }
 
 // ── Primitivas del protocolo ───────────────────────────────────────────────────────────
-
 // Lee `p[i]` con chequeo de límites. Los paquetes vienen del servidor (no confiable): una lectura
 // fuera de rango debe ser un error como VALOR, no un trap ("índice fuera de rango") que tumbe al
 // cliente. Toda la decodificación de filas y del handshake pasa por aquí.
 fn at(p: [int], i: int) -> Result<int, string> {
     if (i < 0 || i >= p.len()) {
-        return Result.Err("mysql: truncated packet (requested byte " + to_string(i) + " de " + to_string(p.len()) + ")");
+        return Result.Err(
+            "mysql: truncated packet (requested byte " + to_string(i) + " de " + to_string(p.len()) + ")"
+        );
     }
     Result.Ok(p[i])
 }
@@ -112,13 +110,19 @@ fn lenc_int(p: [int], i: int) -> Result<(int, int), string> {
         return Result.Ok((at(p, i + 1)? | at(p, i + 2)? << 8 | at(p, i + 3)? << 16, 4));
     }
     // 254: 8 octetos LE, por mitades (hi<<32 + lo desbordaría el i64 al armarlo por shifts).
-    let _ = at(p, i + 8)?; // valida que existan los 8 octetos
+    let _ = at(p, i + 8)?;  // valida que existan los 8 octetos
     var lo = 0;
     var k = 0;
-    while (k < 4) { lo = lo | (p[i + 1 + k] << (8 * k)); k = k + 1; }
+    while (k < 4) {
+        lo = lo | p[i + 1 + k] << 8 * k;
+        k = k + 1;
+    }
     var hi = 0;
     k = 0;
-    while (k < 4) { hi = hi | (p[i + 5 + k] << (8 * k)); k = k + 1; }
+    while (k < 4) {
+        hi = hi | p[i + 5 + k] << 8 * k;
+        k = k + 1;
+    }
     // Una longitud >= 2^32 es imposible en un paquete de <= 16 MiB → paquete corrupto/malicioso.
     if (hi != 0) {
         return Result.Err("mysql: nonsensical length-encoded length");
@@ -167,7 +171,6 @@ fn bytes_to_ints(b: bytes) -> [int] {
 }
 
 // ── Autenticación ──────────────────────────────────────────────────────────────────────
-
 // `mysql_native_password`: SHA1(pass) XOR SHA1(scramble + SHA1(SHA1(pass))). Vacía → vacía.
 fn native_auth(scramble: [int], password: string) -> [int] {
     if (password.len() == 0) {
@@ -204,9 +207,9 @@ fn auth_for(plugin: string, scramble: [int], password: string) -> Result<[int], 
 
 // El mensaje de un paquete ERR: [0xff][código:2][#estado:6][texto].
 fn err_msg(p: [int]) -> string {
-    var i = 3; // 0xff + código
+    var i = 3;  // 0xff + código
     if (i < p.len() && p[i] == 35) {
-        i = i + 6; // '#' + 5 de sqlstate
+        i = i + 6;  // '#' + 5 de sqlstate
     }
     var out: [int] = [];
     while (i < p.len()) {
@@ -220,9 +223,14 @@ fn err_msg(p: [int]) -> string {
 }
 
 // ── Conexión ───────────────────────────────────────────────────────────────────────────
-
 /// Abre una conexión y autentica. `database` puede ser "" (sin esquema por defecto).
-pub fn connect(host: string, port: int, user: string, password: string, database: string) -> Result<Conn, string> {
+pub fn connect(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string
+) -> Result<Conn, string> {
     connect_opts(host, port, user, password, database, false)
 }
 
@@ -230,12 +238,25 @@ pub fn connect(host: string, port: int, user: string, password: string, database
 /// the socket (certificate verified against `host`), and completes the handshake over the
 /// encrypted channel. Enables the `caching_sha2_password` **full path** (the cleartext password
 /// travels only inside TLS), so it works even when the server has not cached the credential.
-pub fn connect_tls(host: string, port: int, user: string, password: string, database: string) -> Result<Conn, string> {
+pub fn connect_tls(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string
+) -> Result<Conn, string> {
     connect_opts(host, port, user, password, database, true)
 }
 
 // La conexión real; `tls` decide si se intercala el SSLRequest + upgrade antes de la respuesta.
-fn connect_opts(host: string, port: int, user: string, password: string, database: string, tls: bool) -> Result<Conn, string> {
+fn connect_opts(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    tls: bool
+) -> Result<Conn, string> {
     let sock = net.tcp_connect(host, port)?;
     let empty: [int] = [];
     let c = Conn { sock: sock, seq: 0, buf: empty, pos: 0 };
@@ -248,20 +269,20 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
     if (hs[0] != 10) {
         return Result.Err("mysql: unsupported protocol version: " + to_string(hs[0]));
     }
-    let sv = nul_str(hs, 1)?; // versión del servidor (informativa)
-    var i = sv.1 + 4;         // thread id
+    let sv = nul_str(hs, 1)?;  // versión del servidor (informativa)
+    var i = sv.1 + 4;  // thread id
     var scramble: [int] = [];
     var k = 0;
     while (k < 8) {
-        scramble.push(at(hs, i + k)?); // auth-data parte 1
+        scramble.push(at(hs, i + k)?);  // auth-data parte 1
         k = k + 1;
     }
-    i = i + 8 + 1 + 2; // parte1 + filler + capacidades bajas
+    i = i + 8 + 1 + 2;  // parte1 + filler + capacidades bajas
     var plugin = "mysql_native_password";
     if (i < hs.len()) {
-        i = i + 1 + 2 + 2; // charset + estado + capacidades altas
+        i = i + 1 + 2 + 2;  // charset + estado + capacidades altas
         let auth_len = at(hs, i)?;
-        i = i + 1 + 10; // longitud + reservado
+        i = i + 1 + 10;  // longitud + reservado
         // Parte 2 del scramble: auth_len - 8 - 1 octetos (el último es un NUL).
         var p2 = auth_len - 9;
         if (p2 < 12) {
@@ -274,7 +295,7 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
         }
         i = i + p2;
         if (i < hs.len() && hs[i] == 0) {
-            i = i + 1; // NUL del scramble
+            i = i + 1;  // NUL del scramble
         }
         if (i < hs.len()) {
             let pn = nul_str(hs, i)?;
@@ -283,12 +304,12 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
     }
 
     // 2. Respuesta del handshake (protocolo 41 + conexión segura + plugin auth).
-    var caps = 512 | 32768 | 524288; // CLIENT_PROTOCOL_41 | SECURE_CONNECTION | PLUGIN_AUTH
+    var caps = 512 | 32768 | 524288;  // CLIENT_PROTOCOL_41 | SECURE_CONNECTION | PLUGIN_AUTH
     if (database.len() > 0) {
-        caps = caps | 8; // CLIENT_CONNECT_WITH_DB
+        caps = caps | 8;  // CLIENT_CONNECT_WITH_DB
     }
     if (tls) {
-        caps = caps | 2048; // CLIENT_SSL
+        caps = caps | 2048;  // CLIENT_SSL
     }
     // Prefijo común: capacidades + paquete máximo + charset + 23 reservados. Es también el
     // paquete SSLRequest completo (la respuesta truncada antes del usuario).
@@ -297,11 +318,11 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
     pre.push(caps >> 8 & 255);
     pre.push(caps >> 16 & 255);
     pre.push(caps >> 24 & 255);
-    pre = pre + [0, 0, 0, 1]; // paquete máximo 16 MiB (LE)
-    pre.push(33); // charset utf8_general_ci
+    pre = pre + [0, 0, 0, 1];  // paquete máximo 16 MiB (LE)
+    pre.push(33);  // charset utf8_general_ci
     k = 0;
     while (k < 23) {
-        pre.push(0); // reservado
+        pre.push(0);  // reservado
         k = k + 1;
     }
     if (tls) {
@@ -310,7 +331,10 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
         let _ = write_packet(c, pre)?;
         let _ = match (net.tls_upgrade(sock, host)) {
             Result.Ok(h) => h,
-            Result.Err(e) => { close(sock); return Result.Err("mysql: " + e); },
+            Result.Err(e) => {
+                close(sock);
+                return Result.Err("mysql: " + e);
+            },
         };
     }
     var out = pre + bytes_to_ints(user.to_bytes()) + [0];
@@ -328,7 +352,7 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
     while (rounds < 4) {
         let r = read_packet(c)?;
         if (r[0] == 0) {
-            return Result.Ok(c); // OK
+            return Result.Ok(c);  // OK
         }
         if (r[0] == 255) {
             return Result.Err(err_msg(r));
@@ -357,9 +381,8 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
                         // sigue el OK/ERR en el bucle
                     } else {
                         return Result.Err(
-                            "mysql: caching_sha2_password requires the full path; use connect_tls (the "
-                                + "password travels encrypted), a user with mysql_native_password, or "
-                                + "warm the server cache with another client");
+                            "mysql: caching_sha2_password requires the full path; use connect_tls (the " + "password travels encrypted), a user with mysql_native_password, or " + "warm the server cache with another client"
+                        );
                     }
                 }
             } else {
@@ -372,7 +395,6 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
 }
 
 // ── Consultas ──────────────────────────────────────────────────────────────────────────
-
 // ¿El paquete es un EOF clásico? (0xfe con carga corta; los lenc-int de 8 octetos también
 // empiezan por 0xfe, por eso el límite de longitud.)
 fn is_eof(p: [int]) -> bool {
@@ -381,7 +403,7 @@ fn is_eof(p: [int]) -> bool {
 
 // Manda COM_QUERY y devuelve el primer paquete de la respuesta.
 fn send_query(c: Conn, sql: string) -> Result<[int], string> {
-    c.seq = 0; // cada comando resetea la secuencia
+    c.seq = 0;  // cada comando resetea la secuencia
     let _ = write_packet(c, [3] + bytes_to_ints(sql.to_bytes()))?;
     read_packet(c)
 }
@@ -442,12 +464,12 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
             var col = 0;
             while (col < ncols) {
                 if (at(p, i)? == 251) {
-                    row.push(""); // NULL
+                    row.push("");  // NULL
                     i = i + 1;
                 } else {
                     let ln = lenc_int(p, i)?;
                     i = i + ln.1;
-                    let _ = at(p, i + ln.0 - 1)?; // valida el rango del valor (si ln.0 > 0)
+                    let _ = at(p, i + ln.0 - 1)?;  // valida el rango del valor (si ln.0 > 0)
                     var cell: [int] = [];
                     var j = 0;
                     while (j < ln.0) {
@@ -477,7 +499,7 @@ fn exec_text(c: Conn, sql: string) -> Result<int, string> {
     if (first[0] != 0) {
         return Result.Err("mysql: the statement returns rows; use query");
     }
-    let af = lenc_int(first, 1)?; // OK: [0x00][afectadas lenc][last_insert_id lenc]…
+    let af = lenc_int(first, 1)?;  // OK: [0x00][afectadas lenc][last_insert_id lenc]…
     Result.Ok(af.0)
 }
 
@@ -487,18 +509,17 @@ fn exec_text(c: Conn, sql: string) -> Result<int, string> {
 // postgres). Los parámetros se enlazan todos como VAR_STRING (texto; la afinidad del servidor
 // convierte); la FILA de respuesta llega en formato binario y se decodifica por el TIPO de cada
 // columna (que viaja en su definición) de vuelta a texto → misma API [[string]] que el texto.
-
 // Codifica un entero length-encoded (el inverso de lenc_int).
 fn lenc_of(n: int) -> [int] {
     if (n < 251) {
         return [n];
     }
     if (n < 65536) {
-        return [252, n & 255, (n >> 8) & 255];
+        return [252, n & 255, n >> 8 & 255];
     }
     // `return` explícito: un literal `[…]` en cola tras un if-sentencia se parsearía como
     // indexación (mismo compromiso gramatical que el de las tuplas, DESIGN §55.1).
-    return [253, n & 255, (n >> 8) & 255, (n >> 16) & 255];
+    return [253, n & 255, n >> 8 & 255, n >> 16 & 255];
 }
 
 // COM_STMT_PREPARE (0x16): devuelve (stmt_id, num_params). Las definiciones de parámetros y
@@ -518,16 +539,16 @@ fn stmt_prepare(c: Conn, sql: string) -> Result<(int, int), string> {
     if (ok.len() < 12) {
         return Result.Err("mysql: truncated prepare response");
     }
-    let stmt_id = ok[1] | (ok[2] << 8) | (ok[3] << 16) | (ok[4] << 24);
-    let ncols = ok[5] | (ok[6] << 8);
-    let nparams = ok[7] | (ok[8] << 8);
+    let stmt_id = ok[1] | ok[2] << 8 | ok[3] << 16 | ok[4] << 24;
+    let ncols = ok[5] | ok[6] << 8;
+    let nparams = ok[7] | ok[8] << 8;
     var k = 0;
     while (k < nparams) {
         let _ = read_packet(c)?;
         k = k + 1;
     }
     if (nparams > 0) {
-        let _ = read_packet(c)?; // EOF del bloque de parámetros
+        let _ = read_packet(c)?;  // EOF del bloque de parámetros
     }
     k = 0;
     while (k < ncols) {
@@ -535,7 +556,7 @@ fn stmt_prepare(c: Conn, sql: string) -> Result<(int, int), string> {
         k = k + 1;
     }
     if (ncols > 0) {
-        let _ = read_packet(c)?; // EOF del bloque de columnas
+        let _ = read_packet(c)?;  // EOF del bloque de columnas
     }
     return Result.Ok((stmt_id, nparams));
 }
@@ -547,23 +568,23 @@ fn stmt_execute(c: Conn, stmt_id: int, params: [string]) -> Result<[int], string
     c.seq = 0;
     var out: [int] = [23];
     out.push(stmt_id & 255);
-    out.push((stmt_id >> 8) & 255);
-    out.push((stmt_id >> 16) & 255);
-    out.push((stmt_id >> 24) & 255);
-    out.push(0); // flags: CURSOR_TYPE_NO_CURSOR
-    out = out + [1, 0, 0, 0]; // iteration count = 1
+    out.push(stmt_id >> 8 & 255);
+    out.push(stmt_id >> 16 & 255);
+    out.push(stmt_id >> 24 & 255);
+    out.push(0);  // flags: CURSOR_TYPE_NO_CURSOR
+    out = out + [1, 0, 0, 0];  // iteration count = 1
     if (params.len() > 0) {
         var k = 0;
         let nb = (params.len() + 7) / 8;
         while (k < nb) {
-            out.push(0); // bitmap de NULLs: ninguno
+            out.push(0);  // bitmap de NULLs: ninguno
             k = k + 1;
         }
-        out.push(1); // new-params-bound
+        out.push(1);  // new-params-bound
         k = 0;
         while (k < params.len()) {
-            out.push(253); // MYSQL_TYPE_VAR_STRING
-            out.push(0);   // con signo
+            out.push(253);  // MYSQL_TYPE_VAR_STRING
+            out.push(0);  // con signo
             k = k + 1;
         }
         k = 0;
@@ -580,7 +601,10 @@ fn stmt_execute(c: Conn, stmt_id: int, params: [string]) -> Result<[int], string
 // COM_STMT_CLOSE (0x19): libera la sentencia en el servidor. No hay respuesta.
 fn stmt_close(c: Conn, stmt_id: int) {
     c.seq = 0;
-    let _ = write_packet(c, [25, stmt_id & 255, (stmt_id >> 8) & 255, (stmt_id >> 16) & 255, (stmt_id >> 24) & 255]);
+    let _ = write_packet(
+        c,
+        [25, stmt_id & 255, stmt_id >> 8 & 255, stmt_id >> 16 & 255, stmt_id >> 24 & 255]
+    );
 }
 
 // El tipo y los flags de una definición de columna (lo único que necesita la fila binaria).
@@ -595,8 +619,8 @@ fn col_type_flags(p: [int]) -> Result<(int, int), string> {
         k = k + 1;
     }
     let fl = lenc_int(p, i)?;
-    i = i + fl.1 + 2 + 4; // bloque fijo + charset + longitud de columna
-    return Result.Ok((at(p, i)?, at(p, i + 1)? | (at(p, i + 2)? << 8)));
+    i = i + fl.1 + 2 + 4;  // bloque fijo + charset + longitud de columna
+    return Result.Ok((at(p, i)?, at(p, i + 1)? | at(p, i + 2)? << 8));
 }
 
 // int → float (exacto hasta 2^53; los operandos aquí caben de sobra).
@@ -609,11 +633,11 @@ fn to_f(n: int) -> float {
 
 // Entero LE SIN signo de hasta 4 octetos (con chequeo de límites).
 fn int_le(p: [int], i: int, w: int) -> Result<int, string> {
-    let _ = at(p, i + w - 1)?; // valida el rango [i, i+w)
+    let _ = at(p, i + w - 1)?;  // valida el rango [i, i+w)
     var v = 0;
     var k = 0;
     while (k < w) {
-        v = v | (p[i + k] << (8 * k));
+        v = v | p[i + k] << 8 * k;
         k = k + 1;
     }
     Result.Ok(v)
@@ -623,7 +647,7 @@ fn int_le(p: [int], i: int, w: int) -> Result<int, string> {
 fn int_cell(p: [int], i: int, w: int, unsigned: bool) -> Result<(string, int), string> {
     var v = int_le(p, i, w)?;
     if (!unsigned) {
-        let lim = 1 << (8 * w - 1);
+        let lim = 1 << 8 * w - 1;
         if (v >= lim) {
             v = v - lim * 2;
         }
@@ -634,20 +658,20 @@ fn int_cell(p: [int], i: int, w: int, unsigned: bool) -> Result<(string, int), s
 // Reconstruye un f32 desde sus 4 octetos (raylang solo tiene bits de f64): la aritmética
 // (mantisa + 2^exp) es exacta en f64 para cualquier f32.
 fn f32_of(bits: int) -> float {
-    let neg = ((bits >> 31) & 1) == 1;
-    let e = (bits >> 23) & 255;
+    let neg = (bits >> 31 & 1) == 1;
+    let e = bits >> 23 & 255;
     let m = bits & 8388607;
     var v = 0.0;
     if (e == 255) {
         // Inf/NaN: se construye el f64 equivalente por bits.
         if (m == 0) {
-            v = math.float_from_bits(9218868437227405312); // +inf
+            v = math.float_from_bits(9218868437227405312);  // +inf
         } else {
-            v = math.float_from_bits(9221120237041090560); // NaN
+            v = math.float_from_bits(9221120237041090560);  // NaN
         }
     } else {
         if (e == 0) {
-            v = to_f(m) * math.pow(2.0, 0.0 - 149.0); // subnormal
+            v = to_f(m) * math.pow(2.0, 0.0 - 149.0);  // subnormal
         } else {
             v = (to_f(m) + 8388608.0) * math.pow(2.0, to_f(e - 150));
         }
@@ -660,9 +684,15 @@ fn pad2(n: int) -> string {
 }
 
 fn pad4(n: int) -> string {
-    if (n < 10) { return "000" + to_string(n); }
-    if (n < 100) { return "00" + to_string(n); }
-    if (n < 1000) { return "0" + to_string(n); }
+    if (n < 10) {
+        return "000" + to_string(n);
+    }
+    if (n < 100) {
+        return "00" + to_string(n);
+    }
+    if (n < 1000) {
+        return "0" + to_string(n);
+    }
     to_string(n)
 }
 
@@ -679,7 +709,9 @@ fn dec_date(p: [int], i: int, ln: int) -> Result<string, string> {
     if (ln < 4) {
         return Result.Ok("0000-00-00");
     }
-    Result.Ok(pad4(at(p, i)? | (at(p, i + 1)? << 8)) + "-" + pad2(at(p, i + 2)?) + "-" + pad2(at(p, i + 3)?))
+    Result.Ok(
+        pad4(at(p, i)? | at(p, i + 1)? << 8) + "-" + pad2(at(p, i + 2)?) + "-" + pad2(at(p, i + 3)?)
+    )
 }
 
 // DATETIME/TIMESTAMP binarios: fecha + [hour][min][sec] (len>=7) + [micro:4] (len=11).
@@ -714,9 +746,15 @@ fn dec_time(p: [int], i: int, ln: int) -> Result<string, string> {
 // ante un paquete truncado (toda lectura pasa por `at`/`int_le`/`lenc_int`, que chequean límites).
 fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), string> {
     let unsigned = (flags & 32) != 0;
-    if (t == 1) { return int_cell(p, i, 1, unsigned); }          // TINY
-    if (t == 2 || t == 13) { return int_cell(p, i, 2, unsigned); } // SHORT / YEAR
-    if (t == 3 || t == 9) { return int_cell(p, i, 4, unsigned); }  // LONG / INT24
+    if (t == 1) {
+        return int_cell(p, i, 1, unsigned);  // TINY
+    }
+    if (t == 2 || t == 13) {
+        return int_cell(p, i, 2, unsigned);  // SHORT / YEAR
+    }
+    if (t == 3 || t == 9) {
+        return int_cell(p, i, 4, unsigned);  // LONG / INT24
+    }
     if (t == 8) {
         // LONGLONG: por mitades (b7<<56 desbordaría). Un BIGINT UNSIGNED ≥ 2^63 no cabe en el
         // int de raylang y se muestra envuelto (limitación documentada).
@@ -755,7 +793,7 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), strin
     }
     // El resto (DECIMAL/NEWDECIMAL/VARCHAR/BIT/ENUM/SET/BLOB/TEXT/STRING/JSON…): length-encoded.
     let ln = lenc_int(p, i)?;
-    let _ = at(p, i + ln.1 + ln.0 - 1)?; // valida el rango completo del valor (si ln.0 > 0)
+    let _ = at(p, i + ln.1 + ln.0 - 1)?;  // valida el rango completo del valor (si ln.0 > 0)
     var cell: [int] = [];
     var j = 0;
     while (j < ln.0) {
@@ -815,8 +853,8 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
             var col = 0;
             while (col < ncols) {
                 let bit = col + 2;
-                if (((at(p, 1 + bit / 8)? >> (bit % 8)) & 1) == 1) {
-                    row.push(""); // NULL
+                if ((at(p, 1 + bit / 8)? >> bit % 8 & 1) == 1) {
+                    row.push("");  // NULL
                 } else {
                     let cell = bin_cell(p, i, types[col], cflags[col])?;
                     row.push(cell.0);
@@ -850,6 +888,6 @@ fn exec_prepared(c: Conn, sql: string, params: [string]) -> Result<int, string> 
 /// dentro del módulo, al builtin global que cierra el socket.)
 pub fn disconnect(c: Conn) {
     c.seq = 0;
-    let _ = write_packet(c, [1]); // COM_QUIT (el servidor no responde)
+    let _ = write_packet(c, [1]);  // COM_QUIT (el servidor no responde)
     close(c.sock);
 }

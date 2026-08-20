@@ -23,12 +23,17 @@ fn atender(conn: int) {
 }
 
 fn main() -> int {
-    match (net.tcp_listen("127.0.0.1", 8080)) {
+    match (net.tcp_listen(
+    "127.0.0.1",
+    8080
+)) {
         Result.Ok(srv) => {
             print("escuchando (concurrente) en el puerto " + to_string(net.local_port(srv)));
             var seguir: bool = true;
             while (seguir) {
-                match (net.tcp_accept(srv)) {
+                match (net.tcp_accept(
+                srv
+            )) {
                     // Una fibra por connection: el bucle vuelve a `accept` de inmediato (cede mientras
                     // no haya conexión nueva), y cada `atender` cede mientras espera datos.
                     Result.Ok(conn) => {

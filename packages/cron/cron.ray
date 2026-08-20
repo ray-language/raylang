@@ -12,7 +12,6 @@
 // el día casa si CUALQUIERA casa (OR); si solo uno está restringido, manda ese (AND).
 // El dow acepta 0-7 con 0 y 7 = domingo. v1 sin nombres (`jan`/`mon`) y sin hora local
 // (un cron local correcto necesita packages/tz y la política de gap/solape → M86b).
-
 import std/time;
 
 // Una expresión compilada: máscaras por campo + si dom/dow eran `*` (para el quirk OR).
@@ -31,7 +30,6 @@ pub struct Schedule {
 // ---------------------------------------------------------------------------
 // Parse
 // ---------------------------------------------------------------------------
-
 fn mask(n: int) -> [bool] {
     var m: [bool] = [];
     var i = 0;
@@ -103,7 +101,9 @@ fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], 
             }
         }
         if (a < lo || b > hi || a > b) {
-            return Result.Err("cron: '" + name + "' out of range [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')");
+            return Result.Err(
+                "cron: '" + name + "' out of range [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')"
+            );
         }
         var v = a;
         while (v <= b) {
@@ -136,14 +136,26 @@ fn fields_of(expr: string) -> [string] {
 /// is 0-7 with both 0 and 7 meaning Sunday. Errors as values on malformed input.
 pub fn parse(expr: string) -> Result<Schedule, string> {
     var e = expr.trim();
-    if (e == "@hourly") { e = "0 * * * *"; }
-    if (e == "@daily") { e = "0 0 * * *"; }
-    if (e == "@weekly") { e = "0 0 * * 0"; }
-    if (e == "@monthly") { e = "0 0 1 * *"; }
-    if (e == "@yearly" || e == "@annually") { e = "0 0 1 1 *"; }
+    if (e == "@hourly") {
+        e = "0 * * * *";
+    }
+    if (e == "@daily") {
+        e = "0 0 * * *";
+    }
+    if (e == "@weekly") {
+        e = "0 0 * * 0";
+    }
+    if (e == "@monthly") {
+        e = "0 0 1 * *";
+    }
+    if (e == "@yearly" || e == "@annually") {
+        e = "0 0 1 1 *";
+    }
     let fs = fields_of(e);
     if (fs.len() != 5) {
-        return Result.Err("cron: expected 5 fields (min hour dom mon dow), got " + to_string(fs.len()));
+        return Result.Err(
+            "cron: expected 5 fields (min hour dom mon dow), got " + to_string(fs.len())
+        );
     }
     let mins = parse_field(fs[0], 0, 59, "minute")?;
     let hours = parse_field(fs[1], 0, 23, "hour")?;
@@ -153,21 +165,22 @@ pub fn parse(expr: string) -> Result<Schedule, string> {
     if (dow[7]) {
         dow[0] = true;  // 7 = domingo, como el 0
     }
-    Result.Ok(Schedule {
-        mins: mins,
-        hours: hours,
-        dom: dom,
-        months: months,
-        dow: dow,
-        dom_star: fs[2] == "*",
-        dow_star: fs[4] == "*",
-    })
+    Result.Ok(
+        Schedule {
+            mins: mins,
+            hours: hours,
+            dom: dom,
+            months: months,
+            dow: dow,
+            dom_star: fs[2] == "*",
+            dow_star: fs[4] == "*"
+        }
+    )
 }
 
 // ---------------------------------------------------------------------------
 // next_after — el siguiente disparo, saltando por campos (no minuto a minuto).
 // ---------------------------------------------------------------------------
-
 // ¿Casa el DÍA (dom/dow) de `dt`? El quirk de vixie: ambos restringidos → OR.
 fn day_matches(s: Schedule, dt: time.DateTime) -> bool {
     let by_dom = s.dom[dt.day];
@@ -197,7 +210,17 @@ pub fn next_after(s: Schedule, ms: int) -> Result<int, string> {
                 mo = 1;
                 y = y + 1;
             }
-            t = time.to_epoch_millis(time.DateTime { year: y, month: mo, day: 1, hour: 0, minute: 0, second: 0, weekday: 0 });
+            t = time.to_epoch_millis(
+                time.DateTime {
+                    year: y,
+                    month: mo,
+                    day: 1,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    weekday: 0
+                }
+            );
         } else if (!day_matches(s, dt)) {
             // Salta a las 00:00 del día siguiente.
             t = (floor_div(t, 86400000) + 1) * 86400000;
@@ -215,7 +238,7 @@ pub fn next_after(s: Schedule, ms: int) -> Result<int, string> {
 
 fn floor_div(a: int, b: int) -> int {
     let q = a / b;
-    if (a % b != 0 && ((a < 0) != (b < 0))) {
+    if (a % b != 0 && a < 0 != b < 0) {
         return q - 1;
     }
     q
@@ -224,7 +247,6 @@ fn floor_div(a: int, b: int) -> int {
 // ---------------------------------------------------------------------------
 // El runner cooperativo
 // ---------------------------------------------------------------------------
-
 // Corre `job` en cada disparo de `s`, para siempre (duerme entre disparos cediendo la
 // fibra). Úsese dentro de un `spawn`; si la expresión es imposible, retorna en silencio.
 /// Runs `job` at every fire time of the schedule, forever, sleeping cooperatively

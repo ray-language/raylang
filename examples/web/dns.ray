@@ -371,7 +371,9 @@ pub fn format_records(recs: [Record]) -> [string] {
                 out.push(name);
             },
             Record.Srv(prio, peso, puerto, target) => {
-                out.push(to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target);
+                out.push(
+                    to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target
+                );
             },
             Record.Other(_) => { },
         }
@@ -404,10 +406,18 @@ fn random_id() -> int {
 pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result<DnsResult, string> {
     let id = random_id();
     let consulta = build_query(id, name, qtype);
-    match (bind("0.0.0.0", 0)) {
+    match (bind(
+    "0.0.0.0",
+    0
+)) {
         Result.Err(e) => Result.Err("bind: " + e),
         Result.Ok(h) => {
-            match (send_to(h, server, port, consulta)) {
+            match (send_to(
+            h,
+            server,
+            port,
+            consulta
+        )) {
                 Result.Err(e) => {
                     close(h);
                     Result.Err("send: " + e)
@@ -420,7 +430,9 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
                             // M72.2: la respuesta debe llevar el ID de la consulta (anti-spoofing).
                             let rid = be16(pkt.data, 0)?;
                             if (rid != id) {
-                                Result.Err("ID de la respuesta DNS no coincide con la consulta (posible spoofing)")
+                                Result.Err(
+                                    "ID de la respuesta DNS no coincide con la consulta (posible spoofing)"
+                                )
                             } else {
                                 parse_full(pkt.data)
                             }

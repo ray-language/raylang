@@ -82,7 +82,9 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
                 return Result.Err("invalid message length (" + to_string(mlen) + ")");
             }
             if (mlen > max_message()) {
-                return Result.Err("message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)");
+                return Result.Err(
+                    "message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)"
+                );
             }
             let total = 1 + mlen;
             if (c.buf.len() >= total) {
@@ -158,7 +160,15 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
 /// SCRAM-SHA-256 (`nonce` = client nonce; use a random one in production), runs `sql` via
 /// the simple query protocol, and returns the FIRST row as column strings (NULL -> "").
 /// Blocking network I/O; Err on connection/auth failure or any server ErrorResponse.
-pub fn pg_query(host: string, port: int, user: string, db: string, password: string, nonce: string, sql: string) -> Result<[string], string> {
+pub fn pg_query(
+    host: string,
+    port: int,
+    user: string,
+    db: string,
+    password: string,
+    nonce: string,
+    sql: string
+) -> Result<[string], string> {
     let handle = match (net.tcp_connect(host, port)) {
         Result.Ok(h) => h,
         Result.Err(e) => {
@@ -284,7 +294,9 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
                 };
                 if (!scram_verify(sc, sfin)) {
                     close(handle);
-                    return Result.Err("the server signature does not verify (authentication failed)");
+                    return Result.Err(
+                        "the server signature does not verify (authentication failed)"
+                    );
                 }
             }
             // code 0 = AuthenticationOk: nada que hacer.

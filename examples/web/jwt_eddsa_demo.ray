@@ -8,7 +8,40 @@ from base64 import base64url;
 
 fn main() {
     // Seed del firmante (semilla 2 del RFC 8032 §7.1).
-    let seed: [int] = [76, 205, 8, 155, 40, 255, 150, 218, 157, 182, 195, 70, 236, 17, 78, 15, 91, 138, 49, 159, 53, 171, 166, 36, 218, 140, 246, 237, 79, 184, 166, 251];
+    let seed: [int] = [
+        76,
+        205,
+        8,
+        155,
+        40,
+        255,
+        150,
+        218,
+        157,
+        182,
+        195,
+        70,
+        236,
+        17,
+        78,
+        15,
+        91,
+        138,
+        49,
+        159,
+        53,
+        171,
+        166,
+        36,
+        218,
+        140,
+        246,
+        237,
+        79,
+        184,
+        166,
+        251
+    ];
     let payload = "{\"sub\":\"ada\",\"admin\":true}";
 
     let token = jwt_eddsa_sign(seed, payload);
@@ -21,7 +54,40 @@ fn main() {
     }
 
     // Clave pública equivocada (la de la semilla 1) → rechazo.
-    let otro_seed: [int] = [157, 97, 177, 157, 239, 254, 188, 63, 40, 81, 62, 119, 227, 211, 101, 61, 149, 167, 92, 62, 92, 114, 224, 125, 15, 101, 179, 200, 91, 214, 204, 152];
+    let otro_seed: [int] = [
+        157,
+        97,
+        177,
+        157,
+        239,
+        254,
+        188,
+        63,
+        40,
+        81,
+        62,
+        119,
+        227,
+        211,
+        101,
+        61,
+        149,
+        167,
+        92,
+        62,
+        92,
+        114,
+        224,
+        125,
+        15,
+        101,
+        179,
+        200,
+        91,
+        214,
+        204,
+        152
+    ];
     let otra_pk = ed25519_public_key(otro_seed);
     match (jwt_eddsa_verify(otra_pk, token)) {
         Result.Ok(c) => print("clave equivocada ACEPTADA"),

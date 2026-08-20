@@ -9,10 +9,17 @@ fn main() {
     // --- HMAC-SHA256 (RFC 4231 §4.3 + vectores de openssl) ---
     print(hmac_sha256_hex("Jefe".to_bytes(), "what do ya want for nothing?".to_bytes()));
     // 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
-    print(hmac_sha256_hex("key".to_bytes(), "The quick brown fox jumps over the lazy dog".to_bytes()));
+    print(
+        hmac_sha256_hex("key".to_bytes(), "The quick brown fox jumps over the lazy dog".to_bytes())
+    );
     // f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
     // Clave más larga que el bloque (>64 octetos) → se hashea antes.
-    print(hmac_sha256_hex("clave-larguisima-de-mas-de-sesenta-y-cuatro-octetos-para-forzar-el-hash-previo".to_bytes(), "mensaje".to_bytes()));
+    print(
+        hmac_sha256_hex(
+            "clave-larguisima-de-mas-de-sesenta-y-cuatro-octetos-para-forzar-el-hash-previo".to_bytes(),
+            "mensaje".to_bytes()
+        )
+    );
     // 7d5c78edf5aae49e5d1bf1106e250485811585bcad0d78ebbea235d9f320a0dd
     // --- base64url (sin relleno, alfabeto URL-safe) ---
     print(base64url(hex_decode_ok("4d616e")));  // TWFu  ("Man")
@@ -32,7 +39,6 @@ fn main() {
         Result.Err(e) => print(e),
     }
 }
-
 
 // hex_decode que asume entrada válida (para la demo).
 fn hex_decode_ok(s: string) -> bytes {

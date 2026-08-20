@@ -153,19 +153,34 @@ fn read_file(path: string) -> Result<string, string> {
 
 // Lee + lexea + parsea un módulo; traduce los errores a LoadError con el nombre del módulo.
 fn load_one(name: string, path: string) -> Result<Program, LoadError> {
-    match (read_file(path)) {
+    match (read_file(
+    path
+)) {
         Result.Ok(src) => {
-            match (lex(src)) {
+            match (lex(
+            src
+        )) {
                 Result.Ok(toks) => {
-                    match (parse(toks)) {
+                    match (parse(
+                    toks
+                )) {
                         Result.Ok(p) => Result.Ok(p),
-                        Result.Err(pe) => Result.Err(LoadError { msg: pe.msg, line: pe.line, col: pe.col, module: name }),
+                        Result.Err(pe) => Result.Err(
+                            LoadError { msg: pe.msg, line: pe.line, col: pe.col, module: name }
+                        ),
                     }
                 },
                 Result.Err(le) => Result.Err(LoadError { msg: le.msg, line: le.line, col: le.col, module: name }),
             }
         },
-        Result.Err(_) => Result.Err(LoadError { msg: "could not read module '" + name + "' (" + path + ")", line: 0, col: 0, module: name }),
+        Result.Err(_) => Result.Err(
+            LoadError {
+                msg: "could not read module '" + name + "' (" + path + ")",
+                line: 0,
+                col: 0,
+                module: name
+            }
+        ),
     }
 }
 
@@ -229,26 +244,49 @@ fn classify_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps, 
         while (j < fi.names.len()) {
             let n = fi.names[j];
             let local = local_of_alias(n.alias, n.name);
-            match (get(surfaces, fi.module)) {
+            match (get(
+                surfaces,
+                fi.module
+            )) {
                 Option.Some(surf) => {
-                    match (get(surf.values, n.name)) {
+                    match (get(
+                    surf.values,
+                    n.name
+                )) {
                         Option.Some(g) => {
                             values.insert(local, g);
                         },
                         Option.None => {
-                            match (get(surf.types, n.name)) {
+                            match (get(
+                            surf.types,
+                            n.name
+                        )) {
                                 Option.Some(g) => {
                                     types.insert(local, g);
                                 },
                                 Option.None => {
-                                    return Result.Err(LoadError { msg: "module '" + fi.module + "' does not export '" + n.name + "' (missing 'pub'?)", line: n.line, col: n.col, module: m.name });
+                                    return Result.Err(
+                                        LoadError {
+                                            msg: "module '" + fi.module + "' does not export '" + n.name + "' (missing 'pub'?)",
+                                            line: n.line,
+                                            col: n.col,
+                                            module: m.name
+                                        }
+                                    );
                                 },
                             }
                         },
                     }
                 },
                 Option.None => {
-                    return Result.Err(LoadError { msg: "module not found: '" + fi.module + "'", line: n.line, col: n.col, module: m.name });
+                    return Result.Err(
+                        LoadError {
+                            msg: "module not found: '" + fi.module + "'",
+                            line: n.line,
+                            col: n.col,
+                            module: m.name
+                        }
+                    );
                 },
             }
             j = j + 1;
@@ -903,13 +941,17 @@ pub fn load(entry_path: string) -> Result<Program, LoadError> {
             var di = 0;
             while (di < prog.from_imports.len()) {
                 let dep = prog.from_imports[di].module;
-                pending.push(PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
+                pending.push(
+                    PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false }
+                );
                 di = di + 1;
             }
             var ii = 0;
             while (ii < prog.imports.len()) {
                 let dep = prog.imports[ii].module;
-                pending.push(PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
+                pending.push(
+                    PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false }
+                );
                 ii = ii + 1;
             }
             modules.push(Module { name: pm.name, is_entry: pm.is_entry, prog: prog });
@@ -918,7 +960,15 @@ pub fn load(entry_path: string) -> Result<Program, LoadError> {
 
     // Fases 2-4: superficies, resolución por módulo y fusión.
     let surfaces = build_surfaces(modules);
-    var fused = Program { funcs: [], structs: [], enums: [], traits: [], impls: [], imports: [], from_imports: [] };
+    var fused = Program {
+        funcs: [],
+        structs: [],
+        enums: [],
+        traits: [],
+        impls: [],
+        imports: [],
+        from_imports: []
+    };
     var mi = 0;
     while (mi < modules.len()) {
         let m = modules[mi];

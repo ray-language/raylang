@@ -126,7 +126,15 @@ fn parse_datarow(payload: bytes) -> [string] {
 
 // Ejecuta `sql` como consulta simple tras autenticar con SCRAM-SHA-256, y devuelve la PRIMERA fila
 // como lista de columnas (strings). `nonce` es el nonce del cliente (aleatorio en producción).
-pub fn pg_query(host: string, port: int, user: string, db: string, password: string, nonce: string, sql: string) -> Result<[string], string> {
+pub fn pg_query(
+    host: string,
+    port: int,
+    user: string,
+    db: string,
+    password: string,
+    nonce: string,
+    sql: string
+) -> Result<[string], string> {
     let handle = match (net.tcp_connect(host, port)) {
         Result.Ok(h) => h,
         Result.Err(e) => {

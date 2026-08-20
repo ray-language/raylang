@@ -18,7 +18,12 @@ fn main() {
     let reg = registry();
     register_counter(reg, "http_requests_total", "Total de peticiones HTTP");
     register_gauge(reg, "temperatura_celsius", "Temperatura actual");
-    register_histogram(reg, "http_duracion_segundos", "Duracion de las peticiones", [0.1, 0.5, 1.0]);
+    register_histogram(
+        reg,
+        "http_duracion_segundos",
+        "Duracion de las peticiones",
+        [0.1, 0.5, 1.0]
+    );
 
     // Counter con labels (dos series distintas por el conjunto de labels).
     inc(reg, "http_requests_total", labels2("method", "GET", "code", "200"));

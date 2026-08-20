@@ -28,7 +28,9 @@ pub fn writer() -> PbWriter {
 // write_fixed64 (el complemento a dos de 8 octetos LE sí es correcto) o `sint`/zigzag (diferido).
 fn encode_varint(out: [int], value: int) {
     if (value < 0) {
-        panic("protobuf: varint negativo no soportado (usa write_fixed64, o sint/zigzag — diferido)");
+        panic(
+            "protobuf: varint negativo no soportado (usa write_fixed64, o sint/zigzag — diferido)"
+        );
     }
     var v = value;
     while (v >= 128) {
@@ -179,11 +181,25 @@ pub fn parse(data: bytes) -> Result<[PbField], string> {
                 fields.push(PbField { number: number, wire: 2, int_val: 0, bytes_val: b });
             } else {
                 if (wire == 1) {
-                    fields.push(PbField { number: number, wire: 1, int_val: read_le(data, pos, 8), bytes_val: b"" });
+                    fields.push(
+                        PbField {
+                            number: number,
+                            wire: 1,
+                            int_val: read_le(data, pos, 8),
+                            bytes_val: b""
+                        }
+                    );
                     pos = pos + 8;
                 } else {
                     if (wire == 5) {
-                        fields.push(PbField { number: number, wire: 5, int_val: read_le(data, pos, 4), bytes_val: b"" });
+                        fields.push(
+                            PbField {
+                                number: number,
+                                wire: 5,
+                                int_val: read_le(data, pos, 4),
+                                bytes_val: b""
+                            }
+                        );
                         pos = pos + 4;
                     } else {
                         return Result.Err("wire type no soportado: " + to_string(wire));

@@ -69,7 +69,15 @@ fn sanitize(s: string) -> string {
 /// Creates a cookie with just a name and value, no attributes set.
 /// Add attributes with the chainable `with_*` setters, e.g. `cookie("sid","abc").with_path("/").with_http_only()`.
 pub fn cookie(name: string, value: string) -> Cookie {
-    Cookie { name: name, value: value, path: "", max_age: 0 - 1, http_only: false, secure: false, same_site: "" }
+    Cookie {
+        name: name,
+        value: value,
+        path: "",
+        max_age: 0 - 1,
+        http_only: false,
+        secure: false,
+        same_site: ""
+    }
 }
 
 // Setters encadenables (mutan por referencia y devuelven la cookie). Nombres `with_*` para no chocar

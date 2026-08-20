@@ -97,7 +97,10 @@ fn main() -> int {
             return 1;
         },
     }
-    match (net.tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen(
+    "127.0.0.1",
+    0
+)) {
         Result.Err(e) => {
             eprint("no se pudo escuchar: " + e);
             1
@@ -106,7 +109,9 @@ fn main() -> int {
             print(to_string(net.local_port(srv)));
             var seguir = true;
             while (seguir) {
-                match (net.tcp_accept(srv)) {
+                match (net.tcp_accept(
+                srv
+            )) {
                     Result.Err(e) => {
                         eprint(e);
                         seguir = false;

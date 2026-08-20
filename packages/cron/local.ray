@@ -8,7 +8,6 @@
 // - una hora civil que cae en el HUECO de primavera (no existe) dispara al TERMINAR el
 //   hueco — la primera hora local válida;
 // - una hora civil del SOLAPE de otoño (ocurre dos veces) dispara solo la PRIMERA vez.
-
 import cron/cron;
 import tz/tz;
 import std/time;

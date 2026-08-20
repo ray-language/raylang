@@ -5,22 +5,34 @@ from udp import bind, send_to, recv_from;
 
 fn main() -> int {
     let puerto = puerto_de_args();
-    match (bind("127.0.0.1", 0)) {
+    match (bind(
+    "127.0.0.1",
+    0
+)) {
         Result.Err(e) => {
             eprint("bind: " + e);
             1
         },
         Result.Ok(h) => {
-            match (send_to(h, "127.0.0.1", puerto, "hola udp".to_bytes())) {
+            match (send_to(
+            h,
+            "127.0.0.1",
+            puerto,
+            "hola udp".to_bytes()
+        )) {
                 Result.Err(e) => {
                     eprint("send: " + e);
                     1
                 },
                 Result.Ok(n) => {
                     print(to_string(n));  // 8 (octetos enviados)
-                    match (recv_from(h)) {
+                    match (recv_from(
+                        h
+                    )) {
                         Result.Ok(p) => {
-                            match (from_utf8(p.data)) {
+                            match (from_utf8(
+                            p.data
+                        )) {
                                 Result.Ok(s) => print(s),  // HOLA UDP (el servidor lo pasa a mayúsculas)
                                 Result.Err(e) => print("utf8: " + e),
                             }

@@ -3,7 +3,6 @@
 // `from std/units import kb, mb;  let buf_max = 64.kb();`. Módulo PLANO a propósito (sin
 // submódulo units/size): si algún día llega otra familia de unidades, entra como submódulo
 // hermano o con un reexport de compat (la crónica de la decisión, en IDEAS §55).
-
 /// `n` kilobytes as **bytes**, binary convention (1 KB = 1024 bytes — the systems-code reading:
 /// buffers, memory limits): `64.kb()` is `65536`.
 pub fn kb(n: int) -> int { n * 1024 }

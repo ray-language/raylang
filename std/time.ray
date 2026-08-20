@@ -8,7 +8,6 @@
 // `DateTime` es una VISTA civil para formatear/parsear (no lleva offset). Solo UTC — no hay base
 // de zonas horarias (una `tz` IANA sería un paquete aparte). Sin leap seconds (= tiempo Unix);
 // fechas desde 1970 (epoch >= 0: la división trunca = floor).
-
 /// The current wall-clock time as **milliseconds since the Unix epoch** (UTC).
 pub fn now() -> int { __now() }
 
@@ -35,7 +34,6 @@ pub fn sleep(ms: int) { __sleep(ms) }
 // La moneda de duración de la stdlib es el int en MILISEGUNDOS; estas funciones convierten a esa
 // moneda desde la unidad que se lee natural. Importadas sin calificar (`from std/time import
 // seconds, minutes`) habilitan la forma UFCS: `sleep(30.seconds())`, `retry_after(5.minutes())`.
-
 /// `n` milliseconds as milliseconds — the identity, for call sites that want the unit spelled
 /// out: `sleep(500.millis())` reads better than a bare `500`.
 pub fn millis(n: int) -> int { n }
@@ -53,7 +51,6 @@ pub fn hours(n: int) -> int { n * 3600000 }
 pub fn days(n: int) -> int { n * 86400000 }
 
 // --- Fechas civiles UTC (M20.5, promovidas en M57.1) ---
-
 /// A civil UTC date-time: year, month (1..12), day (1..31), hour (0..23), minute/second (0..59)
 /// and weekday (0=Sunday..6=Saturday). A *view* over an instant for formatting/parsing — the
 /// instant itself is the `int` of milliseconds since the Unix epoch (see `from_epoch_millis`/
@@ -149,14 +146,20 @@ fn pad(n: int, ancho: int) -> string {
 // Formato ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
 /// Formats a DateTime as ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
 pub fn to_iso8601(dt: DateTime) -> string {
-    pad(dt.year, 4) + "-" + pad(dt.month, 2) + "-" + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
+    pad(
+        dt.year,
+        4
+    ) + "-" + pad(dt.month, 2) + "-" + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
 }
 
 // Formato ISO 8601 "básico" (sin separadores): `YYYYMMDDTHHMMSSZ`. Es el `X-Amz-Date` de AWS SigV4.
 /// Formats a DateTime as "basic" ISO 8601 (no separators): `YYYYMMDDTHHMMSSZ`.
 /// This is the `X-Amz-Date` format used by AWS Signature V4.
 pub fn to_iso8601_basic(dt: DateTime) -> string {
-    pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
+    pad(
+        dt.year,
+        4
+    ) + pad(dt.month, 2) + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
 }
 
 // Solo la fecha, sin separadores: `YYYYMMDD` (el "datestamp" del *credential scope* de AWS SigV4).
@@ -171,21 +174,36 @@ fn weekday_name(w: int) -> string {
 }
 
 fn month_name(m: int) -> string {
-    let names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let names = [
+        "",
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec"
+    ];
     names[m]
 }
 
 // Formato RFC 1123 (la cabecera `Date:` de HTTP): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
 /// Formats a DateTime as RFC 1123 (the HTTP `Date:` header): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
 pub fn to_rfc1123(dt: DateTime) -> string {
-    weekday_name(dt.weekday) + ", " + pad(dt.day, 2) + " " + month_name(dt.month) + " " + pad(dt.year, 4) + " " + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + " GMT"
+    weekday_name(
+        dt.weekday
+    ) + ", " + pad(dt.day, 2) + " " + month_name(dt.month) + " " + pad(dt.year, 4) + " " + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + " GMT"
 }
 
 // --- Parse RFC 3339 endurecido (M57.1) ---
 // Antes: solo la forma exacta `…Z`, campos no numéricos = 0 EN SILENCIO, sin validar rangos.
 // Ahora: `YYYY-MM-DDTHH:MM:SS[.fff…][Z|±HH:MM]` — acepta offset y fracción (normaliza a UTC),
 // y todo lo malformado o fuera de rango es un Err real.
-
 // Un campo numérico de ancho fijo: Err si algún carácter no es un dígito.
 fn field(s: string, ini: int, fin: int, name: string) -> Result<int, string> {
     var n = 0;
@@ -204,7 +222,9 @@ fn field(s: string, ini: int, fin: int, name: string) -> Result<int, string> {
 // Exige el separador `expected` en la posición `i`.
 fn separator(s: string, i: int, expected: char) -> Result<int, string> {
     if (s[i] != expected) {
-        return Result.Err("ISO 8601: se esperaba '" + to_string(expected) + "' en la posición " + to_string(i) + " de '" + s + "'");
+        return Result.Err(
+            "ISO 8601: se esperaba '" + to_string(expected) + "' en la posición " + to_string(i) + " de '" + s + "'"
+        );
     }
     Result.Ok(0)
 }
@@ -245,7 +265,9 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
     }
     let civil = civil_from_days(days_from_civil(year, month, day));
     if (civil.year != year || civil.month != month || civil.day != day) {
-        return Result.Err("ISO 8601: fecha inexistente (" + pad(year, 4) + "-" + pad(month, 2) + "-" + pad(day, 2) + ")");
+        return Result.Err(
+            "ISO 8601: fecha inexistente (" + pad(year, 4) + "-" + pad(month, 2) + "-" + pad(day, 2) + ")"
+        );
     }
     if (hour > 23 || minute > 59 || second > 59) {
         return Result.Err("ISO 8601: hora fuera de rango en '" + s + "'");
@@ -302,7 +324,17 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
         return Result.Err("ISO 8601: texto sobrante tras el offset en '" + s + "'");
     }
 
-    let civil_ms = to_epoch_millis(DateTime { year: year, month: month, day: day, hour: hour, minute: minute, second: second, weekday: 0 });
+    let civil_ms = to_epoch_millis(
+        DateTime {
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute,
+            second: second,
+            weekday: 0
+        }
+    );
     let epoch = civil_ms + frac_ms - offset_ms;
     if (epoch < 0) {
         return Result.Err("ISO 8601: el instante es anterior a 1970 (no soportado)");

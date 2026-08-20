@@ -187,7 +187,9 @@ fn no_types() -> [Type] { [] }
 // `to_string`). Los flotantes usan el `to_string` del host = el `Display` de f64 de Rust → coincide.
 pub fn value_str(v: Value) -> string {
     match (v) {
-        Value.VInt(n) => to_string(n),
+        Value.VInt(n) => to_string(
+            n
+        ),
         Value.VFloat(x) => to_string(x),
         Value.VBool(b) => to_string(b),
         Value.VStr(s) => s,
@@ -656,7 +658,14 @@ pub fn eval_cmp(op: BinOp, l: Value, r: Value) -> Result<Value, Flow> {
 }
 
 // Un operador binario. Los lógicos (`&&`/`||`) hacen CORTOCIRCUITO → se tratan antes de evaluar ambos.
-fn eval_binary(c: Interp, op: BinOp, left: Expr, right: Expr, line: int, col: int) -> Result<Value, Flow> {
+fn eval_binary(
+    c: Interp,
+    op: BinOp,
+    left: Expr,
+    right: Expr,
+    line: int,
+    col: int
+) -> Result<Value, Flow> {
     match (op) {
         BinOp.And => {
             if (!eval_bool(c, left)?) {
@@ -925,7 +934,13 @@ fn call_builtin(c: Interp, name: string, args: [Expr], line: int, col: int) -> R
 // Despacha un builtin con sus argumentos ya evaluados (lo reusan el builtin-como-método —`xs.len()`— y
 // la VM auto-alojada de M14.5). `prog_args` son los argumentos del programa (para `args()`). `panic` se
 // intercepta aquí (necesita la posición de la llamada y produce un FError, no un Value).
-pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: int, col: int) -> Result<Value, Flow> {
+pub fn dispatch_builtin(
+    prog_args: [string],
+    name: string,
+    vals: [Value],
+    line: int,
+    col: int
+) -> Result<Value, Flow> {
     if (name == "panic") {
         return Result.Err(Flow.FError(rt_error(line, col, as_str(vals[0]))));
     }
@@ -1194,7 +1209,10 @@ fn register_methods(c: Interp, prog: Program) {
                     if (!contains_str(defined, sig.name)) {
                         match (sig.default_body) {
                             Option.Some(body) => {
-                                c.methods.insert(key + "#" + sig.name, Method { params: sig.params, body: body });
+                                c.methods.insert(
+                                    key + "#" + sig.name,
+                                    Method { params: sig.params, body: body }
+                                );
                             },
                             Option.None => { },
                         }
@@ -1216,7 +1234,14 @@ fn call_method(c: Interp, method: Method, recv: Value, args: [Value]) -> Result<
 // Despacho de `recv.fname(args)`: campo-función → método (tabla `Tipo#metodo`) → `@derive` (igual/mostrar)
 // → UFCS a función libre `fname(recv, args)` → builtin como método. Es el corazón de la resolución en
 // runtime: `dyn`/bounds/genéricos no necesitan nada especial (se mira la etiqueta del valor concreto).
-fn dispatch_method(c: Interp, recv: Value, fname: string, args: [Expr], line: int, col: int) -> Result<Value, Flow> {
+fn dispatch_method(
+    c: Interp,
+    recv: Value,
+    fname: string,
+    args: [Expr],
+    line: int,
+    col: int
+) -> Result<Value, Flow> {
     // (a) ¿campo del struct que contiene una función? (gana sobre UFCS/método)
     match (recv) {
         Value.VStruct(_, fields) => {
@@ -1309,7 +1334,10 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
             // que no es una variable local). Si no, es despacho de método/UFCS sobre el receptor.
             match (obj.kind) {
                 EKind.EIdent(maybe_enum) => {
-                    match (lookup_opt(c, maybe_enum)) {
+                    match (lookup_opt(
+                    c,
+                    maybe_enum
+                )) {
                         Option.Some(recv) => dispatch_method(c, recv, fname, args, callee.line, callee.col),
                         Option.None => {
                             if (enum_has_variant(c, maybe_enum, fname)) {
@@ -1341,7 +1369,13 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
 // capturado. Scoping léxico: arranca con una pila de ámbitos NUEVA (no la de quien llama); se guarda la
 // actual y se restaura al volver. Un `return` interno (FReturn) se desenvuelve aquí en el valor de la
 // función. El ámbito base son las celdas capturadas (compartidas); encima va el de los parámetros.
-fn call_body(c: Interp, params: [Param], body: Block, args: [Value], captured: [Capture]) -> Result<Value, Flow> {
+fn call_body(
+    c: Interp,
+    params: [Param],
+    body: Block,
+    args: [Value],
+    captured: [Capture]
+) -> Result<Value, Flow> {
     let saved = c.scopes;
     c.scopes = empty_scopes();
     push_scope(c);  // ámbito base: las capturas
@@ -1510,7 +1544,11 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
 // =====================================================================
 // Error de índice fuera de rango (mensaje idéntico al de Rust).
 fn oob(idx_e: Expr, i: int, n: int) -> RuntimeError {
-    rt_error(idx_e.line, idx_e.col, "index " + to_string(i) + " out of range (length " + to_string(n) + ")")
+    rt_error(
+        idx_e.line,
+        idx_e.col,
+        "index " + to_string(i) + " out of range (length " + to_string(n) + ")"
+    )
 }
 
 fn eval_array(c: Interp, elems: [Expr]) -> Result<Value, Flow> {
@@ -1671,7 +1709,9 @@ fn eval_match(c: Interp, scr: Expr, arms: [MatchArm]) -> Result<Value, Flow> {
         }
         i = i + 1;
     }
-    Result.Err(Flow.FError(rt_error(scr.line, scr.col, "no match branch matched (should not happen)")))
+    Result.Err(
+        Flow.FError(rt_error(scr.line, scr.col, "no match branch matched (should not happen)"))
+    )
 }
 
 // `?`: desempaqueta `Ok(v)`/`Some(v)` a `v`, o propaga `Err(e)`/`None` como un `return` de la función
@@ -1694,8 +1734,20 @@ fn eval_try(c: Interp, inner: Expr) -> Result<Value, Flow> {
 // (`Option.Some`/`Result.Ok`/…) en runtime. El intérprete solo necesita los nombres de las variantes
 // (no los tipos del payload). Si el usuario redefine uno, sus definiciones lo sobrescriben luego.
 fn inject_prelude_enums(c: Interp) {
-    c.enums.insert("Option", [VariantDef { name: "Some", payload: no_types(), line: 0, col: 0 }, VariantDef { name: "None", payload: no_types(), line: 0, col: 0 }]);
-    c.enums.insert("Result", [VariantDef { name: "Ok", payload: no_types(), line: 0, col: 0 }, VariantDef { name: "Err", payload: no_types(), line: 0, col: 0 }]);
+    c.enums.insert(
+        "Option",
+        [
+            VariantDef { name: "Some", payload: no_types(), line: 0, col: 0 },
+            VariantDef { name: "None", payload: no_types(), line: 0, col: 0 }
+        ]
+    );
+    c.enums.insert(
+        "Result",
+        [
+            VariantDef { name: "Ok", payload: no_types(), line: 0, col: 0 },
+            VariantDef { name: "Err", payload: no_types(), line: 0, col: 0 }
+        ]
+    );
 }
 
 // =====================================================================
@@ -1704,7 +1756,14 @@ fn inject_prelude_enums(c: Interp) {
 // Ejecuta el programa llamando a `main` y devuelve su valor (o un error de ejecución). El checker ya
 // garantizó que `main` existe.
 pub fn run(prog: Program, prog_args: [string]) -> Result<Value, RuntimeError> {
-    let c = Interp { funcs: Map.new(), structs: Map.new(), enums: Map.new(), methods: Map.new(), scopes: empty_scopes(), args: prog_args };
+    let c = Interp {
+        funcs: Map.new(),
+        structs: Map.new(),
+        enums: Map.new(),
+        methods: Map.new(),
+        scopes: empty_scopes(),
+        args: prog_args
+    };
     inject_prelude_enums(c);  // Option/Result (los del programa, abajo, sobrescriben si el usuario redefine)
     var i = 0;
     while (i < prog.funcs.len()) {

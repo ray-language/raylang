@@ -40,7 +40,12 @@ pub struct Limits {
 }
 
 pub fn default_limits() -> Limits {
-    Limits { max_header_bytes: 65536, max_body_bytes: 10485760, max_conns: 1024, read_timeout_millis: 10000 }
+    Limits {
+        max_header_bytes: 65536,
+        max_body_bytes: 10485760,
+        max_conns: 1024,
+        read_timeout_millis: 10000
+    }
 }
 
 // M56.7: `headers` es un Map (una por nombre) y `Set-Cookie` —la única cabecera que se repite de
@@ -93,31 +98,81 @@ pub fn request_text(req: Request) -> Result<string, string> {
 // El Content-Type por extensión (tipos comunes; el resto, octet-stream). Pub: lo reusan handlers propios.
 pub fn mime_of(file: string) -> string {
     let f = file.to_lower();
-    if (f.ends_with(".html") || f.ends_with(".htm")) { return "text/html; charset=utf-8"; }
-    if (f.ends_with(".css")) { return "text/css; charset=utf-8"; }
-    if (f.ends_with(".js") || f.ends_with(".mjs")) { return "text/javascript; charset=utf-8"; }
-    if (f.ends_with(".json") || f.ends_with(".map")) { return "application/json; charset=utf-8"; }
-    if (f.ends_with(".txt")) { return "text/plain; charset=utf-8"; }
-    if (f.ends_with(".csv")) { return "text/csv; charset=utf-8"; }
-    if (f.ends_with(".xml")) { return "application/xml; charset=utf-8"; }
-    if (f.ends_with(".svg")) { return "image/svg+xml"; }
-    if (f.ends_with(".png")) { return "image/png"; }
-    if (f.ends_with(".jpg") || f.ends_with(".jpeg")) { return "image/jpeg"; }
-    if (f.ends_with(".gif")) { return "image/gif"; }
-    if (f.ends_with(".webp")) { return "image/webp"; }
-    if (f.ends_with(".avif")) { return "image/avif"; }
-    if (f.ends_with(".ico")) { return "image/x-icon"; }
-    if (f.ends_with(".pdf")) { return "application/pdf"; }
-    if (f.ends_with(".wasm")) { return "application/wasm"; }
-    if (f.ends_with(".woff2")) { return "font/woff2"; }
-    if (f.ends_with(".woff")) { return "font/woff"; }
-    if (f.ends_with(".ttf")) { return "font/ttf"; }
-    if (f.ends_with(".otf")) { return "font/otf"; }
-    if (f.ends_with(".mp4")) { return "video/mp4"; }
-    if (f.ends_with(".webm")) { return "video/webm"; }
-    if (f.ends_with(".mp3")) { return "audio/mpeg"; }
-    if (f.ends_with(".wav")) { return "audio/wav"; }
-    if (f.ends_with(".gz")) { return "application/gzip"; }
+    if (f.ends_with(".html") || f.ends_with(".htm")) {
+        return "text/html; charset=utf-8";
+    }
+    if (f.ends_with(".css")) {
+        return "text/css; charset=utf-8";
+    }
+    if (f.ends_with(".js") || f.ends_with(".mjs")) {
+        return "text/javascript; charset=utf-8";
+    }
+    if (f.ends_with(".json") || f.ends_with(".map")) {
+        return "application/json; charset=utf-8";
+    }
+    if (f.ends_with(".txt")) {
+        return "text/plain; charset=utf-8";
+    }
+    if (f.ends_with(".csv")) {
+        return "text/csv; charset=utf-8";
+    }
+    if (f.ends_with(".xml")) {
+        return "application/xml; charset=utf-8";
+    }
+    if (f.ends_with(".svg")) {
+        return "image/svg+xml";
+    }
+    if (f.ends_with(".png")) {
+        return "image/png";
+    }
+    if (f.ends_with(".jpg") || f.ends_with(".jpeg")) {
+        return "image/jpeg";
+    }
+    if (f.ends_with(".gif")) {
+        return "image/gif";
+    }
+    if (f.ends_with(".webp")) {
+        return "image/webp";
+    }
+    if (f.ends_with(".avif")) {
+        return "image/avif";
+    }
+    if (f.ends_with(".ico")) {
+        return "image/x-icon";
+    }
+    if (f.ends_with(".pdf")) {
+        return "application/pdf";
+    }
+    if (f.ends_with(".wasm")) {
+        return "application/wasm";
+    }
+    if (f.ends_with(".woff2")) {
+        return "font/woff2";
+    }
+    if (f.ends_with(".woff")) {
+        return "font/woff";
+    }
+    if (f.ends_with(".ttf")) {
+        return "font/ttf";
+    }
+    if (f.ends_with(".otf")) {
+        return "font/otf";
+    }
+    if (f.ends_with(".mp4")) {
+        return "video/mp4";
+    }
+    if (f.ends_with(".webm")) {
+        return "video/webm";
+    }
+    if (f.ends_with(".mp3")) {
+        return "audio/mpeg";
+    }
+    if (f.ends_with(".wav")) {
+        return "audio/wav";
+    }
+    if (f.ends_with(".gz")) {
+        return "application/gzip";
+    }
     "application/octet-stream"
 }
 
@@ -187,11 +242,15 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
         Option.Some(file) => {
             let size: int = match (fs.file_size(file)) {
                 Result.Ok(n) => n,
-                Result.Err(_) => { return not_found(); },
+                Result.Err(_) => {
+                    return not_found();
+                },
             };
             let mtime: int = match (fs.mtime(file)) {
                 Result.Ok(ms) => ms,
-                Result.Err(_) => { return not_found(); },
+                Result.Err(_) => {
+                    return not_found();
+                },
             };
             let etag: string = "\"" + to_string(size) + "-" + to_string(mtime) + "\"";
             match (get(req.headers, "if-none-match")) {
@@ -221,32 +280,7 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
 // La frase de estado para los códigos comunes (HTTP la exige tras el número). M56.1: cubre
 // también redirecciones (3xx), auth (401/403), 405/413/429/431 y los 5xx de gateway.
 fn status_text(code: int) -> string {
-    if (code == 200) { "OK" }
-    else if (code == 201) { "Created" }
-    else if (code == 204) { "No Content" }
-    else if (code == 301) { "Moved Permanently" }
-    else if (code == 302) { "Found" }
-    else if (code == 303) { "See Other" }
-    else if (code == 304) { "Not Modified" }
-    else if (code == 307) { "Temporary Redirect" }
-    else if (code == 308) { "Permanent Redirect" }
-    else if (code == 400) { "Bad Request" }
-    else if (code == 401) { "Unauthorized" }
-    else if (code == 403) { "Forbidden" }
-    else if (code == 404) { "Not Found" }
-    else if (code == 405) { "Method Not Allowed" }
-    else if (code == 409) { "Conflict" }
-    else if (code == 413) { "Content Too Large" }
-    else if (code == 415) { "Unsupported Media Type" }
-    else if (code == 422) { "Unprocessable Content" }
-    else if (code == 429) { "Too Many Requests" }
-    else if (code == 431) { "Request Header Fields Too Large" }
-    else if (code == 500) { "Internal Server Error" }
-    else if (code == 501) { "Not Implemented" }
-    else if (code == 502) { "Bad Gateway" }
-    else if (code == 503) { "Service Unavailable" }
-    else if (code == 504) { "Gateway Timeout" }
-    else { "Status" }
+    if (code == 200) { "OK" } else if (code == 201) { "Created" } else if (code == 204) { "No Content" } else if (code == 301) { "Moved Permanently" } else if (code == 302) { "Found" } else if (code == 303) { "See Other" } else if (code == 304) { "Not Modified" } else if (code == 307) { "Temporary Redirect" } else if (code == 308) { "Permanent Redirect" } else if (code == 400) { "Bad Request" } else if (code == 401) { "Unauthorized" } else if (code == 403) { "Forbidden" } else if (code == 404) { "Not Found" } else if (code == 405) { "Method Not Allowed" } else if (code == 409) { "Conflict" } else if (code == 413) { "Content Too Large" } else if (code == 415) { "Unsupported Media Type" } else if (code == 422) { "Unprocessable Content" } else if (code == 429) { "Too Many Requests" } else if (code == 431) { "Request Header Fields Too Large" } else if (code == 500) { "Internal Server Error" } else if (code == 501) { "Not Implemented" } else if (code == 502) { "Bad Gateway" } else if (code == 503) { "Service Unavailable" } else if (code == 504) { "Gateway Timeout" } else { "Status" }
 }
 
 // --- Lectura de la petición ---
@@ -256,7 +290,9 @@ fn status_text(code: int) -> string {
 // re-escanear todo el acumulado por trozo es O(n²)).
 fn find_fin_cabeceras(b: bytes, desde: int) -> int {
     var i: int = desde;
-    if (i < 0) { i = 0; }
+    if (i < 0) {
+        i = 0;
+    }
     while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
             return i;
@@ -288,9 +324,15 @@ fn buscar_crlf(b: bytes, desde: int) -> int {
 
 // El valor de un dígito hexadecimal (octeto ASCII), o -1.
 fn hex_digito(b: int) -> int {
-    if (b >= 48 && b <= 57) { return b - 48; }
-    if (b >= 97 && b <= 102) { return b - 97 + 10; }
-    if (b >= 65 && b <= 70) { return b - 65 + 10; }
+    if (b >= 48 && b <= 57) {
+        return b - 48;
+    }
+    if (b >= 97 && b <= 102) {
+        return b - 97 + 10;
+    }
+    if (b >= 65 && b <= 70) {
+        return b - 65 + 10;
+    }
     0 - 1
 }
 
@@ -351,7 +393,9 @@ fn leer_cuerpo_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> R
                     match (leer_con_plazo(conn, plazo_fin)) {
                         Result.Ok(t) => {
                             if (t.len() == 0) {
-                                return Result.Err("cuerpo chunked incompleto (la conexión se cerró)");
+                                return Result.Err(
+                                    "cuerpo chunked incompleto (la conexión se cerró)"
+                                );
                             }
                             acc = acc + t;
                             falta = acc.len() < nl + 2 + n + 2;
@@ -400,9 +444,14 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             // Reanudar 3 octetos atrás: el "\r\n\r\n" puede quedar partido entre dos trozos.
             desde = acc.len() - 3;
             if (acc.len() > limits.max_header_bytes) {
-                return Result.Err("cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
+                return Result.Err(
+                    "cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)"
+                );
             }
-            match (leer_con_plazo(conn, plazo_fin)) {
+            match (leer_con_plazo(
+        conn,
+        plazo_fin
+    )) {
                 Result.Ok(trozo) => {
                     if (trozo.len() == 0) {
                         seguir = false;
@@ -429,11 +478,15 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
     // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
     // solo trozo grande pasarían y el límite dependería del troceo de la red (no determinista).
     if (sep + 4 > limits.max_header_bytes) {
-        return Result.Err("cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
+        return Result.Err(
+            "cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)"
+        );
     }
 
     var body: bytes = acc.sub_bytes(sep + 4, acc.len());
-    match (from_utf8(acc.sub_bytes(0, sep))) {
+    match (from_utf8(
+    acc.sub_bytes(0, sep)
+)) {
         Result.Err(e) => Result.Err("cabeceras de la petición no son UTF-8: " + e),
         Result.Ok(cabeceras_raw) => {
             let lineas: [string] = cabeceras_raw.split("\r\n");
@@ -458,7 +511,9 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             }
             var path: string = path_raw;
             match (url.percent_decode(path_raw)) {
-                Result.Ok(p) => { path = p; },
+                Result.Ok(p) => {
+                    path = p;
+                },
                 Result.Err(e) => {
                     return Result.Err("ruta malformada (" + e + "): " + path_raw);
                 },
@@ -500,41 +555,64 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             }
             // Cuerpo: si hay Content-Length (octetos), completar la lectura hasta esa longitud.
             // M56.1: tope contra lo declarado, cierre prematuro = Err, y recorte a n.
-            if (!chunked) { match (get(headers, "content-length")) {
-                Option.Some(cl) => {
-                    match (parse_int(cl)) {
-                        Option.Some(n) => {
-                            if (n > limits.max_body_bytes) {
-                                return Result.Err("cuerpo demasiado grande (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
-                            }
-                            while (body.len() < n) {
-                                match (leer_con_plazo(conn, plazo_fin)) {
-                                    Result.Ok(trozo) => {
-                                        if (trozo.len() == 0) {
-                                            return Result.Err("cuerpo incompleto: la conexión se cerró con " + to_string(body.len()) + " de " + to_string(n) + " octetos");
-                                        }
-                                        body = body + trozo;
-                                    },
-                                    Result.Err(e) => {
-                                        return Result.Err("error al leer el cuerpo: " + e);
-                                    },
+            if (!chunked) {
+                match (get(
+                headers,
+                "content-length"
+            )) {
+                    Option.Some(cl) => {
+                        match (parse_int(
+                        cl
+                    )) {
+                            Option.Some(n) => {
+                                if (n > limits.max_body_bytes) {
+                                    return Result.Err(
+                                        "cuerpo demasiado grande (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")"
+                                    );
                                 }
-                            }
-                            if (body.len() > n) {
-                                body = body.sub_bytes(0, n);
-                            }
-                        },
-                        Option.None => { },
-                    }
-                },
-                Option.None => { },
-            } }
+                                while (body.len() < n) {
+                                    match (leer_con_plazo(
+                                    conn,
+                                    plazo_fin
+                                )) {
+                                        Result.Ok(trozo) => {
+                                            if (trozo.len() == 0) {
+                                                return Result.Err(
+                                                    "cuerpo incompleto: la conexión se cerró con " + to_string(body.len()) + " de " + to_string(n) + " octetos"
+                                                );
+                                            }
+                                            body = body + trozo;
+                                        },
+                                        Result.Err(e) => {
+                                            return Result.Err("error al leer el cuerpo: " + e);
+                                        },
+                                    }
+                                }
+                                if (body.len() > n) {
+                                    body = body.sub_bytes(0, n);
+                                }
+                            },
+                            Option.None => { },
+                        }
+                    },
+                    Option.None => { },
+                }
+            }
 
             // Petición leída: quitar el timeout (que el handler no herede un plazo casi vencido).
             if (plazo_fin > 0) {
                 net.set_read_timeout(conn, 0);
             }
-            Result.Ok(Request { method: method, path: path, query: query, version: version, headers: headers, body: body })
+            Result.Ok(
+                Request {
+                    method: method,
+                    path: path,
+                    query: query,
+                    version: version,
+                    headers: headers,
+                    body: body
+                }
+            )
         },
     }
 }
@@ -551,7 +629,7 @@ fn send_response_keep(conn: int, r: Response, keep: bool, omit_body: bool) -> Re
     // junto como bytes para no corromper un cuerpo binario.
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Content-Length: " + to_string(r.body.len()) + "\r\n";
-    head = head + "Connection: " + (if (keep) { "keep-alive" } else { "close" }) + "\r\n";
+    head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     // M85a: la cabecera `Date:` (SHOULD de RFC 7231), en RFC 1123 sobre el reloj UTC.
     head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista).
@@ -700,7 +778,12 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 // SEMÁFORO (M12.2: `send` cede la fibra si está lleno → backpressure; `recv` al terminar saca el
 // token), y accept RESILIENTE (un error transitorio se loguea y se sigue; solo 100 errores
 // seguidos sin ningún accept exitoso rinden el bucle).
-pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
+pub fn serve_raw_limits(
+    host: string,
+    port: int,
+    limits: Limits,
+    handler: fn(Request, int)
+) -> Result<int, string> {
     // TCP plano: la conexión aceptada se atiende tal cual (preparar = identidad).
     bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         atender(c, handler, limits);
@@ -712,8 +795,17 @@ pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Req
 // DENTRO de la fibra de la connection: un handshake TLS lento no frena el accept de las demás.
 // M56.6: `atender_conn` atiende la conexión preparada (crudo: una petición; ergonómico: bucle
 // keep-alive); debe cerrar la conexión al terminar.
-fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, atender_conn: fn(int)) -> Result<int, string> {
-    match (net.tcp_listen(host, port)) {
+fn bucle_servidor(
+    host: string,
+    port: int,
+    limits: Limits,
+    preparar: fn(int) -> Result<int, string>,
+    atender_conn: fn(int)
+) -> Result<int, string> {
+    match (net.tcp_listen(
+    host,
+    port
+)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("escuchando en el puerto " + to_string(net.local_port(srv)));
@@ -764,7 +856,12 @@ pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Resul
     serve_limits(host, port, default_limits(), handler)
 }
 
-pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_limits(
+    host: string,
+    port: int,
+    limits: Limits,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         atender_http(c, handler, limits);
     })
@@ -773,11 +870,24 @@ pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request
 // --- HTTPS (M56.3): el mismo servidor sobre TLS ---
 // El upgrade TLS es el paso `preparar` del bucle compartido, en la fibra de cada conexión.
 // `cert`/`key` son los PEM (contenido, no ruta), como `net.tls_accept`.
-pub fn serve_tls(host: string, port: int, cert: string, key: string, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_tls(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     serve_tls_limits(host, port, cert, key, default_limits(), handler)
 }
 
-pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_tls_limits(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    limits: Limits,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {
@@ -785,11 +895,24 @@ pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limi
     })
 }
 
-pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler: fn(Request, int)) -> Result<int, string> {
+pub fn serve_raw_tls(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    handler: fn(Request, int)
+) -> Result<int, string> {
     serve_raw_tls_limits(host, port, cert, key, default_limits(), handler)
 }
 
-pub fn serve_raw_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
+pub fn serve_raw_tls_limits(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    limits: Limits,
+    handler: fn(Request, int)
+) -> Result<int, string> {
     bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {

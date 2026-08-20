@@ -24,18 +24,24 @@ fn main() {
     print(to_string(crc32("123456789".to_bytes())));
 
     // --- Robustez (M64.1): input corrupto = Err con mensaje, nunca crash. ---
-    caso("vacio", inflate_raw(b""));                     // stream vacío
-    caso("un-octeto", inflate_raw(bytes_of([5])));       // bloque dinámico truncado tras la cabecera
+    caso("vacio", inflate_raw(b""));  // stream vacío
+    caso("un-octeto", inflate_raw(bytes_of([5])));  // bloque dinámico truncado tras la cabecera
     // Bloque almacenado que declara más octetos de los que hay (LEN=65535, payload de 1).
     caso("stored-truncado", inflate_raw(bytes_of([0, 255, 255, 0, 0, 65])));
     // Bloque dinámico con HLIT fuera de rango (288 > 286).
     caso("hlit-excesivo", inflate_raw(bytes_of([253, 255, 255])));
     // gzip con flag FNAME y sin el NUL terminador (cabecera truncada).
-    caso("fname-sin-nul", gunzip(bytes_of([31, 139, 8, 8, 0, 0, 0, 0, 0, 255, 65, 66, 67, 0, 0, 0, 0, 0])));
+    caso(
+        "fname-sin-nul",
+        gunzip(bytes_of([31, 139, 8, 8, 0, 0, 0, 0, 0, 255, 65, 66, 67, 0, 0, 0, 0, 0]))
+    );
     // gzip válido truncado a la mitad + gzip FEXTRA con xlen que salta más allá del final.
     let g = gzip_compress("hola mundo hola mundo hola mundo".to_bytes());
     caso("gzip-truncado", gunzip(g.sub_bytes(0, g.len() / 2)));
-    caso("fextra-gigante", gunzip(bytes_of([31, 139, 8, 4, 0, 0, 0, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0])));
+    caso(
+        "fextra-gigante",
+        gunzip(bytes_of([31, 139, 8, 4, 0, 0, 0, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0]))
+    );
     // zlib con diccionario preestablecido (FDICT): no soportado, error claro.
     caso("zlib-fdict", zlib_inflate(bytes_of([120, 32, 0, 0, 0, 0, 0, 0, 0, 0])));
     // Límite de salida (M64.2, anti-bomba): el mismo gzip válido, con tope menor que su salida.

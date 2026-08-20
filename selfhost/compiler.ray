@@ -724,7 +724,12 @@ fn emit_func_expr(comp: Comp, fe: FnExpr) {
     emit_block(comp, fe.body);
     emit(comp, Op.OReturn);
     let s = top(comp);
-    let cfn = CompiledFn { name: "<fn>", arity: fe.params.len(), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
+    let cfn = CompiledFn {
+        name: "<fn>",
+        arity: fe.params.len(),
+        nslots: s.max_slots,
+        chunk: Chunk { code: s.code, consts: s.consts }
+    };
     let ups = s.upvalues;
     pop(comp.scopes);
     comp.out.push(cfn);
@@ -752,7 +757,12 @@ fn compile_body(comp: Comp, name: string, params: [Param], body: Block) -> Compi
     emit(comp, Op.OReturn);  // ...que se retorna
     let s = top(comp);
     optimize_tail_calls(s.code);  // M14.5e: las llamadas en posición de cola → variantes TailCall
-    let cfn = CompiledFn { name: name, arity: params.len(), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
+    let cfn = CompiledFn {
+        name: name,
+        arity: params.len(),
+        nslots: s.max_slots,
+        chunk: Chunk { code: s.code, consts: s.consts }
+    };
     pop(comp.scopes);
     cfn
 }
@@ -766,7 +776,10 @@ fn optimize_tail_calls(code: [Op]) {
     var i = 0;
     while (i < code.len()) {
         let new_op: Option<Op> = match (code[i]) {
-            Op.OCall(idx, argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailCall(idx, argc)) } else { Option.None },
+            Op.OCall(idx, argc) => if (returns_immediately(
+                code,
+                i + 1
+            )) { Option.Some(Op.OTailCall(idx, argc)) } else { Option.None },
             Op.OCallValue(argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailCallValue(argc)) } else { Option.None },
             Op.ODispatch(fname, argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailDispatch(fname, argc)) } else { Option.None },
             _ => Option.None,
@@ -876,8 +889,20 @@ fn contains_name(xs: [string], s: string) -> bool {
 // en compilación, como el intérprete los inyecta en runtime (`inject_prelude_enums`). Solo importan los
 // nombres de las variantes (la aridad la da el sitio de llamada).
 fn inject_prelude_enums(enums: Map<string, [VariantDef]>) {
-    enums.insert("Option", [VariantDef { name: "Some", payload: [], line: 0, col: 0 }, VariantDef { name: "None", payload: [], line: 0, col: 0 }]);
-    enums.insert("Result", [VariantDef { name: "Ok", payload: [], line: 0, col: 0 }, VariantDef { name: "Err", payload: [], line: 0, col: 0 }]);
+    enums.insert(
+        "Option",
+        [
+            VariantDef { name: "Some", payload: [], line: 0, col: 0 },
+            VariantDef { name: "None", payload: [], line: 0, col: 0 }
+        ]
+    );
+    enums.insert(
+        "Result",
+        [
+            VariantDef { name: "Ok", payload: [], line: 0, col: 0 },
+            VariantDef { name: "Err", payload: [], line: 0, col: 0 }
+        ]
+    );
 }
 
 // Una `CompiledFn` de relleno para reservar los slots de las funciones nombradas (índices 0..n) antes de

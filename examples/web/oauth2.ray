@@ -70,7 +70,13 @@ fn parse_token(body: string) -> Result<Token, string> {
                 if (at.len() == 0) {
                     Result.Err("la respuesta no trae access_token")
                 } else {
-                    Result.Ok(Token { access_token: at, token_type: str_field(j, "token_type"), expires_in: int_field(j, "expires_in") })
+                    Result.Ok(
+                        Token {
+                            access_token: at,
+                            token_type: str_field(j, "token_type"),
+                            expires_in: int_field(j, "expires_in")
+                        }
+                    )
                 }
             }
         },
@@ -78,23 +84,39 @@ fn parse_token(body: string) -> Result<Token, string> {
 }
 
 // Grant client_credentials: POST al token endpoint con las credenciales y devuelve el `Token`.
-pub fn client_credentials(token_url: string, client_id: string, client_secret: string, scope: string) -> Result<Token, string> {
-    var body = "grant_type=client_credentials" + "&client_id=" + url_encode(client_id) + "&client_secret=" + url_encode(client_secret);
+pub fn client_credentials(
+    token_url: string,
+    client_id: string,
+    client_secret: string,
+    scope: string
+) -> Result<Token, string> {
+    var body = "grant_type=client_credentials" + "&client_id=" + url_encode(
+        client_id
+    ) + "&client_secret=" + url_encode(client_secret);
     if (scope.len() > 0) {
         body = body + "&scope=" + url_encode(scope);
     }
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", "application/x-www-form-urlencoded");
     h.insert("Accept", "application/json");
-    match (request_with("POST", token_url, body, h)) {
+    match (request_with(
+    "POST",
+    token_url,
+    body,
+    h
+)) {
         Result.Err(e) => Result.Err("could not contact the token endpoint: " + e),
         Result.Ok(resp) => {
-            match (body_text(resp)) {
+            match (body_text(
+            resp
+        )) {
                 Result.Err(e) => Result.Err("cuerpo del token no es UTF-8: " + e),
                 Result.Ok(txt) => {
                     if (resp.status != 200) {
                         // Aun en error, OAuth devuelve un JSON con `error`; se intenta parsear.
-                        match (parse_token(txt)) {
+                        match (parse_token(
+                    txt
+                )) {
                             Result.Err(e) => Result.Err("token endpoint HTTP " + to_string(resp.status) + ": " + e),
                             Result.Ok(t) => Result.Ok(t),
                         }
@@ -108,8 +130,16 @@ pub fn client_credentials(token_url: string, client_id: string, client_secret: s
 }
 
 // Construye la URL de autorización del flujo de código (a la que se redirige al usuario).
-pub fn authorize_url(endpoint: string, client_id: string, redirect_uri: string, scope: string, state: string) -> string {
-    endpoint + "?response_type=code" + "&client_id=" + url_encode(client_id) + "&redirect_uri=" + url_encode(redirect_uri) + "&scope=" + url_encode(scope) + "&state=" + url_encode(state)
+pub fn authorize_url(
+    endpoint: string,
+    client_id: string,
+    redirect_uri: string,
+    scope: string,
+    state: string
+) -> string {
+    endpoint + "?response_type=code" + "&client_id=" + url_encode(
+        client_id
+    ) + "&redirect_uri=" + url_encode(redirect_uri) + "&scope=" + url_encode(scope) + "&state=" + url_encode(state)
 }
 
 // La cabecera `Authorization` para llamar a una API protegida con este token.

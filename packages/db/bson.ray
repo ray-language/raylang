@@ -17,7 +17,6 @@
 //
 // Gramática (recordatorios): el enum recursivo va por el heap ([Field]/[Bson]); los enteros LE
 // se arman por mitades de 32 bits (b7<<56 desbordaría i64; hi*2^32+lo es exacto y total).
-
 import std/math;
 from std/json import Json, parse;
 from net/time import from_epoch_millis, to_iso8601;
@@ -65,7 +64,6 @@ pub fn get(fields: [Field], name: string) -> Option<Bson> {
 }
 
 // ── Codificación ─────────────────────────────────────────────────────────────
-
 // El octeto de tipo de cada variante (bsonspec.org §element).
 fn type_byte(v: Bson) -> int {
     return match (v) {
@@ -85,15 +83,15 @@ fn type_byte(v: Bson) -> int {
 
 fn enc_le32(out: [int], n: int) {
     out.push(n & 255);
-    out.push((n >> 8) & 255);
-    out.push((n >> 16) & 255);
-    out.push((n >> 24) & 255);
+    out.push(n >> 8 & 255);
+    out.push(n >> 16 & 255);
+    out.push(n >> 24 & 255);
 }
 
 fn enc_le64(out: [int], n: int) {
     var i = 0;
     while (i < 8) {
-        out.push((n >> (8 * i)) & 255);
+        out.push(n >> 8 * i & 255);
         i = i + 1;
     }
 }
@@ -120,7 +118,9 @@ fn enc_bytes(out: [int], b: bytes) {
 
 fn enc_value(out: [int], v: Bson) {
     match (v) {
-        Bson.Double(f) => { enc_le64(out, math.float_bits(f)); },
+        Bson.Double(f) => {
+            enc_le64(out, math.float_bits(f));
+        },
         Bson.Str(s) => {
             // string: int32 (longitud en octetos + 1) + UTF-8 + 0x00.
             let bs = s.to_bytes();
@@ -131,7 +131,10 @@ fn enc_value(out: [int], v: Bson) {
         Bson.Doc(fields) => {
             let inner = enc_doc(fields);
             var i = 0;
-            while (i < inner.len()) { out.push(inner[i]); i = i + 1; }
+            while (i < inner.len()) {
+                out.push(inner[i]);
+                i = i + 1;
+            }
         },
         Bson.Arr(items) => {
             // Un arreglo ES un documento con claves "0", "1", … (así lo define el spec).
@@ -143,7 +146,10 @@ fn enc_value(out: [int], v: Bson) {
             }
             let inner = enc_doc(fields);
             var j = 0;
-            while (j < inner.len()) { out.push(inner[j]); j = j + 1; }
+            while (j < inner.len()) {
+                out.push(inner[j]);
+                j = j + 1;
+            }
         },
         Bson.Bin(b) => {
             // binary: int32 longitud + subtipo (0 = genérico) + octetos.
@@ -158,11 +164,19 @@ fn enc_value(out: [int], v: Bson) {
             }
             enc_bytes(out, b);
         },
-        Bson.Bool(x) => { out.push(if (x) { 1 } else { 0 }); },
-        Bson.Null => {},
-        Bson.Int(n) => { enc_le64(out, n); },
-        Bson.Date(ms) => { enc_le64(out, ms); },
-        Bson.Timestamp(t) => { enc_le64(out, t); },
+        Bson.Bool(x) => {
+            out.push(if (x) { 1 } else { 0 });
+        },
+        Bson.Null => { },
+        Bson.Int(n) => {
+            enc_le64(out, n);
+        },
+        Bson.Date(ms) => {
+            enc_le64(out, ms);
+        },
+        Bson.Timestamp(t) => {
+            enc_le64(out, t);
+        },
     }
 }
 
@@ -181,7 +195,10 @@ fn enc_doc(fields: [Field]) -> [int] {
     var out: [int] = [];
     enc_le32(out, body.len() + 5);
     var j = 0;
-    while (j < body.len()) { out.push(body[j]); j = j + 1; }
+    while (j < body.len()) {
+        out.push(body[j]);
+        j = j + 1;
+    }
     out.push(0);
     out
 }
@@ -192,7 +209,6 @@ pub fn encode(fields: [Field]) -> bytes {
 }
 
 // ── Decodificación ───────────────────────────────────────────────────────────
-
 // El cursor de lectura; se muta por referencia (semántica de referencia de structs).
 struct Dec {
     b: bytes,
@@ -223,7 +239,9 @@ fn rd_u8(d: Dec) -> Result<int, string> {
 
 fn rd_exact(d: Dec, n: int) -> Result<bytes, string> {
     if (d.pos + n > d.b.len()) {
-        return Result.Err(dec_err("unexpected end of data (missing " + to_string(n) + " bytes)", d.pos));
+        return Result.Err(
+            dec_err("unexpected end of data (missing " + to_string(n) + " bytes)", d.pos)
+        );
     }
     let out = d.b.sub_bytes(d.pos, d.pos + n);
     d.pos = d.pos + n;
@@ -233,7 +251,7 @@ fn rd_exact(d: Dec, n: int) -> Result<bytes, string> {
 // int32 LE con signo (complemento a dos).
 fn rd_le32(d: Dec) -> Result<int, string> {
     let bs = rd_exact(d, 4)?;
-    var v = bs[0] | (bs[1] << 8) | (bs[2] << 16) | (bs[3] << 24);
+    var v = bs[0] | bs[1] << 8 | bs[2] << 16 | bs[3] << 24;
     if (v >= 2147483648) {
         v = v - 4294967296;
     }
@@ -244,8 +262,8 @@ fn rd_le32(d: Dec) -> Result<int, string> {
 // total; armarlo con b[7] << 56 desbordaría el i64.
 fn rd_le64(d: Dec) -> Result<int, string> {
     let bs = rd_exact(d, 8)?;
-    let lo = bs[0] | (bs[1] << 8) | (bs[2] << 16) | (bs[3] << 24);
-    var hi = bs[4] | (bs[5] << 8) | (bs[6] << 16) | (bs[7] << 24);
+    let lo = bs[0] | bs[1] << 8 | bs[2] << 16 | bs[3] << 24;
+    var hi = bs[4] | bs[5] << 8 | bs[6] << 16 | bs[7] << 24;
     if (hi >= 2147483648) {
         hi = hi - 4294967296;
     }
@@ -352,7 +370,12 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
 
 fn rd_doc(d: Dec, depth: int) -> Result<[Field], string> {
     if (depth > max_depth()) {
-        return Result.Err(dec_err("nesting too deep (possible DoS): more than " + to_string(max_depth()) + " levels", d.pos));
+        return Result.Err(
+            dec_err(
+                "nesting too deep (possible DoS): more than " + to_string(max_depth()) + " levels",
+                d.pos
+            )
+        );
     }
     let start = d.pos;
     let total = rd_le32(d)?;
@@ -390,7 +413,6 @@ pub fn decode(b: bytes) -> Result<[Field], string> {
 // La ergonomía de "armo mi filtro como string JSON" sin perder la fidelidad del enum. La
 // degradación es EXPLÍCITA y solo en la dirección Bson → Json (JSON no puede representar
 // ObjectId/Bin/int64): ver `to_json`.
-
 /// Converts a JSON value to BSON. JSON numbers become `Double` (JSON has a single number type;
 /// MongoDB compares ints and doubles numerically, so filters still match). Object keys come out
 /// sorted (Json objects are Maps).
@@ -415,8 +437,10 @@ pub fn from_json(j: Json) -> Bson {
             var i = 0;
             while (i < ks.len()) {
                 match (m.get(ks[i])) {
-                    Option.Some(v) => { fields.push(Field { name: ks[i], value: from_json(v) }); },
-                    Option.None => {},
+                    Option.Some(v) => {
+                        fields.push(Field { name: ks[i], value: from_json(v) });
+                    },
+                    Option.None => { },
                 }
                 i = i + 1;
             }
@@ -482,7 +506,6 @@ fn json_obj_of(fields: [Field]) -> Map<string, Json> {
 }
 
 // ── Volcado para depuración/tests ────────────────────────────────────────────
-
 fn hex_of(b: bytes) -> string {
     let digits = "0123456789abcdef";
     var s = "";
@@ -497,14 +520,18 @@ fn hex_of(b: bytes) -> string {
 /// Renders a value as compact JSON-ish text (deterministic; used by the tests' oracle).
 pub fn dump(v: Bson) -> string {
     return match (v) {
-        Bson.Double(f) => to_string(f),
+        Bson.Double(f) => to_string(
+            f
+        ),
         Bson.Str(s) => "\"" + s + "\"",
         Bson.Doc(fields) => dump_doc(fields),
         Bson.Arr(items) => {
             var s = "[";
             var i = 0;
             while (i < items.len()) {
-                if (i > 0) { s = s + ", "; }
+                if (i > 0) {
+                    s = s + ", ";
+                }
                 s = s + dump(items[i]);
                 i = i + 1;
             }
@@ -535,8 +562,12 @@ fn iso_ms(ms: int) -> string {
 }
 
 fn pad3(n: int) -> string {
-    if (n < 10) { return "00" + to_string(n); }
-    if (n < 100) { return "0" + to_string(n); }
+    if (n < 10) {
+        return "00" + to_string(n);
+    }
+    if (n < 100) {
+        return "0" + to_string(n);
+    }
     to_string(n)
 }
 
@@ -545,7 +576,9 @@ pub fn dump_doc(fields: [Field]) -> string {
     var s = "{";
     var i = 0;
     while (i < fields.len()) {
-        if (i > 0) { s = s + ", "; }
+        if (i > 0) {
+            s = s + ", ";
+        }
         s = s + fields[i].name + ": " + dump(fields[i].value);
         i = i + 1;
     }

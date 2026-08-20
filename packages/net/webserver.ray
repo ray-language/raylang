@@ -66,7 +66,12 @@ pub struct Limits {
 /// The default safety limits: 64 KiB of headers, 10 MiB of body, 1024 simultaneous connections,
 /// 10 s to read a request.
 pub fn default_limits() -> Limits {
-    Limits { max_header_bytes: 65536, max_body_bytes: 10485760, max_conns: 1024, read_timeout_millis: 10000 }
+    Limits {
+        max_header_bytes: 65536,
+        max_body_bytes: 10485760,
+        max_conns: 1024,
+        read_timeout_millis: 10000
+    }
 }
 
 // M56.7: `headers` es un Map (una cabecera por nombre, ergonómico) y la ÚNICA cabecera que en la
@@ -147,31 +152,81 @@ pub fn request_text(req: Request) -> Result<string, string> {
 /// responses (e.g. serving generated files with the right type).
 pub fn mime_of(file: string) -> string {
     let f = file.to_lower();
-    if (f.ends_with(".html") || f.ends_with(".htm")) { return "text/html; charset=utf-8"; }
-    if (f.ends_with(".css")) { return "text/css; charset=utf-8"; }
-    if (f.ends_with(".js") || f.ends_with(".mjs")) { return "text/javascript; charset=utf-8"; }
-    if (f.ends_with(".json") || f.ends_with(".map")) { return "application/json; charset=utf-8"; }
-    if (f.ends_with(".txt")) { return "text/plain; charset=utf-8"; }
-    if (f.ends_with(".csv")) { return "text/csv; charset=utf-8"; }
-    if (f.ends_with(".xml")) { return "application/xml; charset=utf-8"; }
-    if (f.ends_with(".svg")) { return "image/svg+xml"; }
-    if (f.ends_with(".png")) { return "image/png"; }
-    if (f.ends_with(".jpg") || f.ends_with(".jpeg")) { return "image/jpeg"; }
-    if (f.ends_with(".gif")) { return "image/gif"; }
-    if (f.ends_with(".webp")) { return "image/webp"; }
-    if (f.ends_with(".avif")) { return "image/avif"; }
-    if (f.ends_with(".ico")) { return "image/x-icon"; }
-    if (f.ends_with(".pdf")) { return "application/pdf"; }
-    if (f.ends_with(".wasm")) { return "application/wasm"; }
-    if (f.ends_with(".woff2")) { return "font/woff2"; }
-    if (f.ends_with(".woff")) { return "font/woff"; }
-    if (f.ends_with(".ttf")) { return "font/ttf"; }
-    if (f.ends_with(".otf")) { return "font/otf"; }
-    if (f.ends_with(".mp4")) { return "video/mp4"; }
-    if (f.ends_with(".webm")) { return "video/webm"; }
-    if (f.ends_with(".mp3")) { return "audio/mpeg"; }
-    if (f.ends_with(".wav")) { return "audio/wav"; }
-    if (f.ends_with(".gz")) { return "application/gzip"; }
+    if (f.ends_with(".html") || f.ends_with(".htm")) {
+        return "text/html; charset=utf-8";
+    }
+    if (f.ends_with(".css")) {
+        return "text/css; charset=utf-8";
+    }
+    if (f.ends_with(".js") || f.ends_with(".mjs")) {
+        return "text/javascript; charset=utf-8";
+    }
+    if (f.ends_with(".json") || f.ends_with(".map")) {
+        return "application/json; charset=utf-8";
+    }
+    if (f.ends_with(".txt")) {
+        return "text/plain; charset=utf-8";
+    }
+    if (f.ends_with(".csv")) {
+        return "text/csv; charset=utf-8";
+    }
+    if (f.ends_with(".xml")) {
+        return "application/xml; charset=utf-8";
+    }
+    if (f.ends_with(".svg")) {
+        return "image/svg+xml";
+    }
+    if (f.ends_with(".png")) {
+        return "image/png";
+    }
+    if (f.ends_with(".jpg") || f.ends_with(".jpeg")) {
+        return "image/jpeg";
+    }
+    if (f.ends_with(".gif")) {
+        return "image/gif";
+    }
+    if (f.ends_with(".webp")) {
+        return "image/webp";
+    }
+    if (f.ends_with(".avif")) {
+        return "image/avif";
+    }
+    if (f.ends_with(".ico")) {
+        return "image/x-icon";
+    }
+    if (f.ends_with(".pdf")) {
+        return "application/pdf";
+    }
+    if (f.ends_with(".wasm")) {
+        return "application/wasm";
+    }
+    if (f.ends_with(".woff2")) {
+        return "font/woff2";
+    }
+    if (f.ends_with(".woff")) {
+        return "font/woff";
+    }
+    if (f.ends_with(".ttf")) {
+        return "font/ttf";
+    }
+    if (f.ends_with(".otf")) {
+        return "font/otf";
+    }
+    if (f.ends_with(".mp4")) {
+        return "video/mp4";
+    }
+    if (f.ends_with(".webm")) {
+        return "video/webm";
+    }
+    if (f.ends_with(".mp3")) {
+        return "audio/mpeg";
+    }
+    if (f.ends_with(".wav")) {
+        return "audio/wav";
+    }
+    if (f.ends_with(".gz")) {
+        return "application/gzip";
+    }
     "application/octet-stream"
 }
 
@@ -254,11 +309,15 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
             // El ETag sale de los metadatos (2 stats, sin leer el cuerpo): si no hay archivo, 404.
             let size: int = match (fs.file_size(file)) {
                 Result.Ok(n) => n,
-                Result.Err(_) => { return not_found(); },
+                Result.Err(_) => {
+                    return not_found();
+                },
             };
             let mtime: int = match (fs.mtime(file)) {
                 Result.Ok(ms) => ms,
-                Result.Err(_) => { return not_found(); },
+                Result.Err(_) => {
+                    return not_found();
+                },
             };
             let etag: string = "\"" + to_string(size) + "-" + to_string(mtime) + "\"";
             // If-None-Match puede traer una lista de ETags → basta que contenga el nuestro.
@@ -289,32 +348,7 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
 // La frase de estado para los códigos comunes (HTTP la exige tras el número). M56.1: cubre
 // también redirecciones (3xx), auth (401/403), 405/413/429/431 y los 5xx de gateway.
 fn status_text(code: int) -> string {
-    if (code == 200) { "OK" }
-    else if (code == 201) { "Created" }
-    else if (code == 204) { "No Content" }
-    else if (code == 301) { "Moved Permanently" }
-    else if (code == 302) { "Found" }
-    else if (code == 303) { "See Other" }
-    else if (code == 304) { "Not Modified" }
-    else if (code == 307) { "Temporary Redirect" }
-    else if (code == 308) { "Permanent Redirect" }
-    else if (code == 400) { "Bad Request" }
-    else if (code == 401) { "Unauthorized" }
-    else if (code == 403) { "Forbidden" }
-    else if (code == 404) { "Not Found" }
-    else if (code == 405) { "Method Not Allowed" }
-    else if (code == 409) { "Conflict" }
-    else if (code == 413) { "Content Too Large" }
-    else if (code == 415) { "Unsupported Media Type" }
-    else if (code == 422) { "Unprocessable Content" }
-    else if (code == 429) { "Too Many Requests" }
-    else if (code == 431) { "Request Header Fields Too Large" }
-    else if (code == 500) { "Internal Server Error" }
-    else if (code == 501) { "Not Implemented" }
-    else if (code == 502) { "Bad Gateway" }
-    else if (code == 503) { "Service Unavailable" }
-    else if (code == 504) { "Gateway Timeout" }
-    else { "Status" }
+    if (code == 200) { "OK" } else if (code == 201) { "Created" } else if (code == 204) { "No Content" } else if (code == 301) { "Moved Permanently" } else if (code == 302) { "Found" } else if (code == 303) { "See Other" } else if (code == 304) { "Not Modified" } else if (code == 307) { "Temporary Redirect" } else if (code == 308) { "Permanent Redirect" } else if (code == 400) { "Bad Request" } else if (code == 401) { "Unauthorized" } else if (code == 403) { "Forbidden" } else if (code == 404) { "Not Found" } else if (code == 405) { "Method Not Allowed" } else if (code == 409) { "Conflict" } else if (code == 413) { "Content Too Large" } else if (code == 415) { "Unsupported Media Type" } else if (code == 422) { "Unprocessable Content" } else if (code == 429) { "Too Many Requests" } else if (code == 431) { "Request Header Fields Too Large" } else if (code == 500) { "Internal Server Error" } else if (code == 501) { "Not Implemented" } else if (code == 502) { "Bad Gateway" } else if (code == 503) { "Service Unavailable" } else if (code == 504) { "Gateway Timeout" } else { "Status" }
 }
 
 // --- Lectura de la petición ---
@@ -325,7 +359,9 @@ fn status_text(code: int) -> string {
 // del ataque de cabeceras gigantes.
 fn find_fin_headers(b: bytes, start: int) -> int {
     var i: int = start;
-    if (i < 0) { i = 0; }
+    if (i < 0) {
+        i = 0;
+    }
     while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
             return i;
@@ -361,9 +397,15 @@ fn find_crlf(b: bytes, start: int) -> int {
 
 // El valor de un dígito hexadecimal (octeto ASCII), o -1.
 fn hex_digit(b: int) -> int {
-    if (b >= 48 && b <= 57) { return b - 48; }        // 0-9
-    if (b >= 97 && b <= 102) { return b - 97 + 10; }  // a-f
-    if (b >= 65 && b <= 70) { return b - 65 + 10; }   // A-F
+    if (b >= 48 && b <= 57) {
+        return b - 48;  // 0-9
+    }
+    if (b >= 97 && b <= 102) {
+        return b - 97 + 10;  // a-f
+    }
+    if (b >= 65 && b <= 70) {
+        return b - 65 + 10;  // A-F
+    }
     0 - 1
 }
 
@@ -374,7 +416,8 @@ fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
     var i: int = ini;
     var any_found: bool = false;
     while (i < fin) {
-        if (b[i] == 59) {  // ';' → extensión de chunk: ignorar el resto
+        if (b[i] == 59) {
+            // ';' → extensión de chunk: ignorar el resto
             i = fin;
         } else {
             let d: int = hex_digit(b[i]);
@@ -428,7 +471,9 @@ fn read_body_chunked(conn: int, initial: bytes, deadline: int, max: int) -> Resu
                     match (read_with_deadline(conn, deadline)) {
                         Result.Ok(t) => {
                             if (t.len() == 0) {
-                                return Result.Err("incomplete chunked body (the connection closed)");
+                                return Result.Err(
+                                    "incomplete chunked body (the connection closed)"
+                                );
                             }
                             acc = acc + t;
                             missing = acc.len() < nl + 2 + n + 2;
@@ -485,7 +530,9 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             // Reanudar 3 octetos atrás: el "\r\n\r\n" puede quedar partido entre dos trozos.
             start = acc.len() - 3;
             if (acc.len() > limits.max_header_bytes) {
-                return Result.Err("headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)");
+                return Result.Err(
+                    "headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)"
+                );
             }
             match (read_with_deadline(conn, deadline)) {
                 Result.Ok(trozo) => {
@@ -516,11 +563,15 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
     // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
     // solo trozo grande pasarían y el límite dependería del troceo de la red (no determinista).
     if (sep + 4 > limits.max_header_bytes) {
-        return Result.Err("headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)");
+        return Result.Err(
+            "headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)"
+        );
     }
 
     var body: bytes = acc.sub_bytes(sep + 4, acc.len());
-    match (from_utf8(acc.sub_bytes(0, sep))) {
+    match (from_utf8(
+    acc.sub_bytes(0, sep)
+)) {
         Result.Err(e) => Result.Err("request headers are not UTF-8: " + e),
         Result.Ok(headers_raw) => {
             let lines: [string] = headers_raw.split("\r\n");
@@ -546,7 +597,9 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             }
             var path: string = path_raw;
             match (url.percent_decode(path_raw)) {
-                Result.Ok(p) => { path = p; },
+                Result.Ok(p) => {
+                    path = p;
+                },
                 Result.Err(e) => {
                     return Result.Err("path malformada (" + e + "): " + path_raw);
                 },
@@ -590,42 +643,65 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             // M56.1: el tope se comprueba contra lo DECLARADO (antes de leer nada); un peer que
             // cierra sin completar el cuerpo es error (no un Ok truncado); y el cuerpo se recorta
             // a n (un trozo puede traer octetos de más).
-            if (!chunked) { match (get(headers, "content-length")) {
-                Option.Some(cl) => {
-                    match (parse_int(cl)) {
-                        Option.Some(n) => {
-                            if (n > limits.max_body_bytes) {
-                                return Result.Err("body too large (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
-                            }
-                            while (body.len() < n) {
-                                match (read_with_deadline(conn, deadline)) {
-                                    Result.Ok(trozo) => {
-                                        if (trozo.len() == 0) {
-                                            return Result.Err("incomplete body: the connection closed with " + to_string(body.len()) + " de " + to_string(n) + " bytes");
-                                        }
-                                        body = body + trozo;
-                                    },
-                                    Result.Err(e) => {
-                                        return Result.Err("error reading the body: " + e);
-                                    },
+            if (!chunked) {
+                match (get(
+                headers,
+                "content-length"
+            )) {
+                    Option.Some(cl) => {
+                        match (parse_int(
+                        cl
+                    )) {
+                            Option.Some(n) => {
+                                if (n > limits.max_body_bytes) {
+                                    return Result.Err(
+                                        "body too large (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")"
+                                    );
                                 }
-                            }
-                            if (body.len() > n) {
-                                body = body.sub_bytes(0, n);
-                            }
-                        },
-                        Option.None => { },
-                    }
-                },
-                Option.None => { },
-            } }
+                                while (body.len() < n) {
+                                    match (read_with_deadline(
+                                    conn,
+                                    deadline
+                                )) {
+                                        Result.Ok(trozo) => {
+                                            if (trozo.len() == 0) {
+                                                return Result.Err(
+                                                    "incomplete body: the connection closed with " + to_string(body.len()) + " de " + to_string(n) + " bytes"
+                                                );
+                                            }
+                                            body = body + trozo;
+                                        },
+                                        Result.Err(e) => {
+                                            return Result.Err("error reading the body: " + e);
+                                        },
+                                    }
+                                }
+                                if (body.len() > n) {
+                                    body = body.sub_bytes(0, n);
+                                }
+                            },
+                            Option.None => { },
+                        }
+                    },
+                    Option.None => { },
+                }
+            }
 
             // Petición leída: quitar el timeout (el handler puede retener la conexión — SSE — o un
             // handler crudo leer más; que no herede un plazo casi vencido).
             if (deadline > 0) {
                 net.set_read_timeout(conn, 0);
             }
-            Result.Ok(Request { method: method, path: path, query: query, version: version, headers: headers, body: body })
+            Result.Ok(
+                Request {
+                    method: method,
+                    path: path,
+                    query: query,
+                    version: version,
+                    headers: headers,
+                    body: body
+                }
+            )
         },
     }
 }
@@ -647,7 +723,11 @@ fn is_html_response(r: Response) -> bool {
     while (i < ks.len()) {
         if (ks[i].to_lower() == "content-type") {
             match (get(r.headers, ks[i])) {
-                Option.Some(v) => { if (v.to_lower().contains("text/html")) { html = true; } },
+                Option.Some(v) => {
+                    if (v.to_lower().contains("text/html")) {
+                        html = true;
+                    }
+                },
                 Option.None => { },
             }
         }
@@ -682,7 +762,7 @@ fn dev_notify_ready() {
                             let _ = net.socket_write(c, "GET /ready HTTP/1.0\r\n\r\n");
                             close(c);
                         },
-                        Result.Err(e) => { }, // el hub murió → sin live-reload, el servidor sigue
+                        Result.Err(e) => { },  // el hub murió → sin live-reload, el servidor sigue
                     }
                 },
             }
@@ -691,18 +771,29 @@ fn dev_notify_ready() {
 }
 
 fn inject_live_reload(r: Response) -> Response {
-    return match (env("RAY_DEV_RELOAD")) {
+    return match (env(
+        "RAY_DEV_RELOAD"
+    )) {
         Option.None => r,
         Option.Some(port) => {
-            if (is_html_response(r)) {
-                match (from_utf8(r.body)) {
+            if (is_html_response(
+            r
+        )) {
+                match (from_utf8(
+            r.body
+        )) {
                     Result.Ok(html) => {
                         // Recarga directa: el hub retiene el evento hasta el `/ready` de este servidor
                         // (dev_notify_ready, emitido al bindear) → cuando llega, el servidor ya escucha.
                         let snippet: string = "<script>new EventSource(\"http://127.0.0.1:" + port + "/\").onmessage=function(){location.reload()}</script>";
-                        Response { status: r.status, headers: r.headers, set_cookie: r.set_cookie, body: inject_before_body_end(html, snippet).to_bytes() }
+                        Response {
+                            status: r.status,
+                            headers: r.headers,
+                            set_cookie: r.set_cookie,
+                            body: inject_before_body_end(html, snippet).to_bytes()
+                        }
                     },
-                    Result.Err(e) => r, // cuerpo no-UTF8 → intacto
+                    Result.Err(e) => r,  // cuerpo no-UTF8 → intacto
                 }
             } else {
                 r
@@ -723,7 +814,7 @@ fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> R
     // junto como bytes para no corromper un cuerpo binario.
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Content-Length: " + to_string(r.body.len()) + "\r\n";
-    head = head + "Connection: " + (if (keep) { "keep-alive" } else { "close" }) + "\r\n";
+    head = head + "Connection: " + if (keep) { "keep-alive" } else { "close" } + "\r\n";
     // M85a: la cabecera `Date:` (SHOULD de RFC 7231), en RFC 1123 sobre el reloj UTC.
     head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista).
@@ -902,7 +993,12 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 /// Like `serve_raw`, with explicit safety limits (`Limits`): bounds header/body sizes per request
 /// and caps simultaneous connections (accept pauses while at the cap; `max_conns <= 0` = unbounded).
 /// Transient accept errors are logged and retried; only persistent failure stops the server.
-pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
+pub fn serve_raw_limits(
+    host: string,
+    port: int,
+    limits: Limits,
+    handler: fn(Request, int)
+) -> Result<int, string> {
     // TCP plano: la conexión aceptada se atiende tal cual (prepare = identidad).
     loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle(c, handler, limits);
@@ -914,8 +1010,17 @@ pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Req
 // DENTRO de la fibra de la conexión: un handshake TLS lento no frena el accept de las demás.
 // M56.6: `atender_conn` es quien atiende la conexión preparada (una petición y cerrar —crudo— o
 // el bucle keep-alive —ergonómico—); debe CERRAR la conexión al terminar.
-fn loop_iter_server(host: string, port: int, limits: Limits, prepare: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
-    match (net.tcp_listen(host, port)) {
+fn loop_iter_server(
+    host: string,
+    port: int,
+    limits: Limits,
+    prepare: fn(int) -> Result<int, string>,
+    handle_conn: fn(int)
+) -> Result<int, string> {
+    match (net.tcp_listen(
+    host,
+    port
+)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("listening on port " + to_string(net.local_port(srv)));
@@ -985,8 +1090,19 @@ fn loop_iter_server(host: string, port: int, limits: Limits, prepare: fn(int) ->
 // Keep-alive: el drenaje espera a que las conexiones CIERREN; una ociosa muere por
 // `read_timeout_millis`, así que un `drain_ms` menor puede vencer con ociosas vivas (se cierran
 // al salir el proceso). Solo VM, como serve.
-fn loop_iter_server_drainable(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, prepare: fn(int) -> Result<int, string>, handle_conn: fn(int)) -> Result<int, string> {
-    match (net.tcp_listen(host, port)) {
+fn loop_iter_server_drainable(
+    host: string,
+    port: int,
+    limits: Limits,
+    stop: Channel<int>,
+    drain_ms: int,
+    prepare: fn(int) -> Result<int, string>,
+    handle_conn: fn(int)
+) -> Result<int, string> {
+    match (net.tcp_listen(
+    host,
+    port
+)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("listening on port " + to_string(net.local_port(srv)));
@@ -1115,7 +1231,9 @@ fn loop_iter_server_drainable(host: string, port: int, limits: Limits, stop: Cha
                     }
                 }
                 if (active > 0) {
-                    eprint("off: " + to_string(active) + " connection(s) in flight when the deadline expired");
+                    eprint(
+                        "off: " + to_string(active) + " connection(s) in flight when the deadline expired"
+                    );
                 }
             }
             Result.Ok(0)
@@ -1127,12 +1245,25 @@ fn loop_iter_server_drainable(host: string, port: int, limits: Limits, stop: Cha
 /// is closed), the server stops accepting (new clients are refused), drains in-flight
 /// connections for up to `drain_ms` ms, and returns Ok(0). Wire `stop` to `signals()` — or use
 /// `serve_graceful`, which does exactly that. VM only.
-pub fn serve_shutdown(host: string, port: int, stop: Channel<int>, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_shutdown(
+    host: string,
+    port: int,
+    stop: Channel<int>,
+    drain_ms: int,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     serve_shutdown_limits(host, port, default_limits(), stop, drain_ms, handler)
 }
 
 /// Like `serve_shutdown`, with explicit safety limits (see `Limits`).
-pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_shutdown_limits(
+    host: string,
+    port: int,
+    limits: Limits,
+    stop: Channel<int>,
+    drain_ms: int,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     loop_iter_server_drainable(host, port, limits, stop, drain_ms, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle_http(c, handler, limits);
     })
@@ -1144,7 +1275,12 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
 /// The production pattern: `serve` wired to OS signals (`signals()`, M88.1). On SIGTERM/SIGINT
 /// it stops accepting, drains in-flight connections for up to `drain_ms` ms, and returns Ok(0)
 /// so `main` can clean up and exit — zero dropped requests on deploys. Unix + VM only.
-pub fn serve_graceful(host: string, port: int, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_graceful(
+    host: string,
+    port: int,
+    drain_ms: int,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     serve_shutdown(host, port, signals(), drain_ms, handler)
 }
 
@@ -1160,7 +1296,12 @@ pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Resul
 }
 
 /// Like `serve`, with explicit safety limits (see `Limits`/`serve_raw_limits`).
-pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_limits(
+    host: string,
+    port: int,
+    limits: Limits,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle_http(c, handler, limits);
     })
@@ -1177,12 +1318,21 @@ pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request
 /// `make_handler()` inside its own task. The factory crosses threads as a plain function while
 /// the handler (closures, state) never does — the form that also compiles with
 /// `ray build --native` (M93.3). Blocks forever.
-pub fn serve_with(host: string, port: int, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_with(
+    host: string,
+    port: int,
+    make_handler: fn() -> fn(Request) -> Response
+) -> Result<int, string> {
     serve_with_limits(host, port, default_limits(), make_handler)
 }
 
 /// Like `serve_with`, with explicit safety limits (see `Limits`).
-pub fn serve_with_limits(host: string, port: int, limits: Limits, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_with_limits(
+    host: string,
+    port: int,
+    limits: Limits,
+    make_handler: fn() -> fn(Request) -> Response
+) -> Result<int, string> {
     serve_limits(host, port, limits, fn(req: Request) -> Response {
         let h: fn(Request) -> Response = make_handler();
         h(req)
@@ -1190,7 +1340,13 @@ pub fn serve_with_limits(host: string, port: int, limits: Limits, make_handler: 
 }
 
 /// Like `serve_tls`, from a handler factory (see `serve_with`). Uses `default_limits()`.
-pub fn serve_with_tls(host: string, port: int, cert: string, key: string, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_with_tls(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    make_handler: fn() -> fn(Request) -> Response
+) -> Result<int, string> {
     serve_tls_limits(host, port, cert, key, default_limits(), fn(req: Request) -> Response {
         let h: fn(Request) -> Response = make_handler();
         h(req)
@@ -1198,7 +1354,12 @@ pub fn serve_with_tls(host: string, port: int, cert: string, key: string, make_h
 }
 
 /// Like `serve_graceful`, from a handler factory (see `serve_with`). Uses `default_limits()`.
-pub fn serve_with_graceful(host: string, port: int, drain_ms: int, make_handler: fn() -> fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_with_graceful(
+    host: string,
+    port: int,
+    drain_ms: int,
+    make_handler: fn() -> fn(Request) -> Response
+) -> Result<int, string> {
     serve_graceful(host, port, drain_ms, fn(req: Request) -> Response {
         let h: fn(Request) -> Response = make_handler();
         h(req)
@@ -1214,12 +1375,25 @@ pub fn serve_with_graceful(host: string, port: int, drain_ms: int, make_handler:
 /// HTTPS server: like `serve`, but each accepted connection is upgraded to server-side TLS with
 /// the given PEM certificate chain and private key (contents, not paths) before reading the
 /// request. Keep-alive like `serve`. Uses `default_limits()`. Blocks forever; VM only.
-pub fn serve_tls(host: string, port: int, cert: string, key: string, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_tls(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     serve_tls_limits(host, port, cert, key, default_limits(), handler)
 }
 
 /// Like `serve_tls`, with explicit safety limits (see `Limits`).
-pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
+pub fn serve_tls_limits(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    limits: Limits,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
     loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {
@@ -1229,12 +1403,25 @@ pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limi
 
 /// Low-level HTTPS server: like `serve_raw` over TLS — the handler receives the request AND the
 /// (TLS) connection, so it can stream (SSE over HTTPS). Uses `default_limits()`. VM only.
-pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler: fn(Request, int)) -> Result<int, string> {
+pub fn serve_raw_tls(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    handler: fn(Request, int)
+) -> Result<int, string> {
     serve_raw_tls_limits(host, port, cert, key, default_limits(), handler)
 }
 
 /// Like `serve_raw_tls`, with explicit safety limits (see `Limits`).
-pub fn serve_raw_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
+pub fn serve_raw_tls_limits(
+    host: string,
+    port: int,
+    cert: string,
+    key: string,
+    limits: Limits,
+    handler: fn(Request, int)
+) -> Result<int, string> {
     loop_iter_server(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
     }, fn(c: int) {

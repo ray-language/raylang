@@ -77,27 +77,40 @@ fn main() -> int {
         return 1;
     }
     // M14.7: el loader aplana el programa (entrada + sus `import`/`from` transitivos) en un Program plano.
-    match (load(argv[0])) {
+    match (load(
+    argv[0]
+)) {
         Result.Ok(prog) => {
             add_prelude(load_prelude(), prog);  // fusiona map/filter/fold/... del prelude
-            match (check(prog)) {
+            match (check(
+            prog
+        )) {
                 Result.Ok(_) => {
-                    match (run(prog, rest_args(argv))) {
+                    match (run(
+                    prog,
+                    rest_args(argv)
+                )) {
                         Result.Ok(v) => exit_code(v),
                         Result.Err(re) => {
-                            eprint("runtime error at " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg);
+                            eprint(
+                                "runtime error at " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg
+                            );
                             70
                         },
                     }
                 },
                 Result.Err(te) => {
-                    eprint("type error at " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                    eprint(
+                        "type error at " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg
+                    );
                     65
                 },
             }
         },
         Result.Err(le) => {
-            eprint("[" + le.module + "] load error at " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+            eprint(
+                "[" + le.module + "] load error at " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg
+            );
             65
         },
     }

@@ -114,7 +114,6 @@ pub fn new_app() -> App {
 // Los verbos van en MAYÚSCULA (`GET`/`POST`/…) por dos razones: se leen como el método HTTP, y
 // evitan el choque de `get` con el `get` del prelude (de Map) — definir `fn get` en el módulo de
 // entrada taparía el `get` de Map para todo el programa.
-
 /// Registers a route for an arbitrary HTTP method (uppercase: "GET", "OPTIONS", …). The pattern
 /// is segment-based; a `:name` segment captures a route parameter (read it with `c.param("name")`)
 /// and a FINAL `*name` segment captures the rest of the path, slashes included (M93.2b).
@@ -189,8 +188,10 @@ pub fn ALL(app: App, pattern: string, handler: fn(Ctx, Res)) {
 /// root app owns the response cycle). A regex route cannot be re-prefixed: panic at mount time.
 pub fn mount(app: App, prefix: string, sub: App) {
     // "/api" y "/api/" son el mismo mount; la base va sin "/" final para concatenar limpio.
-    let base: string = if (prefix.ends_with("/")) { prefix.substring(0, prefix.len() - 1) } else { prefix };
-    let pre: [string] = split_path(base);        // "/api" → ["", "api"]
+    let base: string = if (prefix.ends_with(
+        "/"
+    )) { prefix.substring(0, prefix.len() - 1) } else { prefix };
+    let pre: [string] = split_path(base);  // "/api" → ["", "api"]
     var i: int = 0;
     while (i < sub.routes.len()) {
         let rt: Route = sub.routes[i];
@@ -202,19 +203,23 @@ pub fn mount(app: App, prefix: string, sub: App) {
                     joined.push(pre[a]);
                     a = a + 1;
                 }
-                var b: int = 1;                  // salta el "" inicial del patrón del sub-app
+                var b: int = 1;  // salta el "" inicial del patrón del sub-app
                 while (b < segs.len()) {
                     joined.push(segs[b]);
                     b = b + 1;
                 }
-                app.routes.push(Route {
-                    method: rt.method,
-                    pattern: Pattern.Segments(joined),
-                    handler: with_mw(sub.middlewares, rt.handler),
-                });
+                app.routes.push(
+                    Route {
+                        method: rt.method,
+                        pattern: Pattern.Segments(joined),
+                        handler: with_mw(sub.middlewares, rt.handler)
+                    }
+                );
             },
             Pattern.Re(_) => {
-                panic("mount '" + prefix + "': a regex route cannot be re-prefixed; register it on the root app");
+                panic(
+                    "mount '" + prefix + "': a regex route cannot be re-prefixed; register it on the root app"
+                );
             },
         }
         i = i + 1;
@@ -258,7 +263,9 @@ pub fn with_mw(mws: [fn(Ctx, Res) -> Step], handler: fn(Ctx, Res)) -> fn(Ctx, Re
             let mw: fn(Ctx, Res) -> Step = mws[i];
             match (mw(c, r)) {
                 Step.Next => { },
-                Step.Done => { return; },
+                Step.Done => {
+                    return;
+                },
             }
             i = i + 1;
         }
@@ -318,7 +325,6 @@ pub fn cors(app: App, origin: string) {
 }
 
 // --- Helpers del contexto (handler) ---
-
 /// The value of the `:name` route parameter, or `""` if the pattern did not capture it.
 pub fn param(ctx: Ctx, name: string) -> string {
     var i: int = 0;
@@ -401,7 +407,6 @@ pub fn json_body(ctx: Ctx) -> Result<jsonlib.Json, string> {
 }
 
 // --- Helpers de la respuesta (mutan `res`; encadenables con UFCS) ---
-
 /// Sets the status code and returns `res` (chainable: `r.status(404).text("...")`).
 pub fn status(res: Res, n: int) -> Res {
     res.code = n;
@@ -454,7 +459,6 @@ pub fn cookie(res: Res, line: string) -> Res {
 // persistencia RKV1 de std/kv. Bajo `ray dev` (RAY_DEV_RELOAD presente) el store se carga
 // del archivo al boot y se guarda tras cada escritura → el estado sobrevive al restart del
 // supervisor. En producción arranca vacío y NUNCA toca disco.
-
 /// The session layer: a shared `kv` store owned by an actor fiber, plus the persistence
 /// switch. Create it ONCE in `main` with `sessions(path)` and let the handlers capture it.
 /// Under `ray dev` (`RAY_DEV_RELOAD` set) session state is loaded from `path` at boot and
@@ -621,7 +625,9 @@ fn build_response(res: Res) -> webserver.Response {
     var i: int = 0;
     while (i < ks.len()) {
         match (get(res.headers, ks[i])) {
-            Option.Some(v) => { h.insert(ks[i], v); },
+            Option.Some(v) => {
+                h.insert(ks[i], v);
+            },
             Option.None => { },
         }
         i = i + 1;
@@ -649,8 +655,20 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
         }
     }
 
-    let res: Res = Res { code: 200, body: b"", content_type: "text/plain; charset=utf-8", headers: Map.new(), set_cookie: [] };
-    var ctx: Ctx = Ctx { method: req.method, path: req.path, params: [], req: req, locals: Map.new() };
+    let res: Res = Res {
+        code: 200,
+        body: b"",
+        content_type: "text/plain; charset=utf-8",
+        headers: Map.new(),
+        set_cookie: []
+    };
+    var ctx: Ctx = Ctx {
+        method: req.method,
+        path: req.path,
+        params: [],
+        req: req,
+        locals: Map.new()
+    };
 
     // Middlewares (pre): Step.Done corta la cadena y salta el enrutado (los `after` SÍ corren).
     var keep_going: bool = true;
@@ -659,7 +677,9 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
         let mw: fn(Ctx, Res) -> Step = app.middlewares[m];
         match (mw(ctx, res)) {
             Step.Next => { },
-            Step.Done => { keep_going = false; },
+            Step.Done => {
+                keep_going = false;
+            },
         }
         m = m + 1;
     }
@@ -707,7 +727,9 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
         let rt: Route = app.routes[k];
         if (rt.method != "*" && rt.method != method && !allow.contains(rt.method)) {
             match (match_pattern(rt.pattern, ctx.path, path_segs)) {
-                Option.Some(unused) => { allow.push(rt.method); },
+                Option.Some(unused) => {
+                    allow.push(rt.method);
+                },
                 Option.None => { },
             }
         }
@@ -715,7 +737,7 @@ fn route_request(app: App, ctx: Ctx, res: Res) {
     }
     if (allow.len() > 0) {
         if (allow.contains("GET")) {
-            allow.push("HEAD");          // un GET siempre atiende HEAD (M56.8)
+            allow.push("HEAD");  // un GET siempre atiende HEAD (M56.8)
         }
         res.code = 405;
         res.headers.insert("Allow", join(allow, ", "));
@@ -758,7 +780,6 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
 // todas sus peticiones keep-alive. Así ningún valor-función cruza hilos (actores de heap
 // aislado): el mismo fuente corre en la VM y compila con `ray build --native`. Consecuencia: el
 // estado del builder es POR CONEXIÓN; el estado compartido va por canales a una fibra dueña.
-
 /// Starts the server: `listen(build_app, "0.0.0.0", 8080)` with a TOP-LEVEL `fn build_app() ->
 /// App`. Each connection's fiber builds its own App once and serves all its keep-alive requests
 /// with it — no function value crosses a thread boundary, so the same source runs on the VM and
@@ -772,7 +793,13 @@ pub fn listen(build: fn() -> App, host: string, port: int) -> Result<int, string
 }
 
 /// Like `listen`, over HTTPS: `cert`/`key` are the PEM certificate chain and private key (M56.3).
-pub fn listen_tls(build: fn() -> App, host: string, port: int, cert: string, key: string) -> Result<int, string> {
+pub fn listen_tls(
+    build: fn() -> App,
+    host: string,
+    port: int,
+    cert: string,
+    key: string
+) -> Result<int, string> {
     webserver.serve_with_tls(host, port, cert, key, fn() -> fn(webserver.Request) -> webserver.Response {
         let app: App = build();
         fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
@@ -781,7 +808,12 @@ pub fn listen_tls(build: fn() -> App, host: string, port: int, cert: string, key
 
 /// Like `listen`, with graceful shutdown (M88.1b): on SIGTERM/SIGINT it stops accepting, drains
 /// in-flight connections for up to `drain_ms` and returns 0 — zero requests lost on deploy.
-pub fn listen_graceful(build: fn() -> App, host: string, port: int, drain_ms: int) -> Result<int, string> {
+pub fn listen_graceful(
+    build: fn() -> App,
+    host: string,
+    port: int,
+    drain_ms: int
+) -> Result<int, string> {
     webserver.serve_with_graceful(host, port, drain_ms, fn() -> fn(webserver.Request) -> webserver.Response {
         let app: App = build();
         fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
@@ -790,7 +822,12 @@ pub fn listen_graceful(build: fn() -> App, host: string, port: int, drain_ms: in
 
 /// Like `listen`, with explicit safety limits (`webserver.Limits`: max header/body bytes, max
 /// connections, read timeout) instead of `webserver.default_limits()`.
-pub fn listen_limits(build: fn() -> App, host: string, port: int, limits: webserver.Limits) -> Result<int, string> {
+pub fn listen_limits(
+    build: fn() -> App,
+    host: string,
+    port: int,
+    limits: webserver.Limits
+) -> Result<int, string> {
     webserver.serve_with_limits(host, port, limits, fn() -> fn(webserver.Request) -> webserver.Response {
         let app: App = build();
         fn(req: webserver.Request) -> webserver.Response { handle(app, req) }

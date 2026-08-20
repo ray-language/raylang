@@ -114,7 +114,13 @@ fn build_request_h(method: string, u: Url, body: bytes, extra: Map<string, strin
 
 // Como `build_request_h` pero con la cabecera `Connection` parametrizada: "close" para una
 // petición suelta, "keep-alive" para una conexión persistente (M90.2).
-fn build_request_conn(method: string, u: Url, body: bytes, extra: Map<string, string>, conn_val: string) -> bytes {
+fn build_request_conn(
+    method: string,
+    u: Url,
+    body: bytes,
+    extra: Map<string, string>,
+    conn_val: string
+) -> bytes {
     var req: string = method + " " + u.path + " HTTP/1.1\r\n";
     req = req + "Host: " + host_header(u) + "\r\n";
     req = req + "Connection: " + conn_val + "\r\n";
@@ -274,7 +280,9 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
     }
     // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
     let body: bytes = raw.sub_bytes(sep + 4, raw.len());
-    match (from_utf8(raw.sub_bytes(0, sep))) {
+    match (from_utf8(
+    raw.sub_bytes(0, sep)
+)) {
         Result.Err(e) => Result.Err("HTTP headers are not UTF-8: " + e),
         Result.Ok(headers_raw) => {
             let lines: [string] = headers_raw.split("\r\n");
@@ -338,12 +346,19 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 Option.None => { },
             }
             if (!was_chunked) {
-                match (get(headers, "content-length")) {
+                match (get(
+                headers,
+                "content-length"
+            )) {
                     Option.Some(cl) => {
-                        match (parse_int(cl)) {
+                        match (parse_int(
+                        cl
+                    )) {
                             Option.Some(n) => {
                                 if (body_final.len() < n) {
-                                    return Result.Err("truncated response: got " + to_string(body_final.len()) + " de " + to_string(n) + " bytes");
+                                    return Result.Err(
+                                        "truncated response: got " + to_string(body_final.len()) + " de " + to_string(n) + " bytes"
+                                    );
                                 }
                                 if (body_final.len() > n) {
                                     body_final = body_final.sub_bytes(0, n);
@@ -412,7 +427,12 @@ pub fn request(method: string, url: string, body: string) -> Result<Response, st
 /// Like `request` but with extra headers (Authorization, Accept, Content-Type, ...).
 /// Client headers (Host/Connection/Content-Length/Accept-Encoding) are set first; extras are
 /// appended in key order. 30 s total read timeout.
-pub fn request_with(method: string, url: string, body: string, headers: Map<string, string>) -> Result<Response, string> {
+pub fn request_with(
+    method: string,
+    url: string,
+    body: string,
+    headers: Map<string, string>
+) -> Result<Response, string> {
     request_bytes(method, url, body.to_bytes(), headers, 30000)
 }
 
@@ -421,13 +441,21 @@ pub fn request_with(method: string, url: string, body: string, headers: Map<stri
 /// Like `request_with`, but propagates the W3C trace context: sends a `traceparent` header with
 /// a fresh CHILD span of `t` (same `trace_id`, new `span_id`). Get `t` from
 /// `webserver.trace_of(req)` (adopt the incoming trace) or `trace.new_trace()` (start one).
-pub fn request_traced(method: string, url: string, body: string, headers: Map<string, string>, t: trace.Trace) -> Result<Response, string> {
+pub fn request_traced(
+    method: string,
+    url: string,
+    body: string,
+    headers: Map<string, string>,
+    t: trace.Trace
+) -> Result<Response, string> {
     // Copia: los Map van por referencia y el `traceparent` no debe aparecer en el del llamador.
     var h: Map<string, string> = Map.new();
     for k in headers.keys() {
         match (headers.get(k)) {
-            Option.Some(v) => { h.insert(k, v); },
-            Option.None => {},
+            Option.Some(v) => {
+                h.insert(k, v);
+            },
+            Option.None => { },
         }
     }
     h.insert("traceparent", trace.traceparent(trace.child(t)));
@@ -445,11 +473,21 @@ pub fn fetch_traced(url: string, t: trace.Trace) -> Result<Response, string> {
 /// an explicit total read-timeout in ms (`<= 0` = no timeout). `request`/`request_with` delegate
 /// here with a UTF-8 body and 30 s. Err on invalid URL, connect failure, I/O error/timeout, or a
 /// malformed/truncated response.
-pub fn request_bytes(method: string, url: string, body: bytes, headers: Map<string, string>, timeout_millis: int) -> Result<Response, string> {
-    match (parse_url(url)) {
+pub fn request_bytes(
+    method: string,
+    url: string,
+    body: bytes,
+    headers: Map<string, string>,
+    timeout_millis: int
+) -> Result<Response, string> {
+    match (parse_url(
+    url
+)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (dial(u)) {
+            match (dial(
+            u
+        )) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
                 Result.Ok(h) => {
                     let deadline: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
@@ -550,7 +588,6 @@ pub fn fetch(url: string) -> Result<Response, string> {
 // (patrón `Rd` del RPC de M88.4). Si la conexión reutilizada estaba caída (el servidor la
 // cerró en el ocio sin entregar ningún octeto de respuesta: la carrera clásica del
 // keep-alive), se reconecta y reintenta UNA vez de forma transparente.
-
 /// A persistent HTTP/1.1 connection (keep-alive): reuses one socket across requests to the
 /// same server, delimiting each response by Content-Length or chunked encoding. Create it
 /// with `connect`, issue requests with `conn_request`/`conn_request_bytes`, and release it
@@ -571,9 +608,13 @@ pub fn connect(base_url: string) -> Result<Conn, string> {
     match (parse_url(base_url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (dial(u)) {
+            match (dial(
+            u
+        )) {
                 Result.Err(e) => Result.Err("could not connect: " + e),
-                Result.Ok(h) => Result.Ok(Conn { h: h, buf: b"", host: u.host, port: u.port, tls: u.tls, open: true }),
+                Result.Ok(h) => Result.Ok(
+                    Conn { h: h, buf: b"", host: u.host, port: u.port, tls: u.tls, open: true }
+                ),
             }
         },
     }
@@ -604,7 +645,13 @@ fn conn_reopen(c: Conn) -> Result<int, string> {
 
 /// Like `request_with` but over a persistent connection: `path` is relative to the Conn's
 /// server (e.g. "/api/v1/users"). 30 s total read timeout.
-pub fn conn_request(c: Conn, method: string, path: string, body: string, headers: Map<string, string>) -> Result<Response, string> {
+pub fn conn_request(
+    c: Conn,
+    method: string,
+    path: string,
+    body: string,
+    headers: Map<string, string>
+) -> Result<Response, string> {
     conn_request_bytes(c, method, path, body.to_bytes(), headers, 30000)
 }
 
@@ -618,7 +665,14 @@ fn err_dropped() -> string {
 /// read-timeout in ms (`<= 0` = no timeout). If the reused connection turns out dead — the
 /// server closed it while idle, before delivering any response byte — it reconnects and
 /// retries ONCE transparently.
-pub fn conn_request_bytes(c: Conn, method: string, path: string, body: bytes, headers: Map<string, string>, timeout_millis: int) -> Result<Response, string> {
+pub fn conn_request_bytes(
+    c: Conn,
+    method: string,
+    path: string,
+    body: bytes,
+    headers: Map<string, string>,
+    timeout_millis: int
+) -> Result<Response, string> {
     let reused: bool = c.open;
     match (conn_attempt(c, method, path, body, headers, timeout_millis)) {
         Result.Ok(r) => Result.Ok(r),
@@ -635,13 +689,23 @@ pub fn conn_request_bytes(c: Conn, method: string, path: string, body: bytes, he
 
 // Un intento de petición sobre la conexión (sin reintento): asegura el socket, escribe la
 // request y lee UNA respuesta delimitada. Honra un `Connection: close` de la respuesta.
-fn conn_attempt(c: Conn, method: string, path: string, body: bytes, headers: Map<string, string>, timeout_millis: int) -> Result<Response, string> {
+fn conn_attempt(
+    c: Conn,
+    method: string,
+    path: string,
+    body: bytes,
+    headers: Map<string, string>,
+    timeout_millis: int
+) -> Result<Response, string> {
     if (!c.open) {
         let _ = conn_reopen(c)?;
     }
     let u = Url { host: c.host, port: c.port, path: path, tls: c.tls };
     let deadline: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
-    match (net.socket_write_bytes(c.h, build_request_conn(method, u, body, headers, "keep-alive"))) {
+    match (net.socket_write_bytes(
+    c.h,
+    build_request_conn(method, u, body, headers, "keep-alive")
+)) {
         Result.Err(_) => {
             // Escribir en una conexión que el servidor ya cerró falla aquí o en la lectura.
             conn_close(c);
@@ -657,7 +721,9 @@ fn conn_attempt(c: Conn, method: string, path: string, body: bytes, headers: Map
                             // El servidor puede pedir cerrar tras esta respuesta.
                             var close: bool = false;
                             match (header(r, "connection")) {
-                                Option.Some(v) => { close = v.to_lower().contains("close"); },
+                                Option.Some(v) => {
+                                    close = v.to_lower().contains("close");
+                                },
                                 Option.None => { },
                             }
                             if (close) {
@@ -724,7 +790,10 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
     var sep: int = find_fin_headers(c.buf);
     while (sep < 0) {
         let had: int = c.buf.len();
-        match (conn_read_more(c, deadline)) {
+        match (conn_read_more(
+            c,
+            deadline
+        )) {
             Result.Err(e) => {
                 return Result.Err(e);
             },
@@ -742,7 +811,9 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
     let fin_cab: int = sep + 4;
 
     // 2. Decidir la delimitación del cuerpo con las cabeceras ya recibidas.
-    match (from_utf8(c.buf.sub_bytes(0, sep))) {
+    match (from_utf8(
+    c.buf.sub_bytes(0, sep)
+)) {
         Result.Err(e) => Result.Err("HTTP headers are not UTF-8: " + e),
         Result.Ok(cab) => {
             let lines: [string] = cab.split("\r\n");
@@ -750,7 +821,9 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
             let parts: [string] = lines[0].split(" ");
             if (parts.len() >= 2) {
                 match (parse_int(parts[1])) {
-                    Option.Some(n) => { status = n; },
+                    Option.Some(n) => {
+                        status = n;
+                    },
                     Option.None => { },
                 }
             }
@@ -764,14 +837,16 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
                 }
                 if (lin.starts_with("content-length:")) {
                     match (parse_int(lines[i].substring(15, lines[i].len()).trim())) {
-                        Option.Some(n) => { content_len = n; },
+                        Option.Some(n) => {
+                            content_len = n;
+                        },
                         Option.None => { },
                     }
                 }
                 i = i + 1;
             }
             // Sin cuerpo por definición (RFC 9112 §6.3): HEAD, 1xx, 204 y 304.
-            if (method == "HEAD" || status == 204 || status == 304 || (status >= 100 && status < 200)) {
+            if (method == "HEAD" || status == 204 || status == 304 || status >= 100 && status < 200) {
                 return Result.Ok(take(c, fin_cab));
             }
             if (chunked) {

@@ -14,10 +14,10 @@ fn fib(n: int) -> int {
 fn main() -> int {
     let a = args();
     let ds = 10;
-    let steps = if (a.len() > 0) { 
+    let steps = if (a.len() > 0) {
         match (parse_int(a[0])) {
             Option.Some(x) => x,
-            Option.None => ds
+            Option.None => ds,
         }
     } else {
         ds

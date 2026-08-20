@@ -20,7 +20,9 @@ fn main() {
         print(k + " " + to_string(cnt.get(k).unwrap_or(0)));
     }
     var total = 0;
-    for v in lat.values() { total = total + v; }
+    for v in lat.values() {
+        total = total + v;
+    }
     print(total);
     eprint("bench_ns=${time.monotonic_nanos() - t0}");
 }

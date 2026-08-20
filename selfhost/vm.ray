@@ -237,7 +237,9 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 while (i < srcs.len()) {
                     match (srcs[i]) {
                         // Captura POR REFERENCIA: se empuja la celda misma (compartida), no su valor.
-                        UpSrc.ULocal(slot) => cells.push(fr.locals[slot]),
+                        UpSrc.ULocal(slot) => cells.push(
+                            fr.locals[slot]
+                        ),
                         UpSrc.UUp(u) => cells.push(fr.upvalues[u]),
                     }
                     i = i + 1;
@@ -276,7 +278,13 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
             Op.ODispatch(fname, argc) => {
                 let args = pop_n(fr.stack, argc);
                 let recv = pop_val(fr.stack);
-                match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
+                match (resolve_dispatch(
+                    cp,
+                    prog_args,
+                    recv,
+                    fname,
+                    args
+                )?) {
                     // Marco nuevo (campo-función / método / UFCS): los args ya llevan o no el receptor.
                     Dispatch.DFrame(idx, callargs, cells) => frames.push(new_frame(cp, idx, callargs, cells)),
                     // Valor directo (@derive igual/mostrar, primitivo menor, builtin como método).
@@ -301,7 +309,13 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
             Op.OTailDispatch(fname, argc) => {
                 let args = pop_n(fr.stack, argc);
                 let recv = pop_val(fr.stack);
-                match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
+                match (resolve_dispatch(
+                    cp,
+                    prog_args,
+                    recv,
+                    fname,
+                    args
+                )?) {
                     // En cola: reutiliza el marco. Si resuelve a un valor directo, lo empuja y el `OReturn`
                     // que sigue lo retorna (sin optimización de cola, pero correcto).
                     Dispatch.DFrame(idx, callargs, cells) => {
@@ -384,7 +398,9 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 };
             },
             Op.OMatchFail => {
-                return Result.Err(Flow.FError(rt_error(0, 0, "no match branch matched (should not happen)")));
+                return Result.Err(
+                    Flow.FError(rt_error(0, 0, "no match branch matched (should not happen)"))
+                );
             },
         }
     }
@@ -443,7 +459,13 @@ enum Dispatch {
 // Resuelve `recv.fname(args)` por la ETIQUETA del valor (como `dispatch_method` del intérprete, M14.4d):
 // (a) campo-función del struct → (b) método (`Tipo#metodo`) → (c) @derive igual/mostrar y primitivo menor →
 // (d) UFCS a función libre → (e) builtin como método. `dyn`/bounds/genéricos no necesitan nada especial.
-fn resolve_dispatch(cp: CProgram, prog_args: [string], recv: Value, fname: string, args: [Value]) -> Result<Dispatch, Flow> {
+fn resolve_dispatch(
+    cp: CProgram,
+    prog_args: [string],
+    recv: Value,
+    fname: string,
+    args: [Value]
+) -> Result<Dispatch, Flow> {
     // (a) ¿campo del struct que contiene una función? (gana sobre UFCS/método; NO antepone el receptor).
     // El match interno cede un valor en el brazo normal (no todas las ramas divergen → el checker lo acepta).
     match (recv) {

@@ -75,7 +75,9 @@ fn level_name(level: int) -> string {
 // Cuatro dígitos hex en minúscula de `n` (0..65535), para el escape \uXXXX.
 fn hex4(n: int) -> string {
     let digs = "0123456789abcdef";
-    to_string(digs[n >> 12 & 15]) + to_string(digs[n >> 8 & 15]) + to_string(digs[n >> 4 & 15]) + to_string(digs[n & 15])
+    to_string(
+        digs[n >> 12 & 15]
+    ) + to_string(digs[n >> 8 & 15]) + to_string(digs[n >> 4 & 15]) + to_string(digs[n & 15])
 }
 
 // Escapa una cadena para incrustarla en JSON. M70: cubre TODO control < 0x20 (RFC 8259;
@@ -117,7 +119,9 @@ fn json_escape(s: string) -> string {
 // Renderiza la entrada como una línea JSON con la marca de tiempo `ts` dada (determinista → testeable).
 // El orden de claves es fijo: ts, level, service, msg, y luego los campos en orden de adición.
 pub fn render(e: LogEntry, ts: string) -> string {
-    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
+    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(
+        e.level
+    ) + "\",\"service\":\"" + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
     var i = 0;
     while (i < e.fields.len()) {
         let f = e.fields[i];

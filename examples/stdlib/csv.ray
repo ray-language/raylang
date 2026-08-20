@@ -8,6 +8,7 @@
 // carácter — el coste es cuadrático solo en el LARGO DEL CAMPO (cortos en la práctica), y la
 // alternativa (substring por rachas) es peor: substring indexa por carácter y escanea desde 0.
 import std/collections/stringbuilder as sb;
+
 // Parsea un documento CSV a filas de campos. Los campos entrecomillados (`"..."`) admiten comas, saltos
 // de línea y comillas escapadas como `""`. Acepta finales de línea LF o CRLF.
 /// Parses a CSV document (RFC 4180) into rows of string fields. Quoted fields (`"..."`) may

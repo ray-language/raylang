@@ -85,7 +85,14 @@ pub fn parse_frame(data: bytes) -> Result<Http2Frame, string> {
     if (data.len() < 9 + plen) {
         return Result.Err("frame HTTP/2 truncado (carga incompleta)");
     }
-    Result.Ok(Http2Frame { ftype: ftype, flags: flags, stream_id: stream_id, payload: data.sub_bytes(9, 9 + plen) })
+    Result.Ok(
+        Http2Frame {
+            ftype: ftype,
+            flags: flags,
+            stream_id: stream_id,
+            payload: data.sub_bytes(9, 9 + plen)
+        }
+    )
 }
 
 // El número de octetos que ocupa un frame en el flujo (9 + longitud de la carga), para iterar varios.

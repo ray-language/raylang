@@ -31,7 +31,7 @@ fn main() {
                 let ms = parse_int(caps[4].unwrap_or("")).unwrap_or(0);
                 checksum = (checksum * 31 + uid + path + st + ms) % 1000000007;
             },
-            Option.None => {},
+            Option.None => { },
         }
     }
     print(match_count);

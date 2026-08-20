@@ -18,7 +18,6 @@
 // Módulo puro (ambos motores, cero primitivos nuevos). La compartición entre fibras
 // bajo multicore (actor CSP dueño del Store) y el session store del paquete web van
 // encima de esto (G.2), no aquí.
-
 import std/fs;
 
 /// A persistent key/value store: an in-memory `Map<string, bytes>` backed by a file.
@@ -129,7 +128,6 @@ impl StoreOps for Store {
 // transferir. FIFO da la coherencia: un `get` ve todos los `set` encolados antes.
 // `impl StoreOps for SharedStore` → la MISMA API sirve local y compartido. Solo VM
 // (spawn/canales); el intérprete da su error limpio de siempre.
-
 // Los mensajes al actor. Las peticiones con respuesta llevan su canal de reply.
 enum KvMsg {
     Get(string, Channel<Option<bytes>>),
@@ -264,13 +262,12 @@ impl StoreOps for SharedStore {
 }
 
 // --- formato RKV1 ---
-
 // Empuja `n` (0 <= n < 2^32) como u32 little-endian en `out`.
 fn push_u32(out: [int], n: int) {
     out.push(n % 256);
-    out.push((n / 256) % 256);
-    out.push((n / 65536) % 256);
-    out.push((n / 16777216) % 256);
+    out.push(n / 256 % 256);
+    out.push(n / 65536 % 256);
+    out.push(n / 16777216 % 256);
 }
 
 // Empuja todos los octetos de `b` en `out`.

@@ -90,7 +90,9 @@ fn read_handshake(h: int) -> Result<HandshakeRead, string> {
         if (sep >= 0) {
             match (from_utf8(acc.sub_bytes(0, sep))) {
                 Result.Ok(s) => {
-                    return Result.Ok(HandshakeRead { headers: s, rest: acc.sub_bytes(sep + 4, acc.len()) });
+                    return Result.Ok(
+                        HandshakeRead { headers: s, rest: acc.sub_bytes(sep + 4, acc.len()) }
+                    );
                 },
                 Result.Err(e) => {
                     return Result.Err("handshake headers are not UTF-8: " + e);

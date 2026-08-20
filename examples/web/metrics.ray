@@ -205,13 +205,23 @@ fn with_le(labels: Map<string, string>, le: string) -> Map<string, string> {
 
 // Crea, en orden canónico (buckets ascendentes, +Inf, _sum, _count), la familia de series de un
 // histograma para un conjunto de labels dado — solo la primera vez (idempotente).
-fn ensure_hist_series(reg: Registry, mi: int, name: string, buckets: [float], labels: Map<string, string>) {
+fn ensure_hist_series(
+    reg: Registry,
+    mi: int,
+    name: string,
+    buckets: [float],
+    labels: Map<string, string>
+) {
     if (find_series(reg, mi, name + "_count" + render_labels(labels)) >= 0) {
         return;
     }
     var i = 0;
     while (i < buckets.len()) {
-        create_series(reg, mi, name + "_bucket" + render_labels(with_le(labels, fmt_float(buckets[i]))));
+        create_series(
+            reg,
+            mi,
+            name + "_bucket" + render_labels(with_le(labels, fmt_float(buckets[i])))
+        );
         i = i + 1;
     }
     create_series(reg, mi, name + "_bucket" + render_labels(with_le(labels, "+Inf")));
@@ -269,7 +279,11 @@ pub fn observe_l(reg: Registry, name: string, labels: Map<string, string>, v: fl
     var i = 0;
     while (i < bks.len()) {
         if (v <= bks[i]) {
-            let si = touch_series(reg, mi, name + "_bucket" + render_labels(with_le(labels, fmt_float(bks[i]))));
+            let si = touch_series(
+                reg,
+                mi,
+                name + "_bucket" + render_labels(with_le(labels, fmt_float(bks[i])))
+            );
             reg.s_val[si] = reg.s_val[si] + 1.0;
         }
         i = i + 1;

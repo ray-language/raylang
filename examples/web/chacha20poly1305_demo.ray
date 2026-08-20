@@ -25,7 +25,9 @@ fn main() {
     // AAD: 50 51 52 53 c0 c1 c2 c3 c4 c5 c6 c7.
     let aad: [int] = [80, 81, 82, 83, 192, 193, 194, 195, 196, 197, 198, 199];
 
-    let pt = str_bytes("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+    let pt = str_bytes(
+        "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+    );
 
     let sellado = aead_seal(key, nonce, aad, pt);
     print(hex_encode(bytes_of(sellado.ciphertext)));

@@ -21,28 +21,42 @@ fn main() -> int {
         eprint("use: raylang selfhost/check_dump.ray <file>");
         return 1;
     }
-    match (read_file(argv[0])) {
+    match (read_file(
+    argv[0]
+)) {
         Result.Ok(src) => {
-            match (lex(src)) {
+            match (lex(
+                src
+            )) {
                 Result.Ok(toks) => {
-                    match (parse(toks)) {
+                    match (parse(
+                    toks
+                )) {
                         Result.Ok(prog) => {
-                            match (check(prog)) {
+                            match (check(
+                            prog
+                        )) {
                                 Result.Ok(_) => {
                                     print("ok");
                                 },
                                 Result.Err(te) => {
-                                    print("type error at " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                                    print(
+                                        "type error at " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg
+                                    );
                                 },
                             }
                         },
                         Result.Err(pe) => {
-                            print("syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                            print(
+                                "syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg
+                            );
                         },
                     }
                 },
                 Result.Err(le) => {
-                    print("lex error at " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+                    print(
+                        "lex error at " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg
+                    );
                 },
             }
             0

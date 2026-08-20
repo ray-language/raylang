@@ -9,8 +9,10 @@ fn main() -> int {
         send(ch, "x".repeat(1000));
         close(ch);
         match (recv(ch)) {
-            Option.Some(s) => { total = total + s.len(); },
-            Option.None => {},
+            Option.Some(s) => {
+                total = total + s.len();
+            },
+            Option.None => { },
         }
         i = i + 1;
     }

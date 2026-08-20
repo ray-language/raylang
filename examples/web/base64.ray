@@ -24,7 +24,10 @@ pub fn base64(data: bytes) -> string {
         let b1 = data[i + 1] & 255;
         let b2 = data[i + 2] & 255;
         let triple = b0 << 16 | b1 << 8 | b2;
-        sb.push(b, enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + enc_char(triple & 63));
+        sb.push(
+            b,
+            enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + enc_char(triple & 63)
+        );
         i = i + 3;
     }
     // Cola: 1 o 2 octetos sobrantes se rellenan con '='.
@@ -38,7 +41,10 @@ pub fn base64(data: bytes) -> string {
             let b0 = data[i] & 255;
             let b1 = data[i + 1] & 255;
             let triple = b0 << 16 | b1 << 8;
-            sb.push(b, enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + "=");
+            sb.push(
+                b,
+                enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + "="
+            );
         }
     }
     sb.build(b)
@@ -68,7 +74,10 @@ fn dec_char(c: char) -> int {
             63
         } else {
             // El alfabeto estándar comparte A-Z/a-z/0-9 con base64url.
-            match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
+            match (index_of(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    to_string(c)
+)) {
                 Option.Some(i) => i,
                 Option.None => 0 - 1,
             }
@@ -84,7 +93,10 @@ fn dec_char_std(c: char) -> int {
         if (c == '/') {
             63
         } else {
-            match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
+            match (index_of(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    to_string(c)
+)) {
                 Option.Some(i) => i,
                 Option.None => 0 - 1,
             }
@@ -107,7 +119,7 @@ pub fn base64_decode(s: string) -> Result<bytes, string> {
     var nbits = 0;
     var i = 0;
     var chars = 0;  // caracteres de datos (sin contar '=')
-    var pad = 0;    // caracteres '=' de relleno
+    var pad = 0;  // caracteres '=' de relleno
     while (i < n) {
         let c = s[i];
         if (c == '=') {
@@ -136,7 +148,7 @@ pub fn base64_decode(s: string) -> Result<bytes, string> {
     if (pad > 2) {
         return Result.Err("base64: relleno '=' inválido");
     }
-    if (nbits > 0 && (acc & ((1 << nbits) - 1)) != 0) {
+    if (nbits > 0 && (acc & (1 << nbits) - 1) != 0) {
         return Result.Err("base64: bits sobrantes no nulos (codificación no canónica)");
     }
     Result.Ok(bytes_of(out))
@@ -172,7 +184,7 @@ pub fn base64url_decode(s: string) -> Result<bytes, string> {
     if (n % 4 == 1) {
         return Result.Err("base64url: longitud inválida");
     }
-    if (nbits > 0 && (acc & ((1 << nbits) - 1)) != 0) {
+    if (nbits > 0 && (acc & (1 << nbits) - 1) != 0) {
         return Result.Err("base64url: bits sobrantes no nulos (codificación no canónica)");
     }
     Result.Ok(bytes_of(out))

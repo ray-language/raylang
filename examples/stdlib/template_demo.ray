@@ -17,7 +17,13 @@ from template import
 
 fn main() {
     let tpl = "<h1>Hola, {{ name }}!</h1>\n{% if admin %}<p>admin</p>{% elif invitado %}<p>invitado</p>{% else %}<p>user</p>{% endif %}\n<ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>\nraw: {{& html }}";
-    let ctx = [ctx_str("name", "<b>Ada</b>"), ctx_bool("admin", true), ctx_bool("invitado", false), ctx_list("items", [val_str("a & b"), val_str("c"), val_int(42)]), ctx_str("html", "<i>raw</i>")];
+    let ctx = [
+        ctx_str("name", "<b>Ada</b>"),
+        ctx_bool("admin", true),
+        ctx_bool("invitado", false),
+        ctx_list("items", [val_str("a & b"), val_str("c"), val_int(42)]),
+        ctx_str("html", "<i>raw</i>")
+    ];
     match (render_template(tpl, ctx)) {
         Result.Ok(out) => print(out),
         Result.Err(e) => print("err: " + e),
@@ -30,8 +36,20 @@ fn main() {
             return;
         },
     };
-    let ctx2 = [ctx_str("name", "Eva"), ctx_bool("admin", false), ctx_bool("invitado", true), ctx_list("items", [val_int(1)]), ctx_str("html", "")];
-    let ctx3 = [ctx_str("name", "Leo"), ctx_bool("admin", false), ctx_bool("invitado", false), ctx_list("items", [val_int(2)]), ctx_str("html", "")];
+    let ctx2 = [
+        ctx_str("name", "Eva"),
+        ctx_bool("admin", false),
+        ctx_bool("invitado", true),
+        ctx_list("items", [val_int(1)]),
+        ctx_str("html", "")
+    ];
+    let ctx3 = [
+        ctx_str("name", "Leo"),
+        ctx_bool("admin", false),
+        ctx_bool("invitado", false),
+        ctx_list("items", [val_int(2)]),
+        ctx_str("html", "")
+    ];
     print(render(t, ctx2));
     print(render(t, ctx3));
 }

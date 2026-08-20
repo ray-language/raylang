@@ -1,7 +1,6 @@
 // Ejercita los caminos FUSIONADOS del backend nativo (N-D1/N-D2/N-D4) y el trim de
 // parse_int/parse_float — con salida determinista: el corpus de paridad verifica que
 // intérprete ≡ VM ≡ nativo byte a byte también por estos caminos.
-
 fn main() {
     // parse_int/parse_float TRIMEAN (paridad VM↔nativo cazada en N-D: el nativo no trimeaba).
     print(parse_int(" 42 ").unwrap_or(-1));

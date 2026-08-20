@@ -9,14 +9,20 @@ fn show_caps(pat: string, text: string) {
             var i = 0;
             while (i < gs.len()) {
                 match (gs[i]) {
-                    Option.Some(s) => { line = line + " [" + to_string(i) + "]=" + s; },
-                    Option.None => { line = line + " [" + to_string(i) + "]=<none>"; },
+                    Option.Some(s) => {
+                        line = line + " [" + to_string(i) + "]=" + s;
+                    },
+                    Option.None => {
+                        line = line + " [" + to_string(i) + "]=<none>";
+                    },
                 }
                 i = i + 1;
             }
             print("caps /" + pat + "/ ~ \"" + text + "\" →" + line);
         },
-        Option.None => { print("caps /" + pat + "/ ~ \"" + text + "\" → <none>"); },
+        Option.None => {
+            print("caps /" + pat + "/ ~ \"" + text + "\" → <none>");
+        },
     }
 }
 
@@ -26,8 +32,13 @@ fn full(pat: string, text: string) {
 }
 
 fn span(pat: string, text: string) {
-    match (find(pat, text)) {
-        Option.Some(p) => print("find  /" + pat + "/ ~ \"" + text + "\" = (" + to_string(p.0) + "," + to_string(p.1) + ")"),
+    match (find(
+    pat,
+    text
+)) {
+        Option.Some(p) => print(
+            "find  /" + pat + "/ ~ \"" + text + "\" = (" + to_string(p.0) + "," + to_string(p.1) + ")"
+        ),
         Option.None => print("find  /" + pat + "/ ~ \"" + text + "\" = <none>"),
     }
 }

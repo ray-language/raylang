@@ -136,7 +136,37 @@ fn decode(s: Inflater, h: Huff) -> Result<int, string> {
 
 // Tablas de longitud (códigos 257..285): base + bits extra.
 fn len_base() -> [int] {
-    [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+    [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        13,
+        15,
+        17,
+        19,
+        23,
+        27,
+        31,
+        35,
+        43,
+        51,
+        59,
+        67,
+        83,
+        99,
+        115,
+        131,
+        163,
+        195,
+        227,
+        258
+    ]
 }
 
 fn len_extra() -> [int] {
@@ -145,11 +175,73 @@ fn len_extra() -> [int] {
 
 // Tablas de distancia (códigos 0..29): base + bits extra.
 fn dist_base() -> [int] {
-    [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+    [
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        9,
+        13,
+        17,
+        25,
+        33,
+        49,
+        65,
+        97,
+        129,
+        193,
+        257,
+        385,
+        513,
+        769,
+        1025,
+        1537,
+        2049,
+        3073,
+        4097,
+        6145,
+        8193,
+        12289,
+        16385,
+        24577
+    ]
 }
 
 fn dist_extra() -> [int] {
-    [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+    [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+        4,
+        4,
+        5,
+        5,
+        6,
+        6,
+        7,
+        7,
+        8,
+        8,
+        9,
+        9,
+        10,
+        10,
+        11,
+        11,
+        12,
+        12,
+        13,
+        13
+    ]
 }
 
 // Descomprime los símbolos de un bloque con los árboles dados (literal/longitud + distancia).
@@ -169,7 +261,9 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
         if (sym < 256) {
             // M64.2: anti-bomba — la salida acumulada nunca rebasa el tope.
             if (s.out.len() >= s.limit) {
-                return Result.Err("salida descomprimida excede el límite (posible bomba de descompresión)");
+                return Result.Err(
+                    "salida descomprimida excede el límite (posible bomba de descompresión)"
+                );
             }
             s.out.push(sym);  // literal
         } else {
@@ -188,7 +282,9 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             }
             // M64.2: anti-bomba — el tramo LZ77 completo debe caber bajo el tope.
             if (s.out.len() + length > s.limit) {
-                return Result.Err("salida descomprimida excede el límite (posible bomba de descompresión)");
+                return Result.Err(
+                    "salida descomprimida excede el límite (posible bomba de descompresión)"
+                );
             }
             let start = s.out.len() - distance;
             var k = 0;
@@ -394,7 +490,6 @@ pub fn inflate_raw_limit(data: bytes, max_out: int) -> Result<bytes, string> {
 // raylang no tiene estado de módulo → la tabla se construye en cada llamada (2048 pasos,
 // el equivalente a ~256 octetos bit a bit); por debajo de ese umbral no se amortiza y se
 // usa la forma bit a bit original.
-
 // La tabla del CRC-32: tabla[b] = el resto de procesar el octeto `b` bit a bit.
 fn crc32_tabla() -> [int] {
     var tabla: [int] = [];
@@ -447,7 +542,7 @@ pub fn crc32(data: bytes) -> int {
     var crc = 4294967295;  // 0xFFFFFFFF
     var i = 0;
     while (i < n) {
-        crc = tabla[(crc ^ data[i]) & 255] ^ (crc >> 8);
+        crc = tabla[(crc ^ data[i]) & 255] ^ crc >> 8;
         i = i + 1;
     }
     crc ^ 4294967295
@@ -519,7 +614,10 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
         return Result.Err("cabecera gzip truncada");
     }
     let comprimido = data.sub_bytes(pos, data.len() - 8);
-    match (inflate_raw_limit(comprimido, max_out)) {
+    match (inflate_raw_limit(
+    comprimido,
+    max_out
+)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(salida) => {
             // Verifica el CRC-32 del tráiler (4 octetos LSB-first antes de ISIZE).

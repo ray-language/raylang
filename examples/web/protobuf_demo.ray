@@ -35,7 +35,9 @@ fn main() {
     // Framing de gRPC: prefijo de 5 octetos (flag + longitud) + el protobuf.
     let frame = grpc_frame(msg);
     print(to_string(frame));  // hex del frame (empieza por 00 + longitud big-endian)
-    match (grpc_unframe(frame)) {
+    match (grpc_unframe(
+    frame
+)) {
         Result.Ok(back) => print("roundtrip=" + to_string(to_string(back) == to_string(msg))),  // true
         Result.Err(e) => print("ERR unframe: " + e),
     }

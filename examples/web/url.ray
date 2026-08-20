@@ -25,7 +25,10 @@ fn hex_val(c: char) -> int {
 
 // ¿Es `c` un carácter "unreserved" (no necesita escaparse)?
 fn is_unreserved(c: char) -> bool {
-    match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~", to_string(c))) {
+    match (index_of(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~",
+    to_string(c)
+)) {
         Option.Some(_) => true,
         Option.None => false,
     }

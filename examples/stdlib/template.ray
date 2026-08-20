@@ -85,12 +85,11 @@ pub fn val_int(n: int) -> TVal { TVal.VInt(n) }
 //
 // Recorre los caracteres UNA vez y extrae cada tramo (texto/hueco/etiqueta) con `substring` sobre
 // los índices (un corte por tramo; nunca carácter a carácter).
-
 fn tokenize(tpl: string) -> Result<[Tok], string> {
     let cs = tpl.chars();
     let n = cs.len();
     var toks: [Tok] = [];
-    var start = 0; // inicio del tramo de texto en curso
+    var start = 0;  // inicio del tramo de texto en curso
     var i = 0;
     while (i < n) {
         if (i + 1 < n && cs[i] == '{' && (cs[i + 1] == '{' || cs[i + 1] == '%')) {
@@ -254,18 +253,24 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
 }
 
 // ---- Render ----
-
 // Escape HTML apoyado en los builtins NATIVOS (`contains`/`replace` corren en Rust): el caso común
 // (texto limpio) devuelve el string original tras 5 escaneos O(n); el sucio, 5 pasadas de replace.
 // (No iterar `s[i]` en bucle: indexar un string es O(len) por acceso → un bucle así es cuadrático.)
 // Pub: también lo usan los módulos GENERADOS por `ray build --templates-only` (M55).
 /// Escapes HTML special characters (`& < > " '`) as entities. Clean text is returned as-is.
 pub fn escape_html(s: string) -> string {
-    if (!(s.contains("&") || s.contains("<") || s.contains(">") || s.contains("\"") || s.contains("'"))) {
+    if (!(s.contains(
+        "&"
+    ) || s.contains("<") || s.contains(">") || s.contains("\"") || s.contains("'"))) {
         return s;
     }
     // `&` primero (si no, re-escaparía las entidades recién emitidas).
-    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
+    s
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
 }
 
 fn lookup(ctx: [Bind], name: string) -> Option<TVal> {
@@ -327,7 +332,7 @@ fn emit_node(node: Node, ctx: [Bind], out: [string]) {
                 Option.Some(v) => {
                     out.push(escape_html(render_val(v)));
                 },
-                Option.None => {},
+                Option.None => { },
             }
         },
         Node.NRaw(name) => {
@@ -335,7 +340,7 @@ fn emit_node(node: Node, ctx: [Bind], out: [string]) {
                 Option.Some(v) => {
                     out.push(render_val(v));
                 },
-                Option.None => {},
+                Option.None => { },
             }
         },
         Node.NIf(cond, entonces, sino) => {
@@ -369,17 +374,16 @@ fn emit_node(node: Node, ctx: [Bind], out: [string]) {
                                 i = i + 1;
                             }
                         },
-                        _ => {},
+                        _ => { },
                     }
                 },
-                Option.None => {},
+                Option.None => { },
             }
         },
     }
 }
 
 // ---- API ----
-
 // Compila la plantilla (tokeniza + parsea). En SSR: una vez al arrancar.
 /// Compiles a template (tokenize + parse). For SSR, compile once at startup and `render` per
 /// request — rendering never re-parses.

@@ -9,14 +9,12 @@
 // Sin preempción (el modelo es cooperativo), un deadline NO puede cortar una `f` que
 // bloquea: `Deadline` es un PRESUPUESTO que se enhebra por las llamadas (y se aplica de
 // verdad en la E/S vía `net.set_read_timeout`); honesto y componible.
-
 import std/time;
 import std/random;
 
 // ---------------------------------------------------------------------------
 // Retry con backoff exponencial + jitter.
 // ---------------------------------------------------------------------------
-
 // Una política de reintentos: hasta `attempts` intentos, esperando entre ellos
 // `base_ms * 2^i` acotado a `max_ms`, con jitter uniforme [0, espera) sumado.
 /// A retry policy: up to `attempts` tries, sleeping `base_ms * 2^i` (capped at
@@ -67,7 +65,6 @@ pub fn retry<T, E>(p: Retry, f: fn() -> Result<T, E>) -> Result<T, E> {
 // Circuit breaker: tras `threshold` fallos seguidos, ABRE (rechaza en seco) durante
 // `cooldown_ms`; después prueba de nuevo (semiabierto) — un éxito lo cierra.
 // ---------------------------------------------------------------------------
-
 /// A circuit breaker: after `threshold` consecutive failures it OPENS (fails fast)
 /// for `cooldown_ms`, then lets one try through (half-open) — a success closes it.
 /// Build with `breaker`; guard calls with `guard`.
@@ -113,7 +110,6 @@ pub fn guard<T, E>(b: Breaker, err_open: E, f: fn() -> Result<T, E>) -> Result<T
 // ---------------------------------------------------------------------------
 // Deadline: un presupuesto de tiempo que se enhebra por las llamadas.
 // ---------------------------------------------------------------------------
-
 /// A time budget threaded through calls. Check with `remaining`/`expired`; apply it
 /// to real I/O via `net.set_read_timeout(handle, resilience.remaining(d))`.
 pub struct Deadline {

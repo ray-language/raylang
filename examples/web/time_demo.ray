@@ -1,6 +1,14 @@
 // Demo/verificación de fechas/horas UTC (M20.5). Salida determinista (timestamps fijos), la ejecuta
 // `tests/time_cli.rs`. Referencias de `datetime.utcfromtimestamp` (Python).
-from time import from_epoch_millis, to_iso8601, to_rfc1123, to_epoch_millis, parse_iso8601, parse_iso8601_millis, now_utc, format_duration;
+from time import
+    from_epoch_millis,
+    to_iso8601,
+    to_rfc1123,
+    to_epoch_millis,
+    parse_iso8601,
+    parse_iso8601_millis,
+    now_utc,
+    format_duration;
 from std/time import millis, seconds, minutes, hours, days;
 import std/time;
 
@@ -42,11 +50,11 @@ fn main() {
         Result.Err(e) => print("err: " + e),
     }
     // Errores reales (antes: 0 en silencio): mes 13, fecha inexistente, campo no numérico, sin offset.
-    print(es_err(parse_iso8601_millis("2024-13-01T00:00:00Z")));       // true (mes 13)
-    print(es_err(parse_iso8601_millis("2023-02-29T00:00:00Z")));       // true (2023 no es bisiesto)
-    print(es_err(parse_iso8601_millis("2024-0x-01T00:00:00Z")));       // true (no numérico)
-    print(es_err(parse_iso8601_millis("2024-06-30T11:49:37")));        // true (falta el offset)
-    print(es_err(parse_iso8601_millis("2024-06-30T11:49:37Zx")));      // true (texto sobrante)
+    print(es_err(parse_iso8601_millis("2024-13-01T00:00:00Z")));  // true (mes 13)
+    print(es_err(parse_iso8601_millis("2023-02-29T00:00:00Z")));  // true (2023 no es bisiesto)
+    print(es_err(parse_iso8601_millis("2024-0x-01T00:00:00Z")));  // true (no numérico)
+    print(es_err(parse_iso8601_millis("2024-06-30T11:49:37")));  // true (falta el offset)
+    print(es_err(parse_iso8601_millis("2024-06-30T11:49:37Zx")));  // true (texto sobrante)
     // Y el 29-feb de un año bisiesto SÍ parsea.
     match (parse_iso8601("2024-02-29T00:00:00Z")) {
         Result.Ok(dt) => print(to_rfc1123(dt)),  // Thu, 29 Feb 2024 00:00:00 GMT

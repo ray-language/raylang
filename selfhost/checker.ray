@@ -19,7 +19,30 @@
 // El `Type` del parser DOBLA como representación del tipo inferido (un struct y un enum son ambos
 // `TNamed(nombre, args)`; se distinguen por en qué tabla —`structs`/`enums`— está el nombre). Los
 // ámbitos y las tablas de tipos usan `Map<K,V>`.
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, TraitDef, MethodSig, ImplBlock, Bound, Annotation;
+from parser import
+    Type,
+    Expr,
+    EKind,
+    Stmt,
+    SKind,
+    Block,
+    Func,
+    Param,
+    Program,
+    BinOp,
+    UnOp,
+    FieldInit,
+    FieldDef,
+    VariantDef,
+    MatchArm,
+    Pattern,
+    PKind,
+    FnExpr,
+    TraitDef,
+    MethodSig,
+    ImplBlock,
+    Bound,
+    Annotation;
 
 // Error de tipos con ubicación (espejo de `TypeError` en Rust).
 pub struct TypeError {

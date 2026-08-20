@@ -3,7 +3,16 @@
 // imprime su hex, lo decodifica de vuelta (round-trip) y lo enmarca/desenmarca como gRPC. Determinista,
 // lo ejecuta `tests/protobuf_cli.rs` (que además valida los octetos con un decodificador protobuf en
 // Python sin dependencias).
-from protobuf import writer, write_varint, write_string, finish, parse, get_int, get_string, grpc_frame, grpc_unframe;
+from protobuf import
+    writer,
+    write_varint,
+    write_string,
+    finish,
+    parse,
+    get_int,
+    get_string,
+    grpc_frame,
+    grpc_unframe;
 
 fn main() {
     let w = writer();

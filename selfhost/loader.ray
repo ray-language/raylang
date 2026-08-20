@@ -12,7 +12,19 @@
 // M14.7a: la máquina de carga (BFS de dependencias) + el cruce de **funciones** (el `Resolver`:
 // namespacing `modulo::fn` + reescritura de referencias). El cruce de **tipos** (TypeRewriter) → M14.7b.
 from lexer import lex, LexError;
-from parser import parse, ParseError, Program, Func, Block, Stmt, SKind, Expr, EKind, Pattern, PKind, FnExpr;
+from parser import
+    parse,
+    ParseError,
+    Program,
+    Func,
+    Block,
+    Stmt,
+    SKind,
+    Expr,
+    EKind,
+    Pattern,
+    PKind,
+    FnExpr;
 from parser import Type, StructDef, EnumDef, TraitDef, ImplBlock, MethodSig, Bound;
 
 // Error de carga: mensaje + ubicación + módulo donde ocurrió (espejo recortado del de Rust).

@@ -1,6 +1,14 @@
 // Verificación determinista del framing/handshake de WebSocket (M19.3c), sin red.
 // Lo ejecuta `tests/websocket_cli.rs`; cada línea de salida se compara con su referencia.
-from websocket import accept_key, extract_key, handshake_response, decode_frame, encode_text, encode_frame, op_close, Frame;
+from websocket import
+    accept_key,
+    extract_key,
+    handshake_response,
+    decode_frame,
+    encode_text,
+    encode_frame,
+    op_close,
+    Frame;
 
 // Texto de una carga `bytes` (asumiendo UTF-8 válido; aborta si no).
 fn texto(b: bytes) -> string {

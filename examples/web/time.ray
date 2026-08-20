@@ -1,4 +1,14 @@
 // time — COMPAT (espejo de packages/net/time.ray): las fechas civiles UTC se promovieron a
 // `std/time` (M57.1). Este módulo queda como reexport; el código vive en std/time.ray.
-pub from std/time import DateTime, from_epoch_millis, now_utc, to_epoch_millis, to_iso8601,
-    to_iso8601_basic, date_stamp, to_rfc1123, parse_iso8601, parse_iso8601_millis, format_duration;
+pub from std/time import
+    DateTime,
+    from_epoch_millis,
+    now_utc,
+    to_epoch_millis,
+    to_iso8601,
+    to_iso8601_basic,
+    date_stamp,
+    to_rfc1123,
+    parse_iso8601,
+    parse_iso8601_millis,
+    format_duration;

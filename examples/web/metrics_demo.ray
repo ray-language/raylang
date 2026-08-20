@@ -1,7 +1,18 @@
 // Demo/verificación de las métricas Prometheus (M21.2). Registra un counter (con labels), un gauge y
 // un histograma, hace operaciones y renderiza el formato de exposición. Determinista → lo ejecuta
 // `tests/metrics_cli.rs`; la salida se valida también contra el parser de Prometheus (si está).
-from metrics import registry, register_counter, register_gauge, register_histogram, inc, add, set, observe, render, no_labels, labels2;
+from metrics import
+    registry,
+    register_counter,
+    register_gauge,
+    register_histogram,
+    inc,
+    add,
+    set,
+    observe,
+    render,
+    no_labels,
+    labels2;
 
 fn main() {
     let reg = registry();

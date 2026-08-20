@@ -11,7 +11,16 @@
 // Funciona en ambos motores (cliente bloqueante); `wss://` vía el handle TLS (M19.4).
 from std/base64 import base64;
 import std/random;
-from websocket import accept_key, encode_frame_masked, read_message, client_conn, WsConn, Frame, op_text, op_binary, op_close;
+from websocket import
+    accept_key,
+    encode_frame_masked,
+    read_message,
+    client_conn,
+    WsConn,
+    Frame,
+    op_text,
+    op_binary,
+    op_close;
 import std/net;
 
 // --- Handshake del cliente ---

@@ -170,9 +170,18 @@ struct Cur {
     /// operando, elemento de arreglo…) se indente relativo a su línea y no a la columna 0. Se guarda y
     /// restaura en cada mutación para no contaminar el formateo de expresiones hermanas.
     base: usize,
-    /// ¿Segunda pasada, con envuelto de cadenas de métodos? La primera pasada emite todo en una línea;
-    /// si la sentencia no cabe en [`MAX_WIDTH`] se reemite con esto activo (M105).
+    /// ¿Segunda pasada, con envuelto activo? La primera emite todo en una línea; si la sentencia no
+    /// cabe en [`MAX_WIDTH`] se reemite con esto puesto (M105/M106).
     wrap: bool,
+    /// La PRIMERA expresión repartible de esa segunda pasada se reparte sí o sí, sin medir. Una
+    /// expresión no sabe cuántas columnas le comió el prefijo de la sentencia (`let arr: [int] = `),
+    /// así que medirla sola la daría por cabida aunque la línea entera no quepa. Lo consume la primera
+    /// que lo ve; de ahí para dentro se decide por anchura.
+    force: bool,
+    /// Fuerza que el PRÓXIMO bloque se emita expandido, aunque en la fuente cupiera en una línea. Lo
+    /// pone una firma cuyos parámetros se repartieron: `) -> string { rail }` tras seis líneas de
+    /// parámetros se lee mal. Lo consume el propio `fmt_block`.
+    expand_block: bool,
 }
 
 impl Cur {
@@ -190,6 +199,8 @@ impl Cur {
             pipe: program.pipe_sites.clone(),
             base: 0,
             wrap: false,
+            force: false,
+            expand_block: false,
         }
     }
 
@@ -488,16 +499,44 @@ fn fmt_annotations(anns: &[Annotation]) -> String {
     s
 }
 
-fn fmt_params(params: &[Param]) -> String {
-    let parts: Vec<String> = params.iter().map(|p| {
-        // El receptor `self` de un método se imprime sin tipo.
-        if p.name == "self" && matches!(p.ty, Type::SelfType) {
-            "self".to_string()
-        } else {
-            format!("{}: {}", p.name, fmt_type(&p.ty))
+/// La lista de parámetros de una firma, repartida si la **cabecera entera** no cabe en [`MAX_WIDTH`]
+/// (M106): `prefix` es lo que va antes del `(` (`fn handler` + genéricos, ya con su sangría) y `suffix`
+/// lo que va después del `)` (`-> T {`). Un parámetro por línea a `base + 1`, con el `)` en línea
+/// propia a `base` — el mismo criterio que las demás listas delimitadas. Sin coma final: el parser no
+/// la admite en parámetros, y así la forma es idéntica a la de los argumentos.
+fn fmt_params_at(params: &[Param], base: usize, prefix: &str, suffix: &str) -> String {
+    let flat = format!("{}({}){}", prefix, fmt_params(params), suffix);
+    if params.len() < 2 || flat.chars().count() <= MAX_WIDTH {
+        return flat;
+    }
+    let inner = INDENT.repeat(base + 1);
+    let mut s = format!("{}(\n", prefix);
+    for (i, p) in params.iter().enumerate() {
+        s.push_str(&inner);
+        s.push_str(&fmt_param(p));
+        if i + 1 < params.len() {
+            s.push(',');
         }
-    }).collect();
-    parts.join(", ")
+        s.push('\n');
+    }
+    s.push_str(&INDENT.repeat(base));
+    s.push(')');
+    s.push_str(suffix);
+    s
+}
+
+/// Un parámetro: `nombre: tipo`, o `self` pelado si es el receptor de un método.
+fn fmt_param(p: &Param) -> String {
+    if p.name == "self" && matches!(p.ty, Type::SelfType) {
+        "self".to_string()
+    } else {
+        format!("{}: {}", p.name, fmt_type(&p.ty))
+    }
+}
+
+fn fmt_params(params: &[Param]) -> String {
+    // El receptor `self` de un método se imprime sin tipo (lo resuelve `fmt_param`).
+    params.iter().map(fmt_param).collect::<Vec<_>>().join(", ")
 }
 
 /// `-> T` salvo que el retorno sea unit (se omite, canónico).
@@ -579,9 +618,14 @@ fn fmt_trait(cur: &mut Cur, it: &TraitDef) -> String {
 fn fmt_method_sig(cur: &mut Cur, m: &MethodSig) -> String {
     // M40.2c: métodos genéricos — renderizar los parámetros de tipo propios (`fn map<U>`).
     let gens = fmt_generics(&m.type_params, &m.bounds);
-    let head = format!("fn {}{}({}){}", m.name, gens, fmt_params(&m.params), fmt_return(&m.return_type));
+    // La firma vive dentro del `trait`/`impl` → base 1: la sangría de la cabecera la antepone el
+    // emisor del bloque, pero los parámetros repartidos y su `)` sí la llevan.
+    let head = fmt_params_at(&m.params, 1, &format!("fn {}{}", m.name, gens), &fmt_return(&m.return_type));
     match &m.default_body {
-        Some(body) => format!("{} {}", head, fmt_block(cur, body, 1)),
+        Some(body) => {
+            cur.expand_block = head.contains('\n');
+            format!("{} {}", head, fmt_block(cur, body, 1))
+        }
         None => format!("{};", head),
     }
 }
@@ -616,10 +660,14 @@ fn fmt_function(cur: &mut Cur, f: &Function) -> String {
     let mut s = fmt_annotations(&f.annotations);
     let pref = if f.is_pub { "pub " } else { "" };
     let gens = fmt_generics(&f.type_params, &f.bounds);
-    s.push_str(&format!(
-        "{}fn {}{}({}){} {}",
-        pref, f.name, gens, fmt_params(&f.params), fmt_return(&f.return_type), fmt_block(cur, &f.body, 0)
-    ));
+    let head = fmt_params_at(
+        &f.params,
+        0,
+        &format!("{}fn {}{}", pref, f.name, gens),
+        &fmt_return(&f.return_type),
+    );
+    cur.expand_block = head.contains('\n'); // firma repartida → cuerpo expandido
+    s.push_str(&format!("{} {}", head, fmt_block(cur, &f.body, 0)));
     s
 }
 
@@ -631,6 +679,12 @@ fn fmt_function(cur: &mut Cur, f: &Function) -> String {
 /// va a `base + 1`, y el `}` de cierre vuelve a `base`. Vuelca los comentarios que van **encima** de
 /// cada sentencia (con la sangría del cuerpo) y re-pega los *trailing* de sentencias de una línea.
 fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
+    let expand = std::mem::take(&mut cur.expand_block); // solo afecta a ESTE bloque, no a los de dentro
+    // Un bloque ABRE líneas nuevas: lo que va dentro ya no comparte la línea de la sentencia que lo
+    // contiene, así que el "repártete sí o sí" del padre no le aplica. Sin esto, el primer
+    // `Option.Some(x)` de un `if … { … } else if … { … }` de una línea se repartía —y en la siguiente
+    // pasada el segundo, y así: el formateador no convergía.
+    cur.force = false;
     let inner = INDENT.repeat(base + 1);
     if b.statements.is_empty() && b.tail.is_none() {
         // Bloque vacío. Si es MULTILÍNEA y encierra comentarios (línea < `}`), se preservan; si no, `{ }`.
@@ -646,13 +700,23 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     // ENTERO en una línea (`{`, tail y `}` en `b.line`) y no es una forma con bloque se mantiene inline
     // (`{ expr }`). raylang tiene muchas funciones de una línea (`fn square(n) { n * n }`); expandirlas
     // todas sería anti-idiomático. Al ser de una sola línea, no hay comentarios dentro.
-    if b.statements.is_empty()
+    if !expand
+        && b.statements.is_empty()
         && let Some(tail) = &b.tail
         && tail.line == b.line
         && b.end_line == b.line
         && !is_block_form(tail)
     {
-        return format!("{{ {} }}", fmt_value(cur, tail, base));
+        // El tail puede REPARTIRSE (M106: un literal o una llamada larga). Si sale multilínea, el
+        // bloque no puede quedarse inline: al re-formatear ya no cabría en una línea de la fuente y
+        // se expandiría — es decir, no sería idempotente. Se descarta y se sigue por la vía expandida
+        // (restaurando el cursor: renderizar consume comentarios).
+        let save = cur.i;
+        let inline = fmt_value(cur, tail, base);
+        if !inline.contains('\n') {
+            return format!("{{ {} }}", inline);
+        }
+        cur.i = save;
     }
     let mut s = String::from("{\n");
     for (idx, st) in b.statements.iter().enumerate() {
@@ -684,7 +748,9 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
             s.push('\n');
         }
         s.push_str(&cur.flush_before(tail.line, &inner));
-        let text = fmt_value(cur, tail, base + 1);
+        // El tail no pasa por `fmt_stmt`, así que su reintento va aquí (es el único otro punto de
+        // entrada de una expresión a nivel de línea).
+        let text = retry_wrapped(cur, base + 1, |c| fmt_value(c, tail, base + 1));
         s.push_str(&inner);
         s.push_str(&text);
         if !text.contains('\n') {
@@ -722,15 +788,28 @@ fn fmt_stmt(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
 /// envuelto de cadenas activo (M105). El cursor de comentarios se restaura entre pasadas: renderizar
 /// los CONSUME, y sin restaurarlo la segunda pasada los perdería.
 fn retry_wrapped(cur: &mut Cur, indent: usize, render: impl Fn(&mut Cur) -> String) -> String {
+    // El envuelto se decide POR SENTENCIA, con su propio par de pasadas: una sentencia anidada (el
+    // cuerpo de una closure que es argumento, p. ej.) empieza plana y se mide sola. Si `wrap`/`force`
+    // heredaran los del padre, la sentencia interior se repartiría sin necesidad — y al re-formatear
+    // volvería a medirse ya repartida, oscilando (no idempotente).
+    let (saved_wrap, saved_force) = (cur.wrap, cur.force);
+    let restore = |c: &mut Cur| {
+        c.wrap = saved_wrap;
+        c.force = saved_force;
+    };
     let save = cur.i;
+    cur.wrap = false;
+    cur.force = false;
     let first = render(cur);
-    if cur.wrap || fits_width(&first, indent) {
+    if fits_width(&first, indent) {
+        restore(cur);
         return first;
     }
     cur.i = save;
     cur.wrap = true;
+    cur.force = true;
     let wrapped = render(cur);
-    cur.wrap = false;
+    restore(cur);
     wrapped
 }
 
@@ -814,7 +893,7 @@ fn fmt_value(cur: &mut Cur, e: &Expr, ind: usize) -> String {
         // indentación del contexto en `cur.base` para que la rama block-form de `fmt_expr_raw` la use.
         let saved = cur.base;
         cur.base = ind;
-        let s = retry_wrapped(cur, ind, |c| fmt_expr(c, e, 0));
+        let s = fmt_expr(cur, e, 0);
         cur.base = saved;
         s
     }
@@ -874,17 +953,24 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
         // El pipeline `|>` tiene la precedencia MÍNIMA: se parentiza en cualquier operando más fuerte.
         return if min_prec > PIPE_PREC { format!("({})", s) } else { s };
     }
-    // M105: en la pasada de envuelto, una cadena de 2+ eslabones que no cabe se reparte. El aplanado
-    // se renderiza igual para medirlo, restaurando el cursor de comentarios (renderizar los consume).
-    if cur.wrap && let Some((recv, links)) = chain_links(e) {
+    // M105/M106: en la pasada de envuelto, lo que no cabe se reparte — una cadena de 2+ eslabones, o
+    // una lista delimitada (argumentos, arreglo, tupla, struct, Map). El aplanado se renderiza igual
+    // para medirlo, restaurando el cursor de comentarios (renderizar los consume).
+    if cur.wrap && (chain_links(e).is_some() || could_wrap_list(e)) {
+        // Se consume ANTES de renderizar: si no, la medición del aplanado repartiría ya a un hijo.
+        let force = std::mem::take(&mut cur.force);
         let save = cur.i;
         let flat = fmt_expr_raw(cur, e);
-        let fits = indent_width(cur) + flat.chars().count() <= MAX_WIDTH;
-        let s = if fits {
+        let s = if !force && indent_width(cur) + flat.chars().count() <= MAX_WIDTH {
             flat
         } else {
             cur.i = save;
-            fmt_chain_wrapped(cur, recv, &links)
+            if let Some((recv, links)) = chain_links(e) {
+                fmt_chain_wrapped(cur, recv, &links)
+            } else {
+                let (head, open, items, close) = delimited_list(cur, e).expect("could_wrap_list lo garantiza");
+                fmt_wrapped_list(cur, &head, open, &items, close)
+            }
         };
         return if expr_prec(e) < min_prec { format!("({})", s) } else { s };
     }
@@ -988,6 +1074,122 @@ fn fmt_chain_wrapped(cur: &mut Cur, recv: &Expr, links: &[(&str, &[Expr])]) -> S
         s.push(')');
     }
     s
+}
+
+/// ¿La expresión produce por sí misma varias líneas (una forma con bloque o una función anónima)?
+/// Una lista con un elemento así NO se reparte: su forma multilínea ya la dan `fmt_expr_indented`/
+/// `fmt_block` relativas a `cur.base`, y repartir la lista además desplazaría `spawn(fn() { … })`
+/// a una forma que nadie escribe.
+fn is_multiline_form(e: &Expr) -> bool {
+    is_block_form(e) || matches!(e.kind, ExprKind::Func(_))
+}
+
+/// Emite una **lista delimitada** repartida (M106): `head` + apertura, un elemento por línea a un
+/// nivel más, y el **cierre en LÍNEA PROPIA** al nivel de la sentencia. Sin coma final: el lenguaje la
+/// acepta en literales pero no en argumentos, y la forma sin coma es la misma para las cinco.
+///
+/// El cierre va en su línea porque la lista **tiene delimitador propio** — el mismo criterio que ya
+/// siguen `struct`/`enum`/`match` y los bloques. Las dos formas que cierran PEGADO (M104 `from …
+/// import`, M105 la cadena de métodos) son justo las que no tienen delimitador propio: allí el `;` es
+/// un terminador y el `)` pertenece a la llamada que envuelve.
+fn fmt_wrapped_list(cur: &mut Cur, head: &str, open: &str, items: &[ListItem], close: &str) -> String {
+    let outer = INDENT.repeat(cur.base);
+    let inner = INDENT.repeat(cur.base + 1);
+    let mut s = String::from(head);
+    s.push_str(open);
+    s.push('\n');
+    cur.base += 1; // los elementos (y lo que se reparta DENTRO de ellos) viven un nivel más adentro
+    for (i, item) in items.iter().enumerate() {
+        s.push_str(&inner);
+        match item {
+            ListItem::Value(v) => s.push_str(&fmt_expr(cur, v, 0)),
+            ListItem::Named(n, v) => {
+                s.push_str(n);
+                s.push_str(": ");
+                let v = fmt_expr(cur, v, 0);
+                s.push_str(&v);
+            }
+            ListItem::Pair(k, v) => {
+                let k = fmt_expr(cur, k, 0);
+                s.push_str(&k);
+                s.push_str(": ");
+                let v = fmt_expr(cur, v, 0);
+                s.push_str(&v);
+            }
+        }
+        if i + 1 < items.len() {
+            s.push(',');
+        }
+        s.push('\n');
+    }
+    cur.base -= 1;
+    s.push_str(&outer);
+    s.push_str(close);
+    s
+}
+
+/// Un elemento de una lista delimitada: un valor suelto, un campo de struct (`x: 1`) o un par de Map
+/// (cuya clave es una EXPRESIÓN, no un nombre).
+enum ListItem<'a> {
+    Value(&'a Expr),
+    Named(&'a str, &'a Expr),
+    Pair(&'a Expr, &'a Expr),
+}
+
+/// La lista delimitada de `e`, si es una de las cinco formas que se reparten: llamada, literal de
+/// arreglo, de tupla, de struct y de Map. Devuelve (cabecera, apertura, elementos, cierre).
+fn delimited_list<'a>(
+    cur: &mut Cur,
+    e: &'a Expr,
+) -> Option<(String, &'static str, Vec<ListItem<'a>>, &'static str)> {
+    let plain = |xs: &'a [Expr]| xs.iter().map(ListItem::Value).collect::<Vec<_>>();
+    match &e.kind {
+        ExprKind::Call { callee, args } if !args.is_empty() => {
+            // Un ÚNICO argumento que es una cadena de métodos mantiene la forma compacta de M105
+            // (`render(obj().field(…)…)`): repartir además la lista añadiría dos líneas sin ganar nada.
+            if args.len() == 1 && chain_links(&args[0]).is_some() {
+                return None;
+            }
+            let head = fmt_expr(cur, callee, 13);
+            Some((head, "(", plain(args), ")"))
+        }
+        ExprKind::ArrayLit(xs) if !xs.is_empty() => Some((String::new(), "[", plain(xs), "]")),
+        ExprKind::TupleLit(xs) if !xs.is_empty() => Some((String::new(), "(", plain(xs), ")")),
+        ExprKind::MapLit(ps) if !ps.is_empty() => Some((
+            String::new(),
+            "[",
+            ps.iter().map(|(k, v)| ListItem::Pair(k, v)).collect(),
+            "]",
+        )),
+        ExprKind::StructLit { name, fields } if !fields.is_empty() => Some((
+            format!("{} ", name),
+            "{",
+            fields.iter().map(|(n, v)| ListItem::Named(n.as_str(), v)).collect(),
+            "}",
+        )),
+        _ => None,
+    }
+}
+
+/// ¿Es `e` una lista delimitada repartible? Se descarta si algún elemento es ya multilínea por su
+/// cuenta (`spawn(fn() { … })`, `print(match … )`): repartir la lista además desplazaría una forma que
+/// el formateador ya sabe indentar y que nadie escribe de otra manera.
+fn could_wrap_list(e: &Expr) -> bool {
+    let elems: &[Expr] = match &e.kind {
+        ExprKind::Call { args, .. } => args,
+        ExprKind::ArrayLit(xs) | ExprKind::TupleLit(xs) => xs,
+        ExprKind::MapLit(ps) => return !ps.is_empty()
+            && !ps.iter().any(|(k, v)| is_multiline_form(k) || is_multiline_form(v)),
+        ExprKind::StructLit { fields, .. } => {
+            return !fields.is_empty() && !fields.iter().any(|(_, v)| is_multiline_form(v))
+        }
+        _ => return false,
+    };
+    if elems.is_empty() || elems.iter().any(is_multiline_form) {
+        return false;
+    }
+    // La excepción de M105: un único argumento que es cadena mantiene la forma compacta.
+    !matches!(&e.kind, ExprKind::Call { args, .. } if args.len() == 1 && chain_links(&args[0]).is_some())
 }
 
 /// La anchura que ya consume la sangría de la sentencia en curso.
@@ -1386,6 +1588,109 @@ mod tests {
         for l in out.lines() {
             assert!(l.chars().count() <= MAX_WIDTH, "linea de {} cols: {l:?}", l.chars().count());
         }
+    }
+
+    /// M106 — una **lista delimitada** que no cabe se reparte a un elemento por línea y cierra su
+    /// delimitador en LÍNEA PROPIA (a diferencia del import y de la cadena, que no tienen delimitador
+    /// propio). Sin coma final. Las listas anidadas se reparten cada una un nivel más adentro.
+    #[test]
+    fn wraps_call_arguments_with_the_closer_on_its_own_line() {
+        let src = "fn g(a: int) -> int { a }\n\
+                   fn h(a: int) -> int { a }\n\
+                   fn r(a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int) -> int { a }\n\
+                   fn main() {\n\
+                   \x20   print(g(h(r(1111111111, 2222222222, 3333333333, 4444444444, 5555555555, 6666666666, 7777777777, 8888888888, 9999999999))));\n\
+                   }\n";
+        let out = fmt(src);
+        assert!(out.contains("            r(\n"), "la lista anidada se reparte un nivel mas adentro: {out}");
+        assert!(out.contains("                    1111111111,\n"), "un elemento por linea: {out}");
+        assert!(out.contains("9999999999\n                )"), "sin coma final: {out}");
+        assert!(out.contains("\n                )\n"), "el cierre en linea propia: {out}");
+        assert!(out.contains("    print(\n"), "se reparte de fuera adentro: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    #[test]
+    fn wraps_array_and_struct_literals() {
+        let arr = "fn main() { let a = [111111111, 222222222, 333333333, 444444444, 555555555, 666666666, 777777777, 888888888]; print(a.len()); }\n";
+        let out = fmt(arr);
+        assert!(out.contains("let a = [\n        111111111,"), "arreglo repartido: {out}");
+        assert!(out.contains("\n    ];"), "el ']' cierra en linea propia: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+
+        let st = "struct C { host: string, port: int, timeout_ms: int, retries: int }\n\
+                  fn main() { let c = C { host: \"un-host-bastante-largo.example.com\", port: 8080, timeout_ms: 30000, retries: 5 }; print(c.port); }\n";
+        let out = fmt(st);
+        assert!(out.contains("let c = C {\n        host: "), "literal de struct repartido: {out}");
+        assert!(out.contains("\n    };"), "el '}}' cierra en linea propia: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// Los parámetros de una firma larga se reparten igual, y el cuerpo se EXPANDE: `) -> T { x }`
+    /// tras seis líneas de parámetros se lee mal.
+    #[test]
+    fn wraps_long_parameter_lists_and_expands_the_body() {
+        let src = "fn handle(conn: int, frame: string, featured: [string], rail: string, limit: int, offset: int) -> string { rail }\n\
+                   fn main() { print(handle(1, \"a\", [\"b\"], \"c\", 1, 2)); }\n";
+        let out = fmt(src);
+        assert!(out.starts_with("fn handle(\n    conn: int,\n"), "parametros repartidos: {out}");
+        assert!(out.contains("\n) -> string {\n    rail\n}"), "cierre en linea propia y cuerpo expandido: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// La excepción de M105 sigue viva: una llamada con UN argumento que es cadena mantiene la forma
+    /// compacta en vez de repartir además la lista de argumentos.
+    #[test]
+    fn a_sole_chain_argument_keeps_the_compact_form() {
+        let src = "fn o() -> string { \"\" }\n\
+                   fn f(o: string, k: string, v: string) -> string { o }\n\
+                   fn r(o: string) -> string { o }\n\
+                   fn main() { print(r(o().f(\"aaaaaaaaaaaa\", \"bbbbbbbbbbbb\").f(\"cccccccccccc\", \"dddddddddddd\").f(\"eeeeeeee\", \"ffffffff\"))); }\n";
+        let out = fmt(src);
+        assert!(out.contains("r(o()\n"), "el receptor se queda pegado a la llamada: {out}");
+        assert!(!out.contains("r(\n"), "no se reparte tambien la lista de argumentos: {out}");
+    }
+
+    /// Un argumento que YA es multilínea por su cuenta (una closure) no dispara el reparto de la
+    /// lista: `spawn(fn() { … })` se sigue emitiendo como siempre.
+    #[test]
+    fn a_closure_argument_does_not_wrap_the_argument_list() {
+        let src = "fn main() -> int {\n    spawn(fn() {\n        work(1);\n    });\n    0\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("spawn(fn() {"), "la closure sigue pegada al parentesis: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// El reparto se decide POR SENTENCIA: una sentencia dentro del cuerpo de una closure-argumento se
+    /// mide sola. Heredar el estado del padre la repartía sin necesidad y el formateador oscilaba.
+    #[test]
+    fn a_statement_inside_a_closure_argument_is_measured_on_its_own() {
+        let src = "fn serve(host: string, port: int, drain: int, on_open: fn(int) -> int, on_data: fn(int)) -> int { port }\n\
+                   fn main() -> int {\n\
+                   \x20   serve(\"un-host-bastante-largo.example.com\", 8080, 30000, fn(c: int) -> int {\n\
+                   \x20       c\n\
+                   \x20   }, fn(c: int) {\n\
+                   \x20       print(c);\n\
+                   \x20   })\n\
+                   }\n";
+        let out = fmt(src);
+        assert!(!out.contains("        c\n        )"), "la sentencia interior no se reparte: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    /// Una cadena `if … else if …` de una sola línea que pasa de MAX_WIDTH **converge**: el
+    /// formateador no puede repartirla (es una forma con bloque, no una lista), así que la deja como
+    /// está. El bug que esto guarda: el "repártete sí o sí" de la sentencia se colaba dentro de los
+    /// bloques y expandía el `Option.Some(x)` de la primera rama — y en la pasada siguiente el de la
+    /// segunda, y así sucesivamente.
+    #[test]
+    fn a_long_one_line_if_chain_converges() {
+        let src = "fn un(e: char) -> Option<string> {\n\
+                   \x20   if (e == 'a') { Option.Some(\"a\") } else if (e == 'b') { Option.Some(\"b\") } else if (e == 'c') { Option.Some(\"c\") } else { Option.None }\n\
+                   }\n";
+        let out = fmt(src);
+        assert_eq!(fmt(&out), out, "idempotente");
+        assert!(out.contains("{ Option.Some(\"a\") }"), "no expande una rama suelta: {out}");
     }
 
     /// Una cadena que CABE se queda en una línea, y una de un solo eslabón nunca se reparte (no hay nada

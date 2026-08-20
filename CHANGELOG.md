@@ -193,6 +193,11 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Cambiado
 
+- **`ray fmt` reparte las listas delimitadas largas** (M106): argumentos de llamada, parámetros de
+  `fn` y literales de arreglo, tupla, struct y Map que pasen de **100 columnas** bajan a un elemento
+  por línea, con el delimitador de cierre **en su propia línea** y sin coma final. La regla que separa
+  este cierre del de M104/M105: **con delimitador propio, cierra en línea propia**; sin él (el `;` de
+  un import, el `)` que pertenece a la llamada que envuelve una cadena), pegado al último elemento.
 - **`ray fmt` reparte las cadenas de métodos largas** (M105): una cadena de dos o más eslabones que
   pase de **100 columnas** —el patrón *builder*: `obj().field(…).field(…)`— baja cada `.metodo(…)` a
   su línea, un nivel por debajo de la sentencia. Mismo umbral y misma regla que los imports.

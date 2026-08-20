@@ -9020,3 +9020,58 @@ shell cubre el caso común.
 **Lo que NO se reparte.** Una cadena de llamadas **anidadas** (`f(f(f(x)))`) sigue en una línea: no
 es una cadena de eslabones sino un árbol, y romperla bien es el problema general de repartir
 argumentos —otro arco.
+
+## 97. M106 — listas delimitadas repartidas, y dónde se justifica el cierre en línea propia (ago 2026)
+
+**El síntoma (DX, señalado por el usuario con otra captura).** El caso que M105 dejó fuera a
+propósito: llamadas **anidadas** con muchos argumentos, en una línea de 200+ columnas —
+`Result.Ok(Reply.Html(home.render(frame, featured[0], rail, …)))`.
+
+**La pregunta que trajo el usuario, y que era la buena.** M104 y M105 habían decidido *pegar* el
+cierre al último elemento; ahora pedía lo contrario para los argumentos. ¿Contradicción? El
+inventario de lo que el formateador ya hacía dice que no:
+
+| Forma | ¿Se reparte? | Cierre |
+|---|---|---|
+| `struct`/`enum`/`trait`/`impl`, bloque, `match` | siempre | `}` en línea propia |
+| `from … import` (M104) | por ancho | `;` pegado |
+| cadena de métodos (M105) | por ancho | pegado al último eslabón |
+
+**Todo lo que ya se repartía y tenía delimitador propio (`{}`) cerraba en línea propia.** Las dos
+formas que cierran pegado son justo las dos que **no tienen delimitador propio**: en el import el `;`
+es un *terminador*, y en la cadena el `)` final **pertenece a la llamada que la envuelve**, no a la
+cadena. De ahí la regla, que ahora es explícita: *una forma delimitada que se reparte cierra su
+delimitador en línea propia; una forma sin delimitador propio pega su terminador al último elemento*.
+Una lista de argumentos está delimitada por `()` → cierra en línea propia, como el resto.
+
+**Alcance.** Argumentos de llamada, parámetros de `fn` y literales de arreglo, tupla, struct y Map.
+**Sin coma final** (decisión del usuario, viendo las dos formas): el lenguaje la acepta ya en
+arreglos, structs, tuplas, Maps y brazos de `match`, pero **no** en argumentos ni en parámetros, y
+emitir una forma distinta según la construcción era peor que emitir la misma en las cinco.
+
+**La excepción que preserva M105.** Una llamada con **un único argumento que es una cadena** mantiene
+la forma compacta (`render(obj().field(…)…)`): repartir además la lista añadiría dos líneas sin ganar
+legibilidad. Con esa excepción, los dos ejemplos que trajo el usuario —el builder y el anidado— salen
+exactamente como los escribió.
+
+**Lo que costó: converger.** El mecanismo de dos pasadas de M105 mide una expresión con la sangría de
+su sentencia, pero una expresión no sabe cuántas columnas le comió el prefijo (`let arr: [int] = `),
+así que medirla sola la daba por cabida aunque la línea entera no cupiera. Se resolvió con un flag
+`force`: en la segunda pasada, la **primera** expresión repartible se reparte sin medir. Eso destapó
+tres formas de no-idempotencia, las tres cazadas con un barrido de los ~250 `.ray` del repo:
+
+1. **`force` heredado por sentencias anidadas** — el cuerpo de una closure-argumento se repartía sin
+   necesidad, y al re-formatear volvía a medirse ya repartido. *Fix*: cada sentencia hace su propio
+   par de pasadas, con `wrap`/`force` salvados y restaurados.
+2. **`force` colándose dentro de un bloque** — en un `if … { … } else if … { … }` de una línea
+   expandía la primera rama; en la pasada siguiente, la segunda; y así indefinidamente. *Fix*: un
+   bloque abre líneas nuevas, así que al entrar en uno el `force` del padre deja de aplicar.
+3. **Un bloque inline cuyo tail se reparte** — quedaba `{ [\n … \n] }`, que al re-formatear ya no
+   cabía en una línea de la fuente y se expandía. *Fix*: si el tail sale multilínea, el bloque no
+   puede quedarse inline.
+
+El barrido del repo terminó en **0 no-idempotentes**, que es la única prueba que vale aquí: la
+convergencia de un formateador no se demuestra leyendo el código.
+
+**Un remate.** Una firma repartida con cuerpo inline (`) -> string { rail }` tras seis líneas de
+parámetros) se lee mal, así que una firma que se reparte **expande también su cuerpo**.

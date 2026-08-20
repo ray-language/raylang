@@ -484,7 +484,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray dev [archivo] [args…]` | como `run`, pero reinicia ante cambios en `.ray`/`.ray.html`/`ray.toml` (SIGTERM → drenado con `serve_graceful`) |
 | `ray build [archivo] [--native …]` | chequea y compila sin ejecutar (0 ok / 65 error); `--native` transpila a Rust y produce un **binario nativo** (24–61× la VM, byte-idéntico) |
 | `ray test [archivo] [filtro]` | corre las `@test` del proyecto: la entrada y todos sus módulos (calificadas: `math.t`) + cada `tests/*.ray` como suite de integración; filtro por subcadena; sale con 0/1 (65 si algo no compila) |
-| `ray fmt <archivo>... [--write]` | imprime la versión canónica (indentación de 4; lo que pase de 100 columnas se reparte: un `from … import` a un nombre por línea, una cadena de métodos a un eslabón por línea). `--write`/`-w` reescribe en el sitio y admite varios archivos |
+| `ray fmt <archivo>... [--write]` | imprime la versión canónica (indentación de 4; lo que pase de 100 columnas se reparte: un `from … import` a un nombre por línea, una cadena de métodos a un eslabón por línea, y las listas delimitadas —argumentos, parámetros de `fn`, literales— a un elemento por línea con el cierre en línea propia). `--write`/`-w` reescribe en el sitio y admite varios archivos |
 | `ray build --templates-only [ruta…]` | **materializa** en disco el módulo generado de cada template `.ray.html` (firma `{% params %}`), para inspección (sin rutas: la raíz del proyecto). La vía normal no lo necesita: el loader compila los templates **en memoria** al resolver sus imports (M102) e ignora un `.ray` hermano |
 | `ray doc <archivo>` | documentación Markdown de la superficie pública (`///`) |
 | `ray repl` | REPL interactivo |

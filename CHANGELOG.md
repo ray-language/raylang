@@ -191,6 +191,14 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 - El código del compilador se reorganizó en módulos-directorio (`vm/`, `transpile/`, `checker/`,
   `lsp/`), documentado en `docs/organizacion-codigo.md`.
 
+### Cambiado
+
+- **`ray fmt` envuelve los `from … import` largos** (M104): si la línea renderizada pasa de **100
+  columnas**, la lista se reparte a **un nombre por línea**; si cabe, se queda en una. El parser
+  acepta además **coma final** en la lista (el formateador no la emite: sin llaves que cierren, el
+  `;` quedaría colgando). La forma multilínea ya se parseaba — lo que faltaba era que el
+  formateador la respetara.
+
 ### Corregido
 
 - Binario nativo: `for i in 0..s.len()` no compilaba. En Rust, `for x in EXPR {` toma un bloque

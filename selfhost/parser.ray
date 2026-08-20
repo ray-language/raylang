@@ -614,7 +614,8 @@ fn import_decl(p: Parser) -> Result<ImportDecl, ParseError> {
     Result.Ok(ImportDecl { module: modpath, alias: alias, line: kw.line, col: kw.col })
 }
 
-// from_import_decl = 'from' module_path 'import' name { ',' name } ';'   ;  name = IDENT [ 'as' IDENT ]
+// from_import_decl = 'from' module_path 'import' name { ',' name } [ ',' ] ';'  ;  name = IDENT [ 'as' IDENT ]
+// La coma final es opcional (M104): la lista envuelta en varias líneas se edita con un diff de una línea.
 fn import_from_decl(p: Parser, is_pub: bool) -> Result<FromImport, ParseError> {
     let kw = expect(p, "from", "'from'")?;
     let modpath = module_path(p)?;
@@ -630,6 +631,10 @@ fn import_from_decl(p: Parser, is_pub: bool) -> Result<FromImport, ParseError> {
         }
         names.push(ImportName { name: nm, alias: alias, line: t.line, col: t.col });
         if (!eat(p, ",")) {
+            keep_going = false;
+        }
+        // Coma final: tras la `,` viene el `;` → la lista termina aquí.
+        if (check(p, ";")) {
             keep_going = false;
         }
     }

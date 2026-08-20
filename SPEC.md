@@ -71,7 +71,7 @@ item        = import | from_import | [ anotaciones ] [ 'pub' ] declaracion ;
 declaracion = funcion | struct | enum | trait | impl | const ;
 import      = 'import' ruta_modulo [ 'as' IDENT ] ';' ;
 from_import = [ 'pub' ] 'from' ruta_modulo 'import' nombre [ 'as' IDENT ]
-              { ',' nombre [ 'as' IDENT ] } ';' ;
+              { ',' nombre [ 'as' IDENT ] } [ ',' ] ';' ;
 ruta_modulo = IDENT { '/' IDENT } ;
 anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
 ```
@@ -80,6 +80,9 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   archivo de entrada). `import a/b/c;` liga el *leaf* (`c`; `as` renombra). El acceso es
   calificado: `c.f(...)`, `c.Tipo`, `c.Enum.Variante`. El separador `/` solo existe en el
   `import`.
+- La lista de un `from … import` puede repartirse en **varias líneas** (el léxico ignora los saltos
+  de línea) y admite **coma final**. `ray fmt` la deja en una línea si cabe en **100 columnas** y la
+  envuelve a un nombre por línea si no —sin coma final, que dejaría el `;` colgando.
 - **`pub`** exporta funciones, structs, enums, traits y consts. Referenciar un ítem no-`pub` de
   otro módulo es error. `pub from M import x;` **reexporta** (construye la cara pública).
 - **Cápsulas**: la presencia de `P/mod.ray` vuelve `P/` direccionable (`import P;` carga

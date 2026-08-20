@@ -43,6 +43,11 @@ fn dump_type(t: &Type) -> String {
         Type::Bool => "bool".into(),
         Type::String => "string".into(),
         Type::Char => "char".into(),
+        // El parser SÍ produce estos (M16.1a / M28.3). Sin sus brazos, un ejemplo que los use no
+        // fallaba con un diff sino con el panic de abajo ("el parser no debería producir…"), que
+        // apunta al sitio equivocado: el hueco estaba aquí, no en el parser.
+        Type::Bytes => "bytes".into(),
+        Type::UInt(w) => format!("u{w}"),
         Type::Unit => "unit".into(),
         Type::Array(e) => format!("[{}]", dump_type(e)),
         Type::Tuple(ts) => format!("(tuple{})", ts.iter().map(|t| format!(" {}", dump_type(t))).collect::<String>()),
@@ -677,6 +682,12 @@ fn parses_files_reales_equal_what_el_oracle() {
         "for_bucles.ray", // M27.2: bucle `for` (el toolchain auto-alojado aún no lo soporta)
         "interpolacion.ray", // M27.3: interpolación de strings (idem)
         "casts.ray", // M27.4: casts `as` (idem; usa `for`/interpolación también)
+        "parse_fusion.ray", // corpus de las fusiones N-D del backend nativo: usa `as` (M27.4) y
+                            // `for` (M27.2), ambos diferidos en el toolchain auto-alojado.
+        "process_stream.ray", // M100 v2: streaming de procesos; anota `bytes` en posición de tipo
+                              // (M16, diferido) — `fn text(b: bytes)`, `Channel<bytes>`.
+        "parse_fusion.ray", // corpus de las fusiones N-D del backend nativo: usa `as` (M27.4) y
+                            // `for` (M27.2), ambos diferidos en el toolchain auto-alojado.
         "constantes.ray", // M27.5: const de nivel superior (idem)
         "operadores.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
         "conversion_error.ray", // M28.2: `?` con From<S> / traits con params de tipo (idem)

@@ -770,6 +770,41 @@ from web/framework import
 from std/json import obj, field, list;   // cabe en 100 columnas → una línea
 ```
 
+El mismo umbral reparte una **cadena de métodos** (el patrón *builder*) de dos o más eslabones: el
+receptor se queda en su sitio y cada `.metodo(…)` baja una línea.
+
+```ray
+fn to_json(self) -> string {
+    render(obj()
+        .field("id", self.id)
+        .field("slug", self.slug)
+        .field("name", self.name))
+}
+
+print(s.trim().to_lower());   // cabe → una línea
+```
+
+Y reparte las **listas delimitadas** que no quepan —argumentos, parámetros de `fn`, literales de
+arreglo, tupla, struct y Map—, con el delimitador de cierre **en su propia línea** (como ya hacían
+`struct`, `enum`, `match` y los bloques) y **sin coma final**:
+
+```ray
+Result.Ok(
+    Reply.Html(
+        home.render(
+            frame,
+            featured[0],
+            respond.or_empty(catalog.on_sale(conn, 4)),
+            schema.product_count(conn)?
+        )
+    )
+)
+```
+
+La regla que separa los dos cierres: **si la forma tiene delimitador propio, cierra en línea propia**;
+si no lo tiene —el `;` de un import es un terminador, y el `)` final de una cadena pertenece a la
+llamada que la envuelve— el terminador va pegado al último elemento.
+
 ### Cápsulas (`mod.ray`)
 
 Un directorio con un `mod.ray` es una **cápsula**: `import geo;` carga `geo/mod.ray`, que define la **cara
@@ -1450,7 +1485,7 @@ manda — la variable siempre gana al default.
 
 ```sh
 ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
-ray fmt archivo.ray      # formatea (canónico e idempotente)
+ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
 ray doc archivo.ray      # documentación Markdown desde ///
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)

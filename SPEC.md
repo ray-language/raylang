@@ -82,7 +82,12 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   `import`.
 - La lista de un `from … import` puede repartirse en **varias líneas** (el léxico ignora los saltos
   de línea) y admite **coma final**. `ray fmt` la deja en una línea si cabe en **100 columnas** y la
-  envuelve a un nombre por línea si no —sin coma final, que dejaría el `;` colgando.
+  envuelve a un nombre por línea si no —sin coma final, que dejaría el `;` colgando. Con el mismo
+  umbral reparte una **cadena de métodos** de dos o más eslabones (el receptor se queda en su sitio y
+  cada `.metodo(…)` baja una línea) y las **listas delimitadas**: argumentos de llamada, parámetros de
+  `fn` y literales de arreglo, tupla, struct y Map. Una lista delimitada cierra su delimitador **en
+  línea propia**; una forma sin delimitador propio (el `;` del import, el `)` que no es de la cadena)
+  lo pega al último elemento.
 - **`pub`** exporta funciones, structs, enums, traits y consts. Referenciar un ítem no-`pub` de
   otro módulo es error. `pub from M import x;` **reexporta** (construye la cara pública).
 - **Cápsulas**: la presencia de `P/mod.ray` vuelve `P/` direccionable (`import P;` carga

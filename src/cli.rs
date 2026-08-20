@@ -90,7 +90,7 @@ Project:
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process]] [--templates-only [path...]]
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter]
-  fmt <file>        print the canonical version to stdout
+  fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
 
 Packages:
@@ -1809,12 +1809,43 @@ fn cmd_fetch(_args: &[String]) {
 }
 
 /// `ray fmt <archivo>`: imprime la versión canónica por stdout.
+/// `ray fmt <file>… [--write]`. Sin `--write` imprime la versión canónica a stdout (un solo archivo,
+/// el comportamiento de siempre); con `--write` la escribe EN EL SITIO, y admite varios archivos
+/// (`ray fmt --write src/*.ray`). No recorre directorios: qué extensiones entran y qué se ignora es
+/// una decisión propia, y el glob del shell ya cubre el caso común.
 fn cmd_fmt(args: &[String]) {
-    let Some(path) = args.first() else {
-        eprintln!("usage: ray fmt <file>");
+    let write = args.iter().any(|a| a == "--write" || a == "-w");
+    let paths: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    if paths.is_empty() {
+        eprintln!("usage: ray fmt <file>... [--write]");
         process::exit(64);
-    };
-    format_file(path);
+    }
+    if !write {
+        if paths.len() > 1 {
+            eprintln!("usage: ray fmt <file> (several files require --write)");
+            process::exit(64);
+        }
+        format_file(paths[0]);
+        return;
+    }
+    let mut changed = 0usize;
+    for path in &paths {
+        // Solo se reescribe si el texto CAMBIA: así `--write` no toca el mtime de lo que ya está
+        // canónico (importante para make/watchers y para que el diff de un repo formateado sea vacío).
+        let source = read_source(path);
+        let formatted = format_source_of(path, &source);
+        if formatted != source {
+            if let Err(e) = std::fs::write(path.as_str(), &formatted) {
+                eprintln!("format error: could not write {}: {}", path, e);
+                process::exit(74);
+            }
+            println!("formatted {}", path);
+            changed += 1;
+        }
+    }
+    if changed == 0 {
+        println!("already formatted ({} file(s))", paths.len());
+    }
 }
 
 // M40.4: `ray doc <archivo>` imprime la documentación Markdown de la superficie pública del archivo.
@@ -2100,21 +2131,26 @@ fn emit_rust(path: &str) {
 }
 
 fn format_file(path: &str) {
+    print!("{}", format_source_of(path, &read_source(path)));
+}
+
+/// El texto canónico de `source` según la extensión de `path`. Sale con 65 si no se puede formatear
+/// (mismo código que el resto de errores de compilación). Lo comparten `ray fmt` y `ray fmt --write`.
+fn format_source_of(path: &str, source: &str) -> String {
     let unit = resolve_indent(std::path::Path::new(path));
     // M55: un template `.ray.html` se formatea con SU formateador (etiquetas en su línea +
     // indentación por bloques del template), no con el de raylang.
     if path.ends_with(".ray.html") {
-        match crate::templ::format_template(&read_source(path), &unit) {
-            Some(out) => print!("{}", out),
+        match crate::templ::format_template(source, &unit) {
+            Some(out) => return out,
             None => {
                 eprintln!("format error: the template does not tokenize (unterminated delimiter)");
                 process::exit(65);
             }
         }
-        return;
     }
-    match crate::fmt::format_source_with_indent(&read_source(path), &unit) {
-        Ok(out) => print!("{}", out),
+    match crate::fmt::format_source_with_indent(source, &unit) {
+        Ok(out) => out,
         Err(e) => {
             eprintln!("format error: {}", e);
             process::exit(65);

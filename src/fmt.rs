@@ -967,9 +967,14 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
             cur.i = save;
             if let Some((recv, links)) = chain_links(e) {
                 fmt_chain_wrapped(cur, recv, &links)
-            } else {
-                let (head, open, items, close) = delimited_list(cur, e).expect("could_wrap_list lo garantiza");
+            } else if let Some((head, open, items, close)) = delimited_list(cur, e) {
                 fmt_wrapped_list(cur, &head, open, &items, close)
+            } else {
+                // No repartible después de todo (`could_wrap_list` ya lo filtró, así que no debería
+                // pasar). Se emite plano: degradar a la línea larga es correcto — que el formateador
+                // ABORTE por una decisión de reparto no lo sería.
+                cur.i = save;
+                fmt_expr_raw(cur, e)
             }
         };
         return if expr_prec(e) < min_prec { format!("({})", s) } else { s };

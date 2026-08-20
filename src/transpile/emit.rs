@@ -753,12 +753,15 @@ impl Transpiler {
                     // para NO retener el borrow durante el cuerpo (que podría mutar el arreglo).
                     // `for c in <string>` → `.chars()` (char por char).
                     ForIter::In(expr) => {
-                        let ety = match self.type_of(expr)? {
-                            Type::Array(t) => (*t).clone(),
-                            Type::String => Type::Char,
+                        // El modo de iteración lo decide el tipo del CONTENEDOR, no el del
+                        // elemento: `for c in s` (string) itera `.chars()`, pero `for c in
+                        // s.chars()` ya es un `[char]` y va por la vía de arreglo.
+                        let (is_string, ety) = match self.type_of(expr)? {
+                            Type::Array(t) => (false, (*t).clone()),
+                            Type::String => (true, Type::Char),
                             other => return Err(format!("for over {:?} is not supported", other)),
                         };
-                        if matches!(ety, Type::Char) {
+                        if is_string {
                             write!(out, "for {} in ", var).unwrap();
                             self.emit_expr(out, expr)?;
                             out.push_str(".chars() ");

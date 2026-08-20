@@ -629,6 +629,27 @@ fn string_len_counts_characters() {
     assert!(rust.contains(".chars().count() as i64"), "fallback no-ASCII por caracteres: {}", rust);
 }
 
+/// El modo de iteración de un `for … in` lo decide el tipo del CONTENEDOR, no el del elemento:
+/// `for c in s` (string) itera `.chars()`, pero `for c in s.chars()` ya es un `[char]` y debe ir
+/// por la vía de arreglo (antes se emitía `.chars()` sobre el `Rc<RefCell<Vec<char>>>` → no compilaba).
+#[test]
+fn for_over_a_char_array_iterates_the_array_not_chars() {
+    let over_string = transpile_src("fn main() { let s = \"ab\"; for c in s { print(c); } }");
+    assert!(over_string.contains(".chars() "), "for sobre string itera chars: {}", over_string);
+
+    let over_array = transpile_src("fn main() { let s = \"ab\"; for c in s.chars() { print(c); } }");
+    assert!(
+        over_array.contains("let __rt_n = __rt_it.borrow().len();"),
+        "for sobre [char] itera el arreglo por indice: {}",
+        over_array
+    );
+    assert!(
+        !over_array.contains(")).chars()"),
+        "no se llama .chars() sobre el Vec<char> resultante: {}",
+        over_array
+    );
+}
+
 #[test]
 fn a_user_function_wins_over_a_prelude_builtin() {
     // Si el usuario define su propio `get_or` (aquí 2 args), NO se descarta como el builtin del prelude

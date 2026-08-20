@@ -96,3 +96,59 @@ fn preserves_behavior() {
         }
     }
 }
+
+/// M105 — `ray fmt --write` reescribe EN EL SITIO. Tres garantías: reescribe lo que no es canónico,
+/// **no toca** lo que ya lo es (ni el mtime), y admite varios archivos en una invocación.
+#[test]
+fn write_rewrites_in_place_and_leaves_canonical_files_alone() {
+    let messy = write_tmp("write_messy.ray", "fn main(){print(1);}\n");
+    let canonical = write_tmp("write_canonical.ray", "fn main() {\n    print(2);\n}\n");
+    let before = std::fs::metadata(&canonical).unwrap().modified().unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["fmt", "--write", &messy, &canonical])
+        .output()
+        .expect("ejecuta fmt --write");
+    assert!(out.status.success(), "fmt --write sale 0");
+    let report = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(report.contains("write_messy.ray"), "reporta el reescrito: {report}");
+    assert!(!report.contains("write_canonical.ray"), "no reporta el que ya era canónico: {report}");
+
+    assert_eq!(
+        std::fs::read_to_string(&messy).unwrap(),
+        "fn main() {\n    print(1);\n}\n",
+        "el archivo quedó formateado en el sitio"
+    );
+    assert_eq!(
+        std::fs::metadata(&canonical).unwrap().modified().unwrap(),
+        before,
+        "el canónico no se reescribe (mtime intacto)"
+    );
+
+    // Segunda pasada: ya no hay nada que hacer.
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["fmt", "--write", &messy])
+        .output()
+        .expect("ejecuta fmt --write");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("already formatted"),
+        "la segunda pasada no cambia nada"
+    );
+}
+
+/// Sin `--write`, varios archivos es un error de USO (la salida a stdout de varios se solaparía).
+#[test]
+fn several_files_without_write_is_a_usage_error() {
+    let a = write_tmp("several_a.ray", "fn main() { print(1); }\n");
+    let b = write_tmp("several_b.ray", "fn main() { print(2); }\n");
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["fmt", &a, &b])
+        .output()
+        .expect("ejecuta fmt");
+    assert_eq!(out.status.code(), Some(64), "código de error de uso");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--write"),
+        "el mensaje señala --write: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

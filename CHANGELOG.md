@@ -193,6 +193,12 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Cambiado
 
+- **`ray fmt` reparte las cadenas de métodos largas** (M105): una cadena de dos o más eslabones que
+  pase de **100 columnas** —el patrón *builder*: `obj().field(…).field(…)`— baja cada `.metodo(…)` a
+  su línea, un nivel por debajo de la sentencia. Mismo umbral y misma regla que los imports.
+- **`ray fmt --write`** (`-w`, M105): reescribe **en el sitio** en vez de imprimir a stdout, y admite
+  varios archivos (`ray fmt -w src/*.ray`). Solo reescribe lo que cambia, así que no toca el mtime de
+  lo que ya es canónico.
 - **`ray fmt` envuelve los `from … import` largos** (M104): si la línea renderizada pasa de **100
   columnas**, la lista se reparte a **un nombre por línea**; si cabe, se queda en una. El parser
   acepta además **coma final** en la lista (el formateador no la emite: sin llaves que cierren, el

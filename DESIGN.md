@@ -8981,3 +8981,42 @@ casan `import`/`from` por palabra, no por línea, así que tampoco les afecta.
 peligro era el comentario *trailing*: si se emite al final de la lista envuelta, al re-formatear ya
 no es el trailing de la línea del `from` y se relocaliza. Va por eso tras `import`, en la primera
 línea. Verificado sobre los ~250 `.ray` del repo: 22 archivos envuelven, 0 no-idempotentes.
+
+## 96. M105 — el formateador reparte también las cadenas de métodos, y `ray fmt --write` (ago 2026)
+
+**El síntoma (DX, señalado por el usuario con una captura).** Los `impl ToJson` de una tienda real:
+`render(obj().field("id", self.id).field("slug", self.slug).field("name", self.name)…)` en una sola
+línea de 200+ columnas. Es el patrón *builder*, y es exactamente el caso que M104 resolvió para los
+imports: una lista de elementos homogéneos que no cabe.
+
+**La forma.** Misma regla y mismo umbral que M104 —se mide la línea renderizada, se reparte por
+encima de **100 columnas**—, aplicada a una cadena de **dos o más** eslabones. El receptor se queda
+donde está y cada `.metodo(…)` baja una línea, un nivel por debajo de la sentencia; el cierre de lo
+que envuelva la cadena se pega al último eslabón. Es la forma más compacta de las tres que se
+consideraron: la alternativa estilo rustfmt (desdoblar además la llamada externa y cerrar el `)` en
+línea propia) añade dos líneas por sitio sin ganar legibilidad en cadenas que ya están alineadas.
+
+**Cómo se implementa sin replumbing.** El formateador no tenía noción de ancho en ninguna parte
+(M104 la introdujo, pero solo dentro de `fmt_from_import`); aquí hace falta en mitad del impresor de
+expresiones, que se invoca desde 32 sitios. La palanca ya existía: `Cur.base` lleva el nivel de
+sangría de la sentencia en curso. Así que en vez de propagar un ancho disponible por toda la
+recursión, se hacen **dos pasadas**: se emite la sentencia en una línea y, si alguna línea no cabe,
+se reemite con un flag (`Cur.wrap`) que hace que las cadenas que no quepan se repartan. Es el patrón
+clásico de "intenta plano, si no cabe rompe", con el estado mínimo.
+
+**Dos trampas que la segunda pasada obliga a mirar.** (1) Renderizar **consume comentarios** (el
+cursor `Cur.i` avanza), así que entre pasadas hay que restaurarlo o la segunda los pierde. (2) El
+azúcar preservado —interpolación y pipelines `|>`— se resuelve ANTES en `fmt_expr`, así que el
+envuelto se engancha después: un `a |> b |> c` se reemite como pipeline, nunca como cadena repartida.
+
+**`--write`.** Hasta aquí `ray fmt` solo imprimía a stdout, y aplicarlo a un repo era redirigir
+archivo a archivo (así se aplicó M104 a los 22 archivos que envolvían). `--write`/`-w` reescribe en
+el sitio y admite varios archivos; **solo reescribe si el texto cambia**, para no tocar el mtime de
+lo que ya es canónico (watchers, `make`, y el diff vacío de un repo formateado). Sin `--write`, pasar
+varios archivos es error de uso: sus salidas se solaparían en stdout. **No recorre directorios** a
+propósito: qué extensiones entran y qué se ignora es una decisión de diseño propia, y el glob del
+shell cubre el caso común.
+
+**Lo que NO se reparte.** Una cadena de llamadas **anidadas** (`f(f(f(x)))`) sigue en una línea: no
+es una cadena de eslabones sino un árbol, y romperla bien es el problema general de repartir
+argumentos —otro arco.

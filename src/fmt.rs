@@ -170,6 +170,9 @@ struct Cur {
     /// operando, elemento de arreglo…) se indente relativo a su línea y no a la columna 0. Se guarda y
     /// restaura en cada mutación para no contaminar el formateo de expresiones hermanas.
     base: usize,
+    /// ¿Segunda pasada, con envuelto de cadenas de métodos? La primera pasada emite todo en una línea;
+    /// si la sentencia no cabe en [`MAX_WIDTH`] se reemite con esto activo (M105).
+    wrap: bool,
 }
 
 impl Cur {
@@ -186,6 +189,7 @@ impl Cur {
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
             base: 0,
+            wrap: false,
         }
     }
 
@@ -709,9 +713,35 @@ fn fmt_stmt(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
     // (p. ej. `print(match …)`) debe indentarse relativa a aquí. `fmt_value` refina el valor por caso.
     let saved = cur.base;
     cur.base = indent;
-    let r = fmt_stmt_inner(cur, st, indent);
+    let r = retry_wrapped(cur, indent, |c| fmt_stmt_inner(c, st, indent));
     cur.base = saved;
     r
+}
+
+/// Emite `render` y, si alguna línea del resultado **no cabe** en [`MAX_WIDTH`], lo reemite con el
+/// envuelto de cadenas activo (M105). El cursor de comentarios se restaura entre pasadas: renderizar
+/// los CONSUME, y sin restaurarlo la segunda pasada los perdería.
+fn retry_wrapped(cur: &mut Cur, indent: usize, render: impl Fn(&mut Cur) -> String) -> String {
+    let save = cur.i;
+    let first = render(cur);
+    if cur.wrap || fits_width(&first, indent) {
+        return first;
+    }
+    cur.i = save;
+    cur.wrap = true;
+    let wrapped = render(cur);
+    cur.wrap = false;
+    wrapped
+}
+
+/// ¿Cabe el texto emitido? La primera línea lleva la sangría de la sentencia (el bloque la antepone);
+/// las siguientes ya la traen incorporada.
+fn fits_width(text: &str, indent: usize) -> bool {
+    let pad = INDENT.chars().count() * indent;
+    text.split('\n').enumerate().all(|(i, l)| {
+        let w = if i == 0 { pad + l.chars().count() } else { l.chars().count() };
+        w <= MAX_WIDTH
+    })
 }
 
 fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
@@ -784,7 +814,7 @@ fn fmt_value(cur: &mut Cur, e: &Expr, ind: usize) -> String {
         // indentación del contexto en `cur.base` para que la rama block-form de `fmt_expr_raw` la use.
         let saved = cur.base;
         cur.base = ind;
-        let s = fmt_expr(cur, e, 0);
+        let s = retry_wrapped(cur, ind, |c| fmt_expr(c, e, 0));
         cur.base = saved;
         s
     }
@@ -844,6 +874,20 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
         // El pipeline `|>` tiene la precedencia MÍNIMA: se parentiza en cualquier operando más fuerte.
         return if min_prec > PIPE_PREC { format!("({})", s) } else { s };
     }
+    // M105: en la pasada de envuelto, una cadena de 2+ eslabones que no cabe se reparte. El aplanado
+    // se renderiza igual para medirlo, restaurando el cursor de comentarios (renderizar los consume).
+    if cur.wrap && let Some((recv, links)) = chain_links(e) {
+        let save = cur.i;
+        let flat = fmt_expr_raw(cur, e);
+        let fits = indent_width(cur) + flat.chars().count() <= MAX_WIDTH;
+        let s = if fits {
+            flat
+        } else {
+            cur.i = save;
+            fmt_chain_wrapped(cur, recv, &links)
+        };
+        return if expr_prec(e) < min_prec { format!("({})", s) } else { s };
+    }
     let s = fmt_expr_raw(cur, e);
     if expr_prec(e) < min_prec {
         format!("({})", s)
@@ -901,6 +945,54 @@ fn fmt_pipe(cur: &mut Cur, recv: &Expr, rhs: &Expr) -> String {
     // El receptor liga a nivel `logic_or` (más fuerte que `|>`) o es otro pipe (izq-asociativo): en
     // ambos casos no necesita paréntesis. El rhs es un objetivo de llamada (`f`, `f(a)`, `m.f(a)`).
     format!("{} |> {}", fmt_expr(cur, recv, PIPE_PREC), fmt_expr(cur, rhs, 13))
+}
+
+/// Los eslabones de una **cadena de métodos** `recv.a(…).b(…)`: el receptor y los `(nombre, args)` en
+/// orden de escritura. `None` si no hay al menos DOS eslabones (con uno no hay nada que repartir).
+/// UFCS llega como `Call(Field(obj, m), args)`, así que la espina se recorre hacia el receptor.
+fn chain_links<'a>(e: &'a Expr) -> Option<(&'a Expr, Vec<(&'a str, &'a [Expr])>)> {
+    let mut links: Vec<(&str, &[Expr])> = Vec::new();
+    let mut node = e;
+    while let ExprKind::Call { callee, args } = &node.kind {
+        let ExprKind::Field { object, name } = &callee.kind else { break };
+        links.push((name.as_str(), args.as_slice()));
+        node = object;
+    }
+    if links.len() >= 2 {
+        links.reverse();
+        Some((node, links))
+    } else {
+        None
+    }
+}
+
+/// Emite una cadena repartida: el receptor se queda donde está y **cada eslabón baja una línea**, a un
+/// nivel de sangría por debajo de la sentencia. El cierre de lo que envuelva la cadena se pega al
+/// último eslabón (forma canónica elegida: la más compacta).
+fn fmt_chain_wrapped(cur: &mut Cur, recv: &Expr, links: &[(&str, &[Expr])]) -> String {
+    let pad = INDENT.repeat(cur.base + 1);
+    let mut s = fmt_expr(cur, recv, 13); // el receptor liga a nivel de llamada/campo
+    for (name, args) in links {
+        s.push('\n');
+        s.push_str(&pad);
+        s.push('.');
+        s.push_str(name);
+        s.push('(');
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                s.push_str(", ");
+            }
+            let a = fmt_expr(cur, a, 0);
+            s.push_str(&a);
+        }
+        s.push(')');
+    }
+    s
+}
+
+/// La anchura que ya consume la sangría de la sentencia en curso.
+fn indent_width(cur: &Cur) -> usize {
+    INDENT.chars().count() * cur.base
 }
 
 fn bin_op_str(op: BinaryOp) -> &'static str {
@@ -1276,6 +1368,43 @@ mod tests {
                    not_found, log_requests, after, cors, html;\nfn main() -> int { 0 }\n";
         let out = super::format_source_with_indent(src, "  ").expect("formatea");
         assert!(out.contains("from web/framework import\n  new_app,\n  GET,\n"), "sangria de 2: {out:?}");
+    }
+
+    /// M105 — una cadena de métodos que no cabe en MAX_WIDTH se reparte a un eslabón por línea, un nivel
+    /// por debajo de la sentencia; el receptor se queda donde está y el cierre se pega al último eslabón.
+    #[test]
+    fn wraps_a_long_method_chain_one_link_per_line() {
+        let src = "fn f(o: string, k: string, v: string) -> string { o }\n\
+                   fn main() {\n\
+                   \x20   let x = \"\".f(\"aaaaaaaaaaaa\", \"bbbbbbbbbbbb\").f(\"cccccccccccc\", \"dddddddddddd\").f(\"eeeeeeeeeeee\", \"ffffffff\");\n\
+                   \x20   print(x);\n\
+                   }\n";
+        let out = fmt(src);
+        assert!(out.contains("let x = \"\"\n        .f(\"aaaaaaaaaaaa\""), "receptor + eslabon a +1: {out}");
+        assert!(out.contains(".f(\"eeeeeeeeeeee\", \"ffffffff\");"), "el cierre se pega al ultimo: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        for l in out.lines() {
+            assert!(l.chars().count() <= MAX_WIDTH, "linea de {} cols: {l:?}", l.chars().count());
+        }
+    }
+
+    /// Una cadena que CABE se queda en una línea, y una de un solo eslabón nunca se reparte (no hay nada
+    /// que repartir) aunque la línea sea larga.
+    #[test]
+    fn keeps_a_short_chain_inline() {
+        let src = "fn main() { let s = \"  x  \"; print(s.trim().to_lower()); }\n";
+        assert!(fmt(src).contains("print(s.trim().to_lower());"), "{:?}", fmt(src));
+    }
+
+    /// El envuelto NO toca el azúcar: un pipeline `|>` se reemite como pipeline, no como cadena repartida
+    /// (se comprueba antes, en `fmt_expr`).
+    #[test]
+    fn does_not_wrap_a_pipeline_as_a_chain() {
+        let src = "fn a(x: int) -> int { x }\nfn b(x: int) -> int { x }\n\
+                   fn main() { let averyveryverylongname = 1; print(averyveryverylongname |> a |> b |> a |> b |> a |> b |> a); }\n";
+        let out = fmt(src);
+        assert!(out.contains("|>"), "el pipeline se preserva: {out}");
+        assert!(!out.contains("\n        .a("), "no se reparte como cadena: {out}");
     }
 
     #[test]

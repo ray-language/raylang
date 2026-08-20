@@ -770,6 +770,20 @@ from web/framework import
 from std/json import obj, field, list;   // cabe en 100 columnas → una línea
 ```
 
+El mismo umbral reparte una **cadena de métodos** (el patrón *builder*) de dos o más eslabones: el
+receptor se queda en su sitio y cada `.metodo(…)` baja una línea.
+
+```ray
+fn to_json(self) -> string {
+    render(obj()
+        .field("id", self.id)
+        .field("slug", self.slug)
+        .field("name", self.name))
+}
+
+print(s.trim().to_lower());   // cabe → una línea
+```
+
 ### Cápsulas (`mod.ray`)
 
 Un directorio con un `mod.ray` es una **cápsula**: `import geo;` carga `geo/mod.ray`, que define la **cara
@@ -1450,7 +1464,7 @@ manda — la variable siempre gana al default.
 
 ```sh
 ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
-ray fmt archivo.ray      # formatea (canónico e idempotente)
+ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
 ray doc archivo.ray      # documentación Markdown desde ///
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)

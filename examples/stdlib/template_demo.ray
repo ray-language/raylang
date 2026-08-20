@@ -1,7 +1,19 @@
 // Demo del motor de plantillas HTML: interpolación con autoescape, condicional if/elif/else, bucle
 // for, interpolación cruda (sin escapar) `{{& … }}`, y la API de dos niveles (compile una vez +
 // render N veces — el patrón de SSR).
-from template import compile, render, render_template, ctx_str, ctx_int, ctx_bool, ctx_list, val_str, val_int, Bind, TVal, Template;
+from template import
+    compile,
+    render,
+    render_template,
+    ctx_str,
+    ctx_int,
+    ctx_bool,
+    ctx_list,
+    val_str,
+    val_int,
+    Bind,
+    TVal,
+    Template;
 
 fn main() {
     let tpl = "<h1>Hola, {{ name }}!</h1>\n{% if admin %}<p>admin</p>{% elif invitado %}<p>invitado</p>{% else %}<p>user</p>{% endif %}\n<ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>\nraw: {{& html }}";
@@ -13,7 +25,10 @@ fn main() {
     // La rama elif, con la plantilla COMPILADA y dos contextos distintos (compile 1 vez, render 2).
     let t = match (compile(tpl)) {
         Result.Ok(x) => x,
-        Result.Err(e) => { print("err: " + e); return; },
+        Result.Err(e) => {
+            print("err: " + e);
+            return;
+        },
     };
     let ctx2 = [ctx_str("name", "Eva"), ctx_bool("admin", false), ctx_bool("invitado", true), ctx_list("items", [val_int(1)]), ctx_str("html", "")];
     let ctx3 = [ctx_str("name", "Leo"), ctx_bool("admin", false), ctx_bool("invitado", false), ctx_list("items", [val_int(2)]), ctx_str("html", "")];

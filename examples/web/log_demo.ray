@@ -1,6 +1,18 @@
 // Demo/verificación del logging estructurado (M21.1). Usa `render` con una marca de tiempo fija para
 // que la salida sea determinista (el `emit` real usa la hora actual). Lo ejecuta `tests/log_cli.rs`.
-from log import Logger, LogEntry, logger, with_level, debug, info, warn, error, field, field_int, field_bool, render;
+from log import
+    Logger,
+    LogEntry,
+    logger,
+    with_level,
+    debug,
+    info,
+    warn,
+    error,
+    field,
+    field_int,
+    field_bool,
+    render;
 
 fn main() {
     let lg = logger("api");

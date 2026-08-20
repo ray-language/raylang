@@ -8,7 +8,15 @@
 //   cargo run -- --vm examples/web/metrics_server_demo.ray
 //   curl 127.0.0.1:8080/ ; curl 127.0.0.1:8080/metrics
 from webserver import serve, Request, Response, text, not_found;
-from metrics import registry, register_counter, register_histogram, inc, observe, render, labels2, Registry;
+from metrics import
+    registry,
+    register_counter,
+    register_histogram,
+    inc,
+    observe,
+    render,
+    labels2,
+    Registry;
 
 // Los mensajes al actor de métricas. `Render` lleva un canal por el que el actor devuelve el texto
 // (enviar un canal dentro del mensaje funciona: su id es un valor primitivo, se comparte al transferir).

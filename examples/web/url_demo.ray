@@ -1,7 +1,15 @@
 // Demo/verificación de url (percent-encoding + query) y cookies (M20.4). Salida determinista,
 // la ejecuta `tests/url_cli.rs`. Referencias de `urllib.parse.quote`.
 from url import url_encode, url_decode, parse_query, build_query;
-from cookie import parse_cookies, cookie, set_cookie, with_path, with_max_age, with_http_only, with_secure, with_same_site;
+from cookie import
+    parse_cookies,
+    cookie,
+    set_cookie,
+    with_path,
+    with_max_age,
+    with_http_only,
+    with_secure,
+    with_same_site;
 
 fn main() {
     // --- percent-encoding ---
@@ -41,7 +49,7 @@ fn main() {
     print(set_cookie(cookie("plain", "x")));  // plain=x  (sin atributos)
     // M71: SameSite=None implica Secure; SameSite=Lax se emite tal cual.
     print(set_cookie(cookie("s", "1").with_same_site("None")));  // s=1; Secure; SameSite=None
-    print(set_cookie(cookie("s", "1").with_same_site("Lax")));   // s=1; SameSite=Lax
+    print(set_cookie(cookie("s", "1").with_same_site("Lax")));  // s=1; SameSite=Lax
     // M71: un nombre con CRLF + cabecera inyectada se SANEA (sin CR/LF/;) → no hay splitting.
     print(set_cookie(cookie("a" + ctrl(13) + ctrl(10) + "Set-Cookie: evil", "v")));  // aSet-Cookie: evil=v
 }

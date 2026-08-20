@@ -12,7 +12,16 @@
 // Las cadenas/caracteres se re-escapan igual que en el lexer-dump → coinciden con el oráculo.
 from lexer import lex, Token, LexError;
 from parser import parse, Program, Func, Param, Type, Expr, EKind, Stmt, SKind, Block, BinOp, UnOp;
-from parser import StructDef, FieldDef, EnumDef, VariantDef, FieldInit, FnExpr, MatchArm, Pattern, PKind;
+from parser import
+    StructDef,
+    FieldDef,
+    EnumDef,
+    VariantDef,
+    FieldInit,
+    FnExpr,
+    MatchArm,
+    Pattern,
+    PKind;
 from parser import Bound, TraitDef, MethodSig, ImplBlock;
 from parser import Annotation, ImportDecl, ImportName, FromImport, ParseError;
 

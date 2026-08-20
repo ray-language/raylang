@@ -4,7 +4,25 @@
 // hasta END_STREAM. Importable: `from http2_client import http2_get, Http2Response;`.
 //
 // Es el transporte que necesita un cliente gRPC (M31.3): gRPC = HTTP/2 + framing de mensajes en DATA.
-from http2 import preface, settings_empty, settings_ack, headers_frame, parse_frame, frame_size, window_update_frame, ping_ack, rst_error_code, ft_settings, ft_headers, ft_data, ft_goaway, ft_ping, ft_rst_stream, fl_ack, fl_end_stream, Http2Frame;
+from http2 import
+    preface,
+    settings_empty,
+    settings_ack,
+    headers_frame,
+    parse_frame,
+    frame_size,
+    window_update_frame,
+    ping_ack,
+    rst_error_code,
+    ft_settings,
+    ft_headers,
+    ft_data,
+    ft_goaway,
+    ft_ping,
+    ft_rst_stream,
+    fl_ack,
+    fl_end_stream,
+    Http2Frame;
 from hpack import new_hpack, encode, decode, header, HEntry;
 import std/net;
 

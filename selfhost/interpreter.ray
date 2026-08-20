@@ -42,7 +42,26 @@
 // índices de Rust, el valor guarda el `Func`/`FnExpr` DIRECTAMENTE (referencia + GC del host). Diferido:
 // despacho dinámico (M14.4d: UFCS/métodos/dyn/@derive + map/filter/fold del prelude). TCO/MAX_CALL_DEPTH
 // también (el host ya da TCO + pila grande).
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, MethodSig;
+from parser import
+    Type,
+    Expr,
+    EKind,
+    Stmt,
+    SKind,
+    Block,
+    Func,
+    Param,
+    Program,
+    BinOp,
+    UnOp,
+    FieldInit,
+    FieldDef,
+    VariantDef,
+    MatchArm,
+    Pattern,
+    PKind,
+    FnExpr,
+    MethodSig;
 
 // =====================================================================
 // Valores en tiempo de ejecución y señales de flujo

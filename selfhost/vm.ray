@@ -9,7 +9,18 @@
 //
 // M14.5a — el núcleo (escalares, control, locales, llamadas, recursión, builtins escalares).
 from compiler import Op, CProgram, CompiledFn, Chunk, UpSrc;
-from interpreter import Value, Flow, RuntimeError, value_str, values_equal, eval_add, eval_arith, eval_cmp, dispatch_builtin, rt_error, no_vals;
+from interpreter import
+    Value,
+    Flow,
+    RuntimeError,
+    value_str,
+    values_equal,
+    eval_add,
+    eval_arith,
+    eval_cmp,
+    dispatch_builtin,
+    rt_error,
+    no_vals;
 from interpreter import SField, struct_get, struct_set, as_int, Cell;
 from interpreter import is_builtin, type_key_of_value, value_lt, struct_has_field, prepend;
 from parser import BinOp;

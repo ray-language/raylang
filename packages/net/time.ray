@@ -2,5 +2,15 @@
 // tiers §53 — las usan net/log, net/sigv4 y db/bson, y no son "web"). Este módulo queda como
 // reexport para no romper a nadie; el código vive en std/time.ray. Para código nuevo, importa
 // `std/time` directamente.
-pub from std/time import DateTime, from_epoch_millis, now_utc, to_epoch_millis, to_iso8601,
-    to_iso8601_basic, date_stamp, to_rfc1123, parse_iso8601, parse_iso8601_millis, format_duration;
+pub from std/time import
+    DateTime,
+    from_epoch_millis,
+    now_utc,
+    to_epoch_millis,
+    to_iso8601,
+    to_iso8601_basic,
+    date_stamp,
+    to_rfc1123,
+    parse_iso8601,
+    parse_iso8601_millis,
+    format_duration;

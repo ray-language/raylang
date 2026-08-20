@@ -6,7 +6,26 @@
 // trailers) + DATA (grpc_frame(mensaje)) con END_STREAM; la respuesta trae HEADERS (:status) + DATA
 // (mensaje gRPC-framed) + un HEADERS de **trailers** con `grpc-status`. Importable:
 //   from grpc_client import grpc_call, GrpcResponse;
-from net/http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size, window_update_frame, ping_ack, rst_error_code, ft_settings, ft_headers, ft_data, ft_goaway, ft_ping, ft_rst_stream, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
+from net/http2 import
+    preface,
+    settings_empty,
+    settings_ack,
+    encode_frame,
+    parse_frame,
+    frame_size,
+    window_update_frame,
+    ping_ack,
+    rst_error_code,
+    ft_settings,
+    ft_headers,
+    ft_data,
+    ft_goaway,
+    ft_ping,
+    ft_rst_stream,
+    fl_ack,
+    fl_end_stream,
+    fl_end_headers,
+    Http2Frame;
 from net/hpack import new_hpack, encode, decode, header, HEntry;
 from std/protobuf import grpc_frame, grpc_unframe;
 import std/net;

@@ -6192,6 +6192,16 @@ VM, como desde M12.)
     un canal de respuesta) → cuentas correctas por el orden FIFO. Los **canales SÍ se comparten** (su id es
     un valor primitivo que se copia tal cual al transferir) → son el medio de comunicación entre actores.
     **Cierra M37**: pausa máxima del GC 10,5 ms → 0,12 ms (§27.5), <1 ms por construcción.
+  - **Cruce que se escapó (corregido ago 2026)**: `transfer_value` cubrió los cruces de *datos*, pero el
+    `Spawn` prefabrica los **locales** de la hija (`build_locals`) y lo hacía **contra el heap del
+    spawner**. Las celdas de los slots capturados nacían así en el heap equivocado, y eran raíz de la
+    hija desde su primera instrucción hasta que el `InitLocal` del slot estrenaba celda propia — una
+    ventana real si la hija asigna (y recolecta) antes de declarar su `var`. El `mark` de la hija
+    resolvía ese handle contra SU tabla de slots: objeto ajeno si el índice cabía (corrupción silenciosa),
+    `index out of bounds` si no. Sale a la luz cuando el spawner tiene un heap grande — un `main` que
+    siembra una base de datos y luego sirve peticiones caía a la ~15ª. La lección: el invariante «ningún
+    handle cruza heaps» hay que sostenerlo también en el estado que el spawner **prefabrica** para la
+    hija, no solo en los valores que le transfiere.
 - **M38.2 — move/copy-on-send DESCARTADO por medición** (el deep-copy-siempre de M38.1 se conserva). Se midió
   (`benchmarks/send_heavy.ray` + variantes, `RAYLANG_XFER_STATS`, instrumentación temporal en `transfer_value`)
   el coste real de la transferencia deep-copy en tres escenarios: **(a) mensajes pequeños** (int, la carga

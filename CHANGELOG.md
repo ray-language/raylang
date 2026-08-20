@@ -214,6 +214,14 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **VM: caída del GC (`index out of bounds` en `Heap::mark`) en servidores de larga vida.** Al hacer
+  `spawn`, las celdas de los locales **capturados** de la fibra hija se alojaban en el heap del
+  *spawner* en vez del suyo. Con heap-por-fibra ese handle cruzaba heaps: desde el arranque de la
+  hija y hasta que su `InitLocal` estrenaba celda propia era una raíz del GC resuelta contra la tabla
+  de slots equivocada — otro objeto si el índice cabía, pánico si no. Se disparaba cuando el spawner
+  tenía un heap grande (p. ej. un `main` que siembra una base de datos y **luego** sirve): a la
+  decimoquinta petición, `the len is 64 but the index is 828`.
+
 - **Backend nativo: seis huecos de superficie** que la VM ejecutaba y el binario nativo rechazaba —
   arreglos `reverse`/`pop`/`position`, `math.atan2`/`float_bits`/`float_from_bits` y
   `fs.append_file` (existía `append_file_bytes`). El checklist `NATIVE_TRACKED_BUILTINS` los daba por

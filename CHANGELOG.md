@@ -193,6 +193,9 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- Binario nativo: `for i in 0..s.len()` no compilaba. En Rust, `for x in EXPR {` toma un bloque
+  inicial de `EXPR` como **cuerpo** del loop, y varios builtins emiten un bloque (`len` de string,
+  concatenación, `push`); ahora los extremos del rango se emiten entre paréntesis.
 - Binario nativo: `for c in <string>.chars()` no compilaba (el transpilador decidía el modo de
   iteración por el tipo del ELEMENTO —`char` → `.chars()`— y lo aplicaba al `Vec<char>` ya
   materializado). Ahora lo decide el tipo del contenedor: string → `.chars()`, `[char]` → vía de

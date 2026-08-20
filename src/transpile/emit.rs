@@ -731,11 +731,15 @@ impl Transpiler {
                             }
                             write!(out, "    for {} in __rt_lo..__rt_hi ", var).unwrap();
                         } else {
-                            write!(out, "for {} in ", var).unwrap();
+                            // Los extremos van ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
+                            // bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten
+                            // un bloque (`len` de string → `{ let __rt_s = …; … }`, la concatenación,
+                            // `push`…). Sin ellos, `for i in 0..s.len() { … }` no compilaba.
+                            write!(out, "for {} in (", var).unwrap();
                             self.emit_expr(out, start)?;
-                            out.push_str("..");
+                            out.push_str(")..(");
                             self.emit_expr(out, end)?;
-                            out.push(' ');
+                            out.push_str(") ");
                         }
                         self.scopes.push(HashMap::new());
                         self.declare(&var, Type::Int);

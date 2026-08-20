@@ -112,7 +112,7 @@ fn transpiles_for_range_loop() {
     let rust = transpile_src(
         "fn main() { var acc: int = 0; for i in 0..100 { acc = acc + i; } print(acc); }",
     );
-    assert!(rust.contains("for i in 0i64..100i64"), "{}", rust);
+    assert!(rust.contains("for i in (0i64)..(100i64)"), "{}", rust);
     assert!(rust.contains("let mut acc: i64 = 0i64"), "{}", rust); // anotación emitida (pina inferencia)
 }
 
@@ -627,6 +627,15 @@ fn string_len_counts_characters() {
     let rust = transpile_src("fn main() { let s = \"ab\"; print(s.len()); }");
     assert!(rust.contains("is_ascii()"), "len de string con fast-path ASCII: {}", rust);
     assert!(rust.contains(".chars().count() as i64"), "fallback no-ASCII por caracteres: {}", rust);
+}
+
+/// Los extremos de un `for` de rango se emiten ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
+/// bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten un bloque (`len` de string,
+/// concatenación, `push`). Sin paréntesis, `for i in 0..s.len() { … }` no compilaba.
+#[test]
+fn parenthesizes_the_bounds_of_a_range_loop() {
+    let rust = transpile_src("fn main() { let s = \"abc\"; for i in 0..s.len() { print(s[i]); } }");
+    assert!(rust.contains("for i in (0i64)..({ let __rt_s"), "extremos entre parentesis: {}", rust);
 }
 
 /// El modo de iteración de un `for … in` lo decide el tipo del CONTENEDOR, no el del elemento:

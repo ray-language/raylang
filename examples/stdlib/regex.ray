@@ -53,15 +53,15 @@ struct Prog {
     classes: [Class],
     nsaves: int,
     ngroups: int,
-    // R5 (perf, 22 jul 2026): el patrón FUENTE. El backend nativo intercepta las funciones
-    // `run_*` y ejecuta este patrón —ya VALIDADO por el parser de arriba— con el crate `regex`
-    // de ray-runtime (semántica traducida; ver docs/bench-regex-plan.md §R5). R7 (29 jul): la VM
-    // hace lo mismo (feature `regex` de la toolchain, activa por defecto); la Pike VM de abajo
-    // corre en el intérprete (--interp, oráculo del dialecto), en builds slim sin la feature y
-    // con RAYLANG_REGEX_PIKE=1. El parseo/los errores siguen siendo los de esta librería.
     pat: string,
 }
 
+// R5 (perf, 22 jul 2026): el patrón FUENTE. El backend nativo intercepta las funciones
+// `run_*` y ejecuta este patrón —ya VALIDADO por el parser de arriba— con el crate `regex`
+// de ray-runtime (semántica traducida; ver docs/bench-regex-plan.md §R5). R7 (29 jul): la VM
+// hace lo mismo (feature `regex` de la toolchain, activa por defecto); la Pike VM de abajo
+// corre en el intérprete (--interp, oráculo del dialecto), en builds slim sin la feature y
+// con RAYLANG_REGEX_PIKE=1. El parseo/los errores siguen siendo los de esta librería.
 // El AST del patrón. Recursivo: en raylang los enums son objetos del heap (semántica de referencia),
 // así que un payload puede volver a ser un `Re` sin tamaño infinito.
 // M81: `Star`/`Plus`/`Opt` llevan el flag **lazy** (`*?` `+?` `??`: prefieren salir del
@@ -122,11 +122,11 @@ fn ranges_space() -> [Range] {
 struct PS {
     pat: [char],
     pos: int,
-    // M81: contador de grupos de captura (el siguiente índice libre; empieza en 1 —
-    // el 0 es el match entero). Se asigna por orden del '(' de APERTURA, como Perl.
     ngroups: int,
 }
 
+// M81: contador de grupos de captura (el siguiente índice libre; empieza en 1 —
+// el 0 es el match entero). Se asigna por orden del '(' de APERTURA, como Perl.
 fn ps_at_end(p: PS) -> bool { p.pos >= p.pat.len() }
 
 fn ps_peek(p: PS) -> char { p.pat[p.pos] }  // el llamador comprueba at_end antes
@@ -176,7 +176,9 @@ fn parse_concat(p: PS) -> Result<Re, string> {
 // es cuantificador si le sigue un dígito (si no, es un `{` literal, como en Perl).
 fn parse_repeat(p: PS) -> Result<Re, string> {
     var node = parse_atom(p)?;
-    while (!ps_at_end(p) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?' || rep_abre(p))) {
+    while (!ps_at_end(
+        p
+    ) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?' || rep_abre(p))) {
         let op = ps_advance(p);
         if (op == '{') {
             node = parse_bounds(p, node)?;
@@ -218,7 +220,7 @@ fn parse_num(p: PS) -> int {
     var v = 0;
     while (!ps_at_end(p) && es_digito(ps_peek(p))) {
         let c = ps_advance(p);
-        v = v * 10 + ((c as int) - ('0' as int));
+        v = v * 10 + (c as int - '0' as int);
     }
     v
 }
@@ -524,7 +526,13 @@ fn compile_pattern(pattern: string) -> Result<Prog, string> {
     }
     var insts: [Inst] = [];
     var classes: [Class] = [];
-    let prog = Prog { insts: insts, classes: classes, nsaves: 2 * p.ngroups, ngroups: p.ngroups, pat: pattern };
+    let prog = Prog {
+        insts: insts,
+        classes: classes,
+        nsaves: 2 * p.ngroups,
+        ngroups: p.ngroups,
+        pat: pattern
+    };
     // M81: el match entero es el grupo 0 — Save(0) al entrar, Save(1) antes del Match.
     emit(prog, 8, 0, 0, ' ');
     compile_re(re, prog);
@@ -599,7 +607,6 @@ fn class_matches(cl: Class, ch: char) -> bool {
 // semántica **leftmost-first** de Perl (antes: leftmost-longest); las capturas y los
 // cuantificadores lazy solo tienen sentido con ella. Sigue siendo tiempo lineal: el
 // dedup por `seen` acota los hilos a |insts| por posición.
-
 // Copia las ranuras de captura de un hilo (copy-on-write en Save).
 // R4 (perf, 22 jul 2026): copiar vía la CONCATENACIÓN nativa de arreglos (`s + []` es un solo
 // opcode que clona en Rust) en vez de un bucle de push por elemento (interpretado en la VM,
@@ -627,7 +634,17 @@ fn new_saves(n: int) -> [int] {
 // y DESCARTÓ por medición (22 jul 2026): nativo −9%, pero la VM +17% — el acceso a campos por
 // nombre (GetField) por hilo cuesta más que las 2 allocs/posición ahorradas. Reevaluar solo si
 // la VM gana acceso a campos por índice (P1.3, GetFieldIdx).
-fn add_thread(prog: Prog, pcs: [int], svs: [[int]], seen: [int], gen: int, pc: int, saves: [int], pos: int, n: int) {
+fn add_thread(
+    prog: Prog,
+    pcs: [int],
+    svs: [[int]],
+    seen: [int],
+    gen: int,
+    pc: int,
+    saves: [int],
+    pos: int,
+    n: int
+) {
     if (seen[pc] == gen) {
         return;
     }
@@ -667,7 +684,6 @@ fn add_thread(prog: Prog, pcs: [int], svs: [[int]], seen: [int], gen: int, pc: i
 //   `seed`: siembra un hilo nuevo por posición (búsqueda NO anclada) mientras no haya match.
 //   `full`: solo acepta un Match al consumir TODO el texto (full_match) — y entonces un
 //           Match prematuro no corta (el hilo muere; los demás siguen).
-
 // R2 (perf, 22 jul 2026): ¿el programa está ANCLADO a `^`? Cierto si desde pc 0, siguiendo solo
 // Save (8) y Jmp (3), se llega a AssertStart (6) — sin Splits por medio (una alternancia podría
 // tener un brazo no anclado). Con ancla, sembrar un hilo por posición es trabajo muerto: el hilo
@@ -952,7 +968,9 @@ fn run_captures_str(prog: Prog, text: string) -> Option<[Option<string>]> {
             var i = 0;
             while (i < grupos.len()) {
                 match (grupos[i]) {
-                    Option.Some(par) => { out.push(Option.Some(text.substring(par.0, par.1))); },
+                    Option.Some(par) => {
+                        out.push(Option.Some(text.substring(par.0, par.1)));
+                    },
                     Option.None => {
                         var nada: Option<string> = Option.None;
                         out.push(nada);
@@ -1002,16 +1020,23 @@ pub trait Matcher {
 
 impl Matcher for Regex {
     fn full_match(self, text: string) -> bool { run_full(self.prog, text) }
+
     fn search(self, text: string) -> bool { run_search(self.prog, text) }
+
     fn find(self, text: string) -> Option<(int, int)> { run_find(self.prog, text) }
+
     fn find_str(self, text: string) -> Option<string> {
         match (run_find(self.prog, text)) {
             Option.Some(par) => Option.Some(text.substring(par.0, par.1)),
             Option.None => Option.None,
         }
     }
+
     fn find_all(self, text: string) -> [string] { run_find_all(self.prog, text) }
+
     fn replace_all(self, text: string, repl: string) -> string { run_replace_all(self.prog, text, repl) }
+
     fn captures(self, text: string) -> Option<[Option<(int, int)>]> { run_captures(self.prog, text) }
+
     fn captures_str(self, text: string) -> Option<[Option<string>]> { run_captures_str(self.prog, text) }
 }

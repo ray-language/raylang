@@ -22,7 +22,7 @@ fn muestra(r: Result<bytes, string>) {
 
 fn main() {
     let f = "f".to_bytes();
-    print(base64(f));     // Zg==
+    print(base64(f));  // Zg==
     print(base64url(f));  // Zg
 
     // Decode estándar — válidos (RFC 4648 §10).
@@ -33,17 +33,17 @@ fn main() {
 
     // Decode estándar — rechazos del modo estricto (M59.3).
     muestra(base64_decode("Zg==basura"));  // datos tras el relleno
-    muestra(base64_decode("Zg="));         // longitud no múltiplo de 4
-    muestra(base64_decode("Zg"));          // sin relleno
-    muestra(base64_decode("QR=="));        // bits sobrantes ≠ 0 (canónico: QQ==)
-    muestra(base64_decode("A==="));        // relleno de más
-    muestra(base64_decode("Zg*="));        // carácter fuera del alfabeto
+    muestra(base64_decode("Zg="));  // longitud no múltiplo de 4
+    muestra(base64_decode("Zg"));  // sin relleno
+    muestra(base64_decode("QR=="));  // bits sobrantes ≠ 0 (canónico: QQ==)
+    muestra(base64_decode("A==="));  // relleno de más
+    muestra(base64_decode("Zg*="));  // carácter fuera del alfabeto
 
     // base64url (sin relleno) — válidos y rechazos.
     muestra(base64url_decode("TWFu"));
     muestra(base64url_decode("Zg"));
     muestra(base64url_decode("Zm8"));
-    muestra(base64url_decode("QR"));    // bits sobrantes ≠ 0
-    muestra(base64url_decode("A"));     // cola de 1 carácter
+    muestra(base64url_decode("QR"));  // bits sobrantes ≠ 0
+    muestra(base64url_decode("A"));  // cola de 1 carácter
     muestra(base64url_decode("Zg=="));  // '=' no pertenece al alfabeto url
 }

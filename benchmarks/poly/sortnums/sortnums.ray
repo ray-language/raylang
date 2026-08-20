@@ -8,7 +8,7 @@ fn main() {
     var seed = 12345;
     var arr: [int] = [];
     for i in 0..n {
-        seed = (48271 * seed) % 2147483647;
+        seed = 48271 * seed % 2147483647;
         arr.push(seed % 1000000);
     }
 

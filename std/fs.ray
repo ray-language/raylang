@@ -5,7 +5,6 @@
 // archivos". Los envoltorios se apoyan en los primitivos globales `__read_file`/…
 // (que devuelven un arreglo etiquetado `["ok", …]` / `["err", msg]`) y los
 // traducen a `Result`/`Option`. El único builtin total es `exists` (`__exists`).
-
 // Lee el archivo completo; Ok(contenido) u Err(mensaje del sistema).
 /// Reads the whole file as a string; `Ok(contents)` or `Err(system error message)`.
 pub fn read_file(path: string) -> Result<string, string> {
@@ -81,7 +80,6 @@ pub fn exists(path: string) -> bool {
 // --- M67: directorios y metadatos. Antes el módulo era solo-archivos: sin mkdir no se podía
 // crear un directorio, sin is_dir/is_file no se podía recorrer un árbol, y sin rename la
 // escritura atómica (temp + rename) era imposible. ---
-
 /// Creates a directory, including any missing parents (like `mkdir -p`); `Ok(0)` or `Err(message)`.
 pub fn mkdir(path: string) -> Result<int, string> {
     let r = __mkdir(path);

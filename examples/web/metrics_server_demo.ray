@@ -56,7 +56,12 @@ fn metrics_response(cuerpo: string) -> Response {
 fn main() -> int {
     let reg = registry();
     register_counter(reg, "http_requests_total", "Total de peticiones HTTP por metodo y ruta");
-    register_histogram(reg, "http_request_duracion_segundos", "Duracion de la peticion (simulada)", [0.005, 0.01, 0.05]);
+    register_histogram(
+        reg,
+        "http_request_duracion_segundos",
+        "Duracion de la peticion (simulada)",
+        [0.005, 0.01, 0.05]
+    );
 
     // El canal del actor de métricas (su id lo capturan todos los handlers → le envían a TODOS al mismo).
     let mch: Channel<MetricMsg> = Channel.new();
@@ -76,7 +81,13 @@ fn main() -> int {
             }
         } else {
             // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
-            send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
+            send(
+                mch,
+                MetricMsg.Inc(
+                    "http_requests_total",
+                    labels2("method", req.method, "path", req.path)
+                )
+            );
             send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008));  // duración simulada
             if (req.path == "/") {
                 text(200, "hola desde raylang")

@@ -511,7 +511,6 @@ pub fn stringify(j: Json) -> string {
 // Navegar un Json sin `match` anidado: `member`/`at` bajan un nivel (Option), los `as_*`
 // extraen el payload si el valor es del tipo pedido, y los `get_*` combinan ambos para el
 // caso común (campo tipado de un objeto). Componen con UFCS: `j.get_string("nombre")`.
-
 /// The member `key` of a JSON object, or None (not an object / key absent).
 pub fn member(j: Json, key: string) -> Option<Json> {
     match (j) {
@@ -636,7 +635,6 @@ pub fn get_object(j: Json, key: string) -> Option<Map<string, Json>> {
 }
 
 // ── Pretty-print (M90.3) ─────────────────────────────────────────────────────────────
-
 /// Serializes a `Json` value to indented multi-line JSON, `indent` spaces per level
 /// (canonical sorted keys, like `stringify` — which remains the compact form).
 pub fn stringify_pretty(j: Json, indent: int) -> string {
@@ -715,12 +713,15 @@ pub trait ToJson {
 impl ToJson for int {
     fn to_json(self) -> string { to_string(self) }
 }
+
 impl ToJson for float {
     fn to_json(self) -> string { to_string(self) }
 }
+
 impl ToJson for bool {
     fn to_json(self) -> string { to_string(self) }
 }
+
 impl ToJson for string {
     fn to_json(self) -> string { stringify(Json.JStr(self)) }
 }
@@ -790,6 +791,7 @@ pub fn render_arr(a: Arr) -> string {
 impl ToJson for Obj {
     fn to_json(self) -> string { render(self) }
 }
+
 impl ToJson for Arr {
     fn to_json(self) -> string { render_arr(self) }
 }

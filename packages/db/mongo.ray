@@ -13,7 +13,6 @@
 //
 // v1 (plan M54, IDEAS §15): sin compresión (OP_COMPRESSED), sin checksum (flagBits = 0), una sola
 // sección kind 0 por mensaje, `hello` mínimo (solo se exige `ok`). El CRUD llega en M54.3.
-
 import db/bson;
 from net/scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
 import std/net;
@@ -28,13 +27,12 @@ pub struct Conn {
 }
 
 // ── Enteros LE y framing ─────────────────────────────────────────────────────
-
 fn le32_of(n: int) -> [int] {
-    [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >> 24) & 255]
+    [n & 255, n >> 8 & 255, n >> 16 & 255, n >> 24 & 255]
 }
 
 fn le32_at(b: bytes, off: int) -> int {
-    b[off] | (b[off + 1] << 8) | (b[off + 2] << 16) | (b[off + 3] << 24)
+    b[off] | b[off + 1] << 8 | b[off + 2] << 16 | b[off + 3] << 24
 }
 
 fn bytes_to_ints(b: bytes) -> [int] {
@@ -51,7 +49,9 @@ fn bytes_to_ints(b: bytes) -> [int] {
 fn send_msg(c: Conn, doc: [bson.Field]) -> Result<int, string> {
     let body = bson.encode(doc);
     // 16 (cabecera) + 4 (flags) + 1 (kind) + el documento.
-    var m: [int] = le32_of(21 + body.len()) + le32_of(c.req_id) + le32_of(0) + le32_of(2013) + le32_of(0);
+    var m: [int] = le32_of(
+        21 + body.len()
+    ) + le32_of(c.req_id) + le32_of(0) + le32_of(2013) + le32_of(0);
     m.push(0);
     m = m + bytes_to_ints(body);
     c.req_id = c.req_id + 1;
@@ -74,7 +74,9 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
                 return Result.Err("mongo: message too short (" + to_string(total) + " bytes)");
             }
             if (total > max_message()) {
-                return Result.Err("mongo: message exceeds the limit (" + to_string(total) + " bytes, possible memory bomb)");
+                return Result.Err(
+                    "mongo: message exceeds the limit (" + to_string(total) + " bytes, possible memory bomb)"
+                );
             }
             if (c.buf.len() >= total) {
                 let op = le32_at(c.buf, 12);
@@ -106,7 +108,6 @@ pub fn run_command(c: Conn, doc: [bson.Field]) -> Result<[bson.Field], string> {
 }
 
 // ── Inspección de respuestas ─────────────────────────────────────────────────
-
 // ¿La respuesta trae ok: 1? (El servidor lo manda como double 1.0; se acepta también int.)
 fn is_ok(fields: [bson.Field]) -> bool {
     return match (bson.get(fields, "ok")) {
@@ -164,10 +165,16 @@ fn check_ok(fields: [bson.Field]) -> Result<int, string> {
 }
 
 // ── Conexión ─────────────────────────────────────────────────────────────────
-
 /// Connects and authenticates with SCRAM-SHA-256 (`hello`, then `saslStart`/`saslContinue`).
 /// The nonce must be random in production. Authenticates against `database`.
-pub fn connect(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+pub fn connect(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let handle = net.tcp_connect(host, port)?;
     session(handle, user, password, database, nonce)
 }
@@ -175,20 +182,33 @@ pub fn connect(host: string, port: int, user: string, password: string, database
 /// Like `connect`, over TLS. MongoDB encrypts from byte zero (no STARTTLS): the socket is a TLS
 /// client session from the start (`net.tls_connect`, certificate verified against `host`) and the
 /// whole protocol — hello, SCRAM, commands — runs unchanged over it.
-pub fn connect_tls(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+pub fn connect_tls(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let handle = net.tls_connect(host, port)?;
     session(handle, user, password, database, nonce)
 }
 
 // hello + SCRAM sobre un handle ya conectado (plano o TLS: el I/O se desvía por el tipo del handle).
-fn session(handle: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+fn session(
+    handle: int,
+    user: string,
+    password: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let c = Conn { handle: handle, buf: b"", req_id: 1, db: database };
 
     // 1. hello: presentación. v1 solo exige ok (sin negociar compresión/versiones).
-    let hr = run_command(c, [
-        bson.field("hello", bson.Bson.Int(1)),
-        bson.field("$db", bson.Bson.Str(database)),
-    ])?;
+    let hr = run_command(
+        c,
+        [bson.field("hello", bson.Bson.Int(1)), bson.field("$db", bson.Bson.Str(database))]
+    )?;
     if (!is_ok(hr)) {
         close(handle);
         return Result.Err("mongo: " + error_of(hr));
@@ -197,12 +217,15 @@ fn session(handle: int, user: string, password: string, database: string, nonce:
     // 2. saslStart con el client-first de SCRAM (reusa net/scram, como PostgreSQL).
     let sc = scram_first(user, nonce);
     let cf = scram_client_first_message(sc);
-    let r1 = run_command(c, [
-        bson.field("saslStart", bson.Bson.Int(1)),
-        bson.field("mechanism", bson.Bson.Str("SCRAM-SHA-256")),
-        bson.field("payload", bson.Bson.Bin(cf.to_bytes())),
-        bson.field("$db", bson.Bson.Str(database)),
-    ])?;
+    let r1 = run_command(
+        c,
+        [
+            bson.field("saslStart", bson.Bson.Int(1)),
+            bson.field("mechanism", bson.Bson.Str("SCRAM-SHA-256")),
+            bson.field("payload", bson.Bson.Bin(cf.to_bytes())),
+            bson.field("$db", bson.Bson.Str(database))
+        ]
+    )?;
     if (!is_ok(r1)) {
         close(handle);
         return Result.Err("mongo: " + error_of(r1));
@@ -210,20 +233,29 @@ fn session(handle: int, user: string, password: string, database: string, nonce:
     let conv = int_field(r1, "conversationId");
     let server_first = match (payload_str(r1)) {
         Result.Ok(s) => s,
-        Result.Err(e) => { close(handle); return Result.Err(e); },
+        Result.Err(e) => {
+            close(handle);
+            return Result.Err(e);
+        },
     };
 
     // 3. saslContinue con el client-final (el proof calculado con la contraseña).
     let final_msg = match (scram_final(sc, password, server_first)) {
         Result.Ok(f) => f,
-        Result.Err(e) => { close(handle); return Result.Err(e); },
+        Result.Err(e) => {
+            close(handle);
+            return Result.Err(e);
+        },
     };
-    let r2 = run_command(c, [
-        bson.field("saslContinue", bson.Bson.Int(1)),
-        bson.field("conversationId", bson.Bson.Int(conv)),
-        bson.field("payload", bson.Bson.Bin(final_msg.to_bytes())),
-        bson.field("$db", bson.Bson.Str(database)),
-    ])?;
+    let r2 = run_command(
+        c,
+        [
+            bson.field("saslContinue", bson.Bson.Int(1)),
+            bson.field("conversationId", bson.Bson.Int(conv)),
+            bson.field("payload", bson.Bson.Bin(final_msg.to_bytes())),
+            bson.field("$db", bson.Bson.Str(database))
+        ]
+    )?;
     if (!is_ok(r2)) {
         close(handle);
         return Result.Err("mongo: " + error_of(r2));
@@ -232,7 +264,10 @@ fn session(handle: int, user: string, password: string, database: string, nonce:
     // 4. Verificar la firma del servidor (prueba que ÉL también conoce la credencial).
     let server_final = match (payload_str(r2)) {
         Result.Ok(s) => s,
-        Result.Err(e) => { close(handle); return Result.Err(e); },
+        Result.Err(e) => {
+            close(handle);
+            return Result.Err(e);
+        },
     };
     if (!scram_verify(sc, server_final)) {
         close(handle);
@@ -247,7 +282,6 @@ fn session(handle: int, user: string, password: string, database: string, nonce:
 // colección va como valor del campo homónimo y `$db` sale de la `Conn`. Los filtros y documentos
 // son `[bson.Field]` — el usuario arma `{$set: {...}}` y compañía explícitamente (fiel al
 // protocolo, sin azúcar que esconda semántica).
-
 /// Inserts documents into a collection; returns how many were inserted. Leave `_id` out and the
 /// server assigns one.
 pub fn insert(c: Conn, coll: string, docs: [[bson.Field]]) -> Result<int, string> {
@@ -257,11 +291,14 @@ pub fn insert(c: Conn, coll: string, docs: [[bson.Field]]) -> Result<int, string
         arr.push(bson.Bson.Doc(docs[i]));
         i = i + 1;
     }
-    let r = run_command(c, [
-        bson.field("insert", bson.Bson.Str(coll)),
-        bson.field("documents", bson.Bson.Arr(arr)),
-        bson.field("$db", bson.Bson.Str(c.db)),
-    ])?;
+    let r = run_command(
+        c,
+        [
+            bson.field("insert", bson.Bson.Str(coll)),
+            bson.field("documents", bson.Bson.Arr(arr)),
+            bson.field("$db", bson.Bson.Str(c.db))
+        ]
+    )?;
     let _ = check_ok(r)?;
     Result.Ok(int_field(r, "n"))
 }
@@ -282,15 +319,23 @@ fn append_batch(out: [[bson.Field]], cursor: [bson.Field], key: string) -> Resul
     let batch = match (bson.get(cursor, key)) {
         Option.Some(v) => match (v) {
             bson.Bson.Arr(items) => items,
-            _ => { return Result.Err("mongo: the cursor has no " + key); },
+            _ => {
+                return Result.Err("mongo: the cursor has no " + key);
+            },
         },
-        Option.None => { return Result.Err("mongo: the cursor has no " + key); },
+        Option.None => {
+            return Result.Err("mongo: the cursor has no " + key);
+        },
     };
     var i = 0;
     while (i < batch.len()) {
         match (batch[i]) {
-            bson.Bson.Doc(f) => { out.push(f); },
-            _ => { return Result.Err("mongo: the batch has an element that is not a document"); },
+            bson.Bson.Doc(f) => {
+                out.push(f);
+            },
+            _ => {
+                return Result.Err("mongo: the batch has an element that is not a document");
+            },
         }
         i = i + 1;
     }
@@ -300,11 +345,14 @@ fn append_batch(out: [[bson.Field]], cursor: [bson.Field], key: string) -> Resul
 /// Finds every document matching the filter (`[]` = all). Exhausts the cursor: reads the
 /// `firstBatch` and keeps issuing `getMore` until the server reports cursor id 0.
 pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]], string> {
-    let r = run_command(c, [
-        bson.field("find", bson.Bson.Str(coll)),
-        bson.field("filter", bson.Bson.Doc(filter)),
-        bson.field("$db", bson.Bson.Str(c.db)),
-    ])?;
+    let r = run_command(
+        c,
+        [
+            bson.field("find", bson.Bson.Str(coll)),
+            bson.field("filter", bson.Bson.Doc(filter)),
+            bson.field("$db", bson.Bson.Str(c.db))
+        ]
+    )?;
     let _ = check_ok(r)?;
     var out: [[bson.Field]] = [];
     var cursor = cursor_of(r)?;
@@ -313,11 +361,14 @@ pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]
     // int64 del wire — 0x12, justo lo que codifica nuestro Int.)
     var id = int_field(cursor, "id");
     while (id != 0) {
-        let more = run_command(c, [
-            bson.field("getMore", bson.Bson.Int(id)),
-            bson.field("collection", bson.Bson.Str(coll)),
-            bson.field("$db", bson.Bson.Str(c.db)),
-        ])?;
+        let more = run_command(
+            c,
+            [
+                bson.field("getMore", bson.Bson.Int(id)),
+                bson.field("collection", bson.Bson.Str(coll)),
+                bson.field("$db", bson.Bson.Str(c.db))
+            ]
+        )?;
         let _ = check_ok(more)?;
         cursor = cursor_of(more)?;
         let _ = append_batch(out, cursor, "nextBatch")?;
@@ -328,18 +379,31 @@ pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]
 
 /// Updates documents matching the filter with the update document (e.g. a `$set` doc);
 /// returns how many were modified. `multi: true` updates every match, `false` only the first.
-pub fn update(c: Conn, coll: string, filter: [bson.Field], u: [bson.Field], multi: bool) -> Result<int, string> {
+pub fn update(
+    c: Conn,
+    coll: string,
+    filter: [bson.Field],
+    u: [bson.Field],
+    multi: bool
+) -> Result<int, string> {
     var arr: [bson.Bson] = [];
-    arr.push(bson.Bson.Doc([
-        bson.field("q", bson.Bson.Doc(filter)),
-        bson.field("u", bson.Bson.Doc(u)),
-        bson.field("multi", bson.Bson.Bool(multi)),
-    ]));
-    let r = run_command(c, [
-        bson.field("update", bson.Bson.Str(coll)),
-        bson.field("updates", bson.Bson.Arr(arr)),
-        bson.field("$db", bson.Bson.Str(c.db)),
-    ])?;
+    arr.push(
+        bson.Bson.Doc(
+            [
+                bson.field("q", bson.Bson.Doc(filter)),
+                bson.field("u", bson.Bson.Doc(u)),
+                bson.field("multi", bson.Bson.Bool(multi))
+            ]
+        )
+    );
+    let r = run_command(
+        c,
+        [
+            bson.field("update", bson.Bson.Str(coll)),
+            bson.field("updates", bson.Bson.Arr(arr)),
+            bson.field("$db", bson.Bson.Str(c.db))
+        ]
+    )?;
     let _ = check_ok(r)?;
     Result.Ok(int_field(r, "nModified"))
 }
@@ -347,15 +411,19 @@ pub fn update(c: Conn, coll: string, filter: [bson.Field], u: [bson.Field], mult
 /// Deletes every document matching the filter; returns how many were deleted.
 pub fn delete(c: Conn, coll: string, filter: [bson.Field]) -> Result<int, string> {
     var arr: [bson.Bson] = [];
-    arr.push(bson.Bson.Doc([
-        bson.field("q", bson.Bson.Doc(filter)),
-        bson.field("limit", bson.Bson.Int(0)),
-    ]));
-    let r = run_command(c, [
-        bson.field("delete", bson.Bson.Str(coll)),
-        bson.field("deletes", bson.Bson.Arr(arr)),
-        bson.field("$db", bson.Bson.Str(c.db)),
-    ])?;
+    arr.push(
+        bson.Bson.Doc(
+            [bson.field("q", bson.Bson.Doc(filter)), bson.field("limit", bson.Bson.Int(0))]
+        )
+    );
+    let r = run_command(
+        c,
+        [
+            bson.field("delete", bson.Bson.Str(coll)),
+            bson.field("deletes", bson.Bson.Arr(arr)),
+            bson.field("$db", bson.Bson.Str(c.db))
+        ]
+    )?;
     let _ = check_ok(r)?;
     Result.Ok(int_field(r, "n"))
 }

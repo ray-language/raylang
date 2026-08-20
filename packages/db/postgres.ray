@@ -14,7 +14,6 @@
 //
 // API uniforme con `db/mysql`: `connect` → `Conn`, `query`/`exec` (con `params: [string]`),
 // `disconnect`. Las transacciones son SQL corriente: `exec(c, "BEGIN", [])` / `"COMMIT"` / `"ROLLBACK"`.
-
 from net/scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
 import std/net;
 
@@ -32,7 +31,6 @@ struct PgMsg {
 }
 
 // ── Enteros y cadenas del protocolo ──────────────────────────────────────────────────────
-
 fn be32(b: bytes, off: int) -> int {
     b[off] << 24 | b[off + 1] << 16 | b[off + 2] << 8 | b[off + 3]
 }
@@ -63,7 +61,6 @@ fn bytes_to_ints(b: bytes) -> [int] {
 }
 
 // ── Framing ──────────────────────────────────────────────────────────────────────────────
-
 // Envía un mensaje con octeto de tipo: `[tipo][longitud=4+len(carga)][carga]`.
 fn send(c: Conn, mtype: int, payload: [int]) -> Result<int, string> {
     var m: [int] = [mtype];
@@ -82,14 +79,16 @@ fn max_message() -> int {
 fn read_msg(c: Conn) -> Result<PgMsg, string> {
     while (true) {
         if (c.buf.len() >= 5) {
-            let mlen = be32(c.buf, 1); // longitud (incluye sus 4 octetos)
+            let mlen = be32(c.buf, 1);  // longitud (incluye sus 4 octetos)
             // La longitud incluye sus propios 4 octetos → un valor < 4 es inválido (evita un `total`
             // que deje `sub_bytes` con fin < inicio). Y un valor enorme = bomba de memoria.
             if (mlen < 4) {
                 return Result.Err("postgres: invalid message length (" + to_string(mlen) + ")");
             }
             if (mlen > max_message()) {
-                return Result.Err("postgres: message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)");
+                return Result.Err(
+                    "postgres: message exceeds the limit (" + to_string(mlen) + " bytes, possible memory bomb)"
+                );
             }
             let total = 1 + mlen;
             if (c.buf.len() >= total) {
@@ -119,7 +118,7 @@ fn error_text(payload: bytes) -> string {
             val.push(payload[i]);
             i = i + 1;
         }
-        i = i + 1; // NUL
+        i = i + 1;  // NUL
         if (field == 77) {
             // 'M'
             return match (from_utf8(bytes_of(val))) {
@@ -132,7 +131,6 @@ fn error_text(payload: bytes) -> string {
 }
 
 // ── DataRow ────────────────────────────────────────────────────────────────────────────────
-
 // Parsea un DataRow ('D'): `[nº columnas:2]` y por columna `[longitud:4][valor]` (-1 = NULL → "").
 // Falla como valor ante un payload truncado o una longitud fuera de rango (datos del servidor).
 fn parse_datarow(payload: bytes) -> Result<[string], string> {
@@ -156,7 +154,7 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
         }
         pos = pos + 4;
         if (vlen < 0) {
-            cols.push(""); // NULL
+            cols.push("");  // NULL
         } else {
             if (pos + vlen > payload.len()) {
                 return Result.Err("postgres: DataRow with column length out of range");
@@ -174,10 +172,16 @@ fn parse_datarow(payload: bytes) -> Result<[string], string> {
 }
 
 // ── Conexión + autenticación SCRAM ─────────────────────────────────────────────────────────
-
 /// Abre una conexión, autentica con SCRAM-SHA-256 y la deja lista para consultas. `nonce` es el
 /// nonce del cliente (usa uno aleatorio en producción).
-pub fn connect(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+pub fn connect(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let handle = net.tcp_connect(host, port)?;
     startup_and_auth(handle, user, password, database, nonce)
 }
@@ -185,7 +189,14 @@ pub fn connect(host: string, port: int, user: string, password: string, database
 /// Connects over TLS: sends the protocol's sslRequest on the plain socket, expects 'S', upgrades
 /// the SAME handle to a client TLS session (the certificate is verified against `host`), and runs
 /// the normal startup + SCRAM handshake over the encrypted channel.
-pub fn connect_tls(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+pub fn connect_tls(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let handle = net.tcp_connect(host, port)?;
     // SSLRequest (sin octeto de tipo): [longitud=8][código 80877103]. El servidor responde UN
     // octeto en claro: 'S' (adelante con TLS) o 'N' (no soporta).
@@ -197,14 +208,23 @@ pub fn connect_tls(host: string, port: int, user: string, password: string, data
     }
     let _ = match (net.tls_upgrade(handle, host)) {
         Result.Ok(h) => h,
-        Result.Err(e) => { close(handle); return Result.Err("postgres: " + e); },
+        Result.Err(e) => {
+            close(handle);
+            return Result.Err("postgres: " + e);
+        },
     };
     startup_and_auth(handle, user, password, database, nonce)
 }
 
 // El StartupMessage + handshake SCRAM hasta ReadyForQuery, sobre un handle ya conectado
 // (plano o TLS — el I/O se desvía solo por el tipo del handle).
-fn startup_and_auth(handle: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+fn startup_and_auth(
+    handle: int,
+    user: string,
+    password: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let c = Conn { handle: handle, buf: b"" };
 
     // StartupMessage (sin octeto de tipo): [longitud][versión 3.0 = 196608][params NUL][0].
@@ -223,18 +243,26 @@ fn startup_and_auth(handle: int, user: string, password: string, database: strin
             if (code == 10) {
                 // AuthenticationSASL → SASLInitialResponse ('p')
                 let cf = scram_client_first_message(sc);
-                let pl = cstr("SCRAM-SHA-256") + be32_bytes(cf.to_bytes().len()) + bytes_to_ints(cf.to_bytes());
+                let pl = cstr(
+                    "SCRAM-SHA-256"
+                ) + be32_bytes(cf.to_bytes().len()) + bytes_to_ints(cf.to_bytes());
                 let _ = send(c, 112, pl)?;
             } else {
                 if (code == 11) {
                     // AuthenticationSASLContinue (server-first) → SASLResponse
                     let sf = match (from_utf8(msg.payload.sub_bytes(4, msg.payload.len()))) {
                         Result.Ok(s) => s,
-                        Result.Err(_) => { close(handle); return Result.Err("postgres: server-first is not UTF-8"); },
+                        Result.Err(_) => {
+                            close(handle);
+                            return Result.Err("postgres: server-first is not UTF-8");
+                        },
                     };
                     let final_msg = match (scram_final(sc, password, sf)) {
                         Result.Ok(f) => f,
-                        Result.Err(e) => { close(handle); return Result.Err(e); },
+                        Result.Err(e) => {
+                            close(handle);
+                            return Result.Err(e);
+                        },
                     };
                     let _ = send(c, 112, bytes_to_ints(final_msg.to_bytes()))?;
                 } else {
@@ -242,11 +270,19 @@ fn startup_and_auth(handle: int, user: string, password: string, database: strin
                         // AuthenticationSASLFinal (server-final): verificar la firma del servidor.
                         let sfin = match (from_utf8(msg.payload.sub_bytes(4, msg.payload.len()))) {
                             Result.Ok(s) => s,
-                            Result.Err(_) => { close(handle); return Result.Err("postgres: server-final is not UTF-8"); },
+                            Result.Err(_) => {
+                                close(handle);
+                                return Result.Err("postgres: server-final is not UTF-8");
+                            },
                         };
-                        if (!scram_verify(sc, sfin)) {
+                        if (!scram_verify(
+        sc,
+        sfin
+    )) {
                             close(handle);
-                            return Result.Err("postgres: the server signature does not verify (authentication failed)");
+                            return Result.Err(
+                                "postgres: the server signature does not verify (authentication failed)"
+                            );
                         }
                     }
                     // code 0 = AuthenticationOk: nada que hacer.
@@ -270,7 +306,6 @@ fn startup_and_auth(handle: int, user: string, password: string, database: strin
 }
 
 // ── Protocolo extendido: Parse / Bind / Describe / Execute / Sync ───────────────────────────
-
 // Manda la secuencia extendida para `sql` con `params` (formato texto). El nombre de sentencia y
 // portal quedan vacíos (anónimos): una consulta por ronda, sin estado de sentencia preparada.
 fn send_extended(c: Conn, sql: string, params: [string]) -> Result<int, string> {
@@ -364,7 +399,6 @@ fn drain_until_ready(c: Conn) -> Result<int, string> {
 }
 
 // ── API pública de consulta ─────────────────────────────────────────────────────────────────
-
 /// Ejecuta una consulta con filas (SELECT…) y parámetros (`$1`, `$2`, … enlazados aparte, en
 /// formato texto → anti-inyección). Devuelve **todas** las filas; un NULL llega como "".
 pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
@@ -383,6 +417,6 @@ pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
 
 /// Cierra la sesión (Terminate 'X') y el socket.
 pub fn disconnect(c: Conn) {
-    let _ = send(c, 88, []); // 'X' Terminate
+    let _ = send(c, 88, []);  // 'X' Terminate
     close(c.handle);
 }

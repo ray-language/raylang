@@ -116,11 +116,16 @@ fn build_app() -> App {
     // Builder de std/json (M93.5): JSON ad-hoc — orden de claves preservado, escapado por
     // construcción (mira el motto con comillas) y anidando valores ToJson (el User derivado).
     app.GET("/perfil", fn(c: Ctx, r: Res) {
-        r.json_of(obj().field("user", User { id: 7, name: "Ada" }).field("motto", `di "hola"`).field("tags", list(["admin", "dev"])));
+        r.json_of(obj()
+            .field("user", User { id: 7, name: "Ada" })
+            .field("motto", `di "hola"`)
+            .field("tags", list(["admin", "dev"])));
     });
 
     app.GET("/", fn(c: Ctx, r: Res) {
-        r.html(`<h1>¡Hola desde el framework web de raylang!</h1><link rel="stylesheet" href="/assets/style.css">`);
+        r.html(
+            `<h1>¡Hola desde el framework web de raylang!</h1><link rel="stylesheet" href="/assets/style.css">`
+        );
     });
 
     // Parámetro de ruta: /users/:id → c.param("id").

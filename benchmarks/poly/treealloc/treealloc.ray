@@ -35,7 +35,7 @@ fn main() {
     var total_check = 0;
     var depth = min_depth;
     while (depth <= max_depth) {
-        let iterations = 1 << (max_depth - depth + min_depth);
+        let iterations = 1 << max_depth - depth + min_depth;
         var check = 0;
         for i in 0..iterations {
             check = check + node_count(make_tree(depth));

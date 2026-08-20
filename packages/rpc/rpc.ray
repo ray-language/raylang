@@ -18,13 +18,11 @@
 // viaja en la petición (el handler lo ve en `Req.deadline_ms` y puede recortarse). Ojo: un
 // deadline vencido deja la conexión desincronizada (la respuesta tardía quedaría en el buffer)
 // → tras un timeout, `disconnect` y reconectar. Solo VM (fibras), como el webserver.
-
 import std/net;
 import std/time;
 from std/json import parse, stringify, Json;
 
 // --- Límites de seguridad ---
-
 /// Safety limits: the maximum frame size in bytes (a hostile or buggy peer cannot make the
 /// server allocate unbounded memory). `serve`/`connect` use `default_limits()`.
 pub struct Limits {
@@ -37,7 +35,6 @@ pub fn default_limits() -> Limits {
 }
 
 // --- El framing: prefijo de longitud de 4 octetos big-endian ---
-
 // Lector bufferizado por conexión (estado mutado por referencia, como el Parser del self-hosting).
 struct Rd {
     conn: int,
@@ -61,7 +58,7 @@ fn read_exact(r: Rd, n: int) -> Result<bytes, string> {
 // Envuelve un payload en un frame: prefijo de longitud + cuerpo.
 fn frame(payload: bytes) -> bytes {
     let n = payload.len();
-    bytes_of([(n >> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255]) + payload
+    bytes_of([n >> 24 & 255, n >> 16 & 255, n >> 8 & 255, n & 255]) + payload
 }
 
 // Lee un frame completo. `Ok(None)` = EOF LIMPIO (el peer cerró entre frames — fin normal de
@@ -76,7 +73,7 @@ fn read_frame(r: Rd, max: int) -> Result<Option<bytes>, string> {
         r.buf = chunk;
     }
     let h = read_exact(r, 4)?;
-    let n = (h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3];
+    let n = h[0] << 24 | h[1] << 16 | h[2] << 8 | h[3];
     if (n > max) {
         return Result.Err("frame too large (" + to_string(n) + " > " + to_string(max) + " bytes)");
     }
@@ -85,7 +82,6 @@ fn read_frame(r: Rd, max: int) -> Result<Option<bytes>, string> {
 }
 
 // --- El sobre JSON ---
-
 fn obj_field(m: Map<string, Json>, k: string) -> Json {
     match (m.get(k)) {
         Option.Some(v) => v,
@@ -118,7 +114,13 @@ pub struct Req {
     traceparent: string,
 }
 
-fn encode_request(id: int, method: string, params: Json, deadline_ms: int, traceparent: string) -> bytes {
+fn encode_request(
+    id: int,
+    method: string,
+    params: Json,
+    deadline_ms: int,
+    traceparent: string
+) -> bytes {
     var m: Map<string, Json> = Map.new();
     m.insert("id", Json.JNum(id as float));
     m.insert("method", Json.JStr(method));
@@ -142,12 +144,17 @@ fn decode_request(b: bytes) -> Result<(int, Req), string> {
             if (id < 0 || method == "") {
                 return Result.Err("request without id or without method");
             }
-            Result.Ok((id, Req {
-                method: method,
-                params: obj_field(m, "params"),
-                deadline_ms: field_int(m, "deadline_ms", 0),
-                traceparent: field_str(m, "traceparent", ""),
-            }))
+            Result.Ok(
+                (
+                    id,
+                    Req {
+                        method: method,
+                        params: obj_field(m, "params"),
+                        deadline_ms: field_int(m, "deadline_ms", 0),
+                        traceparent: field_str(m, "traceparent", "")
+                    }
+                )
+            )
         },
         _ => Result.Err("the request is not a JSON object"),
     }
@@ -199,7 +206,6 @@ fn decode_response(b: bytes) -> Result<(int, Result<Json, string>), string> {
 }
 
 // --- El servidor ---
-
 // Atiende UNA conexión: peticiones secuenciales hasta EOF limpio (o error). El handler corre
 // en su PROPIA tarea (try_join): un panic se responde como err y la conexión sigue viva.
 fn handle_rpc(conn: int, handler: fn(Req) -> Result<Json, string>, limits: Limits) {
@@ -252,7 +258,11 @@ fn handle_rpc(conn: int, handler: fn(Req) -> Result<Json, string>, limits: Limit
 /// requests per connection). The handler maps a `Req` to `Ok(Json)` (→ `ok` on the wire) or
 /// `Err(msg)` (→ `err`); a panicking handler answers `err` without killing the connection.
 /// Prints "rpc escuchando en el puerto N". Blocks forever; VM only.
-pub fn serve(host: string, port: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+pub fn serve(
+    host: string,
+    port: int,
+    handler: fn(Req) -> Result<Json, string>
+) -> Result<int, string> {
     // Un canal al que nunca llega nada = servir para siempre (un solo bucle drenable).
     let never: Channel<int> = Channel.new();
     serve_shutdown(host, port, never, 0, handler)
@@ -261,14 +271,25 @@ pub fn serve(host: string, port: int, handler: fn(Req) -> Result<Json, string>) 
 /// Like `serve`, with graceful shutdown (the M88.1b pattern): when a value arrives on `stop`
 /// (or it is closed), the server stops accepting, drains in-flight connections for up to
 /// `drain_ms` ms, and returns Ok(0).
-pub fn serve_shutdown(host: string, port: int, stop: Channel<int>, drain_ms: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+pub fn serve_shutdown(
+    host: string,
+    port: int,
+    stop: Channel<int>,
+    drain_ms: int,
+    handler: fn(Req) -> Result<Json, string>
+) -> Result<int, string> {
     serve_shutdown_limits(host, port, default_limits(), stop, drain_ms, handler)
 }
 
 /// The production pattern: `serve` wired to OS signals (`signals()`). On SIGTERM/SIGINT it
 /// stops accepting, drains in-flight connections for up to `drain_ms` ms and returns Ok(0).
 /// Unix + VM only.
-pub fn serve_graceful(host: string, port: int, drain_ms: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+pub fn serve_graceful(
+    host: string,
+    port: int,
+    drain_ms: int,
+    handler: fn(Req) -> Result<Json, string>
+) -> Result<int, string> {
     serve_shutdown(host, port, signals(), drain_ms, handler)
 }
 
@@ -277,8 +298,18 @@ pub fn serve_graceful(host: string, port: int, drain_ms: int, handler: fn(Req) -
 // de activos vive en ESTA fibra; las conexiones avisan su fin por `done`; la bomba muere en
 // silencio observando el canal `apagado` CERRADO (un canal cerrado queda "listo", M12.4).
 /// Like `serve_shutdown`, with explicit `Limits`.
-pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
-    match (net.tcp_listen(host, port)) {
+pub fn serve_shutdown_limits(
+    host: string,
+    port: int,
+    limits: Limits,
+    stop: Channel<int>,
+    drain_ms: int,
+    handler: fn(Req) -> Result<Json, string>
+) -> Result<int, string> {
+    match (net.tcp_listen(
+    host,
+    port
+)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("rpc listening on port " + to_string(net.local_port(srv)));
@@ -373,7 +404,9 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
                     }
                 }
                 if (active > 0) {
-                    eprint("rpc off: " + to_string(active) + " connection(s) in flight when the deadline expired");
+                    eprint(
+                        "rpc off: " + to_string(active) + " connection(s) in flight when the deadline expired"
+                    );
                 }
             }
             Result.Ok(0)
@@ -382,7 +415,6 @@ pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Chan
 }
 
 // --- El cliente ---
-
 /// An RPC client: one persistent connection, sequential request/response correlated and
 /// validated by id. Build with `connect`, call with `call`/`call_deadline`/`call_full`, and
 /// release with `disconnect`. After a deadline timeout the connection may be out of sync (the
@@ -413,29 +445,47 @@ pub fn call(c: Client, method: string, params: Json) -> Result<Json, string> {
 /// and declares the budget in the request (`Req.deadline_ms`), so the server can shed work it
 /// cannot finish in time. On timeout the call fails AND the connection is out of sync —
 /// `disconnect` and reconnect.
-pub fn call_deadline(c: Client, method: string, params: Json, deadline_ms: int) -> Result<Json, string> {
+pub fn call_deadline(
+    c: Client,
+    method: string,
+    params: Json,
+    deadline_ms: int
+) -> Result<Json, string> {
     call_full(c, method, params, deadline_ms, "")
 }
 
 /// The full form: deadline (`0` = none) and W3C `traceparent` (`""` = none; build it with
 /// `net/trace` — e.g. `trace.traceparent(trace.child(t))` — it travels as an opaque string).
-pub fn call_full(c: Client, method: string, params: Json, deadline_ms: int, traceparent: string) -> Result<Json, string> {
+pub fn call_full(
+    c: Client,
+    method: string,
+    params: Json,
+    deadline_ms: int,
+    traceparent: string
+) -> Result<Json, string> {
     c.next_id = c.next_id + 1;
     let id = c.next_id;
     if (deadline_ms > 0) {
         net.set_read_timeout(c.rd.conn, deadline_ms);
     }
-    let _ = net.socket_write_bytes(c.rd.conn, encode_request(id, method, params, deadline_ms, traceparent))?;
+    let _ = net.socket_write_bytes(
+        c.rd.conn,
+        encode_request(id, method, params, deadline_ms, traceparent)
+    )?;
     let response = read_frame(c.rd, default_limits().max_frame_bytes);
     if (deadline_ms > 0) {
         net.set_read_timeout(c.rd.conn, 0);
     }
     match (response?) {
-        Option.None => Result.Err("the server closed the connection"),
+        Option.None => Result.Err(
+            "the server closed the connection"
+        ),
         Option.Some(fr) => {
             let par = decode_response(fr)?;
             if (par.0 != id) {
-                return Result.Err("response with unexpected id (" + to_string(par.0) + " != " + to_string(id) + "); reconecta");
+                return Result.Err(
+                    "response with unexpected id (" + to_string(par.0) + " != " + to_string(id) + "); reconecta"
+                );
             }
             par.1
         },

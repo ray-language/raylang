@@ -17,7 +17,15 @@ fn main() -> int {
     let token_url = "http://127.0.0.1:" + to_string(port) + "/token";
 
     // URL de autorización (flujo de código) — pura, no toca la red.
-    print(authorize_url("https://auth.example.com/authorize", "mi-cliente", "https://app.example.com/callback", "read write", "xyz123"));
+    print(
+        authorize_url(
+            "https://auth.example.com/authorize",
+            "mi-cliente",
+            "https://app.example.com/callback",
+            "read write",
+            "xyz123"
+        )
+    );
 
     // Grant client_credentials contra el token endpoint.
     match (client_credentials(token_url, "mi-cliente", "secreto", "read")) {

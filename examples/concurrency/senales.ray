@@ -31,7 +31,9 @@ fn main() -> int {
                     print("señal " + to_string(n) + ": drenando y apagando");
                     vivo = false;
                 },
-                Option.None => { vivo = false; },
+                Option.None => {
+                    vivo = false;
+                },
             }
         }
     }

@@ -486,7 +486,10 @@ fn perr_at(line: int, col: int, msg: string) -> ParseError {
 
 // Consume el token actual si es `name`; si no, error describiendo qué se esperaba.
 fn expect(p: Parser, name: string, what: string) -> Result<Token, ParseError> {
-    if (check(p, name)) { Result.Ok(advance(p)) } else { Result.Err(perr_here(p, "expected " + what)) }
+    if (check(
+    p,
+    name
+)) { Result.Ok(advance(p)) } else { Result.Err(perr_here(p, "expected " + what)) }
 }
 
 // Consume un identificador y devuelve su nombre.
@@ -544,17 +547,27 @@ fn parse_program(p: Parser) -> Result<Program, ParseError> {
                 enums.push(e);
             } else if (check(p, "trait")) {
                 if (anns.len() > 0) {
-                    return Result.Err(perr_at(anns[0].line, anns[0].col, "annotations are not allowed on a trait"));
+                    return Result.Err(
+                        perr_at(anns[0].line, anns[0].col, "annotations are not allowed on a trait")
+                    );
                 }
                 var t = trait_def(p)?;
                 t.is_pub = is_pub;
                 traits.push(t);
             } else if (check(p, "impl")) {
                 if (is_pub) {
-                    return Result.Err(perr_at(pub_line, pub_col, "'pub' is not allowed on an impl (export the trait/type, not the impl)"));
+                    return Result.Err(
+                        perr_at(
+                            pub_line,
+                            pub_col,
+                            "'pub' is not allowed on an impl (export the trait/type, not the impl)"
+                        )
+                    );
                 }
                 if (anns.len() > 0) {
-                    return Result.Err(perr_at(anns[0].line, anns[0].col, "annotations are not allowed on an impl"));
+                    return Result.Err(
+                        perr_at(anns[0].line, anns[0].col, "annotations are not allowed on an impl")
+                    );
                 }
                 impls.push(impl_block(p)?);
             } else {
@@ -565,7 +578,17 @@ fn parse_program(p: Parser) -> Result<Program, ParseError> {
             }
         }
     }
-    Result.Ok(Program { funcs: funcs, structs: structs, enums: enums, traits: traits, impls: impls, imports: imports, from_imports: from_imports })
+    Result.Ok(
+        Program {
+            funcs: funcs,
+            structs: structs,
+            enums: enums,
+            traits: traits,
+            impls: impls,
+            imports: imports,
+            from_imports: from_imports
+        }
+    )
 }
 
 // Recoge las anotaciones que preceden a una declaración: { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] }.
@@ -639,7 +662,9 @@ fn import_from_decl(p: Parser, is_pub: bool) -> Result<FromImport, ParseError> {
         }
     }
     expect(p, ";", "';' to close the 'from M import …'")?;
-    Result.Ok(FromImport { module: modpath, names: names, is_pub: is_pub, line: kw.line, col: kw.col })
+    Result.Ok(
+        FromImport { module: modpath, names: names, is_pub: is_pub, line: kw.line, col: kw.col }
+    )
 }
 
 // struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'   ;  field = IDENT ':' type
@@ -660,7 +685,18 @@ fn struct_def(p: Parser) -> Result<StructDef, ParseError> {
         }
     }
     expect(p, "}", "'}' to close the struct")?;
-    Result.Ok(StructDef { annotations: [], is_pub: false, name: name, type_params: g.params, bounds: g.bounds, fields: fields, line: kw.line, col: kw.col })
+    Result.Ok(
+        StructDef {
+            annotations: [],
+            is_pub: false,
+            name: name,
+            type_params: g.params,
+            bounds: g.bounds,
+            fields: fields,
+            line: kw.line,
+            col: kw.col
+        }
+    )
 }
 
 // enum_def = 'enum' IDENT '{' [ variant { ',' variant } [ ',' ] ] '}'
@@ -692,7 +728,18 @@ fn enum_def(p: Parser) -> Result<EnumDef, ParseError> {
         }
     }
     expect(p, "}", "'}' to close the enum")?;
-    Result.Ok(EnumDef { annotations: [], is_pub: false, name: name, type_params: g.params, bounds: g.bounds, variants: variants, line: kw.line, col: kw.col })
+    Result.Ok(
+        EnumDef {
+            annotations: [],
+            is_pub: false,
+            name: name,
+            type_params: g.params,
+            bounds: g.bounds,
+            variants: variants,
+            line: kw.line,
+            col: kw.col
+        }
+    )
 }
 
 // trait_def = 'trait' IDENT '{' { method_sig } '}'
@@ -725,7 +772,16 @@ fn method_sig(p: Parser) -> Result<MethodSig, ParseError> {
     } else {
         expect(p, ";", "';' or a '{ ... }' body for the method")?;
     }
-    Result.Ok(MethodSig { name: name, params: params, ret: ret, default_body: default_body, line: kw.line, col: kw.col })
+    Result.Ok(
+        MethodSig {
+            name: name,
+            params: params,
+            ret: ret,
+            default_body: default_body,
+            line: kw.line,
+            col: kw.col
+        }
+    )
 }
 
 // impl_block = 'impl' [ '<' tparams '>' ] IDENT 'for' type '{' { impl_method } '}'
@@ -737,7 +793,9 @@ fn impl_block(p: Parser) -> Result<ImplBlock, ParseError> {
     let for_tok = cur_tok(p);
     let kw_for = expect_ident(p, "'for' after the trait name")?;
     if (kw_for != "for") {
-        return Result.Err(perr_at(for_tok.line, for_tok.col, "expected 'for', not '" + kw_for + "'"));
+        return Result.Err(
+            perr_at(for_tok.line, for_tok.col, "expected 'for', not '" + kw_for + "'")
+        );
     }
     let target = parse_type(p)?;
     expect(p, "{", "'{' to open the impl body")?;
@@ -746,7 +804,17 @@ fn impl_block(p: Parser) -> Result<ImplBlock, ParseError> {
         methods.push(impl_method(p)?);
     }
     expect(p, "}", "'}' to close the impl")?;
-    Result.Ok(ImplBlock { trait_name: trait_name, type_params: g.params, bounds: g.bounds, target: target, methods: methods, line: kw.line, col: kw.col })
+    Result.Ok(
+        ImplBlock {
+            trait_name: trait_name,
+            type_params: g.params,
+            bounds: g.bounds,
+            target: target,
+            methods: methods,
+            line: kw.line,
+            col: kw.col
+        }
+    )
 }
 
 // impl_method = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] block
@@ -763,7 +831,20 @@ fn impl_method(p: Parser) -> Result<Func, ParseError> {
     let body = block(p)?;
     var tp: [string] = [];
     var bd: [Bound] = [];
-    Result.Ok(Func { annotations: [], is_pub: false, name: name, type_params: tp, bounds: bd, params: params, ret: ret, body: body, line: kw.line, col: kw.col })
+    Result.Ok(
+        Func {
+            annotations: [],
+            is_pub: false,
+            name: name,
+            type_params: tp,
+            bounds: bd,
+            params: params,
+            ret: ret,
+            body: body,
+            line: kw.line,
+            col: kw.col
+        }
+    )
 }
 
 // method_params = [ 'self' [ ',' param { ',' param } ] ] | [ params ]
@@ -821,7 +902,20 @@ fn function(p: Parser) -> Result<Func, ParseError> {
         ret = parse_type(p)?;
     }
     let body = block(p)?;
-    Result.Ok(Func { annotations: [], is_pub: false, name: name, type_params: g.params, bounds: g.bounds, params: params, ret: ret, body: body, line: kw.line, col: kw.col })
+    Result.Ok(
+        Func {
+            annotations: [],
+            is_pub: false,
+            name: name,
+            type_params: g.params,
+            bounds: g.bounds,
+            params: params,
+            ret: ret,
+            body: body,
+            line: kw.line,
+            col: kw.col
+        }
+    )
 }
 
 // params = param { ',' param } ;  param = IDENT ':' type
@@ -896,7 +990,14 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
         _ => { },
     }
     // Tipos primitivos.
-    if (eat(p, "int")) { Result.Ok(Type.TInt) } else if (eat(p, "float")) { Result.Ok(Type.TFloat) } else if (eat(p, "bool")) { Result.Ok(Type.TBool) } else if (eat(p, "string")) { Result.Ok(Type.TString) } else if (eat(p, "char")) { Result.Ok(Type.TChar) } else { Result.Err(perr_here(p, "expected a type (int, float, bool, string, char, bytes, [T] or a struct)")) }
+    if (eat(
+    p,
+    "int"
+)) { Result.Ok(Type.TInt) } else if (eat(p, "float")) { Result.Ok(Type.TFloat) } else if (eat(p, "bool")) { Result.Ok(Type.TBool) } else if (eat(p, "string")) { Result.Ok(Type.TString) } else if (eat(p, "char")) { Result.Ok(Type.TChar) } else {
+        Result.Err(
+            perr_here(p, "expected a type (int, float, bool, string, char, bytes, [T] or a struct)")
+        )
+    }
 }
 
 // Lista opcional de argumentos de tipo: `< type { ',' type } >` (genéricos). Vacío si no hay `<`.
@@ -1178,7 +1279,10 @@ fn call(p: Parser) -> Result<Expr, ParseError> {
     while (keep_going) {
         let line = expr.line;
         let col = expr.col;
-        if (check(p, "(")) {
+        if (check(
+        p,
+        "("
+    )) {
             advance(p);
             var cargs: [Expr] = [];
             if (!check(p, ")")) {
@@ -1286,7 +1390,10 @@ fn primary(p: Parser) -> Result<Expr, ParseError> {
             advance(p);
             // `Nombre { ... }` es un literal de struct (las condiciones de if/while/match van entre
             // paréntesis, así que no hay ambigüedad con los bloques).
-            if (check(p, "{")) { struct_literal(p, name, t.line, t.col) } else { Result.Ok(Expr { kind: EKind.EIdent(name), line: t.line, col: t.col }) }
+            if (check(
+            p,
+            "{"
+        )) { struct_literal(p, name, t.line, t.col) } else { Result.Ok(Expr { kind: EKind.EIdent(name), line: t.line, col: t.col }) }
         },
         TokKind.LParen => {
             advance(p);
@@ -1433,7 +1540,9 @@ fn pattern(p: Parser) -> Result<Pattern, ParseError> {
             }
             expect(p, ")", "')' to close the variant pattern")?;
         }
-        return Result.Ok(Pattern { kind: PKind.PVariant(enum_name, variant, bindings), line: t.line, col: t.col });
+        return Result.Ok(
+            Pattern { kind: PKind.PVariant(enum_name, variant, bindings), line: t.line, col: t.col }
+        );
     }
     Result.Ok(Pattern { kind: PKind.PBind(name), line: t.line, col: t.col })
 }

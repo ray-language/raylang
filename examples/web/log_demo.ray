@@ -22,7 +22,15 @@ fn main() {
     print(render(info(lg, "servidor iniciado"), ts));
 
     // Campos encadenados por UFCS (cross-module): string + int.
-    print(render(info(lg, "peticion").field("method", "GET").field("path", "/users/42").field_int("status", 200), ts));
+    print(
+        render(
+            info(lg, "peticion")
+                .field("method", "GET")
+                .field("path", "/users/42")
+                .field_int("status", 200),
+            ts
+        )
+    );
 
     // Niveles + tipos de campo (int, bool).
     print(render(warn(lg, "latencia alta").field_int("ms", 1500).field_bool("retry", true), ts));

@@ -24,7 +24,9 @@ fn main() -> int {
     }
     var cert = "";
     match (fs.read_file(a[0])) {
-        Result.Ok(c) => { cert = c; },
+        Result.Ok(c) => {
+            cert = c;
+        },
         Result.Err(e) => {
             eprint("certificado: " + e);
             return 1;
@@ -32,7 +34,9 @@ fn main() -> int {
     }
     var key = "";
     match (fs.read_file(a[1])) {
-        Result.Ok(k) => { key = k; },
+        Result.Ok(k) => {
+            key = k;
+        },
         Result.Err(e) => {
             eprint("clave: " + e);
             return 1;

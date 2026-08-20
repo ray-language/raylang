@@ -3,7 +3,6 @@
 // same program yields different values across runs — or call `seed(n)` for a reproducible sequence
 // (M68.1). NOT cryptographically secure: secrets (tokens/salts/nonces) come from
 // `crypto.random_bytes` (M68.2). The functions wrap internal primitives (`__random`/`__random_int`).
-
 /// A pseudo-random float uniformly distributed in `[0.0, 1.0)`.
 pub fn next() -> float { __random() }
 
@@ -11,7 +10,6 @@ pub fn next() -> float { __random() }
 pub fn below(n: int) -> int { __random_int(n) }
 
 // --- M68.1: reproducibilidad + el kit estándar sobre `below` (raylang puro, cero opcodes). ---
-
 /// Seeds the generator: the same seed yields the same sequence (reproducible simulations,
 /// shareable game seeds, deterministic tests). Without it, the seed comes from the clock.
 pub fn seed(n: int) {

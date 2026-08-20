@@ -80,7 +80,9 @@ fn main() -> int {
     // devuelven otro iterador que solo calcula al recorrerse. Se encadenan. Aquí: de 1..21, elevar
     // al cuadrado, quedarnos con los múltiplos de 10, y sumarlos.
     var s = 0;
-    let cadena = range(1, 21).map(fn(n: int) -> int { n * n }).filter(fn(n: int) -> bool { n % 10 == 0 });
+    let cadena = range(1, 21)
+        .map(fn(n: int) -> int { n * n })
+        .filter(fn(n: int) -> bool { n % 10 == 0 });
     for x in cadena {
         s = s + x;
     }

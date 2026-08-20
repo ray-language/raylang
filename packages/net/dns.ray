@@ -385,7 +385,9 @@ pub fn format_records(recs: [Record]) -> [string] {
                 out.push(name);
             },
             Record.Srv(prio, peso, port, target) => {
-                out.push(to_string(prio) + " " + to_string(peso) + " " + to_string(port) + " " + target);
+                out.push(
+                    to_string(prio) + " " + to_string(peso) + " " + to_string(port) + " " + target
+                );
             },
             Record.Other(_) => { },
         }
@@ -438,7 +440,9 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
                             // M72.2: la respuesta debe llevar el ID de la consulta (anti-spoofing).
                             let rid = be16(pkt.data, 0)?;
                             if (rid != id) {
-                                Result.Err("DNS response ID does not match the query (possible spoofing)")
+                                Result.Err(
+                                    "DNS response ID does not match the query (possible spoofing)"
+                                )
                             } else {
                                 parse_full(pkt.data)
                             }

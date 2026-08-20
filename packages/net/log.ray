@@ -101,7 +101,9 @@ fn level_name(level: int) -> string {
 // Cuatro dígitos hex en minúscula de `n` (0..65535), para el escape \uXXXX.
 fn hex4(n: int) -> string {
     let digs = "0123456789abcdef";
-    to_string(digs[n >> 12 & 15]) + to_string(digs[n >> 8 & 15]) + to_string(digs[n >> 4 & 15]) + to_string(digs[n & 15])
+    to_string(
+        digs[n >> 12 & 15]
+    ) + to_string(digs[n >> 8 & 15]) + to_string(digs[n >> 4 & 15]) + to_string(digs[n & 15])
 }
 
 // Escapa una cadena para incrustarla en JSON. M70: cubre TODO control < 0x20 (RFC 8259;
@@ -150,7 +152,9 @@ pub fn render(e: LogEntry, ts: string) -> string {
     // Igual que `json_escape`: acumula partes + join al final (no `out = out + ...` repetido,
     // O(n²) — cada `+` de string es una asignación de heap nueva, no in-place).
     var parts: [string] = [];
-    parts.push("{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\"");
+    parts.push(
+        "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\""
+    );
     if (e.lg.trace_id != "") {
         parts.push(",\"trace_id\":\"" + json_escape(e.lg.trace_id) + "\"");
     }

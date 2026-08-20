@@ -19,15 +19,33 @@ fn build_app() -> App {
         r.json(`{"id":"${id}","name":"Ada"}`);
     });
     // Relleno hasta 10 rutas, para igualar el tamaño de la tabla entre implementaciones.
-    app.GET("/", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/health", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/version", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/items", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/items/:id", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/orders", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/orders/:id", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/posts", fn(c: Ctx, r: Res) { r.json("{}"); });
-    app.GET("/posts/:id", fn(c: Ctx, r: Res) { r.json("{}"); });
+    app.GET("/", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/health", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/version", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/items", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/items/:id", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/orders", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/orders/:id", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/posts", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
+    app.GET("/posts/:id", fn(c: Ctx, r: Res) {
+        r.json("{}");
+    });
     app
 }
 

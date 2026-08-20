@@ -189,7 +189,9 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
     while (!at_end(lx) && is_digit(cur(lx))) {
         advance(lx);
     }
-    let has_dot = !at_end(lx) && cur(lx) == '.' && lx.pos + 1 < lx.chars.len() && is_digit(lx.chars[lx.pos + 1]);
+    let has_dot = !at_end(
+        lx
+    ) && cur(lx) == '.' && lx.pos + 1 < lx.chars.len() && is_digit(lx.chars[lx.pos + 1]);
     if (has_dot) {
         advance(lx);  // el '.'
         while (!at_end(lx) && is_digit(cur(lx))) {
@@ -292,7 +294,9 @@ fn string_delim(lx: Lexer, delim: char) -> Result<TokKind, LexError> {
             } else if (e == '$') {
                 value = value + to_string('$');
             } else {
-                return Result.Err(lex_error(lx, "invalid escape sequence '\\" + to_string(e) + "'"));
+                return Result.Err(
+                    lex_error(lx, "invalid escape sequence '\\" + to_string(e) + "'")
+                );
             }
             advance(lx);  // el carácter escapado
         } else {
@@ -343,7 +347,9 @@ fn char_lit(lx: Lexer) -> Result<TokKind, LexError> {
         advance(lx);  // comilla de cierre
         Result.Ok(TokKind.Char(c))
     } else {
-        Result.Err(lex_error(lx, "expected ''' to close the char literal (more than one character?)"))
+        Result.Err(
+            lex_error(lx, "expected ''' to close the char literal (more than one character?)")
+        )
     }
 }
 
@@ -353,7 +359,10 @@ fn next_token(lx: Lexer) -> Result<TokKind, LexError> {
     if (c == '+') { Result.Ok(TokKind.Plus) } else if (c == '-') {
         if (match_char(lx, '>')) { Result.Ok(TokKind.Arrow) } else { Result.Ok(TokKind.Minus) }
     } else if (c == '*') { Result.Ok(TokKind.Star) } else if (c == '/') { Result.Ok(TokKind.Slash) } else if (c == '%') { Result.Ok(TokKind.Percent) } else if (c == '(') { Result.Ok(TokKind.LParen) } else if (c == ')') { Result.Ok(TokKind.RParen) } else if (c == '{') { Result.Ok(TokKind.LBrace) } else if (c == '}') { Result.Ok(TokKind.RBrace) } else if (c == '[') { Result.Ok(TokKind.LBracket) } else if (c == ']') { Result.Ok(TokKind.RBracket) } else if (c == ',') { Result.Ok(TokKind.Comma) } else if (c == ';') { Result.Ok(TokKind.Semicolon) } else if (c == ':') { Result.Ok(TokKind.Colon) } else if (c == '.') { Result.Ok(TokKind.Dot) } else if (c == '?') { Result.Ok(TokKind.Question) } else if (c == '@') { Result.Ok(TokKind.At) } else if (c == '=') {
-        if (match_char(lx, '=')) { Result.Ok(TokKind.EqEq) } else if (match_char(lx, '>')) { Result.Ok(TokKind.FatArrow) } else { Result.Ok(TokKind.Eq) }
+        if (match_char(
+    lx,
+    '='
+)) { Result.Ok(TokKind.EqEq) } else if (match_char(lx, '>')) { Result.Ok(TokKind.FatArrow) } else { Result.Ok(TokKind.Eq) }
     } else if (c == '!') {
         if (match_char(lx, '=')) { Result.Ok(TokKind.BangEq) } else { Result.Ok(TokKind.Bang) }
     } else if (c == '<') {
@@ -361,9 +370,15 @@ fn next_token(lx: Lexer) -> Result<TokKind, LexError> {
     } else if (c == '>') {
         if (match_char(lx, '=')) { Result.Ok(TokKind.GtEq) } else { Result.Ok(TokKind.Gt) }
     } else if (c == '&') {
-        if (match_char(lx, '&')) { Result.Ok(TokKind.AmpAmp) } else { Result.Err(lex_error(lx, "expected '&&' (did you forget a '&'?)")) }
+        if (match_char(
+    lx,
+    '&'
+)) { Result.Ok(TokKind.AmpAmp) } else { Result.Err(lex_error(lx, "expected '&&' (did you forget a '&'?)")) }
     } else if (c == '|') {
-        if (match_char(lx, '|')) { Result.Ok(TokKind.PipePipe) } else if (match_char(lx, '>')) { Result.Ok(TokKind.PipeArrow) } else { Result.Err(lex_error(lx, "expected '||' or '|>' (did you forget a '|'?)")) }
+        if (match_char(
+    lx,
+    '|'
+)) { Result.Ok(TokKind.PipePipe) } else if (match_char(lx, '>')) { Result.Ok(TokKind.PipeArrow) } else { Result.Err(lex_error(lx, "expected '||' or '|>' (did you forget a '|'?)")) }
     } else if (c == '"') { string_delim(lx, '"') } else if (c == '`') { string_delim(lx, '`') } else if (c == '\'') { char_lit(lx) } else if (is_digit(c)) { number(lx) } else if (is_alpha(c)) { Result.Ok(identifier(lx)) } else { Result.Err(lex_error(lx, "unexpected character '" + to_string(c) + "'")) }
 }
 

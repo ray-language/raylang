@@ -3,7 +3,6 @@
 // Hashes/MACs take and return `bytes`; the fallible ones (Ed25519 sign/key from a 32-byte seed,
 // ChaCha20-Poly1305 whose sizes must match, `open` which also authenticates) return `Option<bytes>`.
 // The functions wrap engine-side primitives (`__sha256`, `__ed25519_sign`, …).
-
 // M68.2: aleatoriedad criptográfica. El PRNG de `std/random` (SplitMix64 sembrado del reloj)
 // es para simulación/jitter; los SECRETOS salen de aquí.
 /// `n` cryptographically secure random bytes from the OS CSPRNG. Use this — not `std/random` —
@@ -44,14 +43,24 @@ pub fn ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool {
 
 /// ChaCha20-Poly1305 AEAD encryption: returns ciphertext followed by the authentication tag. The key
 /// must be 32 bytes and the nonce 12; `None` if the sizes are wrong.
-pub fn chacha20poly1305_seal(key: bytes, nonce: bytes, aad: bytes, plaintext: bytes) -> Option<bytes> {
+pub fn chacha20poly1305_seal(
+    key: bytes,
+    nonce: bytes,
+    aad: bytes,
+    plaintext: bytes
+) -> Option<bytes> {
     let r = __chacha20poly1305_seal(key, nonce, aad, plaintext);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 /// ChaCha20-Poly1305 AEAD decryption: verifies and decrypts; `None` if authentication fails (tampered
 /// data) or the sizes are wrong.
-pub fn chacha20poly1305_open(key: bytes, nonce: bytes, aad: bytes, ciphertext: bytes) -> Option<bytes> {
+pub fn chacha20poly1305_open(
+    key: bytes,
+    nonce: bytes,
+    aad: bytes,
+    ciphertext: bytes
+) -> Option<bytes> {
     let r = __chacha20poly1305_open(key, nonce, aad, ciphertext);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }

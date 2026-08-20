@@ -65,7 +65,15 @@ fn sanitize(s: string) -> string {
 
 // Crea una cookie con solo nombre y valor (sin atributos).
 pub fn cookie(name: string, value: string) -> Cookie {
-    Cookie { name: name, value: value, path: "", max_age: 0 - 1, http_only: false, secure: false, same_site: "" }
+    Cookie {
+        name: name,
+        value: value,
+        path: "",
+        max_age: 0 - 1,
+        http_only: false,
+        secure: false,
+        same_site: ""
+    }
 }
 
 // Setters encadenables (mutan por referencia y devuelven la cookie). Nombres `with_*` para no chocar

@@ -15,7 +15,6 @@
 //   ray run                                  # escucha en el puerto 8080
 //   curl http://127.0.0.1:8080/
 //   curl http://127.0.0.1:8080/lang/rust
-
 import net/webserver;
 import vistas/vista_inicio;
 
@@ -49,7 +48,8 @@ fn pagina(req: webserver.Request) -> webserver.Response {
             "raylang SSR",
             "Elige un lenguaje: prueba /lang/rust",
             false,
-            ["raylang", "rust", "lua", "python"]);
+            ["raylang", "rust", "lua", "python"]
+        );
         return webserver.html_response(200, html);
     }
     if (req.path.starts_with("/lang/")) {
@@ -58,7 +58,8 @@ fn pagina(req: webserver.Request) -> webserver.Response {
             "raylang SSR — " + lang,
             "Estás viendo: " + lang,
             es_popular(lang),
-            [lang]);
+            [lang]
+        );
         return webserver.html_response(200, html);
     }
     webserver.not_found()

@@ -32,7 +32,11 @@ fn bajo_stock(inv: [Producto], umbral: int) -> int {
 }
 
 fn main() -> int {
-    var inv: [Producto] = [Producto { nombre: "teclado", precio: 25, cantidad: 8 }, Producto { nombre: "mouse", precio: 15, cantidad: 3 }, Producto { nombre: "monitor", precio: 180, cantidad: 2 }];
+    var inv: [Producto] = [
+        Producto { nombre: "teclado", precio: 25, cantidad: 8 },
+        Producto { nombre: "mouse", precio: 15, cantidad: 3 },
+        Producto { nombre: "monitor", precio: 180, cantidad: 2 }
+    ];
 
     print(valor_total(inv));  // 25*8 + 15*3 + 180*2 = 605
     print(bajo_stock(inv, 5));  // 2 (mouse y monitor)

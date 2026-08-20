@@ -10,7 +10,6 @@
 //
 // Los ids salen del PRNG del runtime (`std/random`, sembrable en tests): identifican, no
 // autentican — no necesitan cripto (mismo criterio que `uuid_v4`).
-
 import std/random;
 
 /// A W3C Trace Context: the end-to-end `trace_id` (32 lowercase hex digits, shared by every
@@ -66,7 +65,7 @@ fn is_lower_hex(s: string) -> bool {
     var i = 0;
     while (i < cs.len()) {
         let c = cs[i];
-        let ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        let ok = c >= '0' && c <= '9' || c >= 'a' && c <= 'f';
         if (!ok) {
             return false;
         }
@@ -102,7 +101,9 @@ pub fn parse_traceparent(s: string) -> Option<Trace> {
     if (version.len() != 2 || tid.len() != 32 || sid.len() != 16 || flags.len() != 2) {
         return Option.None;
     }
-    if (!is_lower_hex(version) || !is_lower_hex(tid) || !is_lower_hex(sid) || !is_lower_hex(flags)) {
+    if (!is_lower_hex(
+        version
+    ) || !is_lower_hex(tid) || !is_lower_hex(sid) || !is_lower_hex(flags)) {
         return Option.None;
     }
     if (version != "00" || all_zero(tid) || all_zero(sid)) {

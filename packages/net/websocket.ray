@@ -50,7 +50,9 @@ pub fn extract_key(request: string) -> string {
 /// Builds the complete HTTP `101 Switching Protocols` response that finishes the
 /// server-side WebSocket handshake for the given client key (RFC 6455 §4.2.2).
 pub fn handshake_response(key: string) -> string {
-    "HTTP/1.1 101 Switching Protocols\r\n" + "Upgrade: websocket\r\n" + "Connection: Upgrade\r\n" + "Sec-WebSocket-Accept: " + accept_key(key) + "\r\n\r\n"
+    "HTTP/1.1 101 Switching Protocols\r\n" + "Upgrade: websocket\r\n" + "Connection: Upgrade\r\n" + "Sec-WebSocket-Accept: " + accept_key(
+        key
+    ) + "\r\n\r\n"
 }
 
 // --- Framing ---
@@ -207,7 +209,6 @@ pub fn encode_frame_masked(opcode: int, payload: bytes) -> bytes {
 }
 
 // --- Lectura robusta (M58.1): buffer entre lecturas + control + fragmentación ---
-
 // El estado de una conexión WebSocket: el socket, el buffer de octetos sobrantes (una lectura
 // puede traer media trama o trama y media) y el lado (los frames de control que emitimos —pong,
 // close de cortesía— van enmascarados si somos el cliente).
@@ -263,7 +264,9 @@ fn frame_total(b: bytes, max_payload: int) -> Result<int, string> {
         }
     }
     if (plen > max_payload || plen < 0) {
-        return Result.Err("frame too large (" + to_string(plen) + " > " + to_string(max_payload) + " bytes)");
+        return Result.Err(
+            "frame too large (" + to_string(plen) + " > " + to_string(max_payload) + " bytes)"
+        );
     }
     if (masked) {
         off = off + 4;
@@ -346,7 +349,9 @@ pub fn read_message_limit(ws: WsConn, max_payload: int) -> Result<Frame, string>
                 return Result.Err("continuation frame without a fragmented message in progress");
             }
             if (acc.len() + f.payload.len() > max_payload) {
-                return Result.Err("fragmented message too large (> " + to_string(max_payload) + " bytes)");
+                return Result.Err(
+                    "fragmented message too large (> " + to_string(max_payload) + " bytes)"
+                );
             }
             acc = acc + f.payload;
             if (f.fin) {

@@ -9,7 +9,6 @@
 // Tabla hash bucketed EN raylang, hermana de `std/collections/set` (buckets paralelos de
 // entradas, rehash al doble cuando la carga media supera 2 por bucket → O(1) amortizado).
 // Con leaf-binding (`import std/collections/dict;`): `dict.new()`/`dict.insert(d, k, v)`/…
-
 /// One key/value entry of a `Dict`. Exposed so `items` can return the pairs.
 pub struct Entry<K, V> {
     key: K,

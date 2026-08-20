@@ -8,7 +8,6 @@
 //
 // UDP no está aquí: sus envoltorios ya viven en el módulo `net/udp` del paquete `net` (sobre los
 // primitivos `__udp_*`), así que nunca ensuciaron el namespace global.
-
 // --- I/O binaria de sockets (M16.1c) ---
 /// Performs one raw read from the socket; `Ok(bytes)` (empty = EOF) or `Err(message)`.
 pub fn socket_read_bytes(h: int) -> Result<bytes, string> {

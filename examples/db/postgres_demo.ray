@@ -8,7 +8,6 @@
 //
 // Ejemplo contra un PostgreSQL local:
 //   ray run postgres_demo.ray 127.0.0.1 5432 raylang secret test
-
 import db/postgres;
 
 fn main() -> int {
@@ -20,13 +19,19 @@ fn main() -> int {
     let host = a[0];
     let port = match (parse_int(a[1])) {
         Option.Some(p) => p,
-        Option.None => { print("puerto inválido: " + a[1]); return 64; },
+        Option.None => {
+            print("puerto inválido: " + a[1]);
+            return 64;
+        },
     };
 
     // 1. Conectar (startup + SCRAM-SHA-256). El nonce sería aleatorio en producción.
     var c = match (postgres.connect(host, port, a[2], a[3], a[4], "clientnonce123456")) {
         Result.Ok(conn) => conn,
-        Result.Err(e) => { print("could not connect: " + e); return 1; },
+        Result.Err(e) => {
+            print("could not connect: " + e);
+            return 1;
+        },
     };
     print("conectado a PostgreSQL en " + host + ":" + to_string(port));
 
@@ -38,7 +43,9 @@ fn main() -> int {
                 print("  " + fila.join(" | "));
             }
         },
-        Result.Err(e) => { print("error en la consulta: " + e); },
+        Result.Err(e) => {
+            print("error en la consulta: " + e);
+        },
     }
 
     // 3. Insertar dentro de una transacción (BEGIN / INSERT con parámetro / COMMIT).

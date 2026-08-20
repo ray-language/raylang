@@ -24,12 +24,12 @@ pub struct NtpResult {
 // La época NTP (1900-01-01) precede a la Unix (1970-01-01) en 2 208 988 800 segundos.
 // Un timestamp 32.32 pasa a ms Unix: segundos re-anclados * 1000 + la fracción escalada.
 fn ntp_to_unix_ms(sec: int, frac: int) -> int {
-    (sec - 2208988800) * 1000 + ((frac * 1000) >> 32)
+    (sec - 2208988800) * 1000 + (frac * 1000 >> 32)
 }
 
 // Lee un u32 big-endian de `b` en el offset `i` (cabe de sobra en el int de 64 bits).
 fn read_u32(b: bytes, i: int) -> int {
-    (b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]
+    b[i] << 24 | b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]
 }
 
 // Interpreta los 48 octetos de la respuesta contra las marcas locales t1/t4.
@@ -53,12 +53,14 @@ fn parse_response(b: bytes, t1: int, t4: int) -> Result<NtpResult, string> {
     }
     let t2 = ntp_to_unix_ms(read_u32(b, 32), read_u32(b, 36));  // Receive Timestamp
     let t3 = ntp_to_unix_ms(read_u32(b, 40), read_u32(b, 44));  // Transmit Timestamp
-    Result.Ok(NtpResult {
-        unix_millis: t3,
-        offset_millis: ((t2 - t1) + (t3 - t4)) / 2,
-        delay_millis: (t4 - t1) - (t3 - t2),
-        stratum: stratum,
-    })
+    Result.Ok(
+        NtpResult {
+            unix_millis: t3,
+            offset_millis: (t2 - t1 + (t3 - t4)) / 2,
+            delay_millis: t4 - t1 - (t3 - t2),
+            stratum: stratum
+        }
+    )
 }
 
 /// Queries an SNTP v4 server (RFC 4330) at `host:port` (the standard port is 123) and

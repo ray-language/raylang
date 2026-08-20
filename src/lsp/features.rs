@@ -748,6 +748,30 @@ pub(super) enum ImportCtx {
     ModulePath,
 }
 
+/// El prefijo **lógico** del import en el que está el cursor: desde el inicio de la sentencia hasta
+/// el cursor, con los saltos de línea colapsados a espacios. Desde M104 `ray fmt` reparte un
+/// `from … import` largo en varias líneas, así que el prefijo de la línea ACTUAL (`    GET,`) ya no
+/// dice nada: hay que subir hasta la línea del `from`. Se para en la línea anterior que cerró una
+/// sentencia (`;`) o en una línea en blanco, y sube como mucho `MAX_LOOKBACK` líneas.
+pub(super) fn import_statement_prefix(lines: &[&str], line0: usize, prefix: &str) -> String {
+    const MAX_LOOKBACK: usize = 64;
+    let mut start = line0;
+    while start > 0 && line0 - start < MAX_LOOKBACK {
+        let prev = lines[start - 1];
+        if prev.trim().is_empty() || prev.contains(';') {
+            break;
+        }
+        start -= 1;
+    }
+    let mut logical = String::new();
+    for l in &lines[start..line0] {
+        logical.push_str(l.trim());
+        logical.push(' ');
+    }
+    logical.push_str(prefix);
+    logical
+}
+
 /// Detecta el contexto de import a partir del prefijo de la línea hasta el cursor (M45c).
 /// Reconoce `import <ruta>`, `[pub] from <ruta> import <símbolos>` (y su fase de ruta). Devuelve
 /// `None` si la línea no es un import.
@@ -982,11 +1006,14 @@ pub(super) fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String
 /// está en un contexto de import completable (entonces se sigue con miembro/archivo). Las rutas de
 /// módulo (`import …`) se resuelven en `module_path_completion_items`.
 pub(super) fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
-    let line = src.split('\n').nth(line0)?;
+    let lines: Vec<&str> = src.split('\n').collect();
+    let line = *lines.get(line0)?;
     let chars: Vec<char> = line.chars().collect();
     let col = char0.min(chars.len());
     let prefix: String = chars[..col].iter().collect();
-    let ctx = import_context(&prefix)?;
+    // El contexto se reconstruye desde el inicio de la SENTENCIA: el import puede venir envuelto en
+    // varias líneas (M104) y el cursor estar en una de continuación.
+    let ctx = import_context(&import_statement_prefix(&lines, line0, &prefix))?;
     let entry = uri.and_then(uri_to_path)?;
     match ctx {
         ImportCtx::Symbols(path) => {

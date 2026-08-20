@@ -755,6 +755,21 @@ fn main() -> int {
 Los **tipos** también cruzan módulos: `from geo/punto import Punto;`, o calificado `punto.Punto { x: 1, y: 2 }`
 y `punto.Color.Rojo` (en anotaciones, literales y patrones).
 
+Una lista larga de nombres se puede repartir en **varias líneas** —el léxico ignora los saltos— y admite
+**coma final**. `ray fmt` lo decide por ancho: deja el import en una línea si cabe en 100 columnas y lo
+envuelve a un nombre por línea si no.
+
+```ray
+from web/framework import
+    new_app,
+    GET,
+    POST,
+    listen_graceful,
+    static_files_cached;
+
+from std/json import obj, field, list;   // cabe en 100 columnas → una línea
+```
+
 ### Cápsulas (`mod.ray`)
 
 Un directorio con un `mod.ray` es una **cápsula**: `import geo;` carga `geo/mod.ray`, que define la **cara

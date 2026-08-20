@@ -115,6 +115,9 @@ from std/json import obj, field;     // unqualified names (alias: import x as y)
 pub fn api() -> int { 1 }            // pub = exported; private by default
 ```
 
+A long `from … import` may be split across lines (a trailing comma is allowed); `ray fmt`
+keeps it on one line if it fits in 100 columns and wraps it one name per line if not.
+
 One file = one module. Types cross modules with `pub` + `from M import Type`. A
 `dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
 are private. Inside a module, calls to its own functions and UFCS both resolve

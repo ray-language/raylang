@@ -23,6 +23,11 @@ use crate::ast::*;
 
 const INDENT: &str = "    "; // 4 espacios
 
+/// Ancho máximo de una línea emitida. Hoy solo lo consulta `from … import` (M104): el resto del
+/// formateador es de **una construcción, una línea** y no reparte expresiones por el margen. 100 es el
+/// ancho de facto del código raylang del repo (p95 = 99 columnas) y el `max_width` de rustfmt.
+const MAX_WIDTH: usize = 100;
+
 /// Formatea el código fuente con la indentación **canónica** (4 espacios, estilo gofmt). Es lo que usa
 /// `ray fmt`. Devuelve el texto formateado, o un error de lexer/parser (ya formateado).
 pub fn format_source(src: &str) -> Result<String, String> {
@@ -318,9 +323,25 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
             Top::Fn(it) => fmt_function(cur, it),
             Top::Extern(lib, blocking) => fmt_extern_block(lib, *blocking, &p.externs),
         };
-        out.push_str(&text);
-        if !text.contains('\n') {
-            out.push_str(&cur.trailing_on(*line));
+        // El trailing de un `from … import` se emite también cuando el ítem se ENVUELVE (M104), y va
+        // tras `import`, en la PRIMERA línea: así al re-formatear sigue siendo el trailing de
+        // `it.line` y el formateador es idempotente (al final de la lista no lo sería).
+        let trail = if !text.contains('\n') || matches!(top, Top::FromImport(_)) {
+            cur.trailing_on(*line)
+        } else {
+            String::new()
+        };
+        match text.split_once('\n') {
+            Some((head, rest)) if !trail.is_empty() => {
+                out.push_str(head);
+                out.push_str(&trail);
+                out.push('\n');
+                out.push_str(rest);
+            }
+            _ => {
+                out.push_str(&text);
+                out.push_str(&trail);
+            }
         }
         out.push('\n');
     }
@@ -348,13 +369,31 @@ fn fmt_import(it: &ImportDecl) -> String {
     }
 }
 
+/// `from M import a, b, c;` en UNA línea si cabe en [`MAX_WIDTH`]; si no, **un nombre por línea**
+/// (M104). Envolver es todo-o-nada, nunca relleno hasta el margen: así añadir o quitar un nombre es
+/// una línea del diff. La lista envuelta NO lleva coma final —sin llaves que cierren, el `;` quedaría
+/// colgando en su propia línea— aunque el parser sí la tolera para quien la escriba a mano.
 fn fmt_from_import(it: &FromImport) -> String {
     let names: Vec<String> = it.names.iter().map(|n| match &n.alias {
         Some(a) => format!("{} as {}", n.name, a),
         None => n.name.clone(),
     }).collect();
     let pref = if it.is_pub { "pub " } else { "" };
-    format!("{}from {} import {};", pref, it.module, names.join(", "))
+    let one_line = format!("{}from {} import {};", pref, it.module, names.join(", "));
+    // Se mide la línea RENDERIDA completa (`pub`, módulo, alias y `;`), no el nº de nombres: lo que
+    // molesta es el ancho. Con un solo nombre no hay nada que repartir, así que nunca se envuelve.
+    if names.len() < 2 || one_line.chars().count() <= MAX_WIDTH {
+        return one_line;
+    }
+    let mut s = format!("{}from {} import\n", pref, it.module);
+    for (i, n) in names.iter().enumerate() {
+        let sep = if i + 1 == names.len() { ";" } else { "," };
+        s.push_str(&format!("{}{}{}", INDENT, n, sep));
+        if i + 1 < names.len() {
+            s.push('\n');
+        }
+    }
+    s
 }
 
 fn fmt_const(cur: &mut Cur, it: &ConstDef) -> String {
@@ -1210,6 +1249,61 @@ mod tests {
         // Anidado: `scope(fn() { spawn(fn() { … }) })`.
         let nested = "fn main() -> int {\n    scope(fn() {\n        spawn(fn() {\n            send(ch, 7);\n        });\n    });\n    0\n}\n";
         assert_eq!(fmt(nested), nested, "función anónima anidada, idempotente: {:?}", fmt(nested));
+    }
+
+    /// M104 — un `from … import` que pasa de MAX_WIDTH se envuelve a un nombre por línea; el que cabe
+    /// se queda en una. Se mide la línea renderizada completa, no el nº de nombres.
+    #[test]
+    fn wraps_a_long_from_import_one_name_per_line() {
+        let long = "from web/framework import new_app, GET, POST, listen_graceful, static_files_cached, \
+                    not_found, log_requests, after, cors, html;\nfn main() -> int { 0 }\n";
+        let out = fmt(long);
+        assert!(out.starts_with("from web/framework import\n    new_app,\n    GET,\n"), "envuelto: {out:?}");
+        assert!(out.contains("    html;\n"), "el ultimo nombre cierra con ';' y SIN coma final: {out:?}");
+        assert!(!out.contains(",\n;"), "sin coma final colgando el ';': {out:?}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        // Ninguna línea del resultado pasa del ancho máximo.
+        for l in out.lines() {
+            assert!(l.chars().count() <= MAX_WIDTH, "linea de {} cols: {l:?}", l.chars().count());
+        }
+    }
+
+    /// La vía del LSP (`format_source_with_indent`) reajusta la sangría del envuelto a la unidad del
+    /// editor: el canónico indenta con 4 espacios, así que el reindent lo reescribe con `unit`.
+    #[test]
+    fn reindents_a_wrapped_import_for_the_editor_unit() {
+        let src = "from web/framework import new_app, GET, POST, listen_graceful, static_files_cached, \
+                   not_found, log_requests, after, cors, html;\nfn main() -> int { 0 }\n";
+        let out = super::format_source_with_indent(src, "  ").expect("formatea");
+        assert!(out.contains("from web/framework import\n  new_app,\n  GET,\n"), "sangria de 2: {out:?}");
+    }
+
+    #[test]
+    fn keeps_a_short_from_import_on_one_line() {
+        let src = "from std/json import obj, field, list;\nfn main() -> int { 0 }\n";
+        assert!(fmt(src).starts_with("from std/json import obj, field, list;\n"), "{:?}", fmt(src));
+        // También se colapsa el que el autor escribió en varias líneas pero cabe en una (canónico).
+        let multi = "from std/json import\n    obj,\n    field,\n    list;\nfn main() -> int { 0 }\n";
+        assert!(fmt(multi).starts_with("from std/json import obj, field, list;\n"), "{:?}", fmt(multi));
+    }
+
+    /// La coma final la ACEPTA el parser (para quien la escriba a mano), pero el formateador no la
+    /// emite: sin llaves que cierren, el `;` quedaría colgando en su propia línea.
+    #[test]
+    fn accepts_but_does_not_emit_a_trailing_comma() {
+        let src = "from std/json import\n    obj,\n    field,\n;\nfn main() -> int { 0 }\n";
+        assert!(fmt(src).starts_with("from std/json import obj, field;\n"), "{:?}", fmt(src));
+    }
+
+    /// El comentario trailing de un import ENVUELTO va tras `import`, en la primera línea: al
+    /// re-formatear vuelve a ser el trailing de esa misma línea (si fuera al final, se relocalizaría).
+    #[test]
+    fn keeps_the_trailing_comment_of_a_wrapped_import() {
+        let src = "from web/framework import new_app, GET, POST, listen_graceful, static_files_cached, \
+                   not_found, log_requests, after, cors, html;  // el router\nfn main() -> int { 0 }\n";
+        let out = fmt(src);
+        assert!(out.starts_with("from web/framework import  // el router\n"), "trailing en la cabeza: {out:?}");
+        assert_eq!(fmt(&out), out, "idempotente");
     }
 
     #[test]

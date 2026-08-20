@@ -268,8 +268,10 @@ impl Parser {
         Ok((path, line, col))
     }
 
-    /// from_import_decl = [ 'pub' ] 'from' module_path 'import' name { ',' name } ';'  (M11.3b/.5/.6a)
-    /// name            = IDENT [ 'as' IDENT ]
+    /// from_import_decl = [ 'pub' ] 'from' module_path 'import' name { ',' name } [ ',' ] ';'
+    /// name            = IDENT [ 'as' IDENT ]                                    (M11.3b/.5/.6a)
+    /// La **coma final** es opcional (M104): con la lista de nombres envuelta en varias líneas —lo que
+    /// emite `ray fmt` al pasar de 100 columnas— añadir un nombre toca UNA línea del diff, no dos.
     /// `is_pub` (M11.6a): el `pub` ya lo consumió el bucle de `parse_program` (reexport).
     fn import_from_decl(&mut self, is_pub: bool) -> Result<FromImport, ParseError> {
         let kw = self.expect(&TokenKind::From, "'from'")?;
@@ -285,6 +287,10 @@ impl Parser {
             };
             names.push(ImportName { name, alias, line, col });
             if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+            // Coma final: tras la `,` viene el `;` → la lista termina aquí.
+            if self.check(&TokenKind::Semicolon) {
                 break;
             }
         }

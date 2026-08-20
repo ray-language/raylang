@@ -8937,3 +8937,47 @@ mismo criterio que M99); quien quiera dos vistas en el mismo ámbito plano las f
 `as` (`from vistas/lista import render as lista_html`), como cualquier colisión de nombres. La
 demo SSR gana además la prueba de convivencia: `main.ray` define su propio `fn render` libre y
 llama `vista_inicio.render(…)` calificado sin conflicto.
+
+## 95. M104 — imports multilínea: el formateador decide por ancho (ago 2026)
+
+**El síntoma (DX, señalado por el usuario).** En un programa real (una tienda servida entera por
+`web/framework`) el import de la cabecera pasaba de 260 columnas: una sola línea con quince
+nombres que se sale de la pantalla. La petición traía dos formas candidatas: la lista repartida en
+varias líneas, y una forma nueva con llaves `import { … }`.
+
+**El diagnóstico.** La forma multilínea **ya se parseaba**: el léxico ignora los saltos de línea y
+el parser solo exige el `;` final. Lo que la hacía inútil era el **formateador**: `ray fmt` es de
+una-construcción-una-línea y no tenía noción de ancho en ninguna parte, así que colapsaba el
+import a una línea y el estilo no sobrevivía. El problema no era de sintaxis, era de tooling — y
+por eso la forma con llaves se descartó: superficie nueva en léxico, parser, fmt, LSP y los
+resaltadores de los editores para expresar exactamente lo que ya se expresaba.
+
+**La forma.** Se mide la **línea renderizada completa** (`pub`, módulo, alias y `;`), no el número
+de nombres: lo que molesta es el ancho. Por encima de **100 columnas** el import se envuelve a un
+nombre por línea, todo-o-nada, nunca relleno hasta el margen — así añadir o quitar un nombre es
+una línea del diff. El umbral se eligió con los 177 `from … import` del repo: con 80 se
+envolverían 36 (20%), muchos de ellos perfectamente legibles; con 120 solo 14, dejando fuera los
+que ya estorban; con 100 se envuelven 19 (11%), y además 100 es el ancho de facto del código
+raylang del repo (p95 = 99 columnas) y el `max_width` por defecto de rustfmt.
+
+**La coma final.** El parser la **acepta** (y el espejo selfhost en tándem), para quien la escriba
+a mano; el formateador **no la emite**. Sin llaves que cierren la lista, una coma final deja el `;`
+colgando en su propia línea — un cierre sin precedente en el resto del lenguaje. El coste
+asumido es que añadir un nombre al final toca dos líneas del diff en vez de una.
+
+**El coletazo en el LSP.** La completion dentro de un import (`from M import <cursor>` → los `pub`
+del módulo) detectaba el contexto **textualmente sobre el prefijo de la línea**, porque un import a
+medio escribir no parsea. Eso funcionaba mientras el import cabía siempre en una línea; en cuanto el
+formateador empezó a envolverlos, el cursor en una línea de continuación (`    GET,`) veía un prefijo
+que no dice nada y la completion caía al genérico de palabras clave — una regresión de DX **causada
+por** el cambio, justo en los archivos que el formateador acababa de reformatear. El contexto se
+reconstruye ahora desde el inicio de la **sentencia**: se sube por las líneas anteriores hasta la que
+cerró una sentencia (`;`) o una línea en blanco, y se colapsan los saltos a espacios. El resto del
+LSP no se toca: los diagnósticos, el outline y el goto-definition de un nombre importado van por el
+AST, y cada `ImportName` ya lleva su propia `(línea, columna)`. Los resaltadores de VSCode/Sublime
+casan `import`/`from` por palabra, no por línea, así que tampoco les afecta.
+
+**Idempotencia.** Es la propiedad que un formateador no puede romper, y el caso que la ponía en
+peligro era el comentario *trailing*: si se emite al final de la lista envuelta, al re-formatear ya
+no es el trailing de la línea del `from` y se relocaliza. Va por eso tras `import`, en la primera
+línea. Verificado sobre los ~250 `.ray` del repo: 22 archivos envuelven, 0 no-idempotentes.

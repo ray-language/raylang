@@ -214,6 +214,13 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **Backend nativo: una `var` mutada por un closure DENTRO de `spawn`/`scope` no compilaba.** Ambos
+  emiten el cuerpo del literal directamente, sin pasar por la emisión de función anónima, y con ello
+  se saltaban el registro de "celdas" (B1): la variable salía como `let mut` dentro de un
+  `Rc<closure>` y `rustc` la rechazaba (`E0596: cannot borrow data in an `Rc` as mutable`). La VM sí
+  lo ejecutaba → era una divergencia nativo≠VM. Ahora el cuerpo de `spawn`/`scope` registra sus
+  propias celdas.
+
 - **VM: caída del GC (`index out of bounds` en `Heap::mark`) en servidores de larga vida.** Al hacer
   `spawn`, las celdas de los locales **capturados** de la fibra hija se alojaban en el heap del
   *spawner* en vez del suyo. Con heap-por-fibra ese handle cruzaba heaps: desde el arranque de la

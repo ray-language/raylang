@@ -64,6 +64,11 @@ web-demos 24 → 38 byte-idénticos).
   módulos de usuario (fix de la corrupción de `string#hash`/poly1305, fase 42).
 - **Closures con estado** (B1): análisis de "celdas" — una variable mutable capturada por un
   closure baja a `Rc<RefCell<T>>` con lectura `.borrow().clone()` y escritura por temporal.
+  El análisis se registra al **entrar a cada cuerpo** (`enter_cells`), y eso incluye los cuerpos que
+  no pasan por `emit_fn_expr`: `spawn`/`scope` emiten el literal con `emit_block` directo, así que
+  registran las celdas a mano (si no, una `var` declarada dentro del `spawn` y mutada por un closure
+  más interno salía como `let mut` dentro de un `Rc<closure>` → E0596 de `rustc`).
+
 - **Iteradores** (B2): `for x in it` baja a un `loop`/`match` sobre `next(it)`; el protocolo
   `Iter` del prelude (`map`/`filter`/`enumerate`/`zip`…) se emite como código normal (la
   inferencia genérica `unify`/`subst_type` recorre Struct/Enum/Tuple con argumentos).

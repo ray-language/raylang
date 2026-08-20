@@ -895,6 +895,60 @@ fn build_native_spawn_of_named_function_matches_the_vm() {
     assert_eq!(native_out, expected, "nativo ≡ VM (spawn de función nombrada)");
 }
 
+#[test]
+fn build_native_mutable_capture_inside_spawn_matches_the_vm() {
+    // Regresión: `spawn`/`scope` emiten el cuerpo del literal con `emit_block` directo (sin pasar por
+    // `emit_fn_expr`), así que las CELDAS propias de ese cuerpo no se registraban. Una `var` declarada
+    // dentro del spawn y capturada+mutada por una closure más interna salía como `let mut acc` dentro de
+    // un `Rc<closure>` → `rustc` E0596 ("cannot borrow data in an `Rc` as mutable"): la VM lo ejecutaba
+    // y el nativo NO COMPILABA. Se cubren las dos formas (spawn y scope) y el retorno compuesto, que
+    // toma la otra rama de emisión (`send_is_tree`).
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native captura-mutable-en-spawn: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_spawn_mut_capture");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int {\n\
+        \x20  let t: Task<int> = spawn(fn() -> int {\n\
+        \x20    var acc = 0;\n\
+        \x20    let bump = fn(x: int) -> int { acc = acc + x; acc };\n\
+        \x20    bump(7) + bump(5)\n\
+        \x20  });\n\
+        \x20  let boxed: Task<[int]> = spawn(fn() -> [int] {\n\
+        \x20    var n = 0;\n\
+        \x20    let inc = fn() { n = n + 1; };\n\
+        \x20    inc(); inc();\n\
+        \x20    [n, n * 2]\n\
+        \x20  });\n\
+        \x20  let total = scope(fn() -> int {\n\
+        \x20    var s = 0;\n\
+        \x20    let add = fn(x: int) { s = s + x; };\n\
+        \x20    add(3); add(4);\n\
+        \x20    s\n\
+        \x20  });\n\
+        \x20  let xs = join(boxed);\n\
+        \x20  print(to_string(join(t)) + \" \" + to_string(xs[0]) + to_string(xs[1]) + \" \" + to_string(total));\n\
+        \x20  0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native con captura mutable dentro de spawn ok\n{err}");
+
+    let expected = "19 24 7\n";
+    let (vm_out, e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da la salida\n{e}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        expected,
+        "nativo ≡ VM (captura mutable dentro de spawn/scope)"
+    );
+}
+
 /// Un echo TLS mínimo (servidor): lee cert/clave de los args, escucha en un puerto efímero (lo imprime),
 /// acepta una conexión, la envuelve con `tls_accept` y devuelve por eco lo que reciba (I/O TLS por
 /// `socket_read_bytes`/`socket_write_bytes`). Sirve tanto para el VM como transpilado a nativo.

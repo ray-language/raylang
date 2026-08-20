@@ -731,11 +731,15 @@ impl Transpiler {
                             }
                             write!(out, "    for {} in __rt_lo..__rt_hi ", var).unwrap();
                         } else {
-                            write!(out, "for {} in ", var).unwrap();
+                            // Los extremos van ENTRE PARÉNTESIS: en Rust, `for x in EXPR {` toma un
+                            // bloque inicial de EXPR como CUERPO del loop, y varios builtins emiten
+                            // un bloque (`len` de string → `{ let __rt_s = …; … }`, la concatenación,
+                            // `push`…). Sin ellos, `for i in 0..s.len() { … }` no compilaba.
+                            write!(out, "for {} in (", var).unwrap();
                             self.emit_expr(out, start)?;
-                            out.push_str("..");
+                            out.push_str(")..(");
                             self.emit_expr(out, end)?;
-                            out.push(' ');
+                            out.push_str(") ");
                         }
                         self.scopes.push(HashMap::new());
                         self.declare(&var, Type::Int);
@@ -753,12 +757,15 @@ impl Transpiler {
                     // para NO retener el borrow durante el cuerpo (que podría mutar el arreglo).
                     // `for c in <string>` → `.chars()` (char por char).
                     ForIter::In(expr) => {
-                        let ety = match self.type_of(expr)? {
-                            Type::Array(t) => (*t).clone(),
-                            Type::String => Type::Char,
+                        // El modo de iteración lo decide el tipo del CONTENEDOR, no el del
+                        // elemento: `for c in s` (string) itera `.chars()`, pero `for c in
+                        // s.chars()` ya es un `[char]` y va por la vía de arreglo.
+                        let (is_string, ety) = match self.type_of(expr)? {
+                            Type::Array(t) => (false, (*t).clone()),
+                            Type::String => (true, Type::Char),
                             other => return Err(format!("for over {:?} is not supported", other)),
                         };
-                        if matches!(ety, Type::Char) {
+                        if is_string {
                             write!(out, "for {} in ", var).unwrap();
                             self.emit_expr(out, expr)?;
                             out.push_str(".chars() ");

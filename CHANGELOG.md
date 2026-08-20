@@ -193,6 +193,13 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- Binario nativo: `for i in 0..s.len()` no compilaba. En Rust, `for x in EXPR {` toma un bloque
+  inicial de `EXPR` como **cuerpo** del loop, y varios builtins emiten un bloque (`len` de string,
+  concatenación, `push`); ahora los extremos del rango se emiten entre paréntesis.
+- Binario nativo: `for c in <string>.chars()` no compilaba (el transpilador decidía el modo de
+  iteración por el tipo del ELEMENTO —`char` → `.chars()`— y lo aplicaba al `Vec<char>` ya
+  materializado). Ahora lo decide el tipo del contenedor: string → `.chars()`, `[char]` → vía de
+  arreglo. La VM ya lo ejecutaba bien.
 - Playground web: el build wasm estaba **roto desde P0.1/M100** (aHash arrastra `getrandom`, que no
   compila a wasm32; el empaquetado `gen << 32` de handles de tareas/canales desborda el `usize` de
   32 bits; un builtin de procesos sin stub) — recompilado y verificado (núcleo + concurrencia M:1 +

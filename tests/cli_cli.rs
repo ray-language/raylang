@@ -110,6 +110,59 @@ fn build_native_produces_a_binary_that_runs_like_the_vm() {
     assert_eq!(native_out.trim(), "55", "fib(10) = 55");
 }
 
+/// **Guardia de los huecos de superficie del backend nativo.** `NATIVE_TRACKED_BUILTINS`
+/// (src/transpile/tests.rs) es un CHECKLIST de decisiones: comprueba que ningún builtin quede sin
+/// clasificar, pero NO que exista un brazo en `emit_call`/`type_of` — por eso `__reverse`/`__pop`/
+/// `__position` figuraron como soportados sin estarlo, y `math.atan2`/`float_bits`/`float_from_bits`
+/// y `fs.append_file` cayeron en el mismo hueco (el corpus de ejemplos tampoco los cubría). Este test
+/// es la PRUEBA: un programa que los usa todos, compilado a nativo y comparado con la VM.
+#[test]
+fn build_native_covers_the_array_math_and_fs_surface() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native surface: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_surface");
+    let log = base.join("append.txt");
+    let log_lit = log.to_str().unwrap().replace('\\', "\\\\");
+    let src = format!(
+        "import std/math;\n\
+         import std/fs;\n\
+         fn main() -> int {{\n\
+         \x20   let a: [int] = [3, 1, 2];\n\
+         \x20   print(a.reverse()[0]);\n\
+         \x20   match (a.position(2)) {{ Option.Some(i) => print(i), Option.None => print(-1) }}\n\
+         \x20   var b: [int] = [7, 8];\n\
+         \x20   match (b.pop()) {{ Option.Some(v) => print(v), Option.None => print(-1) }}\n\
+         \x20   print(b.len());\n\
+         \x20   print(math.atan2(1.0, 1.0));\n\
+         \x20   print(math.float_bits(1.0));\n\
+         \x20   print(math.float_from_bits(4607182418800017408));\n\
+         \x20   fs.write_file(\"{log}\", \"a\");\n\
+         \x20   match (fs.append_file(\"{log}\", \"bc\")) {{ Result.Ok(n) => print(n), Result.Err(e) => print(e) }}\n\
+         \x20   match (fs.read_file(\"{log}\")) {{ Result.Ok(t) => print(t), Result.Err(e) => print(e) }}\n\
+         \x20   0\n\
+         }}\n",
+        log = log_lit
+    );
+    std::fs::write(base.join("surface.ray"), src).unwrap();
+
+    // La VM primero (deja el archivo escrito); luego el nativo lo reescribe desde cero (write_file
+    // trunca), así que ambas salidas son comparables.
+    let (vm_out, vm_err, vm_code) = ray(&base, &["run", "surface.ray"]);
+    assert_eq!(vm_code, 0, "la VM corre el programa\n{vm_err}");
+
+    let bin = base.join("surface_bin");
+    let (out, err, code) = ray(&base, &["build", "surface.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    assert_eq!(native_out, vm_out, "nativo ≡ VM en reverse/position/pop/atan2/float_bits/append_file");
+    // Y el resultado es el esperado (no dos motores coincidiendo en el mismo error).
+    assert!(vm_out.contains("\n2\n"), "append_file devuelve el nº de caracteres escritos\n{vm_out}");
+    assert!(vm_out.trim_end().ends_with("abc"), "el append concatena\n{vm_out}");
+}
+
 #[test]
 fn build_native_of_a_multi_module_project_is_a_single_binary() {
     // `ray build --native` sobre un main que importa OTRO módulo con tipos propios: el loader aplana

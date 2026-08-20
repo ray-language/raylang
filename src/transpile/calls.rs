@@ -518,6 +518,22 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str(".len() as i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })");
             }
+            // append_file(path, content): añade al final (crea si no existe). Devuelve Ok(nº de
+            // CARACTERES escritos) como la VM (`std/fs.ray`: `Result.Ok(content.len())`, y `len` de
+            // string cuenta caracteres) — de ahí el mismo fast-path ASCII que el builtin `len`.
+            "append_file" => {
+                out.push_str("{ let __rt_p = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_c = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(
+                    "; (match std::fs::OpenOptions::new().create(true).append(true).open(&*__rt_p)\
+                     .and_then(|mut __rt_f| { use std::io::Write; __rt_f.write_all(__rt_c.as_bytes()) }) {\
+                     Ok(()) => Ok::<i64, Rc<str>>(if __rt_c.is_ascii() { __rt_c.len() as i64 } \
+                     else { __rt_c.chars().count() as i64 }), \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) }) }",
+                );
+            }
             "append_file_bytes" => {
                 out.push_str(
                     "(match std::fs::OpenOptions::new().create(true).append(true).open(&*",
@@ -675,6 +691,27 @@ impl Transpiler {
                 out.push('(');
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").abs()");
+            }
+            // atan2(y, x): el receptor es la ORDENADA (como en la VM, que saca x y luego y).
+            "atan2" => {
+                out.push('(');
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").atan2(");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            // Reinterpretación bit a bit IEEE-754 (misma impl que la VM: `to_bits`/`from_bits`).
+            "float_bits" => {
+                // Los paréntesis EXTERNOS son obligatorios: el `as` es la última operación y el sitio
+                // de llamada puede encadenar un método (`.ray_show()`), que Rust no admite tras un cast.
+                out.push_str("((");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").to_bits() as i64)");
+            }
+            "float_from_bits" => {
+                out.push_str("f64::from_bits(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(" as u64)");
             }
             _ => return Err(format!("std::math::{} is not supported", mfn)),
         }
@@ -1344,6 +1381,29 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // reverse(a) -> [T]: copia invertida (no muta), como el opcode `Reverse` de la VM.
+            "reverse" => {
+                out.push_str("Rc::new(std::cell::RefCell::new(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().iter().rev().cloned().collect::<Vec<_>>()))");
+            }
+            // pop(a) -> Option<T>: quita el último EN EL SITIO. El envoltorio del prelude (que traduce
+            // el `[]`/`[x]` del primitivo `__pop` a Option) no se emite, así que aquí se produce ya el
+            // Option de Rust — igual que `index_of`.
+            "pop" => {
+                out.push_str("(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow_mut().pop())");
+            }
+            // position(a, x) -> Option<int>: índice de la 1ª ocurrencia. Igualdad estructural con `==`,
+            // como `contains`. El valor buscado se iza ANTES del borrow (puede leer del mismo arreglo).
+            "position" => {
+                out.push_str("{ let __rt_x = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow().iter().position(|__e| *__e == __rt_x).map(|__i| __i as i64) }");
+            }
             "sort_prim" => {
                 out.push_str("__ray_sort_unstable(&");
                 self.emit_expr(out, eff[0])?;
@@ -1891,6 +1951,7 @@ impl Transpiler {
                 if let Some(mfn) = n.strip_prefix("std::math::") {
                     return Ok(match mfn {
                         "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("math without an argument")?)?,
+                        "float_bits" => Type::Int, // la reinterpretación bit a bit devuelve el patrón como int
                         _ => Type::Float,
                     });
                 }
@@ -1901,7 +1962,7 @@ impl Transpiler {
                         "read_file_bytes" => Type::Enum("Result".into(), vec![Type::Bytes, Type::String]),
                         "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir"
                         | "rename" | "copy_file" | "file_size" | "mtime" | "write_file_bytes"
-                        | "append_file_bytes" => {
+                        | "append_file_bytes" | "append_file" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }
                         "read_line" => opt_of(Type::String),
@@ -2019,6 +2080,13 @@ impl Transpiler {
                         other => return Err(format!("values on {:?} is not supported", other)),
                     },
                     "sort" => self.type_of(recv0.ok_or("sort without a receiver")?)?,
+                    // reverse conserva el tipo del arreglo; pop da Option<T>; position, Option<int>.
+                    "reverse" => self.type_of(recv0.ok_or("reverse without a receiver")?)?,
+                    "pop" => match self.type_of(recv0.ok_or("pop without a receiver")?)? {
+                        Type::Array(elem) => opt_of((*elem).clone()),
+                        other => return Err(format!("pop on {:?} is not supported", other)),
+                    },
+                    "position" => opt_of(Type::Int),
                     // (Cripto/TLS/SQLite/UDP: sus sitios llegan con el nombre primitivo `__sha256`/… y
                     // los tipa la tabla en el fast-path de arriba.)
                     // unwrap_or/unwrap desenvuelven un Option<T>/Result<T,E> → T.
@@ -2056,6 +2124,15 @@ impl Transpiler {
                             }
                         } else if let Some(Type::Fn(_, r)) = self.lookup(n) {
                             (**r).clone()
+                        } else if matches!(n, "min" | "max") {
+                            // Terminales `min`/`max` de iterador: son funciones del prelude con bound
+                            // `T: Ord`, y el transpilador aún no emite los impls del prelude que
+                            // rellenan el diccionario (`int#less`) — la MISMA limitación que hace
+                            // fallar a cualquier genérico de usuario acotado por `Ord`. Se informa
+                            // como lo que es, no como un tipo desconocido.
+                            return Err(format!(
+                                "builtin/function '{}' is not supported in the native backend \
+                                 (iterator terminal with an Ord bound)", n));
                         } else {
                             return Err(format!("unknown return type of '{}'", n));
                         }

@@ -8,6 +8,12 @@
 /// añadir un builtin a la tabla `BUILTINS`, el test FALLA hasta que se decide conscientemente su soporte
 /// nativo (implementarlo en `emit_call`/`type_of`, o marcarlo stubbeado en `NATIVE_STUBBED_BUILTINS`).
 /// No es la *implementación* (eso son las ramas de `emit_call`), sino el **checklist** que la obliga.
+///
+/// ⚠️ **Lo que este checklist NO prueba**: que el brazo exista. Un nombre puede estar aquí, fuera de
+/// STUBBED, y no tener rama en `emit_call`/`type_of` — le pasó a `__reverse`/`__pop`/`__position`, que
+/// figuraban como soportados y fallaban con "not supported in the native backend". La prueba de que un
+/// brazo existe es EJECUTARLO: los tests de abajo (nivel transpilación) y
+/// `cli_cli::build_native_covers_the_array_math_and_fs_surface` (nivel binario, nativo ≡ VM).
 const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Primitivos de string/bytes/map/arreglo (interceptados en emit_call por su nombre pelado).
     "__chars", "__concat", "__contains", "__contains_key", "__ends_with", "__from_utf8", "__get_or", "__index_of",
@@ -658,6 +664,27 @@ fn for_over_a_char_array_iterates_the_array_not_chars() {
         over_array
     );
 }
+
+/// Los huecos que el checklist H11 no cazaba: `reverse`/`pop`/`position` figuraban como soportados
+/// sin tener brazo. `pop`/`position` producen ya el Option de Rust (el envoltorio del prelude, que
+/// traduce el `[]`/`[x]` del primitivo, no se emite) — el mismo patrón que `index_of`.
+#[test]
+fn transpiles_the_array_builtins_reverse_pop_and_position() {
+    let rev = transpile_src("fn main() { let a = [1, 2]; print(a.reverse().len()); }");
+    assert!(rev.contains(".borrow().iter().rev().cloned().collect::<Vec<_>>()"), "reverse: {rev}");
+
+    let pop = transpile_src("fn main() { var a = [1, 2]; match (a.pop()) { Option.Some(v) => print(v), Option.None => print(0) } }");
+    assert!(pop.contains(".borrow_mut().pop())"), "pop en el sitio → Option: {pop}");
+
+    let pos = transpile_src("fn main() { let a = [1, 2]; match (a.position(2)) { Option.Some(i) => print(i), Option.None => print(-1) } }");
+    assert!(pos.contains(".borrow().iter().position(|__e| *__e == __rt_x)"), "position: {pos}");
+    assert!(pos.contains(".map(|__i| __i as i64)"), "position devuelve Option<int>: {pos}");
+}
+
+// NOTA: `math.atan2`/`float_bits`/`float_from_bits` y `fs.append_file` —los otros huecos del mismo
+// lote— NO se prueban aquí: se interceptan por su nombre CALIFICADO (`std::math::…`/`std::fs::…`),
+// que solo produce el loader, y `transpile_src` va por lex/parse/check sin loader. Su guardia es
+// `cli_cli::build_native_covers_the_array_math_and_fs_surface`, que además compara nativo ≡ VM.
 
 #[test]
 fn a_user_function_wins_over_a_prelude_builtin() {

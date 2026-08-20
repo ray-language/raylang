@@ -727,6 +727,17 @@ silencio. *Fix:* test corpus que itera los ejemplos deterministas nativo↔VM, p
 `#[ignore]` por lento (como los metacirculares), corrido en CI nightly o bajo demanda.
 **Esfuerzo: 0,5–1 día.**
 
+> **Revisión (ago 2026).** El guardia que resolvió H11 quedó a medias: `NATIVE_TRACKED_BUILTINS`
+> comprueba que ningún builtin de la tabla quede **sin clasificar**, pero no que exista un **brazo**
+> en `emit_call`/`type_of`. `__reverse`/`__pop`/`__position` figuraban como soportados y fallaban con
+> "not supported in the native backend"; `math.atan2`/`float_bits`/`float_from_bits` y
+> `fs.append_file` cayeron en el mismo hueco (ninguno estaba en el corpus de ejemplos). Los seis se
+> implementaron, y la prueba de que el brazo existe pasó a ser **ejecutarlo**:
+> `cli_cli::build_native_covers_the_array_math_and_fs_surface` compila un programa que los usa todos
+> y compara nativo ≡ VM. Sigue abierto: `min`/`max` de iterador (bound `T: Ord`) — es la misma
+> limitación que hace fallar a **cualquier genérico de usuario acotado por `Ord`**, porque el
+> transpilador no emite los impls del prelude que rellenan el diccionario (`int#less`).
+
 **H11. ✅ RESUELTO. Sin guardia contra la "triple implementación" de builtins.** `transpile.rs` **no consulta
 la tabla `BUILTINS`** de `src/builtins.rs` (cero referencias): un builtin nuevo añadido a
 checker/VM/intérprete cae en nativo en `emit_stub` (panic en runtime) o en

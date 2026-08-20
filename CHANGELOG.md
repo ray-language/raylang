@@ -203,6 +203,13 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **Backend nativo: seis huecos de superficie** que la VM ejecutaba y el binario nativo rechazaba —
+  arreglos `reverse`/`pop`/`position`, `math.atan2`/`float_bits`/`float_from_bits` y
+  `fs.append_file` (existía `append_file_bytes`). El checklist `NATIVE_TRACKED_BUILTINS` los daba por
+  soportados: comprobaba que estuvieran clasificados, no que tuvieran brazo. La prueba pasa a ser
+  ejecutarlos (nativo ≡ VM en un test dedicado). `min`/`max` de iterador siguen fuera —bound
+  `T: Ord`, la misma limitación que cualquier genérico de usuario acotado— pero ahora lo dicen.
+
 - Binario nativo: `for i in 0..s.len()` no compilaba. En Rust, `for x in EXPR {` toma un bloque
   inicial de `EXPR` como **cuerpo** del loop, y varios builtins emiten un bloque (`len` de string,
   concatenación, `push`); ahora los extremos del rango se emiten entre paréntesis.

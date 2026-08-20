@@ -1628,6 +1628,15 @@ impl Transpiler {
                 // compuestos → __RaySend); el cuerpo produce la repr del programa, se envuelve. scope
                 // corre en el hilo actual → sin conversión.
                 let wrap = if method == "spawn" { ret } else { Type::Unit };
+                // El cuerpo del literal se emite AQUÍ (no por `emit_fn_expr`), así que hay que
+                // registrar sus celdas a mano: una `var` declarada DENTRO del cuerpo y capturada por
+                // una closure aún más interna necesita `Rc<RefCell<_>>`, o el `Rc<closure>` que la
+                // envuelve intenta mutar a través de un `Rc` (E0596). Va después de
+                // `spawn_captures`, que clasifica las capturas con las celdas del ámbito de FUERA.
+                let body_cells = match &eff[0].kind {
+                    ExprKind::Func(fnexpr) => self.enter_cells(&fnexpr.body),
+                    _ => Vec::new(),
+                };
                 if send_is_tree(&wrap) && method == "spawn" {
                     let mut tmp = String::new();
                     match &eff[0].kind {
@@ -1649,6 +1658,7 @@ impl Transpiler {
                     }
                     out.push_str(suf);
                 }
+                self.exit_cells(body_cells);
                 if !captures.is_empty() {
                     out.push_str(" }");
                 }

@@ -788,3 +788,41 @@ fn main() -> int {
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(stdout, "main 1\nhija antes\nhija después\nmain 2\n");
 }
+
+#[test]
+fn spawned_captured_local_cell_lives_in_child_heap() {
+    // Regresión: las celdas de los locales CAPTURADOS de la fibra hija se alojaban en el heap del
+    // SPAWNER (heap-por-fibra, M38.1b-2). Si la hija llegaba a un punto seguro del GC antes del
+    // `InitLocal` que estrena la celda propia, ese handle ajeno se marcaba contra la tabla de slots
+    // de la hija: objeto equivocado si el índice cabía, `index out of bounds` en `Heap::mark` si no
+    // (el caso observado: heap del spawner con cientos de objetos vivos, heap joven con 64 slots).
+    // El programa fuerza justo eso: main deja 400 objetos vivos y la hija asigna —y recolecta—
+    // antes de declarar su `var` capturado.
+    let src = r#"
+fn main() -> int {
+    var seed: [[int]] = [];
+    var i = 0;
+    while (i < 400) {
+        seed.push([i, i + 1]);
+        i = i + 1;
+    }
+    let t: Task<int> = spawn(fn() -> int {
+        var junk: [[int]] = [];
+        var j = 0;
+        while (j < 300) {
+            junk.push([j]);
+            j = j + 1;
+        }
+        var acc = 0;
+        let bump = fn(x: int) -> int { acc = acc + x; acc };
+        bump(junk.len())
+    });
+    print(join(t));
+    0
+}
+"#;
+    let (out, err, code) = run("conc_spawn_captured_cell", src, true);
+    assert_eq!(code, 0, "stderr: {err}");
+    assert_eq!(out, "300\n");
+    assert!(!err.contains("panicked"), "stderr: {err}");
+}

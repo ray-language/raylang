@@ -1200,7 +1200,12 @@ impl<'a> Vm<'a> {
                         .map(|&up| transfer_obj(&self.cur.heap, &mut new_heap, up, &mut remap))
                         .collect();
                     let mut child_locals: Vec<Local> = Vec::new();
-                    build_locals(self.program, &mut self.cur.heap, &mut child_locals, fn_idx);
+                    // Las celdas de los locales CAPTURADOS de la hija se alojan en el heap de la HIJA
+                    // (`new_heap`), no en el del spawner: son raíces de la fibra hija desde su primer
+                    // punto seguro y hasta que el `InitLocal` del slot estrene celda propia. Con el heap
+                    // del spawner, ese handle cruzaba heaps y el `mark` de la hija lo resolvía contra su
+                    // propia tabla de slots — objeto ajeno si el índice cabía, `index out of bounds` si no.
+                    build_locals(self.program, &mut new_heap, &mut child_locals, fn_idx);
                     let frame = CallFrame { function: fn_idx, ip: 0, locals_base: 0, upvalues, stack_base: 0 };
                     // M38.3b paso 3: alojar la Task y encolar la fibra hija en UN solo lock (bajo M:N real,
                     // dos `self.sched()` —len y push— tendrían un TOCTOU en el id de la tarea).

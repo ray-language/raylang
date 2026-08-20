@@ -197,7 +197,9 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
   columnas**, la lista se reparte a **un nombre por línea**; si cabe, se queda en una. El parser
   acepta además **coma final** en la lista (el formateador no la emite: sin llaves que cierren, el
   `;` quedaría colgando). La forma multilínea ya se parseaba — lo que faltaba era que el
-  formateador la respetara.
+  formateador la respetara. La **completion de imports del LSP** reconstruye ahora el contexto desde
+  el inicio de la sentencia, no de la línea: con el import envuelto, el cursor en una línea de
+  continuación sigue ofreciendo los `pub` del módulo.
 
 ### Corregido
 

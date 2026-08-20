@@ -668,6 +668,25 @@ fn completion_of_from_import_symbols_of_embedded_std() {
     }
 }
 
+/// M104 — `ray fmt` reparte un `from … import` largo en varias líneas, así que el cursor puede estar
+/// en una línea de CONTINUACIÓN (`    seconds,`), cuyo prefijo no dice nada: el contexto de import se
+/// reconstruye desde el inicio de la sentencia, no desde el inicio de la línea.
+#[test]
+fn completion_of_from_import_symbols_on_a_wrapped_import() {
+    let src = "from std/time import\n    now,\n    \nfn main() { print(1) }\n";
+    let labels = completion_labels(src, 2, 4);
+    for expected in ["seconds", "minutes", "sleep"] {
+        assert!(labels.contains(&expected.to_string()), "ofrece {expected} en continuacion: {labels:?}");
+    }
+    // La primera línea (`from std/time import`) sigue funcionando.
+    let labels = completion_labels(src, 0, 20);
+    assert!(labels.contains(&"sleep".to_string()), "cabecera del envuelto: {labels:?}");
+    // Cerrada la sentencia con `;`, la línea siguiente ya NO es contexto de import.
+    let closed = "from std/time import\n    now;\n\nfn main() { print(1) }\n";
+    let labels = completion_labels(closed, 2, 0);
+    assert!(!labels.contains(&"minutes".to_string()), "tras el ';' no es import: {labels:?}");
+}
+
 #[test]
 fn completion_of_module_path_includes_embedded_std() {
     // IDEAS §56: en posición de RUTA (`from <cursor>`) la stdlib embebida se ofrece aunque no haya

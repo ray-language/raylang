@@ -8965,6 +8965,18 @@ a mano; el formateador **no la emite**. Sin llaves que cierren la lista, una com
 colgando en su propia línea — un cierre sin precedente en el resto del lenguaje. El coste
 asumido es que añadir un nombre al final toca dos líneas del diff en vez de una.
 
+**El coletazo en el LSP.** La completion dentro de un import (`from M import <cursor>` → los `pub`
+del módulo) detectaba el contexto **textualmente sobre el prefijo de la línea**, porque un import a
+medio escribir no parsea. Eso funcionaba mientras el import cabía siempre en una línea; en cuanto el
+formateador empezó a envolverlos, el cursor en una línea de continuación (`    GET,`) veía un prefijo
+que no dice nada y la completion caía al genérico de palabras clave — una regresión de DX **causada
+por** el cambio, justo en los archivos que el formateador acababa de reformatear. El contexto se
+reconstruye ahora desde el inicio de la **sentencia**: se sube por las líneas anteriores hasta la que
+cerró una sentencia (`;`) o una línea en blanco, y se colapsan los saltos a espacios. El resto del
+LSP no se toca: los diagnósticos, el outline y el goto-definition de un nombre importado van por el
+AST, y cada `ImportName` ya lleva su propia `(línea, columna)`. Los resaltadores de VSCode/Sublime
+casan `import`/`from` por palabra, no por línea, así que tampoco les afecta.
+
 **Idempotencia.** Es la propiedad que un formateador no puede romper, y el caso que la ponía en
 peligro era el comentario *trailing*: si se emite al final de la lista envuelta, al re-formatear ya
 no es el trailing de la línea del `from` y se relocaliza. Va por eso tras `import`, en la primera

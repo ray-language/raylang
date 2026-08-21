@@ -273,16 +273,10 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
     Result.Ok(out)
 }
 
-fn parse_response(raw: bytes) -> Result<Response, string> {
-    let sep: int = find_fin_headers(raw);
-    if (sep < 0) {
-        return Result.Err("malformed HTTP response (no header separator)");
-    }
-    // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
-    let body: bytes = raw.sub_bytes(sep + 4, raw.len());
-    match (from_utf8(
-    raw.sub_bytes(0, sep)
-)) {
+// Parsea la CABEZA de una respuesta (línea de estado + cabeceras, SIN el "\r\n\r\n" final):
+// (status, cabeceras con nombre en minúsculas). Compartido por parse_response y el streaming (M108).
+fn parse_head(head: bytes) -> Result<(int, Map<string, string>), string> {
+    match (from_utf8(head)) {
         Result.Err(e) => Result.Err("HTTP headers are not UTF-8: " + e),
         Result.Ok(headers_raw) => {
             let lines: [string] = headers_raw.split("\r\n");
@@ -317,6 +311,25 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 }
                 i = i + 1;
             }
+            Result.Ok((status, headers))
+        },
+    }
+}
+
+fn parse_response(raw: bytes) -> Result<Response, string> {
+    let sep: int = find_fin_headers(raw);
+    if (sep < 0) {
+        return Result.Err("malformed HTTP response (no header separator)");
+    }
+    // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
+    let body: bytes = raw.sub_bytes(sep + 4, raw.len());
+    match (parse_head(
+    raw.sub_bytes(0, sep)
+)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(head) => {
+            let status: int = head.0;
+            let headers: Map<string, string> = head.1;
             // Transfer-Encoding: chunked → decodificar el cuerpo (un cliente robusto lo soporta;
             // algunos servidores siempre chunked aunque pidamos Connection: close).
             var body_final: bytes = body;
@@ -907,4 +920,390 @@ fn conn_read_chunked(c: Conn, start: int, deadline: int) -> Result<bytes, string
         pos = pos + size + 2;  // datos + su \r\n
     }
     Result.Err("unreachable")
+}
+
+// =====================================================================
+// M108 — respuesta en STREAMING: cabeceras ya, cuerpo a trozos según llegan.
+// =====================================================================
+//
+// El caso que lo motiva: consumir una respuesta que se genera en vivo (tokens de un LLM, logs,
+// SSE) pintando cada trozo al llegar — `request` espera el cuerpo ENTERO. `stream` devuelve el
+// estado y las cabeceras en cuanto llegan; `stream_read` entrega el siguiente trozo del cuerpo
+// (des-chunkeado de forma incremental) aparcando solo la fibra.
+//
+// Decisiones: la petición NO anuncia gzip (no hay gunzip incremental; si el servidor lo impone
+// igualmente, error limpio). Socket de un solo uso (`Connection: close`): un stream no se reusa.
+// El plazo es de OCIO por lectura (un stream legítimo puede durar minutos; lo que delata el
+// problema es el silencio), no total.
+
+/// A streaming HTTP response: `status`/`headers` are available immediately; the body is pulled
+/// piece by piece with `stream_read`. Fields `mode`/`remaining`/`buf` are internal state.
+pub struct Stream {
+    h: int,
+    buf: bytes,
+    status: int,
+    headers: Map<string, string>,
+    // "size" | "data" | "crlf" | "trailer" (chunked) · "length" · "eof" · "done"
+    mode: string,
+    // en "data": octetos que quedan del chunk; en "length": octetos que quedan del cuerpo
+    remaining: int,
+    idle_ms: int,
+    open: bool,
+}
+
+/// Opens a streaming request with a 30 s idle timeout per read (see `stream_with`).
+pub fn stream(
+    method: string,
+    url: string,
+    body: bytes,
+    headers: Map<string, string>
+) -> Result<Stream, string> {
+    stream_with(method, url, body, headers, 30000)
+}
+
+/// Opens a streaming request: connects, sends, reads the head, and returns as soon as the
+/// status and headers are in — the body is pulled with `stream_read`. `idle_timeout_ms` bounds
+/// each individual read (a healthy stream may last minutes; silence is what signals trouble);
+/// `<= 0` = no timeout. The request does not advertise gzip (no incremental gunzip).
+pub fn stream_with(
+    method: string,
+    url: string,
+    body: bytes,
+    headers: Map<string, string>,
+    idle_timeout_ms: int
+) -> Result<Stream, string> {
+    match (parse_url(url)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(u) => {
+            match (dial(u)) {
+                Result.Err(e) => Result.Err("could not connect: " + e),
+                Result.Ok(h) => {
+                    // Copia de las cabeceras del llamador + identity (que el servidor no comprima):
+                    // el Map es compartido por referencia y no se muta lo que nos prestaron.
+                    var hs: Map<string, string> = Map.new();
+                    let names: [string] = headers.keys();
+                    var i: int = 0;
+                    while (i < names.len()) {
+                        match (get(headers, names[i])) {
+                            Option.Some(v) => {
+                                hs.insert(names[i], v);
+                            },
+                            Option.None => { },
+                        }
+                        i = i + 1;
+                    }
+                    if (!has_header(hs, "accept-encoding")) {
+                        hs.insert("Accept-Encoding", "identity");
+                    }
+                    let s = Stream {
+                        h: h,
+                        buf: b"",
+                        status: 0,
+                        headers: Map.new(),
+                        mode: "eof",
+                        remaining: 0,
+                        idle_ms: idle_timeout_ms,
+                        open: true
+                    };
+                    match (net.socket_write_bytes(
+                    h,
+                    build_request_conn(method, u, body, hs, "close")
+                )) {
+                        Result.Err(e) => {
+                            stream_close(s);
+                            Result.Err("error sending: " + e)
+                        },
+                        Result.Ok(_) => stream_head(s, method),
+                    }
+                },
+            }
+        },
+    }
+}
+
+// Lee hasta tener la cabeza completa, la parsea y fija el modo de delimitación del cuerpo.
+fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
+    var sep: int = find_fin_headers(s.buf);
+    while (sep < 0) {
+        match (stream_fill(s)) {
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
+            Result.Ok(more) => {
+                if (!more) {
+                    stream_close(s);
+                    return Result.Err("malformed HTTP response (no header separator)");
+                }
+            },
+        }
+        sep = find_fin_headers(s.buf);
+    }
+    match (parse_head(s.buf.sub_bytes(0, sep))) {
+        Result.Err(e) => {
+            stream_close(s);
+            Result.Err(e)
+        },
+        Result.Ok(head) => {
+            s.status = head.0;
+            s.headers = head.1;
+            s.buf = s.buf.sub_bytes(sep + 4, s.buf.len());
+            // Un cuerpo comprimido no se puede entregar a trozos (no hay gunzip incremental):
+            // solo puede pasar si el servidor ignora nuestro Accept-Encoding: identity.
+            match (get(s.headers, "content-encoding")) {
+                Option.Some(enc) => {
+                    if (enc.to_lower() != "identity") {
+                        stream_close(s);
+                        return Result.Err("streaming does not support content-encoding: " + enc);
+                    }
+                },
+                Option.None => { },
+            }
+            // Delimitación (las mismas reglas que conn_leer_respuesta, RFC 9112): sin cuerpo →
+            // hecho; chunked → framing incremental; Content-Length → cuenta atrás; si no → EOF.
+            if (method == "HEAD" || s.status < 200 || s.status == 204 || s.status == 304) {
+                stream_close(s);
+                s.mode = "done";
+                return Result.Ok(s);
+            }
+            var chunked: bool = false;
+            match (get(s.headers, "transfer-encoding")) {
+                Option.Some(te) => {
+                    chunked = te.to_lower().contains("chunked");
+                },
+                Option.None => { },
+            }
+            if (chunked) {
+                s.mode = "size";
+                return Result.Ok(s);
+            }
+            match (get(s.headers, "content-length")) {
+                Option.Some(cl) => {
+                    match (parse_int(cl)) {
+                        Option.Some(n) => {
+                            s.remaining = n;
+                            s.mode = "length";
+                            if (n == 0) {
+                                stream_close(s);
+                                s.mode = "done";
+                            }
+                        },
+                        Option.None => {
+                            stream_close(s);
+                            return Result.Err("invalid content-length: " + cl);
+                        },
+                    }
+                },
+                Option.None => {
+                    s.mode = "eof";
+                },
+            }
+            Result.Ok(s)
+        },
+    }
+}
+
+// Una lectura del socket al buffer, con el plazo de OCIO. Ok(false) = EOF.
+fn stream_fill(s: Stream) -> Result<bool, string> {
+    let deadline: int = if (s.idle_ms > 0) { time.monotonic() + s.idle_ms } else { 0 };
+    match (read_with_deadline(s.h, deadline)) {
+        Result.Err(e) => {
+            stream_close(s);
+            Result.Err("error reading: " + e)
+        },
+        Result.Ok(piece) => {
+            if (piece.len() == 0) {
+                Result.Ok(false)
+            } else {
+                s.buf = s.buf + piece;
+                Result.Ok(true)
+            }
+        },
+    }
+}
+
+// Saca hasta n octetos del frente del buffer.
+fn stream_take(s: Stream, n: int) -> bytes {
+    let k: int = if (n < s.buf.len()) { n } else { s.buf.len() };
+    let r: bytes = s.buf.sub_bytes(0, k);
+    s.buf = s.buf.sub_bytes(k, s.buf.len());
+    r
+}
+
+/// Pulls the next piece of the body: `Ok(Some(bytes))` as soon as ANY data is available
+/// (partial chunks included — that is the point), `Ok(None)` on a clean end of stream, `Err`
+/// on network/framing errors or a truncated body. Blocks only the calling fiber.
+pub fn stream_read(s: Stream) -> Result<Option<bytes>, string> {
+    while (true) {
+        if (s.mode == "done") {
+            return Result.Ok(Option.None);
+        }
+        if (s.mode == "length") {
+            if (s.remaining == 0) {
+                stream_close(s);
+                s.mode = "done";
+                return Result.Ok(Option.None);
+            }
+            if (s.buf.len() == 0) {
+                match (stream_fill(s)) {
+                    Result.Err(e) => {
+                        return Result.Err(e);
+                    },
+                    Result.Ok(more) => {
+                        if (!more) {
+                            stream_close(s);
+                            s.mode = "done";
+                            return Result.Err(
+                                "truncated body: " + to_string(s.remaining) + " bytes missing"
+                            );
+                        }
+                    },
+                }
+            }
+            let piece: bytes = stream_take(s, s.remaining);
+            s.remaining = s.remaining - piece.len();
+            return Result.Ok(Option.Some(piece));
+        }
+        if (s.mode == "eof") {
+            if (s.buf.len() > 0) {
+                return Result.Ok(Option.Some(stream_take(s, s.buf.len())));
+            }
+            match (stream_fill(s)) {
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
+                Result.Ok(more) => {
+                    if (!more) {
+                        stream_close(s);
+                        s.mode = "done";
+                        return Result.Ok(Option.None);
+                    }
+                },
+            }
+        }
+        if (s.mode == "data") {
+            if (s.buf.len() == 0) {
+                match (stream_fill(s)) {
+                    Result.Err(e) => {
+                        return Result.Err(e);
+                    },
+                    Result.Ok(more) => {
+                        if (!more) {
+                            stream_close(s);
+                            s.mode = "done";
+                            return Result.Err("truncated chunked body");
+                        }
+                    },
+                }
+            }
+            let piece: bytes = stream_take(s, s.remaining);
+            s.remaining = s.remaining - piece.len();
+            if (s.remaining == 0) {
+                s.mode = "crlf";
+            }
+            return Result.Ok(Option.Some(piece));
+        }
+        if (s.mode == "crlf") {
+            // El \r\n que cierra cada chunk.
+            if (stream_need(s, 2)?) {
+                if (s.buf[0] != 13 || s.buf[1] != 10) {
+                    stream_close(s);
+                    s.mode = "done";
+                    return Result.Err("malformed chunked body (missing chunk CRLF)");
+                }
+                s.buf = s.buf.sub_bytes(2, s.buf.len());
+                s.mode = "size";
+            } else {
+                stream_close(s);
+                s.mode = "done";
+                return Result.Err("truncated chunked body");
+            }
+        }
+        if (s.mode == "size") {
+            // Línea "tamaño-hex[;ext]\r\n".
+            var nl: int = find_crlf(s.buf, 0);
+            while (nl < 0) {
+                match (stream_fill(s)) {
+                    Result.Err(e) => {
+                        return Result.Err(e);
+                    },
+                    Result.Ok(more) => {
+                        if (!more) {
+                            stream_close(s);
+                            s.mode = "done";
+                            return Result.Err("truncated chunked body");
+                        }
+                    },
+                }
+                nl = find_crlf(s.buf, 0);
+            }
+            let size: int = parse_chunk_size(s.buf, 0, nl);
+            if (size < 0) {
+                stream_close(s);
+                s.mode = "done";
+                return Result.Err("malformed chunked body (bad chunk size)");
+            }
+            s.buf = s.buf.sub_bytes(nl + 2, s.buf.len());
+            if (size == 0) {
+                s.mode = "trailer";
+            } else {
+                s.remaining = size;
+                s.mode = "data";
+            }
+        }
+        if (s.mode == "trailer") {
+            // Tras el chunk 0: líneas de trailer hasta la vacía (lo normal: vacía directa).
+            var nl2: int = find_crlf(s.buf, 0);
+            while (nl2 >= 0) {
+                let line_len: int = nl2;
+                s.buf = s.buf.sub_bytes(nl2 + 2, s.buf.len());
+                if (line_len == 0) {
+                    stream_close(s);
+                    s.mode = "done";
+                    return Result.Ok(Option.None);
+                }
+                nl2 = find_crlf(s.buf, 0);
+            }
+            match (stream_fill(s)) {
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
+                Result.Ok(more) => {
+                    if (!more) {
+                        // EOF sin la línea en blanco del trailer: el cuerpo YA está completo
+                        // (llegó el chunk 0) → fin limpio, con lenidad.
+                        stream_close(s);
+                        s.mode = "done";
+                        return Result.Ok(Option.None);
+                    }
+                },
+            }
+        }
+    }
+    Result.Err("unreachable")
+}
+
+// Asegura n octetos en el buffer; Ok(false) = EOF antes de tenerlos.
+fn stream_need(s: Stream, n: int) -> Result<bool, string> {
+    while (s.buf.len() < n) {
+        match (stream_fill(s)) {
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
+            Result.Ok(more) => {
+                if (!more) {
+                    return Result.Ok(false);
+                }
+            },
+        }
+    }
+    Result.Ok(true)
+}
+
+/// Closes a stream early (e.g. the consumer has seen enough). Safe to call twice; after a
+/// clean `Ok(None)` from `stream_read` it is already closed.
+pub fn stream_close(s: Stream) {
+    if (s.open) {
+        close(s.h);
+    }
+    s.open = false;
 }

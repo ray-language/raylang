@@ -1,0 +1,184 @@
+// net/sse (M108) — cliente de Server-Sent Events (text/event-stream) sobre net/http.stream.
+//
+// El decodificador (`decode`) es PURO —bytes → evento— como el de teclas de std/term: toda la
+// gramática del formato (campos data/event/id, comentarios ":", finales CR/CRLF/LF, data
+// multilínea) se prueba sin red. `next` lo alimenta con trozos del stream HTTP; los trozos
+// pueden partir un evento (incluso un carácter UTF-8) por cualquier octeto: el acumulador es
+// bytes y solo se decodifica a texto línea COMPLETA (el octeto de '\n' nunca aparece dentro de
+// un carácter multibyte → el corte por líneas es seguro).
+//
+// Alcance v1: `retry:` se ignora y no hay reconexión automática (el llamador decide con el
+// `last_id` que conserva cada evento).
+
+import net/http;
+
+/// A Server-Sent Event: `data` (the payload, multi-line joined with '\n'), `event` (the type;
+/// "" when the server sent none — the spec's default is "message"), and `id` (the last event
+/// id; "" when unset).
+pub struct Event {
+    data: string,
+    event: string,
+    id: string,
+}
+
+/// An open SSE subscription: the underlying HTTP stream plus the undecoded byte tail.
+pub struct EventStream {
+    s: http.Stream,
+    acc: bytes,
+}
+
+/// Subscribes to `url` (GET with `Accept: text/event-stream`, no idle timeout — a healthy
+/// event stream may stay silent for minutes). Fails on a non-200 status.
+pub fn open(url: string, headers: Map<string, string>) -> Result<EventStream, string> {
+    // Copia de las cabeceras del llamador (no se muta lo prestado) + las de SSE.
+    var hs: Map<string, string> = Map.new();
+    let names: [string] = headers.keys();
+    var i: int = 0;
+    while (i < names.len()) {
+        match (get(headers, names[i])) {
+            Option.Some(v) => {
+                hs.insert(names[i], v);
+            },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    hs.insert("Accept", "text/event-stream");
+    hs.insert("Cache-Control", "no-cache");
+    match (http.stream_with("GET", url, b"", hs, 0)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(s) => {
+            if (s.status != 200) {
+                http.stream_close(s);
+                return Result.Err("SSE subscription failed: HTTP " + to_string(s.status));
+            }
+            Result.Ok(EventStream { s: s, acc: b"" })
+        },
+    }
+}
+
+/// The next event: `Ok(Some(event))`, `Ok(None)` when the server ends the stream cleanly
+/// (a half-received event is discarded, per spec), or `Err` on network errors. Blocks only
+/// the calling fiber. Events whose `data` is empty are not dispatched (per spec) — they are
+/// consumed and the read continues.
+pub fn next(sub: EventStream) -> Result<Option<Event>, string> {
+    while (true) {
+        match (decode(sub.acc)) {
+            Option.Some(evn) => {
+                sub.acc = sub.acc.sub_bytes(evn.1, sub.acc.len());
+                // La spec no despacha eventos con data vacío (p. ej. solo comentarios keep-alive).
+                if (evn.0.data != "") {
+                    return Result.Ok(Option.Some(evn.0));
+                }
+            },
+            Option.None => {
+                match (http.stream_read(sub.s)) {
+                    Result.Err(e) => {
+                        return Result.Err(e);
+                    },
+                    Result.Ok(piece_opt) => {
+                        match (piece_opt) {
+                            Option.Some(b) => {
+                                sub.acc = sub.acc + b;
+                            },
+                            Option.None => {
+                                return Result.Ok(Option.None);  // fin limpio; parcial descartado
+                            },
+                        }
+                    },
+                }
+            },
+        }
+    }
+    Result.Err("unreachable")
+}
+
+/// Unsubscribes (closes the underlying stream). Safe to call twice.
+pub fn close_stream(sub: EventStream) {
+    http.stream_close(sub.s);
+}
+
+// ---------------------------------------------------------------------------------------------
+// El decodificador puro
+// ---------------------------------------------------------------------------------------------
+
+// El fin de la línea que empieza en `from`: (índice del fin, índice del comienzo de la
+// siguiente), o (-1, -1) si aún no hay final de línea. Acepta LF, CRLF y CR solo — pero un CR
+// como ÚLTIMO octeto no decide (podría venir el LF de un CRLF partido entre trozos).
+fn line_end(buf: bytes, start: int) -> (int, int) {
+    var i: int = start;
+    while (i < buf.len()) {
+        if (buf[i] == 10) {
+            return (i, i + 1);
+        }
+        if (buf[i] == 13) {
+            if (i + 1 < buf.len()) {
+                if (buf[i + 1] == 10) {
+                    return (i, i + 2);
+                } else {
+                    return (i, i + 1);
+                }
+            }
+            return (0 - 1, 0 - 1);  // CR al final del buffer: incompleto
+        }
+        i = i + 1;
+    }
+    return (0 - 1, 0 - 1);
+}
+
+/// Decodes ONE event from the front of `buf`: `Some((event, bytes consumed))` when a complete
+/// event (terminated by a blank line) is there, `None` when more bytes are needed. Pure — feed
+/// it any byte source. Comment lines (starting with ':') and `retry:` fields are consumed and
+/// ignored; multi-line `data:` is joined with '\n' (spec: the trailing newline is dropped).
+pub fn decode(buf: bytes) -> Option<(Event, int)> {
+    var data: string = "";
+    var has_data: bool = false;
+    var event: string = "";
+    var id: string = "";
+    var pos: int = 0;
+    while (true) {
+        let le = line_end(buf, pos);
+        if (le.0 < 0) {
+            return Option.None;  // sin final de línea: el evento aún no está completo
+        }
+        let line_bytes: bytes = buf.sub_bytes(pos, le.0);
+        pos = le.1;
+        if (line_bytes.len() == 0) {
+            // Línea en blanco: fin del evento.
+            return Option.Some((Event { data: data, event: event, id: id }, pos));
+        }
+        match (from_utf8(line_bytes)) {
+            Result.Err(_) => { },  // línea no-UTF-8: se ignora (lenidad)
+            Result.Ok(line) => {
+                if (!line.starts_with(":")) {
+                    // "campo: valor" — sin ':' la línea entera es el campo con valor "".
+                    var field: string = line;
+                    var value: string = "";
+                    match (index_of(line, ":")) {
+                        Option.Some(c) => {
+                            field = line.substring(0, c);
+                            value = line.substring(c + 1, line.len());
+                            // La spec quita UN espacio inicial del valor.
+                            if (value.starts_with(" ")) {
+                                value = value.substring(1, value.len());
+                            }
+                        },
+                        Option.None => { },
+                    }
+                    if (field == "data") {
+                        data = if (has_data) { data + "\n" + value } else { value };
+                        has_data = true;
+                    }
+                    if (field == "event") {
+                        event = value;
+                    }
+                    if (field == "id") {
+                        id = value;
+                    }
+                    // retry: ignorado (v1).
+                }
+            },
+        }
+    }
+    Option.None
+}

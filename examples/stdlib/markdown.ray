@@ -657,8 +657,16 @@ fn render_blocks(blocks: [Block]) -> string {
                 out = out + "<p>" + render_inlines(xs) + "</p>\n";
             },
             Block.Code(lang, body) => {
-                let cls = if (lang == "") { "" } else { " class=\"language-" + escape_html(lang) + "\"" };
-                out = out + "<pre><code" + cls + ">" + escape_html(body) + "\n</code></pre>\n";
+                // M111.c: una cerca ```mermaid emite el contenedor que mermaid.js busca en la
+                // página (<pre class="mermaid">, texto escapado) — el render del diagrama es
+                // client-side; reimplementarlo server-side no tiene sentido. En el AST sigue
+                // siendo Block.Code("mermaid", …): quien renderice distinto decide él.
+                if (lang == "mermaid") {
+                    out = out + "<pre class=\"mermaid\">" + escape_html(body) + "\n</pre>\n";
+                } else {
+                    let cls = if (lang == "") { "" } else { " class=\"language-" + escape_html(lang) + "\"" };
+                    out = out + "<pre><code" + cls + ">" + escape_html(body) + "\n</code></pre>\n";
+                }
             },
             Block.Quote(inner) => {
                 out = out + "<blockquote>\n" + render_blocks(inner) + "</blockquote>\n";

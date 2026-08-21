@@ -68,6 +68,7 @@ Lo que impide que el contrato se erosione en silencio; todo corre en CI:
 | `tests/fuzz_frontend.rs` | que ninguna entrada haga *panic* al compilador (campaña continua + nocturna) |
 | `tests/ice_policy.rs` | que los fallos internos vayan por `ice!()` y no por `unwrap` suelto |
 | `tests/naming_policy.rs` | que no se cuele *spanglish* en los identificadores |
+| `tests/fmt_policy.rs` | que todo `.ray` versionado siga siendo un punto fijo de `ray fmt` — y, por separado, que el formateador **converja** (formatear dos veces = formatear una) |
 | `tests/perf_regression.rs` | que ningún cambio degrade el banco más de un 5% |
 | Gate de memoria del banco | que no crezca el pico de RSS sin darse cuenta |
 | `cargo clippy --all-targets` + `cargo audit` | lints y avisos de seguridad de las dependencias |

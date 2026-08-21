@@ -2241,6 +2241,49 @@ M108** (ago 2026): `net/http.stream*` + cliente `net/sse` (crónica en DESIGN §
 MANUAL, CHANGELOG "Sin publicar", SECURITY.md (unsafe de termios/ioctl/isatty), DESIGN (crónica al
 cerrar el arco).
 
+## 61. Valores-función thread-safe en el nativo — fn dentro de un dato cruzando fibras (ago 2026, impacto: MEDIO-ALTO — solo backend nativo)
+
+**El caso** (destapado por un programa real, ago 2026): un valor **con funciones dentro** (campo
+`fn` de un struct, payload de enum, elemento de array/Map/tupla) que cruza una fibra —canal,
+captura de `spawn`, `Task`—. **No es un hueco del lenguaje**: el checker no lo restringe (no hay
+noción de "enviable") y la **VM lo soporta** — su modelo de closure es *índice de función +
+upvalues* y `vm/transfer.rs` copia `Obj::Closure` en profundidad entre heaps (M38), verificado en
+vivo. Es una **divergencia del backend nativo**, hoy degradada a fallo limpio y guiado:
+
+- fn **suelta** capturada por `spawn` → error en transpilación ("cannot cross threads… yet"),
+  salvo por la vía N5c (abajo).
+- fn **dentro de un compuesto** que cruza → el conversor `__to_send_N` del tipo entero se emite
+  como stub que **panica en runtime** ("value of a type holding functions cannot cross a thread
+  boundary… rebuild it inside the fiber").
+
+**Lo que SÍ está resuelto** (H21-N5c): un **parámetro** de tipo fn que atraviesa un `spawn`
+(directa o transitivamente, punto fijo sobre el grafo de llamadas) se emite como genérico Rust
+(`__F: Fn + Send + Sync + Clone`) — así corre el patrón webserver completo en nativo. Lo que
+falta es la fn **almacenada en un dato**.
+
+**Por qué es un proyecto propio y no un fleco** (`docs/transpilador-nativo.md`, "modelo de
+concurrencia thread-safe"): en el nativo una closure es una closure de Rust tras `Rc<dyn Fn>`
+(no-`Send`), y en el punto de cruce el tipo `fn(int)->int` ya está **borrado** — no dice qué
+closure es ni qué capturó, así que no hay reconstrucción genérica posible al otro lado. Dos vías:
+
+1. **Repr thread-safe universal**: toda fn-valor pasa a `Arc<dyn Fn + Send + Sync>` con capturas
+   copiables. Coste: cambio de repr pervasivo + posible impacto en los caminos calientes de
+   closures (medir; el contrato de PERFORMANCE manda).
+2. **Defuncionalización en el cruce**: replicar el modelo índice+upvalues de la VM — un registro
+   de constructores de closures (id de forma + capturas convertidas a `__RaySend`) y un caso
+   `Type::Fn` en el árbol de conversión. Más quirúrgico, pero exige rastrear qué closures pueden
+   llegar a cada sitio de cruce (análisis estático o tabla global de formas).
+
+**Semántica ya fijada** (no re-decidir): lo que cruza se **copia** (heap aislado M38); las
+capturas mutables se re-crean como celdas locales → mutación aislada, como la VM y como ya hace
+N5c con los params genéricos.
+
+**Interacciones**: el contrato byte-idéntico VM≡nativo de PRODUCTION.md (esta es hoy su excepción
+documentada); `web/framework` (`listen_app` existe precisamente como workaround: reconstruir el
+valor dentro de la fibra); si algún día hay serialización de closures (no planeada), compartiría
+la defuncionalización. **Workaround vigente**: reconstruir el valor con funciones dentro de la
+fibra receptora (pasar los DATOS y rehacer las fns allí).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

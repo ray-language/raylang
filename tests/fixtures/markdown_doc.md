@@ -41,3 +41,10 @@ graph TD
     A[VM] -->|bytecode| B(Runtime)
     A --> C{Checker}
 ```
+
+## Detalles CommonMark
+
+Prosa con snake_case_name y __init__ en negrita.
+
+2. empieza en dos
+3. sigue

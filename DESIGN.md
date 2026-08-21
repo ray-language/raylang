@@ -9354,3 +9354,26 @@ De paso, el corpus del oráculo del parser auto-alojado destapó que `examples/s
 (M111) y `examples/term/keys.ray` (M107.3) usan tuplas (M27.1) — diferidas en el toolchain
 self-hosted, cuyo espejo está congelado en su hito —, así que ambos entran en la lista
 `DIFERIDOS_SELFHOST` de `tests/selfhost_parser.rs`, como en su día `regex.ray`.
+
+## 103. M111.d — std/markdown: dos fallos CommonMark con dientes (ago 2026)
+
+Dos reportes de uso real, ambos de la clase "el subconjunto v1 era demasiado subconjunto":
+
+**El `_` intra-palabra creaba énfasis.** `to_html("snake_case_name en prosa")` devolvía
+`snake<em>case</em>name` — CommonMark lo prohíbe (regla 17) precisamente porque el `_` vive
+dentro de los identificadores; para un agente de código que escribe prosa técnica, el parser
+mutilaba nombres a mansalva. El arreglo es la versión pragmática del flanking de CommonMark: un
+delimitador de `_`/`__` solo **abre** si el carácter anterior no es "de palabra" (letra, dígito,
+el propio `_`, o no-ASCII — las letras acentuadas cuentan) y un candidato a **cierre** seguido de
+un carácter de palabra no cierra (se sigue buscando). Con eso `snake_case_name` e
+`intra__word__no` van literales, `__init__` sigue siendo negrita y `_foo_bar_` emite
+`<em>foo_bar</em>` — los mismos resultados que el dingus de CommonMark. El `*` no cambia: el
+énfasis intra-palabra con asterisco es legal (`foo*bar*`).
+
+**La lista ordenada perdía su número de inicio.** `2. dos` emitía `<ol>` a secas (renderizaba
+como 1) y el AST no tenía dónde guardar el dato — el defecto era del modelo, no del render. La
+variante gana el campo: `Block.List(ordered, start, items)` (cambio de firma de la v1, asumido
+ahora que la superficie es joven), donde `start` es el número del **primer** marcador — los de
+los demás ítems se ignoran, como en CommonMark — y el render emite `<ol start="N">` solo cuando
+N ≠ 1. La moraleja de diseño: cuando el render "pierde" información, mirar primero si el AST
+puede representarla.

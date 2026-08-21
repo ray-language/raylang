@@ -1015,6 +1015,11 @@ Dos decisiones de seguridad, pensadas para servir la salida tal cual: el HTML em
 documento **se escapa** (no se interpreta), y las URLs `javascript:`/`vbscript:`/`data:` no-imagen
 de enlaces e imágenes se neutralizan a `#`.
 
+Dos detalles CommonMark que importan al escribir prosa técnica: el `_` **intra-palabra** no crea
+énfasis (`snake_case_name` queda intacto; `*` sí funciona dentro de una palabra), y una lista
+ordenada conserva su número inicial (`2. dos` → `<ol start="2">`; el AST lo lleva en
+`Block.List(ordered, start, items)`).
+
 ### Archivos (`std/fs` — todo con errores como valores)
 
 ```rust

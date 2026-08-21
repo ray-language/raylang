@@ -9085,3 +9085,24 @@ convergencia de un formateador no se demuestra leyendo el código.
 
 **Un remate.** Una firma repartida con cuerpo inline (`) -> string { rail }` tras seis líneas de
 parámetros) se lee mal, así que una firma que se reparte **expande también su cuerpo**.
+
+**Una cuarta forma, encontrada después (ago 2026) por el usuario con otra captura.** El repartir se
+colaba **dentro de una interpolación**. Un template multilínea (un documento SVG, HTML…) rebasa el
+umbral por construcción, así que la sentencia entraba siempre a la segunda pasada con `force` puesto,
+y la primera expresión repartible que encontraba era la de un `${…}` del documento:
+
+```
+      <stop offset="0%" stop-color="${hsl(          ← ¡esto es TEXTO del SVG!
+        hue,
+        62,
+        76
+    )}"/>
+```
+
+La distinción que faltaba: lo que hay dentro de `${…}` **no se emite en el código, se emite en la
+cadena**. Un salto de línea con su sangría ahí no es formato: es contenido — cambia el string que el
+programa produce (y en un `"…"` de una sola línea ni siquiera vuelve a lexar). El envuelto se apaga
+al entrar a cada interpolación y se restaura al salir; el `force` sin consumir queda disponible para
+lo que venga **fuera** del literal, que sí es código. Es la misma familia que los tres casos de
+arriba —`wrap`/`force` cruzando una frontera que no debían cruzar—, pero la frontera aquí no es
+sintáctica sino la de código vs. datos.

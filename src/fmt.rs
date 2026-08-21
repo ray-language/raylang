@@ -1020,9 +1020,19 @@ fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool) -> String {
                 }
             }
             InterpSeg::Expr(e) => {
+                // El envuelto se APAGA dentro de `${…}`: lo que se emita aquí va DENTRO del literal, y
+                // un salto de línea con su sangría no es formato sino TEXTO — cambiaría la cadena que el
+                // programa produce (y en un `"…"` de una línea, ni siquiera relexaría). Un template
+                // multilínea siempre rebasa el umbral, así que la segunda pasada llegaba aquí con
+                // `force` puesto y repartía la PRIMERA llamada interpolada del documento.
+                let (wrap, force) = (cur.wrap, cur.force);
+                cur.wrap = false;
+                cur.force = false;
                 out.push_str("${");
                 out.push_str(&fmt_expr(cur, e, 0));
                 out.push('}');
+                cur.wrap = wrap;
+                cur.force = force;
             }
         }
     }
@@ -1525,6 +1535,23 @@ mod tests {
         // Y un `\${` literal en un string PLANO sobrevive al roundtrip (fix M95).
         let plain = "fn main() -> int {\n    print(\"precio \\${USD}\");\n    0\n}\n";
         assert_eq!(fmt(plain), plain);
+    }
+
+    #[test]
+    fn interpolation_is_never_wrapped() {
+        // Lo de dentro de `${…}` es TEXTO del literal: repartirlo mete saltos de línea y sangría en la
+        // cadena que el programa produce. Un template multilínea rebasa siempre el umbral, así que la
+        // segunda pasada llegaba aquí con `force` puesto y partía la primera llamada interpolada.
+        let src = "fn hsl(h: int, s: int, l: int) -> string {\n    to_string(h) + to_string(s) + to_string(l)\n}\n\nfn svg(key: string) -> string {\n    let hue = 10;\n    `<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"xMidYMid slice\">\n  <stop id=\"bg-${key}\" stop-color=\"${hsl(hue, 62, 76)}\"/>\n</svg>`\n}\n";
+        assert_eq!(fmt(src), src, "el `${{…}}` se reemite intacto");
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+        // Igual en un string PLANO de una línea, donde un salto ni siquiera relexaría. Aquí el
+        // `print(…)` SÍ reparte su argumento (eso es formato legítimo, fuera del literal); lo que no
+        // puede es tocar el interior del `${…}`.
+        let plain = "fn f(a: int, b: int, c: int) -> int {\n    a + b + c\n}\n\nfn main() -> int {\n    print(\"un texto largo de relleno para rebasar holgadamente el umbral de cien columnas: ${f(1, 2, 3)} fin\");\n    0\n}\n";
+        let out = fmt(plain);
+        assert!(out.contains("${f(1, 2, 3)}"), "la interpolación queda intacta: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
     }
 
     #[test]

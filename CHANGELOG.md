@@ -214,6 +214,12 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **`ray fmt` rompía el contenido de una cadena interpolada.** El repartir por ancho se colaba dentro
+  de un `${…}`: en un template multilínea (un documento SVG/HTML, que rebasa el umbral por
+  construcción) la primera llamada interpolada salía partida en varias líneas **dentro del literal**,
+  cambiando el texto que el programa produce. Lo de dentro de una interpolación es contenido, no
+  código: el envuelto ahora se apaga al entrar a un `${…}` y se restaura al salir.
+
 - **Backend nativo: una `var` mutada por un closure DENTRO de `spawn`/`scope` no compilaba.** Ambos
   emiten el cuerpo del literal directamente, sin pasar por la emisión de función anónima, y con ello
   se saltaban el registro de "celdas" (B1): la variable salía como `let mut` dentro de un

@@ -197,16 +197,44 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    // M112: el pánico de EPIPE de la libstd NO es un ICE. Rust ignora SIGPIPE al arrancar y
+    // `println!`/`eprintln!` paniquean si su destino se cerró (`ray fmt x | head`, `ray doc |
+    // less` y salir…). El programa del usuario ya no pasa por aquí (#126: `host_print` maneja el
+    // EPIPE antes de paniquear), pero la salida del PROPIO CLI —fmt, doc, diagnósticos, REPL— usa
+    // los macros de std. Dos piezas: el hook silencia la traza del pánico (corre en el hilo que
+    // panica, ANTES de que el payload llegue aquí) y el catch convierte el payload en la
+    // convención Unix: exit 141 (128+SIGPIPE), en silencio — el destino de un programa C.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !is_broken_pipe_panic_message(&panic_payload_text(info.payload())) {
+            previous(info);
+        }
+    }));
     match spawn_big_stack(f) {
         Ok(v) => v,
         Err(payload) => {
-            let detail = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_else(|| "panic without message".to_string());
+            let detail = panic_payload_text(payload.as_ref());
+            if is_broken_pipe_panic_message(&detail) {
+                std::process::exit(141);
+            }
             eprintln!("{}", diagnostic::ice_banner(&detail));
             std::process::exit(101);
         }
     }
+}
+
+/// El texto de un payload de pánico (`String` o `&str`; otra cosa → marcador).
+fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "panic without message".to_string())
+}
+
+/// ¿Es el pánico de la libstd por escribir en un stdout/stderr cerrado? (El texto es estable en
+/// la práctica: `failed printing to stdout: Broken pipe (os error 32)`. Si algún día cambiara, lo
+/// peor que pasa es volver al banner de ICE — nunca se silencia un pánico que no sea este.)
+fn is_broken_pipe_panic_message(detail: &str) -> bool {
+    detail.starts_with("failed printing to") && detail.contains("Broken pipe")
 }

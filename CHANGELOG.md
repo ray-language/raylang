@@ -282,6 +282,12 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **`ray fmt archivo | head` (la salida del propio CLI) también reventaba con el ICE de "Broken
+  pipe"** — el residuo del arreglo de `print`/`eprint`: fmt, doc, diagnósticos y REPL usan los
+  macros de la libstd, que paniquean con el pipe cerrado. La red central de ICEs distingue ahora
+  ese pánico (y solo ese) y aplica la misma convención: exit 141 en silencio, sin traza ni banner.
+  Un pánico real sigue mostrando el ICE completo.
+
 - **`programa | head` reventaba con un ICE de "Broken pipe".** Rust ignora SIGPIPE y `println!`
   paniquea al escribir en un stdout cerrado; el pánico salía disfrazado de error interno del
   compilador. Ahora `print`/`eprint` siguen la convención Unix: el proceso termina **en silencio

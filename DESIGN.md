@@ -9260,6 +9260,9 @@ vez de mentir. Más: Content-Length completo y TRUNCADO (error, no fin limpio), 
 SSE con el evento partido en medio de una `ñ`, y la batería pura del decodificador en los tres
 motores (nativo incluido).
 
-**De propina, una verruga avistada** (no arreglada aquí): `print` sobre un stdout cerrado
-(`programa | head`) revienta con ICE de "Broken pipe" — cualquier programa raylang canalizado a
-`head` lo sufre; anotado para arreglo aparte.
+**De propina, una verruga avistada** (arreglada justo después, mismo agosto): `print` sobre un
+stdout cerrado (`programa | head`) reventaba con ICE de "Broken pipe" — Rust ignora SIGPIPE y
+`println!` paniquea. El arreglo sigue la convención Unix: exit **141** (128+SIGPIPE) en silencio,
+en los tres motores (VM/interp vía `host_print`; el nativo en su hilo escritor y en el
+`__ray_eprint` que sustituyó al `eprintln!` emitido). `io.write`/`io.flush` conservan su `Result`:
+quien escribe explícitamente decide qué hacer con el pipe cerrado. SPEC §2 lo documenta.

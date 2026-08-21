@@ -2175,6 +2175,72 @@ columna del generado no existe en el template). Detalle en DESIGN §93.
 
 ---
 
+## 60. std/term + std/io — terminal real (ago 2026, impacto: MEDIO — runtime en ambos motores) — arco M107, PLAN
+
+**El caso.** Construir una TUI real en raylang (raycode) hoy exige FFI a `getchar`, abrir
+`/dev/stdout` en append para escribir sin salto, y `tput cols < /dev/tty` para el tamaño. Todo eso
+son huecos de la stdlib, no del lenguaje. El arco los cierra con dos módulos (`std/io`, `std/term`)
+sobre builtins, **sin FFI de usuario y sin dependencias nuevas**.
+
+**Lo que el código ya tiene (y el plan aprovecha).** (a) La VM aparca fibras por fd en kqueue/epoll
+(`IoParked` + patrón `SocketRead`: rebobinar ip, aparcar, re-ejecutar) — una lectura de stdin que
+aparca NO pide `extern blocking` ni bloquea la VM. (b) El nativo expone `wait_readable(fd)` en
+`ray_runtime::fibers`; sin fibras (`--without fibers`), un read bloqueante en su hilo es correcto.
+(c) `signals()` ya existe TAMBIÉN en el nativo (`__ray_signals`, self-pipe) — la doc "VM only" está
+rancia; añadir SIGWINCH (28 en macOS y Linux) es pequeño. (d) `IoParked` ya tiene `deadline`
+(M56.4) → lectura con timeout gratis.
+
+**Fases (un PR cada una, en este orden):**
+
+- **M107.0 — bug: `unit` escrito en posición de tipo.** No hay token de tipo `unit`
+  (`parse_type_inner`): `-> unit` llega como `Struct("unit")` y `resolve_type`
+  (`checker/core.rs:1164`) no lo mapea → `extern fn free(p: ptr) -> unit` se rechaza con un mensaje
+  que lo da por válido, y `fn f() -> unit` tampoco compila. SPEC lista `unit` entre los tipos → bug
+  de implementación. Fix: `Struct("unit", [])` → `Type::Unit` en `resolve_type`, **en tándem con el
+  espejo `selfhost/checker.ray`** y tests en ambos.
+- **M107.1 — `std/io`: escribir sin salto + flush.** Builtins `__stdout_write(s)`,
+  `__stderr_write(s)`, `__stdout_write_bytes(b)`, `__stdout_flush()` (convención `[string]`
+  ok/err, como `__write_handle`); módulo `std/io` con `write/ewrite/write_bytes/flush ->
+  Result`. Los cuatro consumidores del registro (checker/VM/interp/nativo) + entrada en
+  `NATIVE_TRACKED_BUILTINS` con test que los EJECUTA (lección de los seis huecos).
+- **M107.2 — lectura de stdin por bytes, que aparca.** `__stdin_read(max) -> bytes` (`b""` = EOF) y
+  `__stdin_read_timeout(max, ms) -> [bytes]`. VM: patrón `SocketRead` sobre fd 0 — aparcar hasta
+  readiness y LEER DESPUÉS (sin `O_NONBLOCK`: stdin comparte la open file description con el shell
+  padre; volteársela sería grosero). Un solo lector a la vez (documentado). Interp: read bloqueante
+  (oráculo M:1, correcto). Nativo: `wait_readable(0)` + read; sin fibras, read directo. wasm: error
+  limpio. **El test que importa**: hijo con stdin=pipe alimentado con retardo; una fibra ticker
+  imprime mientras main espera el byte → los ticks salen ANTES del byte (prueba el aparcamiento
+  real), y paridad nativa del mismo programa.
+- **M107.3 — `std/term`.** Builtins `__term_is_tty(fd)`, `__term_size() -> [int]` ([] si no tty;
+  `ioctl(TIOCGWINSZ)` sobre `/dev/tty` con fallback a fd 1) y `__term_raw_on()/__term_raw_off()`
+  (termios guardado en static; equivalente de `cfmakeraw` a mano). **Cero deps**: `extern "C"`
+  declarados a mano (patrón `src/poll.rs`), structs termios `repr(C)` por SO (macOS ≠ Linux) →
+  inventario de `unsafe` en SECURITY.md. Módulo: `is_tty()`, `size() -> Option<(int, int)>`,
+  `raw(f: fn() -> T) -> Result<T, string>` (enciende, corre `f` bajo `try_call`, restaura SIEMPRE;
+  red de seguridad extra: restaurar al salir la VM/binario y en el panic hook; `kill -9` queda
+  documentado → `reset`), y `read_key() -> Option<Key>` con
+  `enum Key { Char(char), Enter, Tab, Backspace, Esc, Up, Down, Left, Right, Home, End, PageUp,
+  PageDown, Delete, Ctrl(char), F(int) }` — decodificador de secuencias ESC + UTF-8 multibyte en
+  **raylang puro** → testeable por `@test` alimentando bytes, sin tty. Ejemplo `examples/term/`
+  (visor con repintado). CI sin tty: paths no-tty + decoder puro; termios = smoke manual.
+- **M107.4 — SIGWINCH en `signals()`.** Añadir 28 al self-pipe de la VM y del nativo; corregir la
+  doc rancia ("VM only"). Con esto: `select` sobre `signals()` + `term.size()` = re-maquetado al
+  redimensionar.
+- **M107.5 — Buffer mutable en la frontera FFI (CLASIFICAR, no ejecutar en este arco).** El
+  síntoma (un `read(0, buf, 8)` C que "no escribe") es el modelo, no un bug: `bytes` es inmutable y
+  compartido (`Rc<[u8]>`); que C escribiera ahí sería corrupción. El arreglo real es un tipo
+  `Buffer` (objeto de heap mutable con storage estable, pasable como `void*`): SPEC + checker +
+  ambos motores + nativo + interacción con heap-por-fibra (cruza `spawn` por copia, coherente).
+  Impacto: MEDIO-ALTO. **No lo necesita std/term** (que va por builtins); lo necesitan APIs C con
+  out-params. Milestone propio si el caso real aparece.
+
+**Fuera del arco** (backlog aparte): streaming/chunked del cliente `http` (hoy lee hasta EOF; es la
+otra mitad de "TUI que pinta mientras llegan tokens", pero es de red, no de terminal).
+
+**Docs por fase**: SPEC (superficie estable: módulos y builtins nuevos, SIGWINCH), REFERENCE +
+MANUAL, CHANGELOG "Sin publicar", SECURITY.md (unsafe de termios/ioctl/isatty), DESIGN (crónica al
+cerrar el arco).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

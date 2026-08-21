@@ -37,6 +37,10 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/markdown`: tablas GFM** (M111.b): cabecera + fila separadora (`|---|:--:|`) →
+  `Block.Table(aligns, header, rows)` y `<table>` con `align`; `\|` escapado, filas cortas se
+  rellenan, cabecera y separadora con distinto número de columnas no es tabla (párrafo intacto).
+
 - **`std/markdown`** (M111): parser de Markdown en raylang puro — `parse(md) -> [Block]` (AST
   tipado: encabezados, párrafos, código cercado con lenguaje, listas anidadas, citas, regla;
   inline: énfasis/negrita/código/enlaces/imágenes/escapes) y `to_html(md)`. Subconjunto CommonMark

@@ -87,19 +87,30 @@ pub struct Response {
     headers: Map<string, string>,
     set_cookie: [string],
     body: bytes,
+    // M110: respuesta en STREAMING — si no está vacío, el cuerpo NO es `body` sino los trozos que
+    // lleguen por el canal ([canal] = streaming; [] = respuesta normal): el bucle de servicio los
+    // escribe con Transfer-Encoding: chunked según llegan y termina cuando el productor lo cierra.
+    // Construir con `stream_response`.
+    stream: [Channel<bytes>],
 }
 
 // --- Respuestas: atajos para los casos comunes ---
 // Respuesta de texto: el cuerpo se codifica a UTF-8.
 /// Builds a text response with the given status: the body string is encoded to UTF-8 bytes, no extra headers.
 pub fn text(status: int, body: string) -> Response {
-    Response { status: status, headers: Map.new(), set_cookie: [], body: body.to_bytes() }
+    Response {
+        status: status,
+        headers: Map.new(),
+        set_cookie: [],
+        body: body.to_bytes(),
+        stream: []
+    }
 }
 
 // Respuesta binaria: el cuerpo va tal cual (octetos crudos).
 /// Builds a binary response with the given status: the body bytes are sent verbatim (images, downloads, etc.).
 pub fn bytes_response(status: int, body: bytes) -> Response {
-    Response { status: status, headers: Map.new(), set_cookie: [], body: body }
+    Response { status: status, headers: Map.new(), set_cookie: [], body: body, stream: [] }
 }
 
 /// Appends one `Set-Cookie` line to the response and returns it (chainable with UFCS:
@@ -107,6 +118,43 @@ pub fn bytes_response(status: int, body: bytes) -> Response {
 pub fn with_cookie(r: Response, line: string) -> Response {
     r.set_cookie.push(line);
     r
+}
+
+// M110: respuesta en streaming — el cuerpo son los trozos del canal, en chunked, según llegan.
+/// Builds a STREAMING response: the body is whatever arrives on `ch`, written to the client as
+/// each piece arrives (`Transfer-Encoding: chunked`) until the producer `close`s the channel.
+/// Spawn the producer and return immediately:
+///
+/// ```ray
+/// let ch: Channel<bytes> = Channel.bounded(8);   // bounded = backpressure hacia el productor
+/// spawn(fn() {
+///     send(ch, b"chunk 1");
+///     send(ch, b"chunk 2");
+///     close(ch);
+/// });
+/// webserver.stream_response(200, ch)
+/// ```
+///
+/// The connection always closes after a stream (no keep-alive); a HEAD request gets the headers
+/// only (the channel is still drained so the producer never blocks forever). Set `Content-Type`
+/// on the returned response as usual.
+pub fn stream_response(status: int, ch: Channel<bytes>) -> Response {
+    Response { status: status, headers: Map.new(), set_cookie: [], body: b"", stream: [ch] }
+}
+
+// Entero a hexadecimal en minúsculas (el tamaño de un chunk del framing).
+fn to_hex(n0: int) -> string {
+    if (n0 == 0) {
+        return "0";
+    }
+    let digits: string = "0123456789abcdef";
+    var n: int = n0;
+    var out: string = "";
+    while (n > 0) {
+        out = to_string(digits[n % 16]) + out;
+        n = n / 16;
+    }
+    out
 }
 
 /// Builds a 200 OK text response with the given body.
@@ -123,7 +171,7 @@ pub fn not_found() -> Response {
 pub fn json_response(body: string) -> Response {
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", "application/json; charset=utf-8");
-    Response { status: 200, headers: h, set_cookie: [], body: body.to_bytes() }
+    Response { status: 200, headers: h, set_cookie: [], body: body.to_bytes(), stream: [] }
 }
 
 // Respuesta HTML con el charset declarado. `text`/`ok` NO ponen Content-Type → el navegador adivina
@@ -134,7 +182,7 @@ pub fn json_response(body: string) -> Response {
 pub fn html_response(status: int, body: string) -> Response {
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", "text/html; charset=utf-8");
-    Response { status: status, headers: h, set_cookie: [], body: body.to_bytes() }
+    Response { status: status, headers: h, set_cookie: [], body: body.to_bytes(), stream: [] }
 }
 
 // El cuerpo de una petición decodificado como texto UTF-8 (para formularios/JSON entrantes). Para datos
@@ -294,6 +342,64 @@ pub fn static_response(dir: string, path: string) -> Response {
 /// a strong `ETag` (from the file's size and mtime) and a request whose `If-None-Match` matches
 /// is answered `304 Not Modified` without re-reading or resending the body. Add your own
 /// `Cache-Control` if you want one: `r.headers.insert("Cache-Control", "max-age=3600")`.
+// M110: parsea `Range: bytes=a-b` (UN solo rango) contra un recurso de `size` octetos.
+// Devuelve: [] = sin rango / no parseable / múltiple (→ 200 completo, permitido por RFC 9110);
+// [a, b] = satisfacible, inclusive (→ 206); [-1] = insatisfacible (→ 416).
+fn parse_range(v: string, size: int) -> [int] {
+    if (!v.starts_with("bytes=")) {
+        return [];
+    }
+    let spec: string = v.substring(6, v.len()).trim();
+    if (spec.contains(",")) {
+        return [];  // multi-rango: fuera de v1 → respuesta completa
+    }
+    match (index_of(
+    spec,
+    "-"
+)) {
+        Option.None => [],
+        Option.Some(d) => {
+            let a_s: string = spec.substring(0, d).trim();
+            let b_s: string = spec.substring(d + 1, spec.len()).trim();
+            if (a_s == "") {
+                // Sufijo "-N": los últimos N octetos.
+                match (parse_int(b_s)) {
+                    Option.None => [],
+                    Option.Some(n) => {
+                        if (n <= 0) {
+                            return [0 - 1];
+                        }
+                        let start: int = if (n >= size) { 0 } else { size - n };
+                        if (size == 0) { [0 - 1] } else { [start, size - 1] }
+                    },
+                }
+            } else {
+                match (parse_int(
+            a_s
+        )) {
+                    Option.None => [],
+                    Option.Some(a) => {
+                        if (a >= size) {
+                            return [0 - 1];  // empieza más allá del final: 416
+                        }
+                        if (b_s == "") {
+                            return [a, size - 1];  // "a-": hasta el final
+                        }
+                        match (parse_int(
+                        b_s
+                    )) {
+                            Option.None => [],
+                            Option.Some(b) => {
+                                if (b < a) { [] } else { [a, if (b < size) { b } else { size - 1 }] }
+                            },
+                        }
+                    },
+                }
+            }
+        },
+    }
+}
+
 pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
     if (req.method != "GET" && req.method != "HEAD") {
         let r: Response = text(405, "method not allowed\n");
@@ -304,7 +410,10 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
         return not_found();
     }
     let rest: string = req.path.substring(prefix.len(), req.path.len());
-    match (static_file_of(dir, rest)) {
+    match (static_file_of(
+    dir,
+    rest
+)) {
         Option.Some(file) => {
             // El ETag sale de los metadatos (2 stats, sin leer el cuerpo): si no hay archivo, 404.
             let size: int = match (fs.file_size(file)) {
@@ -331,11 +440,58 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
                 },
                 Option.None => { },
             }
-            match (fs.read_file_bytes(file)) {
+            match (fs.read_file_bytes(
+            file
+        )) {
                 Result.Ok(data) => {
+                    // M110: Range/206 (solo GET; en HEAD el Range se ignora, permitido por RFC).
+                    // `If-Range` con validador distinto al nuestro → respuesta completa (el
+                    // archivo cambió bajo una descarga reanudada; servir el trozo corrompería).
+                    var range_v: string = "";
+                    if (req.method == "GET") {
+                        match (get(req.headers, "range")) {
+                            Option.Some(rv) => {
+                                range_v = rv;
+                            },
+                            Option.None => { },
+                        }
+                        match (get(req.headers, "if-range")) {
+                            Option.Some(ir) => {
+                                if (ir.trim() != etag) {
+                                    range_v = "";
+                                }
+                            },
+                            Option.None => { },
+                        }
+                    }
+                    if (range_v != "") {
+                        let rng: [int] = parse_range(range_v, data.len());
+                        if (rng.len() == 1) {
+                            let r416: Response = text(416, "range not satisfiable\n");
+                            r416.headers.insert(
+                                "Content-Range",
+                                "bytes */" + to_string(data.len())
+                            );
+                            r416.headers.insert("ETag", etag);
+                            return r416;
+                        }
+                        if (rng.len() == 2) {
+                            let piece: bytes = data.sub_bytes(rng[0], rng[1] + 1);
+                            let r206: Response = bytes_response(206, piece);
+                            r206.headers.insert("Content-Type", mime_of(file));
+                            r206.headers.insert("ETag", etag);
+                            r206.headers.insert("Accept-Ranges", "bytes");
+                            r206.headers.insert(
+                                "Content-Range",
+                                "bytes " + to_string(rng[0]) + "-" + to_string(rng[1]) + "/" + to_string(data.len())
+                            );
+                            return r206;
+                        }
+                    }
                     let r: Response = bytes_response(200, data);
                     r.headers.insert("Content-Type", mime_of(file));
                     r.headers.insert("ETag", etag);
+                    r.headers.insert("Accept-Ranges", "bytes");
                     r
                 },
                 Result.Err(_) => not_found(),
@@ -348,7 +504,7 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
 // La frase de estado para los códigos comunes (HTTP la exige tras el número). M56.1: cubre
 // también redirecciones (3xx), auth (401/403), 405/413/429/431 y los 5xx de gateway.
 fn status_text(code: int) -> string {
-    if (code == 200) { "OK" } else if (code == 201) { "Created" } else if (code == 204) { "No Content" } else if (code == 301) { "Moved Permanently" } else if (code == 302) { "Found" } else if (code == 303) { "See Other" } else if (code == 304) { "Not Modified" } else if (code == 307) { "Temporary Redirect" } else if (code == 308) { "Permanent Redirect" } else if (code == 400) { "Bad Request" } else if (code == 401) { "Unauthorized" } else if (code == 403) { "Forbidden" } else if (code == 404) { "Not Found" } else if (code == 405) { "Method Not Allowed" } else if (code == 409) { "Conflict" } else if (code == 413) { "Content Too Large" } else if (code == 415) { "Unsupported Media Type" } else if (code == 422) { "Unprocessable Content" } else if (code == 429) { "Too Many Requests" } else if (code == 431) { "Request Header Fields Too Large" } else if (code == 500) { "Internal Server Error" } else if (code == 501) { "Not Implemented" } else if (code == 502) { "Bad Gateway" } else if (code == 503) { "Service Unavailable" } else if (code == 504) { "Gateway Timeout" } else { "Status" }
+    if (code == 200) { "OK" } else if (code == 201) { "Created" } else if (code == 204) { "No Content" } else if (code == 206) { "Partial Content" } else if (code == 301) { "Moved Permanently" } else if (code == 302) { "Found" } else if (code == 303) { "See Other" } else if (code == 304) { "Not Modified" } else if (code == 307) { "Temporary Redirect" } else if (code == 308) { "Permanent Redirect" } else if (code == 400) { "Bad Request" } else if (code == 401) { "Unauthorized" } else if (code == 403) { "Forbidden" } else if (code == 404) { "Not Found" } else if (code == 405) { "Method Not Allowed" } else if (code == 409) { "Conflict" } else if (code == 413) { "Content Too Large" } else if (code == 415) { "Unsupported Media Type" } else if (code == 416) { "Range Not Satisfiable" } else if (code == 422) { "Unprocessable Content" } else if (code == 429) { "Too Many Requests" } else if (code == 431) { "Request Header Fields Too Large" } else if (code == 500) { "Internal Server Error" } else if (code == 501) { "Not Implemented" } else if (code == 502) { "Bad Gateway" } else if (code == 503) { "Service Unavailable" } else if (code == 504) { "Gateway Timeout" } else { "Status" }
 }
 
 // --- Lectura de la petición ---
@@ -790,7 +946,8 @@ fn inject_live_reload(r: Response) -> Response {
                             status: r.status,
                             headers: r.headers,
                             set_cookie: r.set_cookie,
-                            body: inject_before_body_end(html, snippet).to_bytes()
+                            body: inject_before_body_end(html, snippet).to_bytes(),
+                            stream: []
                         }
                     },
                     Result.Err(e) => r,  // cuerpo no-UTF8 → intacto
@@ -807,6 +964,11 @@ fn inject_live_reload(r: Response) -> Response {
 // `omit_body` = respuesta a un HEAD — cabeceras completas (incl. el Content-Length que tendría el
 // GET) pero SIN el cuerpo (RFC 9110 §9.3.2).
 fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> Result<int, string> {
+    // M110: una respuesta en streaming va por su propio camino (chunked, sin Content-Length,
+    // conexión SIEMPRE close). El live-reload no aplica (no hay cuerpo HTML bufferizado).
+    if (r0.stream.len() > 0) {
+        return send_stream_response(conn, r0, omit_body);
+    }
     // M92.4: bajo `ray dev` inyecta el snippet de live-reload en las respuestas HTML (no-op en producción).
     // Se hace ANTES de calcular el Content-Length para que cuadre con el cuerpo ya inyectado.
     let r: Response = inject_live_reload(r0);
@@ -840,6 +1002,85 @@ fn send_response_keep(conn: int, r0: Response, keep: bool, omit_body: bool) -> R
         return net.socket_write_bytes(conn, head.to_bytes());
     }
     net.socket_write_bytes(conn, head.to_bytes() + r.body)
+}
+
+// M110: escribe una respuesta en streaming — cabecera con Transfer-Encoding: chunked y luego un
+// chunk por cada trozo del canal, hasta que el productor lo cierre. En un HEAD se envían solo las
+// cabeceras, pero el canal SE DRENA igual: si no, un productor sobre un canal acotado se quedaría
+// bloqueado en `send` para siempre (fuga de fibra).
+fn send_stream_response(conn: int, r: Response, omit_body: bool) -> Result<int, string> {
+    let ch: Channel<bytes> = r.stream[0];
+    var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
+    head = head + "Transfer-Encoding: chunked\r\n";
+    head = head + "Connection: close\r\n";
+    head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
+    let ks: [string] = r.headers.keys();
+    var i: int = 0;
+    while (i < ks.len()) {
+        match (get(r.headers, ks[i])) {
+            Option.Some(v) => {
+                head = head + ks[i] + ": " + v + "\r\n";
+            },
+            Option.None => { },
+        }
+        i = i + 1;
+    }
+    var c: int = 0;
+    while (c < r.set_cookie.len()) {
+        head = head + "Set-Cookie: " + r.set_cookie[c] + "\r\n";
+        c = c + 1;
+    }
+    head = head + "\r\n";
+    match (net.socket_write_bytes(conn, head.to_bytes())) {
+        Result.Err(e) => {
+            drain_stream(ch);
+            return Result.Err(e);
+        },
+        Result.Ok(_) => { },
+    }
+    var err: string = "";
+    var go: bool = true;
+    while (go) {
+        match (recv(ch)) {
+            Option.None => {
+                go = false;
+            },
+            Option.Some(piece) => {
+                if (!omit_body && piece.len() > 0 && err == "") {
+                    // Un chunk por trozo: "<tamaño-hex>\r\n" + datos + "\r\n". Si el cliente
+                    // cortó, se sigue DRENANDO el canal (el productor no debe quedar colgado)
+                    // pero ya no se escribe.
+                    let frame: bytes = (to_hex(piece.len()) + "\r\n").to_bytes() + piece + b"\r\n";
+                    match (net.socket_write_bytes(conn, frame)) {
+                        Result.Err(e) => {
+                            err = e;
+                        },
+                        Result.Ok(_) => { },
+                    }
+                }
+            },
+        }
+    }
+    if (err != "") {
+        return Result.Err(err);
+    }
+    if (omit_body) {
+        return Result.Ok(0);
+    }
+    net.socket_write_bytes(conn, b"0\r\n\r\n")
+}
+
+// Drena un canal de stream hasta su cierre (libera al productor si algo falló antes de leerlo).
+fn drain_stream(ch: Channel<bytes>) {
+    var go: bool = true;
+    while (go) {
+        match (recv(ch)) {
+            Option.None => {
+                go = false;
+            },
+            Option.Some(_) => { },
+        }
+    }
 }
 
 // --- SSE (server-sent events): HTTP que no cierra y va emitiendo eventos ---
@@ -943,6 +1184,10 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                                 eprint("response: " + e);
                                 follow = false;
                             },
+                        }
+                        // M110: un stream anuncia y hace Connection: close → no reusar.
+                        if (resp.stream.len() > 0) {
+                            follow = false;
                         }
                     },
                     Result.Err(e) => {

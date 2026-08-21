@@ -632,7 +632,13 @@ fn build_response(res: Res) -> webserver.Response {
         }
         i = i + 1;
     }
-    webserver.Response { status: res.code, headers: h, set_cookie: res.set_cookie, body: res.body }
+    webserver.Response {
+        status: res.code,
+        headers: h,
+        set_cookie: res.set_cookie,
+        body: res.body,
+        stream: []
+    }
 }
 
 // Atiende una petición ya parseada: estáticos → middlewares → enrutado → 404 (custom o default).

@@ -126,7 +126,11 @@ fn main() -> int {
   coexisten (semántica BSD + `SO_REUSEADDR`, que Rust pone en todo listener) y la dirección más
   específica gana el tráfico de loopback — tu servidor SÍ atiende `localhost:P` mientras la otra
   app sigue en el resto de interfaces. No hay error que reportar ni forma portable de detectarlo;
-  si quieres exclusividad del puerto, escucha tú también en `0.0.0.0`.
+  si quieres exclusividad del puerto, escucha tú también en `0.0.0.0`. M110:
+  **streaming** (`stream_response(status, ch)`: el cuerpo son los trozos de un `Channel<bytes>`,
+  en chunked según llegan — el handler `spawn`ea al productor y devuelve ya; canal acotado =
+  backpressure) y **HTTP Range** en `static_mount` (`Accept-Ranges`/206/`Content-Range`/416,
+  `If-Range` contra el ETag; multi-rango cae a 200 completo).
 
 ### Observabilidad
 

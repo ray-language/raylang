@@ -9280,3 +9280,27 @@ match anidado, spawn, extern blocking, wrap forzado…) quedan PERMANENTES en `t
 un "AST alterado" es siempre bug grave del formateador, nunca culpa del archivo. De paso se retiró
 una anotación falsa: la supuesta asimetría de M105 con cadenas interpoladas ya no reproduce (la
 arreglaron de rebote los fixes de comentarios de #117).
+
+## 100. M110 — streaming del webserver y HTTP Range (ago 2026)
+
+El gemelo servidor de M108, cerrando dos diferidos de M56.9. **`stream_response` es el modelo de
+actores aplicado a HTTP**: el handler `spawn`ea un productor, le da un `Channel<bytes>` acotado
+(backpressure gratis) y devuelve de inmediato; la fibra de servicio escribe cada trozo en chunked
+según llega y termina cuando el productor cierra el canal. Detalles con dientes: un HEAD manda solo
+cabeceras pero DRENA el canal igual (un productor sobre canal acotado se quedaría bloqueado en
+`send` para siempre — fuga de fibra); si el cliente corta a mitad, se sigue drenando sin escribir,
+por lo mismo; y la conexión nunca se reusa tras un stream (v1). **Range/206** en `static_mount`:
+rango cerrado/abierto/sufijo, 416 con `bytes */tamaño`, multi-rango → 200 completo (permitido por
+RFC 9110), `If-Range` honrado contra el ETag (validador distinto = 200 completo: servir el trozo de
+un archivo cambiado corrompería la descarga reanudada) y el `304` de `If-None-Match` ganando al
+Range.
+
+**El bug que destapó** (preexistente desde V2, alcanzable con `("a" + "b").len() + 3`): los
+paréntesis son TRANSPARENTES en posición — el parser devuelve la expr interior tal cual — así que
+un `+` exterior no-string hereda la (línea, col) del `+` de strings interior que `check_binary`
+registró para la superinstrucción `ConcatN`, y `lower_concat` aplanaba la cadena EQUIVOCADA: la VM
+reventaba con "the checker guarantees strings". Es el mismo patrón de las tablas por posición que
+CLAUDE.md ya advierte para UFCS ("la posición sola los confunde"); el arreglo des-registra el sitio
+colisionado — la cadena interior pierde su superinstrucción y queda como `Add` normal: corrección
+antes que optimización. El framing del chunked (`(to_hex(n) + "\r\n").to_bytes() + piece + …`) fue
+el gatillo.

@@ -949,6 +949,94 @@ fn build_native_mutable_capture_inside_spawn_matches_the_vm() {
     );
 }
 
+#[test]
+fn build_native_mutable_capture_in_every_function_literal_shape_matches_the_vm() {
+    // El hueco que arregló `build_native_mutable_capture_inside_spawn_matches_the_vm` era de una
+    // CLASE: un cuerpo de función literal que el backend emite sin pasar por `emit_func_literal` no
+    // registra sus celdas (B1) y `rustc` rechaza la mutación a través del `Rc<closure>` (E0596).
+    // `spawn`/`scope` eran los dos sitios que lo hacían; este test vigila la clase entera, para que
+    // un futuro builtin que emita el cuerpo de su argumento inline no reabra el agujero en silencio.
+    // Las seis formas en que un cuerpo de función literal llega al backend, cada una declarando un
+    // `var` dentro y mutándolo desde una closure más interna.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native matriz de captura mutable: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_capture_matrix");
+    std::fs::write(
+        base.join("prog.ray"),
+        r#"fn apply(f: fn() -> int) -> int { f() }
+
+fn main() -> int {
+    // 1. closure pasada como valor a una función de usuario
+    let a = apply(fn() -> int {
+        var n = 0;
+        let bump = fn(x: int) { n = n + x; };
+        bump(3);
+        n
+    });
+    // 2. try_call (primitivo del prelude)
+    let b = match (try_call(fn() -> int {
+        var n = 0;
+        let bump = fn(x: int) { n = n + x; };
+        bump(4);
+        n
+    })) {
+        Result.Ok(v) => v,
+        Result.Err(_) => 0,
+    };
+    // 3. adaptador de iterador (la closure va como valor a `map`)
+    let c = range(0, 3).map(fn(i: int) -> int {
+        var n = 0;
+        let bump = fn(x: int) { n = n + x; };
+        bump(i);
+        n
+    }).fold(0, fn(acc: int, x: int) -> int { acc + x });
+    // 4. spawn
+    let d = join(spawn(fn() -> int {
+        var n = 0;
+        let bump = fn(x: int) { n = n + x; };
+        bump(6);
+        n
+    }));
+    // 5. scope
+    let e = scope(fn() -> int {
+        var n = 0;
+        let bump = fn(x: int) { n = n + x; };
+        bump(7);
+        n
+    });
+    // 6. closure anidada dentro de otra closure
+    let f = apply(fn() -> int {
+        apply(fn() -> int {
+            var n = 0;
+            let bump = fn(x: int) { n = n + x; };
+            bump(8);
+            n
+        })
+    });
+    print(to_string(a) + " " + to_string(b) + " " + to_string(c) + " " + to_string(d) + " " + to_string(e) + " " + to_string(f));
+    0
+}
+"#,
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native de las seis formas ok\n{err}");
+
+    // El 3 de en medio es la suma de `map` sobre 0..3 (cada elemento parte de su propio `n`).
+    let expected = "3 4 3 6 7 8\n";
+    let (vm_out, e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da la salida\n{e}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        expected,
+        "nativo ≡ VM (captura mutable en las seis formas de cuerpo de función literal)"
+    );
+}
+
 /// Un echo TLS mínimo (servidor): lee cert/clave de los args, escucha en un puerto efímero (lo imprime),
 /// acepta una conexión, la envuelve con `tls_accept` y devuelve por eco lo que reciba (I/O TLS por
 /// `socket_read_bytes`/`socket_write_bytes`). Sirve tanto para el VM como transpilado a nativo.

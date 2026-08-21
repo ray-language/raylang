@@ -263,3 +263,45 @@ fn main() -> int {\n\
         assert_eq!(String::from_utf8_lossy(&out.stdout), "timeout\n", "{engine}: plazo vencido");
     }
 }
+
+#[test]
+fn closed_stdout_pipe_exits_quietly_with_141() {
+    // La verruga de M108 (DESIGN §99): `programa | head` reventaba con un pánico de Rust
+    // disfrazado de ICE ("failed printing to stdout: Broken pipe") — Rust ignora SIGPIPE y
+    // `println!` paniquea. Ahora sigue la convención Unix: exit 141 (128+SIGPIPE) EN SILENCIO,
+    // en los tres motores (el nativo, vía su hilo escritor).
+    let src = "fn main() -> int {\n    var i = 0;\n    while (i < 200000) {\n        print(\"line \" + to_string(i));\n        i = i + 1;\n    }\n    0\n}\n";
+    let base = tmp("epipe");
+    std::fs::write(base.join("prog.ray"), src).unwrap();
+
+    let mut cmds: Vec<(String, Command)> = Vec::new();
+    for engine in ["--vm", "--interp"] {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_ray"));
+        c.args([engine, "prog.ray"]).current_dir(&base);
+        cmds.push((engine.to_string(), c));
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(bcode, 0, "build --native ok\n{berr}");
+        cmds.push(("nativo".into(), Command::new(&bin)));
+    }
+    for (label, mut cmd) in cmds {
+        use std::io::Read;
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("lanza");
+        // Lee un poco y CIERRA el extremo de lectura (el `head` del caso real).
+        let mut out = child.stdout.take().unwrap();
+        let mut first = [0u8; 64];
+        let _ = out.read(&mut first);
+        drop(out);
+        let status = child.wait().expect("espera");
+        let mut err = String::new();
+        child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+        assert_eq!(status.code(), Some(141), "{label}: convención Unix (128+SIGPIPE)\n{err}");
+        assert!(!err.contains("panicked") && !err.contains("ICE"), "{label}: sin ruido en stderr: {err}");
+    }
+}

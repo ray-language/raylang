@@ -102,7 +102,10 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   en ámbito para derivarlo). `Ord` **no** es derivable: se implementa a mano. Cualquier otra
   anotación es error.
 - **`main`** es obligatoria en el programa de entrada: sin parámetros, retorno `int` o `unit`.
-  El código de salida del proceso es ese `int` (`& 0xFF`) o `0`.
+  El código de salida del proceso es ese `int` (`& 0xFF`) o `0`. Excepción: si `print`/`eprint`
+  encuentran su salida **cerrada** (un pipe roto, `programa | head`), el proceso termina en
+  silencio con código **141** (128+SIGPIPE, la convención Unix); `io.write`/`io.flush` en cambio
+  devuelven `Err` y el programa decide.
 
 ## 3. Tipos
 

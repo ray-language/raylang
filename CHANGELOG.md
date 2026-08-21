@@ -253,6 +253,13 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **`programa | head` reventaba con un ICE de "Broken pipe".** Rust ignora SIGPIPE y `println!`
+  paniquea al escribir en un stdout cerrado; el pánico salía disfrazado de error interno del
+  compilador. Ahora `print`/`eprint` siguen la convención Unix: el proceso termina **en silencio
+  con código 141** (128+SIGPIPE — el mismo destino observable que un programa C matado por la
+  señal), en los tres motores (el nativo, vía su hilo escritor). `io.write`/`io.flush` no cambian:
+  tienen `Result` y el programa decide qué hacer con el pipe cerrado.
+
 - **`unit` escrito en posición de tipo no compilaba** — `extern "c" {{ fn free(p: ptr) -> unit; }}`
   se rechazaba con un mensaje que lo daba por válido (y REFERENCE §13 lo documenta), y
   `fn f() -> unit` tampoco pasaba: no hay token de tipo `unit`, así que llegaba como un nombre

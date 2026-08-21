@@ -982,11 +982,13 @@ impl Transpiler {
             "eprint" => {
                 // Uniforme vía RayShow (maneja todo tipo, incl. structs/arreglos/genéricos). Sin
                 // buffering (a diferencia de `print`, ver más abajo): stderr es tpicamente para
-                // errores, baja frecuencia, y se espera visible de inmediato.
+                // errores, baja frecuencia, y se espera visible de inmediato. Va por `__ray_eprint`
+                // (no `eprintln!`): un stderr cerrado sigue la convención Unix (exit 141), no un
+                // pánico de Rust — el gemelo del writer de stdout.
                 if matches!(self.type_of(eff[0])?, Type::Fn(_, _)) {
-                    out.push_str("eprintln!(\"<fn>\")"); // una función se muestra como <fn>
+                    out.push_str("__ray_eprint(\"<fn>\".to_string())"); // una función se muestra como <fn>
                 } else {
-                    out.push_str("eprintln!(\"{}\", ");
+                    out.push_str("__ray_eprint(");
                     self.emit_expr(out, eff[0])?;
                     out.push_str(".ray_show())");
                 }

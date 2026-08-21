@@ -62,16 +62,40 @@ pub mod wasm;
 #[inline]
 pub fn host_print(s: &str) {
     #[cfg(not(target_arch = "wasm32"))]
-    println!("{s}");
+    {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let r = out.write_all(s.as_bytes()).and_then(|()| out.write_all(b"\n"));
+        host_write_failed(r);
+    }
     #[cfg(target_arch = "wasm32")]
     wasm::push_stdout(s);
 }
 #[inline]
 pub fn host_eprint(s: &str) {
     #[cfg(not(target_arch = "wasm32"))]
-    eprintln!("{s}");
+    {
+        use std::io::Write;
+        let mut err = std::io::stderr().lock();
+        let r = err.write_all(s.as_bytes()).and_then(|()| err.write_all(b"\n"));
+        host_write_failed(r);
+    }
     #[cfg(target_arch = "wasm32")]
     wasm::push_stderr(s);
+}
+
+/// Maneja el fallo de escritura de `print`/`eprint` (que no tienen canal de error). Un **pipe
+/// cerrado** (`programa | head`) sigue la convención Unix: el proceso termina EN SILENCIO con
+/// código 141 (128+SIGPIPE) — antes reventaba con un pánico de Rust disfrazado de ICE (Rust
+/// ignora SIGPIPE y `println!` paniquea con Broken pipe; C muere por la señal, Go re-arma la
+/// señal para fd 1/2 — el 141 replica ese destino observable). Otros errores de escritura se
+/// ignoran (mejor-esfuerzo: no hay a quién reportarlos). `io.write`/`io.flush` NO pasan por
+/// aquí: tienen `Result` y el programa decide.
+#[cfg(not(target_arch = "wasm32"))]
+fn host_write_failed(r: std::io::Result<()>) {
+    if matches!(r, Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe) {
+        std::process::exit(141);
+    }
 }
 
 /// Tamaño de pila del hilo worker (M13.3a): 256 MiB, muy por encima de los ~8 MiB

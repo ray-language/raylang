@@ -37,8 +37,9 @@ pub enum Block {
     // lenguaje ("" si no se indicó), texto crudo del bloque
     Code(string, string),
     Quote([Block]),
-    // ¿ordenada?, ítems (cada ítem es una lista de bloques: soporta anidación)
-    List(bool, [[Block]]),
+    // ¿ordenada?, número inicial (el del primer marcador; 1 en las no ordenadas),
+    // ítems (cada ítem es una lista de bloques: soporta anidación)
+    List(bool, int, [[Block]]),
     Rule,
     // Tabla GFM: alineación por columna ("" | "left" | "center" | "right"), cabecera, filas.
     Table([string], [[Inline]], [[[Inline]]]),
@@ -243,6 +244,18 @@ fn parse_blocks(lines: [string]) -> [Block] {
             // Lista: ítems al nivel 0; las líneas sangradas 2+ bajo un ítem son su continuación
             // (párrafos extra o sub-listas), y se re-parsean recursivamente sin la sangría.
             let ordered = list_marker(t)[0] >= '0' && list_marker(t)[0] <= '9';
+            // El número del PRIMER marcador es el inicio de la lista (<ol start>, CommonMark);
+            // los de los demás ítems se ignoran (también CommonMark).
+            var start = 1;
+            if (ordered) {
+                let first_mk = list_marker(t);
+                match (parse_int(first_mk.substring(0, first_mk.len() - 1))) {
+                    Option.Some(n) => {
+                        start = n;
+                    },
+                    Option.None => { },
+                }
+            }
             var items: [[Block]] = [];
             var go = true;
             while (go && i < lines.len()) {
@@ -288,7 +301,7 @@ fn parse_blocks(lines: [string]) -> [Block] {
                     go = false;
                 }
             }
-            out.push(Block.List(ordered, items));
+            out.push(Block.List(ordered, start, items));
         } else if (t.contains("|") && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim()) && split_row(t).len() == split_row(lines[i + 1].trim()).len() && split_row(t).len() >= 1) {
             // Tabla GFM: cabecera + fila separadora con el MISMO número de columnas; las filas
             // siguientes duran mientras contengan '|'. Filas cortas se rellenan, largas se recortan.
@@ -358,6 +371,43 @@ fn is_strong_delim(s: string, i: int) -> bool {
     i + 1 < s.len() && (s[i] == '*' && s[i + 1] == '*' || s[i] == '_' && s[i + 1] == '_')
 }
 
+// ¿El carácter cuenta como "de palabra" para el flanking del '_' (regla 17 de CommonMark)?
+// Aproximación ASCII: letras, dígitos, el propio '_' (así `intra__word__no` queda literal,
+// como en CommonMark) y todo carácter no-ASCII (letras acentuadas, CJK…).
+fn is_word_char(c: char) -> bool {
+    c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c > '~'
+}
+
+// ¿Un delimitador de énfasis en `i` puede ABRIR? El '*' abre incluso dentro de una palabra
+// (`foo*bar*`); el '_' NO (regla 17: `snake_case_name` va literal) — exige que lo anterior
+// no sea "de palabra".
+fn can_open_emph(s: string, i: int) -> bool {
+    if (s[i] != '_') {
+        return true;
+    }
+    i == 0 || !is_word_char(s[i - 1])
+}
+
+// El índice del cierre `needle` de un énfasis desde `start`, respetando escapes; -1 si no está.
+// Para los delimitadores de '_', un candidato seguido de un carácter "de palabra" no puede
+// cerrar (regla 17) y se sigue buscando.
+fn find_emph_close(s: string, start: int, needle: string) -> int {
+    var at = start;
+    while (at >= 0) {
+        let close = find_close(s, at, needle);
+        if (close < 0) {
+            return close;
+        }
+        if (needle[0] != '_' || close + needle.len() >= s.len() || !is_word_char(
+            s[close + needle.len()]
+        )) {
+            return close;
+        }
+        at = close + 1;
+    }
+    0 - 1
+}
+
 // El índice del cierre `needle` desde `start`, respetando escapes; -1 si no está.
 fn find_close(s: string, start: int, needle: string) -> int {
     var i = start;
@@ -415,9 +465,9 @@ pub fn parse_inline(s: string) -> [Inline] {
                 text = text + "`";
                 i = i + 1;
             }
-        } else if (is_strong_delim(s, i)) {
+        } else if (is_strong_delim(s, i) && can_open_emph(s, i)) {
             let delim = s.substring(i, i + 2);
-            let close = find_close(s, i + 2, delim);
+            let close = find_emph_close(s, i + 2, delim);
             if (close >= 0 && close > i + 2) {
                 if (text != "") {
                     out.push(Inline.Text(text));
@@ -429,8 +479,8 @@ pub fn parse_inline(s: string) -> [Inline] {
                 text = text + delim;
                 i = i + 2;
             }
-        } else if (c == '*' || c == '_') {
-            let close = find_close(s, i + 1, to_string(c));
+        } else if ((c == '*' || c == '_') && can_open_emph(s, i)) {
+            let close = find_emph_close(s, i + 1, to_string(c));
             if (close >= 0 && close > i + 1) {
                 if (text != "") {
                     out.push(Inline.Text(text));
@@ -671,9 +721,10 @@ fn render_blocks(blocks: [Block]) -> string {
             Block.Quote(inner) => {
                 out = out + "<blockquote>\n" + render_blocks(inner) + "</blockquote>\n";
             },
-            Block.List(ordered, items) => {
+            Block.List(ordered, start, items) => {
                 let tag = if (ordered) { "ol" } else { "ul" };
-                out = out + "<" + tag + ">\n";
+                let attrs = if (ordered && start != 1) { " start=\"" + to_string(start) + "\"" } else { "" };
+                out = out + "<" + tag + attrs + ">\n";
                 var k = 0;
                 while (k < items.len()) {
                     out = out + "<li>" + render_item(items[k]) + "</li>\n";

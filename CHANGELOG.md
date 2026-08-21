@@ -64,6 +64,19 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Corregido (bloque siguiente)
 
+- **`std/markdown`: el `_` intra-palabra ya no crea énfasis** (regla 17 de CommonMark):
+  `snake_case_name` en prosa quedaba mutilado a `snake<em>case</em>name` — especialmente dañino
+  para agentes de código, que escriben identificadores en prosa constantemente. Un delimitador
+  de `_`/`__` ahora solo abre si lo anterior no es "de palabra" y solo cierra si lo siguiente
+  tampoco lo es (`intra__word__no` va literal; `__init__` sigue siendo negrita; `*` conserva el
+  énfasis intra-palabra, como CommonMark).
+
+- **`std/markdown`: la lista ordenada conserva su número de inicio**: `2. dos` emitía `<ol>`
+  (se renderizaba como 1). El AST gana el campo — `Block.List(ordered, start, items)` (cambio
+  de firma; `start` es el número del PRIMER marcador, los demás se ignoran como en CommonMark) —
+  y el render emite `<ol start="2">` cuando no empieza en 1.
+
+
 - **`ray fmt` borraba código en `"x ${n}" + " tail"`** (la misma familia de colisión de posición
   que el ConcatN de abajo, ahora en el formateador): el `+` exterior hereda la (línea, col) de la
   interpolación y el resurfacing del azúcar lo tomaba por la raíz de la cadena — imprimía solo la

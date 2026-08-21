@@ -102,6 +102,14 @@ fn targeted_cases() {
         ),
         // Otros lenguajes no cambian: siguen en <pre><code class=\"language-…\">.
         ("```viz\nx\n```\n", "<pre><code class=\"language-viz\">x\n</code></pre>\n"),
+        // El '_' INTRA-palabra no crea énfasis (regla 17 de CommonMark): identificadores en
+        // prosa quedan intactos; '*' sí funciona dentro de una palabra.
+        ("snake_case_name en prosa", "<p>snake_case_name en prosa</p>\n"),
+        ("intra__word__no y __init__", "<p>intra__word__no y <strong>init</strong></p>\n"),
+        ("_foo_bar_ y foo*bar*", "<p><em>foo_bar</em> y foo<em>bar</em></p>\n"),
+        // Lista ordenada que no empieza en 1 → <ol start=\"N\"> (los números siguientes se ignoran).
+        ("2. dos\n5. tres\n", "<ol start=\"2\">\n<li>dos</li>\n<li>tres</li>\n</ol>\n"),
+        ("1. uno\n", "<ol>\n<li>uno</li>\n</ol>\n"),
     ];
     let base = tmp("casos");
     for engine in ["--vm", "--interp"] {
@@ -119,7 +127,7 @@ fn targeted_cases() {
 /// El AST es utilizable directamente (el caso TUI): parse + match sobre los bloques.
 #[test]
 fn ast_is_directly_consumable() {
-    let prog = "import std/markdown;\nfn main() -> int {\n    let blocks = markdown.parse(\"# T\\n\\nparrafo\\n\\n- a\\n- b\\n\");\n    var counts = \"\";\n    var i = 0;\n    while (i < blocks.len()) {\n        match (blocks[i]) {\n            markdown.Block.Heading(lvl, _) => { counts = counts + \"h\" + to_string(lvl); },\n            markdown.Block.Paragraph(_) => { counts = counts + \"p\"; },\n            markdown.Block.List(ordered, items) => { counts = counts + \"l\" + to_string(items.len()); },\n            _ => { counts = counts + \"?\"; },\n        }\n        i = i + 1;\n    }\n    print(counts);\n    0\n}\n";
+    let prog = "import std/markdown;\nfn main() -> int {\n    let blocks = markdown.parse(\"# T\\n\\nparrafo\\n\\n- a\\n- b\\n\");\n    var counts = \"\";\n    var i = 0;\n    while (i < blocks.len()) {\n        match (blocks[i]) {\n            markdown.Block.Heading(lvl, _) => { counts = counts + \"h\" + to_string(lvl); },\n            markdown.Block.Paragraph(_) => { counts = counts + \"p\"; },\n            markdown.Block.List(ordered, start, items) => { counts = counts + \"l\" + to_string(items.len()); },\n            _ => { counts = counts + \"?\"; },\n        }\n        i = i + 1;\n    }\n    print(counts);\n    0\n}\n";
     let base = tmp("ast");
     for engine in ["--vm", "--interp"] {
         let (out, err, code) = run_prog(&base, engine, prog);

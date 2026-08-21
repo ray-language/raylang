@@ -37,6 +37,16 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Streaming del cliente HTTP + cliente SSE** (M108, la otra mitad de "pintar mientras llegan
+  tokens"): `net/http.stream[_with]` devuelve el status y las cabeceras en cuanto llegan y
+  `stream_read` entrega el cuerpo **a trozos según llegan** (des-chunkeado incremental, plazo de
+  ocio por lectura, truncado = error, fin limpio = `Ok(None)`; la petición no anuncia gzip — no
+  hay gunzip incremental). Y `net/sse`: cliente Server-Sent Events sobre ese stream, con el
+  decodificador **puro** `sse.decode` (bytes → evento, mismo patrón que `term.decode`): data
+  multilínea, comentarios keep-alive, finales CR/CRLF/LF, y trozos que parten un evento — incluso
+  un carácter UTF-8 — por cualquier octeto. El test de incrementalidad va por handshake: el
+  servidor retiene el final del cuerpo hasta ver el primer trozo impreso por el cliente.
+
 - **`signals()` entrega también SIGWINCH (28)** (M107.4, cierre del arco de terminal): con
   `select` sobre `signals()` + `term.size()`, una TUI se re-maqueta al redimensionar la ventana.
   El 28 coincide en macOS/BSD y Linux; VM y binario nativo (de paso se corrige la doc rancia que

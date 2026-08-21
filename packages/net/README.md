@@ -59,7 +59,19 @@ fn main() -> int {
 - **`net/http`** — cliente/servidor HTTP/1.1 en `bytes` (habla `https://` vía el TLS del runtime). Sobre
   `std/inflate` (gunzip). M90.2: conexiones persistentes (keep-alive) con `connect`/`conn_request`/
   `conn_close` — reusa el socket entre peticiones al mismo servidor (delimitación por
-  Content-Length/chunked, reconexión y reintento transparente).
+  Content-Length/chunked, reconexión y reintento transparente). M108: **streaming** —
+  `stream`/`stream_with` devuelven status y cabeceras en cuanto llegan y `stream_read` entrega el
+  cuerpo a trozos según llegan (des-chunkeado incremental; plazo de OCIO por lectura, no total;
+  `Ok(None)` = fin limpio, truncado = `Err`). Para respuestas que se generan en vivo (tokens de un
+  LLM, logs) pintando cada trozo al llegar.
+- **`net/sse`** — cliente **Server-Sent Events** (`text/event-stream`) sobre `net/http.stream`:
+  `open(url, headers)` suscribe (sin plazo de ocio: un stream sano puede callar minutos) y
+  `next(es)` entrega cada `Event { data, event, id }` (data multilínea unida con `\n`; los
+  comentarios keep-alive y los eventos sin data no se despachan, según la spec). El decodificador
+  `decode(bytes) -> Option<(Event, int)>` es **puro** (mismo patrón que `term.decode`): el
+  acumulador es bytes y solo se decodifica a texto por línea completa, así un trozo puede partir
+  un evento — incluso un carácter UTF-8 — por cualquier octeto. `retry:`/reconexión: fuera de v1
+  (el llamador conserva `id`).
 - **`net/http2`** — framing HTTP/2 (preface, SETTINGS, frames). Hoja.
 - **`net/hpack`** — compresión de cabeceras HPACK (RFC 7541): `header`, `encode`, `decode` + tabla
   dinámica. Determinista. Hoja.

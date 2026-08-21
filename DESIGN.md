@@ -9220,3 +9220,46 @@ de #123 entraron sin `ray fmt` y el primer `cargo test` de la rama las cazó.
 clasificado, sin caso real todavía) y el streaming del cliente `http` (lee hasta EOF; es la otra
 mitad de «pintar mientras llegan tokens», pero es de red). Con M107, raycode se queda sin
 workarounds: ni FFI a `getchar`, ni `/dev/stdout` en append, ni `tput cols`.
+
+## 99. M108 — streaming del cliente HTTP y cliente SSE (ago 2026)
+
+**El caso.** Quedó señalado en el arco M107: `http.fetch`/`request` esperan el cuerpo ENTERO, así
+que una TUI no puede pintar los tokens de un LLM según llegan — la otra mitad de "escribir mientras
+se transmite" (la primera fue el terminal). M108 la cierra en el paquete de producción
+(`packages/net`), no en el ejemplo didáctico: los dos `http.ray` divergieron a propósito hace
+tiempo (el del paquete lleva trace e identificadores en inglés) y el ejemplo se queda en su alcance
+de enseñanza.
+
+**El diseño.** `stream_with` conecta, envía y devuelve en cuanto la CABEZA está (status +
+cabeceras, parseo compartido con `parse_response` vía el `parse_head` extraído); el cuerpo se tira
+con `stream_read`, que entrega **lo que haya** en cuanto hay algo — chunks parciales incluidos,
+que es el punto. La delimitación es una máquina de estados por modos (`size`/`data`/`crlf`/
+`trailer` para chunked; `length`; `eof`), las mismas reglas RFC 9112 que la lectura delimitada de
+M90.2 pero incrementales. Tres decisiones:
+
+- **La petición no anuncia gzip** (`Accept-Encoding: identity`): no hay gunzip incremental, y un
+  cuerpo comprimido no se puede entregar a trozos. Si el servidor comprime igualmente, error
+  limpio — no un stream de bytes ininteligibles.
+- **Plazo de OCIO por lectura, no total**: un stream legítimo puede durar minutos; lo que delata
+  el problema es el silencio. (En SSE, ni eso: `open` va sin plazo — un event stream sano calla.)
+- **Socket de un solo uso** (`Connection: close`): un stream no se reusa; `stream_close` en
+  cualquier momento para abandonarlo.
+
+**SSE repite el patrón que dejó `term.decode`**: el decodificador es una función **pura**
+`decode(bytes) -> Option<(Event, int)>` (`None` = evento incompleto) y el driver (`next`) la
+alimenta con trozos del stream. El detalle con dientes: un trozo puede partir un evento por
+CUALQUIER octeto — incluso dentro de un carácter UTF-8 —, así que el acumulador es `bytes` y solo
+se decodifica a texto la línea COMPLETA (el octeto de `\n` nunca aparece dentro de un multibyte:
+el corte por líneas es seguro). Comentarios keep-alive y eventos sin `data` se consumen sin
+despachar (spec); `retry:`/reconexión quedan fuera de v1 (el llamador conserva `id`).
+
+**El test que vale es el de incrementalidad, y va por handshake** (la lección de M107.2): el
+servidor de juguete manda el primer chunk y RETIENE el resto hasta que el test ve ese trozo
+impreso en el stdout del cliente — si el cliente bufferizase hasta el final, el test cuelga en
+vez de mentir. Más: Content-Length completo y TRUNCADO (error, no fin limpio), EOF-delimitado,
+SSE con el evento partido en medio de una `ñ`, y la batería pura del decodificador en los tres
+motores (nativo incluido).
+
+**De propina, una verruga avistada** (no arreglada aquí): `print` sobre un stdout cerrado
+(`programa | head`) revienta con ICE de "Broken pipe" — cualquier programa raylang canalizado a
+`head` lo sufre; anotado para arreglo aparte.

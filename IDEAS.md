@@ -2234,8 +2234,8 @@ rancia; añadir SIGWINCH (28 en macOS y Linux) es pequeño. (d) `IoParked` ya ti
   Impacto: MEDIO-ALTO. **No lo necesita std/term** (que va por builtins); lo necesitan APIs C con
   out-params. Milestone propio si el caso real aparece.
 
-**Fuera del arco** (backlog aparte): streaming/chunked del cliente `http` (hoy lee hasta EOF; es la
-otra mitad de "TUI que pinta mientras llegan tokens", pero es de red, no de terminal).
+**Fuera del arco** (backlog aparte): streaming/chunked del cliente `http` — ✅ **EJECUTADO como
+M108** (ago 2026): `net/http.stream*` + cliente `net/sse` (crónica en DESIGN §99).
 
 **Docs por fase**: SPEC (superficie estable: módulos y builtins nuevos, SIGWINCH), REFERENCE +
 MANUAL, CHANGELOG "Sin publicar", SECURITY.md (unsafe de termios/ioctl/isatty), DESIGN (crónica al

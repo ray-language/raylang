@@ -2062,6 +2062,40 @@ raylang; ejemplo determinista · **(2c)** gemelo nativo (registro emitido + help
 · **(2d)** golden VM≡nativo + docs (MANUAL/REFERENCIA/llms.txt/DESIGN) · **(2e)** cancelación
 estructural con kill al grupo, si el gancho no es invasivo.
 
+### 53.10 DISEÑO de la v3 (stdin escribible sobre un hijo VIVO), fijado 21 ago 2026 — impacto: MEDIO
+
+**El caso real que lo desbloquea** (el criterio de promoción de este archivo): un **cliente MCP**
+escrito en raylang. Un servidor MCP por stdio es un hijo JSON-RPC **vivo**: se le escriben
+peticiones y se leen respuestas indefinidamente. Hoy es **imposible** — `spawn_streamed` crea el
+pipe de stdin solo con `.stdin(bytes)`, lo escribe ENTERO y lo cierra antes de devolver (el hijo
+ve EOF), `Proc` expone solo `out`/`err`, y `write_handle` rechaza los handles de proceso
+(`src/builtins.rs`: "un stdin por canal sería v3"). No es un caso periférico: cliente MCP,
+cliente LSP, drivers de REPL y toda herramienta interactiva caen en el mismo hueco.
+
+**Superficie** (métodos, NO un canal — corrección sobre la nota original de v2): un canal es
+simétrico y bonito (`send(p.stdin, b)`), pero **se traga los errores**: si el hijo muere a mitad
+de sesión, un `send` a un canal no tiene dónde decir EPIPE, y para un cliente MCP ese es EL error
+que importa. El norte del lenguaje es errores como valores →
+
+- `Cmd.stdin_pipe()` — el stdin del hijo será un pipe ABIERTO (excluyente con `.stdin(data)`, que
+  sigue siendo escribir-y-cerrar). Sin ninguno de los dos, `/dev/null` (invariante intacto: jamás
+  se hereda el stdin del padre).
+- `Proc.write(data: bytes) -> Result<int, string>` — escribe TODO el dato (EPIPE = el hijo cerró
+  o murió → `Err`, visible).
+- `Proc.close_stdin()` — el EOF explícito es parte del protocolo de muchos hijos (`sort`, `wc`),
+  así que es superficie, no un efecto colateral del `Drop`.
+
+**Implementación** (la fontanería está al 90 %; el cambio es *no cerrar* el pipe):
+`RunOpts.stdin_open` + `SpawnedChild.stdin` (extremo de escritura, NO-bloqueante) ·
+`OpenHandle::PipeW` en el registro (`close(h)` ya lo cierra → EOF gratis) · `__proc_write`
+**reusa el opcode `SocketWriteBytes`** (como `__proc_read` reusa `SocketReadBytes`: cero opcodes
+nuevos) → en la VM la contrapresión de un pipe lleno **reusa `park_write`** (aparcado por interés
+de ESCRITURA, ya existente); en el nativo con fibras, `wait_writable` del reactor; el intérprete,
+bloqueante.
+
+**Invariantes que NO cambian**: sin shell, argv tipado, stdin nunca heredado, `Proc` sigue siendo
+hijo de scope (un hijo con stdin abierto que nadie cierra muere con su scope, como hoy).
+
 ## 54. Carrera de builds nativos concurrentes del MISMO fuente (jul 2026, impacto: BAJO)
 
 Dos `ray build --native` simultáneos del mismo archivo comparten el pkg de la caché Cargo (H14: el

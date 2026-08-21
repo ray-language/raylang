@@ -37,6 +37,19 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/process`: stdin escribible sobre un hijo VIVO** (M100 v3, IDEAS §53.10) — lo que faltaba
+  para una **sesión persistente** por stdio (cliente MCP/LSP, driver de REPL): hasta ahora
+  `.stdin(bytes)` escribía y CERRABA en el spawn, y `Proc` solo exponía `out`/`err`, así que
+  "petición → respuesta → petición" era imposible. Ahora `.stdin_pipe()` deja el pipe abierto y
+  `Proc.write(bytes) -> Result<int, string>` / `Proc.close_stdin()` lo alimentan mientras el hijo
+  vive. `write` coloca TODO el dato y **aparca la fibra** si el pipe se llena (contrapresión real,
+  reusando el aparcado por interés de escritura que ya tenían los sockets); si el hijo cerró su
+  stdin o murió, devuelve **`Err`** (EPIPE visible — el error que un cliente de sesión necesita,
+  y la razón de elegir métodos con `Result` en vez de un canal, que se lo tragaría);
+  `close_stdin` ES el EOF que el hijo espera. En la VM y en el binario nativo (fibras e
+  hilo-por-tarea), byte-idénticos.
+
+
 - **`std/fs`: lectura por trozos + `seek`** (M113): `fs.read_bytes(h, max) ->
   Result<Option<bytes>, string>` lee hasta `max` octetos del handle desde su posición actual
   (trozos **exactos** salvo cerca del final; `None` = EOF; la memoria queda acotada por lo

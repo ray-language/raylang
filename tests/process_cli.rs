@@ -148,3 +148,76 @@ fn scope_cancellation_kills_and_reaps_the_child_group() {
     assert!(out.status.success(), "nativo ok\nstderr: {}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(String::from_utf8_lossy(&out.stdout), CANCEL_EXPECTED, "nativo");
 }
+
+/// M100 v3: **sesión persistente** sobre un hijo VIVO (`stdin_pipe` + `write` + `close_stdin`) —
+/// el esqueleto de un cliente MCP/LSP: se escribe una petición, se lee SU respuesta, y el hijo
+/// sigue vivo para la siguiente (con el stdin de la v2 —escribir-y-cerrar— la segunda vuelta
+/// sería imposible). Cubre además el EOF explícito y que un `write` tras la muerte del hijo sea
+/// `Err` (EPIPE visible), no un silencio.
+const SESSION_SRC: &str = r#"import std/process;
+
+fn main() -> int {
+    match (process.cmd("cat", []).stdin_pipe().stream()) {
+        Result.Err(e) => { print("spawn: " + e); 1 },
+        Result.Ok(p) => {
+            var i = 1;
+            while (i <= 3) {
+                match (p.write("req ${i}\n".to_bytes())) {
+                    Result.Err(e) => { print("write: " + e); },
+                    Result.Ok(n) => { print("-> ${n}"); },
+                }
+                match (recv(p.out)) {
+                    Option.Some(chunk) => { print("<- " + from_utf8(chunk).unwrap_or("?").trim()); },
+                    Option.None => { print("<- (closed)"); },
+                }
+                i = i + 1;
+            }
+            p.close_stdin();
+            match (p.wait()) {
+                process.Exit.Code(c) => { print("exit ${c}"); },
+                process.Exit.Signal(s) => { print("signal ${s}"); },
+            }
+            // El hijo ya murió: escribir es un Err visible (EPIPE), nunca un silencio.
+            match (p.write(b"tarde")) {
+                Result.Err(_) => print("write-after-exit: err"),
+                Result.Ok(_) => print("write-after-exit: OK (INESPERADO)"),
+            }
+            0
+        },
+    }
+}
+"#;
+
+const SESSION_EXPECTED: &str = "-> 6\n<- req 1\n-> 6\n<- req 2\n-> 6\n<- req 3\nexit 0\n\
+                                write-after-exit: err\n";
+
+#[test]
+fn writable_stdin_keeps_a_session_alive_on_vm_and_native() {
+    let base = std::env::temp_dir().join("ray_process_session_cli");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let prog = base.join("session.ray");
+    std::fs::write(&prog, SESSION_SRC).unwrap();
+
+    let out = Command::new(BIN).args(["run", prog.to_str().unwrap()]).output().expect("lanza el binario");
+    assert!(out.status.success(), "VM ok\nstderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), SESSION_EXPECTED, "VM");
+
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando la parte nativa: rustc no disponible");
+        return;
+    }
+    // Los DOS modelos de concurrencia nativos: fibras (default) e hilo-por-tarea.
+    for flags in [vec![], vec!["--without".to_string(), "fibers".to_string()]] {
+        let bin = base.join(if flags.is_empty() { "session_native" } else { "session_native_nf" });
+        let mut args: Vec<String> = vec![
+            "build".into(), "--native".into(), prog.to_str().unwrap().into(),
+            "-o".into(), bin.to_str().unwrap().into(),
+        ];
+        args.extend(flags.clone());
+        let out = Command::new(BIN).args(&args).output().expect("lanza el build");
+        assert!(out.status.success(), "build nativo ok\nstderr: {}", String::from_utf8_lossy(&out.stderr));
+        let out = Command::new(&bin).output().expect("lanza el nativo");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), SESSION_EXPECTED, "nativo {flags:?}");
+    }
+}

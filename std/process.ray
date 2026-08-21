@@ -42,6 +42,7 @@ pub struct Cmd {
     clear_env: bool,
     stdin_data: bytes,
     use_stdin: bool,
+    open_stdin: bool,
     timeout: int,
     output_cap: int,
     merge: bool,
@@ -66,6 +67,7 @@ pub fn cmd(program: string, args: [string]) -> Cmd {
         clear_env: false,
         stdin_data: b"",
         use_stdin: false,
+        open_stdin: false,
         timeout: 0,
         output_cap: 16777216,
         merge: false
@@ -83,6 +85,11 @@ pub trait CmdOps {
     /// Feeds `data` to the child's stdin, then CLOSES it (the child sees EOF). Without this,
     /// stdin is `/dev/null` — never the parent's stdin.
     fn stdin(self, data: bytes) -> Cmd;
+    /// Keeps the child's stdin OPEN as a pipe (`stream` only): write to it with `Proc.write`
+    /// while the child runs and end it with `Proc.close_stdin`. This is what a persistent
+    /// session over stdio needs — an MCP/LSP client, a REPL driver. Takes precedence over
+    /// `stdin(data)` (which is write-and-close); with neither, stdin is `/dev/null`.
+    fn stdin_pipe(self) -> Cmd;
     /// Total time budget in milliseconds. On expiry the run returns the PARTIAL `Output` with
     /// `timed_out: true` (not an `Err`); the shutdown ladder kills the child's process GROUP.
     fn timeout_ms(self, ms: int) -> Cmd;
@@ -121,6 +128,11 @@ impl CmdOps for Cmd {
     fn stdin(self, data: bytes) -> Cmd {
         self.stdin_data = data;
         self.use_stdin = true;
+        self
+    }
+
+    fn stdin_pipe(self) -> Cmd {
+        self.open_stdin = true;
         self
     }
 
@@ -165,14 +177,16 @@ impl CmdOps for Cmd {
             self.clear_env,
             self.stdin_data,
             self.use_stdin,
+            self.open_stdin,
             self.merge
         );
         if (r[0] == b"err") {
             return Result.Err(text_of(r[1]));
         }
         let h_child = int_of(r[1]);
-        let h_out = int_of(r[2]);
-        let h_err = int_of(r[3]);
+        let h_in = int_of(r[2]);
+        let h_out = int_of(r[3]);
+        let h_err = int_of(r[4]);
         // Canales ACOTADOS: la capacidad (8 trozos de hasta 64 KB) es el máximo en vuelo por
         // flujo; el resto de la contrapresión la pone el kernel (el pipe lleno bloquea al hijo).
         let out: Channel<bytes> = Channel.bounded(8);
@@ -188,7 +202,7 @@ impl CmdOps for Cmd {
             // merge_output: no hay pipe de stderr; el canal nace cerrado (recv da None).
             close(err);
         }
-        Result.Ok(Proc { out: out, err: err, child: h_child })
+        Result.Ok(Proc { out: out, err: err, child: h_child, stdin_h: h_in })
     }
 }
 
@@ -202,6 +216,9 @@ pub struct Proc {
     out: Channel<bytes>,
     err: Channel<bytes>,
     child: int,
+    // M100 v3: el handle del stdin ABIERTO del hijo (`-1` si no se pidió `stdin_pipe`). El nombre
+    // difiere del método (`write`/`close_stdin`) por la resolución campo→método del UFCS.
+    stdin_h: int,
 }
 
 /// The operations of a streaming process, in method-call style.
@@ -213,6 +230,14 @@ pub trait ProcOps {
     /// Sends SIGTERM (or SIGKILL with `force`) to the child's process GROUP — grandchildren
     /// included. A no-op after `wait` (never a signal to a recycled pid).
     fn kill(self, force: bool);
+    /// Writes `data` to the child's stdin — the whole of it (M100 v3; needs `stdin_pipe()`).
+    /// `Ok(bytes written)`; `Err` when the child closed its stdin or died (EPIPE) — the error a
+    /// session client must see. If the OS pipe fills up, this PARKS the fiber until the child
+    /// reads, so a slow child applies backpressure instead of losing data.
+    fn write(self, data: bytes) -> Result<int, string>;
+    /// Closes the child's stdin: that close IS the EOF the child waits for (`sort`, `wc`, a
+    /// server that ends its session). Idempotent; a no-op without `stdin_pipe()`.
+    fn close_stdin(self);
 }
 
 impl ProcOps for Proc {
@@ -243,6 +268,21 @@ impl ProcOps for Proc {
 
     fn kill(self, force: bool) {
         __proc_kill(self.child, force);
+    }
+
+    fn write(self, data: bytes) -> Result<int, string> {
+        if (self.stdin_h < 0) {
+            return Result.Err("this child has no writable stdin (build it with .stdin_pipe())");
+        }
+        let r = __proc_write(self.stdin_h, data);
+        if (r[0] == "ok") { Result.Ok(data.len()) } else { Result.Err(r[1]) }
+    }
+
+    fn close_stdin(self) {
+        if (self.stdin_h >= 0) {
+            close(self.stdin_h);
+            self.stdin_h = 0 - 1;
+        }
     }
 }
 

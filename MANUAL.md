@@ -1198,6 +1198,30 @@ fn main() -> int {
   mata y cosecha con la cancelación; y un proceso al que nunca llamaste `wait()` **no sobrevive a
   su scope** (se mata y cosecha al salir). Fuera de un `scope`, el ciclo de vida es tuyo
   (`wait`/`kill`).
+
+**Sesión persistente** (`.stdin_pipe()`): `.stdin(datos)` escribe y **cierra** — vale para
+alimentar a `wc` o `sort`, no para hablar con un hijo que sigue vivo. Para eso está `stdin_pipe`:
+el stdin queda abierto y se escribe con `p.write(...)` cuando haga falta. Es lo que necesita un
+cliente **MCP** o **LSP**, o un driver de REPL: petición → respuesta → petición.
+
+```rust
+let p = process.cmd("mi-servidor-mcp", []).stdin_pipe().stream()?;
+let _ = p.write(peticion.to_bytes());          // Result<int, string>
+match (recv(p.out)) {                          // la respuesta de ESA petición
+    Option.Some(chunk) => procesar(chunk),
+    Option.None => { },
+}
+// … más vueltas mientras el hijo vive …
+p.close_stdin();                               // el EOF que cierra la sesión
+let estado = p.wait();
+```
+
+- `write` escribe **todo** el dato; si el pipe del SO se llena (hijo lento), **aparca la fibra**
+  hasta que lea — contrapresión, no pérdida ni giro en vacío.
+- Si el hijo cerró su stdin o murió, `write` devuelve **`Err`** (EPIPE) — el error que un cliente
+  de sesión necesita ver, nunca un silencio.
+- `close_stdin()` es el **EOF explícito**: lo que espera `sort`/`wc` para emitir, y lo que cierra
+  la sesión de un servidor. Es idempotente.
 - Solo **VM y binario nativo** (usa fibras y canales, como todo `spawn`); el intérprete lo
   rechaza con su error de concurrencia.
 

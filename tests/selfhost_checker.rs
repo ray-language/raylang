@@ -93,6 +93,9 @@ fn programas_valid_vals() {
     compare("fn double(x: int) -> int { x * 2 } fn main() -> int { double(21) }", "sc_call.ray");
     compare("fn main() -> int { print(\"hello\"); print(42); 0 }", "sc_print.ray");
     compare("fn main() -> int { let b = true && false || 1 == 2; if (b) { 1 } else { 0 } }", "sc_logic.ray");
+    // `unit` escrito en posición de tipo (SPEC §3): válido, y con args de tipo NO (tipo desconocido).
+    compare("fn side() -> unit { print(1); } fn main() -> int { side(); 0 }", "sc_unit_written.ray");
+    compare("fn f() -> unit<int> { } fn main() -> int { 0 }", "sce_unit_args.ray");
 }
 
 #[test]

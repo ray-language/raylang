@@ -120,7 +120,10 @@ tipo = 'int' | 'float' | 'bool' | 'string' | 'char' | 'bytes' | 'ptr'
 - **Primitivos**: `int` (entero con signo de 64 bits), `float` (IEEE-754 doble), `bool`,
   `string` (secuencia inmutable de caracteres Unicode; se indexa y mide **por carácter**),
   `char` (code point), `bytes` (secuencia inmutable de octetos), `unit` (el tipo del bloque
-  vacío y del retorno omitido; no es escribible).
+  vacío y del retorno omitido; **escribible** en posición de tipo — `fn f() -> unit`, útil sobre
+  todo en firmas `extern` (§FFI) y tipos `fn`; no es palabra clave: se resuelve como nombre de
+  tipo, igual que `Map`/`Channel`/`Task`, y **sombrea** cualquier struct/enum del usuario que se
+  llame así).
 - **Enteros sin signo** `u8`/`u32`/`u64`: aritmética, comparación y bits **con wrapping** al
   ancho (por diseño). Solo operan con su mismo ancho; la conversión es explícita con `as`. Un
   **literal entero** adopta el ancho del contexto si cabe (fuera de rango = error de tipos).

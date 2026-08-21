@@ -28,6 +28,9 @@ pub(super) fn normalize_type(t: &Type) -> Type {
         Type::Struct(n, args) if (n == "Option" && args.len() == 1) || (n == "Result" && args.len() == 2) => {
             Type::Enum(n.clone(), args.iter().map(normalize_type).collect())
         }
+        // `unit` escrito (SPEC §3): el parser lo trae como `Struct("unit")`; se resuelve como en el
+        // checker (cubre `ffi_c_ret_ty` y `rust_ty` sin tocarlos).
+        Type::Struct(n, args) if n == "unit" && args.is_empty() => Type::Unit,
         Type::Array(e) => Type::Array(Box::new(normalize_type(e))),
         Type::Map(k, v) => Type::Map(Box::new(normalize_type(k)), Box::new(normalize_type(v))),
         Type::Enum(n, args) => Type::Enum(n.clone(), args.iter().map(normalize_type).collect()),

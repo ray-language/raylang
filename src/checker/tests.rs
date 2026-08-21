@@ -276,6 +276,24 @@ fn member_completion_fields_methods_y_builtins() {
     assert!(members("fn main() -> int { unknown.__raycomplete__; 0 }").is_empty());
 }
 
+#[test]
+fn written_unit_resolves_in_type_position() {
+    // SPEC §3 (ago 2026): `unit` es escribible en posición de tipo. No hay token de tipo para él
+    // (llega como `Struct("unit")`): lo resuelven `resolve_type`/`ensure_type`, como Map/Channel.
+    check_src("fn side() -> unit { print(1); } fn main() -> int { side(); 0 }").expect("fn -> unit");
+    check_src("fn main() -> int { let f: fn() -> unit = fn() { print(1); }; f(); 0 }")
+        .expect("fn-type con unit");
+    check_src("extern \"c\" { fn free(p: ptr) -> unit; } fn main() -> int { 0 }")
+        .expect("extern -> unit (el caso que motivó el arreglo)");
+    // Con argumentos de tipo NO es unit: cae al arm general como tipo desconocido.
+    err_contains("fn f() -> unit<int> { } fn main() -> int { 0 }", "unknown type: 'unit'");
+    // Como parámetro de una extern sigue sin ser marshalable (mismo mensaje de siempre).
+    err_contains(
+        "extern \"c\" { fn bad(x: unit) -> int; } fn main() -> int { 0 }",
+        "is not FFI-marshalable",
+    );
+}
+
 /// Atajo: ¿el mensaje de error contiene esta subcadena?
 fn err_contains(src: &str, needle: &str) {
     let e = check_src(src).expect_err("debería fallar la verificación");

@@ -18,7 +18,9 @@ env:
 jobs:
   # Lints + tests + build. Es el grueso: si algo se rompe, aquí se ve. (No hay paso de `cargo fmt
   # --check`: el código usa alineación manual de comentarios deliberada que rustfmt reformatearía; el
-  # estilo del proyecto no es el de rustfmt por defecto.)
+  # estilo del proyecto no es el de rustfmt por defecto. El código RAYLANG sí se comprueba, pero desde
+  # dentro de `cargo test`: `tests/fmt_policy.rs` asevera que todo `.ray` versionado es un punto fijo
+  # de `ray fmt` — no hace falta un paso propio.)
   test:
     name: clippy · test · build
     runs-on: ubuntu-latest

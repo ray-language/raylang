@@ -2318,6 +2318,81 @@ valor dentro de la fibra); si algún día hay serialización de closures (no pla
 la defuncionalización. **Workaround vigente**: reconstruir el valor con funciones dentro de la
 fibra receptora (pasar los DATOS y rehacer las fns allí).
 
+## 62. Acuerdo de claves — X25519/ECDH + HKDF en std/crypto (ago 2026, impacto: ALTO — superficie estable de cripto, dependencia nueva)
+
+**El caso** (reporte de un usuario construyendo un p2p tipo IRC, ago 2026): `std/crypto` tiene
+**identidad** (Ed25519) y **cifrado autenticado** (ChaCha20-Poly1305), pero **no tiene con qué
+acordar la clave**. Sin X25519 no hay secreto compartido, así que las dos piezas que sí están no
+se pueden unir: el usuario solo puede cifrar con claves precompartidas fuera de banda.
+
+Un canal cifrado entre pares necesita **cuatro** piezas; hoy hay dos:
+
+| pieza | primitiva | estado |
+|---|---|---|
+| identidad / autenticación | Ed25519 | ✅ M43.3 |
+| **acuerdo de claves** | **X25519 (ECDH)** | ❌ |
+| **derivación** (secreto DH → claves) | **HKDF-SHA256** | ❌ |
+| cifrado autenticado | ChaCha20-Poly1305 | ✅ M43.4 |
+
+HKDF **no es opcional**: la salida cruda de un DH no es una clave uniforme y jamás debe usarse
+directa como clave AEAD. Si se entrega X25519 sin HKDF, el usuario hará exactamente eso.
+
+**El bloqueo técnico — `ring` NO puede darlo con la forma que el proyecto necesita.** Verificado
+sobre `ring` 0.17.14: `agreement::EphemeralPrivateKey` solo se construye con `generate(alg, rng)`;
+no hay constructor desde octetos, `bytes()` es `#[cfg(test)]` + `#[deprecated]`, `agree_ephemeral`
+**consume** la clave, y el truco de pasar un RNG determinista es imposible porque el trait
+`rand::SecureRandom` está **sellado** (`sealed::SecureRandom`). Consecuencias, ambas fatales:
+
+1. **No se puede persistir** la clave privada larga de un nodo — justo lo que un p2p necesita
+   (la identidad sobrevive al reinicio).
+2. **No es determinista** → rompe el oráculo byte-idéntico VM≡nativo, que es invariante del
+   proyecto (PRODUCTION.md): no habría forma de probarlo en el corpus dorado.
+
+Una API "solo efímera" (generar, acordar, tirar) evitaría la dependencia pero es una mala forma:
+sin clave persistente y sin test determinista. **No merece la pena.**
+
+**Propuesta: `x25519-dalek` 3.0** bajo la feature `crypto` ya existente. Cae de lleno en la
+cláusula de `SECURITY.md` ("una dependencia entra solo cuando hacerlo a mano sería peor
+ingeniería": criptografía de curva elíptica en tiempo constante lo es). Árbol medido con
+`--no-default-features --features static_secrets`: `curve25519-dalek` 5.0 + `subtle` + `cfg-if` +
+`rand_core` — cuatro crates pequeños, sin `std` obligatorio, la base de todo Noise/WireGuard en
+Rust. `StaticSecret::from([u8;32])` da la forma **semilla → determinista** que ya usa Ed25519.
+Verificado contra los vectores de RFC 7748 §6.1 antes de proponerlo.
+
+HKDF **no** trae dependencia: `ring::hkdf` ya está disponible.
+
+**Superficie propuesta** (misma forma que Ed25519: semilla de 32 octetos, `Option` ante tamaño malo):
+
+```ray
+pub fn x25519_public_key(secret: bytes) -> Option<bytes>                       // 32 -> 32
+pub fn x25519_shared_secret(secret: bytes, peer_public: bytes) -> Option<bytes> // 32,32 -> 32
+pub fn hkdf_sha256(salt: bytes, ikm: bytes, info: bytes, len: int) -> Option<bytes>
+pub fn constant_time_eq(a: bytes, b: bytes) -> bool
+```
+
+- **`x25519_shared_secret` devuelve `None` si el resultado no es contributorio** (clave pública de
+  orden pequeño → salida toda-ceros). Es la comprobación que impide seguir con una clave nula, y
+  `was_contributory()` la da hecha. Decisión: `None`, no ceros — el tipo obliga a mirarlo.
+- **`constant_time_eq`**: hoy comparar dos `bytes` en raylang (`==`) NO es de tiempo constante;
+  cualquier comparación de etiquetas/MAC escrita por el usuario filtra por temporización.
+- HKDF con `salt` vacío = el `HashLen` ceros del RFC 5869, como manda el estándar.
+
+**Lo que hay que documentar junto con la primitiva** (si no, el usuario se dispara en el pie —
+esta es la mitad del valor del arco): la receta de canal seguro entre pares — X25519 efímero por
+sesión, HKDF sobre el secreto con el **transcript** como `info`, **dos claves direccionales**
+(`info` distinto por sentido) para que ningún nonce se reutilice entre los dos extremos, nonce =
+contador por dirección, y una firma Ed25519 sobre el transcript para **ligar la identidad** al
+intercambio (si no, hay man-in-the-middle: X25519 solo no autentica). Va a `MANUAL.md`.
+
+**Alcance del arco**: `crates/ray-runtime/src/crypto.rs` (+ stubs sin la feature), registro de
+builtins (4 opcodes), intérprete + VM + `transpile/`, `std/crypto.ray`, `SECURITY.md` (tabla de
+dependencias + inventario), REFERENCE/MANUAL/SPEC, vectores de RFC 7748 §6.1 y RFC 5869 en el
+corpus de 3 motores. Sin la feature `crypto` (build slim/wasm), stubs inofensivos como el resto.
+
+**Interacciones**: es la pieza que faltaba para un Noise/handshake escrito **en raylang**; si
+algún día hay un `std/noise`, se apoya exactamente en estas cuatro funciones.
+
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

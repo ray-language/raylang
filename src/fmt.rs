@@ -978,18 +978,36 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
     // (p. ej. `"${x}"` → `to_string(x)`, ambos en la misma `(línea, col)`), así que sin quitarla la
     // recursión reentraría infinitamente; quitándola solo LA raíz, el azúcar anidado (en otras
     // posiciones) se sigue preservando.
-    let pos = (e.line, e.col);
-    if let Some(segs) = cur.interp.remove(&pos) {
-        let template = cur.is_template(e.line, e.col);
-        let s = fmt_interp(cur, &segs, template); // una cadena interpolada es primaria → sin paréntesis
-        cur.interp.insert(pos, segs);
-        return s;
+    // COLISIÓN DE POSICIÓN (la familia de ConcatN, ago 2026): la posición de un nodo NO lo
+    // identifica — un `+` exterior hereda la (línea, col) de su operando izquierdo (borraba
+    // `"x ${n}" + " tail"` entero al resurfacear en el nodo equivocado) y un paréntesis
+    // RE-POSICIONA la raíz al `(` (perdía o duplicaba el azúcar). El ancla estable son las
+    // HOJAS: la interpolación se clava a su PRIMERA pieza — se busca por la hoja izquierda del
+    // spine de `+` y se verifica por CONTEO de piezas (el `+` exterior suma una de más; un
+    // sub-spine se queda corto) —; el pipeline, al `callee` de su `Call` desazucarado (que
+    // conserva su posición bajo paréntesis), verificando que el receptor guardado sea el
+    // primer argumento (`Expr` es `PartialEq`).
+    let leaf = interp_leaf_key(e);
+    if let Some(segs) = cur.interp.remove(&leaf) {
+        if interp_spine_pieces(e) == segs.len() {
+            let template = cur.is_template(leaf.0, leaf.1);
+            let s = fmt_interp(cur, &segs, template); // una cadena interpolada es primaria → sin paréntesis
+            cur.interp.insert(leaf, segs);
+            return s;
+        }
+        cur.interp.insert(leaf, segs); // no es la raíz real: la recursión hallará al dueño
     }
-    if let Some((recv, rhs)) = cur.pipe.remove(&pos) {
-        let s = fmt_pipe(cur, &recv, &rhs);
-        cur.pipe.insert(pos, (recv, rhs));
-        // El pipeline `|>` tiene la precedencia MÍNIMA: se parentiza en cualquier operando más fuerte.
-        return if min_prec > PIPE_PREC { format!("({})", s) } else { s };
+    if let ExprKind::Call { callee, args } = &e.kind {
+        let key = (callee.line, callee.col);
+        if let Some((recv, rhs)) = cur.pipe.remove(&key) {
+            if args.first() == Some(&recv) {
+                let s = fmt_pipe(cur, &recv, &rhs);
+                cur.pipe.insert(key, (recv, rhs));
+                // El pipeline `|>` tiene la precedencia MÍNIMA: se parentiza en cualquier operando más fuerte.
+                return if min_prec > PIPE_PREC { format!("({})", s) } else { s };
+            }
+            cur.pipe.insert(key, (recv, rhs));
+        }
     }
     // M105/M106: en la pasada de envuelto, lo que no cabe se reparte — una cadena de 2+ eslabones, o
     // una lista delimitada (argumentos, arreglo, tupla, struct, Map). El aplanado se renderiza igual
@@ -1027,6 +1045,29 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
 
 /// Precedencia del pipeline `|>` (la más baja del lenguaje; menor que cualquier binario).
 const PIPE_PREC: u8 = 0;
+
+/// La HOJA IZQUIERDA del spine de `+` de `e` (el propio `e` si no es un `+`): la clave del sitio
+/// de una interpolación (su primera pieza), estable bajo paréntesis y operadores exteriores.
+fn interp_leaf_key(e: &Expr) -> (usize, usize) {
+    let mut node = e;
+    while let ExprKind::Binary { op: BinaryOp::Add, left, .. } = &node.kind {
+        node = left;
+    }
+    (node.line, node.col)
+}
+
+/// Cuenta las PIEZAS (hojas) del spine izquierdo de `+` de `e`. Una interpolación pura tiene
+/// tantas piezas como segmentos; un `+` exterior suma una de más y un sub-spine se queda corto —
+/// el discriminador que identifica al nodo dueño del sitio.
+fn interp_spine_pieces(e: &Expr) -> usize {
+    let mut pieces = 1;
+    let mut node = e;
+    while let ExprKind::Binary { op: BinaryOp::Add, left, .. } = &node.kind {
+        pieces += 1;
+        node = left;
+    }
+    pieces
+}
 
 /// Reemite una cadena interpolada desde sus segmentos de superficie (M29.3): `"a${x}b"`. Las partes
 /// literales se re-escapan como un string; cada `${e}` formatea su expresión (recursivo → interpolación

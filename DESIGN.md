@@ -9321,3 +9321,36 @@ URL con paréntesis exige el emparejado balanceado de CommonMark; un cambio de t
 apretadas) aunque le siga una sub-lista; y la línea vacía fantasma del split de un documento
 terminado en `\n` se descarta antes de parsear (una cerca sin cerrar se la comía como línea de
 código).
+
+## 102. La colisión de posición, cerrada de raíz en el formateador (ago 2026)
+
+El mismo defecto estructural que reventaba la VM con `("a" + "b").len() + 3` (el ConcatN de la
+crónica del webserver) vivía también en `ray fmt`, y ahí era **peor que un crash: borraba código**.
+Las tablas de azúcar del formateador (interpolaciones y pipelines, `program.interp_sites`/
+`pipe_sites`) se indexan por (línea, col); pero la posición NO identifica un nodo: un `+` exterior
+**hereda** la posición de su operando izquierdo (el parser arranca el `Binary` donde empieza la
+expresión), y un paréntesis **re-posiciona** su contenido al `(`. Tres síntomas del mismo agujero:
+`print("x ${n}" + " tail")` resurfaceaba el azúcar en el `+` exterior — imprimía la interpolación
+y tiraba el resto (el bug que se comió tres funciones de raycode); `("x ${n}") + t` lo duplicaba
+(el nodo re-posicionado ya no casaba con el sitio y el desazucarado quedaba a la vista *además*
+del azúcar); y `(a |> to_string) + "!"` se corrompía a `(a |> to_string)(a) + "!"`.
+
+El arreglo sigue el principio que dejó el ConcatN: **anclar a lo que no se mueve y verificar la
+identidad estructuralmente**. La interpolación se registra en el parser clavada a su **primera
+pieza** (la hoja izquierda del spine de `+`, inmune a los paréntesis: la agrupación re-posiciona
+la raíz, nunca las hojas) y el resurfacing la reclama solo si el **conteo de piezas** del spine
+casa con los segmentos guardados — el `+` exterior suma una pieza de más y un sub-spine se queda
+corto, así que la recursión encuentra al dueño real. El pipeline ya estaba clavado al `callee`
+del `Call` desazucarado (que conserva su posición bajo paréntesis); le faltaba verificar que el
+receptor guardado fuera de verdad el **primer argumento** (`Expr` deriva `PartialEq`).
+
+La moraleja quedó como guarda permanente: el corpus adversarial de `tests/fmt_policy.rs` — que
+asevera para cada caso que el AST re-parseado de la salida es **idéntico** al original (módulo
+posiciones) y que ningún comentario se pierde — ganó la familia completa (interpolación + cola,
+parentizada, dos interpolaciones concatenadas, pipeline parentizado en operando). Contra el fmt
+anterior, seis de esos checks fallan; contra este, ninguno.
+
+De paso, el corpus del oráculo del parser auto-alojado destapó que `examples/stdlib/markdown.ray`
+(M111) y `examples/term/keys.ray` (M107.3) usan tuplas (M27.1) — diferidas en el toolchain
+self-hosted, cuyo espejo está congelado en su hito —, así que ambos entran en la lista
+`DIFERIDOS_SELFHOST` de `tests/selfhost_parser.rs`, como en su día `regex.ray`.

@@ -693,6 +693,9 @@ fn parses_files_reales_equal_what_el_oracle() {
         "conversion_error.ray", // M28.2: `?` con From<S> / traits con params de tipo (idem)
         "enteros.ray", // M28.3: enteros con tamaño u8/u32/u64 + `for` (idem)
         "regex.ray", // M29.1c: el motor de regex usa tuplas `Option<(int,int)>` (M27.1, idem)
+        "markdown.ray", // M111: std/markdown usa tuplas `Option<([Inline], string, int)>` y `lk.0`
+                        // (M27.1, diferido en el toolchain auto-alojado)
+        "keys.ray", // M107.3: demo de term.read_key; usa acceso a tupla `wh.0` (M27.1, idem)
         "regex_demo.ray", // M29.1: demo del motor de regex; usa interpolación f"..." (idem)
         "regex_captures_demo.ray", // M81: capturas; usa tuplas `p.0` (M27.1, idem) — rojo pre-existente
                                    // descubierto en la limpieza ES→EN (nunca estuvo en la lista)

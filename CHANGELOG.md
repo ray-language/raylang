@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/markdown`** (M111): parser de Markdown en raylang puro — `parse(md) -> [Block]` (AST
+  tipado: encabezados, párrafos, código cercado con lenguaje, listas anidadas, citas, regla;
+  inline: énfasis/negrita/código/enlaces/imágenes/escapes) y `to_html(md)`. Subconjunto CommonMark
+  pragmático con dos decisiones de seguridad: el HTML embebido se **escapa** (no se interpreta) y
+  las URLs `javascript:`/`vbscript:`/`data:` no-imagen se neutralizan — la salida se puede servir
+  sin sanitizador. Determinista: golden byte-idéntico en los tres motores.
+
 - **Streaming del webserver + Range/206 en estáticos** (M110, el gemelo servidor del streaming de
   M108): `webserver.stream_response(status, ch)` — el cuerpo son los trozos que lleguen por un
   `Channel<bytes>` (el patrón de actores: el handler `spawn`ea al productor y devuelve ya), escritos

@@ -989,6 +989,32 @@ explícito; y la restauración está garantizada al salir del proceso — salvo 
 `select` sobre `signals()` + `term.size()`: SIGWINCH (28) llega por el canal de señales al
 redimensionar la ventana.
 
+### Markdown (`std/markdown`)
+
+Markdown → HTML (o el AST, si quieres renderizar tú — una TUI, un índice):
+
+```rust
+import std/markdown;
+
+fn main() -> int {
+    print(markdown.to_html("# Hola\n\nUn *saludo* con [enlace](https://x.dev)."));
+    // <h1>Hola</h1>\n<p>Un <em>saludo</em> con <a href="https://x.dev">enlace</a>.</p>
+
+    // El AST tipado, para consumirlo directamente:
+    for b in markdown.parse("# T\n\ntexto").iter() {
+        match (b) {
+            markdown.Block.Heading(lvl, _) => print("h" + to_string(lvl)),
+            _ => { },
+        }
+    }
+    0
+}
+```
+
+Dos decisiones de seguridad, pensadas para servir la salida tal cual: el HTML embebido en el
+documento **se escapa** (no se interpreta), y las URLs `javascript:`/`vbscript:`/`data:` no-imagen
+de enlaces e imágenes se neutralizan a `#`.
+
 ### Archivos (`std/fs` — todo con errores como valores)
 
 ```rust

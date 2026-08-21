@@ -476,7 +476,7 @@ Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista
 | `std/random` | PRNG del proceso: `next`, `below`, `between`, `choice`, `shuffle` y `seed` (semilla explícita → secuencia reproducible) |
 | `std/crypto` | cripto de **producción** respaldada por `ring` (tiempo constante): `sha256 sha512 sha1`, `hmac_sha256`, `ed25519_public_key`/`ed25519_sign`/`ed25519_verify`, `chacha20poly1305_seal`/`_open` y `random_bytes` (CSPRNG). Las versiones escritas en raylang puro (`examples/web/`) son **demostración del lenguaje**, no producción |
 | `std/collections/{set,deque,stringbuilder,dict}` | `Set<T>` y `Dict<K,V>` (claves de usuario vía `Hash`+`Eq`), `Deque<T>` y un constructor de strings que evita el O(n²) de concatenar en bucle |
-| `std/text`, `std/sort`, `std/regex`, `std/csv`, `std/toml`, `std/json`, `std/template` | procesamiento de texto y datos |
+| `std/text`, `std/sort`, `std/regex`, `std/csv`, `std/toml`, `std/json`, `std/template`, `std/markdown` | procesamiento de texto y datos (`markdown`: `parse -> [Block]` —AST tipado— y `to_html`; subconjunto CommonMark, HTML embebido **escapado** y URLs `javascript:` neutralizadas por diseño) |
 | `std/hex`, `std/base64`, `std/url`, `std/uuid`, `std/protobuf` | codificaciones e identificadores |
 | `std/inflate`, `std/deflate`, `std/huffman` | compresión (gzip/zlib/DEFLATE) |
 | `std/kv`, `std/resilience` | almacén clave-valor persistente (compartible entre fibras) y utilidades de resiliencia: reintentos con política, *circuit breaker* y plazos (`deadline`/`expired`) |

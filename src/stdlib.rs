@@ -65,6 +65,7 @@ const MODULES: &[(&str, &str)] = &[
     ("std/csv", include_str!("../examples/stdlib/csv.ray")),
     ("std/toml", include_str!("../examples/stdlib/toml.ray")),
     ("std/template", include_str!("../examples/stdlib/template.ray")),
+    ("std/markdown", include_str!("../examples/stdlib/markdown.ray")), // M111
     // Protobuf (M40.7e; la cripto que lo acompañaba se des-embebió, ver la nota de arriba).
     ("std/protobuf", include_str!("../examples/web/protobuf.ray")),
     // UUID (M40.7f): `uuid_v4` usa `random_int` (no determinista), `is_uuid_v4` valida. → `std/hex`.

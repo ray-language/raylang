@@ -9304,3 +9304,20 @@ CLAUDE.md ya advierte para UFCS ("la posición sola los confunde"); el arreglo d
 colisionado — la cadena interior pierde su superinstrucción y queda como `Add` normal: corrección
 antes que optimización. El framing del chunked (`(to_hex(n) + "\r\n").to_bytes() + piece + …`) fue
 el gatillo.
+
+## 101. M111 — std/markdown: Markdown como ciudadano de la stdlib (ago 2026)
+
+La familia de `std/json`/`std/toml`/`std/csv` aplicada a Markdown: parser en raylang puro (cero
+runtime, determinista → golden byte-idéntico en los tres motores), nacido en
+`examples/stdlib/markdown.ray` y embebido como `std/markdown` (política de tiers de M51). Dos
+superficies a propósito: `to_html` para el caso común (un blog sobre `web/framework`, un README
+servido) y `parse -> [Block]` —el AST tipado— para quien renderiza distinto (una TUI con
+`std/term`, un extractor de índice). **Seguridad por diseño, no por sanitizador**: el HTML embebido
+se escapa como texto y las URLs `javascript:`/`vbscript:`/`data:` no-imagen se neutralizan a `#` —
+la salida es servible tal cual. Alcance v1 honesto (sin tablas GFM, setext ni footnotes,
+documentado). Los detalles con dientes que salieron al probar con un documento real: el `)` de un
+URL con paréntesis exige el emparejado balanceado de CommonMark; un cambio de tipo de marcador
+(`-` → `1.`) es una lista NUEVA, no un ítem más; el primer párrafo de un ítem va desnudo (listas
+apretadas) aunque le siga una sub-lista; y la línea vacía fantasma del split de un documento
+terminado en `\n` se descarta antes de parsear (una cerca sin cerrar se la comía como línea de
+código).

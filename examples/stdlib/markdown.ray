@@ -1,0 +1,578 @@
+// std/markdown (M111) — parser de Markdown en raylang puro: AST tipado + render a HTML.
+//
+// La familia de std/json/std/toml/std/csv: cero runtime, determinista (oráculo entre los tres
+// motores gratis). Subconjunto CommonMark pragmático:
+//
+// - Bloques: encabezados ATX (# .. ######), párrafos, código cercado (``` con lenguaje),
+//   listas anidadas (-/*/+ y "1."), citas (>), regla horizontal (---/***/___).
+// - Inline: *énfasis*/_énfasis_, **negrita**, `código`, [enlaces](url), ![imágenes](src),
+//   escapes con backslash (\* \_ \` \[ \! \\ \#).
+// - SEGURIDAD: el HTML embebido NO se interpreta — se escapa como texto (decisión deliberada:
+//   la salida se puede servir sin sanitizador). URLs de enlace/imagen con esquema javascript:
+//   se neutralizan a "#".
+//
+// Fuera de v1 (documentado): tablas GFM, encabezados setext, footnotes, saltos duros por doble
+// espacio, autolinks, listas sueltas vs apretadas (todo se renderiza apretado).
+
+// Un elemento inline (el contenido de encabezados, párrafos e ítems).
+/// An inline element: the content of headings, paragraphs and list items.
+pub enum Inline {
+    Text(string),
+    Code(string),
+    Emph([Inline]),
+    Strong([Inline]),
+    // texto del enlace, href
+    Link([Inline], string),
+    // alt, src
+    Image(string, string),
+}
+
+// Un bloque del documento.
+/// A block-level element of the document.
+pub enum Block {
+    // nivel 1..6, contenido inline
+    Heading(int, [Inline]),
+    Paragraph([Inline]),
+    // lenguaje ("" si no se indicó), texto crudo del bloque
+    Code(string, string),
+    Quote([Block]),
+    // ¿ordenada?, ítems (cada ítem es una lista de bloques: soporta anidación)
+    List(bool, [[Block]]),
+    Rule,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Parseo de bloques
+// ---------------------------------------------------------------------------------------------
+
+/// Parses a Markdown document into its block-level AST.
+pub fn parse(md: string) -> [Block] {
+    var lines = md.split("\n");
+    // Un documento terminado en '\n' produce una línea vacía FANTASMA al partir (no es una línea
+    // del documento): fuera — si no, una cerca sin cerrar la absorbería como línea de código.
+    if (lines.len() > 0 && lines[lines.len() - 1] == "") {
+        let _ = lines.pop();
+    }
+    parse_blocks(lines)
+}
+
+// ¿Cuántos espacios de sangría tiene la línea?
+fn indent_of(line: string) -> int {
+    var i = 0;
+    while (i < line.len() && line[i] == ' ') {
+        i = i + 1;
+    }
+    i
+}
+
+// ¿La línea es una regla horizontal? (3+ de -, * o _, solos, con espacios opcionales)
+fn is_rule(line: string) -> bool {
+    let t = line.trim();
+    if (t.len() < 3) {
+        return false;
+    }
+    let c = t[0];
+    if (c != '-' && c != '*' && c != '_') {
+        return false;
+    }
+    var i = 0;
+    var n = 0;
+    while (i < t.len()) {
+        if (t[i] == c) {
+            n = n + 1;
+        } else if (t[i] != ' ') {
+            return false;
+        }
+        i = i + 1;
+    }
+    n >= 3
+}
+
+// Nivel de encabezado ATX (1..6), o 0 si la línea no lo es (exige espacio tras los #).
+fn heading_level(line: string) -> int {
+    var i = 0;
+    while (i < line.len() && line[i] == '#') {
+        i = i + 1;
+    }
+    if (i >= 1 && i <= 6 && i < line.len() && line[i] == ' ') { i } else { 0 }
+}
+
+// El marcador de lista de la línea (ya sin sangría): "" si no es ítem; "-" | "*" | "+" | "1."
+// (cualquier número). Exige un espacio tras el marcador.
+fn list_marker(t: string) -> string {
+    if (t.len() >= 2 && (t[0] == '-' || t[0] == '*' || t[0] == '+') && t[1] == ' ') {
+        return to_string(t[0]);
+    }
+    var i = 0;
+    while (i < t.len() && t[i] >= '0' && t[i] <= '9') {
+        i = i + 1;
+    }
+    if (i >= 1 && i + 1 < t.len() && t[i] == '.' && t[i + 1] == ' ') {
+        return t.substring(0, i + 1);
+    }
+    ""
+}
+
+// El contenido del ítem tras su marcador (t ya viene sin sangría).
+fn after_marker(t: string, marker: string) -> string {
+    t.substring(marker.len() + 1, t.len())
+}
+
+fn parse_blocks(lines: [string]) -> [Block] {
+    var out: [Block] = [];
+    var i = 0;
+    while (i < lines.len()) {
+        let line = lines[i];
+        let t = line.trim();
+        if (t == "") {
+            i = i + 1;
+        } else if (t.starts_with("```")) {
+            // Código cercado: hasta el cierre (o el fin del documento, con lenidad).
+            let lang = t.substring(3, t.len()).trim();
+            var body = "";
+            var first = true;
+            i = i + 1;
+            var open = true;
+            while (open && i < lines.len()) {
+                if (lines[i].trim().starts_with("```")) {
+                    open = false;
+                } else {
+                    body = if (first) { lines[i] } else { body + "\n" + lines[i] };
+                    first = false;
+                }
+                i = i + 1;
+            }
+            out.push(Block.Code(lang, body));
+        } else if (heading_level(t) > 0) {
+            let lvl = heading_level(t);
+            // Se admite (y recorta) el cierre opcional "## título ##".
+            var text = t.substring(lvl + 1, t.len()).trim();
+            var end = text.len();
+            while (end > 0 && text[end - 1] == '#') {
+                end = end - 1;
+            }
+            if (end < text.len() && end > 0 && text[end - 1] == ' ') {
+                text = text.substring(0, end).trim();
+            }
+            out.push(Block.Heading(lvl, parse_inline(text)));
+            i = i + 1;
+        } else if (is_rule(t)) {
+            out.push(Block.Rule);
+            i = i + 1;
+        } else if (t.starts_with(">")) {
+            // Cita: se juntan las líneas ">" contiguas, se les quita el prefijo y se recurre.
+            var inner: [string] = [];
+            while (i < lines.len() && lines[i].trim().starts_with(">")) {
+                let q = lines[i].trim();
+                var content = q.substring(1, q.len());
+                if (content.starts_with(" ")) {
+                    content = content.substring(1, content.len());
+                }
+                inner.push(content);
+                i = i + 1;
+            }
+            out.push(Block.Quote(parse_blocks(inner)));
+        } else if (list_marker(t) != "" && indent_of(line) == 0) {
+            // Lista: ítems al nivel 0; las líneas sangradas 2+ bajo un ítem son su continuación
+            // (párrafos extra o sub-listas), y se re-parsean recursivamente sin la sangría.
+            let ordered = list_marker(t)[0] >= '0' && list_marker(t)[0] <= '9';
+            var items: [[Block]] = [];
+            var go = true;
+            while (go && i < lines.len()) {
+                let cur = lines[i];
+                let ct = cur.trim();
+                if (ct == "") {
+                    // Una línea en blanco solo termina la lista si lo siguiente no es ítem ni
+                    // continuación sangrada.
+                    if (i + 1 < lines.len() && (list_marker(
+                lines[i + 1].trim()
+            ) != "" && indent_of(lines[i + 1]) == 0 || indent_of(lines[i + 1]) >= 2 && lines[i + 1].trim() != "")) {
+                        i = i + 1;
+                    } else {
+                        go = false;
+                    }
+                } else if (list_marker(ct) != "" && indent_of(cur) == 0) {
+                    let mk = list_marker(ct);
+                    // Cambio de TIPO de marcador (ordenada ↔ no ordenada): empieza otra lista.
+                    let mk_ordered = mk[0] >= '0' && mk[0] <= '9';
+                    if (mk_ordered != ordered) {
+                        go = false;
+                    } else {
+                        var item_lines: [string] = [after_marker(ct, mk)];
+                        i = i + 1;
+                        var more = true;
+                        while (more && i < lines.len()) {
+                            let nx = lines[i];
+                            if (nx.trim() != "" && indent_of(
+                            nx
+                        ) >= 2) {
+                                item_lines.push(nx.substring(2, nx.len()));
+                                i = i + 1;
+                            } else if (nx.trim() == "" && i + 1 < lines.len() && lines[i + 1].trim() != "" && indent_of(lines[i + 1]) >= 2) {
+                                item_lines.push("");
+                                i = i + 1;
+                            } else {
+                                more = false;
+                            }
+                        }
+                        items.push(parse_blocks(item_lines));
+                    }
+                } else {
+                    go = false;
+                }
+            }
+            out.push(Block.List(ordered, items));
+        } else {
+            // Párrafo: líneas contiguas hasta un blanco u otro bloque.
+            var text = t;
+            i = i + 1;
+            var more = true;
+            while (more && i < lines.len()) {
+                let nx = lines[i].trim();
+                if (nx == "" || nx.starts_with(
+                "```"
+            ) || heading_level(nx) > 0 || is_rule(nx) || nx.starts_with(">") || list_marker(nx) != "" && indent_of(lines[i]) == 0) {
+                    more = false;
+                } else {
+                    text = text + "\n" + nx;
+                    i = i + 1;
+                }
+            }
+            out.push(Block.Paragraph(parse_inline(text)));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Parseo inline
+// ---------------------------------------------------------------------------------------------
+
+// ¿buf tiene "**" o "__" en i?
+fn is_strong_delim(s: string, i: int) -> bool {
+    i + 1 < s.len() && (s[i] == '*' && s[i + 1] == '*' || s[i] == '_' && s[i + 1] == '_')
+}
+
+// El índice del cierre `needle` desde `start`, respetando escapes; -1 si no está.
+fn find_close(s: string, start: int, needle: string) -> int {
+    var i = start;
+    while (i < s.len()) {
+        if (s[i] == '\\') {
+            i = i + 2;
+        } else if (matches_at(s, i, needle)) {
+            return i;
+        } else {
+            i = i + 1;
+        }
+    }
+    0 - 1
+}
+
+fn matches_at(s: string, i: int, needle: string) -> bool {
+    if (i + needle.len() > s.len()) {
+        return false;
+    }
+    var k = 0;
+    while (k < needle.len()) {
+        if (s[i + k] != needle[k]) {
+            return false;
+        }
+        k = k + 1;
+    }
+    true
+}
+
+/// Parses inline Markdown (emphasis, strong, code spans, links, images, escapes) into `Inline`s.
+pub fn parse_inline(s: string) -> [Inline] {
+    var out: [Inline] = [];
+    var text = "";  // texto plano acumulado
+    var i = 0;
+    while (i < s.len()) {
+        let c = s[i];
+        if (c == '\\' && i + 1 < s.len()) {
+            // Escape: el carácter siguiente va literal.
+            text = text + to_string(s[i + 1]);
+            i = i + 2;
+        } else if (c == '`') {
+            // Código inline: hasta el siguiente backtick (sin escapes dentro, como CommonMark).
+            var close = i + 1;
+            while (close < s.len() && s[close] != '`') {
+                close = close + 1;
+            }
+            if (close < s.len()) {
+                if (text != "") {
+                    out.push(Inline.Text(text));
+                    text = "";
+                }
+                out.push(Inline.Code(s.substring(i + 1, close)));
+                i = close + 1;
+            } else {
+                text = text + "`";
+                i = i + 1;
+            }
+        } else if (is_strong_delim(s, i)) {
+            let delim = s.substring(i, i + 2);
+            let close = find_close(s, i + 2, delim);
+            if (close >= 0 && close > i + 2) {
+                if (text != "") {
+                    out.push(Inline.Text(text));
+                    text = "";
+                }
+                out.push(Inline.Strong(parse_inline(s.substring(i + 2, close))));
+                i = close + 2;
+            } else {
+                text = text + delim;
+                i = i + 2;
+            }
+        } else if (c == '*' || c == '_') {
+            let close = find_close(s, i + 1, to_string(c));
+            if (close >= 0 && close > i + 1) {
+                if (text != "") {
+                    out.push(Inline.Text(text));
+                    text = "";
+                }
+                out.push(Inline.Emph(parse_inline(s.substring(i + 1, close))));
+                i = close + 1;
+            } else {
+                text = text + to_string(c);
+                i = i + 1;
+            }
+        } else if (c == '!' && i + 1 < s.len() && s[i + 1] == '[') {
+            match (parse_link_at(s, i + 1)) {
+                Option.Some(lk) => {
+                    if (text != "") {
+                        out.push(Inline.Text(text));
+                        text = "";
+                    }
+                    // El "texto" de una imagen es su alt, plano.
+                    out.push(Inline.Image(inline_plain_text(lk.0), lk.1));
+                    i = lk.2 + 1;  // lk.2 = índice del ')' final
+                },
+                Option.None => {
+                    text = text + "!";
+                    i = i + 1;
+                },
+            }
+        } else if (c == '[') {
+            match (parse_link_at(s, i)) {
+                Option.Some(lk) => {
+                    if (text != "") {
+                        out.push(Inline.Text(text));
+                        text = "";
+                    }
+                    out.push(Inline.Link(lk.0, lk.1));
+                    i = lk.2 + 1;
+                },
+                Option.None => {
+                    text = text + "[";
+                    i = i + 1;
+                },
+            }
+        } else {
+            text = text + to_string(c);
+            i = i + 1;
+        }
+    }
+    if (text != "") {
+        out.push(Inline.Text(text));
+    }
+    out
+}
+
+// Intenta parsear "[texto](url)" con '[' en `i`: Some((inlines del texto, url, índice del ')')).
+fn parse_link_at(s: string, i: int) -> Option<([Inline], string, int)> {
+    let close_b = find_close(s, i + 1, "]");
+    if (close_b < 0) {
+        return Option.None;
+    }
+    if (close_b + 1 >= s.len() || s[close_b + 1] != '(') {
+        return Option.None;
+    }
+    // El ')' de cierre respeta paréntesis BALANCEADOS dentro del URL (CommonMark):
+    // [x](http://a/b(1)) cierra en el último.
+    var depth = 0;
+    var close_p = 0 - 1;
+    var j = close_b + 2;
+    while (j < s.len() && close_p < 0) {
+        let cj = s[j];
+        if (cj == '\\') {
+            j = j + 2;
+        } else if (cj == '(') {
+            depth = depth + 1;
+            j = j + 1;
+        } else if (cj == ')') {
+            if (depth == 0) {
+                close_p = j;
+            } else {
+                depth = depth - 1;
+            }
+            j = j + 1;
+        } else {
+            j = j + 1;
+        }
+    }
+    if (close_p < 0) {
+        return Option.None;
+    }
+    let label = s.substring(i + 1, close_b);
+    let url = s.substring(close_b + 2, close_p).trim();
+    Option.Some((parse_inline(label), url, close_p))
+}
+
+// El texto plano de unos inlines (para el alt de una imagen).
+fn inline_plain_text(xs: [Inline]) -> string {
+    var out = "";
+    var i = 0;
+    while (i < xs.len()) {
+        match (xs[i]) {
+            Inline.Text(t) => {
+                out = out + t;
+            },
+            Inline.Code(t) => {
+                out = out + t;
+            },
+            Inline.Emph(inner) => {
+                out = out + inline_plain_text(inner);
+            },
+            Inline.Strong(inner) => {
+                out = out + inline_plain_text(inner);
+            },
+            Inline.Link(inner, _) => {
+                out = out + inline_plain_text(inner);
+            },
+            Inline.Image(alt, _) => {
+                out = out + alt;
+            },
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Render a HTML
+// ---------------------------------------------------------------------------------------------
+
+// Escapa texto para HTML (y comillas: sirve también en atributos).
+fn escape_html(s: string) -> string {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+// Neutraliza URLs peligrosas (javascript:, vbscript:, data: no-imagen) → "#".
+fn safe_url(u: string) -> string {
+    let l = u.to_lower().trim();
+    if (l.starts_with("javascript:") || l.starts_with("vbscript:")) {
+        return "#";
+    }
+    if (l.starts_with("data:") && !l.starts_with("data:image/")) {
+        return "#";
+    }
+    u
+}
+
+fn render_inlines(xs: [Inline]) -> string {
+    var out = "";
+    var i = 0;
+    while (i < xs.len()) {
+        match (xs[i]) {
+            Inline.Text(t) => {
+                out = out + escape_html(t);
+            },
+            Inline.Code(t) => {
+                out = out + "<code>" + escape_html(t) + "</code>";
+            },
+            Inline.Emph(inner) => {
+                out = out + "<em>" + render_inlines(inner) + "</em>";
+            },
+            Inline.Strong(inner) => {
+                out = out + "<strong>" + render_inlines(inner) + "</strong>";
+            },
+            Inline.Link(inner, url) => {
+                out = out + "<a href=\"" + escape_html(
+                    safe_url(url)
+                ) + "\">" + render_inlines(inner) + "</a>";
+            },
+            Inline.Image(alt, src) => {
+                out = out + "<img src=\"" + escape_html(
+                    safe_url(src)
+                ) + "\" alt=\"" + escape_html(alt) + "\">";
+            },
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Los inlines de un párrafo suelto dentro de un ítem de lista se renderizan SIN <p> si son el
+// único bloque del ítem (listas "apretadas", el estilo por defecto de CommonMark para v1).
+fn render_item(blocks: [Block]) -> string {
+    if (blocks.len() == 0) {
+        return "";
+    }
+    match (blocks[0]) {
+        Block.Paragraph(xs) => {
+            // El primer párrafo va desnudo; lo que siga (sub-listas, código…) se renderiza normal.
+            var out = render_inlines(xs);
+            if (blocks.len() > 1) {
+                var rest: [Block] = [];
+                var k = 1;
+                while (k < blocks.len()) {
+                    rest.push(blocks[k]);
+                    k = k + 1;
+                }
+                out = out + "\n" + render_blocks(rest);
+            }
+            out
+        },
+        _ => render_blocks(blocks),
+    }
+}
+
+/// Renders a parsed document back to HTML.
+pub fn render(blocks: [Block]) -> string {
+    render_blocks(blocks)
+}
+
+fn render_blocks(blocks: [Block]) -> string {
+    var out = "";
+    var i = 0;
+    while (i < blocks.len()) {
+        match (blocks[i]) {
+            Block.Heading(lvl, xs) => {
+                out = out + "<h" + to_string(
+                    lvl
+                ) + ">" + render_inlines(xs) + "</h" + to_string(lvl) + ">\n";
+            },
+            Block.Paragraph(xs) => {
+                out = out + "<p>" + render_inlines(xs) + "</p>\n";
+            },
+            Block.Code(lang, body) => {
+                let cls = if (lang == "") { "" } else { " class=\"language-" + escape_html(lang) + "\"" };
+                out = out + "<pre><code" + cls + ">" + escape_html(body) + "\n</code></pre>\n";
+            },
+            Block.Quote(inner) => {
+                out = out + "<blockquote>\n" + render_blocks(inner) + "</blockquote>\n";
+            },
+            Block.List(ordered, items) => {
+                let tag = if (ordered) { "ol" } else { "ul" };
+                out = out + "<" + tag + ">\n";
+                var k = 0;
+                while (k < items.len()) {
+                    out = out + "<li>" + render_item(items[k]) + "</li>\n";
+                    k = k + 1;
+                }
+                out = out + "</" + tag + ">\n";
+            },
+            Block.Rule => {
+                out = out + "<hr>\n";
+            },
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// Converts Markdown straight to HTML (`render(parse(md))`).
+pub fn to_html(md: string) -> string {
+    render(parse(md))
+}

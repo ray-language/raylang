@@ -1,31 +1,25 @@
-//! Pruebas de la I/O interactiva (M11.2a) sobre el binario: escriben un `.ray` temporal,
-//! ejecutan `raylang [--vm] <archivo>` alimentando stdin, y comprueban stdout/stderr/código.
-//! La entrada/lectura no es determinista para el oráculo (depende de stdin), así que se prueba
-//! aquí por subproceso, como el REPL.
+//! Pruebas de **std/io** (M107.1): escritura a stdout/stderr SIN salto de línea + flush.
+//!
+//! Lo delicado no es escribir: es el ORDEN. `print` y `io.write` deben intercalarse en orden de
+//! programa en los TRES motores — y en el binario nativo `print` es asíncrono (M96f: un hilo
+//! escritor consume un canal), así que `io.write` va por el mismo canal; esta suite lo asevera
+//! comparando la salida EXACTA byte a byte, stdout y stderr por separado.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
+use std::process::Command;
 
-/// Escribe `src` en un `.ray` temporal, ejecuta el binario (con `--vm` opcional) alimentando
-/// `stdin`, y devuelve `(stdout, stderr, código)`.
-fn run_io(name: &str, src: &str, stdin: &str, vm: bool) -> (String, String, i32) {
-    let mut path = std::env::temp_dir();
-    path.push(format!("{name}.ray"));
-    std::fs::File::create(&path).expect("crea").write_all(src.as_bytes()).expect("escribe");
+fn tmp(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ray_io_{name}"));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-    if vm {
-        cmd.arg("--vm");
-    }
-    let mut child = cmd
-        .arg(&path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("lanza raylang");
-    child.stdin.take().expect("stdin").write_all(stdin.as_bytes()).expect("escribe stdin");
-    let out = child.wait_with_output().expect("espera al proceso");
+fn ray(dir: &PathBuf, args: &[&str]) -> (String, String, i32) {
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("lanza ray");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -33,585 +27,74 @@ fn run_io(name: &str, src: &str, stdin: &str, vm: bool) -> (String, String, i32)
     )
 }
 
-const PROG: &str = r#"
-fn greeting(o: Option<string>) -> string {
-  match (o) {
-    Option.Some(s) => "hello, " + s,
-    Option.None => "EOF",
-  }
-}
-fn main() -> int {
-  print(greeting(input()));
-  eprint("aviso a stderr");
-  match (read_int()) {
-    Option.Some(n) => n,
-    Option.None => -1,
-  }
-}
-"#;
+const PROG: &str = "import std/io;\n\
+\n\
+fn main() -> int {\n\
+    let _ = io.write(\"a\");\n\
+    let _ = io.write(\"b\");\n\
+    let _ = io.flush();\n\
+    print(\"\");\n\
+    let _ = io.write_bytes(b\"\\x41\\x42\");\n\
+    print(\"\");\n\
+    let _ = io.ewrite(\"E1\");\n\
+    let _ = io.ewrite(\"E2\");\n\
+    eprint(\"\");\n\
+    match (io.write(\"n=3\")) {\n\
+        Result.Ok(n) => print(n),\n\
+        Result.Err(e) => eprint(e),\n\
+    }\n\
+    0\n\
+}\n";
+
+// La salida esperada: `write`s pegados, el `print(\"\")` cierra la línea EN ORDEN aunque el write
+// no haya hecho flush (mismo buffer), y el conteo de `write` es el nº de caracteres.
+const WANT_OUT: &str = "ab\nAB\nn=33\n";
+const WANT_ERR: &str = "E1E2\n";
 
 #[test]
-fn input_and_read_int_read_stdin_in_both_engines() {
-    for vm in [false, true] {
-        let (out, err, code) = run_io("ray_io_ok", PROG, "mundo\n7\n", vm);
-        assert!(out.contains("hello, mundo"), "input() leyó la first línea (vm={vm})\n{out}");
-        assert!(err.contains("aviso a stderr"), "eprint fue a stderr (vm={vm})\n{err}");
-        assert_eq!(code, 7, "read_int() leyó 7 (vm={vm})");
+fn io_writes_interleave_with_print_in_program_order() {
+    let base = tmp("orden");
+    std::fs::write(base.join("prog.ray"), PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, err, code) = ray(&base, &[engine, "prog.ray"]);
+        assert_eq!(code, 0, "{engine}: exit 0\n{err}");
+        assert_eq!(out, WANT_OUT, "{engine}: stdout exacto");
+        assert_eq!(err, WANT_ERR, "{engine}: stderr exacto");
     }
 }
 
 #[test]
-fn immediate_eof_gives_none() {
-    // Sin entrada: input() -> None ("EOF"); read_int() -> None -> -1 (& 0xFF = 255).
-    let (out, _, code) = run_io("ray_io_eof", PROG, "", false);
-    assert!(out.contains("EOF"), "input() en EOF es None\n{out}");
-    assert_eq!(code, 255, "read_int() en EOF es None -> -1");
-}
-
-#[test]
-fn read_int_with_non_integer_text_gives_none() {
-    // Primera línea cualquiera; segunda no es entero -> read_int None -> -1.
-    let (out, _, code) = run_io("ray_io_noint", PROG, "x\nabc\n", false);
-    assert!(out.contains("hello, x"), "input() leyó 'x'\n{out}");
-    assert_eq!(code, 255, "read_int() de 'abc' es None -> -1");
-}
-
-const ARGS_ENV_PROG: &str = r#"
-fn main() -> int {
-  let xs = args();
-  var i = 0;
-  while (i < xs.len()) { print(xs[i]); i = i + 1; }
-  match (env("RAY_TEST_VAR")) {
-    Option.Some(v) => print("env=" + v),
-    Option.None => print("env=?"),
-  }
-  xs.len()
-}
-"#;
-
-#[test]
-fn args_y_env_en_ambos_engines() {
-    let mut path = std::env::temp_dir();
-    path.push("ray_args_env.ray");
-    std::fs::File::create(&path).unwrap().write_all(ARGS_ENV_PROG.as_bytes()).unwrap();
-
-    for vm in [false, true] {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-        if vm {
-            cmd.arg("--vm");
-        }
-        // raylang [--vm] <archivo> uno dos   con RAY_TEST_VAR=hola en el entorno.
-        let out = cmd
-            .arg(&path)
-            .arg("one")
-            .arg("dos")
-            .env("RAY_TEST_VAR", "hello")
-            .output()
-            .expect("ejecuta raylang");
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(stdout.contains("one") && stdout.contains("dos"), "args() ve los CLI args (vm={vm})\n{stdout}");
-        assert!(stdout.contains("env=hello"), "env() lee la variable (vm={vm})\n{stdout}");
-        assert_eq!(out.status.code(), Some(2), "len(args) = 2 (vm={vm})");
+fn io_native_matches_the_vm_byte_for_byte() {
+    // El caso que motivó el diseño: el primer intento escribía `io.write` directo a
+    // `std::io::stdout` y los saltos de `print` (asíncrono) llegaban DESPUÉS de todos los writes.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando io nativo: rustc no disponible");
+        return;
     }
-}
-
-const FILE_PROG: &str = r#"
-import std/fs;
-fn body(r: Result<string, string>) -> string {
-  match (r) {
-    Result.Ok(s) => s,
-    Result.Err(e) => "ERR:" + e,
-  }
-}
-fn main() -> int {
-  let path = args()[0];
-  match (fs.write_file(path, "hello\nmundo")) {
-    Result.Ok(n) => print("escritos:" + n.to_string()),
-    Result.Err(e) => print("err:" + e),
-  }
-  print(body(fs.read_file(path)));
-  match (fs.read_file(path + ".noexiste")) {
-    Result.Ok(_) => print("inesperado"),
-    Result.Err(_) => print("err-al-leer-nonexistent"),
-  }
-  0
-}
-"#;
-
-#[test]
-fn read_write_file_round_trip_in_both_engines() {
-    let mut prog = std::env::temp_dir();
-    prog.push("ray_file_prog.ray");
-    std::fs::File::create(&prog).unwrap().write_all(FILE_PROG.as_bytes()).unwrap();
-
-    for (i, vm) in [false, true].into_iter().enumerate() {
-        let mut data = std::env::temp_dir();
-        data.push(format!("ray_file_data_{i}.txt"));
-        let _ = std::fs::remove_file(&data);
-
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-        if vm {
-            cmd.arg("--vm");
-        }
-        let out = cmd.arg(&prog).arg(&data).output().expect("ejecuta raylang");
-        let stdout = String::from_utf8_lossy(&out.stdout);
-
-        assert!(stdout.contains("escritos:11"), "write_file returns nº de caracteres (vm={vm})\n{stdout}");
-        assert!(stdout.contains("hello\nmundo"), "read_file recupera el contenido escrito (vm={vm})\n{stdout}");
-        assert!(stdout.contains("err-al-leer-nonexistent"), "leer nonexistent es Err (vm={vm})\n{stdout}");
-        // Y el archivo existe de verdad en disco con el contenido correcto.
-        assert_eq!(std::fs::read_to_string(&data).unwrap(), "hello\nmundo", "el file en disco (vm={vm})");
-    }
-}
-
-const APPEND_PROG: &str = r#"
-import std/fs;
-fn n_de(r: Result<int, string>) -> int {
-  match (r) { Result.Ok(n) => n, Result.Err(e) => 0 - 1, }
-}
-fn main() -> int {
-  let path = args()[0];
-  print(if (fs.exists(path)) { "existe" } else { "no-existe" });   // no-existe
-  let a = n_de(fs.append_file(path, "one\n"));
-  let b = n_de(fs.append_file(path, "dos\n"));
-  print(if (fs.exists(path)) { "existe" } else { "no-existe" });   // existe
-  a + b
-}
-"#;
-
-#[test]
-fn exists_y_append_file_en_ambos_engines() {
-    let mut prog = std::env::temp_dir();
-    prog.push("ray_append_prog.ray");
-    std::fs::File::create(&prog).unwrap().write_all(APPEND_PROG.as_bytes()).unwrap();
-
-    for (i, vm) in [false, true].into_iter().enumerate() {
-        let mut data = std::env::temp_dir();
-        data.push(format!("ray_append_data_{i}.txt"));
-        let _ = std::fs::remove_file(&data);
-
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-        if vm {
-            cmd.arg("--vm");
-        }
-        let out = cmd.arg(&prog).arg(&data).output().expect("ejecuta raylang");
-        let stdout = String::from_utf8_lossy(&out.stdout);
-
-        assert!(stdout.contains("no-existe"), "exists() es false antes de crear (vm={vm})\n{stdout}");
-        assert!(stdout.contains("existe"), "exists() es true after append (vm={vm})\n{stdout}");
-        assert_eq!(out.status.code(), Some(8), "append_file returns nº de caracteres: 4+4 (vm={vm})");
-        // append acumula (no sobrescribe): dos líneas en disco.
-        assert_eq!(std::fs::read_to_string(&data).unwrap(), "one\ndos\n", "el file en disco (vm={vm})");
-    }
+    let base = tmp("nativo");
+    std::fs::write(base.join("prog.ray"), PROG).unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(bcode, 0, "build --native ok\n{berr}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(String::from_utf8_lossy(&native.stdout), WANT_OUT, "nativo ≡ VM (stdout)");
+    assert_eq!(String::from_utf8_lossy(&native.stderr), WANT_ERR, "nativo ≡ VM (stderr)");
+    assert_eq!(native.status.code(), Some(0));
 }
 
 #[test]
-fn env_undefined_gives_none() {
-    let mut path = std::env::temp_dir();
-    path.push("ray_args_env2.ray");
-    std::fs::File::create(&path).unwrap().write_all(ARGS_ENV_PROG.as_bytes()).unwrap();
-    // Sin args ni la variable: args() = [] y env() = None.
-    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg(&path)
-        .env_remove("RAY_TEST_VAR")
+fn write_bytes_emits_raw_bytes() {
+    // `write_bytes` no pasa por UTF-8: un byte inválido (\xff) llega intacto al stdout.
+    let base = tmp("crudo");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/io;\nfn main() -> int {\n    let _ = io.write_bytes(b\"\\x1b[2J\\xff\");\n    let _ = io.flush();\n    0\n}\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["run", "prog.ray"])
+        .current_dir(&base)
         .output()
-        .expect("ejecuta raylang");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("env=?"), "env() de one variable ausente es None\n{stdout}");
-    assert_eq!(out.status.code(), Some(0), "len(args) = 0 sin argumentos");
-}
-
-#[test]
-fn list_dir_y_remove_file_en_ambos_engines() {
-    // M11.7c: list_dir lista (ordenado) y remove_file borra. I/O real → subproceso, no oráculo.
-    for vm in [false, true] {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("ray_listdir_{}", if vm { "vm" } else { "tw" }));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.txt"), "x").unwrap();
-        std::fs::write(dir.join("b.txt"), "y").unwrap();
-        let d = dir.to_string_lossy().replace('\\', "/");
-
-        let src = format!(r#"
-import std/fs;
-fn main() -> int {{
-  match (fs.list_dir("{d}")) {{
-    Result.Ok(ns) => print(join(ns, ",")),
-    Result.Err(e) => print("err: " + e),
-  }}
-  match (fs.remove_file("{d}/a.txt")) {{
-    Result.Ok(_) => print("borrado"),
-    Result.Err(e) => print("err: " + e),
-  }}
-  match (fs.list_dir("{d}")) {{
-    Result.Ok(ns) => ns.len(),
-    Result.Err(_) => 0 - 1,
-  }}
-}}
-"#);
-        let mut path = std::env::temp_dir();
-        path.push(format!("ray_listdir_prog_{}.ray", if vm { "vm" } else { "tw" }));
-        std::fs::File::create(&path).unwrap().write_all(src.as_bytes()).unwrap();
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-        if vm { cmd.arg("--vm"); }
-        let out = cmd.arg(&path).output().expect("ejecuta raylang");
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(stdout.contains("a.txt,b.txt"), "list_dir ordenado (vm={vm})\n{stdout}");
-        assert!(stdout.contains("borrado"), "remove_file ok (vm={vm})\n{stdout}");
-        assert_eq!(out.status.code(), Some(1), "after borrar queda 1 entry (vm={vm})");
-    }
-}
-
-#[test]
-fn file_handles_open_write_read_close() {
-    // M11.8: abrir, escribir por partes, cerrar, reabrir y leer línea a línea. I/O real → subproceso.
-    for vm in [false, true] {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!("ray_handles_{}", if vm { "vm" } else { "tw" }));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("out.txt").to_string_lossy().replace('\\', "/");
-
-        let src = format!(r#"
-import std/fs;
-fn main() -> int {{
-  match (fs.open("{f}", "w")) {{
-    Result.Ok(h) => {{
-      fs.write(h, "one\n");
-      fs.write(h, "dos\n");
-      close(h);
-    }},
-    Result.Err(e) => print("err: " + e),
-  }}
-  var total: int = 0;
-  match (fs.open("{f}", "r")) {{
-    Result.Ok(h) => {{
-      match (fs.read_line(h)) {{ Option.Some(l) => print("L1=" + l), Option.None => print("empty"), }}
-      match (fs.read_line(h)) {{ Option.Some(l) => print("L2=" + l), Option.None => print("empty"), }}
-      match (fs.read_line(h)) {{ Option.Some(l) => print("hay mas"), Option.None => print("EOF"), }}
-      close(h);
-      total = 2;
-    }},
-    Result.Err(e) => print("err: " + e),
-  }}
-  total
-}}
-"#);
-        let mut path = std::env::temp_dir();
-        path.push(format!("ray_handles_prog_{}.ray", if vm { "vm" } else { "tw" }));
-        std::fs::File::create(&path).unwrap().write_all(src.as_bytes()).unwrap();
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-        if vm { cmd.arg("--vm"); }
-        let out = cmd.arg(&path).output().expect("ejecuta raylang");
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(stdout.contains("L1=one"), "lee la 1ª línea (vm={vm})\n{stdout}");
-        assert!(stdout.contains("L2=dos"), "lee la 2ª línea (vm={vm})\n{stdout}");
-        assert!(stdout.contains("EOF"), "EOF after la última (vm={vm})\n{stdout}");
-        assert_eq!(out.status.code(), Some(2), "leídas 2 líneas (vm={vm})");
-        // El archivo en disco tiene exactamente lo escrito por partes.
-        assert_eq!(std::fs::read_to_string(dir.join("out.txt")).unwrap(), "one\ndos\n");
-    }
-}
-
-#[test]
-fn open_of_nonexistent_file_gives_err() {
-    let mut path = std::env::temp_dir();
-    path.push("ray_open_err.ray");
-    let src = r#"
-import std/fs;
-fn main() -> int {
-  match (fs.open("/no/existe/para/nada.txt", "r")) {
-    Result.Ok(h) => 0,
-    Result.Err(e) => 1,
-  }
-}
-"#;
-    std::fs::File::create(&path).unwrap().write_all(src.as_bytes()).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg(&path).output().unwrap();
-    assert_eq!(out.status.code(), Some(1), "open de un file nonexistent en mode r → Err");
-}
-
-/// M67 — std/fs de producción: directorios y metadatos. Ciclo completo mkdir → write →
-/// is_dir/is_file → file_size → append_file_bytes → copy → rename → remove_dir, por ambos
-/// motores. El mensaje de "directorio no vacío" varía por OS → solo se comprueba la etiqueta.
-#[test]
-fn fs_directories_and_metadata() {
-    let src = r#"
-import std/fs;
-fn tag(r: Result<int, string>) -> string {
-  match (r) { Result.Ok(n) => "ok " + to_string(n), Result.Err(_) => "err" }
-}
-fn main() -> int {
-  let base = "BASE";
-  let _ = fs.remove_file(base + "/sub/b.txt");
-  let _ = fs.remove_file(base + "/sub/a2.bin");
-  let _ = fs.remove_dir(base + "/sub");
-  let _ = fs.remove_dir(base);
-  print("mkdir: " + tag(fs.mkdir(base + "/sub")));
-  print("is_dir: " + to_string(fs.is_dir(base + "/sub")) + " is_file: " + to_string(fs.is_file(base + "/sub")));
-  let _ = fs.write_file(base + "/sub/a.txt", "hello");
-  print("size: " + tag(fs.file_size(base + "/sub/a.txt")));
-  print("size de dir: " + tag(fs.file_size(base + "/sub")));
-  let plausible = match (fs.mtime(base + "/sub/a.txt")) {
-    Result.Ok(ms) => ms > 1577836800000,
-    Result.Err(_) => false,
-  };
-  print("mtime plausible: " + to_string(plausible));
-  print("mtime nonexistent: " + tag(fs.mtime(base + "/nope")));
-  print("append_bytes: " + tag(fs.append_file_bytes(base + "/sub/a.txt", b"\x00\x01")));
-  print("size after append: " + tag(fs.file_size(base + "/sub/a.txt")));
-  print("copy: " + tag(fs.copy_file(base + "/sub/a.txt", base + "/sub/a2.bin")));
-  print("rename: " + tag(fs.rename(base + "/sub/a.txt", base + "/sub/b.txt")));
-  print("old: " + to_string(fs.is_file(base + "/sub/a.txt")) + " new: " + to_string(fs.is_file(base + "/sub/b.txt")));
-  print("rmdir no empty: " + tag(fs.remove_dir(base + "/sub")));
-  let _ = fs.remove_file(base + "/sub/b.txt");
-  let _ = fs.remove_file(base + "/sub/a2.bin");
-  print("rmdir: " + tag(fs.remove_dir(base + "/sub")));
-  print("rmdir base: " + tag(fs.remove_dir(base)));
-  print("base existe: " + to_string(fs.exists(base)));
-  0
-}
-"#;
-    let expected = "mkdir: ok 0\nis_dir: true is_file: false\nsize: ok 5\nsize de dir: err\n\
-        mtime plausible: true\nmtime nonexistent: err\n\
-        append_bytes: ok 2\nsize after append: ok 7\ncopy: ok 0\nrename: ok 0\n\
-        old: false new: true\nrmdir no empty: err\nrmdir: ok 0\nrmdir base: ok 0\n\
-        base existe: false\n";
-    for vm in [false, true] {
-        let dir = std::env::temp_dir().join(format!("ray_fs_m67_{}", if vm { "vm" } else { "in" }));
-        let src = src.replace("BASE", dir.to_str().unwrap());
-        let (out, err, code) = run_io(&format!("fs_m67_{vm}"), &src, "", vm);
-        assert_eq!(code, 0, "sale 0 (vm={vm})\n{err}");
-        assert_eq!(out, expected, "ciclo fs complete (vm={vm})");
-    }
-}
-
-/// P2.b: I/O de entrada transpilable. Compila con `ray build --native` un programa que lee stdin y un
-/// archivo, y comprueba que el binario nativo produce la MISMA salida que la VM. Requiere `rustc`; se
-/// salta limpiamente si no está (no es un fallo).
-#[test]
-fn native_input_io_matches_the_vm() {
-    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
-        eprintln!("saltando native_io: rustc no disponible");
-        return;
-    }
-    let dir = std::env::temp_dir().join("ray_native_io");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("crea dir");
-    let data = dir.join("data.txt");
-    std::fs::write(&data, "contenido de archivo").expect("escribe data");
-    let src = format!(
-        "import std/fs;\n\
-         fn main() -> int {{\n\
-           match (fs.read_file(\"{}\")) {{ Result.Ok(c) => print(\"file: \" + c), Result.Err(e) => print(\"err: \" + e) }}\n\
-           match (input()) {{ Option.Some(l) => print(\"in: \" + l), Option.None => print(\"in: eof\") }}\n\
-           match (read_int()) {{ Option.Some(n) => print(\"n: \" + to_string(n * 3)), Option.None => print(\"n: none\") }}\n\
-           0\n\
-         }}\n",
-        data.to_str().unwrap()
-    );
-    let ray = dir.join("prog.ray");
-    std::fs::write(&ray, &src).expect("escribe prog");
-    let bin = dir.join("prog_native");
-    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
-        .output()
-        .expect("lanza build --native");
-    assert!(build.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&build.stderr));
-
-    let stdin = "hola\n14\n";
-    // Salida del binario nativo.
-    let mut nat = Command::new(&bin)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("lanza nativo");
-    nat.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
-    let nat_out = String::from_utf8_lossy(&nat.wait_with_output().unwrap().stdout).into_owned();
-    // Salida de la VM.
-    let (vm_out, _e, _c) = run_io("native_io_vm", &src, stdin, true);
-    assert_eq!(nat_out, vm_out, "nativo ≡ VM");
-    assert_eq!(nat_out, "file: contenido de archivo\nin: hola\nn: 42\n", "salida esperada");
-}
-
-/// P2.b: handles de archivo transpilables (open/write/read_line/close). Compila con `ray build --native`
-/// un programa que escribe con un handle y lo relee línea a línea, y comprueba nativo ≡ VM. Requiere rustc.
-#[test]
-fn native_file_handles_match_the_vm() {
-    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
-        eprintln!("saltando native_handles: rustc no disponible");
-        return;
-    }
-    let dir = std::env::temp_dir().join("ray_native_handles");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("crea dir");
-    let target = dir.join("out.txt");
-    let src = format!(
-        "import std/fs;\n\
-         fn main() -> int {{\n\
-           let h = match (fs.open(\"{p}\", \"w\")) {{ Result.Ok(x) => x, Result.Err(e) => 0 - 1 }};\n\
-           match (fs.write(h, \"uno\\ndos\\n\")) {{ Result.Ok(n) => print(\"w: \" + to_string(n)), Result.Err(e) => print(e) }}\n\
-           print(\"c: \" + to_string(close(h)));\n\
-           let r = match (fs.open(\"{p}\", \"r\")) {{ Result.Ok(x) => x, Result.Err(e) => 0 - 1 }};\n\
-           var go = true;\n\
-           while (go) {{ match (fs.read_line(r)) {{ Option.Some(l) => print(\"r: \" + l), Option.None => {{ go = false; }} }} }}\n\
-           let _ = close(r);\n\
-           0\n\
-         }}\n",
-        p = target.to_str().unwrap()
-    );
-    let ray = dir.join("prog.ray");
-    std::fs::write(&ray, &src).expect("escribe prog");
-    let bin = dir.join("prog_native");
-    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
-        .output().expect("lanza build --native");
-    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
-
-    let _ = std::fs::remove_file(&target);
-    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
-    let _ = std::fs::remove_file(&target);
-    let (vm, _e, _c) = run_io("native_handles_vm", &src, "", true);
-    assert_eq!(nat, vm, "nativo ≡ VM");
-    assert_eq!(nat, "w: 8\nc: 0\nr: uno\nr: dos\n", "salida esperada");
-}
-
-/// P2.b: list_dir/remove_file transpilables. Crea archivos, lista el dir (ordenado), borra uno y re-lista;
-/// comprueba nativo ≡ VM. Requiere rustc; se salta si no está.
-#[test]
-fn native_list_dir_and_remove_file_match_the_vm() {
-    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
-        eprintln!("saltando native_list_dir: rustc no disponible");
-        return;
-    }
-    let dir = std::env::temp_dir().join("ray_native_lsdir");
-    let _ = std::fs::remove_dir_all(&dir);
-    let sub = dir.join("d");
-    std::fs::create_dir_all(&sub).expect("crea dir");
-    let src = format!(
-        "import std/fs;\n\
-         fn muestra(r: Result<[string], string>) {{ match (r) {{ Result.Ok(ns) => print(\"n=\" + to_string(ns.len())), Result.Err(e) => print(\"err\") }} }}\n\
-         fn tag(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok\", Result.Err(e) => \"err\" }} }}\n\
-         fn main() -> int {{\n\
-           let d = \"{d}\";\n\
-           let _ = fs.write_file(d + \"/c.txt\", \"c\");\n\
-           let _ = fs.write_file(d + \"/a.txt\", \"a\");\n\
-           let _ = fs.write_file(d + \"/b.txt\", \"b\");\n\
-           muestra(fs.list_dir(d));\n\
-           print(\"rm b: \" + tag(fs.remove_file(d + \"/b.txt\")));\n\
-           print(\"rm no: \" + tag(fs.remove_file(d + \"/no.txt\")));\n\
-           muestra(fs.list_dir(d));\n\
-           0\n\
-         }}\n",
-        d = sub.to_str().unwrap()
-    );
-    let ray = dir.join("prog.ray");
-    std::fs::write(&ray, &src).expect("escribe prog");
-    let bin = dir.join("prog_native");
-    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
-        .output().expect("lanza build --native");
-    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
-
-    let clean = |sub: &std::path::Path| { for n in ["a.txt", "b.txt", "c.txt"] { let _ = std::fs::remove_file(sub.join(n)); } };
-    clean(&sub);
-    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
-    clean(&sub);
-    let (vm, _e, _c) = run_io("native_lsdir_vm", &src, "", true);
-    assert_eq!(nat, vm, "nativo ≡ VM");
-    // 3 archivos → borra b (ok) → 2 archivos; borrar inexistente → err.
-    assert_eq!(nat, "n=3\nrm b: ok\nrm no: err\nn=2\n", "salida esperada");
-}
-
-/// P2.b: operaciones de directorio/metadatos transpilables (mkdir/is_dir/is_file/file_size/copy_file/
-/// rename/remove_dir). Ejercita el ciclo completo y comprueba nativo ≡ VM. Requiere rustc.
-#[test]
-fn native_directories_match_the_vm() {
-    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
-        eprintln!("saltando native_directorios: rustc no disponible");
-        return;
-    }
-    let root = std::env::temp_dir().join("ray_native_dirs");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("crea root");
-    let base = root.join("proj");
-    let src = format!(
-        "import std/fs;\n\
-         fn tag(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok \" + to_string(n), Result.Err(e) => \"err\" }} }}\n\
-         fn main() -> int {{\n\
-           let b = \"{b}\";\n\
-           print(\"mkdir: \" + tag(fs.mkdir(b + \"/sub\")));\n\
-           print(\"isdir: \" + to_string(fs.is_dir(b + \"/sub\")) + \" isfile: \" + to_string(fs.is_file(b + \"/sub\")));\n\
-           let _ = fs.write_file(b + \"/sub/a.txt\", \"hola\");\n\
-           print(\"size: \" + tag(fs.file_size(b + \"/sub/a.txt\")));\n\
-           print(\"size dir: \" + tag(fs.file_size(b + \"/sub\")));\n\
-           print(\"copy: \" + tag(fs.copy_file(b + \"/sub/a.txt\", b + \"/sub/b.txt\")));\n\
-           print(\"rename: \" + tag(fs.rename(b + \"/sub/b.txt\", b + \"/sub/c.txt\")));\n\
-           print(\"rmdir full: \" + tag(fs.remove_dir(b + \"/sub\")));\n\
-           let _ = fs.remove_file(b + \"/sub/a.txt\");\n\
-           let _ = fs.remove_file(b + \"/sub/c.txt\");\n\
-           print(\"rmdir: \" + tag(fs.remove_dir(b + \"/sub\")));\n\
-           print(\"rmdir base: \" + tag(fs.remove_dir(b)));\n\
-           0\n\
-         }}\n",
-        b = base.to_str().unwrap()
-    );
-    let ray = root.join("prog.ray");
-    std::fs::write(&ray, &src).expect("escribe prog");
-    let bin = root.join("prog_native");
-    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
-        .output().expect("lanza build --native");
-    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
-
-    let _ = std::fs::remove_dir_all(&base);
-    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
-    let _ = std::fs::remove_dir_all(&base);
-    let (vm, _e, _c) = run_io("native_dirs_vm", &src, "", true);
-    assert_eq!(nat, vm, "nativo ≡ VM");
-    let expected = "mkdir: ok 0\nisdir: true isfile: false\nsize: ok 4\nsize dir: err\ncopy: ok 0\n\
-        rename: ok 0\nrmdir full: err\nrmdir: ok 0\nrmdir base: ok 0\n";
-    assert_eq!(nat, expected, "ciclo de directorios");
-}
-
-/// P2.b: I/O binaria transpilable (bytes + read_file_bytes/write_file_bytes). Escribe bytes a un archivo
-/// y los relee; comprueba nativo ≡ VM (incl. el render en hex). Requiere rustc.
-#[test]
-fn native_binary_io_matches_the_vm() {
-    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
-        eprintln!("saltando native_io_binaria: rustc no disponible");
-        return;
-    }
-    let dir = std::env::temp_dir().join("ray_native_bytes");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("crea dir");
-    let f = dir.join("b.bin");
-    let src = format!(
-        "import std/fs;\n\
-         fn tag_i(r: Result<int, string>) -> string {{ match (r) {{ Result.Ok(n) => \"ok \" + to_string(n), Result.Err(e) => \"err\" }} }}\n\
-         fn tag_s(r: Result<string, string>) -> string {{ match (r) {{ Result.Ok(s) => \"ok \" + s, Result.Err(e) => \"err\" }} }}\n\
-         fn main() -> int {{\n\
-           let b = \"Hola\".to_bytes();\n\
-           print(\"hex: \" + to_string(b));\n\
-           print(\"sub: \" + to_string(b.sub_bytes(1, 3)));\n\
-           print(\"dec: \" + tag_s(from_utf8(b)));\n\
-           print(\"w: \" + tag_i(fs.write_file_bytes(\"{p}\", b)));\n\
-           match (fs.read_file_bytes(\"{p}\")) {{ Result.Ok(rb) => print(\"r: \" + to_string(rb)), Result.Err(e) => print(\"err\") }}\n\
-           0\n\
-         }}\n",
-        p = f.to_str().unwrap()
-    );
-    let ray = dir.join("prog.ray");
-    std::fs::write(&ray, &src).expect("escribe prog");
-    let bin = dir.join("prog_native");
-    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .args(["build", ray.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
-        .output().expect("lanza build --native");
-    assert!(build.status.success(), "build ok\n{}", String::from_utf8_lossy(&build.stderr));
-
-    let _ = std::fs::remove_file(&f);
-    let nat = String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout).into_owned();
-    let _ = std::fs::remove_file(&f);
-    let (vm, _e, _c) = run_io("native_bytes_vm", &src, "", true);
-    assert_eq!(nat, vm, "nativo ≡ VM");
-    // "Hola" = 486f6c61; sub[1,3) = 6f6c; write = 4 bytes; readback = 486f6c61.
-    assert_eq!(nat, "hex: 486f6c61\nsub: 6f6c\ndec: ok Hola\nw: ok 4\nr: 486f6c61\n", "salida esperada");
+        .expect("lanza ray");
+    assert_eq!(out.stdout, b"\x1b[2J\xff", "los bytes crudos llegan intactos (VM)");
 }

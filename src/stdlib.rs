@@ -21,6 +21,7 @@
 const MODULES: &[(&str, &str)] = &[
     // Utilidades escritas para la stdlib (viven en `std/`).
     ("std/fs", include_str!("../std/fs.ray")), // M50.1
+    ("std/io", include_str!("../std/io.ray")), // M107.1
     ("std/net", include_str!("../std/net.ray")), // M50.3
     ("std/process", include_str!("../std/process.ray")), // M100 (IDEAS §53.8)
     // M50.2: colecciones puras en raylang, en submódulos (leaf-binding: set.new/deque.push_back/sb.push).

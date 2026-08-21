@@ -682,6 +682,61 @@ pub fn read_line_handle(h: i64) -> Option<String> {
 }
 
 /// Escribe `s` en el handle; `Ok(nº de caracteres)` o `Err(mensaje)` (M11.8).
+/// M107.1 (std/io): escribe a stdout SIN salto de línea, por el MISMO lock que `print` (orden
+/// consistente al intercalarlos). stdout va line-buffered → sin '\n' los datos pueden quedarse en
+/// el buffer hasta `stdout_flush` (o el fin del proceso). En wasm acumula en el buffer del playground.
+pub fn stdout_write(s: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        std::io::stdout().lock().write_all(s.as_bytes()).map_err(|e| e.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::wasm::push_stdout_raw(s);
+        Ok(())
+    }
+}
+
+/// M107.1 (std/io): como `stdout_write`, a stderr (sin buffer en Rust → visible al instante).
+pub fn stderr_write(s: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        std::io::stderr().lock().write_all(s.as_bytes()).map_err(|e| e.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::wasm::push_stdout_raw(s); // el playground muestra stdout y stderr juntos
+        Ok(())
+    }
+}
+
+/// M107.1 (std/io): bytes crudos a stdout (secuencias de escape de terminal, salida binaria).
+pub fn stdout_write_bytes(b: &[u8]) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        std::io::stdout().lock().write_all(b).map_err(|e| e.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::wasm::push_stdout_raw(&String::from_utf8_lossy(b));
+        Ok(())
+    }
+}
+
+/// M107.1 (std/io): vacía el buffer de stdout.
+pub fn stdout_flush() -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        std::io::stdout().lock().flush().map_err(|e| e.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    Ok(())
+}
+
 pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
     use std::io::Write;
     let mut reg = registry().lock().unwrap();
@@ -2385,6 +2440,27 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__write_handle", " (handle, contenido)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__write_handle expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__write_handle expects a string (the content), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // --- std/io (M107.1): stdout/stderr sin salto de línea + flush. Primitivos con arreglo
+    // etiquetado ["ok"]/["err", msg]; el módulo std/io los envuelve en Result<int,string>. ---
+    Builtin { name: "__stdout_write", opcode: OpCode::StdoutWrite, check: |a| {
+        arity(a, 1, "__stdout_write", " (content)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__stdout_write expects a string, not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__stderr_write", opcode: OpCode::StderrWrite, check: |a| {
+        arity(a, 1, "__stderr_write", " (content)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__stderr_write expects a string, not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__stdout_write_bytes", opcode: OpCode::StdoutWriteBytes, check: |a| {
+        arity(a, 1, "__stdout_write_bytes", " (content)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__stdout_write_bytes expects bytes, not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__stdout_flush", opcode: OpCode::StdoutFlush, check: |a| {
+        nullary(a, "__stdout_flush")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // --- Cliente TCP (M15.2): primitivos con arreglo etiquetado; el prelude → Result. ---

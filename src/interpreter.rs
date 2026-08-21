@@ -1740,6 +1740,41 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // std/io (M107.1): stdout/stderr sin salto + flush → ["ok"] o ["err", msg].
+            "__stdout_write" | "__stderr_write" => {
+                let arr = match &values[0] {
+                    Value::Str(s) => {
+                        let r = if name == "__stdout_write" {
+                            crate::builtins::stdout_write(s)
+                        } else {
+                            crate::builtins::stderr_write(s)
+                        };
+                        match r {
+                            Ok(()) => vec![Value::Str("ok".to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees a string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__stdout_write_bytes" => {
+                let arr = match &values[0] {
+                    Value::Bytes(b) => match crate::builtins::stdout_write_bytes(b.as_slice()) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees bytes"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__stdout_flush" => {
+                let arr = match crate::builtins::stdout_flush() {
+                    Ok(()) => vec![Value::Str("ok".to_string())],
+                    Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M15.2: conecta por TCP → ["ok", handle] o ["err", msg].
             // Diferido JSON-1: code point → char ([] si inválido). El inverso de char_code.
             "__char_from_code" => match &values[0] {

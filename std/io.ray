@@ -1,0 +1,40 @@
+// std/io (M107.1) — escritura a stdout/stderr SIN salto de línea, y flush.
+//
+// `print`/`eprint` siempre añaden '\n'; este módulo cubre lo demás: prompts, barras de progreso,
+// secuencias de escape de terminal, salida incremental. Envuelve los primitivos `__stdout_write`/
+// `__stderr_write`/`__stdout_write_bytes`/`__stdout_flush` (arreglo etiquetado) en `Result`.
+//
+// Buffering: stdout va line-buffered — un `write` sin salto puede no verse hasta `flush()` (o el
+// fin del proceso). stderr no tiene buffer: `ewrite` es visible al instante.
+
+// Escribe a stdout sin salto; Ok(nº de caracteres) u Err(mensaje).
+/// Writes the string to stdout WITHOUT a trailing newline; `Ok(character count)` or
+/// `Err(message)`. Buffered: call `flush()` to make it visible before the next newline.
+pub fn write(s: string) -> Result<int, string> {
+    let r = __stdout_write(s);
+    if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
+}
+
+// Escribe a stderr sin salto; sin buffer (visible al instante).
+/// Writes the string to stderr WITHOUT a trailing newline; `Ok(character count)` or
+/// `Err(message)`. Unbuffered: visible immediately, no flush needed.
+pub fn ewrite(s: string) -> Result<int, string> {
+    let r = __stderr_write(s);
+    if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
+}
+
+// Escribe bytes crudos a stdout (secuencias de escape, salida binaria).
+/// Writes raw bytes to stdout (terminal escape sequences, binary output);
+/// `Ok(byte count)` or `Err(message)`. Buffered, like `write`.
+pub fn write_bytes(b: bytes) -> Result<int, string> {
+    let r = __stdout_write_bytes(b);
+    if (r[0] == "ok") { Result.Ok(b.len()) } else { Result.Err(r[1]) }
+}
+
+// Vacía el buffer de stdout.
+/// Flushes stdout's buffer; `Ok(0)` or `Err(message)`. Needed after `write`/`write_bytes`
+/// when the output must be visible before the next newline (prompts, progress bars).
+pub fn flush() -> Result<int, string> {
+    let r = __stdout_flush();
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}

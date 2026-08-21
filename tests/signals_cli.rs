@@ -104,3 +104,43 @@ fn select_composes_work_and_shutdown() {
     assert_eq!(code, 0, "output limpia\n{out}");
     assert!(out.contains("apagando por 15"), "{out}");
 }
+
+/// M107.4: SIGWINCH (cambio de tamaño del terminal) llega como 28 — con `select` sobre
+/// `signals()` + `term.size()`, una TUI se re-maqueta al redimensionar.
+#[test]
+fn sigwinch_arrives_as_28() {
+    let (out, code) = run_and_signal(PROG, "sig_winch.ray", "-WINCH");
+    assert_eq!(code, 0, "output limpia\n{out}");
+    assert!(out.contains("señal 28"), "{out}");
+}
+
+/// M107.4: el binario NATIVO también entrega SIGWINCH (la doc decía "VM only" y estaba rancia:
+/// `__ray_signals` existe desde M88.1 — aquí queda asegurado con señal real).
+#[test]
+fn sigwinch_reaches_the_native_binary_too() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando sigwinch nativo: rustc no disponible");
+        return;
+    }
+    let dir = std::env::temp_dir().join("ray_sigwinch_native");
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("prog.ray"), PROG).unwrap();
+    let bin = dir.join("prog_bin");
+    let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .expect("build");
+    assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+    let mut child = Command::new(&bin).stdout(Stdio::piped()).spawn().expect("corre");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee 'listo'");
+    assert_eq!(line.trim(), "listo");
+    let st = Command::new("kill").arg("-WINCH").arg(child.id().to_string()).status().unwrap();
+    assert!(st.success());
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut reader, &mut rest).unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+    assert!(rest.contains("señal 28"), "nativo: {rest}");
+}

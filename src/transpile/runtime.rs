@@ -1350,7 +1350,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "}\n",
         ));
     }
-    // signals() (M88.1): el canal de señales del SO (SIGTERM=15/SIGINT=2). El truco del self-pipe (como
+    // signals() (M88.1/M107.4): el canal de señales del SO (SIGTERM=15/SIGINT=2/SIGWINCH=28 — el
+    // 28 coincide en macOS/BSD y Linux). El truco del self-pipe (como
     // la VM, `src/builtins.rs`): el handler (async-signal-safe: solo `write`) escribe el nº de señal a un
     // pipe; un hilo lector lo lee (bloqueante) y lo envía al canal. FFI a libc sin crates (siempre
     // enlazada). Unix; en otras plataformas signals() no se soporta (el checker lo permite, pero aquí
@@ -1371,6 +1372,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            __RAY_SIG_PIPE_W.store(fds[1], std::sync::atomic::Ordering::Release);\n",
             "            signal(15, __ray_on_signal as *const () as usize);\n",
             "            signal(2, __ray_on_signal as *const () as usize);\n",
+            "            signal(28, __ray_on_signal as *const () as usize);\n",
             "        } }\n",
             "        let rfd = fds[0]; let ch2 = ch.clone();\n",
             "        std::thread::spawn(move || loop {\n",

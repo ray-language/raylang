@@ -395,8 +395,9 @@ en los puntos de cesión), nunca preemptiva.
   que alguno esté listo para recibir y devuelve el **menor índice listo en el momento de la
   comprobación** (un canal cerrado está listo para siempre).
 - `signals() -> Channel<int>` devuelve el canal **singleton** de señales del proceso (`SIGTERM`
-  = 15, `SIGINT` = 2 llegan como enteros), para apagado ordenado; compone con `recv`/`select`.
-  Solo unix.
+  = 15, `SIGINT` = 2 y `SIGWINCH` = 28 —cambio de tamaño del terminal— llegan como enteros),
+  para apagado ordenado y re-maquetado de TUIs; compone con `recv`/`select`. Solo unix (VM y
+  binario nativo).
 - El programa termina cuando **`main` retorna** (las fibras pendientes se abandonan). Si todas
   las fibras quedan bloqueadas y ninguna puede progresar: error "deadlock" (las que esperan E/S
   del exterior o el reloj no cuentan como bloqueadas).

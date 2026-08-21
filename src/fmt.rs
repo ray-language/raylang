@@ -93,25 +93,30 @@ fn collect_comments(src: &str) -> Vec<Comment> {
     let mut i = 0;
     let mut line = 1usize;
     let mut line_has_code = false;
-    let (mut in_str, mut in_char) = (false, false);
+    let (mut in_str, mut in_char, mut in_template) = (false, false, false);
     while i < chars.len() {
         let c = chars[i];
         if c == '\n' {
             line += 1;
-            line_has_code = false;
+            // Un template (backtick, M95) es MULTILÍNEA: su estado sobrevive al salto — un
+            // `https://…` en la línea siguiente sigue siendo texto, no un comentario. (El bug que
+            // esto arregla DUPLICABA el resto del template como comentario trailing en cada
+            // pasada de fmt.) Sus líneas interiores cuentan como código (contenido del string).
+            line_has_code = in_template;
             in_str = false;
             in_char = false;
             i += 1;
             continue;
         }
-        if in_str || in_char {
+        if in_str || in_char || in_template {
             if c == '\\' {
                 i += 2; // salta el carácter escapado
                 continue;
             }
-            if (in_str && c == '"') || (in_char && c == '\'') {
+            if (in_str && c == '"') || (in_char && c == '\'') || (in_template && c == '`') {
                 in_str = false;
                 in_char = false;
+                in_template = false;
             }
             i += 1;
             continue;
@@ -119,6 +124,11 @@ fn collect_comments(src: &str) -> Vec<Comment> {
         match c {
             '"' => {
                 in_str = true;
+                line_has_code = true;
+                i += 1;
+            }
+            '`' => {
+                in_template = true;
                 line_has_code = true;
                 i += 1;
             }

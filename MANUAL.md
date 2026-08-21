@@ -1519,6 +1519,7 @@ extern "c" {
     fn fopen(path: string, mode: string) -> Option<ptr>;   // puntero opaco (no desreferenciable)
     fn fgetc(f: ptr) -> int;
     fn fclose(f: ptr) -> int;
+    fn free(p: ptr) -> unit;                   // void de C → unit (también puede omitirse el retorno)
 }
 
 fn main() -> int {

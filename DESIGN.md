@@ -9133,3 +9133,90 @@ La lección de las tres: un comentario no es texto que se arrastra, es texto **a
 y el formateador tiene que saber a qué. Donde el AST no daba el ancla, el arreglo fue dar el ancla —no
 adivinarla. Con esto los ~250 `.ray` del repo son un punto fijo del formateador, y el check de CI que
 lo asevere ya se puede poner.
+
+## 98. M107 — std/io + std/term: el terminal como superficie del lenguaje (ago 2026)
+
+**El origen.** Un agente construyendo **raycode** (un editor en raylang) reportó lo que le faltaba
+para una TUI real, con seis puntos precisos: lectura de stdin por bytes (solo existía por líneas),
+escritura sin salto (lo esquivaba abriendo `/dev/stdout` en append por escritura), modo
+crudo/tamaño/isatty (lo esquivaba con `tput cols < /dev/tty`), buffers de salida en el FFI, el
+bloqueo de `getchar()` parando la VM entera, y un bug puntual: `extern { fn free(p: ptr) -> unit; }`
+rechazado por un mensaje que lo daba por válido. El plan del arco quedó en IDEAS §60; esta sección
+es la crónica de lo que se aprendió al ejecutarlo (#120–#124).
+
+**El levantamiento previo cambió el plan.** Dos de los seis puntos no eran lo que parecían:
+
+- *"El bloqueo pide FFI/`extern blocking`"* — no: la VM ya aparcaba fibras por fd arbitrario
+  (kqueue/epoll, `IoParked`, patrón `SocketRead`) y el nativo ya exponía `wait_readable(fd)` en su
+  reactor. stdin solo tenía que entrar por la misma puerta que los sockets. La infraestructura cara
+  ya estaba pagada; el arco entero fue *superficie*.
+- *"El FFI no escribe en buffers `bytes`"* — y no debe: `bytes` es inmutable y compartido
+  (`Rc<[u8]>`); que C escribiera ahí sería corrupción, no una mejora. El arreglo real es un tipo
+  `Buffer` nuevo (clasificado en IDEAS §60, milestone propio si aparece el caso) — y `std/term` no
+  lo necesita, porque va por builtins.
+
+**M107.0 — `unit` escrito (#120).** La causa: no hay token de tipo `unit`; escrito a mano llega
+como `Struct("unit")` y ni `resolve_type` ni `ensure_type` lo mapeaban — `fn f() -> unit` tampoco
+compilaba. Era un **conflicto SPEC↔implementación** (la SPEC decía «no es escribible»; REFERENCE
+§13 y el propio mensaje del checker decían lo contrario), resuelto explícitamente del lado útil:
+SPEC primero, `unit` resuelve como `Map`/`Channel`/`Task` (sombrea, mismo precedente), y el AST
+crudo se acepta en `ret_ckind`/`normalize_type` (los motores llaman `desc_of` sin resolver — el
+precedente del `Option` crudo). El tándem selfhost pagó doble: el caso nuevo del corpus destapó una
+divergencia latente de mensaje (`type unknown:` por `unknown type:`) que llevaba ahí sin que nadie
+la ejercitara.
+
+**M107.1 — escribir sin salto (#121).** Cuatro primitivos (`__stdout_write`/`__stderr_write`/
+`__stdout_write_bytes`/`__stdout_flush`) y el módulo `std/io`. La lección fue del NATIVO: su
+`print` es **asíncrono** (M96f, hilo escritor + canal mpsc), así que el primer intento —escribir
+directo a `std::io::stdout`— intercalaba mal (`ab\nAB` en la VM, `abAB\n\n` en nativo). El arreglo:
+`io.write` va por el MISMO canal, y el payload del canal pasó de `String`-línea a **`Vec<u8>`
+crudo** (el `\n` de cada print lo añade el emisor) — dos pájaros: orden garantizado por la FIFO y
+`write_bytes` sin pasar por UTF-8. Regla que queda: **toda escritura a stdout del nativo va por el
+canal** (`__ray_stdout_write`/`__ray_buffered_print`), nunca directa.
+
+**M107.2 — stdin por bytes, aparcando la fibra (#122).** `io.read(max) -> Option<bytes>` y
+`io.read_timeout(max, ms) -> ReadResult` (`Data`/`Eof`/`TimedOut`). Tres decisiones:
+
+1. **Sin `O_NONBLOCK`**: stdin comparte la *open file description* con el shell padre — voltearle
+   los flags se filtraría al terminal. En su lugar, `poll(2)` con timeout 0 pregunta «¿hay algo
+   YA?»; si no, la fibra se aparca en el poller y el `read(2)` solo ocurre con readiness
+   confirmada. El read es **crudo** (sin el BufReader de `std::io`): un stdin bufferizado haría
+   mentir al poller — de ahí las dos reglas documentadas (no mezclar con `input()`; un lector a la
+   vez, con re-aparcado defensivo al despertar).
+2. **El plazo salió gratis**: la maquinaria de deadlines de sockets (M56.4) tal cual, con el
+   **pseudo-handle 0** de stdin (el registro reparte desde 1).
+3. En el nativo, el poll-previo cubre además el stdin-archivo regular, que **epoll rechaza**
+   (kqueue no) — sin él, `ray run prog < archivo` colgaría en Linux.
+
+La lección de tests del arco vino aquí: la primera versión del test de aparcamiento usaba un
+retardo de 150 ms y dio un resultado *imposible* (el byte leído «antes» de ser escrito). El
+**arranque en frío de un binario recién firmado** (macOS: validación de firma, ~150 ms antes de
+`main`) hacía que el dato «ya estuviera» al arrancar. El test definitivo es por **handshake** —
+el padre lee los ticks de la fibra hermana por el pipe y solo entonces envía el byte: si la
+lectura bloquease la VM, cuelga en vez de mentir. Con temporizadores no hay tests honestos de
+concurrencia + procesos.
+
+**M107.3 — std/term (#123).** `is_tty`/`size`/`raw(f)`/`read_key` + `enum Key`. Dos trucos evitaron
+el fango por-SO en el runtime (idéntico en VM y nativo): el `termios` se maneja como **buffer opaco
+de 128 bytes** (macOS 72, glibc ~60; si no se tocan campos, el layout no existe) y **`cfmakeraw(3)`**
+rellena el modo crudo — la tabla de constantes `ICANON`/`ECHO`/… que difiere por plataforma
+simplemente no se escribe. La restauración va por tres caminos (salir de `f` aunque falle —
+`try_call`—, `atexit(3)` para la salida del proceso incluido `process::exit`, y `raw_off`); señal
+fatal/`kill -9` queda documentado (`reset`). El diseño de más valor: **`decode(bytes) ->
+Option<(Key, int)>` es puro**, con `None` = «prefijo incompleto» — la política de tiempo (un ESC
+suelto se resuelve a los 25 ms) vive aparte en `read_key`, sobre el `read_timeout` de M107.2 que se
+diseñó para esto. Resultado: la tabla entera (CSI, SS3, teclas-`~`, F1..F12, modificadores, UTF-8
+de 2/3/4 octetos, prefijos a medias — 36 casos) se prueba **sin terminal**, en los tres motores,
+contra salida exacta. El modo crudo real solo se puede probar a mano: `examples/term/keys.ray`.
+
+**M107.4 — SIGWINCH (#124).** Dos líneas (el 28 coincide en macOS/BSD y Linux — la rara
+coincidencia) en el self-pipe de ambos motores → `select` sobre `signals()` + `term.size()` =
+re-maquetado al redimensionar. De paso: la doc del builtin decía «VM only» y estaba rancia desde
+que M88.1 emitió `__ray_signals` en el nativo — ahora un test manda `kill -WINCH` real a un binario
+nativo y lo asevera. Y la guarda `fmt_policy` (#118) tuvo su **primer disparo real**: dos fixtures
+de #123 entraron sin `ray fmt` y el primer `cargo test` de la rama las cazó.
+
+**Lo que el arco deja fuera, a propósito**: el `Buffer` mutable del FFI (IDEAS §60, M107.5 —
+clasificado, sin caso real todavía) y el streaming del cliente `http` (lee hasta EOF; es la otra
+mitad de «pintar mientras llegan tokens», pero es de red). Con M107, raycode se queda sin
+workarounds: ni FFI a `getchar`, ni `/dev/stdout` en append, ni `tput cols`.

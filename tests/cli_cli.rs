@@ -3359,3 +3359,64 @@ fn help_is_grouped_by_role() {
     assert!(out.contains("registry publish"), "los de publicador van bajo registry: {out}");
     assert!(!out.contains("\n  templ "), "`templ` ya no es un subcomando raíz: {out}");
 }
+
+/// Regresión de dos huecos del backend nativo destapados por raycode (ago 2026):
+/// (a) la clase **RefCell-en-args** — `f(s, s.campo)` donde `f` muta `s`: el guard del `borrow()`
+///     del argumento vivía durante la llamada y el `borrow_mut` del callee panicaba con "already
+///     borrowed" (los args ahora se izan a temporales; también el clon de un campo-closure);
+/// (b) el **match sobre un método de trait** con brazos que usan el binding en una expresión
+///     compuesta (`Exit.Code(c) => "exit ${c}"`): el escrutinio llegaba como `Type::Struct` crudo
+///     y los bindings quedaban sin tipo → la función entera se emitía como stub.
+#[test]
+fn build_native_call_args_and_match_bindings() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native: rustc no disponible");
+        return;
+    }
+    let base = tmp("native_borrow_match");
+    std::fs::write(
+        base.join("prog.ray"),
+        r#"struct Counter { v: int }
+
+// (a) muta el struct que TAMBIÉN aparece como argumento leído: shrink(c, c.v).
+fn shrink(c: Counter, n: int) -> int {
+    c.v = c.v - n;
+    c.v
+}
+
+struct Box { f: fn(int) -> int }
+
+enum Exit { Code(int), Signal(int) }
+
+trait Waiter { fn wait(self) -> Exit; }
+impl Waiter for Counter {
+    fn wait(self) -> Exit { if (self.v == 0) { Exit.Code(0) } else { Exit.Signal(self.v) } }
+}
+
+fn main() -> int {
+    let c = Counter { v: 10 };
+    print(to_string(shrink(c, c.v)));
+    let b = Box { f: fn(x: int) -> int { x * 3 } };
+    print(to_string(b.f(c.v + 7)));
+    // (b) match inline sobre el método de trait, brazos interpolados con el binding.
+    let status = match (c.wait()) {
+        Exit.Code(n) => "exit ${n}",
+        Exit.Signal(s) => "signal ${s}",
+    };
+    print(status);
+    0
+}
+"#,
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native sale 0\nstdout={out}\nstderr={err}");
+    assert!(!err.contains("stub"), "sin stubs (el match del trait se tipa): {err}");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    let native_out = String::from_utf8_lossy(&native.stdout).into_owned();
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(native_out, vm_out, "nativo ≡ VM");
+    assert_eq!(native_out, "0\n21\nexit 0\n");
+    assert_eq!(native.status.code(), Some(0), "sin pánico RefCell");
+}

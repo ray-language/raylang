@@ -53,6 +53,38 @@ impl Transpiler {
     /// Arc<str>, bytes→Arc<[u8]> (copia al borde, seguro por ser inmutables); primitivos sin cambio.
     /// H21-N5c: emite UN argumento de llamada; si la posición está MARCADA en el callee (param fn
     /// genérico Send), lo emite en su forma enviable (fn item pelado / closure sin Rc::new).
+    /// Emite la llamada a una función de usuario (o closure en ámbito) con los argumentos **izados**
+    /// a temporales. La clase RefCell-en-args (ago 2026, la destapó `stream_take(s, s.remaining)` de
+    /// net/http): un argumento que lee un campo/índice emite `x.borrow().f.clone()`, y en Rust ese
+    /// guard temporal vive hasta el final de la SENTENCIA — es decir, DURANTE la llamada; si el
+    /// callee hace `borrow_mut` del mismo objeto, panica con "already borrowed" (la VM lo permite:
+    /// evalúa los args y ya). Cada `let` cierra sus temporales → guards muertos al llamar, mismo
+    /// orden de evaluación. Sirve a las DOS rutas de llamada de usuario (`shadows_builtin` — mismo
+    /// módulo — y el brazo genérico del final, nombres calificados `mod::fn`).
+    pub(super) fn emit_user_call_hoisted(&mut self, out: &mut String, name: &str, eff: &[&Expr]) -> Result<(), String> {
+        let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
+        if eff.is_empty() {
+            out.push_str(&mangle(name));
+            out.push_str("()");
+            return Ok(());
+        }
+        out.push_str("{ ");
+        for (i, a) in eff.iter().enumerate() {
+            write!(out, "let __rt_a{} = ", i).unwrap();
+            self.emit_call_arg(out, a, marked.contains(&i))?;
+            out.push_str("; ");
+        }
+        write!(out, "{}(", mangle(name)).unwrap();
+        for i in 0..eff.len() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write!(out, "__rt_a{}", i).unwrap();
+        }
+        out.push_str(") }");
+        Ok(())
+    }
+
     pub(super) fn emit_call_arg(&mut self, out: &mut String, a: &Expr, marked: bool) -> Result<(), String> {
         if marked {
             match &a.kind {
@@ -781,16 +813,19 @@ impl Transpiler {
         // arg `r.data` que añadió el checker: es `args[0]`).
         if let Some(r) = recv {
             if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
-                out.push('(');
+                // El clon del campo-vtable se IZA a un `let` propio: cierra el guard del `borrow()`
+                // del receptor ANTES de llamar (si quedara vivo, un `borrow_mut` del mismo objeto
+                // dentro del closure panicaría con "already borrowed" — la clase RefCell-en-args).
+                out.push_str("{ let __rt_cl = ");
                 self.emit_expr(out, r)?;
-                write!(out, ".borrow().{}.clone())(", mangle(name)).unwrap(); // campo-vtable: mismo mangle que 592
+                write!(out, ".borrow().{}.clone(); __rt_cl(", mangle(name)).unwrap(); // campo-vtable: mismo mangle que 592
                 for (i, a) in args.iter().skip(1).enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
                     self.emit_expr(out, a)?;
                 }
-                out.push(')');
+                out.push_str(") }");
                 return Ok(());
             }
         }
@@ -807,16 +842,17 @@ impl Transpiler {
                     .map(|(_, fty)| matches!(normalize_type(fty), Type::Fn(_, _)))
                     .unwrap_or(false);
                 if is_fn_field {
-                    out.push('(');
+                    // Mismo izado que el despacho dyn: el guard del receptor se cierra antes de llamar.
+                    out.push_str("{ let __rt_cl = ");
                     self.emit_expr(out, r)?;
-                    write!(out, ".borrow().{}.clone())(", mangle(name)).unwrap(); // campo-función: mismo mangle que 599
+                    write!(out, ".borrow().{}.clone(); __rt_cl(", mangle(name)).unwrap(); // campo-función: mismo mangle que 599
                     for (i, a) in args.iter().enumerate() {
                         if i > 0 {
                             out.push_str(", ");
                         }
                         self.emit_expr(out, a)?;
                     }
-                    out.push(')');
+                    out.push_str(") }");
                     return Ok(());
                 }
             }
@@ -975,16 +1011,7 @@ impl Transpiler {
                 && self.funcs.contains_key(name)
                 && !is_core_impl_key(name.split('#').next().unwrap_or("")));
         if shadows_builtin {
-            let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
-            out.push_str(&mangle(name));
-            out.push('(');
-            for (i, a) in eff.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                self.emit_call_arg(out, a, marked.contains(&i))?;
-            }
-            out.push(')');
+            self.emit_user_call_hoisted(out, name, &eff)?;
             return Ok(());
         }
         match method {
@@ -1979,16 +2006,7 @@ impl Transpiler {
                 // H21-N5c: los args a params MARCADOS del callee (genéricos Send) se emiten en su
                 // forma "enviable": fn nombrada → el fn item pelado; closure literal → sin Rc::new;
                 // variable → tal cual (si es un param marcado del llamador, su genérico ya es Send).
-                let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
-                out.push_str(&mangle(name));
-                out.push('(');
-                for (i, a) in eff.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    self.emit_call_arg(out, a, marked.contains(&i))?;
-                }
-                out.push(')');
+                self.emit_user_call_hoisted(out, name, &eff)?;
             }
         }
         Ok(())
@@ -2006,7 +2024,12 @@ impl Transpiler {
             ExprKind::Char(_) => Type::Char,
             ExprKind::Ident(n) if n == "std::math::PI" || n == "std::math::E" => Type::Float,
             ExprKind::Ident(n) => {
-                if let Some(t) = self.lookup(n).or_else(|| self.consts.get(n)) {
+                // Bindings de patrón en pie (overlay de `arm_type`): se consulta primero, con clon
+                // inmediato (el guard del RefCell no debe sobrevivir a la recursión).
+                let probed = self.probe_binds.borrow().iter().rev().find_map(|m| m.get(n).cloned());
+                if let Some(t) = probed {
+                    t
+                } else if let Some(t) = self.lookup(n).or_else(|| self.consts.get(n)) {
                     t.clone()
                 } else if let Some(s) = self.funcs.get(n) {
                     // Función como valor → su tipo Fn.
@@ -2038,6 +2061,20 @@ impl Transpiler {
                     if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {
                         return Ok(self.trait_method_sigs.get(n).map(|(_, ret)| ret.clone())
                             .ok_or_else(|| format!("unknown dyn method '{}'", n))?);
+                    }
+                }
+                // Llamada a un CAMPO-closure (`b.f(x)`, espejo del branch de emit_call): el tipo es
+                // el retorno del campo función del struct receptor.
+                if let Some(r) = recv {
+                    if let Ok(rt) = self.type_of(r)
+                        && let Type::Struct(sname, _) = self.classify(&rt)
+                        && let Some(Type::Fn(_, ret)) = self
+                            .struct_fields
+                            .get(&sname)
+                            .and_then(|fs| fs.iter().find(|(fnm, _)| fnm.as_str() == n))
+                            .map(|(_, fty)| normalize_type(fty))
+                    {
+                        return Ok(self.classify(&ret));
                     }
                 }
                 // `std::math::*`: abs/min/max preservan el tipo del primer arg (int|float); el resto
@@ -2359,7 +2396,15 @@ impl Transpiler {
                 // tipo del escrutinio + el patrón. Se saltan los brazos que divergen (`Err(e) => { return }`)
                 // → su "tipo" (`!`) no debe ganar sobre el real (bug: un `var c = match {...}` con struct no
                 // se clonaba al leer → move error).
-                let scrut_ty = self.type_of(scrutinee).ok();
+                let scrut_ty = match self.type_of(scrutinee) {
+                    Ok(t) => Some(t),
+                    Err(e) => {
+                        if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
+                            eprintln!("[matchtype] scrutinee err: {e}");
+                        }
+                        None
+                    }
+                };
                 arms.iter()
                     .find_map(|a| self.arm_type(scrut_ty.as_ref(), a))
                     .ok_or("could not infer the type of the match")?

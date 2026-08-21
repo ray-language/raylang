@@ -45,6 +45,11 @@ struct Transpiler {
     funcs: HashMap<String, FnSig>,
     /// Pila de ámbitos: nombre de variable → su tipo (para decidir clonado y para la inferencia de `let`).
     scopes: Vec<HashMap<String, Type>>,
+    /// Overlay de bindings de patrón para `type_of` (ago 2026): `arm_type` lo empuja mientras tipa el
+    /// CUERPO de un brazo, así un cuerpo compuesto que usa el binding (`Code(c) => "exit ${c}"`) se
+    /// tipa — antes solo el cuerpo-Ident pelado resolvía y el match entero caía a "could not infer"
+    /// (→ la función se emitía como stub). `RefCell` porque `type_of`/`arm_type` son `&self`.
+    probe_binds: std::cell::RefCell<Vec<HashMap<String, Type>>>,
     /// Nombres de enum del usuario (para clasificar un `Type::Struct(n)` como struct vs enum).
     enums: std::collections::HashSet<String>,
     /// Campos de cada struct (nombre → tipo), en orden, para inferir el tipo de `p.campo`.
@@ -230,6 +235,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     let mut t = Transpiler {
         funcs,
         scopes: Vec::new(),
+        probe_binds: std::cell::RefCell::new(Vec::new()),
         enums,
         struct_fields,
         struct_tparams,

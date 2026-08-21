@@ -9425,3 +9425,36 @@ de respaldo (al final: para un archivo de `src/` su propia raíz ya manda). Con 
 función ya declaraba en su doc ("un archivo diagnostica con las MISMAS raíces con las que
 corre"). Guarda: test de LSP con un proyecto `ray.toml` + `src/` + `tests/` (el import resuelve;
 un error de tipos real se sigue reportando), verificado en rojo sin el arreglo.
+
+## 105. El nativo en aplicaciones reales: la clase RefCell-en-args y el tipado de brazos (ago 2026)
+
+Dos reportes de raycode (el agente de código escrito en raylang) corriendo su binario nativo:
+
+**"RefCell already borrowed" en `http.stream_read`** — lo único que impedía el binario nativo.
+El culpable no era el streaming sino una clase entera: en el Rust generado, un argumento que lee
+un campo (`stream_take(s, s.remaining)` → `stream_take(s.clone(), s.borrow().remaining.clone())`)
+deja el guard del `borrow()` **vivo durante la llamada** (los temporales de un argumento mueren al
+final de la sentencia, no antes de entrar al callee), y el primer `borrow_mut` del callee sobre el
+mismo objeto panica. La VM no tiene el problema (evalúa los argumentos y punto). El arreglo es
+estructural, no puntual: **todo argumento de una llamada de usuario se iza a un `let` propio**
+(cada `let` cierra sus temporales; el orden de evaluación no cambia) y la llamada va sobre los
+temporales. La caza dejó una lección de arquitectura: había DOS rutas de emisión de llamadas de
+usuario (el fast-path `shadows_builtin` para nombres del mismo módulo y el brazo genérico para
+calificados `mod::fn`) — el primer parche cubrió solo la segunda y el bug "arreglado" seguía vivo
+en el mismo módulo; ahora ambas comparten `emit_user_call_hoisted`. El clon de un campo-closure y
+del campo-vtable de un `dyn` se izan igual (mismo peligro, receptor en vez de argumento).
+
+**Funciones enteras emitidas como stub por un `match` intipable.** `let status = match (p.wait())
+{ Exit.Code(c) => "exit ${c}", … }` caía a "could not infer the type of the match" (raycode lo
+esquivó extrayendo el match a otra función — y el reporte culpaba al `match (recv(…))` previo,
+una liebre: el discriminador era el escrutinio + los brazos). Dos raíces en el `type_of` del
+transpilador: (1) el retorno de un método de trait llega como `Type::Struct` CRUDO del AST y
+`pattern_binding_types` usaba `normalize_type` libre — que no conoce el registro de enums — en
+vez de `classify`, así que los bindings del patrón quedaban sin tipo; (2) aun con tipo, un cuerpo
+de brazo COMPUESTO que usa el binding (`"exit ${c}"`) no podía tiparse porque el binding no
+estaba en ámbito — solo el cuerpo-identificador pelado tenía atajo. Ahora `arm_type` empuja un
+overlay de bindings (`probe_binds`, `RefCell` porque `type_of` es `&self`) que consulta el caso
+`Ident`, y de paso la llamada a un campo-closure (`b.f(x)`) se tipa (espejo del branch de
+emisión). El corpus nativo también saldó deudas: `examples/stdlib/markdown.ray` (librería sin
+`main`, #129) entra en la lista de excluidos con motivo, y los dos sabores del corpus (fibras e
+hilo-por-tarea) dejan de compartir directorio temporal (el fallo de uno contaminaba al otro).

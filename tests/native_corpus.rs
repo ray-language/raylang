@@ -25,6 +25,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     // Módulos-librería: sin `main` ejecutable (se importan desde su `*_demo.ray`). `ray run`/`--native`
     // sobre ellos no produce un programa.
     ("csv.ray", "módulo-librería sin main (se usa vía csv_demo.ray)"),
+    ("markdown.ray", "módulo-librería sin main (M111; se cubre por markdown_cli, golden 3 motores)"),
     ("regex.ray", "módulo-librería sin main (se usa vía regex_demo.ray)"),
     ("template.ray", "módulo-librería sin main (se usa vía template_demo.ray)"),
     ("toml.ray", "módulo-librería sin main (se usa vía toml_demo.ray)"),
@@ -94,7 +95,9 @@ fn run_corpus(extra_flags: &[&str]) {
         eprintln!("saltando native_corpus: rustc no disponible");
         return;
     }
-    let tmp = std::env::temp_dir().join(format!("ray_corpus_{}", std::process::id()));
+    // El sufijo por sabor (nº de flags extra) separa los dirs de los DOS corpus (fibras y
+    // hilo-por-tarea): compartirlo dejaba al segundo con restos/borrados del primero al fallar.
+    let tmp = std::env::temp_dir().join(format!("ray_corpus_{}_{}", std::process::id(), extra_flags.len()));
     std::fs::create_dir_all(&tmp).expect("crea el dir temporal");
 
     let mut covered = 0usize;

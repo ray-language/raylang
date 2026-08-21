@@ -331,6 +331,11 @@ fn resolve_type(t: Type) -> Type {
             Type.TFn(rps, resolve_type(r))
         },
         Type.TNamed(n, args) => {
+            // `unit` escrito en una anotación (SPEC §3): se resuelve al tipo unit, como en Rust
+            // (`resolve_type` de checker/core.rs) — sombrea cualquier tipo del usuario llamado así.
+            if (n == "unit" && args.len() == 0) {
+                return Type.TUnit;
+            }
             var ra: [Type] = [];
             var i = 0;
             while (i < args.len()) {
@@ -363,6 +368,10 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             ensure_type(c, r, line, col)
         },
         Type.TNamed(name, args) => {
+            // `unit` escrito (SPEC §3): válido tal cual (resolve_type lo mapea a TUnit), como en Rust.
+            if (name == "unit" && args.len() == 0) {
+                return Result.Ok(0);
+            }
             // `Map<K, V>` (M14.6b): la clave debe ser hashable (int/string/char/bool o un parámetro de
             // tipo); aridad 2. No es un struct/enum registrado → se trata aparte.
             if (name == "Map") {
@@ -417,7 +426,7 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                 }
                 Result.Ok(0)
             } else {
-                Result.Err(terr(line, col, "type unknown: '" + name + "' not declared"))
+                Result.Err(terr(line, col, "unknown type: '" + name + "' not declared"))
             }
         },
         Type.TDyn(traits) => {

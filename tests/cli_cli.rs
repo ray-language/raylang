@@ -2841,6 +2841,41 @@ fn ffi_llama_a_libm() {
 }
 
 #[test]
+fn ffi_extern_unit_return_can_be_written() {
+    // SPEC §3 (ago 2026): `-> unit` escrito a mano en una firma extern. Antes se rechazaba con un
+    // mensaje que lo daba por válido (no había token de tipo `unit`: llegaba como Struct("unit") y
+    // resolve_type no lo mapeaba). malloc/free de libc: determinista → e2e en VM y en nativo.
+    let base = tmp("ffi_unit_ret");
+    let file = base.join("main.ray");
+    std::fs::write(
+        &file,
+        "extern \"c\" {\n\
+         \x20 fn malloc(n: int) -> Option<ptr>;\n\
+         \x20 fn free(p: ptr) -> unit;\n\
+         }\n\
+         fn main() -> int {\n\
+         \x20 match (malloc(16)) {\n\
+         \x20   Option.Some(p) => { free(p); print(\"freed\"); },\n\
+         \x20   Option.None => print(\"no mem\"),\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con extern -> unit escrito must salir 0\n{err}");
+    assert!(out.contains("freed"), "malloc/free por FFI\n{out}");
+    // Paridad nativa (si hay rustc): el mismo programa, byte-idéntico.
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let (_o, nerr, ncode) = ray(&base, &["build", file.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(ncode, 0, "build --native con -> unit escrito ok\n{nerr}");
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), out, "nativo ≡ VM");
+    }
+}
+
+#[test]
 fn ffi_errno_reads_the_last_failure_reason() {
     // Revisión FFI jul 2026: `std/ffi.errno()` lee el errno del hilo justo tras la extern. fopen
     // de una ruta inexistente → None + ENOENT (2 en Linux y macOS). Determinista → e2e por

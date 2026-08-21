@@ -150,6 +150,10 @@ pub fn ret_ckind(ty: &crate::ast::Type) -> Option<CKind> {
         Type::Bool => Some(CKind::Bool),
         Type::Unit => Some(CKind::Unit),
         Type::Ptr => Some(CKind::Ptr),
+        // `-> unit` ESCRITO llega del parser como `Struct("unit", [])` (no hay token de tipo); los
+        // motores llaman `desc_of` sobre el AST crudo, así que se acepta aquí igual que el `Option`
+        // crudo de abajo (el checker ya lo resolvió a `Type::Unit` para la firma).
+        Type::Struct(n, args) if n == "unit" && args.is_empty() => Some(CKind::Unit),
         Type::Struct(n, args) | Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
             match &args[0] {
                 Type::Bytes => Some(CKind::OptBytes),

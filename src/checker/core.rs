@@ -1085,6 +1085,9 @@ impl Checker {
             Type::Struct(name, _) if name == "Self" => {
                 Err(self.err(line, col, "'Self' is only valid inside a trait or impl".into()))
             }
+            // `unit` escrito (SPEC §3): válido tal cual (resolve_type lo mapea a `Type::Unit`).
+            // Con argumentos de tipo cae al arm general y falla como tipo desconocido.
+            Type::Struct(name, args) if name == "unit" && args.is_empty() => Ok(()),
             // Un identificador en posición de tipo llega como `Struct(name, args)`
             // desde el parser; aquí puede ser un struct, un enum o un parámetro de
             // tipo en ámbito (M6).
@@ -1171,6 +1174,10 @@ impl Checker {
             Type::Struct(name, args) if name == "Self" && args.is_empty() => {
                 self.current_self.clone().unwrap_or(Type::SelfType)
             }
+            // `unit` escrito en una anotación (SPEC §3): no hay token de tipo para él (un
+            // identificador cualquiera llega como `Struct`), así que se resuelve aquí — igual que
+            // `Map`/`Channel`/`Task`, sombreando cualquier tipo del usuario que se llame así.
+            Type::Struct(name, args) if name == "unit" && args.is_empty() => Type::Unit,
             // `Map<K, V>` (M13.1) llega como `Struct("Map", [K, V])`; se reclasifica a `Type::Map`
             // (igual que `Enum`/`Var`). La validación de la clave hashable va en `ensure_type`.
             Type::Struct(name, args) if name == "Map" && args.len() == 2 => {

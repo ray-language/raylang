@@ -214,6 +214,16 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **`unit` escrito en posición de tipo no compilaba** — `extern "c" {{ fn free(p: ptr) -> unit; }}`
+  se rechazaba con un mensaje que lo daba por válido (y REFERENCE §13 lo documenta), y
+  `fn f() -> unit` tampoco pasaba: no hay token de tipo `unit`, así que llegaba como un nombre
+  cualquiera y el checker no lo resolvía. Era un conflicto SPEC↔implementación (la SPEC decía «no
+  es escribible») que se resuelve del lado útil: **la SPEC ahora lo declara escribible** y se
+  resuelve como `Map`/`Channel`/`Task` (sombrea un tipo del usuario llamado así). Vale en firmas,
+  tipos `fn` y externs, en los tres motores; `unit<int>` sigue siendo tipo desconocido y un
+  parámetro extern `unit` sigue sin ser marshalable. En tándem: el espejo `selfhost/checker.ray`
+  (que además tenía una divergencia latente de mensaje, `type unknown:` por `unknown type:`).
+
 - **`ray fmt` movía comentarios de sitio.** Tres formas, todas destapadas al dejar el repo
   fmt-clean: el blanco que separa un banner de sección del ítem de abajo se comía (y el banner pasaba
   a leerse como su doc-comment); el comentario al final de la línea de un **campo de struct** se

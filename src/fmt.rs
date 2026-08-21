@@ -226,13 +226,31 @@ impl Cur {
     /// se pierde.)
     fn flush_before(&mut self, line: usize, pad: &str) -> String {
         let mut s = String::new();
+        let mut prev: Option<usize> = None;
         while self.i < self.items.len() && self.items[self.i].line < line {
+            let at = self.items[self.i].line;
+            // Los blancos DENTRO del grupo se conservan (dos bloques de comentario separados no son
+            // uno solo). El blanco de ENCIMA del grupo lo pone el llamador vía `blank_before`.
+            if prev.map(|p| self.blank_between(p, at)).unwrap_or(false) {
+                s.push('\n');
+            }
             s.push_str(pad);
             s.push_str(&self.items[self.i].text);
             s.push('\n');
+            prev = Some(at);
             self.i += 1;
         }
+        // …y el blanco que separaba el último comentario del constructo: un banner de sección seguido
+        // de una línea en blanco es una separación deliberada, no un doc-comment del ítem de abajo.
+        if prev.map(|p| self.blank_between(p, line)).unwrap_or(false) {
+            s.push('\n');
+        }
         s
+    }
+
+    /// ¿Hay alguna línea en blanco estrictamente entre `from` y `to`?
+    fn blank_between(&self, from: usize, to: usize) -> bool {
+        (from + 1..to).any(|l| self.blanks.contains(&l))
     }
 
     /// Un comentario **trailing** en la línea `line` (código antes en esa línea). Se consume y se
@@ -327,6 +345,12 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
             }
         }
         out.push_str(&comments);
+        // El trailing de la PRIMERA línea del ítem se consume ANTES de emitirlo: si no, un ítem
+        // multilínea (una `fn`) lo deja para el `flush_before` de la primera sentencia de su cuerpo,
+        // que lo baja al interior del bloque en línea propia. Además de leerse mal, eso MUEVE la
+        // línea del comentario — y hay marcas que dependen de su línea, como el `// es-ok` de la
+        // política de nombres, que exime la línea en la que está.
+        let trail = cur.trailing_on(*line);
         let text = match top {
             Top::Import(it) => fmt_import(it),
             Top::FromImport(it) => fmt_from_import(it),
@@ -338,14 +362,9 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
             Top::Fn(it) => fmt_function(cur, it),
             Top::Extern(lib, blocking) => fmt_extern_block(lib, *blocking, &p.externs),
         };
-        // El trailing de un `from … import` se emite también cuando el ítem se ENVUELVE (M104), y va
-        // tras `import`, en la PRIMERA línea: así al re-formatear sigue siendo el trailing de
-        // `it.line` y el formateador es idempotente (al final de la lista no lo sería).
-        let trail = if !text.contains('\n') || matches!(top, Top::FromImport(_)) {
-            cur.trailing_on(*line)
-        } else {
-            String::new()
-        };
+        // Va siempre en la PRIMERA línea de lo emitido (también cuando el ítem se ENVUELVE, M104):
+        // así al re-formatear sigue siendo el trailing de `it.line` y el formateador es idempotente
+        // (al final de una lista repartida no lo sería).
         match text.split_once('\n') {
             Some((head, rest)) if !trail.is_empty() => {
                 out.push_str(head);
@@ -552,9 +571,10 @@ fn fmt_return(ret: &Type) -> String {
 // struct / enum / trait / impl / función
 // ---------------------------------------------------------------------------
 
-fn fmt_struct(_cur: &mut Cur, it: &StructDef) -> String {
-    // Nota: los campos del struct son `(nombre, tipo)` **sin posición** en el AST, así que un comentario
-    // entre campos no puede acotarse a su campo → lo volcará el contexto tras el `}` (nunca se pierde).
+fn fmt_struct(cur: &mut Cur, it: &StructDef) -> String {
+    // Los comentarios se acotan a su campo con `field_lines` (igual que las variantes de un enum). Sin
+    // eso, el trailing de un campo lo volcaba el contexto TRAS el `}`, donde se lee como el
+    // doc-comment del ítem siguiente. Un struct sintético (sin `field_lines`) no tiene comentarios.
     let mut s = fmt_annotations(&it.annotations);
     let pref = if it.is_pub { "pub " } else { "" };
     let gens = fmt_generics(&it.type_params, &it.bounds);
@@ -563,8 +583,16 @@ fn fmt_struct(_cur: &mut Cur, it: &StructDef) -> String {
         return s;
     }
     s.push_str(&format!("{}struct {}{} {{\n", pref, it.name, gens));
-    for (n, ty) in &it.fields {
-        s.push_str(&format!("{}{}: {},\n", INDENT, n, fmt_type(ty)));
+    for (i, (n, ty)) in it.fields.iter().enumerate() {
+        let at = it.field_lines.get(i).copied();
+        if let Some(at) = at {
+            s.push_str(&cur.flush_before(at, INDENT)); // comentarios encima del campo
+        }
+        s.push_str(&format!("{}{}: {},", INDENT, n, fmt_type(ty)));
+        if let Some(at) = at {
+            s.push_str(&cur.trailing_on(at)); // comentario al final de la línea del campo
+        }
+        s.push('\n');
     }
     s.push('}');
     s
@@ -1020,9 +1048,19 @@ fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg], template: bool) -> String {
                 }
             }
             InterpSeg::Expr(e) => {
+                // El envuelto se APAGA dentro de `${…}`: lo que se emita aquí va DENTRO del literal, y
+                // un salto de línea con su sangría no es formato sino TEXTO — cambiaría la cadena que el
+                // programa produce (y en un `"…"` de una línea, ni siquiera relexaría). Un template
+                // multilínea siempre rebasa el umbral, así que la segunda pasada llegaba aquí con
+                // `force` puesto y repartía la PRIMERA llamada interpolada del documento.
+                let (wrap, force) = (cur.wrap, cur.force);
+                cur.wrap = false;
+                cur.force = false;
                 out.push_str("${");
                 out.push_str(&fmt_expr(cur, e, 0));
                 out.push('}');
+                cur.wrap = wrap;
+                cur.force = force;
             }
         }
     }
@@ -1525,6 +1563,39 @@ mod tests {
         // Y un `\${` literal en un string PLANO sobrevive al roundtrip (fix M95).
         let plain = "fn main() -> int {\n    print(\"precio \\${USD}\");\n    0\n}\n";
         assert_eq!(fmt(plain), plain);
+    }
+
+    #[test]
+    fn interpolation_is_never_wrapped() {
+        // Lo de dentro de `${…}` es TEXTO del literal: repartirlo mete saltos de línea y sangría en la
+        // cadena que el programa produce. Un template multilínea rebasa siempre el umbral, así que la
+        // segunda pasada llegaba aquí con `force` puesto y partía la primera llamada interpolada.
+        let src = "fn hsl(h: int, s: int, l: int) -> string {\n    to_string(h) + to_string(s) + to_string(l)\n}\n\nfn svg(key: string) -> string {\n    let hue = 10;\n    `<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"xMidYMid slice\">\n  <stop id=\"bg-${key}\" stop-color=\"${hsl(hue, 62, 76)}\"/>\n</svg>`\n}\n";
+        assert_eq!(fmt(src), src, "el `${{…}}` se reemite intacto");
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+        // Igual en un string PLANO de una línea, donde un salto ni siquiera relexaría. Aquí el
+        // `print(…)` SÍ reparte su argumento (eso es formato legítimo, fuera del literal); lo que no
+        // puede es tocar el interior del `${…}`.
+        let plain = "fn f(a: int, b: int, c: int) -> int {\n    a + b + c\n}\n\nfn main() -> int {\n    print(\"un texto largo de relleno para rebasar holgadamente el umbral de cien columnas: ${f(1, 2, 3)} fin\");\n    0\n}\n";
+        let out = fmt(plain);
+        assert!(out.contains("${f(1, 2, 3)}"), "la interpolación queda intacta: {out}");
+        assert_eq!(fmt(&out), out, "idempotente");
+    }
+
+    #[test]
+    fn comments_keep_their_place() {
+        // Tres formas en que un comentario se movía de sitio (destapadas al dejar el repo fmt-clean):
+        // (1) el blanco que separa un banner de sección del ítem de abajo se comía, y el banner pasaba
+        // a leerse como su doc; (2) el trailing de un CAMPO de struct se volcaba tras el `}` —donde
+        // queda como doc del ítem siguiente—, porque los campos no llevaban línea en el AST; (3) el
+        // trailing de la FIRMA de una `fn` bajaba al interior del cuerpo, lo que además mueve su línea
+        // (y hay marcas que dependen de ella, como el `// es-ok` de la política de nombres).
+        let src = "// Banner de sección.\n\nstruct P {\n    name: string,\n    owner: string,  // vacío si no está reclamado\n}\n\nfn f(x: int) -> int {  // es-ok\n    x\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+        // Y el blanco ENTRE dos bloques de comentario sueltos tampoco los fusiona.
+        let two = "// Uno.\n\n// Dos.\nfn main() -> int {\n    0\n}\n";
+        assert_eq!(fmt(two), two);
     }
 
     #[test]

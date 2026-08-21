@@ -83,6 +83,17 @@ fn targeted_cases() {
         ("- - -\n", "<hr>\n"),
         // Documento vacío.
         ("", ""),
+        // Tablas GFM (M111.b): alineaciones, pipe escapado, fila corta rellenada.
+        (
+            "| a | b |\n|:--|--:|\n| 1 | 2 |\n| solo |\n",
+            "<table>\n<thead>\n<tr><th align=\"left\">a</th><th align=\"right\">b</th></tr>\n</thead>\n<tbody>\n<tr><td align=\"left\">1</td><td align=\"right\">2</td></tr>\n<tr><td align=\"left\">solo</td><td align=\"right\"></td></tr>\n</tbody>\n</table>\n",
+        ),
+        // Sin fila separadora no hay tabla: párrafo normal.
+        ("a | b\nc | d\n", "<p>a | b\nc | d</p>\n"),
+        // Nº de columnas de cabecera ≠ separadora → no es tabla.
+        ("| a | b |\n|---|\n", "<p>| a | b |\n|---|</p>\n"),
+        // Cabecera sin cuerpo.
+        ("| x |\n|---|\n", "<table>\n<thead>\n<tr><th>x</th></tr>\n</thead>\n</table>\n"),
     ];
     let base = tmp("casos");
     for engine in ["--vm", "--interp"] {

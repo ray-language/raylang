@@ -4,15 +4,16 @@
 // motores gratis). Subconjunto CommonMark pragmático:
 //
 // - Bloques: encabezados ATX (# .. ######), párrafos, código cercado (``` con lenguaje),
-//   listas anidadas (-/*/+ y "1."), citas (>), regla horizontal (---/***/___).
+//   listas anidadas (-/*/+ y "1."), citas (>), regla horizontal (---/***/___), tablas GFM
+//   (cabecera + fila separadora |---|:--:|; \| escapado; filas cortas se rellenan).
 // - Inline: *énfasis*/_énfasis_, **negrita**, `código`, [enlaces](url), ![imágenes](src),
 //   escapes con backslash (\* \_ \` \[ \! \\ \#).
 // - SEGURIDAD: el HTML embebido NO se interpreta — se escapa como texto (decisión deliberada:
 //   la salida se puede servir sin sanitizador). URLs de enlace/imagen con esquema javascript:
 //   se neutralizan a "#".
 //
-// Fuera de v1 (documentado): tablas GFM, encabezados setext, footnotes, saltos duros por doble
-// espacio, autolinks, listas sueltas vs apretadas (todo se renderiza apretado).
+// Fuera de v1 (documentado): encabezados setext, footnotes, saltos duros por doble espacio,
+// autolinks, listas sueltas vs apretadas (todo se renderiza apretado).
 
 // Un elemento inline (el contenido de encabezados, párrafos e ítems).
 /// An inline element: the content of headings, paragraphs and list items.
@@ -39,6 +40,8 @@ pub enum Block {
     // ¿ordenada?, ítems (cada ítem es una lista de bloques: soporta anidación)
     List(bool, [[Block]]),
     Rule,
+    // Tabla GFM: alineación por columna ("" | "left" | "center" | "right"), cabecera, filas.
+    Table([string], [[Inline]], [[[Inline]]]),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -116,6 +119,70 @@ fn list_marker(t: string) -> string {
 // El contenido del ítem tras su marcador (t ya viene sin sangría).
 fn after_marker(t: string, marker: string) -> string {
     t.substring(marker.len() + 1, t.len())
+}
+
+// ¿La línea es la FILA SEPARADORA de una tabla GFM? (solo |, -, :, espacios; al menos un -).
+fn is_table_separator(t: string) -> bool {
+    var dashes = 0;
+    var i = 0;
+    while (i < t.len()) {
+        let c = t[i];
+        if (c == '-') {
+            dashes = dashes + 1;
+        } else if (c != '|' && c != ':' && c != ' ') {
+            return false;
+        }
+        i = i + 1;
+    }
+    dashes > 0 && t.contains("|")
+}
+
+// Parte una fila por sus '|' no escapados; recorta celdas y descarta las vacías de los pipes
+// exteriores (`| a | b |`). Un `\|` es un pipe literal dentro de la celda.
+fn split_row(line: string) -> [string] {
+    var cells: [string] = [];
+    var cur = "";
+    var i = 0;
+    while (i < line.len()) {
+        let c = line[i];
+        if (c == '\\' && i + 1 < line.len() && line[i + 1] == '|') {
+            cur = cur + "|";
+            i = i + 2;
+        } else if (c == '|') {
+            cells.push(cur.trim());
+            cur = "";
+            i = i + 1;
+        } else {
+            cur = cur + to_string(c);
+            i = i + 1;
+        }
+    }
+    cells.push(cur.trim());
+    // Pipes exteriores: la primera/última celda vacía no es una columna.
+    var out: [string] = [];
+    var k = 0;
+    while (k < cells.len()) {
+        if (!((k == 0 || k == cells.len() - 1) && cells[k] == "")) {
+            out.push(cells[k]);
+        }
+        k = k + 1;
+    }
+    out
+}
+
+// La alineación de una celda separadora: `:--:` center, `:--` left, `--:` right, `--` default.
+fn align_of(sep: string) -> string {
+    let l = sep.starts_with(":");
+    let r = sep.ends_with(":");
+    if (l && r) {
+        "center"
+    } else if (l) {
+        "left"
+    } else if (r) {
+        "right"
+    } else {
+        ""
+    }
 }
 
 fn parse_blocks(lines: [string]) -> [Block] {
@@ -222,6 +289,44 @@ fn parse_blocks(lines: [string]) -> [Block] {
                 }
             }
             out.push(Block.List(ordered, items));
+        } else if (t.contains("|") && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim()) && split_row(t).len() == split_row(lines[i + 1].trim()).len() && split_row(t).len() >= 1) {
+            // Tabla GFM: cabecera + fila separadora con el MISMO número de columnas; las filas
+            // siguientes duran mientras contengan '|'. Filas cortas se rellenan, largas se recortan.
+            let header_cells = split_row(t);
+            let sep_cells = split_row(lines[i + 1].trim());
+            var aligns: [string] = [];
+            var header: [[Inline]] = [];
+            var c = 0;
+            while (c < header_cells.len()) {
+                aligns.push(align_of(sep_cells[c]));
+                header.push(parse_inline(header_cells[c]));
+                c = c + 1;
+            }
+            var rows: [[[Inline]]] = [];
+            i = i + 2;
+            var more_rows = true;
+            while (more_rows && i < lines.len()) {
+                let rt = lines[i].trim();
+                if (rt == "" || !rt.contains("|")) {
+                    more_rows = false;
+                } else {
+                    let cells = split_row(rt);
+                    var row: [[Inline]] = [];
+                    var k = 0;
+                    while (k < header_cells.len()) {
+                        if (k < cells.len()) {
+                            row.push(parse_inline(cells[k]));
+                        } else {
+                            let empty: [Inline] = [];
+                            row.push(empty);  // fila corta: celda vacía
+                        }
+                        k = k + 1;
+                    }
+                    rows.push(row);
+                    i = i + 1;
+                }
+            }
+            out.push(Block.Table(aligns, header, rows));
         } else {
             // Párrafo: líneas contiguas hasta un blanco u otro bloque.
             var text = t;
@@ -231,7 +336,7 @@ fn parse_blocks(lines: [string]) -> [Block] {
                 let nx = lines[i].trim();
                 if (nx == "" || nx.starts_with(
                 "```"
-            ) || heading_level(nx) > 0 || is_rule(nx) || nx.starts_with(">") || list_marker(nx) != "" && indent_of(lines[i]) == 0) {
+            ) || heading_level(nx) > 0 || is_rule(nx) || nx.starts_with(">") || list_marker(nx) != "" && indent_of(lines[i]) == 0 || nx.contains("|") && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim())) {
                     more = false;
                 } else {
                     text = text + "\n" + nx;
@@ -470,6 +575,11 @@ fn safe_url(u: string) -> string {
     u
 }
 
+// El atributo de alineación de una celda (formato GFM: align="…"; "" = sin atributo).
+fn align_attr(a: string) -> string {
+    if (a == "") { "" } else { " align=\"" + a + "\"" }
+}
+
 fn render_inlines(xs: [Inline]) -> string {
     var out = "";
     var i = 0;
@@ -565,6 +675,35 @@ fn render_blocks(blocks: [Block]) -> string {
             },
             Block.Rule => {
                 out = out + "<hr>\n";
+            },
+            Block.Table(aligns, header, rows) => {
+                out = out + "<table>\n<thead>\n<tr>";
+                var c = 0;
+                while (c < header.len()) {
+                    out = out + "<th" + align_attr(
+                        aligns[c]
+                    ) + ">" + render_inlines(header[c]) + "</th>";
+                    c = c + 1;
+                }
+                out = out + "</tr>\n</thead>\n";
+                if (rows.len() > 0) {
+                    out = out + "<tbody>\n";
+                    var r = 0;
+                    while (r < rows.len()) {
+                        out = out + "<tr>";
+                        var k = 0;
+                        while (k < rows[r].len()) {
+                            out = out + "<td" + align_attr(
+                                aligns[k]
+                            ) + ">" + render_inlines(rows[r][k]) + "</td>";
+                            k = k + 1;
+                        }
+                        out = out + "</tr>\n";
+                        r = r + 1;
+                    }
+                    out = out + "</tbody>\n";
+                }
+                out = out + "</table>\n";
             },
         }
         i = i + 1;

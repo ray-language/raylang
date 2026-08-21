@@ -26,3 +26,10 @@ fn main() { println!("hola <mundo>"); }
 Escapes: \*no-énfasis\* y \`no-código\`. HTML crudo: <script>alert(1)</script>.
 
 Peligro: [xss](javascript:alert(1)) e imagen ![alt "x"](https://img.example/pic.png).
+
+## Tabla
+
+| Milestone | Estado | Tests |
+|:----------|:------:|------:|
+| M108      | *ok*   | 5     |
+| M111 con \| pipe | **ok** | 12 |

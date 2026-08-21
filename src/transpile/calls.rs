@@ -1983,6 +1983,16 @@ impl Transpiler {
                 }
                 out.push(')');
             }
+            // M100 v3: escritura en el stdin de un hijo vivo (`__ray_proc_write` espera a que el
+            // pipe sea escribible, como la VM aparcando por interés de escritura).
+            "proc_write" if name.starts_with("__") && !self.exclude.contains("process") => {
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_write(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             "proc_read" | "proc_try_wait" if name.starts_with("__") && !self.exclude.contains("process") => {
                 self.needs_rt_process = true;
                 write!(out, "__ray_{}(", method).unwrap();

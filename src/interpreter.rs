@@ -1325,8 +1325,10 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M100 v3: `__proc_write` es un alias con opcode compartido — el mismo camino escribe
+            // en el stdin de un hijo vivo (el despacho por tipo de handle vive en el host).
             // M16.1c: escribe bytes en el socket → ["ok", ""] o ["err", msg].
-            "__socket_write_bytes" => {
+            "__socket_write_bytes" | "__proc_write" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Int(h), Value::Bytes(data)) => match crate::builtins::socket_write_raw(*h, data) {
                         Ok(_) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],
@@ -1392,7 +1394,7 @@ impl<'a> Interpreter<'a> {
                     }).collect()
                 };
                 let opts = crate::builtins::run_opts_from_flat(
-                    dir, as_strings(env), *env_clear, stdin, *has_stdin,
+                    dir, as_strings(env), *env_clear, stdin, *has_stdin, false,
                     *timeout_ms, *max_output, *merge_output,
                 );
                 let arr = crate::builtins::run_encoded(program, &as_strings(args), &opts)
@@ -1405,9 +1407,9 @@ impl<'a> Interpreter<'a> {
             "__proc_spawn" => {
                 let (Value::Str(program), Value::Array(args), Value::Str(dir), Value::Array(env),
                     Value::Bool(env_clear), Value::Bytes(stdin), Value::Bool(has_stdin),
-                    Value::Bool(merge_output)) =
+                    Value::Bool(stdin_open), Value::Bool(merge_output)) =
                     (&values[0], &values[1], &values[2], &values[3], &values[4], &values[5],
-                     &values[6], &values[7])
+                     &values[6], &values[7], &values[8])
                 else { unreachable!("the checker guarantees the __proc_spawn signature") };
                 let as_strings = |rc: &Rc<RefCell<Vec<Value>>>| -> Vec<String> {
                     rc.borrow().iter().map(|v| match v {
@@ -1416,7 +1418,7 @@ impl<'a> Interpreter<'a> {
                     }).collect()
                 };
                 let opts = crate::builtins::run_opts_from_flat(
-                    dir, as_strings(env), *env_clear, stdin, *has_stdin, 0, 0, *merge_output,
+                    dir, as_strings(env), *env_clear, stdin, *has_stdin, *stdin_open, 0, 0, *merge_output,
                 );
                 let arr = crate::builtins::proc_spawn_encoded(program, &as_strings(args), &opts)
                     .into_iter().map(|b| Value::Bytes(Rc::new(b))).collect();

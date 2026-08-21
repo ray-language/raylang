@@ -34,6 +34,10 @@ pub struct RunOpts {
     pub env_clear: bool,
     /// `Some(data)` = escribir eso en el stdin del hijo y cerrarlo; `None` = `/dev/null`.
     pub stdin: Option<Vec<u8>>,
+    /// M100 v3: el stdin del hijo es un pipe que queda ABIERTO (el llamador escribe cuando quiere
+    /// y cierra explícitamente) — un hijo interactivo: cliente MCP/LSP, driver de REPL. Excluyente
+    /// con `stdin` (escribir-y-cerrar); ninguno de los dos = `/dev/null`.
+    pub stdin_open: bool,
     /// Presupuesto total en ms (`<= 0` = sin plazo).
     pub timeout_ms: i64,
     /// Tope de captura por flujo, en octetos.
@@ -60,6 +64,9 @@ pub struct RunOutput {
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 pub struct SpawnedChild {
     pub child: std::process::Child,
+    /// M100 v3: el extremo de ESCRITURA del stdin del hijo (no-bloqueante), solo con
+    /// `opts.stdin_open`. `None` = stdin cerrado/`/dev/null`, como en la v2.
+    pub stdin: Option<std::fs::File>,
     pub out: Option<std::fs::File>,
     pub err: Option<std::fs::File>,
 }
@@ -85,7 +92,7 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
         cmd.env(k, v);
     }
     // stdin: /dev/null por defecto (jamás heredado); con datos, un pipe que se escribe y se cierra.
-    cmd.stdin(if opts.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    cmd.stdin(if opts.stdin.is_some() || opts.stdin_open { Stdio::piped() } else { Stdio::null() });
     // stdout/stderr: pipes propios. Con `merge_output`, los DOS fds del hijo van al MISMO pipe (un
     // `dup` del extremo de escritura) → el entrelazado es el REAL del kernel; fusionar en userspace
     // dos pipes independientes inventa un orden. `std::io::pipe` pone CLOEXEC de forma atómica.
@@ -112,9 +119,16 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
     // está en memoria) mientras quepa en el buffer del pipe; si el hijo no lee y el pipe se llena,
     // el write bloquea — "alimentar megabytes a un hijo que no consume" pide un stdin por canal
     // (v3). Un `Err` aquí NO aborta: el hijo ya corre (verá EOF).
-    if let (Some(data), Some(mut si)) = (&opts.stdin, child.stdin.take()) {
+    // El extremo de escritura se toma UNA vez (`take` vacía el campo) y se decide qué hacer con él:
+    // v3 (`stdin_open`) lo CONSERVA abierto para el llamador; v2 escribe el dato entero y lo suelta
+    // (el drop cierra el pipe → EOF para el hijo); sin ninguno de los dos no hay pipe que tomar.
+    let child_stdin = child.stdin.take();
+    let mut stdin = None;
+    if opts.stdin_open {
+        stdin = child_stdin.map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p)));
+    } else if let (Some(data), Some(mut si)) = (&opts.stdin, child_stdin) {
         let _ = si.write_all(data);
-    } // el drop de `si` cierra el pipe → EOF para el hijo
+    }
 
     // Ambos flujos como `File` y NO-bloqueantes (un POLLIN espurio no debe clavar al lector; y las
     // bombas de la v2 exigen WouldBlock para aparcar la fibra).
@@ -123,7 +137,7 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
         None => child.stdout.take().map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p))),
     };
     let err = child.stderr.take().map(|p| std::fs::File::from(std::os::fd::OwnedFd::from(p)));
-    for f in [&out, &err].into_iter().flatten() {
+    for f in [&stdin, &out, &err].into_iter().flatten() {
         {
             let fd = std::os::fd::AsRawFd::as_raw_fd(f);
             // SAFETY: fcntl variádica (ver el self-pipe de M88.1: con aridad fija es UB en arm64);
@@ -134,7 +148,7 @@ pub fn spawn_streamed(program: &str, args: &[String], opts: &RunOpts) -> Result<
             }
         }
     }
-    Ok(SpawnedChild { child, out, err })
+    Ok(SpawnedChild { child, stdin, out, err })
 }
 
 /// `waitpid(WNOHANG)` del hijo: `Ok(None)` = sigue corriendo; `Ok(Some(exit))` = terminó (y quedó
@@ -332,6 +346,7 @@ pub fn run_opts_from_flat(
     env_clear: bool,
     stdin: &[u8],
     has_stdin: bool,
+    stdin_open: bool,
     timeout_ms: i64,
     max_output: i64,
     merge_output: bool,
@@ -341,6 +356,7 @@ pub fn run_opts_from_flat(
         env: env_flat.chunks_exact(2).map(|p| (p[0].clone(), p[1].clone())).collect(),
         env_clear,
         stdin: if has_stdin { Some(stdin.to_vec()) } else { None },
+        stdin_open,
         timeout_ms,
         max_output,
         merge_output,
@@ -415,6 +431,7 @@ mod process_tests {
     fn opts() -> RunOpts {
         RunOpts {
             dir: None,
+            stdin_open: false,
             env: vec![],
             env_clear: false,
             stdin: None,

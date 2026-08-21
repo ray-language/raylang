@@ -3267,12 +3267,13 @@ fn proc_streaming_primitives_oracle() {
         fn main() -> int {
             let none: [string] = [];
             let r = __proc_spawn("sh", ["-c", "printf abc; printf de >&2; exit 5"], "", none,
-                                 false, "".to_bytes(), false, false);
+                                 false, "".to_bytes(), false, false, false);
             var score = 0;
             if (r[0] == "ok".to_bytes()) { score = score + 1; }
             let h_child = handle_of(r[1]);
-            let h_out = handle_of(r[2]);
-            let h_err = handle_of(r[3]);
+            // M100 v3: r[2] es el stdin (-1 sin `stdin_open`); la salida se corre a r[3]/r[4].
+            let h_out = handle_of(r[3]);
+            let h_err = handle_of(r[4]);
             if (h_child > 0 && h_out > 0 && h_err > 0) { score = score + 2; }
             // Lectura del pipe: la primera da los datos (aparca hasta que lleguen), la segunda EOF.
             let o1 = __socket_read_bytes(h_out);
@@ -3301,7 +3302,7 @@ fn proc_streaming_primitives_oracle() {
             if (w2[0] == "err".to_bytes()) { score = score + 64; }
             __proc_kill(h_child, false);
             // Kill de verdad: al GRUPO, y el estado sale como signal.
-            let k = __proc_spawn("sleep", ["30"], "", none, false, "".to_bytes(), false, false);
+            let k = __proc_spawn("sleep", ["30"], "", none, false, "".to_bytes(), false, false, false);
             let hk = handle_of(k[1]);
             __proc_kill(hk, false);
             var ktag = "".to_bytes();

@@ -2420,7 +2420,7 @@ impl<'a> Vm<'a> {
                         }).collect()
                     };
                     let opts = crate::builtins::run_opts_from_flat(
-                        &dir, as_strings(self, eh), env_clear, &stdin, has_stdin,
+                        &dir, as_strings(self, eh), env_clear, &stdin, has_stdin, false,
                         timeout_ms, max_output, merge_output,
                     );
                     let elems = crate::builtins::run_encoded(&program, &as_strings(self, ah), &opts)
@@ -2435,6 +2435,7 @@ impl<'a> Vm<'a> {
                 // __socket_read_bytes (camino ya existente).
                 OpCode::ProcSpawn => {
                     let merge_output = self.pop();
+                    let stdin_open = self.pop();
                     let has_stdin = self.pop();
                     let stdin = self.pop();
                     let env_clear = self.pop();
@@ -2444,8 +2445,8 @@ impl<'a> Vm<'a> {
                     let program = self.pop();
                     let (HeapValue::Str(program), HeapValue::Obj(ah), HeapValue::Str(dir),
                         HeapValue::Obj(eh), HeapValue::Bool(env_clear), HeapValue::Bytes(stdin),
-                        HeapValue::Bool(has_stdin), HeapValue::Bool(merge_output)) =
-                        (program, args, dir, env, env_clear, stdin, has_stdin, merge_output)
+                        HeapValue::Bool(has_stdin), HeapValue::Bool(stdin_open), HeapValue::Bool(merge_output)) =
+                        (program, args, dir, env, env_clear, stdin, has_stdin, stdin_open, merge_output)
                     else { unreachable!("the checker guarantees the __proc_spawn signature") };
                     let as_strings = |vm: &mut Self, h| -> Vec<String> {
                         vm.as_array(h).iter().map(|v| match v {
@@ -2454,13 +2455,13 @@ impl<'a> Vm<'a> {
                         }).collect()
                     };
                     let opts = crate::builtins::run_opts_from_flat(
-                        &dir, as_strings(self, eh), env_clear, &stdin, has_stdin, 0, 0, merge_output,
+                        &dir, as_strings(self, eh), env_clear, &stdin, has_stdin, stdin_open, 0, 0, merge_output,
                     );
                     let spawned = crate::builtins::proc_spawn_handles(&program, &as_strings(self, ah), &opts);
                     // 2e: el hijo se ATA al scope activo (como Spawn ata las tareas): si el scope
                     // falla o se cierra sin `wait()`, el gancho lo mata y cosecha. Sin scope activo
                     // (nivel superior de main) no hay atadura — como un spawn de nivel superior.
-                    if let (Ok((h_child, _, _)), Some(scope)) = (&spawned, self.cur.scopes.last_mut()) {
+                    if let (Ok((h_child, _, _, _)), Some(scope)) = (&spawned, self.cur.scopes.last_mut()) {
                         scope.procs.push(*h_child);
                     }
                     let elems = crate::builtins::proc_spawn_encode(spawned)

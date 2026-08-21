@@ -9458,3 +9458,42 @@ overlay de bindings (`probe_binds`, `RefCell` porque `type_of` es `&self`) que c
 emisión). El corpus nativo también saldó deudas: `examples/stdlib/markdown.ray` (librería sin
 `main`, #129) entra en la lista de excluidos con motivo, y los dos sabores del corpus (fibras e
 hilo-por-tarea) dejan de compartir directorio temporal (el fallo de uno contaminaba al otro).
+
+## 106. M100 v3 — stdin escribible: el hijo deja de ser un tubo de un solo sentido (ago 2026)
+
+El diferido que la v2 dejó anotado en el código ("un stdin por canal sería v3") lo desbloqueó su
+caso real: un **cliente MCP** en raylang. Un servidor MCP por stdio es un hijo JSON-RPC vivo —
+petición, respuesta, petición— y con la v2 eso era imposible: `.stdin(bytes)` escribía el dato
+ENTERO y cerraba el pipe antes de devolver (el hijo veía EOF), `Proc` solo exponía `out`/`err` y
+`write_handle` rechazaba los handles de proceso. No era un hueco periférico: cliente MCP, cliente
+LSP, drivers de REPL y toda herramienta interactiva caían en él.
+
+**La superficie: métodos, no un canal** — y esto corrige la nota original de la v2. Un canal es
+simétrico y bonito (`send(p.stdin, b)`), pero **se traga los errores**: si el hijo muere a mitad
+de sesión, un `send` no tiene dónde decir EPIPE, y para un cliente de sesión ese es EL error que
+importa. Con el norte del lenguaje (errores como valores) la elección es clara:
+`Cmd.stdin_pipe()` + `Proc.write(bytes) -> Result<int, string>` + `Proc.close_stdin()`. El cierre
+es superficie propia, no un efecto del `Drop`: el EOF es parte del protocolo de muchos hijos
+(`sort`, `wc`, un servidor que termina su sesión).
+
+**La implementación resultó ser casi toda reutilización**, que es la señal de que la arquitectura
+estaba bien puesta: el pipe de stdin ya se creaba (solo había que NO cerrarlo, conservando su
+extremo de escritura no-bloqueante), el registro de handles ya tenía forma para él
+(`OpenHandle::PipeW`, y `close(h)` lo cierra → el EOF sale gratis), y `__proc_write` **reusa el
+opcode `SocketWriteBytes`** igual que `__proc_read` reusa `SocketReadBytes` — cero opcodes
+nuevos. La consecuencia más bonita: como el camino de escritura de la VM ya despachaba por tipo
+de handle y aparcaba por interés de ESCRITURA (`park_write`/`finish_parked_write`, de la cesión
+de `socket_write`), la **contrapresión de un pipe lleno salió gratis**: un hijo lento aparca la
+fibra del escritor en vez de girar o perder datos. En el nativo con fibras es `wait_writable` del
+reactor; sin fibras, el reintento de 1 ms; en el intérprete, bloqueante.
+
+**El bug que cazó la prueba**: el `if let (Some(data), Some(mut si)) = (&opts.stdin,
+child.stdin.take())` de la v2 evalúa `take()` SIEMPRE al construir la tupla — aunque no haya dato
+que escribir—, así que vaciaba el campo antes de que la v3 pudiera quedarse el pipe. El `take` se
+hace ahora una vez y se decide después qué hacer con él. Es el recordatorio de que en Rust el
+patrón de un `if let` sobre una tupla no es perezoso en sus elementos.
+
+Guarda: `process_cli::writable_stdin_keeps_a_session_alive_on_vm_and_native` — tres vueltas de
+petición/respuesta contra un `cat` vivo (con la v2, la segunda vuelta sería imposible), EOF
+explícito y `write` tras la muerte del hijo → `Err`; en VM, nativo-fibras y nativo-hilos, con la
+misma salida byte a byte.

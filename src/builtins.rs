@@ -621,6 +621,12 @@ enum OpenHandle {
     /// exactamente como un socket (el `IoParked` de la VM es fd+deadline, nada socket-específico).
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     Pipe(std::fs::File),
+    /// M100 v3: el extremo de ESCRITURA del stdin de un hijo VIVO (no-bloqueante), de
+    /// `Cmd.stdin_pipe()`. Se escribe con `__proc_write` —que reusa el camino de escritura parcial
+    /// de los sockets, así un pipe lleno APARCA la fibra por interés de escritura en vez de girar—
+    /// y `close(h)` lo cierra: ese cierre ES el EOF que ve el hijo.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    PipeW(std::fs::File),
     /// M100 v2: un proceso hijo lanzado con `__proc_spawn`. Vive en el registro (no un pid crudo en
     /// el borde) para que `try_wait`/`kill` operen sobre el `Child` real — sin carreras de reuso de
     /// pid. `close(h)` lo quita del mapa SIN matar ni cosechar (el `Drop` de `Child` no hace nada);
@@ -801,6 +807,8 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         // escribir-y-cerrar en el spawn; un stdin por canal sería v3).
         #[cfg(all(unix, not(target_arch = "wasm32")))]
         Some(OpenHandle::Pipe(_)) => Err("the handle is a child process pipe; read it with socket_read_bytes".to_string()),
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        Some(OpenHandle::PipeW(_)) => Err("the handle is a child's stdin; write it with proc_write".to_string()),
         #[cfg(all(unix, not(target_arch = "wasm32")))]
         Some(OpenHandle::Child(_)) => Err("the handle is a child process; it is not writable".to_string()),
         None => Err(format!("invalid file handle: {}", h)),
@@ -986,6 +994,20 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     if is_tls_handle(h) {
         return tls_write_nb(h, bytes);
     }
+    // M100 v3: el stdin de un hijo vivo. Camino del INTÉRPRETE (sin scheduler): gira en WouldBlock
+    // hasta colocarlo todo, como el TCP de arriba.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    if is_child_stdin(h) {
+        let mut off = 0;
+        while off < bytes.len() {
+            match pipe_write_once(h, &bytes[off..]) {
+                Ok(0) => std::thread::yield_now(),
+                Ok(n) => off += n,
+                Err(e) => return Err(e),
+            }
+        }
+        return Ok(bytes.len());
+    }
     let mut stream = socket_clone(h)?;
     let mut off = 0;
     while off < bytes.len() {
@@ -1005,6 +1027,21 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
 /// (el scheduler aparca la fibra con interés de escritura, M19.4b post — cesión en `socket_write`).
 pub fn socket_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     use std::io::Write;
+    // M100 v3: stdin de un hijo → escritura parcial sobre el pipe; el resto lo re-intenta la VM
+    // tras aparcar la fibra por interés de escritura (`park_write`/`finish_parked_write`, que
+    // llaman aquí de nuevo). Mismo contrato que el socket: `Ok(n)` con `n < len` = se llenó.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    if is_child_stdin(h) {
+        let mut off = 0;
+        while off < bytes.len() {
+            match pipe_write_once(h, &bytes[off..]) {
+                Ok(0) => break, // WouldBlock: el pipe está lleno
+                Ok(n) => off += n,
+                Err(e) => return Err(e),
+            }
+        }
+        return Ok(off);
+    }
     let mut stream = socket_clone(h)?;
     let mut off = 0;
     while off < bytes.len() {
@@ -1016,6 +1053,34 @@ pub fn socket_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
         }
     }
     Ok(off)
+}
+
+/// M100 v3: ¿el handle es el stdin (escribible) de un hijo vivo?
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn is_child_stdin(h: i64) -> bool {
+    matches!(registry().lock().unwrap().open.get(&h), Some(OpenHandle::PipeW(_)))
+}
+
+/// M100 v3: UN intento de escritura sobre el stdin del hijo (fd no-bloqueante). `Ok(0)` = el pipe
+/// está lleno (`WouldBlock`); `Err` = el hijo cerró su stdin o murió (EPIPE) — el error que un
+/// cliente de sesión (MCP/LSP) necesita ver, no un silencio.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn pipe_write_once(h: i64, bytes: &[u8]) -> Result<usize, String> {
+    use std::io::Write;
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::PipeW(f)) => match f.write(bytes) {
+            Ok(n) => Ok(n),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                Ok(0)
+            }
+            Err(e) => Err(e.to_string()),
+        },
+        _ => Err(format!("invalid child stdin handle: {}", h)),
+    }
 }
 
 // --- TLS (M19.4) ---
@@ -1486,6 +1551,8 @@ pub fn raw_fd(h: i64) -> Option<i32> {
         Some(OpenHandle::Udp(s)) => Some(s.as_raw_fd()), // M20.11: cesión de udp_recv_from
         // M100 v2: el fd del pipe de un hijo, para que la bomba aparque la fibra en el poller.
         Some(OpenHandle::Pipe(f)) => Some(f.as_raw_fd()),
+        // M100 v3: el fd del stdin de un hijo vivo, para aparcar por interés de ESCRITURA.
+        Some(OpenHandle::PipeW(f)) => Some(f.as_raw_fd()),
         _ => None,
     }
 }
@@ -2718,11 +2785,21 @@ static BUILTINS: &[Builtin] = &[
         if a[9] != Type::Bool { return Err((Some(9), format!("__run expects a bool (merge_output), not {}", a[9]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
-    // __proc_spawn(program, args, dir, env, env_clear, stdin, has_stdin, merge_output) -> [bytes]
-    // (M100 v2, IDEAS §53.9): lanza en modo STREAMING → [b"ok", h_child, h_out, h_err] o
+    // __proc_write(h, datos) -> [string] (M100 v3): escribe en el stdin de un hijo VIVO. Alias con
+    // opcode COMPARTIDO con `__socket_write_bytes` (como `__proc_read` con SocketReadBytes): el
+    // camino de escritura ya despacha por tipo de handle, y así el pipe lleno APARCA la fibra por
+    // interés de escritura sin un opcode ni un aparcado propios. ["ok", ""] o ["err", msg].
+    Builtin { name: "__proc_write", opcode: OpCode::SocketWriteBytes, check: |a| {
+        arity(a, 2, "__proc_write", " (handle, data)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__proc_write expects an int (the stdin handle), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__proc_write expects bytes (the data), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __proc_spawn(program, args, dir, env, env_clear, stdin, has_stdin, stdin_open, merge_output) -> [bytes]
+    // (M100 v2/v3): lanza en modo STREAMING → [b"ok", h_child, h_in, h_out, h_err] o
     // [b"err", msg]. Sin timeout_ms/max_output: el streaming no los tiene (canal acotado = tope).
     Builtin { name: "__proc_spawn", opcode: OpCode::ProcSpawn, check: |a| {
-        arity(a, 8, "__proc_spawn", " (program, args, dir, env, env_clear, stdin, has_stdin, merge_output)")?;
+        arity(a, 9, "__proc_spawn", " (program, args, dir, env, env_clear, stdin, has_stdin, stdin_open, merge_output)")?;
         let str_arr = Type::Array(Box::new(Type::String));
         if a[0] != Type::String { return Err((Some(0), format!("__proc_spawn expects a string (the program), not {}", a[0]))); }
         if a[1] != str_arr { return Err((Some(1), format!("__proc_spawn expects a [string] (the arguments), not {}", a[1]))); }
@@ -2731,7 +2808,8 @@ static BUILTINS: &[Builtin] = &[
         if a[4] != Type::Bool { return Err((Some(4), format!("__proc_spawn expects a bool (env_clear), not {}", a[4]))); }
         if a[5] != Type::Bytes { return Err((Some(5), format!("__proc_spawn expects bytes (the stdin data), not {}", a[5]))); }
         if a[6] != Type::Bool { return Err((Some(6), format!("__proc_spawn expects a bool (has_stdin), not {}", a[6]))); }
-        if a[7] != Type::Bool { return Err((Some(7), format!("__proc_spawn expects a bool (merge_output), not {}", a[7]))); }
+        if a[7] != Type::Bool { return Err((Some(7), format!("__proc_spawn expects a bool (stdin_open), not {}", a[7]))); }
+        if a[8] != Type::Bool { return Err((Some(8), format!("__proc_spawn expects a bool (merge_output), not {}", a[8]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // __proc_read(h) -> [bytes] (M100 v2): una lectura del pipe del hijo — [b"ok", datos] (vacío =
@@ -3188,7 +3266,7 @@ pub fn run_encoded(program: &str, _args: &[String], _opts: &RunOpts) -> Vec<Vec<
 /// cierran con `close(h)`. La VM usa esta variante cruda para además ATAR `h_child` al scope
 /// activo (fase 2e); el intérprete usa la codificada.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-pub fn proc_spawn_handles(program: &str, args: &[String], opts: &RunOpts) -> Result<(i64, i64, i64), String> {
+pub fn proc_spawn_handles(program: &str, args: &[String], opts: &RunOpts) -> Result<(i64, i64, i64, i64), String> {
     let s = ray_runtime::process::spawn_streamed(program, args, opts)?;
     let mut reg = registry().lock().unwrap();
     let put = |reg: &mut FileRegistry, h: OpenHandle| -> i64 {
@@ -3198,23 +3276,25 @@ pub fn proc_spawn_handles(program: &str, args: &[String], opts: &RunOpts) -> Res
         id
     };
     let h_child = put(&mut reg, OpenHandle::Child(s.child));
+    let h_in = s.stdin.map_or(-1, |f| put(&mut reg, OpenHandle::PipeW(f)));
     let h_out = s.out.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
     let h_err = s.err.map_or(-1, |f| put(&mut reg, OpenHandle::Pipe(f)));
-    Ok((h_child, h_out, h_err))
+    Ok((h_child, h_in, h_out, h_err))
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-pub fn proc_spawn_handles(program: &str, _args: &[String], _opts: &RunOpts) -> Result<(i64, i64, i64), String> {
+pub fn proc_spawn_handles(program: &str, _args: &[String], _opts: &RunOpts) -> Result<(i64, i64, i64, i64), String> {
     Err(format!("{program}: running OS processes is not supported on this platform"))
 }
 
 /// El resultado de `proc_spawn_handles`, aplanado al arreglo etiquetado del builtin `__proc_spawn`:
 /// `[b"ok", h_child, h_out, h_err]` o `[b"err", msg]`.
-pub fn proc_spawn_encode(r: Result<(i64, i64, i64), String>) -> Vec<Vec<u8>> {
+pub fn proc_spawn_encode(r: Result<(i64, i64, i64, i64), String>) -> Vec<Vec<u8>> {
     match r {
-        Ok((h_child, h_out, h_err)) => vec![
+        Ok((h_child, h_in, h_out, h_err)) => vec![
             b"ok".to_vec(),
             h_child.to_string().into_bytes(),
+            h_in.to_string().into_bytes(),
             h_out.to_string().into_bytes(),
             h_err.to_string().into_bytes(),
         ],

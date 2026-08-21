@@ -1,0 +1,62 @@
+// std/process — SESIÓN PERSISTENTE (M100 v3): un hijo VIVO con el stdin abierto, al que se le
+// escriben peticiones y del que se leen respuestas, una y otra vez. Es la forma de un cliente
+// MCP o LSP: petición → respuesta → petición, sobre el mismo proceso.
+//
+// Con `.stdin(datos)` (v2) el stdin se escribe ENTERO y se CIERRA en el lanzamiento: sirve para
+// alimentar a `wc` o `sort`, no para conversar. `.stdin_pipe()` lo deja abierto:
+//
+//   p.write(bytes)   -> Result<int, string>   escribe TODO el dato; aparca la fibra si el pipe
+//                                             se llena; Err si el hijo cerró su stdin o murió
+//   p.close_stdin()                           el EOF explícito (fin de la sesión)
+//
+// Solo VM y binario nativo (usa fibras y canales, como todo stream); el intérprete lo rechaza.
+import std/process;
+
+fn text(b: bytes) -> string {
+    match (from_utf8(b)) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "<no utf-8>",
+    }
+}
+
+// Una vuelta de la conversación: escribe la petición y espera SU respuesta.
+fn ask(p: process.Proc, request: string) -> string {
+    match (p.write(request.to_bytes())) {
+        Result.Err(e) => {
+            return "error de escritura: ${e}";
+        },
+        Result.Ok(_) => { },
+    }
+    match (recv(p.out)) {
+        Option.Some(chunk) => text(chunk).trim(),
+        Option.None => "<el hijo cerró su salida>",
+    }
+}
+
+fn main() -> int {
+    // `cat` hace de servidor de eco línea a línea: el sustituto determinista de un servidor real.
+    let server = process.cmd("cat", []).stdin_pipe();
+    match (server.stream()) {
+        Result.Err(e) => {
+            print("no se pudo lanzar: ${e}");
+            1
+        },
+        Result.Ok(p) => {
+            // Tres vueltas sobre el MISMO proceso: con el stdin de la v2 la segunda sería imposible.
+            print(ask(p, "hola\n"));
+            print(ask(p, "sigo aqui\n"));
+            print(ask(p, "adios\n"));
+            // El EOF cierra la sesión; el hijo termina y se cosecha.
+            p.close_stdin();
+            match (p.wait()) {
+                process.Exit.Code(c) => {
+                    print("fin, codigo ${c}");
+                },
+                process.Exit.Signal(s) => {
+                    print("fin, senal ${s}");
+                },
+            }
+            0
+        },
+    }
+}

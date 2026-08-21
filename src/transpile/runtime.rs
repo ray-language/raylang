@@ -271,7 +271,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // leer FUERA del lock, como Tcp) y el Child (vive aquí, no un pid crudo: try_wait que
         // cosecha lo elimina bajo el lock → kill posterior es no-op, jamás a un pid reusado).
         let process_variant = if t.needs_rt_process {
-            ", Pipe(std::sync::Arc<std::fs::File>), Child(std::process::Child)"
+            ", Pipe(std::sync::Arc<std::fs::File>), PipeW(std::sync::Arc<std::fs::File>), Child(std::process::Child)"
         } else {
             ""
         };
@@ -704,7 +704,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "fn __ray_run(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool, stdin: &[u8], has_stdin: bool, timeout_ms: i64, max_output: i64, merge_output: bool) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
             "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    let env: Vec<String> = env.borrow().iter().map(|s| s.to_string()).collect();\n",
-            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, stdin, has_stdin, timeout_ms, max_output, merge_output);\n",
+            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, stdin, has_stdin, false, timeout_ms, max_output, merge_output);\n",
             "    let elems: Vec<Rc<[u8]>> = ray_runtime::process::run_encoded(program, &args, &opts).into_iter().map(|b| Rc::<[u8]>::from(&b[..])).collect();\n",
             "    Rc::new(std::cell::RefCell::new(elems)) }\n",
         ));
@@ -715,17 +715,18 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "fn __ray_proc_tag(v: Vec<Rc<[u8]>>) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> { Rc::new(std::cell::RefCell::new(v)) }\n",
             "fn __ray_proc_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> { __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(msg.as_bytes())]) }\n",
             "#[allow(clippy::too_many_arguments)]\n",
-            "fn __ray_proc_spawn(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool, stdin: &[u8], has_stdin: bool, merge_output: bool) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "fn __ray_proc_spawn(program: &str, args: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, dir: &str, env: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, env_clear: bool, stdin: &[u8], has_stdin: bool, stdin_open: bool, merge_output: bool) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
             "    let args: Vec<String> = args.borrow().iter().map(|s| s.to_string()).collect();\n",
             "    let env: Vec<String> = env.borrow().iter().map(|s| s.to_string()).collect();\n",
-            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, stdin, has_stdin, 0, 0, merge_output);\n",
+            "    let opts = ray_runtime::process::run_opts_from_flat(dir, env, env_clear, stdin, has_stdin, stdin_open, 0, 0, merge_output);\n",
             "    match ray_runtime::process::spawn_streamed(program, &args, &opts) {\n",
             "        Ok(s) => {\n",
             "            let h_child = __ray_reg_insert(__RayHandle::Child(s.child));\n",
+            "            let h_in = s.stdin.map_or(-1, |f| __ray_reg_insert(__RayHandle::PipeW(std::sync::Arc::new(f))));\n",
             "            let h_out = s.out.map_or(-1, |f| __ray_reg_insert(__RayHandle::Pipe(std::sync::Arc::new(f))));\n",
             "            let h_err = s.err.map_or(-1, |f| __ray_reg_insert(__RayHandle::Pipe(std::sync::Arc::new(f))));\n",
             "            __ray_proc_bind(h_child);\n",
-            "            __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(h_child.to_string().as_bytes()), Rc::<[u8]>::from(h_out.to_string().as_bytes()), Rc::<[u8]>::from(h_err.to_string().as_bytes())])\n",
+            "            __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(h_child.to_string().as_bytes()), Rc::<[u8]>::from(h_in.to_string().as_bytes()), Rc::<[u8]>::from(h_out.to_string().as_bytes()), Rc::<[u8]>::from(h_err.to_string().as_bytes())])\n",
             "        }\n",
             "        Err(e) => __ray_proc_err(e) } }\n",
             "fn __ray_proc_try_wait(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
@@ -744,6 +745,38 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "fn __ray_pipe_clone(h: i64) -> Option<std::sync::Arc<std::fs::File>> {\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get(&h) { Some(__RayHandle::Pipe(f)) => Some(std::sync::Arc::clone(f)), _ => None } }\n",
+            "fn __ray_stdin_clone(h: i64) -> Option<std::sync::Arc<std::fs::File>> {\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::PipeW(f)) => Some(std::sync::Arc::clone(f)), _ => None } }\n",
+        ));
+        // M100 v3: la escritura en el stdin de un hijo VIVO. Escribe TODO el dato; si el pipe se
+        // llena, con fibras espera a que sea escribible en el reactor (`wait_writable`) y sin ellas
+        // duerme 1 ms — el espejo de lo que hace la VM aparcando por interés de escritura. Tags y
+        // mensajes idénticos a la VM (`["ok",""]`/`["err", msg]` de SocketWriteBytes).
+        out.push_str(concat!(
+            "fn __ray_proc_write(h: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    use std::io::Write;\n",
+            "    let tag = |a: &str, b: String| Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(a), Rc::<str>::from(b.as_str())]));\n",
+            "    let Some(f) = __ray_stdin_clone(h) else { return tag(\"err\", format!(\"invalid child stdin handle: {}\", h)); };\n",
+            "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*f);\n",
+            "    let _ = fd;\n",
+            "    let mut off = 0usize;\n",
+            "    while off < data.len() {\n",
+            "        let mut w = &*f;\n",
+            "        match w.write(&data[off..]) {\n",
+            "            Ok(n) => off += n,\n",
+            "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => ",
+        ));
+        out.push_str(if t.fibers {
+            "{ ray_runtime::fibers::wait_writable(fd); }\n"
+        } else {
+            "{ std::thread::sleep(std::time::Duration::from_millis(1)); }\n"
+        });
+        out.push_str(concat!(
+            "            Err(e) => return tag(\"err\", e.to_string()),\n",
+            "        }\n",
+            "    }\n",
+            "    tag(\"ok\", String::new()) }\n",
         ));
         // M100 fase 2e: la cosecha ESTRUCTURAL. Un proceso lanzado con stream() se ATA al scope
         // activo como un hijo más — vía el MISMO trait __RayScopeChild que las tareas: done()

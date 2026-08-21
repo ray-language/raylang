@@ -9407,3 +9407,21 @@ el resto de la familia (`__ray_read_bytes`/`__ray_seek` en el runtime generado, 
 de error que la VM). Verificado byte-idéntico en los tres. El generado global gana
 `unreachable_patterns` en su `#![allow]` (el `match` del registro de handles tiene brazos que
 solo existen cuando el programa usa la red).
+
+### 104.b — M113b: el LSP ve los tests como los ve `ray test`
+
+El primer uso real de la API nueva destapó una incoherencia vieja: el test de integración del
+proyecto del usuario (`takeit/tests/chunk_review_test.ray`, `import fileread;`) corría en verde
+con `ray test` pero el editor lo subrayaba con "module 'fileread' not found". La razón: `ray
+test` añadía **a mano** la raíz de la entrada (`src/`) como raíz extra del loader para que los
+`tests/*.ray` importen los módulos del proyecto, y el LSP —que resuelve con
+`deps::dependency_roots_for`— no conocía esa convención (su `project_root_for` busca un ancestro
+con `main.ray`, y en un proyecto con `ray.toml` el `main.ray` vive DENTRO de `src/`).
+
+El arreglo mueve la convención al sitio compartido: `dependency_roots_for` añade, en un
+proyecto-aplicación (manifest con entrada existente), el **directorio de la entrada** como raíz
+de respaldo (al final: para un archivo de `src/` su propia raíz ya manda). Con eso el LSP y
+`ray run tests/x.ray` resuelven exactamente igual que `ray test` — que es la promesa que la
+función ya declaraba en su doc ("un archivo diagnostica con las MISMAS raíces con las que
+corre"). Guarda: test de LSP con un proyecto `ray.toml` + `src/` + `tests/` (el import resuelve;
+un error de tipos real se sigue reportando), verificado en rojo sin el arreglo.

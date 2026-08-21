@@ -72,6 +72,14 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Corregido (bloque siguiente)
 
+- **El LSP resuelve los imports de un `tests/*.ray` como `ray test`** (M113b): el editor marcaba
+  "module 'fileread' not found" sobre un test de integración que corría en verde — `ray test`
+  añadía a mano la raíz de la entrada (`src/`) como raíz extra del loader y el LSP no. La regla
+  vive ahora en `deps::dependency_roots_for` (compartida por CLI y LSP): en un proyecto-aplicación
+  con `ray.toml`, el directorio de la entrada entra como raíz de **respaldo** — el editor y
+  `ray run tests/x.ray` resuelven igual que `ray test`.
+
+
 - **`std/markdown`: el `_` intra-palabra ya no crea énfasis** (regla 17 de CommonMark):
   `snake_case_name` en prosa quedaba mutilado a `snake<em>case</em>name` — especialmente dañino
   para agentes de código, que escriben identificadores en prosa constantemente. Un delimitador

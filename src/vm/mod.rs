@@ -2510,6 +2510,31 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::ReadBytesHandle => {
+                    let (max, handle) = match (self.pop(), self.pop()) {
+                        (HeapValue::Int(m), HeapValue::Int(h)) => (m, h),
+                        _ => unreachable!("the checker guarantees two ints"),
+                    };
+                    let elems = match crate::builtins::read_bytes_handle(handle, max) {
+                        Ok(Some(data)) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
+                        Ok(None) => vec![HeapValue::Bytes(b"eof".to_vec())],
+                        Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::SeekHandle => {
+                    let (pos, handle) = match (self.pop(), self.pop()) {
+                        (HeapValue::Int(p), HeapValue::Int(h)) => (p, h),
+                        _ => unreachable!("the checker guarantees two ints"),
+                    };
+                    let elems = match crate::builtins::seek_handle(handle, pos) {
+                        Ok(p) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(p.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::WriteHandle => {
                     let s = self.pop();
                     let handle = self.pop();

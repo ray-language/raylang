@@ -37,6 +37,14 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/fs`: lectura por trozos + `seek`** (M113): `fs.read_bytes(h, max) ->
+  Result<Option<bytes>, string>` lee hasta `max` octetos del handle desde su posición actual
+  (trozos **exactos** salvo cerca del final; `None` = EOF; la memoria queda acotada por lo
+  leído — la primitiva para transferir/trocear archivos grandes sin cargarlos enteros, que
+  antes obligaba a lanzar un `cat` externo vía `std/process`) y `fs.seek(h, pos) ->
+  Result<int, string>` mueve la posición absoluta (con `read_bytes` da transferencias
+  **reanudables**). En los tres motores, byte-idénticos.
+
 - **`std/markdown`: diagramas Mermaid** (M111.c): una cerca ` ```mermaid ` emite el contenedor
   que `mermaid.js` busca en la página (`<pre class="mermaid">`, texto escapado) en vez de
   `<pre><code class="language-mermaid">` — el render del diagrama es client-side, como en todos

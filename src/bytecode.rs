@@ -520,6 +520,14 @@ pub enum OpCode {
     /// Saca el contenido y un handle (int); escribe y empuja un `[string]` etiquetado
     /// `["ok"]`/`["err", msg]`. Primitivo `__write_handle`; el prelude → `Result<int,string>`.
     WriteHandle,
+    /// M113: saca `max` y un handle (int); lee hasta `max` octetos desde la posición actual y
+    /// empuja un `[bytes]` etiquetado `[b"ok", datos]` / `[b"eof"]` / `[b"err", msg]`.
+    /// Primitivo `__read_bytes_handle`; `std/fs` → `Result<Option<bytes>, string>`.
+    ReadBytesHandle,
+    /// M113: saca `pos` y un handle (int); mueve la posición del archivo a `pos` octetos desde el
+    /// inicio y empuja `["ok", nueva_pos]` / `["err", msg]`. Primitivo `__seek_handle`;
+    /// `std/fs` → `Result<int, string>`.
+    SeekHandle,
     /// M107.1 (std/io): escribe el string a stdout SIN salto de línea → `["ok"]`/`["err", msg]`.
     /// Primitivo `__stdout_write`; `std/io` → `Result<int,string>`.
     StdoutWrite,

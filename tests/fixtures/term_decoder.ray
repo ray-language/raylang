@@ -32,14 +32,14 @@ fn show(buf: bytes) {
 fn main() -> int {
     show(b"a");
     show(b"Z");
-    show(b"\x0d");
-    show(b"\x0a");
-    show(b"\x09");
+    show(b"\r");
+    show(b"\n");
+    show(b"\t");
     show(b"\x7f");
-    show(b"\x03");            // Ctrl-C
-    show(b"\x1a");            // Ctrl-Z
-    show(b"\x1b");            // ESC solo: incompleta (el plazo la resuelve)
-    show(b"\x1b[");           // CSI sin final: incompleta
+    show(b"\x03");  // Ctrl-C
+    show(b"\x1a");  // Ctrl-Z
+    show(b"\x1b");  // ESC solo: incompleta (el plazo la resuelve)
+    show(b"\x1b[");  // CSI sin final: incompleta
     show(b"\x1b[A");
     show(b"\x1b[B");
     show(b"\x1b[C");
@@ -53,18 +53,18 @@ fn main() -> int {
     show(b"\x1b[4~");
     show(b"\x1b[5~");
     show(b"\x1b[6~");
-    show(b"\x1b[15~");        // F5
-    show(b"\x1b[17~");        // F6
-    show(b"\x1b[24~");        // F12
-    show(b"\x1b[1;5C");       // Ctrl-Right → right (modificadores ignorados v1)
-    show(b"\x1bOP");          // F1
-    show(b"\x1bOS");          // F4
-    show(b"\x1bx");           // Alt-x → esc (v1), consume 1
-    show(b"\xc3\xb1");        // ñ
-    show(b"\xc3");            // UTF-8 a medias: incompleta
-    show(b"\xe2\x82\xac");    // €
-    show(b"\xf0\x9f\x91\x8d"); // 👍 (4 bytes)
-    show(b"\x80");            // continuación suelta → ?
-    show(b"a\x1b[A");         // solo decodifica la PRIMERA tecla
+    show(b"\x1b[15~");  // F5
+    show(b"\x1b[17~");  // F6
+    show(b"\x1b[24~");  // F12
+    show(b"\x1b[1;5C");  // Ctrl-Right → right (modificadores ignorados v1)
+    show(b"\x1bOP");  // F1
+    show(b"\x1bOS");  // F4
+    show(b"\x1bx");  // Alt-x → esc (v1), consume 1
+    show(b"\xc3\xb1");  // ñ
+    show(b"\xc3");  // UTF-8 a medias: incompleta
+    show(b"\xe2\x82\xac");  // €
+    show(b"\xf0\x9f\x91\x8d");  // 👍 (4 bytes)
+    show(b"\x80");  // continuación suelta → ?
+    show(b"a\x1b[A");  // solo decodifica la PRIMERA tecla
     0
 }

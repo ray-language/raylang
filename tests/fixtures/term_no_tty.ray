@@ -6,7 +6,10 @@ fn main() -> int {
         Option.Some(wh) => print("size " + to_string(wh.0)),
         Option.None => print("no-size"),
     }
-    match (term.raw(fn() -> int { print("CORRIO"); 1 })) {
+    match (term.raw(fn() -> int {
+        print("CORRIO");
+        1
+    })) {
         Result.Ok(v) => print("ok " + to_string(v)),
         Result.Err(_) => print("raw-err"),
     }

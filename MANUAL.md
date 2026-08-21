@@ -986,7 +986,8 @@ Tres cosas que saber del modo crudo: no hay eco ni Ctrl-C (decide tu programa: `
 entrega como `Key.Char`/`Key.Ctrl`); no hay OPOST, así que las líneas terminan con `\r\n`
 explícito; y la restauración está garantizada al salir del proceso — salvo señal fatal o
 `kill -9`, como en cualquier programa de terminal (`reset` lo arregla). Para redimensionamiento,
-`select` sobre `signals()` + `term.size()` (SIGWINCH llega en M107.4).
+`select` sobre `signals()` + `term.size()`: SIGWINCH (28) llega por el canal de señales al
+redimensionar la ventana.
 
 ### Archivos (`std/fs` — todo con errores como valores)
 
@@ -1395,9 +1396,10 @@ fn main() -> int {
 - `Channel.bounded(n)` — acotado: con la cola llena, `send` **bloquea** (backpressure). `n = 0` =
   rendezvous síncrono.
 - `close(ch)` — los valores pendientes aún se reciben; después `recv` da `None`.
-- `signals() -> Channel<int>` — el canal de **señales del SO** (SIGTERM=15, SIGINT=2), para el
-  **apagado ordenado** de un servicio: compone con `recv`/`select` (drena tu canal de trabajo O
-  apaga). Singleton del proceso; solo VM y unix. Ejemplo completo en
+- `signals() -> Channel<int>` — el canal de **señales del SO** (SIGTERM=15, SIGINT=2, y
+  SIGWINCH=28 para el re-maquetado de TUIs), para el **apagado ordenado** de un servicio: compone
+  con `recv`/`select` (drena tu canal de trabajo O apaga). Singleton del proceso; unix (VM y
+  binario nativo). Ejemplo completo en
   [`examples/concurrency/senales.ray`](examples/concurrency/senales.ray). Para un servidor web no
   hace falta cablearlo a mano: `webserver.serve_graceful(host, port, drain_ms, handler)` ya lo
   hace — con SIGTERM deja de aceptar, **drena las peticiones en vuelo** con plazo y devuelve 0

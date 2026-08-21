@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`signals()` entrega también SIGWINCH (28)** (M107.4, cierre del arco de terminal): con
+  `select` sobre `signals()` + `term.size()`, una TUI se re-maqueta al redimensionar la ventana.
+  El 28 coincide en macOS/BSD y Linux; VM y binario nativo (de paso se corrige la doc rancia que
+  decía "solo VM": el nativo tiene el self-pipe desde M88.1).
+
 - **`std/term` — el terminal** (M107.3): `is_tty(fd)`, `size() -> Option<(int, int)>`,
   `raw(f)` (modo crudo con restauración garantizada: al salir de `f` aunque falle, y al salir el
   proceso vía `atexit`), `read_key() -> Option<Key>` y el decodificador **puro**

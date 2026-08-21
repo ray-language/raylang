@@ -365,7 +365,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure).",
         "recv" => "Receives from a channel: blocks while it is empty and open; returns `None` once it is closed and drained.",
         "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
-        "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2 arrive as ints) for graceful shutdown. A singleton; composes with `recv`/`select`. VM only; unix only (M88.1).",
+        "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
         "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
@@ -2988,6 +2988,8 @@ mod signals_host {
 
     const SIGINT: i32 = 2;
     const SIGTERM: i32 = 15;
+    /// M107.4: cambio de tamaño del terminal (28 en macOS/BSD Y Linux — la rara coincidencia).
+    const SIGWINCH: i32 = 28;
     const F_SETFL: i32 = 4;
     const F_SETFD: i32 = 2;
     const FD_CLOEXEC: i32 = 1;
@@ -3037,6 +3039,9 @@ mod signals_host {
         unsafe {
             signal(SIGTERM, on_signal as *const () as usize);
             signal(SIGINT, on_signal as *const () as usize);
+            // M107.4: SIGWINCH — con `select` sobre signals() + term.size(), una TUI se
+            // re-maqueta al redimensionar la ventana.
+            signal(SIGWINCH, on_signal as *const () as usize);
         }
         Ok(fds[0])
     }

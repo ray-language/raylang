@@ -532,6 +532,14 @@ pub enum OpCode {
     /// `__stdout_flush`; sin él, un `write` sin salto puede no verse hasta el fin del proceso
     /// (stdout va line-buffered).
     StdoutFlush,
+    /// M107.2 (std/io): lee hasta `max` octetos de stdin → `[datos]` o `[]` (EOF). En la VM
+    /// APARCA la fibra si no hay nada que leer (poller sobre el fd 0, patrón `SocketRead`).
+    /// Primitivo `__stdin_read`; `std/io` → `Option<bytes>`.
+    StdinRead,
+    /// M107.2 (std/io): como `StdinRead` con plazo → `[b"data", datos]`/`[b"eof"]`/`[b"timeout"]`.
+    /// Primitivo `__stdin_read_timeout`; el deadline reusa la maquinaria de M56.4 con el
+    /// pseudo-handle 0 de stdin.
+    StdinReadTimeout,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

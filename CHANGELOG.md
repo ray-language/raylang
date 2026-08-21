@@ -37,6 +37,14 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/io` — lectura de stdin por bytes, que aparca la fibra** (M107.2): `io.read(max) ->
+  Option<bytes>` (`None` = EOF) e `io.read_timeout(max, ms) -> ReadResult`
+  (`Data`/`Eof`/`TimedOut`). En la VM, una lectura sin datos **aparca la fibra en el poller**
+  (patrón de los sockets, sin tocar los flags del fd: `poll(2)` responde "¿hay algo ya?" y solo
+  entonces se lee) — un programa puede animar/servir mientras espera teclas. En el nativo con
+  fibras, por el reactor (`wait_readable`); sin fibras, lectura bloqueante en su hilo. El plazo
+  reusa la maquinaria de deadlines de los sockets (M56.4) con el pseudo-handle 0 de stdin.
+
 - **`std/io` — escritura sin salto de línea + flush** (M107.1, primera pieza del arco de terminal):
   `io.write(s)` / `io.ewrite(s)` / `io.write_bytes(b)` → `Result<int, string>` y `io.flush()`.
   Cubre prompts, barras de progreso y secuencias de escape (antes: abrir `/dev/stdout` en append

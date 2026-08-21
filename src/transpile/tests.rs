@@ -31,6 +31,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
+    "__stdin_read", "__stdin_read_timeout",
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
     "__monotonic", "__monotonic_nanos", "__now", "__random", "__random_int", "__random_seed", "__sleep",
     // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).
@@ -1014,6 +1015,27 @@ fn transpiles_std_io_through_the_print_channel() {
     assert!(rust.contains("__ray_stdout_write("), "write por el canal: {rust}");
     assert!(rust.contains("__ray_flush_prints(); Rc::new"), "flush = drenar el canal: {rust}");
     assert!(rust.contains("std::io::stderr().lock().write_all"), "stderr directo: {rust}");
+}
+
+#[test]
+fn transpiles_stdin_read_via_the_reactor() {
+    // M107.2: la lectura de stdin aparca la FIBRA (poll "¿listo ya?" + wait_readable(0) del
+    // reactor); el runtime __ray_stdin_* solo se anexa si el programa lee stdin.
+    let src = r#"fn main() -> int {
+    let a = __stdin_read(8);
+    let b = __stdin_read_timeout(8, 50);
+    print(a.len() + b.len());
+    0
+}
+"#;
+    let rust = transpile_src_fibers(src);
+    assert!(rust.contains("__ray_stdin_read("), "primitivo read: {rust}");
+    assert!(rust.contains("__ray_stdin_read_timeout("), "primitivo read_timeout: {rust}");
+    assert!(rust.contains("ray_runtime::fibers::wait_readable(0)"), "aparca la fibra en el reactor: {rust}");
+    assert!(rust.contains("wait_readable_timeout(0,"), "plazo por el reactor: {rust}");
+    // Sin lecturas de stdin, el runtime no se emite.
+    let bare = transpile_src("fn main() -> int { 0 }");
+    assert!(!bare.contains("__ray_stdin"), "runtime de stdin solo bajo demanda");
 }
 
 #[test]

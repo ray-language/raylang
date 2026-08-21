@@ -33,3 +33,11 @@ Peligro: [xss](javascript:alert(1)) e imagen ![alt "x"](https://img.example/pic.
 |:----------|:------:|------:|
 | M108      | *ok*   | 5     |
 | M111 con \| pipe | **ok** | 12 |
+
+## Diagrama
+
+```mermaid
+graph TD
+    A[VM] -->|bytecode| B(Runtime)
+    A --> C{Checker}
+```

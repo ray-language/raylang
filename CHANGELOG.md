@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/markdown`: diagramas Mermaid** (M111.c): una cerca ` ```mermaid ` emite el contenedor
+  que `mermaid.js` busca en la página (`<pre class="mermaid">`, texto escapado) en vez de
+  `<pre><code class="language-mermaid">` — el render del diagrama es client-side, como en todos
+  los generadores; en el AST sigue siendo `Code("mermaid", …)` para quien renderice distinto.
+
 - **`std/markdown`: tablas GFM** (M111.b): cabecera + fila separadora (`|---|:--:|`) →
   `Block.Table(aligns, header, rows)` y `<table>` con `align`; `\|` escapado, filas cortas se
   rellenan, cabecera y separadora con distinto número de columnas no es tabla (párrafo intacto).

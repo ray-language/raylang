@@ -94,6 +94,14 @@ fn targeted_cases() {
         ("| a | b |\n|---|\n", "<p>| a | b |\n|---|</p>\n"),
         // Cabecera sin cuerpo.
         ("| x |\n|---|\n", "<table>\n<thead>\n<tr><th>x</th></tr>\n</thead>\n</table>\n"),
+        // Mermaid (M111.c): el contenedor que mermaid.js busca, con el texto ESCAPADO — el
+        // diagrama lo renderiza la página (client-side), no el parser.
+        (
+            "```mermaid\ngraph TD\n    A --> B\n```\n",
+            "<pre class=\"mermaid\">graph TD\n    A --&gt; B\n</pre>\n",
+        ),
+        // Otros lenguajes no cambian: siguen en <pre><code class=\"language-…\">.
+        ("```viz\nx\n```\n", "<pre><code class=\"language-viz\">x\n</code></pre>\n"),
     ];
     let base = tmp("casos");
     for engine in ["--vm", "--interp"] {

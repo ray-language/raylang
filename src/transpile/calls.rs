@@ -1285,6 +1285,35 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(")())");
             }
+            // std/io (M107.1): stdout sin salto va por el CANAL del escritor de M96f
+            // (`__ray_stdout_write`, sin '\n'): escribir directo a `std::io::stdout` rompería el
+            // orden respecto a `print` (asíncrono). stderr sí escribe directo (como `eprintln!`).
+            // El primitivo devuelve el arreglo etiquetado ["ok"]/["err", msg] del contrato de la VM;
+            // por el canal el envío no falla (los errores del writer se tragan, como en `print`) →
+            // siempre ["ok"]. Guardas por el nombre crudo: solo interceptan el PRIMITIVO `__…`.
+            "stdout_write" if name.starts_with("__") => {
+                out.push_str("{ __ray_stdout_write((&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").as_bytes().to_vec()); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\")])) }");
+            }
+            "stdout_write_bytes" if name.starts_with("__") => {
+                out.push_str("{ __ray_stdout_write((&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").to_vec()); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\")])) }");
+            }
+            "stdout_flush" if name.starts_with("__") => {
+                out.push_str(
+                    "{ __ray_flush_prints(); Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\")])) }",
+                );
+            }
+            "stderr_write" if name.starts_with("__") => {
+                out.push_str("{ use std::io::Write; match std::io::stderr().lock().write_all((&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(
+                    ").as_bytes()) { Ok(()) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\")])), \
+                     Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__rt_e.to_string())])) } }",
+                );
+            }
             // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
             // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
             "__task_failed" => {

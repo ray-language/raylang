@@ -30,6 +30,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__is_dir", "__is_file", "__list_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
+    "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
     "__monotonic", "__monotonic_nanos", "__now", "__random", "__random_int", "__random_seed", "__sleep",
     // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).
@@ -992,6 +993,27 @@ fn channel_inside_message_crosses_shared() {
     );
     assert!(rust.contains("__RaySend::Ch("), "el canal entra al árbol Send compartido: {}", rust);
     assert!(rust.contains("downcast_ref::<__RayChan<i64>>"), "from downcastea al canal concreto: {}", rust);
+}
+
+#[test]
+fn transpiles_std_io_through_the_print_channel() {
+    // M107.1: los writes a stdout van por el CANAL del escritor de M96f (orden respecto a `print`);
+    // stderr escribe directo (como eprintln); flush espera el drenado del canal.
+    // Sobre los PRIMITIVOS (transpile_src no pasa por el loader → sin imports); el wrapper de
+    // std/io es raylang normal y lo cubre el e2e de tests/io_cli.rs.
+    let src = r#"fn main() -> int {
+    let a = __stdout_write("a");
+    let b = __stdout_write_bytes(b"x");
+    let e = __stderr_write("e");
+    let f = __stdout_flush();
+    print(a.len() + b.len() + e.len() + f.len());
+    0
+}
+"#;
+    let rust = transpile_src(src);
+    assert!(rust.contains("__ray_stdout_write("), "write por el canal: {rust}");
+    assert!(rust.contains("__ray_flush_prints(); Rc::new"), "flush = drenar el canal: {rust}");
+    assert!(rust.contains("std::io::stderr().lock().write_all"), "stderr directo: {rust}");
 }
 
 #[test]

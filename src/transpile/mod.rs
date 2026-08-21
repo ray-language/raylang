@@ -438,22 +438,26 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     // `std::process::exit` no corre destructores de ningún hilo → `__ray_flush_prints()` espera
     // (con un tope de 500 ms de salvavidas) a que el escritor haya vaciado TODO lo enviado hasta
     // ese instante, antes de cada uno de los 3 sitios que llaman `std::process::exit`.
+    // M107.1 (std/io): `io.write`/`io.write_bytes` van por el MISMO canal (`__ray_stdout_write`,
+    // sin '\n'), o su orden respecto a `print` se rompería; el canal lleva BYTES crudos (el `\n`
+    // de cada print lo añade el emisor) para que `write_bytes` no pase por UTF-8. `io.flush()` =
+    // `__ray_flush_prints()` (espera el drenado; el escritor ya hace flush por lote).
     out.push_str(concat!(
         "static __RAY_PRINT_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
         "static __RAY_PRINT_WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);\n",
-        "static __RAY_PRINT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<String>> = std::sync::OnceLock::new();\n",
-        "fn __ray_print_tx() -> &'static std::sync::mpsc::Sender<String> {\n",
+        "static __RAY_PRINT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<Vec<u8>>> = std::sync::OnceLock::new();\n",
+        "fn __ray_print_tx() -> &'static std::sync::mpsc::Sender<Vec<u8>> {\n",
         "    __RAY_PRINT_TX.get_or_init(|| {\n",
-        "        let (tx, rx) = std::sync::mpsc::channel::<String>();\n",
+        "        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();\n",
         "        std::thread::spawn(move || {\n",
         "            use std::io::Write;\n",
         "            let mut out = std::io::stdout();\n",
         "            loop {\n",
         "                match rx.recv_timeout(std::time::Duration::from_millis(5)) {\n",
-        "                    Ok(line) => {\n",
-        "                        let mut buf = line; buf.push('\\n'); let mut n: u64 = 1;\n",
-        "                        while let Ok(more) = rx.try_recv() { buf.push_str(&more); buf.push('\\n'); n += 1; }\n",
-        "                        let _ = out.write_all(buf.as_bytes());\n",
+        "                    Ok(chunk) => {\n",
+        "                        let mut buf = chunk; let mut n: u64 = 1;\n",
+        "                        while let Ok(more) = rx.try_recv() { buf.extend_from_slice(&more); n += 1; }\n",
+        "                        let _ = out.write_all(&buf);\n",
         "                        let _ = out.flush();\n",
         "                        __RAY_PRINT_WRITTEN.fetch_add(n, std::sync::atomic::Ordering::Release);\n",
         "                    }\n",
@@ -462,8 +466,12 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         "                }\n            }\n        });\n",
         "        tx\n    })\n}\n",
         "fn __ray_buffered_print(line: String) {\n",
+        "    let mut b = line.into_bytes(); b.push(b'\\n');\n",
         "    __RAY_PRINT_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
-        "    let _ = __ray_print_tx().send(line);\n}\n",
+        "    let _ = __ray_print_tx().send(b);\n}\n",
+        "fn __ray_stdout_write(b: Vec<u8>) {\n",
+        "    __RAY_PRINT_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);\n",
+        "    let _ = __ray_print_tx().send(b);\n}\n",
         "fn __ray_flush_prints() {\n",
         "    if __RAY_PRINT_TX.get().is_none() { return; }\n",
         "    let target = __RAY_PRINT_SENT.load(std::sync::atomic::Ordering::Relaxed);\n",

@@ -520,6 +520,18 @@ pub enum OpCode {
     /// Saca el contenido y un handle (int); escribe y empuja un `[string]` etiquetado
     /// `["ok"]`/`["err", msg]`. Primitivo `__write_handle`; el prelude → `Result<int,string>`.
     WriteHandle,
+    /// M107.1 (std/io): escribe el string a stdout SIN salto de línea → `["ok"]`/`["err", msg]`.
+    /// Primitivo `__stdout_write`; `std/io` → `Result<int,string>`.
+    StdoutWrite,
+    /// M107.1 (std/io): como `StdoutWrite`, a stderr. Primitivo `__stderr_write`.
+    StderrWrite,
+    /// M107.1 (std/io): escribe bytes crudos a stdout (secuencias de escape, salida binaria) →
+    /// `["ok"]`/`["err", msg]`. Primitivo `__stdout_write_bytes`.
+    StdoutWriteBytes,
+    /// M107.1 (std/io): vacía el buffer de stdout → `["ok"]`/`["err", msg]`. Primitivo
+    /// `__stdout_flush`; sin él, un `write` sin salto puede no verse hasta el fin del proceso
+    /// (stdout va line-buffered).
+    StdoutFlush,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

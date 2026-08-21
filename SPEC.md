@@ -477,6 +477,7 @@ Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista
 | `std/inflate`, `std/deflate`, `std/huffman` | compresión (gzip/zlib/DEFLATE) |
 | `std/kv`, `std/resilience` | almacén clave-valor persistente (compartible entre fibras) y utilidades de resiliencia: reintentos con política, *circuit breaker* y plazos (`deadline`/`expired`) |
 | `std/ffi` | helpers de la frontera C: `errno()` (el `errno` del hilo tras una extern estilo POSIX; leerlo inmediatamente tras la llamada) |
+| `std/io` | escritura a stdout/stderr **sin salto de línea** + flush: `write`/`ewrite`/`write_bytes` (→ `Result<int,string>`) y `flush()`. stdout va con buffer (un `write` sin `\n` puede no verse hasta `flush()`); stderr no. El **orden** entre `print` e `io.write` es el de programa en los tres motores |
 | `std/units` | constructores de tamaño a bytes, convención binaria 1024ⁿ (`kb`/`mb`/`gb`) |
 
 Un módulo `std/…` puede depender de que el binario incluya un subsistema (TLS/cripto necesitan

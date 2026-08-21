@@ -31,6 +31,11 @@ pub fn push_stdout(s: &str) {
     });
 }
 
+/// M107.1 (std/io): acumula texto SIN salto de línea (io.write en el playground).
+pub fn push_stdout_raw(s: &str) {
+    OUTPUT.with(|o| o.borrow_mut().push_str(s));
+}
+
 /// Acumula una línea de `eprint`. En el playground stderr y stdout se muestran juntos.
 pub fn push_stderr(s: &str) {
     push_stdout(s);

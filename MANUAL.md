@@ -893,6 +893,32 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
 
 ## 13. I/O y sistema
 
+### Consola sin salto de línea (`std/io`)
+
+`print`/`eprint` siempre añaden `\n`. Para prompts, barras de progreso o secuencias de escape de
+terminal está `std/io`:
+
+```rust
+import std/io;
+
+fn main() -> int {
+    let _ = io.write("¿Continuar? [s/n] ");   // sin salto…
+    let _ = io.flush();                       // …y flush: stdout va con buffer
+    match (input()) {
+        Option.Some(r) => print("dijiste: " + r),
+        Option.None => print("EOF"),
+    }
+    let _ = io.write_bytes(b"\x1b[1mnegrita\x1b[0m\n"); // bytes crudos (escapes ANSI)
+    let _ = io.ewrite("aviso sin salto en stderr");        // stderr: sin buffer, sin flush
+    0
+}
+```
+
+Las tres escrituras devuelven `Result<int, string>` (nº de caracteres/bytes). Regla práctica: tras
+`write`/`write_bytes` sin `\n`, llama `io.flush()` si necesitas ver la salida ya; `ewrite` no lo
+necesita. El orden entre `print` e `io.write` es siempre el del programa, también en el binario
+nativo.
+
 ### Archivos (`std/fs` — todo con errores como valores)
 
 ```rust

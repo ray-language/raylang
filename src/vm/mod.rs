@@ -2523,6 +2523,42 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // --- std/io (M107.1): stdout/stderr sin salto + flush; arreglo etiquetado. ---
+                OpCode::StdoutWrite | OpCode::StderrWrite => {
+                    let HeapValue::Str(s) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let r = if matches!(instr, OpCode::StdoutWrite) {
+                        crate::builtins::stdout_write(&s)
+                    } else {
+                        crate::builtins::stderr_write(&s)
+                    };
+                    let elems = match r {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::StdoutWriteBytes => {
+                    let HeapValue::Bytes(b) = self.pop() else {
+                        unreachable!("the checker guarantees bytes");
+                    };
+                    let elems = match crate::builtins::stdout_write_bytes(&b) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::StdoutFlush => {
+                    let elems = match crate::builtins::stdout_flush() {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // --- Cliente TCP (M15.2): arreglo etiquetado en el heap; el prelude → Result. ---
                 OpCode::TcpConnect => {
                     let port = self.pop();

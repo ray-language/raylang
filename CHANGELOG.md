@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/io` — escritura sin salto de línea + flush** (M107.1, primera pieza del arco de terminal):
+  `io.write(s)` / `io.ewrite(s)` / `io.write_bytes(b)` → `Result<int, string>` y `io.flush()`.
+  Cubre prompts, barras de progreso y secuencias de escape (antes: abrir `/dev/stdout` en append
+  por cada escritura). `write_bytes` entrega los octetos intactos, sin pasar por UTF-8. En el
+  binario nativo, los writes van por el mismo canal que el `print` asíncrono (M96f) → el orden
+  entre `print` e `io.write` es el de programa en los tres motores, verificado byte a byte.
+
 - **Constructores de duración en `std/time`**: `millis seconds minutes hours days` convierten a la
   moneda de duración de la stdlib (int en **ms**) y, importados sin calificar, se leen en UFCS:
   `sleep(30.seconds())`, `2.hours() + 30.minutes()`. Sin sintaxis nueva: funciones ordinarias.

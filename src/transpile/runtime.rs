@@ -1284,6 +1284,72 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             ));
         }
     }
+    // M107.3 (std/term): isatty/tamaño/modo crudo. El MISMO diseño que el host de la VM
+    // (src/builtins.rs, mod term_host): termios como buffer OPACO de 128 bytes (el layout por SO
+    // deja de importar), `cfmakeraw(3)` rellena los flags, y `atexit(3)` garantiza la
+    // restauración en la salida normal y en `std::process::exit`. Unix; en otras plataformas
+    // is_tty=false / size=[] / raw=err.
+    if t.needs_term {
+        out.push_str(concat!(
+            "#[cfg(unix)]\n",
+            "mod __ray_term {\n",
+            "    use std::sync::atomic::{AtomicBool, Ordering};\n",
+            "    unsafe extern \"C\" {\n",
+            "        fn isatty(fd: i32) -> i32;\n",
+            "        fn tcgetattr(fd: i32, t: *mut u8) -> i32;\n",
+            "        fn tcsetattr(fd: i32, act: i32, t: *const u8) -> i32;\n",
+            "        fn cfmakeraw(t: *mut u8);\n",
+            "        fn ioctl(fd: i32, req: u64, ...) -> i32;\n",
+            "        fn atexit(f: extern \"C\" fn()) -> i32;\n",
+            "    }\n",
+            "    #[cfg(any(target_os = \"macos\", target_os = \"ios\", target_os = \"freebsd\"))]\n",
+            "    const TIOCGWINSZ: u64 = 0x4008_7468;\n",
+            "    #[cfg(not(any(target_os = \"macos\", target_os = \"ios\", target_os = \"freebsd\")))]\n",
+            "    const TIOCGWINSZ: u64 = 0x5413;\n",
+            "    #[repr(C)]\n",
+            "    struct WinSize { rows: u16, cols: u16, xp: u16, yp: u16 }\n",
+            "    static mut ORIGINAL: [u8; 128] = [0; 128];\n",
+            "    static SAVED: AtomicBool = AtomicBool::new(false);\n",
+            "    static ARMED: AtomicBool = AtomicBool::new(false);\n",
+            "    pub fn is_tty(fd: i32) -> bool { unsafe { isatty(fd) == 1 } }\n",
+            "    pub fn size() -> Option<(i64, i64)> {\n",
+            "        for fd in [1, 0, 2] {\n",
+            "            let mut ws = WinSize { rows: 0, cols: 0, xp: 0, yp: 0 };\n",
+            "            if unsafe { ioctl(fd, TIOCGWINSZ, &mut ws as *mut WinSize) } == 0 && ws.cols > 0 { return Some((ws.cols as i64, ws.rows as i64)); }\n",
+            "        }\n",
+            "        None\n    }\n",
+            "    extern \"C\" fn restore() {\n",
+            "        if SAVED.load(Ordering::Acquire) { unsafe { tcsetattr(0, 2, std::ptr::addr_of!(ORIGINAL) as *const u8) }; }\n",
+            "    }\n",
+            "    pub fn raw_on() -> Result<(), String> {\n",
+            "        let mut cur = [0u8; 128];\n",
+            "        unsafe {\n",
+            "            if tcgetattr(0, cur.as_mut_ptr()) != 0 { return Err(format!(\"stdin is not a terminal: {}\", std::io::Error::last_os_error())); }\n",
+            "            if !SAVED.load(Ordering::Acquire) { std::ptr::copy_nonoverlapping(cur.as_ptr(), std::ptr::addr_of_mut!(ORIGINAL) as *mut u8, 128); SAVED.store(true, Ordering::Release); }\n",
+            "            if !ARMED.swap(true, Ordering::AcqRel) { atexit(restore); }\n",
+            "            cfmakeraw(cur.as_mut_ptr());\n",
+            "            if tcsetattr(0, 2, cur.as_ptr()) != 0 { return Err(format!(\"could not enter raw mode: {}\", std::io::Error::last_os_error())); }\n",
+            "        }\n",
+            "        Ok(())\n    }\n",
+            "    pub fn raw_off() -> Result<(), String> {\n",
+            "        if !SAVED.load(Ordering::Acquire) { return Ok(()); }\n",
+            "        if unsafe { tcsetattr(0, 2, std::ptr::addr_of!(ORIGINAL) as *const u8) } != 0 { return Err(format!(\"could not restore the terminal: {}\", std::io::Error::last_os_error())); }\n",
+            "        Ok(())\n    }\n",
+            "}\n",
+            "fn __ray_term_is_tty(fd: i64) -> bool {\n",
+            "    #[cfg(unix)] { __ray_term::is_tty(fd as i32) }\n",
+            "    #[cfg(not(unix))] { let _ = fd; false }\n",
+            "}\n",
+            "fn __ray_term_size() -> Option<(i64, i64)> {\n",
+            "    #[cfg(unix)] { __ray_term::size() }\n",
+            "    #[cfg(not(unix))] { None }\n",
+            "}\n",
+            "fn __ray_term_raw(on: bool) -> Result<(), String> {\n",
+            "    #[cfg(unix)] { if on { __ray_term::raw_on() } else { __ray_term::raw_off() } }\n",
+            "    #[cfg(not(unix))] { let _ = on; Err(\"raw mode is not supported on this platform\".to_string()) }\n",
+            "}\n",
+        ));
+    }
     // signals() (M88.1): el canal de señales del SO (SIGTERM=15/SIGINT=2). El truco del self-pipe (como
     // la VM, `src/builtins.rs`): el handler (async-signal-safe: solo `write`) escribe el nº de señal a un
     // pipe; un hilo lector lo lee (bloqueante) y lo envía al canal. FFI a libc sin crates (siempre

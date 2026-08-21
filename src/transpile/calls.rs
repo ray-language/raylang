@@ -1333,6 +1333,24 @@ impl Transpiler {
                      Some(__rt_b) if __rt_b.is_empty() => vec![Rc::<[u8]>::from(&b\"eof\"[..])], \
                      Some(__rt_b) => vec![Rc::<[u8]>::from(&b\"data\"[..]), Rc::<[u8]>::from(__rt_b)] })) }");
             }
+            // std/term (M107.3): terminal (runtime `__ray_term_*`, ver runtime.rs).
+            "term_is_tty" if name.starts_with("__") => {
+                self.needs_term = true;
+                out.push_str("__ray_term_is_tty(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "term_size" if name.starts_with("__") => {
+                self.needs_term = true;
+                out.push_str("Rc::new(std::cell::RefCell::new(match __ray_term_size() { Some((c, r)) => vec![c, r], None => Vec::new() }))");
+            }
+            "term_raw_on" | "term_raw_off" if name.starts_with("__") => {
+                self.needs_term = true;
+                let on = if method == "term_raw_on" { "true" } else { "false" };
+                write!(out, "Rc::new(std::cell::RefCell::new(match __ray_term_raw({on}) {{ \
+                     Ok(()) => vec![Rc::<str>::from(\"ok\")], \
+                     Err(__rt_e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__rt_e)] }}))").unwrap();
+            }
             // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
             // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
             "__task_failed" => {

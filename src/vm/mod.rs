@@ -2629,6 +2629,34 @@ impl<'a> Vm<'a> {
                         if !self.poll_next(l, c2)? { self.stop = true; }
                     }
                 }
+                // --- std/term (M107.3): isatty / tamaño / modo crudo. ---
+                OpCode::TermIsTty => {
+                    let HeapValue::Int(fd) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    self.push(HeapValue::Bool(crate::builtins::term_is_tty(fd)));
+                }
+                OpCode::TermSize => {
+                    let elems = match crate::builtins::term_size() {
+                        Some((c, r)) => vec![HeapValue::Int(c), HeapValue::Int(r)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::TermRawOn | OpCode::TermRawOff => {
+                    let r = if matches!(instr, OpCode::TermRawOn) {
+                        crate::builtins::term_raw_on()
+                    } else {
+                        crate::builtins::term_raw_off()
+                    };
+                    let elems = match r {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // --- Cliente TCP (M15.2): arreglo etiquetado en el heap; el prelude → Result. ---
                 OpCode::TcpConnect => {
                     let port = self.pop();

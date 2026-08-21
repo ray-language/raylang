@@ -2484,6 +2484,28 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Int { return Err((Some(1), format!("__stdin_read_timeout expects an int (the timeout in ms), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // --- std/term (M107.3): terminal — isatty, tamaño, modo crudo. ---
+    // __term_is_tty(fd) -> bool: ¿el fd (0/1/2) es una terminal?
+    Builtin { name: "__term_is_tty", opcode: OpCode::TermIsTty, check: |a| {
+        arity(a, 1, "__term_is_tty", " (fd)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__term_is_tty expects an int (the fd), not {}", a[0]))); }
+        Ok(Type::Bool)
+    } },
+    // __term_size() -> [int]: [cols, rows], o [] si no hay terminal.
+    Builtin { name: "__term_size", opcode: OpCode::TermSize, check: |a| {
+        nullary(a, "__term_size")?;
+        Ok(Type::Array(Box::new(Type::Int)))
+    } },
+    // __term_raw_on() -> [string]: ["ok"] o ["err", msg]. Guarda el termios y activa el modo crudo.
+    Builtin { name: "__term_raw_on", opcode: OpCode::TermRawOn, check: |a| {
+        nullary(a, "__term_raw_on")?;
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __term_raw_off() -> [string]: ["ok"] o ["err", msg]. Restaura el termios guardado (no-op si no hay).
+    Builtin { name: "__term_raw_off", opcode: OpCode::TermRawOff, check: |a| {
+        nullary(a, "__term_raw_off")?;
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // --- Cliente TCP (M15.2): primitivos con arreglo etiquetado; el prelude → Result. ---
     // __tcp_connect(host, port) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__tcp_connect", opcode: OpCode::TcpConnect, check: |a| {
@@ -2778,6 +2800,165 @@ pub fn stdin_read(max: i64) -> Result<Vec<u8>, String> {
     #[cfg(target_arch = "wasm32")]
     {
         Ok(Vec::new()) // el playground no tiene stdin → EOF
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M107.3 — terminal (std/term): isatty, tamaño y modo crudo. `extern "C"` a mano
+// (precedente de src/poll.rs, cero crates), con dos trucos que evitan el detalle por SO:
+//
+// - El `termios` se maneja como BUFFER OPACO de 128 bytes alineados: nunca tocamos sus campos
+//   (macOS 72 bytes, glibc ~60 — 128 cubre a ambos con margen), así que el layout da igual;
+//   `cfmakeraw(3)` (libc en macOS y glibc) rellena los flags del modo crudo por nosotros —
+//   sin reproducir la tabla de constantes ICANON/ECHO/… que difiere por plataforma.
+// - `atexit(3)` registra la restauración: cubre la salida normal Y `std::process::exit` (los
+//   tres caminos del CLI). Lo que NO cubre: una señal fatal o kill -9 — como cualquier
+//   programa de terminal; `reset` lo arregla (documentado en MANUAL).
+//
+// `ioctl` es VARIÁDICA (el mismo gotcha de `fcntl` en arm64): se declara `...`.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod term_host {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    unsafe extern "C" {
+        fn isatty(fd: i32) -> i32;
+        fn tcgetattr(fd: i32, t: *mut u8) -> i32;
+        fn tcsetattr(fd: i32, act: i32, t: *const u8) -> i32;
+        fn cfmakeraw(t: *mut u8);
+        fn ioctl(fd: i32, req: u64, ...) -> i32;
+        fn atexit(f: extern "C" fn()) -> i32;
+    }
+
+    /// TCSAFLUSH: aplica tras drenar la salida y descarta la entrada pendiente (2 en macOS y Linux).
+    const TCSAFLUSH: i32 = 2;
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    const TIOCGWINSZ: u64 = 0x4008_7468;
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+    const TIOCGWINSZ: u64 = 0x5413;
+
+    #[repr(C)]
+    struct WinSize {
+        rows: u16,
+        cols: u16,
+        xpixel: u16,
+        ypixel: u16,
+    }
+
+    /// El termios ORIGINAL de stdin, guardado al entrar al modo crudo (buffer opaco, ver arriba).
+    /// Protegido por `SAVED`: solo se lee para restaurar si el raw_on lo rellenó.
+    static mut ORIGINAL: [u8; 128] = [0; 128];
+    static SAVED: AtomicBool = AtomicBool::new(false);
+    static ATEXIT_ARMED: AtomicBool = AtomicBool::new(false);
+
+    pub fn is_tty(fd: i32) -> bool {
+        // SAFETY: isatty solo consulta el fd.
+        unsafe { isatty(fd) == 1 }
+    }
+
+    /// (cols, rows) del terminal, probando stdout → stdin → stderr; `None` si ninguno es tty.
+    pub fn size() -> Option<(i64, i64)> {
+        for fd in [1, 0, 2] {
+            let mut ws = WinSize { rows: 0, cols: 0, xpixel: 0, ypixel: 0 };
+            // SAFETY: TIOCGWINSZ escribe un WinSize bien formado; no retiene el puntero.
+            if unsafe { ioctl(fd, TIOCGWINSZ, &mut ws as *mut WinSize) } == 0 && ws.cols > 0 {
+                return Some((ws.cols as i64, ws.rows as i64));
+            }
+        }
+        None
+    }
+
+    /// Restaura el termios guardado (la registra `atexit`; también la llama `raw_off`).
+    extern "C" fn restore() {
+        if SAVED.load(Ordering::Acquire) {
+            // SAFETY: ORIGINAL se escribió completo antes de publicar SAVED (Release).
+            unsafe { tcsetattr(0, TCSAFLUSH, std::ptr::addr_of!(ORIGINAL) as *const u8) };
+        }
+    }
+
+    pub fn raw_on() -> Result<(), String> {
+        let mut cur = [0u8; 128];
+        // SAFETY: buffers de 128 bytes, mayores que cualquier termios de las plataformas soportadas.
+        unsafe {
+            if tcgetattr(0, cur.as_mut_ptr()) != 0 {
+                return Err(format!("stdin is not a terminal: {}", std::io::Error::last_os_error()));
+            }
+            // Guarda el original UNA vez (si raw_on se llama dos veces, el original no se pisa
+            // con un termios ya crudo).
+            if !SAVED.load(Ordering::Acquire) {
+                std::ptr::copy_nonoverlapping(cur.as_ptr(), std::ptr::addr_of_mut!(ORIGINAL) as *mut u8, 128);
+                SAVED.store(true, Ordering::Release);
+            }
+            if !ATEXIT_ARMED.swap(true, Ordering::AcqRel) {
+                atexit(restore);
+            }
+            cfmakeraw(cur.as_mut_ptr());
+            if tcsetattr(0, TCSAFLUSH, cur.as_ptr()) != 0 {
+                return Err(format!("could not enter raw mode: {}", std::io::Error::last_os_error()));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn raw_off() -> Result<(), String> {
+        if !SAVED.load(Ordering::Acquire) {
+            return Ok(()); // nunca se entró al modo crudo: no-op
+        }
+        // SAFETY: ORIGINAL completo (ver restore).
+        if unsafe { tcsetattr(0, TCSAFLUSH, std::ptr::addr_of!(ORIGINAL) as *const u8) } != 0 {
+            return Err(format!("could not restore the terminal: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+}
+
+/// ¿El fd (0/1/2) es una terminal? Fuera de unix/wasm: false.
+pub fn term_is_tty(fd: i64) -> bool {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        term_host::is_tty(fd as i32)
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        let _ = fd;
+        false
+    }
+}
+
+/// (cols, rows) del terminal; `None` si no hay tty (o plataforma sin soporte).
+pub fn term_size() -> Option<(i64, i64)> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        term_host::size()
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        None
+    }
+}
+
+/// Activa el modo crudo del terminal (stdin). La restauración queda registrada con `atexit`.
+pub fn term_raw_on() -> Result<(), String> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        term_host::raw_on()
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        Err("raw mode is not supported on this platform".to_string())
+    }
+}
+
+/// Restaura el terminal al estado previo al primer `term_raw_on` (no-op si nunca se entró).
+pub fn term_raw_off() -> Result<(), String> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        term_host::raw_off()
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        Err("raw mode is not supported on this platform".to_string())
     }
 }
 

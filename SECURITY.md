@@ -139,8 +139,13 @@ documentada:
 - **`src/poll.rs`** — las llamadas al sistema del *poller* de E/S (`kqueue`/`epoll`), declaradas a
   mano para no traer `libc`.
 - **`src/builtins.rs`** — el canal de señales del proceso (`signals()`, un *self-pipe* con
-  `pipe`/`sigaction`) y la adopción del socket de escucha heredado del supervisor de `ray dev`
-  (`from_raw_fd` sobre un fd que el padre garantiza, con toma de propiedad única).
+  `pipe`/`sigaction`); la adopción del socket de escucha heredado del supervisor de `ray dev`
+  (`from_raw_fd` sobre un fd que el padre garantiza, con toma de propiedad única); la lectura de
+  stdin por bytes de `std/io` (M107.2: `poll(2)` + `read(2)` crudos sobre el fd 0, buffers propios
+  bien formados que la llamada no retiene); y el terminal de `std/term` (M107.3:
+  `isatty`/`tcgetattr`/`tcsetattr`/`cfmakeraw`/`ioctl(TIOCGWINSZ)`/`atexit` — el `termios` se
+  maneja como buffer opaco de 128 bytes, mayor que el de cualquier plataforma soportada, y el
+  original solo se lee para restaurar tras publicarse completo).
 - **`src/cli.rs`** — ese supervisor: `dup2`/`pre_exec` para pasar el socket al hijo sin rechazar
   conexiones entre reinicios, y la señal de muerte del padre.
 - **`src/lib.rs`** — `setrlimit(RLIMIT_NOFILE)` para subir el límite de descriptores del proceso.

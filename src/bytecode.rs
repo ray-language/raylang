@@ -540,6 +540,15 @@ pub enum OpCode {
     /// Primitivo `__stdin_read_timeout`; el deadline reusa la maquinaria de M56.4 con el
     /// pseudo-handle 0 de stdin.
     StdinReadTimeout,
+    /// M107.3 (std/term): ¿el fd (0/1/2) es una terminal? Primitivo `__term_is_tty`.
+    TermIsTty,
+    /// M107.3 (std/term): tamaño del terminal → `[cols, rows]` o `[]`. Primitivo `__term_size`.
+    TermSize,
+    /// M107.3 (std/term): entra al modo crudo (termios) → `["ok"]`/`["err", msg]`; la restauración
+    /// queda registrada con `atexit`. Primitivo `__term_raw_on`.
+    TermRawOn,
+    /// M107.3 (std/term): restaura el terminal → `["ok"]`/`["err", msg]`. Primitivo `__term_raw_off`.
+    TermRawOff,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

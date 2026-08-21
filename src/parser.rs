@@ -391,17 +391,19 @@ impl Parser {
         let (type_params, bounds) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
         self.expect(&TokenKind::LBrace, "'{' after the struct name")?;
         let mut fields = Vec::new();
+        let mut field_lines = Vec::new();
         while !self.check(&TokenKind::RBrace) {
-            let (fname, _, _) = self.expect_ident("a field name")?;
+            let (fname, fline, _) = self.expect_ident("a field name")?;
             self.expect(&TokenKind::Colon, "':' after the field name")?;
             let ty = self.parse_type()?;
             fields.push((fname, ty));
+            field_lines.push(fline);
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
         }
         self.expect(&TokenKind::RBrace, "'}' to close the struct")?;
-        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, fields, line: kw.line, col: kw.col })
+        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, fields, field_lines, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')'

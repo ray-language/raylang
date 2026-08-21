@@ -214,6 +214,16 @@ Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Corregido
 
+- **`ray fmt` movía comentarios de sitio.** Tres formas, todas destapadas al dejar el repo
+  fmt-clean: el blanco que separa un banner de sección del ítem de abajo se comía (y el banner pasaba
+  a leerse como su doc-comment); el comentario al final de la línea de un **campo de struct** se
+  volcaba **tras el `}`**, donde queda como doc del ítem siguiente (los campos no llevaban línea en
+  el AST — ahora sí, `StructDef.field_lines`); y el comentario al final de la línea de una **firma**
+  bajaba al interior del cuerpo, lo que además mueve su línea (y hay marcas que dependen de ella,
+  como el `// es-ok` de la política de nombres). Con esto, `src/prelude.ray` y
+  `tools/registry_site.ray` —los dos últimos archivos que `ray fmt` no dejaba en paz— quedan
+  formateados: **todo el `.ray` del repo es ahora un punto fijo del formateador**.
+
 - **`ray fmt` rompía el contenido de una cadena interpolada.** El repartir por ancho se colaba dentro
   de un `${…}`: en un template multilínea (un documento SVG/HTML, que rebasa el umbral por
   construcción) la primera llamada interpolada salía partida en varias líneas **dentro del literal**,

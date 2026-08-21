@@ -309,6 +309,10 @@ pub struct StructDef {
     /// sin bounds. Se verifican en la **construcción** del struct (no hay runtime).
     pub bounds: Vec<(String, String)>,
     pub fields: Vec<(String, Type)>,
+    /// Línea (1-basada) de cada campo, en el mismo orden que `fields`. Solo la usa el FORMATEADOR,
+    /// para acotar un comentario a su campo (los `VariantDef` de un enum ya llevan la suya). Vacío
+    /// cuando el struct es sintético (el `dyn` que fabrica el lowering, sin fuente detrás).
+    pub field_lines: Vec<usize>,
     pub line: usize,
     pub col: usize,
 }

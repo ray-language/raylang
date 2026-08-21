@@ -9106,3 +9106,30 @@ al entrar a cada interpolación y se restaura al salir; el `force` sin consumir 
 lo que venga **fuera** del literal, que sí es código. Es la misma familia que los tres casos de
 arriba —`wrap`/`force` cruzando una frontera que no debían cruzar—, pero la frontera aquí no es
 sintáctica sino la de código vs. datos.
+
+**Y una quinta, al perseguir el fmt-clean del repo (ago 2026).** Quedaban dos `.ray` que `ray fmt` no
+dejaba en paz (`src/prelude.ray`, `tools/registry_site.ray`). Formatearlos destapó que el problema no
+era su estilo sino que el formateador **movía comentarios de sitio**, tres veces:
+
+1. **El blanco de debajo de un banner se comía.** `flush_before` emitía los comentarios pegados al
+   ítem, así que `// ---- sección ----` + línea en blanco + `fn f` salía como si el banner fuese el
+   doc-comment de `f`. *Fix*: `flush_before` conserva los blancos **dentro** del grupo y el que lo
+   separaba del constructo. (El blanco de **encima** del grupo ya lo ponía el llamador; son dos
+   fronteras distintas.)
+2. **El trailing de un campo de struct emigraba fuera del struct.** Los campos eran `(nombre, tipo)`
+   **sin posición**, así que el comentario no podía acotarse a su campo y lo volcaba el contexto tras
+   el `}` — donde se lee como el doc del ítem de abajo. Era una limitación asumida en un comentario
+   del propio `fmt_struct`; se levantó añadiendo `StructDef.field_lines` (paralelo a `fields`, como
+   los `VariantDef` de un enum ya hacían). Es campo **solo para el formateador**: vacío en los structs
+   sintéticos que fabrica el lowering de `dyn`.
+3. **El trailing de una firma se hundía en el cuerpo.** El bucle de ítems solo consumía el trailing
+   de los ítems de UNA línea; en una `fn`, se lo quedaba el `flush_before` de la primera sentencia
+   del cuerpo. Además de leerse mal, **mueve la línea del comentario** — y hay marcas cuyo
+   significado es su línea: el `// es-ok` de la política de nombres exime la línea en la que está, así
+   que formatear el archivo habría roto el check de CI. *Fix*: el trailing se consume **antes** de
+   emitir el ítem (si no, el cuerpo ya se lo ha comido) y se pega a la primera línea de lo emitido.
+
+La lección de las tres: un comentario no es texto que se arrastra, es texto **anclado a una posición**,
+y el formateador tiene que saber a qué. Donde el AST no daba el ancla, el arreglo fue dar el ancla —no
+adivinarla. Con esto los ~250 `.ray` del repo son un punto fijo del formateador, y el check de CI que
+lo asevere ya se puede poner.

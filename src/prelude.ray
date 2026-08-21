@@ -1104,7 +1104,9 @@ fn recv<T>(ch: Channel<T>) -> Option<T> {
 /// before the failure stays mutated — use `spawn` plus `try_join` when you need real isolation.
 fn try_call<T>(f: fn() -> T) -> Result<T, string> {
     var slot: [T] = [];
-    let e = __try_call(fn() { slot.push(f()); });
+    let e = __try_call(fn() {
+        slot.push(f());
+    });
     if (e.len() > 0) {
         return Result.Err(e[0]);
     }

@@ -305,3 +305,39 @@ fn closed_stdout_pipe_exits_quietly_with_141() {
         assert!(!err.contains("panicked") && !err.contains("ICE"), "{label}: sin ruido en stderr: {err}");
     }
 }
+
+#[test]
+fn cli_output_to_a_closed_pipe_also_exits_quietly_with_141() {
+    // El residuo de #126: aquel fix cubrió la salida del PROGRAMA (print/eprint), pero la del
+    // propio CLI (`ray fmt x | head`, `ray doc | less`) seguía paniqueando con el ICE de
+    // "failed printing to stdout: Broken pipe". Ahora la red central de ICEs distingue ese
+    // pánico de la libstd y aplica la misma convención Unix: exit 141 en silencio. (La salida
+    // debe superar el buffer del pipe —64 KiB— o el EPIPE nunca ocurre.)
+    use std::io::Read;
+    let base = tmp("cli_epipe");
+    let mut src = String::from("fn main() -> int {\n");
+    for i in 0..6000 {
+        src.push_str(&format!("    let variable_number_{i} = {i};\n"));
+    }
+    src.push_str("    0\n}\n");
+    std::fs::write(base.join("big.ray"), src).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["fmt", "big.ray"])
+        .current_dir(&base)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("lanza ray fmt");
+    let mut out = child.stdout.take().unwrap();
+    let mut first = [0u8; 128];
+    let _ = out.read(&mut first);
+    drop(out); // ← el `head` del caso real: cierra el extremo de lectura
+    let status = child.wait().unwrap();
+    let mut err = String::new();
+    child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+    assert_eq!(status.code(), Some(141), "convención Unix\n{err}");
+    assert!(
+        !err.contains("panicked") && !err.contains("ICE"),
+        "sin traza de pánico ni banner de ICE: {err}"
+    );
+}

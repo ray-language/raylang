@@ -656,6 +656,19 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         {
             roots.push(parent);
         }
+        // M113b: en un proyecto-APLICACIÓN, el directorio de la entrada (típicamente `src/`) entra
+        // como raíz de RESPALDO. Es la convención que `ray test` ya aplicaba a mano ("la raíz de
+        // la entrada como raíz extra") para que un `tests/*.ray` importe los módulos del proyecto
+        // (`import fileread;`); al vivir aquí, el LSP (que diagnostica con estas mismas raíces) y
+        // `ray run tests/x.ray` resuelven IGUAL que `ray test` — antes el editor marcaba "module
+        // not found" sobre un test que corría en verde. Va al final: para un archivo de `src/` la
+        // raíz de su propia entrada ya manda, esto solo alcanza a los archivos de fuera.
+        if m.entry_path().is_file()
+            && let Some(entry_dir) = m.entry_path().parent().map(Path::to_path_buf)
+            && !roots.contains(&entry_dir)
+        {
+            roots.push(entry_dir);
+        }
     }
     roots
 }

@@ -55,6 +55,35 @@ fn diagnostics_con_modules() {
 }
 
 #[test]
+fn diagnostics_test_file_resolves_project_modules() {
+    // M113b: un `tests/*.ray` de un proyecto con ray.toml importa los módulos de `src/` — el
+    // editor debe verlo IGUAL que `ray test` (que añade la raíz de la entrada como raíz extra).
+    // Antes: "module 'fileutil' not found" sobre un test que corría en verde.
+    let dir = std::env::temp_dir().join("ray_lsp_tests_dir");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::write(dir.join("ray.toml"), "[package]\nname = \"proj\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(dir.join("src/main.ray"), "fn main() -> int { 0 }\n").unwrap();
+    std::fs::write(dir.join("src/fileutil.ray"), "pub fn double(x: int) -> int { x * 2 }\n").unwrap();
+    let entry = dir.join("tests/t.ray");
+    let uri = format!("file://{}", entry.display());
+
+    // (a) El import del módulo del proyecto resuelve → sin diagnósticos.
+    let src = "import fileutil;\n@test\nfn doubles() { assert_eq(fileutil.double(2), 4); }\n";
+    let ds = analyze_modular(&uri, src).expect("modular");
+    assert!(ds.is_empty(), "el test importa src/ sin errores: {:?}",
+        ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+
+    // (b) Los errores reales se siguen reportando (no se volvió lenidad).
+    let src = "import fileutil;\n@test\nfn bad() { assert_eq(fileutil.double(true), 4); }\n";
+    let ds = analyze_modular(&uri, src).expect("modular");
+    assert_eq!(ds.len(), 1, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn diagnostics_submodule_without_main_and_import_by_path() {
     // Reproduce dos problemas al abrir un ARCHIVO DE MÓDULO (no la entrada) en el editor:
     //   1. Un submódulo `pub` sin `main` marcaba "falta la función de entrada 'main'".

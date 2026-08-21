@@ -243,6 +243,14 @@ fn adversarial_corpus() {
         "fn main() -> int {\n    let t = `it's a \"test\" con \\` backtick escapado`;\n    print(t);\n    0\n}\n",
         // // dentro de template de UNA línea seguido de comentario REAL
         "fn main() -> int {\n    let u = `https://a.b/c`; // comentario real\n    print(u);\n    0\n}\n",
+        // LA FAMILIA DE COLISIÓN DE POSICIÓN del azúcar (ago 2026, reportada como "fmt borra
+        // código"): un operador exterior hereda la posición del operando izquierdo, y un
+        // paréntesis re-posiciona la raíz — el resurfacing de interpolación/pipeline debe
+        // identificar al nodo DUEÑO, no fiarse de la posición.
+        "fn main() -> int {\n    let n = 5;\n    print(\"x ${n}\" + \" tail\");\n    0\n}\n",
+        "fn main() -> int {\n    let n = 5;\n    let y = (\"x ${n}\") + \" t2\";\n    print(y);\n    let solo = (\"x ${n}\");\n    print(solo);\n    0\n}\n",
+        "fn main() -> int {\n    let n = 5;\n    let m = 6;\n    print(\"a ${n}\" + \"b ${m}\" + \"c\");\n    print(\"${n}\" + \" x\");\n    print(\"pre\" + \"x ${n}\");\n    0\n}\n",
+        "fn main() -> int {\n    let a = 3;\n    let s = (a |> to_string) + \"!\";\n    print(s);\n    let t = a |> to_string;\n    print(t + \"?\");\n    0\n}\n",
         // doc comments /// en fn/struct/campo-comentario mixtos
         "/// Documented.\nfn documented(x: int) -> int {\n    x\n}\n/// Doc del struct.\nstruct D {\n    f: int,\n}\nfn main() -> int { documented(D { f: 2 }.f) }\n",
     ];

@@ -64,6 +64,17 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Corregido (bloque siguiente)
 
+- **`ray fmt` borraba código en `"x ${n}" + " tail"`** (la misma familia de colisión de posición
+  que el ConcatN de abajo, ahora en el formateador): el `+` exterior hereda la (línea, col) de la
+  interpolación y el resurfacing del azúcar lo tomaba por la raíz de la cadena — imprimía solo la
+  interpolación y **el resto de la expresión desaparecía**; con paréntesis (que RE-posicionan el
+  nodo al `(`) el azúcar se duplicaba, y un pipeline parentizado (`(a |> to_string) + "!"`) se
+  corrompía a `(a |> to_string)(a)`. Arreglo estructural: la tabla de interpolaciones se clava a
+  la **hoja izquierda** del spine de `+` (inmune a los paréntesis) y se verifica por **conteo de
+  piezas**; el pipeline verifica que el receptor guardado sea el primer argumento del `Call`. El
+  corpus adversarial de `tests/fmt_policy.rs` (que asevera AST idéntico y comentarios intactos)
+  gana los casos de toda la familia.
+
 - **`("a" + "b").len() + 3` reventaba la VM** ("the checker guarantees strings"): los paréntesis
   son transparentes en posición, así que un `+` exterior no-string heredaba la (línea, col) del
   `+` de strings interior registrado para la superinstrucción `ConcatN` (V2) y `lower_concat`

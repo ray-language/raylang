@@ -924,10 +924,18 @@ impl Parser {
         // M29.3: en paralelo al AST desazucarado, se guardan los segmentos de superficie (texto + exprs
         // ya parseadas) para que el formateador reemita `"…${e}…"` sin perderla.
         let mut segs: Vec<InterpSeg> = Vec::with_capacity(parts.len());
+        // La CLAVE del sitio para el formateador: la posición de la PRIMERA pieza (la hoja
+        // izquierda del spine desazucarado). Un paréntesis re-posiciona el nodo RAÍZ al `(` —
+        // clavar ahí perdía el azúcar (o algo peor, ver fmt: colisión de posición) — pero las
+        // hojas nunca se re-posicionan.
+        let mut first_pos: Option<(usize, usize)> = None;
         for part in parts {
             let piece = match part {
                 InterpPart::Lit(s) => {
                     segs.push(InterpSeg::Lit(s.clone()));
+                    if first_pos.is_none() {
+                        first_pos = Some((line, col));
+                    }
                     Expr { kind: ExprKind::Str(s), line, col }
                 }
                 InterpPart::Expr(src, el, ec) => {
@@ -947,6 +955,9 @@ impl Parser {
                     self.interp_sites.extend(std::mem::take(&mut sub.interp_sites));
                     self.pipe_sites.extend(std::mem::take(&mut sub.pipe_sites));
                     segs.push(InterpSeg::Expr(e.clone()));
+                    if first_pos.is_none() {
+                        first_pos = Some((el, ec));
+                    }
                     // to_string(e) — convierte primitivos/string a texto para concatenar.
                     let callee = Expr { kind: ExprKind::Ident("to_string".into()), line: el, col: ec };
                     Expr { kind: ExprKind::Call { callee: Box::new(callee), args: vec![e] }, line: el, col: ec }
@@ -962,9 +973,11 @@ impl Parser {
             });
         }
         let root = acc.unwrap_or_else(|| crate::ice!("an interpolated string arrived without parts from the lexer"));
-        // Indexado por la posición del nodo RAÍZ desazucarado (el propio `to_string` si es un solo `${e}`,
-        // o el `+` externo si hay literales). El formateador lo consulta ahí para reemitir la cadena.
-        self.interp_sites.insert((root.line, root.col), segs);
+        // Indexado por la posición de la PRIMERA PIEZA (la hoja izquierda del spine): el formateador
+        // encuentra el sitio caminando el spine de `+` de cualquier candidato y verifica por CONTEO
+        // de piezas que el nodo es exactamente esta interpolación (ver fmt::fmt_expr).
+        let key = first_pos.unwrap_or((root.line, root.col));
+        self.interp_sites.insert(key, segs);
         Ok(root)
     }
 

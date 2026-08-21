@@ -9377,3 +9377,33 @@ ahora que la superficie es joven), donde `start` es el número del **primer** ma
 los demás ítems se ignoran, como en CommonMark — y el render emite `<ol start="N">` solo cuando
 N ≠ 1. La moraleja de diseño: cuando el render "pierde" información, mirar primero si el AST
 puede representarla.
+
+## 104. M113 — fs.read_bytes + fs.seek: trocear archivos sin cargarlos (ago 2026)
+
+Un programa de transferencia de archivos del usuario necesitaba enviar un archivo en trozos y la
+stdlib no tenía cómo: `fs.read_file_bytes` carga el archivo ENTERO (es lo que hace hasta el
+`static_mount` del webserver para servir Range), `fs.read_line` es de líneas y `string` (corrompe
+binarios), y la única lectura con memoria acotada era lanzar un **`cat` externo** por
+`std/process` y reensamblar sus trozos — funcional, pero con proceso por archivo, dependencia de
+`cat` en el PATH, doble copia por el pipe y errores con semántica de stderr ajeno. El agujero era
+de la stdlib, no del programa.
+
+El cierre es la pareja mínima sobre el registro de handles que ya existía (M11.8):
+
+- **`fs.read_bytes(h, max) -> Result<Option<bytes>, string>`** — hasta `max` octetos desde la
+  posición actual; `None` en EOF. Dos decisiones con intención: se lee con `take` +
+  `read_to_end`, así los trozos son **exactos** (sin lecturas cortas de por medio, lo que un
+  protocolo de chunks de tamaño fijo agradece) y la memoria es **lo leído** (un `max`
+  desorbitado no pre-reserva nada). Primitivo `__read_bytes_handle` con arreglo etiquetado
+  `[b"ok", datos] | [b"eof"] | [b"err", msg]` — el tag `b"eof"` es nuevo en la casa: `Ok(None)`
+  y `Err` son cosas distintas y el protocolo de dos tags no las distinguía.
+- **`fs.seek(h, pos) -> Result<int, string>`** — posición absoluta desde el inicio, devuelve la
+  nueva. Con `read_bytes` regala **reanudación** (retomar una transferencia en el offset N); en
+  un lector con buffer descarta el buffer (semántica de `BufReader`).
+
+Tres motores: VM e intérprete comparten el host (`builtins::read_bytes_handle`/`seek_handle`,
+opcodes `ReadBytesHandle`/`SeekHandle`); el nativo intercepta `std::fs::read_bytes`/`seek` como
+el resto de la familia (`__ray_read_bytes`/`__ray_seek` en el runtime generado, mismos mensajes
+de error que la VM). Verificado byte-idéntico en los tres. El generado global gana
+`unreachable_patterns` en su `#![allow]` (el `match` del registro de handles tiene brazos que
+solo existen cuando el programa usa la red).

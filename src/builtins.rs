@@ -681,6 +681,52 @@ pub fn read_line_handle(h: i64) -> Option<String> {
     }
 }
 
+/// M113: lee hasta `max` octetos del handle (lector) desde su posición actual. `Ok(Some(datos))`
+/// —exactamente `max` salvo cerca del final—, `Ok(None)` en EOF, `Err` en error o handle
+/// no-lector. Compartido por ambos motores (`__read_bytes_handle`). Se lee con `take` +
+/// `read_to_end`: la memoria es lo LEÍDO (un `max` desorbitado no pre-reserva nada) y no hay
+/// lecturas cortas de por medio (importa en protocolos de chunks de tamaño fijo).
+pub fn read_bytes_handle(h: i64, max: i64) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    if max <= 0 {
+        return Err("read_bytes expects max > 0".to_string());
+    }
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Reader(r)) => {
+            let mut buf = Vec::new();
+            match (&mut *r).take(max as u64).read_to_end(&mut buf) {
+                Ok(0) => Ok(None),
+                Ok(_) => Ok(Some(buf)),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        Some(_) => Err("the handle is not a file open for reading".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
+/// M113: mueve la posición del handle de archivo (lector o escritor) a `pos` octetos desde el
+/// inicio; devuelve la nueva posición. En un lector con buffer, `seek` descarta el buffer
+/// (semántica de `BufReader`). (`__seek_handle`.)
+pub fn seek_handle(h: i64, pos: i64) -> Result<i64, String> {
+    use std::io::Seek;
+    if pos < 0 {
+        return Err("seek expects pos >= 0".to_string());
+    }
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Reader(r)) => {
+            r.seek(std::io::SeekFrom::Start(pos as u64)).map(|p| p as i64).map_err(|e| e.to_string())
+        }
+        Some(OpenHandle::Writer(f)) => {
+            f.seek(std::io::SeekFrom::Start(pos as u64)).map(|p| p as i64).map_err(|e| e.to_string())
+        }
+        Some(_) => Err("the handle is not a file".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
 /// Escribe `s` en el handle; `Ok(nº de caracteres)` o `Err(mensaje)` (M11.8).
 /// M107.1 (std/io): escribe a stdout SIN salto de línea, por el MISMO lock que `print` (orden
 /// consistente al intercalarlos). stdout va line-buffered → sin '\n' los datos pueden quedarse en
@@ -2439,6 +2485,21 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__read_line_handle", opcode: OpCode::ReadLineHandle, check: |a| {
         arity(a, 1, "__read_line_handle", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__read_line_handle expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __read_bytes_handle(h, max) -> [bytes] (M113): [b"ok", datos] | [b"eof"] | [b"err", msg].
+    // std/fs → Result<Option<bytes>, string>.
+    Builtin { name: "__read_bytes_handle", opcode: OpCode::ReadBytesHandle, check: |a| {
+        arity(a, 2, "__read_bytes_handle", " (handle, max)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__read_bytes_handle expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__read_bytes_handle expects an int (the max), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __seek_handle(h, pos) -> [string] (M113): ["ok", nueva_pos] o ["err", msg]. std/fs → Result<int,string>.
+    Builtin { name: "__seek_handle", opcode: OpCode::SeekHandle, check: |a| {
+        arity(a, 2, "__seek_handle", " (handle, pos)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__seek_handle expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__seek_handle expects an int (the position), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __write_handle(h, s) -> [string] (M11.8): ["ok"] o ["err", msg]. Prelude → Result<int,string>.

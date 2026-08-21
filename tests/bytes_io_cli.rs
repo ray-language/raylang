@@ -52,6 +52,77 @@ fn main() -> int {{
     }
 }
 
+/// M113: `fs.read_bytes(h, max)` + `fs.seek(h, pos)` — lectura por trozos con memoria acotada.
+/// Trozos exactos de `max` (salvo el último), EOF → `None`, seek + relectura (reanudación), los
+/// octetos crudos (`\x00`/`\xff`) intactos, y el error limpio sobre un handle de escritura.
+#[test]
+fn file_chunked_read_and_seek() {
+    for vm in [false, true] {
+        let dat = std::env::temp_dir().join(format!("ray_chunks_{}.dat", if vm { "vm" } else { "in" }));
+        let src = format!(
+            r#"
+import std/fs;
+fn main() -> int {{
+    let data: bytes = b"\x00\x01\x02\x03\x04\x05\x06\xff";
+    let _ = fs.write_file_bytes("{path}", data);
+    match (fs.open("{path}", "r")) {{
+        Result.Err(e) => {{ eprint(e); 1 }},
+        Result.Ok(h) => {{
+            var sizes = "";
+            var total: bytes = b"";
+            var go = true;
+            while (go) {{
+                match (fs.read_bytes(h, 3)) {{
+                    Result.Ok(opt) => match (opt) {{
+                        Option.Some(piece) => {{ sizes = sizes + to_string(piece.len()); total = total + piece; }},
+                        Option.None => {{ sizes = sizes + "."; go = false; }},
+                    }},
+                    Result.Err(e) => {{ eprint(e); go = false; }},
+                }}
+            }}
+            print(sizes);
+            print(if (total == data) {{ "identico" }} else {{ "CORRUPTO" }});
+            // Reanudación: seek al octeto 6 y releer la cola.
+            match (fs.seek(h, 6)) {{
+                Result.Ok(p) => print("pos=" + to_string(p)),
+                Result.Err(e) => print("seek err: " + e),
+            }}
+            match (fs.read_bytes(h, 10)) {{
+                Result.Ok(o2) => match (o2) {{
+                    Option.Some(tail) => print(if (tail == b"\x06\xff") {{ "cola ok" }} else {{ "cola MAL" }}),
+                    Option.None => print("cola vacia"),
+                }},
+                Result.Err(e) => print("err: " + e),
+            }}
+            let _ = close(h);
+            // Un handle de escritura no se puede leer: error como valor, no crash.
+            match (fs.open("{path}", "w")) {{
+                Result.Ok(w) => {{
+                    match (fs.read_bytes(w, 4)) {{
+                        Result.Ok(_) => print("LEYO un writer"),
+                        Result.Err(_) => print("writer rechazado"),
+                    }}
+                    let _ = close(w);
+                }},
+                Result.Err(e) => print("open w: " + e),
+            }}
+            let _ = fs.remove_file("{path}");
+            0
+        }},
+    }}
+}}
+"#,
+            path = dat.to_string_lossy()
+        );
+        let (out, code) = run("ray_chunks_file", &src, vm);
+        assert_eq!(
+            out, "332.\nidentico\npos=6\ncola ok\nwriter rechazado\n",
+            "chunked read + seek (vm={vm}): {out}"
+        );
+        assert_eq!(code, 0);
+    }
+}
+
 /// Servidor de juguete que envía 3 octetos crudos (0, 16, 255) y cierra. Devuelve el puerto.
 fn toy_bin_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");

@@ -9,7 +9,7 @@ use super::*;
 
 pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fibers: bool) {
     out.push_str("// Generado por el transpilador raylang→Rust (P2.b).\n");
-    out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables)]\n");
+    out.push_str("#![allow(unused_parens, unused_mut, dead_code, unused_variables, unreachable_patterns)]\n");
     out.push_str("use std::rc::Rc;\n");
     // H6 + H21-N1: errores de EJECUCIÓN como la VM — mensaje `runtime error: <msg>` (sin posición: el
     // nativo no lleva el AST) y exit 70 (EX_SOFTWARE, el de la VM). El error viaja como PANIC con
@@ -326,6 +326,24 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Some(__RayHandle::Reader(r)) => { let mut line = String::new(); match r.read_line(&mut line) {\n",
             "            Ok(0) | Err(_) => None, Ok(_) => Some(Rc::<str>::from(line.trim_end_matches(['\\n', '\\r']))) } }\n",
             "        _ => None } }\n",
+            // M113: lectura por trozos + seek (espejo de `builtins::read_bytes_handle`/`seek_handle`;
+            // mismos mensajes de error que la VM). `take` + `read_to_end`: memoria = lo leído.
+            "fn __ray_read_bytes(h: i64, max: i64) -> Result<Option<Rc<[u8]>>, Rc<str>> {\n",
+            "    use std::io::Read; if max <= 0 { return Err(Rc::<str>::from(\"read_bytes expects max > 0\")); }\n",
+            "    let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Reader(r)) => { let mut buf = Vec::new(); match (&mut *r).take(max as u64).read_to_end(&mut buf) {\n",
+            "            Ok(0) => Ok(None), Ok(_) => Ok(Some(Rc::<[u8]>::from(buf))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+            "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for reading\")),\n",
+            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
+            "fn __ray_seek(h: i64, pos: i64) -> Result<i64, Rc<str>> {\n",
+            "    use std::io::Seek; if pos < 0 { return Err(Rc::<str>::from(\"seek expects pos >= 0\")); }\n",
+            "    let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Reader(r)) => r.seek(std::io::SeekFrom::Start(pos as u64)).map(|p| p as i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(__RayHandle::Writer(f)) => f.seek(std::io::SeekFrom::Start(pos as u64)).map(|p| p as i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file\")),\n",
+            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
             "fn __ray_write(h: i64, s: &str) -> Result<i64, Rc<str>> {\n",
             "    use std::io::Write; let mut reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get_mut(&h) {\n",

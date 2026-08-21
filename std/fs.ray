@@ -180,3 +180,40 @@ pub fn write(h: int, s: string) -> Result<int, string> {
     let r = __write_handle(h, s);
     if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
 }
+
+// Lee hasta `max` octetos del handle desde su posición actual (M113). La memoria queda acotada
+// por lo leído: es la primitiva para trocear archivos grandes sin cargarlos enteros.
+/// Reads up to `max` bytes from the file handle at its current position; `Ok(Some(data))`
+/// (exactly `max` bytes unless the end of the file is near), `Ok(None)` on end of file, or
+/// `Err(message)` on error or on a handle that is not open for reading. Memory is bounded by
+/// what is actually read — the primitive for streaming a large file in chunks.
+pub fn read_bytes(h: int, max: int) -> Result<Option<bytes>, string> {
+    let r = __read_bytes_handle(h, max);
+    if (r[0] == b"ok") {
+        Result.Ok(Option.Some(r[1]))
+    } else if (r[0] == b"eof") {
+        Result.Ok(Option.None)
+    } else {
+        match (from_utf8(r[1])) {
+            Result.Ok(m) => Result.Err(m),
+            Result.Err(_) => Result.Err("read error"),
+        }
+    }
+}
+
+// Mueve la posición del handle a `pos` octetos desde el inicio (M113); devuelve la nueva
+// posición. Con `read_bytes` da transferencias reanudables (retomar en el offset N).
+/// Moves the file handle's position to `pos` bytes from the start and returns the new
+/// position; `Ok(position)` or `Err(message)`. Together with `read_bytes` this enables
+/// resumable transfers (continue from byte offset N).
+pub fn seek(h: int, pos: int) -> Result<int, string> {
+    let r = __seek_handle(h, pos);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(p) => Result.Ok(p),
+            Option.None => Result.Err("posición inválida"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}

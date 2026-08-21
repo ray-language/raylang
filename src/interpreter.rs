@@ -1729,6 +1729,29 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees an int"),
             },
+            // M113: lee hasta `max` octetos del handle → [b"ok", datos] | [b"eof"] | [b"err", msg].
+            "__read_bytes_handle" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Int(max)) => match crate::builtins::read_bytes_handle(*h, *max) {
+                        Ok(Some(data)) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
+                        Ok(None) => vec![bytes_tag("eof")],
+                        Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
+                    },
+                    _ => unreachable!("the checker guarantees two ints"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M113: mueve la posición del handle → ["ok", nueva_pos] o ["err", msg].
+            "__seek_handle" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Int(pos)) => match crate::builtins::seek_handle(*h, *pos) {
+                        Ok(p) => vec![Value::Str("ok".to_string()), Value::Str(p.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees two ints"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M11.8: escribe en el handle → ["ok"] o ["err", msg].
             "__write_handle" => {
                 let arr = match (&values[0], &values[1]) {

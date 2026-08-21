@@ -1059,6 +1059,29 @@ fn main() -> int {
 
 Variantes binarias: `fs.read_file_bytes`/`fs.write_file_bytes` (→ `bytes`).
 
+Para archivos **grandes** (transferencias, backups), el handle también lee **por trozos de
+bytes**, con la memoria acotada por el trozo — y `seek` permite **reanudar** en un offset:
+
+```rust
+match (fs.open("video.bin", "r")) {
+    Result.Ok(h) => {
+        let _ = fs.seek(h, 1048576);                     // reanudar en el byte 1 MiB
+        var go = true;
+        while (go) {
+            match (fs.read_bytes(h, 65536)) {            // trozos de 64 KiB exactos
+                Result.Ok(opt) => match (opt) {
+                    Option.Some(chunk) => { /* enviar el trozo */ },
+                    Option.None => { go = false; },      // EOF
+                },
+                Result.Err(e) => { print(e); go = false; },
+            }
+        }
+        close(h);
+    },
+    Result.Err(e) => print(e),
+}
+```
+
 ### Stdin, entorno y argumentos
 
 ```rust

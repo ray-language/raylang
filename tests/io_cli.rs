@@ -98,3 +98,168 @@ fn write_bytes_emits_raw_bytes() {
         .expect("lanza ray");
     assert_eq!(out.stdout, b"\x1b[2J\xff", "los bytes crudos llegan intactos (VM)");
 }
+
+// ── M107.2: lectura de stdin por bytes ──────────────────────────────────────────────────────────
+
+const ECHO_PROG: &str = "import std/io;\n\
+\n\
+fn main() -> int {\n\
+    var total = 0;\n\
+    var done = false;\n\
+    while (!done) {\n\
+        match (io.read(8)) {\n\
+            Option.Some(b) => {\n\
+                total = total + b.len();\n\
+                let _ = io.write_bytes(b);\n\
+            },\n\
+            Option.None => { done = true; },\n\
+        }\n\
+    }\n\
+    let _ = io.flush();\n\
+    print(\"\");\n\
+    print(total);\n\
+    0\n\
+}\n";
+
+/// Corre `prog` con `stdin` alimentado por pipe (todo el contenido y cierre) y devuelve stdout.
+fn run_with_stdin(dir: &PathBuf, args: &[&str], stdin: &[u8]) -> (String, String, i32) {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(args)
+        .current_dir(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("lanza ray");
+    child.stdin.take().expect("stdin").write_all(stdin).expect("escribe stdin");
+    let out = child.wait_with_output().expect("espera");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn stdin_read_by_bytes_until_eof() {
+    // Eco por bytes hasta EOF, en los dos motores y en nativo: mismos bytes, mismo conteo.
+    let base = tmp("read_eco");
+    std::fs::write(base.join("prog.ray"), ECHO_PROG).unwrap();
+    let want = "hola mundo\n10\n";
+    for engine in ["--vm", "--interp"] {
+        let (out, err, code) = run_with_stdin(&base, &[engine, "prog.ray"], b"hola mundo");
+        assert_eq!(code, 0, "{engine}: exit 0\n{err}");
+        assert_eq!(out, want, "{engine}: eco + conteo");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(bcode, 0, "build --native ok\n{berr}");
+        use std::io::Write;
+        let mut child = Command::new(&bin)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("corre el binario nativo");
+        child.stdin.take().unwrap().write_all(b"hola mundo").unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), want, "nativo ≡ VM");
+    }
+}
+
+#[test]
+fn stdin_read_parks_the_fiber_not_the_vm() {
+    // EL test del arco: mientras main espera un byte de stdin, las demás fibras siguen corriendo.
+    // Determinista por HANDSHAKE (sin temporizadores, que el arranque en frío del binario falsea):
+    // la hija imprime sus ticks, el padre los LEE por el pipe y solo entonces envía el byte —
+    // si la lectura de stdin bloquease la VM entera, los ticks jamás llegarían y esto colgaría.
+    let src = "import std/io;\n\
+fn main() -> int {\n\
+    let t = spawn(fn() {\n\
+        var i = 0;\n\
+        while (i < 3) { print(\"tick \" + to_string(i)); i = i + 1; }\n\
+    });\n\
+    match (io.read(16)) {\n\
+        Option.Some(b) => print(\"got \" + to_string(b.len())),\n\
+        Option.None => print(\"eof\"),\n\
+    }\n\
+    join(t);\n\
+    0\n\
+}\n";
+    let base = tmp("read_park");
+    std::fs::write(base.join("prog.ray"), src).unwrap();
+
+    let mut cmds: Vec<(String, Command)> = Vec::new();
+    let mut vm = Command::new(env!("CARGO_BIN_EXE_ray"));
+    vm.args(["--vm", "--deterministic", "prog.ray"]).current_dir(&base);
+    cmds.push(("VM".into(), vm));
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(bcode, 0, "build --native ok\n{berr}");
+        cmds.push(("nativo".into(), Command::new(&bin)));
+    }
+    for (label, mut cmd) in cmds {
+        use std::io::{BufRead, Write};
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("lanza");
+        let mut stdin = child.stdin.take().unwrap();
+        let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        // Los tres ticks llegan MIENTRAS main está aparcado en stdin (aún no se envió nada).
+        for i in 0..3 {
+            let line = lines.next().expect("línea").expect("lee");
+            assert_eq!(line, format!("tick {i}"), "{label}: la fibra hermana corre durante la espera");
+        }
+        stdin.write_all(b"x").unwrap();
+        drop(stdin);
+        assert_eq!(lines.next().expect("línea").expect("lee"), "got 1", "{label}: el byte llega tras los ticks");
+        assert!(child.wait().unwrap().success(), "{label}: exit 0");
+    }
+}
+
+#[test]
+fn stdin_read_timeout_distinguishes_data_eof_and_timeout() {
+    let src = "import std/io;\n\
+fn main() -> int {\n\
+    match (io.read_timeout(8, 80)) {\n\
+        io.ReadResult.Data(b) => print(\"data \" + to_string(b.len())),\n\
+        io.ReadResult.Eof => print(\"eof\"),\n\
+        io.ReadResult.TimedOut => print(\"timeout\"),\n\
+    }\n\
+    0\n\
+}\n";
+    let base = tmp("read_tmo");
+    std::fs::write(base.join("prog.ray"), src).unwrap();
+    for engine in ["--vm", "--interp"] {
+        // datos ya presentes → Data
+        let (out, err, code) = run_with_stdin(&base, &[engine, "prog.ray"], b"abc");
+        assert_eq!(code, 0, "{engine}\n{err}");
+        assert_eq!(out, "data 3\n", "{engine}: datos");
+        // stdin cerrado de entrada → Eof
+        let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args([engine, "prog.ray"])
+            .current_dir(&base)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("lanza");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "eof\n", "{engine}: EOF");
+        // pipe abierto y mudo → TimedOut (el padre retiene el extremo de escritura sin escribir)
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args([engine, "prog.ray"])
+            .current_dir(&base)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("lanza");
+        // OJO: `wait_with_output` CIERRA el stdin del hijo (dropea el pipe) → parecería EOF.
+        // Retener el extremo de escritura durante la espera es el punto de este caso.
+        let stdin_keep = child.stdin.take();
+        let out = child.wait_with_output().expect("espera");
+        drop(stdin_keep);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "timeout\n", "{engine}: plazo vencido");
+    }
+}

@@ -2559,6 +2559,76 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // --- std/io (M107.2): lectura de stdin por bytes, aparcando la fibra. ---
+                OpCode::StdinRead => {
+                    let HeapValue::Int(max) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    // ¿Hay algo que leer YA (datos o EOF)? Si no, aparca en el poller (fd 0) y
+                    // rebobina: al despertar re-ejecuta este opcode y re-consulta — si otra fibra
+                    // consumió los datos entre medias, se re-aparca (nunca bloquea en M:1).
+                    if crate::builtins::stdin_ready(0) {
+                        // Un error de lectura (stdin cerrado/EBADF) se reporta como EOF: el fin
+                        // de la entrada, sin tumbar el programa — misma politica en el interprete.
+                        let elems = match crate::builtins::stdin_read(max) {
+                            Ok(b) if !b.is_empty() => vec![HeapValue::Bytes(b)],
+                            _ => vec![], // EOF (o error de lectura)
+                        };
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else {
+                        self.push(HeapValue::Int(max));
+                        self.cur.frames.last_mut().unwrap().ip -= 1;
+                        let fiber = Self::take_current_fiber(&mut self.cur);
+                        {
+                            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                            sh.io_parked.push(IoParked { fd: 0, fiber, pending_write: None, handle: crate::builtins::STDIN_PSEUDO_HANDLE, deadline: None });
+                            sh.running -= 1;
+                        }
+                        let (l, c2) = pos!();
+                        if !self.poll_next(l, c2)? { self.stop = true; }
+                    }
+                }
+                OpCode::StdinReadTimeout => {
+                    let HeapValue::Int(ms) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let HeapValue::Int(max) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    // ¿Venció el plazo de un aparcado anterior? (io_wait marcó el pseudo-handle 0
+                    // y despertó la fibra; este re-ejecutado lo consume.)
+                    if crate::builtins::take_read_timeout(crate::builtins::STDIN_PSEUDO_HANDLE) {
+                        let elems = vec![HeapValue::Bytes(b"timeout".to_vec())];
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else if crate::builtins::stdin_ready(0) {
+                        let elems = match crate::builtins::stdin_read(max) {
+                            Ok(b) if !b.is_empty() => vec![HeapValue::Bytes(b"data".to_vec()), HeapValue::Bytes(b)],
+                            _ => vec![HeapValue::Bytes(b"eof".to_vec())], // EOF (o error)
+                        };
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else if ms <= 0 {
+                        // Plazo agotado de entrada: sondeo puro.
+                        let elems = vec![HeapValue::Bytes(b"timeout".to_vec())];
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else {
+                        self.push(HeapValue::Int(max));
+                        self.push(HeapValue::Int(ms));
+                        self.cur.frames.last_mut().unwrap().ip -= 1;
+                        let fiber = Self::take_current_fiber(&mut self.cur);
+                        let deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64));
+                        {
+                            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                            sh.io_parked.push(IoParked { fd: 0, fiber, pending_write: None, handle: crate::builtins::STDIN_PSEUDO_HANDLE, deadline });
+                            sh.running -= 1;
+                        }
+                        let (l, c2) = pos!();
+                        if !self.poll_next(l, c2)? { self.stop = true; }
+                    }
+                }
                 // --- Cliente TCP (M15.2): arreglo etiquetado en el heap; el prelude → Result. ---
                 OpCode::TcpConnect => {
                     let port = self.pop();

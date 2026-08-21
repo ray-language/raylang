@@ -1401,6 +1401,12 @@ pub fn mark_read_timeout(h: i64) {
     read_expired().lock().unwrap().insert(h);
 }
 
+/// M107.2: consume la marca de timeout del PSEUDO-HANDLE de stdin (la mira el opcode
+/// `StdinReadTimeout` re-ejecutado al despertar). Envoltorio público de `take_read_expired`.
+pub fn take_read_timeout(h: i64) -> bool {
+    take_read_expired(h)
+}
+
 /// Consume la marca de timeout del handle (la mira la lectura re-ejecutada al despertar).
 fn take_read_expired(h: i64) -> bool {
     read_expired().lock().unwrap().remove(&h)
@@ -2463,6 +2469,21 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "__stdout_flush")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // --- std/io (M107.2): lectura de stdin POR BYTES. En la VM aparca la fibra (poller sobre el
+    // fd 0, patrón SocketRead); el arreglo devuelto usa tags en bytes (como __proc_try_wait). ---
+    // __stdin_read(max) -> [bytes]: [datos] (1..=max octetos) o [] (EOF).
+    Builtin { name: "__stdin_read", opcode: OpCode::StdinRead, check: |a| {
+        arity(a, 1, "__stdin_read", " (max bytes)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__stdin_read expects an int (max bytes), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __stdin_read_timeout(max, ms) -> [bytes]: [b"data", datos] | [b"eof"] | [b"timeout"].
+    Builtin { name: "__stdin_read_timeout", opcode: OpCode::StdinReadTimeout, check: |a| {
+        arity(a, 2, "__stdin_read_timeout", " (max bytes, timeout ms)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__stdin_read_timeout expects an int (max bytes), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__stdin_read_timeout expects an int (the timeout in ms), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
     // --- Cliente TCP (M15.2): primitivos con arreglo etiquetado; el prelude → Result. ---
     // __tcp_connect(host, port) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__tcp_connect", opcode: OpCode::TcpConnect, check: |a| {
@@ -2654,6 +2675,111 @@ static BUILTINS: &[Builtin] = &[
     } },
 ];
 
+
+// ---------------------------------------------------------------------------
+// M107.2 — lectura de stdin POR BYTES (std/io.read), sin tocar los flags del fd.
+//
+// Dos piezas, ambas `extern "C"` a mano (precedente de src/poll.rs, cero crates):
+// - `poll(2)` con timeout 0 responde "¿hay algo que leer YA?" sin voltear stdin a O_NONBLOCK
+//   (el fd 0 comparte la open file description con el shell padre: cambiarle los flags sería
+//   grosero y se filtraría al terminal). Con eso la VM decide aparcar la fibra o leer.
+// - `read(2)` CRUDO sobre el fd 0, sin pasar por el BufReader de `std::io::stdin()`: si se
+//   leyera bufferizado, el poll del fd mentiría (los datos estarían en el buffer de Rust, no
+//   en el fd). Consecuencia documentada: mezclar `input()`/`__read_line` (bufferizados) con
+//   `io.read` (crudo) en el mismo programa no está soportado.
+//
+// El PSEUDO-HANDLE 0 identifica a stdin en la maquinaria de timeouts del scheduler
+// (`mark_read_timeout`/`take_read_expired`): el registro de handles reparte desde 1, así que
+// 0 nunca colisiona. Un solo lector a la vez (documentado): el opcode re-consulta `poll` al
+// despertar y se re-aparca si otro consumió los datos, así que en M:1 nunca bloquea.
+// ---------------------------------------------------------------------------
+
+/// El pseudo-handle de stdin para `mark_read_timeout`/`take_read_expired` (los handles reales
+/// del registro empiezan en 1).
+pub const STDIN_PSEUDO_HANDLE: i64 = 0;
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod stdin_host {
+    unsafe extern "C" {
+        fn poll(fds: *mut PollFd, nfds: u64, timeout_ms: i32) -> i32;
+        fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+    }
+    // (nfds_t es u32 en macOS y u64 en Linux; con nfds=1 el registro coincide en ambos.)
+
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+    const POLLIN: i16 = 0x1;
+
+    /// ¿Se puede leer de stdin sin bloquear (datos o EOF)? Espera hasta `timeout_ms` (0 = sondeo).
+    pub fn ready(timeout_ms: i32) -> bool {
+        let mut pfd = PollFd { fd: 0, events: POLLIN, revents: 0 };
+        // SAFETY: un solo PollFd bien formado; poll no retiene el puntero tras volver.
+        let r = unsafe { poll(&mut pfd, 1, timeout_ms) };
+        r > 0 // >0 = el fd tiene evento (POLLIN o POLLHUP: ambos significan "read no bloquea")
+    }
+
+    /// `read(2)` crudo del fd 0: `Ok(octetos)` (vacío = EOF) o `Err(mensaje)`. Bloquea si no hay
+    /// datos — el llamador consulta `ready` primero (la VM aparca la fibra en el poller).
+    pub fn read_bytes(max: usize) -> Result<Vec<u8>, String> {
+        let mut buf = vec![0u8; max];
+        loop {
+            // SAFETY: buf vive durante la llamada y n == buf.len().
+            let n = unsafe { read(0, buf.as_mut_ptr(), buf.len()) };
+            if n >= 0 {
+                buf.truncate(n as usize);
+                return Ok(buf);
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue; // EINTR: reintenta (una señal atendida no es un error de lectura)
+            }
+            return Err(e.to_string());
+        }
+    }
+}
+
+/// ¿Hay algo que leer YA en stdin (datos o EOF)? En plataformas sin `poll(2)` responde `true`
+/// (la lectura bloquea, el comportamiento pre-M107; en wasm no hay stdin → "EOF listo").
+pub fn stdin_ready(timeout_ms: i32) -> bool {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        stdin_host::ready(timeout_ms)
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        let _ = timeout_ms;
+        true
+    }
+}
+
+/// Lee hasta `max` octetos de stdin (crudo, sin buffer): `Ok(vec)` — vacío = EOF — o `Err(msg)`.
+/// `max` se acota a 1..=1 MiB.
+pub fn stdin_read(max: i64) -> Result<Vec<u8>, String> {
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] // wasm: sin stdin, max no aplica
+    let max = (max.max(1) as usize).min(1 << 20);
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        stdin_host::read_bytes(max)
+    }
+    #[cfg(all(not(unix), not(target_arch = "wasm32")))]
+    {
+        // Sin poll(2) (Windows): lectura bloqueante por std (el fallback honesto, como el
+        // busy-poll del scheduler en esas plataformas).
+        use std::io::Read;
+        let mut buf = vec![0u8; max];
+        let n = std::io::stdin().lock().read(&mut buf).map_err(|e| e.to_string())?;
+        buf.truncate(n);
+        Ok(buf)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Ok(Vec::new()) // el playground no tiene stdin → EOF
+    }
+}
 
 // ---------------------------------------------------------------------------
 // M88.1 — señales del SO (SIGTERM/SIGINT) para el apagado ordenado de servicios.

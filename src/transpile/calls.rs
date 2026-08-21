@@ -1314,6 +1314,25 @@ impl Transpiler {
                      Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__rt_e.to_string())])) } }",
                 );
             }
+            // std/io (M107.2): lectura de stdin por bytes (runtime `__ray_stdin_*`, ver runtime.rs).
+            // El primitivo produce el arreglo etiquetado del contrato de la VM ([bytes]).
+            "stdin_read" if name.starts_with("__") && eff.len() == 1 => {
+                self.needs_stdin = true;
+                out.push_str("{ let __rt_b = __ray_stdin_read(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("); Rc::new(std::cell::RefCell::new(if __rt_b.is_empty() { Vec::<Rc<[u8]>>::new() } else { vec![Rc::<[u8]>::from(__rt_b)] })) }");
+            }
+            "stdin_read_timeout" if name.starts_with("__") => {
+                self.needs_stdin = true;
+                out.push_str("{ let __rt_r = __ray_stdin_read_timeout(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("); Rc::new(std::cell::RefCell::new(match __rt_r { \
+                     None => vec![Rc::<[u8]>::from(&b\"timeout\"[..])], \
+                     Some(__rt_b) if __rt_b.is_empty() => vec![Rc::<[u8]>::from(&b\"eof\"[..])], \
+                     Some(__rt_b) => vec![Rc::<[u8]>::from(&b\"data\"[..]), Rc::<[u8]>::from(__rt_b)] })) }");
+            }
             // __task_failed(t) → [string] (el primitivo del prelude): [] si acabó bien, [msg] si falló.
             // El wrapper try_join se intercepta arriba; esto cubre un uso directo del primitivo.
             "__task_failed" => {

@@ -919,6 +919,34 @@ Las tres escrituras devuelven `Result<int, string>` (nº de caracteres/bytes). R
 necesita. El orden entre `print` e `io.write` es siempre el del programa, también en el binario
 nativo.
 
+### Leer stdin por bytes (`io.read`)
+
+`input()` lee líneas; `io.read` lee **octetos** — la pieza para teclas, protocolos por stdin o
+consumir un pipe a trozos:
+
+```rust
+import std/io;
+
+fn main() -> int {
+    // Bloquea LA FIBRA (las demás siguen corriendo), no la VM:
+    match (io.read(64)) {                       // hasta 64 octetos; None = EOF
+        Option.Some(b) => print("llegaron " + to_string(b.len())),
+        Option.None => print("fin de la entrada"),
+    }
+    // Con plazo (0 = sondeo puro): tres desenlaces distintos.
+    match (io.read_timeout(64, 50)) {
+        io.ReadResult.Data(b) => print(b.len()),
+        io.ReadResult.Eof => print("eof"),
+        io.ReadResult.TimedOut => print("nada en 50 ms"),
+    }
+    0
+}
+```
+
+Dos reglas: **un solo lector** de stdin a la vez, y no mezclar `io.read` con `input()`/
+`fs.read_line` sobre stdin en el mismo programa (aquéllos leen con buffer de líneas; esto lee el fd
+crudo — cada uno dejaría de ver lo que retiene el otro).
+
 ### Archivos (`std/fs` — todo con errores como valores)
 
 ```rust

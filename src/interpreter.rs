@@ -1775,6 +1775,34 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // std/io (M107.2): lectura de stdin por bytes. El intérprete es el oráculo M:1 →
+            // bloquear el hilo es correcto; el aparcado de fibras es cosa de la VM.
+            "__stdin_read" => match &values[0] {
+                Value::Int(max) => {
+                    // Un error de lectura (stdin cerrado/EBADF) se reporta como EOF: el fin de
+                    // la entrada, sin panico — misma politica en la VM.
+                    let arr = match crate::builtins::stdin_read(*max) {
+                        Ok(b) if !b.is_empty() => vec![Value::Bytes(Rc::new(b))],
+                        _ => vec![], // EOF (o error de lectura)
+                    };
+                    Value::Array(Rc::new(RefCell::new(arr)))
+                }
+                _ => unreachable!("the checker guarantees an int"),
+            },
+            "__stdin_read_timeout" => match (&values[0], &values[1]) {
+                (Value::Int(max), Value::Int(ms)) => {
+                    let arr = if crate::builtins::stdin_ready((*ms).clamp(0, i32::MAX as i64) as i32) {
+                        match crate::builtins::stdin_read(*max) {
+                            Ok(b) if !b.is_empty() => vec![Value::Bytes(Rc::new(b"data".to_vec())), Value::Bytes(Rc::new(b))],
+                            _ => vec![Value::Bytes(Rc::new(b"eof".to_vec()))], // EOF (o error)
+                        }
+                    } else {
+                        vec![Value::Bytes(Rc::new(b"timeout".to_vec()))]
+                    };
+                    Value::Array(Rc::new(RefCell::new(arr)))
+                }
+                _ => unreachable!("the checker guarantees ints"),
+            },
             // M15.2: conecta por TCP → ["ok", handle] o ["err", msg].
             // Diferido JSON-1: code point → char ([] si inválido). El inverso de char_code.
             "__char_from_code" => match &values[0] {

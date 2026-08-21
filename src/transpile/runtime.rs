@@ -1168,6 +1168,122 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    }\n}\n",
         ));
     }
+    // M107.2 (std/io.read): lectura de stdin POR BYTES. `poll(2)`+`read(2)` crudos en un mod propio
+    // (los externs de signals declaran `read` a nivel raíz: el mod evita la colisión). Con fibras,
+    // "¿listo YA?" (poll 0) y si no, aparcar la FIBRA en el reactor (`wait_readable(0)`) — el poll
+    // previo cubre además el stdin-archivo regular, que epoll no acepta; sin fibras, lectura
+    // bloqueante en el hilo de la tarea (correcto en hilo-por-tarea). EOF/error → vacío, como la VM.
+    if t.needs_stdin {
+        out.push_str(concat!(
+            "#[cfg(unix)]
+",
+            "mod __ray_stdin {
+",
+            "    unsafe extern \"C\" {
+",
+            "        fn poll(fds: *mut PollFd, nfds: u64, timeout_ms: i32) -> i32;
+",
+            "        fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+",
+            "    }
+",
+            "    #[repr(C)]
+",
+            "    struct PollFd { fd: i32, events: i16, revents: i16 }
+",
+            "    pub fn ready(timeout_ms: i32) -> bool {
+",
+            "        let mut pfd = PollFd { fd: 0, events: 0x1, revents: 0 };
+",
+            "        (unsafe { poll(&mut pfd, 1, timeout_ms) }) > 0
+",
+            "    }
+",
+            "    pub fn read_max(max: usize) -> Vec<u8> {
+",
+            "        let mut buf = vec![0u8; max];
+",
+            "        loop {
+",
+            "            let n = unsafe { read(0, buf.as_mut_ptr(), buf.len()) };
+",
+            "            if n >= 0 { buf.truncate(n as usize); return buf; }
+",
+            "            if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted { return Vec::new(); }
+",
+            "        }
+",
+            "    }
+",
+            "}
+",
+        ));
+        if t.fibers {
+            out.push_str(concat!(
+                "fn __ray_stdin_read(max: i64) -> Vec<u8> {
+",
+                "    let max = (max.max(1) as usize).min(1 << 20);
+",
+                "    #[cfg(unix)] { while !__ray_stdin::ready(0) { ray_runtime::fibers::wait_readable(0); } __ray_stdin::read_max(max) }
+",
+                "    #[cfg(not(unix))] { use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); b }
+",
+                "}
+",
+                "fn __ray_stdin_read_timeout(max: i64, ms: i64) -> Option<Vec<u8>> {
+",
+                "    let max = (max.max(1) as usize).min(1 << 20);
+",
+                "    #[cfg(unix)] {
+",
+                "        if !__ray_stdin::ready(0) {
+",
+                "            if ms <= 0 || !ray_runtime::fibers::wait_readable_timeout(0, ms) { return None; }
+",
+                "            if !__ray_stdin::ready(0) { return None; }
+",
+                "        }
+",
+                "        Some(__ray_stdin::read_max(max))
+",
+                "    }
+",
+                "    #[cfg(not(unix))] { let _ = ms; use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); Some(b) }
+",
+                "}
+",
+            ));
+        } else {
+            out.push_str(concat!(
+                "fn __ray_stdin_read(max: i64) -> Vec<u8> {
+",
+                "    let max = (max.max(1) as usize).min(1 << 20);
+",
+                "    #[cfg(unix)] { __ray_stdin::read_max(max) }
+",
+                "    #[cfg(not(unix))] { use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); b }
+",
+                "}
+",
+                "fn __ray_stdin_read_timeout(max: i64, ms: i64) -> Option<Vec<u8>> {
+",
+                "    let max = (max.max(1) as usize).min(1 << 20);
+",
+                "    #[cfg(unix)] {
+",
+                "        if !__ray_stdin::ready(ms.clamp(0, i32::MAX as i64) as i32) { return None; }
+",
+                "        Some(__ray_stdin::read_max(max))
+",
+                "    }
+",
+                "    #[cfg(not(unix))] { let _ = ms; use std::io::Read; let mut b = vec![0u8; max]; let n = std::io::stdin().lock().read(&mut b).unwrap_or(0); b.truncate(n); Some(b) }
+",
+                "}
+",
+            ));
+        }
+    }
     // signals() (M88.1): el canal de señales del SO (SIGTERM=15/SIGINT=2). El truco del self-pipe (como
     // la VM, `src/builtins.rs`): el handler (async-signal-safe: solo `write`) escribe el nº de señal a un
     // pipe; un hilo lector lo lee (bloqueante) y lo envía al canal. FFI a libc sin crates (siempre

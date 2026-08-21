@@ -82,6 +82,8 @@ struct Transpiler {
     needs_concurrency: bool,
     /// ¿Usa `signals()`? Si es cierto, se anexa el runtime de señales del SO (self-pipe + FFI a libc).
     needs_signals: bool,
+    /// M107.2: ¿lee stdin por bytes (`__stdin_read`)? Anexa el runtime de stdin (poll+read crudos).
+    needs_stdin: bool,
     /// ¿Usa `std::time::monotonic`/`std::random::*`? Si es cierto, se anexa el PRNG (SplitMix64) + el
     /// reloj monotónico (necesitan estado global; `now`/`sleep` son inline y no lo activan).
     needs_time_rng: bool,
@@ -241,6 +243,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_handles: false,
         needs_concurrency: false,
         needs_signals: false,
+        needs_stdin: false,
         needs_time_rng: false,
         needs_ffi_errno: false,
         needs_net: false,

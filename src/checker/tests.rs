@@ -294,6 +294,18 @@ fn written_unit_resolves_in_type_position() {
     );
 }
 
+#[test]
+fn paren_concat_position_collision_does_not_flatten_the_outer_chain() {
+    // V2, colisión de posición (ago 2026): los paréntesis son transparentes en posición, así que
+    // `("a" + "b").len() + 3` daba al `+` exterior (int) la MISMA (línea, col) que el interior de
+    // strings registrado para ConcatN → la VM reventaba con "the checker guarantees strings".
+    // El sitio colisionado se des-registra (la cadena interior pierde la superinstrucción; la
+    // cadena de Add resultante es correcta igualmente).
+    check_src("fn main() -> int { (\"a\" + \"b\").len() + 3 }").expect("int exterior");
+    check_src("fn main() -> int { let b = (\"x\" + \"y\").to_bytes() + b\"z\"; b.len() }")
+        .expect("bytes exterior");
+}
+
 /// Atajo: ¿el mensaje de error contiene esta subcadena?
 fn err_contains(src: &str, needle: &str) {
     let e = check_src(src).expect_err("debería fallar la verificación");

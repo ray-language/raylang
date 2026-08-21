@@ -293,3 +293,73 @@ fn sse_decoder_battery_is_pure_and_exact() {
         assert_eq!(String::from_utf8_lossy(&native.stdout), DECODE_WANT, "nativo ≡ VM");
     }
 }
+
+/// La clase RefCell-en-args del NATIVO (ago 2026): `stream_take(s, s.remaining)` dejaba vivo el
+/// guard del `borrow()` del argumento DURANTE la llamada (que hace `borrow_mut` del mismo Stream)
+/// → "RefCell already borrowed" en el primer trozo. El fix iza los args a temporales. Este e2e
+/// compila el cliente de streaming a binario nativo y lo corre contra un servidor real.
+#[test]
+fn native_stream_read_matches_expected() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando native_stream_read: rustc no disponible");
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        if let Ok((mut c, _)) = listener.accept() {
+            let mut buf = [0u8; 2048];
+            let _ = c.read(&mut buf);
+            let body = b"hola mundo streaming nativo";
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = c.write_all(head.as_bytes());
+            let _ = c.write_all(body);
+        }
+    });
+    let driver = r#"import net/http;
+
+fn main() -> int {
+    let hs: Map<string, string> = Map.new();
+    match (http.stream("GET", "http://127.0.0.1:__PORT__/d", b"", hs)) {
+        Result.Err(e) => { print("err " + e); 1 },
+        Result.Ok(s) => {
+            print("status " + to_string(s.status));
+            var total = 0;
+            var go = true;
+            var code = 0;
+            while (go) {
+                match (http.stream_read(s)) {
+                    Result.Err(e) => { print("read err " + e); code = 1; go = false; },
+                    Result.Ok(opt) => match (opt) {
+                        Option.Some(b) => { total = total + b.len(); },
+                        Option.None => { go = false; },
+                    },
+                }
+            }
+            print("total " + to_string(total));
+            code
+        },
+    }
+}
+"#
+    .replace("__PORT__", &port.to_string());
+    let dir = setup("native_read", &driver);
+    let bin = dir.join("prog_bin");
+    let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["build", "main.ray", "--native", "-o", bin.to_str().unwrap()])
+        .current_dir(&dir)
+        .output()
+        .expect("build");
+    assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+    let native = Command::new(&bin).output().expect("nativo");
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        "status 200\ntotal 27\n",
+        "stderr: {}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(native.status.code(), Some(0));
+}

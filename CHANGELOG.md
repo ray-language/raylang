@@ -72,6 +72,25 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Corregido (bloque siguiente)
 
+- **Nativo: `http.stream_read` panicaba con "RefCell already borrowed"** — y con él toda la clase
+  `f(s, s.campo)` donde `f` muta `s` (la destapó `stream_take(s, s.remaining)` del cliente HTTP
+  en raycode; era LO ÚNICO que impedía usar el binario nativo allí). En Rust, el guard del
+  `borrow()` de un argumento vive hasta el final de la sentencia — es decir, durante la llamada —
+  y el `borrow_mut` del callee revienta. Arreglo estructural: **todos los argumentos de una
+  llamada de usuario se izan a temporales** (cada `let` cierra sus guards; mismo orden de
+  evaluación) en las DOS rutas de emisión (mismo módulo y calificada `mod::fn`), y el clon de un
+  campo-closure/vtable-dyn también se iza antes de llamar. E2e nativo de streaming como guarda.
+
+- **Nativo: un `match` sobre un método de trait con brazos compuestos se emitía como stub** —
+  `let status = match (p.wait()) { Exit.Code(c) => "exit ${c}", … }` caía a "could not infer the
+  type of the match" y la función entera panicaba al llamarse (raycode lo esquivaba extrayendo el
+  match a otra función). Dos raíces, dos arreglos en el `type_of` del transpilador: el tipo del
+  escrutinio se **clasifica** (un retorno `Type::Struct` crudo del AST ahora se reconoce como el
+  enum que es) y los **bindings del patrón entran en ámbito** al tipar el cuerpo del brazo (antes
+  solo el cuerpo-identificador pelado resolvía). De paso, la llamada a un **campo-closure**
+  (`b.f(x)`) también se tipa (espejo del branch de emisión que ya existía).
+
+
 - **El LSP resuelve los imports de un `tests/*.ray` como `ray test`** (M113b): el editor marcaba
   "module 'fileread' not found" sobre un test de integración que corría en verde — `ray test`
   añadía a mano la raíz de la entrada (`src/`) como raíz extra del loader y el LSP no. La regla

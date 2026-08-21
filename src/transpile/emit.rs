@@ -1714,7 +1714,19 @@ impl Transpiler {
                 return Some(t.clone());
             }
         }
-        self.type_of(&arm.body).ok()
+        // Cuerpo compuesto que usa bindings del patrón (`Code(c) => "exit ${c}"`): se tipan con el
+        // overlay `probe_binds` en pie (lo consulta el caso `Ident` de `type_of`), y se retira al
+        // salir — matches anidados apilan overlays.
+        if binds.is_empty() {
+            return self.type_of(&arm.body).ok();
+        }
+        self.probe_binds.borrow_mut().push(binds);
+        let r = self.type_of(&arm.body);
+        self.probe_binds.borrow_mut().pop();
+        if std::env::var_os("RAYLANG_TRANSPILE_DEBUG").is_some() {
+            if let Err(ref e) = r { eprintln!("[armtype] body err: {e} (scrut_ty={scrut_ty:?})"); }
+        }
+        r.ok()
     }
 
     /// Los tipos de los bindings de un patrón, dado el tipo del escrutinio. Cubre el binding suelto (todo
@@ -1729,7 +1741,12 @@ impl Transpiler {
                 }
             }
             PatternKind::Variant { enum_name, variant, subpatterns } if !subpatterns.is_empty() => {
-                let payload: Option<Vec<Type>> = match scrut_ty.map(normalize_type) {
+                // `classify`, no `normalize_type`: el tipo del escrutinio puede llegar CRUDO del AST
+                // (`Type::Struct("Exit")` para un enum — p. ej. el retorno de un método de trait,
+                // `p.wait()`) y solo `classify` conoce el registro de enums para re-etiquetarlo. Sin
+                // esto los bindings del patrón quedaban sin tipo y el match entero caía a "could not
+                // infer" → la función se emitía como stub (lo destapó raycode, ago 2026).
+                let payload: Option<Vec<Type>> = match scrut_ty.map(|t| self.classify(t)) {
                     Some(Type::Enum(_, args)) if enum_name == "Option" || enum_name == "Result" => {
                         match variant.as_str() {
                             "Some" | "Ok" => args.first().map(|t| vec![t.clone()]),

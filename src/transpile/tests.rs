@@ -113,8 +113,9 @@ fn transpiles_recursive_fib() {
     );
     assert!(rust.contains("fn fib(mut n: i64) -> i64"), "{}", rust);
     // H6: la resta de int baja al helper CHECKED (overflow → runtime error, como la VM).
-    assert!(rust.contains("fib(__ray_sub(n, 1i64))"), "{}", rust);
-    assert!(rust.contains("fib(10i64).ray_show()"), "{}", rust);
+    // Los args van IZADOS a temporales (clase RefCell-en-args, ago 2026).
+    assert!(rust.contains("let __rt_a0 = __ray_sub(n, 1i64); fib(__rt_a0)"), "{}", rust);
+    assert!(rust.contains("let __rt_a0 = 10i64; fib(__rt_a0) }.ray_show()"), "{}", rust);
 }
 
 #[test]
@@ -363,7 +364,7 @@ fn transpiles_generic_functions() {
     );
     assert!(rust.contains("fn id<T: Clone + RayShow + 'static>(mut x: T) -> T"), "{}", rust);
     assert!(rust.contains("fn apply<T:") && rust.contains("U:"), "{}", rust);
-    assert!(rust.contains("apply(Rc::new(neg)"), "{}", rust); // función como valor → Rc::new(fn)
+    assert!(rust.contains("let __rt_a0 = Rc::new(neg)"), "{}", rust); // función como valor → Rc::new(fn)
 }
 
 #[test]
@@ -419,7 +420,7 @@ fn transpiles_dyn_trait_objects() {
     assert!(rust.contains("struct __dyn_Shape"), "{}", rust);
     assert!(rust.contains("area: Rc<dyn Fn() -> i64>"), "{}", rust);
     assert!(rust.contains("let __rt_c = "), "{}", rust); // captura del concreto en la coerción
-    assert!(rust.contains(".borrow().area.clone())"), "{}", rust); // despacho dinámico
+    assert!(rust.contains(".borrow().area.clone(); __rt_cl("), "{}", rust); // despacho dinámico (clon izado)
 }
 
 #[test]
@@ -588,13 +589,14 @@ fn for_over_enumerate_destructures_the_tuple() {
 
 #[test]
 fn function_field_call_unwraps_it() {
-    // Llamar un campo de tipo función (`self.step()`, como en `Iter#next`) → `(r.borrow().step.clone())()`.
+    // Llamar un campo de tipo función (`self.step()`, como en `Iter#next`) → el clon del campo se
+    // IZA a `__rt_cl` (cierra el guard del borrow antes de llamar; clase RefCell-en-args).
     let rust = transpile_src(
         "struct Box { f: fn() -> int }\n\
          fn call(c: Box) -> int { c.f() }\n\
          fn main() { print(call(Box { f: fn() -> int { 7 } })); }",
     );
-    assert!(rust.contains(".borrow().f.clone())("), "llama el campo-closure: {}", rust);
+    assert!(rust.contains(".borrow().f.clone(); __rt_cl("), "llama el campo-closure: {}", rust);
 }
 
 #[test]
@@ -968,8 +970,8 @@ fn trait_method_named_like_builtin_calls_the_impl() {
              s.get(\"a\"); s.keys().len() }",
     );
     assert!(rust.contains("fn Store_HH_get"), "la def del método se emite: {}", rust);
-    assert!(rust.contains("Store_HH_get(s"), "el sitio llama al impl, no al builtin de Map: {}", rust);
-    assert!(rust.contains("Store_HH_keys(s"), "keys va al impl, no a __ray_keys: {}", rust);
+    assert!(rust.contains("Store_HH_get(__rt_a0"), "el sitio llama al impl, no al builtin de Map: {}", rust);
+    assert!(rust.contains("Store_HH_keys(__rt_a0"), "keys va al impl, no a __ray_keys: {}", rust);
 }
 
 #[test]

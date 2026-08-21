@@ -2200,6 +2200,16 @@ impl Checker {
         // (`x + 100` con `x: u8` trata `100` como u8). No es promoción: solo cede el LITERAL.
         let (lt, rt) = self.coerce_uint_binop(left, right, lt, rt)?;
         use BinaryOp::*;
+        // V2, colisión de posición: los paréntesis son TRANSPARENTES en posición (el parser devuelve
+        // la expr interior tal cual), así que un `+` exterior NO-string puede heredar la (línea, col)
+        // de un `+` de strings interior ya registrado — `("a" + "b").len() + 3` o
+        // `(s + t).to_bytes() + b — y `lower_concat` aplanaría la cadena EQUIVOCADA (ConcatN sobre
+        // no-strings reventaba la VM). Si este Add no es de strings y su posición está registrada,
+        // se DES-registra: la cadena interior pierde su superinstrucción (queda la cadena de Add,
+        // correcta) — corrección antes que optimización.
+        if op == Add && !(lt == Type::String && rt == Type::String) {
+            self.concat_sites.remove(&(line, col));
+        }
         match op {
             // Aritméticos: ambos int → int, ambos float → float. Sin mezclas.
             // M11.1a: `+` también concatena dos strings → string.

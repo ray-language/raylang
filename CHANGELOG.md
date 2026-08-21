@@ -37,6 +37,24 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Streaming del webserver + Range/206 en estáticos** (M110, el gemelo servidor del streaming de
+  M108): `webserver.stream_response(status, ch)` — el cuerpo son los trozos que lleguen por un
+  `Channel<bytes>` (el patrón de actores: el handler `spawn`ea al productor y devuelve ya), escritos
+  al cliente en chunked según llegan, con backpressure vía canal acotado; la conexión cierra tras
+  el stream y un HEAD drena el canal para no colgar al productor. Y `static_mount` gana **HTTP
+  Range**: `Accept-Ranges` en los 200, `206 Partial Content` con `Content-Range` (rango cerrado,
+  abierto y sufijo), `416` con el tamaño total, multi-rango → 200 completo (RFC), `If-Range`
+  honrado contra el ETag y el `304` ganando al Range. De paso, `status_text` aprende 206 y 416.
+
+### Corregido (bloque siguiente)
+
+- **`("a" + "b").len() + 3` reventaba la VM** ("the checker guarantees strings"): los paréntesis
+  son transparentes en posición, así que un `+` exterior no-string heredaba la (línea, col) del
+  `+` de strings interior registrado para la superinstrucción `ConcatN` (V2) y `lower_concat`
+  aplanaba la cadena equivocada. El sitio colisionado se des-registra (corrección antes que
+  optimización: la cadena interior queda como `Add` normal). Lo destapó el framing chunked del
+  streaming del webserver.
+
 - **Streaming del cliente HTTP + cliente SSE** (M108, la otra mitad de "pintar mientras llegan
   tokens"): `net/http.stream[_with]` devuelve el status y las cabeceras en cuanto llegan y
   `stream_read` entrega el cuerpo **a trozos según llegan** (des-chunkeado incremental, plazo de

@@ -1,0 +1,77 @@
+// Demo interactiva de std/term: modo crudo + read_key. Corre en una TERMINAL real:
+//
+//   ray run examples/term/keys.ray        (sal con 'q' o Ctrl-C)
+//
+// Muestra cada tecla decodificada (flechas, F1..F12, Home/End, UTF-8 multibyte…) y el tamaño
+// del terminal al arrancar. En CI/pipes no hay tty: el programa lo detecta y sale limpio.
+
+import std/io;
+import std/term;
+
+fn name(k: term.Key) -> string {
+    match (k) {
+        term.Key.Char(c) => "Char(" + to_string(c) + ")",
+        term.Key.Enter => "Enter",
+        term.Key.Tab => "Tab",
+        term.Key.Backspace => "Backspace",
+        term.Key.Esc => "Esc",
+        term.Key.Up => "Up",
+        term.Key.Down => "Down",
+        term.Key.Left => "Left",
+        term.Key.Right => "Right",
+        term.Key.Home => "Home",
+        term.Key.End => "End",
+        term.Key.PageUp => "PageUp",
+        term.Key.PageDown => "PageDown",
+        term.Key.Insert => "Insert",
+        term.Key.Delete => "Delete",
+        term.Key.Ctrl(c) => "Ctrl-" + to_string(c),
+        term.Key.F(n) => "F" + to_string(n),
+    }
+}
+
+fn main() -> int {
+    if (!term.is_tty(0)) {
+        print("stdin no es una terminal; corre esto en una terminal real.");
+        return 0;
+    }
+    match (term.size()) {
+        Option.Some(wh) => print("terminal de " + to_string(wh.0) + "x" + to_string(wh.1)),
+        Option.None => print("¿sin tamaño?"),
+    }
+    print("pulsa teclas ('q' para salir):");
+    let r = term.raw(fn() -> int {
+        var go = true;
+        while (go) {
+            match (term.read_key()) {
+                Option.Some(k) => {
+                    // En modo crudo no hay OPOST: el \r\n va explícito.
+                    let _ = io.write(name(k) + "\r\n");
+                    let _ = io.flush();
+                    match (k) {
+                        term.Key.Char(c) => {
+                            if (c == 'q') {
+                                go = false;
+                            }
+                        },
+                        term.Key.Ctrl(c) => {
+                            if (c == 'c') {
+                                go = false;
+                            }
+                        },
+                        _ => { },
+                    }
+                },
+                Option.None => {
+                    go = false;
+                },
+            }
+        }
+        0
+    });
+    match (r) {
+        Result.Ok(_) => print("adiós"),
+        Result.Err(e) => eprint("raw: " + e),
+    }
+    0
+}

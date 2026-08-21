@@ -947,6 +947,47 @@ Dos reglas: **un solo lector** de stdin a la vez, y no mezclar `io.read` con `in
 `fs.read_line` sobre stdin en el mismo programa (aquéllos leen con buffer de líneas; esto lee el fd
 crudo — cada uno dejaría de ver lo que retiene el otro).
 
+### El terminal (`std/term`)
+
+La pieza para TUIs: modo crudo, tamaño y teclas decodificadas. `examples/term/keys.ray` es la
+demo completa; el esqueleto:
+
+```rust
+import std/io;
+import std/term;
+
+fn main() -> int {
+    if (!term.is_tty(0)) { print("necesito una terminal"); return 1; }
+    match (term.size()) {
+        Option.Some(wh) => print("terminal de ${wh.0}x${wh.1}"),
+        Option.None => { },
+    }
+    let r = term.raw(fn() -> int {          // modo crudo; restaura SIEMPRE (también si f falla)
+        var go = true;
+        while (go) {
+            match (term.read_key()) {        // bloquea la FIBRA, no la VM
+                Option.Some(k) => {
+                    match (k) {
+                        term.Key.Char(c) => { if (c == 'q') { go = false; } },
+                        term.Key.Up => { let _ = io.write("↑\r\n"); let _ = io.flush(); },
+                        _ => { },
+                    }
+                },
+                Option.None => { go = false; },
+            }
+        }
+        0
+    });
+    0
+}
+```
+
+Tres cosas que saber del modo crudo: no hay eco ni Ctrl-C (decide tu programa: `read_key` los
+entrega como `Key.Char`/`Key.Ctrl`); no hay OPOST, así que las líneas terminan con `\r\n`
+explícito; y la restauración está garantizada al salir del proceso — salvo señal fatal o
+`kill -9`, como en cualquier programa de terminal (`reset` lo arregla). Para redimensionamiento,
+`select` sobre `signals()` + `term.size()` (SIGWINCH llega en M107.4).
+
 ### Archivos (`std/fs` — todo con errores como valores)
 
 ```rust

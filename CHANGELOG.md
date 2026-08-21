@@ -37,6 +37,15 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/term` — el terminal** (M107.3): `is_tty(fd)`, `size() -> Option<(int, int)>`,
+  `raw(f)` (modo crudo con restauración garantizada: al salir de `f` aunque falle, y al salir el
+  proceso vía `atexit`), `read_key() -> Option<Key>` y el decodificador **puro**
+  `decode(bytes) -> Option<(Key, int)>` — flechas, Home/End/PageUp/PageDown/Insert/Delete,
+  F1..F12 (CSI y SS3), Ctrl+letra, Shift-Tab y UTF-8 multibyte, con los prefijos incompletos
+  señalados para resolver un ESC suelto por plazo. Sin crates: termios como buffer opaco +
+  `cfmakeraw(3)`/`ioctl(TIOCGWINSZ)`/`isatty(3)` declarados a mano, en la VM y en el binario
+  nativo. Demo: `examples/term/keys.ray`.
+
 - **`std/io` — lectura de stdin por bytes, que aparca la fibra** (M107.2): `io.read(max) ->
   Option<bytes>` (`None` = EOF) e `io.read_timeout(max, ms) -> ReadResult`
   (`Data`/`Eof`/`TimedOut`). En la VM, una lectura sin datos **aparca la fibra en el poller**

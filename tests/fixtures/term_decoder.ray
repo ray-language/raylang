@@ -1,0 +1,70 @@
+import std/term;
+
+fn name(k: term.Key) -> string {
+    match (k) {
+        term.Key.Char(c) => "char:" + to_string(c),
+        term.Key.Enter => "enter",
+        term.Key.Tab => "tab",
+        term.Key.Backspace => "backspace",
+        term.Key.Esc => "esc",
+        term.Key.Up => "up",
+        term.Key.Down => "down",
+        term.Key.Left => "left",
+        term.Key.Right => "right",
+        term.Key.Home => "home",
+        term.Key.End => "end",
+        term.Key.PageUp => "pageup",
+        term.Key.PageDown => "pagedown",
+        term.Key.Insert => "insert",
+        term.Key.Delete => "delete",
+        term.Key.Ctrl(c) => "ctrl:" + to_string(c),
+        term.Key.F(n) => "f" + to_string(n),
+    }
+}
+
+fn show(buf: bytes) {
+    match (term.decode(buf)) {
+        Option.Some(kc) => print(name(kc.0) + " +" + to_string(kc.1)),
+        Option.None => print("incomplete"),
+    }
+}
+
+fn main() -> int {
+    show(b"a");
+    show(b"Z");
+    show(b"\x0d");
+    show(b"\x0a");
+    show(b"\x09");
+    show(b"\x7f");
+    show(b"\x03");            // Ctrl-C
+    show(b"\x1a");            // Ctrl-Z
+    show(b"\x1b");            // ESC solo: incompleta (el plazo la resuelve)
+    show(b"\x1b[");           // CSI sin final: incompleta
+    show(b"\x1b[A");
+    show(b"\x1b[B");
+    show(b"\x1b[C");
+    show(b"\x1b[D");
+    show(b"\x1b[H");
+    show(b"\x1b[F");
+    show(b"\x1b[Z");
+    show(b"\x1b[1~");
+    show(b"\x1b[2~");
+    show(b"\x1b[3~");
+    show(b"\x1b[4~");
+    show(b"\x1b[5~");
+    show(b"\x1b[6~");
+    show(b"\x1b[15~");        // F5
+    show(b"\x1b[17~");        // F6
+    show(b"\x1b[24~");        // F12
+    show(b"\x1b[1;5C");       // Ctrl-Right → right (modificadores ignorados v1)
+    show(b"\x1bOP");          // F1
+    show(b"\x1bOS");          // F4
+    show(b"\x1bx");           // Alt-x → esc (v1), consume 1
+    show(b"\xc3\xb1");        // ñ
+    show(b"\xc3");            // UTF-8 a medias: incompleta
+    show(b"\xe2\x82\xac");    // €
+    show(b"\xf0\x9f\x91\x8d"); // 👍 (4 bytes)
+    show(b"\x80");            // continuación suelta → ?
+    show(b"a\x1b[A");         // solo decodifica la PRIMERA tecla
+    0
+}

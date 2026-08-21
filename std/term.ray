@@ -1,0 +1,300 @@
+// std/term (M107.3) — el terminal: isatty, tamaño, modo crudo y lectura de teclas.
+//
+// Sobre los primitivos `__term_*` (termios/ioctl/isatty vía FFI propio del runtime, cero crates) y
+// la lectura por bytes de std/io (M107.2). El modo crudo se restaura SIEMPRE al salir del proceso
+// (atexit) además de al salir de `raw` — salvo muerte por señal fatal o kill -9 (como cualquier
+// programa de terminal: `reset` lo arregla).
+//
+// `decode` es PURO (bytes → tecla): toda la tabla de secuencias ESC/CSI/SS3 y UTF-8 se prueba sin
+// terminal. `read_key` lo alimenta byte a byte, con un plazo corto para distinguir un ESC suelto
+// de una secuencia (`ESC [ A` llega junta; un humano no teclea el `[` en 25 ms).
+
+import std/io;
+
+// Una tecla decodificada. `Ctrl('a')` es Ctrl+A (bytes 1..=26); `F(5)` es la tecla F5.
+/// A decoded key. `Ctrl('a')` is Ctrl+A (bytes 1..=26); `F(5)` is the F5 function key.
+pub enum Key {
+    Char(char),
+    Enter,
+    Tab,
+    Backspace,
+    Esc,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+    Ctrl(char),
+    F(int),
+}
+
+// ¿El fd (0 = stdin, 1 = stdout, 2 = stderr) es una terminal?
+/// Is the given fd (0 = stdin, 1 = stdout, 2 = stderr) a terminal?
+pub fn is_tty(fd: int) -> bool {
+    __term_is_tty(fd)
+}
+
+// Tamaño del terminal; None si no hay tty (salida canalizada, CI…).
+/// The terminal size as `(columns, rows)`, or `None` when not attached to a terminal.
+pub fn size() -> Option<(int, int)> {
+    let r = __term_size();
+    if (r.len() == 2) { Option.Some((r[0], r[1])) } else { Option.None }
+}
+
+// Corre f en modo crudo y restaura SIEMPRE (también si f falla: try_call).
+/// Runs `f` with the terminal in raw mode (no echo, byte-at-a-time input) and ALWAYS restores
+/// the previous state, even if `f` panics. Returns `f`'s value, or `Err` if raw mode could not
+/// be entered or `f` failed.
+pub fn raw<T>(f: fn() -> T) -> Result<T, string> {
+    let on = __term_raw_on();
+    if (on[0] != "ok") {
+        return Result.Err(on[1]);
+    }
+    let r = try_call(f);
+    let _ = __term_raw_off();
+    r
+}
+
+// ---------------------------------------------------------------------------------------------
+// Decodificación de teclas
+// ---------------------------------------------------------------------------------------------
+
+// Decodifica UNA tecla del frente de buf: Some((tecla, octetos consumidos)) o None si el prefijo
+// es una secuencia aún incompleta (ESC solo, CSI sin byte final, UTF-8 a medias).
+/// Decodes ONE key from the front of `buf`: `Some((key, bytes consumed))`, or `None` when the
+/// prefix is an incomplete sequence (lone ESC, unfinished CSI, partial UTF-8) and more bytes are
+/// needed. Pure — feed it any byte source.
+pub fn decode(buf: bytes) -> Option<(Key, int)> {
+    if (buf.len() == 0) {
+        return Option.None;
+    }
+    let b0 = buf[0];
+    if (b0 == 27) {
+        return decode_escape(buf);
+    }
+    if (b0 == 13 || b0 == 10) {
+        return Option.Some((Key.Enter, 1));
+    }
+    if (b0 == 9) {
+        return Option.Some((Key.Tab, 1));
+    }
+    if (b0 == 127 || b0 == 8) {
+        return Option.Some((Key.Backspace, 1));
+    }
+    if (b0 >= 1 && b0 <= 26) {
+        // Ctrl+letra: el byte es la letra menos 96 ('a' = 97 → 1).
+        match (char_from_code(96 + b0)) {
+            Option.Some(c) => {
+                return Option.Some((Key.Ctrl(c), 1));
+            },
+            Option.None => {
+                return Option.Some((Key.Char('?'), 1));
+            },
+        }
+    }
+    if (b0 < 32) {
+        return Option.Some((Key.Char('?'), 1));  // controles raros (28..31, 0)
+    }
+    if (b0 < 128) {
+        match (char_from_code(b0)) {
+            Option.Some(c) => {
+                return Option.Some((Key.Char(c), 1));
+            },
+            Option.None => {
+                return Option.Some((Key.Char('?'), 1));
+            },
+        }
+    }
+    // UTF-8 multibyte: el byte líder fija la longitud total.
+    let need = utf8_len(b0);
+    if (need == 0) {
+        return Option.Some((Key.Char('?'), 1));  // continuación suelta / líder inválido
+    }
+    if (buf.len() < need) {
+        return Option.None;  // incompleta: faltan continuaciones
+    }
+    match (from_utf8(buf.sub_bytes(0, need))) {
+        Result.Ok(s) => Option.Some((Key.Char(s[0]), need)),
+        Result.Err(_) => Option.Some((Key.Char('?'), 1)),
+    }
+}
+
+// Longitud total de un carácter UTF-8 por su byte líder (0 = inválido/continuación).
+fn utf8_len(lead: int) -> int {
+    if (lead >= 192 && lead < 224) {
+        2
+    } else if (lead >= 224 && lead < 240) {
+        3
+    } else if (lead >= 240 && lead < 248) {
+        4
+    } else {
+        0
+    }
+}
+
+// buf[0] == 27. ESC solo no decide (podría venir una secuencia): None hasta que llegue más (o el
+// llamador se rinda por plazo y lo trate como Esc suelto).
+fn decode_escape(buf: bytes) -> Option<(Key, int)> {
+    if (buf.len() == 1) {
+        return Option.None;
+    }
+    let b1 = buf[1];
+    if (b1 == 91) {
+        // CSI: ESC '[' params… byte final en 0x40..0x7E.
+        var i = 2;
+        while (i < buf.len()) {
+            let c = buf[i];
+            if (c >= 64 && c <= 126) {
+                return Option.Some((csi_key(buf, i), i + 1));
+            }
+            i = i + 1;
+        }
+        return Option.None;  // CSI sin byte final todavía
+    }
+    if (b1 == 79) {
+        // SS3: ESC 'O' letra (F1..F4, Home/End en algunos terminales).
+        if (buf.len() < 3) {
+            return Option.None;
+        }
+        return Option.Some((ss3_key(buf[2]), 3));
+    }
+    // ESC seguido de otra cosa (Alt+tecla…): v1 → Esc suelto, consumiendo SOLO el ESC.
+    Option.Some((Key.Esc, 1))
+}
+
+// La tecla de una secuencia CSI cuyo byte final está en buf[fin] (los params van en 2..fin).
+fn csi_key(buf: bytes, fin: int) -> Key {
+    let f = buf[fin];
+    if (f == 65) {
+        return Key.Up;  // 'A'
+    }
+    if (f == 66) {
+        return Key.Down;  // 'B'
+    }
+    if (f == 67) {
+        return Key.Right;  // 'C'
+    }
+    if (f == 68) {
+        return Key.Left;  // 'D'
+    }
+    if (f == 72) {
+        return Key.Home;  // 'H'
+    }
+    if (f == 70) {
+        return Key.End;  // 'F'
+    }
+    if (f == 90) {
+        return Key.Tab;  // 'Z': Shift-Tab → Tab (v1)
+    }
+    if (f == 126) {
+        // '~': la tecla la nombra el PRIMER número de los params (los modificadores van tras ';').
+        var n = 0;
+        var i = 2;
+        while (i < fin && buf[i] >= 48 && buf[i] <= 57) {
+            n = n * 10 + (buf[i] - 48);
+            i = i + 1;
+        }
+        if (n == 1 || n == 7) {
+            return Key.Home;
+        }
+        if (n == 2) {
+            return Key.Insert;
+        }
+        if (n == 3) {
+            return Key.Delete;
+        }
+        if (n == 4 || n == 8) {
+            return Key.End;
+        }
+        if (n == 5) {
+            return Key.PageUp;
+        }
+        if (n == 6) {
+            return Key.PageDown;
+        }
+        if (n >= 11 && n <= 15) {
+            return Key.F(n - 10);  // F1..F5
+        }
+        if (n >= 17 && n <= 21) {
+            return Key.F(n - 11);  // F6..F10
+        }
+        if (n == 23 || n == 24) {
+            return Key.F(n - 12);  // F11, F12
+        }
+    }
+    Key.Esc  // secuencia CSI que no mapeamos (v1)
+}
+
+// La tecla de una secuencia SS3 (ESC 'O' letra).
+fn ss3_key(f: int) -> Key {
+    if (f == 80) {
+        return Key.F(1);  // 'P'
+    }
+    if (f == 81) {
+        return Key.F(2);  // 'Q'
+    }
+    if (f == 82) {
+        return Key.F(3);  // 'R'
+    }
+    if (f == 83) {
+        return Key.F(4);  // 'S'
+    }
+    if (f == 72) {
+        return Key.Home;  // 'H'
+    }
+    if (f == 70) {
+        return Key.End;  // 'F'
+    }
+    Key.Esc
+}
+
+// Lee UNA tecla de stdin (bloquea la fibra); None = EOF. Pensada para el modo crudo.
+/// Reads ONE key from stdin (blocking only the calling fiber); `None` on end of input. Meant to
+/// be used inside `raw`. A lone ESC is resolved after a short (25 ms) grace period — a human
+/// cannot type the `[` of an arrow-key sequence that fast. Note: on a burst (paste), bytes
+/// beyond the decoded key may be discarded; for burst processing read `io.read` + `decode`.
+pub fn read_key() -> Option<Key> {
+    match (io.read(1)) {
+        Option.None => Option.None,
+        Option.Some(first) => {
+            var buf = first;
+            var keys: [Key] = [];
+            while (keys.len() == 0) {
+                match (decode(buf)) {
+                    Option.Some(kc) => {
+                        keys.push(kc.0);
+                    },
+                    Option.None => {
+                        // Secuencia incompleta: espera un poco por el resto.
+                        match (io.read_timeout(8, 25)) {
+                            io.ReadResult.Data(more) => {
+                                buf = buf + more;
+                            },
+                            io.ReadResult.Eof => {
+                                if (buf[0] == 27) {
+                                    keys.push(Key.Esc);
+                                } else {
+                                    keys.push(Key.Char('?'));
+                                }
+                            },
+                            io.ReadResult.TimedOut => {
+                                // No llegó más: era un ESC suelto (o un byte roto).
+                                if (buf[0] == 27) {
+                                    keys.push(Key.Esc);
+                                } else {
+                                    keys.push(Key.Char('?'));
+                                }
+                            },
+                        }
+                    },
+                }
+            }
+            Option.Some(keys[0])
+        },
+    }
+}

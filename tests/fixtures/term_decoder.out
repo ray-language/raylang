@@ -1,0 +1,36 @@
+char:a +1
+char:Z +1
+enter +1
+enter +1
+tab +1
+backspace +1
+ctrl:c +1
+ctrl:z +1
+incomplete
+incomplete
+up +3
+down +3
+right +3
+left +3
+home +3
+end +3
+tab +3
+home +4
+insert +4
+delete +4
+end +4
+pageup +4
+pagedown +4
+f5 +5
+f6 +5
+f12 +5
+right +6
+f1 +3
+f4 +3
+esc +1
+char:ñ +2
+incomplete
+char:€ +3
+char:👍 +4
+char:? +1
+char:a +1

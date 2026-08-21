@@ -1803,6 +1803,30 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees ints"),
             },
+            // std/term (M107.3): isatty / tamaño / modo crudo.
+            "__term_is_tty" => match &values[0] {
+                Value::Int(fd) => Value::Bool(crate::builtins::term_is_tty(*fd)),
+                _ => unreachable!("the checker guarantees an int"),
+            },
+            "__term_size" => {
+                let arr = match crate::builtins::term_size() {
+                    Some((c, r)) => vec![Value::Int(c), Value::Int(r)],
+                    None => vec![],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__term_raw_on" | "__term_raw_off" => {
+                let r = if name == "__term_raw_on" {
+                    crate::builtins::term_raw_on()
+                } else {
+                    crate::builtins::term_raw_off()
+                };
+                let arr = match r {
+                    Ok(()) => vec![Value::Str("ok".to_string())],
+                    Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M15.2: conecta por TCP → ["ok", handle] o ["err", msg].
             // Diferido JSON-1: code point → char ([] si inválido). El inverso de char_code.
             "__char_from_code" => match &values[0] {

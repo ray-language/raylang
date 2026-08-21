@@ -32,6 +32,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
     "__stdin_read", "__stdin_read_timeout",
+    "__term_is_tty", "__term_size", "__term_raw_on", "__term_raw_off",
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
     "__monotonic", "__monotonic_nanos", "__now", "__random", "__random_int", "__random_seed", "__sleep",
     // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).
@@ -1036,6 +1037,29 @@ fn transpiles_stdin_read_via_the_reactor() {
     // Sin lecturas de stdin, el runtime no se emite.
     let bare = transpile_src("fn main() -> int { 0 }");
     assert!(!bare.contains("__ray_stdin"), "runtime de stdin solo bajo demanda");
+}
+
+#[test]
+fn transpiles_term_builtins() {
+    // M107.3: los primitivos del terminal bajan al runtime __ray_term_* (emitido bajo demanda).
+    let src = r#"fn main() -> int {
+    let t = __term_is_tty(0);
+    let s = __term_size();
+    let a = __term_raw_on();
+    let b = __term_raw_off();
+    print(s.len() + a.len() + b.len());
+    print(t);
+    0
+}
+"#;
+    let rust = transpile_src(src);
+    assert!(rust.contains("__ray_term_is_tty(0"), "is_tty: {rust}");
+    assert!(rust.contains("__ray_term_size()"), "size: {rust}");
+    assert!(rust.contains("__ray_term_raw(true)"), "raw on: {rust}");
+    assert!(rust.contains("__ray_term_raw(false)"), "raw off: {rust}");
+    assert!(rust.contains("cfmakeraw"), "el runtime termios se emite: {rust}");
+    let bare = transpile_src("fn main() -> int { 0 }");
+    assert!(!bare.contains("__ray_term"), "runtime de term solo bajo demanda");
 }
 
 #[test]

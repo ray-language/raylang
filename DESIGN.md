@@ -9266,3 +9266,17 @@ stdout cerrado (`programa | head`) reventaba con ICE de "Broken pipe" — Rust i
 en los tres motores (VM/interp vía `host_print`; el nativo en su hilo escritor y en el
 `__ray_eprint` que sustituyó al `eprintln!` emitido). `io.write`/`io.flush` conservan su `Result`:
 quien escribe explícitamente decide qué hacer con el pipe cerrado. SPEC §2 lo documenta.
+
+**Adenda a la crónica del formateador (auditoría 21 ago 2026, a raíz de un reporte de código
+perdido).** La propiedad que caza pérdida de código no es la idempotencia sino **AST(fuente) ≡
+AST(formateado)** módulo posiciones, más la conservación del multiconjunto de comentarios. Montada
+sobre los 274 `.ray` del repo salió limpia — pero el **corpus adversarial** cazó un bug real de la
+familia del reporte: `collect_comments` no conocía los **backticks** (M95) y reseteaba su estado en
+cada `\n` — un template multilínea con `https://…` dentro convertía el resto de la línea en
+"comentario": el fmt inyectaba líneas fantasma (`//otra.url/…`) y cada pasada las duplicaba. El caso
+más común del mundo (una URL en un template HTML) era el gatillo. Las dos propiedades + el corpus
+(19 construcciones: comentarios en cada sitio raro, templates con URL/apóstrofes/backtick escapado,
+match anidado, spawn, extern blocking, wrap forzado…) quedan PERMANENTES en `tests/fmt_policy.rs`:
+un "AST alterado" es siempre bug grave del formateador, nunca culpa del archivo. De paso se retiró
+una anotación falsa: la supuesta asimetría de M105 con cadenas interpoladas ya no reproduce (la
+arreglaron de rebote los fixes de comentarios de #117).

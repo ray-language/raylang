@@ -71,7 +71,9 @@ en el propio Rust del proyecto, sin crates.
 
 | Dependencia | Para qué | Alcance |
 |---|---|---|
-| `ring` | criptografía de producción en tiempo constante (SHA, HMAC, Ed25519, ChaCha20-Poly1305, CSPRNG) | feature `net-tls` (vía `ray-runtime/crypto`) |
+| `ring` | criptografía de producción en tiempo constante (SHA, HMAC, Ed25519, ChaCha20-Poly1305, HKDF, CSPRNG) | feature `net-tls` (vía `ray-runtime/crypto`) |
+| `x25519-dalek` (+ `curve25519-dalek`) | acuerdo de claves X25519 en tiempo constante. `ring` tiene el algoritmo pero **solo** entrega claves efímeras (`EphemeralPrivateKey::generate(alg, rng)`, sin constructor desde octetos, `SecureRandom` sellado): ni clave privada persistible —la identidad de un nodo p2p— ni determinismo para el oráculo VM≡nativo | feature `net-tls` (vía `ray-runtime/crypto`) |
+| `subtle` | la comparación en tiempo constante (`constant_time_eq`); su razón de ser es que el compilador no pueda reducirla a un cortocircuito. Ya venía en el árbol como transitiva de `curve25519-dalek` | feature `net-tls` (vía `ray-runtime/crypto`) |
 | `rustls` + `webpki-roots` + `rustls-pki-types` | TLS y verificación de certificados | feature `net-tls` |
 | `rusqlite` (`bundled`) | SQLite embebido: sin dependencia del sistema, versión determinista | feature `sqlite` |
 | `libloading` | carga de librerías nativas del FFI — reemplazó a `dlopen`/`dlsym` a mano (arregla Windows y da los errores reales del cargador) | feature `ffi` |

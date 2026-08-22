@@ -1880,13 +1880,37 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
+            // M114: comparación en tiempo constante — total, como ed25519_verify → bool directo.
+            "constant_time_eq" if name.starts_with("__") && !self.exclude.contains("crypto") => {
+                self.needs_rt_crypto = true;
+                out.push_str("ray_runtime::crypto::constant_time_eq(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            // M114: HKDF-SHA256. Va aparte del brazo de abajo porque su último argumento es un `int`
+            // (la longitud), no `bytes`: los tres primeros llevan `&` y el cuarto va por valor.
+            "hkdf_sha256" if name.starts_with("__") && !self.exclude.contains("crypto") => {
+                self.needs_rt_crypto = true;
+                out.push_str("{ let __rt_r = ray_runtime::crypto::hkdf_sha256(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[3])?;
+                out.push_str("); Rc::new(std::cell::RefCell::new(match __rt_r { Some(__rt_v) => vec![Rc::<[u8]>::from(__rt_v)], None => Vec::new() })) }");
+            }
             "ed25519_public_key" | "ed25519_sign" | "chacha20poly1305_seal" | "chacha20poly1305_open"
+            | "x25519_public_key" | "x25519_shared_secret"
                 if name.starts_with("__") && !self.exclude.contains("crypto") =>
             {
                 self.needs_rt_crypto = true;
                 let argc = match method {
-                    "ed25519_public_key" => 1,
-                    "ed25519_sign" => 2,
+                    "ed25519_public_key" | "x25519_public_key" => 1,
+                    "ed25519_sign" | "x25519_shared_secret" => 2,
                     _ => 4, // chacha seal/open: clave, nonce, aad, dato
                 };
                 write!(out, "{{ let __rt_r = ray_runtime::crypto::{}(", method).unwrap();

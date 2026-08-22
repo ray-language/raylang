@@ -684,6 +684,8 @@ fn parses_files_reales_equal_what_el_oracle() {
         "casts.ray", // M27.4: casts `as` (idem; usa `for`/interpolación también)
         "parse_fusion.ray", // corpus de las fusiones N-D del backend nativo: usa `as` (M27.4) y
                             // `for` (M27.2), ambos diferidos en el toolchain auto-alojado.
+        "key_agreement.ray", // M114: acuerdo de claves X25519/HKDF; `bytes` en posición de tipo (M16)
+                             // + interpolación (M27.3), ambos diferidos en el toolchain auto-alojado.
         "process_session.ray", // M100 v3: sesión persistente (stdin escribible); `bytes` en posición
                                // de tipo (M16) + interpolación (M27.3), ambos diferidos.
         "process_stream.ray", // M100 v2: streaming de procesos; anota `bytes` en posición de tipo

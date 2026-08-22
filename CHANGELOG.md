@@ -37,6 +37,21 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/crypto`: acuerdo de claves X25519 + HKDF** (M114, IDEAS §62) — la pieza que faltaba para
+  cifrar entre pares. Había **identidad** (Ed25519) y **cifrado** (ChaCha20-Poly1305), pero no había
+  con qué unirlos: sin acuerdo de claves solo se podía cifrar con claves precompartidas fuera de
+  banda. Ahora `crypto.x25519_public_key(secret)` y `crypto.x25519_shared_secret(secret, peer_public)`
+  dan el secreto común sobre un canal público, `crypto.hkdf_sha256(salt, ikm, info, len)` (RFC 5869) lo
+  convierte en claves usables —y las **separa** por `info`, que es como se tiene una clave por sentido
+  y ningún nonce repetido— y `crypto.constant_time_eq(a, b)` compara secretos sin filtrar por
+  temporización. Las privadas son 32 octetos cualesquiera (`random_bytes(32)`) y se pueden
+  **persistir**: la identidad de un nodo sobrevive al reinicio. `x25519_shared_secret` devuelve `None`
+  ante una clave pública de **orden pequeño** (forzaría un secreto todo-ceros que el atacante conoce).
+  Detrás va `x25519-dalek` y no `ring`, cuya API solo entrega claves efímeras (ver `SECURITY.md`).
+  Vectores de RFC 7748 §6.1 y RFC 5869 A.1/A.3 clavados en los tres motores; la receta completa de
+  canal seguro —firmar la efímera, clave por sentido, nonce contador— en `MANUAL.md` §13 y en
+  `examples/stdlib/key_agreement.ray`.
+
 - **`std/process`: stdin escribible sobre un hijo VIVO** (M100 v3, IDEAS §53.10) — lo que faltaba
   para una **sesión persistente** por stdio (cliente MCP/LSP, driver de REPL): hasta ahora
   `.stdin(bytes)` escribía y CERRABA en el spawn, y `Proc` solo exponía `out`/`err`, así que

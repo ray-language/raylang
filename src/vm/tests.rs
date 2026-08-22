@@ -2629,6 +2629,58 @@ fn ed25519_oracle() {
     assert_eq!(vm, Value::Int(1), "Ed25519: falló roundtrip/manipulación/None/determinismo");
 }
 
+/// M114: **X25519 + HKDF-SHA256** (`x25519-dalek` / `ring`). Oráculo (interp==vm) + validación
+/// RELACIONAL de la propiedad que define un acuerdo de claves: cada lado combina SU privada con la
+/// pública del OTRO y ambos llegan al mismo secreto, que nunca viajó. Cubre además los `None` que
+/// importan (tamaño malo, punto de orden pequeño → salida toda-ceros) y que HKDF SEPARA las claves por
+/// `info` — la propiedad de la que depende tener una clave por sentido. Los vectores oficiales de RFC
+/// 7748/5869 viven en el golden de tres motores (`tests/key_agreement_cli.rs`); aquí se prueba el
+/// cableado de los primitivos en ambos motores. Devuelve 1 solo si TODO cuadra.
+#[test]
+fn x25519_hkdf_oracle() {
+    let src = r#"
+        fn main() -> int {
+            let sk_a = "0123456789abcdef0123456789abcdef".to_bytes();   // 32 octetos
+            let sk_b = "fedcba9876543210fedcba9876543210".to_bytes();
+            let pk_a_arr = __x25519_public_key(sk_a);
+            let pk_b_arr = __x25519_public_key(sk_b);
+            if (pk_a_arr.len() == 0 || pk_b_arr.len() == 0) { 0 } else {
+                let dh_ab = __x25519_shared_secret(sk_a, pk_b_arr[0]);
+                let dh_ba = __x25519_shared_secret(sk_b, pk_a_arr[0]);
+                // La propiedad del acuerdo: ambos lados, el mismo secreto.
+                let agree = dh_ab.len() > 0 && dh_ba.len() > 0
+                    && __constant_time_eq(dh_ab[0], dh_ba[0]);
+                let short = __x25519_public_key("short".to_bytes()).len() == 0;
+                // Pública de orden pequeño (toda ceros) → no contributorio → vacío.
+                let zero = bytes_of([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]);
+                let small_order = __x25519_shared_secret(sk_a, zero).len() == 0;
+                // HKDF: `info` distinto → clave distinta (la base de una clave por sentido).
+                let salt = "salt".to_bytes();
+                let k1 = __hkdf_sha256(salt, dh_ab[0], "a2b".to_bytes(), 32);
+                let k2 = __hkdf_sha256(salt, dh_ab[0], "b2a".to_bytes(), 32);
+                let k1_again = __hkdf_sha256(salt, dh_ab[0], "a2b".to_bytes(), 32);
+                let separated = k1.len() > 0 && k2.len() > 0 && k1_again.len() > 0
+                    && !__constant_time_eq(k1[0], k2[0])          // distinto info, distinta clave
+                    && __constant_time_eq(k1[0], k1_again[0])     // determinista
+                    && k1[0].len() == 32;
+                let bad_len = __hkdf_sha256(salt, dh_ab[0], salt, 0).len() == 0
+                    && __hkdf_sha256(salt, dh_ab[0], salt, 8161).len() == 0;
+                // La comparación en tiempo constante es total ante longitudes distintas.
+                let ct = !__constant_time_eq("abc".to_bytes(), "ab".to_bytes());
+                if (agree && short && small_order && separated && bad_len && ct) { 1 } else { 0 }
+            }
+        }
+    "#;
+    let tokens = crate::lexer::lex(src).expect("lex ok");
+    let mut prog = crate::parser::parse(tokens).expect("parse ok");
+    crate::checker::check(&mut prog).expect("check ok");
+    let interp = crate::interpreter::run(&prog).expect("interp ok");
+    let compiled = compile_program(&prog).expect("compila");
+    let vm = run_program(&compiled).expect("vm ok");
+    assert_eq!(interp, vm, "VM≠intérprete en x25519/hkdf");
+    assert_eq!(vm, Value::Int(1), "X25519/HKDF: falló el acuerdo/None/separación por info");
+}
+
 /// M43.4: **ChaCha20-Poly1305 AEAD** vía `ring`. Oráculo (interp==vm) + validación relacional:
 /// `seal` luego `open` recupera el texto, alterar el `aad` hace fallar la autenticación (`None`), y una
 /// clave de mal tamaño da `None` en `seal`. Devuelve 1 solo si todo cuadra.

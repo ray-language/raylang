@@ -1225,6 +1225,68 @@ let estado = p.wait();
 - Solo **VM y binario nativo** (usa fibras y canales, como todo `spawn`); el intérprete lo
   rechaza con su error de concurrencia.
 
+### Criptografía y canal seguro (`std/crypto`)
+
+`std/crypto` es criptografía de **producción** (tiempo constante, respaldada por `ring` y
+`x25519-dalek`), no una demostración. Tiene cuatro familias, y hacen falta las cuatro para montar un
+canal cifrado entre dos pares:
+
+| para qué | funciones |
+|---|---|
+| identidad (firmar y verificar) | `ed25519_public_key(seed)`, `ed25519_sign(seed, msg)`, `ed25519_verify(pk, msg, sig)` |
+| **acuerdo de claves** | `x25519_public_key(secret)`, `x25519_shared_secret(secret, peer_public)` |
+| **derivación** | `hkdf_sha256(salt, ikm, info, len)` |
+| cifrado autenticado | `chacha20poly1305_seal(key, nonce, aad, plain)`, `..._open(…)` |
+
+Las claves privadas —la semilla Ed25519 y el secreto X25519— son **32 octetos cualesquiera**, así que
+se crean con `crypto.random_bytes(32)` y se pueden guardar: la identidad de un nodo sobrevive al
+reinicio.
+
+```rust
+import std/crypto;
+
+// Cada lado combina SU privada con la pública del OTRO, y los dos llegan al mismo secreto
+// sin que ese secreto haya viajado nunca por el canal.
+let my_secret = crypto.random_bytes(32);
+let my_public = crypto.x25519_public_key(my_secret);       // esto sí se envía
+let shared = crypto.x25519_shared_secret(my_secret, peer_public);
+```
+
+**El secreto que sale de ahí NO es una clave.** Es la salida cruda del Diffie-Hellman: no es uniforme
+y nunca debe entrar directa en `chacha20poly1305_seal`. Pasa por `hkdf_sha256`, que además es lo que
+te deja sacar **varias** claves independientes del mismo secreto cambiando el `info`.
+
+#### Las cuatro reglas
+
+Un `x25519_shared_secret` pelado no es un canal seguro. Estas cuatro reglas sí lo son, y ninguna
+sobra — el ejemplo completo, con vectores oficiales, está en `examples/stdlib/key_agreement.ray`:
+
+1. **La clave AEAD sale siempre de HKDF**, nunca del DH crudo.
+2. **Una clave por sentido de la conversación** (`info` distinto para "yo→tú" y "tú→yo"). Con una sola
+   clave compartida los dos extremos numeran nonces por su cuenta y tarde o temprano repiten uno; un
+   nonce repetido en ChaCha20-Poly1305 rompe la confidencialidad **y** la autenticación. Dos claves lo
+   hacen imposible por construcción.
+3. **El nonce es un contador** por sentido — no aleatorio, y no se reinicia mientras viva la clave.
+4. **X25519 da secreto, no identidad.** Cualquiera puede hacer un intercambio contigo, así que firma tu
+   clave efímera con tu identidad Ed25519 y verifica la del otro. Sin ese paso, un intermediario hace
+   un intercambio con cada lado, lee todo y reenvía; el canal parece perfecto y no lo es.
+
+```rust
+// Regla 2 en tres líneas: mismo secreto, dos claves. El transcript (las dos públicas) ata las
+// claves a ESTE intercambio, para que no se puedan reusar en otro.
+let transcript = crypto.sha256(my_public + peer_public);
+let send_key = crypto.hkdf_sha256(transcript, shared, "a2b".to_bytes(), 32);
+let recv_key = crypto.hkdf_sha256(transcript, shared, "b2a".to_bytes(), 32);
+```
+
+Dos cosas más devuelven `None` a propósito y conviene no taparlas: `x25519_shared_secret` con una
+clave pública de **orden pequeño** (fuerza un secreto todo-ceros que el atacante ya conoce) y
+`hkdf_sha256` con un `len` fuera de `1..=8160`.
+
+Por último, para comparar cualquier secreto —una etiqueta MAC, un token de sesión— usa
+`constant_time_eq(a, b)` y no `==`: el `==` corta en el primer octeto distinto, y esa diferencia de
+tiempo revela el valor correcto octeto a octeto.
+
 ### Tiempo y duraciones (`std/time`)
 
 Relojes (`now()` epoch-ms, `monotonic()` para medir intervalos), `sleep(ms)` cooperativo, y las

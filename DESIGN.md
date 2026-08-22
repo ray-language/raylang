@@ -9497,3 +9497,59 @@ Guarda: `process_cli::writable_stdin_keeps_a_session_alive_on_vm_and_native` —
 petición/respuesta contra un `cat` vivo (con la v2, la segunda vuelta sería imposible), EOF
 explícito y `write` tras la muerte del hijo → `Err`; en VM, nativo-fibras y nativo-hilos, con la
 misma salida byte a byte.
+
+## 107. M114 — acuerdo de claves: lo que faltaba entre la identidad y el cifrado (ago 2026)
+
+**El reporte.** Un usuario construyendo una aplicación p2p tipo IRC señaló que `std/crypto` tiene
+Ed25519 y AEAD pero no X25519, así que no podía obtener un secreto compartido. Tenía razón, y el
+hueco era mayor de lo que decía: un canal cifrado entre pares necesita **cuatro** piezas —identidad,
+acuerdo de claves, derivación y cifrado autenticado— y había dos. Faltaba el acuerdo (X25519) y
+faltaba la derivación (HKDF); sin la segunda, entregar la primera habría empujado a usar el secreto
+Diffie-Hellman **crudo** como clave AEAD, que es precisamente lo que no se debe hacer. Las dos van
+juntas o no van.
+
+**Por qué una dependencia nueva, teniendo `ring`.** `ring` **sí** tiene X25519 (`agreement::X25519`);
+el usuario lo hizo notar y la primera redacción de la ficha fue más tajante de lo que la evidencia
+sostenía. Lo que `ring` no tiene es la **forma de clave** que este proyecto necesita. Verificado
+contra `ring` 0.17.14 (la última publicada, y la que ya usábamos), compilando:
+
+- `EphemeralPrivateKey::generate(alg, rng)` es el **único** constructor; no hay uno desde octetos
+  (`no associated function named 'from_bytes'`).
+- `bytes()` existe pero es `#[cfg(test)]` + `#[deprecated]`: tampoco se puede exportar la generada.
+- `agree_ephemeral` **consume** la clave.
+- Inyectar un RNG determinista que devuelva nuestra semilla es imposible: `rand::SecureRandom` es un
+  trait **sellado** (`pub trait SecureRandom: sealed::SecureRandom`).
+
+No es un descuido de `ring`: el nombre *Ephemeral* es la política. Pero deja fuera las dos cosas que
+aquí son requisito — una clave privada **persistible** (la identidad de un nodo p2p tiene que
+sobrevivir al reinicio) y el **determinismo** que sostiene el oráculo byte-idéntico VM≡nativo de
+`PRODUCTION.md`, sin el cual la primitiva no sería probable en el corpus dorado.
+
+Había una alternativa honesta sin dependencia: X25519 **solo efímero** con handle de sesión, apoyando
+la identidad en Ed25519 (la forma de Noise y de Signal). Se descartó por la API, no por la
+criptografía: obligaba a una superficie asimétrica —un handle opaco donde Ed25519 tiene
+semilla→clave— y a un test relacional en vez de vectores. Se eligió `x25519-dalek` 3.0
+(`--no-default-features --features static_secrets`: `curve25519-dalek` + `subtle` + `cfg-if` +
+`rand_core`), que da `StaticSecret::from([u8;32])` y con ello la misma forma que ya tenía Ed25519.
+La aleatoriedad sigue saliendo del CSPRNG de `ring` (`random_bytes`), no del crate nuevo. HKDF no
+costó dependencia: `ring::hkdf` ya estaba.
+
+**Las decisiones de superficie.**
+
+- **`Option`, no ceros, ante un punto de orden pequeño.** Una clave pública maliciosa fuerza un
+  secreto compartido todo-ceros que el atacante conoce de antemano. `was_contributory()` lo detecta;
+  devolver `None` hace que el tipo obligue a mirarlo, en vez de seguir cifrando bajo una clave nula.
+- **`constant_time_eq` entra en el mismo arco.** Sin ella, comparar una etiqueta MAC en raylang se
+  hace con `==`, que corta en el primer octeto distinto y filtra el valor correcto octeto a octeto.
+  Se apoya en `subtle` —cuya razón de ser es que el compilador no pueda reducir el bucle a un
+  cortocircuito— y no en `ring::constant_time`, que está deprecado para uso externo.
+- **HKDF tipa la longitud por trait** en `ring`; el envoltorio `Len` es el patrón que la propia
+  documentación propone. El tope `1..=8160` (255 bloques) es el del RFC.
+
+**La otra mitad del arco es documentación.** Una primitiva de acuerdo de claves entregada a secas se
+usa mal: la trampa no es la curva, son las cuatro reglas alrededor (la clave AEAD sale de HKDF y no
+del DH; **una clave por sentido**, o los dos extremos numeran nonces por su cuenta y repiten uno, lo
+que en ChaCha20-Poly1305 rompe confidencialidad y autenticación; nonce contador; y X25519 **no
+autentica** — sin firmar la efímera con Ed25519 hay intermediario). Van en `MANUAL.md` §13 y, en
+código ejecutable, en `examples/stdlib/key_agreement.ray`, que además clava los vectores oficiales de
+RFC 7748 §6.1 y RFC 5869 A.1/A.3 en los tres motores (`tests/key_agreement_cli.rs`).

@@ -130,3 +130,92 @@ pub fn chacha20poly1305_open(key: &[u8], nonce: &[u8], aad: &[u8], ciphertext_an
 }
 #[cfg(not(feature = "crypto"))]
 pub fn chacha20poly1305_open(_key: &[u8], _nonce: &[u8], _aad: &[u8], _ciphertext_and_tag: &[u8]) -> Option<Vec<u8>> { None }
+
+// --- X25519: acuerdo de claves (ECDH de curva elíptica, M114) ---
+//
+// La pieza que faltaba para un canal cifrado entre pares: Ed25519 da la IDENTIDAD y ChaCha20-Poly1305 el
+// CIFRADO, pero sin acuerdo de claves no hay con qué unirlos (solo claves precompartidas fuera de banda).
+//
+// **Por qué `x25519-dalek` y no `ring`**: `ring` tiene el algoritmo (`agreement::X25519`), pero su API solo
+// entrega claves EFÍMERAS — `EphemeralPrivateKey::generate(alg, rng)` es el único constructor, no hay uno
+// desde octetos, `bytes()` es `#[cfg(test)]`+`deprecated`, `agree_ephemeral` CONSUME la clave y el trait
+// `rand::SecureRandom` está SELLADO (no se le puede inyectar un RNG determinista). Eso impide las dos cosas
+// que este proyecto necesita: una clave privada larga PERSISTIBLE (la identidad de un nodo p2p sobrevive al
+// reinicio) y el DETERMINISMO que sostiene el oráculo byte-idéntico VM↔nativo.
+//
+// La clave privada son **exactamente 32 octetos**, como la semilla de Ed25519 → misma forma de API. El
+// *clamping* de RFC 7748 lo aplica `StaticSecret` internamente: cualquier 32 octetos son una clave válida.
+
+/// Clave pública X25519 (32 octetos) derivada de una privada de 32. `None` si no mide 32.
+#[cfg(feature = "crypto")]
+pub fn x25519_public_key(secret: &[u8]) -> Option<Vec<u8>> {
+    let sk: [u8; 32] = secret.try_into().ok()?;
+    let sk = x25519_dalek::StaticSecret::from(sk);
+    Some(x25519_dalek::PublicKey::from(&sk).as_bytes().to_vec())
+}
+#[cfg(not(feature = "crypto"))]
+pub fn x25519_public_key(_secret: &[u8]) -> Option<Vec<u8>> { None }
+
+/// Secreto compartido X25519 (32 octetos) entre nuestra privada y la pública del par. `None` si algún
+/// tamaño no es 32 **o si el resultado no es contributorio**: una pública de orden pequeño fuerza una
+/// salida toda-ceros, y seguir con ella sería cifrar bajo una clave que el atacante conoce. Devolver
+/// `None` (y no los ceros) obliga a mirarlo desde el tipo.
+///
+/// La salida es el secreto DH **crudo**: no es una clave uniforme y NO debe usarse directa como clave
+/// AEAD — pasa siempre por `hkdf_sha256`.
+#[cfg(feature = "crypto")]
+pub fn x25519_shared_secret(secret: &[u8], peer_public: &[u8]) -> Option<Vec<u8>> {
+    let sk: [u8; 32] = secret.try_into().ok()?;
+    let pk: [u8; 32] = peer_public.try_into().ok()?;
+    let shared = x25519_dalek::StaticSecret::from(sk).diffie_hellman(&x25519_dalek::PublicKey::from(pk));
+    if !shared.was_contributory() {
+        return None;
+    }
+    Some(shared.as_bytes().to_vec())
+}
+#[cfg(not(feature = "crypto"))]
+pub fn x25519_shared_secret(_secret: &[u8], _peer_public: &[u8]) -> Option<Vec<u8>> { None }
+
+// --- HKDF-SHA256 (derivación de claves, M114) ---
+
+/// HKDF-SHA256 completo (extract + expand, RFC 5869): deriva `len` octetos de material de clave a partir
+/// de `ikm` (p. ej. un secreto DH), ligando `salt` e `info`. `None` si `len` no está en `1..=8160`
+/// (255·32, el máximo del RFC). Un `salt` vacío es el `HashLen` ceros que manda el estándar.
+///
+/// `info` es lo que SEPARA claves derivadas del mismo secreto: dos `info` distintos dan dos claves
+/// independientes (p. ej. una por sentido de la conversación, para que ningún nonce se reutilice).
+#[cfg(feature = "crypto")]
+pub fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], len: i64) -> Option<Vec<u8>> {
+    // `ring::hkdf` tipa la longitud de salida por trait; `Len` es el envoltorio mínimo para pedirla
+    // dinámicamente (el patrón que la propia documentación de ring propone).
+    struct Len(usize);
+    impl ring::hkdf::KeyType for Len {
+        fn len(&self) -> usize {
+            self.0
+        }
+    }
+    if len <= 0 || len > 255 * 32 {
+        return None;
+    }
+    let len = len as usize;
+    let prk = ring::hkdf::Salt::new(ring::hkdf::HKDF_SHA256, salt).extract(ikm);
+    // `info` va en un `let` propio: `expand` toma prestado el slice y el `Okm` lo retiene hasta `fill`.
+    let info = [info];
+    let okm = prk.expand(&info, Len(len)).ok()?;
+    let mut out = vec![0u8; len];
+    okm.fill(&mut out).ok()?;
+    Some(out)
+}
+#[cfg(not(feature = "crypto"))]
+pub fn hkdf_sha256(_salt: &[u8], _ikm: &[u8], _info: &[u8], _len: i64) -> Option<Vec<u8>> { None }
+
+/// Compara dos secuencias de octetos en **tiempo constante** (respecto al contenido; la longitud sí se
+/// distingue). El `==` de raylang sobre `bytes` corta en el primer octeto distinto: comparar así una
+/// etiqueta MAC o un token filtra el valor correcto por temporización, octeto a octeto.
+#[cfg(feature = "crypto")]
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    a.len() == b.len() && bool::from(a.ct_eq(b))
+}
+#[cfg(not(feature = "crypto"))]
+pub fn constant_time_eq(_a: &[u8], _b: &[u8]) -> bool { false }

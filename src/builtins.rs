@@ -587,6 +587,42 @@ pub fn chacha20poly1305_open(key: &[u8], nonce: &[u8], aad: &[u8], ciphertext_an
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn chacha20poly1305_open(_key: &[u8], _nonce: &[u8], _aad: &[u8], _ciphertext_and_tag: &[u8]) -> Option<Vec<u8>> { None }
 
+// --- Acuerdo de claves X25519 + HKDF (M114) ---
+//
+// La privada son **exactamente 32 octetos**, como la semilla de Ed25519 → misma forma (`Option`, primitivo
+// `[bytes]` etiquetado, envoltorio en std/crypto). Detrás va `x25519-dalek` y no `ring`: ring solo entrega
+// claves EFÍMERAS (sin constructor desde octetos), y aquí hacen falta clave persistible y determinismo.
+
+/// Clave pública X25519 (32 octetos) desde una privada de 32. `None` si no mide 32.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn x25519_public_key(secret: &[u8]) -> Option<Vec<u8>> { ray_runtime::crypto::x25519_public_key(secret) }
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn x25519_public_key(_secret: &[u8]) -> Option<Vec<u8>> { None }
+
+/// Secreto compartido X25519 (32 octetos). `None` si un tamaño no es 32 o si el resultado no es
+/// contributorio (pública de orden pequeño → salida toda-ceros). Es el secreto DH CRUDO: pasa por HKDF.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn x25519_shared_secret(secret: &[u8], peer_public: &[u8]) -> Option<Vec<u8>> {
+    ray_runtime::crypto::x25519_shared_secret(secret, peer_public)
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn x25519_shared_secret(_secret: &[u8], _peer_public: &[u8]) -> Option<Vec<u8>> { None }
+
+/// HKDF-SHA256 (RFC 5869): `len` octetos derivados de `ikm`, ligando `salt` e `info`. `None` fuera de
+/// `1..=8160`. Es lo que convierte un secreto DH en claves usables — y lo que las SEPARA por `info`.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], len: i64) -> Option<Vec<u8>> {
+    ray_runtime::crypto::hkdf_sha256(salt, ikm, info, len)
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn hkdf_sha256(_salt: &[u8], _ikm: &[u8], _info: &[u8], _len: i64) -> Option<Vec<u8>> { None }
+
+/// Compara dos `bytes` en tiempo constante. Total: `false` ante longitudes distintas.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool { ray_runtime::crypto::constant_time_eq(a, b) }
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn constant_time_eq(_a: &[u8], _b: &[u8]) -> bool { false }
+
 // --- I/O con buffering: registro de archivos abiertos (M11.8) ---
 //
 // Un handle de archivo es un `int`: NO hay un nuevo tipo de valor ni se toca el GC. Los archivos
@@ -1936,6 +1972,33 @@ static BUILTINS: &[Builtin] = &[
             if a[i] != Type::Bytes { return Err((Some(i), format!("chacha20poly1305_open expects bytes ({etiqueta}), not {}", a[i]))); }
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M114: acuerdo de claves X25519 + HKDF. Los fallibles son `[bytes]` etiquetado (el prelude →
+    // Option<bytes>); `constant_time_eq` es total → bool directo.
+    Builtin { name: "__x25519_public_key", opcode: OpCode::X25519PublicKey, check: |a| {
+        arity(a, 1, "__x25519_public_key", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("x25519_public_key expects bytes (secret key), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "__x25519_shared_secret", opcode: OpCode::X25519SharedSecret, check: |a| {
+        arity(a, 2, "__x25519_shared_secret", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("x25519_shared_secret expects bytes (secret key), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("x25519_shared_secret expects bytes (peer public key), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "__hkdf_sha256", opcode: OpCode::HkdfSha256, check: |a| {
+        arity(a, 4, "__hkdf_sha256", "")?;
+        for (i, etiqueta) in ["salt", "input key material", "info"].iter().enumerate() {
+            if a[i] != Type::Bytes { return Err((Some(i), format!("hkdf_sha256 expects bytes ({etiqueta}), not {}", a[i]))); }
+        }
+        if a[3] != Type::Int { return Err((Some(3), format!("hkdf_sha256 expects an int (output length), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "__constant_time_eq", opcode: OpCode::ConstantTimeEq, check: |a| {
+        arity(a, 2, "constant_time_eq", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("constant_time_eq expects bytes, not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("constant_time_eq expects bytes, not {}", a[1]))); }
+        Ok(Type::Bool)
     } },
     // __char_from_code(n) -> [char] (diferido JSON-1): [] si n no es un code point válido.
     // El prelude → char_from_code -> Option<char>. El inverso de char_code.

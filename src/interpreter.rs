@@ -995,7 +995,9 @@ impl<'a> Interpreter<'a> {
                             "__crypto_random_bytes" | "__sha256" | "__sha512" | "__sha1"
                             | "__hmac_sha256" | "__ed25519_public_key" | "__ed25519_sign"
                             | "__ed25519_verify" | "__chacha20poly1305_seal"
-                            | "__chacha20poly1305_open")
+                            | "__chacha20poly1305_open" | "__x25519_public_key"
+                            | "__x25519_shared_secret" | "__hkdf_sha256"
+                            | "__constant_time_eq")
                     {
                         return Err(runtime_error(callee.line, callee.col,
                             crate::builtins::NET_TLS_UNAVAILABLE));
@@ -1278,6 +1280,41 @@ impl<'a> Interpreter<'a> {
                     _ => unreachable!("the checker guarantees four bytes"),
                 }
             }
+            // M114: X25519 + HKDF. Los tres fallibles devuelven `[bytes]` etiquetado; el prelude → Option.
+            "__x25519_public_key" => match &values[0] {
+                Value::Bytes(sk) => {
+                    let elems = match crate::builtins::x25519_public_key(sk) {
+                        Some(pk) => vec![Value::Bytes(Rc::new(pk))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees bytes"),
+            },
+            "__x25519_shared_secret" => match (&values[0], &values[1]) {
+                (Value::Bytes(sk), Value::Bytes(peer)) => {
+                    let elems = match crate::builtins::x25519_shared_secret(sk, peer) {
+                        Some(secret) => vec![Value::Bytes(Rc::new(secret))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees bytes, bytes"),
+            },
+            "__hkdf_sha256" => match (&values[0], &values[1], &values[2], &values[3]) {
+                (Value::Bytes(salt), Value::Bytes(ikm), Value::Bytes(info), Value::Int(len)) => {
+                    let elems = match crate::builtins::hkdf_sha256(salt, ikm, info, *len) {
+                        Some(okm) => vec![Value::Bytes(Rc::new(okm))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees bytes, bytes, bytes, int"),
+            },
+            "__constant_time_eq" => match (&values[0], &values[1]) {
+                (Value::Bytes(a), Value::Bytes(b)) => Value::Bool(crate::builtins::constant_time_eq(a, b)),
+                _ => unreachable!("the checker guarantees bytes, bytes"),
+            },
             // M16.1b: decodifica bytes como UTF-8 → ["ok", s] o ["err", msg]. El prelude → Result.
             "__from_utf8" => {
                 let arr = match &values[0] {

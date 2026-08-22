@@ -531,6 +531,10 @@ mod tests {
         assert!(d.contains("find_all(pattern: string, text: string) -> [string]"), "{d}");
         let d = doc_text("find_all"); // sin módulo → lo encuentra igual
         assert!(d.contains("std/regex"), "{d}");
+        let d = doc_text("crypto.x25519_public_key");
+        assert!(d.contains("std/crypto") && d.contains("Option<bytes>"), "{d}");
+        let d = doc_text("hkdf_sha256");
+        assert!(d.contains("std/crypto") && d.contains("HKDF"), "{d}");
         let d = doc_text("no_existe_tal_cosa");
         assert!(d.contains("is not a builtin"), "{d}");
     }

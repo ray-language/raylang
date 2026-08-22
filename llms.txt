@@ -148,8 +148,10 @@ substring repeat index_of join parse_int parse_float to_bytes` · arrays: `push 
 reverse contains position sort map filter fold iter` (and `a + b` concatenates) ·
 bytes: `bytes_of sub_bytes from_utf8` · `Map<K,V>`: `Map.new insert get remove
 contains_key keys values` · math: `sqrt pow floor ceil round abs min max` · process/io:
-`args env input read_file write_file exists` · crypto (ring-backed): `sha256 sha512
-hmac_sha256 ed25519_sign ed25519_verify chacha20poly1305_seal/open`.
+`args env input read_file write_file exists` · crypto (ring + x25519-dalek): `sha256 sha512
+hmac_sha256 ed25519_* chacha20poly1305_seal/open random_bytes` · key agreement:
+`x25519_public_key`/`x25519_shared_secret` (seed-shaped 32 B secrets; raw DH → always
+`hkdf_sha256` before AEAD) · `hkdf_sha256(salt, ikm, info, len)` · `constant_time_eq`.
 
 Import-on-demand modules: `std/fs std/net std/process std/math std/random std/time
 std/units std/crypto std/text std/sort std/kv std/json std/hex std/base64 std/url

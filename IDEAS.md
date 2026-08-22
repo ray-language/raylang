@@ -2318,7 +2318,7 @@ valor dentro de la fibra); si algún día hay serialización de closures (no pla
 la defuncionalización. **Workaround vigente**: reconstruir el valor con funciones dentro de la
 fibra receptora (pasar los DATOS y rehacer las fns allí).
 
-## 62. Acuerdo de claves — X25519/ECDH + HKDF en std/crypto (ago 2026, impacto: ALTO — superficie estable de cripto, dependencia nueva)
+## 62. Acuerdo de claves — X25519/ECDH + HKDF en std/crypto — ✅ EJECUTADA como M114 (ago 2026, impacto: ALTO — superficie estable de cripto, dependencia nueva)
 
 **El caso** (reporte de un usuario construyendo un p2p tipo IRC, ago 2026): `std/crypto` tiene
 **identidad** (Ed25519) y **cifrado autenticado** (ChaCha20-Poly1305), pero **no tiene con qué
@@ -2348,8 +2348,12 @@ no hay constructor desde octetos, `bytes()` es `#[cfg(test)]` + `#[deprecated]`,
 2. **No es determinista** → rompe el oráculo byte-idéntico VM≡nativo, que es invariante del
    proyecto (PRODUCTION.md): no habría forma de probarlo en el corpus dorado.
 
-Una API "solo efímera" (generar, acordar, tirar) evitaría la dependencia pero es una mala forma:
-sin clave persistente y sin test determinista. **No merece la pena.**
+Ojo con la formulación: `ring` **sí** trae X25519 como algoritmo (`agreement::X25519`) — lo que no
+trae es esta FORMA de clave. Una API **"solo efímera"** (generar, acordar, tirar) evitaría la
+dependencia y es **defendible**: la identidad la llevaría Ed25519 firmando el transcript, que es la
+forma de Noise y de Signal. Se descartó por la API, no por la criptografía — obliga a una superficie
+asimétrica (handle de sesión opaco donde Ed25519 tiene semilla→clave) y a un test relacional en vez
+de vectores oficiales.
 
 **Propuesta: `x25519-dalek` 3.0** bajo la feature `crypto` ya existente. Cae de lleno en la
 cláusula de `SECURITY.md` ("una dependencia entra solo cuando hacerlo a mano sería peor
@@ -2391,6 +2395,13 @@ corpus de 3 motores. Sin la feature `crypto` (build slim/wasm), stubs inofensivo
 
 **Interacciones**: es la pieza que faltaba para un Noise/handshake escrito **en raylang**; si
 algún día hay un `std/noise`, se apoya exactamente en estas cuatro funciones.
+
+**EJECUTADA como M114** (ago 2026, DESIGN §107): las cuatro funciones entregadas con la superficie de
+arriba, en los tres motores byte-idénticos, con los vectores de RFC 7748 §6.1 y RFC 5869 A.1/A.3 en
+`tests/key_agreement_cli.rs` y la receta de canal seguro en `MANUAL.md` §13 +
+`examples/stdlib/key_agreement.ray`. Entró `subtle` además de `x25519-dalek` (para
+`constant_time_eq`; `ring::constant_time` está deprecado para uso externo) — ya venía en el árbol
+como transitiva de `curve25519-dalek`.
 
 
 ## Cómo usar este archivo

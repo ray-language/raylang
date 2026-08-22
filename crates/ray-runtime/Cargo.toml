@@ -16,8 +16,11 @@ description = "Runtime compartido de raylang: envoltorios de crates de producci�
 
 [features]
 default = []
-# Cripto de PRODUCCIÓN (ring): SHA/HMAC/Ed25519/ChaCha20-Poly1305/CSPRNG. Determinista → oráculo VM↔nativo.
-crypto = ["dep:ring"]
+# Cripto de PRODUCCIÓN (ring): SHA/HMAC/Ed25519/ChaCha20-Poly1305/CSPRNG/HKDF. Determinista → oráculo
+# VM↔nativo. M114 añade el ACUERDO DE CLAVES (X25519) con `x25519-dalek`: ring trae el algoritmo pero su
+# API solo da claves EFÍMERAS (`EphemeralPrivateKey::generate(alg, rng)`, sin constructor desde octetos,
+# `SecureRandom` sellado) → ni clave persistente ni determinismo, que es justo lo que este proyecto exige.
+crypto = ["dep:ring", "dep:x25519-dalek", "dep:subtle"]
 # TLS de PRODUCCIÓN (rustls). El binario transpilado usa hilos de SO reales → I/O TLS BLOQUEANTE
 # (StreamOwned), a diferencia de la VM (no-bloqueante + fibras). ring provee el proveedor de rustls.
 tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
@@ -55,6 +58,14 @@ regex = ["dep:regex"]
 # M43 — ring 0.17: primitivas de tiempo constante y auditadas. Misma versión que la que usaba el binario
 # `ray` (era transitiva vía rustls); aquí se declara directa para el módulo crypto.
 ring = { version = "0.17", optional = true }
+# M114 — x25519-dalek 3.0: acuerdo de claves X25519 en tiempo constante, con clave privada CONSTRUIBLE
+# DESDE OCTETOS (`StaticSecret::from([u8;32])`) → semilla persistible y determinista, la forma que ya usa
+# Ed25519 aquí. `static_secrets` sin `getrandom`: la aleatoriedad la sigue poniendo el CSPRNG de ring.
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets"], optional = true }
+# M114 — subtle 2.6: la comparación en tiempo constante (`constant_time_eq`). Ya venía en el árbol como
+# transitiva de curve25519-dalek; se declara directa porque la usamos. Su razón de ser es exactamente que
+# el compilador NO pueda optimizar el bucle a un cortocircuito (`ring` deprecó su equivalente público).
+subtle = { version = "2.6", default-features = false, optional = true }
 # M19.4 — rustls (proveedor ring, sin OpenSSL): TLS puro Rust+C portable. Mismas versiones/features que
 # usaba el binario `ray` → mismo comportamiento. Las raíces de Mozilla (webpki-roots) verifican certificados.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }

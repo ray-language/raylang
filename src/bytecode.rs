@@ -291,6 +291,15 @@ pub enum OpCode {
     /// etiquetado (el prelude → `Option<bytes>`).
     ChaChaPolySeal,
     ChaChaPolyOpen,
+    /// M114: acuerdo de claves X25519. Ambos sacan `bytes` (privada de 32; `SharedSecret` además la
+    /// pública del par) y empujan `[bytes]` etiquetado (el prelude → `Option<bytes>`). `SharedSecret`
+    /// da `[]` también cuando el resultado no es contributorio (pública de orden pequeño).
+    X25519PublicKey,
+    X25519SharedSecret,
+    /// M114: HKDF-SHA256 (RFC 5869). Saca `len` (int) y salt/ikm/info (bytes); empuja `[bytes]`
+    /// etiquetado. M114: comparación en tiempo constante — saca dos `bytes`, empuja `bool` (total).
+    HkdfSha256,
+    ConstantTimeEq,
 
     /// Diferido TLS (STARTTLS): envuelve un socket TCP plano YA CONECTADO en una sesión TLS de
     /// CLIENTE (el simétrico de `TlsAccept`). Saca host (string) y handle (int); empuja

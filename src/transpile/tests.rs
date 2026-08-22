@@ -47,6 +47,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__ed25519_public_key", "__ed25519_sign", "__ed25519_verify", "__hmac_sha256", "__sha1",
     "__sha256", "__sha512", "__sqlite_exec", "__sqlite_open", "__sqlite_query", "__tls_accept",
     "__tls_connect", "__tls_connect_h2", "__tls_upgrade",
+    // M114: acuerdo de claves X25519 + HKDF + comparación en tiempo constante.
+    "__constant_time_eq", "__hkdf_sha256", "__x25519_public_key", "__x25519_shared_secret",
     // Concurrencia + canales + varios públicos (ramas de emit_call). Las funciones ASOCIADAS `Map.new`/
     // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
     "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",

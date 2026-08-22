@@ -64,3 +64,48 @@ pub fn chacha20poly1305_open(
     let r = __chacha20poly1305_open(key, nonce, aad, ciphertext);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
+
+// M114: ACUERDO DE CLAVES. Ed25519 da la identidad y ChaCha20-Poly1305 el cifrado, pero sin esto no hay
+// con qué unirlos: X25519 es lo que dos pares usan para llegar a un secreto común sobre un canal público.
+// La privada son 32 octetos (`random_bytes(32)`), como la semilla de Ed25519, y se puede PERSISTIR: la
+// identidad de un nodo sobrevive al reinicio.
+
+/// Derives the X25519 public key (32 bytes) from a 32-byte secret key; `None` if the secret is not
+/// exactly 32 bytes. Any 32 bytes are a valid secret key (RFC 7748 clamping is applied internally), so
+/// `random_bytes(32)` is how you make one.
+pub fn x25519_public_key(secret: bytes) -> Option<bytes> {
+    let r = __x25519_public_key(secret);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// The X25519 shared secret (32 bytes) between our secret key and the peer's public key. Both sides
+/// compute the same value from opposite halves. `None` if either key is not 32 bytes, or if the peer's
+/// public key is a small-order point (which would force an all-zero output an attacker knows).
+///
+/// This is the RAW Diffie-Hellman output: it is not a uniform key and must NOT be used directly as an
+/// AEAD key. Always run it through `hkdf_sha256` first.
+///
+/// X25519 on its own gives you secrecy, not identity — anyone can do a key exchange with you. Sign the
+/// exchange with `ed25519_sign` to bind it to a known peer, or you are open to a machine in the middle.
+pub fn x25519_shared_secret(secret: bytes, peer_public: bytes) -> Option<bytes> {
+    let r = __x25519_shared_secret(secret, peer_public);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// HKDF-SHA256 (RFC 5869): derives `len` bytes of key material from `ikm` — typically a shared secret —
+/// bound to `salt` and `info`. `None` if `len` is outside `1..=8160`. An empty `salt` means the all-zero
+/// salt the RFC mandates.
+///
+/// `info` is what separates keys derived from the same secret: two different `info` values yield two
+/// independent keys. Derive one key per direction of a conversation so that neither side can reuse a
+/// nonce the other has already used.
+pub fn hkdf_sha256(salt: bytes, ikm: bytes, info: bytes, len: int) -> Option<bytes> {
+    let r = __hkdf_sha256(salt, ikm, info, len);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// Compares two byte strings in constant time: `false` for different lengths, and otherwise a comparison
+/// whose duration does not depend on where the first difference is. Use this — not `==` — for MAC tags,
+/// session tokens and any secret, because `==` stops at the first differing byte and leaks the correct
+/// value one byte at a time.
+pub fn constant_time_eq(a: bytes, b: bytes) -> bool { __constant_time_eq(a, b) }

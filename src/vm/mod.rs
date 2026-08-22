@@ -1724,6 +1724,8 @@ impl<'a> Vm<'a> {
                 OpCode::CryptoRandomBytes | OpCode::Sha256 | OpCode::Sha512 | OpCode::Sha1
                 | OpCode::HmacSha256 | OpCode::Ed25519PublicKey | OpCode::Ed25519Sign
                 | OpCode::Ed25519Verify | OpCode::ChaChaPolySeal | OpCode::ChaChaPolyOpen
+                | OpCode::X25519PublicKey | OpCode::X25519SharedSecret | OpCode::HkdfSha256
+                | OpCode::ConstantTimeEq
                     if !crate::builtins::net_tls_available() =>
                 {
                     let (l, c) = pos!();
@@ -1812,6 +1814,50 @@ impl<'a> Vm<'a> {
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
+                }
+                // M114: X25519 + HKDF. Los tres fallibles empujan `[bytes]` etiquetado; `constant_time_eq`
+                // empuja un bool. Pop en orden inverso al de los argumentos.
+                op @ (OpCode::X25519PublicKey | OpCode::X25519SharedSecret) => {
+                    let peer = if matches!(op, OpCode::X25519SharedSecret) { Some(self.pop()) } else { None };
+                    let HeapValue::Bytes(sk) = self.pop() else {
+                        unreachable!("the checker guarantees bytes");
+                    };
+                    let res = match peer {
+                        Some(HeapValue::Bytes(peer)) => crate::builtins::x25519_shared_secret(&sk, &peer),
+                        Some(_) => unreachable!("the checker guarantees bytes"),
+                        None => crate::builtins::x25519_public_key(&sk),
+                    };
+                    let elems = match res {
+                        Some(out) => vec![HeapValue::Bytes(out)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::HkdfSha256 => {
+                    let len = self.pop();
+                    let info = self.pop();
+                    let ikm = self.pop();
+                    let salt = self.pop();
+                    let (HeapValue::Bytes(salt), HeapValue::Bytes(ikm), HeapValue::Bytes(info), HeapValue::Int(len)) =
+                        (salt, ikm, info, len)
+                    else {
+                        unreachable!("the checker guarantees bytes, bytes, bytes, int");
+                    };
+                    let elems = match crate::builtins::hkdf_sha256(&salt, &ikm, &info, len) {
+                        Some(okm) => vec![HeapValue::Bytes(okm)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ConstantTimeEq => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    let (HeapValue::Bytes(a), HeapValue::Bytes(b)) = (a, b) else {
+                        unreachable!("the checker guarantees bytes, bytes");
+                    };
+                    self.push(HeapValue::Bool(crate::builtins::constant_time_eq(&a, &b)));
                 }
                 // M16.1b: decodifica bytes como UTF-8 → arreglo etiquetado; el prelude → Result.
                 OpCode::FromUtf8 => {

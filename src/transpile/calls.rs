@@ -1489,7 +1489,12 @@ impl Transpiler {
             // idéntico observable, sin el buffer n/2 del estable). El `sort` genérico (tipos de
             // usuario, estabilidad observable) sigue en `__ray_sort` estable.
             "sort" => {
-                out.push_str("__ray_sort(&");
+                // IDEAS §63: [float] no puede ir por __ray_sort (f64 no es Ord en Rust → E0277 en
+                // el build del usuario). Va por __ray_sort_float: el merge del prelude con `<`,
+                // byte-idéntico a la VM incluso con NaN.
+                let is_float =
+                    matches!(self.type_of(eff[0])?, Type::Array(ref e) if matches!(**e, Type::Float));
+                out.push_str(if is_float { "__ray_sort_float(&" } else { "__ray_sort(&" });
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }

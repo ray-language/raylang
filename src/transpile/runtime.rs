@@ -163,6 +163,28 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // el buffer n/2 del sort estable (4 MB en 1M de ints). Los tipos de usuario siguen en __ray_sort.
     out.push_str("fn __ray_sort_unstable<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
     out.push_str("    let mut v = a.borrow().clone(); v.sort_unstable(); Rc::new(std::cell::RefCell::new(v))\n}\n");
+    // IDEAS §63: `sort([float])` — f64 no es `Ord` en Rust, así que __ray_sort no compila. La VM lo
+    // enruta por el merge sort del prelude (NaN queda fuera de __sort_prim a propósito): aquí se
+    // replica EXACTAMENTE ese merge bottom-up estable comparando con `<` — paridad byte-idéntica
+    // incluso con NaN, cosa que `total_cmp`/`sort_by` con orden no-total no garantizarían.
+    out.push_str("fn __ray_sort_float(a: &Rc<std::cell::RefCell<Vec<f64>>>) -> Rc<std::cell::RefCell<Vec<f64>>> {\n");
+    out.push_str("    let mut src = a.borrow().clone(); let n = src.len(); let mut width = 1;\n");
+    out.push_str("    while width < n {\n");
+    out.push_str("        let mut dst = Vec::with_capacity(n); let mut lo = 0;\n");
+    out.push_str("        while lo < n {\n");
+    out.push_str("            let mid = (lo + width).min(n); let hi = (lo + 2 * width).min(n);\n");
+    out.push_str("            let (mut p, mut q) = (lo, mid);\n");
+    out.push_str("            while p < mid || q < hi {\n");
+    out.push_str("                if p >= mid { dst.push(src[q]); q += 1; }\n");
+    out.push_str("                else if q >= hi { dst.push(src[p]); p += 1; }\n");
+    out.push_str("                else if src[q] < src[p] { dst.push(src[q]); q += 1; }\n");
+    out.push_str("                else { dst.push(src[p]); p += 1; }\n");
+    out.push_str("            }\n");
+    out.push_str("            lo += 2 * width;\n");
+    out.push_str("        }\n");
+    out.push_str("        src = dst; width *= 2;\n");
+    out.push_str("    }\n");
+    out.push_str("    Rc::new(std::cell::RefCell::new(src))\n}\n");
     // keys()/values() ORDENADAS por clave (determinista, como la VM). values() en el orden de keys().
     out.push_str("fn __ray_keys<K: Ord + Clone, V>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<K>>> {\n");
     out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");

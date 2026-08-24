@@ -1260,3 +1260,14 @@ fn transpiles_input_io() {
     assert!(rust.contains("std::io::stdin().read_line("), "input/read_int leen stdin: {}", rust);
     assert!(rust.contains("trim_end_matches"), "quita el salto de línea como la VM: {}", rust);
 }
+
+#[test]
+fn sorts_float_arrays_without_the_ord_bound() {
+    // IDEAS §63: f64 no es `Ord` en Rust → `sort([float])` por __ray_sort rompía el `cargo build`
+    // del usuario (E0277). El caso float va por __ray_sort_float (el merge del prelude con `<`,
+    // paridad NaN con la VM); los demás tipos siguen en __ray_sort.
+    let floats = transpile_src("fn main() { print(sort([3.5, 1.2, 2.7])); }");
+    assert!(floats.contains("__ray_sort_float(&"), "float va por el helper propio: {}", floats);
+    let ints = transpile_src("fn main() { let s = sort([\"b\", \"a\"]); print(s); }");
+    assert!(!ints.contains("__ray_sort_float(&"), "no-float sigue en __ray_sort: {}", ints);
+}

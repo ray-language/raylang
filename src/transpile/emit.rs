@@ -858,6 +858,17 @@ impl Transpiler {
         match (&e.kind, &exp) {
             (ExprKind::Int(n), Type::UInt(w)) => write!(out, "{}u{}", n, w).unwrap(),
             (ExprKind::ArrayLit(elems), Type::Array(et)) => {
+                // Mismo izado que el ArrayLit de emit_expr (clase RefCell-en-args, IDEAS §64),
+                // preservando la emisión tipada de cada elemento.
+                let hoist = elems.len() > 1;
+                if hoist {
+                    out.push_str("{ ");
+                    for (i, el) in elems.iter().enumerate() {
+                        write!(out, "let __rt_a{} = ", i).unwrap();
+                        self.emit_typed(out, el, et)?;
+                        out.push_str("; ");
+                    }
+                }
                 out.push_str("Rc::new(std::cell::RefCell::new(");
                 if elems.is_empty() {
                     out.push_str("Vec::new()");
@@ -867,11 +878,18 @@ impl Transpiler {
                         if i > 0 {
                             out.push_str(", ");
                         }
-                        self.emit_typed(out, el, et)?;
+                        if hoist {
+                            write!(out, "__rt_a{}", i).unwrap();
+                        } else {
+                            self.emit_typed(out, el, et)?;
+                        }
                     }
                     out.push(']');
                 }
                 out.push_str("))");
+                if hoist {
+                    out.push_str(" }");
+                }
             }
             (_, Type::UInt(w)) => {
                 if self.type_of(e)? == exp {
@@ -1185,7 +1203,19 @@ impl Transpiler {
             }
             ExprKind::Block(b) => self.emit_block(out, b)?,
             // Literal de arreglo → Rc<RefCell<Vec>>. Vacío: Vec::new() (Rust infiere el elemento del uso).
+            // Con 2+ elementos se izan a temporales (clase RefCell-en-args, IDEAS §64: el guard del
+            // `borrow()` de un elemento vive hasta el final de la sentencia; un elemento posterior que
+            // haga `borrow_mut` del mismo objeto panicaría).
             ExprKind::ArrayLit(elems) => {
+                let hoist = elems.len() > 1;
+                if hoist {
+                    out.push_str("{ ");
+                    for (i, el) in elems.iter().enumerate() {
+                        write!(out, "let __rt_a{} = ", i).unwrap();
+                        self.emit_expr(out, el)?;
+                        out.push_str("; ");
+                    }
+                }
                 out.push_str("Rc::new(std::cell::RefCell::new(");
                 if elems.is_empty() {
                     out.push_str("Vec::new()");
@@ -1195,20 +1225,43 @@ impl Transpiler {
                         if i > 0 {
                             out.push_str(", ");
                         }
-                        self.emit_expr(out, el)?;
+                        if hoist {
+                            write!(out, "__rt_a{}", i).unwrap();
+                        } else {
+                            self.emit_expr(out, el)?;
+                        }
                     }
                     out.push(']');
                 }
                 out.push_str("))");
+                if hoist {
+                    out.push_str(" }");
+                }
             }
-            // Literal de tupla `(a, b, …)` → tupla nativa de Rust `(a, b,)`.
+            // Literal de tupla `(a, b, …)` → tupla nativa de Rust `(a, b,)`. Mismo izado que ArrayLit.
             ExprKind::TupleLit(elems) => {
+                let hoist = elems.len() > 1;
+                if hoist {
+                    out.push_str("{ ");
+                    for (i, e) in elems.iter().enumerate() {
+                        write!(out, "let __rt_a{} = ", i).unwrap();
+                        self.emit_expr(out, e)?;
+                        out.push_str("; ");
+                    }
+                }
                 out.push('(');
-                for e in elems {
-                    self.emit_expr(out, e)?;
+                for (i, e) in elems.iter().enumerate() {
+                    if hoist {
+                        write!(out, "__rt_a{}", i).unwrap();
+                    } else {
+                        self.emit_expr(out, e)?;
+                    }
                     out.push_str(", ");
                 }
                 out.push(')');
+                if hoist {
+                    out.push_str(" }");
+                }
             }
             // Indexación de LECTURA. Tupla: `t.0` → `t.0` (campo nativo). Arreglo: `a[i]` →
             // `a.borrow()[i].clone()`. String: `s[i]` → char por índice (chars().nth; OOB → panic).
@@ -1326,15 +1379,35 @@ impl Transpiler {
             }
             // Literal de struct: Punto { x: 1, y: 2 } → Rc::new(RefCell::new(Punto { x: 1, y: 2 })).
             ExprKind::StructLit { name, fields } => {
+                // Misma clase RefCell-en-args que EnumLit (IDEAS §64, ver arriba): con 2+ campos,
+                // los valores se izan a temporales para que el guard del `borrow()` de un campo
+                // muera antes de evaluar el siguiente (que puede hacer `borrow_mut` del mismo
+                // objeto). Mismo orden de evaluación que la VM.
+                let hoist = fields.len() > 1;
+                if hoist {
+                    out.push_str("{ ");
+                    for (i, (_, val)) in fields.iter().enumerate() {
+                        write!(out, "let __rt_a{} = ", i).unwrap();
+                        self.emit_expr(out, val)?;
+                        out.push_str("; ");
+                    }
+                }
                 write!(out, "Rc::new(std::cell::RefCell::new({} {{ ", mangle(name)).unwrap();
                 for (i, (fname, val)) in fields.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
                     write!(out, "{}: ", mangle(fname)).unwrap(); // el campo puede ser keyword de Rust
-                    self.emit_expr(out, val)?;
+                    if hoist {
+                        write!(out, "__rt_a{}", i).unwrap();
+                    } else {
+                        self.emit_expr(out, val)?;
+                    }
                 }
                 out.push_str(" }))");
+                if hoist {
+                    out.push_str(" }");
+                }
             }
             // Acceso a campo (lectura). Tupla: `t.0` → `t.0` (campo nativo, sin borrow). Struct: `p.x` →
             // `p.borrow().x.clone()`. (El `Field` de un método/UFCS lo consume `emit_call`.)
@@ -1351,6 +1424,21 @@ impl Transpiler {
             // un enum de usuario → Rc::new(EnumName::Variant(args)).
             ExprKind::EnumLit { enum_name, variant, args } => {
                 let native = enum_name == "Option" || enum_name == "Result";
+                // IDEAS §64 — clase RefCell-en-args en el CONSTRUCTOR de variante: un arg `b.campo`
+                // emite `b.borrow().campo.clone()` y ese guard vive hasta el final de la SENTENCIA;
+                // si un arg POSTERIOR llama a una función que hace `borrow_mut` del mismo objeto,
+                // panic "already borrowed" (la VM evalúa los args y ya). Con 2+ args se izan a
+                // temporales como en `emit_user_call_hoisted`: cada `let` cierra sus guards antes
+                // del siguiente arg, mismo orden de evaluación.
+                let hoist = args.len() > 1;
+                if hoist {
+                    out.push_str("{ ");
+                    for (i, a) in args.iter().enumerate() {
+                        write!(out, "let __rt_a{} = ", i).unwrap();
+                        self.emit_expr(out, a)?;
+                        out.push_str("; ");
+                    }
+                }
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err
                 } else {
@@ -1358,16 +1446,23 @@ impl Transpiler {
                 }
                 if !args.is_empty() {
                     out.push('(');
-                    for (i, a) in args.iter().enumerate() {
-                        if i > 0 {
-                            out.push_str(", ");
+                    if hoist {
+                        for i in 0..args.len() {
+                            if i > 0 {
+                                out.push_str(", ");
+                            }
+                            write!(out, "__rt_a{}", i).unwrap();
                         }
-                        self.emit_expr(out, a)?;
+                    } else {
+                        self.emit_expr(out, &args[0])?;
                     }
                     out.push(')');
                 }
                 if !native {
                     out.push(')');
+                }
+                if hoist {
+                    out.push_str(" }");
                 }
             }
             // Función anónima → closure `move` de Rust envuelto en Rc (captura por valor: para los
@@ -1385,6 +1480,20 @@ impl Transpiler {
             // (`default()`/`from_iter` y no `new()`/`from`: valen para CUALQUIER hasher `S: Default` —
             // con aHash (N2) el `new()`/`from` de HashMap no existen, son solo del RandomState de std.)
             ExprKind::MapLit(pairs) => {
+                // Mismo izado que ArrayLit (clase RefCell-en-args, IDEAS §64): claves y valores en
+                // orden de evaluación (k0, v0, k1, v1, …) — un par cuenta como 2 exprs.
+                let hoist = !pairs.is_empty(); // un par ya son 2 exprs (clave y valor)
+                if hoist {
+                    out.push_str("{ ");
+                    for (i, (k, v)) in pairs.iter().enumerate() {
+                        write!(out, "let __rt_k{} = ", i).unwrap();
+                        self.emit_expr(out, k)?;
+                        out.push_str("; ");
+                        write!(out, "let __rt_v{} = ", i).unwrap();
+                        self.emit_expr(out, v)?;
+                        out.push_str("; ");
+                    }
+                }
                 out.push_str("Rc::new(std::cell::RefCell::new(");
                 if pairs.is_empty() {
                     out.push_str("__RayMap::default()");
@@ -1395,14 +1504,21 @@ impl Transpiler {
                             out.push_str(", ");
                         }
                         out.push('(');
-                        self.emit_expr(out, k)?;
-                        out.push_str(", ");
-                        self.emit_expr(out, v)?;
+                        if hoist {
+                            write!(out, "__rt_k{}, __rt_v{}", i, i).unwrap();
+                        } else {
+                            self.emit_expr(out, k)?;
+                            out.push_str(", ");
+                            self.emit_expr(out, v)?;
+                        }
                         out.push(')');
                     }
                     out.push_str("])");
                 }
                 out.push_str("))");
+                if hoist {
+                    out.push_str(" }");
+                }
             }
             // (Match exhaustivo sobre ExprKind: toda variante tiene su arm. Una variante nueva del AST
             // hará fallar la compilación aquí → obliga a decidir su bajada, mejor que un error en runtime.)

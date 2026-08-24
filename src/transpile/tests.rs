@@ -1288,3 +1288,26 @@ fn spawn_body_with_return_gets_its_own_boundary() {
     );
     assert!(s.contains("Arc::<str>::from(&*(|| "), "string convierte el resultado del IIFE: {}", s);
 }
+
+#[test]
+fn hoists_composite_literal_args_to_temporaries() {
+    // IDEAS §64 — clase RefCell-en-args en LITERALES compuestos: `E.V(b.n, f(b))` (y struct/
+    // arreglo/tupla/map) mantenía vivo el guard del borrow() de `b.n` mientras evaluaba `f(b)`;
+    // si f muta el struct (borrow_mut), panic "already borrowed" en nativo (la VM evalúa y ya).
+    // Con 2+ exprs, cada valor se iza a un `let` (los guards mueren entre args, mismo orden).
+    let enum_lit = transpile_src(
+        "enum E { V(int, int) }\n\
+         fn main() { let e = E.V(1, 2); print(0); }",
+    );
+    assert!(enum_lit.contains("let __rt_a0"), "variante 2+ args iza: {}", enum_lit);
+    let struct_lit = transpile_src(
+        "struct P { a: int, b: int }\n\
+         fn main() { let p = P { a: 1, b: 2 }; print(p.a); }",
+    );
+    assert!(struct_lit.contains("let __rt_a0"), "struct 2+ campos iza: {}", struct_lit);
+    let arr = transpile_src("fn main() { print([1, 2]); }");
+    assert!(arr.contains("let __rt_a0"), "arreglo 2+ elems iza: {}", arr);
+    // 1 solo elemento: sin izado (no hay arg posterior que pueda chocar con el guard).
+    let single = transpile_src("fn main() { print([7]); }");
+    assert!(single.contains("vec![7i64]"), "1 elem se emite directo, sin izar: {}", single);
+}

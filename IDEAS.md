@@ -2404,6 +2404,330 @@ arriba, en los tres motores byte-idénticos, con los vectores de RFC 7748 §6.1 
 como transitiva de `curve25519-dalek`.
 
 
+## 63. Hallazgos de raylogs — sort de floats roto en nativo, tail -f, regex con nombres, CSV streaming (ago 2026)
+
+Dogfood de `ray-apps/raylogs` (analizador de logs en streaming: stdin/archivo → parse
+JSON/CSV/regex → filtros → count-by/percentiles). Cuatro necesidades confirmadas con caso
+concreto, en orden de impacto:
+
+1. **BUG — `sort([float])` compila en la VM pero rompe el build nativo** (impacto: ALTO —
+   corrección entre motores). El transpilador emite `__ray_sort<T: Ord + Clone>` y `f64` no es
+   `Ord` en Rust → `error[E0277]` en el `cargo build` del usuario, con el error de Rust crudo como
+   diagnóstico. Es una violación del contrato "los tres motores byte-idénticos": el mismo programa
+   corre en `ray run` y no compila en `--native`. Repro: `let ys = sort([3.5, 1.2]);` +
+   `ray build --native`. Arreglo natural: `total_cmp` para el caso float (o un bound propio
+   `RayOrd` que f64 implemente). raylogs lo esquiva con un mergesort de floats propio
+   (`src/agg.ray`), que además costó cero en el benchmark (200k floats dentro de 0.62 s totales).
+
+2. **`tail -f` / watch de fs** (impacto: MEDIO — ya anotado en §2 transversal de IDEAS-APPS):
+   `--follow` se compone con `fs.read_bytes` a EOF + `time.sleep(200)` y funciona, pero es la
+   cuarta app que sondea (ray dev, raycode-dev, y lo que raysync/raysite necesitarán). La pieza
+   mínima útil no es inotify completo: un `fs.poll_append(h)` o watch de mtime bastaría.
+
+3. **`std/regex` sin grupos con nombre** `(?P<name>...)` (impacto: MEDIO — ergonomía): para
+   extraer campos de logs los índices g1..gN obligan a un side-channel (raylogs: flag
+   `--fields ip,method,status`). `captures_str` ya devuelve las ranuras; falta solo el parseo del
+   nombre y un mapa nombre→índice en `Regex`.
+
+4. **`std/csv` no es incremental** (impacto: BAJO): `parse_csv` traga el documento entero; un
+   lector por líneas pierde los campos entrecomillados con `\n` dentro (raylogs lo documenta como
+   fuera de v1). La forma streaming sería un parser push (chunk de bytes → filas completas).
+
+**Señal de perf** (para PERFORMANCE.md): 200k líneas JSON parse+count-by — VM 16.5 s vs nativo
+0.62 s (27×); regex 5 grupos — VM 8.75 s vs nativo 0.21 s (42×). El nativo queda al nivel de awk
+(0.48 s con extracción cruda por split, sin parse JSON real). El hotspot de la VM en este workload
+es el parser de `std/json` interpretado (mismo patrón que el 55× de `std/deflate` en store, §7
+transversal de IDEAS-APPS: los parsers de la stdlib en el intérprete son candidatos a builtin).
+
+
+## 64. Hallazgos de rayrelay — close cross-fibra roto en nativo, RefCell en constructores de variante, half-close, select (ago 2026)
+
+Dogfood de `ray-apps/rayrelay` (rendezvous + relay ciego TCP para takeit/msg, con actor CSP,
+traspaso de sockets entre fibras por canal, STUN-lite UDP y métricas). Es la primera app que opera
+sockets de larga vida con fibras en el backend NATIVO, y destapó dos bugs de corrección entre
+motores más varios huecos de expresividad. Repros mínimos en `ray-apps/rayrelay/docs/repros/`.
+
+1. **BUG — nativo: `close(h)` de un socket con un lector aparcado es un no-op silencioso**
+   (impacto: ALTO — corrección entre motores, servicios de larga vida). Matriz medida:
+   - misma fibra, sin lector: ✅ ambos motores (FIN llega, handle inválido después).
+   - cross-fibra, socket OCIOSO: ✅ ambos motores.
+   - cross-fibra con un lector APARCADO en `socket_read_bytes(h)`: **VM ✅** (el lector despierta
+     con `Err(invalid handle)` y el peer recibe FIN) / **nativo ❌**: el close no surte efecto —
+     ni FIN al peer, ni invalidación del handle; el lector sigue recibiendo `Err("read timeout")`
+     para siempre (`closed_read.ray`), y sin timeout configurado queda colgado eternamente
+     (`close_wake.ray`). El idiom estándar de proxies/relays "cierro el socket para despertar al
+     pump del otro sentido" no es portable. Workaround de rayrelay: cada pump cierra su PROPIO src
+     al salir (same-fiber) + suelo de read timeout para que el segundo pump se autolimpie.
+2. **BUG — nativo: `Variant(b.campo, f(b), …)` con `f` mutando `b` panica con "RefCell already
+   borrowed"** (impacto: ALTO — crash de runtime en código válido). El transpilador mantiene vivo
+   el borrow del acceso a campo mientras evalúa el siguiente argumento del constructor de variante;
+   si ese argumento llama a una función que muta el struct (borrow_mut), panic. En la VM funciona.
+   Repro: `borrow_repro2.ray` (send(ch, Msg.Claim(b.n, steal_tag(b), reply))); la variante con
+   llamada a función libre y struct-literal NO reproduce — es específico del constructor de
+   variante. Workaround: izar los argumentos a locales. Emparenta con §61 (thread-safety del
+   nativo), pero este es determinista, no una carrera.
+3. **Half-close: no hay `shutdown(SHUT_WR)`** (impacto: MEDIO). Sin él no se puede expresar el
+   idiom netcat "aviso EOF de escritura y dreno hasta el FIN del peer"; el cliente de rayrelay usa
+   un periodo de gracia de 2 s tras EOF de stdin como aproximación. Cualquier protocolo que
+   termina por half-close (HTTP/1.0, pipes estilo nc) lo necesita.
+4. **Composición canal↔socket: falta `try_recv` (o `recv_timeout`) y `select` heterogéneo**
+   (impacto: MEDIO). `select` bloquea, solo acepta `[Channel<T>]` del MISMO T, y no hay recv no
+   bloqueante → "espera datos del socket O una orden de control" en una fibra no se puede escribir;
+   rayrelay lo rodea con fibras lectoras que vierten a canales del mismo tipo y un timer que envía
+   `bytes` vacíos para poder entrar al select. Un `select` con timeout o sobre tipos mixtos
+   (enum-ificado) cubriría el 90%.
+5. **UDP**: confirmada la restricción documentada (recv bloquea TODAS las fibras en ambos motores
+   → el respondedor STUN debe ser proceso aparte), y además `recv_from` no tiene timeout (un
+   datagrama perdido cuelga al cliente `probe` sin remedio; `timeout_err.ray` muestra que TCP sí
+   lo tiene y su error es el string estable `"read timeout"` — un enum de error tipado sería
+   mejor contrato).
+6. Menores: no hay `exit(code)` (terminar el proceso desde una fibra auxiliar obliga a
+   reestructurar para que main decida); el error de read-timeout solo se distingue por string.
+
+**Lo que funcionó bien de verdad** (vale la pena decirlo): el patrón actor + canales-en-mensajes
+— incluidos canales DENTRO de variantes de enum y handles de socket cruzando fibras — es
+byte-idéntico en VM y nativo bajo carga concurrente (`refcell_repro.ray`/`refcell_repro2.ray`
+pasan en ambos); `signals()` compone limpio para apagado; y el par `net/metrics` + `net/log` deja
+un servicio operable (scrape Prometheus + JSON lines) sin fricción.
+
+## 65. Hallazgos de raygate — remote addr del Request, listeners zombis en ray test, [[toml]], forma de guard (ago 2026)
+
+Dogfood de `ray-apps/raygate` (API gateway: rutas TOML, rate limit, breaker, JWT, retry+deadline,
+proxy streaming, métricas, trace propagado). Es la app que ejercita webserver + cliente http A LA
+VEZ y `std/resilience` completo. Cinco necesidades y una corrección de documentación:
+
+1. **`webserver.Request` no expone la dirección remota del cliente** (impacto: MEDIO-ALTO —
+   cualquier servidor real la necesita). Sin ella no hay rate limit por IP, ni `X-Forwarded-For`,
+   ni logs de acceso con origen. Superficie natural: un campo `remote: string` (o `peer_addr(req)`)
+   rellenado por el bucle de servicio.
+2. **`ray test` deja listeners zombis entre tests** (impacto: MEDIO — DX de tests con servidores).
+   El runner descarta las fibras del `@test` anterior pero los sockets de ESCUCHA del SO
+   sobreviven: el siguiente test los ve aceptar conexiones que nadie atiende (read timeout en vez
+   de connection refused). Un boot de servidores compartido entre tests se envenena; tampoco hay
+   `var` top-level para un "boot once". Workaround: todo el E2E en UN `@test`. Arreglo natural:
+   cerrar los handles vivos del test anterior al aislarlo (los listeners incluidos), o un hook de
+   setup/teardown por archivo.
+3. **`std/toml` sin arrays de tablas `[[route]]`** (ya documentado como diferido; aquí confirmado
+   con el caso concreto: la config de un gateway/proxy es EL uso canónico de `[[...]]`). raygate
+   usa tablas con nombre `[route.api]` como rodeo aceptable.
+4. **La forma de `resilience.guard` no compone con el patrón actor** (impacto: BAJO-MEDIO —
+   API-shape). `guard(b, err, f)` exige que `f` corra en la fibra dueña del breaker; en cuanto el
+   estado vive en un actor (lo obligado con fibras de heap aislado) hay que reimplementar las
+   transiciones a mano sobre los campos del struct. Un par explícito `admit(b) -> bool` /
+   `report(b, ok)` sería la primitiva componible (guard puede quedarse como azúcar). De regalo:
+   el campo `abierto_hasta` del `Breaker` es spanglish en superficie pública.
+5. `jwt_verify` deja `exp`/`nbf` como política del llamador (decisión documentada y razonable),
+   pero todo gateway la reescribe igual: candidato a `jwt_verify_claims(secret, token, now_ms)`.
+6. **Docs desactualizadas (positivo)**: `webserver.serve` dice "VM only", pero el gateway completo
+   — accept concurrente, streaming chunked (`stream_response`), señales, fibras — funciona
+   compilado a NATIVO y rinde ~5.5k req/s en el hop completo local (VM ~4.9k; generador de carga
+   co-alojado, cota inferior). Y `stream_response` + `http.stream_with` componen un proxy
+   streaming real con contrapresión (canal acotado): primer byte en 2 ms con un upstream que
+   tarda 500 ms — el "¿puede el handler streamear?" de IDEAS-APPS §1.1 tiene respuesta: SÍ.
+
+## 66. Hallazgos de rayq — fsync y file locks ausentes de std/fs, rename validado, rpc estrenado (ago 2026)
+
+Dogfood de `ray-apps/rayq` (broker de colas persistente at-least-once: WAL por cola, visibility
+timeout, backoff, DLQ, compactación, worker de procesos). Es la app que convierte "escribir
+archivos" en "ser una base de datos" — exactamente el territorio que IDEAS-APPS §1.2 predijo.
+
+1. **`std/fs` no tiene `fsync`/flush** (impacto: ALTO — el techo de durabilidad de todo el
+   lenguaje). Un append (`fs.write(h, …)`) llega al page cache del SO y ahí se queda hasta que el
+   kernel quiera: durable ante crash del PROCESO (verificado con `kill -9` a mitad de carga: el
+   replay recupera exactamente lo no-ackeado), NO ante corte de luz. Sin `fs.sync(h)` (o un modo
+   `open(path, "as")` con fsync-on-write) ningún programa raylang puede prometer durabilidad
+   real. Es LA pieza que falta para rayq/raykv/cualquier motor de almacenamiento.
+2. **No hay file locks** (impacto: MEDIO-ALTO). Dos brokers sobre el mismo directorio
+   intercalan appends y doble-entregan sin ningún aviso; el patrón estándar (flock sobre un
+   `LOCK` file al arrancar) no se puede expresar. Candidato: `fs.lock_exclusive(h) -> Result`.
+3. **`fs.rename` existe y es el reemplazo atómico que promete** (positivo): la compactación
+   entera de rayq (reescribir a `.tmp` + rename encima + reabrir handle) funciona a la primera;
+   verificado en caliente con 2000 acks → log de 0 bytes sin perder el handle. Matiz aprendido:
+   tras el rename, el handle de append viejo apunta al inode ANTIGUO — hay que cerrar y reabrir
+   (documentarlo en fs.rename evitaría un footgun clásico). `truncate` no hizo falta gracias a
+   este patrón.
+4. **`packages/rpc` estrenado y funcionó a la primera** (positivo): serve_graceful, ids
+   correlados, Err de handler → Err del cliente de punta a punta, una fibra por conexión.
+   ~6.8k push/s (cliente único secuencial, broker nativo; cada push con append a disco) y
+   ~7.3k RPC/s en el drenado. Su README dice "Solo VM (fibras)" y es la TERCERA nota "VM only"
+   desactualizada (webserver §65, ahora rpc): el broker nativo sirve RPC perfectamente —
+   toca barrer esas notas de una vez.
+5. Patrón que salió gratis: ids `uuid_v7` + Map (claves ordenadas) = el replay del WAL
+   reconstruye la cola en orden FIFO sin ordenar nada explícitamente.
+
+## 67. Hallazgos de raytop — ancho de celdas, escapes \x/\u, literales hex; el patrón TUI validado (ago 2026)
+
+Dogfood de `ray-apps/raytop` (monitor de procesos de pantalla completa: alt-screen, redibujado
+diferencial, orden/filtro/scroll, resize en vivo, muestreo vía `ps`). Es el escalón de terminal
+que IDEAS-APPS §1.3 señalaba — y el veredicto es mejor de lo esperado: el estruje encontró
+carencias de ERGONOMÍA, no de runtime.
+
+1. **No hay ancho de celdas Unicode** (impacto: MEDIO — todo TUI lo necesita; predicho por el
+   catálogo §2.3). Alinear columnas con CJK/kana/emoji exige un wcwidth; raytop trae el suyo
+   (`src/width.ray`, ~40 líneas de rangos) y es el candidato directo a `term.width(s: string) ->
+   int` (+ `term.fit(s, cells)`), junto al decode que ya existe. Sin él, cada TUI copiará la
+   misma tabla de rangos.
+2. **Los literales string no admiten `\x`/`\u`** (impacto: BAJO-MEDIO — ergonomía repetida):
+   todo escape ANSI se construye con `char_from_code(27)` + concatenación. raycode ya lo
+   sufría (su ui.ray lo comenta) y raytop lo repite — segunda app con el mismo helper. O un
+   escape `\u{1b}` en el lexer, o un módulo `term/style` con las secuencias hechas.
+3. **No hay literales hexadecimales** (`0x1F300` no lexea; impacto: BAJO): las tablas de rangos
+   Unicode/bits quedan en decimal, incontrastables con cualquier spec. `0x` en el lexer es
+   barato y paga en todo código de protocolos.
+4. **Lo VALIDADO** (positivo, cierra preguntas abiertas del catálogo): (a) el patrón
+   tecla-o-plazo (`io.read_timeout` + `term.decode` + ESC-suelto-25ms) escala del line editor
+   de raycode al TUI de pantalla completa SIN cambios; (b) `term.raw` restaura el terminal
+   siempre, incluso saliendo con el alt-screen activo; (c) el sondeo de `term.size()` por vuelta
+   aguanta perfectamente a 1 s (SIGWINCH-por-`signals()` queda como refinamiento, no necesidad);
+   (d) perf: frame completo (filtro+sort+layout de 749 procesos, 120×40) en 0.29 ms nativo /
+   5.2 ms VM — el render jamás es el cuello (lo es `ps`, ~60-70 ms). Verificado bajo pty real
+   en ambos motores, con el diff repintando exactamente las líneas cambiadas.
+
+## 68. Hallazgos de raykv — return-en-spawn rompe el nativo, fs.write solo string; 86% de Redis real (ago 2026)
+
+Dogfood de `ray-apps/raykv` (servidor RESP2 compatible redis-cli/redis-benchmark/net-redis, con
+AOF lógica y pub/sub). El benchmark honesto que IDEAS-APPS §1.8 pedía, y otro bug de motor.
+
+1. **BUG — nativo: un `return;` dentro de una clausura `spawn` no compila** (impacto: MEDIO-ALTO
+   — patrón común). El transpilador emite el cierre con el `return` que fuerza tipo `()` y luego
+   remata el cuerpo con `__RaySend::U` → E0308 en el cargo del usuario. Repro mínimo: `spawn(fn()
+   { while (true) { match (x) { A => { return; }, … } } });`. Workaround: bandera de salida.
+   Tercer bug del transpilador (con §63 sort-float y §64 RefCell-en-variante); los tres son
+   "código válido en VM que no compila o panica en nativo" — el contrato tres-motores necesita
+   un harness de fuzzing/differential propio más que arreglos puntuales.
+2. **`fs.write(handle, string)` no tiene gemelo binario** (impacto: MEDIO): sockets tienen
+   `socket_write_bytes` pero fs no tiene `write_bytes(h, bytes)` (solo `append_file_bytes` por
+   RUTA, que no compone con un handle abierto ni con seek). Consecuencia real: la AOF de raykv
+   no puede persistir valores binarios (v1 acepta solo UTF-8) y cualquier formato binario en
+   disco (RDB, WAL binario, delta de bloques de raysync) está bloqueado igual. La simetría
+   `fs.write_bytes(h, b)` es la pieza.
+3. **El benchmark de oro para PERFORMANCE.md**: `redis-benchmark -t set,get -n 50000 -c 50`,
+   misma máquina — raykv NATIVO 124k SET / 133k GET rps (p50 0.23 ms) vs Redis 7 real 145k/154k
+   (p50 0.18 ms): **~86% de Redis**, con parser RESP incremental en raylang puro y un round-trip
+   de canal por comando (actor del keyspace). La VM sola: 81k/84k (~55% de Redis). La AOF
+   sin fsync cuesta <1%. Conclusión: el camino socket→bytes→actor→Map del nativo es de clase
+   producción; el runtime no es la excusa.
+
+## 69. Hallazgos de raysync — watch de fs (4ª vez), metadatos, hasher incremental; la cripto vuela (ago 2026)
+
+Dogfood de `ray-apps/raysync` (sync unidireccional cifrado con delta por bloques fijos de 64 KiB,
+reconstrucción verificada + rename, `--watch`, `--delete`).
+
+1. **Watch de filesystem — CUARTA app sondeando mtimes** (ray dev, raycode-dev, raylogs
+   `--follow`, ahora raysync `--watch`). El caso está sobre-demostrado; la pieza mínima
+   (watch de mtime por árbol, o kqueue/inotify detrás de una API de eventos) paga en cuatro
+   sitios ya escritos.
+2. **`fs` sin metadatos**: ni permisos ni symlinks (solo `is_dir`/`is_file`/`file_size`/`mtime`)
+   → un sync fiel (modo rsync -a) es inexpresable; los symlinks ni siquiera se pueden DETECTAR
+   (se siguen o se ignoran a ciegas). Candidato: `fs.stat(path) -> {kind, mode, mtime, size}`.
+3. **Sin hasher incremental en `std/crypto`** — tercera app copiando el patrón takeit de
+   sha256 encadenado por chunks para hashear archivos grandes sin cargarlos enteros. Un
+   `sha256_init/update/final` (o un `crypto.Hasher`) elimina la variante casera y su
+   incompatibilidad mutua (cada app elige su seed/encadenado).
+4. La ausencia de `fs.write_bytes(handle)` (§68) definió el diseño: el delta NO puede escribir
+   bloques in-place; reconstruye a `.tmp` con `append_file_bytes` + rename — que resultó MEJOR
+   (atómico y verificable antes de pisar), pero fue obligado, no elegido.
+5. **Perf (positivo)**: 50 MB fríos cifrados (ChaCha20-Poly1305) + hasheados en ambos lados en
+   0.17 s nativo por localhost; push sin cambios 53 ms; 1 byte cambiado en 30 MB → 64 KiB al
+   wire, resultado byte-idéntico. La cripto de `ring` y el camino fs streaming no son cuello.
+
+## 70. Hallazgos de raywatch — el certificado del peer es invisible, dns hereda el UDP bloqueante (ago 2026)
+
+Dogfood de `ray-apps/raywatch` (monitor: checks http/tcp/tls/redis/dns con fibra por check,
+SQLite, dashboard SSE, webhooks al cambiar de estado).
+
+1. **No se puede leer el certificado del peer TLS** — predicción del catálogo confirmada:
+   `tls_connect` devuelve solo el handle. El handshake de rustls ya valida cadena y fechas (así
+   que "conecta por TLS" sí es un check honesto), pero **"expira en N días"** — el check de TLS
+   que todo operador quiere — es inexpresable. Superficie candidata:
+   `net.tls_peer_cert(h) -> {not_after_ms, subject, san, issuer}` (rustls ya tiene los DER a
+   mano en el handshake).
+2. **`net/dns` hereda el UDP bloqueante de §64 y lo agrava**: `query_a` hace `recv_from` sin
+   timeout → cada consulta DNS congela TODAS las fibras del proceso mientras dura, y un paquete
+   perdido cuelga el monitor ENTERO para siempre. En un monitor la diferencia entre "check
+   lento" y "proceso muerto". El arreglo de fondo es el de §64 (UDP async + timeout); mientras,
+   net/dns debería al menos documentarlo en su cabecera.
+3. `tcp_connect` sin timeout de conexión (queda el del SO, ~75 s en macOS): un host que tira
+   SYNs bloquea la fibra del check mucho más que su `timeout_ms` configurado. Candidato:
+   `tcp_connect_timeout(host, port, ms)`.
+4. **Positivo**: fibra-por-check escala sin drama (la pregunta del catálogo §1.6); SSE se sirve
+   con `stream_response` sin soporte dedicado; `db/sqlite` + actor + webhooks-en-fibra componen
+   limpio e idéntico en VM y nativo.
+
+## 71. Hallazgos de raymail + raysite + raypass — STARTTLS validado, markdown seguro, entrada oculta, chmod (ago 2026)
+
+Tres apps del eje "texto y cripto" en una tanda: `raymail` (SMTP real + MIME + sink),
+`raysite` (generador estático sobre `markdown.to_html`) y `raypass` (bóveda de secretos CLI).
+
+**Validaciones (positivo, cierran preguntas del catálogo):**
+- **`tls_upgrade` funciona a la primera en su estreno** (raymail): EHLO → STARTTLS → upgrade
+  in-place del handle → EHLO → MAIL contra `smtp.gmail.com:587` real; el 530 de auth llega A
+  TRAVÉS de la sesión TLS. STARTTLS deja de ser superficie sin dogfood.
+- **El modelo de seguridad de `markdown.to_html` aguanta su primera app** (raysite): el HTML
+  embebido en un post sale ESCAPADO (verificado con `<script>` en tests) — "seguro por diseño"
+  sin sanitizador externo, tal como promete su doc.
+- **La pila M114 compone** (raypass): X25519 efímero + HKDF + AEAD = sealed box en ~40 líneas;
+  manipulación = fallo de autenticación. Y el patrón temp+`fs.rename` da atomicidad por tercera
+  vez (rayq, raysync, raypass).
+
+**Carencias confirmadas:**
+1. **Entrada oculta de passphrase = artesanía sobre raw** (raypass; predicho por §1.12): ~30
+   líneas de raw + byte a byte + backspace + decode que toda herramienta repetirá. Candidata:
+   `term.read_hidden(prompt) -> Result<string, _>`.
+2. **Sin `fs.chmod`/permisos** (raypass): una bóveda de secretos queda con el umask del proceso
+   y no puede restringirse a 600. Misma familia que el `fs.stat` de §69 — la superficie de
+   metadatos de fs es EL hueco transversal de esta tanda (watch §69, stat §69, chmod aquí).
+3. **Zeroización inexpresable** (raypass): secretos en strings del GC sin borrado garantizado.
+   Decisión de diseño consciente, pero conviene dejarla escrita en SECURITY.md del lenguaje.
+4. **Codificaciones de correo a mano** (raymail; predicho por §1.7): RFC 2047 encoded-words,
+   plegado a 78, base64 a 76 columnas, dot-stuffing — ninguna difícil, todas fáciles de hacer
+   sutilmente mal → candidatas a un `std/mail` o al menos ejemplos canónicos.
+5. **Sin normalización Unicode** (raysite): el slugify translitera a mano las vocales del
+   castellano; NFD/NFKD no existen. Y **quinta app sondeando mtimes** (raysite serve).
+6. Menor (raymail): `'\0'` no es expresable como literal de char — el NUL de AUTH PLAIN se
+   construye con `char_from_code(0)` (la misma familia que \x/\u de §67).
+
+## 72. Hallazgos de raybot + raycall + raygame — websocket y M88 validados, sleep se pasa 6–10 ms (ago 2026)
+
+La última tanda del catálogo de IDEAS-APPS (14 de 14 construidas). Tres apps de ejes distintos:
+`raybot` (conexión websocket de larga vida), `raycall` (microservicios M88 completos) y
+`raygame` (latencia de frame dura).
+
+**Validaciones:**
+- **`websocket_client` + `net/websocket` (lado servidor) funcionan a la primera en su estreno
+  conjunto** (raybot): handshake, framing enmascarado, ping/pong automático en `read_message`.
+  El test E2E fuerza CAÍDAS del gateway tras cada dispatch y el bot reconecta gen 1→2→3 con
+  re-IDENTIFY y su contador SQLite intacto (1, 2, 3 a través de las caídas).
+- **El arco M88 compone entero** (raycall): front HTTP → orders RPC → inventory RPC con el
+  traceparent entrante adoptado, un span HIJO por salto (el test verifica mismo trace_id /
+  span distinto en los TRES servicios — visible en un solo curl), deadline en cascada por
+  `rpc.Req.deadline_ms` (el almacén lento muere en el salto correcto → 504), logs JSON con
+  trace_id, y Err de handler → status HTTP honesto (409/502/504). Sin fricción alguna.
+- **El patrón tecla-o-plazo aguanta 30 fps** (raygame): frame completo (lógica+layout+diff)
+  en 21 µs nativo / 92 µs VM — 0.06% del presupuesto de 33 ms.
+
+**Carencias:**
+1. **`time.sleep` se pasa +6–10 ms consistentemente en AMBOS motores** (raygame; la predicción
+   de §1.14 con número): `sleep(33)` duerme 39–40 ms de media y 43–44 ms en el peor caso.
+   Dormir el presupuesto entero da ~25 fps, no 30. Workaround validado: reloj absoluto
+   (`next += 33`) + `io.read_timeout` como única espera. Candidatos: afinar el timer del
+   scheduler o documentar el patrón como canónico en MANUAL (juegos, pacing, muestreadores).
+2. **El cliente `packages/rpc` es secuencial por conexión** (raycall): handlers concurrentes no
+   pueden compartir uno → conexión por llamada. El hueco de producción de rpc es un pool o
+   multiplexación por id (el streaming diferido de su README apunta ahí).
+3. Sin `try_recv`/select-timeout, matar una fibra dormida sigue sin poderse (raybot): el patrón
+   generación-en-el-canal deja una fibra de heartbeat huérfana latiendo por cada reconexión —
+   inofensivo pero acumulativo en procesos de semanas. Refuerza §64.
+4. `grpc_client` queda como la ÚNICA superficie de red del paquete sin dogfood (necesita un
+   servicio gRPC externo real).
+
+**Cierre del catálogo**: con esta tanda, las 14 apps de IDEAS-APPS están construidas (§§63–72).
+Los temas transversales quedaron así: fs es EL frente (fsync §66, locks §66, watch ×5, stat/
+symlinks §69, chmod §71, write_bytes-en-handle §68); el nativo tiene 4 bugs de divergencia
+reproducidos (sort-float §63, close-con-lector §64, RefCell-en-variante §64, return-en-spawn
+§68) que piden un harness diferencial VM/nativo; y el terminal/tiempo pide `term.width`,
+`\x`/`\u`, literales hex (§67) y ahora precisión de sleep (§72).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

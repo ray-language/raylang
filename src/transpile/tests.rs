@@ -1271,3 +1271,20 @@ fn sorts_float_arrays_without_the_ord_bound() {
     let ints = transpile_src("fn main() { let s = sort([\"b\", \"a\"]); print(s); }");
     assert!(!ints.contains("__ray_sort_float(&"), "no-float sigue en __ray_sort: {}", ints);
 }
+
+#[test]
+fn spawn_body_with_return_gets_its_own_boundary() {
+    // IDEAS §68: `return;` dentro del literal de spawn fijaba `()` como retorno del closure de
+    // hilo y chocaba con la cola de conversión Send (`__RaySend::U` → E0308). El cuerpo se emite
+    // como closure inmediatamente invocado: el return retorna de esa frontera y la conversión se
+    // aplica al resultado. Cubre unit (tree), string (Arc) y compuesto (tree).
+    let unit = transpile_src(
+        "fn main() { let t = spawn(fn() { while (true) { return; } }); join(t); }",
+    );
+    assert!(unit.contains("(|| "), "el cuerpo va en un IIFE: {}", unit);
+    assert!(unit.contains("__RaySend::U"), "la conversión Send sigue fuera: {}", unit);
+    let s = transpile_src(
+        "fn main() { let t = spawn(fn() -> string { if (true) { return \"a\"; } return \"b\"; }); print(join(t)); }",
+    );
+    assert!(s.contains("Arc::<str>::from(&*(|| "), "string convierte el resultado del IIFE: {}", s);
+}

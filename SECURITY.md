@@ -187,6 +187,12 @@ documentada:
 - Que un **binario nativo** no respete `--fuel`/`--heap`, o que `--fast` no detecte desbordamientos.
 - Que la criptografía **pura en raylang** (`examples/`, material de demostración) no sea de tiempo
   constante — por eso `std/crypto` se apoya en `ring`.
+- Que un secreto en memoria **no se pueda borrar de forma garantizada** (zeroización). Los strings
+  y bytes de raylang son inmutables y viven en un heap con GC: no hay forma de sobreescribir sus
+  octetos ni de controlar cuándo se liberan, y el GC puede haberlos copiado. Es una **decisión de
+  diseño consciente** (confirmada en el dogfood de raypass, ago 2026): el modelo de amenaza de
+  raylang no incluye a un atacante leyendo la memoria del propio proceso — quien lo necesite
+  (HSM-grade) debe mantener el secreto fuera del proceso o tras FFI con memoria propia.
 - Que un programa mal escrito produzca un resultado incorrecto sin violar las garantías del runtime.
 
 ## Alcance

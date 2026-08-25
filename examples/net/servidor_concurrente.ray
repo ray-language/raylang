@@ -2,8 +2,8 @@
 //
 // La clave de M15.5: `tcp_accept` y `socket_read` CEDEN al scheduler de M12 cuando no hay nada listo
 // (sockets no bloqueantes + busy-poll cooperativo), en vez de bloquear el hilo. Así, mientras una
-// conexión espera datos, otras avanzan: muchas conexiones a la vez sobre un único hilo. Solo VM
-// (la concurrencia es VM-only).
+// conexión espera datos, otras avanzan: muchas conexiones a la vez sobre un único hilo. VM y
+// binario nativo (la concurrencia necesita fibras; el intérprete no las tiene).
 //
 // Prueba: cargo run -- --vm examples/net/servidor_concurrente.ray  (y conéctate con varios `nc`; Ctrl-C
 // para parar). Compáralo con tcp_servidor.ray (M15.3), que es secuencial y atiende de uno en uno.

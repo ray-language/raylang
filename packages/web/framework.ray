@@ -3,7 +3,7 @@
 // enrutado por método + patrón con parámetros (`/users/:id`), query, middleware, archivos
 // estáticos con caching ETag/304 (M56.9), cookies, headers custom, redirect, 404 personalizable,
 // logging JSON opcional (`net/log`), TLS, límites y apagado ordenado. Cero runtime nuevo: puro
-// raylang. **Solo VM** (el servidor cede fibras).
+// raylang. **VM y binario nativo** (el servidor cede fibras; el intérprete no las tiene).
 //
 // Uso (ver `examples/web/framework/` y docs/web-framework.md):
 //   from web/framework import new_app, GET, listen, text, App, Ctx, Res;

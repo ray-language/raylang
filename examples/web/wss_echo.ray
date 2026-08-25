@@ -2,7 +2,7 @@
 // (`websocket_echo.ray`) con un paso extra: tras aceptar el socket TCP, se envuelve en una sesión TLS de
 // servidor (`tls_accept`) con el certificado y la clave dados. A partir de ahí TODO el I/O (handshake
 // HTTP de upgrade + tramas) viaja cifrado: `socket_read_bytes`/`socket_write_bytes` se desvían a TLS
-// transparentemente, y la VM cede la fibra cuando el TLS bloquearía. **Solo VM.**
+// transparentemente, y la VM cede la fibra cuando el TLS bloquearía. **VM y nativo.**
 //
 // Ejecútalo:  cargo run -- --vm examples/web/wss_echo.ray <cert.pem> <key.pem>
 // Imprime el puerto efímero en la primera línea.

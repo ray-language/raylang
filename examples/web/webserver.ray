@@ -2,8 +2,8 @@
 //
 // Como http.ray/json.ray: cero runtime, cero builtins nuevos; puro raylang + stdlib, importable. Se
 // apoya en el servidor concurrente de M15.5/M17 (tcp_listen/tcp_accept/socket_read/socket_write ceden
-// al scheduler → muchas conexiones a la vez en un hilo, readiness por kqueue/epoll). **Solo VM** (la
-// concurrencia es VM-only).
+// al scheduler → muchas conexiones a la vez en un hilo, readiness por kqueue/epoll). corre en la **VM y el binario nativo** (la
+// concurrencia necesita fibras; el intérprete no las tiene).
 //
 // M19.2: el cuerpo (de la petición y de la respuesta) es **bytes** → binario correcto (imágenes, etc.),
 // no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
@@ -769,7 +769,7 @@ fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
 }
 
 // Servidor de bajo nivel: el handler recibe la petición Y la conexión (para responder o hacer streaming
-// SSE). Bucle infinito; cada conexión en su fibra. **Solo VM.**
+// SSE). Bucle infinito; cada conexión en su fibra. **VM y nativo.**
 pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<int, string> {
     serve_raw_limits(host, port, default_limits(), handler)
 }
@@ -851,7 +851,7 @@ fn bucle_servidor(
 }
 
 // Servidor ergonómico: el handler es petición → respuesta; serve escribe la respuesta y —desde
-// M56.6— mantiene la conexión viva entre peticiones (keep-alive HTTP/1.1). **Solo VM.**
+// M56.6— mantiene la conexión viva entre peticiones (keep-alive HTTP/1.1). **VM y nativo.**
 pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
     serve_limits(host, port, default_limits(), handler)
 }

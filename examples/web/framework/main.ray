@@ -1,7 +1,7 @@
 // Demo del framework web `web/framework` (M93), estilo Express — este proyecto es un CONSUMIDOR
 // del paquete (dependencia por ruta en ray.toml), como lo usaría un usuario del lenguaje. Los
 // atajos `app.GET(...)`, `r.text(...)`, `c.param(...)` funcionan con UFCS sobre las funciones
-// importadas. **Solo VM** (servidor concurrente).
+// importadas. **VM y nativo** (servidor concurrente).
 //
 //   cd examples/web/framework
 //   ray run

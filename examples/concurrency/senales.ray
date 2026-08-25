@@ -1,7 +1,7 @@
 // M88.1 — apagado ordenado con `signals()`: el patrón microservicio.
 //
 // `signals()` devuelve el canal de señales del SO (SIGTERM/SIGINT como int; singleton
-// del proceso, solo VM). Compone NATIVO con `select`: el servicio drena su canal de
+// del proceso; VM y binario nativo). Compone con `select`: el servicio drena su canal de
 // trabajo O apaga — sin polling ni handlers globales. Pruébalo:
 //
 //   ray run examples/concurrency/senales.ray &

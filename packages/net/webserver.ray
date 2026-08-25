@@ -2,8 +2,9 @@
 //
 // Como http.ray/json.ray: cero runtime, cero builtins nuevos; puro raylang + stdlib, importable. Se
 // apoya en el servidor concurrente de M15.5/M17 (tcp_listen/tcp_accept/socket_read/socket_write ceden
-// al scheduler → muchas conexiones a la vez en un hilo, readiness por kqueue/epoll). **Solo VM** (la
-// concurrencia es VM-only).
+// al scheduler → muchas conexiones a la vez en un hilo, readiness por kqueue/epoll). Corre en la **VM
+// y en el binario nativo** (fibras en ambos; verificado en producción por raygate, ~5.5k req/s
+// nativo); el único motor sin concurrencia es el intérprete (`--interp`, el oráculo de desarrollo).
 //
 // M19.2: el cuerpo (de la petición y de la respuesta) es **bytes** → binario correcto (imágenes, etc.),
 // no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
@@ -1219,10 +1220,11 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
 }
 
 // Servidor de bajo nivel: el handler recibe la petición Y la conexión (para responder o hacer streaming
-// SSE). Bucle infinito; cada conexión en su fibra. **Solo VM.**
+// SSE). Bucle infinito; cada conexión en su fibra. **VM y nativo** (el intérprete no tiene fibras).
 /// Low-level concurrent server: listens on `host:port` and runs each connection in its own fiber.
 /// The handler receives the parsed request AND the connection, so it can reply itself or stream (SSE);
-/// the connection is closed after the handler returns. Uses `default_limits()`. VM only (needs fibers).
+/// the connection is closed after the handler returns. Uses `default_limits()`. Needs fibers: runs on
+/// the VM and in native binaries (the interpreter has no concurrency).
 pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<int, string> {
     serve_raw_limits(host, port, default_limits(), handler)
 }
@@ -1334,7 +1336,7 @@ fn loop_iter_server(
 //
 // Keep-alive: el drenaje espera a que las conexiones CIERREN; una ociosa muere por
 // `read_timeout_millis`, así que un `drain_ms` menor puede vencer con ociosas vivas (se cierran
-// al salir el proceso). Solo VM, como serve.
+// al salir el proceso). VM y nativo, como serve.
 fn loop_iter_server_drainable(
     host: string,
     port: int,
@@ -1489,7 +1491,7 @@ fn loop_iter_server_drainable(
 /// Like `serve`, but with graceful shutdown on a channel: when a value arrives on `stop` (or it
 /// is closed), the server stops accepting (new clients are refused), drains in-flight
 /// connections for up to `drain_ms` ms, and returns Ok(0). Wire `stop` to `signals()` — or use
-/// `serve_graceful`, which does exactly that. VM only.
+/// `serve_graceful`, which does exactly that. VM and native (needs fibers).
 pub fn serve_shutdown(
     host: string,
     port: int,
@@ -1519,7 +1521,7 @@ pub fn serve_shutdown_limits(
 // peticiones perdidas al desplegar.
 /// The production pattern: `serve` wired to OS signals (`signals()`, M88.1). On SIGTERM/SIGINT
 /// it stops accepting, drains in-flight connections for up to `drain_ms` ms, and returns Ok(0)
-/// so `main` can clean up and exit — zero dropped requests on deploys. Unix + VM only.
+/// so `main` can clean up and exit — zero dropped requests on deploys. Unix; VM and native.
 pub fn serve_graceful(
     host: string,
     port: int,
@@ -1531,11 +1533,11 @@ pub fn serve_graceful(
 
 // Servidor ergonómico: el handler es petición → respuesta; serve escribe la respuesta y —desde
 // M56.6— mantiene la conexión viva entre peticiones (keep-alive HTTP/1.1; honra `Connection:
-// close` y el ocio lo corta `read_timeout_millis`). **Solo VM.**
+// close` y el ocio lo corta `read_timeout_millis`). **VM y nativo.**
 /// Ergonomic concurrent server: the handler maps a Request to a Response, which is sent
 /// automatically. Connections are kept alive between requests (HTTP/1.1 keep-alive; honors
 /// `Connection: close`; idle connections are closed by the read timeout). One fiber per
-/// connection; `default_limits()`. Blocks forever; VM only.
+/// connection; `default_limits()`. Blocks forever; VM and native (needs fibers).
 pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
     serve_limits(host, port, default_limits(), handler)
 }
@@ -1619,7 +1621,7 @@ pub fn serve_with_graceful(
 // conexión con error logueado, sin tocar a las demás.
 /// HTTPS server: like `serve`, but each accepted connection is upgraded to server-side TLS with
 /// the given PEM certificate chain and private key (contents, not paths) before reading the
-/// request. Keep-alive like `serve`. Uses `default_limits()`. Blocks forever; VM only.
+/// request. Keep-alive like `serve`. Uses `default_limits()`. Blocks forever; VM and native.
 pub fn serve_tls(
     host: string,
     port: int,
@@ -1647,7 +1649,7 @@ pub fn serve_tls_limits(
 }
 
 /// Low-level HTTPS server: like `serve_raw` over TLS — the handler receives the request AND the
-/// (TLS) connection, so it can stream (SSE over HTTPS). Uses `default_limits()`. VM only.
+/// (TLS) connection, so it can stream (SSE over HTTPS). Uses `default_limits()`. VM and native.
 pub fn serve_raw_tls(
     host: string,
     port: int,

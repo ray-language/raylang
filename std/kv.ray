@@ -126,7 +126,7 @@ impl StoreOps for Store {
 // del proyecto (actor de métricas, M38) aplica tal cual: UNA fibra posee el `Store`
 // y las demás le hablan por un canal de peticiones; el id de canal sí se comparte al
 // transferir. FIFO da la coherencia: un `get` ve todos los `set` encolados antes.
-// `impl StoreOps for SharedStore` → la MISMA API sirve local y compartido. Solo VM
+// `impl StoreOps for SharedStore` → la MISMA API sirve local y compartido. VM y nativo
 // (spawn/canales); el intérprete da su error limpio de siempre.
 // Los mensajes al actor. Las peticiones con respuesta llevan su canal de reply.
 enum KvMsg {

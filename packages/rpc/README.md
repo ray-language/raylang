@@ -40,7 +40,8 @@ fn main() -> int {
 }
 ```
 
-- Una **fibra por conexión**; varias peticiones secuenciales por conexión. Solo VM (fibras).
+- Una **fibra por conexión**; varias peticiones secuenciales por conexión. VM y binario nativo
+  (fibras en ambos; el intérprete no tiene concurrencia).
 - El handler corre en su **propia tarea** (`try_join`, como el webserver M56.5): un panic
   responde `err` sin tumbar la conexión ni el servidor.
 - `Req` trae `method`, `params` (Json), `deadline_ms` (presupuesto declarado por el llamador;

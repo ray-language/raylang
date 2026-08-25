@@ -23,7 +23,7 @@ Genéricos, traits, bounds, trait objects, `Option`/`Result` y anotaciones.
 Closures, UFCS, pipelines, strings y orden superior (`map`/`filter`/`fold`/`sort`).
 `closures` · `ufcs` · `pipelines` · `strings` · `stdlib` · `ordenar`
 
-## `concurrency/` — concurrencia (solo VM)
+## `concurrency/` — concurrencia (VM y binario nativo)
 Green threads (CSP): `spawn`/canales, structured concurrency y `select`.
 `concurrencia` · `structured` · `select`
 
@@ -32,11 +32,11 @@ Archivos, datos binarios (`bytes`), reloj y aleatoriedad.
 `io` · `archivos` · `binario` · `reloj_aleatorio`
 
 ## `net/` — redes (TCP crudo)
-Cliente y servidor TCP; servidor concurrente (solo VM).
+Cliente y servidor TCP; servidor concurrente (VM y binario nativo).
 `tcp_cliente` · `tcp_servidor` · `servidor_concurrente`
 
 ## `web/` — la capa web
-Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
+Librerías en raylang (importables) + sus demos. **El servidor corre en la VM y en el binario nativo** (el intérprete no tiene fibras).
 - **Librerías**: `http` (cliente HTTP/HTTPS), `json` (parse/stringify), `webserver` (servidor + SSE + `html_response`),
   `websocket` (handshake + framing), `sha1` / `sha256` / `hmac` / `base64` / `hex` (cripto),
   `jwt` (JSON Web Tokens HS256), `uuid` (v4), `url` (percent-encoding + query string), `cookie`,

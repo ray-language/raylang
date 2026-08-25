@@ -2,7 +2,7 @@
 // sobre `webserver.ray`. Como el webserver lanza una **fibra por conexión** y M38 aísla los heaps (sin
 // estado mutable compartido entre fibras — data-race freedom por construcción), el `Registry` NO se
 // comparte: vive en un **actor de métricas** (una fibra que lo posee) y las peticiones le envían updates
-// por un **canal**. `GET /metrics` le pide el render con un canal de respuesta. **Solo VM** (concurrente).
+// por un **canal**. `GET /metrics` le pide el render con un canal de respuesta. **VM y nativo** (concurrente).
 // Lo prueba `tests/metrics_server_cli.rs`.
 //
 //   cargo run -- --vm examples/web/metrics_server_demo.ray

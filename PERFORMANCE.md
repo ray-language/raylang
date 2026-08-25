@@ -1741,6 +1741,13 @@ self-hosting por el tercer backend.
 - **Multicore ya existe** (M38, pool M:N 3.84×): los benchmarks poliglota son
   single-thread; para throughput de servicio real ray ya escala por fibras — contarlo
   (benchmark de servicio concurrente vs node single-thread sería favorable).
+- **✅ `time.sleep` preciso** (M119, DESIGN §116; latencia, no throughput). El dogfood de
+  raygame midió `sleep(33)` durmiendo ~37 ms en los tres motores (overshoot 4–6 ms → pacing de
+  ~25 fps en vez de 30). La causa era `std::thread::sleep`: el `nanosleep` de macOS se pasa por
+  *timer coalescing*. `poll(2)` con cero descriptores honra el timeout por la vía de eventos del
+  kernel (medido: 33.96 ms vs 37.3 de `nanosleep`) — el mismo camino que ya usaba `read_timeout`.
+  Tras el cambio: ~34 ms en VM/intérprete/nativo (~1 ms de overshoot). Sin coste de CPU (no es
+  spin-sleep): es la misma syscall bloqueante, solo la precisa.
 
 ## 4. Más ideas fuera de la caja (backlog abierto)
 

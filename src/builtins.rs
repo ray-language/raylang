@@ -81,10 +81,11 @@ pub fn monotonic_nanos() -> i64 {
 }
 
 /// Duerme el hilo `ms` milisegundos (`ms<=0` → no duerme). Builtin `sleep`.
+///
+/// M119: usa la espera PRECISA de `poll(2)` (ver `crate::poll::sleep_ms`), no `thread::sleep` —
+/// en macOS este último se pasa varios ms por *timer coalescing* y descuadra el pacing (§72).
 pub fn sleep_millis(ms: i64) {
-    if ms > 0 {
-        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
-    }
+    crate::poll::sleep_ms(ms);
 }
 
 /// El estado del PRNG del proceso. `std` no trae generador de aleatorios y la invariante es **cero

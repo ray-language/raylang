@@ -33,6 +33,53 @@ pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult 
     sys::wait(read_fds, write_fds, timeout_ms)
 }
 
+/// Duerme el hilo `ms` milisegundos **con precisión** (M119). `ms <= 0` no duerme.
+///
+/// Por qué no `thread::sleep`: en macOS su `nanosleep` está sujeto a *timer coalescing* y se pasa
+/// varios ms (medido: `sleep(33)` → ~37 ms), lo que descuadra el pacing de un juego o un
+/// muestreador (§72). `poll(2)` con **cero descriptores** honra el timeout por la vía de eventos del
+/// kernel, mucho más ajustada (medido: ~34 ms), y es portable en Unix. Reintenta ante `EINTR` hasta
+/// cubrir el plazo, así que garantiza dormir *al menos* lo pedido (semántica de `thread::sleep`).
+/// En plataformas sin `poll` (p. ej. Windows) cae a `thread::sleep`.
+pub fn sleep_ms(ms: i64) {
+    if ms <= 0 {
+        return;
+    }
+    sys::sleep_ms(ms as u64);
+}
+
+/// `struct pollfd`. Solo se usa para dar a la declaración de `poll` el MISMO tipo de puntero que la
+/// otra declaración del crate (`builtins::watch_mod`), y así no disparar `clashing_extern_declarations`
+/// (dos `extern` del mismo símbolo con firmas ABI-distintas). En [`sleep_ms`] siempre se pasa un
+/// puntero nulo con `nfds = 0` (espera pura por timeout), así que los campos no se tocan.
+#[cfg(unix)]
+#[repr(C)]
+struct PollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+/// Núcleo común de [`sleep_ms`] para las plataformas con `poll(2)`: llama `poll_once(timeout_ms)`
+/// (que ejecuta `poll(NULL, 0, timeout_ms)`) y, si vuelve por `EINTR` (retorno < 0) antes de cubrir
+/// el plazo, reintenta con el tiempo restante. Así se garantiza dormir **al menos** `ms`.
+#[cfg(unix)]
+fn poll_sleep(ms: u64, poll_once: impl Fn(i32) -> i32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        // +1: redondeo hacia arriba para no despertar un pelo antes del plazo y girar de más.
+        let timeout_ms = (remaining.as_millis().min(i32::MAX as u128 - 1) as i32) + 1;
+        if poll_once(timeout_ms) >= 0 {
+            return; // timeout cumplido (n == 0) o algún fd listo (imposible con 0 fds)
+        }
+        // n < 0 → EINTR (una señal): reintenta el resto del plazo.
+    }
+}
+
 // ─── macOS / BSD: kqueue ────────────────────────────────────────────────────────────────────────
 #[cfg(any(
     target_os = "macos",
@@ -80,6 +127,13 @@ mod sys {
             timeout: *const Timespec,
         ) -> i32;
         fn close(fd: i32) -> i32;
+        // `poll(NULL, 0, ms)` = espera precisa (M119). Firma ABI-idéntica a `builtins::watch_mod`
+        // (mismo `*mut PollFd` y `nfds: u64`) para no disparar `clashing_extern_declarations`.
+        fn poll(fds: *mut super::PollFd, nfds: u64, timeout: i32) -> i32;
+    }
+
+    pub fn sleep_ms(ms: u64) {
+        super::poll_sleep(ms, |t| unsafe { poll(core::ptr::null_mut(), 0, t) });
     }
 
     pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult {
@@ -175,6 +229,13 @@ mod sys {
         fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *mut EpollEvent) -> i32;
         fn epoll_wait(epfd: i32, events: *mut EpollEvent, maxevents: i32, timeout: i32) -> i32;
         fn close(fd: i32) -> i32;
+        // `poll(NULL, 0, ms)` = espera precisa (M119). Firma ABI-idéntica a `builtins::watch_mod`
+        // (`nfds` es `unsigned long`/u64 en Linux LP64) para no disparar `clashing_extern_declarations`.
+        fn poll(fds: *mut super::PollFd, nfds: u64, timeout: i32) -> i32;
+    }
+
+    pub fn sleep_ms(ms: u64) {
+        super::poll_sleep(ms, |t| unsafe { poll(core::ptr::null_mut(), 0, t) });
     }
 
     pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult {
@@ -240,5 +301,34 @@ mod sys {
     use super::PollResult;
     pub fn wait(_read_fds: &[i32], _write_fds: &[i32], _timeout_ms: i32) -> PollResult {
         PollResult::Unsupported
+    }
+    /// Sin `poll(2)` (p. ej. Windows): respaldo a `thread::sleep` (imprecisión asumida).
+    pub fn sleep_ms(ms: u64) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M119: `sleep_ms` duerme AL MENOS lo pedido (regresión del wrapper viejo, que con listas
+    /// vacías retornaba al instante). Solo cota INFERIOR: el techo depende de la carga de la máquina
+    /// y haría el test flaky.
+    #[test]
+    fn sleep_ms_waits_at_least_the_requested_time() {
+        let t0 = std::time::Instant::now();
+        sleep_ms(30);
+        let dt = t0.elapsed().as_millis();
+        assert!(dt >= 28, "sleep_ms(30) debería dormir ~30ms, durmió {dt}ms");
+    }
+
+    /// `ms <= 0` no duerme (retorno inmediato).
+    #[test]
+    fn sleep_ms_zero_or_negative_is_a_noop() {
+        let t0 = std::time::Instant::now();
+        sleep_ms(0);
+        sleep_ms(-5);
+        assert!(t0.elapsed().as_millis() < 20, "un sleep no positivo no debe bloquear");
     }
 }

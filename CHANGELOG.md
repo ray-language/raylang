@@ -360,6 +360,12 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 Cada cifra está medida y contada en [`PERFORMANCE.md`](PERFORMANCE.md).
 
+- **`time.sleep` preciso** (M119) — `sleep(33)` dormía ~37 ms (overshoot de 4–6 ms → pacing de ~25 fps
+  en vez de 30) porque los tres motores acababan en `std::thread::sleep`, cuyo `nanosleep` se pasa en
+  macOS por *timer coalescing*. Ahora se duerme con `poll(2)` de cero descriptores (la misma espera
+  precisa del kernel que usa `read_timeout`): ~34 ms en VM, intérprete y nativo, ~1 ms de overshoot,
+  sin coste de CPU. Para pacing sin deriva sobre muchos frames sigue conviniendo un reloj absoluto.
+
 - **VM (arcos P0/A/D/V/MM/TA)**: `Map` sin alocar en el camino caliente (aHash, `get_or`, `add_to`),
   allocador `mimalloc`, superinstrucciones guiadas por histograma (−19 a −28% en todo el banco), PGO
   (−5 a −9%), opcode `ConcatN` (jsonserialize −27%), fusión del envoltorio `Option` (jsondeserialize

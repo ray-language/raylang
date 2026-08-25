@@ -37,6 +37,12 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/fs`: candados consultivos de archivo** (M115.2, IDEAS §66) — `fs.try_lock(h)` (candado
+  EXCLUSIVO sin bloquear, flock; `Ok(true)` = adquirido, `Ok(false)` = lo tiene otro) y
+  `fs.unlock(h)` (`close` también lo suelta). El patrón LOCK-file del proceso único: dos brokers
+  sobre el mismo directorio ya no se doble-entregan en silencio. El lock bloqueante queda fuera a
+  propósito (congelaría todas las fibras del proceso). Tres motores byte-idénticos.
+
 - **`std/fs`: escritura binaria sobre handle + fsync** (M115.1, IDEAS §66/§68) — las dos piezas que
   el dogfood señaló como techo del eje almacenamiento. `fs.write_bytes(h, data)` es el gemelo
   binario de `fs.write` (octetos crudos en la posición actual; compone con `seek`; desbloquea WAL/

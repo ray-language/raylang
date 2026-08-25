@@ -468,7 +468,7 @@ Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista
 
 | Módulo | Qué cubre |
 |---|---|
-| `std/fs` | disco: leer/escribir (texto y `bytes`), `append`, `exists`, `list_dir`, metadatos, copiar/renombrar/borrar, directorios, handles con `read_line`/`write`/`write_bytes`/`read_bytes`/`seek`/`sync` (durabilidad: fsync) |
+| `std/fs` | disco: leer/escribir (texto y `bytes`), `append`, `exists`, `list_dir`, metadatos, copiar/renombrar/borrar, directorios, handles con `read_line`/`write`/`write_bytes`/`read_bytes`/`seek`/`sync` (durabilidad: fsync) y candados consultivos `try_lock`/`unlock` (flock) |
 | `std/net` | transporte: TCP (`tcp_connect`/`tcp_listen`/`tcp_accept`/`local_port`), I/O de sockets en texto y `bytes`, TLS (`tls_connect`/`tls_accept`/`tls_upgrade`) |
 | `std/process` | ejecución de procesos del SO **sin shell** (argv tipado): `run`, el builder `cmd` y el modo *streaming* `stream` —con stdin escribible sobre un hijo vivo (`stdin_pipe`/`write`/`close_stdin`) para sesiones persistentes— (§ REFERENCE.md §10) |
 | `std/math` | `PI`/`E`, `sqrt pow sin cos tan asin acos atan atan2 ln log2 log10 exp floor ceil round trunc`, y `abs`/`min`/`max` genéricos |

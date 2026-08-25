@@ -545,6 +545,14 @@ pub enum OpCode {
     /// estable (fsync) y empuja `["ok"]` / `["err", msg]`. Primitivo `__sync_handle`;
     /// `std/fs` → `Result<int, string>`.
     SyncHandle,
+    /// M115.2: saca un handle (int); intenta el candado consultivo EXCLUSIVO del archivo sin
+    /// bloquear (flock) y empuja `["ok", "1"]` (adquirido) / `["ok", "0"]` (lo tiene otro) /
+    /// `["err", msg]`. Primitivo `__try_lock_handle`; `std/fs` → `Result<bool, string>`.
+    TryLockHandle,
+    /// M115.2: saca un handle (int); suelta el candado consultivo del archivo y empuja
+    /// `["ok"]` / `["err", msg]`. Primitivo `__unlock_handle`; `std/fs` → `Result<int, string>`.
+    /// `close(h)` también lo suelta (el candado vive en la open file description).
+    UnlockHandle,
     /// M107.1 (std/io): escribe el string a stdout SIN salto de línea → `["ok"]`/`["err", msg]`.
     /// Primitivo `__stdout_write`; `std/io` → `Result<int,string>`.
     StdoutWrite,

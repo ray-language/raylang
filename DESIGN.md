@@ -9585,3 +9585,27 @@ en `builtins.rs` (patrón M113), wrappers en `std/fs.ray`, intercept nativo a ni
 (`std::fs::write_bytes`/`sync` → `__ray_write_bytes`/`__ray_sync`) y la fila en el type_of del
 transpilador — el olvido de esa fila fue el único tropiezo (el H11 solo exige el nombre en la
 lista; la prueba real es ejecutar, y el corpus de paridad manual lo cazó a la primera).
+
+## 109. M115.2 — candados consultivos de archivo: el patrón LOCK-file (ago 2026)
+
+La segunda pieza del frente fs (IDEAS §66): dos brokers de rayq sobre el mismo directorio
+intercalaban appends y doble-entregaban **sin ningún aviso** — el patrón estándar (flock sobre un
+archivo `LOCK` al arrancar) no se podía expresar. La superficie mínima:
+
+- **`fs.try_lock(h) -> Result<bool, string>`** — candado consultivo EXCLUSIVO, **sin bloquear**:
+  `Ok(true)` adquirido, `Ok(false)` lo tiene otra *open file description* (otro proceso u otro
+  handle de este mismo proceso — lo que de paso permite probarlo en un solo proceso).
+- **`fs.unlock(h) -> Result<int, string>`** — lo suelta; `close(h)` también (el candado vive en
+  la open file description, semántica flock).
+
+Decisiones: el lock **bloqueante quedó fuera a propósito** — bloquearía el hilo entero del
+scheduler (todas las fibras), la misma clase de problema que el `recv_from` de UDP (§64.5 del
+dogfood); el caso real (guarda de arranque) es no-bloqueante por naturaleza. El candado es
+**consultivo** (advisory): solo protege frente a procesos que también lo piden — se documenta tal
+cual. Los locks compartidos (`lock_shared`) esperan a que una app los pida.
+
+Plomería sin dependencia nueva: `File::try_lock`/`unlock` de Rust std (estables desde 1.89; flock
+en Unix), mismo patrón M113/M115.1 — opcodes `TryLockHandle`/`UnlockHandle`, impl compartida
+VM/intérprete, helpers nativos espejo (`__ray_try_lock`/`__ray_unlock`), fila en el type_of del
+transpilador (la lección de M115.1). Vale sobre handles de lectura Y de escritura (un `LOCK` se
+abre típicamente en `"w"`, pero flock no distingue).

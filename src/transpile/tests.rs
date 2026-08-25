@@ -29,7 +29,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
     "__is_dir", "__is_file", "__list_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__read_bytes_handle",
-    "__seek_handle", "__write_bytes_handle", "__sync_handle", "__remove_dir",
+    "__seek_handle", "__write_bytes_handle", "__sync_handle", "__try_lock_handle", "__unlock_handle", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
     "__stdin_read", "__stdin_read_timeout",

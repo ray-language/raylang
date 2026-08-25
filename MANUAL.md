@@ -1106,6 +1106,24 @@ match (fs.open("queue.wal", "a")) {
 `Err("the handle is open for reading, not writing")`. Y recuerda el patrón de escritura
 atómica: escribir a un `.tmp`, `sync`, y `fs.rename` encima del destino.
 
+Para garantizar **un solo proceso** sobre un directorio de datos (un broker, una bóveda), el
+patrón LOCK-file con candados consultivos — `fs.try_lock` es no bloqueante y el candado se
+suelta con `unlock`, con `close`, o al morir el proceso:
+
+```rust
+match (fs.open("data/LOCK", "w")) {
+    Result.Ok(h) => match (fs.try_lock(h)) {
+        Result.Ok(true) => { /* somos el dueño; NO cerrar h mientras vivamos */ },
+        Result.Ok(false) => { print("another instance is already running"); },
+        Result.Err(e) => print(e),
+    },
+    Result.Err(e) => print(e),
+}
+```
+
+El candado es **consultivo** (flock): protege frente a otros procesos que también lo piden, no
+frente a quien escribe sin pedirlo.
+
 ### Stdin, entorno y argumentos
 
 ```rust

@@ -540,6 +540,9 @@ mod tests {
         assert!(d.contains("std/fs") && d.contains("Binary twin of `write`"), "{d}");
         let d = doc_text("fs.sync");
         assert!(d.contains("std/fs") && d.contains("fsync"), "{d}");
+        // M115.2: candados consultivos.
+        let d = doc_text("fs.try_lock");
+        assert!(d.contains("std/fs") && d.contains("advisory lock"), "{d}");
         let d = doc_text("no_existe_tal_cosa");
         assert!(d.contains("is not a builtin"), "{d}");
     }

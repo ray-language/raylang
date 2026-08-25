@@ -41,8 +41,10 @@ fuente → [loader] → [checker] → AST bajado → [transpile.rs] → .rs → 
 closures → `Rc<dyn Fn>`, `ptr` → `i64`. La semántica de valor de raylang sobre la de movimiento
 de Rust se resuelve **clonando al leer** (bump de refcount, O(1)). Traits por **erasure** (los
 métodos ya llegan bajados como funciones `Tipo#metodo` → `mangle` los hace identificadores Rust);
-bounds `T: Eq`/`T: Show` por **paso de diccionarios**; `print`/`to_string` vía un trait propio
-`RayShow` (con impls para `Rc<RefCell<…>>`, Map, tuplas).
+bounds `T: Eq`/`T: Show`/`T: Ord` por **paso de diccionarios** (`Ord` desde M120: `less` se emite
+como `eq`/`show` para que el argumento-diccionario `int#less`/`Tipo#less` exista como valor; las
+comparaciones directas siguen bajando a `<`); `print`/`to_string` vía un trait propio
+`RayShow` (con impls para `Rc<RefCell<…>>`, Map, tuplas, y u8/u32/u64 desde M120).
 
 **El mecanismo clave para lo que sigue — emisión bajo demanda del runtime**: el struct
 `Transpiler` lleva flags `needs_handles` / `needs_concurrency` / `needs_signals` /
@@ -739,9 +741,11 @@ silencio. *Fix:* test corpus que itera los ejemplos deterministas nativo↔VM, p
 > `fs.append_file` cayeron en el mismo hueco (ninguno estaba en el corpus de ejemplos). Los seis se
 > implementaron, y la prueba de que el brazo existe pasó a ser **ejecutarlo**:
 > `cli_cli::build_native_covers_the_array_math_and_fs_surface` compila un programa que los usa todos
-> y compara nativo ≡ VM. Sigue abierto: `min`/`max` de iterador (bound `T: Ord`) — es la misma
-> limitación que hace fallar a **cualquier genérico de usuario acotado por `Ord`**, porque el
-> transpilador no emite los impls del prelude que rellenan el diccionario (`int#less`).
+> y compara nativo ≡ VM. Sigue abierto: `min`/`max` de iterador (bound `T: Ord`) — su DEFINICIÓN
+> del prelude se salta y no hay brazo en emit_call. *(Actualizado en M120: los genéricos de
+> usuario acotados por `Ord` YA compilan — el harness diferencial cazó el hueco y ahora los
+> diccionarios `int#less`/`Tipo#less` se emiten como los de `Eq`/`Show`; soportar min/max hoy
+> sería dejar de saltar sus defs, pendiente.)*
 
 **H11. ✅ RESUELTO. Sin guardia contra la "triple implementación" de builtins.** `transpile.rs` **no consulta
 la tabla `BUILTINS`** de `src/builtins.rs` (cero referencias): un builtin nuevo añadido a

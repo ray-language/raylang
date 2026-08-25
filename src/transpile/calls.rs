@@ -2416,11 +2416,11 @@ impl Transpiler {
                         } else if let Some(Type::Fn(_, r)) = self.lookup(n) {
                             (**r).clone()
                         } else if matches!(n, "min" | "max") {
-                            // Terminales `min`/`max` de iterador: son funciones del prelude con bound
-                            // `T: Ord`, y el transpilador aún no emite los impls del prelude que
-                            // rellenan el diccionario (`int#less`) — la MISMA limitación que hace
-                            // fallar a cualquier genérico de usuario acotado por `Ord`. Se informa
-                            // como lo que es, no como un tipo desconocido.
+                            // Terminales `min`/`max` de iterador: funciones del prelude con bound
+                            // `T: Ord` cuya DEFINICIÓN se salta (is_handled_builtin) y no tiene brazo
+                            // en emit_call. (M120 emitió los diccionarios `int#less` — los genéricos
+                            // de usuario acotados por Ord ya compilan —, así que soportarlos hoy sería
+                            // dejar de saltar sus defs; pendiente.) Se informa como lo que es.
                             return Err(format!(
                                 "builtin/function '{}' is not supported in the native backend \
                                  (iterator terminal with an Ord bound)", n));
@@ -2434,10 +2434,45 @@ impl Transpiler {
                 Some(t) => self.type_of(t)?,
                 None => Type::Unit,
             },
-            ExprKind::Block(b) => match &b.tail {
-                Some(t) => self.type_of(t)?,
-                None => Type::Unit,
-            },
+            ExprKind::Block(b) => {
+                // M120: los `let` del bloque se registran en el overlay ANTES de tipar el tail — un
+                // bloque en posición de ARGUMENTO se tipa sin haberse emitido, así que sus locales no
+                // están en `scopes`. El caso que lo cazó (harness diferencial): el lowering de un
+                // despacho dyn envuelve la llamada en `{ let __dynrecv#N = r; (t.m)(t.data) }`, y
+                // `print(x.m())` moría con "unknown return type" al no conocer `__dynrecv#N`.
+                self.probe_binds.borrow_mut().push(HashMap::new());
+                let result = (|| -> Result<Type, String> {
+                    for st in &b.statements {
+                        match &st.kind {
+                            StmtKind::Let { name, ty, value, .. } => {
+                                let t = match ty {
+                                    Some(t) => normalize_type(t),
+                                    None => self.type_of(value)?,
+                                };
+                                self.probe_binds.borrow_mut().last_mut().expect("just pushed").insert(name.clone(), t);
+                            }
+                            StmtKind::LetTuple { names, value, .. } => {
+                                if let Type::Tuple(ts) = self.type_of(value)? {
+                                    let mut overlay = self.probe_binds.borrow_mut();
+                                    let top = overlay.last_mut().expect("just pushed");
+                                    for (nm, t) in names.iter().zip(ts) {
+                                        if let Some(nm) = nm {
+                                            top.insert(nm.clone(), t);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    match &b.tail {
+                        Some(t) => self.type_of(t),
+                        None => Ok(Type::Unit),
+                    }
+                })();
+                self.probe_binds.borrow_mut().pop();
+                result?
+            }
             ExprKind::While { .. } => Type::Unit,
             ExprKind::ArrayLit(elems) => {
                 let elem = match elems.first() {

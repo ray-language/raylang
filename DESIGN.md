@@ -9820,3 +9820,52 @@ es ABI-inocuo). En plataformas sin `poll` (Windows) se cae a `thread::sleep`; el
 `--without fibers` (rustc pelado, hilo-por-tarea) conserva su `thread::sleep` directo — vía
 explícitamente adelgazada. El pacing sin deriva sobre muchos frames sigue queriendo reloj absoluto
 (`next += budget`), no sumar sleeps: documentado en el `///` de `time.sleep` y en MANUAL.
+
+## 117. M120 — el harness diferencial de motores: cazar la clase, no los casos (ago 2026)
+
+El dogfood de 14 apps dejó un patrón inquietante: los 4 bugs de motor (sort-float §63,
+close-con-lector §64, RefCell-en-variante §64, return-en-spawn §68) eran todos de la MISMA clase —
+"código válido en la VM que no compila o diverge en nativo" — y todos vivían en **interacciones de
+features** (sort×float, return×spawn, campo×mutación×constructor) que el corpus de ejemplos
+(caminos felices idiomáticos, H10) nunca ejercita. La conclusión de §68 era explícita: "el contrato
+tres-motores necesita un harness de fuzzing/differential propio más que arreglos puntuales".
+
+**El harness** (`tests/native_differential.rs`): una biblioteca de GENERADORES de sondas — uno por
+clase de interacción (22 secuenciales + 6 concurrentes): builtin×tipo, strings unicode, errores de
+ejecución como valores, wrapping sin signo, mutación-en-args-de-constructor, closures capturando
+`var`, return-en-closures/spawn, genéricos multi-instanciación, traits+dyn, enums anidados, `?`,
+Maps, bytes, tuplas, rangos, y en concurrencia cada TIPO cruzando fibras, canales-en-variantes
+(actor), scope/try_join, try_recv/select_timeout. Los valores los siembra un PRNG determinista
+(SplitMix64, como el fuzzer): misma semilla → mismo batch, un hallazgo se reproduce con
+`RAYLANG_DIFF_SEED=<n>`.
+
+Tres palancas de coste hacen viable correrlo en cada push:
+- **Empaquetado**: N sondas → UN programa (`fn probe_i()` + separadores); un build nativo (~1 s por
+  la vía rustc-pelado `--without` todo) amortiza N sondas. Los batches concurrentes van con fibras
+  (el default del producto, vía Cargo).
+- **Errores como datos**: los caminos de fallo (división por cero, overflow, panic) se sondean vía
+  `try_call` y el MENSAJE impreso entra a la comparación byte a byte (paridad H6) sin abortar el
+  batch. Excepción documentada: el TEXTO de índice-fuera-de-rango difiere a propósito (el indexado
+  nativo no paga bounds-check propio; el flujo Err sí es idéntico) — esa sonda clasifica sin texto.
+- **Bisección automática**: al divergir (o al romperse el build nativo), el harness parte el batch
+  por mitades hasta la(s) sonda(s) culpable(s), escribe el repro y falla nombrando semilla y ruta.
+
+**Validación inmediata: la primera corrida cazó TRES bugs reales del backend nativo** (los tres
+"válido en VM, roto en nativo", cero conocidos antes):
+1. `print(x)` con `x: u8/u32/u64` → E0599 en el cargo del usuario (faltaban los `impl RayShow`).
+2. **Genéricos acotados (`largest<T: Ord>`) no compilaban** — `is_prelude_impl` saltaba `less` en
+   CUALQUIER tipo ("las comparaciones bajan a `<`"), pero el argumento-DICCIONARIO del bound
+   referencia `int#less`/`Coin#less` como VALOR. Fix: `less` se emite como `eq`/`show` (que ya
+   realizaban sus bounds por diccionarios); las comparaciones directas siguen bajando a `<`. El
+   corpus jamás lo vio: ningún ejemplo usa bounds `Ord`.
+3. **`print(x.m())` sobre un receptor `dyn` moría** ("unknown return type") — el lowering del
+   despacho envuelve la llamada en un Block `{ let __dynrecv = …; (r.m)(r.data) }`, y
+   `type_of(Block)` tipaba el tail sin registrar los `let` del bloque: en posición de ARGUMENTO el
+   bloque se tipa antes de emitirse. Fix general: los `let`/`let-tuple` del bloque se registran en
+   el overlay `probe_binds` antes de tipar el tail. El corpus pasaba porque su único ejemplo dyn
+   llama al método en aritmética/tail, nunca como argumento.
+
+**Cobertura consciente**: los entrelazados de E/S real (la clase close-con-lector) quedan en los
+E2E dirigidos de cli_cli — un socket real no sale de una plantilla determinista. Cableado: humo (1
+batch secuencial, 3 motores, ~2 s) dentro de `cargo test`; campaña (4 batches + concurrencia) en
+cada push de CI; nocturna con `RAYLANG_DIFF_BATCHES=40`. Fila nueva en PRODUCTION §4.

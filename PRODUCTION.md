@@ -65,6 +65,7 @@ Lo que impide que el contrato se erosione en silencio; todo corre en CI:
 |---|---|
 | Oráculo VM↔intérprete | que un cambio de runtime no altere la semántica |
 | Corpus de paridad nativo | que el binario nativo siga siendo byte-idéntico a la VM |
+| `tests/native_differential.rs` (M120) | que las **interacciones de features** que los ejemplos idiomáticos no ejercitan tampoco diverjan: programas GENERADOS (builtin×tipo, mutación-en-constructor, return-en-closure, valores cruzando fibras…), 3 motores byte a byte, bisección automática al divergir (humo en cada `cargo test` + campaña en cada push + nocturna con presupuesto alto) |
 | `tests/fuzz_frontend.rs` | que ninguna entrada haga *panic* al compilador (campaña continua + nocturna) |
 | `tests/ice_policy.rs` | que los fallos internos vayan por `ice!()` y no por `unwrap` suelto |
 | `tests/naming_policy.rs` | que no se cuele *spanglish* en los identificadores |

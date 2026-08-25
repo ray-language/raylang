@@ -4,6 +4,24 @@
   "description": "Soporte para el lenguaje raylang (.ray) y sus templates compilados (.ray.html): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
   "version": "0.17.0",
   "publisher": "rayala",
+  "license": "MIT OR Apache-2.0",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ray-language/raylang",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/ray-language/raylang/issues"
+  },
+  "homepage": "https://github.com/ray-language/raylang/tree/main/editors/vscode",
+  "keywords": [
+    "raylang",
+    "ray",
+    "language-server",
+    "lsp",
+    "syntax-highlighting"
+  ],
   "engines": {
     "vscode": "^1.75.0"
   },

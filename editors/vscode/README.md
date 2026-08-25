@@ -103,17 +103,24 @@ extensión se conecta como cliente (ver "Diagnósticos en vivo" al final).
 > inevitable del coloreado por-editor. La validación real (LSP) sí reutilizará el
 > checker de Rust, una sola vez para todos los editores.
 
-## Instalación (desarrollo local)
+## Instalación
 
-La forma más simple, sin empaquetar nada: enlaza esta carpeta dentro del directorio
-de extensiones de VSCode y recarga.
+> La extensión aún no está en el Marketplace (llegará con la primera release pública del
+> lenguaje; el `package.json` ya trae repository/icon/license listos para `vsce publish`).
+> Mientras tanto, dos vías:
+
+**A. Enlace directo (desarrollo local)** — sin empaquetar nada: enlaza esta carpeta dentro del
+directorio de extensiones de VSCode y recarga.
 
 ```sh
-# macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.9.0
+# macOS / Linux (compila primero: make vscode desde la raíz del repo)
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.17.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
+
+**B. `.vsix` instalable** — ver "Empaquetar" abajo; se instala con
+`Extensions: Install from VSIX...` (funciona también en VSCodium/Cursor).
 
 Abre cualquier archivo `.ray` (por ejemplo `examples/fib.ray`) y deberías ver el
 coloreado. Si VSCode no lo reconoce, comprueba el selector de lenguaje (abajo a la
@@ -125,7 +132,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.9.0.vsix
+vsce package        # genera raylang-<versión>.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

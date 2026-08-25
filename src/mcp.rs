@@ -535,6 +535,11 @@ mod tests {
         assert!(d.contains("std/crypto") && d.contains("Option<bytes>"), "{d}");
         let d = doc_text("hkdf_sha256");
         assert!(d.contains("std/crypto") && d.contains("HKDF"), "{d}");
+        // M115.1: escritura binaria sobre handle + fsync.
+        let d = doc_text("fs.write_bytes");
+        assert!(d.contains("std/fs") && d.contains("Binary twin of `write`"), "{d}");
+        let d = doc_text("fs.sync");
+        assert!(d.contains("std/fs") && d.contains("fsync"), "{d}");
         let d = doc_text("no_existe_tal_cosa");
         assert!(d.contains("is not a builtin"), "{d}");
     }

@@ -37,6 +37,14 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/fs`: escritura binaria sobre handle + fsync** (M115.1, IDEAS §66/§68) — las dos piezas que
+  el dogfood señaló como techo del eje almacenamiento. `fs.write_bytes(h, data)` es el gemelo
+  binario de `fs.write` (octetos crudos en la posición actual; compone con `seek`; desbloquea WAL/
+  AOF/formatos binarios en disco, que solo podían escribirse por ruta con `append_file_bytes`). Y
+  `fs.sync(h)` fuerza lo escrito a **almacenamiento estable** (fsync): un append al page cache
+  sobrevive al crash del proceso pero no a un corte de luz — con `sync` un programa raylang puede
+  por fin **prometer durabilidad** real. Tres motores byte-idénticos; receta WAL en MANUAL.
+
 - **`std/crypto`: acuerdo de claves X25519 + HKDF** (M114, IDEAS §62) — la pieza que faltaba para
   cifrar entre pares. Había **identidad** (Ed25519) y **cifrado** (ChaCha20-Poly1305), pero no había
   con qué unirlos: sin acuerdo de claves solo se podía cifrar con claves precompartidas fuera de

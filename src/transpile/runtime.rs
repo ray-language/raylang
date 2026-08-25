@@ -378,6 +378,22 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        Some(__RayHandle::Writer(f)) => f.write_all(s.as_bytes()).map(|_| s.chars().count() as i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
             "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
             "        _ => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
+            // M115.1: gemelo binario de write + fsync (espejo de builtins::write_bytes_handle/
+            // sync_handle — mismos mensajes que la VM, paridad byte-idéntica).
+            "fn __ray_write_bytes(h: i64, data: &[u8]) -> Result<i64, Rc<str>> {\n",
+            "    use std::io::Write; let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Writer(f)) => f.write_all(data).map(|_| data.len() as i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
+            "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
+            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
+            "fn __ray_sync(h: i64) -> Result<i64, Rc<str>> {\n",
+            "    let mut reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get_mut(&h) {\n",
+            "        Some(__RayHandle::Writer(f)) => f.sync_all().map(|_| 0i64).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(__RayHandle::Reader(_)) => Err(Rc::<str>::from(\"the handle is open for reading, not writing\")),\n",
+            "        Some(_) => Err(Rc::<str>::from(\"the handle is not a file open for writing\")),\n",
+            "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
         ));
     }
     // Ops de socket TCP — solo si se usa la red. Clonan el stream para no retener el lock en la I/O

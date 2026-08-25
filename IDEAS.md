@@ -2531,7 +2531,7 @@ Dogfood de `ray-apps/rayq` (broker de colas persistente at-least-once: WAL por c
 timeout, backoff, DLQ, compactación, worker de procesos). Es la app que convierte "escribir
 archivos" en "ser una base de datos" — exactamente el territorio que IDEAS-APPS §1.2 predijo.
 
-1. **`std/fs` no tiene `fsync`/flush** (impacto: ALTO — el techo de durabilidad de todo el
+1. **[EJECUTADA — M115.1, DESIGN §108: `fs.sync(h)`] `std/fs` no tiene `fsync`/flush** (impacto: ALTO — el techo de durabilidad de todo el
    lenguaje). Un append (`fs.write(h, …)`) llega al page cache del SO y ahí se queda hasta que el
    kernel quiera: durable ante crash del PROCESO (verificado con `kill -9` a mitad de carga: el
    replay recupera exactamente lo no-ackeado), NO ante corte de luz. Sin `fs.sync(h)` (o un modo
@@ -2595,7 +2595,7 @@ AOF lógica y pub/sub). El benchmark honesto que IDEAS-APPS §1.8 pedía, y otro
    Tercer bug del transpilador (con §63 sort-float y §64 RefCell-en-variante); los tres son
    "código válido en VM que no compila o panica en nativo" — el contrato tres-motores necesita
    un harness de fuzzing/differential propio más que arreglos puntuales.
-2. **`fs.write(handle, string)` no tiene gemelo binario** (impacto: MEDIO): sockets tienen
+2. **[EJECUTADA — M115.1, DESIGN §108: `fs.write_bytes(h, data)`] `fs.write(handle, string)` no tiene gemelo binario** (impacto: MEDIO): sockets tienen
    `socket_write_bytes` pero fs no tiene `write_bytes(h, bytes)` (solo `append_file_bytes` por
    RUTA, que no compone con un handle abierto ni con seek). Consecuencia real: la AOF de raykv
    no puede persistir valores binarios (v1 acepta solo UTF-8) y cualquier formato binario en

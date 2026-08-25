@@ -9553,3 +9553,35 @@ que en ChaCha20-Poly1305 rompe confidencialidad y autenticación; nonce contador
 autentica** — sin firmar la efímera con Ed25519 hay intermediario). Van en `MANUAL.md` §13 y, en
 código ejecutable, en `examples/stdlib/key_agreement.ray`, que además clava los vectores oficiales de
 RFC 7748 §6.1 y RFC 5869 A.1/A.3 en los tres motores (`tests/key_agreement_cli.rs`).
+
+## 108. M115.1 — fs.write_bytes + fs.sync: el techo de durabilidad del lenguaje (ago 2026)
+
+El dogfood de las 14 apps (IDEAS §§63–72) dejó un veredicto transversal: **fs es EL frente**. Dos
+piezas concretas encabezaban la lista por impacto, y las dos son de la misma familia — operar un
+handle abierto como lo hace un motor de almacenamiento:
+
+- **`fs.write_bytes(h, data) -> Result<int, string>`** (IDEAS §68): existía `socket_write_bytes`
+  para sockets y `append_file_bytes` por RUTA, pero ningún camino binario sobre un **handle** — la
+  AOF de raykv no podía persistir valores binarios (v1 aceptaba solo UTF-8) y cualquier formato
+  binario en disco (RDB, WAL, delta de bloques de raysync) estaba bloqueado. Es el gemelo de
+  `fs.write` (que cuenta caracteres; este cuenta octetos) y compone con `seek`.
+- **`fs.sync(h) -> Result<int, string>`** (IDEAS §66): un append llega al page cache del SO y ahí
+  se queda — durable ante crash del PROCESO (rayq lo verificó con `kill -9` a mitad de carga), NO
+  ante corte de luz. Sin fsync ningún programa raylang podía **prometer** durabilidad real; era el
+  techo de todo el eje almacenamiento (rayq/raykv/futuro raykv-disk).
+
+Decisiones de diseño: `sync` es una operación **del handle** (no un modo `"as"` de `open` con
+fsync-on-write): la política de cuándo pagar el fsync es del programa (por entrada, por lote, por
+ack), y la primitiva compone con cualquiera. Solo aplica a handles de escritura — en un lector es
+un sinsentido y devuelve el mismo error que `write` (`"the handle is open for reading, not
+writing"`); un handle no-archivo da `"the handle is not a file open for writing"` **idéntico en
+los tres motores** (el helper nativo espeja los mensajes de `builtins::write_bytes_handle`/
+`sync_handle`). `fs.sync_dir` (fsync del directorio tras un rename, el último eslabón del patrón
+temp+rename) se consideró y quedó fuera: ninguna de las 14 apps lo pidió y el patrón documentado
+en MANUAL cubre el caso común.
+
+Plomería: par de opcodes nuevos (`WriteBytesHandle`/`SyncHandle`) con impl compartida VM/intérprete
+en `builtins.rs` (patrón M113), wrappers en `std/fs.ray`, intercept nativo a nivel de wrapper
+(`std::fs::write_bytes`/`sync` → `__ray_write_bytes`/`__ray_sync`) y la fila en el type_of del
+transpilador — el olvido de esa fila fue el único tropiezo (el H11 solo exige el nombre en la
+lista; la prueba real es ejecutar, y el corpus de paridad manual lo cazó a la primera).

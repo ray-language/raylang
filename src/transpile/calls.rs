@@ -496,6 +496,21 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M115.1: escritura binaria (Result<int,string>) + fsync (Result<int,string>).
+            "write_bytes" => {
+                self.needs_handles = true;
+                out.push_str("__ray_write_bytes(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "sync" => {
+                self.needs_handles = true;
+                out.push_str("__ray_sync(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // Operaciones de directorio con resultado unitario → Result<int,string> (Ok(0)/Err(msg)):
             // mkdir (create_dir_all), remove_dir (solo vacío), rename, copy_file (std::fs::copy).
             "mkdir" | "remove_dir" | "rename" | "copy_file" => {
@@ -2149,7 +2164,7 @@ impl Transpiler {
                         "read_file_bytes" => Type::Enum("Result".into(), vec![Type::Bytes, Type::String]),
                         "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir"
                         | "rename" | "copy_file" | "file_size" | "mtime" | "write_file_bytes"
-                        | "append_file_bytes" | "append_file" => {
+                        | "append_file_bytes" | "append_file" | "write_bytes" | "sync" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }
                         "read_line" => opt_of(Type::String),

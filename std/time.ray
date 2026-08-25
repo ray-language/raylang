@@ -27,7 +27,9 @@ pub fn monotonic_nanos() -> int { __monotonic_nanos() }
 /// Suspends the current fiber for at least `ms` milliseconds (`ms <= 0` returns immediately).
 /// **Cooperative in the VM** (M57.2): the fiber parks and other fibers keep running — sleeping
 /// inside a server does not stall other connections. In the interpreter (single-threaded oracle)
-/// it blocks the whole program.
+/// it blocks the whole program. The wait is **precise** (M119: `poll(2)`-based, ~1 ms overshoot),
+/// so per-frame pacing holds; for drift-free pacing over many frames prefer an absolute clock
+/// (`next = next + budget`) over summing sleeps.
 pub fn sleep(ms: int) { __sleep(ms) }
 
 // --- Constructores de duración (azúcar UFCS: `30.seconds()`) ---

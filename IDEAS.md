@@ -2711,11 +2711,15 @@ La última tanda del catálogo de IDEAS-APPS (14 de 14 construidas). Tres apps d
   en 21 µs nativo / 92 µs VM — 0.06% del presupuesto de 33 ms.
 
 **Carencias:**
-1. **`time.sleep` se pasa +6–10 ms consistentemente en AMBOS motores** (raygame; la predicción
+1. **[EJECUTADA — M119, DESIGN §116: `time.sleep` preciso vía `poll(2)`] `time.sleep` se pasa +6–10 ms consistentemente en AMBOS motores** (raygame; la predicción
    de §1.14 con número): `sleep(33)` duerme 39–40 ms de media y 43–44 ms en el peor caso.
    Dormir el presupuesto entero da ~25 fps, no 30. Workaround validado: reloj absoluto
    (`next += 33`) + `io.read_timeout` como única espera. Candidatos: afinar el timer del
    scheduler o documentar el patrón como canónico en MANUAL (juegos, pacing, muestreadores).
+   → RESUELTO: la causa era `std::thread::sleep` (el `nanosleep` de macOS se pasa por *timer
+   coalescing*); `poll(2)` con cero fds honra el timeout ajustado. Ambos motores a ~34 ms para
+   `sleep(33)` (~1 ms de overshoot). El reloj absoluto sigue siendo la práctica para pacing
+   sin deriva (documentado en MANUAL + el `///` de `sleep`).
 2. **El cliente `packages/rpc` es secuencial por conexión** (raycall): handlers concurrentes no
    pueden compartir uno → conexión por llamada. El hueco de producción de rpc es un pool o
    multiplexación por id (el streaming diferido de su README apunta ahí).

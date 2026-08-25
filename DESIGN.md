@@ -9785,3 +9785,38 @@ sí vía `\x`/`\u`): un `'\0'` roundtripea como `'\0'`, no como un byte NUL crud
 los escapes nuevos, y el corpus del oráculo (`tests/selfhost_lexer.rs`) no los incluye — la
 byte-identidad se mantiene sobre lo que ambos lexers sí cubren. `std/term` estrena los literales:
 `is_wide`/`is_zero_width` pasan sus rangos a hex, cerrando la nota de §114.
+
+## 116. M119 — `time.sleep` preciso: `poll(2)` en vez de `thread::sleep` (ago 2026)
+
+El dogfood de raygame (IDEAS §72.1) midió que `time.sleep(33)` dormía ~37 ms en AMBOS motores
+(overshoot de 4–6 ms): dormir el presupuesto de un frame daba ~25 fps en vez de 30. La causa, tras
+medir, resultó **de sistema, no del runtime**: los dos motores acababan en `std::thread::sleep` para
+el caso común "el hilo principal duerme y no hay nada más listo", y en macOS su `nanosleep` está
+sujeto a *timer coalescing* — el kernel agrupa despertares y se pasa varios ms. Medido en el Mac de
+desarrollo: `thread::sleep(33ms)` → 36.7 ms; la VM iba clavada a ese suelo (el runtime no añadía
+nada).
+
+**El descubrimiento clave** (por qué el workaround de raygame —reloj absoluto + `io.read_timeout`—
+sí daba pacing exacto): `poll(2)` con **cero descriptores** honra el timeout por la vía de eventos
+del kernel, no por la de temporizadores, y es mucho más ajustado. Medido: `poll(NULL, 0, 33)` →
+33.96 ms (vs. 37.3 de `nanosleep`); `kevent`/`epoll_wait` con lista vacía dan lo mismo. Es
+exactamente el camino que ya recorría `read_timeout` — por eso el workaround funcionaba.
+
+**El arreglo** es el mismo primitivo en los dos motores:
+- **VM/intérprete**: `builtins::sleep_millis` (el chokepoint de "duerme el hilo N ms", que usa el
+  brazo sin-fds de `io_wait` y el `__sleep` del intérprete) pasa a `crate::poll::sleep_ms` — un
+  `poll(NULL, 0, ms)` con reintento ante `EINTR` hasta cubrir el plazo (garantiza dormir *al menos*
+  lo pedido, la semántica de `thread::sleep`).
+- **Nativo**: el `main` del binario transpilado corre **fuera de fibra** (no hay scheduler si no hay
+  `spawn`), así que `fibers::sleep_ms` tomaba su brazo `thread::sleep`. Ahora usa
+  `sys_common::poll_sleep` (el mismo `poll(2)`). *Dentro* de una fibra no cambia nada: el reactor ya
+  dormía preciso vía `kqueue`/`epoll`.
+
+Resultado medido: `sleep(33)` pasa a ~34 ms en los tres motores (VM 36.8→34.0, intérprete →34.1,
+nativo 37→33.96) — de 4–6 ms de overshoot a ~1 ms, y 30 fps deja de perder frames. Plumería: la
+declaración `extern` de `poll` en `src/poll.rs` reusa el mismo tipo `*mut PollFd` + `nfds: u64` que
+la de `builtins::watch_mod` para no disparar `clashing_extern_declarations` (con `nfds = 0` el ancho
+es ABI-inocuo). En plataformas sin `poll` (Windows) se cae a `thread::sleep`; el nativo
+`--without fibers` (rustc pelado, hilo-por-tarea) conserva su `thread::sleep` directo — vía
+explícitamente adelgazada. El pacing sin deriva sobre muchos frames sigue queriendo reloj absoluto
+(`next += budget`), no sumar sleeps: documentado en el `///` de `time.sleep` y en MANUAL.

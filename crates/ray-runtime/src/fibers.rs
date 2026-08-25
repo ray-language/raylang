@@ -436,8 +436,11 @@ pub fn fiber_sleep(ms: i64) {
 pub fn sleep_ms(ms: i64) {
     if in_fiber() {
         fiber_sleep(ms);
-    } else {
-        std::thread::sleep(Duration::from_millis(ms.max(0) as u64));
+    } else if ms > 0 {
+        // M119: fuera de fibra (el `main` del binario transpilado sin `spawn`) dormíamos con
+        // `thread::sleep`, que en macOS se pasa varios ms y descuadra el pacing (§72). `poll(2)` con
+        // cero descriptores es la misma espera precisa que ya usa el reactor.
+        sys_common::poll_sleep(ms as u64);
     }
 }
 
@@ -910,6 +913,33 @@ mod sys_common {
             }
             if unsafe { *errno_ptr() } != EINTR {
                 return false; // error no transitorio: que la syscall del llamador lo vea
+            }
+        }
+    }
+
+    /// Duerme el HILO `ms` milisegundos con precisión (M119): `poll(NULL, 0, ms)` en vez de
+    /// `thread::sleep`. En macOS el `nanosleep` de éste se pasa varios ms por *timer coalescing*
+    /// (medido: `sleep(33)` → ~37 ms) y descuadra el pacing (§72); `poll(2)` con cero descriptores
+    /// honra el plazo por la vía de eventos del kernel (~34 ms). Reintenta ante EINTR hasta cubrir el
+    /// plazo → duerme al menos lo pedido. Lo usa el camino FUERA de fibra (el `main` del binario);
+    /// dentro de una fibra el reactor ya duerme preciso vía kqueue/epoll.
+    pub(super) fn poll_sleep(ms: u64) {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_millis(ms);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            // +1: redondeo hacia arriba para no despertar un pelo antes del plazo.
+            let timeout_ms = (remaining.as_millis().min(i32::MAX as u128 - 1) as i32) + 1;
+            // SAFETY: `poll` de libc con lista nula y n=0 → espera pura por timeout; errno del hilo.
+            let n = unsafe { poll(core::ptr::null_mut(), 0, timeout_ms) };
+            if n >= 0 {
+                return; // n == 0: venció el plazo (con 0 fds no hay otro retorno posible)
+            }
+            if unsafe { *errno_ptr() } != EINTR {
+                return; // error inesperado: no insistir
             }
         }
     }

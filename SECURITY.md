@@ -140,7 +140,8 @@ documentada:
   firma y `CStr::from_ptr` sobre punteros no-NULL con la `CString` viva. La *carga* ya no lleva
   `unsafe` propio: la hace `libloading`.
 - **`src/poll.rs`** — las llamadas al sistema del *poller* de E/S (`kqueue`/`epoll`), declaradas a
-  mano para no traer `libc`.
+  mano para no traer `libc`; y (M119) `poll(2)` con lista **nula** y `nfds = 0` para dormir el hilo
+  con precisión (`sleep_ms`): puntero nulo, ningún buffer que la llamada retenga.
 - **`src/builtins.rs`** — el canal de señales del proceso (`signals()`, un *self-pipe* con
   `pipe`/`sigaction`); la adopción del socket de escucha heredado del supervisor de `ray dev`
   (`from_raw_fd` sobre un fd que el padre garantiza, con toma de propiedad única); la lectura de

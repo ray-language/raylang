@@ -1420,6 +1420,26 @@ horas exactas; los calendarios son asunto de `DateTime`). Nota: la forma `2.seco
 import **sin calificar** (`from std/time import seconds`); con `import std/time;` se usa
 `time.seconds(2)`.
 
+**Pacing (juegos, animaciones, muestreadores).** `sleep` es **preciso** (M119: espera por `poll(2)`,
+~1 ms de desvío), así que dormir un presupuesto de frame mantiene el ritmo. Pero sumar sleeps
+**acumula deriva**: cada vuelta añade el tiempo del propio trabajo más el ~1 ms de desvío. Para un
+ritmo estable a lo largo de muchos frames, duerme contra un **reloj absoluto** en vez de sumar:
+
+```rust
+import std/time;
+
+fn main() {
+    let budget = 33;                       // ~30 fps
+    var next = time.monotonic() + budget;
+    while (true) {
+        // ...lógica del frame...
+        let now = time.monotonic();
+        if (next > now) { time.sleep(next - now); }
+        next = next + budget;              // el objetivo avanza fijo, sin arrastrar el desvío
+    }
+}
+```
+
 El hermano para los **tamaños** es `std/units`: `kb`, `mb`, `gb` → bytes, en convención **binaria**
 (1 KB = 1024 bytes, la lectura habitual en código de sistemas — buffers, límites de memoria):
 

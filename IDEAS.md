@@ -2812,6 +2812,23 @@ el toolchain de Go). Cazó dos bugs en la primera llamada: el decoder HPACK sin 
 superficie entera del lenguaje habla inglés, y TODA la superficie de red del paquete net tiene
 dogfood.** Queda solo el VPS 24/7 de rayrelay (validación de operación, no de superficie).
 
+## 73. El manejador de paquetes en escenario real — asperezas del estreno (ago 2026) — M134
+
+Round-trip real contra github.com/ray-language (cápsula `greeting` + índice `ray-index`,
+DESIGN §131): el flujo entero funciona; el bug del publish (identidad de cápsula) se arregló en
+el propio M134. Quedan clasificadas dos mejoras:
+
+1. **Shallow clone / clone parcial de deps** (impacto: MEDIO — coste de red y disco): cada
+   dependencia clona el repo ENTERO (~4 s y decenas de MB para un paquete de 3 archivos si vive
+   en un monorepo grande). `--depth 1` no compone con checkout de SHA arbitrario (el lockfile
+   fija commits); diseño candidato: `clone --filter=blob:none` + checkout, o depth para tags y
+   fallback a full para SHAs.
+2. **Normalizar github-ssh→https al publicar** (impacto: BAJO — UX): sin `--repo`, la URL del
+   índice sale del `origin` del publicador (ssh si empuja por ssh) y el consumidor anónimo no
+   puede clonarla. Candidatos: reescritura `git@github.com:` → `https://github.com/` con aviso,
+   o un warning duro al publicar URL no-anónima. (El error de un repo privado por https también
+   podría explicarse mejor que el "could not read Username" crudo de git.)
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

@@ -44,7 +44,7 @@ Se configura por proyecto en `ray.toml` — o por entorno, que tiene prioridad:
 
 ```toml
 [registry]
-index = "https://github.com/user/ray-index"    # repo git del índice (o un dir local)
+index = "git+https://github.com/ray-language/ray-index@main"  # el índice OFICIAL (o un dir local)
 ```
 
 ```sh
@@ -95,6 +95,10 @@ jobs:
 ```sh
 git tag v1.0.0 && git push --tags     # la versión del ray.toml, con prefijo v
 ray registry publish                            # …o: ray registry publish --repo git+URL@ref
+# Para consumo ANÓNIMO publica con URL https (--repo "git+https://github.com/…@vX.Y.Z"):
+# sin --repo, la URL sale del remoto `origin` — si empujas por ssh, el índice queda con una URL
+# ssh que solo clona quien tiene clave (M134). Los paquetes del ecosistema viven en la
+# organización github.com/ray-language; el índice oficial es ray-language/ray-index.
 ```
 
 Sin `--repo`, la spec publicada se deriva del remoto **`origin`** + el tag **`v<versión>`**

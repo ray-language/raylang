@@ -37,6 +37,14 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El manejador de paquetes, validado contra GitHub real + la batería de admisión** (M134) —
+  el flujo completo (dep `git+https@tag`, índice remoto, `ray add` por nombre con verificación
+  de hash, lockfile reproducible) probado contra la organización `ray-language` (cápsula
+  `greeting` + índice `ray-index`); harness vivo en `deps_live_cli` (nightly). De paso:
+  **arreglado `ray registry publish`**, que validaba la cápsula con identidad de módulo
+  equivocada y rechazaba imports internos calificados. Y el proceso de admisión de módulos queda
+  ejecutable: `module_policy` en CI (doc `///` total, fila en REFERENCE, tests por módulo,
+  README/manifest de paquetes), `CONTRIBUTING.md` y templates de PR (general + módulo nuevo).
 - **El cliente gRPC, validado contra grpc-go real** (M133) — el dogfood pendiente de la única
   superficie de red sin peer real cazó dos bugs en la primera llamada: el decoder **HPACK ya
   acepta literales Huffman** (grpc-go comprime siempre sus cabeceras; la tabla del RFC 7541

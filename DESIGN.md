@@ -10254,3 +10254,42 @@ El arnés real queda como `tests/grpc_real_cli.rs` (`#[ignore]`: necesita el too
 `cargo test --test grpc_real_cli -- --ignored`): llamada unaria OK en VM **e intérprete** (byte
 a byte) y UNIMPLEMENTED trailers-only contra el servidor real. Con esto, TODA la superficie de
 red del paquete net tiene dogfood.
+
+## 131. M134 — el manejador de paquetes en escenario real + la batería de admisión de módulos (ago 2026)
+
+Toda la maquinaria de paquetes (deps `git+URL@ref`, lockfile con hash de contenido, índice
+remoto por git, MVS transitivo, `ray registry publish`) existía desde M39c/M51 — pero probada
+SOLO con repos `git+file://` locales. El escenario real quedó montado sobre la organización
+**github.com/ray-language**: la cápsula de demo `greeting` (mod.ray + submódulo interno, tags
+v1.0.0/v1.0.1) y el índice oficial `ray-index` (greeting.toml con versiones + hashes,
+generado por `ray registry publish`). El round-trip completo, verde de punta a punta:
+dep directa `git+https@tag` (clone anónimo real + lockfile con commit+hash), resolución POR
+NOMBRE (`ray add greeting` elige la última versión del índice remoto y verifica el hash
+publicado) y reproducibilidad (caché borrada → el hash del lock verifica la re-descarga).
+Queda como harness vivo en `tests/deps_live_cli.rs` (`#[ignore]`; nightly en CI).
+
+El estreno cazó **un bug y dos asperezas**:
+
+- **BUG (arreglado): `ray registry publish` validaba la cápsula con identidad equivocada.** El
+  check semántico cargaba `mod.ray` del clon temporal como módulo `mod` — así el import interno
+  calificado (`import greeting/shout;`, la forma que SÍ funciona al consumir) chocaba con el
+  borde de cápsula ("internal to capsule"). El fix reproduce la geometría del consumidor: el
+  clon vive como `<base>/<nombre>` y la cara se carga con `load_source_module` y
+  `project_root = <base>` → identidad `greeting`, mismas reglas que en `.ray-deps/`.
+- **Aspereza 1: repos privados por https.** El clone anónimo de un repo privado muere con el
+  error crudo de git ("could not read Username"); funciona por ssh o con credential helper. Para
+  consumo público: repos públicos + URLs https (anotado en PUBLISH/CONTRIBUTING).
+- **Aspereza 2: publish deriva la URL del `origin`** — un publicador que empuja por ssh publica
+  URLs ssh que un consumidor anónimo no puede clonar. El escape documentado es `--repo
+  git+https://…`; normalizar github-ssh→https queda anotado en IDEAS (§73), junto al **shallow
+  clone** (hoy cada dep clona el repo entero: ~4 s para un paquete de 3 archivos si vive en un
+  monorepo grande; `--depth 1` no compone con checkout de SHA arbitrario — necesita diseño).
+
+**La batería de admisión de módulos** (la otra mitad del arco): `tests/module_policy.rs`, en CI
+siempre. Regla 1: toda la superficie pública (`pub fn/struct/enum/const`) con doc `///`; regla
+2: todo módulo embebido con fila en REFERENCE.md; reglas 3/4: todo módulo de std/packages
+ejercitado por algún test, y los paquetes con README + manifest. Al estrenarla cazó tres huecos
+reales (dos `pub` sin doc, `std/collections/dict` y `std/kv` sin fila en REFERENCE) — cerrados
+en el mismo PR. La cara humana del proceso: `CONTRIBUTING.md` (flujo, principios no negociables,
+qué pondera la admisión más allá de lo verificable) y los templates de PR de GitHub (el general
+con checklist de contrato y `new_module.md` con la batería + dogfood exigido).

@@ -505,6 +505,8 @@ fn parse_range(v: string, size: int) -> [int] {
     }
 }
 
+/// Serves a static-files MOUNT: strips `prefix` from `req.path` and serves the rest from `dir`
+/// (via `static_response`: traversal-safe, MIME by extension, 404 on miss). Non-GET/HEAD → 405.
 pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
     if (req.method != "GET" && req.method != "HEAD") {
         let r: Response = text(405, "method not allowed\n");

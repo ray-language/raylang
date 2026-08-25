@@ -277,6 +277,10 @@ pub enum OpCode {
     /// M68.2: saca un `int` (n) y empuja `n` octetos criptográficamente seguros (`bytes`;
     /// CSPRNG del SO vía ring). Primitivo `__crypto_random_bytes` (→ `crypto.random_bytes`).
     CryptoRandomBytes,
+    /// M126: hasher incremental (new -> update* -> final; final consume el handle).
+    HasherNew,
+    HasherUpdate,
+    HasherFinal,
     Sha256,
     Sha512,
     Sha1,

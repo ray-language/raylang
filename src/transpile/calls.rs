@@ -1952,6 +1952,29 @@ impl Transpiler {
             // por `__` (no interceptar un método de usuario homónimo). El arg `bytes` es `Rc<[u8]>`; `&expr`
             // deref-coerce a `&[u8]`. Retorno `Vec<u8>` → `Rc<[u8]>`; `Option<Vec<u8>>` → `[bytes]` etiquetado
             // (`Rc<RefCell<Vec<Rc<[u8]>>>>`: vacío/único), que el prelude envuelve en `Option`.
+            // M126: hasher incremental — el estado vive en ray_runtime::crypto (el MISMO registro
+            // por-proceso que usa la VM: mismos digests por construcción). Arreglos etiquetados,
+            // como los wrappers de std/crypto esperan.
+            "hasher_new" if name.starts_with("__") && !self.exclude.contains("crypto") => {
+                self.needs_rt_crypto = true;
+                out.push_str("{ match ray_runtime::crypto::hasher_new(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(") { Ok(__rt_id) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(__rt_id.to_string())])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__rt_e)])) } }");
+            }
+            "hasher_update" if name.starts_with("__") && !self.exclude.contains("crypto") => {
+                self.needs_rt_crypto = true;
+                out.push_str("{ match ray_runtime::crypto::hasher_update(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(") { Ok(()) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\")])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__rt_e)])) } }");
+            }
+            "hasher_final" if name.starts_with("__") && !self.exclude.contains("crypto") => {
+                self.needs_rt_crypto = true;
+                out.push_str("{ match ray_runtime::crypto::hasher_final(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(") { Ok(__rt_d) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(__rt_d)])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(__rt_e.into_bytes())])) } }");
+            }
             "sha256" | "sha512" | "sha1" if name.starts_with("__") && !self.exclude.contains("crypto") => {
                 self.needs_rt_crypto = true;
                 write!(out, "Rc::<[u8]>::from(ray_runtime::crypto::{}(&", method).unwrap();

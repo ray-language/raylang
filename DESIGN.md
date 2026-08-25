@@ -10011,3 +10011,29 @@ PROMPT antes de teclear (lo que haría un humano); anotado aquí porque es la tr
 automatización de un programa `raw` (expect-style) va a pisar.
 
 raylang puro (cero opcodes): byte-idéntico en los tres motores por transpilación, como term.width.
+
+## 123. M126 — el hasher incremental: tres apps copiándolo eran suficientes (ago 2026)
+
+El hallazgo de raysync (IDEAS §69.3): TERCERA app copiando el patrón de takeit — sha256 encadenado
+por chunks para hashear archivos grandes sin cargarlos enteros — cada una con su seed/encadenado
+casero e incompatible con las demás. La pieza que faltaba es el digest incremental de verdad.
+
+**Superficie en `std/crypto`** (ciclo `init → hash_update* → hash_final`; `final` CONSUME el
+handle, no hay close): `sha256_init()`/`sha512_init() -> Result<int, string>` ·
+`hash_update(h, chunk) -> Result<int, string>` · `hash_final(h) -> Result<bytes, string>` — el
+digest es IDÉNTICO al de una pasada (`crypto.sha256(todo)`), que es el contrato que las versiones
+caseras rompían entre sí.
+
+**La decisión de diseño**: el estado (el `digest::Context` de ring, que no es serializable) vive
+en un registro por-proceso **en `ray_runtime::crypto`** — compartido por la VM, el intérprete y el
+binario nativo. Un solo código → digests byte-idénticos por construcción, y cero registro paralelo
+por motor (la lección de x509/M124 aplicada de entrada). Los primitivos (`__hasher_new/update/
+final`, tres opcodes) devuelven arreglos etiquetados que el wrapper alza a Result; en nativo el
+intercept es a nivel de primitivo con bloques inline (sin helpers de runtime: la llamada al crate
+es directa). Los tres van en la guardia de cripto-sin-feature (abortan con NET_TLS_UNAVAILABLE,
+como sha256: jamás un digest vacío en silencio).
+
+Verificado byte-idéntico en los CUATRO sabores: vector NIST FIPS 180-4 (`sha256("abc")` troceado
+en dos updates), incremental ≡ una-pasada (sha256 y sha512), y los caminos de error (doble
+`final`, `update` tras `final` → "invalid hasher handle"). Tests en `crypto_hasher_cli.rs`
+(intérprete, VM, nativo E2E; fixture compartida).

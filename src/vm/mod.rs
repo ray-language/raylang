@@ -1849,6 +1849,7 @@ impl<'a> Vm<'a> {
                 // desde su stub (el programa puede hacer fallback, como con sqlite). Con la
                 // feature activa el guard es false constante y el compilador elimina el brazo.
                 OpCode::CryptoRandomBytes | OpCode::Sha256 | OpCode::Sha512 | OpCode::Sha1
+                | OpCode::HasherNew | OpCode::HasherUpdate | OpCode::HasherFinal
                 | OpCode::HmacSha256 | OpCode::Ed25519PublicKey | OpCode::Ed25519Sign
                 | OpCode::Ed25519Verify | OpCode::ChaChaPolySeal | OpCode::ChaChaPolyOpen
                 | OpCode::X25519PublicKey | OpCode::X25519SharedSecret | OpCode::HkdfSha256
@@ -1867,6 +1868,43 @@ impl<'a> Vm<'a> {
                 OpCode::Sha256 => match self.pop() {
                     HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha256(&b))),
                     _ => unreachable!("the checker guarantees bytes"),
+                },
+                // M126: hasher incremental — el estado vive en ray_runtime::crypto (compartido con
+                // el nativo). Arreglos etiquetados; std/crypto los envuelve en Result.
+                OpCode::HasherNew => match self.pop() {
+                    HeapValue::Str(alg) => {
+                        let elems = match ray_runtime::crypto::hasher_new(&alg) {
+                            Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
+                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        };
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    }
+                    _ => unreachable!("the checker guarantees a string"),
+                },
+                OpCode::HasherUpdate => {
+                    let chunk = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Bytes(chunk)) = (handle, chunk) else {
+                        unreachable!("the checker guarantees int, bytes");
+                    };
+                    let elems = match ray_runtime::crypto::hasher_update(handle, &chunk) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::HasherFinal => match self.pop() {
+                    HeapValue::Int(handle) => {
+                        let elems = match ray_runtime::crypto::hasher_final(handle) {
+                            Ok(d) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(d)],
+                            Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                        };
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    }
+                    _ => unreachable!("the checker guarantees an int"),
                 },
                 OpCode::Sha512 => match self.pop() {
                     HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha512(&b))),

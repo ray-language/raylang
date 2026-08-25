@@ -2267,6 +2267,24 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__crypto_random_bytes expects an int (number of bytes), not {}", a[0]))); }
         Ok(Type::Bytes)
     } },
+    // M126: hasher INCREMENTAL (new → update* → final; final consume el handle). Devuelven
+    // arreglos etiquetados que std/crypto envuelve en Result.
+    Builtin { name: "__hasher_new", opcode: OpCode::HasherNew, check: |a| {
+        arity(a, 1, "__hasher_new", " (algorithm)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__hasher_new expects a string (the algorithm), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__hasher_update", opcode: OpCode::HasherUpdate, check: |a| {
+        arity(a, 2, "__hasher_update", " (handle, chunk)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__hasher_update expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__hasher_update expects bytes (the chunk), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__hasher_final", opcode: OpCode::HasherFinal, check: |a| {
+        arity(a, 1, "__hasher_final", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__hasher_final expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
     Builtin { name: "__sha256", opcode: OpCode::Sha256, check: |a| {
         arity(a, 1, "sha256", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 expects bytes, not {}", a[0]))); }

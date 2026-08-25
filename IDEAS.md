@@ -2626,7 +2626,7 @@ reconstrucción verificada + rename, `--watch`, `--delete`).
 2. **[EJECUTADA — M115.3, DESIGN §110: `fs.stat(path)` lstat con kind/mode/size/mtime_ms] `fs` sin metadatos**: ni permisos ni symlinks (solo `is_dir`/`is_file`/`file_size`/`mtime`)
    → un sync fiel (modo rsync -a) es inexpresable; los symlinks ni siquiera se pueden DETECTAR
    (se siguen o se ignoran a ciegas). Candidato: `fs.stat(path) -> {kind, mode, mtime, size}`.
-3. **Sin hasher incremental en `std/crypto`** — tercera app copiando el patrón takeit de
+3. **[EJECUTADA — M126, DESIGN §123: `sha256_init`/`sha512_init` + `hash_update` + `hash_final`]** **Sin hasher incremental en `std/crypto`** — tercera app copiando el patrón takeit de
    sha256 encadenado por chunks para hashear archivos grandes sin cargarlos enteros. Un
    `sha256_init/update/final` (o un `crypto.Hasher`) elimina la variante casera y su
    incompatibilidad mutua (cada app elige su seed/encadenado).
@@ -2764,9 +2764,12 @@ intento vencido falla con `"connect timeout"` en vez de los ~75 s del SO.
 **[EJECUTADA — M125, DESIGN §122]** `term.read_hidden` (§71.1): la passphrase sin eco, con núcleo
 puro probeable sin tty.
 
+**[EJECUTADA — M126, DESIGN §123]** El hasher incremental (§69.3): sha256_init/sha512_init +
+hash_update + hash_final, digest idéntico al de una pasada, estado en el runtime compartido.
+
 **Quedan abiertos** (candidatos, no comprometidos): el **pool/multiplexado de `packages/rpc`**
-(§72.2, secuencial por conexión hoy); hasher incremental de `std/crypto` (§69.3), normalización
-Unicode y `std/mail` (§71.4/§71.5), y los menores de `std` que cada tanda anotó.
+(§72.2, secuencial por conexión hoy); normalización Unicode y `std/mail` (§71.4/§71.5), y los
+menores de `std` que cada tanda anotó.
 
 ## Cómo usar este archivo
 

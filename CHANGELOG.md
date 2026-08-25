@@ -37,6 +37,10 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Hasher incremental en `std/crypto`** (M126) — `sha256_init`/`sha512_init` + `hash_update` +
+  `hash_final`: hashear un archivo grande POR TROZOS sin cargarlo entero, con digest idéntico al
+  de una pasada. El patrón que tres apps copiaban a mano (cada una con su encadenado casero
+  incompatible); el estado vive en el runtime compartido → byte-idéntico en los tres motores.
 - **`term.read_hidden(prompt)`** (M125) — una línea SIN eco para passphrases: prompt a stderr
   (como getpass(3)), Backspace borra un carácter UTF-8 COMPLETO (la versión artesanal que las apps
   copiaban rompía una "ñ" a medias), Ctrl-C cancela con `Err("interrupted")`. Con su núcleo PURO

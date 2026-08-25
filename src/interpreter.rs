@@ -993,6 +993,7 @@ impl<'a> Interpreter<'a> {
                     if !crate::builtins::net_tls_available()
                         && matches!(name.as_str(),
                             "__crypto_random_bytes" | "__sha256" | "__sha512" | "__sha1"
+                            | "__hasher_new" | "__hasher_update" | "__hasher_final"
                             | "__hmac_sha256" | "__ed25519_public_key" | "__ed25519_sign"
                             | "__ed25519_verify" | "__chacha20poly1305_seal"
                             | "__chacha20poly1305_open" | "__x25519_public_key"
@@ -1217,6 +1218,37 @@ impl<'a> Interpreter<'a> {
             // M68.2: aleatoriedad criptográfica (CSPRNG del SO).
             "__crypto_random_bytes" => match &values[0] {
                 Value::Int(n) => Value::Bytes(Rc::new(crate::builtins::crypto_random_bytes(*n))),
+                _ => unreachable!("the checker guarantees an int"),
+            },
+            // M126: hasher incremental (estado en ray_runtime::crypto, compartido con VM/nativo).
+            "__hasher_new" => match &values[0] {
+                Value::Str(alg) => {
+                    let arr = match ray_runtime::crypto::hasher_new(alg) {
+                        Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    };
+                    Value::Array(Rc::new(RefCell::new(arr)))
+                }
+                _ => unreachable!("the checker guarantees a string"),
+            },
+            "__hasher_update" => match (&values[0], &values[1]) {
+                (Value::Int(h), Value::Bytes(chunk)) => {
+                    let arr = match ray_runtime::crypto::hasher_update(*h, chunk) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    };
+                    Value::Array(Rc::new(RefCell::new(arr)))
+                }
+                _ => unreachable!("the checker guarantees int, bytes"),
+            },
+            "__hasher_final" => match &values[0] {
+                Value::Int(h) => {
+                    let arr = match ray_runtime::crypto::hasher_final(*h) {
+                        Ok(d) => vec![Value::Bytes(Rc::new(b"ok".to_vec())), Value::Bytes(Rc::new(d))],
+                        Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
+                    };
+                    Value::Array(Rc::new(RefCell::new(arr)))
+                }
                 _ => unreachable!("the checker guarantees an int"),
             },
             "__sha256" => match &values[0] {

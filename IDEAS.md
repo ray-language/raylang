@@ -2476,6 +2476,10 @@ motores más varios huecos de expresividad. Repros mínimos en `ray-apps/rayrela
    rayrelay lo rodea con fibras lectoras que vierten a canales del mismo tipo y un timer que envía
    `bytes` vacíos para poder entrar al select. Un `select` con timeout o sobre tipos mixtos
    (enum-ificado) cubriría el 90%.
+   - **[PARCIAL — M116, DESIGN §112: `try_recv(ch) -> Received<T>`]** el recv no bloqueante ya está
+     (recepción sin quedarse esperando; `Got`/`Empty`/`Closed`). **PENDIENTE**: `select_timeout`
+     (select con plazo — toca el scheduler M:N: despertar por canal-listo O por deadline; se dejó
+     para hacerlo con cuidado) y el `select` sobre tipos mixtos (enum-ificado en userland por ahora).
 5. **UDP**: confirmada la restricción documentada (recv bloquea TODAS las fibras en ambos motores
    → el respondedor STUN debe ser proceso aparte), y además `recv_from` no tiene timeout (un
    datagrama perdido cuelga al cliente `probe` sin remedio; `timeout_err.ray` muestra que TCP sí

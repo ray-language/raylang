@@ -468,6 +468,11 @@ pub enum OpCode {
     /// canal está cerrado y vacío). Si está vacío y abierto, **bloquea** la fibra; al recibir despierta a
     /// un emisor bloqueado (M12.2). Primitivo `__recv`; el prelude lo envuelve en `Option<T>`. Solo VM.
     ChanRecv,
+    /// M116: recepción NO bloqueante. Saca un canal; empuja el enum del prelude `Received<T>`:
+    /// `Got(v)` si había un valor listo (lo consume y despierta a un emisor bloqueado, como `ChanRecv`),
+    /// `Closed` si el canal está cerrado y vacío, `Empty` si está abierto y vacío. Nunca bloquea.
+    /// Primitivo `try_recv`. Solo VM.
+    ChanTryRecv,
     // (cerrar un canal reusa el opcode `Close` de M11.8, ad-hoc polimórfico: handle de archivo o canal.)
 
     // --- Aserciones (M13.2a) ---

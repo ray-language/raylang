@@ -1642,6 +1642,27 @@ fn main() -> int {
 - `select([ch1, ch2, …]) -> int` — espera al primero listo y devuelve su índice (el menor listo;
   determinista). Sigue con `recv(chs[i])`. Ojo: un canal cerrado queda "listo" para siempre — sácalo de
   la lista.
+- `try_recv(ch) -> Received<T>` — recepción **sin bloquear**, para "haz trabajo O atiende una orden
+  de control, sin quedarte esperando". Distingue los tres estados que `recv` (que bloquea) colapsa:
+
+  ```rust
+  fn main() -> int {
+      let ctrl: Channel<int> = Channel.new();
+      // ... otra fibra manda órdenes por ctrl ...
+      var working = true;
+      while (working) {
+          match (try_recv(ctrl)) {          // Received<int>, no bloquea
+              Received.Got(cmd) => { if (cmd == 0) { working = false; } },
+              Received.Empty => { do_one_unit_of_work(); },   // nada pendiente: sigue currando
+              Received.Closed => { working = false; },        // el emisor cerró: para
+          }
+      }
+      0
+  }
+  ```
+
+  `Received.Got(v)` consume el valor (como `recv`); `Empty` = abierto pero sin nada ahora mismo;
+  `Closed` = cerrado y drenado. Combínalo con `time.sleep` para un sondeo con respiro.
 
 ### Tareas y concurrencia estructurada
 

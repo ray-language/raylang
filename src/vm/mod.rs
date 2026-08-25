@@ -1403,6 +1403,64 @@ impl<'a> Vm<'a> {
                         if !self.poll_next(l, c2)? { self.stop = true; }
                     }
                 }
+                OpCode::ChanTryRecv => {
+                    // M116: recepción NO bloqueante. Réplica de ChanRecv salvo el paso (3): en vez de
+                    // bloquear, un canal abierto y vacío devuelve `Received.Empty`. Cerrado → `Closed`;
+                    // valor en cola o emisor bloqueado → `Got(v)` (drena y despierta al emisor, igual).
+                    let h = self.pop_channel();
+                    let (l, c2) = pos!();
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                    // Handle stale (canal liberado = cerrado y drenado) → Closed, como recv da None.
+                    if sh.chan(h).is_none() {
+                        drop(sh);
+                        self.push_received_unit("Closed", l, c2)?;
+                        return Ok(None);
+                    }
+                    // (1) Valor en la cola.
+                    let from_queue = sh.chan_mut(h).expect("just checked live").queue.pop_front();
+                    if let Some(v) = from_queue {
+                        let ch = sh.chan_mut(h).expect("just checked live");
+                        let ch_heap = std::mem::take(&mut ch.heap);
+                        let v2 = transfer_value(&ch_heap, &mut self.cur.heap, &v, &mut HashMap::new());
+                        let ch = sh.chan_mut(h).expect("just checked live");
+                        if !ch.queue.is_empty() {
+                            ch.heap = ch_heap;
+                        }
+                        if ch.closed && ch.queue.is_empty() {
+                            sh.free_channel(h);
+                        } else {
+                            Self::wake_blocked_sender(&mut sh, h);
+                        }
+                        drop(sh);
+                        self.push_received_got(v2, l, c2)?;
+                        return Ok(None);
+                    }
+                    // (2) Cola vacía: ¿emisor bloqueado? (canal lleno cap > 0, o rendezvous cap = 0).
+                    if let Some(pos) = sh.parked.iter().position(
+                        |p| p.on == h && matches!(p.waiting, Waiting::Send(_)))
+                    {
+                        let parked = sh.parked.remove(pos);
+                        let sv = match parked.waiting {
+                            Waiting::Send(sv) => sv,
+                            _ => unreachable!(),
+                        };
+                        let sv2 = transfer_value(&parked.fiber.heap, &mut self.cur.heap, &sv, &mut HashMap::new());
+                        Self::wake_sender(&mut sh, parked.fiber);
+                        drop(sh);
+                        self.push_received_got(sv2, l, c2)?;
+                        return Ok(None);
+                    }
+                    // (3) Vacío y sin emisores: cerrado → Closed (liberable); abierto → Empty (NO bloquea).
+                    let closed = sh.chan(h).expect("just checked live").closed;
+                    if closed {
+                        sh.free_channel(h);
+                        drop(sh);
+                        self.push_received_unit("Closed", l, c2)?;
+                    } else {
+                        drop(sh);
+                        self.push_received_unit("Empty", l, c2)?;
+                    }
+                }
                 OpCode::TaskJoin => {
                     // Une una tarea (M12.3): si terminó, su valor; si falló, re-lanza; si pendiente, bloquea.
                     // M38.3b paso 3: UN solo guard a través de leer-estado + aparcar (bajo M:N real, leer
@@ -3931,6 +3989,24 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// M116: empuja `Received.Got(v)` (el enum del prelude construido directo, como el FFI con Option).
+    fn push_received_got(&mut self, v: HeapValue, l: usize, c: usize) -> Result<(), RuntimeError> {
+        let (eid, tag) = enum_variant(&self.program.enums, "Received", "Got")
+            .ok_or_else(|| runtime_error(l, c, "the prelude Received enum is not available for try_recv"))?;
+        let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid as u32, tag: tag as u32, payload: vec![v] }));
+        self.cur.stack.push(HeapValue::Obj(h));
+        Ok(())
+    }
+
+    /// M116: empuja `Received.Empty` o `Received.Closed` (variantes sin payload → objeto canónico).
+    fn push_received_unit(&mut self, variant: &str, l: usize, c: usize) -> Result<(), RuntimeError> {
+        let (eid, tag) = enum_variant(&self.program.enums, "Received", variant)
+            .ok_or_else(|| runtime_error(l, c, "the prelude Received enum is not available for try_recv"))?;
+        let h = self.unit_enum(eid, tag);
+        self.cur.stack.push(HeapValue::Obj(h));
+        Ok(())
+    }
+
     /// R7: `(a, b)` como tupla de la VM — un `IntArray` de 2, la misma representación que
     /// construiría `MakeArray` especializado para un literal de tupla de ints.
     #[cfg(all(feature = "regex", not(target_arch = "wasm32")))]
@@ -4110,7 +4186,14 @@ fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
 /// Localiza la variante `variant` del enum `Option` del prelude en la tabla compilada, devolviendo
 /// `(enum_id, tag)` para armar un `VmEnum`. Lo usa el retorno FFI `char*` → `Option` (M41.3).
 fn option_variant(enums: &[crate::bytecode::CompiledEnum], variant: &str) -> Option<(usize, usize)> {
-    let ei = enums.iter().position(|e| e.name == "Option")?;
+    enum_variant(enums, "Option", variant)
+}
+
+/// M116: localiza `(enum_id, tag)` de una variante de un enum del prelude por nombre — el gemelo
+/// de `option_variant` para `Received` (`try_recv`). El runtime construye estos enums directo
+/// (como el FFI construye `Option`), sin pasar por un wrapper raylang.
+fn enum_variant(enums: &[crate::bytecode::CompiledEnum], name: &str, variant: &str) -> Option<(usize, usize)> {
+    let ei = enums.iter().position(|e| e.name == name)?;
     let tag = enums[ei].variants.iter().position(|v| v.name == variant)?;
     Some((ei, tag))
 }

@@ -365,6 +365,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure).",
         "recv" => "Receives from a channel: blocks while it is empty and open; returns `None` once it is closed and drained.",
         "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
+        "try_recv" => "Receives from a channel WITHOUT blocking: `Received.Got(v)` if a value was ready, `Received.Empty` if the channel is open but empty, `Received.Closed` if it is closed and drained.",
         "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
         "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
         // --- I/O ---
@@ -2484,6 +2485,15 @@ static BUILTINS: &[Builtin] = &[
         match &a[0] {
             Type::Array(el) if matches!(&**el, Type::Channel(_)) => Ok(Type::Int),
             other => Err((Some(0), format!("select expects a [Channel<T>], not {}", other))),
+        }
+    } },
+    // M116: try_recv(ch) -> Received<T>: recepción NO bloqueante (Got(v)/Empty/Closed). El retorno
+    // es el enum del prelude parametrizado con el elemento del canal.
+    Builtin { name: "try_recv", opcode: OpCode::ChanTryRecv, check: |a| {
+        arity(a, 1, "try_recv", " (a channel)")?;
+        match &a[0] {
+            Type::Channel(el) => Ok(Type::Enum("Received".to_string(), vec![(**el).clone()])),
+            other => Err((Some(0), format!("try_recv expects a Channel<T>, not {}", other))),
         }
     } },
     // scope(body: fn() -> R) -> R: corre body; al volver, une todas las tareas lanzadas dentro y propaga

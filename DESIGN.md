@@ -9668,3 +9668,34 @@ difieren y el contrato honesto es "algo cambió aquí, re-examina" — byte-iden
 no de plataformas. Wrappers emitidos + intercept a nivel de primitivo (patrón M115.3: el struct
 vive en raylang); `__watch_next(h, ms<=0)` = sin plazo, a diferencia del `StdinReadTimeout`
 (ms 0 = sondeo puro) — lo fija el wrapper, no el usuario.
+
+## 112. M116 — try_recv: recepción de canal sin bloquear (ago 2026)
+
+El dogfood dejó dos huecos de composición canal↔control (IDEAS §64.4, §72.3): no había forma de
+"esperar datos del socket O una orden de control" sin bloquear, y tres apps lo rodearon con fibras
+lectoras que vertían a canales del mismo tipo + un timer que enviaba `bytes` vacíos solo para poder
+entrar al `select`. Las dos primitivas nombradas eran `try_recv` (recepción no bloqueante) y un
+`select` con plazo.
+
+**Se eligió `try_recv` primero, no `select_timeout`.** Un `select` con plazo debe despertar por DOS
+causas —un canal listo (mecanismo `parked` + `wake_select_waiters`) o el vencimiento del plazo
+(mecanismo `io_parked` + barrido de deadlines)— y unificarlas toca el scheduler M:N, código
+concurrente sensible a wakes perdidos. `try_recv` **no bloquea**: escanea y retorna, cero cambios
+en el scheduler. Por foco-producción, la pieza de menor riesgo y mayor cobertura va primero;
+`select_timeout` queda anotado como continuación con el cuidado que merece.
+
+**La forma: `try_recv(ch) -> Received<T>`** con `enum Received<T> { Got(T), Empty, Closed }` en el
+prelude. `recv` bloquea y colapsa a `Option` (None = cerrado); `try_recv` necesita distinguir TRES
+estados —valor listo, vacío pero abierto (reintenta), cerrado y drenado (deja de escuchar)— y un
+`Option` no basta. Precedente del lenguaje: `io.ReadResult { Data | Eof | TimedOut }`. Se descartó
+un `-1`/sentinela (no idiomático) y un `Option<Option<T>>` (ilegible).
+
+Plomería: opcode `ChanTryRecv` que replica los tres primeros pasos de `ChanRecv` (valor en cola →
+emisor bloqueado en rendezvous → estado del canal) pero, en el paso final, un canal abierto y vacío
+devuelve `Empty` en vez de aparcar la fibra. El runtime construye `Received` directo por nombre
+(helper `enum_variant`, generalización de `option_variant`), como el FFI construye `Option`. En el
+nativo, un enum runtime interno `__TryRecv<sendrepr>` que el sitio de llamada mapea a
+`Received<progrepr>` convirtiendo el payload de `Got` igual que `recv` (repr send → programa); las
+ramas `Empty`/`Closed` infieren el tipo de la rama `Got`. El intérprete (oráculo secuencial) lo
+rechaza como el resto de la concurrencia. VM y binario nativo byte-idénticos (Got/Empty/Closed y la
+toma de un emisor en rendezvous verificados en ambos, con tipos primitivo, string y arreglo).

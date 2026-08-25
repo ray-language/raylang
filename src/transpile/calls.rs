@@ -1687,6 +1687,29 @@ impl Transpiler {
                     out.push_str(from_send_map(&elem));
                 }
             }
+            // M116: try_recv(ch) -> Received<T> — recepción no bloqueante. Mapea el __TryRecv interno
+            // (payload en repr SEND) al enum del prelude Received (repr programa): la rama Got convierte
+            // el payload igual que recv; Empty/Closed infieren T de la rama Got.
+            "try_recv" => {
+                self.needs_concurrency = true;
+                let elem = match self.type_of(eff[0])? {
+                    Type::Channel(t) => (*t).clone(),
+                    other => return Err(format!("try_recv on {:?} is not supported", other)),
+                };
+                out.push_str("{ match ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".try_recv() { __TryRecv::Got(__rt_x) => Rc::new(Received::Got(");
+                if send_is_tree(&elem) {
+                    out.push_str(&self.from_send_expr(&elem, "__rt_x")?);
+                } else {
+                    match normalize_type(&elem) {
+                        Type::String => out.push_str("Rc::<str>::from(&*__rt_x)"),
+                        Type::Bytes => out.push_str("Rc::<[u8]>::from(&*__rt_x)"),
+                        _ => out.push_str("__rt_x"),
+                    }
+                }
+                out.push_str(")), __TryRecv::Empty => Rc::new(Received::Empty), __TryRecv::Closed => Rc::new(Received::Closed) } }");
+            }
             // signals() -> Channel<int>: canal de señales del SO (SIGTERM/SIGINT), singleton (self-pipe).
             "signals" => {
                 self.needs_concurrency = true;

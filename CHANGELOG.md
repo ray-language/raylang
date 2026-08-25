@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Concurrencia: `try_recv` — recepción de canal sin bloquear** (M116, IDEAS §64) — la pieza que
+  tres apps rodearon con fibras lectoras + timers que enviaban bytes vacíos. `try_recv(ch)`
+  devuelve el enum del prelude `Received<T>` (`Got(v)` / `Empty` / `Closed`), distinguiendo los
+  tres estados que `recv` (que bloquea) colapsa a `Option`. Permite "haz trabajo O atiende una
+  orden de control sin quedarte esperando" en una sola fibra. Solo VM/nativo (como el resto de la
+  concurrencia); byte-idéntico entre ambos, con la misma conversión de valor que `recv`.
+
 - **`std/fs`: watch de filesystem por eventos de kernel** (M115.4, IDEAS §69) — la pieza que
   CINCO apps reimplementaban sondeando mtimes (ray dev, raycode-dev, raylogs `--follow`, raysync
   `--watch`, raysite serve). `fs.watch(path)` (directorio → recursivo) + `fs.next_event(h)` — la

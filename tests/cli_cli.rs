@@ -3478,3 +3478,41 @@ fn build_native_close_wakes_a_parked_socket_reader() {
     let status = srv.wait().expect("el proceso termina");
     assert_eq!(status.code(), Some(0), "termina limpio, no colgado");
 }
+
+#[test]
+fn build_native_try_recv_matches_the_vm() {
+    // M116: `ray build --native` de un programa con try_recv (recepción no bloqueante). El enum del
+    // prelude Received se construye en el nativo (Got convierte el payload de la repr send) igual que
+    // en la VM. Salida determinista: Empty (vacío), Got tras send, Empty, Closed tras close.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native try_recv: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_try_recv");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn describe(r: Received<int>) -> string {\n\
+           match (r) { Received.Got(v) => \"got \" + to_string(v), Received.Empty => \"empty\", Received.Closed => \"closed\" }\n\
+         }\n\
+         fn main() -> int {\n\
+           let ch: Channel<int> = Channel.bounded(4);\n\
+           print(describe(try_recv(ch)));\n\
+           send(ch, 42);\n\
+           print(describe(try_recv(ch)));\n\
+           print(describe(try_recv(ch)));\n\
+           close(ch);\n\
+           print(describe(try_recv(ch)));\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native try_recv ok\n{err}");
+
+    let expected = "empty\ngot 42\nempty\nclosed\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da try_recv");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "nativo ≡ VM");
+}

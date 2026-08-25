@@ -1489,7 +1489,12 @@ impl Transpiler {
             // idéntico observable, sin el buffer n/2 del estable). El `sort` genérico (tipos de
             // usuario, estabilidad observable) sigue en `__ray_sort` estable.
             "sort" => {
-                out.push_str("__ray_sort(&");
+                // IDEAS §63: [float] no puede ir por __ray_sort (f64 no es Ord en Rust → E0277 en
+                // el build del usuario). Va por __ray_sort_float: el merge del prelude con `<`,
+                // byte-idéntico a la VM incluso con NaN.
+                let is_float =
+                    matches!(self.type_of(eff[0])?, Type::Array(ref e) if matches!(**e, Type::Float));
+                out.push_str(if is_float { "__ray_sort_float(&" } else { "__ray_sort(&" });
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
@@ -1749,10 +1754,19 @@ impl Transpiler {
                     ExprKind::Func(fnexpr) => self.enter_cells(&fnexpr.body),
                     _ => Vec::new(),
                 };
+                // IDEAS §68: el cuerpo LITERAL se emite como closure inmediatamente invocado
+                // `(|| { … })()` — un `return` del usuario retorna de ESA frontera con el tipo
+                // raylang, y la conversión Send se aplica al resultado. Sin la frontera, `return;`
+                // fija `()` como retorno del closure de hilo y choca con la cola `__RaySend::U`
+                // (E0308); lo mismo pasaba con `return s;` (Rc<str>) frente a la cola Arc<str>.
                 if send_is_tree(&wrap) && method == "spawn" {
                     let mut tmp = String::new();
                     match &eff[0].kind {
-                        ExprKind::Func(fnexpr) => self.emit_block(&mut tmp, &fnexpr.body)?,
+                        ExprKind::Func(fnexpr) => {
+                            tmp.push_str("(|| ");
+                            self.emit_block(&mut tmp, &fnexpr.body)?;
+                            tmp.push_str(")()");
+                        }
                         _ => write!(tmp, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
                     }
                     let conv = self.to_send_expr(&wrap, "__rt_r")?;
@@ -1764,9 +1778,16 @@ impl Transpiler {
                         _ => ("", ""),
                     };
                     out.push_str(pre);
+                    let iife = !pre.is_empty() && matches!(&eff[0].kind, ExprKind::Func(_));
+                    if iife {
+                        out.push_str("(|| ");
+                    }
                     match &eff[0].kind {
                         ExprKind::Func(fnexpr) => self.emit_block(out, &fnexpr.body)?,
                         _ => write!(out, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
+                    }
+                    if iife {
+                        out.push_str(")()");
                     }
                     out.push_str(suf);
                 }

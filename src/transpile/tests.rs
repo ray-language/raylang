@@ -1260,3 +1260,54 @@ fn transpiles_input_io() {
     assert!(rust.contains("std::io::stdin().read_line("), "input/read_int leen stdin: {}", rust);
     assert!(rust.contains("trim_end_matches"), "quita el salto de línea como la VM: {}", rust);
 }
+
+#[test]
+fn sorts_float_arrays_without_the_ord_bound() {
+    // IDEAS §63: f64 no es `Ord` en Rust → `sort([float])` por __ray_sort rompía el `cargo build`
+    // del usuario (E0277). El caso float va por __ray_sort_float (el merge del prelude con `<`,
+    // paridad NaN con la VM); los demás tipos siguen en __ray_sort.
+    let floats = transpile_src("fn main() { print(sort([3.5, 1.2, 2.7])); }");
+    assert!(floats.contains("__ray_sort_float(&"), "float va por el helper propio: {}", floats);
+    let ints = transpile_src("fn main() { let s = sort([\"b\", \"a\"]); print(s); }");
+    assert!(!ints.contains("__ray_sort_float(&"), "no-float sigue en __ray_sort: {}", ints);
+}
+
+#[test]
+fn spawn_body_with_return_gets_its_own_boundary() {
+    // IDEAS §68: `return;` dentro del literal de spawn fijaba `()` como retorno del closure de
+    // hilo y chocaba con la cola de conversión Send (`__RaySend::U` → E0308). El cuerpo se emite
+    // como closure inmediatamente invocado: el return retorna de esa frontera y la conversión se
+    // aplica al resultado. Cubre unit (tree), string (Arc) y compuesto (tree).
+    let unit = transpile_src(
+        "fn main() { let t = spawn(fn() { while (true) { return; } }); join(t); }",
+    );
+    assert!(unit.contains("(|| "), "el cuerpo va en un IIFE: {}", unit);
+    assert!(unit.contains("__RaySend::U"), "la conversión Send sigue fuera: {}", unit);
+    let s = transpile_src(
+        "fn main() { let t = spawn(fn() -> string { if (true) { return \"a\"; } return \"b\"; }); print(join(t)); }",
+    );
+    assert!(s.contains("Arc::<str>::from(&*(|| "), "string convierte el resultado del IIFE: {}", s);
+}
+
+#[test]
+fn hoists_composite_literal_args_to_temporaries() {
+    // IDEAS §64 — clase RefCell-en-args en LITERALES compuestos: `E.V(b.n, f(b))` (y struct/
+    // arreglo/tupla/map) mantenía vivo el guard del borrow() de `b.n` mientras evaluaba `f(b)`;
+    // si f muta el struct (borrow_mut), panic "already borrowed" en nativo (la VM evalúa y ya).
+    // Con 2+ exprs, cada valor se iza a un `let` (los guards mueren entre args, mismo orden).
+    let enum_lit = transpile_src(
+        "enum E { V(int, int) }\n\
+         fn main() { let e = E.V(1, 2); print(0); }",
+    );
+    assert!(enum_lit.contains("let __rt_a0"), "variante 2+ args iza: {}", enum_lit);
+    let struct_lit = transpile_src(
+        "struct P { a: int, b: int }\n\
+         fn main() { let p = P { a: 1, b: 2 }; print(p.a); }",
+    );
+    assert!(struct_lit.contains("let __rt_a0"), "struct 2+ campos iza: {}", struct_lit);
+    let arr = transpile_src("fn main() { print([1, 2]); }");
+    assert!(arr.contains("let __rt_a0"), "arreglo 2+ elems iza: {}", arr);
+    // 1 solo elemento: sin izado (no hay arg posterior que pueda chocar con el guard).
+    let single = transpile_src("fn main() { print([7]); }");
+    assert!(single.contains("vec![7i64]"), "1 elem se emite directo, sin izar: {}", single);
+}

@@ -163,6 +163,28 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // el buffer n/2 del sort estable (4 MB en 1M de ints). Los tipos de usuario siguen en __ray_sort.
     out.push_str("fn __ray_sort_unstable<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");
     out.push_str("    let mut v = a.borrow().clone(); v.sort_unstable(); Rc::new(std::cell::RefCell::new(v))\n}\n");
+    // IDEAS §63: `sort([float])` — f64 no es `Ord` en Rust, así que __ray_sort no compila. La VM lo
+    // enruta por el merge sort del prelude (NaN queda fuera de __sort_prim a propósito): aquí se
+    // replica EXACTAMENTE ese merge bottom-up estable comparando con `<` — paridad byte-idéntica
+    // incluso con NaN, cosa que `total_cmp`/`sort_by` con orden no-total no garantizarían.
+    out.push_str("fn __ray_sort_float(a: &Rc<std::cell::RefCell<Vec<f64>>>) -> Rc<std::cell::RefCell<Vec<f64>>> {\n");
+    out.push_str("    let mut src = a.borrow().clone(); let n = src.len(); let mut width = 1;\n");
+    out.push_str("    while width < n {\n");
+    out.push_str("        let mut dst = Vec::with_capacity(n); let mut lo = 0;\n");
+    out.push_str("        while lo < n {\n");
+    out.push_str("            let mid = (lo + width).min(n); let hi = (lo + 2 * width).min(n);\n");
+    out.push_str("            let (mut p, mut q) = (lo, mid);\n");
+    out.push_str("            while p < mid || q < hi {\n");
+    out.push_str("                if p >= mid { dst.push(src[q]); q += 1; }\n");
+    out.push_str("                else if q >= hi { dst.push(src[p]); p += 1; }\n");
+    out.push_str("                else if src[q] < src[p] { dst.push(src[q]); q += 1; }\n");
+    out.push_str("                else { dst.push(src[p]); p += 1; }\n");
+    out.push_str("            }\n");
+    out.push_str("            lo += 2 * width;\n");
+    out.push_str("        }\n");
+    out.push_str("        src = dst; width *= 2;\n");
+    out.push_str("    }\n");
+    out.push_str("    Rc::new(std::cell::RefCell::new(src))\n}\n");
     // keys()/values() ORDENADAS por clave (determinista, como la VM). values() en el orden de keys().
     out.push_str("fn __ray_keys<K: Ord + Clone, V>(m: &Rc<std::cell::RefCell<__RayMap<K, V>>>) -> Rc<std::cell::RefCell<Vec<K>>> {\n");
     out.push_str("    let b = m.borrow(); let mut ks: Vec<K> = b.keys().cloned().collect(); ks.sort();\n");
@@ -307,7 +329,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         } else {
             ""
         };
-        write!(out, "fn __ray_close(h: i64) -> i64 {{ __ray_reg().lock().unwrap().open.remove(&h); {sock_evict}{tls_evict}0 }}\n").unwrap();
+        // IDEAS §64: si el handle era un socket TCP, `shutdown(Both)` tras sacarlo del registro —
+        // otra fibra puede retener su propio Arc del stream (clonado en su ctx o vivo dentro de un
+        // read aparcado), y sin el shutdown el close era un no-op silencioso: ni FIN al peer ni
+        // despertar del lector. Con él, el fd queda legible (EOF) → el reactor despierta al lector,
+        // que re-verifica el registro y devuelve Err("invalid handle: h"), como la VM. Las entradas
+        // viejas en cachés de OTRAS fibras quedan inertes (los ids nunca se reasignan).
+        write!(out, "fn __ray_close(h: i64) -> i64 {{ let __e = __ray_reg().lock().unwrap().open.remove(&h); if let Some(__RayHandle::Tcp(s)) = __e {{ let _ = s.shutdown(std::net::Shutdown::Both); }} {sock_evict}{tls_evict}0 }}\n").unwrap();
     }
     // Ops de archivo (open/read_line/write) — solo si se usan handles de archivo.
     if t.needs_handles {
@@ -457,6 +485,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // pila propia (docs/diseno-concurrencia-nativa.md §3c).
         // No es reentrante a propósito: no hay `socket_read` anidado dentro de otro en el mismo hilo.
         out.push_str("thread_local! { static __RAY_RDBUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 65536]); }\n");
+        // IDEAS §64: ¿sigue el handle en el registro? Lo consultan las lecturas SOLO en EOF y al
+        // despertar de un park (nunca en el camino caliente con datos): un close cross-fibra ya
+        // hizo shutdown del fd (ver __ray_close) y este re-chequeo convierte ese despertar en
+        // Err("invalid handle: h") — byte-idéntico a la VM — en vez de un Ok("") ambiguo o un
+        // re-park eterno.
+        out.push_str("fn __ray_handle_open(h: i64) -> bool { __ray_reg().lock().unwrap().open.contains_key(&h) }\n");
         if t.fibers {
             // F2: lectura no-bloqueante que APARCA LA FIBRA en WouldBlock. El intento va dentro del
             // préstamo de __RAY_RDBUF y el park FUERA (una fibra puede reanudar en otro worker; el
@@ -464,17 +498,23 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // socket no-bloqueante SO_RCVTIMEO es inerte → plazo total por lectura contra el ctx
             // (rd_to), vencimiento = Err("read timeout"), byte-idéntico a la VM (READ_TIMEOUT_MSG).
             // EINTR también aparca: si había datos, el readiness dispara de inmediato.
+            // §64: el intento de lectura devuelve además `n` — en EOF (n == 0) y antes de aparcar
+            // se re-verifica el registro (__ray_handle_open): un close cross-fibra → Err("invalid
+            // handle"), como la VM. El camino caliente (n > 0) no toca el lock global.
             let read_loop = |ok_expr: &str| {
                 format!(
-                    "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*s);\n    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    loop {{\n        let res = __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{\n            Ok(n) => Some(Ok({ok_expr})),\n            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n            Err(e) => Some(Err(Rc::<str>::from(e.to_string()))) }} }});\n        if let Some(v) = res {{ return v; }}\n        let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"read timeout\")); }} rem }} }};\n        if ray_runtime::fibers::wait_readable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"read timeout\")); }}\n    }}\n}}\n"
+                    "    let fd = std::os::fd::AsRawFd::as_raw_fd(&*s);\n    let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n    let dl = if to > 0 {{ Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) }} else {{ None }};\n    loop {{\n        let res = __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{\n            Ok(n) => Some((n, Ok({ok_expr}))),\n            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n            Err(e) => Some((1, Err(Rc::<str>::from(e.to_string())))) }} }});\n        if let Some((n, v)) = res {{\n            if n == 0 && !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n            return v;\n        }}\n        if !__ray_handle_open(h) {{ return Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))); }}\n        let ms = match dl {{ None => 0, Some(d) => {{ let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 {{ return Err(Rc::<str>::from(\"read timeout\")); }} rem }} }};\n        if ray_runtime::fibers::wait_readable_timeout(fd, ms) {{ return Err(Rc::<str>::from(\"read timeout\")); }}\n    }}\n}}\n"
                 )
             };
             write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())")).unwrap();
             write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{\n    {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s;\n{}", read_loop("Rc::<[u8]>::from(&buf[..n])")).unwrap();
             write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{\n    {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s;\n    let fd = std::os::fd::AsRawFd::as_raw_fd(&*s); let mut off = 0;\n    while off < bytes.len() {{ match w.write(&bytes[off..]) {{\n        Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")),\n        Ok(n) => off += n,\n        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_writable(fd),\n        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {{}}\n        Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }}\n    Ok(bytes.len() as i64)\n}}\n").unwrap();
         } else {
-            write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
-            write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
+            // §64 (también en hilo-por-tarea): en EOF se re-verifica el registro — un close desde
+            // otra tarea hizo shutdown del fd (el read bloqueado despierta con Ok(0)) y debe
+            // reportarse como Err("invalid handle"), no como un fin de stream normal.
+            write!(out, "fn __ray_socket_read(h: i64) -> Result<Rc<str>, Rc<str>> {{ use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<str>::from(String::from_utf8_lossy(&buf[..n]).into_owned())), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
+            write!(out, "fn __ray_socket_read_bytes(h: i64) -> Result<Rc<[u8]>, Rc<str>> {{ {tls_rdb}use std::io::Read; let s = __ray_sock_clone(h)?; let mut r = &*s; __RAY_RDBUF.with(|__b| {{ let mut buf = __b.borrow_mut(); match r.read(&mut buf[..]) {{ Ok(0) if !__ray_handle_open(h) => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))), Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) => Err(Rc::<str>::from(e.to_string())) }} }}) }}\n").unwrap();
             write!(out, "fn __ray_socket_write(h: i64, bytes: &[u8]) -> Result<i64, Rc<str>> {{ {tls_wr}use std::io::Write; let s = __ray_sock_clone(h)?; let mut w = &*s; let mut off = 0; while off < bytes.len() {{ match w.write(&bytes[off..]) {{ Ok(0) => return Err(Rc::<str>::from(\"the connection closed during the write\")), Ok(n) => off += n, Err(e) => return Err(Rc::<str>::from(e.to_string())) }} }} Ok(bytes.len() as i64) }}\n").unwrap();
         }
         out.push_str(concat!(

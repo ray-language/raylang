@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El ecosistema instalable: los seis paquetes espejados** (M135b) — `ray add
+  net|db|web|rpc|tz|cron` funciona desde cualquier proyecto contra `ray-index`, con transitivas
+  resolviendo solas (las path-deps entre hermanos se reescriben a git pinneado en el espejo).
+  De paso: `cron` declara al fin su dependencia de `tz`, y el check de `ray registry publish`
+  valida con una entrada sintética que IMPORTA la cara (la geometría real del consumidor —
+  cazado porque el `fn send` privado de `db/postgres`, legal para todo consumidor, fallaba en
+  falso como redefinición de builtin).
 - **El piloto de espejos de paquetes** (M135) — decisión de forma del ecosistema: los paquetes
   viven en el monorepo (fuente de verdad, tándem con el lenguaje) y se PUBLICAN como espejos de
   solo-lectura en `github.com/ray-language` con tag inmutable por versión + entrada con hash en

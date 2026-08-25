@@ -6,7 +6,7 @@ sobre `std/net` + `std/json`. Para interop externo *entrante* ya está el webser
 esto es para hablar servicio-a-servicio con id, deadline y trace en el sobre.
 
 Tier 2 del ecosistema (paquete adicional, como `net`/`db`; política de tiers en DESIGN §53). Se
-consume por dependencia de ruta/git en `ray.toml`:
+declara en `ray.toml` (por ruta en el monorepo; git desde el espejo publicado):
 
 ```toml
 [dependencies]

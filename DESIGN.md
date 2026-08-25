@@ -10318,3 +10318,43 @@ queda para la generalización). Piezas:
 
 Generalizar a los seis paquetes (net, db, web, tz, cron — `web` exige resolver la reescritura de
 su path-dep a `net`) queda como siguiente paso del arco, a demanda.
+
+## 133. M135b — todos los paquetes espejados: el ecosistema instalable (ago 2026)
+
+La generalización del piloto (§132) a los seis paquetes, en orden de dependencias: `tz` y `net`
+(autónomos) → `cron` y `db` → `web`. Todos viven ahora como espejos en la organización con tag
+`v0.1.0` y entrada con hash en `ray-index`: **`ray add net|db|web|rpc|tz|cron` funciona desde
+cualquier proyecto**, con las transitivas resolviendo solas (el e2e live descarga `db` por
+nombre y verifica que `net` llega al lockfile transitivamente).
+
+Lo que la generalización destapó (tres cosas, las tres arregladas):
+
+- **`cron` no declaraba su dependencia de `tz`** — `cron/local.ray` importa `tz/tz` y funcionaba
+  de casualidad porque los consumidores añadían ambos como path-deps hermanas. En el espejo eso
+  es una mentira: la dep va declarada (path en el monorepo, git en el espejo).
+- **Reescritura path→git en el script**: las path-deps entre hermanos (`net = "path:../net"`)
+  se reescriben en el espejo a `git+https://…/net@vX.Y.Z` (pinneadas al tag de la versión actual
+  del hermano) — el espejo debe ser autocontenido. El publish de `db` valida la reescritura DE
+  VERDAD: su check semántico descarga `net` desde la org.
+- **Segunda geometría falsa del publish** (pareja del fix M134): la cara se cargaba COMO entrada
+  → los módulos del paquete llegaban con nombres pelados (no namespacados) y la regla de
+  redefinición-de-builtin (que exime `M::f`) fallaba en falso — el `fn send` privado de
+  `db/postgres` es legal para todo consumidor real. Ahora el check valida con una **entrada
+  sintética que importa la cara** (`import db/postgres;`): exactamente lo que un consumidor ve,
+  sin geometrías inventadas.
+
+**M135c — el README del espejo es para el consumidor público**: el README copiado del monorepo
+enseñaba la path-dep local ("db = \"path:../ruta/a/packages/db\"") — correcto para el
+desarrollo, mentira para quien llega al repo publicado. `transform_readme` en el script: (1)
+antepone el bloque de instalación (índice + `ray add` + la dep git directa) y el aviso de espejo
+de solo lectura; (2) reescribe las líneas de dep por ruta a su URL git pinneada (comentarios de
+cola preservados); (3) etiqueta los fences ```raylang como ```rust — GitHub aún no reconoce el
+lenguaje (cuando la gramática de ray-language/raylang-grammar entre a linguist, sobra). El modo
+`--refresh-readme` re-genera SOLO el README de main en espejos ya publicados sin tocar tags (el
+hash del índice verifica el contenido del TAG: es seguro); los seis quedaron refrescados.
+
+Operativa del script endurecida por el accidente del estreno: el run de `net` falló a medias
+(espejo empujado, índice sin entrada) porque `tools/publish-packages.sh` prefería
+`target/release/ray` — un binario RANCIO sin los fixes. Ahora elige el binario **más fresco** de
+los dos perfiles, y la inmutabilidad se decide por el ÍNDICE (no por el tag): un tag remoto sin
+entrada = run interrumpido → se REANUDA publicando solo la entrada del contenido ya etiquetado.

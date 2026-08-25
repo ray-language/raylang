@@ -3,3 +3,9 @@
 [package]
 name = "cron"
 version = "0.1.0"
+entry = "cron.ray"
+
+# cron/local (cron en hora LOCAL) importa tz/tz: la dependencia va declarada (M135b — antes
+# funcionaba de casualidad porque tz vive al lado como path-dep del consumidor).
+[dependencies]
+tz = "path:../tz"

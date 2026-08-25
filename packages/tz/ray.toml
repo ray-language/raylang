@@ -3,3 +3,4 @@
 [package]
 name = "tz"
 version = "0.1.0"
+entry = "tz.ray"

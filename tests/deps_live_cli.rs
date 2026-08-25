@@ -140,6 +140,56 @@ fn main() -> int {
 }
 "#;
 
+/// M135b (todos los paquetes espejados): dependencia TRANSITIVA real — `ray add db` descarga
+/// `db` del espejo y su dep reescrita (`net = git+https://…/net@v0.1.0`) arrastra `net` de la
+/// org; el e2e usa `db/bson` (que importa `net/time` transitivamente): roundtrip encode/decode.
+#[test]
+#[ignore]
+fn real_db_package_transitive_net() {
+    if !net_available() {
+        eprintln!("saltando: sin red o GitHub inaccesible");
+        return;
+    }
+    let dir = project(
+        "db",
+        "[package]\nname = \"live\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"git+https://github.com/ray-language/ray-index@main\"\n",
+        DB_MAIN,
+    );
+    let (out, err, code) = ray(&dir, &["add", "db"]);
+    assert_eq!(code, 0, "ray add db contra el índice\n{out}{err}");
+    let (out, err, code) = ray(&dir, &["run"]);
+    assert_eq!(code, 0, "e2e bson sobre el paquete espejado (+ net transitivo)\n{out}{err}");
+    assert!(out.contains("bson roundtrip mundo"), "el roundtrip responde\n{out}");
+    let lock = std::fs::read_to_string(dir.join("ray.lock")).unwrap();
+    assert!(
+        lock.contains("https://github.com/ray-language/net"),
+        "net llegó TRANSITIVAMENTE al lock\n{lock}"
+    );
+}
+
+const DB_MAIN: &str = r#"import db/bson;
+from db/bson import Bson;
+
+fn main() -> int {
+    let doc = [bson.field("saludo", Bson.Str("mundo"))];
+    match (bson.decode(bson.encode(doc))) {
+        Result.Ok(fields) => {
+            match (bson.get(fields, "saludo")) {
+                Option.Some(v) => {
+                    match (v) {
+                        Bson.Str(s) => print("bson roundtrip " + s),
+                        _ => print("unexpected shape"),
+                    }
+                },
+                Option.None => print("missing field"),
+            }
+        },
+        Result.Err(e) => print("decode err " + e),
+    }
+    0
+}
+"#;
+
 /// Resolución POR NOMBRE contra el índice remoto real: `ray add greeting` elige la última
 /// versión publicada (1.0.1, la de URL https) y la descarga verificando el hash del índice.
 #[test]

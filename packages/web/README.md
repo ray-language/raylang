@@ -1,8 +1,9 @@
 # `web` — el framework web de aplicación (M93)
 
 Framework estilo **Express** escrito en raylang puro sobre `net/webserver` (el servidor HTTP de
-producción, M56). Promovido desde `examples/web/framework.ray`; **solo VM** (el servidor cede
-fibras). Guía completa: [`docs/web-framework.md`](../../docs/web-framework.md).
+producción, M56). Promovido desde `examples/web/framework.ray`; corre en la **VM y en el binario
+nativo** (el servidor cede fibras; el intérprete no las tiene). Guía completa:
+[`docs/web-framework.md`](../../docs/web-framework.md).
 
 ```raylang
 from web/framework import new_app, GET, listen, static_files, log_requests, text, Ctx, Res;

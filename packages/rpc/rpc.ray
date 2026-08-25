@@ -17,7 +17,8 @@
 // Deadline: `call_deadline` acota la ESPERA de la respuesta vía el read-timeout del socket y
 // viaja en la petición (el handler lo ve en `Req.deadline_ms` y puede recortarse). Ojo: un
 // deadline vencido deja la conexión desincronizada (la respuesta tardía quedaría en el buffer)
-// → tras un timeout, `disconnect` y reconectar. Solo VM (fibras), como el webserver.
+// → tras un timeout, `disconnect` y reconectar. VM y nativo (fibras en ambos; el intérprete no
+// tiene concurrencia), como el webserver — verificado en producción por rayq (~7k RPC/s nativo).
 import std/net;
 import std/time;
 from std/json import parse, stringify, Json;
@@ -257,7 +258,7 @@ fn handle_rpc(conn: int, handler: fn(Req) -> Result<Json, string>, limits: Limit
 /// RPC server: listens on `host:port` and runs each connection in its own fiber (sequential
 /// requests per connection). The handler maps a `Req` to `Ok(Json)` (→ `ok` on the wire) or
 /// `Err(msg)` (→ `err`); a panicking handler answers `err` without killing the connection.
-/// Prints "rpc escuchando en el puerto N". Blocks forever; VM only.
+/// Prints "rpc escuchando en el puerto N". Blocks forever; VM and native (needs fibers).
 pub fn serve(
     host: string,
     port: int,
@@ -283,7 +284,7 @@ pub fn serve_shutdown(
 
 /// The production pattern: `serve` wired to OS signals (`signals()`). On SIGTERM/SIGINT it
 /// stops accepting, drains in-flight connections for up to `drain_ms` ms and returns Ok(0).
-/// Unix + VM only.
+/// Unix; VM and native.
 pub fn serve_graceful(
     host: string,
     port: int,

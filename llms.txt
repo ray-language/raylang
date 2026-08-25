@@ -25,6 +25,14 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   `x |> f(a)` ≡ `f(x, a)` (lowest precedence, left-associative).
 - Struct fields end with a comma; struct literals are `Name { field: value }`.
 - `main` returns `int` (the process exit code) or unit.
+- Patterns are shallow: NO literals inside variant patterns (`Option.Some(true)` is a
+  syntax error) and NO nested qualified patterns (`Option.Some(mod.Enum.V(x))`) — bind a
+  name (`Option.Some(v)`) and match again. Qualified patterns themselves are fine:
+  `json.Json.JObject(m)` works, and so do qualified types in signatures (`regex.Regex`).
+- Top-level bindings are `const` only — there is NO top-level `var` (no global mutable
+  flags; keep mutable state in `main` or an actor fiber).
+- Integer literals: decimal or `0xFF` / `0o755` / `0b1010`. String/char escapes include
+  `\0`, `\xNN` and `\u{1F600}`.
 
 ## Canonical forms (from the LSP snippet catalog)
 
@@ -118,15 +126,17 @@ pub fn api() -> int { 1 }            // pub = exported; private by default
 A long `from … import` may be split across lines (a trailing comma is allowed); `ray fmt`
 keeps it on one line if it fits in 100 columns and wraps it one name per line if not.
 
-One file = one module. Types cross modules with `pub` + `from M import Type`. A
+One file = one module. Types cross modules with `pub` + `from M import Type` (or use
+them qualified: `regex.Regex` in a signature, `json.Json.JObject(m)` in a pattern). A
 `dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
 are private. Inside a module, calls to its own functions and UFCS both resolve
-module-locally.
+module-locally. Path dependencies from `ray.toml` import by dir/leaf: `import rpc/rpc;`
+(the package dir, then the module file) — NOT `import rpc;` unless it has a `mod.ray`.
 
-## Concurrency (CSP; VM only)
+## Concurrency (CSP; VM and native binaries — the interpreter has no fibers)
 
 ```raylang
-let ch: Channel<int> = Channel.new();            // annotate; Channel.new(n) = bounded
+let ch: Channel<int> = Channel.new();            // annotate; Channel.bounded(n) = bounded
 spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 if let Option.Some(v) = recv(ch) { print(v); }   // recv -> Option<T> (None = closed)
 
@@ -135,28 +145,49 @@ let r = scope(fn() -> int {                      // structured: scope joins its 
     join(t)                                      // try_join(t) -> Result<T, string>
 });
 select(chs)                                      // -> index of the first ready channel
+select_timeout(chs, ms)                          // -> Option<int>; None = deadline hit
+match (try_recv(ch)) {                           // non-blocking receive
+    Received.Got(v) => print(v),
+    Received.Empty => print("nothing yet"),
+    Received.Closed => print("done"),
+}
 ```
 
 Fibers have isolated heaps: values sent over channels are deep-copied; share state by
 giving it to ONE owner fiber (an actor) and talking to it via channels.
 
-## Stdlib map
+## Stdlib map — three calling conventions (getting this wrong = 'not declared')
 
-Global builtins (no import): `print eprint to_string len panic assert assert_eq` ·
-string: `trim split chars contains replace starts_with ends_with to_upper to_lower
-substring repeat index_of join parse_int parse_float to_bytes` · arrays: `push pop
-reverse contains position sort map filter fold iter` (and `a + b` concatenates) ·
-bytes: `bytes_of sub_bytes from_utf8` · `Map<K,V>`: `Map.new insert get remove
-contains_key keys values` · math: `sqrt pow floor ceil round abs min max` · process/io:
-`args env input read_file write_file exists` · crypto (ring + x25519-dalek): `sha256 sha512
-hmac_sha256 ed25519_* chacha20poly1305_seal/open random_bytes` · key agreement:
-`x25519_public_key`/`x25519_shared_secret` (seed-shaped 32 B secrets; raw DH → always
-`hkdf_sha256` before AEAD) · `hkdf_sha256(salt, ikm, info, len)` · `constant_time_eq`.
+1. **Free global builtins** (no import, called free-form): `print eprint to_string
+   panic assert assert_eq args env input parse_int parse_float from_utf8 bytes_of
+   sort get char_code char_from_code try_call` and the concurrency set (`spawn send
+   recv try_recv join try_join scope select select_timeout close signals`).
+2. **Method builtins** (RECEIVER form ONLY — the free form is `function 'x' not
+   declared`): strings `s.len() s.trim() s.split(",") s.chars() s.contains(x)
+   s.replace(a, b) s.starts_with(p) s.ends_with(p) s.to_upper() s.to_lower()
+   s.substring(i, j) s.repeat(n) s.index_of(x) s.to_bytes()` · arrays `xs.len()
+   xs.push(v) xs.pop() xs.reverse() xs.contains(v) xs.position(v) xs.map(f)
+   xs.filter(f) xs.fold(z, f) xs.iter()` (and `a + b` concatenates) · `Map<K,V>`
+   `Map.new()` then `m.insert(k, v) m.remove(k) m.contains_key(k) m.keys()
+   m.values()` — but reading is the FREE `get(m, k) -> Option<V>` · bytes
+   `b.len() b.sub_bytes(i, j)`. (`sort(xs)` is free, so `xs.sort()` also works.)
+3. **Modules, called QUALIFIED after import** — math, crypto, fs, net, time, random
+   are NOT globals: `import std/math; math.sqrt(2.0)` (`pow floor ceil round abs
+   min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*
+   crypto.chacha20poly1305_seal/open crypto.random_bytes crypto.x25519_public_key/
+   x25519_shared_secret` (raw DH → always `crypto.hkdf_sha256` before AEAD) ·
+   `fs.read_file(p) fs.write_file(p, s) fs.exists(p)` · `time.now() time.sleep(ms)` ·
+   `random.below(n)`.
 
-Import-on-demand modules: `std/fs std/net std/process std/math std/random std/time
-std/units std/crypto std/text std/sort std/kv std/json std/hex std/base64 std/url
-std/regex std/csv std/toml std/template std/protobuf std/uuid std/inflate std/deflate
-std/huffman std/collections/{set,deque,stringbuilder,dict} std/ffi std/resilience`.
+Generic collections are MODULE functions, not methods: `import std/collections/deque;`
+then `deque.push_back(d, x)`, `deque.len(d)` — UFCS `d.push_back(x)` fails because
+UFCS never reaches qualified names.
+
+Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
+std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex
+std/base64 std/url std/regex std/csv std/toml std/template std/protobuf std/uuid
+std/markdown std/inflate std/deflate std/huffman
+std/collections/{set,deque,stringbuilder,dict} std/ffi std/resilience`.
 
 Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in
 `std/time` — `millis seconds minutes hours days` → int in **ms** (the stdlib's duration
@@ -216,7 +247,7 @@ up to 20 diagnostics per run.
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload)
 ray build file.ray          # check only (also: ray build --native for a machine binary)
-ray test file.ray           # run @test functions; exit code = number of failures
+ray test [file.ray|filter]  # run @test functions; exit 0 = all passed, 1 = failures, 65 = compile error
 ray fmt file.ray            # canonical formatting
 ray doc file.ray            # API docs (raydoc)
 ```

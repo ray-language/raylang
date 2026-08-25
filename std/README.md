@@ -62,8 +62,9 @@ Estas librerías **ya existían** como ejemplos y se promueven a `std/` embebié
 `examples/web/*.ray` original (no se duplica), el ejemplo sigue siendo el artefacto pedagógico y a la vez
 la fuente del módulo `std/`.
 
-- **`std/hex`** — `hex_encode(data: [int]) -> string`, `hex_decode(s) -> Result<[int], string>`.
-- **`std/base64`** — `base64`/`base64url` (encode) y `base64_decode`/`base64url_decode` (`Result`).
+- **`std/hex`** — `hex_encode(data: bytes) -> string`, `hex_decode(s) -> Result<bytes, string>`.
+- **`std/base64`** — `base64`/`base64url` (`bytes -> string`) y `base64_decode`/`base64url_decode`
+  (`string -> Result<bytes, string>`).
 - **`std/url`** — `url_encode`/`url_decode`, `parse_query`/`build_query` (sobre `Map<string, string>`).
 - **`std/json`** — `enum Json`, `parse(s) -> Result<Json, string>`, `stringify(j) -> string`,
   `stringify_pretty(j, indent)`; helpers de acceso `member`/`at`, `as_*` y `get_*`

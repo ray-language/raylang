@@ -1,6 +1,6 @@
 // Demo de servidor HTTPS (M56.3): el mismo webserver de M19.1, servido sobre TLS. `serve_tls`
 // acepta cada conexión y la sube a TLS de servidor (`net.tls_accept`, M19.4b) antes de leer la
-// petición; el handler es el mismo petición→respuesta de `serve`. **Solo VM.**
+// petición; el handler es el mismo petición→respuesta de `serve`. **VM y nativo.**
 //
 // Ejecútalo (con un certificado y clave en PEM; los de prueba están en tests/fixtures/):
 //   cargo run -- --vm examples/web/https_server_demo.ray tests/fixtures/tls_cert.pem tests/fixtures/tls_key.pem

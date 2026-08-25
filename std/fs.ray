@@ -104,7 +104,9 @@ pub fn is_file(path: string) -> bool {
 }
 
 /// Renames (moves) a file or directory; `Ok(0)` or `Err(message)`. On the same filesystem this
-/// is atomic — write to a temp file and `rename` it for corruption-safe writes.
+/// is atomic — write to a temp file and `rename` it for corruption-safe writes. Caveat: a handle
+/// opened on `dst` BEFORE the rename still points at the replaced (old) file — close and reopen
+/// it after renaming over a file you keep open (e.g. a log being compacted).
 pub fn rename(src: string, dst: string) -> Result<int, string> {
     let r = __rename(src, dst);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

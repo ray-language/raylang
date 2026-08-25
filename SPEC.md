@@ -440,7 +440,8 @@ sobre el que se escriben las capas 1 y 2.
   convierte un `panic` o error de ejecución en `Err(mensaje)` — el fallo **como valor**, sin
   excepciones. La recuperación ocurre en la **misma fibra**: lo que `f` mutó antes de fallar
   sigue mutado (mismo compromiso que `catch_unwind` de Rust); para aislamiento real, `spawn` +
-  `try_join(t) -> Result<T, string>` (§9, solo VM). `try_call` funciona en los tres motores.
+  `try_join(t) -> Result<T, string>` (§9, VM y binario nativo). `try_call` funciona en los tres
+  motores.
 - **Caracteres**: `char_code(c) -> int` (code point Unicode) y `char_from_code(n) -> Option<char>`
   (su inversa; `None` si `n` no es un code point válido). — **String**: `trim split chars contains
   replace starts_with ends_with to_upper to_lower substring repeat index_of join to_bytes

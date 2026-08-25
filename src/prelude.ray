@@ -1089,9 +1089,9 @@ fn read_int() -> Option<int> {
 }
 
 // M12.1 (concurrencia): recibe del canal. Some(v) si llega un valor; None si el canal está cerrado y
-// vacío. Envuelve el primitivo __recv (que devuelve [T]) en un Option, como input/parse_int. Solo la VM.
+// vacío. Envuelve el primitivo __recv (que devuelve [T]) en un Option. VM y nativo (no el intérprete).
 /// Receives from the channel: `Some(v)` when a value arrives, `None` when the channel is
-/// closed and empty. Blocks while the channel is empty and open. VM only.
+/// closed and empty. Blocks while the channel is empty and open. VM and native binaries.
 fn recv<T>(ch: Channel<T>) -> Option<T> {
     let r = __recv(ch);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
@@ -1109,9 +1109,9 @@ fn select_timeout<T>(chs: [Channel<T>], ms: int) -> Option<int> {
 
 // M56.5: une una tarea SIN re-lanzar su fallo (errores como valores; join sí re-lanza). Envuelve
 // el primitivo __task_failed (bloquea hasta que termine; [] = bien, [msg] = falló); para el valor
-// reusa join, que con la tarea ya terminada ni bloquea ni falla. Solo la VM.
+// reusa join, que con la tarea ya terminada ni bloquea ni falla. VM y nativo (no el intérprete).
 /// Waits for the task and returns its outcome as a value: `Ok(its result)` if it finished, or
-/// `Err(panic message)` if it failed — unlike `join`, which re-raises the failure. VM only.
+/// `Err(panic message)` if it failed — unlike `join`, which re-raises it. VM and native binaries.
 // M97.2 — el "recover" general: corre `f` en la MISMA fibra y convierte un fallo fatal (panic,
 // índice fuera de rango, división por cero…) en un valor. A diferencia de `try_join`, no hace
 // `spawn`: ni cambio de hilo en el binario nativo, ni fibra nueva en la VM, y funciona también en

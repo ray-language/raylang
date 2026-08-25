@@ -156,7 +156,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `panic` | `(msg: string) -> unit` | aborta el programa con el mensaje y la posición; para invariantes rotas, no para errores esperables |
 | `args` | `() -> [string]` | argumentos de línea de comandos (tras la ruta del programa) |
 
-### Concurrencia (solo VM; §11 del manual)
+### Concurrencia (VM y binario nativo — el intérprete no tiene fibras; §11 del manual)
 
 | Función | Firma | Descripción |
 |---|---|---|
@@ -176,7 +176,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | Función | Firma | Descripción |
 |---|---|---|
 | `try_call` | `(f: fn() -> T) -> Result<T, string>` | ejecuta `f` y convierte un `panic`/error de ejecución en `Err(mensaje)`. Recupera en la **misma fibra**: lo que `f` mutó sigue mutado (como el `catch_unwind` de Rust). Los tres motores |
-| `try_join` | `(t: Task<T>) -> Result<T, string>` | el fallo de una tarea como valor, en vez de re-lanzarlo. Aísla de verdad (heap propio de la fibra). Solo VM |
+| `try_join` | `(t: Task<T>) -> Result<T, string>` | el fallo de una tarea como valor, en vez de re-lanzarlo. Aísla de verdad (heap propio de la fibra). VM y nativo |
 
 > ⚠️ **Matemáticas, reloj, azar, cripto, disco y red NO son builtins globales.** Viven en módulos
 > `std/` desde M49/M50 y se usan calificados: `math.sqrt(2.0)`, `time.now()`, `random.below(10)`,
@@ -374,8 +374,8 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/collections/deque` | `Deque<T>`: `new len is_empty push_back push_front pop_front pop_back peek_front` |
 | `std/collections/stringbuilder` | `StringBuilder`: `new push build count` (une una vez; evita el O(n²) de `+` en bucle) |
 | `std/json` | `enum Json` (`JNull JBool JNum JStr JArray JObject`) · `parse -> Result<Json, string>` · `stringify` (canónico, claves ordenadas). Escapes `\uXXXX` con pares surrogate |
-| `std/hex` | `hex_encode([int]) -> string` · `hex_decode -> Result<[int], string>` |
-| `std/base64` | `base64 base64url` (`[int] -> string`) · `base64_decode base64url_decode` |
+| `std/hex` | `hex_encode(bytes) -> string` · `hex_decode(string) -> Result<bytes, string>` |
+| `std/base64` | `base64 base64url` (`bytes -> string`) · `base64_decode base64url_decode` (`string -> Result<bytes, string>`) |
 | `std/url` | `url_encode url_decode parse_query build_query` |
 | `std/regex` | motor Thompson NFA (tiempo lineal): `full_match search find find_str find_all replace_all`. Soporta `. * + ? \| ( ) [a-z] [^…] \d \w \s ^ $` |
 | `std/csv` | `parse_csv -> Result<[[string]], string>` (RFC 4180) · `write_csv` |

@@ -1,5 +1,5 @@
 // M19.3c — un echo server de WebSocket (`ws://`) escrito EN raylang, sobre la librería `websocket.ray`
-// (handshake con SHA-1/base64 de M19.3b) y los sockets/scheduler de M15/M17. **Solo VM** (concurrencia).
+// (handshake con SHA-1/base64 de M19.3b) y los sockets/scheduler de M15/M17. **VM y nativo** (concurrencia por fibras).
 //
 // Ejecútalo:  cargo run -- --vm examples/web/websocket_echo.ray
 // Imprime el puerto efímero en la primera línea; luego acepta conexiones y, por cada una, completa el

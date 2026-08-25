@@ -13,8 +13,9 @@
 // `string` (los valores se decodifican como UTF-8; uno no decodificable llega como "?").
 // Además: longitud RESP malformada = `Err` (antes 0 en silencio) y tope de bulk (anti-memoria).
 //
-// Como los sockets ceden la fibra, el camino concurrente es **solo VM**; en el intérprete corren
-// bloqueantes (un hilo), así que el cliente funciona en ambos motores contra un servidor real.
+// Como los sockets ceden la fibra, el camino concurrente corre en la **VM y el binario nativo**;
+// en el intérprete corren bloqueantes (un hilo), así que el cliente funciona en los tres motores
+// contra un servidor real.
 // Una respuesta de Redis (RESP2).
 /// A Redis reply (RESP2): simple/bulk string, integer, nil, array, or server error.
 import std/net;

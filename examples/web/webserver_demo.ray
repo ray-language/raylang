@@ -6,7 +6,7 @@
 //   curl http://127.0.0.1:8080/saluda    -> JSON
 //   curl -N http://127.0.0.1:8080/sse    -> un stream SSE (5 eventos, 1/seg)
 //
-// Cada conexión se atiende en su propia fibra (spawn): muchas a la vez sobre un hilo. **Solo VM.**
+// Cada conexión se atiende en su propia fibra (spawn): muchas a la vez sobre un hilo. **VM y nativo.**
 import webserver;
 import std/time;
 

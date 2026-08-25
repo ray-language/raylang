@@ -1,0 +1,57 @@
+import std/crypto;
+from std/hex import hex_encode;
+
+fn main() -> int {
+    // NIST FIPS 180-4: sha256("abc") — troceado en dos updates.
+    let h = match (crypto.sha256_init()) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("init err: " + e);
+            return 1;
+        },
+    };
+    let _ = crypto.hash_update(h, "ab".to_bytes());
+    let _ = crypto.hash_update(h, "c".to_bytes());
+    match (crypto.hash_final(h)) {
+        Result.Ok(d) => print(hex_encode(d)),
+        Result.Err(e) => print("final err: " + e),
+    }
+    // El incremental == el de una pasada.
+    let one = crypto.sha256("hola troceado".to_bytes());
+    let h2 = match (crypto.sha256_init()) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print(e);
+            return 1;
+        },
+    };
+    let _ = crypto.hash_update(h2, "hola ".to_bytes());
+    let _ = crypto.hash_update(h2, "troceado".to_bytes());
+    match (crypto.hash_final(h2)) {
+        Result.Ok(d) => print(d == one),
+        Result.Err(e) => print(e),
+    }
+    // final consume; el segundo final y un update posterior fallan limpio.
+    match (crypto.hash_final(h2)) {
+        Result.Ok(_) => print("unexpected"),
+        Result.Err(e) => print(e),
+    }
+    match (crypto.hash_update(h2, b"x")) {
+        Result.Ok(_) => print("unexpected"),
+        Result.Err(e) => print(e),
+    }
+    // sha512 troceado == una pasada, y algoritmo desconocido = Err.
+    let h3 = match (crypto.sha512_init()) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print(e);
+            return 1;
+        },
+    };
+    let _ = crypto.hash_update(h3, "abc".to_bytes());
+    match (crypto.hash_final(h3)) {
+        Result.Ok(d) => print(d == crypto.sha512("abc".to_bytes())),
+        Result.Err(e) => print(e),
+    }
+    0
+}

@@ -19,6 +19,57 @@ pub fn sha512(data: bytes) -> bytes { __sha512(data) }
 /// avoid for new designs.
 pub fn sha1(data: bytes) -> bytes { __sha1(data) }
 
+// --- M126: hasher INCREMENTAL (hashear archivos grandes por trozos, sin cargarlos enteros).
+// Ciclo: init → hash_update* → hash_final (final CONSUME el handle; no hay close). El estado vive
+// en el runtime (ring digest::Context) — el mismo código en los tres motores.
+/// Opens an incremental SHA-256 hasher; feed it with `hash_update` and close it with
+/// `hash_final`. For hashing large files chunk by chunk without loading them whole.
+pub fn sha256_init() -> Result<int, string> {
+    let r = __hasher_new("sha256");
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Opens an incremental SHA-512 hasher (same cycle as `sha256_init`).
+pub fn sha512_init() -> Result<int, string> {
+    let r = __hasher_new("sha512");
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Feeds one chunk to incremental hasher `h` (call as many times as needed, in order).
+/// `Ok(0)`, or `Err` on an invalid (or already finalized) handle.
+pub fn hash_update(h: int, chunk: bytes) -> Result<int, string> {
+    let r = __hasher_update(h, chunk);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Finishes incremental hasher `h` and returns the digest (32 bytes for sha256, 64 for sha512).
+/// CONSUMES the handle: a second `hash_final` on it is `Err`.
+pub fn hash_final(h: int) -> Result<bytes, string> {
+    let r = __hasher_final(h);
+    if (r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else {
+        match (from_utf8(r[1])) {
+            Result.Ok(m) => Result.Err(m),
+            Result.Err(_e) => Result.Err("hasher error"),
+        }
+    }
+}
+
 /// HMAC-SHA-256 of `msg` under `key` (32 bytes).
 pub fn hmac_sha256(key: bytes, msg: bytes) -> bytes { __hmac_sha256(key, msg) }
 

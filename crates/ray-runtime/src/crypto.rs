@@ -219,3 +219,61 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 #[cfg(not(feature = "crypto"))]
 pub fn constant_time_eq(_a: &[u8], _b: &[u8]) -> bool { false }
+
+// ─── M126: hasher INCREMENTAL (sha256/sha512 por trozos) ─────────────────────────────────────────
+//
+// Hashear un archivo grande sin cargarlo entero era el patrón que TRES apps copiaban a mano
+// (takeit → raysync → raypass: sha256 encadenado por chunks, cada una con su seed/encadenado
+// incompatible; IDEAS §69.3). ring expone el digest incremental (`digest::Context`), pero su
+// Context no es serializable → el estado vive AQUÍ, en un registro propio por-proceso (id → ctx),
+// compartido por la VM y el binario nativo (mismo código → mismos digests por construcción).
+// `final` CONSUME el handle (un digest no se reanuda); no hay `close` — el ciclo es new→update*→final.
+
+#[cfg(feature = "crypto")]
+fn hasher_registry() -> &'static std::sync::Mutex<(i64, std::collections::HashMap<i64, ring::digest::Context>)> {
+    static REG: std::sync::OnceLock<std::sync::Mutex<(i64, std::collections::HashMap<i64, ring::digest::Context>)>> =
+        std::sync::OnceLock::new();
+    REG.get_or_init(|| std::sync::Mutex::new((1, std::collections::HashMap::new())))
+}
+
+/// Abre un hasher incremental del algoritmo dado (`"sha256"` | `"sha512"`) y devuelve su handle.
+#[cfg(feature = "crypto")]
+pub fn hasher_new(alg: &str) -> Result<i64, String> {
+    let a = match alg {
+        "sha256" => &ring::digest::SHA256,
+        "sha512" => &ring::digest::SHA512,
+        _ => return Err(format!("unknown hash algorithm '{alg}' (sha256 | sha512)")),
+    };
+    let mut reg = hasher_registry().lock().unwrap();
+    let id = reg.0;
+    reg.0 += 1;
+    reg.1.insert(id, ring::digest::Context::new(a));
+    Ok(id)
+}
+#[cfg(not(feature = "crypto"))]
+pub fn hasher_new(_alg: &str) -> Result<i64, String> { Err("crypto is not compiled in".to_string()) }
+
+/// Alimenta un trozo al hasher `h` (tantas veces como haga falta, en orden).
+#[cfg(feature = "crypto")]
+pub fn hasher_update(h: i64, chunk: &[u8]) -> Result<(), String> {
+    match hasher_registry().lock().unwrap().1.get_mut(&h) {
+        Some(ctx) => {
+            ctx.update(chunk);
+            Ok(())
+        }
+        None => Err(format!("invalid hasher handle: {h}")),
+    }
+}
+#[cfg(not(feature = "crypto"))]
+pub fn hasher_update(_h: i64, _chunk: &[u8]) -> Result<(), String> { Err("crypto is not compiled in".to_string()) }
+
+/// Cierra el hasher `h` y devuelve el digest. CONSUME el handle (un segundo `final` es Err).
+#[cfg(feature = "crypto")]
+pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
+    match hasher_registry().lock().unwrap().1.remove(&h) {
+        Some(ctx) => Ok(ctx.finish().as_ref().to_vec()),
+        None => Err(format!("invalid hasher handle: {h}")),
+    }
+}
+#[cfg(not(feature = "crypto"))]
+pub fn hasher_final(_h: i64) -> Result<Vec<u8>, String> { Err("crypto is not compiled in".to_string()) }

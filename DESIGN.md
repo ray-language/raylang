@@ -10343,6 +10343,16 @@ Lo que la generalización destapó (tres cosas, las tres arregladas):
   sintética que importa la cara** (`import db/postgres;`): exactamente lo que un consumidor ve,
   sin geometrías inventadas.
 
+**M135c — el README del espejo es para el consumidor público**: el README copiado del monorepo
+enseñaba la path-dep local ("db = \"path:../ruta/a/packages/db\"") — correcto para el
+desarrollo, mentira para quien llega al repo publicado. `transform_readme` en el script: (1)
+antepone el bloque de instalación (índice + `ray add` + la dep git directa) y el aviso de espejo
+de solo lectura; (2) reescribe las líneas de dep por ruta a su URL git pinneada (comentarios de
+cola preservados); (3) etiqueta los fences ```raylang como ```rust — GitHub aún no reconoce el
+lenguaje (cuando la gramática de ray-language/raylang-grammar entre a linguist, sobra). El modo
+`--refresh-readme` re-genera SOLO el README de main en espejos ya publicados sin tocar tags (el
+hash del índice verifica el contenido del TAG: es seguro); los seis quedaron refrescados.
+
 Operativa del script endurecida por el accidente del estreno: el run de `net` falló a medias
 (espejo empujado, índice sin entrada) porque `tools/publish-packages.sh` prefería
 `target/release/ray` — un binario RANCIO sin los fixes. Ahora elige el binario **más fresco** de

@@ -28,10 +28,75 @@ if [ -z "$RAY" ]; then
     fi
 fi
 [ -x "$RAY" ] || { echo "no 'ray' binary (build with: cargo build [--release])"; exit 66; }
-[ $# -ge 1 ] || { echo "usage: sh tools/publish-packages.sh <package> [<package>...]"; exit 64; }
+[ $# -ge 1 ] || { echo "usage: sh tools/publish-packages.sh [--refresh-readme] <package> [<package>...]"; exit 64; }
+
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
+
+# Transforma el README de un ESPEJO para el consumidor público (M135c): (1) las líneas de
+# dependencia por ruta (`x = "path:…"`) pasan a su URL git pinneada; (2) se antepone el bloque
+# de instalación (índice + `ray add`) y el aviso de espejo de solo lectura. Idempotente.
+# Uso: transform_readme <readme> <pkg> <version>
+transform_readme() {
+    R=$1; TPKG=$2; TVER=$3
+    [ -f "$R" ] || return 0
+    # Coloreado en GitHub: \`\`\`raylang aún no existe como lenguaje reconocido — por ahora los
+    # bloques de código raylang se etiquetan \`rust\` (sintaxis de llaves cercana; linguist lo
+    # colorea decente). Cuando la gramática de ray-language/raylang-grammar entre a linguist,
+    # esta línea sobra.
+    sed -i '' 's/^```raylang$/```rust/' "$R"
+    for DN in $(sed -n 's/^\([a-z0-9_-]*\) = "path:.*/\1/p' "$R" | sort -u); do
+        DV=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/packages/$DN/ray.toml" 2>/dev/null | head -1)
+        [ -n "$DV" ] || continue
+        sed -i '' "s|^$DN = \"path:[^\"]*\"|$DN = \"git+$ORG_HTTPS/$DN@v$DV\"|" "$R"
+    done
+    if ! grep -q "Espejo de solo lectura" "$R"; then
+        HDR=$WORK/.readme_header
+        # Heredoc CITADO (sin expansión: los backticks de markdown son texto) + placeholders.
+        cat > "$HDR" <<'EOF'
+> **Espejo de solo lectura** — publicado desde
+> [`raylang/packages/@PKG@`](https://github.com/roberto-ayala/raylang/tree/main/packages/@PKG@);
+> el desarrollo y los PRs van al monorepo.
+>
+> **Instalación** — en tu `ray.toml`:
+>
+> ```toml
+> [registry]
+> index = "git+https://github.com/ray-language/ray-index@main"
+> ```
+>
+> y `ray add @PKG@` — o la dependencia directa:
+> `@PKG@ = "git+https://github.com/ray-language/@PKG@@v@VER@"`.
+
+EOF
+        sed -i '' "s|@PKG@|$TPKG|g; s|@VER@|$TVER|g" "$HDR"
+        cat "$HDR" "$R" > "$R.tmp" && mv "$R.tmp" "$R"
+    fi
+}
+
+# --refresh-readme: SOLO re-genera el README público de espejos ya publicados (rama main, sin
+# tocar tags — el hash del índice verifica el contenido del TAG, así que es seguro). Para el
+# accidente inverso (contenido nuevo) el camino es subir la versión y publicar normal.
+if [ "$1" = "--refresh-readme" ]; then
+    shift
+    W2=$(mktemp -d); trap 'rm -rf "$W2"' EXIT
+    WORK=$W2
+    for PKG in "$@"; do
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/packages/$PKG/ray.toml" | head -1)
+        git clone -q "$ORG_SSH/$PKG.git" "$W2/$PKG" || { echo "no mirror for $PKG"; exit 65; }
+        cp "$REPO_ROOT/packages/$PKG/README.md" "$W2/$PKG/README.md" 2>/dev/null || { echo "$PKG: no README"; continue; }
+        transform_readme "$W2/$PKG/README.md" "$PKG" "$VERSION"
+        if git -C "$W2/$PKG" diff --quiet; then
+            echo "$PKG: README already up to date"
+        else
+            git -C "$W2/$PKG" commit -qam "docs: public-mirror usage (index + ray add; no local paths)"
+            git -C "$W2/$PKG" push -q
+            echo "$PKG: README refreshed on main"
+        fi
+    done
+    exit 0
+fi
 
 # El índice oficial: un clon fresco; las entradas nuevas se empujan al final.
 git clone -q "$ORG_SSH/ray-index.git" "$WORK/index"
@@ -81,6 +146,8 @@ for PKG in "$@"; do
         sed -i '' "s|= \"path:\.\./$DEPPATH\"|= \"git+$ORG_HTTPS/$DEPPATH@v$DEPV\"|" "$MIRROR/ray.toml"
         echo "$PKG: rewrote dep $DEPPATH -> git+$ORG_HTTPS/$DEPPATH@v$DEPV"
     done
+
+    transform_readme "$MIRROR/README.md" "$PKG" "$VERSION"
 
     SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
     git -C "$MIRROR" add -A

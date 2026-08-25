@@ -26,6 +26,14 @@ mod imp {
     }
 
     impl TlsStream {
+        /// La dirección del peer del socket TCP subyacente (M123: `net.peer_addr` sobre un handle TLS).
+        pub fn peer_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+            match self {
+                TlsStream::Client(s) => s.sock.peer_addr(),
+                TlsStream::Server(s) => s.sock.peer_addr(),
+            }
+        }
+
         /// Lee hasta `buf.len()` octetos de texto plano (descifra; conduce el handshake si hace falta).
         /// `Ok(0)` = fin de la conexión.
         pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -270,6 +278,9 @@ mod stub {
     /// Sin la feature `tls`, `TlsStream` es un tipo vacío inalcanzable (el consumidor lo gatea por checker).
     pub struct TlsStream(std::convert::Infallible);
     impl TlsStream {
+        pub fn peer_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+            match self.0 {}
+        }
         pub fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
             match self.0 {}
         }

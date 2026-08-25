@@ -646,6 +646,8 @@ pub enum OpCode {
     TcpConnect,
     /// M122: como TcpConnect con PLAZO (host, port, ms) — el intento vencido = "connect timeout".
     TcpConnectTimeout,
+    /// M123: la dirección del peer ("ip:puerto") de una conexión TCP/TLS.
+    PeerAddr,
     /// Saca `port` (int) y `host` (string); abre una conexión **TLS** (rustls) y empuja un `[string]`
     /// etiquetado. Primitivo `__tls_connect` (M19.4a); el prelude → `Result<int,string>`. El handle se
     /// lee/escribe con los mismos `socket_*` (desvían a TLS) y se cierra con `close`.

@@ -40,7 +40,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__ffi_errno",
     // Sockets TCP/UDP (interceptados vía `std::net::*`).
     "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_read_timeout",
-    "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_connect_timeout", "__tcp_listen",
+    "__peer_addr", "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_connect_timeout", "__tcp_listen",
     "__udp_bind", "__udp_recv_from", "__udp_send_to",
     // Cripto/TLS/SQLite (interceptados → `ray_runtime::*`, features bajo demanda).
     "__chacha20poly1305_open", "__chacha20poly1305_seal", "__crypto_random_bytes",

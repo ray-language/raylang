@@ -205,3 +205,79 @@ fn main() -> int {
         assert_eq!(lines, vec!["bounded err", "true", "connected"], "vm={vm}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// M123 — `net.peer_addr`: la dirección del peer de una conexión.
+// ---------------------------------------------------------------------------------------------
+
+/// El programa se conecta a su propio listener: el peer del CLIENTE es "127.0.0.1:<port>" —
+/// determinista sin servidor externo. Un listener y un handle inválido fallan limpio.
+const PEER_ADDR_SRC: &str = r#"
+import std/net;
+
+fn main() -> int {
+    let l = match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("listen err: " + e);
+            return 1;
+        },
+    };
+    let port = net.local_port(l);
+    let c = match (net.tcp_connect("127.0.0.1", port)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("connect err: " + e);
+            return 1;
+        },
+    };
+    match (net.peer_addr(c)) {
+        Result.Ok(a) => print(a == "127.0.0.1:" + to_string(port)),
+        Result.Err(e) => print("err: " + e),
+    }
+    match (net.peer_addr(l)) {
+        Result.Ok(_) => print("unexpected"),
+        Result.Err(_e) => print("listener errs"),
+    }
+    match (net.peer_addr(99999)) {
+        Result.Ok(_) => print("unexpected"),
+        Result.Err(e) => print(e),
+    }
+    0
+}
+"#;
+
+const PEER_ADDR_EXPECTED: &[&str] = &["true", "listener errs", "invalid handle: 99999"];
+
+#[test]
+fn peer_addr_reports_the_remote_endpoint() {
+    for vm in [false, true] {
+        let (out, code) = run("net_peer_addr", PEER_ADDR_SRC, vm);
+        assert_eq!(code, 0, "exit (vm={vm}): {out}");
+        assert_eq!(out.lines().collect::<Vec<_>>(), PEER_ADDR_EXPECTED, "vm={vm}");
+    }
+}
+
+/// El binario NATIVO (sabor default): mismo programa, misma salida byte a byte.
+#[test]
+fn peer_addr_native() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        assert!(std::env::var_os("CI").is_none(), "rustc no disponible bajo CI: falso verde");
+        eprintln!("saltando peer_addr_native: rustc no disponible");
+        return;
+    }
+    let mut src_path = std::env::temp_dir();
+    src_path.push("net_peer_addr_native.ray");
+    std::fs::write(&src_path, PEER_ADDR_SRC).expect("escribe el fuente");
+    let bin = std::env::temp_dir().join(format!("ray_peer_addr_{}", std::process::id()));
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", src_path.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("lanza build --native");
+    assert!(build.status.success(), "build --native falló: {}", String::from_utf8_lossy(&build.stderr));
+    let out = Command::new(&bin).output().expect("corre el binario nativo");
+    let _ = std::fs::remove_file(&bin);
+    assert!(out.status.success(), "el binario nativo falló: {}", String::from_utf8_lossy(&out.stderr));
+    let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap_or("").lines().collect();
+    assert_eq!(lines, PEER_ADDR_EXPECTED, "el nativo diverge de la VM en peer_addr");
+}

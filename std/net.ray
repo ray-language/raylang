@@ -62,6 +62,16 @@ pub fn tcp_connect_timeout(host: string, port: int, ms: int) -> Result<int, stri
     }
 }
 
+// M123: la dirección del peer de una conexión TCP o TLS. La pieza de cualquier servidor real:
+// rate-limit por IP, X-Forwarded-For, logs de acceso con origen (hallazgo de raygate, §65.1).
+/// The peer address of a TCP or TLS connection, as `"ip:port"` (IPv6 in brackets:
+/// `"[::1]:8080"`); `Err` on a non-socket handle. This is what access logs, per-IP rate limits
+/// and `X-Forwarded-For` need — `webserver.Request.remote` is filled with it.
+pub fn peer_addr(h: int) -> Result<string, string> {
+    let r = __peer_addr(h);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
 // M19.4a: conecta por TLS a host:port (verifica el certificado del servidor); Ok(handle) u Err. El handle
 // se lee/escribe con net.socket_read_bytes/net.socket_write_bytes (que desvían a TLS) y se cierra con close.
 /// Opens a TLS connection to host:port, verifying the server certificate; `Ok(handle)` or

@@ -49,7 +49,7 @@ watch = ["ray-runtime/watch"]
 # rustls). El *stub* de slim/wasm sigue en `builtins.rs` (rama `not(net-tls)`).
 # (M100: `ray-runtime` dejó de ser opcional — el primitivo de procesos vive ahí y es del núcleo;
 # sin features extra el crate no arrastra ninguna dependencia → el build slim queda igual.)
-net-tls = ["ray-runtime/crypto", "dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+net-tls = ["ray-runtime/crypto", "ray-runtime/x509", "dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 # M89.3: la carga de librerías nativas (extern/FFI, libloading) tras una feature (activa por
 # defecto). El slim sin ella tiene la propiedad "no puede cargar código nativo" (contenedores
 # endurecidos); un `extern fn` chequea igual y su llamada da un error de ejecución claro.

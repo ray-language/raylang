@@ -2037,6 +2037,14 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M124: el resumen del certificado del peer → arreglo etiquetado plano (el wrapper de
+            // std/net construye el struct PeerCert, patrón stat).
+            "tls_peer_cert" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_peer_cert(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "tls_accept" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
                 out.push_str("__ray_tls_accept(");

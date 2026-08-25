@@ -874,6 +874,20 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            __ray_tls_tag_ok(h) }\n",
             "        Err(e) => __ray_tls_tag_err(e) } }\n",
         ));
+        // M124: el resumen del certificado del peer → arreglo etiquetado PLANO de strings
+        // (["ok", subject, issuer, nb_ms, na_ms, san...]); el wrapper de std/net construye el
+        // struct PeerCert (patrón stat). La lógica (conducir el handshake pendiente + parsear el
+        // DER) vive en ray_runtime::tls::TlsStream::peer_cert_summary — el parseo X.509
+        // (ray_runtime::x509) es el MISMO código que usa la VM → resumen byte-idéntico.
+        out.push_str(concat!(
+            "fn __ray_tls_peer_cert(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    match __ray_tls_get(h) {\n",
+            "        Some(t) => match t.lock().unwrap().peer_cert_summary() {\n",
+            "            Ok(s) => { let mut v: Vec<Rc<str>> = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.subject), Rc::<str>::from(s.issuer), Rc::<str>::from(s.not_before_ms.to_string()), Rc::<str>::from(s.not_after_ms.to_string())];\n",
+            "                v.extend(s.san.into_iter().map(Rc::<str>::from)); Rc::new(std::cell::RefCell::new(v)) }\n",
+            "            Err(e) => __ray_tls_tag_err(e) }\n",
+            "        None => __ray_tls_tag_err(format!(\"handle {} is not a TLS connection\", h)) } }\n",
+        ));
     }
     // Helpers de SQLite (P2.b Paso 2), solo si el programa usa SQLite. Los primitivos devuelven arreglos
     // ETIQUETADOS que los wrappers de `db/sqlite.ray` parsean: open → ["ok", handle]/["err", msg]; exec →

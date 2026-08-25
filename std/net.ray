@@ -72,6 +72,50 @@ pub fn peer_addr(h: int) -> Result<string, string> {
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
+// M124: el certificado del PEER de una conexión TLS. "Expira en N días" es EL check que todo
+// operador quiere y era inexpresable (raywatch, §70.1): rustls valida en el handshake pero no
+// exponía los campos. El primitivo devuelve un arreglo etiquetado plano; este wrapper lo alza al
+// struct (patrón fs.stat).
+/// The peer's X.509 certificate summary: subject and issuer as X.500 names (`"CN=example.com"`),
+/// the validity window in epoch ms (compare with `time.now()`: days left =
+/// `(cert.not_after_ms - time.now()) / 86400000`), and the Subject Alternative Names (DNS and
+/// IPs). Works on both client connections (`tls_connect`/`tls_upgrade` — the server's cert) and
+/// server ones (`tls_accept` — the client's cert, only under client-auth).
+pub struct PeerCert {
+    subject: string,
+    issuer: string,
+    not_before_ms: int,
+    not_after_ms: int,
+    san: [string],
+}
+
+/// The peer certificate of TLS connection `h` as a `PeerCert`. Drives the pending handshake if
+/// needed (bounded to 10 s). `Err` on a non-TLS handle, a peer that presented no certificate, or
+/// an unparseable one.
+pub fn tls_peer_cert(h: int) -> Result<PeerCert, string> {
+    let r = __tls_peer_cert(h);
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    let nb = match (parse_int(r[3])) {
+        Option.Some(v) => v,
+        Option.None => 0,
+    };
+    let na = match (parse_int(r[4])) {
+        Option.Some(v) => v,
+        Option.None => 0,
+    };
+    var names: [string] = [];
+    var i = 5;
+    while (i < r.len()) {
+        names.push(r[i]);
+        i = i + 1;
+    }
+    Result.Ok(
+        PeerCert { subject: r[1], issuer: r[2], not_before_ms: nb, not_after_ms: na, san: names }
+    )
+}
+
 // M19.4a: conecta por TLS a host:port (verifica el certificado del servidor); Ok(handle) u Err. El handle
 // se lee/escribe con net.socket_read_bytes/net.socket_write_bytes (que desvían a TLS) y se cierra con close.
 /// Opens a TLS connection to host:port, verifying the server certificate; `Ok(handle)` or

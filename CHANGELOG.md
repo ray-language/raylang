@@ -37,6 +37,12 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`net.tls_peer_cert(h)`** (M124) — el certificado del peer de una conexión TLS como
+  `PeerCert { subject, issuer, not_before_ms, not_after_ms, san }`: **"expira en N días"** — EL
+  check de TLS que todo operador quiere — deja de ser inexpresable
+  (`(cert.not_after_ms - time.now()) / 86400000`). Conduce el handshake pendiente si hace falta
+  (acotado a 10 s); el parseo X.509 (`x509-parser`, dependencia nueva anotada en SECURITY.md) es el
+  mismo código en los tres motores → resumen byte-idéntico.
 - **`Request.remote` + `net.peer_addr`** (M123) — el webserver expone por fin la dirección remota
   del cliente (`req.remote` = `"ip:puerto"`, `webserver.remote_ip(req)` sin el puerto, consciente
   de IPv6): rate-limit por IP, `X-Forwarded-For` y logs de acceso con origen dejan de ser

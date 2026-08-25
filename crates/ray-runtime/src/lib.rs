@@ -23,6 +23,7 @@ pub mod regex;
 pub mod sqlite;
 pub mod tls;
 pub mod watch;
+pub mod x509;
 
 // N1 — reexport de `MiMalloc` para el binario transpilado. El `#[global_allocator]` lo declara el
 // `main.rs` GENERADO (no este crate): una dep que el binario no referencia NO se enlaza, y un

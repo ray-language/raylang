@@ -293,3 +293,53 @@ pub fn chmod(path: string, mode: int) -> Result<int, string> {
     let r = __chmod(path, mode);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
+
+// --- M115.4: watch de filesystem por EVENTOS DE KERNEL (FSEvents/inotify), no por sondeo de
+// mtimes. Un directorio se observa RECURSIVO; un archivo, a sí mismo. Los eventos pueden llegar
+// agrupados o con kinds gruesos según la plataforma — trata el evento como "algo cambió aquí" y
+// re-examina, no como una bitácora exacta. `close(h)` detiene el watch. ---
+/// One filesystem change: `kind` is "create", "modify", "remove", "rename" or "other", and
+/// `path` is the affected file or directory.
+pub struct WatchEvent {
+    kind: string,
+    path: string,
+}
+
+/// Watches a file or a directory (directories recursively) for changes, via kernel events —
+/// not mtime polling. Returns a watch handle; read events with `next_event` and stop with
+/// `close(h)`.
+pub fn watch(path: string) -> Result<int, string> {
+    let r = __watch(path);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// The next change event, waiting as long as it takes (the fiber parks — the process sleeps,
+/// it does not poll); `Err` if the handle is closed or invalid.
+pub fn next_event(h: int) -> Result<WatchEvent, string> {
+    let r = __watch_next(h, 0);
+    if (r[0] == "ok") {
+        Result.Ok(WatchEvent { kind: r[1], path: r[2] })
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// The next change event with a deadline: `Ok(Some(event))`, or `Ok(None)` if `timeout_ms`
+/// elapsed with no change. Useful to coalesce bursts (rebuild once after 200 ms of quiet).
+pub fn next_event_timeout(h: int, timeout_ms: int) -> Result<Option<WatchEvent>, string> {
+    let r = __watch_next(h, timeout_ms);
+    if (r[0] == "ok") {
+        Result.Ok(Option.Some(WatchEvent { kind: r[1], path: r[2] }))
+    } else if (r[0] == "timeout") {
+        Result.Ok(Option.None)
+    } else {
+        Result.Err(r[1])
+    }
+}

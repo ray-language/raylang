@@ -702,6 +702,11 @@ enum OpenHandle {
     /// la cosecha es de `__proc_try_wait` y la estructura la pone `std/process` (bombas + wait).
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     Child(std::process::Child),
+    /// M115.4: un watch de filesystem vivo (eventos de kernel vía notify, ray-runtime). En el
+    /// registro común: `close(h)` lo quita y el `Drop` del watcher detiene sus hilos. La fibra
+    /// aparca por el fd de su self-pipe (`FsWatcher::fd`), como un socket.
+    #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+    Watch(ray_runtime::watch::FsWatcher),
 }
 
 /// Una conexión TLS: la sesión rustls (cliente **o** servidor, vía el enum unificado `Connection`) +
@@ -880,6 +885,8 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::PipeW(_)) => Err("the handle is a child's stdin; write it with proc_write".to_string()),
         #[cfg(all(unix, not(target_arch = "wasm32")))]
         Some(OpenHandle::Child(_)) => Err("the handle is a child process; it is not writable".to_string()),
+        #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+        Some(OpenHandle::Watch(_)) => Err("the handle is a filesystem watch; it is not writable".to_string()),
         None => Err(format!("invalid file handle: {}", h)),
     }
 }
@@ -956,6 +963,120 @@ pub fn unlock_handle(h: i64) -> Result<(), String> {
         Some(OpenHandle::Reader(r)) => r.get_ref().unlock().map_err(|e| e.to_string()),
         Some(_) => Err("the handle is not a file".to_string()),
         None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
+// --- M115.4: watch de filesystem por eventos de kernel (feature `watch`; slim/wasm → stub). ---
+#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+const WATCH_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
+    "fs.watch is not available in the web playground (wasm)"
+} else {
+    "this binary was built without filesystem watch support (rebuild with the 'watch' feature)"
+};
+
+/// Abre un watch sobre la ruta (directorio → recursivo) y lo registra; `Ok(handle)`.
+#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+pub fn watch_open(path: &str) -> Result<i64, String> {
+    let w = ray_runtime::watch::watch(path)?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Watch(w));
+    Ok(id)
+}
+#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+pub fn watch_open(_path: &str) -> Result<i64, String> {
+    Err(WATCH_UNAVAILABLE.to_string())
+}
+
+/// Recupera el watcher del handle o el error apropiado (factoriza fd/try_next/blocking).
+#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+fn watch_of(reg: &mut FileRegistry, h: i64) -> Result<&ray_runtime::watch::FsWatcher, String> {
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Watch(w)) => Ok(w),
+        Some(_) => Err("the handle is not a watch handle".to_string()),
+        None => Err(format!("invalid handle: {}", h)),
+    }
+}
+
+/// El fd por el que aparca la fibra de la VM (self-pipe del watcher).
+#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+pub fn watch_fd(h: i64) -> Result<i32, String> {
+    let mut reg = registry().lock().unwrap();
+    watch_of(&mut reg, h).map(|w| w.fd())
+}
+#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+pub fn watch_fd(_h: i64) -> Result<i32, String> {
+    Err(WATCH_UNAVAILABLE.to_string())
+}
+
+/// El siguiente evento si ya hay uno, sin bloquear: `Ok(Some((kind, path)))` / `Ok(None)`.
+#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+pub fn watch_try_next(h: i64) -> Result<Option<(String, String)>, String> {
+    let mut reg = registry().lock().unwrap();
+    watch_of(&mut reg, h).map(|w| w.try_next())
+}
+#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+pub fn watch_try_next(_h: i64) -> Result<Option<(String, String)>, String> {
+    Err(WATCH_UNAVAILABLE.to_string())
+}
+
+/// El siguiente evento BLOQUEANDO el hilo (el intérprete, oráculo de desarrollo): sondea la cola
+/// y aparca en poll(2) sobre el fd del watcher — nunca retiene el lock del registro mientras
+/// espera. `ms <= 0` = sin plazo; `Ok(None)` = plazo vencido.
+#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+pub fn watch_next_blocking(h: i64, ms: i64) -> Result<Option<(String, String)>, String> {
+    let deadline = if ms > 0 {
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
+    } else {
+        None
+    };
+    loop {
+        let fd = {
+            let mut reg = registry().lock().unwrap();
+            let w = watch_of(&mut reg, h)?;
+            if let Some(ev) = w.try_next() {
+                return Ok(Some(ev));
+            }
+            w.fd()
+        };
+        let wait = match deadline {
+            None => 200, // re-sondea el registro (un close concurrente no debe colgar esto)
+            Some(d) => {
+                let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64;
+                if rem <= 0 {
+                    return Ok(None);
+                }
+                rem.min(200) as i32
+            }
+        };
+        watch_mod::fd_ready(fd, wait);
+    }
+}
+#[cfg(any(not(all(feature = "watch", unix)), target_arch = "wasm32"))]
+pub fn watch_next_blocking(_h: i64, _ms: i64) -> Result<Option<(String, String)>, String> {
+    Err(WATCH_UNAVAILABLE.to_string())
+}
+
+#[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
+mod watch_mod {
+    unsafe extern "C" {
+        fn poll(fds: *mut PollFd, nfds: u64, timeout_ms: i32) -> i32;
+    }
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+    const POLLIN: i16 = 0x0001;
+
+    /// ¿Hay lectura pendiente en `fd` dentro de `timeout_ms`? (Solo espera; el dato lo drena el
+    /// watcher.)
+    pub(super) fn fd_ready(fd: i32, timeout_ms: i32) -> bool {
+        let mut pfd = PollFd { fd, events: POLLIN, revents: 0 };
+        // SAFETY: un solo PollFd bien formado; poll no retiene el puntero tras volver.
+        unsafe { poll(&mut pfd, 1, timeout_ms) > 0 }
     }
 }
 
@@ -2784,6 +2905,20 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__unlock_handle", opcode: OpCode::UnlockHandle, check: |a| {
         arity(a, 1, "__unlock_handle", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__unlock_handle expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __watch(path) -> [string] (M115.4): ["ok", handle] o ["err", msg]. std/fs → Result<int,string>.
+    Builtin { name: "__watch", opcode: OpCode::WatchOpen, check: |a| {
+        arity(a, 1, "__watch", " (path)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__watch expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __watch_next(h, ms) -> [string] (M115.4): ["ok", kind, path] / ["timeout"] / ["err", msg].
+    // ms <= 0 = sin plazo. En la VM APARCA la fibra (self-pipe del watcher, patrón StdinRead).
+    Builtin { name: "__watch_next", opcode: OpCode::WatchNext, check: |a| {
+        arity(a, 2, "__watch_next", " (handle, timeout ms)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__watch_next expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__watch_next expects an int (the timeout in ms), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // --- std/io (M107.1): stdout/stderr sin salto de línea + flush. Primitivos con arreglo

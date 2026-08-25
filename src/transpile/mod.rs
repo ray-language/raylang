@@ -97,6 +97,8 @@ struct Transpiler {
     /// ¿Usa `std::ffi::errno`? Se anexa el helper `__ray_ffi_errno` (lectura del errno del hilo).
     pub(super) needs_ffi_errno: bool,
     pub(super) needs_fs_meta: bool,
+    /// M115.4: el programa usa fs.watch → feature `watch` de ray-runtime (crate notify).
+    pub(super) needs_rt_watch: bool,
     /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
     /// de socket (`std::net::TcpStream`/`TcpListener`).
     needs_net: bool,
@@ -257,6 +259,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_time_rng: false,
         needs_ffi_errno: false,
         needs_fs_meta: false,
+        needs_rt_watch: false,
         needs_net: false,
         needs_rt_crypto: false,
         needs_rt_tls: false,
@@ -528,6 +531,11 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     // process` es gating de POLÍTICA — el builtin cae al Err de "no soportado", no hay crate detrás).
     if t.needs_rt_process {
         rt_features.push("process");
+    }
+    // M115.4: watch de fs (detectado por USO, como crypto/tls/sqlite; `--without watch` evitó
+    // marcar el flag y el primitivo cae al camino no-soportado).
+    if t.needs_rt_watch {
+        rt_features.push("watch");
     }
     // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
     // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,

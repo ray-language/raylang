@@ -37,6 +37,14 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/fs`: watch de filesystem por eventos de kernel** (M115.4, IDEAS §69) — la pieza que
+  CINCO apps reimplementaban sondeando mtimes (ray dev, raycode-dev, raylogs `--follow`, raysync
+  `--watch`, raysite serve). `fs.watch(path)` (directorio → recursivo) + `fs.next_event(h)` — la
+  fibra **aparca** hasta el cambio: el proceso duerme de verdad, no sondea — y
+  `fs.next_event_timeout(h, ms)` para agrupar ráfagas. Detrás: FSEvents en macOS / inotify en
+  Linux (crate `notify` en ray-runtime, feature `watch` por defecto; `--without watch` /
+  build slim → error claro). Tres motores byte-idénticos; `close(h)` detiene el watch.
+
 - **`std/fs`: metadatos y permisos** (M115.3, IDEAS §69/§71) — `fs.stat(path)` devuelve
   `Stat { kind, mode, size, mtime_ms }` **sin seguir symlinks** (lstat): un symlink por fin se
   puede DETECTAR (`kind "symlink"`) en vez de seguirse a ciegas — lo que un sync/backup fiel

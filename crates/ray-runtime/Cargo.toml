@@ -27,6 +27,11 @@ tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
 # SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
 # del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
 sqlite = ["dep:rusqlite"]
+# M115.4 — watch de filesystem por EVENTOS DE KERNEL (crate `notify`: FSEvents en macOS, inotify en
+# Linux; la recursividad sobre árboles resuelta — kqueue crudo exigiría un fd por archivo). Los
+# eventos llegan en hilos del propio notify y se puentean a las fibras con un SELF-PIPE (el truco de
+# signals M88.1): la fibra aparca por readiness del extremo de lectura.
+watch = ["dep:notify"]
 # N1 (bench políglota, jul 2026): mimalloc como allocador del binario TRANSPILADO. El binario `ray` ya lo
 # usa (P0.4); el transpilado caía al malloc del sistema (lento en churn de strings pequeños en macOS).
 # Medido: wordcount/logparse −40%, jsonserialize −18%. Activada POR DEFECTO por `ray build --native`;
@@ -73,6 +78,8 @@ webpki-roots = { version = "0.26", optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
 # M53.3 — rusqlite 0.32 con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# M115.4 — watcher de fs multiplataforma (FSEvents/inotify/kqueue detrás de un API único).
+notify = { version = "8", optional = true }
 # N1 — mimalloc 0.1: misma versión/crate que usa el binario `ray` (src/lib.rs) → mismo allocador en ambos.
 mimalloc = { version = "0.1", optional = true }
 # N2 — ahash 0.8: misma versión que usa el binario `ray` (P0.1, `MapStore` de la VM) → mismo hasher en ambos.

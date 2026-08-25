@@ -2647,6 +2647,79 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M115.4: abre un watch de fs → ["ok", handle] o ["err", msg].
+                OpCode::WatchOpen => {
+                    let HeapValue::Str(path) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let elems = match crate::builtins::watch_open(&path) {
+                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M115.4: siguiente evento del watch — sondea la cola; si está vacía APARCA la
+                // fibra en el fd del self-pipe del watcher y rebobina (patrón StdinRead: al
+                // despertar re-ejecuta y re-consulta; un close concurrente la despierta con el
+                // handle ausente → error, no un aparcado eterno).
+                OpCode::WatchNext => {
+                    let HeapValue::Int(ms) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    // ¿Venció el plazo de un aparcado anterior? (io_wait marcó el handle.)
+                    if crate::builtins::take_read_timeout(handle) {
+                        let elems = vec![HeapValue::Str("timeout".to_string())];
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else {
+                        match crate::builtins::watch_try_next(handle) {
+                            Ok(Some((kind, path))) => {
+                                let elems = vec![
+                                    HeapValue::Str("ok".to_string()),
+                                    HeapValue::Str(kind),
+                                    HeapValue::Str(path),
+                                ];
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            Err(e) => {
+                                let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            Ok(None) => match crate::builtins::watch_fd(handle) {
+                                // Sin evento aún: aparca en el fd del watcher (con plazo si ms > 0).
+                                Err(e) => {
+                                    let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                                    self.push(HeapValue::Obj(h));
+                                }
+                                Ok(fd) => {
+                                self.push(HeapValue::Int(handle));
+                                self.push(HeapValue::Int(ms));
+                                self.cur.frames.last_mut().unwrap().ip -= 1;
+                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let deadline = if ms > 0 {
+                                    Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
+                                } else {
+                                    None
+                                };
+                                {
+                                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                                    sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline });
+                                    sh.running -= 1;
+                                }
+                                let (l, c2) = pos!();
+                                if !self.poll_next(l, c2)? { self.stop = true; }
+                                }
+                            },
+                        }
+                    }
+                }
                 // M115.3: chmod → ["ok"] o ["err", msg].
                 OpCode::Chmod => {
                     let mode = self.pop();

@@ -129,8 +129,14 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
     // M115.3: `std::fs::stat`/`chmod` son la EXCEPCIÓN de fs — sus wrappers se EMITEN (stat
     // construye el struct `Stat` en raylang; el intercept nativo es a nivel de PRIMITIVO
     // `__stat`/`__chmod`, como en std/process).
+    // M115.4: watch/next_event/next_event_timeout — como stat/chmod, sus wrappers se EMITEN (el
+    // struct WatchEvent vive en raylang) y el intercept es a nivel de primitivo __watch/__watch_next.
     if name.starts_with("std::math::")
-        || (name.starts_with("std::fs::") && !matches!(name, "std::fs::stat" | "std::fs::chmod"))
+        || (name.starts_with("std::fs::")
+            && !matches!(
+                name,
+                "std::fs::stat" | "std::fs::chmod" | "std::fs::watch" | "std::fs::next_event" | "std::fs::next_event_timeout"
+            ))
     {
         return true;
     }

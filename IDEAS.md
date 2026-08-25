@@ -2613,7 +2613,7 @@ AOF lógica y pub/sub). El benchmark honesto que IDEAS-APPS §1.8 pedía, y otro
 Dogfood de `ray-apps/raysync` (sync unidireccional cifrado con delta por bloques fijos de 64 KiB,
 reconstrucción verificada + rename, `--watch`, `--delete`).
 
-1. **Watch de filesystem — CUARTA app sondeando mtimes** (ray dev, raycode-dev, raylogs
+1. **[EJECUTADA — M115.4, DESIGN §111: `fs.watch` + `next_event[_timeout]` por eventos de kernel] Watch de filesystem — CUARTA app sondeando mtimes** (ray dev, raycode-dev, raylogs
    `--follow`, ahora raysync `--watch`). El caso está sobre-demostrado; la pieza mínima
    (watch de mtime por árbol, o kqueue/inotify detrás de una API de eventos) paga en cuatro
    sitios ya escritos.

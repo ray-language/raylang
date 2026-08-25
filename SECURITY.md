@@ -76,6 +76,7 @@ en el propio Rust del proyecto, sin crates.
 | `subtle` | la comparación en tiempo constante (`constant_time_eq`); su razón de ser es que el compilador no pueda reducirla a un cortocircuito. Ya venía en el árbol como transitiva de `curve25519-dalek` | feature `net-tls` (vía `ray-runtime/crypto`) |
 | `rustls` + `webpki-roots` + `rustls-pki-types` | TLS y verificación de certificados | feature `net-tls` |
 | `rusqlite` (`bundled`) | SQLite embebido: sin dependencia del sistema, versión determinista | feature `sqlite` |
+| `notify` | watch de filesystem por eventos de kernel (FSEvents en macOS, inotify en Linux, kqueue en BSD): la recursividad sobre árboles resuelta — kqueue crudo exige un fd por archivo. Los eventos corren en hilos del crate y se puentean por un self-pipe | feature `watch` |
 | `libloading` | carga de librerías nativas del FFI — reemplazó a `dlopen`/`dlsym` a mano (arregla Windows y da los errores reales del cargador) | feature `ffi` |
 | `corosensei` | cambio de contexto de las fibras del binario nativo: asm auditado de un solo crate en vez de `asm!` propio | binarios nativos con fibras |
 | `regex` | motor de regex acelerado del binario nativo (R5) y de la VM (R7); la semántica de referencia sigue siendo `std/regex`, escrito en raylang (los patrones llegan ya validados por su parser) | feature `regex` de la toolchain (vía `ray-runtime/regex`) + binarios nativos que usan regex |

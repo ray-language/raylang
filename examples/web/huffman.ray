@@ -636,11 +636,11 @@ pub fn huffman_decode(data: [int]) -> Result<[int], string> {
                 node = t.right[node];
             }
             if (node < 0) {
-                return Result.Err("secuencia Huffman inválida");
+                return Result.Err("invalid Huffman sequence");
             }
             if (t.sym[node] >= 0) {
                 if (t.sym[node] == 256) {
-                    return Result.Err("EOS no permitido en el flujo");
+                    return Result.Err("EOS not allowed in the stream");
                 }
                 out.push(t.sym[node]);
                 node = 0;  // vuelve a la raíz
@@ -652,7 +652,7 @@ pub fn huffman_decode(data: [int]) -> Result<[int], string> {
     // Al final debemos estar en la raíz o en un prefijo de puros 1s (relleno de EOS) de ≤7 bits.
     if (node != 0) {
         if (!valid_padding(t, node)) {
-            return Result.Err("relleno Huffman inválido");
+            return Result.Err("invalid Huffman padding");
         }
     }
     Result.Ok(out)

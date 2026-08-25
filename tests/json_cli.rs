@@ -90,7 +90,7 @@ fn main() -> int {
     0
 }
 "#;
-    let expected = "\"café\"\n\"A❤\"\n\"😀\"\nerr: escape \\u con surrogate suelto\nerr: par surrogate incompleto en \\u\nerr: escape \\u con dígito no hexadecimal";
+    let expected = "\"café\"\n\"A❤\"\n\"😀\"\nerr: lone surrogate in \\u escape\nerr: incomplete surrogate pair in \\u\nerr: non-hex digit in \\u escape";
     check("unicode", driver, expected);
 }
 
@@ -151,7 +151,7 @@ fn main() -> int {
     0
 }
 "#;
-    let expected = "err: texto sobrante tras el JSON\nerr: arreglo sin cerrar\nerr: string sin cerrar";
+    let expected = "err: trailing text after the JSON\nerr: unterminated array\nerr: unterminated string";
     check("errors", driver, expected);
 }
 

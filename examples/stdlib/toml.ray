@@ -101,18 +101,18 @@ fn parse_u_escape(t: TS, n: int) -> Result<string, string> {
     var k = 0;
     while (k < n) {
         if (ts_end(t)) {
-            return Result.Err("escape \\u incompleto");
+            return Result.Err("incomplete \\u escape");
         }
         let d = hex_val(ts_adv(t));
         if (d < 0) {
-            return Result.Err("escape \\u con dígito no hexadecimal");
+            return Result.Err("non-hex digit in \\u escape");
         }
         v = v * 16 + d;
         k = k + 1;
     }
     match (char_from_code(v)) {
         Option.Some(c) => Result.Ok(to_string(c)),
-        Option.None => Result.Err("escape \\u con code point inválido"),
+        Option.None => Result.Err("invalid code point in \\u escape"),
     }
 }
 
@@ -129,7 +129,7 @@ fn parse_string(t: TS) -> Result<string, string> {
             cerrado = true;
         } else if (c == '\\') {
             if (ts_end(t)) {
-                return Result.Err("escape al final del string");
+                return Result.Err("escape at end of string");
             }
             let e = ts_adv(t);
             if (e == 'n') {
@@ -151,14 +151,14 @@ fn parse_string(t: TS) -> Result<string, string> {
             } else if (e == 'U') {
                 s = s + parse_u_escape(t, 8)?;
             } else {
-                return Result.Err("escape desconocido '\\" + to_string(e) + "' en el string");
+                return Result.Err("unknown escape '\\" + to_string(e) + "' in the string");
             }
         } else {
             s = s + to_string(c);
         }
     }
     if (!cerrado) {
-        return Result.Err("string sin cerrar");
+        return Result.Err("unterminated string");
     }
     Result.Ok(s)
 }
@@ -182,11 +182,11 @@ fn parse_literal_string(t: TS) -> Result<string, string> {
             return Result.Ok(s);
         }
         if (c == '\n') {
-            return Result.Err("salto de línea en un string literal '...'");
+            return Result.Err("newline in a literal string '...'");
         }
         s = s + to_string(c);
     }
-    Result.Err("string literal sin cerrar")
+    Result.Err("unterminated literal string")
 }
 
 fn es_digito(c: char) -> bool { c >= '0' && c <= '9' }
@@ -206,7 +206,7 @@ fn quitar_separadores(tok: string) -> Result<string, string> {
             let antes = i > 0 && es_digito(cs[i - 1]);
             let despues = i + 1 < cs.len() && es_digito(cs[i + 1]);
             if (!antes || !despues) {
-                return Result.Err("separador '_' mal colocado en el número: " + tok);
+                return Result.Err("misplaced '_' separator in number: " + tok);
             }
         } else {
             out = out + to_string(c);
@@ -228,7 +228,7 @@ fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
     if (tok == "inf" || tok == "+inf" || tok == "-inf" || tok == "nan" || tok == "+nan" || tok == "-nan") {
         return match (parse_float(tok)) {
             Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
-            Option.None => Result.Err("flotante inválido: " + tok),
+            Option.None => Result.Err("invalid float: " + tok),
         };
     }
     let limpio = quitar_separadores(tok)?;
@@ -245,12 +245,12 @@ fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
     if (es_float) {
         match (parse_float(limpio)) {
             Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
-            Option.None => Result.Err("flotante inválido: " + tok),
+            Option.None => Result.Err("invalid float: " + tok),
         }
     } else {
         match (parse_int(limpio)) {
             Option.Some(n) => Result.Ok(TomlValue.TInt(n)),
-            Option.None => Result.Err("entero inválido: " + tok),
+            Option.None => Result.Err("invalid int: " + tok),
         }
     }
 }
@@ -271,7 +271,7 @@ fn read_scalar(t: TS) -> string {
 fn parse_value(t: TS) -> Result<TomlValue, string> {
     skip_spaces(t);
     if (ts_end(t)) {
-        return Result.Err("valor esperado");
+        return Result.Err("expected a value");
     }
     let c = ts_peek(t);
     if (c == '"') {
@@ -310,7 +310,7 @@ fn parse_array(t: TS) -> Result<TomlValue, string> {
         }
     }
     if (ts_end(t)) {
-        return Result.Err("arreglo sin cerrar");
+        return Result.Err("unterminated array");
     }
     ts_adv(t);  // ']'
     Result.Ok(TomlValue.TArray(elems))
@@ -330,7 +330,7 @@ fn expect_eol(t: TS, que: string) -> Result<int, string> {
         // El '\r' de un CRLF cuenta como fin de línea (lo consume skip_trivia después).
         return Result.Ok(0);
     }
-    Result.Err("se esperaba fin de línea tras " + que)
+    Result.Err("expected end of line after " + que)
 }
 
 // ¿Ya existe una entrada con esta ruta? (M63.3: la spec prohíbe redefinir una clave.)
@@ -390,28 +390,28 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
                 aot_counts.push(1);
             }
             table = path + "." + to_string(idx);
-            expect_eol(t, "la cabecera de tabla [[" + path + "]]")?;
+            expect_eol(t, "the array-of-tables header [[" + path + "]]")?;
         } else if (ts_peek(t) == '[') {
             ts_adv(t);
             table = parse_key(t);
             if (table == "") {
                 // M63.3: `[]` reseteaba la tabla a la raíz en silencio.
-                return Result.Err("cabecera de tabla vacía");
+                return Result.Err("empty table header");
             }
             skip_spaces(t);
             if (ts_end(t) || ts_peek(t) != ']') {
-                return Result.Err("falta ']' en la cabecera de tabla");
+                return Result.Err("missing ']' in table header");
             }
             ts_adv(t);
-            expect_eol(t, "la cabecera de tabla [" + table + "]")?;
+            expect_eol(t, "the table header [" + table + "]")?;
         } else {
             let key = parse_key(t);
             if (key == "") {
-                return Result.Err("clave inválida");
+                return Result.Err("invalid key");
             }
             skip_spaces(t);
             if (ts_end(t) || ts_peek(t) != '=') {
-                return Result.Err("falta '=' tras la clave '" + key + "'");
+                return Result.Err("missing '=' after key '" + key + "'");
             }
             ts_adv(t);
             let val = match (parse_value(t)) {
@@ -426,10 +426,10 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
             }
             if (clave_repetida(entries, full)) {
                 // M63.3: antes se aceptaban ambas y toml_get devolvía la PRIMERA.
-                return Result.Err("clave duplicada: '" + full + "'");
+                return Result.Err("duplicate key: '" + full + "'");
             }
             entries.push(TomlEntry { key: full, value: val });
-            expect_eol(t, "el valor de '" + full + "'")?;
+            expect_eol(t, "the value of '" + full + "'")?;
         }
         skip_trivia(t);
     }

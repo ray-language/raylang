@@ -22,7 +22,7 @@ pub fn read_file_bytes(path: string) -> Result<bytes, string> {
     } else {
         match (from_utf8(r[1])) {
             Result.Ok(m) => Result.Err(m),
-            Result.Err(e) => Result.Err("error de E/S"),
+            Result.Err(e) => Result.Err("I/O error"),
         }
     }
 }
@@ -124,7 +124,7 @@ pub fn file_size(path: string) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(n) => Result.Ok(n),
-            Option.None => Result.Err("tamaño inválido"),
+            Option.None => Result.Err("invalid size"),
         }
     } else {
         Result.Err(r[1])
@@ -138,7 +138,7 @@ pub fn mtime(path: string) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(n) => Result.Ok(n),
-            Option.None => Result.Err("mtime inválido"),
+            Option.None => Result.Err("invalid mtime"),
         }
     } else {
         Result.Err(r[1])
@@ -161,7 +161,7 @@ pub fn open(path: string, mode: string) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])
@@ -213,7 +213,7 @@ pub fn seek(h: int, pos: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(p) => Result.Ok(p),
-            Option.None => Result.Err("posición inválida"),
+            Option.None => Result.Err("invalid position"),
         }
     } else {
         Result.Err(r[1])
@@ -315,7 +315,7 @@ pub fn watch(path: string) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])

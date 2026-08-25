@@ -111,9 +111,9 @@ fn tokenize(tpl: string) -> Result<[Tok], string> {
             }
             if (fin < 0) {
                 if (es_tag) {
-                    return Result.Err("'{%' sin cerrar");
+                    return Result.Err("unterminated '{%'");
                 }
-                return Result.Err("'{{' sin cerrar");
+                return Result.Err("unterminated '{{'");
             }
             let inner = tpl.substring(ini, fin).trim();
             i = fin + 2;
@@ -233,7 +233,7 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
                         pc.pos = pc.pos + 1;
                         let parts = s.split(" ");  // ["for", x, "in", lista]
                         if (parts.len() < 4) {
-                            return Result.Err("'for' mal formado (se espera 'for x in lista')");
+                            return Result.Err("malformed 'for' (expected 'for x in list')");
                         }
                         let bodyr = match (parse_seq(pc, ["endfor"])) {
                             Result.Ok(x) => x,
@@ -243,7 +243,7 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
                         };
                         nodes.push(Node.NFor(parts[1], parts[3], bodyr.nodes));
                     } else {
-                        return Result.Err("etiqueta desconocida: '" + kw + "'");
+                        return Result.Err("unknown tag: '" + kw + "'");
                     }
                 },
             }

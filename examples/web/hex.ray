@@ -39,7 +39,7 @@ pub fn hex_encode(data: bytes) -> string {
 pub fn hex_decode(s: string) -> Result<bytes, string> {
     let n = s.len();
     if (n % 2 != 0) {
-        return Result.Err("longitud hexadecimal impar");
+        return Result.Err("odd-length hex string");
     }
     var out: [int] = [];
     var i = 0;
@@ -47,7 +47,7 @@ pub fn hex_decode(s: string) -> Result<bytes, string> {
         let hi = hex_val(s[i]);
         let lo = hex_val(s[i + 1]);
         if (hi < 0 || lo < 0) {
-            return Result.Err("carácter hexadecimal inválido");
+            return Result.Err("invalid hex character");
         }
         out.push(hi << 4 | lo);
         i = i + 2;

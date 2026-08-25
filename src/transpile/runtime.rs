@@ -20,8 +20,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // con el hook de Rust.
     out.push_str("struct __RayErr(String);\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
-    // M130: exit(code) — termina el PROCESO (flusheando stdout/stderr), byte-idéntico a la VM.
-    out.push_str("#[cold] fn __ray_exit(code: i64) -> ! { use std::io::Write; let _ = std::io::stdout().flush(); let _ = std::io::stderr().flush(); std::process::exit(code as i32) }\n");
+    // M130: exit(code) — termina el PROCESO, byte-idéntico a la VM. OJO (M132): el print nativo
+    // va por el HILO ESCRITOR de M96f — flushear std::io::stdout() aquí era el buffer equivocado
+    // (la salida pendiente se perdía; process::exit no corre destructores): hay que drenar el
+    // canal con __ray_flush_prints(), como los otros tres sitios que llaman a process::exit.
+    out.push_str("#[cold] fn __ray_exit(code: i64) -> ! { __ray_flush_prints(); use std::io::Write; let _ = std::io::stderr().flush(); std::process::exit(code as i32) }\n");
     // M97.2 (`try_call`): recuperación en el MISMO hilo. Devuelve `[]` si `f` volvió bien y `[msg]`
     // si falló, el mismo contrato que `__task_failed` — así el envoltorio `try_call` del prelude es
     // idéntico para los tres motores.

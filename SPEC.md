@@ -340,8 +340,8 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
   **estructural** para arreglos/tuplas. Structs/enums de usuario: con `@derive(Eq)` o `impl
   Eq`, vía `igual` (no `==`). **Orden** `< <= > >=`: `int`, `float`, `string` (lexicográfico),
   `char` (code point), `u*`.
-- **Divergencia**: `return`, `panic(…)` y las ramas que terminan en ellos tipan como "cede el
-  tipo al resto".
+- **Divergencia**: `return`, `panic(…)`, `exit(…)` y las ramas que terminan en ellos tipan como
+  "cede el tipo al resto".
 
 ## 8. Semántica de evaluación
 
@@ -368,6 +368,9 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
 - **Límites del parser**: anidamiento máximo `MAX_PARSE_DEPTH = 1000` (error de sintaxis).
 - **`panic(msg)`** aborta la ejecución con "pánico: msg" y la posición de la llamada; el
   proceso sale con 70.
+- **`exit(code)`** termina el proceso con ese código, desde cualquier fibra, flusheando
+  stdout/stderr. No es un error: sin mensaje ni traza (y `try_call` NO lo captura — el proceso
+  muere).
 
 ## 9. Concurrencia (VM y binario nativo; no en el intérprete)
 
@@ -434,7 +437,7 @@ sobre el que se escriben las capas 1 y 2.
 
 ### 10.1 Global
 
-- **Núcleo**: `print eprint to_string len panic assert assert_eq` · tipos imprimibles: `int
+- **Núcleo**: `print eprint to_string len panic exit assert assert_eq` · tipos imprimibles: `int
   float bool string char bytes u*` y (vía `show`) tipos con `Show`.
 - **Recuperación de fallos** (M97): `try_call(f: fn() -> T) -> Result<T, string>` ejecuta `f` y
   convierte un `panic` o error de ejecución en `Err(mensaje)` — el fallo **como valor**, sin

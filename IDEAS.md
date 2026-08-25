@@ -2784,11 +2784,15 @@ los handles del SO al aislar cada `@test` (§65.2; listeners incluidos, los hijo
 `webserver.gzip(req, resp)` + `accepts_gzip` (negociación de Accept-Encoding, explícita por
 handler: comprimir cuesta CPU en la VM).
 
+**[EJECUTADAS — M130, DESIGN §127]** El lote C (motores): `net.shutdown_write(h)` — half-close
+`shutdown(SHUT_WR)` (§64.3; el idiom netcat expresable al fin, solo TCP, errores estables en los
+cuatro sabores) y `exit(code)` (§64.6; builtin núcleo que diverge como panic, termina el proceso
+desde cualquier fibra, `try_call` no lo captura; SPEC y espejo selfhost en tándem).
+
 **Con esto, TODOS los hallazgos con hito del dogfood de 14 apps están ejecutados.** Quedan solo
-los menores anotados en sus tandas (normalización Unicode §71.5, `std/mail` §71.4,
-half-close §64.3, `exit(code)` §64.6, hora local §42), el barrido de errores de stdlib aún en
-español (json/toml/inflate…, cf. M128) y las validaciones de ecosistema (gRPC dogfood §72.4,
-VPS 24/7 de rayrelay).
+los menores anotados en sus tandas (normalización Unicode §71.5, `std/mail` §71.4, hora local
+§42), el barrido de errores de stdlib aún en español (json/toml/inflate…, cf. M128) y las
+validaciones de ecosistema (gRPC dogfood §72.4, VPS 24/7 de rayrelay).
 
 ## Cómo usar este archivo
 

@@ -1923,7 +1923,7 @@ pub(super) fn expr_diverges(e: &Expr) -> bool {
             Some(t) => expr_diverges(t),
             None => matches!(b.statements.last().map(|s| &s.kind), Some(StmtKind::Return { .. })),
         },
-        ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic"),
+        ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic" || n == "exit"),
         _ => false,
     }
 }

@@ -281,3 +281,108 @@ fn peer_addr_native() {
     let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap_or("").lines().collect();
     assert_eq!(lines, PEER_ADDR_EXPECTED, "el nativo diverge de la VM en peer_addr");
 }
+
+// ---------------------------------------------------------------------------------------------
+// M130 — `net.shutdown_write`: half-close (shutdown SHUT_WR).
+// ---------------------------------------------------------------------------------------------
+
+/// Secuencial contra el propio listener (sin spawn → corre también en el intérprete): el cliente
+/// escribe y hace half-close; el lado aceptado lee los datos Y el EOF (solo visible con
+/// SHUT_WR), y aún puede responder — el cliente sigue leyendo tras su shutdown.
+const SHUTDOWN_WRITE_SRC: &str = r#"
+import std/net;
+
+fn main() -> int {
+    let l = match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("listen err: " + e);
+            return 1;
+        },
+    };
+    let port = net.local_port(l);
+    let c = match (net.tcp_connect("127.0.0.1", port)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("connect err: " + e);
+            return 1;
+        },
+    };
+    let s = match (net.tcp_accept(l)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("accept err: " + e);
+            return 1;
+        },
+    };
+    let _ = net.socket_write(c, "hola");
+    match (net.shutdown_write(c)) {
+        Result.Ok(_z) => print("shutdown ok"),
+        Result.Err(e) => print("shutdown err: " + e),
+    }
+    match (net.socket_read(s)) {
+        Result.Ok(datos) => print("got " + datos),
+        Result.Err(e) => print("read err: " + e),
+    }
+    match (net.socket_read(s)) {
+        Result.Ok(eof) => print("eof " + to_string(eof.len())),
+        Result.Err(e) => print("read err: " + e),
+    }
+    let _ = net.socket_write(s, "resp");
+    match (net.socket_read(c)) {
+        Result.Ok(r) => print("client got " + r),
+        Result.Err(e) => print("client err: " + e),
+    }
+    match (net.shutdown_write(l)) {
+        Result.Ok(_z) => print("unexpected"),
+        Result.Err(e) => print(e),
+    }
+    match (net.shutdown_write(99999)) {
+        Result.Ok(_z) => print("unexpected"),
+        Result.Err(e) => print(e),
+    }
+    0
+}
+"#;
+
+const SHUTDOWN_WRITE_EXPECTED: &[&str] = &[
+    "shutdown ok",
+    "got hola",
+    "eof 0",
+    "client got resp",
+    "handle 1 is not a TCP socket",
+    "invalid handle: 99999",
+];
+
+#[test]
+fn shutdown_write_half_closes_and_still_reads() {
+    for vm in [false, true] {
+        let (out, code) = run("net_shutdown_write", SHUTDOWN_WRITE_SRC, vm);
+        assert_eq!(code, 0, "exit (vm={vm}): {out}");
+        assert_eq!(out.lines().collect::<Vec<_>>(), SHUTDOWN_WRITE_EXPECTED, "vm={vm}");
+    }
+}
+
+/// El binario NATIVO (sabor default): mismo programa, misma salida byte a byte.
+#[test]
+fn shutdown_write_native() {
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        assert!(std::env::var_os("CI").is_none(), "rustc no disponible bajo CI: falso verde");
+        eprintln!("saltando shutdown_write_native: rustc no disponible");
+        return;
+    }
+    let mut src_path = std::env::temp_dir();
+    src_path.push("net_shutdown_write_native.ray");
+    std::fs::write(&src_path, SHUTDOWN_WRITE_SRC).expect("escribe el fuente");
+    let bin = std::env::temp_dir().join(format!("ray_shutdown_write_{}", std::process::id()));
+    let build = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["build", src_path.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()])
+        .output()
+        .expect("lanza build --native");
+    assert!(build.status.success(), "build --native falló: {}", String::from_utf8_lossy(&build.stderr));
+    let out = Command::new(&bin).output().expect("corre el binario nativo");
+    let _ = std::fs::remove_file(&bin);
+    assert!(out.status.success(), "el binario nativo falló: {}", String::from_utf8_lossy(&out.stderr));
+    let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap_or("").lines().collect();
+    assert_eq!(lines, SHUTDOWN_WRITE_EXPECTED, "el nativo diverge de la VM en shutdown_write");
+}

@@ -243,7 +243,7 @@ pub(super) fn expr_diverges(expr: &Expr) -> bool {
         // `match (x) { Some(v) => v, None => panic("imposible") }` cuadra de tipo. `panic` gana
         // siempre sobre cualquier homónimo (un builtin no se tapa), así que el chequeo por nombre
         // es seguro.
-        ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic"),
+        ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic" || n == "exit"),
         _ => false,
     }
 }

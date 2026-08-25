@@ -34,6 +34,61 @@ mod imp {
             }
         }
 
+        /// El certificado del peer en DER (el primero de la cadena), o `None` si no presentó
+        /// (lado servidor sin client-auth). M124: la materia prima de `net.tls_peer_cert`.
+        pub fn peer_cert_der(&self) -> Option<Vec<u8>> {
+            match self {
+                TlsStream::Client(s) => s.conn.peer_certificates().and_then(|c| c.first()).map(|c| c.to_vec()),
+                TlsStream::Server(s) => s.conn.peer_certificates().and_then(|c| c.first()).map(|c| c.to_vec()),
+            }
+        }
+
+        /// ¿El handshake sigue en curso? (el certificado del peer solo está tras completarlo).
+        fn is_handshaking(&self) -> bool {
+            match self {
+                TlsStream::Client(s) => s.conn.is_handshaking(),
+                TlsStream::Server(s) => s.conn.is_handshaking(),
+            }
+        }
+
+        /// Una vuelta de `complete_io` (conduce el handshake sobre el socket subyacente).
+        fn complete_io_once(&mut self) -> std::io::Result<()> {
+            match self {
+                TlsStream::Client(s) => s.conn.complete_io(&mut s.sock).map(|_| ()),
+                TlsStream::Server(s) => s.conn.complete_io(&mut s.sock).map(|_| ()),
+            }
+        }
+
+        /// M124: el resumen del certificado del peer (`net.tls_peer_cert`). `tls_connect` deja el
+        /// handshake para la primera I/O, así que aquí se CONDUCE si sigue pendiente (acotado a
+        /// 10 s): con fibras, WouldBlock aparca la fibra (`wait_ready`); sin fibras el socket es
+        /// bloqueante y `complete_io` simplemente bloquea.
+        pub fn peer_cert_summary(&mut self) -> Result<crate::x509::CertSummary, String> {
+            #[cfg(feature = "fibers")]
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while self.is_handshaking() {
+                match self.complete_io_once() {
+                    Ok(()) => {}
+                    #[cfg(feature = "fibers")]
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        self.wait_ready(Some(deadline)).map_err(|e| {
+                            if e.kind() == std::io::ErrorKind::TimedOut {
+                                "TLS handshake timeout".to_string()
+                            } else {
+                                e.to_string()
+                            }
+                        })?;
+                    }
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            let der = self.peer_cert_der().ok_or_else(|| "the peer presented no certificate".to_string())?;
+            crate::x509::cert_summary(&der)
+        }
+
         /// Lee hasta `buf.len()` octetos de texto plano (descifra; conduce el handshake si hace falta).
         /// `Ok(0)` = fin de la conexión.
         pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -279,6 +334,12 @@ mod stub {
     pub struct TlsStream(std::convert::Infallible);
     impl TlsStream {
         pub fn peer_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+            match self.0 {}
+        }
+        pub fn peer_cert_der(&self) -> Option<Vec<u8>> {
+            match self.0 {}
+        }
+        pub fn peer_cert_summary(&mut self) -> Result<crate::x509::CertSummary, String> {
             match self.0 {}
         }
         pub fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {

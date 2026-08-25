@@ -648,6 +648,8 @@ pub enum OpCode {
     TcpConnectTimeout,
     /// M123: la dirección del peer ("ip:puerto") de una conexión TCP/TLS.
     PeerAddr,
+    /// M124: el resumen del certificado del peer de una conexión TLS.
+    TlsPeerCert,
     /// Saca `port` (int) y `host` (string); abre una conexión **TLS** (rustls) y empuja un `[string]`
     /// etiquetado. Primitivo `__tls_connect` (M19.4a); el prelude → `Result<int,string>`. El handle se
     /// lee/escribe con los mismos `socket_*` (desvían a TLS) y se cierra con `close`.

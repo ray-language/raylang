@@ -2642,7 +2642,7 @@ reconstrucción verificada + rename, `--watch`, `--delete`).
 Dogfood de `ray-apps/raywatch` (monitor: checks http/tcp/tls/redis/dns con fibra por check,
 SQLite, dashboard SSE, webhooks al cambiar de estado).
 
-1. **No se puede leer el certificado del peer TLS** — predicción del catálogo confirmada:
+1. **[EJECUTADA — M124, DESIGN §121: `net.tls_peer_cert(h) -> PeerCert{subject, issuer, not_before_ms, not_after_ms, san}`]** **No se puede leer el certificado del peer TLS** — predicción del catálogo confirmada:
    `tls_connect` devuelve solo el handle. El handshake de rustls ya valida cadena y fechas (así
    que "conecta por TLS" sí es un check honesto), pero **"expira en N días"** — el check de TLS
    que todo operador quiere — es inexpresable. Superficie candidata:
@@ -2758,10 +2758,13 @@ nativo-fibras desde F4) — el hueco real era solo el timeout.
 **[EJECUTADA — M122, DESIGN §119]** `tcp_connect_timeout` (§70.3): el connect con plazo — el
 intento vencido falla con `"connect timeout"` en vez de los ~75 s del SO.
 
+**[EJECUTADAS — M123/M124, DESIGN §120/§121]** `Request.remote` + `net.peer_addr` (§65.1) y
+`net.tls_peer_cert` (§70.1): la dirección del cliente y el certificado del peer.
+
 **Quedan abiertos** (candidatos, no comprometidos): el **pool/multiplexado de `packages/rpc`**
-(§72.2, secuencial por conexión hoy); `net.tls_peer_cert` (§70.1), `term.read_hidden` (§71.1),
-hasher incremental de `std/crypto` (§69.3), normalización Unicode y `std/mail` (§71.4/§71.5), y
-los menores de `std` que cada tanda anotó.
+(§72.2, secuencial por conexión hoy); `term.read_hidden` (§71.1), hasher incremental de
+`std/crypto` (§69.3), normalización Unicode y `std/mail` (§71.4/§71.5), y los menores de `std`
+que cada tanda anotó.
 
 ## Cómo usar este archivo
 

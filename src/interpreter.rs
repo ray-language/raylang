@@ -2040,6 +2040,27 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M124: el resumen del certificado del peer TLS → ["ok", subject, issuer, nb, na, san...].
+            "__tls_peer_cert" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::tls_peer_cert(*h) {
+                        Ok(s) => {
+                            let mut v = vec![
+                                Value::Str("ok".to_string()),
+                                Value::Str(s.subject),
+                                Value::Str(s.issuer),
+                                Value::Str(s.not_before_ms.to_string()),
+                                Value::Str(s.not_after_ms.to_string()),
+                            ];
+                            v.extend(s.san.into_iter().map(Value::Str));
+                            v
+                        }
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M123: la dirección del peer de una conexión TCP/TLS → ["ok", "ip:puerto"] / ["err", msg].
             "__peer_addr" => {
                 let arr = match &values[0] {

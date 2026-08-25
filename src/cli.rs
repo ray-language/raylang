@@ -934,6 +934,7 @@ const RT_REGEX_RS: &str = include_str!("../crates/ray-runtime/src/regex.rs");
 const RT_FIBERS_RS: &str = include_str!("../crates/ray-runtime/src/fibers.rs");
 const RT_PROCESS_RS: &str = include_str!("../crates/ray-runtime/src/process.rs");
 const RT_WATCH_RS: &str = include_str!("../crates/ray-runtime/src/watch.rs");
+const RT_X509_RS: &str = include_str!("../crates/ray-runtime/src/x509.rs");
 
 /// Camino Cargo: el programa usa un subsistema con crate externo (cripto/…). Se genera un proyecto Cargo
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
@@ -987,6 +988,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/fibers.rs", RT_FIBERS_RS), // sin efecto salvo feature `fibers` (cfg en lib.rs)
         ("ray-runtime/src/process.rs", RT_PROCESS_RS), // ídem: solo con la feature `process` (M100)
         ("ray-runtime/src/watch.rs", RT_WATCH_RS), // ídem: solo con la feature `watch` (M115.4)
+        ("ray-runtime/src/x509.rs", RT_X509_RS), // ídem: la arrastra `tls` (M124, tls_peer_cert)
     ];
     for (rel, content) in files {
         if let Err(e) = write(rel, content) {

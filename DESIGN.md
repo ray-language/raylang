@@ -9952,3 +9952,35 @@ Verificado byte-idéntico en los cuatro sabores (el peer del cliente = `"127.0.0
 listener propio — determinista sin servidor externo; listener y handle inválido fallan limpio) y
 E2E sobre el webserver de producción (`webserver_remote_cli`: el servidor reporta EXACTAMENTE el
 extremo local del socket del cliente, y `remote_ip` quita el puerto).
+
+## 121. M124 — tls_peer_cert: "expira en N días" deja de ser inexpresable (ago 2026)
+
+La predicción del catálogo que raywatch confirmó (IDEAS §70.1): rustls valida la cadena y las
+fechas EN el handshake — "conecta por TLS" era un check honesto — pero no exponía los CAMPOS del
+certificado, y **"expira en N días" es EL check de TLS que todo operador quiere**.
+
+**Superficie** (patrón stat M115.3 — el struct vive en raylang):
+`net.tls_peer_cert(h) -> Result<PeerCert, string>` con
+`PeerCert { subject, issuer, not_before_ms, not_after_ms, san: [string] }` — subject/issuer como
+nombres X.500 (`"CN=example.com"`), la validez en epoch ms comparable con `time.now()` (días
+restantes = `(not_after_ms - time.now()) / 86400000`), y los SAN (DNS + IPs). Funciona sobre
+conexiones de cliente (el cert del servidor) y de servidor (el del cliente, solo con client-auth).
+
+**Las dos decisiones de la fase**:
+1. **Dependencia nueva: `x509-parser` (rusticata)**, en ray-runtime tras la feature `x509` (la
+   arrastra `tls`; la VM la activa vía `net-tls` sin arrastrar el TLS del crate — trae su propio
+   rustls). Parsear nombres X.500 + GeneralizedTime + GeneralNames es exactamente la clase de
+   código seguridad-adyacente que no se escribe artesanal. Solo LEE certificados ya validados por
+   rustls; no participa en la verificación (SECURITY.md ampliado). El parseo es el MISMO código en
+   los tres motores → el resumen es byte-idéntico por construcción.
+2. **`tls_peer_cert` CONDUCE el handshake pendiente** (acotado a 10 s): `tls_connect` lo deja para
+   la primera I/O, y el caso de uso canónico (conectar → mirar la expiración → cerrar) no hace
+   ninguna. En la VM (socket no bloqueante) el WouldBlock espera readiness con el poller; en el
+   intérprete bloquea; en nativo la lógica vive en `TlsStream::peer_cert_summary` (ray-runtime),
+   con el brazo WouldBlock aparcando la fibra (`wait_ready`) bajo la feature `fibers`.
+
+Gotcha de plomería (la lección M115.4 de nuevo): `x509.rs` debe EMBEBERSE en `src/cli.rs`
+(RT_X509_RS + lista `files`) o el proyecto Cargo generado no compila. Verificado byte-idéntico en
+los tres motores con el cert de fixtures (CN=localhost / CN=raylang-test-ca / SAN [localhost] +
+ventana de validez), SIN I/O previa al pedirlo — probando la conducción del handshake
+(`tls_peer_cert_cli.rs`: intérprete, VM y nativo E2E).

@@ -1457,6 +1457,52 @@ pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_connect(_host: &str, _port: i64) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
 
+/// M124: el resumen del certificado del PEER de una conexión TLS — "expira en N días" es EL check
+/// que todo operador quiere (raywatch, IDEAS §70.1). `tls_connect` deja el handshake para la
+/// primera I/O, así que aquí se CONDUCE si sigue pendiente (acotado a 10 s): en la VM el socket es
+/// no bloqueante → WouldBlock espera readiness con el poller; en el intérprete bloquea.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
+    use std::os::fd::AsRawFd;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Tls(tc)) => {
+            while tc.conn.is_handshaking() {
+                match tc.conn.complete_io(&mut tc.sock) {
+                    Ok(_) => {}
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        if std::time::Instant::now() >= deadline {
+                            return Err("TLS handshake timeout".to_string());
+                        }
+                        let fd = tc.sock.as_raw_fd();
+                        let (rd, wr): (&[i32], &[i32]) =
+                            if tc.conn.wants_write() { (&[], &[fd]) } else { (&[fd], &[]) };
+                        let _ = crate::poll::wait(rd, wr, 1000);
+                    }
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            let der = tc
+                .conn
+                .peer_certificates()
+                .and_then(|c| c.first())
+                .map(|c| c.to_vec())
+                .ok_or_else(|| "the peer presented no certificate".to_string())?;
+            ray_runtime::x509::cert_summary(&der)
+        }
+        Some(_) => Err(format!("handle {} is not a TLS connection", h)),
+        None => Err(format!("invalid handle: {}", h)),
+    }
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_peer_cert(_h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
+    Err(NET_TLS_UNAVAILABLE.to_string())
+}
+
 /// M31.2a: conexión TLS de cliente ofreciendo **ALPN `h2`** (HTTP/2). Conecta, **completa el handshake**
 /// (bloqueante) y exige que el servidor negocie `h2`; si no, error. Devuelve el handle (reusa el mismo
 /// registro/rutas de I/O que `tls_connect`). Builtin `__tls_connect_h2`.
@@ -3098,6 +3144,13 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__peer_addr", opcode: OpCode::PeerAddr, check: |a| {
         arity(a, 1, "__peer_addr", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__peer_addr expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tls_peer_cert(h) -> [string] (M124): ["ok", subject, issuer, not_before_ms, not_after_ms,
+    // san...] o ["err", msg]. std/net lo envuelve en el struct PeerCert (patrón stat M115.3).
+    Builtin { name: "__tls_peer_cert", opcode: OpCode::TlsPeerCert, check: |a| {
+        arity(a, 1, "__tls_peer_cert", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_peer_cert expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_connect(host, puerto) -> [string] (M19.4a): ["ok", handle] o ["err", msg]. Prelude →

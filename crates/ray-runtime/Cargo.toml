@@ -23,7 +23,14 @@ default = []
 crypto = ["dep:ring", "dep:x25519-dalek", "dep:subtle"]
 # TLS de PRODUCCIÓN (rustls). El binario transpilado usa hilos de SO reales → I/O TLS BLOQUEANTE
 # (StreamOwned), a diferencia de la VM (no-bloqueante + fibras). ring provee el proveedor de rustls.
-tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types"]
+# M124: `tls` arrastra `x509` — todo consumidor de TLS puede inspeccionar el certificado del peer.
+tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types", "x509"]
+# M124 — resumen del certificado X.509 del peer (`net.tls_peer_cert`): subject/issuer/validez/SAN
+# desde el DER que rustls ya tiene en mano. `x509-parser` (rusticata) en vez de un walk DER a mano:
+# parsear nombres X.500 + GeneralizedTime + GeneralNames es exactamente la clase de código
+# seguridad-adyacente que no se escribe artesanal. Feature aparte para que la VM (que trae su
+# propio rustls vía `net-tls` del host) la active sin arrastrar el TLS de este crate.
+x509 = ["dep:x509-parser"]
 # SQLite embebido de PRODUCCIÓN (rusqlite, `bundled` = el C de SQLite dentro del binario → sin dependencia
 # del sistema, versión determinista). Resultados deterministas → oráculo por byte-identidad VM↔nativo.
 sqlite = ["dep:rusqlite"]
@@ -74,6 +81,8 @@ subtle = { version = "2.6", default-features = false, optional = true }
 # M19.4 — rustls (proveedor ring, sin OpenSSL): TLS puro Rust+C portable. Mismas versiones/features que
 # usaba el binario `ray` → mismo comportamiento. Las raíces de Mozilla (webpki-roots) verifican certificados.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+# M124 — parser X.509 (rusticata) para `net.tls_peer_cert`: subject/issuer/validez/SAN del DER.
+x509-parser = { version = "0.17", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
 # M53.3 — rusqlite 0.32 con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.

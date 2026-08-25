@@ -3033,6 +3033,27 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M124: el resumen del certificado del peer TLS → ["ok", subject, issuer, nb_ms,
+                // na_ms, san...] / ["err", msg]. El wrapper de std/net construye el struct PeerCert.
+                OpCode::TlsPeerCert => {
+                    let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
+                    let elems = match crate::builtins::tls_peer_cert(handle) {
+                        Ok(s) => {
+                            let mut v = vec![
+                                HeapValue::Str("ok".to_string()),
+                                HeapValue::Str(s.subject),
+                                HeapValue::Str(s.issuer),
+                                HeapValue::Str(s.not_before_ms.to_string()),
+                                HeapValue::Str(s.not_after_ms.to_string()),
+                            ];
+                            v.extend(s.san.into_iter().map(HeapValue::Str));
+                            v
+                        }
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M123: la dirección del peer de una conexión TCP/TLS → ["ok", "ip:puerto"] / ["err", msg].
                 OpCode::PeerAddr => {
                     let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };

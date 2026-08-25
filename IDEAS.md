@@ -2410,7 +2410,7 @@ Dogfood de `ray-apps/raylogs` (analizador de logs en streaming: stdin/archivo �
 JSON/CSV/regex → filtros → count-by/percentiles). Cuatro necesidades confirmadas con caso
 concreto, en orden de impacto:
 
-1. **BUG — `sort([float])` compila en la VM pero rompe el build nativo** (impacto: ALTO —
+1. **[EJECUTADA — PR #140: `__ray_sort_float` (merge sort con `<`, paridad NaN)] BUG — `sort([float])` compila en la VM pero rompe el build nativo** (impacto: ALTO —
    corrección entre motores). El transpilador emite `__ray_sort<T: Ord + Clone>` y `f64` no es
    `Ord` en Rust → `error[E0277]` en el `cargo build` del usuario, con el error de Rust crudo como
    diagnóstico. Es una violación del contrato "los tres motores byte-idénticos": el mismo programa
@@ -2447,7 +2447,7 @@ traspaso de sockets entre fibras por canal, STUN-lite UDP y métricas). Es la pr
 sockets de larga vida con fibras en el backend NATIVO, y destapó dos bugs de corrección entre
 motores más varios huecos de expresividad. Repros mínimos en `ray-apps/rayrelay/docs/repros/`.
 
-1. **BUG — nativo: `close(h)` de un socket con un lector aparcado es un no-op silencioso**
+1. **[EJECUTADA — PR #140: `__ray_close` hace `shutdown(Both)` y el bucle de lectura re-verifica el handle al despertar/EOF] BUG — nativo: `close(h)` de un socket con un lector aparcado es un no-op silencioso**
    (impacto: ALTO — corrección entre motores, servicios de larga vida). Matriz medida:
    - misma fibra, sin lector: ✅ ambos motores (FIN llega, handle inválido después).
    - cross-fibra, socket OCIOSO: ✅ ambos motores.
@@ -2458,7 +2458,7 @@ motores más varios huecos de expresividad. Repros mínimos en `ray-apps/rayrela
      (`close_wake.ray`). El idiom estándar de proxies/relays "cierro el socket para despertar al
      pump del otro sentido" no es portable. Workaround de rayrelay: cada pump cierra su PROPIO src
      al salir (same-fiber) + suelo de read timeout para que el segundo pump se autolimpie.
-2. **BUG — nativo: `Variant(b.campo, f(b), …)` con `f` mutando `b` panica con "RefCell already
+2. **[EJECUTADA — PR #140: los args de literales compuestos con 2+ exprs se izan a temporales `let __rt_a{i}`] BUG — nativo: `Variant(b.campo, f(b), …)` con `f` mutando `b` panica con "RefCell already
    borrowed"** (impacto: ALTO — crash de runtime en código válido). El transpilador mantiene vivo
    el borrow del acceso a campo mientras evalúa el siguiente argumento del constructor de variante;
    si ese argumento llama a una función que muta el struct (borrow_mut), panic. En la VM funciona.
@@ -2592,7 +2592,7 @@ carencias de ERGONOMÍA, no de runtime.
 Dogfood de `ray-apps/raykv` (servidor RESP2 compatible redis-cli/redis-benchmark/net-redis, con
 AOF lógica y pub/sub). El benchmark honesto que IDEAS-APPS §1.8 pedía, y otro bug de motor.
 
-1. **BUG — nativo: un `return;` dentro de una clausura `spawn` no compila** (impacto: MEDIO-ALTO
+1. **[EJECUTADA — PR #140: el cuerpo literal se emite como IIFE `(|| {…})()` y la conversión Send se aplica al resultado] BUG — nativo: un `return;` dentro de una clausura `spawn` no compila** (impacto: MEDIO-ALTO
    — patrón común). El transpilador emite el cierre con el `return` que fuerza tipo `()` y luego
    remata el cuerpo con `__RaySend::U` → E0308 en el cargo del usuario. Repro mínimo: `spawn(fn()
    { while (true) { match (x) { A => { return; }, … } } });`. Workaround: bandera de salida.
@@ -2730,11 +2730,23 @@ La última tanda del catálogo de IDEAS-APPS (14 de 14 construidas). Tres apps d
    servicio gRPC externo real).
 
 **Cierre del catálogo**: con esta tanda, las 14 apps de IDEAS-APPS están construidas (§§63–72).
-Los temas transversales quedaron así: fs es EL frente (fsync §66, locks §66, watch ×5, stat/
-symlinks §69, chmod §71, write_bytes-en-handle §68); el nativo tiene 4 bugs de divergencia
-reproducidos (sort-float §63, close-con-lector §64, RefCell-en-variante §64, return-en-spawn
-§68) que piden un harness diferencial VM/nativo; y el terminal/tiempo pide `term.width`,
-`\x`/`\u`, literales hex (§67) y ahora precisión de sleep (§72).
+Los temas transversales que dejaron **están todos ejecutados y mergeados** (ago 2026):
+- **fs de producción** — `fs.sync` (§66.1, M115.1), `fs.try_lock`/`unlock` (§66.2, M115.2),
+  `fs.stat` (§69.2, M115.3), `fs.chmod` (§71.2, M115.3), `fs.watch` por eventos de kernel
+  (§69.1, M115.4), `fs.write_bytes`-en-handle (§68.2, M115.1).
+- **Los 4 bugs de divergencia VM/nativo** — sort-float (§63.1), close-con-lector (§64.1),
+  RefCell-en-variante (§64.2), return-en-spawn (§68.1): los cuatro cerrados en el PR #140.
+- **Concurrencia con-plazo** — `try_recv` (§64.4, M116) y `select_timeout` (§64.4, M116.1).
+- **Terminal y tiempo** — `term.width`/`char_width`/`fit` (§67.1, M117), escapes `\0`/`\x`/`\u`
+  (§67.2/§71.6, M118), literales hex/octal/binario (§67.3, M118) y `time.sleep` preciso
+  (§72.1, M119).
+
+**Quedan abiertos** (candidatos, no comprometidos): un **harness diferencial VM/nativo** que cace
+los bugs de la clase §63/§64/§68 antes que el dogfood (los cuatro eran "código válido en VM que no
+compila/panica en nativo"); el **pool/multiplexado de `packages/rpc`** (§72.2, secuencial por
+conexión hoy); `net.tls_peer_cert` (§70.1), timeouts de `tcp_connect`/`dns` (§70.2/§70.3),
+`term.read_hidden` (§71.1), hasher incremental de `std/crypto` (§69.3), normalización Unicode y
+`std/mail` (§71.4/§71.5), y los menores de `std` que cada tanda anotó.
 
 ## Cómo usar este archivo
 

@@ -213,7 +213,7 @@ fn field(s: string, ini: int, fin: int, name: string) -> Result<int, string> {
     while (i < fin) {
         let c = s[i];
         if (c < '0' || c > '9') {
-            return Result.Err("ISO 8601: " + name + " no numérico en '" + s + "'");
+            return Result.Err("ISO 8601: non-numeric " + name + " in '" + s + "'");
         }
         n = n * 10 + (char_code(c) - 48);
         i = i + 1;
@@ -225,7 +225,7 @@ fn field(s: string, ini: int, fin: int, name: string) -> Result<int, string> {
 fn separator(s: string, i: int, expected: char) -> Result<int, string> {
     if (s[i] != expected) {
         return Result.Err(
-            "ISO 8601: se esperaba '" + to_string(expected) + "' en la posición " + to_string(i) + " de '" + s + "'"
+            "ISO 8601: expected '" + to_string(expected) + "' at position " + to_string(i) + " in '" + s + "'"
         );
     }
     Result.Ok(0)
@@ -241,29 +241,29 @@ fn separator(s: string, i: int, expected: char) -> Result<int, string> {
 /// non-leap year…), a malformed offset, trailing text, or a result before 1970.
 pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
     if (s.len() < 20) {
-        return Result.Err("ISO 8601 demasiado corto: '" + s + "'");
+        return Result.Err("ISO 8601 too short: '" + s + "'");
     }
-    let year = field(s, 0, 4, "año")?;
+    let year = field(s, 0, 4, "year")?;
     separator(s, 4, '-')?;
-    let month = field(s, 5, 7, "mes")?;
+    let month = field(s, 5, 7, "month")?;
     separator(s, 7, '-')?;
-    let day = field(s, 8, 10, "día")?;
+    let day = field(s, 8, 10, "day")?;
     if (s[10] != 'T' && s[10] != 't' && s[10] != ' ') {
-        return Result.Err("ISO 8601: se esperaba 'T' entre fecha y hora en '" + s + "'");
+        return Result.Err("ISO 8601: expected 'T' between date and time in '" + s + "'");
     }
-    let hour = field(s, 11, 13, "hora")?;
+    let hour = field(s, 11, 13, "hour")?;
     separator(s, 13, ':')?;
-    let minute = field(s, 14, 16, "minuto")?;
+    let minute = field(s, 14, 16, "minute")?;
     separator(s, 16, ':')?;
-    let second = field(s, 17, 19, "segundo")?;
+    let second = field(s, 17, 19, "second")?;
 
     // Rangos: la fecha se valida EXACTA por round-trip civil (rechaza 31 de abril y 29-feb no
     // bisiesto sin tabla de meses); la hora, por rango simple.
     if (month < 1 || month > 12) {
-        return Result.Err("ISO 8601: mes fuera de rango (" + to_string(month) + ") en '" + s + "'");
+        return Result.Err("ISO 8601: month out of range (" + to_string(month) + ") in '" + s + "'");
     }
     if (day < 1 || day > 31) {
-        return Result.Err("ISO 8601: día fuera de rango (" + to_string(day) + ") en '" + s + "'");
+        return Result.Err("ISO 8601: day out of range (" + to_string(day) + ") in '" + s + "'");
     }
     let civil = civil_from_days(days_from_civil(year, month, day));
     if (civil.year != year || civil.month != month || civil.day != day) {
@@ -272,7 +272,7 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
         );
     }
     if (hour > 23 || minute > 59 || second > 59) {
-        return Result.Err("ISO 8601: hora fuera de rango en '" + s + "'");
+        return Result.Err("ISO 8601: time out of range in '" + s + "'");
     }
 
     // Fracción opcional: `.` + 1+ dígitos; los TRES primeros son los ms (el resto se trunca).
@@ -291,13 +291,13 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
             i = i + 1;
         }
         if (digitos == 0) {
-            return Result.Err("ISO 8601: fracción vacía en '" + s + "'");
+            return Result.Err("ISO 8601: empty fraction in '" + s + "'");
         }
     }
 
     // Offset obligatorio: `Z` (UTC) o `±HH:MM`.
     if (i >= s.len()) {
-        return Result.Err("ISO 8601: falta el offset (Z o ±HH:MM) en '" + s + "'");
+        return Result.Err("ISO 8601: missing offset (Z or ±HH:MM) in '" + s + "'");
     }
     var offset_ms = 0;
     var fin = i + 1;
@@ -305,16 +305,16 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
         offset_ms = 0;
     } else {
         if (s[i] != '+' && s[i] != '-') {
-            return Result.Err("ISO 8601: offset inválido en '" + s + "'");
+            return Result.Err("ISO 8601: invalid offset in '" + s + "'");
         }
         if (i + 6 > s.len()) {
-            return Result.Err("ISO 8601: offset incompleto en '" + s + "'");
+            return Result.Err("ISO 8601: incomplete offset in '" + s + "'");
         }
         let oh = field(s, i + 1, i + 3, "hora del offset")?;
         separator(s, i + 3, ':')?;
         let om = field(s, i + 4, i + 6, "minuto del offset")?;
         if (oh > 23 || om > 59) {
-            return Result.Err("ISO 8601: offset fuera de rango en '" + s + "'");
+            return Result.Err("ISO 8601: offset out of range in '" + s + "'");
         }
         offset_ms = (oh * 3600 + om * 60) * 1000;
         if (s[i] == '-') {
@@ -323,7 +323,7 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
         fin = i + 6;
     }
     if (fin != s.len()) {
-        return Result.Err("ISO 8601: texto sobrante tras el offset en '" + s + "'");
+        return Result.Err("ISO 8601: trailing text after the offset in '" + s + "'");
     }
 
     let civil_ms = to_epoch_millis(
@@ -339,7 +339,7 @@ pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
     );
     let epoch = civil_ms + frac_ms - offset_ms;
     if (epoch < 0) {
-        return Result.Err("ISO 8601: el instante es anterior a 1970 (no soportado)");
+        return Result.Err("ISO 8601: the instant is before 1970 (not supported)");
     }
     Result.Ok(epoch)
 }

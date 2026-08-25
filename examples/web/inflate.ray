@@ -45,7 +45,7 @@ struct Huff {
 // índice fuera de rango que mata la fibra (inflate procesa datos EXTERNOS: el gzip de HTTP).
 fn read_bit(s: Inflater) -> Result<int, string> {
     if (s.pos >= s.data.len()) {
-        return Result.Err("stream DEFLATE truncado");
+        return Result.Err("truncated DEFLATE stream");
     }
     let byte = s.data[s.pos];
     let bit = byte >> s.bitpos & 1;
@@ -253,7 +253,7 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
     while (true) {
         let sym = decode(s, litlen)?;
         if (sym < 0) {
-            return Result.Err("código literal/longitud inválido");
+            return Result.Err("invalid literal/length code");
         }
         if (sym == 256) {
             return Result.Ok(0);  // fin del bloque
@@ -262,28 +262,28 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             // M64.2: anti-bomba — la salida acumulada nunca rebasa el tope.
             if (s.out.len() >= s.limit) {
                 return Result.Err(
-                    "salida descomprimida excede el límite (posible bomba de descompresión)"
+                    "decompressed output exceeds the limit (possible decompression bomb)"
                 );
             }
             s.out.push(sym);  // literal
         } else {
             let li = sym - 257;
             if (li >= 29) {
-                return Result.Err("código de longitud fuera de rango");
+                return Result.Err("length code out of range");
             }
             let length = lbase[li] + read_bits(s, lext[li])?;
             let dsym = decode(s, dist)?;
             if (dsym < 0 || dsym >= 30) {
-                return Result.Err("código de distancia inválido");
+                return Result.Err("invalid distance code");
             }
             let distance = dbase[dsym] + read_bits(s, dext[dsym])?;
             if (distance > s.out.len()) {
-                return Result.Err("distancia fuera de rango");
+                return Result.Err("distance out of range");
             }
             // M64.2: anti-bomba — el tramo LZ77 completo debe caber bajo el tope.
             if (s.out.len() + length > s.limit) {
                 return Result.Err(
-                    "salida descomprimida excede el límite (posible bomba de descompresión)"
+                    "decompressed output exceeds the limit (possible decompression bomb)"
                 );
             }
             let start = s.out.len() - distance;
@@ -305,20 +305,20 @@ fn stored_block(s: Inflater) -> Result<int, string> {
         s.pos = s.pos + 1;  // alinear al siguiente octeto
     }
     if (s.pos + 4 > s.data.len()) {
-        return Result.Err("bloque almacenado truncado (falta LEN/NLEN)");
+        return Result.Err("stored block truncated (missing LEN/NLEN)");
     }
     let length = s.data[s.pos] | s.data[s.pos + 1] << 8;
     let nlen = s.data[s.pos + 2] | s.data[s.pos + 3] << 8;
     if ((length ^ nlen) != 65535) {
-        return Result.Err("bloque almacenado corrupto (NLEN no es el complemento de LEN)");
+        return Result.Err("stored block corrupt (NLEN is not the complement of LEN)");
     }
     s.pos = s.pos + 4;  // salta LEN (2) + NLEN (2)
     if (s.pos + length > s.data.len()) {
-        return Result.Err("bloque almacenado truncado (declara más octetos de los que hay)");
+        return Result.Err("stored block truncated (declares more bytes than are present)");
     }
     // M64.2: anti-bomba — también el bloque almacenado respeta el tope de salida.
     if (s.out.len() + length > s.limit) {
-        return Result.Err("salida descomprimida excede el límite (posible bomba de descompresión)");
+        return Result.Err("decompressed output exceeds the limit (possible decompression bomb)");
     }
     var k = 0;
     while (k < length) {
@@ -369,7 +369,7 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
     let hclen = read_bits(s, 4)? + 4;
     // M64.1: los límites de la spec (como puff): 286 códigos literal/longitud, 30 de distancia.
     if (hlit > 286 || hdist > 30) {
-        return Result.Err("demasiados códigos en el bloque dinámico");
+        return Result.Err("too many codes in the dynamic block");
     }
     // Longitudes del alfabeto de longitudes de código, en el orden permutado del RFC.
     let order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
@@ -390,7 +390,7 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
     while (all_lengths.len() < hlit + hdist) {
         let sym = decode(s, cl_huff)?;
         if (sym < 0) {
-            return Result.Err("código de longitud de código inválido");
+            return Result.Err("invalid code-length code");
         }
         if (sym < 16) {
             all_lengths.push(sym);
@@ -400,7 +400,7 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
             var relleno = 0;
             if (sym == 16) {
                 if (all_lengths.len() == 0) {
-                    return Result.Err("repetición 16 sin longitud previa");
+                    return Result.Err("repeat code 16 with no previous length");
                 }
                 relleno = all_lengths[all_lengths.len() - 1];
                 rep = read_bits(s, 2)? + 3;
@@ -411,7 +411,7 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
                 rep = read_bits(s, 7)? + 11;
             }
             if (all_lengths.len() + rep > hlit + hdist) {
-                return Result.Err("repetición de longitudes rebasa el número de códigos");
+                return Result.Err("length repeat overflows the code count");
             }
             var k = 0;
             while (k < rep) {
@@ -451,7 +451,7 @@ fn inflate_blocks(s: Inflater) -> Result<int, string> {
                 if (btype == 2) {
                     r = dynamic_block(s);
                 } else {
-                    return Result.Err("tipo de bloque DEFLATE reservado (3)");
+                    return Result.Err("reserved DEFLATE block type (3)");
                 }
             }
         }
@@ -562,13 +562,13 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
 /// protection).
 pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     if (data.len() < 18) {
-        return Result.Err("gzip demasiado corto");
+        return Result.Err("gzip too short");
     }
     if (data[0] != 31 || data[1] != 139) {
-        return Result.Err("magia gzip inválida");
+        return Result.Err("invalid gzip magic");
     }
     if (data[2] != 8) {
-        return Result.Err("método de compresión gzip no soportado");
+        return Result.Err("unsupported gzip compression method");
     }
     let flg = data[3];
     // M64.1: la cabecera variable se recorre con BOUNDS — el cuerpo + tráiler (8 octetos)
@@ -578,12 +578,12 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     if ((flg & 4) != 0) {
         // FEXTRA
         if (pos + 2 > tope) {
-            return Result.Err("cabecera gzip truncada (FEXTRA)");
+            return Result.Err("gzip header truncated (FEXTRA)");
         }
         let xlen = data[pos] | data[pos + 1] << 8;
         pos = pos + 2 + xlen;
         if (pos > tope) {
-            return Result.Err("cabecera gzip truncada (FEXTRA declara más de lo que hay)");
+            return Result.Err("gzip header truncated (FEXTRA declares more than is present)");
         }
     }
     if ((flg & 8) != 0) {
@@ -592,7 +592,7 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
             pos = pos + 1;
         }
         if (pos >= tope) {
-            return Result.Err("cabecera gzip truncada (FNAME sin terminar)");
+            return Result.Err("gzip header truncated (unterminated FNAME)");
         }
         pos = pos + 1;
     }
@@ -602,7 +602,7 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
             pos = pos + 1;
         }
         if (pos >= tope) {
-            return Result.Err("cabecera gzip truncada (FCOMMENT sin terminar)");
+            return Result.Err("gzip header truncated (unterminated FCOMMENT)");
         }
         pos = pos + 1;
     }
@@ -611,7 +611,7 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
         pos = pos + 2;
     }
     if (pos > tope) {
-        return Result.Err("cabecera gzip truncada");
+        return Result.Err("gzip header truncated");
     }
     let comprimido = data.sub_bytes(pos, data.len() - 8);
     match (inflate_raw_limit(
@@ -625,7 +625,7 @@ pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
             let crc_esperado = data[n - 8] | data[n - 7] << 8 | data[n - 6] << 16 | data[n - 5] << 24;
             let crc_real = crc32(salida);
             if ((crc_real & 4294967295) != (crc_esperado & 4294967295)) {
-                Result.Err("CRC32 no coincide (gzip corrupto)")
+                Result.Err("CRC32 mismatch (corrupt gzip)")
             } else {
                 Result.Ok(salida)
             }
@@ -646,15 +646,15 @@ pub fn zlib_inflate(data: bytes) -> Result<bytes, string> {
 /// protection).
 pub fn zlib_inflate_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     if (data.len() < 6) {
-        return Result.Err("zlib demasiado corto");
+        return Result.Err("zlib too short");
     }
     // CMF/FLG: el nibble bajo de CMF debe ser 8 (método deflate).
     if ((data[0] & 15) != 8) {
-        return Result.Err("método de compresión zlib no soportado");
+        return Result.Err("unsupported zlib compression method");
     }
     // M64.1: FDICT (diccionario preestablecido) no está soportado — antes producía basura.
     if ((data[1] & 32) != 0) {
-        return Result.Err("zlib con diccionario preestablecido (FDICT) no soportado");
+        return Result.Err("zlib preset dictionary (FDICT) not supported");
     }
     let comprimido = data.sub_bytes(2, data.len() - 4);
     inflate_raw_limit(comprimido, max_out)

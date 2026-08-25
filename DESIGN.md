@@ -10191,3 +10191,36 @@ ambigüedad DST como API) — la lista de pendientes lo arrastraba rancio.
   inicial, RFC 5321 — el cuerpo no puede colar el terminador) y `address` (mailbox con
   display-name: atext tal cual, comillas con escape, no-ASCII → encoded-word). Goldens
   verificados a mano contra las RFC, ambos motores.
+
+## 129. M132 — el barrido final de spanglish: los errores de la stdlib, en inglés (ago 2026)
+
+La política de superficie-en-inglés (diagnósticos, LSP, y desde M122/M128 los errores de
+std/net/regex/csv) tenía una deuda: los `Result.Err` de la stdlib embebida anteriores a la
+política seguían en español — json, toml, inflate, base64, hex, url, huffman, template,
+protobuf, time (ISO 8601) y los menores de fs. Un usuario angloparlante recibía
+"texto sobrante tras el JSON" de una librería documentada en inglés.
+
+Barrido completo (~110 strings), con la traducción alineada al estilo ya asentado ("missing X",
+"unterminated Y", "invalid Z", "unexpected", "truncated", "not supported"):
+
+- `std/json`: los 20 del parser ("unexpected end of input", "unterminated string/array/object",
+  "expected ',' or '}'", la familia \u de surrogates…).
+- `std/toml`: los ~20 restantes de M63 (los de M128 ya nacieron en inglés).
+- `std/inflate`: los 26 del inflador (DEFLATE/gzip/zlib, incluida la bomba de descompresión).
+- `std/base64`/`std/hex`/`std/url`/`std/huffman`/`std/template`/`std/protobuf`: sus baterías.
+- `std/time`: los 15 de `parse_iso8601_millis` (con los nombres de campo `año`→`year` etc. que
+  viajaban dentro del mensaje).
+- `std/fs`: los menores pre-política ("error de E/S" → "I/O error", "handle inválido" →
+  "invalid handle"…).
+
+Los goldens de los tests se actualizaron en tándem (base64/json/inflate/toml/protobuf). Los
+paquetes Tier 2 resultaron ya limpios (los sospechosos del grep eran falsos positivos del "no"
+inglés). Fuera del barrido a propósito: los `expect()`/descripciones de asserts internos (en
+español por política) y los textos históricos de DESIGN/CHANGELOG.
+
+**De regalo, un bug real de M130 que la suite completa destapó**: `exit(code)` en NATIVO podía
+perder la salida pendiente — `__ray_exit` flusheaba `std::io::stdout()`, pero el `print` nativo
+va por el HILO ESCRITOR de M96f y ese era el buffer equivocado (`process::exit` no corre
+destructores; bajo carga el hilo no llegaba a drenar). El arreglo es el de los otros tres sitios
+que terminan el proceso: `__ray_flush_prints()` (espera acotada al drenado del canal) antes del
+`process::exit`.

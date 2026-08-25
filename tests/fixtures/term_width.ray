@@ -1,0 +1,17 @@
+import std/term;
+
+fn main() -> int {
+    print(to_string(term.width("hola")));
+    print(to_string(term.width("日本語")));
+    print(to_string(term.width("A🚀B")));
+    let acute = to_string(char_from_code(769).unwrap_or('x'));
+    print(to_string(term.width("e" + acute)));
+    print(to_string(term.char_width('A')));
+    print(to_string(term.char_width('日')));
+    print("[" + term.fit("日本語", 5) + "]");
+    print("[" + term.fit("hi", 5) + "]");
+    print("[" + term.fit("hello world", 5) + "]");
+    print("[" + term.fit_right("42", 5) + "]");
+    print("[" + term.fit_right("日本語", 4) + "]");
+    0
+}

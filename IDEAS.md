@@ -2566,7 +2566,7 @@ diferencial, orden/filtro/scroll, resize en vivo, muestreo vía `ps`). Es el esc
 que IDEAS-APPS §1.3 señalaba — y el veredicto es mejor de lo esperado: el estruje encontró
 carencias de ERGONOMÍA, no de runtime.
 
-1. **No hay ancho de celdas Unicode** (impacto: MEDIO — todo TUI lo necesita; predicho por el
+1. **[EJECUTADA — M117, DESIGN §114: `term.width`/`char_width`/`fit`/`fit_right`] No hay ancho de celdas Unicode** (impacto: MEDIO — todo TUI lo necesita; predicho por el
    catálogo §2.3). Alinear columnas con CJK/kana/emoji exige un wcwidth; raytop trae el suyo
    (`src/width.ray`, ~40 líneas de rangos) y es el candidato directo a `term.width(s: string) ->
    int` (+ `term.fit(s, cells)`), junto al decode que ya existe. Sin él, cada TUI copiará la

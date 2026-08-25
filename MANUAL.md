@@ -989,6 +989,22 @@ explícito; y la restauración está garantizada al salir del proceso — salvo 
 `select` sobre `signals()` + `term.size()`: SIGWINCH (28) llega por el canal de señales al
 redimensionar la ventana.
 
+Para **alinear columnas** cuando el texto puede llevar CJK, kana o emoji, `s.len()` (cuenta
+caracteres) da la respuesta equivocada — un `日` ocupa DOS celdas, un combinante cero. `term.width`
+da el ancho real en celdas, y `term.fit`/`term.fit_right` construyen la columna (truncan sin partir
+un carácter ancho y rellenan a la anchura exacta):
+
+```rust
+for row in rows {
+    // nombre a 20 celdas (izquierda), tamaño a 8 (derecha) — cuadra con CJK o emoji dentro
+    print(term.fit(row.name, 20) + term.fit_right(to_string(row.size), 8));
+}
+```
+
+Es un wcwidth pragmático (control/combinantes → 0, ancho-Este-Asiático y emoji → 2, resto → 1); no
+intenta resolver secuencias emoji ZWJ/VS16, cuyo ancho depende del terminal. Portable: no necesita
+un tty (es cálculo puro), así que sirve también para medir texto que no vas a imprimir.
+
 ### Markdown (`std/markdown`)
 
 Markdown → HTML (o el AST, si quieres renderizar tú — una TUI, un índice):

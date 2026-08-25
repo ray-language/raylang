@@ -696,6 +696,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M122: connect con plazo (host, port, ms) — vencido = "connect timeout".
+            "tcp_connect_timeout" => {
+                out.push_str("__ray_tcp_connect_timeout(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push(')');
+            }
             "tcp_accept" => {
                 out.push_str("__ray_tcp_accept(");
                 self.emit_expr(out, eff[0])?;
@@ -981,7 +991,7 @@ impl Transpiler {
         if let Some(nfn) = name.strip_prefix("std::net::") {
             if matches!(
                 nfn,
-                "tcp_connect" | "tcp_listen" | "tcp_accept" | "socket_read" | "socket_read_bytes"
+                "tcp_connect" | "tcp_connect_timeout" | "tcp_listen" | "tcp_accept" | "socket_read" | "socket_read_bytes"
                     | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout"
             ) {
                 return self.emit_net(out, nfn, &eff);
@@ -2273,7 +2283,7 @@ impl Transpiler {
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),
                     "std::net::set_read_timeout" => return Ok(Type::Unit),
-                    "std::net::tcp_connect" | "std::net::tcp_listen" | "std::net::tcp_accept"
+                    "std::net::tcp_connect" | "std::net::tcp_connect_timeout" | "std::net::tcp_listen" | "std::net::tcp_accept"
                     | "std::net::socket_write" | "std::net::socket_write_bytes" => {
                         return Ok(Type::Enum("Result".into(), vec![Type::Int, Type::String]))
                     }

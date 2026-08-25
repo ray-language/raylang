@@ -37,6 +37,10 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`net.tcp_connect_timeout(host, port, ms)`** (M122) — el connect con plazo: un host que descarta
+  los SYN (firewall, ruta negra) retenía el connect ~75 s (el timeout del SO); ahora el intento
+  vencido falla con el error estable `"connect timeout"`. Espera acotada pero bloqueante, en los
+  tres motores.
 - **Timeout de lectura UDP** (M121) — `net.set_read_timeout(h, ms)` aplica ahora también a los
   sockets UDP en los tres motores: un `udp.recv_from` que espere más del plazo falla con el error
   estable `"read timeout"` en vez de esperar para siempre (UDP no retransmite: un datagrama

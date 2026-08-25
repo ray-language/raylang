@@ -1215,6 +1215,42 @@ pub fn tcp_connect(host: &str, port: i64) -> Result<i64, String> {
     Ok(id)
 }
 
+/// Error estable de un connect que agota su plazo (M122), hermano de `READ_TIMEOUT_MSG`.
+pub const CONNECT_TIMEOUT_MSG: &str = "connect timeout";
+
+/// Como [`tcp_connect`], con PLAZO (M122): un host que no responde al SYN (firewall que descarta,
+/// ruta negra) retenía la conexión ~75 s (el timeout del SO); con `ms` el intento falla con el
+/// error estable "connect timeout". `ms <= 0` = sin plazo (idéntico a `tcp_connect`). La espera es
+/// **acotada pero bloqueante** (`TcpStream::connect_timeout` del std); la resolución del nombre
+/// (getaddrinfo) va aparte y no entra en el plazo.
+pub fn tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, String> {
+    if ms <= 0 {
+        return tcp_connect(host, port);
+    }
+    use std::net::ToSocketAddrs;
+    let addr = (host, port as u16)
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or_else(|| format!("could not resolve host '{}'", host))?;
+    let stream = match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(ms as u64)) {
+        Ok(s) => s,
+        Err(ref e)
+            if e.kind() == std::io::ErrorKind::TimedOut
+                || e.kind() == std::io::ErrorKind::WouldBlock =>
+        {
+            return Err(CONNECT_TIMEOUT_MSG.to_string());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let _ = stream.set_nodelay(true); // mismo trato que tcp_connect (M96b)
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Tcp(stream));
+    Ok(id)
+}
+
 /// Saca un clon del stream del handle `h` (suelta el lock antes del I/O bloqueante), o un error si
 /// el handle no es un socket.
 fn socket_clone(h: i64) -> Result<std::net::TcpStream, String> {
@@ -3032,6 +3068,15 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__tcp_connect", " (host, port)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__tcp_connect expects a string (the host), not {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__tcp_connect expects an int (the port), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tcp_connect_timeout(host, port, ms) -> [string] (M122): como __tcp_connect con PLAZO — el
+    // intento que agote `ms` falla con el error estable "connect timeout". std/net → Result<int,string>.
+    Builtin { name: "__tcp_connect_timeout", opcode: OpCode::TcpConnectTimeout, check: |a| {
+        arity(a, 3, "__tcp_connect_timeout", " (host, port, ms)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__tcp_connect_timeout expects a string (the host), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tcp_connect_timeout expects an int (the port), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__tcp_connect_timeout expects an int (ms), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_connect(host, puerto) -> [string] (M19.4a): ["ok", handle] o ["err", msg]. Prelude →

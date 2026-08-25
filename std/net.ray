@@ -17,7 +17,7 @@ pub fn socket_read_bytes(h: int) -> Result<bytes, string> {
     } else {
         match (from_utf8(r[1])) {
             Result.Ok(m) => Result.Err(m),
-            Result.Err(e) => Result.Err("error de socket"),
+            Result.Err(e) => Result.Err("socket error"),
         }
     }
 }
@@ -36,7 +36,26 @@ pub fn tcp_connect(host: string, port: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// M122: connect con PLAZO. Un host que no responde al SYN (firewall que descarta, ruta negra)
+// retenía el connect ~75 s (el timeout del SO); con `ms` el intento falla acotado. La espera es
+// acotada pero BLOQUEANTE (no cede la fibra); la resolución del nombre va aparte del plazo.
+/// Like `tcp_connect`, with a DEADLINE: an attempt that outlives `ms` milliseconds fails with the
+/// stable error "connect timeout" instead of waiting for the OS default (~75 s against a host
+/// that drops SYNs). `ms <= 0` behaves exactly like `tcp_connect`. The bounded wait is blocking
+/// (it does not park the fiber); name resolution happens before the deadline starts.
+pub fn tcp_connect_timeout(host: string, port: int, ms: int) -> Result<int, string> {
+    let r = __tcp_connect_timeout(host, port, ms);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])
@@ -52,7 +71,7 @@ pub fn tls_connect(host: string, port: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])
@@ -67,7 +86,7 @@ pub fn tls_connect_h2(host: string, port: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])
@@ -85,7 +104,7 @@ pub fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string>
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])
@@ -104,7 +123,7 @@ pub fn tls_upgrade(handle: int, host: string) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])
@@ -134,7 +153,7 @@ pub fn tcp_listen(host: string, port: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])
@@ -148,7 +167,7 @@ pub fn tcp_accept(listener: int) -> Result<int, string> {
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
+            Option.None => Result.Err("invalid handle"),
         }
     } else {
         Result.Err(r[1])

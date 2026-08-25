@@ -40,7 +40,7 @@ fn main() -> int {
     // Fase 2: el dato gana al plazo (el timeout sigue puesto; el eco responde enseguida).
     net.set_read_timeout(h, 3000);
     match (send_to(h, "127.0.0.1", echo_port, "hola plazo".to_bytes())) {
-        Result.Ok(_) => {},
+        Result.Ok(_) => { },
         Result.Err(e) => {
             print("send err: " + e);
             return 1;

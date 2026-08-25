@@ -2653,7 +2653,7 @@ SQLite, dashboard SSE, webhooks al cambiar de estado).
    perdido cuelga el monitor ENTERO para siempre. En un monitor la diferencia entre "check
    lento" y "proceso muerto". El arreglo de fondo es el de §64 (UDP async + timeout); mientras,
    net/dns debería al menos documentarlo en su cabecera.
-3. `tcp_connect` sin timeout de conexión (queda el del SO, ~75 s en macOS): un host que tira
+3. **[EJECUTADA — M122, DESIGN §119: `net.tcp_connect_timeout(host, port, ms)` → `"connect timeout"`]** `tcp_connect` sin timeout de conexión (queda el del SO, ~75 s en macOS): un host que tira
    SYNs bloquea la fibra del check mucho más que su `timeout_ms` configurado. Candidato:
    `tcp_connect_timeout(host, port, ms)`.
 4. **Positivo**: fibra-por-check escala sin drama (la pregunta del catálogo §1.6); SSE se sirve
@@ -2755,9 +2755,11 @@ aplica a UDP en los tres motores (espera vencida = `Err("read timeout")`) y `net
 respuesta a 5 s. La nota "UDP bloquea todas las fibras" resultó rancia (VM cede desde M20.11,
 nativo-fibras desde F4) — el hueco real era solo el timeout.
 
+**[EJECUTADA — M122, DESIGN §119]** `tcp_connect_timeout` (§70.3): el connect con plazo — el
+intento vencido falla con `"connect timeout"` en vez de los ~75 s del SO.
+
 **Quedan abiertos** (candidatos, no comprometidos): el **pool/multiplexado de `packages/rpc`**
-(§72.2, secuencial por conexión hoy); `net.tls_peer_cert` (§70.1), `tcp_connect_timeout` (§70.3 —
-el connect del SO retiene la fibra ~75 s ante un host que tira SYNs), `term.read_hidden` (§71.1),
+(§72.2, secuencial por conexión hoy); `net.tls_peer_cert` (§70.1), `term.read_hidden` (§71.1),
 hasher incremental de `std/crypto` (§69.3), normalización Unicode y `std/mail` (§71.4/§71.5), y
 los menores de `std` que cada tanda anotó.
 

@@ -3013,7 +3013,27 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
-                // M20.8: UDP. Bloqueante en ambos motores por ahora (la cesión cooperativa queda diferida).
+                // M122: connect con PLAZO — espera acotada pero bloqueante (connect_timeout del std);
+                // el intento vencido devuelve el error estable "connect timeout".
+                OpCode::TcpConnectTimeout => {
+                    let ms = match self.pop() { HeapValue::Int(m) => m, _ => unreachable!("the checker guarantees an int") };
+                    let port = self.pop();
+                    let host = self.pop();
+                    let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
+                        unreachable!("the checker guarantees string, int");
+                    };
+                    let elems = match crate::builtins::tcp_connect_timeout(&host, port, ms) {
+                        Ok(h) => {
+                            // Igual que TcpConnect: la VM usa sockets NO bloqueantes (M15.5).
+                            let _ = crate::builtins::set_nonblocking(h);
+                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                        }
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M20.8: UDP (M20.11: recv cede la fibra; M121: honra el timeout de lectura por handle).
                 OpCode::UdpBind => {
                     let port = self.pop();
                     let host = self.pop();

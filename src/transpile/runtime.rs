@@ -525,6 +525,16 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // que las lecturas/escrituras posteriores aparquen la fibra.
                 "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
                 "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                // M122: connect con PLAZO — espera acotada pero bloqueante (connect_timeout del std);
+                // el intento vencido devuelve el error estable "connect timeout".
+                "fn __ray_tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, Rc<str>> {\n",
+                "    if ms <= 0 { return __ray_tcp_connect(host, port); }\n",
+                "    use std::net::ToSocketAddrs;\n",
+                "    let addr = (host, port as u16).to_socket_addrs().map_err(|e| Rc::<str>::from(e.to_string()))?.next().ok_or_else(|| Rc::<str>::from(format!(\"could not resolve host '{}'\", host)))?;\n",
+                "    match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(ms as u64)) {\n",
+                "        Ok(s) => { let _ = s.set_nodelay(true); let _ = s.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }\n",
+                "        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => Err(Rc::<str>::from(\"connect timeout\")),\n",
+                "        Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
                 "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => { let _ = l.set_nonblocking(true); Ok(__ray_reg_insert(__RayHandle::Listener(l))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 // El accept RE-RESUELVE el handle en cada vuelta (como la VM): así el `close` del
@@ -553,6 +563,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
                 "fn __ray_tcp_connect(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
                 "    match std::net::TcpStream::connect((host, port as u16)) { Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }, Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
+                // M122: connect con PLAZO (hilo-por-tarea: bloquea solo su hilo, acotado a ms).
+                "fn __ray_tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, Rc<str>> {\n",
+                "    if ms <= 0 { return __ray_tcp_connect(host, port); }\n",
+                "    use std::net::ToSocketAddrs;\n",
+                "    let addr = (host, port as u16).to_socket_addrs().map_err(|e| Rc::<str>::from(e.to_string()))?.next().ok_or_else(|| Rc::<str>::from(format!(\"could not resolve host '{}'\", host)))?;\n",
+                "    match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(ms as u64)) {\n",
+                "        Ok(s) => { let _ = s.set_nodelay(true); Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))) }\n",
+                "        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => Err(Rc::<str>::from(\"connect timeout\")),\n",
+                "        Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
                 "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",

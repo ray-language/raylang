@@ -374,6 +374,8 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/collections/set` | `Set<T>` (exige `T: Hash + Eq`): `new add has remove size items` → `set.new()`, `set.add(s, x)`… |
 | `std/collections/deque` | `Deque<T>`: `new len is_empty push_back push_front pop_front pop_back peek_front` |
 | `std/collections/stringbuilder` | `StringBuilder`: `new push build count` (une una vez; evita el O(n²) de `+` en bucle) |
+| `std/collections/dict` | `Dict<K, V>` — mapa hash GENÉRICO (M82): claves de USUARIO vía los traits `Hash` + `Eq` (el `Map<K,V>` builtin exige claves primitivas). `new insert get has remove size keys values` (funciones de módulo: `dict.insert(d, k, v)`) |
+| `std/kv` | `Store` — estado clave/valor persistido (M83): `open(path)`/`empty` + get/set sobre `Map<string, bytes>` con guardado atómico (temp + rename); `share`/`open_shared`/`stop` = la forma ACTOR para acceso entre fibras. Motivado por `ray dev` (sesiones/config que sobreviven reloads) |
 | `std/json` | `enum Json` (`JNull JBool JNum JStr JArray JObject`) · `parse -> Result<Json, string>` · `stringify` (canónico, claves ordenadas). Escapes `\uXXXX` con pares surrogate |
 | `std/hex` | `hex_encode(bytes) -> string` · `hex_decode(string) -> Result<bytes, string>` |
 | `std/base64` | `base64 base64url` (`bytes -> string`) · `base64_decode base64url_decode` (`string -> Result<bytes, string>`) |

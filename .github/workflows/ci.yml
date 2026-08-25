@@ -106,3 +106,8 @@ jobs:
         env:
           RAYLANG_DIFF_BATCHES: "40"
         run: cargo test --test native_differential -- --ignored --nocapture
+      # M134: el manejador de paquetes contra la infraestructura REAL (github.com/ray-language:
+      # cápsula `greeting` + índice `ray-index`, consumo anónimo por https). Red real → nightly,
+      # no en cada push; si GitHub está inaccesible el test se salta con aviso.
+      - name: Manejador de paquetes en vivo (GitHub real)
+        run: cargo test --test deps_live_cli -- --ignored --nocapture

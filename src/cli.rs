@@ -1610,8 +1610,12 @@ fn cmd_publish(args: &[String]) {
 /// del contenido. El clon temporal se borra siempre.
 fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<String, String> {
     let spec = crate::deps::parse_spec(git_spec)?;
-    let tmp = std::env::temp_dir().join(format!("ray-publish-{}-{}", m.name, process::id()));
-    let _ = fs::remove_dir_all(&tmp);
+    // M134: el clon vive como `<base>/<nombre>` para que el check cargue el paquete EXACTAMENTE
+    // como lo verá un consumidor (`.ray-deps/<nombre>`): los imports internos calificados con el
+    // nombre del paquete (`import greeting/shout;`) resuelven con el padre como raíz de módulos.
+    let base = std::env::temp_dir().join(format!("ray-publish-{}-{}", m.name, process::id()));
+    let tmp = base.join(&m.name);
+    let _ = fs::remove_dir_all(&base);
     // Clon del repo LOCAL en la ref publicada (para --repo, la ref debe existir también aquí).
     crate::deps::fetch(&m.name, &crate::deps::GitSpec { url: m.root.to_string_lossy().into_owned(), git_ref: spec.git_ref.clone() }, &tmp)
         .map_err(|e| {
@@ -1647,7 +1651,7 @@ fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
         check_published(&tmp, &face)?;
         Ok(hash)
     })();
-    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&base);
     result
 }
 
@@ -1683,7 +1687,14 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
             }
         }
     }
-    let mut loaded = crate::loader::load_with_deps(face, &roots)
+    // M134: la cara se carga con `project_root` = el PADRE del clon (`<base>`, con el clon como
+    // `<base>/<nombre>`) — exactamente la geometría de `.ray-deps/<nombre>` en el consumidor: la
+    // entrada toma la identidad de cápsula (`greeting`, no `mod`) y sus imports internos
+    // calificados (`import greeting/shout;`) pasan el borde de cápsula igual que al consumirla.
+    let face_src = fs::read_to_string(face)
+        .map_err(|e| format!("could not read the package face: {e}"))?;
+    let base = tmp.parent().unwrap_or(tmp);
+    let mut loaded = crate::loader::load_source_module(face, &face_src, base, &roots)
         .map_err(|e| format!("the package does not load: {}", e.message))?;
     let errors = crate::checker::check_all_modulo(&mut loaded.program);
     if let Some(e) = errors.first() {

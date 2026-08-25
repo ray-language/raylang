@@ -16,10 +16,10 @@
 // Como los sockets ceden la fibra, el camino concurrente corre en la **VM y el binario nativo**;
 // en el intérprete corren bloqueantes (un hilo), así que el cliente funciona en los tres motores
 // contra un servidor real.
-// Una respuesta de Redis (RESP2).
-/// A Redis reply (RESP2): simple/bulk string, integer, nil, array, or server error.
 import std/net;
 
+// Una respuesta de Redis (RESP2).
+/// A Redis reply (RESP2): simple/bulk string, integer, nil, array, or server error.
 pub enum Reply {
     Str(string),  // simple string (+) o bulk string ($)
     Int(int),  // entero (:)

@@ -1,0 +1,107 @@
+//! M134 — el manejador de paquetes en ESCENARIO REAL: paquetes e índice alojados en GitHub
+//! (la organización `ray-language`), consumidos anónimamente por `git+https`. Hasta aquí todo el
+//! flujo git/registry se probaba solo con repos `git+file://` locales; este harness cierra ese
+//! hueco contra la infraestructura real:
+//!
+//!   - github.com/ray-language/greeting  — la cápsula de demo (mod.ray + submódulo interno),
+//!     tags v1.0.0 (URL ssh en el índice) y v1.0.1 (URL https, la de consumo anónimo).
+//!   - github.com/ray-language/ray-index — el índice (greeting.toml con versiones + hashes).
+//!
+//! Cubre: dep directa `git+https@tag` (clone real + checkout + lockfile con commit+hash),
+//! resolución POR NOMBRE contra el índice remoto (`ray add` elige la última no-yanked y verifica
+//! el hash publicado), y reproducibilidad (caché borrada → re-descarga y el hash del lock
+//! verifica). Red real → `#[ignore]`:
+//!   cargo test --test deps_live_cli -- --ignored
+
+use std::path::PathBuf;
+use std::process::Command;
+
+const BIN: &str = env!("CARGO_BIN_EXE_ray");
+
+fn net_available() -> bool {
+    Command::new("git")
+        .args(["ls-remote", "https://github.com/ray-language/greeting", "HEAD"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn project(name: &str, ray_toml: &str, main: &str) -> PathBuf {
+    let base = std::env::temp_dir().join(format!("ray_live_{name}"));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), ray_toml).unwrap();
+    std::fs::write(base.join("src/main.ray"), main).unwrap();
+    base
+}
+
+fn ray(dir: &PathBuf, args: &[&str]) -> (String, String, i32) {
+    let out = Command::new(BIN)
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0") // sin prompts: el fallo de red/credenciales es un error
+        .output()
+        .expect("lanza ray");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+const MAIN: &str = "import greeting;\n\nfn main() -> int {\n    print(greeting.hello(\"live\"));\n    print(greeting.hello_loud(\"live\"));\n    0\n}\n";
+
+/// Dep directa `git+https://…@tag` contra GitHub real: descarga, corre, y el lockfile fija
+/// commit + hash. Segundo run: desde la caché, sin red.
+#[test]
+#[ignore]
+fn direct_git_https_dependency() {
+    if !net_available() {
+        eprintln!("saltando: sin red o GitHub inaccesible");
+        return;
+    }
+    let dir = project(
+        "direct",
+        "[package]\nname = \"live\"\nversion = \"0.1.0\"\n\n[dependencies]\ngreeting = \"git+https://github.com/ray-language/greeting@v1.0.1\"\n",
+        MAIN,
+    );
+    let (out, err, code) = ray(&dir, &["run"]);
+    assert_eq!(code, 0, "run con dep git+https debe salir 0\n{err}");
+    assert!(out.contains("hello, live!"), "la cápsula real responde\n{out}");
+    assert!(out.contains("HELLO, LIVE!!!"), "el submódulo interno de la cápsula funciona\n{out}");
+    let lock = std::fs::read_to_string(dir.join("ray.lock")).expect("ray.lock");
+    assert!(lock.contains("https://github.com/ray-language/greeting"), "url en el lock\n{lock}");
+    assert!(lock.contains("commit = "), "commit resuelto en el lock\n{lock}");
+    assert!(lock.contains("hash = \"sha256:"), "hash de contenido en el lock\n{lock}");
+    // Reproducibilidad: caché fuera → re-descarga y el hash del lock VERIFICA (mismo contenido).
+    let _ = std::fs::remove_dir_all(dir.join(".ray-deps"));
+    let (out2, err2, code2) = ray(&dir, &["run"]);
+    assert_eq!(code2, 0, "re-resolución contra el lock\n{err2}");
+    assert!(out2.contains("hello, live!"), "{out2}");
+}
+
+/// Resolución POR NOMBRE contra el índice remoto real: `ray add greeting` elige la última
+/// versión publicada (1.0.1, la de URL https) y la descarga verificando el hash del índice.
+#[test]
+#[ignore]
+fn by_name_via_remote_index() {
+    if !net_available() {
+        eprintln!("saltando: sin red o GitHub inaccesible");
+        return;
+    }
+    let dir = project(
+        "index",
+        "[package]\nname = \"live\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"git+https://github.com/ray-language/ray-index@main\"\n",
+        MAIN,
+    );
+    let (out, err, code) = ray(&dir, &["add", "greeting"]);
+    assert_eq!(code, 0, "ray add contra el índice remoto\n{out}{err}");
+    let manifest = std::fs::read_to_string(dir.join("ray.toml")).unwrap();
+    assert!(manifest.contains("greeting = \"^1.0.1\""), "elige la última versión\n{manifest}");
+    let (out, err, code) = ray(&dir, &["run"]);
+    assert_eq!(code, 0, "run tras el add\n{err}");
+    assert!(out.contains("hello, live!"), "{out}");
+    let lock = std::fs::read_to_string(dir.join("ray.lock")).unwrap();
+    assert!(lock.contains("ref = \"v1.0.1\""), "el índice resolvió el tag\n{lock}");
+}

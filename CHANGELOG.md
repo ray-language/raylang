@@ -100,6 +100,27 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Corregido (bloque siguiente)
 
+- **Los 4 bugs de divergencia VM/nativo del dogfood de IDEAS-APPS** (IDEAS §§63–72) — la clase
+  "código válido en la VM que no compila o falla en nativo", cerrada de una tanda:
+  - **`sort([float])` no compilaba en nativo** (§63): `f64` no es `Ord` en Rust y el
+    `__ray_sort<T: Ord>` genérico moría con E0277 en el `cargo build` del usuario. El caso float
+    va ahora por un helper que replica el merge sort bottom-up del prelude comparando con `<` —
+    byte-idéntico a la VM incluso con NaN.
+  - **`return` dentro del literal de `spawn` no compilaba** (§68): el `return;` fijaba `()` como
+    retorno del closure de hilo y chocaba con la cola de conversión Send (E0308); `return s;` de
+    un string era la misma familia. El cuerpo se emite como closure inmediatamente invocado: el
+    `return` del usuario retorna de esa frontera y la conversión Send se aplica al resultado.
+  - **`E.V(b.campo, f(b))` panicaba con "RefCell already borrowed"** (§64): la clase
+    RefCell-en-args alcanzaba a TODOS los literales compuestos (variante, struct, arreglo, tupla,
+    map), no solo a las llamadas ya arregladas: con 2+ exprs cada valor se iza a un temporal y los
+    guards mueren entre argumentos, mismo orden de evaluación que la VM.
+  - **`close(h)` cross-fibra con un lector aparcado era un no-op** (§64): ni FIN al peer ni
+    despertar (el lector re-aparcaba para siempre). `__ray_close` hace ahora `shutdown(Both)` del
+    stream TCP (el FIN llega y el fd despierta al lector vía el reactor) y el bucle de lectura
+    re-verifica el registro al despertar y en EOF → `Err("invalid handle: h")`, byte-idéntico a la
+    VM; el camino caliente con datos no paga ningún lock nuevo. Los 4 repros de rayrelay quedan en
+    paridad.
+
 - **Nativo: `http.stream_read` panicaba con "RefCell already borrowed"** — y con él toda la clase
   `f(s, s.campo)` donde `f` muta `s` (la destapó `stream_take(s, s.remaining)` del cliente HTTP
   en raycode; era LO ÚNICO que impedía usar el binario nativo allí). En Rust, el guard del

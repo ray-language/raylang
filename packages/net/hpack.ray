@@ -5,9 +5,12 @@
 // Cubre: tabla ESTÁTICA (61 entradas), tabla DINÁMICA (inserción + evicción por tamaño), enteros con
 // prefijo de N bits (§5.1), literales de string SIN Huffman (§5.2), y las representaciones de campo:
 // indexado, literal con indexado incremental, literal sin indexado / nunca indexado, y actualización de
-// tamaño de la tabla. El **Huffman** de strings queda diferido (el codificador siempre emite literales
-// crudos —válidos—; el decodificador rechaza con un error claro un literal Huffman). Verificado contra
-// los vectores oficiales del RFC 7541 Apéndice C (los que no usan Huffman: C.2.1, C.3).
+// tamaño de la tabla. M133: el decodificador acepta literales **Huffman** (bit H=1; la tabla del
+// RFC 7541 vive en std/huffman) — obligatorio contra servidores reales (grpc-go comprime siempre);
+// el CODIFICADOR sigue emitiendo literales crudos (válidos). Verificado contra los vectores
+// oficiales del RFC 7541 Apéndice C (C.2.1, C.3 crudos; C.4/C.6 con Huffman).
+import std/huffman;
+
 // Una cabecera (nombre, valor).
 /// A single header field: a (name, value) pair, as used in HPACK header lists (RFC 7541).
 pub struct HEntry {
@@ -253,7 +256,7 @@ fn encode_one(h: Hpack, out: [int], name: string, value: string) {
 // Codifica una lista de cabeceras a un bloque HPACK (actualizando la tabla dinámica del emisor).
 /// Encodes a header list into an HPACK header block (RFC 7541), updating the encoder's dynamic table.
 /// Uses indexed fields when possible, otherwise literals with incremental indexing;
-/// string literals are always emitted raw (no Huffman coding).
+/// string literals are always emitted raw (Huffman-coded literals are accepted when decoding).
 pub fn encode(h: Hpack, headers: [HEntry]) -> bytes {
     var out: [int] = [];
     var i = 0;
@@ -317,14 +320,31 @@ fn dec_str(data: bytes, pos: int) -> Result<StrResult, string> {
     }
     let huff = data[pos] >> 7 & 1;
     let lr = dec_int(data, pos, 7)?;
-    if (huff == 1) {
-        return Result.Err("HPACK: Huffman literal not supported in decoding");
-    }
     // La longitud viene del peer: validar el rango antes de `sub_bytes` (evita el OOB).
     if (lr.value < 0 || lr.next + lr.value > data.len()) {
         return Result.Err("HPACK: string length out of range");
     }
-    match (from_utf8(data.sub_bytes(lr.next, lr.next + lr.value))) {
+    var raw = data.sub_bytes(lr.next, lr.next + lr.value);
+    // M133 (dogfood gRPC real): literal HUFFMAN (bit H=1) — grpc-go/nghttp2 comprimen SIEMPRE
+    // sus cabeceras de respuesta. La tabla del RFC 7541 ya vivía en std/huffman (HPACK la usa
+    // por [int]: par interno); aquí solo se puentea bytes → [int] → decode → bytes.
+    if (huff == 1) {
+        var ints: [int] = [];
+        var i = 0;
+        while (i < raw.len()) {
+            ints.push(raw[i]);
+            i = i + 1;
+        }
+        match (huffman.huffman_decode(ints)) {
+            Result.Ok(out) => {
+                raw = bytes_of(out);
+            },
+            Result.Err(e) => {
+                return Result.Err("HPACK: " + e);
+            },
+        }
+    }
+    match (from_utf8(raw)) {
         Result.Ok(s) => Result.Ok(StrResult { value: s, next: lr.next + lr.value }),
         Result.Err(e) => Result.Err("HPACK: string is not UTF-8: " + e),
     }
@@ -345,7 +365,7 @@ fn decode_name(h: Hpack, data: bytes, ir: IntResult) -> Result<StrResult, string
 // Decodifica un bloque HPACK a la lista de cabeceras (actualizando la tabla dinámica del receptor).
 /// Decodes an HPACK header block into its header list (RFC 7541), updating the decoder's dynamic table.
 /// Handles indexed fields, all literal forms, and dynamic table size updates.
-/// Err on an out-of-range index, invalid UTF-8, or a Huffman-coded string literal (not supported).
+/// Err on an out-of-range index, invalid UTF-8, or a malformed Huffman-coded string literal.
 pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
     var headers: [HEntry] = [];
     var pos = 0;

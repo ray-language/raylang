@@ -242,6 +242,12 @@ pub fn grpc_call(
     if (!tuvo_grpc_status) {
         return Result.Err("respuesta gRPC sin grpc-status en los trailers");
     }
+    // M133 (dogfood gRPC real): respuesta TRAILERS-ONLY — un error (UNIMPLEMENTED, NOT_FOUND…)
+    // llega como un único HEADERS con :status 200 + grpc-status y SIN frames DATA. Antes caía en
+    // grpc_unframe(b"") como "frame too short"; el grpc-status de los trailers ES la respuesta.
+    if (body.len() == 0) {
+        return Result.Ok(GrpcResponse { message: b"", grpc_status: grpc_status });
+    }
     // Desenmarca el mensaje gRPC de la respuesta.
     match (grpc_unframe(body)) {
         Result.Ok(msg) => Result.Ok(GrpcResponse { message: msg, grpc_status: grpc_status }),

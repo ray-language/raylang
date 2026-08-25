@@ -88,7 +88,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch]] [--templates-only [path...]]
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -736,7 +736,7 @@ fn cmd_build(args: &[String]) {
         }
     }
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process"];
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(
@@ -933,6 +933,7 @@ const RT_SQLITE_RS: &str = include_str!("../crates/ray-runtime/src/sqlite.rs");
 const RT_REGEX_RS: &str = include_str!("../crates/ray-runtime/src/regex.rs");
 const RT_FIBERS_RS: &str = include_str!("../crates/ray-runtime/src/fibers.rs");
 const RT_PROCESS_RS: &str = include_str!("../crates/ray-runtime/src/process.rs");
+const RT_WATCH_RS: &str = include_str!("../crates/ray-runtime/src/watch.rs");
 
 /// Camino Cargo: el programa usa un subsistema con crate externo (cripto/…). Se genera un proyecto Cargo
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
@@ -985,6 +986,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/regex.rs", RT_REGEX_RS),
         ("ray-runtime/src/fibers.rs", RT_FIBERS_RS), // sin efecto salvo feature `fibers` (cfg en lib.rs)
         ("ray-runtime/src/process.rs", RT_PROCESS_RS), // ídem: solo con la feature `process` (M100)
+        ("ray-runtime/src/watch.rs", RT_WATCH_RS), // ídem: solo con la feature `watch` (M115.4)
     ];
     for (rel, content) in files {
         if let Err(e) = write(rel, content) {

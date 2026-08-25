@@ -551,6 +551,14 @@ pub enum OpCode {
     /// (chmod, solo los 12 bits bajos) y empuja `["ok"]` / `["err", msg]`. Primitivo `__chmod`;
     /// `std/fs` → `Result<int, string>`.
     Chmod,
+    /// M115.4: saca la ruta (string); abre un watch de filesystem por eventos de kernel
+    /// (directorio → recursivo) y empuja `["ok", handle]` / `["err", msg]`. Primitivo
+    /// `__watch`; `std/fs` → `Result<int, string>`.
+    WatchOpen,
+    /// M115.4: saca `ms` y un handle (int); el siguiente evento del watch — `["ok", kind, path]`
+    /// / `["timeout"]` / `["err", msg]`; `ms <= 0` = sin plazo. En la VM APARCA la fibra en el
+    /// fd del watcher (patrón StdinRead). Primitivo `__watch_next`.
+    WatchNext,
     /// M115.2: saca un handle (int); intenta el candado consultivo EXCLUSIVO del archivo sin
     /// bloquear (flock) y empuja `["ok", "1"]` (adquirido) / `["ok", "0"]` (lo tiene otro) /
     /// `["err", msg]`. Primitivo `__try_lock_handle`; `std/fs` → `Result<bool, string>`.

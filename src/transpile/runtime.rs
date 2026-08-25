@@ -279,7 +279,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +
     // mapa handle→archivo tras un Mutex/OnceLock; los mensajes de error son byte-idénticos a la VM.
     // Registro de handles (M11.8): compartido por archivos y sockets. Se emite si el programa usa cualquiera.
-    if t.needs_handles || t.needs_net || t.needs_rt_sqlite || t.needs_rt_process {
+    if t.needs_handles || t.needs_net || t.needs_rt_sqlite || t.needs_rt_process || t.needs_rt_watch {
         // Variantes con-crate del registro, añadidas solo si el programa usa el subsistema: `Tls` (conexión
         // TLS bloqueante tras `Arc<Mutex>` propio → el I/O no retiene el lock global) y `Sqlite` (conexión
         // rusqlite; I/O local → se opera reteniendo el lock global, como la VM).
@@ -297,9 +297,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         } else {
             ""
         };
+        // M115.4: watch de fs vivo (su Drop detiene los hilos de notify; close(h) basta).
+        let watch_variant = if t.needs_rt_watch { ", Watch(ray_runtime::watch::FsWatcher)" } else { "" };
         writeln!(
             out,
-            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant}{process_variant} }}"
+            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant}{process_variant}{watch_variant} }}"
         )
         .unwrap();
         out.push_str(concat!(
@@ -442,6 +444,49 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let r: Result<(), String> = { let _ = (path, mode); Err(\"chmod is not supported on this platform\".to_string()) };\n",
             "    __ray_tagged(match r { Ok(()) => vec![\"ok\".to_string()], Err(e) => vec![\"err\".to_string(), e] })\n}\n",
         ));
+    }
+    // M115.4: watch de fs por eventos de kernel (ray_runtime::watch, crate notify). El aparcado
+    // con fibras va por wait_readable_timeout sobre el fd del self-pipe del watcher; sin fibras,
+    // sondeo de la cola + poll(2) por tramos (nunca reteniendo el lock del registro). Al
+    // despertar SIEMPRE se re-verifica el registro: un close concurrente → Err, no cuelgue
+    // (la lección de M115-close).
+    if t.needs_rt_watch {
+        out.push_str(concat!(
+            "fn __ray_watch(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::watch::watch(path) {\n",
+            "        Ok(w) => { let id = __ray_reg_insert(__RayHandle::Watch(w)); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())] }\n",
+            "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)],\n",
+            "    }))\n",
+            "}\n",
+            "fn __ray_watch_next(h: i64, ms: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let dl = if ms > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)) } else { None };\n",
+            "    let tag = |parts: Vec<String>| Rc::new(std::cell::RefCell::new(parts.into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()));\n",
+            "    loop {\n",
+            "        let fd = { let mut reg = __ray_reg().lock().unwrap();\n",
+            "            match reg.open.get_mut(&h) {\n",
+            "                Some(__RayHandle::Watch(w)) => match w.try_next() {\n",
+            "                    Some((kind, path)) => return tag(vec![\"ok\".to_string(), kind, path]),\n",
+            "                    None => w.fd(),\n",
+            "                },\n",
+            "                Some(_) => return tag(vec![\"err\".to_string(), \"the handle is not a watch handle\".to_string()]),\n",
+            "                None => return tag(vec![\"err\".to_string(), format!(\"invalid handle: {}\", h)]),\n",
+            "            } };\n",
+            "        let rem = match dl {\n",
+            "            None => 0,\n",
+            "            Some(d) => { let r = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if r <= 0 { return tag(vec![\"timeout\".to_string()]); } r }\n",
+            "        };\n",
+        ));
+        if t.fibers {
+            out.push_str(concat!(
+                "        if ray_runtime::fibers::wait_readable_timeout(fd, rem) && rem > 0 { return tag(vec![\"timeout\".to_string()]); }\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "        let step = if rem == 0 { 200 } else { rem.min(200) as i32 };\n",
+                "        ray_runtime::watch::fd_ready(fd, step);\n",
+            ));
+        }
+        out.push_str("    }\n}\n");
     }
     // Ops de socket TCP — solo si se usa la red. Clonan el stream para no retener el lock en la I/O
     // bloqueante (como la VM). read lee ≤64KiB (lossy UTF-8; EOF → ""); write escribe todo (Ok(nº bytes)).

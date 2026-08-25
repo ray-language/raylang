@@ -1141,6 +1141,41 @@ match (fs.stat(path)) {
 384 = `0o600`, 493 = `0o755`. `fs.chmod(path, mode)` los cambia — el gesto de una bóveda de
 secretos: `fs.chmod("vault.db", 384)` la restringe a su dueño.
 
+Para **reaccionar a cambios** (rebuilds, `tail -f`, sync) está `fs.watch`: eventos de **kernel**
+(FSEvents/inotify), no sondeo de mtimes — la fibra aparca en `next_event` y el proceso duerme de
+verdad hasta el cambio. El patrón rebuild-con-agrupado (una ráfaga de guardados = un rebuild):
+
+```rust
+match (fs.watch("src")) {                       // directorio → recursivo; close(h) lo detiene
+    Result.Ok(h) => {
+        while (true) {
+            match (fs.next_event(h)) {           // duerme hasta el primer cambio
+                Result.Ok(ev) => {
+                    // agrupa la ráfaga: espera 200 ms de calma antes de reconstruir
+                    var quiet = false;
+                    while (!quiet) {
+                        match (fs.next_event_timeout(h, 200)) {
+                            Result.Ok(opt) => match (opt) {
+                                Option.Some(_) => { },       // otro cambio: sigue esperando
+                                Option.None => { quiet = true; },
+                            },
+                            Result.Err(e) => { quiet = true; },
+                        }
+                    }
+                    rebuild();
+                },
+                Result.Err(e) => { print(e); return; },
+            }
+        }
+    },
+    Result.Err(e) => print(e),
+}
+```
+
+Los `kind` (`"create"`/`"modify"`/`"remove"`/`"rename"`/`"other"`) pueden ser gruesos según la
+plataforma: trata cada evento como "algo cambió en `ev.path`" y re-examina, no como una bitácora
+exacta.
+
 ### Stdin, entorno y argumentos
 
 ```rust

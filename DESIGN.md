@@ -9634,3 +9634,37 @@ struct vive en raylang) y el intercept baja al nivel de PRIMITIVO (`__stat`/`__c
 `builtins::fs_tagged(FsOp::Stat)`/`chmod_path`). `__stat` reusa la familia `FsTagged` (strings →
 arreglo etiquetado, tabla argc); `__chmod` lleva opcode propio (su `mode` es int). En no-unix,
 `chmod` devuelve error y `mode` reporta 0 (los permisos POSIX no existen ahí).
+
+## 111. M115.4 — fs.watch: eventos de kernel en vez de cinco sondeos de mtime (ago 2026)
+
+El caso más sobre-demostrado del dogfood: CINCO apps sondeando mtimes (ray dev, raycode-dev,
+raylogs `--follow`, raysync `--watch`, raysite serve). La decisión del usuario: eventos de
+kernel, no la pieza mínima de poll.
+
+**Por qué `notify` y no kqueue/inotify a mano**: kqueue (macOS/BSD) exige UN FD POR ARCHIVO
+observado — inviable para un árbol de fuentes — y el camino eficiente en macOS es FSEvents, un
+API distinto; inotify (Linux) es por-directorio y la recursividad (añadir watches a subdirs
+nuevos sobre la marcha) es el 80% del trabajo. El crate `notify` es exactamente esa capa
+(FSEvents/inotify/kqueue tras un API único, recursividad resuelta) — mejor ingeniería que
+reimplementarla, en línea con la política de deps de producción (SECURITY.md ampliado). Vive en
+`ray-runtime` tras la feature `watch` (por defecto; `--without watch`/slim → error claro).
+
+**El puente a fibras es un self-pipe** (el truco de `signals()` M88.1): los eventos llegan en
+hilos del propio notify; el callback encola `(kind, path)` y escribe un octeto a un pipe
+no-bloqueante. Ni la VM ni el scheduler nativo saben de notify — ven un fd legible, como un
+socket: la VM aparca con el patrón StdinRead (sondear cola → `IoParked` en el fd → rebobinar y
+re-consultar al despertar; plazo por el mecanismo M56.4) y el nativo con
+`fibers::wait_readable_timeout`. Al despertar SIEMPRE se re-verifica el registro (la lección del
+close de M115: un `close(h)` concurrente → `Err`, no un aparcado eterno). El intérprete (oráculo
+secuencial) espera con poll(2) por tramos de 200 ms sin retener el lock del registro.
+
+**Superficie**: `fs.watch(path) -> Result<int, string>` (directorio → RECURSIVO; archivo → él
+mismo), `fs.next_event(h) -> Result<WatchEvent, string>` (aparca sin plazo),
+`fs.next_event_timeout(h, ms) -> Result<Option<WatchEvent>, string>` (`None` = plazo — el
+ingrediente del agrupado de ráfagas, receta en MANUAL), `close(h)` detiene el watch (el `Drop`
+del watcher para sus hilos). `WatchEvent { kind, path }` con kinds gruesos a propósito
+("create"/"modify"/"remove"/"rename"/"other"; `Access` se descarta como ruido): las plataformas
+difieren y el contrato honesto es "algo cambió aquí, re-examina" — byte-identidad de MOTORES,
+no de plataformas. Wrappers emitidos + intercept a nivel de primitivo (patrón M115.3: el struct
+vive en raylang); `__watch_next(h, ms<=0)` = sin plazo, a diferencia del `StdinReadTimeout`
+(ms 0 = sondeo puro) — lo fija el wrapper, no el usuario.

@@ -1850,6 +1850,30 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M115.4: watch de fs. El intérprete (oráculo) BLOQUEA el hilo esperando el evento.
+            "__watch" => {
+                let arr = match &values[0] {
+                    Value::Str(path) => match crate::builtins::watch_open(path) {
+                        Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees a string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__watch_next" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Int(ms)) => match crate::builtins::watch_next_blocking(*h, *ms) {
+                        Ok(Some((kind, path))) => {
+                            vec![Value::Str("ok".to_string()), Value::Str(kind), Value::Str(path)]
+                        }
+                        Ok(None) => vec![Value::Str("timeout".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees two ints"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__unlock_handle" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::unlock_handle(*h) {

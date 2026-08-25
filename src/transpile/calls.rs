@@ -961,7 +961,7 @@ impl Transpiler {
         // Excepción M115.3: stat/chmod NO se interceptan aquí — sus wrappers se emiten (el intercept
         // es a nivel de primitivo `__stat`/`__chmod`, abajo), así el struct `Stat` vive en raylang.
         if let Some(ffn) = name.strip_prefix("std::fs::") {
-            if !matches!(ffn, "stat" | "chmod") {
+            if !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout") {
                 return self.emit_fs(out, ffn, &eff);
             }
         }
@@ -2042,6 +2042,22 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M115.4: watch de fs por eventos de kernel (ray_runtime::watch tras la feature
+            // `watch`; los wrappers EMITIDOS fs.watch/next_event/next_event_timeout llaman aquí).
+            "watch" if name.starts_with("__") && !self.exclude.contains("watch") => {
+                self.needs_rt_watch = true;
+                out.push_str("__ray_watch(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "watch_next" if name.starts_with("__") && !self.exclude.contains("watch") => {
+                self.needs_rt_watch = true;
+                out.push_str("__ray_watch_next(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             // M100: `__run` (procesos del SO) → `__ray_run` (ray_runtime::process, el MISMO código que
             // la VM) + activa `needs_rt_process`. `--without process` es gating de POLÍTICA: sin
             // interceptar, cae al Err de "no soportado" de abajo. Strings/arreglos por referencia
@@ -2193,7 +2209,7 @@ impl Transpiler {
                 // `std::fs::*`: read_file → Result<string,string>; write_file → Result<int,string>; exists → bool.
                 // stat/chmod caen a la ruta genérica (sus wrappers emitidos viven en `funcs`).
                 if let Some(ffn) = n.strip_prefix("std::fs::")
-                    && !matches!(ffn, "stat" | "chmod")
+                    && !matches!(ffn, "stat" | "chmod" | "watch" | "next_event" | "next_event_timeout")
                 {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),

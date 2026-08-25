@@ -546,6 +546,9 @@ mod tests {
         // M115.3: metadatos.
         let d = doc_text("fs.stat");
         assert!(d.contains("std/fs") && d.contains("WITHOUT following symlinks"), "{d}");
+        // M115.4: watch por eventos de kernel.
+        let d = doc_text("fs.watch");
+        assert!(d.contains("std/fs") && d.contains("kernel events"), "{d}");
         let d = doc_text("no_existe_tal_cosa");
         assert!(d.contains("is not a builtin"), "{d}");
     }

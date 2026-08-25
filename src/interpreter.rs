@@ -1824,6 +1824,30 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M115.2: candado consultivo del archivo → ["ok","1"/"0"] / ["ok"] / ["err", msg].
+            "__try_lock_handle" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::try_lock_handle(*h) {
+                        Ok(got) => vec![
+                            Value::Str("ok".to_string()),
+                            Value::Str(if got { "1" } else { "0" }.to_string()),
+                        ],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__unlock_handle" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::unlock_handle(*h) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // std/io (M107.1): stdout/stderr sin salto + flush → ["ok"] o ["err", msg].
             "__stdout_write" | "__stderr_write" => {
                 let arr = match &values[0] {

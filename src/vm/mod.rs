@@ -2621,6 +2621,32 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M115.2: candado consultivo del archivo → ["ok","1"/"0"] / ["ok"] / ["err", msg].
+                OpCode::TryLockHandle => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::try_lock_handle(handle) {
+                        Ok(got) => vec![
+                            HeapValue::Str("ok".to_string()),
+                            HeapValue::Str(if got { "1" } else { "0" }.to_string()),
+                        ],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::UnlockHandle => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::unlock_handle(handle) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // --- std/io (M107.1): stdout/stderr sin salto + flush; arreglo etiquetado. ---
                 OpCode::StdoutWrite | OpCode::StderrWrite => {
                     let HeapValue::Str(s) = self.pop() else {

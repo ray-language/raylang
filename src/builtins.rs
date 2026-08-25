@@ -876,6 +876,40 @@ pub fn sync_handle(h: i64) -> Result<(), String> {
     }
 }
 
+/// Intenta el candado consultivo EXCLUSIVO del archivo sin bloquear — flock (M115.2).
+/// `Ok(true)` = adquirido; `Ok(false)` = lo tiene otra open file description (otro proceso u otro
+/// handle de este mismo proceso). Consultivo: solo protege frente a procesos que también lo piden.
+/// Un lock BLOQUEANTE queda fuera a propósito: bloquearía el hilo entero (todas las fibras).
+pub fn try_lock_handle(h: i64) -> Result<bool, String> {
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Writer(f)) => try_lock_file(f),
+        Some(OpenHandle::Reader(r)) => try_lock_file(r.get_ref()),
+        Some(_) => Err("the handle is not a file".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
+fn try_lock_file(f: &std::fs::File) -> Result<bool, String> {
+    match f.try_lock() {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.to_string()),
+    }
+}
+
+/// Suelta el candado consultivo del archivo (M115.2). Sin candado previo también es `Ok` (así se
+/// comporta flock); `close(h)` lo suelta igualmente al morir la open file description.
+pub fn unlock_handle(h: i64) -> Result<(), String> {
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Writer(f)) => f.unlock().map_err(|e| e.to_string()),
+        Some(OpenHandle::Reader(r)) => r.get_ref().unlock().map_err(|e| e.to_string()),
+        Some(_) => Err("the handle is not a file".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
 /// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);
@@ -2675,6 +2709,18 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__sync_handle", opcode: OpCode::SyncHandle, check: |a| {
         arity(a, 1, "__sync_handle", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__sync_handle expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __try_lock_handle(h) -> [string] (M115.2): ["ok","1"/"0"] o ["err", msg]. std/fs → Result<bool,string>.
+    Builtin { name: "__try_lock_handle", opcode: OpCode::TryLockHandle, check: |a| {
+        arity(a, 1, "__try_lock_handle", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__try_lock_handle expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __unlock_handle(h) -> [string] (M115.2): ["ok"] o ["err", msg]. std/fs → Result<int,string>.
+    Builtin { name: "__unlock_handle", opcode: OpCode::UnlockHandle, check: |a| {
+        arity(a, 1, "__unlock_handle", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__unlock_handle expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // --- std/io (M107.1): stdout/stderr sin salto de línea + flush. Primitivos con arreglo

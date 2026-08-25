@@ -2537,7 +2537,7 @@ archivos" en "ser una base de datos" — exactamente el territorio que IDEAS-APP
    replay recupera exactamente lo no-ackeado), NO ante corte de luz. Sin `fs.sync(h)` (o un modo
    `open(path, "as")` con fsync-on-write) ningún programa raylang puede prometer durabilidad
    real. Es LA pieza que falta para rayq/raykv/cualquier motor de almacenamiento.
-2. **No hay file locks** (impacto: MEDIO-ALTO). Dos brokers sobre el mismo directorio
+2. **[EJECUTADA — M115.2, DESIGN §109: `fs.try_lock(h)`/`fs.unlock(h)`] No hay file locks** (impacto: MEDIO-ALTO). Dos brokers sobre el mismo directorio
    intercalan appends y doble-entregan sin ningún aviso; el patrón estándar (flock sobre un
    `LOCK` file al arrancar) no se puede expresar. Candidato: `fs.lock_exclusive(h) -> Result`.
 3. **`fs.rename` existe y es el reemplazo atómico que promete** (positivo): la compactación

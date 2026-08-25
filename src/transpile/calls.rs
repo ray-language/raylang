@@ -511,6 +511,19 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // M115.2: candado consultivo (Result<bool,string>) + unlock (Result<int,string>).
+            "try_lock" => {
+                self.needs_handles = true;
+                out.push_str("__ray_try_lock(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "unlock" => {
+                self.needs_handles = true;
+                out.push_str("__ray_unlock(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // Operaciones de directorio con resultado unitario → Result<int,string> (Ok(0)/Err(msg)):
             // mkdir (create_dir_all), remove_dir (solo vacío), rename, copy_file (std::fs::copy).
             "mkdir" | "remove_dir" | "rename" | "copy_file" => {
@@ -2164,9 +2177,10 @@ impl Transpiler {
                         "read_file_bytes" => Type::Enum("Result".into(), vec![Type::Bytes, Type::String]),
                         "write_file" | "open" | "write" | "remove_file" | "mkdir" | "remove_dir"
                         | "rename" | "copy_file" | "file_size" | "mtime" | "write_file_bytes"
-                        | "append_file_bytes" | "append_file" | "write_bytes" | "sync" => {
+                        | "append_file_bytes" | "append_file" | "write_bytes" | "sync" | "unlock" => {
                             Type::Enum("Result".into(), vec![Type::Int, Type::String])
                         }
+                        "try_lock" => Type::Enum("Result".into(), vec![Type::Bool, Type::String]),
                         "read_line" => opt_of(Type::String),
                         "read_bytes" => Type::Enum("Result".into(), vec![opt_of(Type::Bytes), Type::String]),
                         "seek" => Type::Enum("Result".into(), vec![Type::Int, Type::String]),

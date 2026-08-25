@@ -81,6 +81,65 @@ fn direct_git_https_dependency() {
     assert!(out2.contains("hello, live!"), "{out2}");
 }
 
+/// M135 (piloto de espejos): el paquete REAL `rpc` — espejado del monorepo a
+/// github.com/ray-language/rpc por `tools/publish-packages.sh` — consumido POR NOMBRE desde el
+/// índice, con un e2e de VERDAD: servidor rpc con apagado por canal + cliente en el mismo
+/// proceso (fibras), sobre la superficie descargada de GitHub.
+#[test]
+#[ignore]
+fn real_rpc_package_by_name_e2e() {
+    if !net_available() {
+        eprintln!("saltando: sin red o GitHub inaccesible");
+        return;
+    }
+    let dir = project(
+        "rpc",
+        "[package]\nname = \"live\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"git+https://github.com/ray-language/ray-index@main\"\n",
+        RPC_MAIN,
+    );
+    let (out, err, code) = ray(&dir, &["add", "rpc"]);
+    assert_eq!(code, 0, "ray add rpc contra el índice\n{out}{err}");
+    let (out, err, code) = ray(&dir, &["run"]);
+    assert_eq!(code, 0, "e2e rpc sobre el paquete espejado\n{out}{err}");
+    assert!(out.contains("rpc says pong"), "la llamada RPC responde\n{out}");
+}
+
+const RPC_MAIN: &str = r#"import rpc/rpc;
+import std/time;
+from std/json import Json;
+
+fn main() -> int {
+    let port = 36917;
+    let stop: Channel<int> = Channel.new();
+    spawn(fn() {
+        let _ = rpc.serve_shutdown("127.0.0.1", port, stop, 2000, fn(req: rpc.Req) -> Result<Json, string> {
+            if (req.method == "ping") { Result.Ok(Json.JStr("pong")) } else { Result.Err("unknown") }
+        });
+    });
+    time.sleep(150);
+    let c = match (rpc.connect("127.0.0.1", port)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("connect err " + e);
+            return 1;
+        },
+    };
+    match (rpc.call(c, "ping", Json.JNull)) {
+        Result.Ok(j) => {
+            match (j) {
+                Json.JStr(s) => print("rpc says " + s),
+                _ => print("unexpected shape"),
+            }
+        },
+        Result.Err(e) => print("call err " + e),
+    }
+    rpc.disconnect(c);
+    send(stop, 0);
+    time.sleep(100);
+    0
+}
+"#;
+
 /// Resolución POR NOMBRE contra el índice remoto real: `ray add greeting` elige la última
 /// versión publicada (1.0.1, la de URL https) y la descarga verificando el hash del índice.
 #[test]

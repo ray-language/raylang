@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El piloto de espejos de paquetes** (M135) — decisión de forma del ecosistema: los paquetes
+  viven en el monorepo (fuente de verdad, tándem con el lenguaje) y se PUBLICAN como espejos de
+  solo-lectura en `github.com/ray-language` con tag inmutable por versión + entrada con hash en
+  `ray-index` (`tools/publish-packages.sh`). Piloto: `rpc` — instalable con `ray add rpc` desde
+  cualquier proyecto; e2e live en `deps_live_cli`.
 - **El manejador de paquetes, validado contra GitHub real + la batería de admisión** (M134) —
   el flujo completo (dep `git+https@tag`, índice remoto, `ray add` por nombre con verificación
   de hash, lockfile reproducible) probado contra la organización `ray-language` (cápsula

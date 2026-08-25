@@ -8,7 +8,7 @@
 
 **Un lenguaje de programación estáticamente tipado, orientado a expresiones y auto-alojado — escrito en Rust, con una superficie de dependencias mínima y deliberada.**
 
-[![CI](https://github.com/roberto-ayala/raylang/actions/workflows/ci.yml/badge.svg)](https://github.com/roberto-ayala/raylang/actions/workflows/ci.yml)
+[![CI](https://github.com/ray-language/raylang/actions/workflows/ci.yml/badge.svg)](https://github.com/ray-language/raylang/actions/workflows/ci.yml)
 [![Licencia: MIT OR Apache-2.0](https://img.shields.io/badge/licencia-MIT%20OR%20Apache--2.0-blue.svg)](#licencia)
 [![Versión](https://img.shields.io/badge/versión-1.0.0-brightgreen.svg)](CHANGELOG.md)
 
@@ -90,16 +90,16 @@ fn main() -> int {
 ### `curl | sh` (macOS / Linux)
 
 ```sh
-curl -sSfL https://raw.githubusercontent.com/roberto-ayala/raylang/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
 ```
 
 Instala los binarios `ray` (y su alias `raylang`) en `~/.local/bin`. En **Windows**, descarga el `.zip` de
-la [última release](https://github.com/roberto-ayala/raylang/releases).
+la [última release](https://github.com/ray-language/raylang/releases).
 
 ### Desde el código
 
 ```sh
-git clone https://github.com/roberto-ayala/raylang
+git clone https://github.com/ray-language/raylang
 cd raylang
 cargo build --release          # target/release/ray
 ```

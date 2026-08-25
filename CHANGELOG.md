@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El repo vive en la organización** — `raylang` se transfirió de `roberto-ayala/raylang` a
+  **`ray-language/raylang`** (M136): todo el ecosistema — toolchain, paquetes espejados,
+  `ray-index`, apps — bajo un mismo techo. GitHub redirige las URLs viejas de forma permanente;
+  los enlaces del repo, del instalador (`install.sh`), de los espejos y de las apps quedaron
+  saneados al nuevo owner.
 - **El ecosistema instalable: los seis paquetes espejados** (M135b) — `ray add
   net|db|web|rpc|tz|cron` funciona desde cualquier proyecto contra `ray-index`, con transitivas
   resolviendo solas (las path-deps entre hermanos se reescriben a git pinneado en el espejo).

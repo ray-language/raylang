@@ -2677,7 +2677,7 @@ Tres apps del eje "texto y cripto" en una tanda: `raymail` (SMTP real + MIME + s
   vez (rayq, raysync, raypass).
 
 **Carencias confirmadas:**
-1. **Entrada oculta de passphrase = artesanía sobre raw** (raypass; predicho por §1.12): ~30
+1. **[EJECUTADA — M125, DESIGN §122: `term.read_hidden(prompt)` + el núcleo puro `hidden_feed`; de paso arregla el backspace-por-byte que rompía UTF-8]** **Entrada oculta de passphrase = artesanía sobre raw** (raypass; predicho por §1.12): ~30
    líneas de raw + byte a byte + backspace + decode que toda herramienta repetirá. Candidata:
    `term.read_hidden(prompt) -> Result<string, _>`.
 2. **[EJECUTADA — M115.3, DESIGN §110: `fs.chmod(path, mode)`] Sin `fs.chmod`/permisos** (raypass): una bóveda de secretos queda con el umask del proceso
@@ -2761,10 +2761,12 @@ intento vencido falla con `"connect timeout"` en vez de los ~75 s del SO.
 **[EJECUTADAS — M123/M124, DESIGN §120/§121]** `Request.remote` + `net.peer_addr` (§65.1) y
 `net.tls_peer_cert` (§70.1): la dirección del cliente y el certificado del peer.
 
+**[EJECUTADA — M125, DESIGN §122]** `term.read_hidden` (§71.1): la passphrase sin eco, con núcleo
+puro probeable sin tty.
+
 **Quedan abiertos** (candidatos, no comprometidos): el **pool/multiplexado de `packages/rpc`**
-(§72.2, secuencial por conexión hoy); `term.read_hidden` (§71.1), hasher incremental de
-`std/crypto` (§69.3), normalización Unicode y `std/mail` (§71.4/§71.5), y los menores de `std`
-que cada tanda anotó.
+(§72.2, secuencial por conexión hoy); hasher incremental de `std/crypto` (§69.3), normalización
+Unicode y `std/mail` (§71.4/§71.5), y los menores de `std` que cada tanda anotó.
 
 ## Cómo usar este archivo
 

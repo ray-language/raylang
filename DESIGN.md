@@ -9984,3 +9984,30 @@ Gotcha de plomería (la lección M115.4 de nuevo): `x509.rs` debe EMBEBERSE en `
 los tres motores con el cert de fixtures (CN=localhost / CN=raylang-test-ca / SAN [localhost] +
 ventana de validez), SIN I/O previa al pedirlo — probando la conducción del handshake
 (`tls_peer_cert_cli.rs`: intérprete, VM y nativo E2E).
+
+## 122. M125 — term.read_hidden: la passphrase sin eco deja de ser artesanía (ago 2026)
+
+El hallazgo de raypass (IDEAS §71.1, predicho por el catálogo §1.12): leer una línea sin eco eran
+~30 líneas artesanas sobre `raw` + lectura byte a byte + backspace que toda herramienta de
+secretos iba a repetir. Y la versión artesanal traía el bug esperable: su backspace quitaba un
+BYTE, no un carácter — un retroceso sobre una "ñ" dejaba UTF-8 roto.
+
+**Superficie en `std/term`, con la filosofía de `decode`** (el núcleo puro, probeable sin tty):
+- `hidden_feed(acc: bytes, chunk: bytes) -> Hidden` (`More(bytes)` / `Done(string)` /
+  `Cancelled`) — el editor puro: Enter (CR/LF) termina, Backspace/DEL borra **un carácter UTF-8
+  completo** (retrocede las continuaciones `10xxxxxx` y el líder), Ctrl-C cancela, los demás
+  controles se ignoran, nada se ecoa jamás.
+- `read_hidden(prompt) -> Result<string, string>` — el envoltorio: prompt a **stderr** (como
+  getpass(3): un stdout canalizado queda limpio), `raw` + bucle sobre `io.read`, `\r\n` final.
+  Sin tty → `Err("stdin is not a terminal")` (el fallback por env/archivo es política de la app,
+  no de la stdlib); Ctrl-C → `Err("interrupted")`; EOF devuelve lo tecleado.
+
+**El test que costó su gotcha**: la batería pura corre en los tres motores bajo pipes
+(`term_hidden.ray`), y el camino REAL corre bajo un **pty de verdad** (`script -q`, la receta de
+las TUIs) tecleando `sécrX⌫eto⏎` → `got=sécreto` sin rastro de eco. El primer intento se colgaba:
+`term.raw` aplica el modo con **TCSAFLUSH, que descarta la entrada pendiente** — teclear antes de
+que el modo crudo esté puesto pierde los bytes y la lectura espera para siempre. El test espera el
+PROMPT antes de teclear (lo que haría un humano); anotado aquí porque es la trampa que cualquier
+automatización de un programa `raw` (expect-style) va a pisar.
+
+raylang puro (cero opcodes): byte-idéntico en los tres motores por transpilación, como term.width.

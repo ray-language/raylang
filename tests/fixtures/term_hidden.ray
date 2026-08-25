@@ -1,0 +1,38 @@
+// M125 — batería del núcleo PURO de la entrada oculta (term.hidden_feed) + la degradación sin
+// tty de read_hidden. Corre bajo pipes en los tres motores (assert_on_all_engines); el camino
+// pty real lo cubre term_cli::read_hidden_under_a_real_pty con `script -q`.
+import std/term;
+
+fn show(h: term.Hidden) {
+    match (h) {
+        term.Hidden.More(b) => print("more:" + to_string(b)),
+        term.Hidden.Done(s) => print("done:" + s),
+        term.Hidden.Cancelled => print("cancelled"),
+    }
+}
+
+fn main() {
+    // Acumula sin terminar.
+    show(term.hidden_feed(b"", "secr".to_bytes()));
+    // Enter (CR) termina con el texto decodificado; lo que siga al Enter se descarta.
+    show(term.hidden_feed("secr".to_bytes(), "eto\rZZ".to_bytes()));
+    // LF también termina (terminales en modo no-canónico varían).
+    show(term.hidden_feed(b"", "abc\n".to_bytes()));
+    // Backspace (DEL y BS) borra UN CARÁCTER completo — la ñ de 2 bytes entera.
+    show(term.hidden_feed("señ".to_bytes(), b"\x7f"));
+    show(term.hidden_feed("ab".to_bytes(), b"\x08"));
+    // Backspace sobre vacío es inofensivo.
+    show(term.hidden_feed(b"", b"\x7f"));
+    // Ctrl-C cancela.
+    show(term.hidden_feed("algo".to_bytes(), b"\x03"));
+    // Los controles (tab, ESC) se ignoran; los bytes >= 32 y el UTF-8 multibyte entran.
+    show(term.hidden_feed(b"", b"\t\x1ba"));
+    show(term.hidden_feed(b"", "ñu早\r".to_bytes()));
+    // Edición dentro del MISMO chunk: "sX<backspace>e" → "se".
+    show(term.hidden_feed(b"", b"sX\x7fe\r"));
+    // read_hidden bajo pipes (sin tty) degrada limpio.
+    match (term.read_hidden("p: ")) {
+        Result.Ok(s) => print("unexpected:" + s),
+        Result.Err(e) => print(e),
+    }
+}

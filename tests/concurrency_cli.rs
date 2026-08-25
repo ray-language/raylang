@@ -826,3 +826,51 @@ fn main() -> int {
     assert_eq!(out, "300\n");
     assert!(!err.contains("panicked"), "stderr: {err}");
 }
+
+#[test]
+fn try_recv_non_blocking_three_states() {
+    // M116: try_recv distingue Got/Empty/Closed sin bloquear. Empty (abierto y vacío), Got tras un
+    // send, Empty de nuevo, Closed tras cerrar, y Got de un emisor bloqueado en rendezvous.
+    let src = r#"
+import std/time;
+fn describe(r: Received<int>) -> string {
+    match (r) {
+        Received.Got(v) => "got " + to_string(v),
+        Received.Empty => "empty",
+        Received.Closed => "closed",
+    }
+}
+fn main() -> int {
+    let ch: Channel<int> = Channel.bounded(4);
+    print(describe(try_recv(ch)));
+    send(ch, 42);
+    print(describe(try_recv(ch)));
+    print(describe(try_recv(ch)));
+    close(ch);
+    print(describe(try_recv(ch)));
+    let r: Channel<int> = Channel.new();
+    spawn(fn() { send(r, 7); });
+    time.sleep(50);
+    print(describe(try_recv(r)));
+    0
+}
+"#;
+    let (out, _err, code) = run("conc_try_recv", src, true);
+    assert_eq!(out, "empty\ngot 42\nempty\nclosed\ngot 7\n", "try_recv (vm): {out}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn try_recv_requires_the_vm() {
+    // Como recv/select, try_recv es concurrencia → el intérprete da un error claro, no un panic.
+    let src = r#"
+fn main() -> int {
+    let ch: Channel<int> = Channel.new();
+    match (try_recv(ch)) { Received.Got(v) => print(v), Received.Empty => print(0), Received.Closed => print(0) }
+    0
+}
+"#;
+    let (_out, err, code) = run("conc_try_recv_interp", src, false);
+    assert!(err.contains("requires the VM"), "stderr no pide la VM: {err}");
+    assert_eq!(code, 70);
+}

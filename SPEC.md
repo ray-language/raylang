@@ -396,7 +396,10 @@ en los puntos de cesión), nunca preemptiva.
   `None` cerrado-y-vacío; `close(ch)` despierta receptores (un `send` sobre cerrado es error;
   un `close` con emisor bloqueado es error). `select(chs: [Channel<T>]) -> int` bloquea hasta
   que alguno esté listo para recibir y devuelve el **menor índice listo en el momento de la
-  comprobación** (un canal cerrado está listo para siempre).
+  comprobación** (un canal cerrado está listo para siempre). `try_recv(ch: Channel<T>) ->
+  Received<T>` recibe **sin bloquear**: `Received.Got(v)` si había un valor listo (lo consume,
+  como `recv`), `Received.Empty` si el canal está abierto y vacío, `Received.Closed` si está
+  cerrado y drenado — el `enum Received<T> { Got(T), Empty, Closed }` del prelude.
 - `signals() -> Channel<int>` devuelve el canal **singleton** de señales del proceso (`SIGTERM`
   = 15, `SIGINT` = 2 y `SIGWINCH` = 28 —cambio de tamaño del terminal— llegan como enteros),
   para apagado ordenado y re-maquetado de TUIs; compone con `recv`/`select`. Solo unix (VM y

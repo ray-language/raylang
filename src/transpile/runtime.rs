@@ -1002,6 +1002,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // `senders` los emisores bloqueados (para que `close` los detecte, como la VM). Los panics
             // llevan el MISMO texto que el error de ejecución de la VM (exit code ≠ 70: diferido a H6).
             "struct __ChanState<T> { q: std::collections::VecDeque<T>, closed: bool, cap: Option<usize>, taken: u64, senders: usize }\n",
+            // M116: el resultado interno de `try_recv` (repr SEND del payload); el sitio lo mapea al
+            // enum del prelude `Received` (repr programa).
+            "enum __TryRecv<T> { Got(T), Empty, Closed }\n",
             "struct __RayChan<T> { inner: std::sync::Arc<__RaySync<__ChanState<T>>> }\n",
             "impl<T> Clone for __RayChan<T> { fn clone(&self) -> Self { __RayChan { inner: self.inner.clone() } } }\n",
             // Un canal dentro de un struct/enum mostrable se renderiza `<channel>`, como la VM
@@ -1042,6 +1045,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        let mut st = self.inner.0.lock().unwrap();\n",
             "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; __ray_notify(&self.inner); } v\n",
+            "    }\n",
+            // M116: recepción NO bloqueante. Got(v) drena y despierta a un emisor (como recv); vacío y
+            // abierto → Empty; vacío y cerrado → Closed. El sitio de llamada mapea `__TryRecv<sendrepr>`
+            // al enum del prelude `Received<progrepr>` convirtiendo el payload (repr send → programa).
+            "    fn try_recv(&self) -> __TryRecv<T> {\n",
+            "        let mut st = self.inner.0.lock().unwrap();\n",
+            "        match st.q.pop_front() { Some(v) => { st.taken += 1; __ray_notify(&self.inner); __TryRecv::Got(v) } None => if st.closed { __TryRecv::Closed } else { __TryRecv::Empty } }\n",
             "    }\n",
             // `close` con un emisor bloqueado = error de ejecución en el sitio del close, como la VM
             // (M12.2; antes el emisor hacía return silencioso y su valor quedaba consumible).

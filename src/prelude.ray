@@ -12,6 +12,17 @@ enum Result<T, E> {
     Err(E),
 }
 
+// M116 (concurrencia): el resultado de `try_recv` — recepción de un canal SIN bloquear. Distingue
+// los tres estados que `recv` (que bloquea y colapsa a Option) no puede: valor listo, vacío pero
+// abierto (reintenta luego), y cerrado y drenado (deja de escuchar). Solo la VM.
+/// The outcome of a non-blocking channel receive (`try_recv`): `Got(v)` when a value was ready,
+/// `Empty` when the channel is open but has nothing right now, `Closed` when it is closed and drained.
+enum Received<T> {
+    Got(T),
+    Empty,
+    Closed,
+}
+
 // Igualdad estructural (M10.1). `@derive(Eq)` genera el `impl` para un struct/enum.
 // Usa `Self` en posición de argumento, así que no es invocable sobre un `dyn Eq`
 // (object safety): se compara entre valores concretos, `a.eq(b)`.

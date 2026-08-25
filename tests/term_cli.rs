@@ -70,3 +70,14 @@ fn without_a_tty_everything_degrades_cleanly() {
         "false\nno-size\nraw-err\n",
     );
 }
+
+#[test]
+fn cell_width_matches_on_all_three_engines() {
+    // M117: term.width / char_width / fit / fit_right (wcwidth pragmático) — byte-idéntico en los
+    // tres motores (es raylang puro, se transpila; sin opcode nuevo).
+    assert_on_all_engines(
+        "cell_width",
+        include_str!("fixtures/term_width.ray"),
+        include_str!("fixtures/term_width.out"),
+    );
+}

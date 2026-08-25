@@ -9733,3 +9733,25 @@ que se añadió `__ray_wait_activity_once`: una espera ACOTADA que retorna por n
 inmediato) O por el pulso de ~10 ms (para re-chequear el deadline). El bucle de `__ray_select_timeout`
 re-escanea y compara contra el deadline tras cada retorno. Verificado byte-idéntico a la VM (plazo
 vencido, valor ya listo, despertar por canal antes del plazo, poll `ms=0`), estable en 5× multicore.
+
+## 114. M117 — term.width: el wcwidth que todo TUI copiaba (ago 2026)
+
+El hallazgo más repetido del eje terminal (IDEAS §67): `std/term` no tenía cómo medir el ancho en
+CELDAS de un texto, así que cada TUI (raytop entre ellas, con su `src/width.ray` de ~40 líneas)
+llevaba su propia tabla de rangos wcwidth para alinear columnas con CJK/kana/emoji. `s.len()` cuenta
+caracteres, no celdas: un `日` ocupa 2, un combinante 0.
+
+Superficie en `std/term`: `width(s) -> int`, `char_width(c) -> int`, `fit(s, cells) -> string`
+(trunca a `cells` sin partir un carácter ancho y rellena con espacios) y `fit_right` (relleno a la
+izquierda, columnas numéricas). El modelo wcwidth es pragmático: control (C0/C1) y marcas
+combinantes/de-ancho-cero → 0; East Asian Wide/Fullwidth y los bloques emoji comunes → 2; el resto
+→ 1. **No** intenta resolver secuencias emoji ZWJ/VS16, cuyo ancho depende del terminal y no tiene
+respuesta universal — se documenta como límite consciente.
+
+**Decisión: raylang puro, no builtin.** Es una tabla de rangos sin I/O — vive en `std/term.ray` y se
+transpila a los tres motores byte-idéntica, cero opcodes nuevos. raytop midió que el ancho no es
+cuello (el frame de 749 procesos es 0.29 ms nativo), así que no hay razón de rendimiento para bajarlo
+a Rust. La tabla mejora la de raytop añadiendo combinantes comunes (diacríticos, selectores de
+variación, marcas de ancho cero) como ancho 0, además de los rangos anchos. Portable: al ser cálculo
+puro, funciona sin tty (para medir texto que no se imprime). Los rangos van en decimal con el hex en
+el comentario — hasta que lleguen los literales hex (§67, siguiente pieza del eje).

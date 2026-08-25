@@ -298,3 +298,107 @@ pub fn read_key() -> Option<Key> {
         },
     }
 }
+
+// --- M117: ancho en CELDAS de terminal (el problema wcwidth). Todo TUI lo necesita para alinear
+// columnas cuando el texto lleva CJK/kana/emoji (2 celdas) o combinantes (0). `char_from_code`/
+// `chars` ya dan el code point; esto es la tabla de rangos que faltaba (antes cada TUI la copiaba).
+// wcwidth PRAGMÁTICO: control y combinantes → 0, ancho-Este-Asiático y bloques emoji → 2, resto → 1.
+// No resuelve secuencias emoji ZWJ/VS16 (ancho ambiguo según el terminal); para eso no hay respuesta
+// universal. Los rangos van en decimal (aún sin literales hex); el hex va en el comentario. ---
+
+// ¿El code point ocupa DOS celdas? (East Asian Wide + Fullwidth + bloques emoji comunes.)
+fn is_wide(cp: int) -> bool {
+    cp >= 4352 && cp <= 4447 || cp >= 8986 && cp <= 8987 || cp >= 9728 && cp <= 9747 || cp >= 11904 && cp <= 12350 || cp >= 12353 && cp <= 12543 || cp >= 12549 && cp <= 12591 || cp >= 12593 && cp <= 12686 || cp >= 12800 && cp <= 13311 || cp >= 13312 && cp <= 19903 || cp >= 19968 && cp <= 42124 || cp >= 44032 && cp <= 55203 || cp >= 63744 && cp <= 64255 || cp >= 65072 && cp <= 65131 || cp >= 65281 && cp <= 65376 || cp >= 65504 && cp <= 65510 || cp >= 127744 && cp <= 129791 || cp >= 131072 && cp <= 262141  // Hangul Jamo (0x1100–0x115F)
+    // ⌚⌛ (0x231A–0x231B)
+    // símbolos meteorológicos anchos (0x2600–0x2613)
+    // radicales/puntuación CJK (0x2E80–0x303E)
+    // kana (0x3041–0x30FF)
+    // Bopomofo (0x3105–0x312F)
+    // Hangul compat Jamo (0x3131–0x318E)
+    // símbolos CJK cercados (0x3200–0x33FF)
+    // CJK ext A (0x3400–0x4DBF)
+    // CJK unificado + Yi (0x4E00–0xA48F)
+    // sílabas Hangul (0xAC00–0xD7A3)
+    // CJK compat (0xF900–0xFAFF)
+    // formas CJK compat (0xFE30–0xFE6B)
+    // formas fullwidth (0xFF01–0xFF60)
+    // signos fullwidth (0xFFE0–0xFFE6)
+    // bloques emoji (0x1F300–0x1FAFF)
+    // CJK ext B+ (0x20000–0x3FFFD)
+}
+
+// ¿El code point es de ancho CERO? (Control C0/C1 y marcas combinantes / de ancho cero comunes.)
+fn is_zero_width(cp: int) -> bool {
+    cp < 32 || cp >= 127 && cp < 160 || cp >= 768 && cp <= 879 || cp >= 6832 && cp <= 6911 || cp >= 7616 && cp <= 7679 || cp >= 8203 && cp <= 8207 || cp >= 8400 && cp <= 8447 || cp >= 65056 && cp <= 65071 || cp == 65279  // control C0 (0x00–0x1F) y C1 (0x7F–0x9F)
+    // combinantes diacríticos (0x0300–0x036F)
+    // combinantes extendidos (0x1AB0–0x1AFF)
+    // combinantes suplementarios (0x1DC0–0x1DFF)
+    // espacios/marcas de ancho cero (0x200B–0x200F)
+    // combinantes para símbolos (0x20D0–0x20FF)
+    // selectores de variación combinantes (0xFE20–0xFE2F)
+    // BOM / zero-width no-break space (0xFEFF)
+}
+
+/// The display width of a character in terminal cells: 0 for control and combining code points,
+/// 2 for East Asian Wide/Fullwidth and the common emoji blocks, 1 otherwise.
+pub fn char_width(c: char) -> int {
+    let cp = c as int;
+    if (is_zero_width(cp)) {
+        0
+    } else if (is_wide(cp)) {
+        2
+    } else {
+        1
+    }
+}
+
+/// The display width of a string in terminal cells (the sum of its characters' widths). Use it to
+/// align columns that may contain CJK, kana or emoji, where `s.len()` (a character count) is wrong.
+pub fn width(s: string) -> int {
+    var w = 0;
+    for c in s.chars() {
+        w = w + char_width(c);
+    }
+    w
+}
+
+/// Truncates `s` to at most `cells` display cells and pads with spaces to EXACTLY `cells` (left
+/// aligned). A wide character that would straddle the boundary is dropped (not split). The
+/// column-building primitive for a TUI.
+pub fn fit(s: string, cells: int) -> string {
+    var out = "";
+    var w = 0;
+    var done = false;
+    for c in s.chars() {
+        if (!done) {
+            let cw = char_width(c);
+            if (w + cw > cells) {
+                done = true;  // no cabe: deja de añadir (una wide no se parte)
+            } else {
+                out = out + to_string(c);
+                w = w + cw;
+            }
+        }
+    }
+    while (w < cells) {
+        out = out + " ";
+        w = w + 1;
+    }
+    out
+}
+
+/// Like `fit`, but right aligned — pads on the LEFT to `cells` cells (for numeric columns). If `s`
+/// is already wider than `cells`, it is truncated like `fit`.
+pub fn fit_right(s: string, cells: int) -> string {
+    let w = width(s);
+    if (w >= cells) {
+        return fit(s, cells);
+    }
+    var pad = "";
+    var i = w;
+    while (i < cells) {
+        pad = pad + " ";
+        i = i + 1;
+    }
+    pad + s
+}

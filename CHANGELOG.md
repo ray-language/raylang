@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/term`: ancho en celdas de terminal** (M117, IDEAS §67) — la pieza que todo TUI copiaba a
+  mano: `term.width(s)` da el ancho real en **celdas** (un `日` ocupa 2, un combinante 0), donde
+  `s.len()` (cuenta caracteres) desalinea las columnas; `term.char_width(c)` para un carácter, y
+  `term.fit(s, cells)`/`term.fit_right(s, cells)` truncan sin partir un carácter ancho y rellenan a
+  la anchura exacta. wcwidth pragmático (control/combinantes → 0, CJK/kana/fullwidth/emoji → 2,
+  resto → 1); raylang puro → byte-idéntico en los tres motores, y portable (no necesita tty).
+
 - **Concurrencia: `select_timeout` — `select` con plazo** (M116.1, IDEAS §64) — `select_timeout(chs,
   ms)` devuelve `Some(i)` con el canal listo o `None` al vencer los `ms` milisegundos; `ms = 0` es
   un poll no bloqueante del conjunto. Es **event-driven** (despierta al llegar un canal, no sondea)

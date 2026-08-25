@@ -42,7 +42,7 @@ recomendaciones. Complementa a los otros documentos:
 Instala el binario (`ray`, con su alias `raylang`):
 
 ```sh
-curl -sSfL https://raw.githubusercontent.com/roberto-ayala/raylang/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
 ```
 
 Crea y ejecuta un proyecto:

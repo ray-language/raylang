@@ -1,16 +1,16 @@
 #!/bin/sh
 # Instalador de raylang (M44c). Descarga el binario de la plataforma desde la GitHub Release y lo instala.
 #
-#   curl -sSfL https://raw.githubusercontent.com/roberto-ayala/raylang/main/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
 #
 # Variables de entorno (opcionales):
 #   RAYLANG_VERSION   tag a instalar (p. ej. v1.0.0). Por defecto: la última release.
 #   RAYLANG_BIN_DIR   directorio de instalación. Por defecto: $HOME/.local/bin
-#   RAYLANG_REPO      owner/repo. Por defecto: roberto-ayala/raylang
+#   RAYLANG_REPO      owner/repo. Por defecto: ray-language/raylang
 #   RAYLANG_DRY_RUN   si está definido, imprime el plan y NO descarga (para probar la detección).
 set -eu
 
-REPO="${RAYLANG_REPO:-roberto-ayala/raylang}"
+REPO="${RAYLANG_REPO:-ray-language/raylang}"
 BIN_DIR="${RAYLANG_BIN_DIR:-$HOME/.local/bin}"
 
 info() { printf '\033[1;34m→\033[0m %s\n' "$1"; }

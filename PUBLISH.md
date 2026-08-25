@@ -89,7 +89,7 @@ jobs:
     permissions: { pages: write, id-token: write }
     steps:
       - uses: actions/checkout@v4
-      - run: curl -sSfL https://raw.githubusercontent.com/roberto-ayala/raylang/main/install.sh | sh
+      - run: curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
       - run: ~/.local/bin/ray registry verify .          # la auditoría de firmas (M83)
       - run: ~/.local/bin/ray run tools/registry_site.ray . _site   # requiere el checkout del lenguaje o el script vendorizado
       - uses: actions/upload-pages-artifact@v3

@@ -56,7 +56,7 @@ transform_readme() {
         # Heredoc CITADO (sin expansión: los backticks de markdown son texto) + placeholders.
         cat > "$HDR" <<'EOF'
 > **Espejo de solo lectura** — publicado desde
-> [`raylang/packages/@PKG@`](https://github.com/roberto-ayala/raylang/tree/main/packages/@PKG@);
+> [`raylang/packages/@PKG@`](https://github.com/ray-language/raylang/tree/main/packages/@PKG@);
 > el desarrollo y los PRs van al monorepo.
 >
 > **Instalación** — en tu `ray.toml`:

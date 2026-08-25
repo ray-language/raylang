@@ -215,7 +215,11 @@ fn run_one(suite: &Suite, test: &Test) -> Result<(), Vec<String>> {
         // igualmente porque baja el programa antes de ejecutar.
         return Err(vec![format!("compilation error: {}", e)]);
     }
-    match crate::run_on_vm(&program) {
+    let outcome = crate::run_on_vm(&program);
+    // M129: aísla de verdad — descarta los handles del SO que el test dejó vivos (listeners
+    // incluidos: antes sobrevivían y aceptaban conexiones que nadie atendía en el siguiente test).
+    crate::builtins::close_all_handles();
+    match outcome {
         Ok(Value::Int(0)) => Ok(()),
         Ok(Value::Int(_)) => Err(vec!["the test returned false".into()]),
         Ok(_) => Ok(()),

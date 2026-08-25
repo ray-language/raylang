@@ -246,3 +246,34 @@ fn missing_file_exits_66() {
         .expect("ejecuta el binary");
     assert_eq!(out.status.code(), Some(66));
 }
+
+#[test]
+fn listeners_do_not_survive_between_tests() {
+    // M129 (§65.2): el runner descartaba las fibras del @test anterior pero los sockets de
+    // ESCUCHA del SO sobrevivían — el siguiente test los veía aceptar conexiones que nadie
+    // atendía (read timeout en vez de connection refused). Ahora el aislamiento drena TODO el
+    // registro de handles: el segundo test debe ver el puerto CERRADO.
+    let src = r#"
+import std/net;
+@test fn boots_listener() -> bool {
+    match (net.tcp_listen("127.0.0.1", 36179)) {
+        Result.Ok(l) => true,
+        Result.Err(e) => false,
+    }
+}
+@test fn listener_is_gone() -> bool {
+    match (net.tcp_connect_timeout("127.0.0.1", 36179, 500)) {
+        Result.Ok(c) => {
+            close(c);
+            false
+        },
+        Result.Err(e) => true,
+    }
+}
+fn main() -> int { 0 }
+"#;
+    let (out, code) = run_tests(src, "ray_test_zombie_listener.ray");
+    assert!(out.contains("ok    boots_listener"), "el listener del primer test arranca\n{out}");
+    assert!(out.contains("ok    listener_is_gone"), "el puerto debe estar CERRADO en el segundo test\n{out}");
+    assert_eq!(code, 0, "ambos verdes\n{out}");
+}

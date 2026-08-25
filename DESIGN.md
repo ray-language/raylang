@@ -10108,3 +10108,36 @@ De pasada, los **errores de `std/regex` y `std/csv` pasan a inglés** ("regex: m
 la política de superficie-en-inglés ya regía para diagnósticos y LSP, y estos strings llegan al
 usuario final. El resto de la stdlib (json, toml viejo, inflate…) sigue en español — es un barrido
 aparte, anotado en IDEAS.
+
+## 126. M129 — el lote B del dogfood: admit/report, aislamiento real de `ray test`, Accept-Encoding (ago 2026)
+
+Tras el lote A (M128, librería pura), el lote B toca las tres piezas que quedaban con algo de
+runtime o de runner (IDEAS §65.4, §65.2 y el Accept-Encoding de §7 transversal de IDEAS-APPS).
+
+- **`std/resilience`: el par `admit`/`report`** (§65.4). `guard(b, err, f)` exige que `f` corra
+  en la fibra dueña del breaker; en cuanto el estado vive en un actor (lo natural con fibras de
+  heap aislado) hay que reimplementar las transiciones a mano. El par componible las expone
+  sueltas: `admit(b) -> bool` pregunta si la llamada puede pasar (fail-fast si el circuito está
+  abierto) y `report(b, ok)` registra el desenlace (un fallo cuenta hacia `threshold` y abre al
+  llegar; un éxito resetea y cierra el semiabierto). `guard` queda como **azúcar** sobre el par —
+  una sola verdad para las transiciones. De regalo, los campos spanglish de la superficie pública
+  pasan a inglés: `Breaker.abierto_hasta` → `open_until`, `Deadline.hasta` → `until` (eran
+  internos de facto: ningún consumidor los tocaba).
+- **`ray test` ya no deja listeners zombis** (§65.2). El runner descartaba las fibras del `@test`
+  anterior, pero los sockets de ESCUCHA del SO sobrevivían en el registro global de handles: el
+  siguiente test los veía aceptar conexiones que nadie atendía (read timeout en vez de connection
+  refused) y un boot de servidores compartido se envenenaba. El arreglo es el natural:
+  `close_all_handles()` en builtins drena TODO el registro al aislar cada test (sockets,
+  listeners, TLS, pipes, watches, archivos — los flock caen con la open file description) y limpia
+  los mapas de read-timeout. Los `Child` se sueltan SIN matar (la semántica de `close(h)`: un
+  proceso lanzado sigue siendo del usuario). El test de la guarda demuestra el bug: sin el drenado
+  el puerto del primer test sigue aceptando en el segundo.
+- **`webserver.gzip(req, resp)`: negociación de Accept-Encoding** (hallazgo confirmado del
+  dogfood: store la hacía a mano). Decisión de forma: **explícita por handler**, no automática en
+  el bucle — comprimir cuesta CPU y `std/deflate` es raylang puro (barato en nativo, medible en la
+  VM interpretada): activarlo global sería un impuesto silencioso. El helper envuelve la respuesta
+  ya construida: si el cliente acepta gzip (parseo de `Accept-Encoding` con `q=0` respetado —
+  `accepts_gzip(req)` queda pública), la respuesta no es streaming, no trae `Content-Encoding` y
+  el cuerpo supera el umbral (512 octetos), comprime y pone `Content-Encoding: gzip` +
+  `Vary: Accept-Encoding` (sumándose a un `Vary` previo). Si comprimir no encoge, la deja intacta.
+  La verificación del cuerpo en el test es con NUESTRO `std/inflate` (cero deps de test nuevas).

@@ -13,6 +13,7 @@ import std/net;
 import std/url;
 import std/time;
 import std/fs;
+import std/deflate;
 import net/trace;
 
 // M56.2: `path` llega DECODIFICADO (%XX; un `+` es literal en rutas) y SIN la query string, que
@@ -115,6 +116,87 @@ pub struct Response {
     // escribe con Transfer-Encoding: chunked según llegan y termina cuando el productor lo cierra.
     // Construir con `stream_response`.
     stream: [Channel<bytes>],
+}
+
+// M129: negociación de Accept-Encoding (hallazgo del dogfood: las apps la hacían a mano).
+// Umbral: por debajo de esto el gzip no compensa (cabecera de 18 octetos + CPU por nada).
+const GZIP_MIN_BYTES: int = 512;
+
+/// Does the request accept gzip? Parses `Accept-Encoding`: `gzip` must be listed (parameters
+/// allowed) and not disabled with `q=0`.
+pub fn accepts_gzip(req: Request) -> bool {
+    match (get(req.headers, "accept-encoding")) {
+        Option.None => false,
+        Option.Some(v) => {
+            var ok = false;
+            for item in v.split(",") {
+                let it = item.trim().to_lower();
+                if (it == "gzip" || it.starts_with("gzip;") || it.starts_with("gzip ")) {
+                    var q_zero = false;
+                    match (it.index_of("q=")) {
+                        Option.Some(i) => {
+                            match (parse_float(it.substring(i + 2, it.len()).trim())) {
+                                Option.Some(q) => {
+                                    if (q == 0.0) {
+                                        q_zero = true;
+                                    }
+                                },
+                                Option.None => { },
+                            }
+                        },
+                        Option.None => { },
+                    }
+                    if (!q_zero) {
+                        ok = true;
+                    }
+                }
+            }
+            ok
+        },
+    }
+}
+
+// Comprimir es EXPLÍCITO por handler (cuesta CPU — std/deflate es raylang puro: barato en
+// nativo, medible en la VM): se envuelve la respuesta ya construida, no se activa global.
+/// Negotiates gzip for a finished response: if the request accepts gzip and the response is
+/// not streamed, has no `Content-Encoding` yet, and its body is ≥ 512 bytes, compresses the
+/// body, sets `Content-Encoding: gzip`, and adds `Accept-Encoding` to `Vary` (proxies must
+/// cache per encoding). If compression would not shrink the body, returns it untouched.
+/// Explicit per handler: `webserver.gzip(req, webserver.json_response(body))`.
+pub fn gzip(req: Request, r: Response) -> Response {
+    if (r.stream.len() > 0 || r.body.len() < GZIP_MIN_BYTES || !accepts_gzip(req)) {
+        return r;
+    }
+    for k in r.headers.keys() {
+        if (k.to_lower() == "content-encoding") {
+            return r;
+        }
+    }
+    let packed = deflate.gzip_compress(r.body);
+    if (packed.len() >= r.body.len()) {
+        return r;
+    }
+    var vary_key = "Vary";
+    var vary_val = "Accept-Encoding";
+    for k in r.headers.keys() {
+        if (k.to_lower() == "vary") {
+            vary_key = k;
+            match (get(r.headers, k)) {
+                Option.Some(v) => {
+                    if (v.to_lower().contains("accept-encoding")) {
+                        vary_val = v;
+                    } else {
+                        vary_val = v + ", Accept-Encoding";
+                    }
+                },
+                Option.None => { },
+            }
+        }
+    }
+    r.headers.insert("Content-Encoding", "gzip");
+    r.headers.insert(vary_key, vary_val);
+    r.body = packed;
+    r
 }
 
 // --- Respuestas: atajos para los casos comunes ---

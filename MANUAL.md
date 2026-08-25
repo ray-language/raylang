@@ -1492,7 +1492,8 @@ primer día):
 ### La pila de protocolos (`packages/net`, dependencia)
 
 24 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
-async con SSE (`webserver`), WebSocket (cliente y servidor, ws/wss), HTTP/2 + gRPC, DNS (7 tipos de
+async con SSE (`webserver`; respuestas comprimidas con `webserver.gzip(req, resp)` — negocia
+`Accept-Encoding` por handler), WebSocket (cliente y servidor, ws/wss), HTTP/2 + gRPC, DNS (7 tipos de
 registro + caché), Redis, OAuth2, JWT (HS256/EdDSA), SCRAM, AWS SigV4, cookies, logging JSON, métricas
 Prometheus, fechas UTC, tracing distribuido W3C (`trace`). Se declara como dependencia (`net = "path:…"` o git) y:
 
@@ -1663,6 +1664,11 @@ fn main() -> int {
 Sin preempción (el modelo es cooperativo), un deadline no corta una llamada bloqueada "desde
 fuera": es un **presupuesto** que consultas (`remaining`/`expired`) y aplicas de verdad en la E/S
 con `net.set_read_timeout`.
+
+Cuando la llamada NO corre en la fibra dueña del breaker (el estado en un actor, la petición al
+otro lado de un canal), `guard` no compone: usa el par suelto **`admit`/`report`** —
+`if (resilience.admit(b)) { … } ` antes de intentar, `resilience.report(b, ok)` con el
+desenlace. `guard` es azúcar sobre ese par.
 
 ## 15. Concurrencia
 

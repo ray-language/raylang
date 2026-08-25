@@ -1001,6 +1001,15 @@ for row in rows {
 }
 ```
 
+Y la **entrada oculta** (M125) para passphrases/tokens, sin artesanía sobre `raw`:
+
+```rust
+match (term.read_hidden("passphrase: ")) {   // prompt a stderr; nada se ecoa
+    Result.Ok(secret) => open_vault(secret), // Backspace edita (un carácter UTF-8 completo)
+    Result.Err(e) => print(e),               // Ctrl-C = "interrupted"; sin tty = Err limpio
+}
+```
+
 Es un wcwidth pragmático (control/combinantes → 0, ancho-Este-Asiático y emoji → 2, resto → 1); no
 intenta resolver secuencias emoji ZWJ/VS16, cuyo ancho depende del terminal. Portable: no necesita
 un tty (es cálculo puro), así que sirve también para medir texto que no vas a imprimir.
@@ -1347,6 +1356,7 @@ canal cifrado entre dos pares:
 | **acuerdo de claves** | `x25519_public_key(secret)`, `x25519_shared_secret(secret, peer_public)` |
 | **derivación** | `hkdf_sha256(salt, ikm, info, len)` |
 | cifrado autenticado | `chacha20poly1305_seal(key, nonce, aad, plain)`, `..._open(…)` |
+| hashing (una pasada e **incremental**) | `sha256(b)`/`sha512(b)`; por trozos (archivos grandes sin cargarlos enteros, M126): `sha256_init()` → `hash_update(h, chunk)`* → `hash_final(h)` — digest idéntico al de una pasada |
 
 Las claves privadas —la semilla Ed25519 y el secreto X25519— son **32 octetos cualesquiera**, así que
 se crean con `crypto.random_bytes(32)` y se pueden guardar: la identidad de un nodo sobrevive al
@@ -1467,6 +1477,18 @@ TLS: `net.tls_connect(host, 443)` (verifica el certificado; CAs extra vía `SSL_
 `net.tls_upgrade(h, host)` (STARTTLS sobre un socket ya abierto), `net.tls_accept` (lado servidor),
 `net.tcp_listen`/`net.tcp_accept` para servir.
 
+**Los plazos y la identidad del otro extremo** (M121–M124, lo que un servicio real necesita el
+primer día):
+
+- `net.tcp_connect_timeout(host, port, ms)` — el connect con plazo: un host que descarta los SYN
+  falla con `"connect timeout"` en `ms`, no en los ~75 s del SO.
+- `net.set_read_timeout(h, ms)` — la lectura que espere más falla con `"read timeout"`. Aplica a
+  TCP, TLS **y UDP** (`udp.recv_from`: un datagrama perdido ya no cuelga la fibra).
+- `net.peer_addr(h)` — `"ip:puerto"` del otro extremo (TCP o TLS): logs con origen, rate-limit
+  por IP. El webserver la expone directa en `Request.remote` (+ `webserver.remote_ip(req)`).
+- `net.tls_peer_cert(h) -> Result<PeerCert, _>` — el certificado del peer: **"expira en N días"**
+  por fin se escribe: `(cert.not_after_ms - time.now()) / 86400000`.
+
 ### La pila de protocolos (`packages/net`, dependencia)
 
 24 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
@@ -1551,6 +1573,15 @@ fn main() -> int {
 
 Un handler que devuelve `Err` (o que panica) llega al cliente como `Err` del `call`, sin matar
 la conexión. Interop externo entrante: el webserver (HTTP/1.1 + JSON), que ya está.
+
+Para **llamadas concurrentes** (varias fibras a la vez), el **pool** (M127): hasta `size`
+llamadas en vuelo, con reconexión automática tras un timeout —
+
+```rust
+let p = rpc.pool("127.0.0.1", 7070, 8);
+let r = rpc.pool_call(p, "consulta", params);   // desde cualquier fibra; aparca si está agotado
+rpc.pool_close(p);
+```
 
 ### Bases de datos (`packages/db`, dependencia)
 

@@ -208,6 +208,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
         ("char", "self.to_string()"),
         ("()", "\"()\".to_string()"),
         ("Rc<str>", "self.to_string()"),
+        // M120: los enteros sin signo (u8/u32/u64) también se imprimen — el harness diferencial
+        // cazó que `print(x: u8)` compilaba en la VM y moría con E0599 en el cargo del usuario.
+        ("u8", "self.to_string()"),
+        ("u32", "self.to_string()"),
+        ("u64", "self.to_string()"),
     ] {
         writeln!(out, "impl RayShow for {} {{ fn ray_show(&self) -> String {{ {} }} }}", ty, body).unwrap();
     }

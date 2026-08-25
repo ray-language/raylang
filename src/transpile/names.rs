@@ -64,18 +64,18 @@ pub(super) fn is_prelude_impl(name: &str) -> bool {
     }
     let key = name.split('#').next().unwrap_or("");
     let method = name.rsplit('#').next().unwrap_or("");
-    // Ord (less) → manejado directo (`<`): saltar en CUALQUIER tipo. `eq`/`show` NO se saltan aquí: se
-    // emiten (impl derivado/custom `Tipo#eq`/`Tipo#show` + prelude `int#eq`/`int#show`), realizando el
-    // bound `T: Eq`/`T: Show` por diccionarios. `print`/`to_string` siguen usando RayShow (render default);
-    // solo `.eq()`/`.show()` EXPLÍCITOS llaman al impl (que puede ser custom, p. ej. `impl Show for Vec2`).
-    if method == "less" {
-        return true;
-    }
+    // `eq`/`show`/`less` NO se saltan aquí: se emiten (impl derivado/custom `Tipo#eq`/… + prelude
+    // `int#eq`/`int#less`…), realizando los bounds `T: Eq`/`T: Show`/`T: Ord` por diccionarios.
+    // (M120: `less` se saltaba en CUALQUIER tipo porque las COMPARACIONES directas bajan a `<` — pero
+    // el argumento-diccionario de un genérico acotado `largest<T: Ord>` referencia `int#less` como
+    // VALOR, y el harness diferencial cazó que sin emitirlo el build nativo muere. Mismo trato que
+    // eq/show.) `print`/`to_string` siguen usando RayShow (render default); solo `.eq()`/`.show()`
+    // EXPLÍCITOS llaman al impl (que puede ser custom, p. ej. `impl Show for Vec2`).
     // (Los métodos `Iter#*` del protocolo de iterador SÍ se emiten desde B2.)
     // `eq`/`show` se EMITEN (realizan el bound `T: Eq`/`T: Show` por diccionarios) para tipos de usuario y
     // primitivos ESCALARES (`int#eq` = `self == other`, `int#show` = `to_string(self)`); para contenedores
     // ([], Map, Channel, Task, bytes, unit…) se salta: clave no-identificador o impl no transpilable.
-    if matches!(method, "eq" | "show") {
+    if matches!(method, "eq" | "show" | "less") {
         return matches!(
             key,
             "bytes" | "uint" | "u8" | "u32" | "u64" | "unit" | "[]" | "Map" | "Channel" | "Task"
@@ -91,7 +91,7 @@ pub(super) fn is_prelude_impl(name: &str) -> bool {
         "len" | "push" | "reverse" | "contains" | "trim" | "split" | "replace" | "chars" | "starts_with"
             | "ends_with" | "to_upper" | "to_lower" | "substring" | "repeat" | "join" | "to_bytes"
             | "sub_bytes" | "char_code" | "to_string" | "insert" | "contains_key" | "keys" | "values"
-            | "get" | "get_or" | "remove" | "add_to" | "less" | "index_of" | "position" | "pop"
+            | "get" | "get_or" | "remove" | "add_to" | "index_of" | "position" | "pop"
     );
     builtin_key && prelude_method
 }

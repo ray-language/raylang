@@ -53,6 +53,11 @@ jobs:
       # compartido tarda ~2-3 min — menos que el build de release de abajo. `#[ignore]` en local sigue.
       - name: Corpus nativo ≡ VM (ejemplos deterministas)
         run: cargo test --test native_corpus -- --ignored --nocapture
+      # M120: el harness DIFERENCIAL — programas GENERADOS (interacciones de features que los
+      # ejemplos idiomáticos no ejercitan), 3 motores byte a byte, bisección automática al divergir.
+      # El humo (1 batch) ya corre dentro de `cargo test`; aquí la campaña con concurrencia.
+      - name: Harness diferencial de motores (generativo)
+        run: cargo test --test native_differential -- --ignored --nocapture
       - name: Build de release
         run: cargo build --release
       # La release mínima excluye el intérprete (solo-VM). No se corren tests aquí: los oráculos
@@ -96,3 +101,8 @@ jobs:
         env:
           RAYLANG_FUZZ_ITERS: "200000"
         run: cargo test --test fuzz_frontend -- --nocapture
+      # M120: campaña diferencial prolongada — muchos más batches (semillas rotadas) que el push.
+      - name: Harness diferencial (presupuesto alto)
+        env:
+          RAYLANG_DIFF_BATCHES: "40"
+        run: cargo test --test native_differential -- --ignored --nocapture

@@ -2741,12 +2741,17 @@ Los temas transversales que dejaron **están todos ejecutados y mergeados** (ago
   (§67.2/§71.6, M118), literales hex/octal/binario (§67.3, M118) y `time.sleep` preciso
   (§72.1, M119).
 
-**Quedan abiertos** (candidatos, no comprometidos): un **harness diferencial VM/nativo** que cace
-los bugs de la clase §63/§64/§68 antes que el dogfood (los cuatro eran "código válido en VM que no
-compila/panica en nativo"); el **pool/multiplexado de `packages/rpc`** (§72.2, secuencial por
-conexión hoy); `net.tls_peer_cert` (§70.1), timeouts de `tcp_connect`/`dns` (§70.2/§70.3),
-`term.read_hidden` (§71.1), hasher incremental de `std/crypto` (§69.3), normalización Unicode y
-`std/mail` (§71.4/§71.5), y los menores de `std` que cada tanda anotó.
+**[EJECUTADA — M120, DESIGN §117]** El **harness diferencial VM/nativo** que §68 pedía existe:
+`tests/native_differential.rs` — programas generados por clase de interacción, 3 motores byte a
+byte, bisección automática, semillas reproducibles; humo en cada `cargo test`, campaña en cada
+push, nocturna con presupuesto alto. Validación inmediata: su primera corrida cazó y dejó
+corregidos TRES bugs nuevos del backend nativo (print de u*, genéricos acotados `T: Ord`, método
+dyn en posición de argumento) — los tres de la clase §63/§64/§68 y ninguno cubierto por el corpus.
+
+**Quedan abiertos** (candidatos, no comprometidos): el **pool/multiplexado de `packages/rpc`**
+(§72.2, secuencial por conexión hoy); `net.tls_peer_cert` (§70.1), timeouts de `tcp_connect`/`dns`
+(§70.2/§70.3), `term.read_hidden` (§71.1), hasher incremental de `std/crypto` (§69.3),
+normalización Unicode y `std/mail` (§71.4/§71.5), y los menores de `std` que cada tanda anotó.
 
 ## Cómo usar este archivo
 

@@ -37,6 +37,16 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Harness diferencial de motores** (M120) — programas raylang **generados** (interacciones de
+  features que los ejemplos no ejercitan: builtin×tipo, mutación-en-constructor, return-en-closure,
+  valores cruzando fibras…) corren en intérprete, VM y binario nativo y deben producir exactamente
+  el mismo stdout+exit; bisección automática al divergir, semillas reproducibles. Su primera
+  corrida cazó y dejó corregidos **tres bugs del backend nativo**: `print` de `u8`/`u32`/`u64` no
+  compilaba, los **genéricos acotados** (`fn largest<T: Ord>`) no compilaban (el diccionario
+  `int#less` no se emitía), y llamar un método de un `dyn Trait` **como argumento**
+  (`print(x.tag())`) fallaba el build. Corre en cada `cargo test` (humo), en cada push de CI
+  (campaña) y en la nocturna con presupuesto alto.
+
 - **Literales enteros en hex/octal/binario y escapes por code point** (M118, IDEAS §67, §71.6) —
   `0xFF`, `0o755`, `0b1010` (y en mayúsculas) para escribir máscaras de bits y permisos como lo que
   son (`fs.chmod("vault.db", 0o600)`, no `384`); y en cadenas/caracteres, `\0` (NUL), `\xNN` (octeto

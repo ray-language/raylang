@@ -1218,6 +1218,20 @@ pub fn tcp_connect(host: &str, port: i64) -> Result<i64, String> {
 /// Error estable de un connect que agota su plazo (M122), hermano de `READ_TIMEOUT_MSG`.
 pub const CONNECT_TIMEOUT_MSG: &str = "connect timeout";
 
+/// La dirección del peer (`"ip:puerto"`, IPv6 con corchetes) de una conexión TCP o TLS (M123).
+/// La pieza que le faltaba a cualquier servidor real: rate-limit por IP, X-Forwarded-For, logs de
+/// acceso con origen (hallazgo de raygate, IDEAS §65.1).
+pub fn peer_addr(h: i64) -> Result<String, String> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.peer_addr().map(|a| a.to_string()).map_err(|e| e.to_string()),
+        #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+        Some(OpenHandle::Tls(tc)) => tc.sock.peer_addr().map(|a| a.to_string()).map_err(|e| e.to_string()),
+        Some(_) => Err(format!("handle {} is not a TCP/TLS socket", h)),
+        None => Err(format!("invalid handle: {}", h)),
+    }
+}
+
 /// Como [`tcp_connect`], con PLAZO (M122): un host que no responde al SYN (firewall que descarta,
 /// ruta negra) retenía la conexión ~75 s (el timeout del SO); con `ms` el intento falla con el
 /// error estable "connect timeout". `ms <= 0` = sin plazo (idéntico a `tcp_connect`). La espera es
@@ -3077,6 +3091,13 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("__tcp_connect_timeout expects a string (the host), not {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__tcp_connect_timeout expects an int (the port), not {}", a[1]))); }
         if a[2] != Type::Int { return Err((Some(2), format!("__tcp_connect_timeout expects an int (ms), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __peer_addr(h) -> [string] (M123): ["ok", "ip:puerto"] o ["err", msg] — la dirección del peer
+    // de una conexión TCP/TLS. std/net → Result<string, string>.
+    Builtin { name: "__peer_addr", opcode: OpCode::PeerAddr, check: |a| {
+        arity(a, 1, "__peer_addr", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__peer_addr expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_connect(host, puerto) -> [string] (M19.4a): ["ok", handle] o ["err", msg]. Prelude →

@@ -2502,7 +2502,7 @@ Dogfood de `ray-apps/raygate` (API gateway: rutas TOML, rate limit, breaker, JWT
 proxy streaming, métricas, trace propagado). Es la app que ejercita webserver + cliente http A LA
 VEZ y `std/resilience` completo. Cinco necesidades y una corrección de documentación:
 
-1. **`webserver.Request` no expone la dirección remota del cliente** (impacto: MEDIO-ALTO —
+1. **[EJECUTADA — M123, DESIGN §120: `Request.remote` + `remote_ip(req)` + `net.peer_addr(h)`] `webserver.Request` no expone la dirección remota del cliente** (impacto: MEDIO-ALTO —
    cualquier servidor real la necesita). Sin ella no hay rate limit por IP, ni `X-Forwarded-For`,
    ni logs de acceso con origen. Superficie natural: un campo `remote: string` (o `peer_addr(req)`)
    rellenado por el bucle de servicio.

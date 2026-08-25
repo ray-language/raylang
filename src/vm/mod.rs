@@ -3033,6 +3033,16 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M123: la dirección del peer de una conexión TCP/TLS → ["ok", "ip:puerto"] / ["err", msg].
+                OpCode::PeerAddr => {
+                    let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
+                    let elems = match crate::builtins::peer_addr(handle) {
+                        Ok(a) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(a)],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M20.8: UDP (M20.11: recv cede la fibra; M121: honra el timeout de lectura por handle).
                 OpCode::UdpBind => {
                     let port = self.pop();

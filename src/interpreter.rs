@@ -2040,6 +2040,17 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M123: la dirección del peer de una conexión TCP/TLS → ["ok", "ip:puerto"] / ["err", msg].
+            "__peer_addr" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::peer_addr(*h) {
+                        Ok(a) => vec![Value::Str("ok".to_string()), Value::Str(a)],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M122: connect con PLAZO — el intento vencido devuelve el error estable "connect timeout".
             "__tcp_connect_timeout" => {
                 let arr = match (&values[0], &values[1], &values[2]) {

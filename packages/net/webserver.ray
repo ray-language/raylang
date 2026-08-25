@@ -30,6 +30,28 @@ pub struct Request {
     version: string,
     headers: Map<string, string>,
     body: bytes,
+    // M123: la dirección remota del cliente ("ip:puerto"; "" si el SO no la da). Habilita
+    // rate-limit por IP, X-Forwarded-For y logs de acceso con origen (hallazgo de raygate, §65.1).
+    remote: string,
+}
+
+// M123: la IP remota a secas (sin puerto), consciente de IPv6 ("[::1]:8080" → "::1").
+/// The client's remote IP without the port (`req.remote` is `"ip:port"`): `"127.0.0.1:6113"` →
+/// `"127.0.0.1"`, `"[::1]:8080"` → `"::1"`. Empty if the OS did not report a peer address.
+pub fn remote_ip(req: Request) -> string {
+    let r = req.remote;
+    if (r.starts_with("[")) {
+        // IPv6 con corchetes: lo de dentro de [ ].
+        match (r.index_of("]")) {
+            Option.Some(close_at) => r.substring(1, close_at),
+            Option.None => r,
+        }
+    } else {
+        match (r.index_of(":")) {
+            Option.Some(colon_at) => r.substring(0, colon_at),
+            Option.None => r,
+        }
+    }
 }
 
 /// Parses the request's query string into a `Map<string,string>` (keys and values URL-decoded,
@@ -849,6 +871,11 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             if (deadline > 0) {
                 net.set_read_timeout(conn, 0);
             }
+            // M123: la dirección remota del cliente (total: "" si el SO no la reporta).
+            let remote = match (net.peer_addr(conn)) {
+                Result.Ok(a) => a,
+                Result.Err(_) => "",
+            };
             Result.Ok(
                 Request {
                     method: method,
@@ -856,7 +883,8 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     query: query,
                     version: version,
                     headers: headers,
-                    body: body
+                    body: body,
+                    remote: remote
                 }
             )
         },

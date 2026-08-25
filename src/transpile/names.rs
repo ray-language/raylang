@@ -153,7 +153,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
     // Sockets TCP de `std/net` (interceptados en emit_call → std::net de Rust). TLS y demás quedan fuera.
     if matches!(
         name,
-        "std::net::tcp_connect" | "std::net::tcp_connect_timeout" | "std::net::tcp_listen" | "std::net::tcp_accept" | "std::net::socket_read"
+        "std::net::tcp_connect" | "std::net::tcp_connect_timeout" | "std::net::tcp_listen" | "std::net::tcp_accept" | "std::net::peer_addr" | "std::net::socket_read"
             | "std::net::socket_read_bytes" | "std::net::socket_write" | "std::net::socket_write_bytes"
             | "std::net::local_port" | "std::net::set_read_timeout"
     ) {

@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`Request.remote` + `net.peer_addr`** (M123) — el webserver expone por fin la dirección remota
+  del cliente (`req.remote` = `"ip:puerto"`, `webserver.remote_ip(req)` sin el puerto, consciente
+  de IPv6): rate-limit por IP, `X-Forwarded-For` y logs de acceso con origen dejan de ser
+  inexpresables. Debajo, `net.peer_addr(h)` da la dirección del peer de cualquier conexión TCP o
+  TLS en los tres motores.
 - **`net.tcp_connect_timeout(host, port, ms)`** (M122) — el connect con plazo: un host que descarta
   los SYN (firewall, ruta negra) retenía el connect ~75 s (el timeout del SO); ahora el intento
   vencido falla con el error estable `"connect timeout"`. Espera acotada pero bloqueante, en los

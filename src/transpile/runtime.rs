@@ -654,6 +654,15 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let reg = __ray_reg().lock().unwrap();\n",
             "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0), Some(__RayHandle::Udp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0), _ => 0 } }\n",
             ));
+        // M123: la dirección del peer de una conexión TCP/TLS (intercept a nivel de wrapper →
+        // Result nativo). El brazo TLS solo se splicea si el programa usa TLS (needs_rt_tls),
+        // igual que en socket_read_bytes.
+        let tls_peer = if t.needs_rt_tls {
+            "Some(__RayHandle::Tls(a)) => a.lock().unwrap().peer_addr().map(|p| Rc::<str>::from(p.to_string())).map_err(|e| Rc::<str>::from(e.to_string())), "
+        } else {
+            ""
+        };
+        write!(out, "fn __ray_peer_addr(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    let reg = __ray_reg().lock().unwrap();\n    match reg.open.get(&h) {{ Some(__RayHandle::Tcp(s)) => s.peer_addr().map(|p| Rc::<str>::from(p.to_string())).map_err(|e| Rc::<str>::from(e.to_string())), {tls_peer}Some(_) => Err(Rc::<str>::from(format!(\"handle {{}} is not a TCP/TLS socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))) }} }}\n").unwrap();
         if t.fibers {
             // F2: en no-bloqueante SO_RCVTIMEO es inerte — el plazo se guarda en el ctx (rd_to) y
             // lo aplica el park de la lectura (wait_readable_timeout). ms <= 0 lo quita, como hoy.

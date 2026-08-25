@@ -9926,3 +9926,29 @@ listas de routing (is_handled_builtin, emit_net, type_of). De paso: los `Result.
 inválido")`/`"error de socket"` de std/net (texto de cara al usuario en español, pre-política) →
 inglés. Verificado byte-idéntico en los cuatro sabores (ruta negra TEST-NET-1 vence en ~400 ms +
 un connect real con plazo conecta); test en `net_cli.rs`.
+
+## 120. M123 — Request.remote: la dirección del cliente que todo servidor real necesita (ago 2026)
+
+Hallazgo de raygate (IDEAS §65.1), el más citado de su tanda: `webserver.Request` no exponía la
+dirección remota del cliente — sin ella no hay rate-limit por IP, ni `X-Forwarded-For` que añadir
+al proxy, ni logs de acceso con origen. Cualquier servidor de producción la necesita el primer día.
+
+**Superficie en dos capas**:
+- `net.peer_addr(h) -> Result<string, string>` (std/net): la dirección del peer (`"ip:puerto"`,
+  IPv6 con corchetes) de una conexión **TCP o TLS** — primitivo `__peer_addr` (opcode `PeerAddr`),
+  con el brazo TLS leyendo el socket subyacente (`TlsStream::peer_addr` nuevo en ray-runtime, con
+  su stub sin la feature).
+- `webserver.Request.remote` (campo nuevo, `""` si el SO no la reporta) rellenado por
+  `read_request_limits` — el sitio único por el que pasan `serve`/`serve_raw`/TLS/keep-alive — y el
+  helper `webserver.remote_ip(req)` que quita el puerto consciente de IPv6 (`"[::1]:8080"` →
+  `"::1"`).
+
+**Plomería nativa** — el intercept es a nivel de WRAPPER (como sus hermanos tcp_connect/
+socket_read: `std::net::peer_addr` se salta y `__ray_peer_addr` devuelve el `Result` nativo), con
+el brazo TLS spliced solo si el programa usa TLS (`needs_rt_tls`, el patrón de
+`socket_read_bytes`). Las tres listas de routing + H11.
+
+Verificado byte-idéntico en los cuatro sabores (el peer del cliente = `"127.0.0.1:puerto"` del
+listener propio — determinista sin servidor externo; listener y handle inválido fallan limpio) y
+E2E sobre el webserver de producción (`webserver_remote_cli`: el servidor reporta EXACTAMENTE el
+extremo local del socket del cliente, y `remote_ip` quita el puerto).

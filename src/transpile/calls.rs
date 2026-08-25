@@ -696,6 +696,13 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M123: la dirección del peer — intercept a nivel de WRAPPER (como tcp_connect):
+            // __ray_peer_addr devuelve el Result nativo directamente.
+            "peer_addr" => {
+                out.push_str("__ray_peer_addr(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // M122: connect con plazo (host, port, ms) — vencido = "connect timeout".
             "tcp_connect_timeout" => {
                 out.push_str("__ray_tcp_connect_timeout(&*");
@@ -991,7 +998,7 @@ impl Transpiler {
         if let Some(nfn) = name.strip_prefix("std::net::") {
             if matches!(
                 nfn,
-                "tcp_connect" | "tcp_connect_timeout" | "tcp_listen" | "tcp_accept" | "socket_read" | "socket_read_bytes"
+                "tcp_connect" | "tcp_connect_timeout" | "tcp_listen" | "tcp_accept" | "peer_addr" | "socket_read" | "socket_read_bytes"
                     | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout"
             ) {
                 return self.emit_net(out, nfn, &eff);
@@ -2287,7 +2294,7 @@ impl Transpiler {
                     | "std::net::socket_write" | "std::net::socket_write_bytes" => {
                         return Ok(Type::Enum("Result".into(), vec![Type::Int, Type::String]))
                     }
-                    "std::net::socket_read" => {
+                    "std::net::socket_read" | "std::net::peer_addr" => {
                         return Ok(Type::Enum("Result".into(), vec![Type::String, Type::String]))
                     }
                     "std::net::socket_read_bytes" => {

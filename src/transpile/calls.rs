@@ -2134,6 +2134,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M131: normalización Unicode (ray_runtime::unicode tras la feature `unicode`; los
+            // wrappers EMITIDOS text.nfc/nfd/nfkc/nfkd llaman aquí con la forma como literal).
+            "unicode_normalize" if name.starts_with("__") && !self.exclude.contains("unicode") => {
+                self.needs_rt_unicode = true;
+                out.push_str("__ray_unicode_normalize(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             // M115.4: watch de fs por eventos de kernel (ray_runtime::watch tras la feature
             // `watch`; los wrappers EMITIDOS fs.watch/next_event/next_event_timeout llaman aquí).
             "watch" if name.starts_with("__") && !self.exclude.contains("watch") => {

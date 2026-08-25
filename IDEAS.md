@@ -2789,9 +2789,14 @@ handler: comprimir cuesta CPU en la VM).
 cuatro sabores) y `exit(code)` (§64.6; builtin núcleo que diverge como panic, termina el proceso
 desde cualquier fibra, `try_call` no lo captura; SPEC y espejo selfhost en tándem).
 
-**Con esto, TODOS los hallazgos con hito del dogfood de 14 apps están ejecutados.** Quedan solo
-los menores anotados en sus tandas (normalización Unicode §71.5, `std/mail` §71.4, hora local
-§42), el barrido de errores de stdlib aún en español (json/toml/inflate…, cf. M128) y las
+**[EJECUTADAS — M131, DESIGN §128]** El lote D: `std/text` gana NFC/NFD/NFKC/NFKD (§71.5; crate
+unicode-normalization vía ray-runtime, feature `unicode` por defecto/por-uso) y `net/mail` las
+codificaciones de correo (§71.4; RFC 2047/5322/2045/5321 en raylang puro). El ítem "hora local
+§42" resultó YA ejecutado (M85, packages/tz: TZif v2 + system() + DST como API) — la lista lo
+arrastraba rancio.
+
+**Con esto, el backlog COMPLETO del dogfood de 14 apps está ejecutado — hitos y menores.**
+Queda solo el barrido de errores de stdlib aún en español (json/toml/inflate…, cf. M128) y las
 validaciones de ecosistema (gRPC dogfood §72.4, VPS 24/7 de rayrelay).
 
 ## Cómo usar este archivo

@@ -59,6 +59,10 @@ fibers = ["dep:corosensei"]
 # la feature no gatea un crate sino la COMPILACIÓN del módulo, y en el transpilado fuerza la vía
 # Cargo (como `fibers`). El binario `ray` la activa siempre (el primitivo `__run` es del núcleo).
 process = []
+# M131 — normalización Unicode (NFC/NFD/NFKC/NFKD) para `std/text`: las tablas de UnicodeData no
+# se transcriben a mano. `unicode-normalization` es del proyecto unicode-rs (lo usan rustc/servo),
+# sin dependencias transitivas. Detectada POR USO en el transpilado; la VM la trae por defecto.
+unicode = ["dep:unicode-normalization"]
 # R5 (bench regex, jul 2026): motor de regex ACELERADO del binario transpilado (crate `regex`,
 # la liga de Rust: ~27 ms donde la Pike VM transpilada tarda ~580 ms). Detectada POR USO (import
 # std/regex ejecutado), como crypto/tls/sqlite. `--without regex` NO stubbea: el fallback es la
@@ -93,6 +97,8 @@ notify = { version = "8", optional = true }
 mimalloc = { version = "0.1", optional = true }
 # N2 — ahash 0.8: misma versión que usa el binario `ray` (P0.1, `MapStore` de la VM) → mismo hasher en ambos.
 ahash = { version = "0.8", optional = true }
+# M131 — unicode-normalization 0.1: tablas NFC/NFD/NFKC/NFKD generadas de UnicodeData.txt.
+unicode-normalization = { version = "0.1", optional = true }
 # R5 — regex 1.x: el motor de producción de Rust (NFA/DFA híbrido, literal optimizations).
 regex = { version = "1", optional = true }
 # F1 — corosensei 0.2: corrutinas de pila propia (aarch64+x86_64, macOS/Linux/Windows), pila mmap con

@@ -928,6 +928,17 @@ impl<'a> Interpreter<'a> {
                         };
                         crate::builtins::process_exit(code);
                     }
+                    // M131: normalización Unicode — se intercepta aquí (no en eval_builtin)
+                    // porque el Err (stub slim / forma desconocida) aborta con posición.
+                    if name == "__unicode_normalize" {
+                        let (Value::Str(s), Value::Str(form)) = (&values[0], &values[1]) else {
+                            unreachable!("the checker guarantees string, string");
+                        };
+                        return match crate::builtins::unicode_normalize(s, form) {
+                            Ok(out) => Ok(Value::Str(out)),
+                            Err(e) => Err(runtime_error(callee.line, callee.col, &e)),
+                        };
+                    }
                     // M97.2: `__try_call(f)` llama a `f` y convierte un fallo en valor: `[]` si fue
                     // bien, `[msg]` si falló. Se intercepta aquí —no en `eval_builtin`— por dos
                     // razones: hace falta `&mut self` para llamar (`eval_builtin` toma `&self`), y

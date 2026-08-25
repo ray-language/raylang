@@ -37,6 +37,12 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El lote D del dogfood** (M131) — **normalización Unicode en `std/text`**: `nfc`/`nfd`/
+  `nfkc`/`nfkd` (crate `unicode-normalization` vía ray-runtime; VM por defecto, nativo por USO,
+  slim = error claro) — el slug accent-insensitive por fin se escribe (NFD + descartar
+  combinantes); y **`net/mail`**: las codificaciones de correo en raylang puro — `encoded_word`
+  (RFC 2047), `header` (plegado a 78, RFC 5322), `base64_body` (76 columnas, RFC 2045),
+  `dot_stuff` (RFC 5321) y `address` (mailbox con display-name).
 - **El lote C del dogfood** (M130) — dos primitivos de motor en los TRES engines:
   **`net.shutdown_write(h)`** (half-close `shutdown(SHUT_WR)`: el peer ve EOF y este lado sigue
   leyendo — el idiom netcat/HTTP-1.0; solo TCP, errores estables byte-idénticos) y

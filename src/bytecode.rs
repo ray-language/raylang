@@ -491,6 +491,9 @@ pub enum OpCode {
     /// M130: saca un int (el código) y **termina el proceso** con él, desde cualquier fibra
     /// (flushea stdout/stderr antes). Builtin `exit`; diverge como `panic`.
     Exit,
+    /// M131: saca `form` (string: "nfc"/"nfd"/"nfkc"/"nfkd") y `s` (string) y empuja `s`
+    /// normalizado. Primitivo `__unicode_normalize`; los wrappers `std/text` (`nfc`…) lo llaman.
+    UnicodeNormalize,
 
     // --- I/O y API de runtime (M11.2) ---
     /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.

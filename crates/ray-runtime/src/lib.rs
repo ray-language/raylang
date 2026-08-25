@@ -22,6 +22,7 @@ pub mod process;
 pub mod regex;
 pub mod sqlite;
 pub mod tls;
+pub mod unicode;
 pub mod watch;
 pub mod x509;
 

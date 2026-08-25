@@ -488,6 +488,9 @@ pub enum OpCode {
     /// Saca un string (el mensaje) y **aborta** la ejecución con un error de runtime que lo lleva,
     /// en la posición de la llamada. Builtin `panic`; el prelude lo usa para `assert`/`assert_eq`.
     Panic,
+    /// M130: saca un int (el código) y **termina el proceso** con él, desde cualquier fibra
+    /// (flushea stdout/stderr antes). Builtin `exit`; diverge como `panic`.
+    Exit,
 
     // --- I/O y API de runtime (M11.2) ---
     /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.
@@ -652,6 +655,9 @@ pub enum OpCode {
     TcpConnectTimeout,
     /// M123: la dirección del peer ("ip:puerto") de una conexión TCP/TLS.
     PeerAddr,
+    /// M130: half-close — shutdown(SHUT_WR) de una conexión TCP (el peer ve EOF; se sigue
+    /// pudiendo LEER). Primitivo `__socket_shutdown_write`; std/net → `Result<int, string>`.
+    SocketShutdownWrite,
     /// M124: el resumen del certificado del peer de una conexión TLS.
     TlsPeerCert,
     /// Saca `port` (int) y `host` (string); abre una conexión **TLS** (rustls) y empuja un `[string]`

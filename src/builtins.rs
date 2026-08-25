@@ -262,6 +262,7 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "sleep" => (vec!["ms: int"], "unit"),
         "random_int" => (vec!["n: int"], "int"),
         "panic" => (vec!["msg: string"], "unit"),
+        "exit" => (vec!["code: int"], "unit"),
         // Builtins-método (M46a): firma con el receptor como primer parámetro (el completion de
         // miembros lo recorta para mostrar solo los argumentos). Tipos genéricos como texto de ayuda.
         "len" => (vec!["c"], "int"),
@@ -301,6 +302,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "print" => "Prints a value to stdout followed by a newline. Accepts any printable value (int, float, bool, string, char, arrays, structs/enums with Show).",
         "eprint" => "Prints a value to stderr followed by a newline. Same printable values as `print`.",
         "panic" => "Aborts the program with the given message and a non-zero exit code, reporting the call position. Use for unreachable code; prefer `Result`/`Option` for expected failures.",
+        "exit" => "Terminates the process immediately with the given exit code, from any fiber (stdout/stderr are flushed first). Unlike `panic` it is not an error: no message, no trace.",
         "to_string" => "Converts an int, float, bool, char or string to its string representation (same formatting as `print`).",
         "len" => "Returns the length of a collection: characters of a string, elements of an array, entries of a Map, or octets of a bytes value.",
         "push" => "Appends a value to the end of an array, in place (arrays have reference semantics).",
@@ -1243,6 +1245,28 @@ pub fn peer_addr(h: i64) -> Result<String, String> {
         #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
         Some(OpenHandle::Tls(tc)) => tc.sock.peer_addr().map(|a| a.to_string()).map_err(|e| e.to_string()),
         Some(_) => Err(format!("handle {} is not a TCP/TLS socket", h)),
+        None => Err(format!("invalid handle: {}", h)),
+    }
+}
+
+/// M130: termina el PROCESO con `code`, flusheando stdout/stderr antes (la salida de `print`
+/// pendiente no se pierde). Compartido por intérprete y VM; el nativo emite su propio helper.
+pub fn process_exit(code: i64) -> ! {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(code as i32)
+}
+
+/// Half-close de una conexión TCP (M130): `shutdown(SHUT_WR)` — el peer ve EOF en su lectura,
+/// pero este lado SIGUE pudiendo leer hasta el FIN del otro. Es el idiom netcat/HTTP-1.0: "aviso
+/// que terminé de escribir y dreno la respuesta". Sobre TLS no aplica (el close_notify viaja con
+/// `close`); sobre UDP no hay conexión.
+pub fn shutdown_write(h: i64) -> Result<(), String> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.shutdown(std::net::Shutdown::Write).map_err(|e| e.to_string()),
+        Some(_) => Err(format!("handle {} is not a TCP socket", h)),
         None => Err(format!("invalid handle: {}", h)),
     }
 }
@@ -2850,6 +2874,14 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("panic expects a string, not {}", a[0]))); }
         Ok(Type::Unit)
     } },
+    // exit(code) -> unit (M130): termina el PROCESO con ese código, desde cualquier fibra (flushea
+    // stdout/stderr antes). Diverge como `panic` (el análisis de divergencia lo conoce); a
+    // diferencia de panic no es un error: sin mensaje, sin traza, el código lo eliges tú.
+    Builtin { name: "exit", opcode: OpCode::Exit, check: |a| {
+        arity(a, 1, "exit", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("exit expects an int (the exit code), not {}", a[0]))); }
+        Ok(Type::Unit)
+    } },
     // eprint(x) -> unit (M11.2a): como print, pero a stderr.
     Builtin { name: "eprint", opcode: OpCode::EPrint, check: |a| {
         arity(a, 1, "eprint", "")?;
@@ -3174,6 +3206,13 @@ static BUILTINS: &[Builtin] = &[
     } },
     // __peer_addr(h) -> [string] (M123): ["ok", "ip:puerto"] o ["err", msg] — la dirección del peer
     // de una conexión TCP/TLS. std/net → Result<string, string>.
+    // __socket_shutdown_write(h) -> [string] (M130): ["ok"] o ["err", msg]. Half-close TCP
+    // (shutdown SHUT_WR): el peer ve EOF; este lado sigue leyendo. std/net → Result<int,string>.
+    Builtin { name: "__socket_shutdown_write", opcode: OpCode::SocketShutdownWrite, check: |a| {
+        arity(a, 1, "__socket_shutdown_write", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_shutdown_write expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     Builtin { name: "__peer_addr", opcode: OpCode::PeerAddr, check: |a| {
         arity(a, 1, "__peer_addr", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__peer_addr expects an int (the handle), not {}", a[0]))); }

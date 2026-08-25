@@ -713,6 +713,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
+            // M130: half-close — shutdown(SHUT_WR).
+            "shutdown_write" => {
+                out.push_str("__ray_shutdown_write(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "tcp_accept" => {
                 out.push_str("__ray_tcp_accept(");
                 self.emit_expr(out, eff[0])?;
@@ -998,7 +1004,7 @@ impl Transpiler {
         if let Some(nfn) = name.strip_prefix("std::net::") {
             if matches!(
                 nfn,
-                "tcp_connect" | "tcp_connect_timeout" | "tcp_listen" | "tcp_accept" | "peer_addr" | "socket_read" | "socket_read_bytes"
+                "tcp_connect" | "tcp_connect_timeout" | "tcp_listen" | "tcp_accept" | "peer_addr" | "shutdown_write" | "socket_read" | "socket_read_bytes"
                     | "socket_write" | "socket_write_bytes" | "local_port" | "set_read_timeout"
             ) {
                 return self.emit_net(out, nfn, &eff);
@@ -1905,6 +1911,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str("))");
             }
+            // M130: exit(code) — termina el proceso (flushea salida); diverge como panic.
+            "exit" => {
+                out.push_str("__ray_exit(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             // Aserciones (prelude): mismos MENSAJES que los cuerpos de src/prelude.ray (que la VM ejecuta).
             "assert" => {
                 out.push_str("if !(");
@@ -2322,7 +2334,7 @@ impl Transpiler {
                     "std::net::local_port" => return Ok(Type::Int),
                     "std::net::set_read_timeout" => return Ok(Type::Unit),
                     "std::net::tcp_connect" | "std::net::tcp_connect_timeout" | "std::net::tcp_listen" | "std::net::tcp_accept"
-                    | "std::net::socket_write" | "std::net::socket_write_bytes" => {
+                    | "std::net::socket_write" | "std::net::socket_write_bytes" | "std::net::shutdown_write" => {
                         return Ok(Type::Enum("Result".into(), vec![Type::Int, Type::String]))
                     }
                     "std::net::socket_read" | "std::net::peer_addr" => {

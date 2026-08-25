@@ -39,7 +39,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).
     "__ffi_errno",
     // Sockets TCP/UDP (interceptados vía `std::net::*`).
-    "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_read_timeout",
+    "__local_port", "__socket_read", "__socket_read_bytes", "__socket_set_read_timeout", "__socket_shutdown_write",
     "__peer_addr", "__socket_write", "__socket_write_bytes", "__tcp_accept", "__tcp_connect", "__tcp_connect_timeout", "__tcp_listen",
     "__udp_bind", "__udp_recv_from", "__udp_send_to",
     // Cripto/TLS/SQLite (interceptados → `ray_runtime::*`, features bajo demanda).
@@ -52,7 +52,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Concurrencia + canales + varios públicos (ramas de emit_call). Las funciones ASOCIADAS `Map.new`/
     // `Channel.new`/`Channel.bounded` (tabla ASSOC, no `names()`) se manejan antes del match; no van aquí.
     "__recv", "add_to", "args", "bytes_of", "char_code", "close", "eprint", "join",
-    "panic", "print", "scope", "select", "__select_timeout", "try_recv", "send", "signals", "spawn", "to_string",
+    "exit", "panic", "print", "scope", "select", "__select_timeout", "try_recv", "send", "signals", "spawn", "to_string",
     // H21-N2: `__task_failed` (el primitivo tras `try_join`) YA está portado (sobre `wait()` de N1).
     "__task_failed",
     // M97.2: `__try_call` (el primitivo tras `try_call`) → `catch_unwind` en el MISMO hilo.

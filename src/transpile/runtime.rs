@@ -20,6 +20,8 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // con el hook de Rust.
     out.push_str("struct __RayErr(String);\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string())) }\n");
+    // M130: exit(code) — termina el PROCESO (flusheando stdout/stderr), byte-idéntico a la VM.
+    out.push_str("#[cold] fn __ray_exit(code: i64) -> ! { use std::io::Write; let _ = std::io::stdout().flush(); let _ = std::io::stderr().flush(); std::process::exit(code as i32) }\n");
     // M97.2 (`try_call`): recuperación en el MISMO hilo. Devuelve `[]` si `f` volvió bien y `[msg]`
     // si falló, el mismo contrato que `__task_failed` — así el envoltorio `try_call` del prelude es
     // idéntico para los tres motores.
@@ -662,6 +664,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         } else {
             ""
         };
+        // M130: half-close — shutdown(SHUT_WR) de una conexión TCP (mismos errores que la VM).
+        out.push_str(concat!(
+            "fn __ray_shutdown_write(h: i64) -> Result<i64, Rc<str>> {\n",
+            "    let reg = __ray_reg().lock().unwrap();\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Tcp(s)) => s.shutdown(std::net::Shutdown::Write).map(|_| 0).map_err(|e| Rc::<str>::from(e.to_string())),\n",
+            "        Some(_) => Err(Rc::<str>::from(format!(\"handle {} is not a TCP socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }\n",
+        ));
         write!(out, "fn __ray_peer_addr(h: i64) -> Result<Rc<str>, Rc<str>> {{\n    let reg = __ray_reg().lock().unwrap();\n    match reg.open.get(&h) {{ Some(__RayHandle::Tcp(s)) => s.peer_addr().map(|p| Rc::<str>::from(p.to_string())).map_err(|e| Rc::<str>::from(e.to_string())), {tls_peer}Some(_) => Err(Rc::<str>::from(format!(\"handle {{}} is not a TCP/TLS socket\", h))), None => Err(Rc::<str>::from(format!(\"invalid handle: {{}}\", h))) }} }}\n").unwrap();
         if t.fibers {
             // F2: en no-bloqueante SO_RCVTIMEO es inerte — el plazo se guarda en el ctx (rd_to) y

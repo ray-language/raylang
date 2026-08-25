@@ -920,6 +920,14 @@ impl<'a> Interpreter<'a> {
                         };
                         return Err(runtime_error(callee.line, callee.col, &msg));
                     }
+                    // M130: `exit(code)` termina el PROCESO aquí mismo (flusheando salida antes).
+                    if name == "exit" {
+                        let code = match &values[0] {
+                            Value::Int(n) => *n,
+                            _ => unreachable!("the checker guarantees an int"),
+                        };
+                        crate::builtins::process_exit(code);
+                    }
                     // M97.2: `__try_call(f)` llama a `f` y convierte un fallo en valor: `[]` si fue
                     // bien, `[msg]` si falló. Se intercepta aquí —no en `eval_builtin`— por dos
                     // razones: hace falta `&mut self` para llamar (`eval_builtin` toma `&self`), y
@@ -2094,6 +2102,17 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M123: la dirección del peer de una conexión TCP/TLS → ["ok", "ip:puerto"] / ["err", msg].
+            // M130: half-close — shutdown(SHUT_WR); el peer ve EOF, este lado sigue leyendo.
+            "__socket_shutdown_write" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::shutdown_write(*h) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__peer_addr" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::peer_addr(*h) {

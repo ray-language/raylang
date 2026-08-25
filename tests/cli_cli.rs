@@ -3567,3 +3567,69 @@ fn build_native_select_timeout_matches_the_vm() {
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "nativo ≡ VM");
 }
+
+// ---------------------------------------------------------------------------------------------
+// M130 — `exit(code)`: terminar el proceso desde cualquier punto (y cualquier fibra).
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn exit_terminates_with_the_code_in_all_engines() {
+    // Secuencial: exit en posición de valor (diverge, como panic) — el código manda sobre main.
+    let base = tmp("exit_seq");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn pick() -> int {\n\
+         \x20 match (env(\"RAY_NO_SUCH_VAR\")) {\n\
+         \x20   Option.Some(v) => 1,\n\
+         \x20   Option.None => exit(3),\n\
+         \x20 }\n\
+         }\n\
+         fn main() -> int {\n\
+         \x20 print(\"before\");\n\
+         \x20 let x = pick();\n\
+         \x20 print(\"unreachable \" + to_string(x));\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    for engine in [&["--interp", "prog.ray"][..], &["--vm", "prog.ray"][..]] {
+        let (out, err, code) = ray(&base, engine);
+        assert_eq!(code, 3, "exit(3) manda el código ({engine:?})\n{err}");
+        assert_eq!(out, "before\n", "nada tras el exit ({engine:?})");
+    }
+    // Nativo: byte-idéntico.
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let (_o, err, code) = ray(&base, &["build", "--native", "prog.ray", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        let out = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(out.status.code(), Some(3), "el nativo sale con 3");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "before\n", "nativo ≡ VM");
+    } else {
+        assert!(std::env::var_os("CI").is_none(), "rustc no disponible bajo CI: falso verde");
+    }
+
+    // Desde una fibra AUXILIAR (el hallazgo de rayrelay §64.6: antes había que reestructurar
+    // para que main decidiera): exit termina el proceso entero, VM multicore incluida.
+    let base = tmp("exit_fiber");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/time;\n\
+         fn main() -> int {\n\
+         \x20 spawn(fn() {\n\
+         \x20   time.sleep(50);\n\
+         \x20   print(\"bye\");\n\
+         \x20   exit(9);\n\
+         \x20 });\n\
+         \x20 time.sleep(10000);\n\
+         \x20 print(\"should not reach\");\n\
+         \x20 1\n\
+         }\n",
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    let (out, _err, code) = ray(&base, &["run", "prog.ray"]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(8), "exit no esperó el sleep de main");
+    assert_eq!(code, 9, "el código de la fibra auxiliar\n{out}");
+    assert_eq!(out, "bye\n");
+}

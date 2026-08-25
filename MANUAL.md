@@ -552,6 +552,11 @@ assert(x > 0);                     // aborta si es falso
 assert_eq(resultado, esperado);    // aborta mostrando ambos (T: Eq + Show)
 ```
 
+Y para **terminar el proceso a propósito** (no es un error): `exit(code)` sale con ese código
+desde cualquier punto — cualquier fibra incluida — flusheando la salida pendiente. Diverge como
+`panic` (`Option.None => exit(1)` cuadra de tipo), pero sin mensaje ni traza, y `try_call` no lo
+captura.
+
 Un error de ejecución imprime, además de la cabecera con su posición, la **traza de
 llamadas** (`en <fn> … desde <fn> …`). Si el error nace en el prelude o en la `std`
 (p. ej. un `assert` fallido), la cabecera y el `^` apuntan a **tu** llamada — el sitio
@@ -1488,6 +1493,9 @@ primer día):
   por IP. El webserver la expone directa en `Request.remote` (+ `webserver.remote_ip(req)`).
 - `net.tls_peer_cert(h) -> Result<PeerCert, _>` — el certificado del peer: **"expira en N días"**
   por fin se escribe: `(cert.not_after_ms - time.now()) / 86400000`.
+- `net.shutdown_write(h)` — **half-close** (`SHUT_WR`): el peer ve EOF en su lectura y este lado
+  sigue leyendo hasta su FIN. El idiom netcat/HTTP-1.0: "terminé de enviar, dreno la respuesta".
+  Solo TCP (en TLS el close_notify viaja con `close`).
 
 ### La pila de protocolos (`packages/net`, dependencia)
 

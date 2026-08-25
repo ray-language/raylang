@@ -759,10 +759,10 @@ fn expr_diverges(e: Expr) -> bool {
             }
             true
         },
-        // panic(...) nunca retorna.
+        // panic(...) / exit(...) nunca retornan.
         EKind.ECall(callee, _) => {
             match (callee.kind) {
-                EKind.EIdent(n) => n == "panic",
+                EKind.EIdent(n) => n == "panic" || n == "exit",
                 _ => false,
             }
         },
@@ -2303,7 +2303,7 @@ fn check_ufcs(
 
 // ¿`name` nombra un builtin que el checker auto-alojado conoce? (Los mismos que `check_named_call`.)
 fn is_known_builtin(name: string) -> bool {
-    name == "print" || name == "eprint" || name == "len" || name == "push" || name == "to_string" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "panic" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "__exists" || name == "args" || name == "__pop"
+    name == "print" || name == "eprint" || name == "len" || name == "push" || name == "to_string" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "panic" || name == "exit" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "__exists" || name == "args" || name == "__pop"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -2418,6 +2418,9 @@ fn check_named_call(
     }
     if (name == "panic") {
         return check_panic(c, cargs, line, col);
+    }
+    if (name == "exit") {
+        return check_exit(c, cargs, line, col);
     }
     if (name == "__parse_int") {
         return check_parse_prim(c, "__parse_int", Type.TInt, cargs, line, col);
@@ -2787,6 +2790,15 @@ fn check_panic(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, T
     b_arity("panic", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "panic expects a string, not ")?;
+    Result.Ok(Type.TUnit)
+}
+
+// exit(code: int) -> unit (M130). Termina el proceso; diverge como panic (expr_diverges lo
+// reconoce por nombre). Mensaje byte-idéntico a `src/builtins.rs`.
+fn check_exit(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("exit", 1, "", cargs.len(), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_int(a, cargs, 0, "exit expects an int (the exit code), not ")?;
     Result.Ok(Type.TUnit)
 }
 

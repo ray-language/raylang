@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El lote C del dogfood** (M130) — dos primitivos de motor en los TRES engines:
+  **`net.shutdown_write(h)`** (half-close `shutdown(SHUT_WR)`: el peer ve EOF y este lado sigue
+  leyendo — el idiom netcat/HTTP-1.0; solo TCP, errores estables byte-idénticos) y
+  **`exit(code)`** (termina el proceso desde CUALQUIER fibra, flusheando salida; diverge como
+  `panic` — `Option.None => exit(3)` cuadra de tipo — y `try_call` no lo captura).
 - **El lote B del dogfood** (M129) — `admit(b)`/`report(b, ok)` en `std/resilience` (las
   transiciones del breaker sueltas, componibles con actores; `guard` queda como azúcar; los campos
   `abierto_hasta`/`hasta` pasan a `open_until`/`until`); **`ray test` aísla de verdad**: al

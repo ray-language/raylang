@@ -10141,3 +10141,29 @@ runtime o de runner (IDEAS §65.4, §65.2 y el Accept-Encoding de §7 transversa
   el cuerpo supera el umbral (512 octetos), comprime y pone `Content-Encoding: gzip` +
   `Vary: Accept-Encoding` (sumándose a un `Vary` previo). Si comprimir no encoge, la deja intacta.
   La verificación del cuerpo en el test es con NUESTRO `std/inflate` (cero deps de test nuevas).
+
+## 127. M130 — el lote C del dogfood: half-close y exit(code), trabajo de motores (ago 2026)
+
+Los dos hallazgos de rayrelay que quedaban pedían opcode nuevo en los TRES motores (IDEAS §64.3
+y §64.6) — por eso esperaron a su propio lote.
+
+- **`net.shutdown_write(h)`: half-close** (§64.3). Sin `shutdown(SHUT_WR)` el idiom netcat —
+  "aviso EOF de escritura y dreno hasta el FIN del peer" — era inexpresable, y cualquier
+  protocolo que termina por half-close (HTTP/1.0, pipes estilo nc) lo necesita; rayrelay lo
+  aproximaba con un periodo de gracia de 2 s. Plomería del patrón M115/M122: primitivo
+  `__socket_shutdown_write` (opcode `SocketShutdownWrite`, tabla BUILTINS + H11), brazos de VM e
+  intérprete sobre el `shutdown(Write)` del std, wrapper en `std/net`, y en nativo el intercept a
+  nivel de wrapper (`__ray_shutdown_write`, común a ambos sabores — es una llamada al registro,
+  sin interacción con el scheduler: el EOF lo ve el PEER en su lectura). Solo TCP: en TLS el
+  close_notify viaja con `close`, y en UDP no hay conexión. Errores estables byte-idénticos
+  ("handle N is not a TCP socket" / "invalid handle: N"); verificado en los cuatro sabores con el
+  test secuencial contra el propio listener (corre hasta en el intérprete: el half-close es
+  visible sin concurrencia).
+- **`exit(code)`** (§64.6). Terminar el proceso desde una fibra auxiliar obligaba a reestructurar
+  el programa para que main decidiera. `exit` es un builtin núcleo (como `panic`): opcode `Exit`,
+  **diverge** (el análisis de divergencia lo reconoce junto a panic — `Option.None => exit(3)`
+  cuadra de tipo; SPEC §7/§8 actualizada primero, como manda el contrato), flushea stdout/stderr
+  y llama a `process::exit` — desde CUALQUIER fibra, VM multicore incluida. A diferencia de
+  `panic` no es un error: sin mensaje, sin traza, y `try_call` NO lo captura (el proceso muere:
+  `process::exit` no desenrolla). El espejo selfhost del checker va en tándem (membresía,
+  divergencia, `check_exit` con mensaje byte-idéntico).

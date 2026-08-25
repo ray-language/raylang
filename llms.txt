@@ -24,7 +24,8 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
 - UFCS everywhere: `recv.f(args)` ≡ `f(recv, args)` when `f` is not a field. Pipelines:
   `x |> f(a)` ≡ `f(x, a)` (lowest precedence, left-associative).
 - Struct fields end with a comma; struct literals are `Name { field: value }`.
-- `main` returns `int` (the process exit code) or unit.
+- `main` returns `int` (the process exit code) or unit. `exit(code)` terminates the process
+  immediately from any fiber (diverges like `panic`; stdout/stderr flushed).
 - Patterns are shallow: NO literals inside variant patterns (`Option.Some(true)` is a
   syntax error) and NO nested qualified patterns (`Option.Some(mod.Enum.V(x))`) — bind a
   name (`Option.Some(v)`) and match again. Qualified patterns themselves are fine:

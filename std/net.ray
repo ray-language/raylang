@@ -72,6 +72,17 @@ pub fn peer_addr(h: int) -> Result<string, string> {
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
+// M130: half-close — shutdown(SHUT_WR). El idiom netcat/HTTP-1.0: "terminé de escribir (el peer
+// ve EOF en su lectura) y sigo LEYENDO hasta su FIN". Solo TCP: en TLS el close_notify viaja con
+// `close`, y en UDP no hay conexión.
+/// Half-closes a TCP connection: shuts down the WRITE side (the peer's read sees EOF) while this
+/// side can still read until the peer closes. The netcat/HTTP-1.0 idiom: "done sending, now
+/// draining the response". TCP only (on TLS the close_notify is sent by `close`).
+pub fn shutdown_write(h: int) -> Result<int, string> {
+    let r = __socket_shutdown_write(h);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 // M124: el certificado del PEER de una conexión TLS. "Expira en N días" es EL check que todo
 // operador quiere y era inexpresable (raywatch, §70.1): rustls valida en el handshake pero no
 // exponía los campos. El primitivo devuelve un arreglo etiquetado plano; este wrapper lo alza al

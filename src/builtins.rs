@@ -1760,6 +1760,12 @@ pub fn socket_set_read_timeout(h: i64, ms: i64) {
         Some(OpenHandle::Tls(tc)) => {
             let _ = tc.sock.set_read_timeout(dur);
         }
+        // M121: el timeout de lectura aplica también a UDP (`udp_recv_from` vence con
+        // "read timeout"); en la VM el SO_RCVTIMEO es inerte (socket no bloqueante) y manda
+        // `read_timeouts()`, como en TCP.
+        Some(OpenHandle::Udp(s)) => {
+            let _ = s.set_read_timeout(dur);
+        }
         _ => {}
     }
 }
@@ -1946,7 +1952,10 @@ pub fn local_port(h: i64) -> i64 {
 //
 // Sockets sin conexión sobre `std::net::UdpSocket`, cero deps. El handle vive en el mismo registro.
 // A diferencia de TCP, cada datagrama lleva su remitente → `udp_recv_from` devuelve (host, puerto,
-// datos). I/O **bloqueante** en ambos motores por ahora (la cesión cooperativa queda diferida).
+// datos). La cesión cooperativa llegó en M20.11 (VM: no-bloqueante + aparcado de fibra) y F4
+// (nativo con fibras); el intérprete (oráculo mono-hilo) usa el camino bloqueante. M121: el
+// timeout de lectura por handle (`net.set_read_timeout`, M56.4) aplica también a UDP en los tres
+// motores — una espera vencida devuelve `Err("read timeout")`, como en TCP.
 
 /// Enlaza un socket UDP a `host:port` (port=0 → efímero, consultable con `local_port`) (M20.8).
 pub fn udp_bind(host: &str, port: i64) -> Result<i64, String> {
@@ -1980,7 +1989,18 @@ pub fn udp_recv_from(h: i64) -> Result<(String, i64, Vec<u8>), String> {
         }
     };
     let mut buf = vec![0u8; 65536]; // un datagrama UDP cabe de sobra en 64 KiB
-    let (n, addr) = sock.recv_from(&mut buf).map_err(|e| e.to_string())?;
+    let (n, addr) = match sock.recv_from(&mut buf) {
+        Ok(r) => r,
+        // M121: con SO_RCVTIMEO puesto (set_read_timeout, motor bloqueante), la espera vencida
+        // llega como WouldBlock/TimedOut (según SO) → el mismo mensaje estable que en TCP/VM.
+        Err(ref e)
+            if e.kind() == std::io::ErrorKind::WouldBlock
+                || e.kind() == std::io::ErrorKind::TimedOut =>
+        {
+            return Err(READ_TIMEOUT_MSG.to_string());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     buf.truncate(n);
     Ok((addr.ip().to_string(), addr.port() as i64, buf))
 }
@@ -1988,6 +2008,11 @@ pub fn udp_recv_from(h: i64) -> Result<(String, i64, Vec<u8>), String> {
 /// Variante NO bloqueante de `udp_recv_from` para la VM (M20.11): `Ok(None)` si no hay datagrama listo
 /// (`WouldBlock`) → la VM aparca la fibra en el fd y reintenta, como `socket_read_bytes_nb`.
 pub fn udp_recv_from_nb(h: i64) -> Result<Option<(String, i64, Vec<u8>)>, String> {
+    // M121/M56.4: la espera de esta lectura venció (marcada por el scheduler al expirar el
+    // deadline del aparcado) → error de timeout, como en las lecturas TCP/TLS.
+    if take_read_expired(h) {
+        return Err(READ_TIMEOUT_MSG.to_string());
+    }
     let sock = {
         let reg = registry().lock().unwrap();
         match reg.open.get(&h) {

@@ -2480,7 +2480,9 @@ motores más varios huecos de expresividad. Repros mínimos en `ray-apps/rayrela
      bloqueante (`Got`/`Empty`/`Closed`) y select con plazo (`Some(i)`/`None`; `ms=0` = poll),
      event-driven en los dos motores. **PENDIENTE menor**: `select` sobre tipos MIXTOS (hoy se
      enum-ifica en userland: un `Channel<MiEnum>` y se despacha por variante).
-5. **UDP**: confirmada la restricción documentada (recv bloquea TODAS las fibras en ambos motores
+5. **[EJECUTADA — M121, DESIGN §118: `net.set_read_timeout` aplica a UDP; la nota "bloquea todas
+   las fibras" resultó RANCIA (VM cede desde M20.11, nativo-fibras desde F4)] UDP**: confirmada la
+   restricción documentada (recv bloquea TODAS las fibras en ambos motores
    → el respondedor STUN debe ser proceso aparte), y además `recv_from` no tiene timeout (un
    datagrama perdido cuelga al cliente `probe` sin remedio; `timeout_err.ray` muestra que TCP sí
    lo tiene y su error es el string estable `"read timeout"` — un enum de error tipado sería
@@ -2646,7 +2648,7 @@ SQLite, dashboard SSE, webhooks al cambiar de estado).
    que todo operador quiere — es inexpresable. Superficie candidata:
    `net.tls_peer_cert(h) -> {not_after_ms, subject, san, issuer}` (rustls ya tiene los DER a
    mano en el handshake).
-2. **`net/dns` hereda el UDP bloqueante de §64 y lo agrava**: `query_a` hace `recv_from` sin
+2. **[EJECUTADA — M121, DESIGN §118: dns acota su espera a 5 s → `Err("recv: read timeout")`, no cuelgue] `net/dns` hereda el UDP bloqueante de §64 y lo agrava**: `query_a` hace `recv_from` sin
    timeout → cada consulta DNS congela TODAS las fibras del proceso mientras dura, y un paquete
    perdido cuelga el monitor ENTERO para siempre. En un monitor la diferencia entre "check
    lento" y "proceso muerto". El arreglo de fondo es el de §64 (UDP async + timeout); mientras,
@@ -2748,10 +2750,16 @@ push, nocturna con presupuesto alto. Validación inmediata: su primera corrida c
 corregidos TRES bugs nuevos del backend nativo (print de u*, genéricos acotados `T: Ord`, método
 dyn en posición de argumento) — los tres de la clase §63/§64/§68 y ninguno cubierto por el corpus.
 
+**[EJECUTADA — M121, DESIGN §118]** El timeout UDP/dns (§64.5/§70.2): `net.set_read_timeout`
+aplica a UDP en los tres motores (espera vencida = `Err("read timeout")`) y `net/dns` acota su
+respuesta a 5 s. La nota "UDP bloquea todas las fibras" resultó rancia (VM cede desde M20.11,
+nativo-fibras desde F4) — el hueco real era solo el timeout.
+
 **Quedan abiertos** (candidatos, no comprometidos): el **pool/multiplexado de `packages/rpc`**
-(§72.2, secuencial por conexión hoy); `net.tls_peer_cert` (§70.1), timeouts de `tcp_connect`/`dns`
-(§70.2/§70.3), `term.read_hidden` (§71.1), hasher incremental de `std/crypto` (§69.3),
-normalización Unicode y `std/mail` (§71.4/§71.5), y los menores de `std` que cada tanda anotó.
+(§72.2, secuencial por conexión hoy); `net.tls_peer_cert` (§70.1), `tcp_connect_timeout` (§70.3 —
+el connect del SO retiene la fibra ~75 s ante un host que tira SYNs), `term.read_hidden` (§71.1),
+hasher incremental de `std/crypto` (§69.3), normalización Unicode y `std/mail` (§71.4/§71.5), y
+los menores de `std` que cada tanda anotó.
 
 ## Cómo usar este archivo
 

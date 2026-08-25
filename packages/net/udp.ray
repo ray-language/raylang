@@ -4,7 +4,9 @@
 //
 // A diferencia de TCP, no hay conexión: cada datagrama lleva su remitente, así que `recv_from`
 // devuelve un `Packet { host, port, data }` (con quién y qué). Habilita DNS, statsd, descubrimiento,
-// juegos, etc. I/O **bloqueante** en ambos motores por ahora (la cesión cooperativa queda diferida).
+// juegos, etc. `recv_from` CEDE la fibra mientras espera (VM desde M20.11, nativo-con-fibras desde
+// F4; el intérprete, oráculo mono-hilo, bloquea) y honra el timeout de lectura por handle
+// (`net.set_read_timeout(h, ms)`, M121): la espera vencida devuelve `Err("read timeout")`.
 //
 // Patrón de los primitivos (como M11.2c): el builtin devuelve un arreglo etiquetado y este envoltorio
 // lo traduce a `Result`/`Packet` → el runtime no sabe de `Result` ni de `Packet`.
@@ -54,9 +56,11 @@ fn text(b: bytes) -> string {
     }
 }
 
-// Recibe un datagrama (bloquea hasta que llega uno); `Ok(Packet)` con remitente + contenido.
-/// Receives one datagram on socket `h`, BLOCKING until one arrives (in both engines;
-/// no cooperative yield yet). Ok = Packet with sender address and payload; Err = OS error.
+// Recibe un datagrama (la fibra cede mientras espera); `Ok(Packet)` con remitente + contenido.
+/// Receives one datagram on socket `h`. The fiber parks while waiting (VM and native binaries;
+/// the interpreter blocks). Honors the per-handle read timeout (`net.set_read_timeout(h, ms)`):
+/// a wait that outlives it fails with `Err("read timeout")`. Ok = Packet with sender address and
+/// payload; Err = OS error.
 pub fn recv_from(h: int) -> Result<Packet, string> {
     let r = __udp_recv_from(h);  // [b"ok", host, puerto, datos] o [b"err", msg], todo en bytes
     if (text(r[0]) == "ok") {

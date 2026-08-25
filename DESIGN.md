@@ -9869,3 +9869,35 @@ Tres palancas de coste hacen viable correrlo en cada push:
 E2E dirigidos de cli_cli — un socket real no sale de una plantilla determinista. Cableado: humo (1
 batch secuencial, 3 motores, ~2 s) dentro de `cargo test`; campaña (4 batches + concurrencia) en
 cada push de CI; nocturna con `RAYLANG_DIFF_BATCHES=40`. Fila nueva en PRODUCTION §4.
+
+## 118. M121 — timeout de lectura UDP: el último "cuelga-el-proceso" conocido (ago 2026)
+
+El hallazgo de raywatch (IDEAS §70.2, reforzando §64.5): `udp.recv_from` esperaba PARA SIEMPRE —
+UDP no retransmite, así que un datagrama perdido colgaba la fibra de la consulta sin remedio, y
+`net/dns` lo heredaba entero: en un monitor, la diferencia entre "check lento" y "proceso muerto".
+
+**Lo que la auditoría reveló primero**: la mitad del problema ya no existía. La nota "UDP recv
+bloquea TODAS las fibras en ambos motores" estaba rancia — la VM cede desde M20.11 (no-bloqueante +
+aparcado, con `udp_yield_cli` probándolo) y el nativo-con-fibras desde F4 (`wait_readable`). El
+hueco real era solo el TIMEOUT, roto o ausente en los cuatro sabores: la VM aparcaba CON deadline
+(la maquinaria M56.4 ya viajaba en el park) pero el opcode re-ejecutado nunca consumía la marca de
+vencimiento → re-aparcaba para siempre; el intérprete y el nativo ignoraban los handles UDP en
+`set_read_timeout`; el nativo-con-fibras aparcaba sin plazo.
+
+**El arreglo — cero API nueva**: `net.set_read_timeout(h, ms)` (la superficie por-handle de M56.4
+que TCP/TLS ya tenían) aplica ahora a UDP en los tres motores, y la espera vencida devuelve el
+error estable `"read timeout"`:
+- **VM**: `udp_recv_from_nb` consume la marca de vencimiento al re-ejecutarse (las 3 líneas que
+  TLS/TCP ya tenían en sus helpers nb) — el deadline del park ya estaba cableado.
+- **Intérprete** (y nativo hilo-por-tarea): `socket_set_read_timeout` pone el SO_RCVTIMEO también
+  en `OpenHandle::Udp`, y el recv bloqueante mapea WouldBlock/TimedOut → `READ_TIMEOUT_MSG`.
+- **Nativo con fibras**: el recv lee el plazo por-handle del ctx (`rd_to`, como TCP) y aparca con
+  `wait_readable_timeout`; al vencer, el mismo error.
+
+**Adopción inmediata**: `net/dns` acota su espera de respuesta a 5 s (`DNS_TIMEOUT_MS`) — una
+consulta con el datagrama perdido responde `Err("recv: read timeout")` en vez de colgar el
+monitor. Verificado: `udp_timeout_demo` (plazo vencido en ~150 ms + el dato gana al plazo) en los
+CUATRO sabores byte-idénticos (interp, VM, nativo fibras, nativo `--without fibers`); tests en
+`udp_cli.rs` (interp/VM/nativo). Pendiente de la misma familia, fuera de este hito:
+`tcp_connect_timeout` (§70.3 — el connect del SO puede retener la fibra ~75 s ante un host que
+tira SYNs).

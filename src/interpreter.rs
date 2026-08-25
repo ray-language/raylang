@@ -983,7 +983,7 @@ impl<'a> Interpreter<'a> {
                     // intérprete; la forma de Task nunca llega (spawn ya da error → no existen Tasks aquí).
                     if name == "spawn" || name == "send" || name == "__recv"
                         || name == "scope" || name == "select" || name == "try_recv"
-                        || name == "__task_failed" || name == "signals" {
+                        || name == "__select_timeout" || name == "__task_failed" || name == "signals" {
                         return Err(runtime_error(callee.line, callee.col,
                             "concurrency (spawn/channel/send/recv/join/scope/select) requires the VM; the interpreter is only the sequential oracle (do not use --interp)"));
                     }

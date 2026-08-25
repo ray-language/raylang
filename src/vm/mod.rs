@@ -1674,6 +1674,75 @@ impl<'a> Vm<'a> {
                         }
                     }
                 }
+                OpCode::SelectTimeout => {
+                    // M116.1: select con PLAZO. Empuja `[i]` (índice listo) o `[]` (plazo vencido);
+                    // el prelude lo envuelve en `Option<int>`. `ms <= 0` = poll no bloqueante. El
+                    // deadline absoluto vive en `sh.select_deadlines[arr]` (persistente entre re-parks:
+                    // un wake espurio no reinicia el plazo); `io_wait` lo expira marcando el timeout.
+                    let ms = match self.pop() { HeapValue::Int(m) => m, _ => unreachable!("the checker guarantees an int") };
+                    let arr = self.pop_obj();
+                    let (l, c2) = pos!();
+                    // ¿Marca de timeout de un aparcado anterior? (io_wait la puso al vencer el deadline.)
+                    if crate::builtins::take_read_timeout(arr as i64) {
+                        let h = self.cur.heap.allocate(Obj::Array(Vec::new()));
+                        self.push(HeapValue::Obj(h));
+                    } else {
+                        let chans: Vec<usize> = match self.cur.heap.get(arr) {
+                            Obj::Array(elems) => elems.iter().filter_map(|v| match v {
+                                HeapValue::Channel(id) => Some(*id),
+                                _ => None,
+                            }).collect(),
+                            _ => unreachable!("the checker guarantees an array of channels"),
+                        };
+                        // Guard único a través del escaneo Y el park (atómico, como Select).
+                        let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                        let mut ready_idx = None;
+                        for (i, &c) in chans.iter().enumerate() {
+                            let buffered_or_closed = match sh.chan(c) {
+                                Some(ch) => !ch.queue.is_empty() || ch.closed,
+                                None => true,
+                            };
+                            let has_sender = sh.parked.iter()
+                                .any(|p| p.on == c && matches!(p.waiting, Waiting::Send(_)));
+                            if buffered_or_closed || has_sender {
+                                ready_idx = Some(i);
+                                break;
+                            }
+                        }
+                        match ready_idx {
+                            Some(i) => {
+                                sh.select_deadlines.remove(&arr); // resuelto por canal listo
+                                drop(sh);
+                                let h = self.cur.heap.allocate(Obj::Array(vec![HeapValue::Int(i as i64)]));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            None => {
+                                // El deadline absoluto: el guardado (re-park) o uno nuevo (primer aparcado).
+                                let has_deadline = sh.select_deadlines.contains_key(&arr);
+                                if !has_deadline {
+                                    if ms <= 0 {
+                                        // Poll puro: plazo inmediato, sin aparcar.
+                                        drop(sh);
+                                        let h = self.cur.heap.allocate(Obj::Array(Vec::new()));
+                                        self.push(HeapValue::Obj(h));
+                                        return Ok(None);
+                                    }
+                                    let d = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+                                    sh.select_deadlines.insert(arr, d);
+                                }
+                                // Aparca: re-empuja arr y ms, rebobina el ip al SelectTimeout.
+                                self.cur.stack.push(HeapValue::Obj(arr));
+                                self.cur.stack.push(HeapValue::Int(ms));
+                                self.cur.frames.last_mut().unwrap().ip -= 1;
+                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                sh.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
+                                sh.running -= 1;
+                                drop(sh);
+                                if !self.poll_next(l, c2)? { self.stop = true; }
+                            }
+                        }
+                    }
+                }
 
                 // --- Stdlib de string (M11.1) ---
                 OpCode::ToString => {

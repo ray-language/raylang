@@ -167,6 +167,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `recv` | `(ch: Channel<T>) -> Option<T>` | recibe; bloquea si vacío y abierto; `None` al cerrar y drenar |
 | `select` | `(chs: [Channel<T>]) -> int` | bloquea hasta que un canal esté listo; devuelve el índice menor listo (determinista) |
 | `try_recv` | `(ch: Channel<T>) -> Received<T>` | recibe **sin bloquear**: `Received.Got(v)` (valor listo, lo consume), `Received.Empty` (abierto y vacío), `Received.Closed` (cerrado y drenado). Para "revisa datos O una orden de control sin quedarte bloqueado" |
+| `select_timeout` | `(chs: [Channel<T>], ms: int) -> Option<int>` | `select` con **plazo**: `Some(i)` (índice menor listo), `None` si vencen los `ms` ms; `ms <= 0` = poll no bloqueante. Event-driven (despierta al llegar un canal, no sondea) |
 | `signals` | `() -> Channel<int>` | M88.1/M107.4: el canal de señales del SO (SIGTERM=15, SIGINT=2, SIGWINCH=28); singleton del proceso, para el apagado ordenado y el re-maquetado al redimensionar (`select` + `term.size()`) — compone con `recv`/`select`. Unix; VM y binario nativo |
 | `close` | `(ch \| handle) -> …` | cierra un canal (los valores pendientes aún se reciben) **o** un handle de archivo/socket |
 

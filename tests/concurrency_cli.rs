@@ -874,3 +874,53 @@ fn main() -> int {
     assert!(err.contains("requires the VM"), "stderr no pide la VM: {err}");
     assert_eq!(code, 70);
 }
+
+#[test]
+fn select_timeout_ready_wake_and_deadline() {
+    // M116.1: select_timeout — plazo vencido (None), valor ya listo (Some inmediato), despertar por
+    // canal ANTES del plazo (event-driven), y poll no bloqueante (ms=0). Determinista con --deterministic.
+    let src = r#"
+import std/time;
+fn main() -> int {
+    let a: Channel<int> = Channel.new();
+    let b: Channel<int> = Channel.new();
+    match (select_timeout([a, b], 100)) {
+        Option.Some(i) => print("ready " + to_string(i)),
+        Option.None => print("timeout"),
+    };
+    send(b, 99);
+    match (select_timeout([a, b], 100)) {
+        Option.Some(i) => print("ready " + to_string(i)),
+        Option.None => print("timeout"),
+    };
+    let _ = recv(b);
+    spawn(fn() { time.sleep(50); send(a, 7); });
+    match (select_timeout([a, b], 2000)) {
+        Option.Some(i) => print("ready " + to_string(i) + " val " + to_string(recv(a).unwrap_or(0 - 1))),
+        Option.None => print("timeout"),
+    };
+    match (select_timeout([a, b], 0)) {
+        Option.Some(i) => print("ready " + to_string(i)),
+        Option.None => print("poll empty"),
+    };
+    0
+}
+"#;
+    let (out, _err, code) = run("conc_select_timeout", src, true);
+    assert_eq!(out, "timeout\nready 1\nready 0 val 7\npoll empty\n", "select_timeout (vm): {out}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn select_timeout_requires_the_vm() {
+    let src = r#"
+fn main() -> int {
+    let a: Channel<int> = Channel.new();
+    match (select_timeout([a], 10)) { Option.Some(i) => print(i), Option.None => print(0 - 1) }
+    0
+}
+"#;
+    let (_out, err, code) = run("conc_select_timeout_interp", src, false);
+    assert!(err.contains("requires the VM"), "stderr no pide la VM: {err}");
+    assert_eq!(code, 70);
+}

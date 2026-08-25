@@ -171,7 +171,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
         "all" | "any" | "assert" | "assert_eq" | "char_from_code" | "env" | "filter" | "fold"
             | "from_utf" | "from_utf8" | "get" | "get_or" | "index_of" | "input" | "map" | "max" | "min"
             | "parse_float" | "parse_int" | "pop" | "position" | "read_int" | "recv"
-            | "remove" | "sort" | "try_join"
+            | "remove" | "select_timeout" | "sort" | "try_join"
         // --- builtins públicos manejados en emit_call que NO son filas de la tabla (bajan a
         // primitivos `__len`/`__push`/… o son azúcar del prelude) ---
             | "len" | "push" | "split" | "chars" | "contains_key" | "keys" | "values" | "insert"

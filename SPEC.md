@@ -400,6 +400,9 @@ en los puntos de cesión), nunca preemptiva.
   Received<T>` recibe **sin bloquear**: `Received.Got(v)` si había un valor listo (lo consume,
   como `recv`), `Received.Empty` si el canal está abierto y vacío, `Received.Closed` si está
   cerrado y drenado — el `enum Received<T> { Got(T), Empty, Closed }` del prelude.
+  `select_timeout(chs: [Channel<T>], ms: int) -> Option<int>` es `select` con **plazo**: `Some(i)`
+  con el menor índice listo, `None` si vencen los `ms` milisegundos antes; `ms <= 0` = poll no
+  bloqueante (`None` inmediato si ninguno listo).
 - `signals() -> Channel<int>` devuelve el canal **singleton** de señales del proceso (`SIGTERM`
   = 15, `SIGINT` = 2 y `SIGWINCH` = 28 —cambio de tamaño del terminal— llegan como enteros),
   para apagado ordenado y re-maquetado de TUIs; compone con `recv`/`select`. Solo unix (VM y

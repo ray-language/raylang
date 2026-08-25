@@ -9699,3 +9699,37 @@ nativo, un enum runtime interno `__TryRecv<sendrepr>` que el sitio de llamada ma
 ramas `Empty`/`Closed` infieren el tipo de la rama `Got`. El intérprete (oráculo secuencial) lo
 rechaza como el resto de la concurrencia. VM y binario nativo byte-idénticos (Got/Empty/Closed y la
 toma de un emisor en rendezvous verificados en ambos, con tipos primitivo, string y arreglo).
+
+## 113. M116.1 — select_timeout: el select con plazo, event-driven (ago 2026)
+
+Continuación de M116 (`try_recv`). El otro hueco canal↔control del dogfood (IDEAS §64.4): `select`
+bloquea sin límite, así que "espera datos O una orden de control, pero ríndete tras N ms" no se
+podía escribir — rayrelay lo rodeó con un timer que enviaba a un canal solo para poder salir del
+select. `select_timeout(chs: [Channel<T>], ms: int) -> Option<int>`: `Some(i)` (el menor índice
+listo), `None` al vencer; `ms <= 0` = poll no bloqueante del conjunto. Wrapper del prelude sobre el
+primitivo `__select_timeout(chs, ms) -> [int]` (envuelve `[i]`/`[]` en `Option`, como `recv`).
+
+**Aquí SÍ se tocó el scheduler M:N** — el riesgo que M116 evitó eligiendo `try_recv` primero. Un
+select con plazo debe despertar por DOS causas: un canal listo (`wake_select_waiters`, que recorre
+`parked`) o el vencimiento del plazo (barrido de deadlines, que vivía solo para `io_parked`).
+Unificarlas, con cuidado del wake perdido bajo multicore real:
+
+- El deadline absoluto de cada select con plazo vive en `Shared.select_deadlines` (mapa por handle
+  del arreglo `on`), NO en `Parked` — es la fuente de verdad **persistente** entre re-parks: un wake
+  espurio de `wake_select_waiters` (un canal se puso listo pero otra fibra consumió el valor) re-
+  aparca sin reiniciar el plazo. Lo pone el opcode `SelectTimeout` en su primer aparcado y lo borra
+  al resolver (canal listo o timeout).
+- `io_wait` expira los `select_deadlines` vencidos igual que los de `io_parked`: marca el timeout
+  (`mark_read_timeout(on)`) y despierta la fibra; su opcode re-ejecutado consume la marca
+  (`take_read_timeout`) y devuelve `[]`. El sueño del scheduler se acota al mínimo de AMBOS
+  conjuntos de deadlines.
+- `poll_next` ya no declara deadlock con un `select_timeout` pendiente (`!select_deadlines.is_empty()`
+  se une a "hay io_parked o señales" como razón para esperar en vez de morir).
+
+En el **nativo** no hay `parked`/scheduler propio: el select gira sobre la condvar de actividad.
+`__ray_wait_activity` bloquea HASTA que la generación cambie —correcto para el `select` sin plazo,
+que siempre espera actividad futura, pero colgaría un `select_timeout` sin actividad de canales—, así
+que se añadió `__ray_wait_activity_once`: una espera ACOTADA que retorna por notify (canal listo,
+inmediato) O por el pulso de ~10 ms (para re-chequear el deadline). El bucle de `__ray_select_timeout`
+re-escanea y compara contra el deadline tras cada retorno. Verificado byte-idéntico a la VM (plazo
+vencido, valor ya listo, despertar por canal antes del plazo, poll `ms=0`), estable en 5× multicore.

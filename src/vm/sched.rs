@@ -174,6 +174,12 @@ pub(super) struct Shared {
     /// o termina, `running -= 1`. Un worker ocioso sólo puede declarar **deadlock** cuando `running == 0` (si
     /// alguien ejecuta, aún puede producir trabajo listo vía un canal). Con N=1 oscila 1↔0 trivialmente.
     pub(super) running: usize,
+    /// M116.1 (`select_timeout`): el deadline ABSOLUTO de cada select con plazo aparcado, por handle
+    /// del arreglo de canales (`on`). Fuente de verdad persistente entre re-parks (un wake espurio de
+    /// `wake_select_waiters` no debe reiniciar el plazo). Lo pone el opcode `SelectTimeout` en su
+    /// primer aparcado y lo borra al resolver (canal listo o timeout). Un `select_deadlines` no vacío
+    /// es señal de "esperando un plazo": impide declarar deadlock y acota el sueño del scheduler.
+    pub(super) select_deadlines: std::collections::HashMap<usize, std::time::Instant>,
     /// M38.3b paso 3: el **resultado del programa**, fijado UNA vez (semántica Go: cuando `main` retorna, todo
     /// el programa termina; o un error fatal / deadlock). Su presencia es la **señal de apagado**: los demás
     /// workers, al verla, se detienen. El orquestador lo lee tras unir a los hilos.
@@ -353,9 +359,11 @@ impl<'a> Vm<'a> {
             if sh.running == 0 {
                 // Nadie ejecuta → nadie puede producir trabajo listo. Si hay E/S pendiente, espera readiness
                 // (un solo worker llega aquí, por `running == 0`); si no, es deadlock o fin.
-                if !sh.io_parked.is_empty() || sh.signal_chan.is_some() {
+                if !sh.io_parked.is_empty() || sh.signal_chan.is_some() || !sh.select_deadlines.is_empty() {
                     // M88.1: con la fontanería de señales instalada, "todo aparcado" no es
                     // deadlock — el exterior puede despertar el programa por el self-pipe.
+                    // M116.1: un `select_timeout` pendiente tampoco es deadlock — su plazo lo
+                    // despertará (io_wait duerme hasta el deadline más próximo y lo expira).
                     Self::io_wait(&mut sh);
                     continue; // io_wait dejó fibras en `ready`; reintenta el pop
                 }
@@ -578,9 +586,40 @@ impl<'a> Vm<'a> {
                 }
                 return;
             }
+            // M116.1: expira los `select_timeout` vencidos. Un select aparcado (`Waiting::Select`)
+            // cuyo deadline (por `on`, el handle del arreglo) ya pasó → marca el timeout (su opcode
+            // re-ejecutado lo consume y devuelve None) y despierta la fibra. El deadline se BORRA de
+            // `select_deadlines` aquí (ya no está pendiente); si el opcode re-escaneara y re-aparcara,
+            // pondría uno nuevo — pero al haber vencido devuelve None, no re-aparca.
+            let mut woke_select = false;
+            let mut i = 0;
+            while i < shared.parked.len() {
+                let on = shared.parked[i].on;
+                let due = matches!(shared.parked[i].waiting, Waiting::Select)
+                    && shared.select_deadlines.get(&on).is_some_and(|d| *d <= now);
+                if due {
+                    shared.select_deadlines.remove(&on);
+                    crate::builtins::mark_read_timeout(on as i64);
+                    let p = shared.parked.remove(i);
+                    shared.ready.push_back(p.fiber);
+                    woke_select = true;
+                } else {
+                    i += 1;
+                }
+            }
+            if woke_select {
+                return;
+            }
 
             // 1) Espera del poller, acotada por el deadline más próximo (o infinita si no hay).
-            let timeout_ms: i32 = match shared.io_parked.iter().filter_map(|p| p.deadline).min() {
+            //    M116.1: el mínimo incluye los deadlines de los `select_timeout` aparcados.
+            let next_deadline = shared
+                .io_parked
+                .iter()
+                .filter_map(|p| p.deadline)
+                .chain(shared.select_deadlines.values().copied())
+                .min();
+            let timeout_ms: i32 = match next_deadline {
                 // +1: redondeo hacia arriba para no despertar un pelo antes del deadline (y girar).
                 Some(d) => d.saturating_duration_since(now).as_millis().min(i32::MAX as u128 - 1) as i32 + 1,
                 None => -1,

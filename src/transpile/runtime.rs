@@ -647,8 +647,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // toca el lock global (es el llamador más frecuente: una vez por ciclo de lectura).
             "    if let Some(s) = __RAY_SOCK_CACHE.with(|c| c.borrow().get(&h).cloned()) { let _ = s.set_read_timeout(d); return; }\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    if let Some(__RayHandle::Tcp(s)) = reg.open.get(&h) { let s2 = std::sync::Arc::clone(s); let _ = s2.set_read_timeout(d); drop(reg);\n",
-            "        __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, s2); }); } }\n",
+            "    match reg.open.get(&h) {\n",
+            "        Some(__RayHandle::Tcp(s)) => { let s2 = std::sync::Arc::clone(s); let _ = s2.set_read_timeout(d); drop(reg);\n",
+            "            __RAY_SOCK_CACHE.with(|c| { c.borrow_mut().insert(h, s2); }); }\n",
+            // M121: el timeout de lectura aplica también a UDP (SO_RCVTIMEO real: hilo-por-tarea
+            // usa el recv bloqueante, y la espera vencida se mapea a "read timeout" en el recv).
+            "        Some(__RayHandle::Udp(s)) => { let _ = s.set_read_timeout(d); }\n",
+            "        _ => {}\n",
+            "    } }\n",
             ));
         }
         out.push_str(concat!(
@@ -674,12 +680,26 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}\n",
                 "            Err(e) => break Err(e.to_string()) } } }, None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
                 "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",
+                // M121: el timeout de lectura por handle (rd_to del ctx, como TCP) — sin plazo,
+                // aparcado indefinido (wait_readable); con plazo, wait_readable_timeout y al vencer
+                // el error estable "read timeout" (byte-idéntico a VM/intérprete).
                 "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
                 "    match __ray_udp_clone(h) {\n",
-                "        Some(s) => { use std::os::fd::AsRawFd; let fd = s.as_raw_fd(); let mut buf = vec![0u8; 65536]; loop {\n",
+                "        Some(s) => { use std::os::fd::AsRawFd; let fd = s.as_raw_fd(); let mut buf = vec![0u8; 65536];\n",
+                "            let to = __ray_ctx(|c| c.rd_to.get(&h).copied().unwrap_or(0));\n",
+                "            let dl = if to > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) } else { None };\n",
+                "            loop {\n",
                 "            match s.recv_from(&mut buf) {\n",
                 "                Ok((n, addr)) => { buf.truncate(n); break Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(addr.ip().to_string().as_bytes()), Rc::<[u8]>::from(addr.port().to_string().as_bytes()), Rc::<[u8]>::from(&buf[..])])); }\n",
-                "                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => ray_runtime::fibers::wait_readable(fd),\n",
+                "                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {\n",
+                "                    match dl {\n",
+                "                        None => ray_runtime::fibers::wait_readable(fd),\n",
+                "                        Some(d) => {\n",
+                "                            let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64;\n",
+                "                            if rem <= 0 || ray_runtime::fibers::wait_readable_timeout(fd, rem) { break Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"read timeout\"[..])])); }\n",
+                "                        }\n",
+                "                    }\n",
+                "                }\n",
                 "                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}\n",
                 "                Err(e) => break Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.to_string().as_bytes())])) } } }\n",
                 "        None => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"handle {} is not a UDP socket\", h).as_bytes())])) } }\n",
@@ -694,10 +714,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "fn __ray_udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
                 "    let r = match __ray_udp_clone(h) { Some(s) => s.send_to(data, (host, port as u16)).map_err(|e| e.to_string()), None => Err(format!(\"handle {} is not a UDP socket\", h)) };\n",
                 "    match r { Ok(n) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())])), Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e)])) } }\n",
+                // M121: con SO_RCVTIMEO (set_read_timeout), la espera vencida llega como
+                // WouldBlock/TimedOut (según SO) → el error estable "read timeout".
                 "fn __ray_udp_recv_from(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
                 "    match __ray_udp_clone(h) {\n",
                 "        Some(s) => { let mut buf = vec![0u8; 65536]; match s.recv_from(&mut buf) {\n",
                 "            Ok((n, addr)) => { buf.truncate(n); Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(addr.ip().to_string().as_bytes()), Rc::<[u8]>::from(addr.port().to_string().as_bytes()), Rc::<[u8]>::from(&buf[..])])) }\n",
+                "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"read timeout\"[..])])),\n",
                 "            Err(e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.to_string().as_bytes())])) } }\n",
                 "        None => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"handle {} is not a UDP socket\", h).as_bytes())])) } }\n",
             ));

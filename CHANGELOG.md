@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Timeout de lectura UDP** (M121) — `net.set_read_timeout(h, ms)` aplica ahora también a los
+  sockets UDP en los tres motores: un `udp.recv_from` que espere más del plazo falla con el error
+  estable `"read timeout"` en vez de esperar para siempre (UDP no retransmite: un datagrama
+  perdido colgaba la fibra sin remedio). `net/dns` acota su espera a 5 s — una consulta perdida
+  responde `Err("recv: read timeout")`, no un cuelgue del monitor. De paso, docs al día: la nota
+  "UDP bloquea todas las fibras" estaba rancia (la VM cede desde M20.11 y el nativo-con-fibras
+  desde F4; el hueco real era solo el timeout).
 - **Harness diferencial de motores** (M120) — programas raylang **generados** (interacciones de
   features que los ejemplos no ejercitan: builtin×tipo, mutación-en-constructor, return-en-closure,
   valores cruzando fibras…) corren en intérprete, VM y binario nativo y deben producir exactamente

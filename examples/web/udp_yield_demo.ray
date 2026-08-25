@@ -1,4 +1,4 @@
-// Demo de la CESIÓN cooperativa de udp_recv_from (M20.11, solo VM). Dos fibras esperan un datagrama en
+// Demo de la CESIÓN cooperativa de udp_recv_from (M20.11; F4 la llevó también al nativo con fibras). Dos fibras esperan un datagrama en
 // sockets UDP distintos a la vez. Si recv_from bloqueara el hilo del scheduler, la 2.ª fibra nunca
 // correría (deadlock) y su puerto no se imprimiría → el test colgaría. Que ambas avancen prueba que
 // recv_from CEDE la fibra al scheduler mientras espera. Lo lanza `tests/udp_yield_cli.rs`.

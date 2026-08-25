@@ -8,6 +8,13 @@
 // parser debe seguir los punteros pero devolver la posición SIGUIENTE en el flujo original.
 from net/udp import bind, send_to, recv_from, Packet;
 import std/crypto;
+import std/net;
+
+// M121: plazo de la espera de respuesta. Antes `recv_from` esperaba PARA SIEMPRE: un datagrama
+// perdido (UDP no reenvía) colgaba la fibra de la consulta sin remedio — en un monitor, la
+// diferencia entre "check lento" y "proceso muerto" (hallazgo de raywatch, IDEAS §70.2). Con el
+// timeout de lectura por handle, la consulta responde `Err("recv: read timeout")`.
+const DNS_TIMEOUT_MS: int = 5000;
 
 // M72.1: un octeto con bounds — el parser procesa datos EXTERNOS, así que un acceso fuera del
 // mensaje es `Err`, nunca un crash por índice fuera de rango (clase inflate pre-M64).
@@ -417,7 +424,9 @@ fn random_id() -> int {
 }
 
 // Consulta el servidor DNS `server:port` por UDP para `name` y `qtype`, devolviendo los registros + el TTL.
-/// Queries the DNS server at `server:port` over UDP for `name` with record type `qtype`, blocking until a reply arrives.
+/// Queries the DNS server at `server:port` over UDP for `name` with record type `qtype`. The wait
+/// is bounded (M121): a reply that does not arrive within 5 s — a lost datagram, UDP does not
+/// retransmit — fails with `Err("recv: read timeout")` instead of hanging the querying fiber.
 /// Returns the parsed records plus the minimum TTL, or Err on socket failure, a malformed reply, or a DNS error RCODE.
 /// M72.2: the transaction ID is random (OS CSPRNG) and the reply's ID must match the query's, or it
 /// is rejected as `Err` (anti-spoofing). No retries (one query, one response).
@@ -427,6 +436,7 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
     match (bind("0.0.0.0", 0)) {
         Result.Err(e) => Result.Err("bind: " + e),
         Result.Ok(h) => {
+            net.set_read_timeout(h, DNS_TIMEOUT_MS);
             match (send_to(h, server, port, query)) {
                 Result.Err(e) => {
                     close(h);
@@ -456,7 +466,8 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
 }
 
 // Como `query_full` pero devolviendo solo los registros tipados.
-/// Like `query_full` but returns only the typed records, discarding the TTL. Performs network I/O (blocking UDP).
+/// Like `query_full` but returns only the typed records, discarding the TTL. Performs network I/O
+/// (UDP; the wait is bounded to 5 s — see `query_full`).
 pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Record], string> {
     match (query_full(server, port, name, qtype)) {
         Result.Ok(r) => Result.Ok(r.records),

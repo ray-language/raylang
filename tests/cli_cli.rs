@@ -3420,3 +3420,61 @@ fn main() -> int {
     assert_eq!(native_out, "0\n21\nexit 0\n");
     assert_eq!(native.status.code(), Some(0), "sin pánico RefCell");
 }
+
+#[test]
+fn build_native_close_wakes_a_parked_socket_reader() {
+    // IDEAS §64: `close(h)` desde otra fibra con un lector APARCADO en socket_read_bytes(h) era un
+    // no-op silencioso en nativo (ni FIN al peer ni despertar; la VM despierta al lector con
+    // Err("invalid handle")). Fija el contrato: el lector despierta con ese error byte-idéntico,
+    // el proceso termina, y el peer (este test) recibe el FIN.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native close cross-fibra: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_close_wake");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/net;\n\
+         import std/time;\n\
+         fn main() -> int {\n\
+           let l = match (net.tcp_listen(\"127.0.0.1\", 0)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+           print(to_string(net.local_port(l)));\n\
+           let c = match (net.tcp_accept(l)) { Result.Ok(h) => h, Result.Err(e) => 0 - 1 };\n\
+           spawn(fn() {\n\
+             time.sleep(300);\n\
+             close(c);\n\
+           });\n\
+           match (net.socket_read_bytes(c)) {\n\
+             Result.Ok(b) => print(\"read ok \" + to_string(b.len())),\n\
+             Result.Err(e) => print(\"read err: \" + e),\n\
+           }\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("srv");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native close cross-fibra ok\n{err}");
+
+    use std::io::{BufRead, BufReader, Read};
+    let mut srv = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el servidor");
+    let mut sout = BufReader::new(srv.stdout.take().unwrap());
+    let mut port_line = String::new();
+    sout.read_line(&mut port_line).expect("lee el puerto");
+    let port: u16 = port_line.trim().parse().expect("puerto numérico");
+
+    // Cliente: conecta y NO envía nada — el lector del servidor queda aparcado hasta el close.
+    let mut cli = std::net::TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    cli.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    let mut resp = Vec::new();
+    // El FIN del close debe llegar: read_to_end termina con 0 bytes (no un timeout eterno).
+    cli.read_to_end(&mut resp).expect("el peer recibe el FIN del close");
+    assert!(resp.is_empty(), "el close no envía datos, solo FIN");
+
+    // El lector despierta con el error de la VM y el proceso TERMINA.
+    let mut rest = String::new();
+    sout.read_to_string(&mut rest).expect("lee el resto de stdout");
+    assert!(rest.contains("read err: invalid handle:"), "el lector aparcado despierta con Err(invalid handle): {rest:?}");
+    let status = srv.wait().expect("el proceso termina");
+    assert_eq!(status.code(), Some(0), "termina limpio, no colgado");
+}

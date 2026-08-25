@@ -6,9 +6,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: un **tercer motor**
-(el binario nativo), un salto de **rendimiento** medido arco por arco, y la capa de aplicación
-(framework web, procesos del SO, herramientas de desarrollo).
+(nada aún)
+
+## 1.1.0 — 2026-08-25
+
+La primera versión desde la casa nueva: el ecosistema entero vive en
+[github.com/ray-language](https://github.com/ray-language) — el toolchain, los seis paquetes
+instalables (`ray add net|db|web|rpc|tz|cron` contra `ray-index`), la gramática y las 17 apps de
+dogfood, todo público. Los ejes del periodo: un **tercer motor** (el binario nativo), un salto de
+**rendimiento** medido arco por arco, la capa de aplicación (framework web, procesos del SO,
+herramientas de desarrollo), el **dogfood de 14 apps** que produjo M115–M133 (fs de producción,
+timeouts de red, identidad del peer, half-close, `exit`, Unicode, correo…), la superficie entera
+en **inglés**, y el **manejador de paquetes validado contra GitHub real**.
 
 ### Añadido — un tercer motor
 

@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/ray-language/raylang/actions/workflows/ci.yml/badge.svg)](https://github.com/ray-language/raylang/actions/workflows/ci.yml)
 [![Licencia: MIT OR Apache-2.0](https://img.shields.io/badge/licencia-MIT%20OR%20Apache--2.0-blue.svg)](#licencia)
-[![Versión](https://img.shields.io/badge/versión-1.0.0-brightgreen.svg)](CHANGELOG.md)
+[![Versión](https://img.shields.io/badge/versión-1.1.0-brightgreen.svg)](CHANGELOG.md)
 
 [Instalación](#instalación) · [Un vistazo](#un-vistazo-al-lenguaje) · [Playground](#playground-web) · [Documentación](#documentación) · [Lo notable](#lo-notable)
 

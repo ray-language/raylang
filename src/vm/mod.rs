@@ -3101,6 +3101,15 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 // M123: la dirección del peer de una conexión TCP/TLS → ["ok", "ip:puerto"] / ["err", msg].
+                // M131: normalización Unicode (delegada en ray-runtime; slim = error claro).
+                OpCode::UnicodeNormalize => {
+                    let form = match self.pop() { HeapValue::Str(f) => f, _ => unreachable!("the checker guarantees a string") };
+                    let s = match self.pop() { HeapValue::Str(s) => s, _ => unreachable!("the checker guarantees a string") };
+                    match crate::builtins::unicode_normalize(&s, &form) {
+                        Ok(out) => self.push(HeapValue::Str(out)),
+                        Err(e) => return Err(runtime_error(pos!().0, pos!().1, &e)),
+                    }
+                }
                 // M130: half-close — shutdown(SHUT_WR); el peer ve EOF, este lado sigue leyendo.
                 OpCode::SocketShutdownWrite => {
                     let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };

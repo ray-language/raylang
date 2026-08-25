@@ -10167,3 +10167,27 @@ y §64.6) — por eso esperaron a su propio lote.
   `panic` no es un error: sin mensaje, sin traza, y `try_call` NO lo captura (el proceso muere:
   `process::exit` no desenrolla). El espejo selfhost del checker va en tándem (membresía,
   divergencia, `check_exit` con mensaje byte-idéntico).
+
+## 128. M131 — el lote D del dogfood: normalización Unicode y las codificaciones de correo (ago 2026)
+
+Los dos hallazgos "grandes" que quedaban de la tanda §71 — y el cierre del ítem fantasma "hora
+local": al revisarlo, **ya estaba ejecutado** (M85, `packages/tz`: TZif v2 + `system()` +
+ambigüedad DST como API) — la lista de pendientes lo arrastraba rancio.
+
+- **`std/text`: NFC/NFD/NFKC/NFKD** (§71.5, el slugify de raysite transliterando a mano). Las
+  tablas de descomposición/composición de UnicodeData.txt son exactamente la clase de datos que
+  NO se transcribe artesanal: crate `unicode-normalization` (unicode-rs, el de rustc/servo, cero
+  deps transitivas) envuelto en `ray-runtime` tras la feature `unicode` — el patrón hasher/M126:
+  mismo código en la VM (feature de toolchain, activa por defecto; slim = error claro del stub) y
+  en el nativo (detectada POR USO, `--without unicode` disponible). Primitivo único
+  `__unicode_normalize(s, form)` + 4 wrappers en `std/text` (`nfc`/`nfd`/`nfkc`/`nfkd`) con la
+  forma como literal. El caso de uso del hallazgo queda en el test: slug accent-insensitive =
+  NFD + descartar combinantes U+0300..U+036F + lower.
+- **`net/mail`: las codificaciones de correo** (§71.4, raymail escribiéndolas a mano). Raylang
+  puro (el módulo NO habla SMTP — produce los strings que el cliente SMTP escribe al socket):
+  `encoded_word` (RFC 2047 B-encoding, words de ≤75 chars cortando en frontera UTF-8 — un
+  carácter partido es ilegal), `header` (plegado a 78 con continuación de un espacio, RFC 5322),
+  `base64_body` (76 columnas + CRLF, RFC 2045), `dot_stuff` (normaliza a CRLF y dobla el punto
+  inicial, RFC 5321 — el cuerpo no puede colar el terminador) y `address` (mailbox con
+  display-name: atext tal cual, comillas con escape, no-ASCII → encoded-word). Goldens
+  verificados a mano contra las RFC, ambos motores.

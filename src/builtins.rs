@@ -1249,6 +1249,12 @@ pub fn peer_addr(h: i64) -> Result<String, String> {
     }
 }
 
+/// M131: normalización Unicode (NFC/NFD/NFKC/NFKD) — delega en ray-runtime (mismo código que el
+/// binario transpilado → byte-idéntico). Sin la feature `unicode` (build slim), error claro.
+pub fn unicode_normalize(s: &str, form: &str) -> Result<String, String> {
+    ray_runtime::unicode::normalize(s, form)
+}
+
 /// M130: termina el PROCESO con `code`, flusheando stdout/stderr antes (la salida de `print`
 /// pendiente no se pierde). Compartido por intérprete y VM; el nativo emite su propio helper.
 pub fn process_exit(code: i64) -> ! {
@@ -2873,6 +2879,15 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "panic", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("panic expects a string, not {}", a[0]))); }
         Ok(Type::Unit)
+    } },
+    // __unicode_normalize(s, form) -> string (M131): normaliza `s` a la forma Unicode pedida
+    // ("nfc"/"nfd"/"nfkc"/"nfkd"). Los wrappers de std/text (nfc/nfd/nfkc/nfkd) lo llaman con la
+    // forma como literal; forma desconocida o build slim = error de ejecución claro.
+    Builtin { name: "__unicode_normalize", opcode: OpCode::UnicodeNormalize, check: |a| {
+        arity(a, 2, "__unicode_normalize", " (s, form)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__unicode_normalize expects a string, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__unicode_normalize expects a string (the form), not {}", a[1]))); }
+        Ok(Type::String)
     } },
     // exit(code) -> unit (M130): termina el PROCESO con ese código, desde cualquier fibra (flushea
     // stdout/stderr antes). Diverge como `panic` (el análisis de divergencia lo conoce); a

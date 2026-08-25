@@ -242,6 +242,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     if t.needs_rt_tls {
         t.needs_net = true;
     }
+    // M131: normalización Unicode — mismo código que la VM (ray_runtime::unicode). El Err (forma
+    // desconocida; imposible desde los wrappers de std/text) aborta byte-idéntico a la VM.
+    if t.needs_rt_unicode {
+        out.push_str("fn __ray_unicode_normalize(s: &str, form: &str) -> Rc<str> { match ray_runtime::unicode::normalize(s, form) { Ok(o) => Rc::<str>::from(o), Err(e) => __ray_rt_err(&e) } }\n");
+    }
     // F2 (--fibers): el CONTEXTO POR-TAREA que en el modelo de hilos eran thread-locals
     // (cancelación, pila de scopes, profundidad de try_call, caché de sockets y sus timeouts).
     // Con fibras que pueden reanudarse en otro worker, ese estado viaja EN LA FIBRA: vive en el

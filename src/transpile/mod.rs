@@ -117,6 +117,7 @@ struct Transpiler {
     needs_rt_sqlite: bool,
     /// R5: el programa ejecuta std/regex → feature `regex` de ray-runtime (motor acelerado).
     pub(super) needs_rt_regex: bool,
+    pub(super) needs_rt_unicode: bool,
     /// M100: ¿usa `__run` (procesos del SO)? El helper `__ray_run` llama a `ray_runtime::process`
     /// (el MISMO código que la VM). Activa la feature `process` (sin deps; fuerza la vía Cargo).
     needs_rt_process: bool,
@@ -265,6 +266,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_rt_tls: false,
         needs_rt_sqlite: false,
         needs_rt_regex: false,
+        needs_rt_unicode: false,
         needs_rt_process: false,
         exclude: exclude.iter().cloned().collect(),
         cells: std::collections::HashSet::new(),
@@ -526,6 +528,10 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     // `--without regex` ya evitó marcar el flag y la Pike VM raylang se transpila tal cual).
     if t.needs_rt_regex {
         rt_features.push("regex");
+    }
+    // M131: normalización Unicode (detectada por USO del primitivo, como crypto/tls/sqlite).
+    if t.needs_rt_unicode {
+        rt_features.push("unicode");
     }
     // M100: procesos del SO (detectado por USO de `__run`, como crypto/tls/sqlite; `--without
     // process` es gating de POLÍTICA — el builtin cae al Err de "no soportado", no hay crate detrás).

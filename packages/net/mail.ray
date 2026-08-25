@@ -1,0 +1,177 @@
+// M131 — las codificaciones de correo que raymail escribió a mano (IDEAS §71.4): RFC 2047
+// encoded-words para cabeceras no-ASCII, plegado de cabeceras a 78 columnas (RFC 5322), base64
+// de cuerpo a 76 columnas (RFC 2045) y dot-stuffing (RFC 5321). Ninguna es difícil; todas son
+// fáciles de hacer sutilmente mal — por eso viven aquí y no en cada app.
+//
+// Raylang puro sobre std/base64 + StringBuilder. Este módulo NO habla SMTP: produce los strings
+// que un cliente SMTP (net.tcp_connect + tls_upgrade, como raymail) escribe al socket.
+import std/base64;
+import std/collections/stringbuilder as sb;
+
+// ¿La cadena es ASCII imprimible (sin necesidad de encoded-word)?
+fn is_ascii_printable(s: string) -> bool {
+    var ok = true;
+    for c in s.chars() {
+        let code = char_code(c);
+        if (code > 126 || code < 32) {
+            ok = false;
+        }
+    }
+    ok
+}
+
+// Los octetos UTF-8 que caben en un encoded-word: el total no debe pasar de 75 chars
+// (RFC 2047 §2) — "=?UTF-8?B?" (10) + "?=" (2) = 12 de sobrecarga → 63 de base64 → 45 octetos.
+const WORD_MAX_BYTES: int = 45;
+
+// Parte `s` en trozos de <= WORD_MAX_BYTES octetos UTF-8, cortando SIEMPRE en frontera de
+// carácter (un encoded-word con un carácter partido es ilegal, RFC 2047 §5).
+fn chunk_by_bytes(s: string) -> [string] {
+    var out: [string] = [];
+    var cur = "";
+    var cur_bytes = 0;
+    for c in s.chars() {
+        let n = to_string(c).to_bytes().len();
+        if (cur_bytes + n > WORD_MAX_BYTES && cur.len() > 0) {
+            out.push(cur);
+            cur = "";
+            cur_bytes = 0;
+        }
+        cur = cur + to_string(c);
+        cur_bytes = cur_bytes + n;
+    }
+    if (cur.len() > 0) {
+        out.push(cur);
+    }
+    out
+}
+
+// Un solo encoded-word B (ya acotado en octetos por el llamador).
+fn one_word(s: string) -> string {
+    "=?UTF-8?B?" + base64.base64(s.to_bytes()) + "?="
+}
+
+/// RFC 2047 encoded-word(s) for a header value: ASCII printable text is returned as-is;
+/// anything else becomes `=?UTF-8?B?...?=` words of at most 75 characters, split at UTF-8
+/// character boundaries and separated by spaces (decoders join adjacent words dropping the
+/// whitespace between them).
+pub fn encoded_word(text: string) -> string {
+    if (is_ascii_printable(text)) {
+        return text;
+    }
+    var out = "";
+    var first = true;
+    for part in chunk_by_bytes(text) {
+        if (!first) {
+            out = out + " ";
+        }
+        out = out + one_word(part);
+        first = false;
+    }
+    out
+}
+
+/// One complete header line, encoded and FOLDED: `Name: value` with the value passed through
+/// `encoded_word` and the result folded at 78 characters per line (continuation lines start
+/// with a single space; CRLF line endings, RFC 5322 §2.2.3). Folding only happens at spaces.
+pub fn header(name: string, value: string) -> string {
+    let full = name + ": " + encoded_word(value);
+    let words = full.split(" ");
+    let b = sb.new();
+    var line = "";
+    var i = 0;
+    while (i < words.len()) {
+        if (line.len() == 0) {
+            line = words[i];
+        } else if (line.len() + 1 + words[i].len() <= 78) {
+            line = line + " " + words[i];
+        } else {
+            sb.push(b, line);
+            sb.push(b, "\r\n");
+            // La línea de continuación arranca con UN espacio (el plegado ES el separador).
+            line = " " + words[i];
+        }
+        i = i + 1;
+    }
+    sb.push(b, line);
+    sb.push(b, "\r\n");
+    sb.build(b)
+}
+
+/// A base64 body: the data encoded and wrapped at 76 columns with CRLF line endings
+/// (RFC 2045 §6.8) — the `Content-Transfer-Encoding: base64` form of an attachment.
+pub fn base64_body(data: bytes) -> string {
+    let enc = base64.base64(data);
+    let b = sb.new();
+    var i = 0;
+    while (i < enc.len()) {
+        var j = i + 76;
+        if (j > enc.len()) {
+            j = enc.len();
+        }
+        sb.push(b, enc.substring(i, j));
+        sb.push(b, "\r\n");
+        i = j;
+    }
+    sb.build(b)
+}
+
+/// Dot-stuffing for a DATA body (RFC 5321 §4.5.2): normalizes line endings to CRLF and doubles
+/// the leading dot of any line that starts with one, so the body cannot smuggle the `CRLF.CRLF`
+/// terminator. The terminator itself is NOT appended — that is the sender's job.
+pub fn dot_stuff(body: string) -> string {
+    let b = sb.new();
+    let cs = body.chars();
+    var i = 0;
+    var at_line_start = true;
+    while (i < cs.len()) {
+        let c = cs[i];
+        if (c == '\r') {
+            // Un \r suelto o el arranque de un \r\n: normaliza ambos a CRLF.
+            sb.push(b, "\r\n");
+            if (i + 1 < cs.len() && cs[i + 1] == '\n') {
+                i = i + 1;
+            }
+            at_line_start = true;
+        } else if (c == '\n') {
+            sb.push(b, "\r\n");
+            at_line_start = true;
+        } else {
+            if (at_line_start && c == '.') {
+                sb.push(b, ".");
+            }
+            sb.push(b, to_string(c));
+            at_line_start = false;
+        }
+        i = i + 1;
+    }
+    sb.build(b)
+}
+
+// ¿El display-name necesita comillas? (RFC 5322: fuera de atext — puntos, comas, etc.)
+fn needs_quoting(s: string) -> bool {
+    var q = false;
+    for c in s.chars() {
+        let is_atext = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' || c == '/' || c == '=' || c == '?' || c == '^' || c == '_' || c == '`' || c == '{' || c == '|' || c == '}' || c == '~';
+        if (!is_atext) {
+            q = true;
+        }
+    }
+    q
+}
+
+/// A mailbox for a `From:`/`To:` header: `Display <user@host>`. A non-ASCII display name
+/// becomes encoded-word(s); an ASCII one with characters outside atext (dots, commas) is
+/// quoted with `"` and `\` escaped. An empty display name yields just `<user@host>`.
+pub fn address(display: string, email: string) -> string {
+    if (display.len() == 0) {
+        return "<" + email + ">";
+    }
+    if (!is_ascii_printable(display)) {
+        return encoded_word(display) + " <" + email + ">";
+    }
+    if (needs_quoting(display)) {
+        return "\"" + display.replace("\\", "\\\\").replace("\"", "\\\"") + "\" <" + email + ">";
+    }
+    display + " <" + email + ">"
+}

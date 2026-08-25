@@ -736,7 +736,7 @@ fn cmd_build(args: &[String]) {
         }
     }
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch"];
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch", "unicode"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(
@@ -935,6 +935,7 @@ const RT_FIBERS_RS: &str = include_str!("../crates/ray-runtime/src/fibers.rs");
 const RT_PROCESS_RS: &str = include_str!("../crates/ray-runtime/src/process.rs");
 const RT_WATCH_RS: &str = include_str!("../crates/ray-runtime/src/watch.rs");
 const RT_X509_RS: &str = include_str!("../crates/ray-runtime/src/x509.rs");
+const RT_UNICODE_RS: &str = include_str!("../crates/ray-runtime/src/unicode.rs");
 
 /// Camino Cargo: el programa usa un subsistema con crate externo (cripto/…). Se genera un proyecto Cargo
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
@@ -981,6 +982,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("src/main.rs", rust),
         ("ray-runtime/Cargo.toml", RT_CARGO_TOML),
         ("ray-runtime/src/lib.rs", RT_LIB_RS),
+        ("ray-runtime/src/unicode.rs", RT_UNICODE_RS),
         ("ray-runtime/src/crypto.rs", RT_CRYPTO_RS),
         ("ray-runtime/src/tls.rs", RT_TLS_RS),
         ("ray-runtime/src/sqlite.rs", RT_SQLITE_RS),

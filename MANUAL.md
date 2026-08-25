@@ -881,7 +881,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
 
    ```rust
    import std/math;          // math.gcd(12, 18), math.PI, math.clamp(x, 0, 10)
-   import std/text;          // text.capitalize("hola"), text.pad_left("7", 3, "0")
+   import std/text;          // text.capitalize("hola"), text.nfd("café") — normalización Unicode
    import std/sort;          // sort.binary_search(xs, 42), sort.dedup(xs)
    import std/fs;            // fs.read_file("x.txt") -> Result<string, string>
    import std/json;          // json.parse(s) -> Result<Json, string>, json.stringify(j)
@@ -1499,11 +1499,11 @@ primer día):
 
 ### La pila de protocolos (`packages/net`, dependencia)
 
-24 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
+25 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
 async con SSE (`webserver`; respuestas comprimidas con `webserver.gzip(req, resp)` — negocia
 `Accept-Encoding` por handler), WebSocket (cliente y servidor, ws/wss), HTTP/2 + gRPC, DNS (7 tipos de
 registro + caché), Redis, OAuth2, JWT (HS256/EdDSA), SCRAM, AWS SigV4, cookies, logging JSON, métricas
-Prometheus, fechas UTC, tracing distribuido W3C (`trace`). Se declara como dependencia (`net = "path:…"` o git) y:
+Prometheus, fechas UTC, tracing distribuido W3C (`trace`), y las codificaciones de correo (`mail`: RFC 2047 encoded-words, plegado de cabeceras, base64 a 76 columnas, dot-stuffing — lo que un cliente SMTP escribe al socket). Se declara como dependencia (`net = "path:…"` o git) y:
 
 ```rust
 import net/http;

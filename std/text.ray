@@ -124,3 +124,33 @@ pub fn lines(s: string) -> [string] {
     }
     out
 }
+
+// --- M131: normalización Unicode ---
+// Dos strings visualmente idénticos pueden diferir en octetos ("é" precompuesto U+00E9 vs
+// "e"+U+0301 combinante): comparar, deduplicar o hacer un slug exige normalizar primero. Las
+// formas C/D (canónicas) preservan el texto; las K (de compatibilidad) además aplanan variantes
+// de presentación ("ﬁ" → "fi", "²" → "2") — para slugs/búsqueda, no para mostrar.
+
+/// Normalizes to NFC (canonical composition): the precomposed form ("e" + combining acute →
+/// "é"). The form most text expects; use it before comparing or storing user input.
+pub fn nfc(s: string) -> string {
+    __unicode_normalize(s, "nfc")
+}
+
+/// Normalizes to NFD (canonical decomposition): base characters + combining marks ("é" → "e" +
+/// U+0301). Strip the combining marks after this for accent-insensitive slugs/search.
+pub fn nfd(s: string) -> string {
+    __unicode_normalize(s, "nfd")
+}
+
+/// Normalizes to NFKC (compatibility composition): like NFC but also folds presentation
+/// variants ("ﬁ" → "fi", "²" → "2"). For identifiers/search keys, not for display.
+pub fn nfkc(s: string) -> string {
+    __unicode_normalize(s, "nfkc")
+}
+
+/// Normalizes to NFKD (compatibility decomposition): like NFD plus compatibility folding.
+/// The usual first step of a slugify (decompose, drop marks, lowercase).
+pub fn nfkd(s: string) -> string {
+    __unicode_normalize(s, "nfkd")
+}

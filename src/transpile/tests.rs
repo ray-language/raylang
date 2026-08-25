@@ -24,7 +24,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // Math (interceptados vía `std::math::*` en el sitio del wrapper).
     "__acos", "__asin", "__atan", "__atan2", "__ceil", "__cos", "__exp", "__floor", "__float_bits",
     "__float_from_bits", "__ln", "__log10", "__log2", "__pow", "__round", "__sin", "__sqrt", "__tan",
-    "__trunc",
+    "__trunc", "__unicode_normalize",
     // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
     "__is_dir", "__is_file", "__list_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",

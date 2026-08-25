@@ -2772,12 +2772,18 @@ hash_update + hash_final, digest idéntico al de una pasada, estado en el runtim
 aparca (backpressure) y reconexión automática tras un fallo. (Se descartó multiplexar por id sobre
 una conexión: el servidor procesa en serie por conexión — no compraría paralelismo.)
 
+**[EJECUTADAS — M128, DESIGN §125]** El lote de menores de std: regex con grupos con nombre
+(§63.3: `(?P<name>)`/`(?<name>)` + `group_names` + `captures_map`, la vía acelerada intacta), csv
+incremental (§63.4: `parser`/`feed`/`finish`, `parse_csv` reescrito encima), `[[toml]]` (§65.3:
+aplanado como `ruta.N.clave` + `toml_array_len`) y `jwt_verify_claims` (§65.5: firma + `exp`/`nbf`
+en una llamada). De pasada, los errores de regex/csv pasan a inglés.
+
 **Con esto, TODOS los hallazgos con hito del dogfood de 14 apps están ejecutados.** Quedan solo
-los menores anotados en sus tandas (normalización Unicode §71.5, `std/mail` §71.4, csv
-incremental §63.4, regex con nombres §63.3, `[[toml]]` §65.3, `jwt_verify_claims` §65.5,
+los menores anotados en sus tandas (normalización Unicode §71.5, `std/mail` §71.4,
 `guard` → `admit`/`report` §65.4, listeners zombis de `ray test` §65.2, Accept-Encoding,
-half-close §64.3, `exit(code)` §64.6, hora local §42) y las validaciones de ecosistema (gRPC
-dogfood §72.4, VPS 24/7 de rayrelay).
+half-close §64.3, `exit(code)` §64.6, hora local §42), el barrido de errores de stdlib aún en
+español (json/toml/inflate…, cf. M128) y las validaciones de ecosistema (gRPC dogfood §72.4,
+VPS 24/7 de rayrelay).
 
 ## Cómo usar este archivo
 

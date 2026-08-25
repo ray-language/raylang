@@ -1,6 +1,14 @@
 // M81 — demo de la Pike VM: grupos de captura, {n,m} y cuantificadores lazy.
 // Lo verifica `tests/regex_cli.rs` (golden, ambos motores).
-from regex import captures_str, find, find_all, replace_all, full_match;
+from regex import
+    captures_str,
+    find,
+    find_all,
+    replace_all,
+    full_match,
+    compile,
+    group_names,
+    captures_map;
 
 fn show_caps(pat: string, text: string) {
     match (captures_str(pat, text)) {
@@ -72,5 +80,37 @@ fn main() -> int {
     // find_all / replace_all sobre el motor nuevo (compat).
     print(join(find_all("\\d+", "a1 b22 c333"), ","));
     print(replace_all("\\s+", "a  b   c", "_"));
+    // M128: grupos con NOMBRE — (?P<name>...) y (?<name>...), mismo índice posicional.
+    let re = match (compile("(?P<y>\\d{4})-(?<m>\\d{2})-(\\d{2})")) {
+        Result.Ok(r) => r,
+        Result.Err(e) => {
+            print("compile err: " + e);
+            return 1;
+        },
+    };
+    print("names [" + join(group_names(re), ",") + "]");
+    match (captures_map(re, "log 2026-08-25 fin")) {
+        Option.Some(m) => {
+            for k in sort(m.keys()) {
+                match (get(m, k)) {
+                    Option.Some(v) => print("cap " + k + "=" + v),
+                    Option.None => { },
+                }
+            }
+        },
+        Option.None => print("cap <none>"),
+    }
+    match (captures_map(re, "sin fecha")) {
+        Option.Some(_m) => print("cap inesperado"),
+        Option.None => print("cap <none>"),
+    }
+    match (compile("(?P<a>x)(?P<a>y)")) {
+        Result.Ok(_r) => print("dup inesperado"),
+        Result.Err(e) => print("comp err: " + e),
+    }
+    match (compile("(?P<9x>y)")) {
+        Result.Ok(_r) => print("digit inesperado"),
+        Result.Err(e) => print("comp err: " + e),
+    }
     0
 }

@@ -7,75 +7,122 @@
 // M59.5: el writer acumula en StringBuilder (O(n)); en el parser los campos siguen con `+` por
 // carácter — el coste es cuadrático solo en el LARGO DEL CAMPO (cortos en la práctica), y la
 // alternativa (substring por rachas) es peor: substring indexa por carácter y escanea desde 0.
+//
+// M128: parser INCREMENTAL (push). `parser()` + `feed(p, chunk)` + `finish(p)` procesan el
+// documento por trozos con memoria O(fila): apto para archivos que no caben en RAM (léelos con
+// fs.read_bytes) o para streams. Los trozos pueden cortar POR CUALQUIER SITIO (medio campo,
+// medio `""`, medio CRLF): el estado sobrevive entre feeds. `parse_csv` es feed+finish de un
+// solo trozo — una sola verdad.
 import std/collections/stringbuilder as sb;
 
-// Parsea un documento CSV a filas de campos. Los campos entrecomillados (`"..."`) admiten comas, saltos
-// de línea y comillas escapadas como `""`. Acepta finales de línea LF o CRLF.
-/// Parses a CSV document (RFC 4180) into rows of string fields. Quoted fields (`"..."`) may
-/// contain commas, newlines, and quotes escaped as `""`; accepts LF or CRLF line endings.
-/// Returns `Err` on an unterminated quoted field.
-pub fn parse_csv(src: string) -> Result<[[string]], string> {
-    let cs = src.chars();
-    let n = cs.len();
-    var rows: [[string]] = [];
+// El estado del parser incremental. `state`: 0 = campo normal, 1 = dentro de comillas,
+// 2 = comilla vista dentro de comillas (¿escape `""` o cierre?). `alive` = hay fila/campo
+// en curso (para flushear el final sin `\n`).
+pub struct Parser {
+    state: int,
+    field: string,
+    row: [string],
+    alive: bool,
+}
+
+/// Creates an incremental (push) CSV parser. Feed it chunks with `feed` and flush the tail
+/// with `finish`; chunks may split the input anywhere (mid-field, mid-quote, mid-CRLF).
+pub fn parser() -> Parser {
     var row: [string] = [];
-    var field = "";
-    var vivo = false;  // ¿hay una fila/campo en curso? (para flushear el final sin `\n`)
+    Parser { state: 0, field: "", row: row, alive: false }
+}
+
+/// Feeds one chunk to the parser and returns the rows COMPLETED by it (possibly empty).
+/// Same dialect as `parse_csv` (RFC 4180, `""` escapes, LF or CRLF).
+pub fn feed(p: Parser, chunk: string) -> [[string]] {
+    let cs = chunk.chars();
+    let n = cs.len();
+    var out: [[string]] = [];
     var i = 0;
     while (i < n) {
         let c = cs[i];
-        if (c == '"') {
-            vivo = true;
+        if (p.state == 1) {
+            // Dentro de comillas: una comilla puede ser cierre o el arranque de un escape `""`;
+            // la decisión se pospone al SIGUIENTE carácter (estado 2), que puede llegar en otro feed.
+            if (c == '"') {
+                p.state = 2;
+            } else {
+                p.field = p.field + to_string(c);
+            }
             i = i + 1;
-            var cerrado = false;
-            while (!cerrado && i < n) {
-                let d = cs[i];
-                if (d == '"') {
-                    if (i + 1 < n && cs[i + 1] == '"') {
-                        field = field + "\"";  // comilla escapada
-                        i = i + 2;
-                    } else {
-                        cerrado = true;
-                        i = i + 1;
-                    }
-                } else {
-                    field = field + to_string(d);
-                    i = i + 1;
-                }
+        } else if (p.state == 2) {
+            if (c == '"') {
+                // Escape `""`: una comilla literal, seguimos dentro.
+                p.field = p.field + "\"";
+                p.state = 1;
+                i = i + 1;
+            } else {
+                // Era el cierre: reprocesa `c` como campo normal (sin consumir).
+                p.state = 0;
             }
-            if (!cerrado) {
-                return Result.Err("comilla sin cerrar en el CSV");
-            }
+        } else if (c == '"') {
+            p.state = 1;
+            p.alive = true;
+            i = i + 1;
         } else if (c == ',') {
-            row.push(field);
-            field = "";
-            vivo = true;
+            p.row.push(p.field);
+            p.field = "";
+            p.alive = true;
             i = i + 1;
         } else if (c == '\n') {
-            row.push(field);
-            rows.push(row);
-            row = [];
-            field = "";
-            vivo = false;
+            p.row.push(p.field);
+            out.push(p.row);
+            p.row = [];
+            p.field = "";
+            p.alive = false;
             i = i + 1;
         } else if (c == '\r') {
             i = i + 1;  // se ignora (parte de CRLF)
         } else {
-            field = field + to_string(c);
-            vivo = true;
+            p.field = p.field + to_string(c);
+            p.alive = true;
             i = i + 1;
         }
     }
-    // Flushea la última fila si el documento no terminó en salto de línea.
-    if (vivo || field.len() > 0 || row.len() > 0) {
-        row.push(field);
-        rows.push(row);
+    out
+}
+
+/// Ends the stream: returns the final row if the input did not end with a newline
+/// (zero or one row), or `Err` on an unterminated quoted field.
+pub fn finish(p: Parser) -> Result<[[string]], string> {
+    if (p.state == 1) {
+        return Result.Err("csv: unterminated quoted field");
+    }
+    // Estado 2 al EOF = la comilla era el cierre.
+    p.state = 0;
+    var out: [[string]] = [];
+    if (p.alive || p.field.len() > 0 || p.row.len() > 0) {
+        p.row.push(p.field);
+        out.push(p.row);
+        p.row = [];
+        p.field = "";
+        p.alive = false;
+    }
+    Result.Ok(out)
+}
+
+// Parsea un documento CSV a filas de campos. Los campos entrecomillados (`"..."`) admiten comas,
+// saltos de línea y comillas escapadas como `""`. Acepta finales de línea LF o CRLF.
+/// Parses a CSV document (RFC 4180) into rows of string fields. Quoted fields (`"..."`) may
+/// contain commas, newlines, and quotes escaped as `""`; accepts LF or CRLF line endings.
+/// Returns `Err` on an unterminated quoted field.
+pub fn parse_csv(src: string) -> Result<[[string]], string> {
+    let p = parser();
+    var rows = feed(p, src);
+    let tail = finish(p)?;
+    for r in tail {
+        rows.push(r);
     }
     Result.Ok(rows)
 }
 
 // ¿Necesita `s` entrecomillado al escribir? (contiene coma, comilla, CR o LF).
-fn necesita_comillas(s: string) -> bool {
+fn needs_quoting(s: string) -> bool {
     var q = false;
     var i = 0;
     while (i < s.len()) {
@@ -91,7 +138,7 @@ fn necesita_comillas(s: string) -> bool {
 // Escribe un campo, entrecomillándolo y escapando las comillas si hace falta.
 // M59.5: la comilla interior se escapa duplicando por rachas (replace nativo, O(n)).
 fn write_field(s: string) -> string {
-    if (!necesita_comillas(s)) {
+    if (!needs_quoting(s)) {
         return s;
     }
     "\"" + s.replace("\"", "\"\"") + "\""
@@ -104,13 +151,13 @@ pub fn write_csv(rows: [[string]]) -> string {
     let b = sb.new();
     var r = 0;
     while (r < rows.len()) {
-        let fila = rows[r];
+        let row = rows[r];
         var c = 0;
-        while (c < fila.len()) {
+        while (c < row.len()) {
             if (c > 0) {
                 sb.push(b, ",");
             }
-            sb.push(b, write_field(fila[c]));
+            sb.push(b, write_field(row[c]));
             c = c + 1;
         }
         sb.push(b, "\n");

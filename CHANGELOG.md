@@ -37,11 +37,15 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
-- **Pool de conexiones en `packages/rpc`** (M127) — `pool(host, port, size)` +
-  `pool_call[_deadline/_full]` + `pool_close`: hasta `size` llamadas EN VUELO a la vez (una
-  conexión por hueco = paralelismo real del lado servidor), checkout que aparca al agotarse
-  (backpressure por canal acotado) y RECONEXIÓN automática tras un timeout — el "disconnect y
-  reconecta" manual desaparece.
+- **El lote de menores de std** (M128) — cuatro cierres de dogfood en raylang puro:
+  `std/regex` con **grupos con nombre** (`(?P<n>…)`/`(?<n>…)` + `group_names` +
+  `captures_map(re, s) -> Option<Map<string, string>>`; la vía acelerada por crate sigue intacta);
+  `std/csv` **incremental** (`parser`/`feed`/`finish` — los trozos pueden cortar por medio de un
+  campo, de un `""` o de un CRLF; `parse_csv` reescrito encima); `std/toml` con **arreglos de
+  tablas `[[ruta]]`** (aplanados como `ruta.N.clave` + `toml_array_len`); y
+  **`jwt_verify_claims(secret, token, now_ms)`** en `packages/net` (firma + `exp`/`nbf` en una
+  llamada; errores estables `"token expired"`/`"token not yet valid"`). De pasada, los errores de
+  regex/csv pasan a inglés (`"regex: missing ')'"`…).
 - **Pool de conexiones en `packages/rpc`** (M127) — `pool(host, port, size)` +
   `pool_call[_deadline/_full]` + `pool_close`: hasta `size` llamadas EN VUELO a la vez (una
   conexión por hueco = paralelismo real del lado servidor), checkout que aparca al agotarse

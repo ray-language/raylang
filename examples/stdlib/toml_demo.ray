@@ -1,6 +1,6 @@
 // Demo de TOML: parsea un documento con comentarios, tablas, y valores string/int/float/bool/array,
 // y muestra cada valor por su ruta con puntos.
-from toml import parse_toml, toml_get, toml_show, TomlValue, TomlEntry;
+from toml import parse_toml, toml_get, toml_show, toml_array_len, TomlValue, TomlEntry;
 
 fn show_key(entries: [TomlEntry], key: string) {
     match (toml_get(entries, key)) {
@@ -67,6 +67,28 @@ fn main() {
         Result.Err(e) => print("err: " + e),
     }
     match (parse_toml("a = 1 b = 2")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
+
+    // M128 — arreglos de tablas [[ruta]]: cada cabecera abre un elemento nuevo (ruta.N.clave).
+    let aot = "[[route]]\npath = \"/a\"\nport = 1\n[[route]]\npath = \"/b\"\n[server]\nhost = \"x\"\n";
+    match (parse_toml(aot)) {
+        Result.Ok(entries) => {
+            show_key(entries, "route.0.path");
+            show_key(entries, "route.0.port");
+            show_key(entries, "route.1.path");
+            show_key(entries, "server.host");
+            print("route len = " + to_string(toml_array_len(entries, "route")));
+            print("nope len = " + to_string(toml_array_len(entries, "nope")));
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("[[]]\nk = 1\n")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("[[bad\nk = 1\n")) {
         Result.Ok(entries) => print("no debería parsear"),
         Result.Err(e) => print("err: " + e),
     }

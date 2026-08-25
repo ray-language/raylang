@@ -355,9 +355,43 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
     let t = TS { cs: src.chars(), pos: 0 };
     var entries: [TomlEntry] = [];
     var table = "";
+    // M128: contadores de `[[ruta]]` — cuántos elementos lleva cada arreglo de tablas.
+    var aot_paths: [string] = [];
+    var aot_counts: [int] = [];
     skip_trivia(t);
     while (!ts_end(t)) {
-        if (ts_peek(t) == '[') {
+        if (ts_peek(t) == '[' && t.pos + 1 < t.cs.len() && t.cs[t.pos + 1] == '[') {
+            // M128: `[[ruta]]` — arreglo de tablas. Cada cabecera abre un elemento NUEVO;
+            // sus claves se aplanan como `ruta.N.clave` (N = índice de aparición, desde 0).
+            ts_adv(t);
+            ts_adv(t);
+            let path = parse_key(t);
+            if (path == "") {
+                return Result.Err("empty array-of-tables header");
+            }
+            skip_spaces(t);
+            if (t.pos + 1 >= t.cs.len() || ts_peek(t) != ']' || t.cs[t.pos + 1] != ']') {
+                return Result.Err("missing ']]' in array-of-tables header");
+            }
+            ts_adv(t);
+            ts_adv(t);
+            var idx = 0 - 1;
+            var k = 0;
+            while (k < aot_paths.len()) {
+                if (aot_paths[k] == path) {
+                    idx = aot_counts[k];
+                    aot_counts[k] = idx + 1;
+                }
+                k = k + 1;
+            }
+            if (idx < 0) {
+                idx = 0;
+                aot_paths.push(path);
+                aot_counts.push(1);
+            }
+            table = path + "." + to_string(idx);
+            expect_eol(t, "la cabecera de tabla [[" + path + "]]")?;
+        } else if (ts_peek(t) == '[') {
             ts_adv(t);
             table = parse_key(t);
             if (table == "") {
@@ -437,4 +471,27 @@ pub fn toml_show(v: TomlValue) -> string {
             s + "]"
         },
     }
+}
+
+// M128: cuántos elementos tiene el arreglo de tablas `[[path]]` (aplanado como `path.N.…`).
+/// Number of elements in the `[[path]]` array of tables (entries are flattened as
+/// `path.0.key`, `path.1.key`, …). Returns 0 if the document has no such array.
+pub fn toml_array_len(entries: [TomlEntry], path: string) -> int {
+    var n = 0;
+    var found = true;
+    while (found) {
+        found = false;
+        let prefix = path + "." + to_string(n) + ".";
+        var i = 0;
+        while (!found && i < entries.len()) {
+            if (entries[i].key.starts_with(prefix)) {
+                found = true;
+            }
+            i = i + 1;
+        }
+        if (found) {
+            n = n + 1;
+        }
+    }
+    n
 }

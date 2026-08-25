@@ -1687,14 +1687,23 @@ fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
             }
         }
     }
-    // M134: la cara se carga con `project_root` = el PADRE del clon (`<base>`, con el clon como
-    // `<base>/<nombre>`) — exactamente la geometría de `.ray-deps/<nombre>` en el consumidor: la
-    // entrada toma la identidad de cápsula (`greeting`, no `mod`) y sus imports internos
-    // calificados (`import greeting/shout;`) pasan el borde de cápsula igual que al consumirla.
-    let face_src = fs::read_to_string(face)
-        .map_err(|e| format!("could not read the package face: {e}"))?;
+    // M134/M135b: la cara se valida EXACTAMENTE como la verá un consumidor — con una entrada
+    // SINTÉTICA que la importa desde `<base>` (el clon vive como `<base>/<nombre>`, la geometría
+    // de `.ray-deps/`). Cargarla directamente como entrada era una geometría que ningún
+    // consumidor ve: los módulos del paquete llegaban con nombres PELADOS (no namespacados) y
+    // reglas como la de redefinición-de-builtin (que exime `M::f`) fallaban en falso — una
+    // función privada `send` de un módulo del paquete es legal para todo consumidor real.
     let base = tmp.parent().unwrap_or(tmp);
-    let mut loaded = crate::loader::load_source_module(face, &face_src, base, &roots)
+    let pkg_name = tmp.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let import_path = if face.file_name().is_some_and(|n| n == "mod.ray") {
+        pkg_name.clone()
+    } else {
+        let stem = face.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        format!("{pkg_name}/{stem}")
+    };
+    let synth = format!("import {import_path};\n");
+    let entry_path = base.join("__ray_publish_entry.ray");
+    let mut loaded = crate::loader::load_source_module(&entry_path, &synth, base, &roots)
         .map_err(|e| format!("the package does not load: {}", e.message))?;
     let errors = crate::checker::check_all_modulo(&mut loaded.program);
     if let Some(e) = errors.first() {

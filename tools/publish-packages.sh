@@ -16,8 +16,17 @@ ORG_SSH=git@github.com:ray-language
 ORG_HTTPS=https://github.com/ray-language
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
-RAY=${RAY:-$REPO_ROOT/target/release/ray}
-[ -x "$RAY" ] || RAY=$REPO_ROOT/target/debug/ray
+# El binario `ray` MÁS FRESCO de los dos perfiles (un release rancio sin los fixes del publish
+# es exactamente el accidente del estreno de M135b) — o el que fije $RAY.
+if [ -z "$RAY" ]; then
+    REL=$REPO_ROOT/target/release/ray
+    DBG=$REPO_ROOT/target/debug/ray
+    if [ -x "$REL" ] && [ -x "$DBG" ]; then
+        if [ "$REL" -nt "$DBG" ]; then RAY=$REL; else RAY=$DBG; fi
+    elif [ -x "$REL" ]; then RAY=$REL
+    else RAY=$DBG
+    fi
+fi
 [ -x "$RAY" ] || { echo "no 'ray' binary (build with: cargo build [--release])"; exit 66; }
 [ $# -ge 1 ] || { echo "usage: sh tools/publish-packages.sh <package> [<package>...]"; exit 64; }
 
@@ -35,14 +44,25 @@ for PKG in "$@"; do
     [ -n "$VERSION" ] || { echo "packages/$PKG/ray.toml has no version"; exit 65; }
     TAG=v$VERSION
 
-    # Inmutabilidad: si el tag ya existe en el espejo remoto, no se re-publica.
+    # Inmutabilidad: la fuente de verdad es el ÍNDICE. Si la versión ya tiene entrada, nada que
+    # hacer; si el TAG existe remoto pero el índice no la tiene (un run anterior a medias), se
+    # REANUDA: el contenido publicado es el del tag, solo falta su entrada.
+    if grep -q "^\[$VERSION\]" "$WORK/index/$PKG.toml" 2>/dev/null; then
+        echo "$PKG $TAG is already in the index (versions are immutable); bump the version"
+        continue
+    fi
+    MIRROR=$WORK/$PKG
     if git ls-remote --tags "$ORG_SSH/$PKG.git" "refs/tags/$TAG" 2>/dev/null | grep -q .; then
-        echo "$PKG $TAG is already published (versions are immutable); bump the version"
+        echo "$PKG $TAG exists in the mirror but not in the index; resuming its index entry"
+        git clone -q "$ORG_SSH/$PKG.git" "$MIRROR"
+        git -C "$MIRROR" checkout -q "$TAG"
+        (cd "$MIRROR" && RAY_INDEX="$WORK/index" "$RAY" registry publish \
+            --repo "git+$ORG_HTTPS/$PKG@$TAG")
+        PUBLISHED="$PUBLISHED $PKG@$VERSION"
         continue
     fi
 
     # Espejo: clon del repo de la org (o repo nuevo si aún está vacío) + snapshot del paquete.
-    MIRROR=$WORK/$PKG
     if ! git clone -q "$ORG_SSH/$PKG.git" "$MIRROR" 2>/dev/null; then
         mkdir -p "$MIRROR"
         git -C "$MIRROR" init -q
@@ -50,6 +70,17 @@ for PKG in "$@"; do
     fi
     find "$MIRROR" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
     (cd "$SRC" && tar cf - --exclude .ray-deps --exclude ray.lock .) | (cd "$MIRROR" && tar xf -)
+
+    # M135b: las path-deps entre paquetes hermanos (`x = "path:../x"`) se REESCRIBEN en el
+    # espejo a su URL git pinneada al tag de la versión ACTUAL del hermano en este monorepo —
+    # el espejo debe ser autocontenido (un consumidor no tiene el monorepo al lado). La
+    # resolución transitiva del consumidor (BFS de deps::ensure) sigue esa URL.
+    for DEPPATH in $(sed -n 's/^\([a-z_][a-z0-9_-]*\) = "path:\.\.\/\([a-z0-9_-]*\)"$/\2/p' "$MIRROR/ray.toml"); do
+        DEPV=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/packages/$DEPPATH/ray.toml" | head -1)
+        [ -n "$DEPV" ] || { echo "$PKG depends on packages/$DEPPATH which has no version"; exit 65; }
+        sed -i '' "s|= \"path:\.\./$DEPPATH\"|= \"git+$ORG_HTTPS/$DEPPATH@v$DEPV\"|" "$MIRROR/ray.toml"
+        echo "$PKG: rewrote dep $DEPPATH -> git+$ORG_HTTPS/$DEPPATH@v$DEPV"
+    done
 
     SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
     git -C "$MIRROR" add -A

@@ -53,7 +53,8 @@ export RAY_INDEX=/ruta/al/indice               # override (tests, CI)
 
 Un índice **remoto** se clona/cachea en `.ray-deps/.index` (lo refresca `ray update`).
 
-**Espejos de los paquetes oficiales** (M135): el desarrollo vive en `raylang/packages/<pkg>`;
+**Espejos de los paquetes oficiales** (M135/M135b — los seis publicados: `net` `db` `web`
+`rpc` `tz` `cron`, instalables con `ray add <pkg>`): el desarrollo vive en `raylang/packages/<pkg>`;
 `tools/publish-packages.sh <pkg>` publica cada versión como espejo de solo-lectura en
 `github.com/ray-language/<pkg>` (tag `vX.Y.Z` inmutable) y su entrada en `ray-index`. Los PRs a
 los paquetes van al monorepo, nunca al espejo.

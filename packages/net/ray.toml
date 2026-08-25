@@ -3,3 +3,4 @@
 [package]
 name = "net"
 version = "0.1.0"
+entry = "webserver.ray"

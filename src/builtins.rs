@@ -2496,6 +2496,17 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("try_recv expects a Channel<T>, not {}", other))),
         }
     } },
+    // M116.1: __select_timeout(chs, ms) -> [int] (0 o 1 elem): el índice listo, o vacío si vence el
+    // plazo. El prelude lo envuelve en Option<int> (select_timeout). Primitivo interno (con `__`).
+    Builtin { name: "__select_timeout", opcode: OpCode::SelectTimeout, check: |a| {
+        arity(a, 2, "__select_timeout", " (an array of channels, timeout ms)")?;
+        match &a[0] {
+            Type::Array(el) if matches!(&**el, Type::Channel(_)) => {}
+            other => return Err((Some(0), format!("__select_timeout expects a [Channel<T>], not {}", other))),
+        }
+        if a[1] != Type::Int { return Err((Some(1), format!("__select_timeout expects an int (the timeout in ms), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Int)))
+    } },
     // scope(body: fn() -> R) -> R: corre body; al volver, une todas las tareas lanzadas dentro y propaga
     // un fallo si lo hubo (M12.3 structured concurrency). El compilador lo baja con ScopeBegin/ScopeEnd.
     Builtin { name: "scope", opcode: OpCode::ScopeBegin, check: |a| {

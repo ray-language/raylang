@@ -1723,6 +1723,15 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow()[..])");
             }
+            // M116.1: select_timeout([chs], ms) -> Option<int>. -1 del helper → None; índice → Some(i).
+            "select_timeout" => {
+                self.needs_concurrency = true;
+                out.push_str("{ let __st_i = __ray_select_timeout(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(".borrow()[..], ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("); if __st_i < 0 { None } else { Some(__st_i) } }");
+            }
             // spawn(f) → __ray_spawn(move || {...}) → Task<T> (estado compartido, registrado en el scope
             // activo). scope(f) → __ray_scope(move || {...}): corre el cuerpo y une las tareas de dentro. `f`
             // es una función anónima literal `fn(){}` (captura valores Send, p. ej. canales) O el NOMBRE de
@@ -2331,6 +2340,8 @@ impl Transpiler {
                         Type::Channel(t) => opt_of(*t),
                         other => return Err(format!("recv on {:?} is not supported", other)),
                     },
+                    // M116.1: select_timeout([chs], ms) -> Option<int>.
+                    "select_timeout" => opt_of(Type::Int),
                     "push" | "insert" | "assert" | "assert_eq" => Type::Unit,
                     "char_from_code" => opt_of(Type::Char),
                     // Más string builtins como métodos manglados (`string#trim` → "trim"; sus filas de

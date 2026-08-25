@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Concurrencia: `select_timeout` — `select` con plazo** (M116.1, IDEAS §64) — `select_timeout(chs,
+  ms)` devuelve `Some(i)` con el canal listo o `None` al vencer los `ms` milisegundos; `ms = 0` es
+  un poll no bloqueante del conjunto. Es **event-driven** (despierta al llegar un canal, no sondea)
+  y cierra el hueco "espera datos O una orden de control **con un límite de tiempo**": reemplaza el
+  rodeo de un timer que enviaba a un canal solo para poder salir del `select`. Byte-idéntico entre
+  VM y nativo (el scheduler M:N despierta el select aparcado por canal-listo **o** por deadline).
+
 - **Concurrencia: `try_recv` — recepción de canal sin bloquear** (M116, IDEAS §64) — la pieza que
   tres apps rodearon con fibras lectoras + timers que enviaban bytes vacíos. `try_recv(ch)`
   devuelve el enum del prelude `Received<T>` (`Got(v)` / `Empty` / `Closed`), distinguiendo los

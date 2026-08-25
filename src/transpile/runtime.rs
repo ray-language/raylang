@@ -1170,6 +1170,32 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    drop(g);\n",
             "    __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
             "}\n",
+            // M116.1: espera de actividad ACOTADA (una sola vez). A diferencia de __ray_wait_activity
+            // (que bloquea HASTA que la generación cambie), retorna tras el despertar por notify (un
+            // canal listo) O el pulso de ~10 ms — el que llegue antes. Es lo que necesita
+            // select_timeout: su bucle re-escanea y re-chequea el deadline tras cada retorno, así el
+            // plazo vence aunque no haya ninguna actividad de canales que despierte.
+            "fn __ray_wait_activity_once(act: u64) {\n",
+            "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
+            "    let g = __RAY_ACT_M.lock().unwrap();\n",
+            "    if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
+        ));
+        if t.fibers {
+            out.push_str(concat!(
+                "        if ray_runtime::fibers::in_fiber() {\n",
+                "            let seen = __ray_act_wl().prepare();\n",
+                "            drop(g);\n",
+                "            if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act { ray_runtime::fibers::block_on(__ray_act_wl(), seen); }\n",
+                "        } else { let _ = __RAY_ACT_CV.wait_timeout(g, std::time::Duration::from_millis(10)); }\n",
+            ));
+        } else {
+            out.push_str("        let _ = __RAY_ACT_CV.wait_timeout(g, std::time::Duration::from_millis(10));\n");
+        }
+        out.push_str(concat!(
+            "    } else { drop(g); }\n",
+            "    if __ray_cancelled() { __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+            "    __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
+            "}\n",
             // Structured concurrency (M12.3) + contención de fallos (H21-N1) + cancelación de hermanas
             // (M12.5, H21-N3): Task<T> = estado compartido (resultado + condvar) que el HILO HIJO rellena
             // al terminar (push, no join) + un token de cancelación. El cuerpo corre bajo `catch_unwind`
@@ -1374,6 +1400,21 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            if !st.q.is_empty() || st.closed { return i as i64; }\n",
             "        }\n",
             "        __ray_wait_activity(act);\n",
+            "    }\n}\n",
+            // M116.1: select con PLAZO → índice listo, o -1 al vencer (el sitio lo envuelve en Option).
+            // ms <= 0 = poll no bloqueante (escanea una vez, -1 si nada). El despertar por canal listo
+            // es inmediato (notify de __ray_wait_activity); el vencimiento se nota en la vuelta siguiente
+            // (el pulso de actividad acota la latencia a la cadencia de cancelación, como el resto).
+            "fn __ray_select_timeout<T>(chs: &[__RayChan<T>], ms: i64) -> i64 {\n",
+            "    let deadline = if ms > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)) } else { None };\n",
+            "    loop {\n",
+            "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
+            "        for (i, ch) in chs.iter().enumerate() {\n",
+            "            let st = ch.inner.0.lock().unwrap();\n",
+            "            if !st.q.is_empty() || st.closed { return i as i64; }\n",
+            "        }\n",
+            "        match deadline { None => return -1, Some(d) => if std::time::Instant::now() >= d { return -1; } }\n",
+            "        __ray_wait_activity_once(act);\n",
             "    }\n}\n",
         ));
     }

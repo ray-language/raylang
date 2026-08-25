@@ -3516,3 +3516,40 @@ fn build_native_try_recv_matches_the_vm() {
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "nativo ≡ VM");
 }
+
+#[test]
+fn build_native_select_timeout_matches_the_vm() {
+    // M116.1: `ray build --native` de select_timeout. El nativo espera con el pulso de actividad
+    // acotado por el deadline (event-driven al llegar un canal; vence por tiempo si no). Salida
+    // determinista: timeout (nada listo), Some(1) (valor listo), y despertar por canal a los 50ms.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native select_timeout: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_select_timeout");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/time;\n\
+         fn main() -> int {\n\
+           let a: Channel<int> = Channel.new();\n\
+           let b: Channel<int> = Channel.new();\n\
+           match (select_timeout([a, b], 100)) { Option.Some(i) => print(\"ready \" + to_string(i)), Option.None => print(\"timeout\") };\n\
+           send(b, 99);\n\
+           match (select_timeout([a, b], 100)) { Option.Some(i) => print(\"ready \" + to_string(i)), Option.None => print(\"timeout\") };\n\
+           let _ = recv(b);\n\
+           spawn(fn() { time.sleep(50); send(a, 7); });\n\
+           match (select_timeout([a, b], 2000)) { Option.Some(i) => print(\"ready \" + to_string(i) + \" val \" + to_string(recv(a).unwrap_or(0 - 1))), Option.None => print(\"timeout\") };\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(code, 0, "build --native select_timeout ok\n{err}");
+
+    let expected = "timeout\nready 1\nready 0 val 7\n";
+    let (vm_out, _e, _c) = ray(&base, &["run", "prog.ray"]);
+    assert_eq!(vm_out, expected, "VM da select_timeout");
+    let native = Command::new(&bin).output().expect("corre el binario nativo");
+    assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "nativo ≡ VM");
+}

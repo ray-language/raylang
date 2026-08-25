@@ -1097,6 +1097,16 @@ fn recv<T>(ch: Channel<T>) -> Option<T> {
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// M116.1: `select` con PLAZO. Espera a que algún canal esté listo, pero se rinde tras `ms`
+// milisegundos: `Some(i)` = el índice del canal listo (el menor), `None` = venció el plazo.
+// `ms <= 0` = poll no bloqueante (mira sin esperar). Sigue con `recv(chs[i])`. Solo la VM.
+/// Like `select`, but gives up after `ms` milliseconds: `Some(i)` = index of a ready channel,
+/// `None` = the timeout elapsed. `ms <= 0` polls without blocking. Follow with `recv(chs[i])`.
+fn select_timeout<T>(chs: [Channel<T>], ms: int) -> Option<int> {
+    let r = __select_timeout(chs, ms);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // M56.5: une una tarea SIN re-lanzar su fallo (errores como valores; join sí re-lanza). Envuelve
 // el primitivo __task_failed (bloquea hasta que termine; [] = bien, [msg] = falló); para el valor
 // reusa join, que con la tarea ya terminada ni bloquea ni falla. Solo la VM.

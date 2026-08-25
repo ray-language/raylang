@@ -445,6 +445,11 @@ pub enum OpCode {
     /// no vacía, emisor bloqueado, o cerrado) y empuja el **índice** (int) del primero listo. Si ninguno
     /// lo está, **bloquea** la fibra hasta que alguno lo esté (M12.4). Builtin `select`. Solo VM.
     Select,
+    /// M116.1: `select` con PLAZO. Saca `ms` (int) y un arreglo de canales; si alguno está listo empuja
+    /// `[i]` (índice), si vence el plazo (`ms > 0`) empuja `[]`; `ms <= 0` = poll no bloqueante (`[]`
+    /// inmediato si ninguno listo). El prelude lo envuelve en `Option<int>`. Primitivo `__select_timeout`.
+    /// Solo VM.
+    SelectTimeout,
     /// Apila un **marco de scope** (vacío) en la fibra actual: las tareas `spawn`eadas mientras esté
     /// activo quedan adscritas a él (M12.3 structured concurrency). El compilador lo intercala antes de la
     /// llamada al cuerpo de `scope`. No toca la pila de operandos. Solo VM.

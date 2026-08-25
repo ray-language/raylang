@@ -1663,6 +1663,19 @@ fn main() -> int {
 
   `Received.Got(v)` consume el valor (como `recv`); `Empty` = abierto pero sin nada ahora mismo;
   `Closed` = cerrado y drenado. Combínalo con `time.sleep` para un sondeo con respiro.
+- `select_timeout(chs, ms) -> Option<int>` — `select` con **plazo**: `Some(i)` con el índice del
+  canal listo, o `None` si pasan `ms` milisegundos sin que ninguno lo esté. Es **event-driven**
+  (despierta en cuanto llega un canal, no sondea) y con `ms = 0` es un poll no bloqueante del
+  conjunto. Reemplaza el rodeo de "un timer que envía a un canal para poder salir del `select`":
+
+  ```rust
+  match (select_timeout([work, ctrl], 500)) {   // espera a work O ctrl, máx 500 ms
+      Option.Some(0) => handle(recv(work)),
+      Option.Some(1) => handle(recv(ctrl)),
+      Option.Some(_) => {},
+      Option.None => tick(),                     // nada en 500 ms: latido periódico
+  }
+  ```
 
 ### Tareas y concurrencia estructurada
 

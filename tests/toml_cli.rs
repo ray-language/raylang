@@ -16,19 +16,19 @@ const EXPECTED: &[&str] = &[
     // y escape desconocido/incompleto = Err (antes: corrupción silenciosa, "cafu00E9").
     "s = \"café 😀\"",
     "p = \"C:\\ruta\\ne\"",
-    "err: escape desconocido '\\q' en el string",
-    "err: escape \\u con dígito no hexadecimal",
+    "err: unknown escape '\\q' in the string",
+    "err: non-hex digit in \\u escape",
     // M63.2 — números conformes: separadores `_` (entre dígitos) e inf/nan.
     "n = 1000000",
     "f = 1024.5",
     "a = inf",
     "b = -inf",
     "c = NaN",
-    "err: separador '_' mal colocado en el número: 1__0",
+    "err: misplaced '_' separator in number: 1__0",
     // M63.3 — rigor del documento: lo que la spec prohíbe ya no pasa en silencio.
-    "err: clave duplicada: 'a'",
-    "err: cabecera de tabla vacía",
-    "err: se esperaba fin de línea tras el valor de 'a'",
+    "err: duplicate key: 'a'",
+    "err: empty table header",
+    "err: expected end of line after the value of 'a'",
     // M128 — arreglos de tablas [[ruta]] aplanados como ruta.N.clave + toml_array_len.
     "route.0.path = \"/a\"",
     "route.0.port = 1",

@@ -70,12 +70,12 @@ pub fn percent_decode(s: string) -> Result<string, string> {
         let c = s[i];
         if (c == '%') {
             if (i + 2 >= n) {
-                return Result.Err("escape % incompleto");
+                return Result.Err("incomplete % escape");
             }
             let hi = hex_val(s[i + 1]);
             let lo = hex_val(s[i + 2]);
             if (hi < 0 || lo < 0) {
-                return Result.Err("escape % inválido");
+                return Result.Err("invalid % escape");
             }
             oct.push(hi << 4 | lo);
             i = i + 3;

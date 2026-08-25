@@ -76,7 +76,7 @@ fn lit(p: P, kw: string) -> bool {
 fn parse_value(p: P) -> Result<Json, string> {
     skip_ws(p);
     if (at_end(p)) {
-        return Result.Err("fin inesperado del texto");
+        return Result.Err("unexpected end of input");
     }
     let c: char = cur(p);
     if (c == '{') {
@@ -88,7 +88,7 @@ fn parse_value(p: P) -> Result<Json, string> {
     } else if (c == 't' || c == 'f') {
         parse_bool(p)
     } else if (c == 'n') {
-        if (lit(p, "null")) { Result.Ok(Json.JNull) } else { Result.Err("se esperaba 'null'") }
+        if (lit(p, "null")) { Result.Ok(Json.JNull) } else { Result.Err("expected 'null'") }
     } else {
         parse_number(p)
     }
@@ -100,7 +100,7 @@ fn parse_bool(p: P) -> Result<Json, string> {
     } else if (lit(p, "false")) {
         Result.Ok(Json.JBool(false))
     } else {
-        Result.Err("se esperaba 'true' o 'false'")
+        Result.Err("expected 'true' or 'false'")
     }
 }
 
@@ -121,7 +121,7 @@ fn parse_number(p: P) -> Result<Json, string> {
         }
     }
     if (p.i == inicio) {
-        return Result.Err("se esperaba un número");
+        return Result.Err("expected a number");
     }
     // El token es corto: reconstruirlo por carácter es O(largo del número).
     var trozo: string = "";
@@ -132,7 +132,7 @@ fn parse_number(p: P) -> Result<Json, string> {
     }
     match (parse_float(trozo)) {
         Option.Some(f) => Result.Ok(Json.JNum(f)),
-        Option.None => Result.Err("número inválido: " + trozo),
+        Option.None => Result.Err("invalid number: " + trozo),
     }
 }
 
@@ -170,11 +170,11 @@ fn hex4(p: P) -> Result<int, string> {
     var k = 0;
     while (k < 4) {
         if (at_end(p)) {
-            return Result.Err("escape \\u incompleto");
+            return Result.Err("incomplete \\u escape");
         }
         let d = hex_val(cur(p));
         if (d < 0) {
-            return Result.Err("escape \\u con dígito no hexadecimal");
+            return Result.Err("non-hex digit in \\u escape");
         }
         v = v * 16 + d;
         p.i = p.i + 1;
@@ -189,28 +189,28 @@ fn parse_u_escape(p: P) -> Result<string, string> {
     let hi = hex4(p)?;
     if (hi >= 56320 && hi <= 57343) {
         // 0xDC00–0xDFFF: un low surrogate suelto no es un code point.
-        return Result.Err("escape \\u con surrogate suelto");
+        return Result.Err("lone surrogate in \\u escape");
     }
     var cp = hi;
     if (hi >= 55296 && hi <= 56319) {
         // 0xD800–0xDBFF: par surrogate — debe venir \uDC00–DFFF.
         if (at_end(p) || cur(p) != '\\') {
-            return Result.Err("par surrogate incompleto en \\u");
+            return Result.Err("incomplete surrogate pair in \\u");
         }
         p.i = p.i + 1;
         if (at_end(p) || cur(p) != 'u') {
-            return Result.Err("par surrogate incompleto en \\u");
+            return Result.Err("incomplete surrogate pair in \\u");
         }
         p.i = p.i + 1;
         let lo = hex4(p)?;
         if (lo < 56320 || lo > 57343) {
-            return Result.Err("par surrogate inválido en \\u");
+            return Result.Err("invalid surrogate pair in \\u");
         }
         cp = 65536 + (hi - 55296) * 1024 + (lo - 56320);
     }
     return match (char_from_code(cp)) {
         Option.Some(c) => Result.Ok(to_string(c)),
-        Option.None => Result.Err("escape \\u con code point inválido"),
+        Option.None => Result.Err("invalid code point in \\u escape"),
     };
 }
 
@@ -225,7 +225,7 @@ fn parse_str_raw(p: P) -> Result<string, string> {
     var err: string = "";
     while (seguir) {
         if (at_end(p)) {
-            err = "string sin cerrar";
+            err = "unterminated string";
             seguir = false;
         } else {
             let c: char = cur(p);
@@ -235,7 +235,7 @@ fn parse_str_raw(p: P) -> Result<string, string> {
             } else if (c == '\\') {
                 p.i = p.i + 1;
                 if (at_end(p)) {
-                    err = "escape sin cerrar";
+                    err = "unterminated escape";
                     seguir = false;
                 } else if (cur(p) == 'u') {
                     // \uXXXX (con par surrogate si es un astral).
@@ -256,7 +256,7 @@ fn parse_str_raw(p: P) -> Result<string, string> {
                             p.i = p.i + 1;
                         },
                         Option.None => {
-                            err = "secuencia de escape no soportada";
+                            err = "unsupported escape sequence";
                             seguir = false;
                         },
                     }
@@ -300,7 +300,7 @@ fn parse_array(p: P) -> Result<Json, string> {
         if (seguir) {
             skip_ws(p);
             if (at_end(p)) {
-                err = "arreglo sin cerrar";
+                err = "unterminated array";
                 seguir = false;
             } else {
                 let c: char = cur(p);
@@ -310,7 +310,7 @@ fn parse_array(p: P) -> Result<Json, string> {
                     p.i = p.i + 1;
                     seguir = false;
                 } else {
-                    err = "se esperaba ',' o ']'";
+                    err = "expected ',' or ']'";
                     seguir = false;
                 }
             }
@@ -332,14 +332,14 @@ fn parse_object(p: P) -> Result<Json, string> {
     while (seguir) {
         skip_ws(p);
         if (at_end(p) || cur(p) != '"') {
-            err = "se esperaba una clave string";
+            err = "expected a string key";
             seguir = false;
         } else {
             match (parse_str_raw(p)) {
                 Result.Ok(k) => {
                     skip_ws(p);
                     if (at_end(p) || cur(p) != ':') {
-                        err = "se esperaba ':'";
+                        err = "expected ':'";
                         seguir = false;
                     } else {
                         p.i = p.i + 1;  // saltar ':'
@@ -348,7 +348,7 @@ fn parse_object(p: P) -> Result<Json, string> {
                                 obj.insert(k, v);
                                 skip_ws(p);
                                 if (at_end(p)) {
-                                    err = "objeto sin cerrar";
+                                    err = "unterminated object";
                                     seguir = false;
                                 } else {
                                     let c: char = cur(p);
@@ -358,7 +358,7 @@ fn parse_object(p: P) -> Result<Json, string> {
                                         p.i = p.i + 1;
                                         seguir = false;
                                     } else {
-                                        err = "se esperaba ',' o '}'";
+                                        err = "expected ',' or '}'";
                                         seguir = false;
                                     }
                                 }
@@ -390,7 +390,7 @@ pub fn parse(s: string) -> Result<Json, string> {
     match (parse_value(p)) {
         Result.Ok(j) => {
             skip_ws(p);
-            if (at_end(p)) { Result.Ok(j) } else { Result.Err("texto sobrante tras el JSON") }
+            if (at_end(p)) { Result.Ok(j) } else { Result.Err("trailing text after the JSON") }
         },
         Result.Err(e) => Result.Err(e),
     }

@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Los errores de la stdlib, en inglés** (M132) — el barrido final de la política de
+  superficie-en-inglés: los ~110 `Result.Err` en español que quedaban en la stdlib embebida
+  (json, toml, inflate, base64, hex, url, huffman, template, protobuf, time/ISO-8601, fs) pasan
+  al inglés, alineados al estilo asentado ("unterminated string", "unexpected end of input",
+  "gzip header truncated (unterminated FNAME)"…). De regalo: arreglado `exit(code)` en NATIVO,
+  que bajo carga podía perder la salida pendiente de `print` (flusheaba el buffer equivocado —
+  ahora drena el hilo escritor antes de terminar el proceso).
 - **El lote D del dogfood** (M131) — **normalización Unicode en `std/text`**: `nfc`/`nfd`/
   `nfkc`/`nfkd` (crate `unicode-normalization` vía ray-runtime; VM por defecto, nativo por USO,
   slim = error claro) — el slug accent-insensitive por fin se escribe (NFD + descartar

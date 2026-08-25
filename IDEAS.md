@@ -2795,9 +2795,15 @@ codificaciones de correo (§71.4; RFC 2047/5322/2045/5321 en raylang puro). El �
 §42" resultó YA ejecutado (M85, packages/tz: TZif v2 + system() + DST como API) — la lista lo
 arrastraba rancio.
 
-**Con esto, el backlog COMPLETO del dogfood de 14 apps está ejecutado — hitos y menores.**
-Queda solo el barrido de errores de stdlib aún en español (json/toml/inflate…, cf. M128) y las
-validaciones de ecosistema (gRPC dogfood §72.4, VPS 24/7 de rayrelay).
+**[EJECUTADO — M132, DESIGN §129]** El barrido final de spanglish: TODOS los errores de la
+stdlib embebida en inglés (~110 strings: json, toml, inflate, base64, hex, url, huffman,
+template, protobuf, time, fs), goldens en tándem; los paquetes Tier 2 ya estaban limpios. De
+regalo cazó un bug real de M130: `exit(code)` nativo perdía la salida pendiente (flusheaba el
+buffer equivocado; ahora drena el hilo escritor con `__ray_flush_prints()`).
+
+**Con esto, el backlog COMPLETO del dogfood de 14 apps está ejecutado — hitos y menores — y la
+superficie entera del lenguaje habla inglés.** Quedan solo las validaciones de ecosistema
+(gRPC dogfood §72.4, VPS 24/7 de rayrelay).
 
 ## Cómo usar este archivo
 

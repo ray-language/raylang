@@ -29,7 +29,7 @@ pub fn writer() -> PbWriter {
 fn encode_varint(out: [int], value: int) {
     if (value < 0) {
         panic(
-            "protobuf: varint negativo no soportado (usa write_fixed64, o sint/zigzag — diferido)"
+            "protobuf: negative varint not supported (use write_fixed64, or sint/zigzag — deferred)"
         );
     }
     var v = value;
@@ -202,7 +202,7 @@ pub fn parse(data: bytes) -> Result<[PbField], string> {
                         );
                         pos = pos + 4;
                     } else {
-                        return Result.Err("wire type no soportado: " + to_string(wire));
+                        return Result.Err("unsupported wire type: " + to_string(wire));
                     }
                 }
             }
@@ -266,7 +266,7 @@ pub fn grpc_frame(message: bytes) -> bytes {
 /// Returns `Err` if the frame is shorter than 5 bytes.
 pub fn grpc_unframe(data: bytes) -> Result<bytes, string> {
     if (data.len() < 5) {
-        return Result.Err("frame gRPC demasiado corto");
+        return Result.Err("gRPC frame too short");
     }
     let n = data[1] << 24 | data[2] << 16 | data[3] << 8 | data[4];
     Result.Ok(data.sub_bytes(5, 5 + n))

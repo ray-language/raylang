@@ -113,7 +113,7 @@ fn main() {
         assert!(!out.status.success(), "debería fallar (flags {flags:?})");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
-            err.contains("protobuf: varint negativo no soportado"),
+            err.contains("protobuf: negative varint not supported"),
             "stderr inesperado (flags {flags:?}): {err}"
         );
     }

@@ -6,15 +6,27 @@
 //! `(línea, columna)` para poder dar errores con ubicación (principio 3 del
 //! diseño).
 
+/// La base en que se ESCRIBIÓ un literal entero (M118). El valor ya está
+/// interpretado a `i64`; la base solo sirve para que el formateador reimprima el
+/// literal como lo escribió el usuario (`0xFF`, `0o755`, `0b1010`) en vez de
+/// canonizarlo a decimal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Radix {
+    Dec,
+    Hex,
+    Oct,
+    Bin,
+}
+
 /// El "qué es" de un token. Las variantes siguen la sección 3 de DESIGN.md.
 ///
-/// Cuidado con la nomenclatura: `Int(i64)` es el **literal** entero `42`,
+/// Cuidado con la nomenclatura: `Int(i64, _)` es el **literal** entero `42`,
 /// mientras que `IntType` es la **palabra clave de tipo** `int`. Lo mismo para
 /// `Float`/`FloatType` y `Str`/`StringType`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // --- Literales (cargan su valor ya interpretado) ---
-    Int(i64),    // 42
+    Int(i64, Radix), // 42, 0xFF, 0o755, 0b1010
     Float(f64),  // 3.14
     Str(String), // "hola\n"  (escapes ya resueltos)
     /// Cadena con **interpolación** `"a${x}b"` (M27.3): partes literales y expresiones (código crudo).

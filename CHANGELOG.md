@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Literales enteros en hex/octal/binario y escapes por code point** (M118, IDEAS §67, §71.6) —
+  `0xFF`, `0o755`, `0b1010` (y en mayúsculas) para escribir máscaras de bits y permisos como lo que
+  son (`fs.chmod("vault.db", 0o600)`, no `384`); y en cadenas/caracteres, `\0` (NUL), `\xNN` (octeto
+  hex) y `\u{H…H}` (code point Unicode: `"\u{1F680}"` → 🚀, `'\u{00E9}'` → é). **`ray fmt` conserva
+  la base** en que se escribió el literal en vez de canonizarlo a decimal — la base carga intención.
 - **`std/term`: ancho en celdas de terminal** (M117, IDEAS §67) — la pieza que todo TUI copiaba a
   mano: `term.width(s)` da el ancho real en **celdas** (un `日` ocupa 2, un combinante 0), donde
   `s.len()` (cuenta caracteres) desalinea las columnas; `term.char_width(c)` para un carácter, y

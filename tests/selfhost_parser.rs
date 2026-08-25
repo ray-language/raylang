@@ -123,7 +123,7 @@ fn dump_unop(op: &UnaryOp) -> &'static str {
 fn dump_expr(e: &Expr) -> String {
     let pp = pos(e.line, e.col);
     match &e.kind {
-        ExprKind::Int(n) => format!("(int {}){}", n, pp),
+        ExprKind::Int(n, _) => format!("(int {}){}", n, pp),
         ExprKind::Float(f) => format!("(float {}){}", f, pp),
         ExprKind::Bool(b) => format!("(bool {}){}", b, pp),
         ExprKind::Str(s) => format!("(str \"{}\"){}", escape(s), pp),

@@ -259,14 +259,14 @@ impl std::error::Error for RuntimeError {}
 /// Compartido por ambos motores (lo usa el compilador al construir la tabla de constantes).
 pub fn eval_const_literal(e: &Expr) -> Value {
     match &e.kind {
-        ExprKind::Int(n) => Value::Int(*n),
+        ExprKind::Int(n, _) => Value::Int(*n),
         ExprKind::Float(f) => Value::Float(*f),
         ExprKind::Bool(b) => Value::Bool(*b),
         ExprKind::Str(s) => Value::Str(s.clone()),
         ExprKind::Char(c) => Value::Char(*c),
         ExprKind::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
         ExprKind::Unary { op: UnaryOp::Neg, expr } => match &expr.kind {
-            ExprKind::Int(n) => Value::Int(-n),
+            ExprKind::Int(n, _) => Value::Int(-n),
             ExprKind::Float(f) => Value::Float(-f),
             _ => unreachable!("the checker guarantees a negated numeric literal"),
         },

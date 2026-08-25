@@ -323,7 +323,7 @@ impl Transpiler {
             e: &Expr,
         ) -> Option<Type> {
             match &e.kind {
-                ExprKind::Int(_) => Some(Type::Int),
+                ExprKind::Int(..) => Some(Type::Int),
                 ExprKind::Float(_) => Some(Type::Float),
                 ExprKind::Bool(_) => Some(Type::Bool),
                 ExprKind::Char(_) => Some(Type::Char),
@@ -856,7 +856,7 @@ impl Transpiler {
     pub(super) fn emit_typed(&mut self, out: &mut String, e: &Expr, expected: &Type) -> Result<(), String> {
         let exp = normalize_type(expected);
         match (&e.kind, &exp) {
-            (ExprKind::Int(n), Type::UInt(w)) => write!(out, "{}u{}", n, w).unwrap(),
+            (ExprKind::Int(n, _), Type::UInt(w)) => write!(out, "{}u{}", n, w).unwrap(),
             (ExprKind::ArrayLit(elems), Type::Array(et)) => {
                 // Mismo izado que el ArrayLit de emit_expr (clase RefCell-en-args, IDEAS §64),
                 // preservando la emisión tipada de cada elemento.
@@ -1022,7 +1022,7 @@ impl Transpiler {
 
     pub(super) fn emit_expr(&mut self, out: &mut String, e: &Expr) -> Result<(), String> {
         match &e.kind {
-            ExprKind::Int(n) => write!(out, "{}i64", n).unwrap(),
+            ExprKind::Int(n, _) => write!(out, "{}i64", n).unwrap(),
             ExprKind::Float(x) => {
                 // `{:?}` de un f64 no finito da `inf`/`-inf`/`NaN` → `inff64` es Rust INVÁLIDO. Un literal
                 // como `1e999` parsea a infinito: se emite la constante de Rust correspondiente.
@@ -1268,7 +1268,7 @@ impl Transpiler {
             ExprKind::Index { array, index } if matches!(self.type_of(array)?, Type::Tuple(_)) => {
                 self.emit_expr(out, array)?;
                 match &index.kind {
-                    ExprKind::Int(n) => write!(out, ".{}", n).unwrap(),
+                    ExprKind::Int(n, _) => write!(out, ".{}", n).unwrap(),
                     _ => return Err("non-literal tuple index".into()),
                 }
             }
@@ -1294,7 +1294,7 @@ impl Transpiler {
                     _ => {
                         // N-D4b: lectura sobre un split FUSIONADO → el temporal extraído. El pánico
                         // OOB replica byte a byte el del indexado de Vec (con la longitud real).
-                        if let (ExprKind::Ident(name), ExprKind::Int(k)) = (&array.kind, &index.kind)
+                        if let (ExprKind::Ident(name), ExprKind::Int(k, _)) = (&array.kind, &index.kind)
                             && let Some(prefix) = self.fused_splits.get(name)
                         {
                             write!(
@@ -1988,7 +1988,7 @@ fn split_uses_expr(name: &str, e: &Expr, ks: &mut Vec<i64>) -> bool {
         ExprKind::Index { array, index } => {
             if matches!(&array.kind, ExprKind::Ident(n) if n == name) {
                 return match &index.kind {
-                    ExprKind::Int(k) if *k >= 0 => {
+                    ExprKind::Int(k, _) if *k >= 0 => {
                         ks.push(*k);
                         true
                     }
@@ -2000,7 +2000,7 @@ fn split_uses_expr(name: &str, e: &Expr, ks: &mut Vec<i64>) -> bool {
         ExprKind::Ident(n) => n != name, // cualquier otro uso (alias, arg, len, for-in…) descarta
         ExprKind::Match { .. } => false, // un patrón podría ligar `name` y confundir el mapeo
         ExprKind::Func(_) => false,      // parámetros/capturas podrían sombrearlo
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
         | ExprKind::Char(_) | ExprKind::Bytes(_) => true,
         ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } | ExprKind::Try(expr) => {
             split_uses_expr(name, expr, ks)

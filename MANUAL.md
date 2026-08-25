@@ -86,7 +86,7 @@ hola/
 
 | Tipo | Ejemplo | Notas |
 |------|---------|-------|
-| `int` | `42`, `-7` | entero de 64 bits con signo; el desbordamiento es **error de ejecución** (no envuelve en silencio) |
+| `int` | `42`, `-7`, `0xFF`, `0o755`, `0b1010` | entero de 64 bits con signo; decimal o prefijo `0x`/`0o`/`0b` (hex/octal/binario); el desbordamiento es **error de ejecución** (no envuelve en silencio) |
 | `u8`, `u32`, `u64` | `let x: u8 = 255;` | sin signo; la aritmética **envuelve** por diseño (para hashes, protocolos, bits) |
 | `float` | `3.14`, `2.0` | coma flotante de 64 bits |
 | `bool` | `true`, `false` | |
@@ -1153,9 +1153,9 @@ match (fs.stat(path)) {
 }
 ```
 
-`st.mode` son los 12 bits de permiso en decimal (raylang aún no tiene literales octales):
-384 = `0o600`, 493 = `0o755`. `fs.chmod(path, mode)` los cambia — el gesto de una bóveda de
-secretos: `fs.chmod("vault.db", 384)` la restringe a su dueño.
+`st.mode` son los 12 bits de permiso. Con los literales octales (M118) se escriben directamente:
+`0o600` (dueño rw), `0o755` (rwxr-xr-x). `fs.chmod(path, mode)` los cambia — el gesto de una
+bóveda de secretos: `fs.chmod("vault.db", 0o600)` la restringe a su dueño.
 
 Para **reaccionar a cambios** (rebuilds, `tail -f`, sync) está `fs.watch`: eventos de **kernel**
 (FSEvents/inotify), no sondeo de mtimes — la fibra aparca en `next_event` y el proceso duerme de

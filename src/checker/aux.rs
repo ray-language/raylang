@@ -22,10 +22,10 @@ pub(super) fn is_hashable_key(t: &Type) -> bool {
 /// ¿Es `e` un valor válido para una constante (M27.5)? Un literal, o un literal numérico negado (`-5`).
 pub(super) fn is_const_literal(e: &Expr) -> bool {
     match &e.kind {
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
         | ExprKind::Char(_) | ExprKind::Bytes(_) => true,
         ExprKind::Unary { op: UnaryOp::Neg, expr } => {
-            matches!(expr.kind, ExprKind::Int(_) | ExprKind::Float(_))
+            matches!(expr.kind, ExprKind::Int(..) | ExprKind::Float(_))
         }
         _ => false,
     }

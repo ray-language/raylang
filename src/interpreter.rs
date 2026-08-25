@@ -633,7 +633,7 @@ impl<'a> Interpreter<'a> {
     /// Evalúa una expresión a un valor.
     fn eval_expr(&mut self, expr: &'a Expr) -> EvalResult {
         match &expr.kind {
-            ExprKind::Int(v) => Ok(Value::Int(*v)),
+            ExprKind::Int(v, _) => Ok(Value::Int(*v)),
             ExprKind::Float(v) => Ok(Value::Float(*v)),
             ExprKind::Bool(v) => Ok(Value::Bool(*v)),
             ExprKind::Str(v) => Ok(Value::Str(v.clone())),

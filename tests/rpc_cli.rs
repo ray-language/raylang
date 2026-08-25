@@ -38,6 +38,9 @@ fn main() -> int {
             Result.Ok(Json.JNum(req.deadline_ms as float))
         } else if (req.method == "boom") {
             panic("bum")
+        } else if (req.method == "nap") {
+            time.sleep(100);
+            Result.Ok(Json.JStr("ok"))
         } else if (req.method == "lento") {
             time.sleep(1000);
             Result.Ok(Json.JStr("tarde"))
@@ -232,4 +235,85 @@ fn main() -> int {
     let mut server = server;
     server.kill().ok();
     server.wait().ok();
+}
+
+/// M127 — el POOL de conexiones (IDEAS §72.2): N llamadas concurrentes de verdad (una conexión
+/// por hueco), backpressure por canal acotado (checkout aparca al agotarse), y RECONEXIÓN
+/// automática tras un fallo (el timeout descarta la conexión desincronizada; la siguiente
+/// llamada re-marca). El paralelismo se demuestra con el reloj: 4 "nap" de 100 ms por un pool
+/// de 2 caben en ~2 rondas (< 380 ms), donde en secuencial serían ≥ 400 ms.
+#[test]
+fn pool_runs_calls_concurrently_and_recovers_from_timeouts() {
+    let base = project("pool");
+    std::fs::write(
+        base.join("src/pool.ray"),
+        r#"import rpc/rpc;
+from std/json import Json, stringify;
+import std/time;
+
+fn main() -> int {
+    let port = match (parse_int(args()[0])) {
+        Option.Some(p) => p,
+        Option.None => panic("bad port"),
+    };
+    let p = rpc.pool("127.0.0.1", port, 2);
+    // 4 llamadas CONCURRENTES por un pool de 2: dos rondas (~200 ms), no cuatro (400 ms).
+    let t0 = time.monotonic();
+    let t1 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "nap", Json.JNull) });
+    let t2 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "nap", Json.JNull) });
+    let t3 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "nap", Json.JNull) });
+    let t4 = spawn(fn() -> Result<Json, string> { rpc.pool_call(p, "nap", Json.JNull) });
+    var oks = 0;
+    for r in [join(t1), join(t2), join(t3), join(t4)] {
+        match (r) {
+            Result.Ok(_) => { oks = oks + 1; },
+            Result.Err(e) => print("nap err=" + e),
+        }
+    }
+    let dt = time.monotonic() - t0;
+    print("oks=" + to_string(oks));
+    print("parallel=" + to_string(dt >= 150 && dt < 380));
+    // Timeout por el pool: el hueco se descarta y la SIGUIENTE llamada re-marca sola.
+    match (rpc.pool_call_deadline(p, "lento", Json.JNull, 150)) {
+        Result.Ok(_) => print("timeout=?"),
+        Result.Err(_e) => print("timeout=true"),
+    }
+    match (rpc.pool_call(p, "sum", Json.JArray([Json.JNum(4.0), Json.JNum(5.0)]))) {
+        Result.Ok(j) => print("recovered=" + stringify(j)),
+        Result.Err(e) => print("recovered err=" + e),
+    }
+    // pool_close: las llamadas posteriores fallan limpio.
+    rpc.pool_close(p);
+    match (rpc.pool_call(p, "sum", Json.JNull)) {
+        Result.Ok(_) => print("closed=?"),
+        Result.Err(e) => print("closed=" + e),
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    let (server, port) = launch_server(&base);
+    let out = Command::new(BIN)
+        .args(["run", "src/pool.ray", &port.to_string()])
+        .current_dir(&base)
+        .output()
+        .expect("client del pool");
+    let mut server = server;
+    server.kill().ok();
+    server.wait().ok();
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "oks=4",
+            "parallel=true",
+            "timeout=true",
+            "recovered=9",
+            "closed=the pool is closed",
+        ],
+        "salida completa: {stdout:?}"
+    );
 }

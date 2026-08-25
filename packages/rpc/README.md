@@ -69,7 +69,28 @@ rpc.disconnect(c);
 - `call_deadline` acota la ESPERA de la respuesta (read-timeout del socket) y además declara el
   presupuesto en el sobre (`Req.deadline_ms`), para que el servidor pueda descartar trabajo que
   no llegará a tiempo. **Ojo**: un deadline vencido deja la conexión desincronizada (la
-  respuesta tardía quedaría en el buffer) → tras un timeout, `disconnect` y reconectar.
+  respuesta tardía quedaría en el buffer) → tras un timeout, `disconnect` y reconectar — o usa
+  el pool, que lo hace solo.
+
+### Pool de conexiones (M127)
+
+Handlers concurrentes no pueden compartir UN `Client` (la conexión es secuencial); el pool da
+hasta `size` llamadas **en vuelo a la vez** — una conexión por hueco, que es también paralelismo
+real del lado servidor (una fibra por conexión):
+
+```raylang
+let p = rpc.pool("127.0.0.1", 7070, 8);
+// desde CUALQUIER fibra, a la vez:
+let r = rpc.pool_call(p, "consulta", params);                 // aparca si el pool está agotado
+let r2 = rpc.pool_call_deadline(p, "lenta", params, 500);     // timeout → descarta ESA conexión
+rpc.pool_close(p);
+```
+
+- Marcado **perezoso** (nada conecta hasta la primera llamada del hueco) y **reconexión
+  automática**: un fallo (timeout, id inesperado, cierre del peer) descarta la conexión y deja el
+  hueco vacío — la siguiente llamada re-marca. El "disconnect y reconecta" manual desaparece.
+- El pool ES un canal acotado: checkout = `recv` (la fibra aparca si los `size` huecos están en
+  vuelo → backpressure natural), release = `send`.
 
 ## Tests
 

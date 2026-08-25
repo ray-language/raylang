@@ -485,10 +485,154 @@ pub fn call_full(
             let par = decode_response(fr)?;
             if (par.0 != id) {
                 return Result.Err(
-                    "response with unexpected id (" + to_string(par.0) + " != " + to_string(id) + "); reconecta"
+                    "response with unexpected id (" + to_string(par.0) + " != " + to_string(id) + "); reconnect"
                 );
             }
             par.1
         },
     }
+}
+
+// --- M127: POOL de conexiones — llamadas concurrentes de verdad (IDEAS §72.2) ---
+//
+// El cliente es secuencial POR CONEXIÓN (request/response correlado sobre un socket), y el
+// servidor atiende UNA fibra por conexión: N handlers en paralelo exigen N conexiones. El pool
+// resuelve el hueco de producción que raycall señaló: handlers concurrentes compartiendo "un
+// cliente" sin abrir conexión por llamada.
+//
+// El diseño ES un canal acotado: la cola de huecos del pool. Checkout = `recv` (si el pool está
+// agotado la fibra APARCA → backpressure natural, sin busy-wait); release = `send`. Las
+// conexiones se marcan PEREZOSAMENTE (el pool nace con huecos vacíos; la primera llamada de cada
+// hueco conecta), y un error de llamada DESCARTA la conexión y devuelve el hueco vacío — la
+// siguiente llamada re-marca: reconexión automática tras un timeout/desincronización, el gesto
+// que antes había que escribir a mano ("disconnect y reconecta").
+
+// Un hueco del pool: una conexión viva lista para usar, o un hueco por (re)marcar. Interno —
+// público solo porque viaja en el canal del struct `Pool`.
+/// A pool slot: a live ready connection, or an empty slot the next checkout will (re)dial.
+/// Internal to the pool machinery.
+pub enum Slot {
+    Ready(Client),
+    Empty,
+}
+
+/// A connection pool: up to `size` concurrent in-flight calls, each on its own connection.
+/// Connections are dialed lazily and re-dialed automatically after a failed call (a timeout
+/// leaves a connection out of sync — the pool discards it). When every slot is in use the
+/// caller's fiber parks until one is released: natural backpressure, no busy-wait.
+pub struct Pool {
+    host: string,
+    port: int,
+    size: int,
+    slots: Channel<Slot>,
+}
+
+/// Creates a pool of up to `size` connections to `host:port` (minimum 1). Nothing is dialed
+/// until the first call.
+pub fn pool(host: string, port: int, size: int) -> Pool {
+    let n = if (size < 1) { 1 } else { size };
+    let slots: Channel<Slot> = Channel.bounded(n);
+    var i = 0;
+    while (i < n) {
+        send(slots, Slot.Empty);
+        i = i + 1;
+    }
+    Pool { host: host, port: port, size: n, slots: slots }
+}
+
+/// Calls `method` through the pool: checks a connection out (parking if the pool is exhausted),
+/// performs the call, and returns the connection — or discards it on error, so the next call on
+/// that slot re-dials. Safe to call from many fibers at once.
+pub fn pool_call(p: Pool, method: string, params: Json) -> Result<Json, string> {
+    pool_call_full(p, method, params, 0, "")
+}
+
+/// Like `pool_call`, bounding the wait for the response to `deadline_ms` ms. On timeout the
+/// call fails and the pool DISCARDS that connection (it is out of sync) — no manual reconnect.
+pub fn pool_call_deadline(
+    p: Pool,
+    method: string,
+    params: Json,
+    deadline_ms: int
+) -> Result<Json, string> {
+    pool_call_full(p, method, params, deadline_ms, "")
+}
+
+/// The full form: deadline (`0` = none) and W3C `traceparent` (`""` = none).
+pub fn pool_call_full(
+    p: Pool,
+    method: string,
+    params: Json,
+    deadline_ms: int,
+    traceparent: string
+) -> Result<Json, string> {
+    let c = match (recv(p.slots)) {
+        Option.None => {
+            return Result.Err("the pool is closed");
+        },
+        Option.Some(slot) => match (slot) {
+            Slot.Ready(client) => client,
+            Slot.Empty => match (connect(p.host, p.port)) {
+                Result.Ok(client) => client,
+                Result.Err(e) => {
+                    // Devuelve el hueco: otra llamada reintentará el marcado.
+                    release(p, Slot.Empty);
+                    return Result.Err(e);
+                },
+            },
+        },
+    };
+    match (call_full(c, method, params, deadline_ms, traceparent)) {
+        Result.Ok(v) => {
+            release(p, Slot.Ready(c));
+            Result.Ok(v)
+        },
+        Result.Err(e) => {
+            // Timeout, id inesperado o cierre del peer: la conexión puede estar DESINCRONIZADA
+            // (la respuesta tardía sigue en vuelo) → se descarta entera y el hueco vuelve vacío.
+            disconnect(c);
+            release(p, Slot.Empty);
+            Result.Err(e)
+        },
+    }
+}
+
+// Devuelve un hueco al pool. Si `pool_close` cerró el canal con llamadas aún en vuelo, el send
+// fallaría: se amortigua con try_call (el hueco simplemente se pierde; la conexión Ready se
+// cierra antes de perderse).
+fn release(p: Pool, slot: Slot) {
+    match (try_call(fn() -> int {
+    send(p.slots, slot);
+    0
+})) {
+        Result.Ok(_) => { },
+        Result.Err(_e) => match (slot) {
+            Slot.Ready(client) => disconnect(client),
+            Slot.Empty => { },
+        },
+    }
+}
+
+/// Closes the pool: drains the idle slots (closing their live connections) and closes the
+/// queue — later `pool_call`s fail with "the pool is closed". Calls still in flight finish
+/// normally; their connections are closed as they come back.
+pub fn pool_close(p: Pool) {
+    var i = 0;
+    var draining = true;
+    while (i < p.size && draining) {
+        match (try_recv(p.slots)) {
+            Received.Got(slot) => match (slot) {
+                Slot.Ready(client) => disconnect(client),
+                Slot.Empty => { },
+            },
+            Received.Empty => {
+                draining = false;
+            },
+            Received.Closed => {
+                draining = false;
+            },
+        }
+        i = i + 1;
+    }
+    close(p.slots);
 }

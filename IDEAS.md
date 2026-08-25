@@ -2722,7 +2722,7 @@ La última tanda del catálogo de IDEAS-APPS (14 de 14 construidas). Tres apps d
    coalescing*); `poll(2)` con cero fds honra el timeout ajustado. Ambos motores a ~34 ms para
    `sleep(33)` (~1 ms de overshoot). El reloj absoluto sigue siendo la práctica para pacing
    sin deriva (documentado en MANUAL + el `///` de `sleep`).
-2. **El cliente `packages/rpc` es secuencial por conexión** (raycall): handlers concurrentes no
+2. **[EJECUTADA — M127, DESIGN §124: `rpc.pool(host, port, size)` + `pool_call*` — el canal acotado como cola, marcado perezoso, reconexión automática]** **El cliente `packages/rpc` es secuencial por conexión** (raycall): handlers concurrentes no
    pueden compartir uno → conexión por llamada. El hueco de producción de rpc es un pool o
    multiplexación por id (el streaming diferido de su README apunta ahí).
 3. Sin `try_recv`/select-timeout, matar una fibra dormida sigue sin poderse (raybot): el patrón
@@ -2767,9 +2767,17 @@ puro probeable sin tty.
 **[EJECUTADA — M126, DESIGN §123]** El hasher incremental (§69.3): sha256_init/sha512_init +
 hash_update + hash_final, digest idéntico al de una pasada, estado en el runtime compartido.
 
-**Quedan abiertos** (candidatos, no comprometidos): el **pool/multiplexado de `packages/rpc`**
-(§72.2, secuencial por conexión hoy); normalización Unicode y `std/mail` (§71.4/§71.5), y los
-menores de `std` que cada tanda anotó.
+**[EJECUTADA — M127, DESIGN §124]** El pool de `packages/rpc` (§72.2): `pool(host, port, size)` +
+`pool_call*` + `pool_close` — el canal acotado como cola del pool, marcado perezoso, checkout que
+aparca (backpressure) y reconexión automática tras un fallo. (Se descartó multiplexar por id sobre
+una conexión: el servidor procesa en serie por conexión — no compraría paralelismo.)
+
+**Con esto, TODOS los hallazgos con hito del dogfood de 14 apps están ejecutados.** Quedan solo
+los menores anotados en sus tandas (normalización Unicode §71.5, `std/mail` §71.4, csv
+incremental §63.4, regex con nombres §63.3, `[[toml]]` §65.3, `jwt_verify_claims` §65.5,
+`guard` → `admit`/`report` §65.4, listeners zombis de `ray test` §65.2, Accept-Encoding,
+half-close §64.3, `exit(code)` §64.6, hora local §42) y las validaciones de ecosistema (gRPC
+dogfood §72.4, VPS 24/7 de rayrelay).
 
 ## Cómo usar este archivo
 

@@ -10037,3 +10037,32 @@ Verificado byte-idéntico en los CUATRO sabores: vector NIST FIPS 180-4 (`sha256
 en dos updates), incremental ≡ una-pasada (sha256 y sha512), y los caminos de error (doble
 `final`, `update` tras `final` → "invalid hasher handle"). Tests en `crypto_hasher_cli.rs`
 (intérprete, VM, nativo E2E; fixture compartida).
+
+## 124. M127 — el pool de rpc: el canal acotado ES la cola (ago 2026)
+
+El hueco de producción que raycall señaló (IDEAS §72.2): el cliente de `packages/rpc` es
+secuencial POR CONEXIÓN (request/response correlado sobre un socket) y el servidor atiende una
+fibra por conexión — handlers concurrentes no podían compartir un `Client` y acababan abriendo
+conexión por llamada. Se evaluó multiplexar por id sobre UNA conexión y se descartó: el servidor
+procesa las peticiones de una conexión EN SERIE, así que multiplexar no compra paralelismo — N
+llamadas en vuelo exigen N conexiones. El pool es la forma correcta.
+
+**El diseño ES un canal acotado** (`Channel.bounded(size)` de huecos `Slot { Ready(Client),
+Empty }`): checkout = `recv` — si el pool está agotado la fibra APARCA (backpressure natural, sin
+busy-wait) —, release = `send`. Tres propiedades salen gratis de esa elección:
+- **Marcado perezoso**: el pool nace con `size` huecos `Empty`; la primera llamada de cada hueco
+  conecta.
+- **Reconexión automática**: un fallo de llamada (timeout → conexión desincronizada, id
+  inesperado, cierre del peer) DESCARTA la conexión y devuelve el hueco `Empty` — la siguiente
+  llamada re-marca. El "disconnect y reconecta" manual de raycall desaparece.
+- **Los `Client` cruzan fibras por el canal** con su estado a cuestas (conn/buf/next_id viajan en
+  la copia — los handles de socket son ids del registro global, el patrón rayrelay), así que no
+  hay actor dueño ni lock: el canal es toda la sincronización.
+
+Superficie: `pool(host, port, size)` · `pool_call`/`pool_call_deadline`/`pool_call_full` ·
+`pool_close` (drena los huecos ociosos con `try_recv` — M116 en acción — y cierra el canal; una
+llamada en vuelo que vuelva después pierde su hueco sin drama, `release` amortiguado con
+`try_call`). Verificado en `rpc_cli`: 4 llamadas concurrentes por un pool de 2 caben en ~2 rondas
+de reloj (paralelismo real medido, no asumido), el timeout se recupera solo, y el pool cerrado
+falla limpio. De paso: el mensaje "…; reconecta" del id inesperado (spanglish de cara al usuario)
+→ "; reconnect".

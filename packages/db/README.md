@@ -6,7 +6,7 @@ Clientes de bases de datos **escritos en raylang** sobre los sockets de `std/net
 
 ## Cómo usarlo
 
-Declara el paquete en tu `ray.toml` como dependencia por ruta (o git):
+Declara el paquete en tu `ray.toml` (por ruta en el monorepo; git desde el espejo publicado):
 
 ```toml
 [dependencies]

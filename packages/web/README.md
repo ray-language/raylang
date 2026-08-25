@@ -39,7 +39,7 @@ fn main() -> int {
 
 ## Instalación
 
-Por ruta (monorepo / desarrollo):
+En tu `ray.toml` (por ruta en el monorepo; git desde el espejo publicado):
 
 ```toml
 [dependencies]

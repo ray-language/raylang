@@ -18,8 +18,8 @@ resistencia a canales laterales de temporización (requisito para tocar secretos
 
 ## Cómo usarlo
 
-Declara el paquete en tu `ray.toml` como una **dependencia por ruta** (M40.8a) — o, cuando se publique,
-como una dependencia git:
+Declara el paquete en tu `ray.toml` (por ruta si desarrollas en el monorepo; git desde el
+espejo publicado):
 
 ```toml
 [dependencies]

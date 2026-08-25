@@ -71,7 +71,13 @@ transform_readme() {
 
 EOF
         sed -i '' "s|@PKG@|$TPKG|g; s|@VER@|$TVER|g" "$HDR"
-        cat "$HDR" "$R" > "$R.tmp" && mv "$R.tmp" "$R"
+        # El bloque va DESPUÉS del título H1 (antes lo enterraba); sin H1, al principio.
+        if head -1 "$R" | grep -q '^# '; then
+            { head -1 "$R"; echo; cat "$HDR"; tail -n +2 "$R"; } > "$R.tmp"
+        else
+            cat "$HDR" "$R" > "$R.tmp"
+        fi
+        mv "$R.tmp" "$R"
     fi
 }
 

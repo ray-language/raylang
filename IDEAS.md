@@ -2778,9 +2778,14 @@ incremental (§63.4: `parser`/`feed`/`finish`, `parse_csv` reescrito encima), `[
 aplanado como `ruta.N.clave` + `toml_array_len`) y `jwt_verify_claims` (§65.5: firma + `exp`/`nbf`
 en una llamada). De pasada, los errores de regex/csv pasan a inglés.
 
+**[EJECUTADAS — M129, DESIGN §126]** El lote B: `admit(b)`/`report(b, ok)` en resilience (§65.4;
+`guard` queda como azúcar; `abierto_hasta`/`hasta` → `open_until`/`until`), `ray test` drena TODOS
+los handles del SO al aislar cada `@test` (§65.2; listeners incluidos, los hijos no se matan) y
+`webserver.gzip(req, resp)` + `accepts_gzip` (negociación de Accept-Encoding, explícita por
+handler: comprimir cuesta CPU en la VM).
+
 **Con esto, TODOS los hallazgos con hito del dogfood de 14 apps están ejecutados.** Quedan solo
 los menores anotados en sus tandas (normalización Unicode §71.5, `std/mail` §71.4,
-`guard` → `admit`/`report` §65.4, listeners zombis de `ray test` §65.2, Accept-Encoding,
 half-close §64.3, `exit(code)` §64.6, hora local §42), el barrido de errores de stdlib aún en
 español (json/toml/inflate…, cf. M128) y las validaciones de ecosistema (gRPC dogfood §72.4,
 VPS 24/7 de rayrelay).

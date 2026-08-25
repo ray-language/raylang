@@ -1090,6 +1090,21 @@ pub fn close_handle(h: i64) {
     read_expired().lock().unwrap().remove(&h);
 }
 
+/// M129: cierra TODOS los handles vivos del registro — sockets, LISTENERS, TLS, pipes, watches y
+/// archivos (los flock se sueltan al caer la open file description). Lo usa `ray test` al aislar
+/// cada `@test`: el runner ya descartaba las fibras, pero los sockets de escucha del SO
+/// sobrevivían y el siguiente test los veía aceptar conexiones que nadie atendía (read timeout
+/// en vez de connection refused). Los `Child` se sueltan SIN matar (la semántica de `close(h)`:
+/// un proceso lanzado a propósito sigue siendo del usuario). El contador de ids no se resetea
+/// (los handles no se reusan entre tests).
+pub fn close_all_handles() {
+    // Drena bajo el lock pero DROPEA fuera: el Drop de un watch detiene hilos y puede tardar.
+    let drained: Vec<OpenHandle> = registry().lock().unwrap().open.drain().map(|(_, v)| v).collect();
+    drop(drained);
+    read_timeouts().lock().unwrap().clear();
+    read_expired().lock().unwrap().clear();
+}
+
 // M89.2: ¿este binario trae cripto/TLS (ring/rustls)? Los motores y el CLI lo consultan para
 // dar un error CLARO (nunca un hash vacío ni una verificación que "pasa" en silencio).
 pub fn net_tls_available() -> bool {

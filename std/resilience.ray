@@ -72,38 +72,57 @@ pub struct Breaker {
     threshold: int,
     cooldown_ms: int,
     failures: int,
-    abierto_hasta: int,
+    open_until: int,
 }
 
 /// Builds a circuit breaker (see `Breaker`).
 pub fn breaker(threshold: int, cooldown_ms: int) -> Breaker {
-    Breaker { threshold: threshold, cooldown_ms: cooldown_ms, failures: 0, abierto_hasta: 0 }
+    Breaker { threshold: threshold, cooldown_ms: cooldown_ms, failures: 0, open_until: 0 }
 }
 
 /// Is the breaker currently OPEN (failing fast)?
 pub fn is_open(b: Breaker) -> bool {
-    time.monotonic() < b.abierto_hasta
+    time.monotonic() < b.open_until
 }
 
-// Ejecuta `f` bajo el breaker. Abierto → devuelve `err_abierto` SIN llamar a `f`
+// M129: el par componible admit/report. `guard` exige que `f` corra en la fibra dueña del
+// breaker; en cuanto el estado vive en un actor (lo natural con fibras de heap aislado) hacen
+// falta las TRANSICIONES sueltas: preguntar antes de intentar y reportar el desenlace después,
+// con la llamada real donde sea (otra fibra, otro proceso, el otro lado de un canal).
+/// May a call proceed right now? `true` unless the breaker is OPEN (fail-fast window).
+/// Pair with `report`: `if (admit(b)) { let r = try_it(); report(b, r.is_ok()); }`.
+/// `guard` is sugar over this pair for the same-fiber case.
+pub fn admit(b: Breaker) -> bool {
+    !is_open(b)
+}
+
+/// Reports the outcome of an admitted call: a failure counts toward `threshold` (and OPENS
+/// the breaker when reached); a success resets the count (and closes a half-open breaker).
+pub fn report(b: Breaker, ok: bool) {
+    if (ok) {
+        b.failures = 0;
+    } else {
+        b.failures = b.failures + 1;
+        if (b.failures >= b.threshold) {
+            b.open_until = time.monotonic() + b.cooldown_ms;
+            b.failures = 0;
+        }
+    }
+}
+
+// Ejecuta `f` bajo el breaker. Abierto → devuelve `err_open` SIN llamar a `f`
 // (fail-fast: no castigar a un servicio caído con más tráfico). El error del circuito
 // lo aporta el llamador porque `E` es suyo (no hay un tipo de error universal).
+// M129: azúcar sobre admit/report — una sola verdad para las transiciones.
 /// Runs `f` under the breaker. If OPEN, returns `err_open` WITHOUT calling `f`
 /// (fail-fast). The caller provides the open-circuit error because `E` is theirs.
+/// Sugar over `admit`/`report` for the same-fiber case.
 pub fn guard<T, E>(b: Breaker, err_open: E, f: fn() -> Result<T, E>) -> Result<T, E> {
-    if (is_open(b)) {
+    if (!admit(b)) {
         return Result.Err(err_open);
     }
     let out = f();
-    if (out.is_err()) {
-        b.failures = b.failures + 1;
-        if (b.failures >= b.threshold) {
-            b.abierto_hasta = time.monotonic() + b.cooldown_ms;
-            b.failures = 0;
-        }
-    } else {
-        b.failures = 0;
-    }
+    report(b, !out.is_err());
     out
 }
 
@@ -113,17 +132,17 @@ pub fn guard<T, E>(b: Breaker, err_open: E, f: fn() -> Result<T, E>) -> Result<T
 /// A time budget threaded through calls. Check with `remaining`/`expired`; apply it
 /// to real I/O via `net.set_read_timeout(handle, resilience.remaining(d))`.
 pub struct Deadline {
-    hasta: int,
+    until: int,
 }
 
 /// A deadline `ms` from now (monotonic clock).
 pub fn deadline(ms: int) -> Deadline {
-    Deadline { hasta: time.monotonic() + ms }
+    Deadline { until: time.monotonic() + ms }
 }
 
 /// Milliseconds left in the budget (0 if expired — never negative).
 pub fn remaining(d: Deadline) -> int {
-    let r = d.hasta - time.monotonic();
+    let r = d.until - time.monotonic();
     if (r < 0) {
         return 0;
     }

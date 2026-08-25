@@ -63,6 +63,22 @@ fn main() -> int {
     // Deadline: un presupuesto de 100s no expira de inmediato.
     let d = resilience.deadline(100000);
     print("deadline expirado=" + to_string(resilience.expired(d)));
+    // M129: admit/report — las transiciones sueltas, componibles con actores. threshold 2:
+    // dos reportes de fallo lo ABREN (admit=false sin llamar a nada); un éxito tras el
+    // cooldown lo cierra.
+    let b2 = resilience.breaker(2, 100000);
+    print("admit inicial=" + to_string(resilience.admit(b2)));
+    resilience.report(b2, false);
+    resilience.report(b2, false);
+    print("admit tras 2 fallos=" + to_string(resilience.admit(b2)));
+    let b3 = resilience.breaker(2, 0);
+    resilience.report(b3, false);
+    resilience.report(b3, false);
+    // cooldown 0 → semiabierto de inmediato: admite, y el éxito lo cierra.
+    print("semiabierto admite=" + to_string(resilience.admit(b3)));
+    resilience.report(b3, true);
+    resilience.report(b3, false);
+    print("tras exito, 1 fallo no abre=" + to_string(resilience.admit(b3)));
     0
 }
 "#;
@@ -74,7 +90,11 @@ guard err 2\n\
 guard err -1\n\
 guard err -1\n\
 f corrió 2 veces; abierto=true\n\
-deadline expirado=false\n";
+deadline expirado=false\n\
+admit inicial=true\n\
+admit tras 2 fallos=false\n\
+semiabierto admite=true\n\
+tras exito, 1 fallo no abre=true\n";
 
 #[test]
 fn resilience_ambos_engines() {

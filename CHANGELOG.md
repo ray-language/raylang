@@ -37,6 +37,14 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El lote B del dogfood** (M129) — `admit(b)`/`report(b, ok)` en `std/resilience` (las
+  transiciones del breaker sueltas, componibles con actores; `guard` queda como azúcar; los campos
+  `abierto_hasta`/`hasta` pasan a `open_until`/`until`); **`ray test` aísla de verdad**: al
+  terminar cada `@test` se cierran TODOS los handles del SO que dejó vivos — los LISTENERS
+  incluidos, que antes sobrevivían y envenenaban el siguiente test (los procesos hijos no se
+  matan); y **`webserver.gzip(req, resp)`** + `accepts_gzip(req)`: negociación de
+  `Accept-Encoding` explícita por handler (umbral 512 octetos, `q=0` respetado, `Vary` correcto,
+  streaming y `Content-Encoding` previos intactos).
 - **El lote de menores de std** (M128) — cuatro cierres de dogfood en raylang puro:
   `std/regex` con **grupos con nombre** (`(?P<n>…)`/`(?<n>…)` + `group_names` +
   `captures_map(re, s) -> Option<Map<string, string>>`; la vía acelerada por crate sigue intacta);

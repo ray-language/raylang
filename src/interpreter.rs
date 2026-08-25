@@ -2040,6 +2040,19 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M122: connect con PLAZO — el intento vencido devuelve el error estable "connect timeout".
+            "__tcp_connect_timeout" => {
+                let arr = match (&values[0], &values[1], &values[2]) {
+                    (Value::Str(host), Value::Int(port), Value::Int(ms)) => {
+                        match crate::builtins::tcp_connect_timeout(host, *port, *ms) {
+                            Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees string, int, int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M19.4a: abre una conexión TLS → ["ok", handle] o ["err", msg].
             "__tls_connect" => {
                 let arr = match (&values[0], &values[1]) {

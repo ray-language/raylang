@@ -9901,3 +9901,28 @@ CUATRO sabores byte-idénticos (interp, VM, nativo fibras, nativo `--without fib
 `udp_cli.rs` (interp/VM/nativo). Pendiente de la misma familia, fuera de este hito:
 `tcp_connect_timeout` (§70.3 — el connect del SO puede retener la fibra ~75 s ante un host que
 tira SYNs).
+
+## 119. M122 — tcp_connect_timeout: el connect con plazo (ago 2026)
+
+El hermano del timeout UDP (§118), del mismo hallazgo de raywatch (IDEAS §70.3): `tcp_connect`
+contra un host que descarta los SYN (firewall drop, ruta negra) retenía la fibra del check ~75 s —
+el timeout de conexión del SO en macOS — muy por encima de cualquier `timeout_ms` configurado en
+el monitor.
+
+**Superficie**: `net.tcp_connect_timeout(host, port, ms) -> Result<int, string>` — el intento que
+agote el plazo falla con el error estable `"connect timeout"` (hermano de `"read timeout"`);
+`ms <= 0` = idéntico a `tcp_connect`. La espera es **acotada pero bloqueante**
+(`TcpStream::connect_timeout` del std, en los tres motores): no cede la fibra, pero convierte un
+cuelgue de 75 s en uno de `ms`. El connect asíncrono de verdad (socket crudo no-bloqueante +
+EINPROGRESS + aparcar en escribible + SO_ERROR) exigiría crear sockets sin conectar — fuera del
+std de Rust — y ninguna app lo pide aún: queda como refinamiento si un perfil lo reclama. La
+resolución del nombre (getaddrinfo) va aparte del plazo, también acotable a futuro.
+
+**Plomería** (patrón M115, los tres sitios): primitivo `__tcp_connect_timeout` (opcode
+`TcpConnectTimeout`, tabla BUILTINS + H11), brazo de VM (con el `set_nonblocking` de M15.5 al
+conectar) e intérprete, wrapper en `std/net`, y en nativo el intercept a nivel de WRAPPER
+(`std::net::tcp_connect_timeout` → `__ray_tcp_connect_timeout` en ambos sabores) con sus tres
+listas de routing (is_handled_builtin, emit_net, type_of). De paso: los `Result.Err("handle
+inválido")`/`"error de socket"` de std/net (texto de cara al usuario en español, pre-política) →
+inglés. Verificado byte-idéntico en los cuatro sabores (ruta negra TEST-NET-1 vence en ~400 ms +
+un connect real con plazo conecta); test en `net_cli.rs`.

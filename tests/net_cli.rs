@@ -154,3 +154,54 @@ fn tcp_connect_fails_a_un_port_closed() {
         assert_eq!(code, 1, "output 1 en error (vm={vm})");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// M122 — `net.tcp_connect_timeout`: el connect con plazo.
+// ---------------------------------------------------------------------------------------------
+
+/// (1) Contra una ruta negra (TEST-NET-1, RFC 5737 — descarta los SYN), el intento falla ACOTADO
+/// con el error estable "connect timeout" (antes: ~75 s del SO). (2) Con plazo puesto, un connect
+/// a un listener real sigue funcionando. Ambos motores. NOTA: si la red local responde a
+/// 192.0.2.1 con un rechazo inmediato (poco común), el error del SO también vale — lo que el test
+/// exige es que NO cuelgue (elapsed acotado) y que sea Err.
+#[test]
+fn tcp_connect_timeout_bounds_the_wait_and_still_connects() {
+    let src = r#"
+import std/net;
+import std/time;
+
+fn main() -> int {
+    let t0 = time.monotonic();
+    match (net.tcp_connect_timeout("192.0.2.1", 81, 400)) {
+        Result.Ok(_) => print("unexpected connect"),
+        Result.Err(_e) => print("bounded err"),
+    }
+    let dt = time.monotonic() - t0;
+    print(dt < 10000);
+    let l = match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            print("listen err: " + e);
+            return 1;
+        },
+    };
+    let port = net.local_port(l);
+    match (net.tcp_connect_timeout("127.0.0.1", port, 2000)) {
+        Result.Ok(h) => {
+            print("connected");
+            close(h);
+        },
+        Result.Err(e) => print("connect err: " + e),
+    }
+    0
+}
+"#;
+    for vm in [false, true] {
+        let start = std::time::Instant::now();
+        let (out, code) = run("net_connect_timeout", src, vm);
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "el connect no quedó acotado (vm={vm})");
+        assert_eq!(code, 0, "exit (vm={vm}): {out}");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines, vec!["bounded err", "true", "connected"], "vm={vm}");
+    }
+}

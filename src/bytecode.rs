@@ -644,6 +644,8 @@ pub enum OpCode {
     /// Saca `port` (int) y `host` (string); conecta y empuja un `[string]` etiquetado
     /// (`["ok", handle]`/`["err", msg]`). Primitivo `__tcp_connect`; el prelude → `Result<int,string>`.
     TcpConnect,
+    /// M122: como TcpConnect con PLAZO (host, port, ms) — el intento vencido = "connect timeout".
+    TcpConnectTimeout,
     /// Saca `port` (int) y `host` (string); abre una conexión **TLS** (rustls) y empuja un `[string]`
     /// etiquetado. Primitivo `__tls_connect` (M19.4a); el prelude → `Result<int,string>`. El handle se
     /// lee/escribe con los mismos `socket_*` (desvían a TLS) y se cierra con `close`.

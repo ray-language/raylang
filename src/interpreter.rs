@@ -1680,13 +1680,14 @@ impl<'a> Interpreter<'a> {
             }
             // M67: operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file) —
             // el helper compartido monta el ["ok"(, dato)]/["err", msg]; aquí solo se convierte.
-            "__mkdir" | "__remove_dir" | "__file_size" | "__mtime" | "__rename" | "__copy_file" => {
+            "__mkdir" | "__remove_dir" | "__file_size" | "__mtime" | "__stat" | "__rename" | "__copy_file" => {
                 use crate::bytecode::FsOp;
                 let op = match name {
                     "__mkdir" => FsOp::Mkdir,
                     "__remove_dir" => FsOp::RemoveDir,
                     "__file_size" => FsOp::FileSize,
                     "__mtime" => FsOp::Mtime,
+                    "__stat" => FsOp::Stat,
                     "__rename" => FsOp::Rename,
                     "__copy_file" => FsOp::CopyFile,
                     _ => unreachable!(),
@@ -1835,6 +1836,17 @@ impl<'a> Interpreter<'a> {
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
                     _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M115.3: chmod → ["ok"] o ["err", msg].
+            "__chmod" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(path), Value::Int(mode)) => match crate::builtins::chmod_path(path, *mode) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees string, int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }

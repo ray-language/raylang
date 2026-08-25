@@ -543,6 +543,9 @@ mod tests {
         // M115.2: candados consultivos.
         let d = doc_text("fs.try_lock");
         assert!(d.contains("std/fs") && d.contains("advisory lock"), "{d}");
+        // M115.3: metadatos.
+        let d = doc_text("fs.stat");
+        assert!(d.contains("std/fs") && d.contains("WITHOUT following symlinks"), "{d}");
         let d = doc_text("no_existe_tal_cosa");
         assert!(d.contains("is not a builtin"), "{d}");
     }

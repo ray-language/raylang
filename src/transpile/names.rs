@@ -126,7 +126,12 @@ pub(super) fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), Str
 pub(super) fn is_handled_builtin(name: &str) -> bool {
     // `std::math::*`/`std::fs::*` se interceptan en emit_call/type_of (→ Rust nativo); no emitimos sus
     // wrappers del módulo (llaman a primitivos `__sqrt`/`__read_file`… ausentes).
-    if name.starts_with("std::math::") || name.starts_with("std::fs::") {
+    // M115.3: `std::fs::stat`/`chmod` son la EXCEPCIÓN de fs — sus wrappers se EMITEN (stat
+    // construye el struct `Stat` en raylang; el intercept nativo es a nivel de PRIMITIVO
+    // `__stat`/`__chmod`, como en std/process).
+    if name.starts_with("std::math::")
+        || (name.starts_with("std::fs::") && !matches!(name, "std::fs::stat" | "std::fs::chmod"))
+    {
         return true;
     }
     // De `std/time` y `std/random` SOLO se saltan las funciones que envuelven un primitivo (interceptadas);

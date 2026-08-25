@@ -1124,6 +1124,23 @@ match (fs.open("data/LOCK", "w")) {
 El candado es **consultivo** (flock): protege frente a otros procesos que también lo piden, no
 frente a quien escribe sin pedirlo.
 
+Los **metadatos** completos de una ruta los da `fs.stat`, que a diferencia de
+`is_dir`/`is_file`/`mtime` **no sigue symlinks** — un symlink se detecta en vez de seguirse:
+
+```rust
+match (fs.stat(path)) {
+    Result.Ok(st) => match (st.kind) {          // "file" | "dir" | "symlink" | "other"
+        "symlink" => print("link (" + to_string(st.size) + " bytes de destino)"),
+        _ => print(st.kind + " mode=" + to_string(st.mode) + " " + to_string(st.size) + "b"),
+    },
+    Result.Err(e) => print(e),
+}
+```
+
+`st.mode` son los 12 bits de permiso en decimal (raylang aún no tiene literales octales):
+384 = `0o600`, 493 = `0o755`. `fs.chmod(path, mode)` los cambia — el gesto de una bóveda de
+secretos: `fs.chmod("vault.db", 384)` la restringe a su dueño.
+
 ### Stdin, entorno y argumentos
 
 ```rust

@@ -256,3 +256,40 @@ pub fn unlock(h: int) -> Result<int, string> {
     let r = __unlock_handle(h);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
+
+// --- M115.3: metadatos y permisos. `stat` NO sigue symlinks (lstat): así un symlink se DETECTA
+// (kind "symlink") en vez de seguirse a ciegas — lo que un sync/backup fiel necesita. Los
+// helpers totales (is_dir/is_file/mtime/file_size) siguen resolviendo symlinks, como siempre. ---
+/// File metadata, WITHOUT following symlinks (lstat semantics): a symlink reports its own
+/// kind/size instead of its target's. See `stat`.
+pub struct Stat {
+    /// "file", "dir", "symlink" or "other" (socket, FIFO, device…).
+    kind: string,
+    /// Permission bits (the low 12 bits), as an int: 0o600 is 384, 0o755 is 493.
+    mode: int,
+    /// Size in bytes (for a symlink: the length of the link itself).
+    size: int,
+    /// Last modification, epoch milliseconds UTC (the same currency as `time.now()`).
+    mtime_ms: int,
+}
+
+/// Metadata of the path WITHOUT following symlinks; `Ok(Stat)` or `Err(message)` if the path
+/// does not exist. A symlink reports kind "symlink" — the way to even detect one.
+pub fn stat(path: string) -> Result<Stat, string> {
+    let r = __stat(path);
+    if (r[0] == "ok") {
+        let mode = parse_int(r[2]).unwrap_or(0);
+        let size = parse_int(r[3]).unwrap_or(0);
+        let mt = parse_int(r[4]).unwrap_or(0);
+        Result.Ok(Stat { kind: r[1], mode: mode, size: size, mtime_ms: mt })
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Sets the file's permission bits (chmod, the low 12 bits); `Ok(0)` or `Err(message)`.
+/// The mode is a plain int: 384 is 0o600 (owner read/write), 493 is 0o755.
+pub fn chmod(path: string, mode: int) -> Result<int, string> {
+    let r = __chmod(path, mode);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}

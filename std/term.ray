@@ -299,6 +299,106 @@ pub fn read_key() -> Option<Key> {
     }
 }
 
+// --- M125: entrada OCULTA (passphrases). Leer una línea sin eco era artesanía sobre `raw` que
+// toda herramienta de secretos repetía (~30 líneas; hallazgo de raypass, IDEAS §71.1). El núcleo
+// de edición es PURO (`hidden_feed`, como `decode`): se prueba sin tty y sirve para alimentar
+// bytes propios. `read_hidden` lo envuelve con el prompt (a stderr, como getpass(3): no ensucia
+// un stdout canalizado), el modo crudo y el bucle de lectura. ---
+
+// Un paso del editor oculto: sigue acumulando, terminó (Enter/EOF) o se canceló (Ctrl-C).
+/// One step of the hidden-line editor: still accumulating (`More`), finished (`Done`, on
+/// Enter), or cancelled (`Cancelled`, on Ctrl-C).
+pub enum Hidden {
+    More(bytes),
+    Done(string),
+    Cancelled,
+}
+
+// Quita el ÚLTIMO carácter completo (no un byte): retrocede las continuaciones UTF-8 (10xxxxxx)
+// y luego el byte líder — un backspace sobre "ñ" borra la "ñ" entera.
+fn drop_last_char(buf: bytes) -> bytes {
+    if (buf.len() == 0) {
+        return buf;
+    }
+    var end = buf.len() - 1;
+    while (end > 0 && (buf[end] & 192) == 128) {
+        end = end - 1;
+    }
+    buf.sub_bytes(0, end)
+}
+
+// El texto acumulado como string (total: bytes no-UTF-8 → "").
+fn hidden_text(buf: bytes) -> string {
+    match (from_utf8(buf)) {
+        Result.Ok(s) => s,
+        Result.Err(_e) => "",
+    }
+}
+
+/// The PURE core of `read_hidden` (the `decode` philosophy: testable without a tty, feed it any
+/// byte source): applies one chunk of raw input to the accumulated bytes. Enter (CR/LF) finishes
+/// with the decoded text; Backspace/DEL removes one full UTF-8 CHARACTER; Ctrl-C cancels; other
+/// control bytes are ignored. Nothing is ever echoed — that is the caller's contract.
+pub fn hidden_feed(acc: bytes, chunk: bytes) -> Hidden {
+    var buf = acc;
+    var i = 0;
+    while (i < chunk.len()) {
+        let b = chunk[i];
+        if (b == 13 || b == 10) {
+            return Hidden.Done(hidden_text(buf));
+        }
+        if (b == 3) {
+            return Hidden.Cancelled;
+        }
+        if (b == 127 || b == 8) {
+            buf = drop_last_char(buf);
+        } else if (b >= 32) {
+            buf = buf + chunk.sub_bytes(i, i + 1);
+        }
+        i = i + 1;
+    }
+    Hidden.More(buf)
+}
+
+// El bucle de lectura sobre el núcleo puro (dentro de `raw`): EOF devuelve lo tecleado.
+fn hidden_loop() -> Result<string, string> {
+    var acc = b"";
+    while (true) {
+        match (io.read(64)) {
+            Option.None => {
+                return Result.Ok(hidden_text(acc));
+            },
+            Option.Some(chunk) => match (hidden_feed(acc, chunk)) {
+                Hidden.More(rest) => {
+                    acc = rest;
+                },
+                Hidden.Done(s) => {
+                    return Result.Ok(s);
+                },
+                Hidden.Cancelled => {
+                    return Result.Err("interrupted");
+                },
+            },
+        }
+    }
+    return Result.Err("eof");
+}
+
+/// Reads one line WITHOUT echo (passphrases, tokens): prints `prompt` to STDERR (like getpass(3),
+/// so a piped stdout stays clean), enters raw mode, and edits with Backspace (one full UTF-8
+/// character) until Enter. Ctrl-C cancels with `Err("interrupted")`; end of input returns what
+/// was typed. `Err` when stdin is not a terminal — script callers should read their secret from
+/// an env var or a file instead.
+pub fn read_hidden(prompt: string) -> Result<string, string> {
+    if (!is_tty(0)) {
+        return Result.Err("stdin is not a terminal");
+    }
+    let _ = io.ewrite(prompt);
+    let out = raw(fn() -> Result<string, string> { hidden_loop() })?;
+    let _ = io.ewrite("\r\n");
+    out
+}
+
 // --- M117: ancho en CELDAS de terminal (el problema wcwidth). Todo TUI lo necesita para alinear
 // columnas cuando el texto lleva CJK/kana/emoji (2 celdas) o combinantes (0). `char_from_code`/
 // `chars` ya dan el code point; esto es la tabla de rangos que faltaba (antes cada TUI la copiaba).

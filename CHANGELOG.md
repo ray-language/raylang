@@ -37,6 +37,11 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`term.read_hidden(prompt)`** (M125) — una línea SIN eco para passphrases: prompt a stderr
+  (como getpass(3)), Backspace borra un carácter UTF-8 COMPLETO (la versión artesanal que las apps
+  copiaban rompía una "ñ" a medias), Ctrl-C cancela con `Err("interrupted")`. Con su núcleo PURO
+  `hidden_feed` (la filosofía de `term.decode`): probeable sin tty y byte-idéntico en los tres
+  motores.
 - **`net.tls_peer_cert(h)`** (M124) — el certificado del peer de una conexión TLS como
   `PeerCert { subject, issuer, not_before_ms, not_after_ms, san }`: **"expira en N días"** — EL
   check de TLS que todo operador quiere — deja de ser inexpresable

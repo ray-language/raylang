@@ -81,3 +81,115 @@ fn cell_width_matches_on_all_three_engines() {
         include_str!("fixtures/term_width.out"),
     );
 }
+
+#[test]
+fn hidden_input_core_matches_on_all_three_engines() {
+    // M125: el núcleo PURO de la entrada oculta (hidden_feed: Enter/backspace-por-carácter/
+    // Ctrl-C/controles ignorados) + la degradación sin tty de read_hidden.
+    assert_on_all_engines(
+        "hidden",
+        include_str!("fixtures/term_hidden.ray"),
+        include_str!("fixtures/term_hidden.out"),
+    );
+}
+
+/// M125: el camino REAL — un pty vía `script -q` (la receta de las TUIs). Se ESPERA el prompt
+/// antes de teclear (term.raw usa TCSAFLUSH, que descarta la entrada pendiente: teclear antes de
+/// que el modo crudo esté puesto perdería los bytes y colgaría la lectura). Se teclea
+/// "sécrX<backspace>eto<Enter>": el programa debe devolver "sécreto" (el backspace borra la X, la
+/// "é" multibyte cruza intacta) y NADA de lo tecleado debe aparecer en la salida (sin eco).
+/// Solo VM (la batería pura de arriba ya cubre la edición en los tres motores).
+#[test]
+fn read_hidden_under_a_real_pty() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    if Command::new("script").arg("--version").output().is_err() && Command::new("script").output().is_err() {
+        eprintln!("saltando read_hidden_under_a_real_pty: no hay `script`");
+        return;
+    }
+    let dir = tmp("hidden_pty");
+    let main = dir.join("main.ray");
+    std::fs::write(
+        &main,
+        r#"import std/term;
+
+fn main() {
+    match (term.read_hidden("pass: ")) {
+        Result.Ok(s) => print("got=" + s),
+        Result.Err(e) => print("err=" + e),
+    }
+}
+"#,
+    )
+    .unwrap();
+    let bin = env!("CARGO_BIN_EXE_raylang");
+    let mut cmd = if cfg!(target_os = "linux") {
+        // util-linux: script -q -e -c "cmd" /dev/null
+        let inner = format!("{} --vm {}", bin, main.display());
+        let mut c = Command::new("script");
+        c.args(["-q", "-e", "-c", &inner, "/dev/null"]);
+        c
+    } else {
+        // BSD/macOS: script -q /dev/null cmd args...
+        let mut c = Command::new("script");
+        c.arg("-q").arg("/dev/null").arg(bin).arg("--vm").arg(&main);
+        c
+    };
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lanza script(pty)");
+    // Hilo lector: acumula TODO el stdout del pty (prompt incluido — stderr del hijo también
+    // desemboca en el pty).
+    let mut stdout = child.stdout.take().expect("stdout");
+    let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let sink = std::sync::Arc::clone(&collected);
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 512];
+        while let Ok(n) = stdout.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().extend_from_slice(&buf[..n]);
+        }
+    });
+    // Espera el prompt (→ el modo crudo YA está puesto: el ewrite del prompt va antes de raw,
+    // pero el margen extra de abajo cubre el tcsetattr inmediato) y entonces teclea.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if collected.lock().unwrap().windows(6).any(|w| w == b"pass: ") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "el prompt nunca llegó");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(300)); // margen: prompt visto → raw ya aplicado
+    let typed = b"s\xc3\xa9crX\x7feto\r";
+    child.stdin.as_mut().unwrap().write_all(typed).expect("teclea");
+    let _ = child.stdin.as_mut().unwrap().flush();
+    drop(child.stdin.take());
+    // Espera acotada a que el hijo termine.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let all = String::from_utf8_lossy(&collected.lock().unwrap()).into_owned();
+                    panic!("el pty no terminó a tiempo; salida hasta ahora: {all:?}");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => panic!("wait: {e}"),
+        }
+    }
+    let _ = reader.join();
+    let all = String::from_utf8_lossy(&collected.lock().unwrap()).into_owned();
+    assert!(all.contains("got=sécreto"), "el resultado editado debe llegar: {all:?}");
+    assert!(!all.contains("sécrX"), "lo tecleado no debe tener eco: {all:?}");
+}

@@ -2728,8 +2728,9 @@ La última tanda del catálogo de IDEAS-APPS (14 de 14 construidas). Tres apps d
 3. Sin `try_recv`/select-timeout, matar una fibra dormida sigue sin poderse (raybot): el patrón
    generación-en-el-canal deja una fibra de heartbeat huérfana latiendo por cada reconexión —
    inofensivo pero acumulativo en procesos de semanas. Refuerza §64.
-4. `grpc_client` queda como la ÚNICA superficie de red del paquete sin dogfood (necesita un
-   servicio gRPC externo real).
+4. **[EJECUTADA — M133, DESIGN §130]** `grpc_client` queda como la ÚNICA superficie de red del
+   paquete sin dogfood (necesita un servicio gRPC externo real). → Dogfood contra grpc-go real:
+   dos bugs cazados (HPACK sin Huffman; trailers-only roto), ambos arreglados con guardas.
 
 **Cierre del catálogo**: con esta tanda, las 14 apps de IDEAS-APPS están construidas (§§63–72).
 Los temas transversales que dejaron **están todos ejecutados y mergeados** (ago 2026):
@@ -2801,9 +2802,15 @@ template, protobuf, time, fs), goldens en tándem; los paquetes Tier 2 ya estaba
 regalo cazó un bug real de M130: `exit(code)` nativo perdía la salida pendiente (flusheaba el
 buffer equivocado; ahora drena el hilo escritor con `__ray_flush_prints()`).
 
-**Con esto, el backlog COMPLETO del dogfood de 14 apps está ejecutado — hitos y menores — y la
-superficie entera del lenguaje habla inglés.** Quedan solo las validaciones de ecosistema
-(gRPC dogfood §72.4, VPS 24/7 de rayrelay).
+**[EJECUTADA — M133, DESIGN §130]** El dogfood de gRPC (§72.4): `grpc_client` contra grpc-go
+REAL (fixture Go reproducible, codec crudo sin protoc; `tests/grpc_real_cli.rs`, `#[ignore]` por
+el toolchain de Go). Cazó dos bugs en la primera llamada: el decoder HPACK sin literales Huffman
+(grpc-go comprime siempre; la tabla YA vivía en std/huffman — puente de 15 líneas + vectores
+§C.4 como guarda) y la respuesta trailers-only de un error rota en `grpc_unframe(b"")`.
+
+**Con esto, el backlog COMPLETO del dogfood de 14 apps está ejecutado — hitos y menores — la
+superficie entera del lenguaje habla inglés, y TODA la superficie de red del paquete net tiene
+dogfood.** Queda solo el VPS 24/7 de rayrelay (validación de operación, no de superficie).
 
 ## Cómo usar este archivo
 

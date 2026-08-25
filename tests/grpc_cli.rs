@@ -115,6 +115,51 @@ fn grpc_call_vm() {
     assert_eq!(run(&["--vm"], port), EXPECTED);
 }
 
+/// Servidor de juguete que responde TRAILERS-ONLY (como grpc-go ante un método desconocido):
+/// un único HEADERS con END_HEADERS|END_STREAM, `:status 200` + `grpc-status: 12`, sin DATA.
+fn launch_grpc_trailers_only() -> u16 {
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
+        .collect::<Result<_, _>>()
+        .expect("cert de prueba");
+    let key = PrivateKeyDer::from_pem_slice(KEY_PEM.as_bytes()).expect("clave de prueba");
+    let mut cfg = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .expect("config servidor");
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    let config = Arc::new(cfg);
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        if let Ok((mut sock, _)) = listener.accept() {
+            let mut conn = ServerConnection::new(config).expect("server conn");
+            let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+            let mut buf = [0u8; 4096];
+            let _ = tls.read(&mut buf);
+            // 0x88 = :status 200 (tabla estática) + literal sin indexar `grpc-status: 12`.
+            let mut hdrs = vec![0x88u8, 0x00, 0x0b];
+            hdrs.extend_from_slice(b"grpc-status");
+            hdrs.push(0x02);
+            hdrs.extend_from_slice(b"12");
+            let mut out = Vec::new();
+            out.extend_from_slice(&frame(4, 0, 0, &[])); // SETTINGS
+            out.extend_from_slice(&frame(1, 5, 1, &hdrs)); // HEADERS END_HEADERS|END_STREAM
+            let _ = tls.write_all(&out);
+            let _ = tls.flush();
+        }
+    });
+    port
+}
+
+/// M133 (dogfood gRPC real) — una respuesta TRAILERS-ONLY (el error típico: UNIMPLEMENTED) ya no
+/// cae como "gRPC frame too short": sin DATA, el grpc-status de los trailers ES la respuesta.
+#[test]
+fn grpc_trailers_only_reports_the_status() {
+    let port = launch_grpc_trailers_only();
+    let lines = run(&["--vm"], port);
+    assert_eq!(lines, &["grpc-status: 12", "greeting: "], "trailers-only → status 12, mensaje vacío");
+}
+
 /// M73 — un servidor gRPC que cierra el stream SIN `grpc-status` en los trailers (protocolo
 /// violado) ya no pasa como OK: `grpc_call` devuelve `Err`. Antes `tuvo_grpc_status` se
 /// computaba pero no se leía → `Ok(grpc_status: 0)` indistinguible de un OK legítimo.

@@ -2,7 +2,8 @@
 // vectores oficiales del Apéndice C.3 (las tres peticiones con tabla dinámica compartida). Determinista,
 // lo ejecuta `tests/http2_cli.rs`. (HTTP/2 completo necesita además HPACK-Huffman y el transporte vivo;
 // aquí: framing + HPACK no-Huffman, suficiente para construir una petición HTTP/2 / gRPC.)
-from hpack import HEntry, header, new_hpack, encode, decode;
+from hpack import HEntry, Hpack, header, new_hpack, encode, decode;
+from hex import hex_decode;
 from http2 import preface, parse_frame, Http2Frame, headers_frame;
 
 fn req1() -> [HEntry] {
@@ -12,6 +13,27 @@ fn req1() -> [HEntry] {
         header(":path", "/"),
         header(":authority", "www.example.com")
     ]
+}
+
+// Decodifica un bloque HPACK dado en hex y imprime sus cabeceras (todas, o solo la última).
+fn decode_and_print(dec: Hpack, hex_block: string, all: bool) {
+    let block = match (hex_decode(hex_block)) {
+        Result.Ok(b) => b,
+        Result.Err(e) => {
+            print("ERR hex: " + e);
+            return;
+        },
+    };
+    match (decode(dec, block)) {
+        Result.Ok(hs) => {
+            var i = if (all) { 0 } else { hs.len() - 1 };
+            while (i < hs.len()) {
+                print(hs[i].name + ": " + hs[i].value);
+                i = i + 1;
+            }
+        },
+        Result.Err(e) => print("ERR decode: " + e),
+    }
 }
 
 fn main() {
@@ -62,6 +84,13 @@ fn main() {
         },
         Result.Err(e) => print("ERR decode: " + e),
     }
+
+    // --- M133: los vectores CON Huffman (RFC 7541 §C.4) — la misma serie de peticiones, con
+    // los literales de string comprimidos. Los servidores reales (grpc-go) codifican así. ---
+    let dec4 = new_hpack();
+    decode_and_print(dec4, "828684418cf1e3c2e5f23a6ba0ab90f4ff", true);
+    decode_and_print(dec4, "828684be5886a8eb10649cbf", false);
+    decode_and_print(dec4, "828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf", false);
 
     // --- HTTP/2 framing: round-trip de un HEADERS frame (stream 1, END_HEADERS+END_STREAM). ---
     let block = encode(new_hpack(), [header(":method", "GET"), header(":path", "/")]);

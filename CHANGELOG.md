@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **El cliente gRPC, validado contra grpc-go real** (M133) — el dogfood pendiente de la única
+  superficie de red sin peer real cazó dos bugs en la primera llamada: el decoder **HPACK ya
+  acepta literales Huffman** (grpc-go comprime siempre sus cabeceras; la tabla del RFC 7541
+  vivía en `std/huffman` sin puentear — vectores §C.4 como guarda) y una respuesta
+  **trailers-only** (el error típico: UNIMPLEMENTED, sin DATA) ya devuelve su `grpc-status` en
+  vez de romper como "frame too short". Arnés reproducible: servidor Go real como fixture
+  (`cargo test --test grpc_real_cli -- --ignored`).
 - **Los errores de la stdlib, en inglés** (M132) — el barrido final de la política de
   superficie-en-inglés: los ~110 `Result.Err` en español que quedaban en la stdlib embebida
   (json, toml, inflate, base64, hex, url, huffman, template, protobuf, time/ISO-8601, fs) pasan

@@ -10224,3 +10224,33 @@ va por el HILO ESCRITOR de M96f y ese era el buffer equivocado (`process::exit` 
 destructores; bajo carga el hilo no llegaba a drenar). El arreglo es el de los otros tres sitios
 que terminan el proceso: `__ray_flush_prints()` (espera acotada al drenado del canal) antes del
 `process::exit`.
+
+## 130. M133 — el dogfood de gRPC: el cliente contra grpc-go de verdad (ago 2026)
+
+`grpc_client` era la única superficie de red del paquete sin dogfood (IDEAS §72.4): sus tests
+corrían contra un toy-server escrito a mano que **no parsea nada** del cliente y responde bytes
+fijos. Un peer real era la prueba pendiente — y el peer elegido es el canónico:
+`google.golang.org/grpc` (grpc-go), como servidor local con codec crudo (sin protoc; el fixture
+reproducible vive en `tests/fixtures/grpc_go_server/`, con el MISMO servicio
+`greet.Greeter/Hello` que el toy — un solo demo valida ambos).
+
+El estreno cazó DOS bugs reales en la primera llamada:
+
+1. **El decoder HPACK rechazaba literales Huffman.** grpc-go (y nghttp2) comprimen SIEMPRE sus
+   cabeceras de respuesta; el toy-server nunca lo hacía, así que el diferido de M26 ("el
+   decodificador rechaza con un error claro un literal Huffman") jamás había dolido. La ironía:
+   la tabla Huffman del RFC 7541 ya vivía COMPLETA en `std/huffman` (HPACK la usa por `[int]`,
+   su par interno) — el arreglo es un puente de 15 líneas en `dec_str` (bytes → `[int]` →
+   `huffman_decode` → bytes), en el paquete y en su gemelo didáctico. El codificador sigue
+   emitiendo literales crudos (válidos). Guardas nuevas SIEMPRE-verdes: los vectores oficiales
+   CON Huffman del RFC 7541 §C.4 en `http2_demo`/`http2_cli`.
+2. **Una respuesta trailers-only rompía como "frame too short".** Un error gRPC (UNIMPLEMENTED,
+   NOT_FOUND…) llega como un único HEADERS con `:status 200` + `grpc-status` y SIN frames DATA;
+   `grpc_call` pasaba el cuerpo vacío por `grpc_unframe` y fallaba en vez de devolver el status.
+   Ahora `body.len() == 0` → `GrpcResponse { message: b"", grpc_status }` — el grpc-status de
+   los trailers ES la respuesta. Guarda siempre-verde: el toy-server gana el modo trailers-only.
+
+El arnés real queda como `tests/grpc_real_cli.rs` (`#[ignore]`: necesita el toolchain de Go;
+`cargo test --test grpc_real_cli -- --ignored`): llamada unaria OK en VM **e intérprete** (byte
+a byte) y UNIMPLEMENTED trailers-only contra el servidor real. Con esto, TODA la superficie de
+red del paquete net tiene dogfood.

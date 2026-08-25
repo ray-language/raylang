@@ -1,6 +1,8 @@
 // HPACK (RFC 7541) — compresión de cabeceras de HTTP/2, escrita EN raylang. Cero runtime nuevo. Es la
 // parte difícil del transporte HTTP/2. Importable:
 //   from hpack import HEntry, header, new_hpack, encode, decode;
+from huffman import huffman_decode;
+
 //
 // Cubre: tabla ESTÁTICA (61 entradas), tabla DINÁMICA (inserción + evicción por tamaño), enteros con
 // prefijo de N bits (§5.1), literales de string SIN Huffman (§5.2), y las representaciones de campo:
@@ -307,14 +309,30 @@ fn dec_str(data: bytes, pos: int) -> Result<StrResult, string> {
     }
     let huff = data[pos] >> 7 & 1;
     let lr = dec_int(data, pos, 7)?;
-    if (huff == 1) {
-        return Result.Err("HPACK: Huffman literal not supported in decoding");
-    }
     // La longitud viene del peer: validar el rango antes de `sub_bytes` (evita el OOB).
     if (lr.value < 0 || lr.next + lr.value > data.len()) {
         return Result.Err("HPACK: longitud de string fuera de rango");
     }
-    match (from_utf8(data.sub_bytes(lr.next, lr.next + lr.value))) {
+    var raw = data.sub_bytes(lr.next, lr.next + lr.value);
+    // M133: literal HUFFMAN (bit H=1) — los servidores reales (grpc-go/nghttp2) comprimen sus
+    // cabeceras; la tabla del RFC 7541 vive en huffman.ray (par interno por [int]).
+    if (huff == 1) {
+        var ints: [int] = [];
+        var i = 0;
+        while (i < raw.len()) {
+            ints.push(raw[i]);
+            i = i + 1;
+        }
+        match (huffman_decode(ints)) {
+            Result.Ok(out) => {
+                raw = bytes_of(out);
+            },
+            Result.Err(e) => {
+                return Result.Err("HPACK: " + e);
+            },
+        }
+    }
+    match (from_utf8(raw)) {
         Result.Ok(s) => Result.Ok(StrResult { value: s, next: lr.next + lr.value }),
         Result.Err(e) => Result.Err("HPACK: string is not UTF-8: " + e),
     }

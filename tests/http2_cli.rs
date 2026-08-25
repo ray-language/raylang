@@ -15,6 +15,14 @@ const EXPECTED: &[&str] = &[
     ":scheme: http",
     ":path: /",
     ":authority: www.example.com",
+    // M133 — RFC 7541 §C.4 (CON Huffman): la misma serie, literales comprimidos; C.4.1 entero,
+    // de C.4.2/C.4.3 la cabecera nueva (la tabla dinámica compartida resuelve el resto).
+    ":method: GET",
+    ":scheme: http",
+    ":path: /",
+    ":authority: www.example.com",
+    "cache-control: no-cache",
+    "custom-key: custom-value",
     // Round-trip de un HEADERS frame (tipo 1, stream 1, flags END_HEADERS|END_STREAM = 5).
     "HEADERS type=1 stream=1 flags=5 blocklen=2",
     // La connection preface del cliente: "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".

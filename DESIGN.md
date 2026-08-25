@@ -9754,4 +9754,34 @@ cuello (el frame de 749 procesos es 0.29 ms nativo), así que no hay razón de r
 a Rust. La tabla mejora la de raytop añadiendo combinantes comunes (diacríticos, selectores de
 variación, marcas de ancho cero) como ancho 0, además de los rangos anchos. Portable: al ser cálculo
 puro, funciona sin tty (para medir texto que no se imprime). Los rangos van en decimal con el hex en
-el comentario — hasta que lleguen los literales hex (§67, siguiente pieza del eje).
+el comentario — hasta que lleguen los literales hex (§67, siguiente pieza del eje). *(Actualizado en
+M118: con los literales hex, `is_wide`/`is_zero_width` ya escriben sus rangos como `0x1100`, `0x300`,
+etc. — el código dice lo que el comentario decía.)*
+
+## 115. M118 — literales hex/octal/binario y escapes `\xNN`/`\u{…}`/`\0` (ago 2026)
+
+Dos huecos léxicos que el dogfooding marcó (IDEAS §67 la pieza final del eje terminal, §71.6): no se
+podía escribir un entero en otra base que decimal, ni un carácter por su code point. `fs.chmod` lo
+sufría de cara: un permiso octal `0o600` había que escribirlo `384`, y el manual tenía que aclararlo.
+Un `'\0'` o un `"\u{1F680}"` eran inexpresables.
+
+**Léxico.** El lexer (`number()`) reconoce el prefijo `0x`/`0X`, `0o`/`0O`, `0b`/`0B` tras un `0`
+inicial y lee los dígitos en esa base (`i64::from_str_radix`); sin dígitos tras el prefijo es error.
+Solo enteros (no hay flotantes hex). Los escapes de cadena y de carácter ganan `\0` (NUL), `\xNN`
+(octeto hex, U+0000..U+00FF) y `\u{H…H}` (1–6 hex, validado con `char::from_u32` → rechaza >0x10FFFF
+y surrogates), con mensajes de error propios para cada malformación.
+
+**La base sobrevive al formateador.** La decisión de diseño de la fase: la base **carga intención**
+(una máscara de bits, un permiso octal) que decimal pierde. Por eso el literal no se colapsa a `i64` a
+secas — `TokenKind::Int` y `ExprKind::Int` cargan ahora un `Radix { Dec, Hex, Oct, Bin }`, y `ray fmt`
+reemite el literal en su base (`0xFF`, `0o755`, `0b1010`; prefijo en minúscula, dígitos hex en
+mayúscula) en vez de canonizarlo. El `Radix` es metadato solo-front-end: checker, intérprete, VM y
+transpilador leen el valor y lo ignoran (erasure), como con los genéricos. El transpilador nativo
+emite el valor en decimal (`{}i64`) — byte-idéntico, la base es cosmética de la fuente, no del binario.
+De paso, `fmt` aprendió a escapar cualquier carácter de control (antes inexpresable en fuente, ahora
+sí vía `\x`/`\u`): un `'\0'` roundtripea como `'\0'`, no como un byte NUL crudo en el `.ray`.
+
+**El espejo selfhost queda diferido**, como los bitops: `selfhost/lexer.ray` no tokeniza las bases ni
+los escapes nuevos, y el corpus del oráculo (`tests/selfhost_lexer.rs`) no los incluye — la
+byte-identidad se mantiene sobre lo que ambos lexers sí cubren. `std/term` estrena los literales:
+`is_wide`/`is_zero_width` pasan sus rangos a hex, cerrando la nota de §114.

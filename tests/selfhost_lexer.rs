@@ -34,7 +34,7 @@ fn escape(s: &str) -> String {
 /// El nombre canónico de un token, espejo de `kind_str` en `lex_dump.ray`.
 fn kind_str(k: &TokenKind) -> String {
     match k {
-        TokenKind::Int(n) => format!("Int({})", n),
+        TokenKind::Int(n, _) => format!("Int({})", n),
         TokenKind::Float(f) => format!("Float({})", f),
         TokenKind::Str(s) => format!("Str(\"{}\")", escape(s)),
         // M27.3: cadena interpolada (el lexer auto-alojado aún no la produce; no aparece en el corpus).

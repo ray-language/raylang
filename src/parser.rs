@@ -1324,7 +1324,7 @@ impl Parser {
             } else if self.check(&TokenKind::Dot) {
                 self.advance(); // '.'
                 // Acceso a tupla `t.0`: tras el '.' viene un número, no un identificador (M27.1).
-                if let TokenKind::Int(n) = self.peek().kind {
+                if let TokenKind::Int(n, _) = self.peek().kind {
                     let (nl, nc) = (self.peek().line, self.peek().col);
                     self.advance();
                     self.field_name_pos.entry((line, col, n.to_string())).or_default().push((nl, nc));
@@ -1400,7 +1400,7 @@ impl Parser {
 
         let tok = self.advance();
         let kind = match tok.kind {
-            TokenKind::Int(v) => ExprKind::Int(v),
+            TokenKind::Int(v, r) => ExprKind::Int(v, r),
             TokenKind::Float(v) => ExprKind::Float(v),
             TokenKind::Str(s) => ExprKind::Str(s),
             // M27.3: cadena interpolada `"...${expr}..."` → concatenación con `to_string` de cada expresión.
@@ -2083,7 +2083,7 @@ mod tests {
     /// compacta: `1 + 2 * 3` → `(+ 1 (* 2 3))`.
     fn sx(e: &Expr) -> String {
         match &e.kind {
-            ExprKind::Int(v) => v.to_string(),
+            ExprKind::Int(v, _) => v.to_string(),
             ExprKind::Float(v) => v.to_string(),
             ExprKind::Bool(b) => b.to_string(),
             ExprKind::Str(s) => format!("{:?}", s),
@@ -2427,7 +2427,7 @@ fn main() -> int {
         assert_eq!(main.return_type, Type::Int);
         // main: var, while, y el valor final 0.
         assert_eq!(main.body.statements.len(), 2);
-        assert!(matches!(main.body.tail.as_deref(), Some(Expr { kind: ExprKind::Int(0), .. })));
+        assert!(matches!(main.body.tail.as_deref(), Some(Expr { kind: ExprKind::Int(0, _), .. })));
     }
 
     #[test]

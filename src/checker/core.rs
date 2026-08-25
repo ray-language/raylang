@@ -1938,7 +1938,7 @@ impl Checker {
 
     pub(super) fn check_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match &expr.kind {
-            ExprKind::Int(_) => Ok(Type::Int),
+            ExprKind::Int(..) => Ok(Type::Int),
             ExprKind::Float(_) => Ok(Type::Float),
             ExprKind::Bool(_) => Ok(Type::Bool),
             ExprKind::Str(_) => Ok(Type::String),
@@ -2318,7 +2318,7 @@ impl Checker {
     /// ese ancho (en el lowering se envuelve en un `as u{w}`) y devuelve `Some(UInt(w))`. Si no es
     /// un literal, `None` (sin coerción). Si es un literal fuera de rango, error.
     pub(super) fn coerce_uint_literal(&mut self, expr: &Expr, w: u8) -> Result<Option<Type>, TypeError> {
-        if let ExprKind::Int(n) = &expr.kind {
+        if let ExprKind::Int(n, _) = &expr.kind {
             if !uint_literal_fits(*n, w) {
                 return Err(self.err(expr.line, expr.col, format!(
                     "the literal {} does not fit in u{}", n, w)));

@@ -547,7 +547,7 @@ pub struct Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     // --- Literales ---
-    Int(i64),
+    Int(i64, crate::token::Radix), // el valor + la base en que se escribió (M118)
     Float(f64),
     Bool(bool),
     Str(String),
@@ -732,7 +732,7 @@ fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
 
 fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
     match &expr.kind {
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
         ExprKind::Unary { expr, .. } => walk_expr(expr, acc),
         ExprKind::Binary { left, right, .. } => {
             walk_expr(left, acc);

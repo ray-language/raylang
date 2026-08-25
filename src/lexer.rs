@@ -10,7 +10,7 @@
 //! correspondan. Para operadores de dos caracteres (`==`, `->`, …) usamos un
 //! lookahead de un carácter.
 
-use crate::token::{InterpPart, Token, TokenKind};
+use crate::token::{InterpPart, Radix, Token, TokenKind};
 
 /// Error léxico con ubicación. Se produce ante un carácter inesperado, una cadena
 /// sin cerrar, un escape inválido o un número mal formado.
@@ -228,6 +228,31 @@ impl Lexer {
     /// entero y flotante según haya un '.' seguido de dígito.
     fn number(&mut self) -> Result<TokenKind, LexError> {
         let start = self.pos - 1; // el primer dígito ya fue consumido por next_token
+        // M118: literal con prefijo de base — `0x`/`0X` hex, `0o`/`0O` octal, `0b`/`0B` binario. El
+        // '0' ya se consumió; si le sigue el prefijo, se lee en esa base (solo enteros, sin `.`).
+        if self.chars[start] == '0' {
+            if let Some((radix, base)) = self.peek().and_then(|p| match p {
+                'x' | 'X' => Some((16, Radix::Hex)),
+                'o' | 'O' => Some((8, Radix::Oct)),
+                'b' | 'B' => Some((2, Radix::Bin)),
+                _ => None,
+            }) {
+                let prefix = self.advance(); // consume x/o/b
+                let dstart = self.pos;
+                while matches!(self.peek(), Some(c) if c.is_digit(radix)) {
+                    self.advance();
+                }
+                if self.pos == dstart {
+                    return Err(self.error(format!("expected at least one digit after '0{}'", prefix)));
+                }
+                let digits: String = self.chars[dstart..self.pos].iter().collect();
+                let v = i64::from_str_radix(&digits, radix).map_err(|_| {
+                    let text: String = self.chars[start..self.pos].iter().collect();
+                    self.error(format!("integer out of range '{}'", text))
+                })?;
+                return Ok(TokenKind::Int(v, base));
+            }
+        }
         while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
             self.advance();
         }
@@ -276,7 +301,7 @@ impl Lexer {
             let v = text
                 .parse::<i64>()
                 .map_err(|_| self.error(format!("integer out of range '{}'", text)))?;
-            Ok(TokenKind::Int(v))
+            Ok(TokenKind::Int(v, Radix::Dec))
         }
     }
 
@@ -314,20 +339,25 @@ impl Lexer {
                 }
                 Some('\\') => {
                     self.advance(); // la barra invertida
+                    // Cada brazo consume EXACTAMENTE sus caracteres (los simples, 1; `\x`, 3; `\u{…}`,
+                    // variable) — no hay un `advance` común al final (M118 añadió escapes de longitud
+                    // variable, incompatibles con él).
                     match self.peek() {
-                        Some('n') => cur.push('\n'),
-                        Some('t') => cur.push('\t'),
-                        Some('r') => cur.push('\r'),
-                        Some('\\') => cur.push('\\'),
-                        Some('"') => cur.push('"'),
-                        Some('`') => cur.push('`'),
-                        Some('$') => cur.push('$'), // `\$` → un `$` literal (para un `${` sin interpolar)
+                        Some('n') => { cur.push('\n'); self.advance(); }
+                        Some('t') => { cur.push('\t'); self.advance(); }
+                        Some('r') => { cur.push('\r'); self.advance(); }
+                        Some('0') => { cur.push('\0'); self.advance(); } // M118: NUL
+                        Some('\\') => { cur.push('\\'); self.advance(); }
+                        Some('"') => { cur.push('"'); self.advance(); }
+                        Some('`') => { cur.push('`'); self.advance(); }
+                        Some('$') => { cur.push('$'); self.advance(); } // `\$` → un `$` literal (para un `${` sin interpolar)
+                        Some('x') => { self.advance(); cur.push(self.hex_escape_char()?); } // M118: \xNN → U+00NN
+                        Some('u') => { self.advance(); cur.push(self.unicode_escape_char()?); } // M118: \u{H…H}
                         Some(other) => {
                             return Err(self.error(format!("invalid escape sequence '\\{}'", other)))
                         }
                         None => return Err(self.error("unterminated string after '\\'".into())),
                     }
-                    self.advance(); // el carácter escapado
                 }
                 // `${expr}`: inicio de una interpolación. Un `$` sin `{` detrás es un carácter normal.
                 Some('$') if self.peek_next() == Some('{') => {
@@ -422,6 +452,42 @@ impl Lexer {
         }
     }
 
+    /// M118: `\xNN` en un string/char — dos dígitos hex (la `x` ya consumida) → el carácter del code
+    /// point `U+00NN` (0–255). En un `b"…"` el `\x` produce un OCTETO (ver `byte_string`); aquí, sobre
+    /// texto Unicode, produce el carácter (Latin-1 / control).
+    fn hex_escape_char(&mut self) -> Result<char, LexError> {
+        let hi = self.hex_digit()? as u32;
+        let lo = self.hex_digit()? as u32;
+        Ok(char::from_u32(hi * 16 + lo).unwrap_or_else(|| crate::ice!("0..=255 is always a valid code point")))
+    }
+
+    /// M118: `\u{H…H}` — de 1 a 6 dígitos hex entre llaves (la `u` ya consumida) → un code point
+    /// Unicode. Error si excede `U+10FFFF` o cae en el rango surrogate (no es un carácter válido).
+    fn unicode_escape_char(&mut self) -> Result<char, LexError> {
+        if self.peek() != Some('{') {
+            return Err(self.error("expected '{' after '\\u' (write it as \\u{1F600})".into()));
+        }
+        self.advance(); // '{'
+        let dstart = self.pos;
+        while matches!(self.peek(), Some(c) if c.is_ascii_hexdigit()) {
+            self.advance();
+        }
+        let ndigits = self.pos - dstart;
+        if ndigits == 0 || ndigits > 6 {
+            return Err(self.error("'\\u{...}' takes 1 to 6 hex digits".into()));
+        }
+        if self.peek() != Some('}') {
+            return Err(self.error("expected '}' to close '\\u{...}'".into()));
+        }
+        let digits: String = self.chars[dstart..self.pos].iter().collect();
+        self.advance(); // '}'
+        // 6 dígitos hex caben en u32 (max 0xFFFFFF); char::from_u32 rechaza > 0x10FFFF y surrogates.
+        let cp = u32::from_str_radix(&digits, 16)
+            .unwrap_or_else(|_| crate::ice!("1..=6 hex digits parse as u32"));
+        char::from_u32(cp)
+            .ok_or_else(|| self.error(format!("'\\u{{{}}}' is not a valid Unicode code point", digits)))
+    }
+
     /// Lee un dígito hexadecimal y devuelve su valor (0–15). Para el escape `\xNN` (M16.1a).
     fn hex_digit(&mut self) -> Result<u8, LexError> {
         match self.peek() {
@@ -444,17 +510,26 @@ impl Lexer {
             Some('\n') => return Err(self.error("newline inside a char literal".into())),
             Some('\\') => {
                 self.advance(); // la barra invertida
-                let escaped = match self.peek() {
-                    Some('n') => '\n',
-                    Some('t') => '\t',
-                    Some('r') => '\r', // M14: retorno de carro
-                    Some('\\') => '\\',
-                    Some('\'') => '\'',
-                    Some(other) => return Err(self.error(format!("invalid escape sequence '\\{}'", other))),
-                    None => return Err(self.error("unterminated char literal after '\\'".into())),
-                };
-                self.advance(); // el carácter escapado
-                escaped
+                // `\x`/`\u{…}` leen su propia longitud (y ya dejan el cursor tras el escape); los
+                // simples consumen su único carácter con el `advance` de después.
+                match self.peek() {
+                    Some('x') => { self.advance(); self.hex_escape_char()? }
+                    Some('u') => { self.advance(); self.unicode_escape_char()? }
+                    other => {
+                        let escaped = match other {
+                            Some('n') => '\n',
+                            Some('t') => '\t',
+                            Some('r') => '\r', // M14: retorno de carro
+                            Some('0') => '\0', // M118: NUL
+                            Some('\\') => '\\',
+                            Some('\'') => '\'',
+                            Some(o) => return Err(self.error(format!("invalid escape sequence '\\{}'", o))),
+                            None => return Err(self.error("unterminated char literal after '\\'".into())),
+                        };
+                        self.advance(); // el carácter escapado
+                        escaped
+                    }
+                }
             }
             Some(c) => {
                 self.advance();
@@ -612,11 +687,11 @@ mod tests {
         // Guarda conservadora: sin dígito tras el e (o tras el signo), NO es exponente.
         assert_eq!(
             kinds("1eabc"),
-            vec![TokenKind::Int(1), TokenKind::Ident("eabc".into()), TokenKind::Eof]
+            vec![TokenKind::Int(1, Radix::Dec), TokenKind::Ident("eabc".into()), TokenKind::Eof]
         );
         assert_eq!(
             kinds("1e+"),
-            vec![TokenKind::Int(1), TokenKind::Ident("e".into()), TokenKind::Plus, TokenKind::Eof]
+            vec![TokenKind::Int(1, Radix::Dec), TokenKind::Ident("e".into()), TokenKind::Plus, TokenKind::Eof]
         );
         // Un exponente que desborda f64 no es error: satura a infinito (semántica de f64).
         assert_eq!(kinds("1e999"), vec![TokenKind::Float(f64::INFINITY), TokenKind::Eof]);
@@ -676,7 +751,7 @@ mod tests {
         assert_eq!(lens[0], (TokenKind::Let, 3));
         assert_eq!(lens[1], (TokenKind::Ident("foo".into()), 3));
         assert_eq!(lens[2], (TokenKind::Eq, 1));
-        assert_eq!(lens[3], (TokenKind::Int(12345), 5));
+        assert_eq!(lens[3], (TokenKind::Int(12345, Radix::Dec), 5));
         assert_eq!(lens[4], (TokenKind::Plus, 1));
         // El string mide su forma ESCRITA (comillas y escapes incluidos): "ab\n" son 6 chars.
         assert_eq!(lens[5], (TokenKind::Str("ab\n".into()), 6));
@@ -705,7 +780,7 @@ mod tests {
     // `3.14` prueba el lexeo de floats, no es una aproximación de PI (falso positivo de `approx_constant`).
     #[allow(clippy::approx_constant)]
     fn literals() {
-        assert_eq!(kinds("42"), vec![TokenKind::Int(42), TokenKind::Eof]);
+        assert_eq!(kinds("42"), vec![TokenKind::Int(42, Radix::Dec), TokenKind::Eof]);
         assert_eq!(kinds("3.14"), vec![TokenKind::Float(3.14), TokenKind::Eof]);
         assert_eq!(
             kinds("\"hello\""),
@@ -714,12 +789,64 @@ mod tests {
     }
 
     #[test]
+    fn base_prefixed_integer_literals() {
+        // M118: prefijos 0x/0o/0b (mayúsculas también) para hex, octal y binario.
+        assert_eq!(kinds("0xFF"), vec![TokenKind::Int(255, Radix::Hex), TokenKind::Eof]);
+        assert_eq!(kinds("0x1F300"), vec![TokenKind::Int(127744, Radix::Hex), TokenKind::Eof]);
+        assert_eq!(kinds("0o755"), vec![TokenKind::Int(493, Radix::Oct), TokenKind::Eof]);
+        assert_eq!(kinds("0o600"), vec![TokenKind::Int(384, Radix::Oct), TokenKind::Eof]);
+        assert_eq!(kinds("0b1010"), vec![TokenKind::Int(10, Radix::Bin), TokenKind::Eof]);
+        assert_eq!(kinds("0X10"), vec![TokenKind::Int(16, Radix::Hex), TokenKind::Eof]);
+        assert_eq!(kinds("0O17"), vec![TokenKind::Int(15, Radix::Oct), TokenKind::Eof]);
+        assert_eq!(kinds("0B1"), vec![TokenKind::Int(1, Radix::Bin), TokenKind::Eof]);
+        // `0` a secas y `0.5` siguen siendo lo de siempre (no confundir el prefijo).
+        assert_eq!(kinds("0"), vec![TokenKind::Int(0, Radix::Dec), TokenKind::Eof]);
+        assert_eq!(kinds("0.5"), vec![TokenKind::Float(0.5), TokenKind::Eof]);
+        // El lexema mide su forma escrita (prefijo incluido).
+        let toks = lex("0xFF").expect("tokeniza");
+        assert_eq!(toks[0].len, 4);
+        // Sin dígitos tras el prefijo → error.
+        assert!(matches!(lex("0x"), Err(e) if e.msg.contains("expected at least one digit")));
+        assert!(matches!(lex("0b"), Err(e) if e.msg.contains("expected at least one digit")));
+        // Un dígito fuera del rango de la base no forma parte del literal.
+        assert_eq!(
+            kinds("0b12"),
+            vec![TokenKind::Int(1, Radix::Bin), TokenKind::Int(2, Radix::Dec), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn hex_and_unicode_escapes_in_string() {
+        // M118: \0, \xNN y \u{H…H} en cadenas.
+        assert_eq!(kinds(r#""\x41""#), vec![TokenKind::Str("A".into()), TokenKind::Eof]);
+        assert_eq!(kinds(r#""\u{00e9}""#), vec![TokenKind::Str("é".into()), TokenKind::Eof]);
+        assert_eq!(kinds(r#""\u{1F680}""#), vec![TokenKind::Str("🚀".into()), TokenKind::Eof]);
+        assert_eq!(kinds(r#""a\0b""#), vec![TokenKind::Str("a\0b".into()), TokenKind::Eof]);
+        // Errores: hex no válido, code point fuera de rango, surrogate, sin llave/cierre.
+        assert!(lex(r#""\xZZ""#).is_err());
+        assert!(lex(r#""\u{110000}""#).is_err());
+        assert!(lex(r#""\u{D800}""#).is_err());
+        assert!(lex(r#""\u{}""#).is_err());
+        // Falta el cierre de la secuencia \u{…}.
+        assert!(lex(r#""\u{1F680""#).is_err());
+    }
+
+    #[test]
+    fn hex_and_unicode_escapes_in_char() {
+        // M118: los mismos escapes en literales de carácter.
+        assert_eq!(kinds(r"'\x41'"), vec![TokenKind::Char('A'), TokenKind::Eof]);
+        assert_eq!(kinds(r"'\0'"), vec![TokenKind::Char('\0'), TokenKind::Eof]);
+        assert_eq!(kinds(r"'\u{1F600}'"), vec![TokenKind::Char('\u{1F600}'), TokenKind::Eof]);
+        assert!(lex(r"'\u{110000}'").is_err());
+    }
+
+    #[test]
     fn dot_without_decimal_is_not_a_float() {
         // El número no se traga el punto si no le sigue un dígito: "1.x" debe ser
         // Int(1), Dot, Ident("x") (acceso a campo), no un flotante.
         assert_eq!(
             kinds("1.x"),
-            vec![TokenKind::Int(1), TokenKind::Dot, TokenKind::Ident("x".into()), TokenKind::Eof]
+            vec![TokenKind::Int(1, Radix::Dec), TokenKind::Dot, TokenKind::Ident("x".into()), TokenKind::Eof]
         );
         // Y que "12.5" sí es flotante.
         assert_eq!(kinds("12.5"), vec![TokenKind::Float(12.5), TokenKind::Eof]);

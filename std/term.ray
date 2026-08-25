@@ -308,7 +308,7 @@ pub fn read_key() -> Option<Key> {
 
 // ¿El code point ocupa DOS celdas? (East Asian Wide + Fullwidth + bloques emoji comunes.)
 fn is_wide(cp: int) -> bool {
-    cp >= 4352 && cp <= 4447 || cp >= 8986 && cp <= 8987 || cp >= 9728 && cp <= 9747 || cp >= 11904 && cp <= 12350 || cp >= 12353 && cp <= 12543 || cp >= 12549 && cp <= 12591 || cp >= 12593 && cp <= 12686 || cp >= 12800 && cp <= 13311 || cp >= 13312 && cp <= 19903 || cp >= 19968 && cp <= 42124 || cp >= 44032 && cp <= 55203 || cp >= 63744 && cp <= 64255 || cp >= 65072 && cp <= 65131 || cp >= 65281 && cp <= 65376 || cp >= 65504 && cp <= 65510 || cp >= 127744 && cp <= 129791 || cp >= 131072 && cp <= 262141  // Hangul Jamo (0x1100–0x115F)
+    cp >= 0x1100 && cp <= 0x115F || cp >= 0x231A && cp <= 0x231B || cp >= 0x2600 && cp <= 0x2613 || cp >= 0x2E80 && cp <= 0x303E || cp >= 0x3041 && cp <= 0x30FF || cp >= 0x3105 && cp <= 0x312F || cp >= 0x3131 && cp <= 0x318E || cp >= 0x3200 && cp <= 0x33FF || cp >= 0x3400 && cp <= 0x4DBF || cp >= 0x4E00 && cp <= 0xA48C || cp >= 0xAC00 && cp <= 0xD7A3 || cp >= 0xF900 && cp <= 0xFAFF || cp >= 0xFE30 && cp <= 0xFE6B || cp >= 0xFF01 && cp <= 0xFF60 || cp >= 0xFFE0 && cp <= 0xFFE6 || cp >= 0x1F300 && cp <= 0x1FAFF || cp >= 0x20000 && cp <= 0x3FFFD  // Hangul Jamo (0x1100–0x115F)
     // ⌚⌛ (0x231A–0x231B)
     // símbolos meteorológicos anchos (0x2600–0x2613)
     // radicales/puntuación CJK (0x2E80–0x303E)
@@ -317,7 +317,7 @@ fn is_wide(cp: int) -> bool {
     // Hangul compat Jamo (0x3131–0x318E)
     // símbolos CJK cercados (0x3200–0x33FF)
     // CJK ext A (0x3400–0x4DBF)
-    // CJK unificado + Yi (0x4E00–0xA48F)
+    // CJK unificado + Yi (0x4E00–0xA48C)
     // sílabas Hangul (0xAC00–0xD7A3)
     // CJK compat (0xF900–0xFAFF)
     // formas CJK compat (0xFE30–0xFE6B)
@@ -329,7 +329,7 @@ fn is_wide(cp: int) -> bool {
 
 // ¿El code point es de ancho CERO? (Control C0/C1 y marcas combinantes / de ancho cero comunes.)
 fn is_zero_width(cp: int) -> bool {
-    cp < 32 || cp >= 127 && cp < 160 || cp >= 768 && cp <= 879 || cp >= 6832 && cp <= 6911 || cp >= 7616 && cp <= 7679 || cp >= 8203 && cp <= 8207 || cp >= 8400 && cp <= 8447 || cp >= 65056 && cp <= 65071 || cp == 65279  // control C0 (0x00–0x1F) y C1 (0x7F–0x9F)
+    cp < 0x20 || cp >= 0x7F && cp < 0xA0 || cp >= 0x300 && cp <= 0x36F || cp >= 0x1AB0 && cp <= 0x1AFF || cp >= 0x1DC0 && cp <= 0x1DFF || cp >= 0x200B && cp <= 0x200F || cp >= 0x20D0 && cp <= 0x20FF || cp >= 0xFE20 && cp <= 0xFE2F || cp == 0xFEFF  // control C0 (0x00–0x1F) y C1 (0x7F–0x9F)
     // combinantes diacríticos (0x0300–0x036F)
     // combinantes extendidos (0x1AB0–0x1AFF)
     // combinantes suplementarios (0x1DC0–0x1DFF)

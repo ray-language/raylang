@@ -2167,7 +2167,7 @@ impl Transpiler {
     /// heap-vs-escalar y decidir la concatenación de strings. No sustituye al checker (que ya validó).
     pub(super) fn type_of(&self, e: &Expr) -> Result<Type, String> {
         Ok(match &e.kind {
-            ExprKind::Int(_) => Type::Int,
+            ExprKind::Int(_, _) => Type::Int,
             ExprKind::Float(_) => Type::Float,
             ExprKind::Bool(_) => Type::Bool,
             ExprKind::Str(_) => Type::String,
@@ -2452,7 +2452,7 @@ impl Transpiler {
                 Type::Bytes => Type::Int, // b[i] → el octeto como int
                 Type::Tuple(ts) => {
                     let i = match &index.kind {
-                        ExprKind::Int(n) => *n as usize,
+                        ExprKind::Int(n, _) => *n as usize,
                         _ => return Err("non-literal tuple index".into()),
                     };
                     ts.get(i).cloned().ok_or("tuple index out of range")?

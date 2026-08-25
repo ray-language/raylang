@@ -74,7 +74,7 @@ pub(super) fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
         _ => None,
     };
     if let Some(target) = target {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
         if let ExprKind::Call { callee, mut args } = taken {
             let (cl, cc) = (callee.line, callee.col);
             if let ExprKind::Field { object, .. } = callee.kind {
@@ -197,10 +197,10 @@ pub(super) fn lower_uintlit_block(block: &mut Block, sites: &UIntLitMap) {
 
 pub(super) fn lower_uintlit_expr(expr: &mut Expr, sites: &UIntLitMap) {
     // ¿Es un literal entero registrado? Envolverlo en `Cast` al ancho. (No tiene hijos que recorrer.)
-    if let ExprKind::Int(_) = &expr.kind {
+    if let ExprKind::Int(..) = &expr.kind {
         if let Some(&w) = sites.get(&(expr.line, expr.col)) {
             let (l, c) = (expr.line, expr.col);
-            let inner = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+            let inner = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
             expr.kind = ExprKind::Cast {
                 expr: Box::new(Expr { kind: inner, line: l, col: c }),
                 ty: Type::UInt(w),
@@ -297,7 +297,7 @@ pub(super) fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
     };
     if let Some(mangled) = conv {
         let (l, c) = (expr.line, expr.col);
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
         let inner = match taken {
             ExprKind::Try(inner) => *inner,
             _ => crate::ice!("the guard guarantees a Try"),
@@ -427,7 +427,7 @@ pub(super) fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
     };
     if let Some(target) = target {
         let (l, c) = (expr.line, expr.col);
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
         let args = match taken {
             ExprKind::Binary { left, right, .. } => vec![*left, *right],
             ExprKind::Unary { expr: inner, .. } => vec![*inner],
@@ -843,7 +843,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
         _ => None,
     };
     if dispatch_method.is_some() {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
         let ExprKind::Call { callee, mut args } = taken else { crate::ice!("a dispatch site is a Call") };
         let ExprKind::Field { object, name } = callee.kind else { crate::ice!("the callee of a dispatch is a Field") };
         let tmp = format!("__dynrecv#{}", *counter);
@@ -872,7 +872,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
     // closure anidado para un impl genérico acotado—, así que `dyn` funciona también sobre impls
     // genéricos. Van en el orden de los métodos del trait, igual que `tm`.
     if let Some((set, vtable)) = coercions.get(&(line, col)) {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
         let inner = Expr { kind: taken, line, col };
         let mut fields = vec![("data".to_string(), inner)];
         let names = dyn_method_names(set, tm);
@@ -886,7 +886,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
     // campos del mayor. Necesita un temp porque el origen se referencia varias veces:
     // `{ let __dynup = <obj>; __dyn_S2 { data: __dynup.data, m: __dynup.m, … } }`.
     if let Some(target) = upcasts.get(&(line, col)) {
-        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::Dec));
         let source = Expr { kind: taken, line, col };
         let tmp = format!("__dynup#{}", *counter);
         *counter += 1;
@@ -1037,7 +1037,7 @@ fn lower_concat_expr(expr: &mut Expr, sites: &std::collections::HashSet<(usize, 
             lower_concat_block(body, sites);
         }
         ExprKind::Block(b) => lower_concat_block(b, sites),
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
         | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
     }
 }
@@ -1218,7 +1218,7 @@ fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
             lower_fusion_block(body, origin);
         }
         ExprKind::Block(b) => lower_fusion_block(b, origin),
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
         | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
     }
 }

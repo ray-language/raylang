@@ -170,7 +170,7 @@ fn collect_tests(program: &Program, filter: Option<&str>, own_only: bool) -> Vec
 /// devuelve ya renderizado contra su módulo y línea local.
 fn check_suite(suite: &Suite) -> Result<(), String> {
     let statements = suite.tests.iter().map(|t| stmt_call(&t.global)).collect();
-    let body = Block { statements, tail: Some(Box::new(expr(ExprKind::Int(0)))), line: 1, col: 1, end_line: 1 };
+    let body = Block { statements, tail: Some(Box::new(expr(ExprKind::Int(0, crate::token::Radix::Dec)))), line: 1, col: 1, end_line: 1 };
     let mut program = swap_main(suite.loaded.program.clone(), synth_main(body));
     checker::check(&mut program).map_err(|mut e| {
         let (module, source, local, col, len) = suite.loaded.locate(e.line, e.col, e.len);
@@ -203,7 +203,7 @@ fn run_one(suite: &Suite, test: &Test) -> Result<(), Vec<String>> {
         // unit: `fn main() -> int { t(); 0 }` — un panic/aserción aborta con error.
         Kind::Unit => Block {
             statements: vec![stmt_call(&test.global)],
-            tail: Some(Box::new(expr(ExprKind::Int(0)))),
+            tail: Some(Box::new(expr(ExprKind::Int(0, crate::token::Radix::Dec)))),
             line: 1,
             col: 1,
             end_line: 1,
@@ -295,5 +295,5 @@ fn stmt_call(name: &str) -> Stmt {
 
 /// Un bloque cuyo valor es el literal entero `v`.
 fn int_block(v: i64) -> Block {
-    Block { statements: vec![], tail: Some(Box::new(expr(ExprKind::Int(v)))), line: 1, col: 1, end_line: 1 }
+    Block { statements: vec![], tail: Some(Box::new(expr(ExprKind::Int(v, crate::token::Radix::Dec)))), line: 1, col: 1, end_line: 1 }
 }

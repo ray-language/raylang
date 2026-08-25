@@ -874,7 +874,7 @@ impl<'a> Compiler<'a> {
             }
         }
         match &expr.kind {
-            ExprKind::Int(v) => {
+            ExprKind::Int(v, _) => {
                 let idx = self.cur().chunk.add_constant(Value::Int(*v));
                 self.emit(OpCode::Constant(idx), line, col);
             }
@@ -1344,7 +1344,7 @@ fn returns_immediately(chunk: &Chunk, mut j: usize) -> bool {
 fn const_fold(e: &Expr) -> Option<Value> {
     use Value::{Bool, Float, Int};
     match &e.kind {
-        ExprKind::Int(n) => Some(Int(*n)),
+        ExprKind::Int(n, _) => Some(Int(*n)),
         ExprKind::Float(f) => Some(Float(*f)),
         ExprKind::Bool(b) => Some(Bool(*b)),
         ExprKind::Unary { op, expr } => match (op, const_fold(expr)?) {

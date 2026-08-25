@@ -2571,11 +2571,11 @@ carencias de ERGONOMÍA, no de runtime.
    (`src/width.ray`, ~40 líneas de rangos) y es el candidato directo a `term.width(s: string) ->
    int` (+ `term.fit(s, cells)`), junto al decode que ya existe. Sin él, cada TUI copiará la
    misma tabla de rangos.
-2. **Los literales string no admiten `\x`/`\u`** (impacto: BAJO-MEDIO — ergonomía repetida):
+2. **[EJECUTADA — M118, DESIGN §115: escapes `\0`/`\xNN`/`\u{H…H}` en string y char] Los literales string no admiten `\x`/`\u`** (impacto: BAJO-MEDIO — ergonomía repetida):
    todo escape ANSI se construye con `char_from_code(27)` + concatenación. raycode ya lo
    sufría (su ui.ray lo comenta) y raytop lo repite — segunda app con el mismo helper. O un
    escape `\u{1b}` en el lexer, o un módulo `term/style` con las secuencias hechas.
-3. **No hay literales hexadecimales** (`0x1F300` no lexea; impacto: BAJO): las tablas de rangos
+3. **[EJECUTADA — M118, DESIGN §115: `0x`/`0o`/`0b` con la base preservada por `ray fmt`] No hay literales hexadecimales** (`0x1F300` no lexea; impacto: BAJO): las tablas de rangos
    Unicode/bits quedan en decimal, incontrastables con cualquier spec. `0x` en el lexer es
    barato y paga en todo código de protocolos.
 4. **Lo VALIDADO** (positivo, cierra preguntas abiertas del catálogo): (a) el patrón
@@ -2688,7 +2688,7 @@ Tres apps del eje "texto y cripto" en una tanda: `raymail` (SMTP real + MIME + s
    sutilmente mal → candidatas a un `std/mail` o al menos ejemplos canónicos.
 5. **Sin normalización Unicode** (raysite): el slugify translitera a mano las vocales del
    castellano; NFD/NFKD no existen. Y **quinta app sondeando mtimes** (raysite serve).
-6. Menor (raymail): `'\0'` no es expresable como literal de char — el NUL de AUTH PLAIN se
+6. **[EJECUTADA — M118, DESIGN §115: `'\0'` y `"\0"` ya lexean]** Menor (raymail): `'\0'` no es expresable como literal de char — el NUL de AUTH PLAIN se
    construye con `char_from_code(0)` (la misma familia que \x/\u de §67).
 
 ## 72. Hallazgos de raybot + raycall + raygame — websocket y M88 validados, sleep se pasa 6–10 ms (ago 2026)

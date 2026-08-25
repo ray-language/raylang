@@ -953,7 +953,7 @@ pub(super) fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, u
         match &mut stmt.kind {
             StmtKind::For { iter, body, .. } => {
                 if let (Some(next_fn), ForIter::In(_)) = (sites.get(&pos), &*iter) {
-                    let old = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0), line: 0, col: 0 }));
+                    let old = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0, crate::token::Radix::Dec), line: 0, col: 0 }));
                     if let ForIter::In(e) = old {
                         *iter = ForIter::Iter { expr: e, next_fn: next_fn.clone() };
                     }

@@ -41,13 +41,18 @@ caracteres. **Ningún token cruza líneas.**
   `let var fn return if else while for in true false struct const enum match trait impl dyn
   pub import from extern as` y las de tipo `int float bool string char bytes ptr u8 u32 u64`.
 - **Literales**:
-  - *Entero*: dígitos decimales (`42`). Debe caber en `int` (i64); si no, error léxico. No hay
-    literales hex/octales/binarios ni separador `_` (diferido).
+  - *Entero*: dígitos decimales (`42`) o con **prefijo de base** (M118): `0x`/`0X` hexadecimal
+    (`0x1F`), `0o`/`0O` octal (`0o755`), `0b`/`0B` binario (`0b1010`). Al menos un dígito tras el
+    prefijo (`0x` solo es error léxico). Debe caber en `int` (i64); si no, error léxico. Sin
+    separador `_` (diferido).
+  - *Flotante*: siempre decimal (los prefijos de base son solo para enteros).
   - *Flotante*: `dígitos '.' dígitos` (`3.14`), con **exponente** opcional `e|E [+|-] dígitos`
     (`1e21`, `1.5e-3`, `2E+10`); un exponente hace el literal flotante aunque no lleve punto.
     Un `.` sin dígito decimal no es flotante; un `e` sin dígito (o sin dígito tras el signo) no
     es exponente (`1eabc` = entero `1` + identificador).
-  - *Cadena*: `"…"` con escapes `\n \t \r \\ \" \` \$`. No admite saltos de línea literales.
+  - *Cadena*: `"…"` con escapes `\n \t \r \0 \\ \" \` \$`, más `\xNN` (dos dígitos hex → el code
+    point `U+00NN`, 0–255) y `\u{H…H}` (1–6 dígitos hex → un code point Unicode; error si excede
+    `U+10FFFF` o es un surrogate). No admite saltos de línea literales.
   - *Cadena plantilla* (M95): `` `…` `` — mismo valor y mismo token que `"…"`, con dos
     diferencias: la comilla doble `"` es **literal** (no se escapa) y los **saltos de línea**
     están permitidos (multilínea, literales). El backtick literal se escapa `` \` ``. Interpola
@@ -56,7 +61,8 @@ caracteres. **Ningún token cruza líneas.**
     contiene **una** expresión; el `$` solo es especial seguido de `{` (`"$5"`, `"{n}"` son
     literales; `\${` es un `${` literal). Azúcar: se desazucara a concatenación con
     `to_string(expr)` (§6.6).
-  - *Carácter*: `'a'` con escapes `\n \t \r \\ \'`. Un code point Unicode.
+  - *Carácter*: `'a'` con escapes `\n \t \r \0 \\ \'`, más `\xNN` y `\u{H…H}` (como en cadena). Un
+    code point Unicode.
   - *Bytes*: `b"…"` con los escapes de cadena más `\xNN` (octeto arbitrario, dos dígitos hex).
   - *Booleano*: `true` / `false`.
 - **Operadores y puntuación**: `+ - * / % == != < <= > >= && || ! = & | ^ ~ << >> ( ) { } [ ]

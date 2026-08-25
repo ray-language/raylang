@@ -98,12 +98,12 @@ Reservadas (no pueden usarse como identificadores):
 
 | Literal | Forma | Notas |
 |---|---|---|
-| Entero | `42`, `-7` | decimal; debe caber en i64. Sin hex/octal/binario ni `_` (diferidos) |
-| Flotante | `3.14` | `dígitos . dígitos` (el `.` exige decimal: `2.0`, no `2.`) |
+| Entero | `42`, `-7`, `0xFF`, `0o755`, `0b1010` | decimal o con prefijo `0x`/`0o`/`0b` (hex/octal/binario, mayúsculas también); debe caber en i64. Sin `_` (diferido) |
+| Flotante | `3.14` | `dígitos . dígitos` (el `.` exige decimal: `2.0`, no `2.`); siempre decimal |
 | Booleano | `true` / `false` | |
-| String | `"hola"` | escapes `\n \t \r \\ \" \$`; sin saltos de línea literales |
+| String | `"hola"` | escapes `\n \t \r \\ \" \$ \0`, `\xNN` (octeto hex, U+0000..U+00FF) y `\u{H…H}` (1–6 hex, code point Unicode); sin saltos de línea literales |
 | String interpolada | `"x = ${expr}"` | `${expr}` = **una** expresión; desazucara a `+ to_string(expr)`. `\${` = literal. `"$5"` y `"{n}"` son literales (el `$` solo es especial ante `{`) |
-| Char | `'a'`, `'\n'` | un code point Unicode; escapes `\n \t \r \\ \'` |
+| Char | `'a'`, `'\n'`, `'\x41'`, `'\u{1F600}'` | un code point Unicode; escapes `\n \t \r \\ \' \0`, `\xNN` y `\u{H…H}` |
 | Bytes | `b"ok\x00\xff"` | escapes de string + `\xNN` (octeto en hex) |
 | Arreglo | `[1, 2, 3,]` | coma final permitida; `[]` vacío necesita contexto o anotación |
 | Tupla | `(1, "a")` | acceso `t.0`, `t.1`; destructuring `let (a, b) = t;` |

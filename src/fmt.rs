@@ -1311,7 +1311,9 @@ fn unary_op_str(op: UnaryOp) -> &'static str {
 
 fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
     match &e.kind {
-        ExprKind::Int(n) => n.to_string(),
+        // M118: reimprimir el literal en la base en que se escribió (0xFF/0o755/0b1010), no
+        // canonizar a decimal — la base carga intención (máscaras de bits, permisos octales).
+        ExprKind::Int(n, radix) => fmt_int(*n, *radix),
         ExprKind::Float(f) => fmt_float(*f),
         ExprKind::Bool(b) => b.to_string(),
         ExprKind::Str(s) => {
@@ -1495,14 +1497,31 @@ fn fmt_float(f: f64) -> String {
     s
 }
 
+/// Reimprime un literal entero en su base (M118). Forma canónica: prefijo en minúscula, dígitos
+/// hex en mayúscula (`0xFF`, `0o755`, `0b1010`). El valor ya cabe en i64 y es no negativo (el
+/// signo es un `Unary` aparte), así que `{:X}`/`{:o}`/`{:b}` bastan.
+fn fmt_int(n: i64, radix: crate::token::Radix) -> String {
+    use crate::token::Radix;
+    match radix {
+        Radix::Dec => n.to_string(),
+        Radix::Hex => format!("0x{:X}", n),
+        Radix::Oct => format!("0o{:o}", n),
+        Radix::Bin => format!("0b{:b}", n),
+    }
+}
+
 fn escape_char(c: char, out: &mut String, in_double_quotes: bool) {
     match c {
         '\\' => out.push_str("\\\\"),
         '\n' => out.push_str("\\n"),
         '\t' => out.push_str("\\t"),
         '\r' => out.push_str("\\r"),
+        '\0' => out.push_str("\\0"), // M118: NUL
         '"' if in_double_quotes => out.push_str("\\\""),
         '\'' if !in_double_quotes => out.push_str("\\'"),
+        // M118: cualquier otro carácter de control se reemite como `\u{H…H}` para que el
+        // literal roundtripee (nunca escupir un byte de control crudo en la fuente).
+        other if other.is_control() => out.push_str(&format!("\\u{{{:X}}}", other as u32)),
         other => out.push(other),
     }
 }
@@ -1602,6 +1621,22 @@ mod tests {
         // Un bloque `extern "c" blocking { … }` conserva su marca al reformatear, y NO se fusiona
         // con un bloque normal de la MISMA librería (la reagrupación es por (lib, blocking)).
         let src = "extern \"c\" blocking {\n    fn sleep(s: int) -> int;\n}\n\nextern \"c\" {\n    fn abs(x: int) -> int;\n}\n\nfn main() -> int {\n    0\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+    }
+
+    #[test]
+    fn base_prefixed_literals_are_preserved() {
+        // M118: el fmt NO canoniza a decimal — reemite la base en que se escribió el literal.
+        let src = "fn main() -> int {\n    let mask = 0xFF;\n    let mode = 0o755;\n    let bits = 0b1010;\n    let dec = 42;\n    mask + mode + bits + dec\n}\n";
+        assert_eq!(fmt(src), src);
+        assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
+    }
+
+    #[test]
+    fn control_char_escapes_roundtrip() {
+        // M118: `\0` y otros controles se reemiten escapados (nunca un byte crudo en la fuente).
+        let src = "fn main() -> int {\n    let z = '\\0';\n    let s = \"a\\0b\";\n    print(s);\n    z as int\n}\n";
         assert_eq!(fmt(src), src);
         assert_eq!(fmt(&fmt(src)), fmt(src), "idempotente");
     }
@@ -2126,7 +2161,7 @@ mod tests {
                 cm_block(body, n);
             }
             ExprKind::Block(b) => cm_block(b, n),
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+            ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
             | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
         }
         // ¿Este nodo es una llamada prefija a un builtin retirado? → `recv.builtin(resto)`.

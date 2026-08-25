@@ -10,6 +10,9 @@ const EXPECTED: &[&str] = &[
     "Doe, John|42|New \"York\"",
     "Ada|36|London",
     "roundtrip ok",
+    // M128 — parser incremental: trozos de 3 chars = mismas filas; comilla sin cerrar → err en finish.
+    "incremental ok",
+    "err: csv: unterminated quoted field",
 ];
 
 fn run(flags: &[&str]) -> (Vec<String>, bool) {

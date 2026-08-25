@@ -104,3 +104,49 @@ pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
         Result.Err(e) => Result.Err(e),
     }
 }
+
+// Lee una claim numérica del payload (segundos UNIX, como manda la RFC). `None` si no está
+// o no es número.
+fn claim_seconds(m: Map<string, Json>, name: string) -> Option<int> {
+    match (m.get(name)) {
+        Option.Some(v) => match (v) {
+            Json.JNum(f) => Option.Some(f as int),
+            _ => Option.None,
+        },
+        Option.None => Option.None,
+    }
+}
+
+// M128: verifica firma Y claims temporales en una llamada — el patrón que toda app repetía a
+// mano. `exp`/`nbf` van en SEGUNDOS UNIX (RFC 7519); `now_ms` en milisegundos (time.now()).
+/// Verifies the JWT's signature (like `jwt_verify`) AND its time claims: rejects an expired
+/// token (`now >= exp`) and one not yet valid (`now < nbf`). `now_ms` is the current UNIX
+/// time in milliseconds (`time.now()`); `exp`/`nbf` are in seconds per RFC 7519 and are
+/// optional (a token without them passes). Returns the payload JSON on success.
+pub fn jwt_verify_claims(secret: bytes, token: string, now_ms: int) -> Result<string, string> {
+    let payload_json = jwt_verify(secret, token)?;
+    let j = parse(payload_json)?;
+    match (j) {
+        Json.JObject(m) => {
+            let now_s = now_ms / 1000;
+            match (claim_seconds(m, "exp")) {
+                Option.Some(exp) => {
+                    if (now_s >= exp) {
+                        return Result.Err("token expired");
+                    }
+                },
+                Option.None => { },
+            }
+            match (claim_seconds(m, "nbf")) {
+                Option.Some(nbf) => {
+                    if (now_s < nbf) {
+                        return Result.Err("token not yet valid");
+                    }
+                },
+                Option.None => { },
+            }
+            Result.Ok(payload_json)
+        },
+        _ => Result.Err("the payload is not a JSON object"),
+    }
+}

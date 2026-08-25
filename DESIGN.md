@@ -10066,3 +10066,45 @@ llamada en vuelo que vuelva después pierde su hueco sin drama, `release` amorti
 de reloj (paralelismo real medido, no asumido), el timeout se recupera solo, y el pool cerrado
 falla limpio. De paso: el mensaje "…; reconecta" del id inesperado (spanglish de cara al usuario)
 → "; reconnect".
+
+## 125. M128 — los menores de std en un lote: regex con nombres, csv incremental, `[[toml]]`, jwt_verify_claims (ago 2026)
+
+Cerrados los cuatro hitos ejecutados del dogfood, quedaba la cola de hallazgos **menores** de
+librería (IDEAS §63.3, §63.4, §65.3, §65.5). Ninguno justificaba un arco propio — los cuatro son
+raylang puro, sin runtime nuevo — así que van en **un lote**: cuatro módulos, cuatro features,
+una tanda de tests.
+
+- **`std/regex`: grupos con nombre** (`(?P<name>...)` y `(?<name>...)`, §63.3). El parser ya
+  numeraba los grupos por `(` de apertura; el nombre es solo una anotación: `PS`/`Prog` ganan la
+  tabla `names` (índice = grupo; `""` = sin nombre, el 0 siempre `""`) y `parse_atom` reconoce
+  las dos grafías (la de Perl/Python y la de .NET/JS, como el crate `regex`). Superficie nueva:
+  `group_names(re)` y `captures_map(re, s) -> Option<Map<string, string>>` (solo los grupos con
+  nombre; el que no participa no aparece). Lo importante del diseño: `captures_map` se apoya en
+  `run_captures_str`, **la función que la vía acelerada intercepta** (R5/R7) — el crate recibe el
+  patrón fuente tal cual (soporta ambas grafías con la MISMA numeración posicional) y la
+  aceleración sigue funcionando sin tocar `ray-runtime`. La validación del nombre es la del crate
+  (`[A-Za-z_][A-Za-z0-9_]*`, sin duplicados): lo que el parser raylang acepta no puede hacer
+  panicar al motor nativo.
+- **`std/csv`: parser incremental** (push, §63.4). `parser()` + `feed(p, chunk) -> [[string]]`
+  (las filas COMPLETADAS por ese trozo) + `finish(p)` (la cola sin `\n` final; la comilla sin
+  cerrar es SU error). El estado es una máquina de tres estados (normal / entre comillas /
+  comilla-vista) que sobrevive entre feeds: un trozo puede cortar por medio de un campo, de un
+  escape `""` o de un CRLF. `parse_csv` se **reescribió encima** (feed + finish de un solo
+  trozo): una sola verdad, y el demo verifica que trocear en pedazos de 3 chars produce
+  exactamente las mismas filas.
+- **`std/toml`: arreglos de tablas `[[ruta]]`** (§65.3). Sobre el modelo plano de entradas con
+  ruta punteada, cada cabecera `[[route]]` abre un elemento nuevo y aplana sus claves como
+  `route.N.clave` (N por orden de aparición, desde 0) — la config de un gateway (el caso de
+  raygate) se lee con `toml_get(entries, "route.0.path")` + el helper nuevo
+  `toml_array_len(entries, "route")`. Sub-tablas dentro de un elemento (`[x.y]` tras `[[x]]`)
+  siguen fuera del subconjunto.
+- **`packages/net/jwt`: `jwt_verify_claims(secret, token, now_ms)`** (§65.5). `jwt_verify` deja
+  `exp`/`nbf` como política del llamador (decisión documentada), pero todo gateway reescribía el
+  mismo bloque: la forma con claims verifica la firma Y la ventana temporal (`exp`/`nbf` en
+  segundos UNIX como manda la RFC 7519; `now_ms` en milisegundos, lo que da `time.now()`; sin
+  claims = pasa). Errores estables: `"token expired"` / `"token not yet valid"`.
+
+De pasada, los **errores de `std/regex` y `std/csv` pasan a inglés** ("regex: missing ')'" etc.):
+la política de superficie-en-inglés ya regía para diagnósticos y LSP, y estos strings llegan al
+usuario final. El resto de la stdlib (json, toml viejo, inflate…) sigue en español — es un barrido
+aparte, anotado en IDEAS.

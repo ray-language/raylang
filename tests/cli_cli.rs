@@ -3078,6 +3078,17 @@ fn package_net_jwt_via_path_dep() {
          \x20 match (jwt.jwt_verify(\"mala\".to_bytes(), tok)) {\n\
          \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(\"rechazado\"); },\n\
          \x20 }\n\
+         \x20 // M128: verify_claims — exp/nbf en segundos, now en ms; sin claims pasa.\n\
+         \x20 let t2 = jwt.jwt_sign(\"secreto\".to_bytes(), \"{\\\"exp\\\":1000600,\\\"nbf\\\":999000}\");\n\
+         \x20 match (jwt.jwt_verify_claims(\"secreto\".to_bytes(), t2, 1000000000)) {\n\
+         \x20   Result.Ok(p) => { print(\"claims ok\"); }, Result.Err(e) => { print(e); },\n\
+         \x20 }\n\
+         \x20 match (jwt.jwt_verify_claims(\"secreto\".to_bytes(), t2, 1000600000)) {\n\
+         \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(e); },\n\
+         \x20 }\n\
+         \x20 match (jwt.jwt_verify_claims(\"secreto\".to_bytes(), t2, 998000000)) {\n\
+         \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(e); },\n\
+         \x20 }\n\
          \x20 0\n\
          }\n",
     )
@@ -3086,6 +3097,9 @@ fn package_net_jwt_via_path_dep() {
     assert_eq!(code, 0, "run con el package net must salir 0\n{err}");
     assert!(out.contains("{\"sub\":\"ada\"}"), "jwt_verify con la clave correcta → Ok(payload)\n{out}");
     assert!(out.contains("rechazado"), "jwt_verify con clave mala → Err\n{out}");
+    assert!(out.contains("claims ok"), "verify_claims dentro de la ventana → Ok\n{out}");
+    assert!(out.contains("token expired"), "now >= exp → expirado\n{out}");
+    assert!(out.contains("token not yet valid"), "now < nbf → aún no válido\n{out}");
 }
 
 #[test]

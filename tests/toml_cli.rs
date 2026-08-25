@@ -29,6 +29,15 @@ const EXPECTED: &[&str] = &[
     "err: clave duplicada: 'a'",
     "err: cabecera de tabla vacía",
     "err: se esperaba fin de línea tras el valor de 'a'",
+    // M128 — arreglos de tablas [[ruta]] aplanados como ruta.N.clave + toml_array_len.
+    "route.0.path = \"/a\"",
+    "route.0.port = 1",
+    "route.1.path = \"/b\"",
+    "server.host = \"x\"",
+    "route len = 2",
+    "nope len = 0",
+    "err: empty array-of-tables header",
+    "err: missing ']]' in array-of-tables header",
 ];
 
 fn run(flags: &[&str]) -> (Vec<String>, bool) {

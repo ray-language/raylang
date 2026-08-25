@@ -1,6 +1,6 @@
 // Demo de CSV: parsea un documento con campos entrecomillados (coma interna, comillas escapadas),
 // imprime las filas (campos unidos por '|'), y comprueba el round-trip (write_csv → parse_csv).
-from csv import parse_csv, write_csv;
+from csv import parse_csv, write_csv, parser, feed, finish;
 
 fn fila_str(f: [string]) -> string {
     var s = "";
@@ -50,6 +50,47 @@ fn main() {
                 Result.Err(e) => print("re-parse err: " + e),
             }
         },
+        Result.Err(e) => print("err: " + e),
+    }
+    // M128: el parser INCREMENTAL, alimentado por trozos de 3 chars que cortan por medio de
+    // campos, `""` y CRLF, debe producir exactamente las mismas filas que parse_csv.
+    let doc2 = "a,\"x\"\"y\",fin\r\nq,\"multi\nlinea\",z";
+    let p = parser();
+    var inc: [[string]] = [];
+    var i = 0;
+    while (i < doc2.len()) {
+        var j = i + 3;
+        if (j > doc2.len()) {
+            j = doc2.len();
+        }
+        for r in feed(p, doc2.substring(i, j)) {
+            inc.push(r);
+        }
+        i = j;
+    }
+    match (finish(p)) {
+        Result.Ok(tail) => {
+            for r in tail {
+                inc.push(r);
+            }
+            match (parse_csv(doc2)) {
+                Result.Ok(whole) => {
+                    if (iguales(inc, whole)) {
+                        print("incremental ok");
+                    } else {
+                        print("incremental FALLO");
+                    }
+                },
+                Result.Err(e) => print("err: " + e),
+            }
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+    // Comilla sin cerrar: el error sale en finish (el stream pudo haber seguido).
+    let p2 = parser();
+    feed(p2, "\"abierta");
+    match (finish(p2)) {
+        Result.Ok(_t) => print("err esperado FALLO"),
         Result.Err(e) => print("err: " + e),
     }
 }

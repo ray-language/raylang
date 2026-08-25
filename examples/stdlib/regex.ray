@@ -54,6 +54,8 @@ struct Prog {
     nsaves: int,
     ngroups: int,
     pat: string,
+    // M128: nombre de cada grupo por indice (0 = match entero, siempre ""); "" = sin nombre.
+    names: [string],
 }
 
 // R5 (perf, 22 jul 2026): el patrón FUENTE. El backend nativo intercepta las funciones
@@ -123,6 +125,7 @@ struct PS {
     pat: [char],
     pos: int,
     ngroups: int,
+    names: [string],
 }
 
 // M81: contador de grupos de captura (el siguiente índice libre; empieza en 1 —
@@ -242,15 +245,15 @@ fn parse_bounds(p: PS, node: Re) -> Result<Re, string> {
         }
     }
     if (ps_at_end(p) || ps_peek(p) != '}') {
-        return Result.Err("regex: falta '}' en el cuantificador {n,m}");
+        return Result.Err("regex: missing '}' in {n,m} quantifier");
     }
     ps_advance(p);  // '}'
     let lazy = quant_lazy(p);
     if (!abierto && m < n) {
-        return Result.Err("regex: cuantificador {n,m} con m < n");
+        return Result.Err("regex: {n,m} quantifier with m < n");
     }
     if (m > 512 || n > 512) {
-        return Result.Err("regex: cuantificador {n,m} demasiado grande (tope 512)");
+        return Result.Err("regex: {n,m} quantifier too large (max 512)");
     }
     // n copias obligatorias…
     var out = Re.Empty;
@@ -299,20 +302,60 @@ fn parse_atom(p: PS) -> Result<Re, string> {
     if (c == '(') {
         ps_advance(p);
         // M81: `(?:...)` agrupa SIN capturar; `(...)` captura con índice por orden
-        // de apertura (1..; el 0 es el match entero).
+        // de apertura (1..; el 0 es el match entero). M128: `(?P<name>...)` y `(?<name>...)`
+        // capturan CON nombre (mismo índice posicional; el nombre va a la tabla `names`).
         var g = 0 - 1;
-        if (p.pos + 1 < p.pat.len() && ps_peek(p) == '?' && ps_peek2(p) == ':') {
+        if (p.pos + 1 < p.pat.len() && ps_peek(
+            p
+        ) == '?' && ps_peek2(p) == ':') {
             ps_advance(p);
             ps_advance(p);
+        } else if (p.pos + 1 < p.pat.len() && ps_peek(p) == '?' && (ps_peek2(p) == 'P' || ps_peek2(p) == '<')) {
+            ps_advance(p);
+            if (ps_peek(p) == 'P') {
+                ps_advance(p);
+            }
+            if (ps_at_end(p) || ps_peek(p) != '<') {
+                return Result.Err("regex: expected '<' after '(?P'");
+            }
+            ps_advance(p);
+            // Mismo léxico que el crate `regex` nativo: [A-Za-z_][A-Za-z0-9_]* — un nombre
+            // que empezara por dígito rompería la paridad con la vía acelerada.
+            if (!ps_at_end(p) && ps_peek(p) >= '0' && ps_peek(p) <= '9') {
+                return Result.Err("regex: group name cannot start with a digit");
+            }
+            var name = "";
+            while (!ps_at_end(
+                p
+            ) && ps_peek(p) != '>') {
+                let nc = ps_peek(p);
+                let ok_char = nc >= 'a' && nc <= 'z' || nc >= 'A' && nc <= 'Z' || nc >= '0' && nc <= '9' || nc == '_';
+                if (!ok_char) {
+                    return Result.Err("regex: invalid character in group name");
+                }
+                name = name + to_string(nc);
+                ps_advance(p);
+            }
+            if (ps_at_end(p) || name == "") {
+                return Result.Err("regex: expected '>' closing the group name");
+            }
+            ps_advance(p);
+            if (p.names.contains(name)) {
+                return Result.Err("regex: duplicate group name '" + name + "'");
+            }
+            g = p.ngroups;
+            p.ngroups = p.ngroups + 1;
+            p.names.push(name);
         } else {
             g = p.ngroups;
             p.ngroups = p.ngroups + 1;
+            p.names.push("");
         }
         let inner = parse_alt(p)?;
         if (!ps_at_end(p) && ps_peek(p) == ')') {
             ps_advance(p);
         } else {
-            return Result.Err("regex: falta ')'");
+            return Result.Err("regex: missing ')'");
         }
         if (g >= 0) {
             return Result.Ok(Re.Group(inner, g));
@@ -338,7 +381,7 @@ fn parse_atom(p: PS) -> Result<Re, string> {
     if (c == '\\') {
         ps_advance(p);  // consume la barra
         if (ps_at_end(p)) {
-            return Result.Err("regex: '\\' al final del patrón");
+            return Result.Err("regex: trailing '\\' at end of pattern");
         }
         let e = ps_advance(p);
         return Result.Ok(escape_atom(e));
@@ -364,7 +407,7 @@ fn parse_class(p: PS) -> Result<Class, string> {
         if (ps_peek(p) == '\\') {
             ps_advance(p);  // barra
             if (ps_at_end(p)) {
-                return Result.Err("regex: '\\' al final de la clase");
+                return Result.Err("regex: trailing '\\' at end of class");
             }
             let e = ps_advance(p);
             // Clases predefinidas dentro de la clase: se fusionan sus rangos.
@@ -383,7 +426,7 @@ fn parse_class(p: PS) -> Result<Class, string> {
         }
     }
     if (ps_at_end(p)) {
-        return Result.Err("regex: falta ']' para cerrar la clase");
+        return Result.Err("regex: missing ']' to close the class");
     }
     ps_advance(p);  // consume ']'
     Result.Ok(Class { neg: neg, ranges: ranges })
@@ -406,7 +449,7 @@ fn push_item(p: PS, ranges: [Range], lo: char) -> Result<int, string> {
         var hi = ps_advance(p);
         if (hi == '\\') {
             if (ps_at_end(p)) {
-                return Result.Err("regex: '\\' al final de la clase");
+                return Result.Err("regex: trailing '\\' at end of class");
             }
             hi = unescape(ps_advance(p));
         }
@@ -519,10 +562,10 @@ fn compile_re(re: Re, prog: Prog) {
 }
 
 fn compile_pattern(pattern: string) -> Result<Prog, string> {
-    let p = PS { pat: pattern.chars(), pos: 0, ngroups: 1 };
+    let p = PS { pat: pattern.chars(), pos: 0, ngroups: 1, names: [""] };
     let re = parse_alt(p)?;
     if (!ps_at_end(p)) {
-        return Result.Err("regex: carácter inesperado en el patrón (¿')' de más?)");
+        return Result.Err("regex: unexpected character in pattern (stray ')'?)");
     }
     var insts: [Inst] = [];
     var classes: [Class] = [];
@@ -531,7 +574,8 @@ fn compile_pattern(pattern: string) -> Result<Prog, string> {
         classes: classes,
         nsaves: 2 * p.ngroups,
         ngroups: p.ngroups,
-        pat: pattern
+        pat: pattern,
+        names: p.names
     };
     // M81: el match entero es el grupo 0 — Save(0) al entrar, Save(1) antes del Match.
     emit(prog, 8, 0, 0, ' ');
@@ -1039,4 +1083,36 @@ impl Matcher for Regex {
     fn captures(self, text: string) -> Option<[Option<(int, int)>]> { run_captures(self.prog, text) }
 
     fn captures_str(self, text: string) -> Option<[Option<string>]> { run_captures_str(self.prog, text) }
+}
+
+// --- M128: grupos con NOMBRE — la ergonomía que un extractor de campos espera (IDEAS §63.3).
+/// The name of each capture group by index (`[0]` is the whole match, always `""`;
+/// unnamed groups are `""`). Use it to map `captures`/`captures_str` slots to names.
+pub fn group_names(re: Regex) -> [string] {
+    re.prog.names
+}
+
+/// Named captures of the FIRST match, as a `name -> matched text` map: only named groups
+/// (`(?P<name>...)` / `(?<name>...)`) appear, and a named group that did not participate is
+/// absent. `None` when the pattern does not match at all.
+pub fn captures_map(re: Regex, text: string) -> Option<Map<string, string>> {
+    match (run_captures_str(re.prog, text)) {
+        Option.None => Option.None,
+        Option.Some(groups) => {
+            var out: Map<string, string> = Map.new();
+            var i = 0;
+            while (i < groups.len() && i < re.prog.names.len()) {
+                if (re.prog.names[i] != "") {
+                    match (groups[i]) {
+                        Option.Some(s) => {
+                            out.insert(re.prog.names[i], s);
+                        },
+                        Option.None => { },
+                    }
+                }
+                i = i + 1;
+            }
+            Option.Some(out)
+        },
+    }
 }

@@ -62,10 +62,10 @@ const EXPECTED: &[&str] = &[
     "repl  /\\s+/ \"hola   mundo  ya\" -> \"hola_mundo_ya\"",
     "repl  /a/ \"banana\" -> \"b-n-n-\"",
     // M59.2 — errores como valores (compile) + la API compilada (métodos de Matcher).
-    "comp  /gr(a|e/ = err: regex: falta ')'",
-    "comp  /[a-z/ = err: regex: falta ']' para cerrar la clase",
-    "comp  /abc\\/ = err: regex: '\\' al final del patrón",
-    "comp  /ab)c/ = err: regex: carácter inesperado en el patrón (¿')' de más?)",
+    "comp  /gr(a|e/ = err: regex: missing ')'",
+    "comp  /[a-z/ = err: regex: missing ']' to close the class",
+    "comp  /abc\\/ = err: regex: trailing '\\' at end of pattern",
+    "comp  /ab)c/ = err: regex: unexpected character in pattern (stray ')'?)",
     "re    full 2024 = si",
     "re    search abc123 = si",
     "re    find_str = \"123\"",
@@ -136,6 +136,13 @@ const EXPECTED_M81: &[&str] = &[
     "caps /\"(.*?)\"/ ~ \"dice \"hola\" y \"adios\"\" → [0]=\"hola\" [1]=hola",
     "1,22,333",
     "a_b_c",
+    // M128 — grupos con nombre: (?P<name>) / (?<name>), captures_map y errores de nombre.
+    "names [,y,m,]",
+    "cap m=08",
+    "cap y=2026",
+    "cap <none>",
+    "comp err: regex: duplicate group name 'a'",
+    "comp err: regex: group name cannot start with a digit",
 ];
 
 fn run_m81(flags: &[&str]) -> (Vec<String>, bool) {

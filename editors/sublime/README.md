@@ -1,5 +1,9 @@
 # Paquete de Sublime Text 4 para raylang
 
+> Aún no está en Package Control (llegará con la primera release pública del lenguaje,
+> vía un espejo `ray-language/sublime-raylang`). Mientras tanto: instalación por copia,
+> abajo.
+
 Soporte para archivos `.ray` en **Sublime Text 4**: **resaltado de sintaxis** + **diagnósticos
 en vivo** (vía el Language Server `raylang --lsp`).
 

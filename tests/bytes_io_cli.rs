@@ -174,3 +174,80 @@ fn main() -> int {
         assert_eq!(code, 0);
     }
 }
+
+/// M115.1: `fs.write_bytes(h, data)` + `fs.sync(h)` — escritura binaria sobre handle y fsync.
+/// El gemelo binario de `write`: octetos crudos (`\x00`/`\xff`) intactos a través del handle,
+/// compone con append ("a") y con `seek`+`read_bytes` para releer; `sync` fuerza a disco y
+/// falla limpio sobre un lector o un handle inválido.
+#[test]
+fn file_write_bytes_and_sync() {
+    for vm in [false, true] {
+        let dat = std::env::temp_dir().join(format!("ray_wbytes_{}.dat", if vm { "vm" } else { "in" }));
+        let _ = std::fs::remove_file(&dat);
+        let src = format!(
+            r#"
+import std/fs;
+fn main() -> int {{
+    let h = match (fs.open("{path}", "w")) {{
+        Result.Ok(h) => h,
+        Result.Err(e) => {{ eprint(e); return 1; }},
+    }};
+    match (fs.write_bytes(h, b"WAL\x00\xff")) {{
+        Result.Ok(n) => print(to_string(n)),
+        Result.Err(e) => {{ eprint(e); return 1; }},
+    }};
+    match (fs.sync(h)) {{
+        Result.Ok(_) => print("synced"),
+        Result.Err(e) => {{ eprint(e); return 1; }},
+    }};
+    close(h);
+    // append binario sobre handle + sync, y relectura completa
+    let a = match (fs.open("{path}", "a")) {{
+        Result.Ok(h) => h,
+        Result.Err(e) => {{ eprint(e); return 1; }},
+    }};
+    let _ = fs.write_bytes(a, b"\x01tail");
+    let _ = fs.sync(a);
+    close(a);
+    match (fs.read_file_bytes("{path}")) {{
+        Result.Ok(all) => {{
+            print(to_string(all.len()));
+            if (all == b"WAL\x00\xff\x01tail") {{ print("identico") }} else {{ print("CORRUPTO") }}
+        }},
+        Result.Err(e) => print("err: " + e),
+    }};
+    // errores limpios: write_bytes/sync sobre un LECTOR, y sobre un handle inválido
+    let r = match (fs.open("{path}", "r")) {{
+        Result.Ok(h) => h,
+        Result.Err(e) => {{ eprint(e); return 1; }},
+    }};
+    match (fs.write_bytes(r, b"x")) {{
+        Result.Ok(_) => print("MAL"),
+        Result.Err(e) => print(e),
+    }};
+    match (fs.sync(r)) {{
+        Result.Ok(_) => print("MAL"),
+        Result.Err(e) => print(e),
+    }};
+    close(r);
+    match (fs.sync(99999)) {{
+        Result.Ok(_) => print("MAL"),
+        Result.Err(e) => print(e),
+    }};
+    0
+}}
+"#,
+            path = dat.to_string_lossy()
+        );
+        let (out, code) = run("ray_wbytes", &src, vm);
+        assert_eq!(
+            out,
+            "5\nsynced\n10\nidentico\n\
+             the handle is open for reading, not writing\n\
+             the handle is open for reading, not writing\n\
+             invalid file handle: 99999\n",
+            "write_bytes + sync (vm={vm}): {out}"
+        );
+        assert_eq!(code, 0);
+    }
+}

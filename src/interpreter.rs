@@ -1802,6 +1802,28 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M115.1: escritura binaria en el handle → ["ok"] o ["err", msg].
+            "__write_bytes_handle" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Bytes(data)) => match crate::builtins::write_bytes_handle(*h, data) {
+                        Ok(_) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees int, bytes"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M115.1: fsync del handle → ["ok"] o ["err", msg].
+            "__sync_handle" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::sync_handle(*h) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // std/io (M107.1): stdout/stderr sin salto + flush → ["ok"] o ["err", msg].
             "__stdout_write" | "__stderr_write" => {
                 let arr = match &values[0] {

@@ -1082,6 +1082,30 @@ match (fs.open("video.bin", "r")) {
 }
 ```
 
+Para **escribir** binario sobre un handle está `fs.write_bytes(h, data)` (el gemelo de
+`fs.write`), y `fs.sync(h)` fuerza lo escrito a **almacenamiento estable** (fsync). La
+distinción importa: un `write`/`append` llega al *page cache* del SO — sobrevive a un crash
+del **proceso**, pero no a un corte de luz. Un log de escritura anticipada (WAL/AOF) durable
+es el patrón de las tres piezas juntas:
+
+```rust
+match (fs.open("queue.wal", "a")) {
+    Result.Ok(h) => {
+        let entry: bytes = encode_entry();               // registro binario propio
+        let _ = fs.write_bytes(h, entry);                // octetos crudos, \x00/\xff intactos
+        match (fs.sync(h)) {                             // fsync: ahora sí es durable
+            Result.Ok(_) => { /* confirmar al cliente */ },
+            Result.Err(e) => print(e),
+        }
+    },
+    Result.Err(e) => print(e),
+}
+```
+
+`sync` solo aplica a handles de escritura (`"w"`/`"a"`); sobre un lector devuelve
+`Err("the handle is open for reading, not writing")`. Y recuerda el patrón de escritura
+atómica: escribir a un `.tmp`, `sync`, y `fs.rename` encima del destino.
+
 ### Stdin, entorno y argumentos
 
 ```rust

@@ -2595,6 +2595,32 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M115.1: escritura binaria en el handle → ["ok"] o ["err", msg].
+                OpCode::WriteBytesHandle => {
+                    let data = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Bytes(data)) = (handle, data) else {
+                        unreachable!("the checker guarantees int, bytes");
+                    };
+                    let elems = match crate::builtins::write_bytes_handle(handle, &data) {
+                        Ok(_) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M115.1: fsync del handle → ["ok"] o ["err", msg].
+                OpCode::SyncHandle => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::sync_handle(handle) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // --- std/io (M107.1): stdout/stderr sin salto + flush; arreglo etiquetado. ---
                 OpCode::StdoutWrite | OpCode::StderrWrite => {
                     let HeapValue::Str(s) = self.pop() else {

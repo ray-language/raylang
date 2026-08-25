@@ -537,6 +537,14 @@ pub enum OpCode {
     /// inicio y empuja `["ok", nueva_pos]` / `["err", msg]`. Primitivo `__seek_handle`;
     /// `std/fs` → `Result<int, string>`.
     SeekHandle,
+    /// M115.1: saca los datos (bytes) y un handle (int); escribe los octetos crudos en la posición
+    /// actual y empuja `["ok"]` / `["err", msg]`. Primitivo `__write_bytes_handle`;
+    /// `std/fs` → `Result<int, string>`. Gemelo binario de `WriteHandle`.
+    WriteBytesHandle,
+    /// M115.1: saca un handle (int); vuelca los búferes y fuerza el archivo a almacenamiento
+    /// estable (fsync) y empuja `["ok"]` / `["err", msg]`. Primitivo `__sync_handle`;
+    /// `std/fs` → `Result<int, string>`.
+    SyncHandle,
     /// M107.1 (std/io): escribe el string a stdout SIN salto de línea → `["ok"]`/`["err", msg]`.
     /// Primitivo `__stdout_write`; `std/io` → `Result<int,string>`.
     StdoutWrite,

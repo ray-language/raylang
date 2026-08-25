@@ -851,6 +851,31 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
     }
 }
 
+/// Escribe octetos crudos en la posición actual del handle (M115.1). Gemelo binario de
+/// `write_handle`; mismos mensajes que el helper nativo `__ray_write_bytes` (paridad).
+pub fn write_bytes_handle(h: i64, data: &[u8]) -> Result<usize, String> {
+    use std::io::Write;
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Writer(f)) => f.write_all(data).map(|_| data.len()).map_err(|e| e.to_string()),
+        Some(OpenHandle::Reader(_)) => Err("the handle is open for reading, not writing".to_string()),
+        Some(_) => Err("the handle is not a file open for writing".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
+/// Vuelca los búferes y fuerza el archivo a almacenamiento estable — fsync (M115.1). Solo sobre
+/// handles de escritura: es la pieza de durabilidad (WAL/AOF); en un lector no tiene sentido.
+pub fn sync_handle(h: i64) -> Result<(), String> {
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Writer(f)) => f.sync_all().map_err(|e| e.to_string()),
+        Some(OpenHandle::Reader(_)) => Err("the handle is open for reading, not writing".to_string()),
+        Some(_) => Err("the handle is not a file open for writing".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
 /// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);
@@ -2637,6 +2662,19 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__write_handle", " (handle, contenido)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__write_handle expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__write_handle expects a string (the content), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __write_bytes_handle(h, data) -> [string] (M115.1): ["ok"] o ["err", msg]. std/fs → Result<int,string>.
+    Builtin { name: "__write_bytes_handle", opcode: OpCode::WriteBytesHandle, check: |a| {
+        arity(a, 2, "__write_bytes_handle", " (handle, datos)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__write_bytes_handle expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__write_bytes_handle expects bytes (the data), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __sync_handle(h) -> [string] (M115.1): ["ok"] o ["err", msg]. std/fs → Result<int,string>.
+    Builtin { name: "__sync_handle", opcode: OpCode::SyncHandle, check: |a| {
+        arity(a, 1, "__sync_handle", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sync_handle expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // --- std/io (M107.1): stdout/stderr sin salto de línea + flush. Primitivos con arreglo

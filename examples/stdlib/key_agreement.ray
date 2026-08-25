@@ -16,8 +16,12 @@ fn empty_bytes() -> bytes {
 }
 
 fn nibble(c: char) -> int {
-    if (c >= '0' && c <= '9') { return char_code(c) - char_code('0'); }
-    if (c >= 'a' && c <= 'f') { return char_code(c) - char_code('a') + 10; }
+    if (c >= '0' && c <= '9') {
+        return char_code(c) - char_code('0');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return char_code(c) - char_code('a') + 10;
+    }
     0 - 1
 }
 
@@ -87,7 +91,9 @@ fn rejections() {
 
     // Una pública de ORDEN PEQUEÑO (aquí, toda ceros) fuerza un secreto compartido todo ceros — que el
     // atacante conoce de antemano. `None` es lo que impide seguir cifrando bajo esa clave nula.
-    print("orden pequeño:  ${crypto.x25519_shared_secret(sk, bytes_of([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])).is_none()}");
+    print(
+        "orden pequeño:  ${crypto.x25519_shared_secret(sk, bytes_of([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])).is_none()}"
+    );
 
     // HKDF solo puede estirar hasta 255 bloques de hash (255 × 32 = 8160 octetos).
     print("hkdf len 0:     ${crypto.hkdf_sha256(empty, sk, empty, 0).is_none()}");
@@ -110,8 +116,8 @@ fn rejections() {
 //      paso siguiente, un intermediario hace un intercambio con cada lado y lee todo.
 
 struct Peer {
-    x_secret: bytes,     // privada X25519 (efímera: una por sesión)
-    id_seed: bytes,      // semilla Ed25519 (persistente: es la identidad del nodo)
+    x_secret: bytes,  // privada X25519 (efímera: una por sesión)
+    id_seed: bytes,  // semilla Ed25519 (persistente: es la identidad del nodo)
 }
 
 fn new_peer(x_secret: string, id_seed: string) -> Peer {
@@ -119,6 +125,7 @@ fn new_peer(x_secret: string, id_seed: string) -> Peer {
 }
 
 fn public_of(p: Peer) -> bytes { or_empty(crypto.x25519_public_key(p.x_secret)) }
+
 fn identity_of(p: Peer) -> bytes { or_empty(crypto.ed25519_public_key(p.id_seed)) }
 
 // Regla 4: cada uno FIRMA su pública efímera con su identidad de largo plazo. Eso es lo que ata "esta
@@ -139,7 +146,10 @@ fn direction_key(dh: bytes, transcript: bytes, label: string) -> bytes {
 fn nonce_for(counter: int) -> bytes {
     var n: [int] = [];
     var i = 0;
-    while (i < 11) { n.push(0); i = i + 1; }
+    while (i < 11) {
+        n.push(0);
+        i = i + 1;
+    }
     n.push(counter);
     bytes_of(n)
 }
@@ -177,15 +187,28 @@ fn handshake() {
     // Un mensaje de Alice a Bob: nonce = contador de ESE sentido.
     let empty = empty_bytes();
     let msg = "hola desde el otro lado".to_bytes();
-    match (crypto.chacha20poly1305_seal(a2b_alice, nonce_for(1), empty, msg)) {
-        Option.None => { print("no se pudo cifrar"); },
+    match (crypto.chacha20poly1305_seal(
+    a2b_alice,
+    nonce_for(1),
+    empty,
+    msg
+)) {
+        Option.None => {
+            print("no se pudo cifrar");
+        },
         Option.Some(sealed) => {
             match (crypto.chacha20poly1305_open(a2b_bob, nonce_for(1), empty, sealed)) {
-                Option.Some(plain) => { print("B descifra: ${or_utf8(plain)}"); },
-                Option.None => { print("B no pudo descifrar"); },
+                Option.Some(plain) => {
+                    print("B descifra: ${or_utf8(plain)}");
+                },
+                Option.None => {
+                    print("B no pudo descifrar");
+                },
             }
             // Con la clave del sentido CONTRARIO no se abre: es la regla 2 funcionando.
-            print("con la clave del otro sentido: ${crypto.chacha20poly1305_open(b2a_bob, nonce_for(1), empty, sealed).is_none()}");
+            print(
+                "con la clave del otro sentido: ${crypto.chacha20poly1305_open(b2a_bob, nonce_for(1), empty, sealed).is_none()}"
+            );
         },
     }
 }
@@ -200,9 +223,15 @@ fn or_utf8(b: bytes) -> string {
 fn bytes_concat(a: bytes, b: bytes) -> bytes {
     var out: [int] = [];
     var i = 0;
-    while (i < a.len()) { out.push(a[i]); i = i + 1; }
+    while (i < a.len()) {
+        out.push(a[i]);
+        i = i + 1;
+    }
     var j = 0;
-    while (j < b.len()) { out.push(b[j]); j = j + 1; }
+    while (j < b.len()) {
+        out.push(b[j]);
+        j = j + 1;
+    }
     bytes_of(out)
 }
 

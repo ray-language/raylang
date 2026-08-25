@@ -37,6 +37,16 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **Pool de conexiones en `packages/rpc`** (M127) — `pool(host, port, size)` +
+  `pool_call[_deadline/_full]` + `pool_close`: hasta `size` llamadas EN VUELO a la vez (una
+  conexión por hueco = paralelismo real del lado servidor), checkout que aparca al agotarse
+  (backpressure por canal acotado) y RECONEXIÓN automática tras un timeout — el "disconnect y
+  reconecta" manual desaparece.
+- **Pool de conexiones en `packages/rpc`** (M127) — `pool(host, port, size)` +
+  `pool_call[_deadline/_full]` + `pool_close`: hasta `size` llamadas EN VUELO a la vez (una
+  conexión por hueco = paralelismo real del lado servidor), checkout que aparca al agotarse
+  (backpressure por canal acotado) y **reconexión automática** tras un timeout — el "disconnect
+  y reconecta" manual desaparece.
 - **Hasher incremental en `std/crypto`** (M126) — `sha256_init`/`sha512_init` + `hash_update` +
   `hash_final`: hashear un archivo grande POR TROZOS sin cargarlo entero, con digest idéntico al
   de una pasada. El patrón que tres apps copiaban a mano (cada una con su encadenado casero

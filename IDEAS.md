@@ -2617,7 +2617,7 @@ reconstrucción verificada + rename, `--watch`, `--delete`).
    `--follow`, ahora raysync `--watch`). El caso está sobre-demostrado; la pieza mínima
    (watch de mtime por árbol, o kqueue/inotify detrás de una API de eventos) paga en cuatro
    sitios ya escritos.
-2. **`fs` sin metadatos**: ni permisos ni symlinks (solo `is_dir`/`is_file`/`file_size`/`mtime`)
+2. **[EJECUTADA — M115.3, DESIGN §110: `fs.stat(path)` lstat con kind/mode/size/mtime_ms] `fs` sin metadatos**: ni permisos ni symlinks (solo `is_dir`/`is_file`/`file_size`/`mtime`)
    → un sync fiel (modo rsync -a) es inexpresable; los symlinks ni siquiera se pueden DETECTAR
    (se siguen o se ignoran a ciegas). Candidato: `fs.stat(path) -> {kind, mode, mtime, size}`.
 3. **Sin hasher incremental en `std/crypto`** — tercera app copiando el patrón takeit de
@@ -2674,7 +2674,7 @@ Tres apps del eje "texto y cripto" en una tanda: `raymail` (SMTP real + MIME + s
 1. **Entrada oculta de passphrase = artesanía sobre raw** (raypass; predicho por §1.12): ~30
    líneas de raw + byte a byte + backspace + decode que toda herramienta repetirá. Candidata:
    `term.read_hidden(prompt) -> Result<string, _>`.
-2. **Sin `fs.chmod`/permisos** (raypass): una bóveda de secretos queda con el umask del proceso
+2. **[EJECUTADA — M115.3, DESIGN §110: `fs.chmod(path, mode)`] Sin `fs.chmod`/permisos** (raypass): una bóveda de secretos queda con el umask del proceso
    y no puede restringirse a 600. Misma familia que el `fs.stat` de §69 — la superficie de
    metadatos de fs es EL hueco transversal de esta tanda (watch §69, stat §69, chmod aquí).
 3. **Zeroización inexpresable** (raypass): secretos en strings del GC sin borrado garantizado.

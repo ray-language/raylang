@@ -413,6 +413,36 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        None => Err(Rc::<str>::from(format!(\"invalid file handle: {}\", h))) } }\n",
         ));
     }
+    // M115.3: primitivos de metadatos (stat sin seguir symlinks + chmod). Arreglo etiquetado
+    // byte-idéntico a builtins::fs_tagged(FsOp::Stat)/chmod_path — los wrappers fs.stat/fs.chmod
+    // se EMITEN (el struct Stat vive en raylang) y llaman aquí.
+    if t.needs_fs_meta {
+        out.push_str(concat!(
+            "fn __ray_tagged(parts: Vec<String>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    Rc::new(std::cell::RefCell::new(parts.into_iter().map(Rc::<str>::from).collect()))\n}\n",
+            "fn __ray_stat_prim(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    __ray_tagged(match std::fs::symlink_metadata(path) {\n",
+            "        Ok(md) => {\n",
+            "            let ft = md.file_type();\n",
+            "            let kind = if ft.is_symlink() { \"symlink\" } else if ft.is_dir() { \"dir\" } else if ft.is_file() { \"file\" } else { \"other\" };\n",
+            "            #[cfg(unix)]\n",
+            "            let mode = { use std::os::unix::fs::PermissionsExt; (md.permissions().mode() & 0o7777) as u64 };\n",
+            "            #[cfg(not(unix))]\n",
+            "            let mode = 0u64;\n",
+            "            let mtime = match md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {\n",
+            "                Some(d) => d.as_millis().to_string(), None => \"0\".to_string() };\n",
+            "            vec![\"ok\".to_string(), kind.to_string(), mode.to_string(), md.len().to_string(), mtime]\n",
+            "        }\n",
+            "        Err(e) => vec![\"err\".to_string(), e.to_string()],\n",
+            "    })\n}\n",
+            "fn __ray_chmod_prim(path: &str, mode: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    #[cfg(unix)]\n",
+            "    let r = { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(path, std::fs::Permissions::from_mode((mode as u32) & 0o7777)).map_err(|e| e.to_string()) };\n",
+            "    #[cfg(not(unix))]\n",
+            "    let r: Result<(), String> = { let _ = (path, mode); Err(\"chmod is not supported on this platform\".to_string()) };\n",
+            "    __ray_tagged(match r { Ok(()) => vec![\"ok\".to_string()], Err(e) => vec![\"err\".to_string(), e] })\n}\n",
+        ));
+    }
     // Ops de socket TCP — solo si se usa la red. Clonan el stream para no retener el lock en la I/O
     // bloqueante (como la VM). read lee ≤64KiB (lossy UTF-8; EOF → ""); write escribe todo (Ok(nº bytes)).
     if t.needs_net {

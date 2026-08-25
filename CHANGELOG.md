@@ -37,6 +37,13 @@ Todo lo que ha entrado en `main` desde la 1.0.0 (jul 2026). El eje del periodo: 
 
 ### Añadido — lenguaje y stdlib
 
+- **`std/fs`: metadatos y permisos** (M115.3, IDEAS §69/§71) — `fs.stat(path)` devuelve
+  `Stat { kind, mode, size, mtime_ms }` **sin seguir symlinks** (lstat): un symlink por fin se
+  puede DETECTAR (`kind "symlink"`) en vez de seguirse a ciegas — lo que un sync/backup fiel
+  necesita; los helpers totales (`is_dir`/`is_file`/`mtime`) siguen resolviendo como siempre. Y
+  `fs.chmod(path, mode)` cambia los bits de permiso (384 = 0o600): una bóveda de secretos ya
+  puede restringirse a su dueño. Tres motores byte-idénticos.
+
 - **`std/fs`: candados consultivos de archivo** (M115.2, IDEAS §66) — `fs.try_lock(h)` (candado
   EXCLUSIVO sin bloquear, flock; `Ok(true)` = adquirido, `Ok(false)` = lo tiene otro) y
   `fs.unlock(h)` (`close` también lo suelta). El patrón LOCK-file del proceso único: dos brokers

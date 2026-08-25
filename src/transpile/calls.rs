@@ -958,8 +958,12 @@ impl Transpiler {
             }
         }
         // `std::fs::*` (módulo std/fs) → I/O de archivos con `std::fs`/`std::io` de Rust (Ok/Err como la VM).
+        // Excepción M115.3: stat/chmod NO se interceptan aquí — sus wrappers se emiten (el intercept
+        // es a nivel de primitivo `__stat`/`__chmod`, abajo), así el struct `Stat` vive en raylang.
         if let Some(ffn) = name.strip_prefix("std::fs::") {
-            return self.emit_fs(out, ffn, &eff);
+            if !matches!(ffn, "stat" | "chmod") {
+                return self.emit_fs(out, ffn, &eff);
+            }
         }
         // `std::time::{now,monotonic,sleep}`/`std::random::{next,below,seed}` → reloj + PRNG de Rust (no
         // deterministas → casan por propiedades). El resto de std/time|random es raylang puro → pasa de largo.
@@ -2022,6 +2026,22 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
             }
+            // M115.3: primitivos de metadatos (los llaman los wrappers EMITIDOS fs.stat/fs.chmod).
+            // Devuelven el arreglo etiquetado, byte-idéntico a builtins::fs_tagged/chmod_path.
+            "stat" if name.starts_with("__") => {
+                self.needs_fs_meta = true;
+                out.push_str("__ray_stat_prim(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "chmod" if name.starts_with("__") => {
+                self.needs_fs_meta = true;
+                out.push_str("__ray_chmod_prim(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             // M100: `__run` (procesos del SO) → `__ray_run` (ray_runtime::process, el MISMO código que
             // la VM) + activa `needs_rt_process`. `--without process` es gating de POLÍTICA: sin
             // interceptar, cae al Err de "no soportado" de abajo. Strings/arreglos por referencia
@@ -2171,7 +2191,10 @@ impl Transpiler {
                     });
                 }
                 // `std::fs::*`: read_file → Result<string,string>; write_file → Result<int,string>; exists → bool.
-                if let Some(ffn) = n.strip_prefix("std::fs::") {
+                // stat/chmod caen a la ruta genérica (sus wrappers emitidos viven en `funcs`).
+                if let Some(ffn) = n.strip_prefix("std::fs::")
+                    && !matches!(ffn, "stat" | "chmod")
+                {
                     return Ok(match ffn {
                         "read_file" => Type::Enum("Result".into(), vec![Type::String, Type::String]),
                         "read_file_bytes" => Type::Enum("Result".into(), vec![Type::Bytes, Type::String]),

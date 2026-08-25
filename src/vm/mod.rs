@@ -2647,6 +2647,20 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M115.3: chmod → ["ok"] o ["err", msg].
+                OpCode::Chmod => {
+                    let mode = self.pop();
+                    let path = self.pop();
+                    let (HeapValue::Str(path), HeapValue::Int(mode)) = (path, mode) else {
+                        unreachable!("the checker guarantees string, int");
+                    };
+                    let elems = match crate::builtins::chmod_path(&path, mode) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // --- std/io (M107.1): stdout/stderr sin salto + flush; arreglo etiquetado. ---
                 OpCode::StdoutWrite | OpCode::StderrWrite => {
                     let HeapValue::Str(s) = self.pop() else {

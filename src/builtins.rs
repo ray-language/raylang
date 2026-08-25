@@ -409,6 +409,39 @@ pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
                 Err(e) => vec!["err".to_string(), e.to_string()],
             };
         }
+        FsOp::Stat => {
+            // ["ok", kind, mode, size, mtime_ms] — metadatos SIN seguir symlinks (lstat): un
+            // symlink se DETECTA (kind "symlink") en vez de seguirse a ciegas; los helpers
+            // totales (is_dir/is_file/mtime) siguen resolviendo, como siempre. mode = los 12
+            // bits de permiso en decimal (0o600 = 384; raylang aún no tiene literales octales).
+            return match std::fs::symlink_metadata(&args[0]) {
+                Ok(md) => {
+                    let ft = md.file_type();
+                    let kind = if ft.is_symlink() {
+                        "symlink"
+                    } else if ft.is_dir() {
+                        "dir"
+                    } else if ft.is_file() {
+                        "file"
+                    } else {
+                        "other"
+                    };
+                    #[cfg(unix)]
+                    let mode = {
+                        use std::os::unix::fs::PermissionsExt;
+                        (md.permissions().mode() & 0o7777) as u64
+                    };
+                    #[cfg(not(unix))]
+                    let mode = 0u64;
+                    let mtime = match md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
+                        Some(d) => d.as_millis().to_string(),
+                        None => "0".to_string(),
+                    };
+                    vec!["ok".to_string(), kind.to_string(), mode.to_string(), md.len().to_string(), mtime]
+                }
+                Err(e) => vec!["err".to_string(), e.to_string()],
+            };
+        }
         FsOp::Mtime => {
             // ["ok", epoch_ms] — la última modificación en la MONEDA del tiempo (epoch-ms UTC,
             // como `now()`). Vale para archivos y directorios.
@@ -873,6 +906,22 @@ pub fn sync_handle(h: i64) -> Result<(), String> {
         Some(OpenHandle::Reader(_)) => Err("the handle is open for reading, not writing".to_string()),
         Some(_) => Err("the handle is not a file open for writing".to_string()),
         None => Err(format!("invalid file handle: {}", h)),
+    }
+}
+
+/// Cambia los bits de permiso del archivo — chmod, solo los 12 bits bajos (M115.3). En una
+/// plataforma no-unix devuelve error (los permisos POSIX no existen ahí).
+pub fn chmod_path(path: &str, mode: i64) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode((mode as u32) & 0o7777))
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+        Err("chmod is not supported on this platform".to_string())
     }
 }
 
@@ -2628,6 +2677,20 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__file_size", opcode: OpCode::FsTagged(FsOp::FileSize), check: |a| {
         arity(a, 1, "__file_size", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__file_size expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __stat(path) -> [string] (M115.3): ["ok", kind, mode, size, mtime_ms] o ["err", msg] — SIN
+    // seguir symlinks (lstat). std/fs → Result<Stat, string>.
+    Builtin { name: "__stat", opcode: OpCode::FsTagged(FsOp::Stat), check: |a| {
+        arity(a, 1, "__stat", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__stat expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __chmod(path, mode) -> [string] (M115.3): ["ok"] o ["err", msg]. std/fs → Result<int,string>.
+    Builtin { name: "__chmod", opcode: OpCode::Chmod, check: |a| {
+        arity(a, 2, "__chmod", " (path, mode)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__chmod expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__chmod expects an int (the mode bits), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__mtime", opcode: OpCode::FsTagged(FsOp::Mtime), check: |a| {

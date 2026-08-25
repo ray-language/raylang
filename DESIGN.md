@@ -9609,3 +9609,28 @@ en Unix), mismo patrón M113/M115.1 — opcodes `TryLockHandle`/`UnlockHandle`, 
 VM/intérprete, helpers nativos espejo (`__ray_try_lock`/`__ray_unlock`), fila en el type_of del
 transpilador (la lección de M115.1). Vale sobre handles de lectura Y de escritura (un `LOCK` se
 abre típicamente en `"w"`, pero flock no distingue).
+
+## 110. M115.3 — fs.stat + fs.chmod: los metadatos que un sync fiel necesita (ago 2026)
+
+Tercera fase del frente fs. raysync (IDEAS §69) no podía ni DETECTAR un symlink — se seguía o se
+ignoraba a ciegas — y raypass (§71) dejaba su bóveda con el umask del proceso, sin poder
+restringirla a 600. La superficie:
+
+- **`fs.stat(path) -> Result<Stat, string>`** con `Stat { kind, mode, size, mtime_ms }` — y la
+  decisión clave: **NO sigue symlinks** (semántica lstat). Es lo que hace útil la función: un
+  symlink reporta `kind "symlink"` (y su propio tamaño), que es la única manera de detectarlo;
+  los helpers totales de siempre (`is_dir`/`is_file`/`mtime`/`file_size`) siguen resolviendo. Un
+  `stat` que siguiera el enlace no añadiría nada sobre lo existente.
+- **`fs.chmod(path, mode) -> Result<int, string>`** — los 12 bits de permiso. `mode` va en
+  decimal (384 = 0o600) porque raylang aún no tiene literales octales/hex (IDEAS §67, pendiente);
+  cuando lleguen, este API los recibirá sin cambio.
+
+Novedad de plomería frente a M115.1/2: el wrapper `stat` construye un **struct** (`Stat`), así
+que el intercept nativo a nivel de wrapper (lo usual en std/fs, que salta TODAS sus defs) habría
+tenido que fabricar el struct en Rust generado. En su lugar se siguió el precedente de
+std/process: `std::fs::stat`/`chmod` son la **excepción** del salto — sus defs se emiten (el
+struct vive en raylang) y el intercept baja al nivel de PRIMITIVO (`__stat`/`__chmod` →
+`__ray_stat_prim`/`__ray_chmod_prim`, arreglos etiquetados byte-idénticos a
+`builtins::fs_tagged(FsOp::Stat)`/`chmod_path`). `__stat` reusa la familia `FsTagged` (strings →
+arreglo etiquetado, tabla argc); `__chmod` lleva opcode propio (su `mode` es int). En no-unix,
+`chmod` devuelve error y `mode` reporta 0 (los permisos POSIX no existen ahí).

@@ -23,13 +23,15 @@ pub enum FsOp {
     Rename,
     CopyFile,
     Mtime,
+    /// M115.3: metadatos SIN seguir symlinks (lstat) → ["ok", kind, mode, size, mtime_ms].
+    Stat,
 }
 
 impl FsOp {
     /// Nº de argumentos string (rutas) que saca de la pila.
     pub fn argc(self) -> usize {
         match self {
-            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime => 1,
+            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat => 1,
             FsOp::Rename | FsOp::CopyFile => 2,
         }
     }
@@ -545,6 +547,10 @@ pub enum OpCode {
     /// estable (fsync) y empuja `["ok"]` / `["err", msg]`. Primitivo `__sync_handle`;
     /// `std/fs` → `Result<int, string>`.
     SyncHandle,
+    /// M115.3: saca `mode` (int) y `path` (string); cambia los bits de permiso del archivo
+    /// (chmod, solo los 12 bits bajos) y empuja `["ok"]` / `["err", msg]`. Primitivo `__chmod`;
+    /// `std/fs` → `Result<int, string>`.
+    Chmod,
     /// M115.2: saca un handle (int); intenta el candado consultivo EXCLUSIVO del archivo sin
     /// bloquear (flock) y empuja `["ok", "1"]` (adquirido) / `["ok", "0"]` (lo tiene otro) /
     /// `["err", msg]`. Primitivo `__try_lock_handle`; `std/fs` → `Result<bool, string>`.

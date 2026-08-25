@@ -10293,3 +10293,28 @@ reales (dos `pub` sin doc, `std/collections/dict` y `std/kv` sin fila en REFEREN
 en el mismo PR. La cara humana del proceso: `CONTRIBUTING.md` (flujo, principios no negociables,
 qué pondera la admisión más allá de lo verificable) y los templates de PR de GitHub (el general
 con checklist de contrato y `new_module.md` con la batería + dogfood exigido).
+
+## 132. M135 — el piloto de espejos: `rpc` publicado del monorepo a la organización (ago 2026)
+
+Decisión de forma del ecosistema (fijada con el usuario tras M134): los paquetes **se quedan en
+el monorepo como fuente de verdad** (el bucle en tándem lenguaje↔paquete↔tests que produjo todo
+el arco M115–M133 no se rompe) y se publican como **espejos de solo-lectura** en la organización
+`ray-language` — el patrón read-only-split de Symfony. El espejo es el artefacto de release: repo
+pequeño (el shallow-clone de IDEAS §73.1 deja de doler), tag inmutable por versión, entrada con
+hash en `ray-index`.
+
+El piloto es `rpc` (autónomo: sin deps entre paquetes — la reescritura path→git de deps cruzadas
+queda para la generalización). Piezas:
+
+- `packages/rpc/ray.toml` gana `entry = "rpc.ray"`: la CARA publicable explícita (un paquete
+  dir/leaf sin `mod.ray` no tenía cara y `ray registry publish` lo rechazaba).
+- **`tools/publish-packages.sh`**: el flujo completo por paquete — clona el espejo de la org (o
+  lo inicia), snapshot del contenido (sin caches), commit "pkg X.Y.Z (from raylang@sha)", tag
+  `vX.Y.Z` (inmutable: si el tag existe remoto, se niega y pide subir la versión), push, y
+  `ray registry publish --repo git+https://…` contra un clon del índice que empuja al final.
+- El harness live (`deps_live_cli`) gana el e2e real: `ray add rpc` por nombre contra el índice
+  → servidor rpc con apagado por canal + cliente en el mismo proceso, sobre la superficie
+  descargada de GitHub.
+
+Generalizar a los seis paquetes (net, db, web, tz, cron — `web` exige resolver la reescritura de
+su path-dep a `net`) queda como siguiente paso del arco, a demanda.

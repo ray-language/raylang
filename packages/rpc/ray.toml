@@ -1,5 +1,7 @@
-# Manifiesto del paquete-librería `rpc` (sin entry: los imports `rpc/…` se resuelven
-# contra el directorio padre — ver deps::dependency_roots_for).
+# Manifiesto del paquete-librería `rpc`. Los imports `rpc/…` se resuelven contra el directorio
+# padre (deps::dependency_roots_for); `entry` es la CARA publicable (M135: la valida y carga
+# `ray registry publish` — un paquete sin mod.ray la declara explícita).
 [package]
 name = "rpc"
 version = "0.1.0"
+entry = "rpc.ray"

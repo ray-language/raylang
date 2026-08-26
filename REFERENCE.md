@@ -500,7 +500,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray doc <archivo>` | documentación Markdown de la superficie pública (`///`) |
 | `ray repl` | REPL interactivo |
 | `ray lsp` | Language Server (diagnósticos, hover, ir-a-definición, references, rename, completion, signature help) |
-| `ray mcp` | servidor MCP para agentes LLM: tools `check`/`run`/`test`/`fmt`/`doc`, con el código confinado (fuel + heap + plazo). Guía: [`docs/mcp.md`](docs/mcp.md) |
+| `ray mcp` | servidor MCP para agentes LLM: tools `check`/`run`/`test`/`fmt`/`doc`, con el código confinado (fuel + heap + plazo), más el resource `raylang://llms.txt` (el contexto destilado [`llms.txt`](llms.txt) de la raíz del repo, para el prompt del modelo). Guía: [`docs/mcp.md`](docs/mcp.md) |
 | `ray add <nombre>[@req]` | añade una dependencia del registro (`1.2.0`, `^1.2`, `~1.2.3`, `*`) |
 | `ray remove <nombre>` | la elimina (y su caché si nadie más la usa) |
 | `ray search [patrón]` | lista paquetes del registro |

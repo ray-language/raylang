@@ -255,3 +255,9 @@ ray doc file.ray            # API docs (raydoc)
 
 Always run what you write: the checker's messages are positioned and specific — treat
 them as the feedback loop, not as failure.
+
+If your client supports MCP, `ray mcp` exposes this loop as tools — `ray_check` (exact
+diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` — with the code sandboxed
+(instruction fuel + heap cap + wall deadline), plus this file as the resource
+`raylang://llms.txt`. Connect it with `claude mcp add raylang -- ray mcp` (details in
+docs/mcp.md).

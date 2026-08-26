@@ -239,6 +239,19 @@ Cubre el lenguaje núcleo (todo el lenguaje + prelude + stdlib pura). Ver [`play
   primeros.
 - **Robusto ante entrada arbitraria.** Compilador sin pánicos + **fuzzing continuo** del front-end.
 
+## raylang y los agentes LLM
+
+raylang trae de serie las dos piezas para que un agente de código escriba raylang correcto:
+
+- **[`llms.txt`](llms.txt)** — el contexto destilado (~250 líneas): el delta contra Rust, las
+  formas canónicas y los mensajes de error exactos. Pégalo en tu prompt / `CLAUDE.md` (o deja
+  que tu cliente MCP cargue el resource `raylang://llms.txt`).
+- **`ray mcp`** — un servidor [MCP](https://modelcontextprotocol.io) embebido en el binario, que
+  da al modelo el bucle **escribir → verificar → corregir**: tools `ray_check` (diagnósticos
+  exactos), `ray_run`, `ray_test`, `ray_fmt` y `ray_doc`, con el código del modelo **confinado**
+  (fuel + heap + plazo, en subproceso). Con Claude Code: `claude mcp add raylang -- ray mcp`.
+  Guía completa: [`docs/mcp.md`](docs/mcp.md).
+
 ## Documentación
 
 | Documento | Qué es |

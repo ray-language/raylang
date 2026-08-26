@@ -1959,6 +1959,15 @@ ray build                # chequea + compila sin ejecutar (para CI: 0 ok / 65 er
 ray build --native       # transpila a Rust y compila un binario nativo (deploy)
 ```
 
+**raylang con agentes LLM.** Si un modelo va a escribir raylang por ti, dale las dos piezas que
+el proyecto trae de serie. Primero el contexto: **`llms.txt`** (raíz del repo) es el destilado
+para LLMs — el delta contra Rust, las formas canónicas y los mensajes de error exactos; pégalo
+en tu prompt o `CLAUDE.md`. Después el bucle de verificación: **`ray mcp`** expone al agente las
+tools `ray_check`/`ray_run`/`ray_test`/`ray_fmt`/`ray_doc` con el código confinado (fuel + heap +
+plazo, en subproceso), y sirve el propio `llms.txt` como resource `raylang://llms.txt`. Con
+Claude Code basta `claude mcp add raylang -- ray mcp`; para cualquier otro cliente MCP y el
+detalle del confinamiento, `docs/mcp.md`.
+
 **Compilación a binario nativo** (`ray build --native`): además de correr sobre la VM, un programa se
 puede **transpilar a Rust** y compilar a un ejecutable de código máquina — el modelo *dev = VM / deploy =
 nativo*, como el ciclo dev/release de Rust. El binario es **byte-idéntico a la VM** (verificado con

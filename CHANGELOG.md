@@ -6,12 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-- **El sitio del lenguaje, fase 1** (IDEAS §74): `tools/site.ray`, un generador estático en
-  raylang puro — las páginas se autoran con los templates nativos `.ray.html` y siguen el
-  manual de marca (paleta océano, Space Grotesk/JetBrains Mono, símbolo y Manta) — que produce
-  la landing (`index.html`) y la SPEC renderizada (`spec.html`), con salida determinista y
-  byte-idéntica por ambos motores. Previsualización: abrir `index.html` de la salida o servir
-  el directorio con cualquier servidor estático.
+- **El sitio del lenguaje, fase 1** (IDEAS §74): `site/`, un generador estático en raylang
+  puro — las páginas se autoran con los templates nativos `.ray.html` y siguen el manual de
+  marca (paleta océano, fuentes woff2 embebidas → 100% autocontenido, símbolo y Manta) — que
+  produce la landing (hero con efecto de tipeo, sección de agentes LLM/MCP, playground WASM
+  embebido, ecosistema de apps y librerías) y la SPEC renderizada, con salida determinista y
+  byte-idéntica por ambos motores. Previsualización: servir la salida con cualquier servidor
+  estático.
 
 ## 1.3.1 — 2026-08-26
 

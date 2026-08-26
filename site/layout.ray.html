@@ -6,10 +6,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }}</title>
 <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
+/* Fuentes de marca EMBEBIDAS (SIL OFL 1.1; las mismas del playground): sitio 100% autocontenido. */
+@font-face {
+    font-family: "Space Grotesk";
+    src: url("assets/fonts/space-grotesk.woff2") format("woff2");
+    font-weight: 300 700;
+    font-display: swap;
+}
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("assets/fonts/jetbrains-mono.woff2") format("woff2");
+    font-weight: 400;
+    font-display: swap;
+}
 /* Paleta océano — assets/branding/raylang-brand.pdf (BRAND SYSTEM v1.0) */
 :root {
     --bg: #ffffff;
@@ -53,7 +63,7 @@ body {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre, kbd { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
-.wrap { max-width: 68rem; margin: 0 auto; padding: 0 1.5rem; }
+.wrap { max-width: 80rem; margin: 0 auto; padding: 0 2rem; }
 
 nav.top {
     position: sticky;
@@ -137,6 +147,7 @@ nav.top .spacer { flex: 1; }
     margin-left: .6rem;
     color: #6b87a3;
     font-size: .82rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 .window pre {
     margin: 0;
@@ -154,7 +165,15 @@ nav.top .spacer { flex: 1; }
 .cm { color: #6b87a3; font-style: italic; }
 .pr { color: #34d2c6; }
 
+section h2.sec {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    letter-spacing: -.02em;
+    margin: 0 0 .4rem;
+}
+section p.lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 46rem; }
+
 article.doc { padding: 2.5rem 0 4rem; }
+article.doc .wrap { max-width: 64rem; }
 article.doc h1 { font-size: 2rem; letter-spacing: -.02em; }
 article.doc h2 {
     margin-top: 2.5rem;
@@ -204,6 +223,9 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
     <div class="wrap">
         <a class="brand" href="index.html"><img src="assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
         <span class="spacer"></span>
+        <a class="link" href="index.html#playground">Playground</a>
+        <a class="link" href="index.html#agentes">LLMs</a>
+        <a class="link" href="index.html#ecosistema">Ecosistema</a>
         <a class="link" href="spec.html">Especificación</a>
         <a class="link" href="https://github.com/ray-language/raylang">GitHub</a>
     </div>
@@ -213,7 +235,7 @@ footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
 <footer class="site">
     <div class="wrap">
         <span>raylang — licencia MIT OR Apache-2.0 · <a href="https://github.com/ray-language/raylang">github.com/ray-language/raylang</a></span>
-        <span>Este sitio lo genera el propio lenguaje: <code>ray run tools/site.ray</code></span>
+        <span>Este sitio lo genera el propio lenguaje: <code>ray run site/site.ray</code></span>
     </div>
 </footer>
 </body>

@@ -1,0 +1,110 @@
+// site/site.ray — el generador del SITIO del lenguaje (IDEAS §74), en raylang puro.
+//
+// Dogfooding doble: el sitio lo genera raylang (como el sitio del registro, M84) y las
+// páginas se autoran con los TEMPLATES NATIVOS `.ray.html` de este directorio — layout
+// compartido con herencia (`layout`) + landing (`landing`) + SPEC renderizada vía
+// std/markdown empalmada cruda con `{{& body }}` (`spec_page`). El diseño sigue el
+// manual de marca (assets/branding/raylang-brand.pdf) con las fuentes EMBEBIDAS (las
+// woff2 del playground) → sitio 100% autocontenido. También empaqueta el playground
+// WASM bajo `playground/`. Salida DETERMINISTA (cero relojes, contenido fijo + SPEC.md)
+// → verificable por golden en ambos motores.
+//
+//   ray run site/site.ray <raíz-del-repo> <dir-de-salida>
+//
+// Previsualización local: abrir `index.html` de la salida o servir el directorio con
+// cualquier servidor estático (el iframe del playground requiere servirlo por http en
+// algunos navegadores; `python3 -m http.server -d <salida>` basta).
+
+import std/fs;
+import std/markdown;
+import landing;
+import spec_page;
+
+fn write_or_die(path: string, content: string) {
+    match (fs.write_file(path, content)) {
+        Result.Ok(n) => { },
+        Result.Err(e) => panic("no se pudo escribir '" + path + "': " + e),
+    }
+}
+
+// Copia un archivo de TEXTO del repo a la salida.
+fn copy_text(root: string, out: string, source: string, dest: string) {
+    match (fs.read_file(root + "/" + source)) {
+        Result.Ok(s) => write_or_die(out + "/" + dest, s),
+        Result.Err(e) => panic("missing site file '" + source + "': " + e),
+    }
+}
+
+// Copia un archivo BINARIO (fuentes woff2, wasm) del repo a la salida.
+fn copy_bytes(root: string, out: string, source: string, dest: string) {
+    match (fs.read_file_bytes(root + "/" + source)) {
+        Result.Ok(data) => {
+            match (fs.write_file_bytes(out + "/" + dest, data)) {
+                Result.Ok(n) => { },
+                Result.Err(e) => panic("no se pudo escribir '" + dest + "': " + e),
+            }
+        },
+        Result.Err(e) => panic("missing site file '" + source + "': " + e),
+    }
+}
+
+fn main() -> int {
+    let argv = args();
+    if (argv.len() != 2) {
+        eprint("usage: ray run site/site.ray <repo-root> <out-dir>");
+        return 64;
+    }
+    let root = argv[0];
+    let out = argv[1];
+    let spec_md = match (fs.read_file(root + "/SPEC.md")) {
+        Result.Ok(s) => s,
+        Result.Err(e) => {
+            eprint("could not read SPEC.md: " + e);
+            return 65;
+        },
+    };
+    let _ = fs.mkdir(out);
+    let _ = fs.mkdir(out + "/assets");
+    let _ = fs.mkdir(out + "/assets/fonts");
+    let _ = fs.mkdir(out + "/playground");
+    let _ = fs.mkdir(out + "/playground/fonts");
+    // La marca (assets/branding/raylang-brand.pdf): símbolo primario, icono y Manta.
+    copy_text(root, out, "assets/raylang-symbol-primary.svg", "assets/symbol.svg");
+    copy_text(root, out, "assets/icon.svg", "assets/icon.svg");
+    copy_text(root, out, "assets/raylang-mascot.svg", "assets/mascot.svg");
+    // Las fuentes de marca embebidas (SIL OFL 1.1): sitio autocontenido, sin CDNs.
+    copy_bytes(
+        root,
+        out,
+        "playground/fonts/space-grotesk.woff2",
+        "assets/fonts/space-grotesk.woff2"
+    );
+    copy_bytes(
+        root,
+        out,
+        "playground/fonts/jetbrains-mono.woff2",
+        "assets/fonts/jetbrains-mono.woff2"
+    );
+    // El playground completo (la VM en WASM), embebido en la landing y a pantalla completa.
+    copy_text(root, out, "playground/index.html", "playground/index.html");
+    copy_bytes(root, out, "playground/raylang.wasm", "playground/raylang.wasm");
+    copy_bytes(
+        root,
+        out,
+        "playground/fonts/space-grotesk.woff2",
+        "playground/fonts/space-grotesk.woff2"
+    );
+    copy_bytes(
+        root,
+        out,
+        "playground/fonts/jetbrains-mono.woff2",
+        "playground/fonts/jetbrains-mono.woff2"
+    );
+    write_or_die(out + "/index.html", landing.render("raylang — un lenguaje para producción real"));
+    write_or_die(
+        out + "/spec.html",
+        spec_page.render("Especificación del lenguaje raylang", markdown.to_html(spec_md))
+    );
+    print("site generated in " + out);
+    0
+}

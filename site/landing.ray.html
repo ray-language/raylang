@@ -1,0 +1,403 @@
+{% params title: string %}
+{% extends layout %}
+{% block content %}
+<style>
+.hero { padding: 4.5rem 0 3rem; }
+.hero .wrap {
+    display: grid;
+    grid-template-columns: 1fr 1.05fr;
+    gap: 3.5rem;
+    align-items: center;
+}
+@media (max-width: 60rem) {
+    .hero .wrap { grid-template-columns: 1fr; }
+}
+.badge {
+    display: inline-block;
+    font-size: .82rem;
+    font-weight: 600;
+    color: var(--accent);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: .25rem .8rem;
+    margin-bottom: 1.1rem;
+    background: var(--bg-soft);
+}
+.hero h1 {
+    font-size: clamp(2.4rem, 5vw, 3.8rem);
+    line-height: 1.06;
+    letter-spacing: -.03em;
+    margin: 0 0 1rem;
+}
+.hero p.sub { color: var(--muted); font-size: 1.12rem; max-width: 36rem; margin: 0 0 1.6rem; }
+.cta { display: flex; gap: .8rem; flex-wrap: wrap; }
+.window pre { min-height: 16.5rem; }
+.cur {
+    display: inline-block;
+    width: .55em;
+    height: 1.1em;
+    background: #4ba3f5;
+    vertical-align: text-bottom;
+    animation: blink 1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+section.install { padding: 1rem 0 2.5rem; }
+.terminal {
+    background: var(--code-bg);
+    border: 1px solid var(--code-line);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+}
+.terminal code { color: var(--code-ink); font-size: .95rem; white-space: pre; }
+.terminal .pr { user-select: none; }
+
+section.features { padding: 1.5rem 0 2rem; }
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 1.1rem;
+}
+.card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 1.25rem 1.3rem;
+    transition: border-color .15s ease, transform .15s ease;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.card h3 { margin: 0 0 .45rem; font-size: 1.02rem; letter-spacing: -.01em; }
+.card p { margin: 0; color: var(--muted); font-size: .93rem; }
+.card .ico {
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: .8rem;
+    background: linear-gradient(135deg, #2b7ce0, #34d2c6);
+    color: #ffffff;
+    font-size: 1.05rem;
+    font-weight: 700;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+section.agents { padding: 2.5rem 0; }
+.agents .duo {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    align-items: center;
+}
+@media (max-width: 60rem) {
+    .agents .duo { grid-template-columns: 1fr; }
+}
+.agents ul { margin: 0 0 1.2rem; padding-left: 1.2rem; color: var(--muted); }
+.agents li { margin-bottom: .45rem; }
+.agents li b { color: var(--ink); font-weight: 600; }
+
+section.play { padding: 2.5rem 0; }
+.play iframe {
+    width: 100%;
+    height: 40rem;
+    border: 1px solid var(--code-line);
+    border-radius: 14px;
+    background: #0b1622;
+    box-shadow: 0 24px 60px rgba(8, 24, 39, .3);
+}
+.play p.after { color: var(--muted); font-size: .92rem; margin-top: .8rem; }
+
+section.eco { padding: 2.5rem 0; }
+.apps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: .9rem;
+    margin-bottom: 1.4rem;
+}
+a.app {
+    display: block;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: .95rem 1.1rem;
+    color: var(--ink);
+    transition: border-color .15s ease, transform .15s ease;
+}
+a.app:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
+a.app b { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .95rem; color: var(--accent); }
+a.app span { display: block; color: var(--muted); font-size: .87rem; margin-top: .2rem; }
+.eco p.libs { color: var(--muted); max-width: 56rem; }
+
+section.engines { padding: 2.5rem 0 4rem; }
+.engines .band {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--bg-soft);
+    padding: 2rem 2.2rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2rem;
+    align-items: center;
+}
+@media (max-width: 44rem) {
+    .engines .band { grid-template-columns: 1fr; text-align: center; }
+    .engines .band img { margin: 0 auto; }
+    .chips { justify-content: center; }
+}
+.engines .band img { width: 8.5rem; height: auto; display: block; }
+.engines h2 { margin: 0 0 .4rem; letter-spacing: -.02em; }
+.engines p.claim { color: var(--muted); margin: 0 0 1.2rem; }
+.chips { display: flex; gap: .7rem; flex-wrap: wrap; }
+.chip {
+    border: 1px solid var(--line);
+    background: var(--card);
+    border-radius: 10px;
+    padding: .55rem 1rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .88rem;
+}
+.chip b { color: var(--accent); font-weight: 700; }
+</style>
+
+<header class="hero">
+    <div class="wrap">
+        <div>
+            <span class="badge">Estáticamente tipado · orientado a expresiones · auto-alojado</span>
+            <h1>Un lenguaje para <span class="grad">producción real</span>.</h1>
+            <p class="sub">Genéricos, traits, pattern matching y concurrencia multicore por
+            actores — con errores como valores, sin null y sin excepciones. Escrito en Rust,
+            con una superficie de dependencias mínima y deliberada.</p>
+            <div class="cta">
+                <a class="btn primary" href="#empezar">Empezar</a>
+                <a class="btn ghost" href="#playground">Probar en el navegador</a>
+                <a class="btn ghost" href="spec.html">Especificación</a>
+            </div>
+        </div>
+        <div class="window">
+            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>tree.ray</span></div>
+            <pre><code id="typed"><noscript>enum Tree { Leaf, Node(Tree, int, Tree) }
+
+fn sum(t: Tree) -> int {
+    match (t) {
+        Tree.Leaf => 0,
+        Tree.Node(l, v, r) => sum(l) + v + sum(r),
+    }
+}
+
+fn main() {
+    let t = Tree.Node(Tree.Node(Tree.Leaf, 1, Tree.Leaf), 2, Tree.Leaf);
+    print(sum(t));    // 3
+}</noscript></code></pre>
+        </div>
+    </div>
+</header>
+
+<section class="install" id="empezar">
+    <div class="wrap">
+        <div class="terminal"><code><span class="pr cm">$ </span><span class="st">curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh</span>
+<span class="pr cm">$ </span><span class="st">ray new hola &amp;&amp; cd hola &amp;&amp; ray run</span></code></div>
+    </div>
+</section>
+
+<section class="features">
+    <div class="wrap">
+        <div class="cards">
+            <div class="card">
+                <div class="ico">≡</div>
+                <h3>Tres motores que coinciden</h3>
+                <p>Una VM de bytecode para desarrollar, un binario nativo para desplegar y un
+                intérprete como oráculo — salida byte a byte idéntica, verificada en CI.</p>
+            </div>
+            <div class="card">
+                <div class="ico">»</div>
+                <h3>Binario nativo</h3>
+                <p><code>ray build --native</code> transpila a Rust y compila un ejecutable:
+                3–4× la VM en cargas de servicio y 28–57× en cómputo puro.</p>
+            </div>
+            <div class="card">
+                <div class="ico">⇄</div>
+                <h3>Concurrencia por actores</h3>
+                <p>Heap aislado por fibra + transferencia de propiedad en <code>send</code>:
+                multicore real sin data races, con scheduler M:N.</p>
+            </div>
+            <div class="card">
+                <div class="ico">?</div>
+                <h3>Errores como valores</h3>
+                <p>Sin <code>null</code> y sin excepciones: <code>Result</code>/<code>Option</code>
+                + <code>?</code>, pattern matching exhaustivo y genéricos con traits.</p>
+            </div>
+            <div class="card">
+                <div class="ico">⌘</div>
+                <h3>Tooling completo</h3>
+                <p><code>ray</code> trae proyecto, paquetes, tests, formateador, docs, REPL,
+                LSP para el editor y un servidor MCP para agentes LLM.</p>
+            </div>
+            <div class="card">
+                <div class="ico">◇</div>
+                <h3>Dependencias deliberadas</h3>
+                <p>HTTP/1.1 y 2, JSON, TOML, DNS, WebSocket o los clientes de BD están escritos
+                en raylang; cada crate de Cargo entra justificado y medido.</p>
+            </div>
+            <div class="card">
+                <div class="ico">∞</div>
+                <h3>Auto-alojado</h3>
+                <p>raylang lexea, parsea, chequea y ejecuta raylang: el compilador auto-alojado
+                se ejecuta a sí mismo sobre los motores auto-alojados.</p>
+            </div>
+            <div class="card">
+                <div class="ico">/</div>
+                <h3>Framework web</h3>
+                <p>Servidor HTTP de producción con framework estilo Express, SSR con templates
+                compilados y tipados (<code>.ray.html</code>), WebSocket y streaming.</p>
+            </div>
+            <div class="card">
+                <div class="ico">✓</div>
+                <h3>Paquetes verificables</h3>
+                <p>Manifiesto <code>ray.toml</code> + lockfile con hashes SHA-256; el registro
+                acepta versiones firmadas con Ed25519 y nombres reclamados.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="agents" id="agentes">
+    <div class="wrap">
+        <div class="duo">
+            <div>
+                <h2 class="sec">Nativo para <span class="grad">agentes LLM</span></h2>
+                <p class="lead">raylang trae de serie las dos piezas para que un modelo escriba
+                raylang correcto — y lo verifique solo.</p>
+                <ul>
+                    <li><b><a href="https://github.com/ray-language/raylang/blob/main/llms.txt">llms.txt</a></b> —
+                    el contexto destilado: el delta contra Rust, las formas canónicas y los
+                    mensajes de error exactos, listo para tu prompt o <code>CLAUDE.md</code>.</li>
+                    <li><b><code>ray mcp</code></b> — un servidor MCP embebido en el binario:
+                    el bucle <em>escribir → verificar → corregir</em> con los diagnósticos
+                    exactos del compilador y el código del modelo confinado (fuel + heap +
+                    plazo, en subproceso).</li>
+                    <li>El propio <code>llms.txt</code> se sirve como <em>resource</em>
+                    (<code>raylang://llms.txt</code>) — el cliente lo inyecta antes de la
+                    primera línea. Guía completa en
+                    <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.md">docs/mcp.md</a>.</li>
+                </ul>
+            </div>
+            <div class="window">
+                <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>mcp</span></div>
+                <pre><code><span class="pr">$ </span><span class="st">claude mcp add raylang -- ray mcp</span>
+
+<span class="cm"># tools</span>
+<span class="fn">ray_check</span>   <span class="cm">diagnósticos exactos, posicionados</span>
+<span class="fn">ray_run</span>     <span class="cm">stdout + exit, confinado</span>
+<span class="fn">ray_test</span>    <span class="cm">el runner @test</span>
+<span class="fn">ray_fmt</span>     <span class="cm">fuente canónico</span>
+<span class="fn">ray_doc</span>     <span class="cm">firma + doc de la stdlib</span>
+
+<span class="cm"># resource</span>
+<span class="ty">raylang://llms.txt</span></code></pre>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="play" id="playground">
+    <div class="wrap">
+        <h2 class="sec">Pruébalo <span class="grad">en el navegador</span></h2>
+        <p class="lead">La VM completa compilada a WebAssembly — el playground corre raylang
+        en tu navegador, sin servidor y sin instalar nada.</p>
+        <iframe src="playground/index.html" title="playground de raylang" loading="lazy"></iframe>
+        <p class="after"><a href="playground/index.html">Abrir el playground a pantalla completa →</a></p>
+    </div>
+</section>
+
+<section class="eco" id="ecosistema">
+    <div class="wrap">
+        <h2 class="sec">Hecho <span class="grad">con raylang</span></h2>
+        <p class="lead">Servidores, herramientas y hasta juegos de terminal — dogfood real,
+        publicado en la organización.</p>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>agente de código y REPL para la terminal</span></a>
+            <a class="app" href="https://github.com/ray-language/raywatch"><b>raywatch</b><span>monitor de servicios con dashboard SSE</span></a>
+            <a class="app" href="https://github.com/ray-language/raykv"><b>raykv</b><span>clave-valor compatible con Redis (RESP2)</span></a>
+            <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: rate limit, circuit breaker, streaming</span></a>
+            <a class="app" href="https://github.com/ray-language/rayq"><b>rayq</b><span>broker de colas at-least-once con write-ahead log</span></a>
+            <a class="app" href="https://github.com/ray-language/raypass"><b>raypass</b><span>bóveda de secretos cifrada, compartición sealed-box</span></a>
+            <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>transferencia de archivos P2P cifrada extremo a extremo</span></a>
+            <a class="app" href="https://github.com/ray-language/raygame"><b>raygame</b><span>Tetris en la terminal a 30 fps</span></a>
+            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>y más →</b><span>raysite, raytop, raymail, raysync, raylogs, raycall…</span></a>
+        </div>
+        <p class="libs">Las librerías también: la pila de red y formatos
+        (<code>net</code> — HTTP/1.1 y 2, DNS, WebSocket, TLS —, <code>web</code>,
+        <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) vive en
+        <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
+        escrita en raylang puro, y los paquetes de la comunidad se publican en el
+        <a href="https://github.com/ray-language/ray-index">registro</a> con hashes y firmas.</p>
+    </div>
+</section>
+
+<section class="engines">
+    <div class="wrap">
+        <div class="band">
+            <img src="assets/mascot.svg" alt="Manta, la mascota de raylang">
+            <div>
+                <h2>raylang <span class="grad">fluye sin fricción</span></h2>
+                <p class="claim">Un fuente, tres motores: el mismo programa corre igual —
+                byte a byte — en desarrollo, en despliegue y bajo el oráculo de validación.</p>
+                <div class="chips">
+                    <span class="chip"><b>ray run</b> · VM de bytecode</span>
+                    <span class="chip"><b>ray build --native</b> · binario de máquina</span>
+                    <span class="chip"><b>--interp</b> · el oráculo</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+// Efecto de tipeo del hero: los segmentos ya vienen tokenizados (clase, texto).
+(function () {
+    var SEG = [
+        ["kw", "enum"], ["", " "], ["ty", "Tree"], ["", " { Leaf, Node("], ["ty", "Tree"],
+        ["", ", "], ["ty", "int"], ["", ", "], ["ty", "Tree"], ["", ") }\n\n"],
+        ["kw", "fn"], ["", " "], ["fn", "sum"], ["", "(t: "], ["ty", "Tree"], ["", ") -> "],
+        ["ty", "int"], ["", " {\n    "], ["kw", "match"], ["", " (t) {\n        "],
+        ["ty", "Tree"], ["", ".Leaf => "], ["nu", "0"], ["", ",\n        "],
+        ["ty", "Tree"], ["", ".Node(l, v, r) => "], ["fn", "sum"], ["", "(l) + v + "],
+        ["fn", "sum"], ["", "(r),\n    }\n}\n\n"],
+        ["kw", "fn"], ["", " "], ["fn", "main"], ["", "() {\n    "], ["kw", "let"],
+        ["", " t = "], ["ty", "Tree"], ["", ".Node("], ["ty", "Tree"], ["", ".Node("],
+        ["ty", "Tree"], ["", ".Leaf, "], ["nu", "1"], ["", ", "], ["ty", "Tree"],
+        ["", ".Leaf), "], ["nu", "2"], ["", ", "], ["ty", "Tree"], ["", ".Leaf);\n    "],
+        ["fn", "print"], ["", "("], ["fn", "sum"], ["", "(t));    "], ["cm", "// 3"],
+        ["", "\n}"]
+    ];
+    var host = document.getElementById("typed");
+    if (!host) { return; }
+    host.textContent = "";
+    function span(cls) {
+        var s = document.createElement("span");
+        if (cls) { s.className = cls; }
+        host.appendChild(s);
+        return s;
+    }
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        for (var i = 0; i < SEG.length; i++) { span(SEG[i][0]).textContent = SEG[i][1]; }
+        return;
+    }
+    var cur = document.createElement("span");
+    cur.className = "cur";
+    var seg = 0, pos = 0, el = null;
+    function tick() {
+        if (seg >= SEG.length) { setTimeout(function () { cur.remove(); }, 4000); return; }
+        if (el === null) { el = span(SEG[seg][0]); host.appendChild(cur); }
+        el.textContent += SEG[seg][1].charAt(pos);
+        host.appendChild(cur);
+        pos += 1;
+        if (pos >= SEG[seg][1].length) { seg += 1; pos = 0; el = null; }
+        setTimeout(tick, 14);
+    }
+    setTimeout(tick, 350);
+})();
+</script>
+{% endblock %}

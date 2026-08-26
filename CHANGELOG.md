@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.2.0 — 2026-08-26
 
 - **El índice oficial de paquetes es el default** (M136): `ray add web` funciona en un
   proyecto recién creado sin configurar nada. Precedencia: `RAY_INDEX` → `[registry] index`

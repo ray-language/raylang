@@ -34,8 +34,10 @@ El editor es **CodeMirror 6** (`editor/editor.mjs` → `editor.bundle.js`) con e
 raylang corriendo dentro del wasm**: el MISMO despacho del `ray lsp` de tu editor
 (`src/lsp/mod.rs::handle_message`), compilado a wasm32. Eso da diagnósticos en vivo
 (publishDiagnostics → subrayado + gutter), **autocompletado** (símbolos del documento +
-builtins + snippets con placeholders) y **hover** con tipos, sin reimplementar nada en JS: el
-cliente (`index.html`) solo habla JSON-RPC con la función exportada `lsp`.
+builtins + snippets con placeholders), **hover** con tipos, **signature help** (la firma de la
+llamada en curso con el parámetro activo resaltado) y **formateo** (`ray fmt`, botón `fmt` o
+Shift+Alt+F), sin reimplementar nada en JS: el cliente (`index.html`) solo habla JSON-RPC con
+la función exportada `lsp`.
 
 ## Cómo funciona (ABI)
 

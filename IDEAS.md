@@ -2858,7 +2858,8 @@ del registro de M84):
   JSON-RPC por llamada → el array de mensajes emitidos). El editor pasa del overlay
   textarea+pre a **CodeMirror 6** (`playground/editor/` → `editor.bundle.js` vía npm/esbuild;
   artefacto NO versionado, como el wasm — `build.sh` produce ambos): diagnósticos en vivo,
-  **autocompletado** (símbolos + builtins + snippets), hover con tipos, tema de marca.
+  **autocompletado** (símbolos + builtins + snippets), hover con tipos, **signature help**
+  (tooltip CM propio con el parámetro activo) y **formateo** LSP (`ray fmt`), tema de marca.
   De paso se destapó y arregló que el build wasm32 llevaba roto desde M100 v3/M124/M126/M131
   (usos de ray_runtime sin guarda `cfg`); pendiente: una guarda de CI que compile wasm32.
   La landing suma la sección de editores (VSCode marketplace, Sublime, Neovim/Helix).

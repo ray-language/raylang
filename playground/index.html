@@ -20,6 +20,9 @@
   header .sp { flex:1; }
   button { background:var(--accent); color:#04122a; border:0; border-radius:6px; padding:7px 16px; font-weight:600; cursor:pointer; font-size:14px; }
   button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--border);
+    font-family:"JetBrains Mono",ui-monospace,monospace; }
+  button.ghost:hover:enabled { color:var(--fg); border-color:var(--accent); }
   main { display:grid; grid-template-columns:212px 1fr 1fr; gap:1px; background:var(--border); height:calc(100vh - 54px); }
   /* En móvil: el explorador se mantiene a la izquierda (más angosto) y el editor/salida se apilan. */
   @media (max-width:820px){ main{ grid-template-columns:128px 1fr; grid-template-rows:1fr 1fr; }
@@ -57,6 +60,7 @@
   <h1>raylang <span class="tag">· playground</span></h1>
   <span class="sp"></span>
   <span class="status" id="status">cargando…</span>
+  <button id="fmt" class="ghost" disabled title="Formatear (Shift+Alt+F)">fmt</button>
   <button id="run" disabled>▶ Ejecutar (⌘/Ctrl+Enter)</button>
 </header>
 <main>
@@ -205,7 +209,7 @@ fn main() -> int {
 };
 
 const $ = (id) => document.getElementById(id);
-const outEl = $("out"), runEl = $("run"), statusEl = $("status"), filesEl = $("files"), fileLabelEl = $("filelabel");
+const outEl = $("out"), runEl = $("run"), fmtEl = $("fmt"), statusEl = $("status"), filesEl = $("files"), fileLabelEl = $("filelabel");
 
 // --- ABI wasm compartida por run y lsp ---
 let wasm = null;
@@ -300,6 +304,49 @@ function hoverConLsp(v, pos) {
   return { pos: desde, end: hasta, text: texto.replace(/```[a-z]*\n?/g, "").trim() };
 }
 
+// Formateo del documento: reusa el `ray fmt` que sirve el LSP (TextEdits sobre offsets).
+function formatear() {
+  if (!wasm) return;
+  const res = lspRequest("textDocument/formatting", {
+    textDocument: { uri: URI },
+    options: { tabSize: 4, insertSpaces: true },
+  });
+  if (!Array.isArray(res) || !res.length) return;   // p. ej. el fuente aún no parsea
+  RayEditor.applyTextEdits(view, res.map((e) => ({
+    from: RayEditor.posToOffset(view, e.range.start.line, e.range.start.character),
+    to: RayEditor.posToOffset(view, e.range.end.line, e.range.end.character),
+    insert: e.newText,
+  })));
+}
+
+// Signature help: al mover el cursor / escribir, se consulta la firma de la llamada en curso;
+// el servidor devuelve null fuera de una llamada → se oculta el tooltip.
+let firmaTimer = null;
+function actualizarFirma(v) {
+  clearTimeout(firmaTimer);
+  firmaTimer = setTimeout(() => {
+    if (!wasm) return;
+    const off = v.state.selection.main.head;
+    const res = lspRequest("textDocument/signatureHelp", {
+      textDocument: { uri: URI },
+      position: RayEditor.offsetToPos(v, off),
+    });
+    const sig = res && res.signatures && res.signatures[res.activeSignature || 0];
+    if (!sig) { RayEditor.signatureHide(v); return; }
+    let a0 = -1, a1 = -1;
+    const idx = res.activeParameter !== undefined ? res.activeParameter : sig.activeParameter;
+    const par = sig.parameters && idx !== undefined && sig.parameters[idx];
+    if (par) {
+      if (Array.isArray(par.label)) { a0 = par.label[0]; a1 = par.label[1]; }
+      else if (typeof par.label === "string") {
+        const i = sig.label.indexOf(par.label);
+        if (i >= 0) { a0 = i; a1 = i + par.label.length; }
+      }
+    }
+    RayEditor.signatureShow(v, off, sig.label, a0, a1);
+  }, 120);
+}
+
 let sincronizar = null;   // debounce del didChange
 const view = RayEditor.create($("editor"), {
   doc: "",
@@ -313,9 +360,11 @@ const view = RayEditor.create($("editor"), {
       });
     }, 150);
   },
+  onCursor: actualizarFirma,
   completion: completarConLsp,
   hover: hoverConLsp,
   run: () => ejecutar(),
+  format: formatear,
 });
 
 async function cargar() {
@@ -338,6 +387,7 @@ async function cargar() {
     });
     statusEl.textContent = "listo · LSP activo";
     runEl.disabled = false;
+    fmtEl.disabled = false;
   } catch (e) {
     statusEl.textContent = "no se pudo cargar raylang.wasm — sírvelo por HTTP (ver README)";
     outEl.textContent = String(e);
@@ -378,6 +428,7 @@ for (const [nombre, clave] of ARCHIVOS) {
 }
 
 runEl.onclick = ejecutar;
+fmtEl.onclick = formatear;
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); ejecutar(); }
 });

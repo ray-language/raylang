@@ -44,7 +44,10 @@ fn generates_the_site_and_both_engines_match() {
     assert!(landing.contains("producción real"), "hero\n{landing}");
     assert!(landing.contains("install.sh | sh"), "snippet de instalación\n{landing}");
     assert!(landing.contains("id=\"typed\""), "efecto de tipeo\n{landing}");
-    assert!(landing.contains("<noscript>enum Tree"), "fallback sin JS\n{landing}");
+    // El "fantasma" con el código final dimensiona el contenedor (sin saltos) y es a la
+    // vez el fallback resaltado sin JS / con movimiento reducido.
+    assert!(landing.contains("id=\"ghost\""), "fantasma dimensionador\n{landing}");
+    assert!(landing.contains("pre.typing #typed { position: absolute"), "tipeo superpuesto");
     assert!(landing.contains("prefers-reduced-motion"), "tipeo accesible");
     assert!(landing.contains("href=\"spec.html\""), "enlace a la SPEC\n{landing}");
     // Los templates quedaron completamente resueltos (ni una directiva cruda en la salida).

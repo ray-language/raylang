@@ -31,7 +31,10 @@
 }
 .hero p.sub { color: var(--muted); font-size: 1.12rem; max-width: 36rem; margin: 0 0 1.6rem; }
 .cta { display: flex; gap: .8rem; flex-wrap: wrap; }
-.window pre { min-height: 16.5rem; }
+/* El "fantasma" con el código final dimensiona el <pre> desde el primer pintado (el
+   tipeo se dibuja encima, en absoluto): el contenedor no crece y la página no salta. */
+.window pre.typing { position: relative; }
+.window pre.typing #typed { position: absolute; top: 1.1rem; left: 1.25rem; right: 1.25rem; }
 .cur {
     display: inline-block;
     width: .55em;
@@ -177,19 +180,19 @@ section.engines { padding: 2.5rem 0 4rem; }
         </div>
         <div class="window">
             <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>tree.ray</span></div>
-            <pre><code id="typed"><noscript>enum Tree { Leaf, Node(Tree, int, Tree) }
+            <pre class="typing"><code id="ghost"><span class="kw">enum</span> <span class="ty">Tree</span> { Leaf, Node(<span class="ty">Tree</span>, <span class="ty">int</span>, <span class="ty">Tree</span>) }
 
-fn sum(t: Tree) -> int {
-    match (t) {
-        Tree.Leaf => 0,
-        Tree.Node(l, v, r) => sum(l) + v + sum(r),
+<span class="kw">fn</span> <span class="fn">sum</span>(t: <span class="ty">Tree</span>) -> <span class="ty">int</span> {
+    <span class="kw">match</span> (t) {
+        <span class="ty">Tree</span>.Leaf => <span class="nu">0</span>,
+        <span class="ty">Tree</span>.Node(l, v, r) => <span class="fn">sum</span>(l) + v + <span class="fn">sum</span>(r),
     }
 }
 
-fn main() {
-    let t = Tree.Node(Tree.Node(Tree.Leaf, 1, Tree.Leaf), 2, Tree.Leaf);
-    print(sum(t));    // 3
-}</noscript></code></pre>
+<span class="kw">fn</span> <span class="fn">main</span>() {
+    <span class="kw">let</span> t = <span class="ty">Tree</span>.Node(<span class="ty">Tree</span>.Node(<span class="ty">Tree</span>.Leaf, <span class="nu">1</span>, <span class="ty">Tree</span>.Leaf), <span class="nu">2</span>, <span class="ty">Tree</span>.Leaf);
+    <span class="fn">print</span>(<span class="fn">sum</span>(t));    <span class="cm">// 3</span>
+}</code><code id="typed"></code></pre>
         </div>
     </div>
 </header>
@@ -373,17 +376,19 @@ fn main() {
         ["", "\n}"]
     ];
     var host = document.getElementById("typed");
-    if (!host) { return; }
-    host.textContent = "";
+    var ghost = document.getElementById("ghost");
+    if (!host || !ghost) { return; }
+    // Con movimiento reducido (o sin JS) queda el fantasma: el código final, resaltado.
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        return;
+    }
+    // El fantasma sigue dimensionando el <pre> (el tipeo se pinta encima): cero saltos.
+    ghost.style.visibility = "hidden";
     function span(cls) {
         var s = document.createElement("span");
         if (cls) { s.className = cls; }
         host.appendChild(s);
         return s;
-    }
-    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        for (var i = 0; i < SEG.length; i++) { span(SEG[i][0]).textContent = SEG[i][1]; }
-        return;
     }
     var cur = document.createElement("span");
     cur.className = "cur";

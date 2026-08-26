@@ -56,11 +56,13 @@ servicios externos (del mantenedor).
       (macOS arm/intel, Linux x86_64/arm64, Windows) — así `ring`/`rustls` compilan sin cross — empaqueta
       `ray`+`raylang` y los sube a la Release con `gh` (sin acciones de terceros). Falta **dispararlo** con
       un tag. (El CI de **test** —`ci.yml`— ya existía.)
-- [ ] **Extensión VSCode publicada** — 🌐
-      La extensión existe (`editors/vscode/`, con cliente LSP); falta **publicarla** en el marketplace.
+- [x] **Extensión VSCode publicada** — ✅ (ago 2026)
+      Publicada en el marketplace (`editors/vscode/`, con cliente LSP); el paquete de Sublime Text
+      (`editors/sublime/`) también está disponible.
 - [ ] **Libro y sitio publicados** — 🌐
       El libro (`book/`, mdBook) existe; falta hostearlo + un sitio de aterrizaje (que puede alojar el
-      playground y la SPEC).
+      playground y la SPEC). **Es lo único del lanzamiento que sigue pendiente** (junto con hostear la
+      SPEC, arriba).
 - [x] **Declarar `1.0.0`** — ✅ (resuelto como `v1.1.0`)
       Versión subida a `1.0.0` en `Cargo.toml`/`SPEC.md`; licencia MIT OR Apache-2.0
       (`LICENSE-MIT`/`LICENSE-APACHE`). El tag `v1.0.0` no llegó a empujarse: lo acumulado desde la

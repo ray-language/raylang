@@ -6,7 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-(nada aún)
+- **La extensión de VSCode está en el Marketplace**: `ext install ray-language.raylang`
+  (resaltado + cliente LSP). Publicación automatizable con el workflow `vscode-publish`
+  (manual o tags `vscode-v*`; Open VSX opcional vía `OVSX_PAT`).
 
 ## 1.1.0 — 2026-08-25
 

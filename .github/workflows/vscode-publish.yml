@@ -1,0 +1,40 @@
+# Publica la extensión de VSCode al Marketplace (y a Open VSX si hay token). La versión de la
+# extensión es INDEPENDIENTE de la del lenguaje (0.x vs 1.x) → no va atada a los tags `v*` del
+# release: se dispara a mano (workflow_dispatch) o con tags `vscode-v*`, tras subir `version` en
+# editors/vscode/package.json (el Marketplace rechaza re-publicar una versión existente).
+#
+# Secrets: VSCE_PAT (Azure DevOps, scope Marketplace→Manage, "All accessible organizations");
+# OVSX_PAT opcional (open-vsx.org) — sin él, la pata de Open VSX se salta con aviso.
+name: vscode-publish
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["vscode-v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: editors/vscode }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Compilar
+        run: |
+          npm ci
+          npm run compile
+      - name: Publicar al Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish -p "$VSCE_PAT"
+      - name: Publicar a Open VSX (opcional)
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -n "$OVSX_PAT" ]; then
+            npx --yes ovsx publish -p "$OVSX_PAT"
+          else
+            echo "sin OVSX_PAT: se salta Open VSX (crea el token en open-vsx.org y súbelo como secret)"
+          fi

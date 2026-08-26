@@ -616,6 +616,13 @@ section.engines { padding: 2.5rem 0 4rem; }
     }
 
     var current = 0, auto = true, timer = null;
+    // La rotación espera 10 s tras terminar el tipeo, y se PAUSA mientras el ratón esté
+    // sobre la ventana (el lector se quedó en ese ejemplo); al salir, se reanuda.
+    var advanceTimer = null, hovered = false, finished = false;
+    function scheduleNext() {
+        clearTimeout(advanceTimer);
+        if (auto && finished && !hovered) { advanceTimer = setTimeout(next, 10000); }
+    }
     var cur = document.createElement("span");
     cur.className = "cur";
     function span(cls) {
@@ -636,6 +643,8 @@ section.engines { padding: 2.5rem 0 4rem; }
     }
     function show(idx, fromUser) {
         clearTimeout(timer);
+        clearTimeout(advanceTimer);
+        finished = false;
         current = idx;
         markTabs();
         host.textContent = "";
@@ -649,7 +658,8 @@ section.engines { padding: 2.5rem 0 4rem; }
         function tick() {
             if (seg >= segments.length) {
                 cur.remove();
-                if (auto) { timer = setTimeout(next, 3800); }
+                finished = true;
+                scheduleNext();
                 return;
             }
             if (el === null) { el = span(segments[seg][0]); }
@@ -663,6 +673,17 @@ section.engines { padding: 2.5rem 0 4rem; }
     }
 
     ghost.style.visibility = "hidden";
+    var frame = host.closest(".window");
+    if (frame) {
+        frame.addEventListener("mouseenter", function () {
+            hovered = true;
+            clearTimeout(advanceTimer);
+        });
+        frame.addEventListener("mouseleave", function () {
+            hovered = false;
+            scheduleNext();
+        });
+    }
     for (var i = 0; i < EXAMPLES.length; i++) {
         var b = document.createElement("button");
         b.type = "button";

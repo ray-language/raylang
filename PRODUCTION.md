@@ -50,7 +50,7 @@ el sexto se añadió el 14 de julio, cuando el rendimiento pasó a ser el objeti
 |---|---|
 | Núcleo Rust | ~53.100 líneas en `src/` + ~2.800 en `crates/ray-runtime` |
 | Código raylang | 268 archivos `.ray` (173 ejemplos, 15 módulos `std/`, 35 de paquetes, 13 del compilador auto-alojado) |
-| Tests | **626** unitarios + **101** archivos de integración (~22.900 líneas), con oráculo VM↔intérprete y corpus de paridad del binario nativo |
+| Tests | **703** unitarios + **123** archivos de integración (~28.300 líneas), con oráculo VM↔intérprete y corpus de paridad del binario nativo |
 | Dependencias de Cargo | 7 externas directas en el binario `ray` (`ahash`, `mimalloc`, `rustls` + 2 satélites, `rusqlite`, `libloading`) y 4 más en `ray-runtime` (`ring`, `regex`, `corosensei`, y las mismas tras features). Todas justificadas, casi todas tras una feature (ver SECURITY.md) |
 | Higiene | ~90 avisos de clippy (55 son `collapsible_if`; ninguno es error) y 29 `TODO` anotados |
 | `unsafe` | acotado a una docena de archivos, cada bloque con su invariante `SAFETY` documentada e inventariado en SECURITY.md |

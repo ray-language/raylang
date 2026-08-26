@@ -1,13 +1,14 @@
 # Estado del lanzamiento de raylang 1.0
 
-Checklist viva. **Los criterios técnicos de la 1.0 están cumplidos en el repo** (los fijó el arco D
-del plan de producción, hoy resumido en [PRODUCTION.md](PRODUCTION.md)); lo que queda es
-**publicación**: empujar el tag `v1.0.0` —que dispara el workflow de release— y las piezas que
-dependen de cuentas del mantenedor. La versión ya es `1.0.0` en `Cargo.toml` y en `SPEC.md`.
+Checklist **histórica** del lanzamiento 1.0. Los criterios técnicos los fijó el arco D del plan de
+producción (hoy resumido en [PRODUCTION.md](PRODUCTION.md)) y quedaron cumplidos en el repo con la
+versión `1.0.0` (jul 2026).
 
-> Desde entonces el trabajo ha seguido sobre esa línea (binario nativo, fibras, framework web,
-> `std/process`…): lo entregado y aún sin publicar se lee en [CHANGELOG.md](CHANGELOG.md). Cuando
-> se decida publicar, este documento es la lista de comprobación previa.
+> **La publicación ya ocurrió** (ago 2026), con un matiz: el tag `v1.0.0` nunca se empujó — lo
+> acumulado desde la 1.0 salió directamente como **`v1.1.0`**, la primera Release de GitHub, y el
+> flujo por tags (`v*` → workflow de release → binarios por plataforma) ha publicado desde entonces
+> hasta la versión vigente (ver [CHANGELOG.md](CHANGELOG.md)). Los 🟡 de "empujar el tag" de abajo
+> quedan por tanto cumplidos; el documento se conserva como registro de qué exigió la 1.0.
 
 Leyenda: ✅ hecho · 🟡 hecho en el repo, falta publicar/ejecutar fuera · ⬜ pendiente · 🌐 requiere cuentas/
 servicios externos (del mantenedor).
@@ -60,11 +61,11 @@ servicios externos (del mantenedor).
 - [ ] **Libro y sitio publicados** — 🌐
       El libro (`book/`, mdBook) existe; falta hostearlo + un sitio de aterrizaje (que puede alojar el
       playground y la SPEC).
-- [ ] **Declarar `1.0.0`** — 🟡
+- [x] **Declarar `1.0.0`** — ✅ (resuelto como `v1.1.0`)
       Versión subida a `1.0.0` en `Cargo.toml`/`SPEC.md`; licencia MIT OR Apache-2.0
-      (`LICENSE-MIT`/`LICENSE-APACHE`). Falta **empujar el tag `v1.0.0`** (dispara la Release). Antes de
-      hacerlo: cerrar el bloque "Sin publicar" del `CHANGELOG.md` con el número de versión que toque —
-      lo acumulado desde la 1.0.0 es material de una **1.1** larga, no de un parche.
+      (`LICENSE-MIT`/`LICENSE-APACHE`). El tag `v1.0.0` no llegó a empujarse: lo acumulado desde la
+      1.0.0 era material de una **1.1** larga, y así salió — el bloque "Sin publicar" del
+      `CHANGELOG.md` se cerró como `1.1.0` y su tag disparó la primera Release (25 ago 2026).
 
 ## Notas
 
@@ -73,5 +74,5 @@ servicios externos (del mantenedor).
   la versión) está preparado y se ejecuta cuando se decida.
 - **Ningún criterio técnico está pendiente de código**: los ⬜/🟡 que quedan son de publicación (hostear la
   SPEC y el libro, subir la extensión, empujar el tag).
-- El repositorio **no tiene todavía ningún tag `v*`**: la primera Release está por hacer, y con ella la
-  comprobación de que el workflow funciona de punta a punta.
+- La primera Release fue **`v1.1.0`** (25 ago 2026): comprobó de punta a punta el workflow de release
+  y el instalador; desde entonces cada versión del `CHANGELOG.md` sale con su tag `v*`.

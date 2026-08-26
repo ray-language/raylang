@@ -274,16 +274,18 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 | [`docs/organizacion-codigo.md`](docs/organizacion-codigo.md) | Cómo está **organizado el código** del compilador (módulos-directorio, dónde viven los tests). |
 | [`SECURITY.md`](SECURITY.md) | Política de seguridad, política de dependencias y modelo de amenazas. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Qué cambió en cada versión. |
-| [`RELEASE-1.0.md`](RELEASE-1.0.md) | Estado del lanzamiento: qué está hecho y qué falta publicar. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | La **guía de contribución**: flujo de PRs, principios no negociables y batería de admisión de módulos. |
+| [`RELEASE-1.0.md`](RELEASE-1.0.md) | Checklist histórica del lanzamiento 1.0 (las releases se publican desde la v1.1.0). |
 
 Editores: extensión de [VSCode](editors/vscode/) (con cliente LSP), paquete de [Sublime Text](editors/sublime/),
 y config para Neovim/Helix (usan `ray lsp` directo).
 
 ## Estado
 
-**raylang 1.0.0**, con trabajo continuo sobre esa línea (rendimiento, concurrencia nativa, framework web,
+**raylang 1.3.1** (última release publicada; las versiones salen como Releases de GitHub con binarios
+por plataforma), con trabajo continuo sobre esa línea (rendimiento, concurrencia nativa, framework web,
 procesos del SO). Motor de producto = la VM; el binario nativo es el destino de despliegue y el
-intérprete, el oráculo de desarrollo. La suite tiene **626 tests unitarios** + **101 archivos de tests de
+intérprete, el oráculo de desarrollo. La suite tiene **703 tests unitarios** + **123 archivos de tests de
 integración** (incluido un fuzzer del front-end, los oráculos VM↔intérprete y el corpus de paridad del
 binario nativo). Lo publicado y lo que está en camino, en [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -292,11 +294,13 @@ una auditoría externa (ver [`SECURITY.md`](SECURITY.md#alcance)).
 
 ## Contribuir
 
-Cada fase del proyecto es un commit con sus tests (Conventional Commits en español). Los identificadores
-van en **inglés** y los comentarios en español (la documentación `///`, en inglés). Antes de tocar
-comportamiento, lee los documentos-contrato: [`SPEC.md`](SPEC.md) manda sobre la semántica y
-[`DESIGN.md`](DESIGN.md) cuenta el porqué. Para reportar una vulnerabilidad, ver
-[`SECURITY.md`](SECURITY.md).
+La guía contractual está en **[`CONTRIBUTING.md`](CONTRIBUTING.md)**: el flujo (rama + PR contra
+`main`, Conventional Commits en español, CI en verde con las guardas `fmt`/`naming`/`module`), los
+principios no negociables (la SPEC manda, byte-identidad de los tres motores, idioma, errores como
+valores) y la **batería de admisión** para módulos nuevos de `std/`/`packages/` (doc `///` en inglés,
+fila en `REFERENCE.md`, tests por ambos motores, uso real demostrado). Antes de tocar comportamiento,
+lee los documentos-contrato: [`SPEC.md`](SPEC.md) manda sobre la semántica y [`DESIGN.md`](DESIGN.md)
+cuenta el porqué. Para reportar una vulnerabilidad, ver [`SECURITY.md`](SECURITY.md).
 
 ## Licencia
 

@@ -2829,6 +2829,27 @@ el propio M134. Quedan clasificadas dos mejoras:
    o un warning duro al publicar URL no-anónima. (El error de un repo privado por https también
    podría explicarse mejor que el "could not read Username" crudo de git.)
 
+## 74. El sitio del lenguaje — landing + SPEC + book + playground publicados (ago 2026)
+
+**Problema**: raylang 1.3.x se publica (Releases, extensión VSCode) pero no tiene sitio web:
+la SPEC, el book y el playground existen solo en el repo (el ítem "Libro y sitio publicados"
+de RELEASE-1.0.md es lo único del lanzamiento aún pendiente). **Impacto: MEDIO** (visibilidad
+y adopción; cero riesgo de bloqueo de features — es tooling/distribución, no lenguaje).
+
+Plan por fases, con dogfooding como principio (el sitio lo genera raylang mismo, como el sitio
+del registro de M84):
+
+- **Fase 1 — ✅ HECHA (26 ago 2026): `tools/site.ray`**, el generador estático en raylang puro
+  (std/markdown + std/fs + StringBuilder): `index.html` (la landing: hero, instalación, muestra
+  de código, seis tarjetas) y `spec.html` (SPEC.md renderizada vía `markdown.to_html`). Salida
+  determinista, byte-idéntica por ambos motores (`tests/site_cli.rs`). Previsualización local:
+  la salida es autocontenida — abrir `index.html` o servir el directorio con cualquier estático.
+- **Fase 2 — ensamblado**: el sitio completo = landing + SPEC + book (`mdbook build`) +
+  playground (WASM) bajo un mismo árbol de salida; enlaces internos de SPEC.md (DESIGN.md,
+  MANUAL.md…) resueltos o neutralizados.
+- **Fase 3 — deploy**: job de GitHub Pages en el workflow (en el tag `v*` o en push a main),
+  para que el sitio nunca se desincronice de lo publicado. Activar Pages = acción del mantenedor.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

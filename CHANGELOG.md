@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **El sitio del lenguaje, fase 1** (IDEAS §74): `tools/site.ray`, un generador estático en
+  raylang puro que produce la landing (`index.html`) y la SPEC renderizada (`spec.html`) —
+  salida determinista, byte-idéntica por ambos motores. Previsualización: abrir `index.html`
+  o servir el directorio de salida con cualquier servidor estático.
+
 ## 1.3.1 — 2026-08-26
 
 - **Fix LSP**: abrir un fuente de una dependencia descargada (`.ray-deps/<pkg>/…`) ya no

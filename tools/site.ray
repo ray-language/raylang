@@ -1,0 +1,246 @@
+// tools/site.ray — el generador del SITIO del lenguaje (IDEAS §74), en raylang puro.
+//
+// Dogfooding: la landing de raylang y la SPEC renderizada son un sitio ESTÁTICO generado
+// por el propio lenguaje (std/markdown + std/fs + StringBuilder), como el sitio del
+// registro (tools/registry_site.ray, M84). Salida DETERMINISTA (cero relojes, contenido
+// fijo + SPEC.md) → verificable por golden en ambos motores.
+//
+//   ray run tools/site.ray <raíz-del-repo> <dir-de-salida>
+//
+// Genera `index.html` (la landing) y `spec.html` (SPEC.md → HTML vía std/markdown).
+// Previsualización local: la salida es autocontenida (CSS inline, enlaces relativos) —
+// basta abrir `index.html` en el navegador o servir el directorio con cualquier estático.
+
+import std/fs;
+import std/markdown;
+import std/collections/stringbuilder;
+
+// ---------------------------------------------------------------------------
+// Estilo compartido (inline: el sitio no carga recursos externos).
+// ---------------------------------------------------------------------------
+
+fn style() -> string {
+    let sb = stringbuilder.new();
+    stringbuilder.push(sb, "<style>");
+    stringbuilder.push(
+        sb,
+        ":root{--ink:#1c2128;--muted:#59636e;--accent:#0b62a4;--bg:#ffffff;--soft:#f6f8fa;--line:#d8dee4}"
+    );
+    stringbuilder.push(
+        sb,
+        "*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;color:var(--ink);background:var(--bg);line-height:1.6}"
+    );
+    stringbuilder.push(
+        sb,
+        "a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}"
+    );
+    stringbuilder.push(sb, "main{max-width:56rem;margin:0 auto;padding:0 1.25rem 3rem}");
+    stringbuilder.push(
+        sb,
+        "nav{display:flex;gap:1.25rem;align-items:baseline;max-width:56rem;margin:0 auto;padding:1rem 1.25rem}"
+    );
+    stringbuilder.push(
+        sb,
+        "nav .brand{font-weight:700;font-size:1.1rem;color:var(--ink)}nav a{color:var(--muted)}"
+    );
+    stringbuilder.push(sb, "header.hero{text-align:center;padding:3rem 1rem 2rem}");
+    stringbuilder.push(
+        sb,
+        ".hero h1{font-size:2.4rem;margin:0 0 .5rem}.hero p{max-width:44rem;margin:0 auto;color:var(--muted)}"
+    );
+    stringbuilder.push(
+        sb,
+        "pre{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:1rem;overflow-x:auto}"
+    );
+    stringbuilder.push(
+        sb,
+        "code{font-family:ui-monospace,monospace;font-size:.92em}p code,li code,td code{background:var(--soft);padding:.1rem .3rem;border-radius:4px}"
+    );
+    stringbuilder.push(
+        sb,
+        ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1rem;margin:2rem 0}"
+    );
+    stringbuilder.push(
+        sb,
+        ".card{border:1px solid var(--line);border-radius:8px;padding:1rem}.card h3{margin:0 0 .4rem;font-size:1rem}.card p{margin:0;color:var(--muted);font-size:.92rem}"
+    );
+    stringbuilder.push(
+        sb,
+        "table{border-collapse:collapse;width:100%;display:block;overflow-x:auto}td,th{text-align:left;padding:.35rem .6rem;border:1px solid var(--line)}"
+    );
+    stringbuilder.push(
+        sb,
+        "blockquote{border-left:3px solid var(--line);margin:0;padding:.1rem 1rem;color:var(--muted)}"
+    );
+    stringbuilder.push(
+        sb,
+        "footer{border-top:1px solid var(--line);color:var(--muted);text-align:center;padding:1.5rem;font-size:.9rem}"
+    );
+    stringbuilder.push(sb, "</style>");
+    stringbuilder.build(sb)
+}
+
+fn nav() -> string {
+    let sb = stringbuilder.new();
+    stringbuilder.push(sb, "<nav><a class=\"brand\" href=\"index.html\">raylang</a>");
+    stringbuilder.push(sb, "<a href=\"spec.html\">Especificación</a>");
+    stringbuilder.push(sb, "<a href=\"https://github.com/ray-language/raylang\">GitHub</a>");
+    stringbuilder.push(sb, "</nav>");
+    stringbuilder.build(sb)
+}
+
+fn footer() -> string {
+    "<footer>raylang — licencia MIT OR Apache-2.0 · <a href=\"https://github.com/ray-language/raylang\">github.com/ray-language/raylang</a></footer>"
+}
+
+fn page_head(title: string) -> string {
+    "<!doctype html><html lang=\"es\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>" + title + "</title>"
+}
+
+// ---------------------------------------------------------------------------
+// La landing.
+// ---------------------------------------------------------------------------
+
+// La muestra de código del hero, ya escapada para HTML.
+fn code_sample() -> string {
+    let sb = stringbuilder.new();
+    stringbuilder.push(sb, "enum Tree { Leaf, Node(Tree, int, Tree) }\n\n");
+    stringbuilder.push(sb, "fn sum(t: Tree) -&gt; int {\n");
+    stringbuilder.push(sb, "    match (t) {\n");
+    stringbuilder.push(sb, "        Tree.Leaf =&gt; 0,\n");
+    stringbuilder.push(sb, "        Tree.Node(l, v, r) =&gt; sum(l) + v + sum(r),\n");
+    stringbuilder.push(sb, "    }\n");
+    stringbuilder.push(sb, "}\n\n");
+    stringbuilder.push(sb, "fn main() {\n");
+    stringbuilder.push(
+        sb,
+        "    let t = Tree.Node(Tree.Node(Tree.Leaf, 1, Tree.Leaf), 2, Tree.Leaf);\n"
+    );
+    stringbuilder.push(sb, "    print(sum(t));    // 3\n");
+    stringbuilder.push(sb, "}\n");
+    stringbuilder.build(sb)
+}
+
+fn card(title: string, body: string) -> string {
+    "<div class=\"card\"><h3>" + title + "</h3><p>" + body + "</p></div>"
+}
+
+fn landing_page() -> string {
+    let sb = stringbuilder.new();
+    stringbuilder.push(sb, page_head("raylang — un lenguaje para producción real"));
+    stringbuilder.push(sb, style());
+    stringbuilder.push(sb, nav());
+    stringbuilder.push(sb, "<header class=\"hero\"><h1>raylang</h1>");
+    stringbuilder.push(
+        sb,
+        "<p>Un lenguaje de programación estáticamente tipado, orientado a expresiones y auto-alojado — escrito en Rust, con una superficie de dependencias mínima y deliberada.</p>"
+    );
+    stringbuilder.push(sb, "</header><main>");
+    stringbuilder.push(
+        sb,
+        "<pre><code>curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh</code></pre>"
+    );
+    stringbuilder.push(sb, "<pre><code>" + code_sample() + "</code></pre>");
+    stringbuilder.push(sb, "<div class=\"grid\">");
+    stringbuilder.push(
+        sb,
+        card(
+            "Tres motores que coinciden",
+            "Una VM de bytecode para desarrollar, un binario nativo para desplegar y un intérprete como oráculo — salida byte a byte idéntica, verificada en CI."
+        )
+    );
+    stringbuilder.push(
+        sb,
+        card(
+            "Binario nativo",
+            "<code>ray build --native</code> transpila a Rust y compila un ejecutable: 3–4× la VM en cargas de servicio y 28–57× en cómputo puro."
+        )
+    );
+    stringbuilder.push(
+        sb,
+        card(
+            "Concurrencia por actores",
+            "Heap aislado por fibra + transferencia de propiedad en <code>send</code>: multicore real sin data races, con scheduler M:N."
+        )
+    );
+    stringbuilder.push(
+        sb,
+        card(
+            "Errores como valores",
+            "Sin <code>null</code> y sin excepciones: <code>Result</code>/<code>Option</code> + <code>?</code>, pattern matching y genéricos con traits."
+        )
+    );
+    stringbuilder.push(
+        sb,
+        card(
+            "Tooling completo",
+            "<code>ray</code> trae proyecto, paquetes, tests, formateador, docs, REPL, LSP para el editor y un servidor MCP para agentes LLM."
+        )
+    );
+    stringbuilder.push(
+        sb,
+        card(
+            "Dependencias deliberadas",
+            "HTTP/1.1 y 2, JSON, TOML, DNS, WebSocket o los clientes de BD están escritos en raylang; cada crate de Cargo entra justificado y medido."
+        )
+    );
+    stringbuilder.push(sb, "</div>");
+    stringbuilder.push(
+        sb,
+        "<p>La <a href=\"spec.html\">especificación normativa</a> define el lenguaje; el <a href=\"https://github.com/ray-language/raylang\">repositorio</a> trae el manual, la referencia y los ejemplos.</p>"
+    );
+    stringbuilder.push(sb, "</main>");
+    stringbuilder.push(sb, footer());
+    stringbuilder.build(sb)
+}
+
+// ---------------------------------------------------------------------------
+// La SPEC renderizada.
+// ---------------------------------------------------------------------------
+
+fn spec_page(spec_html: string) -> string {
+    let sb = stringbuilder.new();
+    stringbuilder.push(sb, page_head("Especificación del lenguaje raylang"));
+    stringbuilder.push(sb, style());
+    stringbuilder.push(sb, nav());
+    stringbuilder.push(sb, "<main>");
+    stringbuilder.push(
+        sb,
+        "<blockquote><p>Renderizado de <code>SPEC.md</code>, el documento <strong>normativo</strong> del repositorio: ante cualquier duda, manda el archivo fuente de la versión etiquetada.</p></blockquote>"
+    );
+    stringbuilder.push(sb, spec_html);
+    stringbuilder.push(sb, "</main>");
+    stringbuilder.push(sb, footer());
+    stringbuilder.build(sb)
+}
+
+// ---------------------------------------------------------------------------
+
+fn write_or_die(path: string, content: string) {
+    match (fs.write_file(path, content)) {
+        Result.Ok(n) => { },
+        Result.Err(e) => panic("no se pudo escribir '" + path + "': " + e),
+    }
+}
+
+fn main() -> int {
+    let argv = args();
+    if (argv.len() != 2) {
+        eprint("usage: ray run tools/site.ray <repo-root> <out-dir>");
+        return 64;
+    }
+    let root = argv[0];
+    let out = argv[1];
+    let spec_md = match (fs.read_file(root + "/SPEC.md")) {
+        Result.Ok(s) => s,
+        Result.Err(e) => {
+            eprint("could not read SPEC.md: " + e);
+            return 65;
+        },
+    };
+    let _ = fs.mkdir(out);
+    write_or_die(out + "/index.html", landing_page());
+    write_or_die(out + "/spec.html", spec_page(markdown.to_html(spec_md)));
+    print("site generated in " + out);
+    0
+}

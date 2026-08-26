@@ -2865,6 +2865,13 @@ del registro de M84):
   final del job de tests: cualquier rojo anterior la dejaba sin ejecutar (y main llevaba en
   rojo por un enlace de docs) → ✅ promovida a job propio que corre siempre, en paralelo.
   La landing suma la sección de editores (VSCode marketplace, Sublime, Neovim/Helix).
+- **Fase 1c — ✅ HECHA (26 ago 2026): benchmarks en el sitio.** `site/bench_chart.ray` parsea
+  la tabla de resultados de `benchmarks/poly/README.md` con `std/markdown` (`Block.Table`) y
+  genera barras CSS (raylang nativo = 1× vs rustc/go/node, tope 4×) — dogfooding triple: el
+  sitio, sus templates y ahora sus gráficas los produce el lenguaje, con una sola fuente de
+  verdad (re-medir el banco regenera todo). Banda "Medido, no prometido" en la landing +
+  `bench.html` con el README completo renderizado; la fecha/hardware sale del encabezado
+  "## Resultados (…)" del propio banco.
 - **Fase 2 — ensamblado**: el sitio completo = landing + SPEC + book (`mdbook build`) +
   playground (WASM) bajo un mismo árbol de salida; enlaces internos de SPEC.md (DESIGN.md,
   MANUAL.md…) resueltos o neutralizados.

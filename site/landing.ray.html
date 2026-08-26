@@ -1,4 +1,4 @@
-{% params title: string, page: string %}
+{% params title: string, page: string, bench: string %}
 {% extends layout %}
 {% block content %}
 <style>
@@ -262,6 +262,17 @@ section.engines { padding: 2.5rem 0 4rem; }
                 acepta versiones firmadas con Ed25519 y nombres reclamados.</p>
             </div>
         </div>
+    </div>
+</section>
+
+<section class="eco" id="benchmarks">
+    <div class="wrap">
+        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
+        <p class="lead">El binario nativo se pelea de tú a tú con Go y <code>rustc -O</code>, y
+        le gana a node en 9 de los 10 programas de cómputo del banco poliglota. Las barras
+        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica.</p>
+        {{& bench }}
+        <p style="margin-top:1.2rem"><a class="btn ghost" href="bench.html">Ver los benchmarks completos</a></p>
     </div>
 </section>
 

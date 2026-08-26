@@ -33,7 +33,7 @@ fn generates_the_site_and_both_engines_match() {
     generate(&interp, true);
 
     // Byte-idénticos por ambos motores.
-    for rel in ["index.html", "spec.html"] {
+    for rel in ["index.html", "spec.html", "bench.html"] {
         let a = std::fs::read_to_string(vm.join(rel)).unwrap_or_else(|_| panic!("falta {rel}"));
         let b = std::fs::read_to_string(interp.join(rel)).unwrap();
         assert_eq!(a, b, "ambos engines idénticos en {rel}");
@@ -118,6 +118,24 @@ fn generates_the_site_and_both_engines_match() {
     }
     if repo.join("playground/editor.bundle.js").exists() {
         assert!(vm.join("playground/editor.bundle.js").exists(), "bundle del editor copiado");
+    }
+
+    // Los benchmarks: la gráfica se GENERA de la tabla real de benchmarks/poly/README.md
+    // (una fuente de verdad) y aparece en la landing y en bench.html; los ratios y la fecha
+    // vienen del propio README, no de números copiados.
+    let bench_md =
+        std::fs::read_to_string(repo.join("benchmarks/poly/README.md")).unwrap();
+    assert!(landing.contains("id=\"benchmarks\""), "sección de benchmarks\n{landing}");
+    assert!(landing.contains("class=\"bgroup\""), "barras generadas\n{landing}");
+    assert!(landing.contains("wordcount"), "programas del banco en la gráfica");
+    assert!(landing.contains("href=\"bench.html\""), "enlace a la página de benchmarks");
+    let bench = std::fs::read_to_string(vm.join("bench.html")).unwrap();
+    assert!(bench.contains("class=\"bgroup\""), "gráfica también en bench.html");
+    assert!(bench.contains("bench.py"), "metodología reproducible enlazada\n{bench}");
+    // La fecha de medición del README aparece tal cual (regenerar el banco la actualiza).
+    if let Some(i) = bench_md.find("## Resultados (") {
+        let date = &bench_md[i + "## Resultados (".len()..i + "## Resultados (".len() + 10];
+        assert!(landing.contains(date), "la fecha de medición viene del README: {date}");
     }
 
     // La SPEC renderizada: título y estructura reales de SPEC.md, pasados por std/markdown.

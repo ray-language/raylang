@@ -17,8 +17,10 @@
 
 import std/fs;
 import std/markdown;
+import bench_chart;
 import landing;
 import spec_page;
+import bench_page;
 
 fn write_or_die(path: string, content: string) {
     match (fs.write_file(path, content)) {
@@ -83,6 +85,16 @@ fn main() -> int {
             return 65;
         },
     };
+    // El banco poliglota: una sola fuente de verdad — la gráfica de la landing y la página
+    // de benchmarks se generan de ESTE markdown (re-medir el banco regenera el sitio).
+    let bench_md = match (fs.read_file(root + "/benchmarks/poly/README.md")) {
+        Result.Ok(s) => s,
+        Result.Err(e) => {
+            eprint("could not read benchmarks/poly/README.md: " + e);
+            return 65;
+        },
+    };
+    let chart = bench_chart.build(bench_md);
     let _ = fs.mkdir(out);
     let _ = fs.mkdir(out + "/assets");
     let _ = fs.mkdir(out + "/assets/fonts");
@@ -125,11 +137,15 @@ fn main() -> int {
     );
     write_or_die(
         out + "/index.html",
-        landing.render("raylang — un lenguaje para producción real", "index")
+        landing.render("raylang — un lenguaje para producción real", "index", chart)
     );
     write_or_die(
         out + "/spec.html",
         spec_page.render("Especificación del lenguaje raylang", markdown.to_html(spec_md), "spec")
+    );
+    write_or_die(
+        out + "/bench.html",
+        bench_page.render("Benchmarks de raylang", chart, markdown.to_html(bench_md), "bench")
     );
     print("site generated in " + out);
     0

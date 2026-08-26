@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Benchmarks en el sitio** (IDEAS §74): sección "Medido, no prometido" en la landing y
+  página `bench.html` — la gráfica de barras se **genera de la tabla real** de
+  `benchmarks/poly/README.md` vía `std/markdown` (una sola fuente de verdad: re-medir el
+  banco regenera el sitio), con fecha/hardware del propio README y el banco completo
+  renderizado con enlace a la metodología reproducible.
 - **Playground con editor real y LSP embebido** (IDEAS §74 fase 1b): el editor pasa a
   CodeMirror 6 y el **LSP de raylang corre dentro del wasm** (el mismo despacho de `ray lsp`,
   exportado como `lsp(msg)`): diagnósticos en vivo, autocompletado con snippets, hover con

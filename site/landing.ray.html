@@ -12,6 +12,10 @@
 @media (max-width: 60rem) {
     .hero .wrap { grid-template-columns: 1fr; }
 }
+/* Los hijos de grid/flex que envuelven código scrolleable deben poder ENCOGER (min-width
+   auto los deja desbordar el viewport en móvil): el scroll ocurre dentro de la caja. */
+.hero .wrap > div, .agents .duo > div, .step > div, .bgroup { min-width: 0; }
+.cmd code { min-width: 0; }
 .badge {
     display: inline-block;
     font-size: .82rem;
@@ -61,6 +65,10 @@ section.install { padding: 2rem 0 2.5rem; }
     grid-template-columns: auto 1fr;
     gap: 1rem;
     align-items: start;
+}
+@media (max-width: 44rem) {
+    .step { grid-template-columns: 1fr; gap: .5rem; }
+    .stepn { width: 1.7rem; height: 1.7rem; font-size: .85rem; }
 }
 .stepn {
     width: 2rem;

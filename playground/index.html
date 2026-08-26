@@ -31,8 +31,10 @@
   @media (max-width:820px){
     body { position:relative; }
     main { grid-template-columns:1fr; grid-template-rows:1fr 1fr; }
-    .sidebar { display:none; }
-    body.files-open .sidebar {
+    /* aside.sidebar > .sidebar en especificidad: la regla base (display:flex) va DESPUÉS
+       en la hoja y con un selector de igual peso ganaría al cerrar el dropdown. */
+    aside.sidebar { display:none; }
+    body.files-open aside.sidebar {
       display:flex; position:absolute; top:50px; left:10px; z-index:30;
       width:13rem; max-height:min(60%, 21rem); overflow:auto;
       border:1px solid var(--border); border-radius:10px;

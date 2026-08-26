@@ -105,9 +105,15 @@ extensión se conecta como cliente (ver "Diagnósticos en vivo" al final).
 
 ## Instalación
 
-> La extensión aún no está en el Marketplace (llegará con la primera release pública del
-> lenguaje; el `package.json` ya trae repository/icon/license listos para `vsce publish`).
-> Mientras tanto, dos vías:
+**Desde el Marketplace** (la vía normal): busca **raylang** en la vista de extensiones, o
+
+```
+ext install ray-language.raylang
+```
+
+— [marketplace.visualstudio.com/items?itemName=ray-language.raylang](https://marketplace.visualstudio.com/items?itemName=ray-language.raylang).
+
+Para desarrollo de la propia extensión, dos vías más:
 
 **A. Enlace directo (desarrollo local)** — sin empaquetar nada: enlaza esta carpeta dentro del
 directorio de extensiones de VSCode y recarga.

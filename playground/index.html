@@ -13,7 +13,8 @@
   /* Colores de marca raylang: azul primario #2B7CE0, navy #0B1F33, acentos. */
   :root { color-scheme: dark; --bg:#0b1622; --panel:#0e1c2e; --border:#1e3454; --fg:#e6edf3; --accent:#2B7CE0; --muted:#8fa6c4; }
   * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.5 "Space Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--fg); }
+  body { margin:0; font:14px/1.5 "Space Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--fg);
+    display:flex; flex-direction:column; height:100vh; }
   header { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); }
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header .tag { color:var(--muted); font-size:12px; }
@@ -23,7 +24,7 @@
   button.ghost { background:transparent; color:var(--muted); border:1px solid var(--border);
     font-family:"JetBrains Mono",ui-monospace,monospace; }
   button.ghost:hover:enabled { color:var(--fg); border-color:var(--accent); }
-  main { display:grid; grid-template-columns:212px 1fr 1fr; gap:1px; background:var(--border); height:calc(100vh - 54px); }
+  main { display:grid; grid-template-columns:212px 1fr 1fr; gap:1px; background:var(--border); flex:1; min-height:0; }
   #files-btn { display:none; }
   /* En móvil: editor/salida apilados a todo lo ancho; el explorador COLAPSA en un dropdown
      compacto anclado al botón de archivos del header (no un panel a pantalla completa: el
@@ -56,11 +57,10 @@
   .file svg { flex:none; opacity:.9; }
   .file:hover { background:rgba(43,124,224,.10); }
   .file.active { background:rgba(43,124,224,.18); border-left-color:var(--accent); color:#fff; }
-  /* La nota de ALCANCE, anclada al pie del explorador: qué corre, qué da Err y qué no resuelve. */
-  .scope-note { margin-top:auto; padding:10px 14px 12px; border-top:1px solid var(--border);
-    color:var(--muted); font-size:11.5px; line-height:1.5; }
+  /* La nota de ALCANCE, a pie de página del playground: qué corre, qué da Err y qué no resuelve. */
+  footer.scope-note { flex:none; padding:8px 18px 10px; border-top:1px solid var(--border);
+    background:var(--panel); color:var(--muted); font-size:11.5px; line-height:1.6; }
   .scope-note b { color:var(--fg); font-weight:600; }
-  .scope-note p { margin:6px 0 0; }
   .scope-note code { font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px;
     color:#a8c7e8; background:rgba(43,124,224,.12); padding:.5px 4px; border-radius:4px; }
   .pane .label { padding:6px 14px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--border); text-transform:uppercase; letter-spacing:.04em; }
@@ -93,16 +93,6 @@
   <aside class="sidebar">
     <div class="tree-header">ejemplos</div>
     <ul class="files" id="files"></ul>
-    <div class="scope-note">
-      <b>Alcance del playground</b>
-      <p>Corre el <b>lenguaje completo</b> y la stdlib pura con <code>import std/*</code>
-      (math, json, markdown, iteradores, actores/canales…).</p>
-      <p>La stdlib con E/S (<code>fs</code>, <code>process</code>, red) <b>compila pero devuelve
-      <code>Err</code> al ejecutar</b>: el navegador no tiene disco ni sockets.</p>
-      <p>Los <b>paquetes del registro</b> (<code>net</code>, <code>web</code>, <code>rpc</code>,
-      <code>db</code>…) y los módulos de usuario multi-archivo <b>no resuelven aquí</b> — para
-      eso, instala <code>ray</code> y usa <code>ray add</code>.</p>
-    </div>
   </aside>
   <div class="pane">
     <div class="label" id="filelabel">fib.ray</div>
@@ -113,6 +103,15 @@
     <pre id="out"></pre>
   </div>
 </main>
+<footer class="scope-note">
+  <b>Alcance</b> · Corre el <b>lenguaje completo</b> y la stdlib pura con
+  <code>import std/*</code> (math, json, markdown, iteradores, actores/canales…) ·
+  La stdlib con E/S (<code>fs</code>, <code>process</code>, red) <b>compila pero devuelve
+  <code>Err</code> al ejecutar</b>: el navegador no tiene disco ni sockets ·
+  Los <b>paquetes del registro</b> (<code>net</code>, <code>web</code>, <code>rpc</code>,
+  <code>db</code>…) y los módulos multi-archivo <b>no resuelven aquí</b> — para eso, instala
+  <code>ray</code> y usa <code>ray add</code>.
+</footer>
 
 <script src="editor.bundle.js"></script>
 <script type="module">

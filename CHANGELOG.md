@@ -4,6 +4,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Fix LSP**: abrir un fuente de una dependencia descargada (`.ray-deps/<pkg>/…`) ya no
+  marca "module not found" en los imports de sus dependencias hermanas (M138): la caché
+  plana del proyecto es raíz de módulos aunque el paquete declare su `entry` publicable.
+
 ## 1.3.0 — 2026-08-26
 
 - **`ray upgrade`** (M137): autoactualización del toolchain — descarga la última release

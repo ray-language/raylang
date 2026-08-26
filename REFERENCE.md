@@ -510,6 +510,7 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray registry keygen [--out F]` | genera la clave Ed25519 de publicación (`RAY_KEY` o `~/.ray/publish.key`) |
 | `ray registry verify [dir]` | audita las firmas de un índice contra sus dueños (CI del repo del índice) |
 | `ray registry yank <nom>@<ver> [--undo]` | retira/restaura una versión publicada |
+| `ray upgrade [tag] [--check]` | actualiza `ray`/`raylang` a la última release (o al tag); `--check` solo informa (0 = al día, 1 = hay nueva) |
 | `ray version` | versión |
 | `ray help` | la ayuda: todos los subcomandos con sus flags (también sin argumentos) |
 

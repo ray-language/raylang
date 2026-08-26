@@ -59,6 +59,10 @@ Lo que raylang **garantiza por construcción**:
   publicada con dueño de nombre fijado por TOFU (`ray registry publish --sign`,
   `ray registry verify` como check de CI del índice) e **índice único por proyecto** para mitigar
   la *dependency confusion*. Detalle en [PUBLISH.md](PUBLISH.md) §6.
+  - **Autoactualización** (M137): `ray upgrade` descarga la release desde
+    `github.com/ray-language/raylang/releases` — solo ante la orden explícita del usuario
+    (mismo canal y confianza que `install.sh`), y el binario descargado se verifica
+    ejecutándolo (`ray version` debe reportar el tag pedido) antes de reemplazar nada.
   - **Endpoint de red por defecto** (M136): el índice oficial
     (`github.com/ray-language/ray-index`) es el default cuando no hay `RAY_INDEX` ni
     `[registry] index`. Solo se contacta al resolver deps **por nombre** (nunca en

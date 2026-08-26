@@ -4,6 +4,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray upgrade`** (M137): autoactualización del toolchain — descarga la última release
+  (o un tag explícito) y reemplaza los binarios instalados, verificando el binario nuevo
+  antes de tocar nada. `--check` solo informa (exit 0 = al día, 1 = hay versión nueva).
+
 ## 1.2.0 — 2026-08-26
 
 - **El índice oficial de paquetes es el default** (M136): `ray add web` funciona en un

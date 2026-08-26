@@ -96,6 +96,13 @@ curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.s
 Instala los binarios `ray` (y su alias `raylang`) en `~/.local/bin`. En **Windows**, descarga el `.zip` de
 la [última release](https://github.com/ray-language/raylang/releases).
 
+Para actualizar a la última versión (o consultar si hay una nueva):
+
+```sh
+ray upgrade            # descarga la última release y reemplaza los binarios instalados
+ray upgrade --check    # solo informa (0 = al día, 1 = hay versión nueva)
+```
+
 ### Desde el código
 
 ```sh

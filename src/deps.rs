@@ -698,6 +698,19 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         {
             roots.push(parent);
         }
+        // M138: un paquete DESCARGADO —su `ray.toml` vive directamente bajo una caché
+        // `.ray-deps/`— resuelve a sus dependencias hermanas por la CACHÉ PLANA: el padre entra
+        // como raíz aunque el paquete declare `entry` (la cara publicable, M135). Sin esto, la
+        // heurística de arriba ("entry presente = aplicación, no se ensancha") dejaba al LSP sin
+        // raíz para `import net/…` al abrir un fuente de `.ray-deps/web/` (el paquete espejado
+        // declara `entry = "framework.ray"`, que existe) → "module not found" sobre código que
+        // `ray run` resuelve bien desde el proyecto consumidor.
+        if let Some(parent) = m.root.parent().map(Path::to_path_buf)
+            && parent.file_name().is_some_and(|n| n == ".ray-deps")
+            && !roots.contains(&parent)
+        {
+            roots.push(parent);
+        }
         // M113b: en un proyecto-APLICACIÓN, el directorio de la entrada (típicamente `src/`) entra
         // como raíz de RESPALDO. Es la convención que `ray test` ya aplicaba a mano ("la raíz de
         // la entrada como raíz extra") para que un `tests/*.ray` importe los módulos del proyecto
@@ -705,8 +718,11 @@ pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
         // `ray run tests/x.ray` resuelven IGUAL que `ray test` — antes el editor marcaba "module
         // not found" sobre un test que corría en verde. Va al final: para un archivo de `src/` la
         // raíz de su propia entrada ya manda, esto solo alcanza a los archivos de fuera.
+        // (`entry_dir == dir` se salta: es la raíz propia del archivo que pregunta — el loader ya
+        // la tiene primera, y repetirla solo duplicaba la lista en los mensajes de error.)
         if m.entry_path().is_file()
             && let Some(entry_dir) = m.entry_path().parent().map(Path::to_path_buf)
+            && entry_dir != dir
             && !roots.contains(&entry_dir)
         {
             roots.push(entry_dir);
@@ -736,6 +752,33 @@ fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downloaded_package_resolves_siblings_via_the_flat_cache() {
+        // M138: el ray.toml de un paquete bajo `.ray-deps/` declara `entry` (la cara publicable),
+        // pero sus deps hermanas viven en la caché PLANA → el padre `.ray-deps` debe ser raíz.
+        let base = std::env::temp_dir().join(format!("ray-deps-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let web = base.join("store/.ray-deps/web");
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::create_dir_all(base.join("store/.ray-deps/net")).unwrap();
+        std::fs::write(
+            web.join("ray.toml"),
+            "[package]\nname = \"web\"\nversion = \"0.1.0\"\nentry = \"framework.ray\"\n\n\
+             [dependencies]\nnet = \"git+https://example/net@v0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(web.join("framework.ray"), "import net/webserver;\n").unwrap();
+        std::fs::write(base.join("store/.ray-deps/net/webserver.ray"), "pub fn listen() {}\n").unwrap();
+
+        let roots = dependency_roots_for(&web);
+        let cache = base.join("store/.ray-deps");
+        assert!(roots.contains(&cache), "la caché plana es raíz (hermanas por nombre): {roots:?}");
+        // La raíz propia del archivo que pregunta no se repite (antes salía duplicada en los
+        // mensajes de error del loader: "in: …/web, …/web").
+        assert!(!roots.contains(&web), "sin duplicar la raíz propia: {roots:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn index_precedence_env_toml_official_default() {

@@ -387,3 +387,40 @@ fn diagnoses_ray_html_templates() {
     let param_section = out.split("\"id\":10").nth(1).unwrap_or("");
     assert!(param_section.contains("titulo: string"), "hover del param da su type\n{out}");
 }
+
+#[test]
+fn dep_source_resolves_sibling_packages_from_the_flat_cache() {
+    // M138: abrir un fuente de una dependencia descargada (`.ray-deps/web/framework.ray`) que
+    // importa a su hermana (`net/…`) NO debe marcar "module not found": la caché plana del
+    // proyecto consumidor es raíz de módulos aunque el paquete declare `entry` (su cara M135).
+    let base = std::env::temp_dir().join(format!("ray_lsp_depcache_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let web = base.join("store/.ray-deps/web");
+    let net = base.join("store/.ray-deps/net");
+    std::fs::create_dir_all(&web).unwrap();
+    std::fs::create_dir_all(&net).unwrap();
+    std::fs::write(
+        base.join("store/ray.toml"),
+        "[package]\nname = \"store\"\nversion = \"0.1.0\"\n\n[dependencies]\nweb = \"^0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        web.join("ray.toml"),
+        "[package]\nname = \"web\"\nversion = \"0.1.0\"\nentry = \"framework.ray\"\n\n[dependencies]\nnet = \"git+https://example/net@v0.1.0\"\n",
+    )
+    .unwrap();
+    let dep_src = "import net/webserver;\nfn helper() -> int { webserver.answer() }\n";
+    std::fs::write(web.join("framework.ray"), dep_src).unwrap();
+    std::fs::write(net.join("webserver.ray"), "pub fn answer() -> int { 42 }\n").unwrap();
+
+    let uri = format!("file://{}", web.join("framework.ray").display());
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import net/webserver;\nfn helper() -> int {{ webserver.answer() }}\n"}}}}}}"#
+    );
+    let entry = frame(&open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entry);
+    assert!(out.contains("publishDiagnostics"), "publica diagnostics\n{out}");
+    assert!(!out.contains("not found"), "resuelve la hermana net/ desde la caché plana:\n{out}");
+    assert!(out.contains("\"diagnostics\":[]"), "sin errores en el fuente de la dep:\n{out}");
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -10418,3 +10418,31 @@ Tests: los helpers puros (nombre del asset por plataforma — acoplado a lo que 
 la consulta con red real, `#[ignore]` como los live de deps. El smoke de reemplazo real:
 binarios 1.2.0 instalados en un dir aparte + `ray upgrade v1.1.0` → descarga, verifica y
 deja ambos binarios en 1.1.0.
+
+## 136. M138 — el LSP dentro de la caché de dependencias: hermanas por la caché plana (ago 2026)
+
+Bug de dogfood post-v1.3.0: en un proyecto recién creado con `ray add web`, abrir
+`.ray-deps/web/framework.ray` en el editor marcaba `module 'net/webserver' not found` — sobre
+código que `ray run` resuelve perfectamente. Peor señal: el error listaba la MISMA raíz dos
+veces ("in: …/web, …/web").
+
+La causa: la heurística de `deps::dependency_roots_for` que distingue paquete-librería de
+proyecto-aplicación por la EXISTENCIA del `entry` quedó rota desde M135 — los paquetes
+espejados declaran `entry` (su cara publicable: `entry = "framework.ray"`), y ese archivo
+existe en el espejo. Al abrir un fuente de la dependencia, `Manifest::find` sube hasta el
+`ray.toml` DEL PAQUETE (no el del proyecto consumidor), lo clasifica como aplicación, no
+añade el padre como raíz (ahí viven las hermanas: la caché es plana) y el respaldo M113b
+re-añadía el propio directorio del paquete (el duplicado del mensaje).
+
+El arreglo, dos piezas en `dependency_roots_for`:
+
+- **La caché plana como raíz**: si el `ray.toml` del paquete vive directamente bajo un
+  directorio llamado `.ray-deps`, ese padre entra como raíz de módulos, declare o no `entry`
+  — es exactamente la invariante de la caché (un slot por nombre) hecha visible al LSP.
+- **Sin raíz propia duplicada**: el respaldo M113b (el dir de la entrada como raíz extra) se
+  salta cuando coincide con el directorio del archivo que pregunta — el loader ya lo tiene
+  como primera raíz.
+
+El test de LSP de punta a punta (didOpen de un fuente en `.ray-deps/web/` que importa
+`net/…`) FALLA sin el fix y queda en verde con él; el unitario fija las dos piezas. La
+verificación real: el `framework.ray` espejado diagnostica limpio en el proyecto del repro.

@@ -1,0 +1,17 @@
+{% params title: string, chart: string, body: string, page: string %}
+{% extends layout %}
+{% block content %}
+<article class="doc">
+    <div class="wrap">
+        <h1>Benchmarks <span class="grad">medidos</span></h1>
+        <blockquote><p>Renderizado de <code>benchmarks/poly/README.md</code>: el banco poliglota
+        del repositorio (14 programas × 9 lenguajes, mismo output verificado por checksum),
+        <a href="https://github.com/ray-language/raylang/tree/main/benchmarks/poly">reproducible
+        con <code>bench.py</code></a>. La crónica de cada arco de optimización vive en
+        <a href="https://github.com/ray-language/raylang/blob/main/PERFORMANCE.md">PERFORMANCE.md</a>.</p></blockquote>
+        {{& chart }}
+        <hr>
+        {{& body }}
+    </div>
+</article>
+{% endblock %}

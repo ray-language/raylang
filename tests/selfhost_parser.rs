@@ -680,6 +680,9 @@ fn parses_files_reales_equal_what_el_oracle() {
         "binario.ray", "http.ray", "webserver.ray",
         "tuplas.ray", // M27.1: tuplas (el toolchain auto-alojado aún no las soporta)
         "for_bucles.ray", // M27.2: bucle `for` (el toolchain auto-alojado aún no lo soporta)
+        "csv.ray", // M128 introdujo un `for` en parse_csv → diferido por M27.2 (destapado al
+                   // desatascar el CI: docs_root moría antes y este corpus nunca corría)
+        "csv_demo.ray", // ídem: el demo de M128 también usa `for` (M27.2)
         "interpolacion.ray", // M27.3: interpolación de strings (idem)
         "casts.ray", // M27.4: casts `as` (idem; usa `for`/interpolación también)
         "parse_fusion.ray", // corpus de las fusiones N-D del backend nativo: usa `as` (M27.4) y

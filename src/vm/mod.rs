@@ -1873,7 +1873,7 @@ impl<'a> Vm<'a> {
                 // el nativo). Arreglos etiquetados; std/crypto los envuelve en Result.
                 OpCode::HasherNew => match self.pop() {
                     HeapValue::Str(alg) => {
-                        let elems = match ray_runtime::crypto::hasher_new(&alg) {
+                        let elems = match crate::builtins::hasher_new(&alg) {
                             Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
                             Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                         };
@@ -1888,7 +1888,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Int(handle), HeapValue::Bytes(chunk)) = (handle, chunk) else {
                         unreachable!("the checker guarantees int, bytes");
                     };
-                    let elems = match ray_runtime::crypto::hasher_update(handle, &chunk) {
+                    let elems = match crate::builtins::hasher_update(handle, &chunk) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
@@ -1897,7 +1897,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::HasherFinal => match self.pop() {
                     HeapValue::Int(handle) => {
-                        let elems = match ray_runtime::crypto::hasher_final(handle) {
+                        let elems = match crate::builtins::hasher_final(handle) {
                             Ok(d) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(d)],
                             Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
                         };

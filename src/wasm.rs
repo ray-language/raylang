@@ -10,9 +10,11 @@
 //! renderizado con contexto de fuente (`diagnostic::render`). El multicore está desactivado (N=1) y la
 //! red/TLS/cripto/FFI **no están disponibles** (un programa que las use da un error claro).
 //!
-//! Alcance: **un solo archivo** (sin `import`/módulos, que requieren el loader host-side). Cubre todo el
-//! lenguaje núcleo: aritmética, strings, arreglos, `Map`, structs, enums, `match`, closures, genéricos,
-//! traits, y el prelude (`Option`/`Result`/`map`/`filter`/`fold`/`assert`/`sort`).
+//! Alcance: **un archivo de usuario** + los `import std/*` (la stdlib va EMBEBIDA en el binario —
+//! include_str — y el loader la resuelve sin disco; un import de módulo de usuario no existe en el
+//! navegador y da el error claro del loader). Cubre todo el lenguaje núcleo: aritmética, strings,
+//! arreglos, `Map`, structs, enums, `match`, closures, genéricos, traits, y el prelude
+//! (`Option`/`Result`/`map`/`filter`/`fold`/`assert`/`sort`).
 
 use std::cell::RefCell;
 
@@ -94,25 +96,105 @@ pub unsafe extern "C" fn run(src_ptr: *mut u8, src_len: usize) -> u64 {
     ((ptr as u64) << 32) | (len as u64)
 }
 
-/// El pipeline del playground: lex → parse → check → VM, capturando la salida y renderizando cualquier
-/// error con contexto de fuente. Sin loader (un solo archivo; `import` daría un error de tipos claro).
+/// El pipeline del playground: LOADER → check → VM, capturando la salida y renderizando cualquier
+/// error con contexto de fuente. Con el loader, los `import std/*` resuelven desde la stdlib
+/// **embebida** (include_str, sin disco) — como en el LSP del propio playground (`analyze_modular`).
+/// Un import de módulo de usuario no existe en el navegador → el error claro del loader.
 fn run_source(src: &str) -> String {
-    use crate::{checker, diagnostic, lexer, parser};
+    use crate::{checker, diagnostic, loader};
 
-    let tokens = match lexer::lex(src) {
-        Ok(t) => t,
-        Err(e) => return diagnostic::render(src, e.line, e.col, e.len, &e.to_string()),
+    let entry = std::path::Path::new("playground/main.ray");
+    let loaded = match loader::load_source(entry, src, &[]) {
+        Ok(l) => l,
+        // Si la entrada ni siquiera parsea, la vía directa da el diagnóstico preciso con
+        // posición; si parsea, el fallo es de un import → el mensaje del loader tal cual.
+        Err(e) => return direct_error(src).unwrap_or(e.message),
     };
-    let mut program = match parser::parse(tokens) {
-        Ok(p) => p,
-        Err(e) => return diagnostic::render(src, e.line, e.col, e.len, &e.to_string()),
+    // Las posiciones del programa FUSIONADO se localizan contra su módulo (patrón del CLI:
+    // `load_and_locate`); `program` se saca del `Loaded` antes, así que el localizador vive
+    // sobre los módulos, no sobre `loaded` entero.
+    let modules = loaded.modules;
+    let multi = modules.len() > 1;
+    let locate = |gline: usize, col: usize, len: usize| {
+        let m = modules.iter().rev().find(|m| m.start_line <= gline).unwrap_or(&modules[0]);
+        let local = gline.saturating_sub(m.start_line) + 1;
+        let (source, local, col, len) = m.present(local, col, len);
+        (m.name.as_str(), source, local, col, len)
     };
-    if let Err(e) = checker::check(&mut program) {
-        return take_output() + &diagnostic::render(src, e.line, e.col, e.len, &e.to_string());
+    let mut program = loaded.program;
+    if let Err(mut e) = checker::check(&mut program) {
+        let (name, source, local, col, len) = locate(e.line, e.col, e.len);
+        e.line = local;
+        e.col = col;
+        let head = if multi { format!("[{name}] {e}") } else { e.to_string() };
+        return take_output() + &diagnostic::render(source, local, col, len, &head);
     }
     match crate::run_on_vm(&program) {
         Ok(_) => take_output(),
         // Un error de ejecución no lleva `len`; subrayamos 1 columna.
-        Err(e) => take_output() + &diagnostic::render(src, e.line, e.col, 1, &e.to_string()),
+        Err(mut e) => {
+            let (name, source, local, col, len) = locate(e.line, e.col, 1);
+            e.line = local;
+            e.col = col;
+            let head = if multi { format!("[{name}] {e}") } else { e.to_string() };
+            take_output() + &diagnostic::render(source, local, col, len, &head)
+        }
     }
+}
+
+/// El error del front-end sobre la entrada SOLA (léxico/sintaxis), renderizado; `None` si parsea.
+fn direct_error(src: &str) -> Option<String> {
+    use crate::{diagnostic, lexer, parser};
+    let tokens = match lexer::lex(src) {
+        Ok(t) => t,
+        Err(e) => return Some(diagnostic::render(src, e.line, e.col, e.len, &e.to_string())),
+    };
+    match parser::parse(tokens) {
+        Ok(_) => None,
+        Err(e) => Some(diagnostic::render(src, e.line, e.col, e.len, &e.to_string())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// El LSP en el navegador (playground con editor real, IDEAS §74): el MISMO despacho del
+// Language Server (`lsp::handle_message`) compilado a wasm. El host JS manda UN mensaje
+// JSON-RPC (sin framing: el transporte aquí es la llamada) y recibe el ARRAY JSON de los
+// mensajes que el servidor emite (respuesta y/o publishDiagnostics). El estado de
+// documentos abiertos vive en el módulo, como en el proceso del `ray lsp` real.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Documentos abiertos del LSP embebido (uri → texto), como los del bucle stdio.
+    static LSP_DOCS: RefCell<std::collections::HashMap<String, String>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Empaqueta un `String` en la memoria lineal como `(ptr << 32) | len` (contrato de [`run`]).
+fn pack_output(output: String) -> u64 {
+    let mut bytes = output.into_bytes();
+    bytes.shrink_to_fit();
+    let len = bytes.len();
+    let ptr = bytes.as_mut_ptr();
+    std::mem::forget(bytes);
+    ((ptr as u64) << 32) | (len as u64)
+}
+
+/// Despacha un mensaje LSP (bytes UTF-8 de un JSON-RPC) y devuelve el array JSON de mensajes
+/// emitidos, empaquetado como en [`run`]. Un mensaje ilegible devuelve `[]` (el servidor no
+/// se cae). Libera el buffer de entrada.
+///
+/// # Safety
+/// `msg_ptr`/`msg_len` deben provenir de un [`alloc`] previo con esa longitud.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lsp(msg_ptr: *mut u8, msg_len: usize) -> u64 {
+    let raw = {
+        let v = unsafe { Vec::from_raw_parts(msg_ptr, msg_len, msg_len) };
+        String::from_utf8_lossy(&v).into_owned()
+    };
+    let messages = match crate::lsp::json::parse(&raw) {
+        Ok(msg) => LSP_DOCS.with(|d| crate::lsp::handle_message(&mut d.borrow_mut(), &msg)).0,
+        Err(_) => Vec::new(),
+    };
+    let body: Vec<String> = messages.iter().map(|m| m.serialize()).collect();
+    pack_output(format!("[{}]", body.join(",")))
 }

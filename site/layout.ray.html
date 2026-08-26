@@ -1,0 +1,480 @@
+{% params title: string, page: string %}
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+<script>
+// Aplica el tema guardado ANTES de pintar (evita el destello); sin valor → sistema.
+(function () {
+    var t = null;
+    try { t = localStorage.getItem("theme"); } catch (e) { }
+    if (t === "light" || t === "dark") { document.documentElement.setAttribute("data-theme", t); }
+})();
+</script>
+<style>
+/* Fuentes de marca EMBEBIDAS (SIL OFL 1.1; las mismas del playground): sitio 100% autocontenido. */
+@font-face {
+    font-family: "Space Grotesk";
+    src: url("assets/fonts/space-grotesk.woff2") format("woff2");
+    font-weight: 300 700;
+    font-display: swap;
+}
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("assets/fonts/jetbrains-mono.woff2") format("woff2");
+    font-weight: 400;
+    font-display: swap;
+}
+/* Paleta océano — assets/branding/raylang-brand.pdf (BRAND SYSTEM v1.0) */
+:root {
+    --bg: #ffffff;
+    --bg-soft: #eaf4fb;
+    --ink: #0b1f33;
+    --muted: #46617a;
+    --line: #d4e4f0;
+    --accent: #2b7ce0;
+    --sky: #4ba3f5;
+    --aqua: #34d2c6;
+    --card: #ffffff;
+    --nav-bg: rgba(255, 255, 255, .82);
+    --code-bg: #0b1f33;
+    --code-line: #103a5e;
+    --code-ink: #eaf4fb;
+}
+/* Tema: sistema por defecto; data-theme="light"/"dark" (el selector de la nav) manda. */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --bg: #0b1f33;
+        --bg-soft: #0e2947;
+        --ink: #eaf4fb;
+        --muted: #8fb0cc;
+        --line: #1e3a57;
+        --accent: #4ba3f5;
+        --card: #0e2947;
+        --nav-bg: rgba(11, 31, 51, .82);
+        --code-bg: #081827;
+        --code-line: #103a5e;
+    }
+}
+:root[data-theme="dark"] {
+    --bg: #0b1f33;
+    --bg-soft: #0e2947;
+    --ink: #eaf4fb;
+    --muted: #8fb0cc;
+    --line: #1e3a57;
+    --accent: #4ba3f5;
+    --card: #0e2947;
+    --nav-bg: rgba(11, 31, 51, .82);
+    --code-bg: #081827;
+    --code-line: #103a5e;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+    margin: 0;
+    font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, kbd { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+.wrap { max-width: 80rem; margin: 0 auto; padding: 0 2rem; }
+
+nav.top {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: var(--nav-bg);
+    border-bottom: 1px solid var(--line);
+}
+nav.top .wrap {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding-top: .75rem;
+    padding-bottom: .75rem;
+}
+.brand {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    font-weight: 700;
+    font-size: 1.18rem;
+    letter-spacing: -.02em;
+}
+.brand:hover { text-decoration: none; }
+.brand img { height: 1.5rem; width: auto; display: block; }
+.brand .w1 { color: var(--accent); }
+.brand .w2 { color: var(--ink); }
+nav.top a.link {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: .95rem;
+    padding-bottom: .1rem;
+    border-bottom: 2px solid transparent;
+}
+nav.top a.link:hover { color: var(--ink); text-decoration: none; }
+nav.top a.link.active { color: var(--accent); border-bottom-color: var(--accent); }
+nav.top .spacer { flex: 1; }
+nav.top .links { display: flex; gap: 1.5rem; align-items: baseline; }
+button.menu {
+    display: none;
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--muted);
+    padding: .4rem .5rem;
+    cursor: pointer;
+    align-items: center;
+}
+button.menu:hover { color: var(--ink); border-color: var(--accent); }
+button.menu svg { width: 1.15rem; height: 1.15rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* Móvil: los enlaces colapsan a un desplegable bajo la barra; GitHub y el tema se quedan. */
+@media (max-width: 56rem) {
+    nav.top .links {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+        padding: .3rem 1.5rem .9rem;
+        box-shadow: 0 18px 40px rgba(8, 24, 39, .25);
+    }
+    nav.top.open .links { display: flex; }
+    nav.top .links a.link {
+        padding: .65rem 0;
+        font-size: 1.05rem;
+        border-bottom: 1px solid var(--line);
+    }
+    nav.top .links a.link:last-child { border-bottom: none; }
+    nav.top .links a.link.active { border-bottom-color: var(--line); }
+    button.menu { display: flex; }
+}
+/* El selector de tema: en la barra en escritorio, dentro del desplegable en móvil (hay un
+   grupo en cada sitio; el JS los sincroniza todos). */
+nav.top .links .theme { display: none; }
+@media (max-width: 56rem) {
+    nav.top .wrap > .theme { display: none; }
+    nav.top .links .theme { display: flex; margin-top: .9rem; align-self: flex-start; }
+}
+nav.top a.gh { display: flex; align-items: center; color: var(--muted); }
+nav.top a.gh:hover { color: var(--ink); }
+nav.top a.gh svg { width: 1.25rem; height: 1.25rem; fill: currentColor; }
+.theme {
+    display: flex;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    overflow: hidden;
+}
+.theme button {
+    background: none;
+    border: 0;
+    padding: .35rem .55rem;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+}
+.theme button svg { width: .95rem; height: .95rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.theme button.on { background: var(--bg-soft); color: var(--accent); }
+section[id] { scroll-margin-top: 4.2rem; }
+
+.grad {
+    background: linear-gradient(90deg, var(--accent), var(--aqua));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.btn {
+    display: inline-block;
+    padding: .65rem 1.3rem;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: .98rem;
+    border: 1px solid transparent;
+}
+.btn:hover { text-decoration: none; filter: brightness(1.08); }
+.btn.primary {
+    background: linear-gradient(135deg, #2b7ce0, #4ba3f5);
+    color: #ffffff;
+    box-shadow: 0 8px 24px rgba(43, 124, 224, .3);
+}
+.btn.ghost { border-color: var(--line); color: var(--ink); }
+.btn.ghost:hover { border-color: var(--accent); }
+
+.window {
+    background: var(--code-bg);
+    border: 1px solid var(--code-line);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(8, 24, 39, .38);
+}
+.window .bar {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    padding: .65rem .9rem;
+    border-bottom: 1px solid var(--code-line);
+}
+.window .bar i {
+    width: .72rem;
+    height: .72rem;
+    border-radius: 50%;
+    display: inline-block;
+}
+.window .bar i.r { background: #ff5f57; }
+.window .bar i.y { background: #febc2e; }
+.window .bar i.g { background: #28c840; }
+.window .bar span {
+    margin-left: .6rem;
+    color: #6b87a3;
+    font-size: .82rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.window pre {
+    margin: 0;
+    padding: 1.1rem 1.25rem;
+    overflow-x: auto;
+    font-size: .9rem;
+    line-height: 1.7;
+}
+.window code { color: var(--code-ink); }
+.kw { color: #34d2c6; }
+.fn { color: #c7e4ff; }
+.ty { color: #4ba3f5; }
+.st { color: #a8e6e0; }
+.nu { color: #4ba3f5; }
+.cm { color: #6b87a3; font-style: italic; }
+.pr { color: #34d2c6; }
+
+section h2.sec {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    letter-spacing: -.02em;
+    margin: 0 0 .4rem;
+}
+section p.lead { color: var(--muted); margin: 0 0 1.6rem; max-width: 64rem; }
+
+article.doc { padding: 2.5rem 0 4rem; }
+article.doc .wrap { max-width: 64rem; }
+article.doc h1 { font-size: 2rem; letter-spacing: -.02em; }
+article.doc h2 {
+    margin-top: 2.5rem;
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--line);
+    letter-spacing: -.01em;
+}
+article.doc pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border: 1px solid var(--code-line);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    font-size: .88rem;
+}
+article.doc p code, article.doc li code, article.doc td code, article.doc h2 code, article.doc h3 code {
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    padding: .08rem .35rem;
+    border-radius: 5px;
+    font-size: .88em;
+}
+article.doc table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; }
+article.doc td, article.doc th { text-align: left; padding: .4rem .7rem; border: 1px solid var(--line); }
+article.doc blockquote {
+    border-left: 3px solid var(--accent);
+    margin: 1.2rem 0;
+    padding: .2rem 1.1rem;
+    color: var(--muted);
+    background: var(--bg-soft);
+    border-radius: 0 8px 8px 0;
+}
+
+/* La gráfica de benchmarks (site/bench_chart.ray): barras en CSS puro, generadas en build
+   desde la tabla real de benchmarks/poly/README.md. */
+.bench-chart {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+    gap: 1.2rem 2.4rem;
+}
+.bgroup h4 {
+    margin: 0 0 .3rem;
+    font-size: .95rem;
+    letter-spacing: -.01em;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+.bgroup h4 span { color: var(--muted); font-weight: 500; font-size: .8rem; font-family: "JetBrains Mono", ui-monospace, monospace; }
+.brow {
+    display: grid;
+    grid-template-columns: 4.6rem 1fr 4.2rem;
+    align-items: center;
+    gap: .6rem;
+    margin: .22rem 0;
+    font-size: .78rem;
+}
+.brow span, .brow b { color: var(--muted); font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 500; }
+.brow b { text-align: right; white-space: nowrap; }
+.brow i { display: block; height: .7rem; border-radius: 4px; background: var(--line); }
+.brow.ray i { background: linear-gradient(90deg, #2b7ce0, #34d2c6); }
+.brow.ray span, .brow.ray b { color: var(--accent); font-weight: 700; }
+.bench-note { color: var(--muted); font-size: .85rem; margin-top: 1.2rem; }
+
+footer.site {
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: .9rem;
+    padding: 2rem 0 2.5rem;
+    text-align: center;
+}
+footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
+</style>
+</head>
+<body>
+<nav class="top">
+    <div class="wrap">
+        <a class="brand" href="index.html"><img src="assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
+        <span class="spacer"></span>
+        <div class="links">
+        {% if page == "index" %}
+        <a class="link" href="#agentes" data-spy="agentes">LLMs</a>
+        <a class="link" href="#playground" data-spy="playground">Playground</a>
+        <a class="link" href="#ecosistema" data-spy="ecosistema">Ecosistema</a>
+        <a class="link" href="bench.html">Benchmarks</a>
+        <a class="link" href="spec.html">Especificación</a>
+        {% else %}
+        <a class="link" href="index.html#agentes">LLMs</a>
+        <a class="link" href="index.html#playground">Playground</a>
+        <a class="link" href="index.html#ecosistema">Ecosistema</a>
+        {% if page == "bench" %}
+        <a class="link active" href="bench.html">Benchmarks</a>
+        <a class="link" href="spec.html">Especificación</a>
+        {% else %}
+        <a class="link" href="bench.html">Benchmarks</a>
+        <a class="link active" href="spec.html">Especificación</a>
+        {% endif %}
+        {% endif %}
+        <div class="theme" role="group" aria-label="Tema">
+            <button type="button" data-mode="light" title="Tema claro" aria-label="Tema claro">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+            </button>
+            <button type="button" data-mode="system" title="Tema del sistema" aria-label="Tema del sistema">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M9 21h6M12 17v4"></path></svg>
+            </button>
+            <button type="button" data-mode="dark" title="Tema oscuro" aria-label="Tema oscuro">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"></path></svg>
+            </button>
+        </div>
+        </div>
+        <div class="theme" role="group" aria-label="Tema">
+            <button type="button" data-mode="light" title="Tema claro" aria-label="Tema claro">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+            </button>
+            <button type="button" data-mode="system" title="Tema del sistema" aria-label="Tema del sistema">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M9 21h6M12 17v4"></path></svg>
+            </button>
+            <button type="button" data-mode="dark" title="Tema oscuro" aria-label="Tema oscuro">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"></path></svg>
+            </button>
+        </div>
+        <button type="button" class="menu" aria-label="Abrir el menú" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+        </button>
+        <a class="gh" href="https://github.com/ray-language/raylang" aria-label="GitHub" title="GitHub">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        </a>
+    </div>
+</nav>
+{% block content %}
+{% endblock %}
+<footer class="site">
+    <div class="wrap">
+        <span>Identidad de marca (paleta océano, tipografías y Manta): el
+        <a href="https://github.com/ray-language/raylang/tree/main/assets/branding">manual de marca</a>
+        del repositorio</span>
+        <span>raylang — licencia MIT OR Apache-2.0 · <a href="https://github.com/ray-language/raylang">github.com/ray-language/raylang</a></span>
+        <span>Este sitio lo genera el propio lenguaje: <code>ray run site/site.ray</code></span>
+    </div>
+</footer>
+<script>
+// Selector de tema (claro / sistema / oscuro), persistido en localStorage.
+(function () {
+    var buttons = document.querySelectorAll(".theme button");
+    function current() {
+        var t = null;
+        try { t = localStorage.getItem("theme"); } catch (e) { }
+        return t === "light" || t === "dark" ? t : "system";
+    }
+    function apply(mode) {
+        if (mode === "system") {
+            document.documentElement.removeAttribute("data-theme");
+            try { localStorage.removeItem("theme"); } catch (e) { }
+        } else {
+            document.documentElement.setAttribute("data-theme", mode);
+            try { localStorage.setItem("theme", mode); } catch (e) { }
+        }
+        for (var i = 0; i < buttons.length; i++) {
+            buttons[i].classList.toggle("on", buttons[i].getAttribute("data-mode") === mode);
+        }
+    }
+    for (var i = 0; i < buttons.length; i++) {
+        buttons[i].addEventListener("click", function () { apply(this.getAttribute("data-mode")); });
+    }
+    apply(current());
+})();
+// Menú desplegable móvil: la hamburguesa abre/cierra los enlaces; elegir uno lo cierra.
+(function () {
+    var nav = document.querySelector("nav.top");
+    var btn = document.querySelector("button.menu");
+    if (!nav || !btn) { return; }
+    btn.addEventListener("click", function () {
+        var open = nav.classList.toggle("open");
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    var links = document.querySelectorAll("nav.top .links a");
+    for (var i = 0; i < links.length; i++) {
+        links[i].addEventListener("click", function () {
+            nav.classList.remove("open");
+            btn.setAttribute("aria-expanded", "false");
+        });
+    }
+})();
+// Scrollspy: marca en la nav la sección visible (solo en páginas con anclas espiadas).
+(function () {
+    var links = document.querySelectorAll("nav.top a.link[data-spy]");
+    if (links.length === 0) { return; }
+    var secs = [];
+    for (var i = 0; i < links.length; i++) {
+        var el = document.getElementById(links[i].getAttribute("data-spy"));
+        if (el) { secs.push([el, links[i]]); }
+    }
+    function update() {
+        var mark = -1;
+        for (var i = 0; i < secs.length; i++) {
+            if (secs[i][0].getBoundingClientRect().top <= 120) { mark = i; }
+        }
+        for (var i = 0; i < secs.length; i++) {
+            secs[i][1].classList.toggle("active", i === mark);
+        }
+    }
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    update();
+})();
+</script>
+</body>
+</html>

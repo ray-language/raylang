@@ -1,0 +1,22 @@
+{
+  "name": "raylang-playground-editor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CodeMirror 6 bundle for the raylang playground (built with esbuild; the bundle is committed like raylang.wasm)",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild editor.mjs --bundle --minify --format=iife --global-name=RayEditorBundle --outfile=../editor.bundle.js"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.6.0",
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/lint": "^6.8.0",
+    "@codemirror/state": "^6.4.0",
+    "@codemirror/view": "^6.34.0",
+    "@lezer/highlight": "^1.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

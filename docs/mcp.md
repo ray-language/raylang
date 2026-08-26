@@ -42,7 +42,9 @@ modelo antes de escribir la primera línea.
 propio binario (aislamiento por proceso; el stdout del invitado nunca toca el canal MCP) con
 los límites de embebido de M42:
 
-- **fuel**: 100 M de instrucciones de la VM (un bucle infinito muere por fuel, con error claro);
+- **fuel**: 100 M de instrucciones de la VM (un bucle infinito muere por fuel, con error claro;
+  `RAYLANG_MCP_FUEL` lo ajusta — lo usan los tests para que el corte por fuel gane siempre al
+  plazo de pared, también en builds debug lentos);
 - **heap**: 1 M de objetos vivos;
 - **plazo de pared**: 10 s con `kill` (para lo que no consume fuel: red, stdin bloqueado);
 - salida truncada a 64 KiB por flujo;

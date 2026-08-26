@@ -1,0 +1,151 @@
+// site/bench_chart.ray — la gráfica de benchmarks del sitio, GENERADA desde la tabla real
+// del banco poliglota (`benchmarks/poly/README.md`) vía std/markdown: una sola fuente de
+// verdad — re-medir y actualizar el README regenera el sitio, sin números copiados a mano.
+//
+// Busca la tabla de resultados (cabecera `Programa | native | vs node | …`) y emite barras
+// horizontales en CSS puro (sin JS): por programa, el tiempo relativo de rustc/go/node contra
+// el binario nativo (= 1×; barra más larga = más lento que raylang, más corta = nos gana).
+// La fecha/hardware sale del propio encabezado "## Resultados (…)". Salida determinista.
+
+import std/markdown;
+
+// Aplana las inlines de una celda a texto plano (sin marcas: `code`, **strong**, enlaces…).
+fn cell_text(cell: [markdown.Inline]) -> string {
+    var out = "";
+    for c in cell {
+        match (c) {
+            markdown.Inline.Text(t) => {
+                out = out + t;
+            },
+            markdown.Inline.Code(t) => {
+                out = out + t;
+            },
+            markdown.Inline.Strong(kids) => {
+                out = out + cell_text(kids);
+            },
+            markdown.Inline.Emph(kids) => {
+                out = out + cell_text(kids);
+            },
+            markdown.Inline.Link(kids, href) => {
+                out = out + cell_text(kids);
+            },
+            markdown.Inline.Image(alt, src) => { },
+        }
+    }
+    out
+}
+
+// El float inicial de un texto tipo "9.06×" / "27.3 ms 🥇" / "1.01× (empate)".
+fn leading_float(s: string) -> float {
+    var digits = "";
+    var done = false;
+    for c in s.chars() {
+        if (!done) {
+            let piece = to_string(c);
+            match ("0123456789.".index_of(piece)) {
+                Option.Some(i) => {
+                    digits = digits + piece;
+                },
+                Option.None => {
+                    if (digits.len() > 0) {
+                        done = true;
+                    }
+                },
+            }
+        }
+    }
+    match (digits.parse_float()) {
+        Option.Some(f) => f,
+        Option.None => 0.0,
+    }
+}
+
+// "3.28× lo que sea" → "3.28×" (el label original de la tabla, recortado en la ×).
+fn ratio_label(s: string) -> string {
+    match (s.index_of("×")) {
+        Option.Some(i) => s.substring(0, i + 1),
+        Option.None => s,
+    }
+}
+
+// "27.3 ms 🥇" → "27.3 ms".
+fn ms_label(s: string) -> string {
+    match (s.index_of("ms")) {
+        Option.Some(i) => s.substring(0, i + 2),
+        Option.None => s,
+    }
+}
+
+// El ancho de barra: 1× = 25%, tope en 4× = 100% (sortnums vs node se sale de la escala y
+// se trunca — el label sigue diciendo la cifra real).
+fn bar_width(ratio: float) -> int {
+    var capped = ratio;
+    if (capped > 4.0) {
+        capped = 4.0;
+    }
+    var pct = (capped * 25.0) as int;
+    if (pct < 3) {
+        pct = 3;
+    }
+    pct
+}
+
+fn bar_row(css: string, lang: string, width: int, label: string) -> string {
+    "<div class=\"brow " + css + "\"><span>" + lang + "</span><i style=\"width:" + to_string(
+        width
+    ) + "%\"></i><b>" + label + "</b></div>"
+}
+
+// Un grupo por programa: raylang (1×, referencia) + rustc/go/node relativos.
+fn group(name: string, native_ms: string, rust: string, go: string, node: string) -> string {
+    var out = "<div class=\"bgroup\"><h4>" + name + " <span>" + native_ms + "</span></h4>";
+    out = out + bar_row("ray", "raylang", 25, "1.00×");
+    out = out + bar_row("", "rustc -O", bar_width(leading_float(rust)), ratio_label(rust));
+    out = out + bar_row("", "go", bar_width(leading_float(go)), ratio_label(go));
+    out = out + bar_row("", "node", bar_width(leading_float(node)), ratio_label(node));
+    out + "</div>"
+}
+
+/// Builds the landing/bench chart from the polyglot benchmark README: bars per program with
+/// rustc/go/node times relative to the native raylang binary (1×), plus the measurement
+/// caption taken from the "## Resultados (…)" heading. Empty string if the table is missing.
+pub fn build(md: string) -> string {
+    let blocks = markdown.parse(md);
+    var caption = "";
+    var groups = "";
+    for b in blocks {
+        match (b) {
+            markdown.Block.Heading(level, inlines) => {
+                let t = cell_text(inlines);
+                if (t.starts_with("Resultados")) {
+                    caption = t;
+                }
+            },
+            markdown.Block.Table(aligns, header, rows) => {
+                // La tabla de resultados: `Programa | native | vs node | vs go | vs rustc -O | …`.
+                if (header.len() >= 5 && cell_text(header[1]) == "native") {
+                    for row in rows {
+                        if (row.len() >= 5) {
+                            groups = groups + group(
+                                cell_text(row[0]),
+                                ms_label(cell_text(row[1])),
+                                cell_text(row[4]),
+                                cell_text(row[3]),
+                                cell_text(row[2])
+                            );
+                        }
+                    }
+                }
+            },
+            _ => { },
+        }
+    }
+    if (groups.len() == 0) {
+        return "";
+    }
+    var note = "";
+    if (caption.len() > 0) {
+        note = "<p class=\"bench-note\">" + caption + " · el mismo output en todas las variantes, verificado por checksum · barra más larga = más lento que el binario nativo de raylang (1×), truncada en 4×.</p>";
+    }
+    "<div class=\"bench-chart\">" + groups + "</div>" + note
+}

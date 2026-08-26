@@ -40,102 +40,119 @@ pub fn run() {
 
 /// El bucle del servidor, parametrizado por los flujos para poder probarlo en memoria.
 ///
-/// Lee un mensaje, lo despacha por su `method` y, cuando corresponde, analiza el documento
-/// y publica diagnósticos. Termina al recibir `exit` o al cerrarse la entrada (EOF).
-///
-/// Guarda los documentos abiertos (M10.2b): una petición `hover`/`definition` trae solo la
-/// `uri` y la posición, no el texto, así que el servidor debe recordarlo.
+/// Lee un mensaje, lo despacha con [`handle_message`] y emite las respuestas. Termina al
+/// recibir `exit` o al cerrarse la entrada (EOF).
 fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
     let mut docs: HashMap<String, String> = HashMap::new();
     while let Some(raw) = read_message(reader) {
         let Ok(msg) = json::parse(&raw) else {
             continue; // mensaje ilegible: lo ignoramos (un servidor robusto no se cae)
         };
-        let method = msg.get("method").and_then(Json::as_str).unwrap_or("");
-        match method {
-            "initialize" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &initialize_response(id));
+        let (messages, quit) = handle_message(&mut docs, &msg);
+        for m in &messages {
+            send(out, m);
+        }
+        if quit {
+            break;
+        }
+    }
+}
+
+/// Despacha UN mensaje ya parseado sobre el estado de documentos abiertos y devuelve los
+/// mensajes a emitir (respuestas y/o `publishDiagnostics`) más si el cliente pidió terminar
+/// (`exit`). Es el corazón del servidor, **independiente del transporte**: lo comparten el
+/// bucle stdio ([`serve`]) y el punto de entrada WebAssembly del playground
+/// (`crate::wasm::lsp`), donde el "framing" lo pone el host JS.
+///
+/// Guarda los documentos abiertos (M10.2b): una petición `hover`/`definition` trae solo la
+/// `uri` y la posición, no el texto, así que el servidor debe recordarlo.
+pub(crate) fn handle_message(docs: &mut HashMap<String, String>, msg: &Json) -> (Vec<Json>, bool) {
+    let mut out: Vec<Json> = Vec::new();
+    let method = msg.get("method").and_then(Json::as_str).unwrap_or("");
+    match method {
+        "initialize" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(initialize_response(id));
+        }
+        // Notificación de cortesía tras initialize: no requiere respuesta.
+        "initialized" => {}
+        "shutdown" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, Json::Null));
+        }
+        "exit" => return (out, true),
+        "textDocument/didOpen" => {
+            if let Some((uri, text)) = open_params(msg) {
+                out.push(diagnostics(&uri, &text));
+                docs.insert(uri, text);
             }
-            // Notificación de cortesía tras initialize: no requiere respuesta.
-            "initialized" => {}
-            "shutdown" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, Json::Null));
+        }
+        "textDocument/didChange" => {
+            if let Some((uri, text)) = change_params(msg) {
+                out.push(diagnostics(&uri, &text));
+                docs.insert(uri, text);
             }
-            "exit" => break,
-            "textDocument/didOpen" => {
-                if let Some((uri, text)) = open_params(&msg) {
-                    send(out, &diagnostics(&uri, &text));
-                    docs.insert(uri, text);
-                }
+        }
+        "textDocument/didClose" => {
+            if let Some(uri) = close_uri(msg) {
+                docs.remove(&uri);
+                // Limpiamos los diagnósticos del editor con una lista vacía.
+                out.push(publish(&uri, vec![]));
             }
-            "textDocument/didChange" => {
-                if let Some((uri, text)) = change_params(&msg) {
-                    send(out, &diagnostics(&uri, &text));
-                    docs.insert(uri, text);
-                }
-            }
-            "textDocument/didClose" => {
-                if let Some(uri) = close_uri(&msg) {
-                    docs.remove(&uri);
-                    // Limpiamos los diagnósticos del editor con una lista vacía.
-                    send(out, &publish(&uri, vec![]));
-                }
-            }
-            // M10.2b: hover — el tipo del identificador bajo el cursor.
-            "textDocument/hover" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, hover_result(&msg, &docs)));
-            }
-            // M10.2b: ir-a-definición — salta del uso a su declaración.
-            "textDocument/definition" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, definition_result(&msg, &docs)));
-            }
-            // M10.2c-LSP (cluster 4): find-references — todos los usos (y la declaración).
-            "textDocument/references" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, references_result(&msg, &docs)));
-            }
-            // Cluster 4: rename — renombra el símbolo en todas sus apariciones.
-            "textDocument/rename" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, rename_result(&msg, &docs)));
-            }
-            // Cluster 4: completion — símbolos del documento + builtins + palabras clave.
-            "textDocument/completion" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, completion_result(&msg, &docs)));
-            }
-            // M10.2f: signature help — la firma de la función cuya llamada se está escribiendo.
-            "textDocument/signatureHelp" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, signature_help_result(&msg, &docs)));
-            }
-            // Formateo del documento — reusa el formateador de `ray fmt` (`fmt::format_source`).
-            "textDocument/formatting" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, formatting_result(&msg, &docs)));
-            }
-            // Outline / "ir a símbolo en el archivo": los ítems de nivel superior del documento.
-            "textDocument/documentSymbol" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, document_symbol_result(&msg, &docs)));
-            }
-            // Resaltar todas las apariciones del símbolo bajo el cursor (reusa `symbol_occurrences`).
-            "textDocument/documentHighlight" => {
-                let id = msg.get("id").cloned().unwrap_or(Json::Null);
-                send(out, &result_message(id, document_highlight_result(&msg, &docs)));
-            }
-            // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
-            _ => {
-                if let Some(id) = msg.get("id") {
-                    send(out, &method_error(id.clone(), method));
-                }
+        }
+        // M10.2b: hover — el tipo del identificador bajo el cursor.
+        "textDocument/hover" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, hover_result(msg, docs)));
+        }
+        // M10.2b: ir-a-definición — salta del uso a su declaración.
+        "textDocument/definition" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, definition_result(msg, docs)));
+        }
+        // M10.2c-LSP (cluster 4): find-references — todos los usos (y la declaración).
+        "textDocument/references" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, references_result(msg, docs)));
+        }
+        // Cluster 4: rename — renombra el símbolo en todas sus apariciones.
+        "textDocument/rename" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, rename_result(msg, docs)));
+        }
+        // Cluster 4: completion — símbolos del documento + builtins + palabras clave.
+        "textDocument/completion" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, completion_result(msg, docs)));
+        }
+        // M10.2f: signature help — la firma de la función cuya llamada se está escribiendo.
+        "textDocument/signatureHelp" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, signature_help_result(msg, docs)));
+        }
+        // Formateo del documento — reusa el formateador de `ray fmt` (`fmt::format_source`).
+        "textDocument/formatting" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, formatting_result(msg, docs)));
+        }
+        // Outline / "ir a símbolo en el archivo": los ítems de nivel superior del documento.
+        "textDocument/documentSymbol" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, document_symbol_result(msg, docs)));
+        }
+        // Resaltar todas las apariciones del símbolo bajo el cursor (reusa `symbol_occurrences`).
+        "textDocument/documentHighlight" => {
+            let id = msg.get("id").cloned().unwrap_or(Json::Null);
+            out.push(result_message(id, document_highlight_result(msg, docs)));
+        }
+        // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
+        _ => {
+            if let Some(id) = msg.get("id") {
+                out.push(method_error(id.clone(), method));
             }
         }
     }
+    (out, false)
 }
 
 #[cfg(test)]

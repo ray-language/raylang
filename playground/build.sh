@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 # M44a-3: construye el .wasm del playground (release) y lo deja junto a index.html.
 # Si `wasm-opt` (binaryen) está instalado, reduce aún más el tamaño (-Oz).
+# IDEAS §74: también empaqueta el editor real (CodeMirror 6) con npm/esbuild.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -14,6 +15,13 @@ if command -v wasm-opt >/dev/null 2>&1; then
   wasm-opt -Oz playground/raylang.wasm -o playground/raylang.wasm
 else
   echo "  (wasm-opt no encontrado; instala 'binaryen' para reducir el tamaño)"
+fi
+
+if command -v npm >/dev/null 2>&1; then
+  echo "→ editor.bundle.js (CodeMirror 6, esbuild)…"
+  (cd playground/editor && npm install --no-audit --no-fund --silent && npm run --silent build)
+else
+  echo "  (npm no encontrado; el editor real no se puede construir — instala node/npm)"
 fi
 
 echo "✓ playground/raylang.wasm ($(du -h playground/raylang.wasm | cut -f1))"

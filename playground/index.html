@@ -13,18 +13,38 @@
   /* Colores de marca raylang: azul primario #2B7CE0, navy #0B1F33, acentos. */
   :root { color-scheme: dark; --bg:#0b1622; --panel:#0e1c2e; --border:#1e3454; --fg:#e6edf3; --accent:#2B7CE0; --muted:#8fa6c4; }
   * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.5 "Space Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--fg); }
+  body { margin:0; font:14px/1.5 "Space Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--fg);
+    display:flex; flex-direction:column; height:100vh; }
   header { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); }
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header .tag { color:var(--muted); font-size:12px; }
   header .sp { flex:1; }
   button { background:var(--accent); color:#04122a; border:0; border-radius:6px; padding:7px 16px; font-weight:600; cursor:pointer; font-size:14px; }
   button:disabled { opacity:.5; cursor:default; }
-  main { display:grid; grid-template-columns:212px 1fr 1fr; gap:1px; background:var(--border); height:calc(100vh - 54px); }
-  /* En móvil: el explorador se mantiene a la izquierda (más angosto) y el editor/salida se apilan. */
-  @media (max-width:820px){ main{ grid-template-columns:128px 1fr; grid-template-rows:1fr 1fr; }
-    .sidebar{ grid-row:1 / span 2; }
-    .file{ padding:6px 8px 6px 12px; font-size:12px; } .file span{ overflow:hidden; text-overflow:ellipsis; } }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--border);
+    font-family:"JetBrains Mono",ui-monospace,monospace; }
+  button.ghost:hover:enabled { color:var(--fg); border-color:var(--accent); }
+  main { display:grid; grid-template-columns:212px 1fr 1fr; gap:1px; background:var(--border); flex:1; min-height:0; }
+  #files-btn { display:none; }
+  /* En móvil: editor/salida apilados a todo lo ancho; el explorador COLAPSA en un dropdown
+     compacto anclado al botón de archivos del header (no un panel a pantalla completa: el
+     playground vive también dentro de un iframe en la landing). El header queda mínimo. */
+  @media (max-width:820px){
+    body { position:relative; }
+    main { grid-template-columns:1fr; grid-template-rows:1fr 1fr; }
+    /* aside.sidebar > .sidebar en especificidad: la regla base (display:flex) va DESPUÉS
+       en la hoja y con un selector de igual peso ganaría al cerrar el dropdown. */
+    aside.sidebar { display:none; }
+    body.files-open aside.sidebar {
+      display:flex; position:absolute; top:50px; left:10px; z-index:30;
+      width:13rem; max-height:min(60%, 21rem); overflow:auto;
+      border:1px solid var(--border); border-radius:10px;
+      box-shadow:0 18px 50px rgba(0,0,0,.55);
+    }
+    #files-btn { display:flex; }
+    #status, #fmt, header h1 { display:none; }
+    #run .kbd { display:none; }
+  }
   .pane { background:var(--panel); display:flex; flex-direction:column; min-width:0; min-height:0; }
   /* Panel lateral de "archivos" (tipo explorador de un editor). */
   .sidebar { background:#0a131f; display:flex; flex-direction:column; min-height:0; overflow:auto; padding:6px 0; }
@@ -38,24 +58,12 @@
   .file:hover { background:rgba(43,124,224,.10); }
   .file.active { background:rgba(43,124,224,.18); border-left-color:var(--accent); color:#fff; }
   .pane .label { padding:6px 14px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--border); text-transform:uppercase; letter-spacing:.04em; }
-  /* Editor con resaltado por OVERLAY: un <textarea> transparente (edición nativa: caret, selección) encima
-     de un <pre> coloreado; se sincroniza el scroll. Ambas capas comparten métricas EXACTAS (mono → alinea). */
-  .editor { position:relative; flex:1; min-height:0; overflow:hidden; }
-  .editor > pre, .editor > textarea {
-    position:absolute; inset:0; margin:0; border:0; padding:14px;
-    font:13px/1.5 "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
-    tab-size:4; white-space:pre; overflow-wrap:normal; }
-  .editor > pre { color:#c9d1d9; background:transparent; pointer-events:none; overflow:hidden; }
-  .editor > textarea { color:transparent; background:transparent; caret-color:var(--fg);
-    resize:none; outline:none; overflow:auto; }
+  /* El editor REAL (CodeMirror 6, editor.bundle.js) con el LSP de raylang corriendo en el wasm. */
+  #editor { flex:1; min-height:0; overflow:hidden; }
+  #editor .cm-editor { height:100%; }
   /* Salida */
   #out { flex:1; margin:0; padding:14px; color:#c9d1d9; overflow:auto; white-space:pre-wrap;
     font:13px/1.5 "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; }
-  /* Tokens (tema oscuro sobre el navy de marca). */
-  .tok-kw{color:#c9a3ff} .tok-ty{color:#5bacf7} .tok-str{color:#7ee787} .tok-num{color:#f0a868}
-  .tok-const{color:#f0a868}  /* constantes SCREAMING_SNAKE (PI, MAX_…), como los números */
-  .tok-com{color:#6b7f99;font-style:italic} .tok-fn{color:#79c0ff} .tok-lit{color:#f0a868} .tok-ann{color:#e3b341}
-  .tok-idelim{color:#8fa6c4}  /* delimitadores ${ } de interpolación */
   .status { color:var(--muted); font-size:12px; }
 </style>
 </head>
@@ -67,9 +75,13 @@
     <path d="M107 55 C110 45 112 38 113 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/>
   </svg>
   <h1>raylang <span class="tag">· playground</span></h1>
+  <button id="files-btn" class="ghost" type="button" aria-label="Archivos" title="Archivos">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
+  </button>
   <span class="sp"></span>
   <span class="status" id="status">cargando…</span>
-  <button id="run" disabled>▶ Ejecutar (⌘/Ctrl+Enter)</button>
+  <button id="fmt" class="ghost" disabled title="Formatear (Shift+Alt+F)">fmt</button>
+  <button id="run" disabled>▶ Ejecutar <span class="kbd">(⌘/Ctrl+Enter)</span></button>
 </header>
 <main>
   <aside class="sidebar">
@@ -78,10 +90,7 @@
   </aside>
   <div class="pane">
     <div class="label" id="filelabel">fib.ray</div>
-    <div class="editor">
-      <pre aria-hidden="true"><code id="hl"></code></pre>
-      <textarea id="src" spellcheck="false" wrap="off" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
-    </div>
+    <div id="editor"></div>
   </div>
   <div class="pane">
     <div class="label">salida</div>
@@ -89,9 +98,12 @@
   </div>
 </main>
 
+<script src="editor.bundle.js"></script>
 <script type="module">
-// M44a-3: glue del playground. ABI cruda contra el .wasm de raylang (sin wasm-bindgen): alloc → escribir
-// el fuente → run(ptr,len) → u64 empaquetado (ptr<<32|len) → leer la salida → dealloc.
+// M44a-3 + IDEAS §74: glue del playground. ABI cruda contra el .wasm de raylang (sin wasm-bindgen):
+// alloc → escribir bytes → run/lsp(ptr,len) → u64 empaquetado (ptr<<32|len) → leer → dealloc.
+// El editor es CodeMirror 6 (editor.bundle.js) y el LSP REAL de raylang corre dentro del wasm
+// (`lsp::handle_message`): diagnósticos en vivo, autocompletado y hover, como en tu editor.
 const EJEMPLOS = {
   "fib": `fn fib(n: int) -> int {
     if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
@@ -217,73 +229,164 @@ fn main() -> int {
 };
 
 const $ = (id) => document.getElementById(id);
-const srcEl = $("src"), outEl = $("out"), runEl = $("run"), statusEl = $("status"), hlEl = $("hl"),
-      filesEl = $("files"), fileLabelEl = $("filelabel");
+const outEl = $("out"), runEl = $("run"), fmtEl = $("fmt"), statusEl = $("status"), filesEl = $("files"), fileLabelEl = $("filelabel");
 
-// --- Resaltado de sintaxis de raylang (a mano, cero deps) ---
-// Un scanner tokeniza el fuente (robusto ante comentarios/strings) y emite <span> por token. Las
-// palabras clave y tipos primitivos son los del lexer real (src/token.rs); un identificador con mayúscula
-// inicial se trata como tipo/enum, y uno seguido de '(' como función.
-const KW  = new Set("fn let var const if else while for in match return struct enum trait impl import from as pub dyn extern spawn".split(" "));
-const TY  = new Set("int float bool string char bytes ptr unit".split(" "));
-const LIT = new Set("true false".split(" "));
-function esc(s){ return s.replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c])); }
-function span(cls, s){ return `<span class="${cls}">${esc(s)}</span>`; }
-// Una cadena "..." con interpolación: las partes literales van en verde y cada ${expr} se resalta como
-// CÓDIGO embebido (recursivo, vía highlight). Los delimitadores ${ } se marcan aparte. `\` escapa (incl.
-// `\${` como un `${` literal, que así NO abre interpolación). Devuelve [html, índice tras la comilla].
-function hlString(code, i){
-  const n = code.length; let j = i + 1, out = "", lit = code[i];
-  while (j < n) {
-    const c = code[j];
-    if (c === "\\") { lit += c + (code[j+1] ?? ""); j += 2; continue; }   // escape: 2 caracteres
-    if (c === '"') { lit += c; j++; break; }                              // comilla de cierre
-    if (c === "$" && code[j+1] === "{") {
-      if (lit) { out += span("tok-str", lit); lit = ""; }
-      let d = 1, k = j + 2;                                               // balancea llaves anidadas
-      while (k < n && d > 0) { const ch = code[k]; if (ch === "{") d++; else if (ch === "}") { d--; if (d === 0) break; } k++; }
-      out += span("tok-idelim", "${") + highlight(code.slice(j + 2, k)) + (code[k] === "}" ? span("tok-idelim", "}") : "");
-      j = code[k] === "}" ? k + 1 : k;
-      continue;
-    }
-    lit += c; j++;
-  }
-  if (lit) out += span("tok-str", lit);
-  return [out, j];
-}
-function highlight(code){
-  let out = "", i = 0; const n = code.length;
-  const isIdStart = c => /[A-Za-z_]/.test(c), isId = c => /[A-Za-z0-9_]/.test(c);
-  const scanStr = (j, q) => { j++; while (j < n && code[j] !== q) { if (code[j] === "\\") j++; j++; } return j + 1; };
-  while (i < n) {
-    const c = code[i];
-    if (c === "/" && code[i+1] === "/") { let j = i; while (j < n && code[j] !== "\n") j++; out += span("tok-com", code.slice(i, j)); i = j; }
-    else if (c === '"') { const [h, j] = hlString(code, i); out += h; i = j; }
-    else if (c === "b" && code[i+1] === '"') { const j = scanStr(i+1, '"'); out += span("tok-str", code.slice(i, j)); i = j; }
-    else if (c === "'") { const j = scanStr(i, "'"); out += span("tok-str", code.slice(i, j)); i = j; }
-    else if (c === "@") { let j = i+1; while (j < n && isId(code[j])) j++; out += span("tok-ann", code.slice(i, j)); i = j; }
-    else if (/[0-9]/.test(c)) { let j = i; while (j < n && /[0-9._eExXa-fA-F]/.test(code[j])) j++; out += span("tok-num", code.slice(i, j)); i = j; }
-    else if (isIdStart(c)) {
-      let j = i; while (j < n && isId(code[j])) j++; const w = code.slice(i, j);
-      let k = j; while (k < n && /\s/.test(code[k])) k++;
-      let cls = KW.has(w) ? "tok-kw" : TY.has(w) ? "tok-ty" : LIT.has(w) ? "tok-lit"
-              : (w === "self" || w === "Self") ? "tok-kw"
-              : /^[A-Z][A-Z0-9_]*[A-Z0-9]$/.test(w) ? "tok-const"  // SCREAMING (2+): PI, MAX_INTENTOS
-              : /^[A-Z]/.test(w) ? "tok-ty"
-              : code[k] === "(" ? "tok-fn" : null;
-      out += cls ? span(cls, w) : esc(w); i = j;
-    }
-    else { out += esc(c); i++; }
-  }
-  return out;
-}
-function render(){
-  hlEl.innerHTML = highlight(srcEl.value);
-  hlEl.parentNode.scrollTop = srcEl.scrollTop;
-  hlEl.parentNode.scrollLeft = srcEl.scrollLeft;
-}
-
+// --- ABI wasm compartida por run y lsp ---
 let wasm = null;
+function wasmCall(fn, text) {
+  const { memory, alloc, dealloc } = wasm;
+  const enc = new TextEncoder().encode(text);
+  const p = alloc(enc.length);
+  new Uint8Array(memory.buffer, p, enc.length).set(enc);
+  const packed = fn(p, enc.length);               // BigInt (u64)
+  const ptr = Number(packed >> 32n), len = Number(packed & 0xffffffffn);
+  const salida = new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len));
+  dealloc(ptr, len);
+  return salida;
+}
+
+// --- Cliente LSP: habla JSON-RPC con el servidor de dentro del wasm (sin framing: la llamada
+// ES el transporte). Cada envío devuelve el array de mensajes que el servidor emitió. ---
+const URI = "file:///playground/main.ray";
+let reqId = 0, docVersion = 0;
+function lspSend(msg) {
+  if (!wasm || !wasm.lsp) return [];
+  try { return JSON.parse(wasmCall(wasm.lsp, JSON.stringify(msg))); } catch { return []; }
+}
+function lspRoute(m) {
+  if (m.method === "textDocument/publishDiagnostics" && m.params && m.params.uri === URI) {
+    aplicarDiagnosticos(m.params.diagnostics || []);
+  }
+}
+function lspRequest(method, params) {
+  const id = ++reqId;
+  let result = null;
+  for (const m of lspSend({ jsonrpc: "2.0", id, method, params })) {
+    if (m.id === id) result = m.result; else lspRoute(m);
+  }
+  return result;
+}
+function lspNotify(method, params) {
+  for (const m of lspSend({ jsonrpc: "2.0", method, params })) lspRoute(m);
+}
+
+// --- El editor (CodeMirror 6) conectado al LSP ---
+function aplicarDiagnosticos(diags) {
+  RayEditor.setDiagnostics(view, diags.map((d) => ({
+    from: RayEditor.posToOffset(view, d.range.start.line, d.range.start.character),
+    to: RayEditor.posToOffset(view, d.range.end.line, d.range.end.character),
+    severity: d.severity === 2 ? "warning" : "error",
+    message: d.message,
+  })));
+}
+// LSP snippet → snippet de CM: `$0` (cursor final) → `${}`; `$n` pelado → `${n}`.
+function convertirSnippet(s) {
+  return s.replace(/\$0/g, "${}").replace(/\$([0-9]+)/g, "${$1}");
+}
+const TIPO_COMPLETION = { 2: "method", 3: "function", 5: "property", 6: "variable", 7: "class",
+  8: "interface", 13: "enum", 14: "keyword", 15: "text", 20: "enum", 21: "constant", 22: "class", 25: "type" };
+function completarConLsp(ctx) {
+  if (!wasm) return null;
+  const palabra = ctx.matchBefore(/[A-Za-z_][A-Za-z0-9_]*$/);
+  const punto = ctx.matchBefore(/\.[A-Za-z_]?[A-Za-z0-9_]*$/);
+  if (!palabra && !punto && !ctx.explicit) return null;
+  const pos = RayEditor.offsetToPos(view, ctx.pos);
+  const res = lspRequest("textDocument/completion", { textDocument: { uri: URI }, position: pos });
+  const items = Array.isArray(res) ? res : (res && res.items) || [];
+  if (!items.length) return null;
+  return {
+    from: palabra ? palabra.from : ctx.pos,
+    options: items.map((it) => {
+      const o = { label: it.label, type: TIPO_COMPLETION[it.kind] || "text" };
+      if (it.detail) o.detail = it.detail;
+      const doc = it.documentation && (it.documentation.value || it.documentation);
+      if (typeof doc === "string" && doc) o.info = doc;
+      if (it.insertTextFormat === 2 && it.insertText) o.apply = RayEditor.snippet(convertirSnippet(it.insertText));
+      else if (it.insertText) o.apply = it.insertText;
+      return o;
+    }),
+  };
+}
+function hoverConLsp(v, pos) {
+  if (!wasm) return null;
+  const p = RayEditor.offsetToPos(v, pos);
+  const res = lspRequest("textDocument/hover", { textDocument: { uri: URI }, position: p });
+  if (!res || !res.contents) return null;
+  const c = res.contents;
+  const texto = typeof c === "string" ? c : (c.value || (Array.isArray(c) ? c.map((x) => x.value || x).join("\n") : ""));
+  if (!texto) return null;
+  let desde = pos, hasta = pos;
+  if (res.range) {
+    desde = RayEditor.posToOffset(v, res.range.start.line, res.range.start.character);
+    hasta = RayEditor.posToOffset(v, res.range.end.line, res.range.end.character);
+  }
+  // El hover del LSP llega como markdown con cerca de código: la pelamos para el tooltip plano.
+  return { pos: desde, end: hasta, text: texto.replace(/```[a-z]*\n?/g, "").trim() };
+}
+
+// Formateo del documento: reusa el `ray fmt` que sirve el LSP (TextEdits sobre offsets).
+function formatear() {
+  if (!wasm) return;
+  const res = lspRequest("textDocument/formatting", {
+    textDocument: { uri: URI },
+    options: { tabSize: 4, insertSpaces: true },
+  });
+  if (!Array.isArray(res) || !res.length) return;   // p. ej. el fuente aún no parsea
+  RayEditor.applyTextEdits(view, res.map((e) => ({
+    from: RayEditor.posToOffset(view, e.range.start.line, e.range.start.character),
+    to: RayEditor.posToOffset(view, e.range.end.line, e.range.end.character),
+    insert: e.newText,
+  })));
+}
+
+// Signature help: al mover el cursor / escribir, se consulta la firma de la llamada en curso;
+// el servidor devuelve null fuera de una llamada → se oculta el tooltip.
+let firmaTimer = null;
+function actualizarFirma(v) {
+  clearTimeout(firmaTimer);
+  firmaTimer = setTimeout(() => {
+    if (!wasm) return;
+    const off = v.state.selection.main.head;
+    const res = lspRequest("textDocument/signatureHelp", {
+      textDocument: { uri: URI },
+      position: RayEditor.offsetToPos(v, off),
+    });
+    const sig = res && res.signatures && res.signatures[res.activeSignature || 0];
+    if (!sig) { RayEditor.signatureHide(v); return; }
+    let a0 = -1, a1 = -1;
+    const idx = res.activeParameter !== undefined ? res.activeParameter : sig.activeParameter;
+    const par = sig.parameters && idx !== undefined && sig.parameters[idx];
+    if (par) {
+      if (Array.isArray(par.label)) { a0 = par.label[0]; a1 = par.label[1]; }
+      else if (typeof par.label === "string") {
+        const i = sig.label.indexOf(par.label);
+        if (i >= 0) { a0 = i; a1 = i + par.label.length; }
+      }
+    }
+    RayEditor.signatureShow(v, off, sig.label, a0, a1);
+  }, 120);
+}
+
+let sincronizar = null;   // debounce del didChange
+const view = RayEditor.create($("editor"), {
+  doc: "",
+  onChange: (texto) => {
+    clearTimeout(sincronizar);
+    sincronizar = setTimeout(() => {
+      docVersion += 1;
+      lspNotify("textDocument/didChange", {
+        textDocument: { uri: URI, version: docVersion },
+        contentChanges: [{ text: texto }],
+      });
+    }, 150);
+  },
+  onCursor: actualizarFirma,
+  completion: completarConLsp,
+  hover: hoverConLsp,
+  run: () => ejecutar(),
+  format: formatear,
+});
+
 async function cargar() {
   try {
     // `instantiateStreaming` necesita MIME `application/wasm`; si falla (p. ej. file://), cae a ArrayBuffer.
@@ -295,8 +398,16 @@ async function cargar() {
       mod = await WebAssembly.instantiate(bytes, {});
     }
     wasm = mod.instance.exports;
-    statusEl.textContent = "listo";
+    // Arranca el LSP embebido y abre el documento actual.
+    lspRequest("initialize", { processId: null, rootUri: null, capabilities: {} });
+    lspNotify("initialized", {});
+    docVersion = 1;
+    lspNotify("textDocument/didOpen", {
+      textDocument: { uri: URI, languageId: "raylang", version: docVersion, text: RayEditor.getDoc(view) },
+    });
+    statusEl.textContent = "listo · LSP activo";
     runEl.disabled = false;
+    fmtEl.disabled = false;
   } catch (e) {
     statusEl.textContent = "no se pudo cargar raylang.wasm — sírvelo por HTTP (ver README)";
     outEl.textContent = String(e);
@@ -305,14 +416,7 @@ async function cargar() {
 
 function ejecutar() {
   if (!wasm) return;
-  const { memory, alloc, run, dealloc } = wasm;
-  const enc = new TextEncoder().encode(srcEl.value);
-  const p = alloc(enc.length);
-  new Uint8Array(memory.buffer, p, enc.length).set(enc);
-  const packed = run(p, enc.length);              // BigInt (u64)
-  const ptr = Number(packed >> 32n), len = Number(packed & 0xffffffffn);
-  const salida = new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len));
-  dealloc(ptr, len);
+  const salida = wasmCall(wasm.run, RayEditor.getDoc(view));
   outEl.textContent = salida || "(sin salida)";
 }
 
@@ -326,13 +430,13 @@ const ARCHIVOS = [
 const ICONO = `<svg width="14" height="13" viewBox="0 20 200 184"><path d="M100 50 C108 49 113 53 115 60 C150 66 175 84 191 116 C166 127 141 137 119 150 C111 154 105 159 100 165 C95 159 89 154 81 150 C59 137 34 127 9 116 C25 84 50 66 85 60 C87 53 92 49 100 50 Z" fill="#2B7CE0"/><path d="M93 55 C90 45 88 38 87 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/><path d="M107 55 C110 45 112 38 113 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/></svg>`;
 let archivoActivo = null;
 function abrirArchivo(nombre, clave, li) {
-  srcEl.value = EJEMPLOS[clave];
-  render();
+  RayEditor.setDoc(view, EJEMPLOS[clave]);      // dispara onChange → didChange → diagnósticos
   outEl.textContent = "";                 // limpia la salida al cambiar de archivo
   fileLabelEl.textContent = nombre;
   if (archivoActivo) archivoActivo.classList.remove("active");
   li.classList.add("active");
   archivoActivo = li;
+  document.body.classList.remove("files-open");   // en móvil, elegir cierra el drawer
 }
 let primerLi = null;
 for (const [nombre, clave] of ARCHIVOS) {
@@ -345,17 +449,12 @@ for (const [nombre, clave] of ARCHIVOS) {
 }
 
 runEl.onclick = ejecutar;
-// Re-resaltar al escribir; sincronizar el scroll de la capa coloreada con el textarea.
-srcEl.addEventListener("input", render);
-srcEl.addEventListener("scroll", () => { hlEl.parentNode.scrollTop = srcEl.scrollTop; hlEl.parentNode.scrollLeft = srcEl.scrollLeft; });
-// Tab inserta 4 espacios (indentación) en vez de mover el foco.
-srcEl.addEventListener("keydown", (e) => {
-  if (e.key === "Tab") {
-    e.preventDefault();
-    const s = srcEl.selectionStart, t = srcEl.selectionEnd;
-    srcEl.value = srcEl.value.slice(0, s) + "    " + srcEl.value.slice(t);
-    srcEl.selectionStart = srcEl.selectionEnd = s + 4;
-    render();
+fmtEl.onclick = formatear;
+$("files-btn").onclick = (e) => { e.stopPropagation(); document.body.classList.toggle("files-open"); };
+// Tocar fuera del dropdown de archivos lo cierra (solo aplica en móvil).
+document.addEventListener("click", (e) => {
+  if (document.body.classList.contains("files-open") && !e.target.closest(".sidebar")) {
+    document.body.classList.remove("files-open");
   }
 });
 document.addEventListener("keydown", (e) => {

@@ -1,0 +1,700 @@
+{% params title: string, page: string, bench: string %}
+{% extends layout %}
+{% block content %}
+<style>
+.hero { padding: 4.5rem 0 3rem; }
+.hero .wrap {
+    display: grid;
+    grid-template-columns: 1fr 1.05fr;
+    gap: 3.5rem;
+    align-items: center;
+}
+@media (max-width: 60rem) {
+    .hero .wrap { grid-template-columns: 1fr; }
+}
+/* Los hijos de grid/flex que envuelven código scrolleable deben poder ENCOGER (min-width
+   auto los deja desbordar el viewport en móvil): el scroll ocurre dentro de la caja. */
+.hero .wrap > div, .agents .duo > div, .step > div, .bgroup { min-width: 0; }
+.cmd code { min-width: 0; }
+/* Tres mini-chips en vez de una píldora larga: envuelven de a uno en pantallas angostas
+   (una píldora multilínea con radio 999px se veía desproporcionada). */
+.badges { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.2rem; }
+.badge {
+    display: inline-block;
+    font-size: .78rem;
+    font-weight: 600;
+    color: var(--accent);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: .22rem .75rem;
+    background: var(--bg-soft);
+    white-space: nowrap;
+}
+.hero h1 {
+    font-size: clamp(2.4rem, 5vw, 3.8rem);
+    line-height: 1.06;
+    letter-spacing: -.03em;
+    margin: 0 0 1rem;
+}
+.hero p.sub { color: var(--muted); font-size: 1.12rem; max-width: 36rem; margin: 0 0 1.6rem; }
+.cta { display: flex; gap: .8rem; flex-wrap: wrap; }
+@media (max-width: 44rem) {
+    .cta .btn { flex: 1 1 auto; text-align: center; padding: .65rem 1rem; }
+}
+/* La galería de ejemplos: altura FIJA (la del ejemplo más largo) para que rotar o re-tipear
+   nunca mueva la página; el "fantasma" queda como fallback sin JS. El tipeo va encima. */
+.window pre.typing { position: relative; height: 28.5rem; overflow: auto; }
+.window pre.typing #typed { position: absolute; top: 1.1rem; left: 1.25rem; right: 1.25rem; }
+.window .bar .tabs { display: flex; gap: .1rem; margin-left: .6rem; overflow-x: auto; }
+.window .bar .tab {
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: #6b87a3;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .78rem;
+    padding: .5rem .65rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.window .bar .tab:hover { color: #a8c7e8; }
+.window .bar .tab.on { color: #eaf4fb; border-bottom-color: #4ba3f5; }
+.cur {
+    display: inline-block;
+    width: .55em;
+    height: 1.1em;
+    background: #4ba3f5;
+    vertical-align: text-bottom;
+    animation: blink 1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+section.install { padding: 2rem 0 2.5rem; }
+.install .panel {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--bg-soft);
+    padding: 2.2rem 2.4rem;
+}
+@media (max-width: 44rem) {
+    .install .panel { padding: 1.4rem 1.2rem; }
+}
+.steps { display: grid; gap: 1.4rem; }
+.step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1rem;
+    align-items: start;
+}
+@media (max-width: 44rem) {
+    .step { grid-template-columns: 1fr; gap: .5rem; }
+    .stepn { width: 1.7rem; height: 1.7rem; font-size: .85rem; }
+}
+.stepn {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #2b7ce0, #34d2c6);
+    color: #ffffff;
+    font-weight: 700;
+    font-size: .95rem;
+    margin-top: .2rem;
+}
+.step h3 { margin: 0 0 .45rem; font-size: 1.02rem; letter-spacing: -.01em; }
+.step p.hint { margin: .45rem 0 0; color: var(--muted); font-size: .88rem; }
+.cmd {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    background: var(--code-bg);
+    border: 1px solid var(--code-line);
+    border-radius: 10px;
+    padding: .7rem .9rem;
+}
+.cmd .pr { color: #34d2c6; font-family: "JetBrains Mono", ui-monospace, monospace; user-select: none; }
+.cmd code {
+    flex: 1;
+    color: var(--code-ink);
+    font-size: .92rem;
+    white-space: pre;
+    overflow-x: auto;
+}
+button.copy {
+    flex: none;
+    background: none;
+    border: 1px solid var(--code-line);
+    border-radius: 7px;
+    color: #8fa6c4;
+    padding: .4rem .5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: color .15s ease, border-color .15s ease;
+}
+button.copy:hover { color: #eaf4fb; border-color: var(--accent); }
+button.copy.ok { color: #34d2c6; border-color: #34d2c6; }
+button.copy svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+section.features { padding: 1.5rem 0 2rem; }
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 1.1rem;
+}
+.card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 1.25rem 1.3rem;
+    transition: border-color .15s ease, transform .15s ease;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.card h3 { margin: 0 0 .45rem; font-size: 1.02rem; letter-spacing: -.01em; }
+.card p { margin: 0; color: var(--muted); font-size: .93rem; }
+.card .ico {
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: .8rem;
+    background: linear-gradient(135deg, #2b7ce0, #34d2c6);
+    color: #ffffff;
+    font-size: 1.05rem;
+    font-weight: 700;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+section.agents { padding: 2.5rem 0; }
+.agents .duo {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    align-items: center;
+}
+@media (max-width: 60rem) {
+    .agents .duo { grid-template-columns: 1fr; }
+}
+.agents ul { margin: 0 0 1.2rem; padding-left: 1.2rem; color: var(--muted); }
+.agents li { margin-bottom: .45rem; }
+.agents li b { color: var(--ink); font-weight: 600; }
+
+section.play { padding: 2.5rem 0; }
+.play p.scope-note {
+    color: var(--muted);
+    font-size: .88rem;
+    max-width: 64rem;
+    margin: -0.6rem 0 1.4rem;
+    padding: .7rem 1rem;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    background: var(--bg-soft);
+}
+.play p.scope-note b { color: var(--ink); }
+.play iframe {
+    width: 100%;
+    height: 40rem;
+    border: 1px solid var(--code-line);
+    border-radius: 14px;
+    background: #0b1622;
+    box-shadow: 0 24px 60px rgba(8, 24, 39, .3);
+}
+.play p.after { color: var(--muted); font-size: .92rem; margin-top: .8rem; }
+
+section.eco { padding: 2.5rem 0; }
+.apps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: .9rem;
+    margin-bottom: 1.4rem;
+}
+a.app {
+    display: block;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: .95rem 1.1rem;
+    color: var(--ink);
+    transition: border-color .15s ease, transform .15s ease;
+}
+a.app:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
+a.app b { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .95rem; color: var(--accent); }
+a.app span { display: block; color: var(--muted); font-size: .87rem; margin-top: .2rem; }
+.eco p.libs { color: var(--muted); max-width: 64rem; }
+
+section.engines { padding: 2.5rem 0 4rem; }
+.engines .band {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--bg-soft);
+    padding: 2rem 2.2rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2rem;
+    align-items: center;
+}
+@media (max-width: 44rem) {
+    .engines .band { grid-template-columns: 1fr; text-align: center; }
+    .engines .band img { margin: 0 auto; }
+    .chips { justify-content: center; }
+}
+.engines .band img { width: 8.5rem; height: auto; display: block; }
+.engines h2 { margin: 0 0 .4rem; letter-spacing: -.02em; }
+.engines p.claim { color: var(--muted); margin: 0 0 1.2rem; }
+.chips { display: flex; gap: .7rem; flex-wrap: wrap; }
+.chip {
+    border: 1px solid var(--line);
+    background: var(--card);
+    border-radius: 10px;
+    padding: .55rem 1rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .88rem;
+}
+.chip b { color: var(--accent); font-weight: 700; }
+</style>
+
+<header class="hero">
+    <div class="wrap">
+        <div>
+            <div class="badges">
+                <span class="badge">Estáticamente tipado</span>
+                <span class="badge">Orientado a expresiones</span>
+                <span class="badge">Auto-alojado</span>
+            </div>
+            <h1>Un lenguaje para <span class="grad">producción real</span>.</h1>
+            <p class="sub">Genéricos, traits, pattern matching y concurrencia multicore por
+            actores — con errores como valores, sin null y sin excepciones. Escrito en Rust,
+            con una superficie de dependencias mínima y deliberada.</p>
+            <div class="cta">
+                <a class="btn primary" href="#empezar">Empezar</a>
+                <a class="btn ghost" href="#playground">Playground</a>
+                <a class="btn ghost" href="spec.html">Especificación</a>
+            </div>
+        </div>
+        <div class="window">
+            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><div class="tabs" id="hero-tabs"><noscript><span style="color:#6b87a3">tree.ray</span></noscript></div></div>
+            <pre class="typing"><code id="ghost"><span class="kw">enum</span> <span class="ty">Tree</span> { Leaf, Node(<span class="ty">Tree</span>, <span class="ty">int</span>, <span class="ty">Tree</span>) }
+
+<span class="kw">fn</span> <span class="fn">sum</span>(t: <span class="ty">Tree</span>) -> <span class="ty">int</span> {
+    <span class="kw">match</span> (t) {
+        <span class="ty">Tree</span>.Leaf => <span class="nu">0</span>,
+        <span class="ty">Tree</span>.Node(l, v, r) => <span class="fn">sum</span>(l) + v + <span class="fn">sum</span>(r),
+    }
+}
+
+<span class="kw">fn</span> <span class="fn">main</span>() {
+    <span class="kw">let</span> t = <span class="ty">Tree</span>.Node(<span class="ty">Tree</span>.Node(<span class="ty">Tree</span>.Leaf, <span class="nu">1</span>, <span class="ty">Tree</span>.Leaf), <span class="nu">2</span>, <span class="ty">Tree</span>.Leaf);
+    <span class="fn">print</span>(<span class="fn">sum</span>(t));    <span class="cm">// 3</span>
+}</code><code id="typed"></code></pre>
+        </div>
+    </div>
+</header>
+
+<section class="install" id="empezar">
+    <div class="wrap">
+        <div class="panel">
+        <h2 class="sec">Instálalo <span class="grad">en un minuto</span></h2>
+        <p class="lead">Un solo binario, sin dependencias: el instalador detecta tu plataforma
+        (macOS y Linux, arm64 y x86_64), descarga la release firmada y deja <code>ray</code> en
+        <code>~/.local/bin</code>. En Windows, descarga el binario de la
+        <a href="https://github.com/ray-language/raylang/releases/latest">última release</a>.</p>
+        <div class="steps">
+            <div class="step">
+                <span class="stepn">1</span>
+                <div>
+                    <h3>Instala la toolchain</h3>
+                    <div class="cmd"><span class="pr">$</span><code>curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+                    </button></div>
+                    <p class="hint">Verifícalo con <code>ray version</code> — un binario, todo incluido: compilador, VM, LSP, formateador y gestor de paquetes.</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="stepn">2</span>
+                <div>
+                    <h3>Crea y corre tu primer proyecto</h3>
+                    <div class="cmd"><span class="pr">$</span><code>ray new hola &amp;&amp; cd hola &amp;&amp; ray run</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+                    </button></div>
+                    <p class="hint"><code>ray new</code> deja un <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompila y reinicia al guardar.</p>
+                </div>
+            </div>
+        </div>
+        </div>
+    </div>
+</section>
+
+<section class="features">
+    <div class="wrap">
+        <div class="cards">
+            <div class="card">
+                <div class="ico">≡</div>
+                <h3>Tres motores que coinciden</h3>
+                <p>Una VM de bytecode para desarrollar, un binario nativo para desplegar y un
+                intérprete como oráculo — salida byte a byte idéntica, verificada en CI.</p>
+            </div>
+            <div class="card">
+                <div class="ico">»</div>
+                <h3>Binario nativo</h3>
+                <p><code>ray build --native</code> transpila a Rust y compila un ejecutable:
+                3–4× la VM en cargas de servicio y 28–57× en cómputo puro.</p>
+            </div>
+            <div class="card">
+                <div class="ico">⇄</div>
+                <h3>Concurrencia por actores</h3>
+                <p>Heap aislado por fibra + transferencia de propiedad en <code>send</code>:
+                multicore real sin data races, con scheduler M:N.</p>
+            </div>
+            <div class="card">
+                <div class="ico">?</div>
+                <h3>Errores como valores</h3>
+                <p>Sin <code>null</code> y sin excepciones: <code>Result</code>/<code>Option</code>
+                + <code>?</code>, pattern matching exhaustivo y genéricos con traits.</p>
+            </div>
+            <div class="card">
+                <div class="ico">⌘</div>
+                <h3>Tooling completo</h3>
+                <p><code>ray</code> trae proyecto, paquetes, tests, formateador, docs, REPL,
+                LSP para el editor y un servidor MCP para agentes LLM.</p>
+            </div>
+            <div class="card">
+                <div class="ico">◇</div>
+                <h3>Dependencias deliberadas</h3>
+                <p>HTTP/1.1 y 2, JSON, TOML, DNS, WebSocket o los clientes de BD están escritos
+                en raylang; cada crate de Cargo entra justificado y medido.</p>
+            </div>
+            <div class="card">
+                <div class="ico">∞</div>
+                <h3>Auto-alojado</h3>
+                <p>raylang lexea, parsea, chequea y ejecuta raylang: el compilador auto-alojado
+                se ejecuta a sí mismo sobre los motores auto-alojados.</p>
+            </div>
+            <div class="card">
+                <div class="ico">/</div>
+                <h3>Framework web</h3>
+                <p>Servidor HTTP de producción con framework estilo Express, SSR con templates
+                compilados y tipados (<code>.ray.html</code>), WebSocket y streaming.</p>
+            </div>
+            <div class="card">
+                <div class="ico">✓</div>
+                <h3>Paquetes verificables</h3>
+                <p>Manifiesto <code>ray.toml</code> + lockfile con hashes SHA-256; el registro
+                acepta versiones firmadas con Ed25519 y nombres reclamados.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="eco" id="benchmarks">
+    <div class="wrap">
+        <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
+        <p class="lead">El binario nativo se pelea de tú a tú con Go y <code>rustc -O</code>, y
+        le gana a node en 9 de los 10 programas de cómputo del banco poliglota. Las barras
+        salen de la tabla real del repositorio — re-medir el banco regenera esta gráfica.</p>
+        {{& bench }}
+        <p style="margin-top:1.2rem"><a class="btn ghost" href="bench.html">Ver los benchmarks completos</a></p>
+    </div>
+</section>
+
+<section class="eco" id="editores">
+    <div class="wrap">
+        <h2 class="sec">En tu <span class="grad">editor</span></h2>
+        <p class="lead">Extensiones oficiales sobre el LSP de raylang: diagnósticos en vivo,
+        autocompletado, hover, ir a definición, renombrar y formateo.</p>
+        <div class="apps">
+            <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extensión en el marketplace, con cliente LSP integrado</span></a>
+            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>sintaxis + LSP vía el paquete oficial</span></a>
+            <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>apuntan a <code>ray lsp</code> directo; config en editors/</span></a>
+        </div>
+    </div>
+</section>
+
+<section class="agents" id="agentes">
+    <div class="wrap">
+        <div class="duo">
+            <div>
+                <h2 class="sec">Nativo para <span class="grad">agentes LLM</span></h2>
+                <p class="lead">raylang trae de serie las dos piezas para que un modelo escriba
+                raylang correcto — y lo verifique solo.</p>
+                <ul>
+                    <li><b><a href="https://github.com/ray-language/raylang/blob/main/llms.txt">llms.txt</a></b> —
+                    el contexto destilado: el delta contra Rust, las formas canónicas y los
+                    mensajes de error exactos, listo para tu prompt o <code>CLAUDE.md</code>.</li>
+                    <li><b><code>ray mcp</code></b> — un servidor MCP embebido en el binario:
+                    el bucle <em>escribir → verificar → corregir</em> con los diagnósticos
+                    exactos del compilador y el código del modelo confinado (fuel + heap +
+                    plazo, en subproceso).</li>
+                    <li>El propio <code>llms.txt</code> se sirve como <em>resource</em>
+                    (<code>raylang://llms.txt</code>) — el cliente lo inyecta antes de la
+                    primera línea. Guía completa en
+                    <a href="https://github.com/ray-language/raylang/blob/main/docs/mcp.md">docs/mcp.md</a>.</li>
+                </ul>
+            </div>
+            <div class="window">
+                <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>mcp</span></div>
+                <pre><code><span class="pr">$ </span><span class="st">claude mcp add raylang -- ray mcp</span>
+
+<span class="cm"># tools</span>
+<span class="fn">ray_check</span>   <span class="cm">diagnósticos exactos, posicionados</span>
+<span class="fn">ray_run</span>     <span class="cm">stdout + exit, confinado</span>
+<span class="fn">ray_test</span>    <span class="cm">el runner @test</span>
+<span class="fn">ray_fmt</span>     <span class="cm">fuente canónico</span>
+<span class="fn">ray_doc</span>     <span class="cm">firma + doc de la stdlib</span>
+
+<span class="cm"># resource</span>
+<span class="ty">raylang://llms.txt</span></code></pre>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="play" id="playground">
+    <div class="wrap">
+        <h2 class="sec">Pruébalo <span class="grad">en el navegador</span></h2>
+        <p class="lead">La VM completa compilada a WebAssembly — el playground corre raylang
+        en tu navegador, sin servidor y sin instalar nada.</p>
+        <p class="scope-note"><b>Alcance</b>: corre el <b>lenguaje completo</b> y la stdlib pura
+        con <code>import std/*</code> (math, json, markdown, iteradores, actores/canales…). La
+        stdlib con E/S (<code>fs</code>, <code>process</code>, red) compila pero devuelve
+        <code>Err</code> al ejecutar — el navegador no tiene disco ni sockets. Los paquetes del
+        registro (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) y los
+        módulos multi-archivo no resuelven aquí: para eso, instala <code>ray</code> y usa
+        <code>ray add</code>.</p>
+        <iframe src="playground/index.html" title="playground de raylang" loading="lazy"></iframe>
+        <p class="after"><a href="playground/index.html">Abrir el playground a pantalla completa →</a></p>
+    </div>
+</section>
+
+<section class="eco" id="ecosistema">
+    <div class="wrap">
+        <h2 class="sec">Hecho <span class="grad">con raylang</span></h2>
+        <p class="lead">Servidores, herramientas y hasta juegos de terminal — dogfood real,
+        publicado en la organización.</p>
+        <div class="apps">
+            <a class="app" href="https://github.com/ray-language/raycode"><b>raycode</b><span>agente de código y REPL para la terminal</span></a>
+            <a class="app" href="https://github.com/ray-language/raywatch"><b>raywatch</b><span>monitor de servicios con dashboard SSE</span></a>
+            <a class="app" href="https://github.com/ray-language/raykv"><b>raykv</b><span>clave-valor compatible con Redis (RESP2)</span></a>
+            <a class="app" href="https://github.com/ray-language/raygate"><b>raygate</b><span>API gateway: rate limit, circuit breaker, streaming</span></a>
+            <a class="app" href="https://github.com/ray-language/rayq"><b>rayq</b><span>broker de colas at-least-once con write-ahead log</span></a>
+            <a class="app" href="https://github.com/ray-language/raypass"><b>raypass</b><span>bóveda de secretos cifrada, compartición sealed-box</span></a>
+            <a class="app" href="https://github.com/ray-language/takeit"><b>takeit</b><span>transferencia de archivos P2P cifrada extremo a extremo</span></a>
+            <a class="app" href="https://github.com/ray-language/raygame"><b>raygame</b><span>Tetris en la terminal a 30 fps</span></a>
+            <a class="app" href="https://github.com/orgs/ray-language/repositories"><b>y más →</b><span>raysite, raytop, raymail, raysync, raylogs, raycall…</span></a>
+        </div>
+        <p class="libs">Las librerías también: la pila de red y formatos
+        (<code>net</code> — HTTP/1.1 y 2, DNS, WebSocket, TLS —, <code>web</code>,
+        <code>rpc</code>, <code>db</code> — Postgres, Redis, SQLite) vive en
+        <a href="https://github.com/ray-language/raylang/tree/main/packages">packages/</a>,
+        escrita en raylang puro, y los paquetes de la comunidad se publican en el
+        <a href="https://github.com/ray-language/ray-index">registro</a> con hashes y firmas.</p>
+    </div>
+</section>
+
+<section class="engines">
+    <div class="wrap">
+        <div class="band">
+            <img src="assets/mascot.svg" alt="Manta, la mascota de raylang">
+            <div>
+                <h2>raylang <span class="grad">fluye sin fricción</span></h2>
+                <p class="claim">Un fuente, tres motores: el mismo programa corre igual —
+                byte a byte — en desarrollo, en despliegue y bajo el oráculo de validación.</p>
+                <div class="chips">
+                    <span class="chip"><b>ray run</b> · VM de bytecode</span>
+                    <span class="chip"><b>ray build --native</b> · binario de máquina</span>
+                    <span class="chip"><b>--interp</b> · el oráculo</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+// Copiar al portapapeles: cada botón copia el <code> de su fila (el $ del prompt queda fuera).
+(function () {
+    var CHECK = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"></path></svg>";
+    var buttons = document.querySelectorAll("button.copy");
+    function fallback(text) {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch (e) { }
+        ta.remove();
+    }
+    for (var i = 0; i < buttons.length; i++) {
+        buttons[i].addEventListener("click", function () {
+            var btn = this;
+            var code = btn.parentNode.querySelector("code");
+            var text = code ? code.textContent : "";
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).catch(function () { fallback(text); });
+            } else {
+                fallback(text);
+            }
+            var icon = btn.innerHTML;
+            btn.innerHTML = CHECK;
+            btn.classList.add("ok");
+            setTimeout(function () {
+                btn.innerHTML = icon;
+                btn.classList.remove("ok");
+            }, 1600);
+        });
+    }
+})();
+// La galería del hero: varios ejemplos VERIFICADOS (corren tal cual con `ray run`),
+// tabs estilo editor, tipeo por tokenizador y rotación automática; clic en una tab
+// re-tipea ese ejemplo y detiene la rotación (el usuario toma el control).
+(function () {
+    var EXAMPLES = [
+        { name: "tree.ray", code: "enum Tree { Leaf, Node(Tree, int, Tree) }\n\nfn sum(t: Tree) -> int {\n    match (t) {\n        Tree.Leaf => 0,\n        Tree.Node(l, v, r) => sum(l) + v + sum(r),\n    }\n}\n\nfn main() {\n    let t = Tree.Node(Tree.Node(Tree.Leaf, 1, Tree.Leaf), 2, Tree.Leaf);\n    print(sum(t));    // 3\n}" },
+        { name: "pipeline.ray", code: "fn main() {\n    // Pipelines perezosos: nada se materializa hasta el final.\n    let sum = [1, 2, 3, 4, 5]\n        |> map(fn(x: int) -> int { x * x })\n        |> filter(fn(x: int) -> bool { x % 2 == 1 })\n        |> fold(0, fn(a: int, b: int) -> int { a + b });\n    print(\"odd squares: ${sum}\");    // 35\n\n    let firsts = range(1, 100)\n        .map(fn(x: int) -> int { x * x })\n        .take(4)\n        .collect();\n    print(firsts);    // [1, 4, 9, 16]\n}" },
+        { name: "actors.ray", code: "fn main() {\n    // Actores: fibras + canales, sin estado compartido.\n    let ch: Channel<int> = Channel.new();\n    spawn(fn() {\n        for i in range(1, 6) { send(ch, i * i); }\n        close(ch);\n    });\n    var total = 0;\n    var open = true;\n    while (open) {\n        match (recv(ch)) {\n            Option.Some(v) => { total = total + v; },\n            Option.None => { open = false; },\n        }\n    }\n    print(\"total: ${total}\");    // 55\n}" },
+        { name: "errors.ray", code: "fn parse_port(s: string) -> Result<int, string> {\n    match (s.parse_int()) {\n        Option.Some(p) => Result.Ok(p),\n        Option.None => Result.Err(\"not a number: ${s}\"),\n    }\n}\n\nfn config() -> Result<int, string> {\n    Result.Ok(parse_port(\"8080\")? + 1)    // ? desempaqueta o retorna\n}\n\nfn main() {\n    match (config()) {\n        Result.Ok(p) => print(\"port: ${p}\"),\n        Result.Err(e) => print(\"error: ${e}\"),\n    }\n}" }
+    ];
+    var host = document.getElementById("typed");
+    var ghost = document.getElementById("ghost");
+    var tabsEl = document.getElementById("hero-tabs");
+    if (!host || !ghost || !tabsEl) { return; }
+    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    // Mini-tokenizador de raylang (los ejemplos son texto plano): comentario, string
+    // (interpolación incluida), número, palabra clave / Tipo / llamada.
+    var KW = { fn: 1, let: 1, var: 1, if: 1, else: 1, while: 1, for: 1, in: 1, match: 1, return: 1, enum: 1, struct: 1, trait: 1, impl: 1, import: 1, spawn: 1 };
+    var PRIM = { int: 1, float: 1, bool: 1, string: 1, char: 1, bytes: 1, unit: 1 };
+    function tokenize(code) {
+        var out = [];
+        function push(cls, txt) {
+            if (!txt) { return; }
+            var last = out[out.length - 1];
+            if (last && last[0] === cls) { last[1] += txt; } else { out.push([cls, txt]); }
+        }
+        var i = 0, n = code.length, j, w, k;
+        while (i < n) {
+            var c = code.charAt(i);
+            if (c === "/" && code.charAt(i + 1) === "/") {
+                j = i;
+                while (j < n && code.charAt(j) !== "\n") { j += 1; }
+                push("cm", code.slice(i, j));
+                i = j;
+            } else if (c === "\"") {
+                j = i + 1;
+                while (j < n && code.charAt(j) !== "\"") {
+                    if (code.charAt(j) === "\\") { j += 1; }
+                    j += 1;
+                }
+                push("st", code.slice(i, j + 1));
+                i = j + 1;
+            } else if (c >= "0" && c <= "9") {
+                j = i;
+                while (j < n && /[0-9._]/.test(code.charAt(j))) { j += 1; }
+                push("nu", code.slice(i, j));
+                i = j;
+            } else if (/[A-Za-z_]/.test(c)) {
+                j = i;
+                while (j < n && /[A-Za-z0-9_]/.test(code.charAt(j))) { j += 1; }
+                w = code.slice(i, j);
+                k = j;
+                while (k < n && code.charAt(k) === " ") { k += 1; }
+                if (KW[w] === 1) { push("kw", w); }
+                else if (PRIM[w] === 1 || /^[A-Z]/.test(w)) { push("ty", w); }
+                else if (code.charAt(k) === "(") { push("fn", w); }
+                else { push("", w); }
+                i = j;
+            } else {
+                push("", c);
+                i += 1;
+            }
+        }
+        return out;
+    }
+
+    var current = 0, auto = true, timer = null;
+    // La rotación espera 10 s tras terminar el tipeo, y se PAUSA mientras el ratón esté
+    // sobre la ventana (el lector se quedó en ese ejemplo); al salir, se reanuda.
+    var advanceTimer = null, hovered = false, finished = false;
+    function scheduleNext() {
+        clearTimeout(advanceTimer);
+        if (auto && finished && !hovered) { advanceTimer = setTimeout(next, 10000); }
+    }
+    var cur = document.createElement("span");
+    cur.className = "cur";
+    function span(cls) {
+        var s = document.createElement("span");
+        if (cls) { s.className = cls; }
+        host.appendChild(s);
+        return s;
+    }
+    function markTabs() {
+        var tabs = tabsEl.querySelectorAll(".tab");
+        for (var i = 0; i < tabs.length; i++) {
+            tabs[i].classList.toggle("on", i === current);
+        }
+    }
+    function next() { show((current + 1) % EXAMPLES.length, false); }
+    function fill(segments) {
+        for (var i = 0; i < segments.length; i++) { span(segments[i][0]).textContent = segments[i][1]; }
+    }
+    function show(idx, fromUser) {
+        clearTimeout(timer);
+        clearTimeout(advanceTimer);
+        finished = false;
+        current = idx;
+        markTabs();
+        host.textContent = "";
+        var segments = tokenize(EXAMPLES[idx].code);
+        if (reduced) {
+            // Sin animación: el ejemplo aparece completo y no hay rotación automática.
+            fill(segments);
+            return;
+        }
+        var seg = 0, pos = 0, el = null;
+        function tick() {
+            if (seg >= segments.length) {
+                cur.remove();
+                finished = true;
+                scheduleNext();
+                return;
+            }
+            if (el === null) { el = span(segments[seg][0]); }
+            el.textContent += segments[seg][1].charAt(pos);
+            host.appendChild(cur);
+            pos += 1;
+            if (pos >= segments[seg][1].length) { seg += 1; pos = 0; el = null; }
+            timer = setTimeout(tick, 12);
+        }
+        timer = setTimeout(tick, fromUser ? 80 : 350);
+    }
+
+    ghost.style.visibility = "hidden";
+    var frame = host.closest(".window");
+    if (frame) {
+        frame.addEventListener("mouseenter", function () {
+            hovered = true;
+            clearTimeout(advanceTimer);
+        });
+        frame.addEventListener("mouseleave", function () {
+            hovered = false;
+            scheduleNext();
+        });
+    }
+    for (var i = 0; i < EXAMPLES.length; i++) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "tab";
+        b.textContent = EXAMPLES[i].name;
+        b.addEventListener("click", (function (idx) {
+            return function () { auto = false; show(idx, true); };
+        })(i));
+        tabsEl.appendChild(b);
+    }
+    if (reduced) { show(0, false); } else { show(0, false); }
+})();
+</script>
+{% endblock %}

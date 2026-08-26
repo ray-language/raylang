@@ -46,8 +46,11 @@ jobs:
       # sería un falso verde). Se verifica su presencia para que un toolchain roto falle ruidosamente aquí.
       - name: Verificar rustc (los tests nativos lo requieren)
         run: rustc --version
+      # `--no-fail-fast`: que un binario rojo no ENMASCARE a los siguientes — la cadena
+      # docs_root → mcp → registry → selfhost (ago 2026) se destapó de uno en uno, un run
+      # de ~9 min por eslabón, porque cada fallo abortaba la suite y escondía el resto.
       - name: Tests (incluye el fuzzer del front-end)
-        run: cargo test
+        run: cargo test --no-fail-fast
       # El corpus nativo corre en CADA push (antes: solo nocturno → una regresión se veía hasta 24 h
       # después, post-merge, sin bloquear ningún PR). Con la caché de `~/.ray/native-cache` y el target
       # compartido tarda ~2-3 min — menos que el build de release de abajo. `#[ignore]` en local sigue.
@@ -64,14 +67,33 @@ jobs:
       # comparan intérprete↔VM y necesitan la feature `interp`; basta con verificar que compila.
       - name: Build solo-VM (sin intérprete)
         run: cargo build --release --no-default-features
-      # Guarda del playground web (IDEAS §57): el target wasm no compila en ningún otro paso y ya se
-      # rompió en silencio dos veces (P0.1 metió aHash→getrandom incondicional; M98/M100 desbordes de
-      # usize de 32 bits y un stub ausente — reparado en el PR #102). El artefacto no va al repo
-      # (se construye con `sh playground/build.sh`); aquí basta con que el lib compile al target.
-      - name: Build wasm32 (playground)
+  # Guarda del playground web (IDEAS §57 + §74): el target wasm no compila en ningún otro paso y
+  # ya se rompió en silencio TRES veces (P0.1 metió aHash→getrandom incondicional; M98/M100
+  # desbordes de usize de 32 bits y un stub ausente — PR #102; y M100v3/M124/M126/M131 usos de
+  # ray_runtime sin guarda de target — PR #182). La tercera se coló porque el paso vivía al FINAL
+  # del job de tests: cualquier rojo anterior lo dejaba sin ejecutar y el fallo de wasm quedaba
+  # enmascarado. Por eso ahora es un JOB propio: corre siempre, en paralelo, y reporta solo. El
+  # artefacto no va al repo (se construye con `sh playground/build.sh`); basta con que el lib
+  # compile al target.
+  wasm:
+    name: build wasm32 (playground)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable + target wasm32
         run: |
+          rustup toolchain install stable --profile minimal
           rustup target add wasm32-unknown-unknown
-          cargo build --target wasm32-unknown-unknown --lib --release
+      - name: Caché de cargo (target wasm propio)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-wasm-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build wasm32 (lib release)
+        run: cargo build --target wasm32-unknown-unknown --lib --release
 
   # Auditoría de dependencias contra la base de avisos de seguridad de RustSec. Se aparta del job
   # principal porque instala una herramienta y consulta una base remota (más lento, distinto fallo).

@@ -837,7 +837,8 @@ fn other_key_cannot_publish_a_claimed_name() {
     )
     .unwrap();
     git(&work, &["add", "-A"]);
-    git(&work, &["commit", "-m", "v1.1.0"]);
+    // Identidad por-invocación como el resto del archivo: el runner de CI no tiene ~/.gitconfig.
+    git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "v1.1.0"]);
     git(&work, &["tag", "v1.1.0"]);
     let (_out, err, code) = ray_signed(&work, &index, &key2, &["registry", "publish", "--sign"]);
     assert_ne!(code, 0, "other clave no public un name ajeno");

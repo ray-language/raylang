@@ -2829,6 +2829,55 @@ el propio M134. Quedan clasificadas dos mejoras:
    o un warning duro al publicar URL no-anónima. (El error de un repo privado por https también
    podría explicarse mejor que el "could not read Username" crudo de git.)
 
+## 74. El sitio del lenguaje — landing + SPEC + book + playground publicados (ago 2026)
+
+**Problema**: raylang 1.3.x se publica (Releases, extensión VSCode) pero no tiene sitio web:
+la SPEC, el book y el playground existen solo en el repo (el ítem "Libro y sitio publicados"
+de RELEASE-1.0.md es lo único del lanzamiento aún pendiente). **Impacto: MEDIO** (visibilidad
+y adopción; cero riesgo de bloqueo de features — es tooling/distribución, no lenguaje).
+
+Plan por fases, con dogfooding como principio (el sitio lo genera raylang mismo, como el sitio
+del registro de M84):
+
+- **Fase 1 — ✅ HECHA (26 ago 2026): `site/`**, el generador estático en raylang puro
+  (`site/site.ray` + templates nativos `.ray.html` del mismo directorio), con dogfooding
+  doble: layout con herencia + landing + shell de la SPEC con `{{& body }}`, y la SPEC
+  renderizada con `std/markdown`. Diseño con el **manual de marca**
+  (`assets/branding/raylang-brand.pdf`): paleta océano, Space Grotesk/JetBrains Mono
+  **embebidas** (las woff2 del playground → sitio 100% autocontenido, cero CDNs), símbolo en
+  la nav, Manta en la banda final, modo claro/oscuro. La landing suma: muestra de código con
+  efecto de tipeo (con fallback `noscript` y `prefers-reduced-motion`), sección de agentes
+  LLM (llms.txt + `ray mcp`), el **playground WASM embebido** (iframe lazy + copia completa
+  bajo `playground/`), nueve tarjetas de features y el ecosistema (apps de la organización +
+  packages/ + registro). Salida determinista, byte-idéntica por ambos motores
+  (`tests/site_cli.rs`). Previsualización local: servir la salida con cualquier estático
+  (`python3 -m http.server -d <salida>`; el iframe del playground prefiere http a file://).
+- **Fase 1b — ✅ HECHA (26 ago 2026): el playground con EDITOR REAL y el LSP embebido.**
+  El despacho del Language Server se extrajo del bucle stdio (`lsp::handle_message`,
+  independiente del transporte) y se exporta desde el wasm (`src/wasm.rs::lsp`: un mensaje
+  JSON-RPC por llamada → el array de mensajes emitidos). El editor pasa del overlay
+  textarea+pre a **CodeMirror 6** (`playground/editor/` → `editor.bundle.js` vía npm/esbuild;
+  artefacto NO versionado, como el wasm — `build.sh` produce ambos): diagnósticos en vivo,
+  **autocompletado** (símbolos + builtins + snippets), hover con tipos, **signature help**
+  (tooltip CM propio con el parámetro activo) y **formateo** LSP (`ray fmt`), tema de marca.
+  De paso se destapó y arregló que el build wasm32 llevaba roto desde M100 v3/M124/M126/M131
+  (usos de ray_runtime sin guarda `cfg`). La guarda de CI EXISTÍA (IDEAS §57) pero vivía al
+  final del job de tests: cualquier rojo anterior la dejaba sin ejecutar (y main llevaba en
+  rojo por un enlace de docs) → ✅ promovida a job propio que corre siempre, en paralelo.
+  La landing suma la sección de editores (VSCode marketplace, Sublime, Neovim/Helix).
+- **Fase 1c — ✅ HECHA (26 ago 2026): benchmarks en el sitio.** `site/bench_chart.ray` parsea
+  la tabla de resultados de `benchmarks/poly/README.md` con `std/markdown` (`Block.Table`) y
+  genera barras CSS (raylang nativo = 1× vs rustc/go/node, tope 4×) — dogfooding triple: el
+  sitio, sus templates y ahora sus gráficas los produce el lenguaje, con una sola fuente de
+  verdad (re-medir el banco regenera todo). Banda "Medido, no prometido" en la landing +
+  `bench.html` con el README completo renderizado; la fecha/hardware sale del encabezado
+  "## Resultados (…)" del propio banco.
+- **Fase 2 — ensamblado**: el sitio completo = landing + SPEC + book (`mdbook build`) +
+  playground (WASM) bajo un mismo árbol de salida; enlaces internos de SPEC.md (DESIGN.md,
+  MANUAL.md…) resueltos o neutralizados.
+- **Fase 3 — deploy**: job de GitHub Pages en el workflow (en el tag `v*` o en push a main),
+  para que el sitio nunca se desincronice de lo publicado. Activar Pages = acción del mantenedor.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

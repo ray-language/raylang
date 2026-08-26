@@ -4,6 +4,30 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Benchmarks en el sitio** (IDEAS §74): sección "Medido, no prometido" en la landing y
+  página `bench.html` — la gráfica de barras se **genera de la tabla real** de
+  `benchmarks/poly/README.md` vía `std/markdown` (una sola fuente de verdad: re-medir el
+  banco regenera el sitio), con fecha/hardware del propio README y el banco completo
+  renderizado con enlace a la metodología reproducible.
+- **Playground con editor real y LSP embebido** (IDEAS §74 fase 1b): el editor pasa a
+  CodeMirror 6 y el **LSP de raylang corre dentro del wasm** (el mismo despacho de `ray lsp`,
+  exportado como `lsp(msg)`): diagnósticos en vivo, autocompletado con snippets, hover con
+  tipos, signature help y formateo (`ray fmt`), en el navegador y sin servidor. `playground/build.sh` produce ahora el wasm y el
+  bundle del editor (npm/esbuild; artefactos no versionados).
+- **Fix**: la compilación a `wasm32` llevaba rota desde M100 v3/M124/M126/M131 (usos de
+  `ray_runtime` sin guarda de target); stubs honestos en wasm para procesos, hasher
+  incremental, `tls_peer_cert` y normalización Unicode.
+
+- **El sitio del lenguaje, fase 1** (IDEAS §74): `site/`, un generador estático en raylang
+  puro — las páginas se autoran con los templates nativos `.ray.html` y siguen el manual de
+  marca (paleta océano, fuentes woff2 embebidas → 100% autocontenido, símbolo y Manta) — que
+  produce la landing (hero con efecto de tipeo, sección de agentes LLM/MCP, playground WASM
+  embebido, ecosistema de apps y librerías) y la SPEC renderizada, con salida determinista y
+  byte-idéntica por ambos motores. Previsualización: servir la salida con cualquier servidor
+  estático.
+
 ## 1.3.1 — 2026-08-26
 
 - **Fix LSP**: abrir un fuente de una dependencia descargada (`.ray-deps/<pkg>/…`) ya no

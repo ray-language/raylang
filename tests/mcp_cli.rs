@@ -16,6 +16,11 @@ impl Mcp {
     fn start() -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
             .arg("mcp")
+            // Fuel bajo SOLO para el test: en un build debug sobre un runner lento, quemar los
+            // 100M de default tarda más que el plazo de pared y la bomba de bucle moría por
+            // timeout en vez de por fuel (carrera vista en CI). Con 2M el corte por fuel llega
+            // en fracciones de segundo en cualquier máquina; la semántica probada es la misma.
+            .env("RAYLANG_MCP_FUEL", "2000000")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

@@ -46,8 +46,11 @@ jobs:
       # sería un falso verde). Se verifica su presencia para que un toolchain roto falle ruidosamente aquí.
       - name: Verificar rustc (los tests nativos lo requieren)
         run: rustc --version
+      # `--no-fail-fast`: que un binario rojo no ENMASCARE a los siguientes — la cadena
+      # docs_root → mcp → registry → selfhost (ago 2026) se destapó de uno en uno, un run
+      # de ~9 min por eslabón, porque cada fallo abortaba la suite y escondía el resto.
       - name: Tests (incluye el fuzzer del front-end)
-        run: cargo test
+        run: cargo test --no-fail-fast
       # El corpus nativo corre en CADA push (antes: solo nocturno → una regresión se veía hasta 24 h
       # después, post-merge, sin bloquear ningún PR). Con la caché de `~/.ray/native-cache` y el target
       # compartido tarda ~2-3 min — menos que el build de release de abajo. `#[ignore]` en local sigue.

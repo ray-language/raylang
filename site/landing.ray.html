@@ -170,6 +170,18 @@ section.agents { padding: 2.5rem 0; }
 .agents li b { color: var(--ink); font-weight: 600; }
 
 section.play { padding: 2.5rem 0; }
+.play p.scope-note {
+    color: var(--muted);
+    font-size: .88rem;
+    max-width: 64rem;
+    margin: -0.6rem 0 1.4rem;
+    padding: .7rem 1rem;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    background: var(--bg-soft);
+}
+.play p.scope-note b { color: var(--ink); }
 .play iframe {
     width: 100%;
     height: 40rem;
@@ -432,6 +444,13 @@ section.engines { padding: 2.5rem 0 4rem; }
         <h2 class="sec">Pruébalo <span class="grad">en el navegador</span></h2>
         <p class="lead">La VM completa compilada a WebAssembly — el playground corre raylang
         en tu navegador, sin servidor y sin instalar nada.</p>
+        <p class="scope-note"><b>Alcance</b>: corre el <b>lenguaje completo</b> y la stdlib pura
+        con <code>import std/*</code> (math, json, markdown, iteradores, actores/canales…). La
+        stdlib con E/S (<code>fs</code>, <code>process</code>, red) compila pero devuelve
+        <code>Err</code> al ejecutar — el navegador no tiene disco ni sockets. Los paquetes del
+        registro (<code>net</code>, <code>web</code>, <code>rpc</code>, <code>db</code>…) y los
+        módulos multi-archivo no resuelven aquí: para eso, instala <code>ray</code> y usa
+        <code>ray add</code>.</p>
         <iframe src="playground/index.html" title="playground de raylang" loading="lazy"></iframe>
         <p class="after"><a href="playground/index.html">Abrir el playground a pantalla completa →</a></p>
     </div>

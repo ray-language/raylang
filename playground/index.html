@@ -57,12 +57,6 @@
   .file svg { flex:none; opacity:.9; }
   .file:hover { background:rgba(43,124,224,.10); }
   .file.active { background:rgba(43,124,224,.18); border-left-color:var(--accent); color:#fff; }
-  /* La nota de ALCANCE, a pie de página del playground: qué corre, qué da Err y qué no resuelve. */
-  footer.scope-note { flex:none; padding:8px 18px 10px; border-top:1px solid var(--border);
-    background:var(--panel); color:var(--muted); font-size:11.5px; line-height:1.6; }
-  .scope-note b { color:var(--fg); font-weight:600; }
-  .scope-note code { font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px;
-    color:#a8c7e8; background:rgba(43,124,224,.12); padding:.5px 4px; border-radius:4px; }
   .pane .label { padding:6px 14px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--border); text-transform:uppercase; letter-spacing:.04em; }
   /* El editor REAL (CodeMirror 6, editor.bundle.js) con el LSP de raylang corriendo en el wasm. */
   #editor { flex:1; min-height:0; overflow:hidden; }
@@ -103,15 +97,6 @@
     <pre id="out"></pre>
   </div>
 </main>
-<footer class="scope-note">
-  <b>Alcance</b> · Corre el <b>lenguaje completo</b> y la stdlib pura con
-  <code>import std/*</code> (math, json, markdown, iteradores, actores/canales…) ·
-  La stdlib con E/S (<code>fs</code>, <code>process</code>, red) <b>compila pero devuelve
-  <code>Err</code> al ejecutar</b>: el navegador no tiene disco ni sockets ·
-  Los <b>paquetes del registro</b> (<code>net</code>, <code>web</code>, <code>rpc</code>,
-  <code>db</code>…) y los módulos multi-archivo <b>no resuelven aquí</b> — para eso, instala
-  <code>ray</code> y usa <code>ray add</code>.
-</footer>
 
 <script src="editor.bundle.js"></script>
 <script type="module">

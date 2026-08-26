@@ -68,6 +68,7 @@ fn run() {
         Some("lsp") => lsp::run(),
         Some("mcp") => mcp::run(),
         Some("repl") | None => repl::run(),
+        Some("upgrade") => cmd_upgrade(&rest[1..]),
         Some("version") | Some("--version") | Some("-V") => {
             println!("raylang {}", env!("CARGO_PKG_VERSION"));
         }
@@ -110,6 +111,7 @@ Tooling:
   lsp               start the Language Server
   mcp               start the MCP server (tools for AI agents: check/run/test/fmt/doc)
   repl              interactive REPL
+  upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
   version           the language version
   help              this help
 ",
@@ -180,6 +182,198 @@ fn cmd_new(args: &[String]) {
     write_file(root.join("src/main.ray"), &main_ray);
     write_file(root.join(".gitignore"), gitignore);
     println!("project '{name}' created. To run it:\n  cd {name} && ray run");
+}
+
+// ── `ray upgrade` (M137): autoactualización del toolchain desde las GitHub Releases ─────────
+
+/// El repo de releases del toolchain. `RAYLANG_REPO` lo sobrescribe (forks, tests) — la misma
+/// variable que entiende `install.sh`.
+fn upgrade_repo() -> String {
+    std::env::var("RAYLANG_REPO")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "ray-language/raylang".to_string())
+}
+
+/// El nombre del asset de release para una plataforma (el mismo esquema que publica
+/// `release.yml` y consume `install.sh`). `None` = plataforma sin asset tar.gz (Windows va
+/// por zip manual). Pura para poder testearla; el llamador pasa los `cfg!` reales.
+fn upgrade_asset(os: &str, arch: &str) -> Option<String> {
+    let suffix = match os {
+        "macos" => "apple-darwin",
+        "linux" => "unknown-linux-gnu",
+        _ => return None,
+    };
+    let arch = match arch {
+        "x86_64" | "aarch64" => arch,
+        _ => return None,
+    };
+    Some(format!("raylang-{arch}-{suffix}.tar.gz"))
+}
+
+/// Extrae el tag de la URL final de `releases/latest` (GitHub redirige a
+/// `…/releases/tag/<tag>`). `None` si no hay redirección a un tag (repo sin releases).
+fn tag_from_latest_url(url: &str) -> Option<String> {
+    let (_, tag) = url.trim_end_matches('/').rsplit_once("/releases/tag/")?;
+    Some(tag.to_string()).filter(|t| !t.is_empty() && !t.contains('/'))
+}
+
+/// Corre un comando externo y devuelve su stdout (o el stderr como error). El equivalente
+/// del helper `git` de deps.rs, para `curl`/`tar`: dependencias del ENTORNO (como git),
+/// no crates del árbol de compilación.
+fn sh_capture(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+    let mut cmd = process::Command::new(program);
+    if let Some(d) = cwd {
+        cmd.current_dir(d);
+    }
+    let out = cmd
+        .args(args)
+        .output()
+        .map_err(|e| format!("could not run '{program}': {e} (is it installed?)"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// `ray upgrade [tag] [--check]`: actualiza los binarios instalados (`ray` + `raylang`) a la
+/// última release publicada, o al tag pedido. `--check` solo informa (exit 0 = al día,
+/// 1 = hay versión nueva; para scripts/CI). La descarga delega en `curl` y `tar` del sistema.
+/// El binario descargado se VERIFICA (`ray version` desde un dir temporal) antes de tocar
+/// nada, y el reemplazo es un rename dentro del directorio de instalación (atómico en POSIX,
+/// válido con el binario en ejecución).
+fn cmd_upgrade(args: &[String]) {
+    let (check, rest) = take_flag_bool(args, "--check");
+    if rest.len() > 1 {
+        eprintln!("usage: ray upgrade [tag] [--check]");
+        process::exit(64);
+    }
+    let repo = upgrade_repo();
+    let Some(asset) = upgrade_asset(std::env::consts::OS, std::env::consts::ARCH) else {
+        eprintln!(
+            "ray upgrade does not support this platform ({}-{}); on Windows download the \
+             .zip from https://github.com/{repo}/releases",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        process::exit(69); // EX_UNAVAILABLE
+    };
+    // El tag objetivo: el pedido (con o sin la `v`), o el de la última release publicada.
+    let tag = match rest.first() {
+        Some(t) if t.starts_with('v') => t.clone(),
+        Some(t) => format!("v{t}"),
+        None => {
+            let latest_url = format!("https://github.com/{repo}/releases/latest");
+            let effective = sh_capture(
+                "curl",
+                &["-sSfL", "-o", "/dev/null", "-w", "%{url_effective}", &latest_url],
+                None,
+            )
+            .unwrap_or_else(|e| {
+                eprintln!("could not query the latest release ({latest_url}): {e}");
+                process::exit(69);
+            });
+            tag_from_latest_url(&effective).unwrap_or_else(|| {
+                eprintln!("no releases published in https://github.com/{repo}/releases");
+                process::exit(69);
+            })
+        }
+    };
+    let current = env!("CARGO_PKG_VERSION");
+    let target = tag.trim_start_matches('v');
+    if target == current {
+        println!("raylang {current} is already up to date");
+        return;
+    }
+    if check {
+        println!("raylang {current} installed; {target} available (run 'ray upgrade')");
+        process::exit(1);
+    }
+
+    // El directorio de instalación: el del propio ejecutable (resolviendo symlinks).
+    let exe = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .unwrap_or_else(|e| {
+            eprintln!("could not locate the current executable: {e}");
+            process::exit(70);
+        });
+    let Some(install_dir) = exe.parent().map(Path::to_path_buf) else {
+        eprintln!("could not locate the installation directory of '{}'", exe.display());
+        process::exit(70);
+    };
+
+    // Descargar y desempaquetar en un dir temporal propio.
+    let tmp = std::env::temp_dir().join(format!("ray-upgrade-{}", process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    if let Err(e) = fs::create_dir_all(&tmp) {
+        eprintln!("could not create '{}': {e}", tmp.display());
+        process::exit(73);
+    }
+    // Limpieza del temporal pase lo que pase de aquí en adelante (el éxito sale por `return`).
+    let cleanup = |code: i32| -> ! {
+        let _ = fs::remove_dir_all(&tmp);
+        process::exit(code);
+    };
+    let url = format!("https://github.com/{repo}/releases/download/{tag}/{asset}");
+    eprintln!("downloading {url}");
+    let archive = tmp.join(&asset);
+    if let Err(e) = sh_capture("curl", &["-sSfL", "-o", &archive.to_string_lossy(), &url], None) {
+        eprintln!("could not download the release ({url}): {e}");
+        eprintln!("(does the tag '{tag}' exist? see https://github.com/{repo}/releases)");
+        cleanup(69);
+    }
+    if let Err(e) = sh_capture("tar", &["-xzf", &archive.to_string_lossy()], Some(&tmp)) {
+        eprintln!("could not unpack '{asset}': {e}");
+        cleanup(69);
+    }
+
+    // Verificar el binario ANTES de reemplazar nada: debe correr y reportar la versión pedida.
+    match sh_capture(&tmp.join("ray").to_string_lossy(), &["version"], None) {
+        Ok(v) if v.contains(target) => {}
+        Ok(v) => {
+            eprintln!(
+                "the downloaded binary reports '{}' but the tag is '{tag}': not installing",
+                v.trim()
+            );
+            cleanup(65);
+        }
+        Err(e) => {
+            eprintln!("the downloaded binary does not run on this machine: {e}");
+            cleanup(65);
+        }
+    }
+
+    // Instalar por rename: copiar al directorio destino como `.<bin>.new` y renombrar encima
+    // (mismo filesystem → atómico; reemplazar un binario en ejecución es válido en POSIX).
+    for bin in ["ray", "raylang"] {
+        let src = tmp.join(bin);
+        if !src.is_file() {
+            eprintln!("the release package does not contain '{bin}': not installing");
+            cleanup(65);
+        }
+        let staged = install_dir.join(format!(".{bin}.new"));
+        let dest = install_dir.join(bin);
+        let result = fs::copy(&src, &staged).map_err(|e| e.to_string()).and_then(|_| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&staged, fs::Permissions::from_mode(0o755));
+            }
+            fs::rename(&staged, &dest).map_err(|e| e.to_string())
+        });
+        if let Err(e) = result {
+            let _ = fs::remove_file(&staged);
+            eprintln!("could not install '{}': {e}", dest.display());
+            eprintln!(
+                "(no write permission? re-run the installer choosing a writable directory: \
+                 RAYLANG_BIN_DIR=<dir> install.sh)"
+            );
+            cleanup(73);
+        }
+    }
+    let _ = fs::remove_dir_all(&tmp);
+    println!("installed: raylang {current} → {target} ({})", install_dir.join("ray").display());
 }
 
 /// `ray run [--interp] [archivo] [args...]`: ejecuta el programa. Sin archivo usa
@@ -2366,4 +2560,36 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
         out.push(render_frame(if i == 0 { "en" } else { "from" }, f));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upgrade_asset_matches_release_scheme() {
+        // M137: el nombre del asset debe coincidir con lo que publica release.yml.
+        assert_eq!(
+            upgrade_asset("macos", "aarch64").as_deref(),
+            Some("raylang-aarch64-apple-darwin.tar.gz")
+        );
+        assert_eq!(
+            upgrade_asset("linux", "x86_64").as_deref(),
+            Some("raylang-x86_64-unknown-linux-gnu.tar.gz")
+        );
+        // Windows va por zip manual; una arquitectura desconocida tampoco tiene asset.
+        assert_eq!(upgrade_asset("windows", "x86_64"), None);
+        assert_eq!(upgrade_asset("linux", "riscv64"), None);
+    }
+
+    #[test]
+    fn upgrade_tag_from_latest_redirect() {
+        // GitHub redirige `releases/latest` a `releases/tag/<tag>`.
+        let url = "https://github.com/ray-language/raylang/releases/tag/v1.2.0";
+        assert_eq!(tag_from_latest_url(url).as_deref(), Some("v1.2.0"));
+        assert_eq!(tag_from_latest_url("https://github.com/o/r/releases/tag/v2.0.0/"), Some("v2.0.0".into()));
+        // Sin releases no hay redirección a un tag → None (error claro aguas arriba).
+        assert_eq!(tag_from_latest_url("https://github.com/o/r/releases"), None);
+        assert_eq!(tag_from_latest_url("https://github.com/o/r/releases/tag/"), None);
+    }
 }

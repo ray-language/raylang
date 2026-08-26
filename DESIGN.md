@@ -10389,3 +10389,32 @@ Las dos aristas que la implementación tuvo que cuidar:
 Los comandos que piden el índice de frente (`add`/`search`/`update`/`registry publish|yank`)
 sí lo localizan eager — ahí el clon del oficial ES la feature. La superficie de seguridad
 queda anotada en SECURITY.md (endpoint de red por defecto, cuándo se contacta y cómo se apaga).
+
+## 135. M137 — `ray upgrade`: la actualización del toolchain cubierta (ago 2026)
+
+El corte de la v1.2.0 destapó el hueco espejo del de M136: instalar estaba cubierto
+(`install.sh` → GitHub Release) pero **actualizar no existía como concepto** — la única vía era
+saber que había que re-correr el instalador, y nada te decía que había versión nueva. Para un
+toolchain con foco DX, la actualización es parte del producto (rustup/`go`, no "baja el tar").
+
+`ray upgrade [tag] [--check]`, en el CLI:
+
+- **Localiza la última release** siguiendo la redirección de `releases/latest` (o usa el tag
+  explícito, con o sin `v` — que también permite fijar/bajar a una versión concreta).
+- **Delegación en `curl`/`tar` del sistema** (helper `sh_capture`), el mismo criterio que el
+  gestor de paquetes con `git`: dependencias del entorno de desarrollo, cero crates nuevos.
+- **Verificación antes de reemplazar**: el binario descargado se ejecuta (`ray version`) y debe
+  reportar la versión del tag pedido; si no corre o no cuadra, no se instala nada.
+- **Reemplazo por rename en el directorio del ejecutable actual** (resolviendo symlinks):
+  copiar como `.<bin>.new` + `rename` encima — atómico en el mismo filesystem y válido sobre
+  un binario en ejecución (POSIX). Se instalan los dos nombres (`ray` + `raylang`).
+- **`--check` con contrato de scripts/CI**: exit 0 = al día, 1 = hay versión nueva, solo
+  informa. Windows queda fuera (como en `install.sh`: zip manual), con mensaje que apunta a
+  las Releases.
+
+Tests: los helpers puros (nombre del asset por plataforma — acoplado a lo que publica
+`release.yml` —, parseo del tag de la redirección) en unit; la CLI offline vía tag explícito
+(no-op con la versión actual, `--check`, error de uso, tag inexistente) en `upgrade_cli.rs`;
+la consulta con red real, `#[ignore]` como los live de deps. El smoke de reemplazo real:
+binarios 1.2.0 instalados en un dir aparte + `ray upgrade v1.1.0` → descarga, verifica y
+deja ambos binarios en 1.1.0.

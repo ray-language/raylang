@@ -45,6 +45,9 @@ Instala el binario (`ray`, con su alias `raylang`):
 curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
 ```
 
+Para actualizarlo después basta `ray upgrade` (descarga la última release y reemplaza los
+binarios instalados; `--check` solo informa, `ray upgrade v1.2.0` fija un tag concreto).
+
 Crea y ejecuta un proyecto:
 
 ```sh

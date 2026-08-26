@@ -54,6 +54,11 @@ fn generates_the_site_and_both_engines_match() {
     assert!(landing.contains("id=\"ghost\""), "fantasma dimensionador\n{landing}");
     assert!(landing.contains("pre.typing #typed { position: absolute"), "tipeo superpuesto");
     assert!(landing.contains("prefers-reduced-motion"), "tipeo accesible");
+    // La galería del hero: tabs de editor con varios ejemplos VERIFICADOS que rotan solos.
+    assert!(landing.contains("id=\"hero-tabs\""), "tabs del hero\n{landing}");
+    for example in ["tree.ray", "pipeline.ray", "actors.ray", "errors.ray"] {
+        assert!(landing.contains(example), "ejemplo {example} en la galería");
+    }
     assert!(landing.contains("href=\"spec.html\""), "enlace a la SPEC\n{landing}");
     // Los templates quedaron completamente resueltos (ni una directiva cruda en la salida).
     assert!(!landing.contains("{%"), "directivas sin resolver");

@@ -41,10 +41,24 @@
 @media (max-width: 44rem) {
     .cta .btn { flex: 1 1 auto; text-align: center; padding: .65rem 1rem; }
 }
-/* El "fantasma" con el código final dimensiona el <pre> desde el primer pintado (el
-   tipeo se dibuja encima, en absoluto): el contenedor no crece y la página no salta. */
-.window pre.typing { position: relative; }
+/* La galería de ejemplos: altura FIJA (la del ejemplo más largo) para que rotar o re-tipear
+   nunca mueva la página; el "fantasma" queda como fallback sin JS. El tipeo va encima. */
+.window pre.typing { position: relative; height: 28.5rem; overflow: auto; }
 .window pre.typing #typed { position: absolute; top: 1.1rem; left: 1.25rem; right: 1.25rem; }
+.window .bar .tabs { display: flex; gap: .1rem; margin-left: .6rem; overflow-x: auto; }
+.window .bar .tab {
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: #6b87a3;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .78rem;
+    padding: .5rem .65rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.window .bar .tab:hover { color: #a8c7e8; }
+.window .bar .tab.on { color: #eaf4fb; border-bottom-color: #4ba3f5; }
 .cur {
     display: inline-block;
     width: .55em;
@@ -263,7 +277,7 @@ section.engines { padding: 2.5rem 0 4rem; }
             </div>
         </div>
         <div class="window">
-            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>tree.ray</span></div>
+            <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><div class="tabs" id="hero-tabs"><noscript><span style="color:#6b87a3">tree.ray</span></noscript></div></div>
             <pre class="typing"><code id="ghost"><span class="kw">enum</span> <span class="ty">Tree</span> { Leaf, Node(<span class="ty">Tree</span>, <span class="ty">int</span>, <span class="ty">Tree</span>) }
 
 <span class="kw">fn</span> <span class="fn">sum</span>(t: <span class="ty">Tree</span>) -> <span class="ty">int</span> {
@@ -534,51 +548,132 @@ section.engines { padding: 2.5rem 0 4rem; }
         });
     }
 })();
-// Efecto de tipeo del hero: los segmentos ya vienen tokenizados (clase, texto).
+// La galería del hero: varios ejemplos VERIFICADOS (corren tal cual con `ray run`),
+// tabs estilo editor, tipeo por tokenizador y rotación automática; clic en una tab
+// re-tipea ese ejemplo y detiene la rotación (el usuario toma el control).
 (function () {
-    var SEG = [
-        ["kw", "enum"], ["", " "], ["ty", "Tree"], ["", " { Leaf, Node("], ["ty", "Tree"],
-        ["", ", "], ["ty", "int"], ["", ", "], ["ty", "Tree"], ["", ") }\n\n"],
-        ["kw", "fn"], ["", " "], ["fn", "sum"], ["", "(t: "], ["ty", "Tree"], ["", ") -> "],
-        ["ty", "int"], ["", " {\n    "], ["kw", "match"], ["", " (t) {\n        "],
-        ["ty", "Tree"], ["", ".Leaf => "], ["nu", "0"], ["", ",\n        "],
-        ["ty", "Tree"], ["", ".Node(l, v, r) => "], ["fn", "sum"], ["", "(l) + v + "],
-        ["fn", "sum"], ["", "(r),\n    }\n}\n\n"],
-        ["kw", "fn"], ["", " "], ["fn", "main"], ["", "() {\n    "], ["kw", "let"],
-        ["", " t = "], ["ty", "Tree"], ["", ".Node("], ["ty", "Tree"], ["", ".Node("],
-        ["ty", "Tree"], ["", ".Leaf, "], ["nu", "1"], ["", ", "], ["ty", "Tree"],
-        ["", ".Leaf), "], ["nu", "2"], ["", ", "], ["ty", "Tree"], ["", ".Leaf);\n    "],
-        ["fn", "print"], ["", "("], ["fn", "sum"], ["", "(t));    "], ["cm", "// 3"],
-        ["", "\n}"]
+    var EXAMPLES = [
+        { name: "tree.ray", code: "enum Tree { Leaf, Node(Tree, int, Tree) }\n\nfn sum(t: Tree) -> int {\n    match (t) {\n        Tree.Leaf => 0,\n        Tree.Node(l, v, r) => sum(l) + v + sum(r),\n    }\n}\n\nfn main() {\n    let t = Tree.Node(Tree.Node(Tree.Leaf, 1, Tree.Leaf), 2, Tree.Leaf);\n    print(sum(t));    // 3\n}" },
+        { name: "pipeline.ray", code: "fn main() {\n    // Pipelines perezosos: nada se materializa hasta el final.\n    let sum = [1, 2, 3, 4, 5]\n        |> map(fn(x: int) -> int { x * x })\n        |> filter(fn(x: int) -> bool { x % 2 == 1 })\n        |> fold(0, fn(a: int, b: int) -> int { a + b });\n    print(\"odd squares: ${sum}\");    // 35\n\n    let firsts = range(1, 100)\n        .map(fn(x: int) -> int { x * x })\n        .take(4)\n        .collect();\n    print(firsts);    // [1, 4, 9, 16]\n}" },
+        { name: "actors.ray", code: "fn main() {\n    // Actores: fibras + canales, sin estado compartido.\n    let ch: Channel<int> = Channel.new();\n    spawn(fn() {\n        for i in range(1, 6) { send(ch, i * i); }\n        close(ch);\n    });\n    var total = 0;\n    var open = true;\n    while (open) {\n        match (recv(ch)) {\n            Option.Some(v) => { total = total + v; },\n            Option.None => { open = false; },\n        }\n    }\n    print(\"total: ${total}\");    // 55\n}" },
+        { name: "errors.ray", code: "fn parse_port(s: string) -> Result<int, string> {\n    match (s.parse_int()) {\n        Option.Some(p) => Result.Ok(p),\n        Option.None => Result.Err(\"not a number: ${s}\"),\n    }\n}\n\nfn config() -> Result<int, string> {\n    Result.Ok(parse_port(\"8080\")? + 1)    // ? desempaqueta o retorna\n}\n\nfn main() {\n    match (config()) {\n        Result.Ok(p) => print(\"port: ${p}\"),\n        Result.Err(e) => print(\"error: ${e}\"),\n    }\n}" }
     ];
     var host = document.getElementById("typed");
     var ghost = document.getElementById("ghost");
-    if (!host || !ghost) { return; }
-    // Con movimiento reducido (o sin JS) queda el fantasma: el código final, resaltado.
-    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        return;
+    var tabsEl = document.getElementById("hero-tabs");
+    if (!host || !ghost || !tabsEl) { return; }
+    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    // Mini-tokenizador de raylang (los ejemplos son texto plano): comentario, string
+    // (interpolación incluida), número, palabra clave / Tipo / llamada.
+    var KW = { fn: 1, let: 1, var: 1, if: 1, else: 1, while: 1, for: 1, in: 1, match: 1, return: 1, enum: 1, struct: 1, trait: 1, impl: 1, import: 1, spawn: 1 };
+    var PRIM = { int: 1, float: 1, bool: 1, string: 1, char: 1, bytes: 1, unit: 1 };
+    function tokenize(code) {
+        var out = [];
+        function push(cls, txt) {
+            if (!txt) { return; }
+            var last = out[out.length - 1];
+            if (last && last[0] === cls) { last[1] += txt; } else { out.push([cls, txt]); }
+        }
+        var i = 0, n = code.length, j, w, k;
+        while (i < n) {
+            var c = code.charAt(i);
+            if (c === "/" && code.charAt(i + 1) === "/") {
+                j = i;
+                while (j < n && code.charAt(j) !== "\n") { j += 1; }
+                push("cm", code.slice(i, j));
+                i = j;
+            } else if (c === "\"") {
+                j = i + 1;
+                while (j < n && code.charAt(j) !== "\"") {
+                    if (code.charAt(j) === "\\") { j += 1; }
+                    j += 1;
+                }
+                push("st", code.slice(i, j + 1));
+                i = j + 1;
+            } else if (c >= "0" && c <= "9") {
+                j = i;
+                while (j < n && /[0-9._]/.test(code.charAt(j))) { j += 1; }
+                push("nu", code.slice(i, j));
+                i = j;
+            } else if (/[A-Za-z_]/.test(c)) {
+                j = i;
+                while (j < n && /[A-Za-z0-9_]/.test(code.charAt(j))) { j += 1; }
+                w = code.slice(i, j);
+                k = j;
+                while (k < n && code.charAt(k) === " ") { k += 1; }
+                if (KW[w] === 1) { push("kw", w); }
+                else if (PRIM[w] === 1 || /^[A-Z]/.test(w)) { push("ty", w); }
+                else if (code.charAt(k) === "(") { push("fn", w); }
+                else { push("", w); }
+                i = j;
+            } else {
+                push("", c);
+                i += 1;
+            }
+        }
+        return out;
     }
-    // El fantasma sigue dimensionando el <pre> (el tipeo se pinta encima): cero saltos.
-    ghost.style.visibility = "hidden";
+
+    var current = 0, auto = true, timer = null;
+    var cur = document.createElement("span");
+    cur.className = "cur";
     function span(cls) {
         var s = document.createElement("span");
         if (cls) { s.className = cls; }
         host.appendChild(s);
         return s;
     }
-    var cur = document.createElement("span");
-    cur.className = "cur";
-    var seg = 0, pos = 0, el = null;
-    function tick() {
-        if (seg >= SEG.length) { setTimeout(function () { cur.remove(); }, 4000); return; }
-        if (el === null) { el = span(SEG[seg][0]); host.appendChild(cur); }
-        el.textContent += SEG[seg][1].charAt(pos);
-        host.appendChild(cur);
-        pos += 1;
-        if (pos >= SEG[seg][1].length) { seg += 1; pos = 0; el = null; }
-        setTimeout(tick, 14);
+    function markTabs() {
+        var tabs = tabsEl.querySelectorAll(".tab");
+        for (var i = 0; i < tabs.length; i++) {
+            tabs[i].classList.toggle("on", i === current);
+        }
     }
-    setTimeout(tick, 350);
+    function next() { show((current + 1) % EXAMPLES.length, false); }
+    function fill(segments) {
+        for (var i = 0; i < segments.length; i++) { span(segments[i][0]).textContent = segments[i][1]; }
+    }
+    function show(idx, fromUser) {
+        clearTimeout(timer);
+        current = idx;
+        markTabs();
+        host.textContent = "";
+        var segments = tokenize(EXAMPLES[idx].code);
+        if (reduced) {
+            // Sin animación: el ejemplo aparece completo y no hay rotación automática.
+            fill(segments);
+            return;
+        }
+        var seg = 0, pos = 0, el = null;
+        function tick() {
+            if (seg >= segments.length) {
+                cur.remove();
+                if (auto) { timer = setTimeout(next, 3800); }
+                return;
+            }
+            if (el === null) { el = span(segments[seg][0]); }
+            el.textContent += segments[seg][1].charAt(pos);
+            host.appendChild(cur);
+            pos += 1;
+            if (pos >= segments[seg][1].length) { seg += 1; pos = 0; el = null; }
+            timer = setTimeout(tick, 12);
+        }
+        timer = setTimeout(tick, fromUser ? 80 : 350);
+    }
+
+    ghost.style.visibility = "hidden";
+    for (var i = 0; i < EXAMPLES.length; i++) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "tab";
+        b.textContent = EXAMPLES[i].name;
+        b.addEventListener("click", (function (idx) {
+            return function () { auto = false; show(idx, true); };
+        })(i));
+        tabsEl.appendChild(b);
+    }
+    if (reduced) { show(0, false); } else { show(0, false); }
 })();
 </script>
 {% endblock %}

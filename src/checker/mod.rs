@@ -32,11 +32,11 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::*;
 
 mod core;
-mod aux;
+mod support;
 mod enums;
 mod traits;
 mod lowering;
-use aux::*;
+use support::*;
 use enums::*;
 use traits::*;
 use lowering::*;

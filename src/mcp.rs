@@ -17,8 +17,16 @@ use std::io::{BufRead, Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Límite de instrucciones de la VM para `ray_run` (M42.1): ~1 s de CPU.
+/// Límite de instrucciones de la VM para `ray_run` (M42.1): ~1 s de CPU en release.
 const FUEL: u64 = 100_000_000;
+
+/// El fuel efectivo: `RAYLANG_MCP_FUEL` manda sobre el default. Existe por los tests: en un
+/// build DEBUG sobre un runner lento, quemar los 100M puede tardar más que el plazo de pared
+/// y la bomba de bucle moriría por timeout en vez de por fuel (carrera observada en CI);
+/// bajando el fuel, el corte por fuel queda MUY por debajo del plazo en cualquier máquina.
+fn fuel_limit() -> u64 {
+    std::env::var("RAYLANG_MCP_FUEL").ok().and_then(|v| v.parse().ok()).unwrap_or(FUEL)
+}
 /// Tope de objetos vivos del heap para `ray_run` (M42.2).
 const HEAP: u64 = 1_000_000;
 /// Plazo de pared por tool que ejecuta un subproceso (un invitado bloqueado en red/stdin no
@@ -228,7 +236,7 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
         "ray_check" => run_self(&["build"], code()?, None),
         "ray_run" => {
             let stdin = args.get("stdin").and_then(|s| s.as_str()).map(str::to_string);
-            let fuel = FUEL.to_string();
+            let fuel = fuel_limit().to_string();
             let heap = HEAP.to_string();
             run_self(&["run", "--deterministic", "--fuel", &fuel, "--heap", &heap], code()?, stdin)
         }

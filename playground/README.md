@@ -7,7 +7,9 @@ Ejecuta raylang **en el navegador**: la VM compilada a WebAssembly (`wasm32-unkn
 
 Es el **lenguaje núcleo**: lexer, parser, checker y VM, más el prelude
 (`Option`/`Result`/`map`/`filter`/`fold`/`assert`/`sort`) y toda la stdlib pura (aritmética, strings,
-arreglos, `Map`, structs, enums, `match`, closures, genéricos, traits). Un solo archivo (sin `import`).
+arreglos, `Map`, structs, enums, `match`, closures, genéricos, traits). Un archivo de usuario; los
+`import std/*` resuelven desde la stdlib **embebida** (los módulos de usuario no existen en el
+navegador y dan el error claro del loader).
 
 **No disponible** en el playground (el navegador no lo permite, y respeta la invariante cero-deps):
 red/TLS/HTTP, cripto (`ring`), FFI (`dlopen`), archivos, y el multicore (corre en un hilo, N=1). Un

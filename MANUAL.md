@@ -867,6 +867,19 @@ ray remove textutils
 ray registry publish                 # publica TU paquete en el registro (valida + chequea + hashea)
 ```
 
+Las dependencias **por nombre** se resuelven contra el **índice oficial**
+(`github.com/ray-language/ray-index`) **por defecto** — un proyecto recién creado puede hacer
+`ray add web` sin configurar nada. Precedencia: `RAY_INDEX` (entorno) → `[registry] index`
+(ray.toml) → el oficial. Opt-out explícito (solo deps git/`path:`, sin tocar la red):
+
+```toml
+[registry]
+index = ""            # sin índice (o exporta RAY_INDEX vacía)
+```
+
+El índice solo se consulta al resolver deps por nombre (`ray add`/`search`/`update`, o un
+requisito semver en `[dependencies]`); `ray run`/`build` con deps git/`path:` nunca lo tocan.
+
 El flujo completo del **publicador** (empaquetar, el índice, versionado, `yank`, garantías y
 receta de punta a punta) está en [`PUBLISH.md`](PUBLISH.md).
 

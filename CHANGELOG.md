@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El índice oficial de paquetes es el default** (M136): `ray add web` funciona en un
+  proyecto recién creado sin configurar nada. Precedencia: `RAY_INDEX` → `[registry] index`
+  → `git+https://github.com/ray-language/ray-index@main`. Opt-out explícito con
+  `index = ""` (o `RAY_INDEX` vacía); el índice solo se contacta al resolver deps por
+  nombre — `ray run`/`build` con deps git/`path:` siguen sin tocar la red.
 - **La extensión de VSCode está en el Marketplace**: `ext install ray-language.raylang`
   (resaltado + cliente LSP). Publicación automatizable con el workflow `vscode-publish`
   (manual o tags `vscode-v*`; Open VSX opcional vía `OVSX_PAT`).

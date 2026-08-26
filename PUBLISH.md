@@ -40,15 +40,18 @@ git = "git+https://github.com/user/mipaquete@v1.0.0"
 hash = "sha256:…"
 ```
 
-Se configura por proyecto en `ray.toml` — o por entorno, que tiene prioridad:
+El índice OFICIAL (`git+https://github.com/ray-language/ray-index@main`) es el **default**
+(M136): sin configurar nada, `ray add`/`search`/`update` y los requisitos semver resuelven
+contra él. Se sobrescribe por proyecto en `ray.toml` — o por entorno, que tiene prioridad:
 
 ```toml
 [registry]
-index = "git+https://github.com/ray-language/ray-index@main"  # el índice OFICIAL (o un dir local)
+index = "git+https://github.com/mi-org/mi-index@main"  # otro índice (o un dir local)
+# index = ""                                           # opt-out: sin índice (solo deps git/path:)
 ```
 
 ```sh
-export RAY_INDEX=/ruta/al/indice               # override (tests, CI)
+export RAY_INDEX=/ruta/al/indice               # override (tests, CI); vacía = opt-out
 ```
 
 Un índice **remoto** se clona/cachea en `.ray-deps/.index` (lo refresca `ray update`).

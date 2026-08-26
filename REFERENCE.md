@@ -539,7 +539,8 @@ hacen que el default sea la vía Cargo; `--without mimalloc,ahash,fibers` recupe
 hilo-por-tarea. `[native] without = ["tls", …]` en `ray.toml` fija una política de exclusión estable del
 proyecto.
 
-Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (índice de paquetes),
+Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (índice de paquetes;
+sin ella ni `[registry] index` se usa el oficial `ray-language/ray-index`; vacía = sin índice),
 `RAY_MIRROR` (mirror de descarga), `RAY_KEY` (clave Ed25519 de publicación),
 `RAYLANG_THREADS` (nº de hilos worker del scheduler; `1` = determinista),
 `RAY_FIBER_STACK_KIB` (reserva de pila por fibra en el binario nativo).

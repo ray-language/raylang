@@ -1508,7 +1508,6 @@ pub fn tls_connect(_host: &str, _port: i64) -> Result<i64, String> { Err(NET_TLS
 /// no bloqueante → WouldBlock espera readiness con el poller; en el intérprete bloquea.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
-    use std::os::fd::AsRawFd;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut reg = registry().lock().unwrap();
     match reg.open.get_mut(&h) {
@@ -1523,10 +1522,19 @@ pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
                         if std::time::Instant::now() >= deadline {
                             return Err("TLS handshake timeout".to_string());
                         }
-                        let fd = tc.sock.as_raw_fd();
-                        let (rd, wr): (&[i32], &[i32]) =
-                            if tc.conn.wants_write() { (&[], &[fd]) } else { (&[fd], &[]) };
-                        let _ = crate::poll::wait(rd, wr, 1000);
+                        // La espera de readiness es por fd + poll(2): solo-unix. En Windows
+                        // (destapado por la pata msvc del release v1.1.0, que nunca había
+                        // compilado) se espera con un sleep corto — mismo presupuesto de 10 s.
+                        #[cfg(unix)]
+                        {
+                            use std::os::fd::AsRawFd;
+                            let fd = tc.sock.as_raw_fd();
+                            let (rd, wr): (&[i32], &[i32]) =
+                                if tc.conn.wants_write() { (&[], &[fd]) } else { (&[fd], &[]) };
+                            let _ = crate::poll::wait(rd, wr, 1000);
+                        }
+                        #[cfg(not(unix))]
+                        std::thread::sleep(std::time::Duration::from_millis(20));
                     }
                     Err(e) => return Err(e.to_string()),
                 }

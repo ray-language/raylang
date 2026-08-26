@@ -2861,7 +2861,9 @@ del registro de M84):
   **autocompletado** (símbolos + builtins + snippets), hover con tipos, **signature help**
   (tooltip CM propio con el parámetro activo) y **formateo** LSP (`ray fmt`), tema de marca.
   De paso se destapó y arregló que el build wasm32 llevaba roto desde M100 v3/M124/M126/M131
-  (usos de ray_runtime sin guarda `cfg`); pendiente: una guarda de CI que compile wasm32.
+  (usos de ray_runtime sin guarda `cfg`). La guarda de CI EXISTÍA (IDEAS §57) pero vivía al
+  final del job de tests: cualquier rojo anterior la dejaba sin ejecutar (y main llevaba en
+  rojo por un enlace de docs) → ✅ promovida a job propio que corre siempre, en paralelo.
   La landing suma la sección de editores (VSCode marketplace, Sublime, Neovim/Helix).
 - **Fase 2 — ensamblado**: el sitio completo = landing + SPEC + book (`mdbook build`) +
   playground (WASM) bajo un mismo árbol de salida; enlaces internos de SPEC.md (DESIGN.md,

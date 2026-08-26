@@ -16,16 +16,19 @@
    auto los deja desbordar el viewport en móvil): el scroll ocurre dentro de la caja. */
 .hero .wrap > div, .agents .duo > div, .step > div, .bgroup { min-width: 0; }
 .cmd code { min-width: 0; }
+/* Tres mini-chips en vez de una píldora larga: envuelven de a uno en pantallas angostas
+   (una píldora multilínea con radio 999px se veía desproporcionada). */
+.badges { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.2rem; }
 .badge {
     display: inline-block;
-    font-size: .82rem;
+    font-size: .78rem;
     font-weight: 600;
     color: var(--accent);
     border: 1px solid var(--line);
     border-radius: 999px;
-    padding: .25rem .8rem;
-    margin-bottom: 1.1rem;
+    padding: .22rem .75rem;
     background: var(--bg-soft);
+    white-space: nowrap;
 }
 .hero h1 {
     font-size: clamp(2.4rem, 5vw, 3.8rem);
@@ -35,6 +38,9 @@
 }
 .hero p.sub { color: var(--muted); font-size: 1.12rem; max-width: 36rem; margin: 0 0 1.6rem; }
 .cta { display: flex; gap: .8rem; flex-wrap: wrap; }
+@media (max-width: 44rem) {
+    .cta .btn { flex: 1 1 auto; text-align: center; padding: .65rem 1rem; }
+}
 /* El "fantasma" con el código final dimensiona el <pre> desde el primer pintado (el
    tipeo se dibuja encima, en absoluto): el contenedor no crece y la página no salta. */
 .window pre.typing { position: relative; }
@@ -229,14 +235,18 @@ section.engines { padding: 2.5rem 0 4rem; }
 <header class="hero">
     <div class="wrap">
         <div>
-            <span class="badge">Estáticamente tipado · orientado a expresiones · auto-alojado</span>
+            <div class="badges">
+                <span class="badge">Estáticamente tipado</span>
+                <span class="badge">Orientado a expresiones</span>
+                <span class="badge">Auto-alojado</span>
+            </div>
             <h1>Un lenguaje para <span class="grad">producción real</span>.</h1>
             <p class="sub">Genéricos, traits, pattern matching y concurrencia multicore por
             actores — con errores como valores, sin null y sin excepciones. Escrito en Rust,
             con una superficie de dependencias mínima y deliberada.</p>
             <div class="cta">
                 <a class="btn primary" href="#empezar">Empezar</a>
-                <a class="btn ghost" href="#playground">Probar en el navegador</a>
+                <a class="btn ghost" href="#playground">Playground</a>
                 <a class="btn ghost" href="spec.html">Especificación</a>
             </div>
         </div>

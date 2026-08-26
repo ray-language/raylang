@@ -112,7 +112,7 @@ Las líneas citadas son las actuales (17 jul 2026), para localizar cada bloque a
 |---|---|---:|
 | `mod.rs` | API pública (`check`, `semantic_index`, `prepare_program`/`check_program`), structs `TypeError`/`FnSig`/`VarInfo`/`Checker`/`SemanticIndex` (39–592) y declaración de submódulos | ~700 |
 | `core.rs` | El grueso del `impl Checker`: expr/stmt/llamadas/ámbitos/divergencia (593–3700) — si al moverlo se ve una costura natural (p. ej. `check_call` y la resolución por punto), partir en `core.rs` + `calls.rs` | ~1 500 ×2 |
-| `aux.rs` | "Auxiliares libres" (3700–3941): `subst`/`unify`/helpers puros | ~250 |
+| `support.rs` (né `aux.rs`) | "Auxiliares libres" (3700–3941): `subst`/`unify`/helpers puros | ~250 |
 | `enums.rs` | Resolución de construcción de enums, M5 (3942–4080) | ~150 |
 | `traits.rs` | Auxiliares de traits M9 + `@derive` M10.1 (4081–5163) | ~1 000 |
 | `lowering.rs` | Las 6 bajadas post-check: UFCS/dicts/dyn/uint/`?`-conv/operadores (5164–6053). Son secciones de ~150 líneas: UN archivo con las cabeceras actuales como separadores | ~900 |
@@ -202,7 +202,7 @@ puro** con suite verde, en cuatro PRs fusionados a `main`:
 |---|---|---:|---|
 | `src/vm.rs` | #35 (tests) + #36/#38 (resto) | 7 221 | `vm/`: `mod.rs` 3 103 · `tests.rs` 3 102 · `sched.rs` 723 · `values.rs` 208 · `transfer.rs` 113 |
 | `src/transpile.rs` | #39 | 6 220 | `transpile/`: `calls.rs` 1 911 · `emit.rs` 1 496 · `tests.rs` 853 · `runtime.rs` 677 · `mod.rs` 447 · `types.rs` 378 · `analysis.rs` 345 · `names.rs` 185 |
-| `src/checker.rs` | #40 | 7 849 | `checker/`: `core.rs` 3 147 · `tests.rs` 1 709 · `traits.rs` 1 136 · `lowering.rs` 907 · `mod.rs` 605 · `aux.rs` 249 · `enums.rs` 145 |
+| `src/checker.rs` | #40 | 7 849 | `checker/`: `core.rs` 3 147 · `tests.rs` 1 709 · `traits.rs` 1 136 · `lowering.rs` 907 · `mod.rs` 605 · `support.rs` (né `aux.rs`) 249 · `enums.rs` 145 |
 | `src/lsp.rs` | #41 | 4 987 | `lsp/`: `features.rs` 2 765 · `tests.rs` 1 336 · `protocol.rs` 418 · `json.rs` 344 · `mod.rs` 141 |
 
 ### Desviaciones del plan (§4), todas decididas al ver el código real

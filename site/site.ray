@@ -48,6 +48,26 @@ fn copy_bytes(root: string, out: string, source: string, dest: string) {
     }
 }
 
+// Copia un ARTEFACTO construido (el wasm del playground, el bundle del editor): si falta, el
+// sitio sale sin él con un aviso — `playground/build.sh` lo produce (no se versiona).
+fn copy_artifact(root: string, out: string, source: string, dest: string) {
+    match (fs.read_file_bytes(
+    root + "/" + source
+)) {
+        Result.Ok(data) => {
+            match (fs.write_file_bytes(out + "/" + dest, data)) {
+                Result.Ok(n) => { },
+                Result.Err(e) => panic("no se pudo escribir '" + dest + "': " + e),
+            }
+        },
+        Result.Err(e) => {
+            eprint(
+                "warning: '" + source + "' is not built (run playground/build.sh); the site ships without it"
+            );
+        },
+    }
+}
+
 fn main() -> int {
     let argv = args();
     if (argv.len() != 2) {
@@ -85,9 +105,12 @@ fn main() -> int {
         "playground/fonts/jetbrains-mono.woff2",
         "assets/fonts/jetbrains-mono.woff2"
     );
-    // El playground completo (la VM en WASM), embebido en la landing y a pantalla completa.
+    // El playground completo (la VM en WASM + el editor CodeMirror con el LSP embebido),
+    // incrustado en la landing y a pantalla completa. El wasm y el bundle son artefactos
+    // de `playground/build.sh` (no versionados): si faltan, aviso y el sitio sale sin ellos.
     copy_text(root, out, "playground/index.html", "playground/index.html");
-    copy_bytes(root, out, "playground/raylang.wasm", "playground/raylang.wasm");
+    copy_artifact(root, out, "playground/raylang.wasm", "playground/raylang.wasm");
+    copy_artifact(root, out, "playground/editor.bundle.js", "playground/editor.bundle.js");
     copy_bytes(
         root,
         out,

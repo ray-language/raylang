@@ -23,19 +23,30 @@ cd playground && python3 -m http.server 8000
 
 > Hay que **servirlo por HTTP** (no `file://`): el navegador bloquea `fetch` del `.wasm` en local.
 
-El `.wasm` es un artefacto de build (no se versiona; ver `.gitignore`). Con `wasm-opt` (paquete
-`binaryen`) instalado, `build.sh` lo reduce con `-Oz`.
+El `.wasm` y el `editor.bundle.js` son artefactos de build (no se versionan; ver `.gitignore`).
+Con `wasm-opt` (paquete `binaryen`) instalado, `build.sh` reduce el wasm con `-Oz`; el bundle
+del editor lo produce npm/esbuild desde `editor/` (la única parte del playground con deps JS,
+como la extensión de VSCode).
 
-El editor trae **resaltado de sintaxis** (escrito a mano, cero deps): un tokenizador de raylang colorea un
-`<pre>` que va detrás de un `<textarea>` transparente (técnica de *overlay* → edición nativa intacta).
+## El editor real (IDEAS §74)
+
+El editor es **CodeMirror 6** (`editor/editor.mjs` → `editor.bundle.js`) con el **LSP de
+raylang corriendo dentro del wasm**: el MISMO despacho del `ray lsp` de tu editor
+(`src/lsp/mod.rs::handle_message`), compilado a wasm32. Eso da diagnósticos en vivo
+(publishDiagnostics → subrayado + gutter), **autocompletado** (símbolos del documento +
+builtins + snippets con placeholders) y **hover** con tipos, sin reimplementar nada en JS: el
+cliente (`index.html`) solo habla JSON-RPC con la función exportada `lsp`.
 
 ## Cómo funciona (ABI)
 
-El módulo exporta tres funciones (`src/wasm.rs`):
+El módulo exporta cuatro funciones (`src/wasm.rs`):
 
 - `alloc(len) -> ptr` — reserva `len` bytes en la memoria lineal.
 - `run(ptr, len) -> u64` — compila y ejecuta el fuente en `[ptr, ptr+len)`; devuelve
   `(ptr_salida << 32) | len_salida` apuntando al texto de salida (stdout capturado + errores).
+- `lsp(ptr, len) -> u64` — despacha UN mensaje LSP (JSON-RPC, sin framing: la llamada es el
+  transporte) y devuelve el **array JSON** de mensajes emitidos, empaquetado igual que `run`.
 - `dealloc(ptr, len)` — libera un buffer.
 
-El glue JS (`index.html`) reserva, escribe el fuente UTF-8, llama a `run`, lee la salida y libera.
+El glue JS (`index.html`) reserva, escribe los bytes UTF-8, llama a `run`/`lsp`, lee la salida
+y libera.

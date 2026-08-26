@@ -116,3 +116,47 @@ fn run_source(src: &str) -> String {
         Err(e) => take_output() + &diagnostic::render(src, e.line, e.col, 1, &e.to_string()),
     }
 }
+
+// ---------------------------------------------------------------------------
+// El LSP en el navegador (playground con editor real, IDEAS §74): el MISMO despacho del
+// Language Server (`lsp::handle_message`) compilado a wasm. El host JS manda UN mensaje
+// JSON-RPC (sin framing: el transporte aquí es la llamada) y recibe el ARRAY JSON de los
+// mensajes que el servidor emite (respuesta y/o publishDiagnostics). El estado de
+// documentos abiertos vive en el módulo, como en el proceso del `ray lsp` real.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Documentos abiertos del LSP embebido (uri → texto), como los del bucle stdio.
+    static LSP_DOCS: RefCell<std::collections::HashMap<String, String>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Empaqueta un `String` en la memoria lineal como `(ptr << 32) | len` (contrato de [`run`]).
+fn pack_output(output: String) -> u64 {
+    let mut bytes = output.into_bytes();
+    bytes.shrink_to_fit();
+    let len = bytes.len();
+    let ptr = bytes.as_mut_ptr();
+    std::mem::forget(bytes);
+    ((ptr as u64) << 32) | (len as u64)
+}
+
+/// Despacha un mensaje LSP (bytes UTF-8 de un JSON-RPC) y devuelve el array JSON de mensajes
+/// emitidos, empaquetado como en [`run`]. Un mensaje ilegible devuelve `[]` (el servidor no
+/// se cae). Libera el buffer de entrada.
+///
+/// # Safety
+/// `msg_ptr`/`msg_len` deben provenir de un [`alloc`] previo con esa longitud.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lsp(msg_ptr: *mut u8, msg_len: usize) -> u64 {
+    let raw = {
+        let v = unsafe { Vec::from_raw_parts(msg_ptr, msg_len, msg_len) };
+        String::from_utf8_lossy(&v).into_owned()
+    };
+    let messages = match crate::lsp::json::parse(&raw) {
+        Ok(msg) => LSP_DOCS.with(|d| crate::lsp::handle_message(&mut d.borrow_mut(), &msg)).0,
+        Err(_) => Vec::new(),
+    };
+    let body: Vec<String> = messages.iter().map(|m| m.serialize()).collect();
+    pack_output(format!("[{}]", body.join(",")))
+}

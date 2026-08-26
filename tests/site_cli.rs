@@ -106,12 +106,19 @@ fn generates_the_site_and_both_engines_match() {
         assert_eq!(copied, origin, "fuente copiada íntegra: {font}");
     }
 
-    // El playground viaja completo con el sitio.
-    let wasm = std::fs::read(vm.join("playground/raylang.wasm")).unwrap();
-    assert!(wasm.starts_with(b"\0asm"), "wasm válido");
+    // El playground viaja completo con el sitio; el wasm y el bundle del editor son
+    // artefactos de `playground/build.sh` (no versionados) → se aseveran solo si están.
     let play = std::fs::read_to_string(vm.join("playground/index.html")).unwrap();
-    assert!(play.contains("raylang"), "playground copiado");
+    assert!(play.contains("editor.bundle.js"), "el playground usa el editor real");
+    assert!(play.contains("wasm.lsp"), "el playground habla con el LSP embebido");
     assert!(vm.join("playground/fonts/jetbrains-mono.woff2").exists(), "fuentes del playground");
+    if repo.join("playground/raylang.wasm").exists() {
+        let wasm = std::fs::read(vm.join("playground/raylang.wasm")).unwrap();
+        assert!(wasm.starts_with(b"\0asm"), "wasm válido");
+    }
+    if repo.join("playground/editor.bundle.js").exists() {
+        assert!(vm.join("playground/editor.bundle.js").exists(), "bundle del editor copiado");
+    }
 
     // La SPEC renderizada: título y estructura reales de SPEC.md, pasados por std/markdown.
     let spec = std::fs::read_to_string(vm.join("spec.html")).unwrap();

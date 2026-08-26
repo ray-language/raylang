@@ -2852,6 +2852,16 @@ del registro de M84):
   packages/ + registro). Salida determinista, byte-idéntica por ambos motores
   (`tests/site_cli.rs`). Previsualización local: servir la salida con cualquier estático
   (`python3 -m http.server -d <salida>`; el iframe del playground prefiere http a file://).
+- **Fase 1b — ✅ HECHA (26 ago 2026): el playground con EDITOR REAL y el LSP embebido.**
+  El despacho del Language Server se extrajo del bucle stdio (`lsp::handle_message`,
+  independiente del transporte) y se exporta desde el wasm (`src/wasm.rs::lsp`: un mensaje
+  JSON-RPC por llamada → el array de mensajes emitidos). El editor pasa del overlay
+  textarea+pre a **CodeMirror 6** (`playground/editor/` → `editor.bundle.js` vía npm/esbuild;
+  artefacto NO versionado, como el wasm — `build.sh` produce ambos): diagnósticos en vivo,
+  **autocompletado** (símbolos + builtins + snippets), hover con tipos, tema de marca.
+  De paso se destapó y arregló que el build wasm32 llevaba roto desde M100 v3/M124/M126/M131
+  (usos de ray_runtime sin guarda `cfg`); pendiente: una guarda de CI que compile wasm32.
+  La landing suma la sección de editores (VSCode marketplace, Sublime, Neovim/Helix).
 - **Fase 2 — ensamblado**: el sitio completo = landing + SPEC + book (`mdbook build`) +
   playground (WASM) bajo un mismo árbol de salida; enlaces internos de SPEC.md (DESIGN.md,
   MANUAL.md…) resueltos o neutralizados.

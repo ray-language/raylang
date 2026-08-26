@@ -33,3 +33,7 @@ playground/*.wasm
 # Salida compilada del libro (se regenera con `mdbook build`).
 book/book/
 tools/__pycache__/
+# IDEAS §74: el editor real del playground (CodeMirror 6) también se construye
+# (playground/build.sh → npm/esbuild); el bundle no se versiona, como el .wasm.
+playground/editor.bundle.js
+playground/editor/node_modules/

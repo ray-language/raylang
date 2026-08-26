@@ -34,9 +34,10 @@ pub struct Manifest {
     /// `[fmt] indent_size` — nº de espacios por nivel (si `indent_style = "space"`). `None` = no declarado.
     pub indent_size: Option<usize>,
     /// `[registry] index` — el **índice de paquetes** para resolver dependencias por nombre (M51). Un
-    /// directorio local (M51a) o, más adelante, una URL git del repo del índice (M51c). Relativo a la
-    /// raíz del proyecto si no es absoluto. `None` = sin índice (solo deps git/`path:`). Lo puede
-    /// sobrescribir la variable de entorno `RAY_INDEX`.
+    /// directorio local (M51a) o una URL git del repo del índice (M51c). Relativo a la raíz del
+    /// proyecto si no es absoluto. `None` = no declarado → se usa el índice **oficial** por defecto
+    /// (M136, `deps::OFFICIAL_INDEX`); `Some("")` (`index = ""`) = opt-out explícito (sin índice,
+    /// solo deps git/`path:`). Lo puede sobrescribir la variable de entorno `RAY_INDEX`.
     pub registry_index: Option<String>,
     /// `[registry] mirror` — **mirror de paquetes** (M90.1): un prefijo de URL que reescribe la URL
     /// git de cada paquete al descargarlo (`prefijo/<url-sin-esquema>`). NO es otro índice (mismo

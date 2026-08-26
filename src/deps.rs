@@ -115,9 +115,10 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 /// Ciclos seguros (mapa de elegidos). Conflictos (mismo nombre, distinto spec): **MVS ligero** —el
 /// mayor tag semver de la misma URL, o error si no son comparables (caché plana: un slot por nombre)—.
 /// Para cada paquete recomputa el hash y lo compara con el bloqueado; un desajuste = *supply-chain*.
-/// El directorio del **índice de paquetes** (M51a), para resolver deps por nombre. Precedencia:
-/// la variable de entorno `RAY_INDEX`, luego `[registry] index` del `ray.toml` (relativo a la raíz
-/// si no es absoluto). `Ok(None)` = sin índice (solo deps git/`path:`). Un índice remoto por git → M51c.
+/// El directorio del **índice de paquetes** (M51a), para resolver deps por nombre. Precedencia
+/// (M136): la variable de entorno `RAY_INDEX`, luego `[registry] index` del `ray.toml` (relativo a
+/// la raíz si no es absoluto), y si ninguno está, el índice **oficial** (`OFFICIAL_INDEX`).
+/// `Ok(None)` = opt-out explícito (valor vacío; solo deps git/`path:`). Un índice remoto por git → M51c.
 pub(crate) fn index_dir(manifest: &Manifest) -> Result<Option<std::path::PathBuf>, String> {
     let Some(raw) = index_raw(manifest) else {
         return Ok(None);
@@ -132,12 +133,30 @@ pub(crate) fn index_dir(manifest: &Manifest) -> Result<Option<std::path::PathBuf
     Ok(Some(if p.is_absolute() { p.to_path_buf() } else { manifest.root.join(&raw) }))
 }
 
-/// La spec cruda del índice configurado: `RAY_INDEX`, o `[registry] index` del `ray.toml`.
+/// El índice de paquetes **oficial** (M136): el default cuando ni `RAY_INDEX` ni
+/// `[registry] index` lo configuran — modelo crates.io/proxy.golang.org: `ray add <pkg>`
+/// funciona out-of-the-box en un proyecto recién creado.
+pub(crate) const OFFICIAL_INDEX: &str = "git+https://github.com/ray-language/ray-index@main";
+
+/// La spec cruda del índice configurado. Precedencia (M136): `RAY_INDEX` → `[registry] index`
+/// del `ray.toml` → el índice **oficial** (`OFFICIAL_INDEX`). Un valor **vacío** en cualquiera
+/// de los dos niveles es el *opt-out* explícito (`None` = sin índice, solo deps git/`path:`).
 fn index_raw(manifest: &Manifest) -> Option<String> {
-    std::env::var("RAY_INDEX")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| manifest.registry_index.clone())
+    resolve_index_raw(std::env::var("RAY_INDEX").ok(), manifest.registry_index.as_deref())
+}
+
+/// La lógica pura de `index_raw` (separada para poder testearla sin tocar el entorno del proceso).
+fn resolve_index_raw(env: Option<String>, toml: Option<&str>) -> Option<String> {
+    if let Some(v) = env {
+        // La variable declarada decide: un valor vacío es el opt-out por entorno (CI hermético).
+        return Some(v).filter(|s| !s.trim().is_empty());
+    }
+    match toml {
+        // `index = ""` en ray.toml = opt-out explícito del índice (incluido el oficial).
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => Some(s.to_string()),
+        None => Some(OFFICIAL_INDEX.to_string()),
+    }
 }
 
 /// El **mirror de paquetes** configurado (M90.1): `RAY_MIRROR`, o `[registry] mirror` del `ray.toml`.
@@ -265,20 +284,42 @@ pub fn refresh_index(manifest: &Manifest) -> Result<(), String> {
 fn to_gitspec(
     name: &str,
     spec: &str,
-    index: Option<&Path>,
+    index: &mut LazyIndex<'_>,
     locked: Option<&GitSpec>,
     update: bool,
 ) -> Result<(GitSpec, Option<String>), String> {
     if crate::index::is_registry_spec(spec) {
-        let dir = index.ok_or_else(|| {
+        let dir = index.get()?.map(Path::to_path_buf).ok_or_else(|| {
             format!(
-                "the dependency '{name} = \"{spec}\"' resolves by name, but no index is \
-                 configured (declare '[registry] index = \"<dir>\"' in ray.toml or export RAY_INDEX)"
+                "the dependency '{name} = \"{spec}\"' resolves by name, but the package index \
+                 is disabled ('index = \"\"' or empty RAY_INDEX): configure one with \
+                 '[registry] index = \"<dir>\"' in ray.toml or export RAY_INDEX"
             )
         })?;
-        crate::index::resolve_pinned(dir, name, spec, locked, update)
+        crate::index::resolve_pinned(&dir, name, spec, locked, update)
     } else {
         parse_spec(spec).map(|s| (s, None))
+    }
+}
+
+/// El directorio del índice, localizado **perezosamente** (M136): con el índice oficial por
+/// defecto, `index_dir` puede implicar un clon por red — un proyecto cuyas deps son todas
+/// git/`path:` no debe tocarlo. Solo la primera dep **por nombre** dispara la localización.
+struct LazyIndex<'a> {
+    manifest: &'a Manifest,
+    dir: Option<Option<std::path::PathBuf>>,
+}
+
+impl<'a> LazyIndex<'a> {
+    fn new(manifest: &'a Manifest) -> Self {
+        LazyIndex { manifest, dir: None }
+    }
+
+    fn get(&mut self) -> Result<Option<&Path>, String> {
+        if self.dir.is_none() {
+            self.dir = Some(index_dir(self.manifest)?);
+        }
+        Ok(self.dir.as_ref().unwrap().as_deref())
     }
 }
 
@@ -297,7 +338,7 @@ pub fn update(manifest: &Manifest) -> Result<usize, String> {
 fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     let cache = manifest.root.join(".ray-deps");
     let locked = read_lock(&manifest.root)?;
-    let index = index_dir(manifest)?;
+    let mut index = LazyIndex::new(manifest);
     let mirror = mirror_raw(manifest);
     // El `GitSpec` bloqueado por nombre (para `resolve_pinned`): reproducibilidad de los requisitos.
     let locked_spec = |name: &str| -> Option<GitSpec> {
@@ -317,9 +358,10 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     let enqueue = |n: &str,
                    s: &str,
                    queue: &mut std::collections::VecDeque<(String, GitSpec)>,
-                   index_hash: &mut std::collections::HashMap<String, (GitSpec, String)>|
+                   index_hash: &mut std::collections::HashMap<String, (GitSpec, String)>,
+                   index: &mut LazyIndex<'_>|
      -> Result<(), String> {
-        let (gs, h) = to_gitspec(n, s, index.as_deref(), locked_spec(n).as_ref(), update)?;
+        let (gs, h) = to_gitspec(n, s, index, locked_spec(n).as_ref(), update)?;
         if let Some(h) = h {
             index_hash.insert(n.to_string(), (gs.clone(), h));
         }
@@ -333,7 +375,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
         if path_of_path_dep(s).is_some() {
             continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
         }
-        enqueue(n, s, &mut queue, &mut index_hash)?;
+        enqueue(n, s, &mut queue, &mut index_hash, &mut index)?;
     }
 
     while let Some((name, spec)) = queue.pop_front() {
@@ -395,7 +437,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
             if path_of_path_dep(&ds).is_some() {
                 continue;
             }
-            enqueue(&dn, &ds, &mut queue, &mut index_hash)?;
+            enqueue(&dn, &ds, &mut queue, &mut index_hash, &mut index)?;
         }
     }
 
@@ -694,6 +736,23 @@ fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_precedence_env_toml_official_default() {
+        // M136: RAY_INDEX → [registry] index → índice oficial. Vacío = opt-out en ambos niveles.
+        let s = |v: &str| Some(v.to_string());
+        // Sin nada configurado → el índice oficial por defecto.
+        assert_eq!(resolve_index_raw(None, None), s(OFFICIAL_INDEX));
+        // El ray.toml decide sobre el default; la variable decide sobre ambos.
+        assert_eq!(resolve_index_raw(None, Some("./idx")), s("./idx"));
+        assert_eq!(resolve_index_raw(s("/env/idx"), Some("./idx")), s("/env/idx"));
+        // Opt-out explícito: `index = ""` en ray.toml, o RAY_INDEX declarado vacío.
+        assert_eq!(resolve_index_raw(None, Some("")), None);
+        assert_eq!(resolve_index_raw(None, Some("  ")), None);
+        assert_eq!(resolve_index_raw(s(""), Some("./idx")), None);
+        // El default oficial es una spec remota git (se clona/cachea como cualquier M51c).
+        assert!(OFFICIAL_INDEX.starts_with("git+https://"));
+    }
 
     #[test]
     fn validates_package_names() {

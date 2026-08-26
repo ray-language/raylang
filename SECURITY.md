@@ -59,6 +59,11 @@ Lo que raylang **garantiza por construcción**:
   publicada con dueño de nombre fijado por TOFU (`ray registry publish --sign`,
   `ray registry verify` como check de CI del índice) e **índice único por proyecto** para mitigar
   la *dependency confusion*. Detalle en [PUBLISH.md](PUBLISH.md) §6.
+  - **Endpoint de red por defecto** (M136): el índice oficial
+    (`github.com/ray-language/ray-index`) es el default cuando no hay `RAY_INDEX` ni
+    `[registry] index`. Solo se contacta al resolver deps **por nombre** (nunca en
+    `run`/`build` con deps git/`path:`), y el opt-out es explícito: `index = ""` en
+    `ray.toml` o `RAY_INDEX` vacía (builds herméticos/CI sin red).
 
 ### Política de dependencias
 

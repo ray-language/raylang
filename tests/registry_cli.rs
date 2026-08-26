@@ -359,19 +359,37 @@ fn remote_git_index_clones_and_resolves() {
 }
 
 #[test]
-fn spec_by_name_without_configured_index_warns() {
+fn spec_by_name_with_disabled_index_warns() {
+    // M136: sin configurar nada, el default es el índice OFICIAL — el opt-out es explícito
+    // (`index = ""` en ray.toml, o RAY_INDEX declarada vacía) y entonces resolver por nombre falla.
     let base = tmp("noindex");
     let app = app(&base, "fn main() -> int { 0 }\n");
     std::fs::write(
         app.join("ray.toml"),
-        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"1.0.0\"\n",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"\"\n\n\
+         [dependencies]\ngeo = \"1.0.0\"\n",
     )
     .unwrap();
-    // Sin RAY_INDEX ni [registry] → error claro al intentar resolver por nombre.
-    let out = Command::new(BIN).args(["run"]).current_dir(&app).env_remove("RAY_INDEX").output().unwrap();
+    let (_out, err, code) = ray_plain(&app, &["run"]);
+    assert_eq!(code, 65, "opt-out por ray.toml → error al resolver por nombre\n{err}");
+    assert!(err.contains("disabled"), "avisa del índice deshabilitado:\n{err}");
+
+    // Opt-out por entorno: RAY_INDEX="" gana sobre un `[registry] index` válido del ray.toml.
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"./idx\"\n\n\
+         [dependencies]\ngeo = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let out = Command::new(BIN)
+        .args(["run"])
+        .current_dir(&app)
+        .env("RAY_INDEX", "")
+        .output()
+        .unwrap();
     assert_eq!(out.status.code().unwrap_or(-1), 65);
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no index") || err.contains("index"), "avisa de la falta de índice:\n{err}");
+    assert!(err.contains("disabled"), "RAY_INDEX vacía deshabilita el índice:\n{err}");
 }
 
 // ── M51d: endurecimiento (nombres, hash del índice, publish del tag, índice re-cacheado) ──

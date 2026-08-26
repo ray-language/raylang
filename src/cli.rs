@@ -1139,13 +1139,14 @@ fn cmd_add(args: &[String]) {
         eprintln!("no project: missing 'ray.toml' (create one with 'ray new')");
         process::exit(64);
     };
-    // Localiza el índice (RAY_INDEX o [registry] index).
+    // Localiza el índice (RAY_INDEX, [registry] index, o el oficial por defecto — M136).
     let index = match crate::deps::index_dir(&m) {
         Ok(Some(dir)) => dir,
         Ok(None) => {
             eprintln!(
-                "no package index configured: declare '[registry] index = \"<dir>\"' in \
-                 ray.toml or export RAY_INDEX (for git deps use 'name = \"git+URL@ref\"' by hand)"
+                "the package index is disabled ('index = \"\"' or empty RAY_INDEX): declare \
+                 '[registry] index = \"<dir>\"' in ray.toml or export RAY_INDEX (for git deps \
+                 use 'name = \"git+URL@ref\"' by hand)"
             );
             process::exit(65);
         }
@@ -1262,7 +1263,7 @@ fn cmd_search(args: &[String]) {
     let index = match crate::deps::index_dir(&m) {
         Ok(Some(dir)) => dir,
         Ok(None) => {
-            eprintln!("no index configured ('[registry] index' or RAY_INDEX)");
+            eprintln!("the package index is disabled ('index = \"\"' or empty RAY_INDEX)");
             process::exit(65);
         }
         Err(e) => {
@@ -1549,8 +1550,8 @@ fn cmd_publish(args: &[String]) {
         Ok(Some(dir)) => dir,
         Ok(None) => {
             eprintln!(
-                "no index configured: declare '[registry] index = \"<dir>\"' in ray.toml or \
-                 export RAY_INDEX"
+                "the package index is disabled ('index = \"\"' or empty RAY_INDEX): declare \
+                 '[registry] index = \"<dir>\"' in ray.toml or export RAY_INDEX"
             );
             process::exit(65);
         }
@@ -1791,7 +1792,7 @@ fn cmd_yank(args: &[String]) {
     let index = match crate::deps::index_dir(&m) {
         Ok(Some(dir)) => dir,
         Ok(None) => {
-            eprintln!("no index configured ('[registry] index' or RAY_INDEX)");
+            eprintln!("the package index is disabled ('index = \"\"' or empty RAY_INDEX)");
             process::exit(65);
         }
         Err(e) => {

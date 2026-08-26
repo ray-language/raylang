@@ -10358,3 +10358,34 @@ Operativa del script endurecida por el accidente del estreno: el run de `net` fa
 `target/release/ray` — un binario RANCIO sin los fixes. Ahora elige el binario **más fresco** de
 los dos perfiles, y la inmutabilidad se decide por el ÍNDICE (no por el tag): un tag remoto sin
 entrada = run interrumpido → se REANUDA publicando solo la entrada del contenido ya etiquetado.
+
+## 134. M136 — el índice oficial por defecto: `ray add web` out-of-the-box (ago 2026)
+
+El hueco lo destapó el dogfood de la instalación: `ray new demo && cd demo && ray add web`
+fallaba con "no package index configured" — a pesar de que el índice oficial
+(`ray-language/ray-index`, §132–§133) existe precisamente para eso. Obligar a cada usuario a
+descubrir qué es un índice y pegar una URL en `[registry]` antes de su primer `add` es
+fricción sin valor: ningún gestor moderno lo pide (crates.io es el default de Cargo,
+proxy.golang.org el de Go).
+
+La decisión (vía "default embebido", no "ray new lo escribe"): la precedencia de localización
+del índice gana un tercer escalón — `RAY_INDEX` → `[registry] index` → **`OFFICIAL_INDEX`**
+(`git+https://github.com/ray-language/ray-index@main`, constante en `deps.rs`). Beneficia a
+todo proyecto (nuevo o existente, manifiesto a mano incluido), no copia la URL en cada
+`ray.toml` (rotable en una release del toolchain) y mantiene el manifiesto generado mínimo.
+
+Las dos aristas que la implementación tuvo que cuidar:
+
+- **Opt-out explícito, en ambos niveles**: `index = ""` en `ray.toml`, o `RAY_INDEX`
+  declarada vacía (que ahora significa "sin índice", no "cae al siguiente escalón"), devuelven
+  el comportamiento pre-M136 — solo deps git/`path:`, cero red. Para CI hermético y para el
+  test que asevera el error de "índice deshabilitado".
+- **Localización perezosa en `ensure`**: `index_dir` sobre una spec `git+` **clona**; con un
+  default remoto, el `let index = index_dir(...)` eager de `ensure_impl` habría metido un clon
+  del índice en cada `ray run` de cualquier proyecto con deps — aunque fueran todas git
+  directas. `LazyIndex` pospone la localización hasta la primera dep **por nombre**: un
+  proyecto sin specs de registro sigue sin tocar el índice jamás.
+
+Los comandos que piden el índice de frente (`add`/`search`/`update`/`registry publish|yank`)
+sí lo localizan eager — ahí el clon del oficial ES la feature. La superficie de seguridad
+queda anotada en SECURITY.md (endpoint de red por defecto, cuándo se contacta y cómo se apaga).

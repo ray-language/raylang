@@ -1,0 +1,12 @@
+{% params title: string, body: string %}
+{% extends site_layout %}
+{% block content %}
+<article class="doc">
+    <div class="wrap">
+        <blockquote><p>Renderizado de <code>SPEC.md</code>, el documento <strong>normativo</strong>
+        del repositorio: ante cualquier duda, manda el archivo fuente de la versión
+        etiquetada.</p></blockquote>
+        {{& body }}
+    </div>
+</article>
+{% endblock %}

@@ -2839,11 +2839,14 @@ y adopción; cero riesgo de bloqueo de features — es tooling/distribución, no
 Plan por fases, con dogfooding como principio (el sitio lo genera raylang mismo, como el sitio
 del registro de M84):
 
-- **Fase 1 — ✅ HECHA (26 ago 2026): `tools/site.ray`**, el generador estático en raylang puro
-  (std/markdown + std/fs + StringBuilder): `index.html` (la landing: hero, instalación, muestra
-  de código, seis tarjetas) y `spec.html` (SPEC.md renderizada vía `markdown.to_html`). Salida
-  determinista, byte-idéntica por ambos motores (`tests/site_cli.rs`). Previsualización local:
-  la salida es autocontenida — abrir `index.html` o servir el directorio con cualquier estático.
+- **Fase 1 — ✅ HECHA (26 ago 2026): `tools/site.ray`**, el generador estático en raylang puro,
+  con dogfooding doble: las páginas se autoran con los **templates nativos `.ray.html`** (M102;
+  layout con herencia + landing + shell de la SPEC con `{{& body }}`) y la SPEC se renderiza
+  con `std/markdown`. Diseño con el **manual de marca** (`assets/branding/raylang-brand.pdf`):
+  paleta océano, Space Grotesk/JetBrains Mono (Google Fonts), símbolo en la nav, Manta en la
+  banda final, modo claro/oscuro. Salida determinista, byte-idéntica por ambos motores
+  (`tests/site_cli.rs`). Previsualización local: abrir `index.html` de la salida o servir el
+  directorio con cualquier estático.
 - **Fase 2 — ensamblado**: el sitio completo = landing + SPEC + book (`mdbook build`) +
   playground (WASM) bajo un mismo árbol de salida; enlaces internos de SPEC.md (DESIGN.md,
   MANUAL.md…) resueltos o neutralizados.

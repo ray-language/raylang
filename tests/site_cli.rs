@@ -1,6 +1,7 @@
 //! IDEAS §74 — `tools/site.ray`: el generador del SITIO del lenguaje, escrito EN raylang
-//! (dogfooding: std/markdown + std/fs + StringBuilder). Genera `index.html` (la landing)
-//! y `spec.html` (SPEC.md renderizada). Salida determinista → ambos motores byte-idénticos.
+//! (dogfooding doble: std/markdown + los templates nativos `.ray.html` con layout heredado).
+//! Genera `index.html` (la landing) y `spec.html` (SPEC.md renderizada empalmada cruda con
+//! `{{& body }}`). Salida determinista → ambos motores byte-idénticos.
 
 use std::process::Command;
 
@@ -37,12 +38,27 @@ fn generates_the_site_and_both_engines_match() {
         assert_eq!(a, b, "ambos engines idénticos en {rel}");
     }
 
-    // La landing: hero, instalación, muestra de código y enlace a la SPEC.
+    // La landing: hero, instalación, muestra de código resaltada y enlace a la SPEC.
     let landing = std::fs::read_to_string(vm.join("index.html")).unwrap();
-    assert!(landing.contains("<h1>raylang</h1>"), "{landing}");
+    assert!(landing.contains("producción real"), "hero\n{landing}");
     assert!(landing.contains("install.sh | sh"), "snippet de instalación\n{landing}");
-    assert!(landing.contains("enum Tree"), "muestra de código\n{landing}");
+    assert!(
+        landing.contains("<span class=\"kw\">enum</span> <span class=\"ty\">Tree</span>"),
+        "muestra de código con sintaxis resaltada\n{landing}"
+    );
     assert!(landing.contains("href=\"spec.html\""), "enlace a la SPEC\n{landing}");
+    // Los templates quedaron completamente resueltos (ni una directiva cruda en la salida).
+    assert!(!landing.contains("{%") && !landing.contains("{{"), "directivas sin resolver");
+
+    // La marca (assets/branding/raylang-brand.pdf): tipografías, símbolo, mascota y paleta.
+    assert!(landing.contains("Space+Grotesk"), "tipografía de marca\n{landing}");
+    assert!(landing.contains("assets/symbol.svg"), "símbolo en la nav\n{landing}");
+    assert!(landing.contains("assets/mascot.svg"), "Manta\n{landing}");
+    assert!(landing.contains("#2b7ce0"), "azul raya (primario)\n{landing}");
+    for asset in ["assets/symbol.svg", "assets/icon.svg", "assets/mascot.svg"] {
+        let svg = std::fs::read_to_string(vm.join(asset)).unwrap_or_else(|_| panic!("falta {asset}"));
+        assert!(svg.contains("<svg"), "asset SVG válido: {asset}");
+    }
 
     // La SPEC renderizada: título y estructura reales de SPEC.md, pasados por std/markdown.
     let spec = std::fs::read_to_string(vm.join("spec.html")).unwrap();

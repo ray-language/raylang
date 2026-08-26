@@ -1,0 +1,220 @@
+{% params title: string %}
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Paleta océano — assets/branding/raylang-brand.pdf (BRAND SYSTEM v1.0) */
+:root {
+    --bg: #ffffff;
+    --bg-soft: #eaf4fb;
+    --ink: #0b1f33;
+    --muted: #46617a;
+    --line: #d4e4f0;
+    --accent: #2b7ce0;
+    --sky: #4ba3f5;
+    --aqua: #34d2c6;
+    --card: #ffffff;
+    --nav-bg: rgba(255, 255, 255, .82);
+    --code-bg: #0b1f33;
+    --code-line: #103a5e;
+    --code-ink: #eaf4fb;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0b1f33;
+        --bg-soft: #0e2947;
+        --ink: #eaf4fb;
+        --muted: #8fb0cc;
+        --line: #1e3a57;
+        --accent: #4ba3f5;
+        --card: #0e2947;
+        --nav-bg: rgba(11, 31, 51, .82);
+        --code-bg: #081827;
+        --code-line: #103a5e;
+    }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+    margin: 0;
+    font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, kbd { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+.wrap { max-width: 68rem; margin: 0 auto; padding: 0 1.5rem; }
+
+nav.top {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: var(--nav-bg);
+    border-bottom: 1px solid var(--line);
+}
+nav.top .wrap {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding-top: .75rem;
+    padding-bottom: .75rem;
+}
+.brand {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    font-weight: 700;
+    font-size: 1.18rem;
+    letter-spacing: -.02em;
+}
+.brand:hover { text-decoration: none; }
+.brand img { height: 1.5rem; width: auto; display: block; }
+.brand .w1 { color: var(--accent); }
+.brand .w2 { color: var(--ink); }
+nav.top a.link { color: var(--muted); font-weight: 500; font-size: .95rem; }
+nav.top a.link:hover { color: var(--ink); text-decoration: none; }
+nav.top .spacer { flex: 1; }
+
+.grad {
+    background: linear-gradient(90deg, var(--accent), var(--aqua));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.btn {
+    display: inline-block;
+    padding: .65rem 1.3rem;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: .98rem;
+    border: 1px solid transparent;
+}
+.btn:hover { text-decoration: none; filter: brightness(1.08); }
+.btn.primary {
+    background: linear-gradient(135deg, #2b7ce0, #4ba3f5);
+    color: #ffffff;
+    box-shadow: 0 8px 24px rgba(43, 124, 224, .3);
+}
+.btn.ghost { border-color: var(--line); color: var(--ink); }
+.btn.ghost:hover { border-color: var(--accent); }
+
+.window {
+    background: var(--code-bg);
+    border: 1px solid var(--code-line);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(8, 24, 39, .38);
+}
+.window .bar {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    padding: .65rem .9rem;
+    border-bottom: 1px solid var(--code-line);
+}
+.window .bar i {
+    width: .72rem;
+    height: .72rem;
+    border-radius: 50%;
+    display: inline-block;
+}
+.window .bar i.r { background: #ff5f57; }
+.window .bar i.y { background: #febc2e; }
+.window .bar i.g { background: #28c840; }
+.window .bar span {
+    margin-left: .6rem;
+    color: #6b87a3;
+    font-size: .82rem;
+}
+.window pre {
+    margin: 0;
+    padding: 1.1rem 1.25rem;
+    overflow-x: auto;
+    font-size: .9rem;
+    line-height: 1.7;
+}
+.window code { color: var(--code-ink); }
+.kw { color: #34d2c6; }
+.fn { color: #c7e4ff; }
+.ty { color: #4ba3f5; }
+.st { color: #a8e6e0; }
+.nu { color: #4ba3f5; }
+.cm { color: #6b87a3; font-style: italic; }
+.pr { color: #34d2c6; }
+
+article.doc { padding: 2.5rem 0 4rem; }
+article.doc h1 { font-size: 2rem; letter-spacing: -.02em; }
+article.doc h2 {
+    margin-top: 2.5rem;
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--line);
+    letter-spacing: -.01em;
+}
+article.doc pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border: 1px solid var(--code-line);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    overflow-x: auto;
+    font-size: .88rem;
+}
+article.doc p code, article.doc li code, article.doc td code, article.doc h2 code, article.doc h3 code {
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    padding: .08rem .35rem;
+    border-radius: 5px;
+    font-size: .88em;
+}
+article.doc table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; }
+article.doc td, article.doc th { text-align: left; padding: .4rem .7rem; border: 1px solid var(--line); }
+article.doc blockquote {
+    border-left: 3px solid var(--accent);
+    margin: 1.2rem 0;
+    padding: .2rem 1.1rem;
+    color: var(--muted);
+    background: var(--bg-soft);
+    border-radius: 0 8px 8px 0;
+}
+
+footer.site {
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: .9rem;
+    padding: 2rem 0 2.5rem;
+    text-align: center;
+}
+footer.site .wrap { display: flex; flex-direction: column; gap: .3rem; }
+</style>
+</head>
+<body>
+<nav class="top">
+    <div class="wrap">
+        <a class="brand" href="index.html"><img src="assets/symbol.svg" alt=""><span><span class="w1">ray</span><span class="w2">lang</span></span></a>
+        <span class="spacer"></span>
+        <a class="link" href="spec.html">Especificación</a>
+        <a class="link" href="https://github.com/ray-language/raylang">GitHub</a>
+    </div>
+</nav>
+{% block content %}
+{% endblock %}
+<footer class="site">
+    <div class="wrap">
+        <span>raylang — licencia MIT OR Apache-2.0 · <a href="https://github.com/ray-language/raylang">github.com/ray-language/raylang</a></span>
+        <span>Este sitio lo genera el propio lenguaje: <code>ray run tools/site.ray</code></span>
+    </div>
+</footer>
+</body>
+</html>

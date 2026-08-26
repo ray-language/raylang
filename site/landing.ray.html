@@ -45,16 +45,61 @@
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-section.install { padding: 1rem 0 2.5rem; }
-.terminal {
+section.install { padding: 2rem 0 2.5rem; }
+.steps { display: grid; gap: 1rem; max-width: 56rem; }
+.step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1rem;
+    align-items: start;
+}
+.stepn {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #2b7ce0, #34d2c6);
+    color: #ffffff;
+    font-weight: 700;
+    font-size: .95rem;
+    margin-top: .2rem;
+}
+.step h3 { margin: 0 0 .45rem; font-size: 1.02rem; letter-spacing: -.01em; }
+.step p.hint { margin: .45rem 0 0; color: var(--muted); font-size: .88rem; }
+.cmd {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
     background: var(--code-bg);
     border: 1px solid var(--code-line);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
+    border-radius: 10px;
+    padding: .7rem .9rem;
+}
+.cmd .pr { color: #34d2c6; font-family: "JetBrains Mono", ui-monospace, monospace; user-select: none; }
+.cmd code {
+    flex: 1;
+    color: var(--code-ink);
+    font-size: .92rem;
+    white-space: pre;
     overflow-x: auto;
 }
-.terminal code { color: var(--code-ink); font-size: .95rem; white-space: pre; }
-.terminal .pr { user-select: none; }
+button.copy {
+    flex: none;
+    background: none;
+    border: 1px solid var(--code-line);
+    border-radius: 7px;
+    color: #8fa6c4;
+    padding: .4rem .5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: color .15s ease, border-color .15s ease;
+}
+button.copy:hover { color: #eaf4fb; border-color: var(--accent); }
+button.copy.ok { color: #34d2c6; border-color: #34d2c6; }
+button.copy svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 section.features { padding: 1.5rem 0 2rem; }
 .cards {
@@ -199,8 +244,33 @@ section.engines { padding: 2.5rem 0 4rem; }
 
 <section class="install" id="empezar">
     <div class="wrap">
-        <div class="terminal"><code><span class="pr cm">$ </span><span class="st">curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh</span>
-<span class="pr cm">$ </span><span class="st">ray new hola &amp;&amp; cd hola &amp;&amp; ray run</span></code></div>
+        <h2 class="sec">Instálalo <span class="grad">en un minuto</span></h2>
+        <p class="lead">Un solo binario, sin dependencias: el instalador detecta tu plataforma
+        (macOS y Linux, arm64 y x86_64), descarga la release firmada y deja <code>ray</code> en
+        <code>~/.local/bin</code>. En Windows, descarga el binario de la
+        <a href="https://github.com/ray-language/raylang/releases/latest">última release</a>.</p>
+        <div class="steps">
+            <div class="step">
+                <span class="stepn">1</span>
+                <div>
+                    <h3>Instala la toolchain</h3>
+                    <div class="cmd"><span class="pr">$</span><code>curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+                    </button></div>
+                    <p class="hint">Verifícalo con <code>ray version</code> — un binario, todo incluido: compilador, VM, LSP, formateador y gestor de paquetes.</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="stepn">2</span>
+                <div>
+                    <h3>Crea y corre tu primer proyecto</h3>
+                    <div class="cmd"><span class="pr">$</span><code>ray new hola &amp;&amp; cd hola &amp;&amp; ray run</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+                    </button></div>
+                    <p class="hint"><code>ray new</code> deja un <code>ray.toml</code> + <code>src/main.ray</code>; <code>ray dev</code> recompila y reinicia al guardar.</p>
+                </div>
+            </div>
+        </div>
     </div>
 </section>
 
@@ -382,6 +452,40 @@ section.engines { padding: 2.5rem 0 4rem; }
 </section>
 
 <script>
+// Copiar al portapapeles: cada botón copia el <code> de su fila (el $ del prompt queda fuera).
+(function () {
+    var CHECK = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"></path></svg>";
+    var buttons = document.querySelectorAll("button.copy");
+    function fallback(text) {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch (e) { }
+        ta.remove();
+    }
+    for (var i = 0; i < buttons.length; i++) {
+        buttons[i].addEventListener("click", function () {
+            var btn = this;
+            var code = btn.parentNode.querySelector("code");
+            var text = code ? code.textContent : "";
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).catch(function () { fallback(text); });
+            } else {
+                fallback(text);
+            }
+            var icon = btn.innerHTML;
+            btn.innerHTML = CHECK;
+            btn.classList.add("ok");
+            setTimeout(function () {
+                btn.innerHTML = icon;
+                btn.classList.remove("ok");
+            }, 1600);
+        });
+    }
+})();
 // Efecto de tipeo del hero: los segmentos ya vienen tokenizados (clase, texto).
 (function () {
     var SEG = [

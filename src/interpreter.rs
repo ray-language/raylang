@@ -1242,7 +1242,7 @@ impl<'a> Interpreter<'a> {
             // M126: hasher incremental (estado en ray_runtime::crypto, compartido con VM/nativo).
             "__hasher_new" => match &values[0] {
                 Value::Str(alg) => {
-                    let arr = match ray_runtime::crypto::hasher_new(alg) {
+                    let arr = match crate::builtins::hasher_new(alg) {
                         Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     };
@@ -1252,7 +1252,7 @@ impl<'a> Interpreter<'a> {
             },
             "__hasher_update" => match (&values[0], &values[1]) {
                 (Value::Int(h), Value::Bytes(chunk)) => {
-                    let arr = match ray_runtime::crypto::hasher_update(*h, chunk) {
+                    let arr = match crate::builtins::hasher_update(*h, chunk) {
                         Ok(()) => vec![Value::Str("ok".to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     };
@@ -1262,7 +1262,7 @@ impl<'a> Interpreter<'a> {
             },
             "__hasher_final" => match &values[0] {
                 Value::Int(h) => {
-                    let arr = match ray_runtime::crypto::hasher_final(*h) {
+                    let arr = match crate::builtins::hasher_final(*h) {
                         Ok(d) => vec![Value::Bytes(Rc::new(b"ok".to_vec())), Value::Bytes(Rc::new(d))],
                         Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
                     };

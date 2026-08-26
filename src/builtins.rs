@@ -1251,8 +1251,45 @@ pub fn peer_addr(h: i64) -> Result<String, String> {
 
 /// M131: normalización Unicode (NFC/NFD/NFKC/NFKD) — delega en ray-runtime (mismo código que el
 /// binario transpilado → byte-idéntico). Sin la feature `unicode` (build slim), error claro.
+/// El playground wasm no embarca ray-runtime → el mismo estilo de error honesto.
 pub fn unicode_normalize(s: &str, form: &str) -> Result<String, String> {
-    ray_runtime::unicode::normalize(s, form)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ray_runtime::unicode::normalize(s, form)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, form);
+        Err("this binary was built without Unicode normalization support (rebuild with the 'unicode' feature)".to_string())
+    }
+}
+
+// M126: hasher incremental — el estado vive en `ray_runtime::crypto` (compartido con el
+// nativo). El playground wasm no embarca cripto → Err claro (errores como valores). Los dos
+// motores llaman ESTOS wrappers (nunca ray_runtime directo) para compilar también a wasm.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hasher_new(alg: &str) -> Result<i64, String> {
+    ray_runtime::crypto::hasher_new(alg)
+}
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hasher_update(h: i64, chunk: &[u8]) -> Result<(), String> {
+    ray_runtime::crypto::hasher_update(h, chunk)
+}
+#[cfg(not(target_arch = "wasm32"))]
+pub fn hasher_final(h: i64) -> Result<Vec<u8>, String> {
+    ray_runtime::crypto::hasher_final(h)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn hasher_new(_alg: &str) -> Result<i64, String> {
+    Err("incremental hashing is not available on this platform".to_string())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn hasher_update(_h: i64, _chunk: &[u8]) -> Result<(), String> {
+    Err("incremental hashing is not available on this platform".to_string())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn hasher_final(_h: i64) -> Result<Vec<u8>, String> {
+    Err("incremental hashing is not available on this platform".to_string())
 }
 
 /// M130: termina el PROCESO con `code`, flusheando stdout/stderr antes (la salida de `print`
@@ -1551,8 +1588,21 @@ pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
         None => Err(format!("invalid handle: {}", h)),
     }
 }
+// El tipo del resumen: el real de ray-runtime; en wasm (que no embarca ray-runtime), un
+// espejo local con los mismos campos para que los motores compilen igual.
+#[cfg(not(target_arch = "wasm32"))]
+pub use ray_runtime::x509::CertSummary;
+#[cfg(target_arch = "wasm32")]
+pub struct CertSummary {
+    pub subject: String,
+    pub issuer: String,
+    pub not_before_ms: i64,
+    pub not_after_ms: i64,
+    pub san: Vec<String>,
+}
+
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
-pub fn tls_peer_cert(_h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
+pub fn tls_peer_cert(_h: i64) -> Result<CertSummary, String> {
     Err(NET_TLS_UNAVAILABLE.to_string())
 }
 
@@ -3846,6 +3896,7 @@ pub fn run_opts_from_flat(
     _env_clear: bool,
     _stdin: &[u8],
     _has_stdin: bool,
+    _stdin_open: bool,
     _timeout_ms: i64,
     _max_output: i64,
     _merge_output: bool,

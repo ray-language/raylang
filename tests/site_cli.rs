@@ -50,6 +50,21 @@ fn generates_the_site_and_both_engines_match() {
     // Los templates quedaron completamente resueltos (ni una directiva cruda en la salida).
     assert!(!landing.contains("{%"), "directivas sin resolver");
 
+    // La nav: LLMs primero (orden del contenido), anclas same-page con scrollspy en la
+    // landing y absolutas en la SPEC (que además marca su propio ítem activo), icono de
+    // GitHub y selector de tema claro/sistema/oscuro persistido.
+    let llms = landing.find("data-spy=\"agentes\"").expect("spy de LLMs");
+    let play_link = landing.find("data-spy=\"playground\"").expect("spy del playground");
+    assert!(llms < play_link, "LLMs va primero en la nav");
+    assert!(landing.contains("href=\"#agentes\""), "ancla same-page en la landing");
+    assert!(landing.contains("aria-label=\"GitHub\""), "icono de GitHub\n{landing}");
+    assert!(!landing.contains(">GitHub</a>"), "el texto GitHub se fue de la nav");
+    for mode in ["light", "system", "dark"] {
+        assert!(landing.contains(&format!("data-mode=\"{mode}\"")), "modo de tema {mode}");
+    }
+    assert!(landing.contains("data-theme"), "aplicación del tema");
+    assert!(landing.contains("scroll-margin-top"), "anclas bajo la nav sticky");
+
     // Las secciones nuevas: agentes LLM/MCP, playground embebido y ecosistema.
     assert!(landing.contains("id=\"agentes\""), "sección de agentes\n{landing}");
     assert!(landing.contains("claude mcp add raylang -- ray mcp"), "conexión MCP");
@@ -104,4 +119,6 @@ fn generates_the_site_and_both_engines_match() {
     );
     assert!(spec.contains("<h2>"), "secciones renderizadas");
     assert!(spec.contains("normativo"), "nota de normatividad");
+    assert!(spec.contains("class=\"link active\""), "Especificación activa en su nav");
+    assert!(spec.contains("index.html#agentes"), "anclas absolutas desde la SPEC");
 }

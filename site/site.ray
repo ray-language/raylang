@@ -100,10 +100,13 @@ fn main() -> int {
         "playground/fonts/jetbrains-mono.woff2",
         "playground/fonts/jetbrains-mono.woff2"
     );
-    write_or_die(out + "/index.html", landing.render("raylang — un lenguaje para producción real"));
+    write_or_die(
+        out + "/index.html",
+        landing.render("raylang — un lenguaje para producción real", "index")
+    );
     write_or_die(
         out + "/spec.html",
-        spec_page.render("Especificación del lenguaje raylang", markdown.to_html(spec_md))
+        spec_page.render("Especificación del lenguaje raylang", markdown.to_html(spec_md), "spec")
     );
     print("site generated in " + out);
     0

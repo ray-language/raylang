@@ -1,0 +1,74 @@
+# Deploy del SITIO a GitHub Pages (IDEAS §74, fase 3). En cada push a main: construye el
+# playground (wasm de la VM+LSP y el bundle CodeMirror del editor), genera el sitio con el
+# PROPIO lenguaje (site/site.ray) y lo publica. Requiere Settings → Pages → Source: "GitHub
+# Actions" (activado por el usuario, 26 ago 2026). URL: https://ray-language.github.io/raylang/
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Un deploy a la vez; un push nuevo cancela el que estuviera en vuelo.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: generar el sitio
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable + target wasm32 + binaryen
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+          sudo apt-get update -q && sudo apt-get install -yq binaryen
+      - name: Caché de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-pages-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: "Playground: wasm de la VM + LSP (release, wasm-opt -Oz)"
+        run: |
+          cargo build --target wasm32-unknown-unknown --lib --release
+          cp target/wasm32-unknown-unknown/release/raylang.wasm playground/raylang.wasm
+          wasm-opt -Oz playground/raylang.wasm -o playground/raylang.wasm
+      - name: "Playground: editor real (CodeMirror 6, esbuild)"
+        run: |
+          cd playground/editor
+          npm install --no-audit --no-fund --silent
+          npm run --silent build
+      - name: Generar el sitio (dogfooding, el propio lenguaje)
+        run: cargo run --bin ray -- run site/site.ray . _site
+      # El sitio sin playground sería un deploy degradado en silencio: se asevera completo.
+      - name: Verificar el sitio completo
+        run: |
+          test -f _site/index.html
+          test -f _site/spec.html
+          test -f _site/bench.html
+          test -f _site/playground/raylang.wasm
+          test -f _site/playground/editor.bundle.js
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: publicar
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

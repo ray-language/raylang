@@ -2875,8 +2875,13 @@ del registro de M84):
 - **Fase 2 — ensamblado**: el sitio completo = landing + SPEC + book (`mdbook build`) +
   playground (WASM) bajo un mismo árbol de salida; enlaces internos de SPEC.md (DESIGN.md,
   MANUAL.md…) resueltos o neutralizados.
-- **Fase 3 — deploy**: job de GitHub Pages en el workflow (en el tag `v*` o en push a main),
-  para que el sitio nunca se desincronice de lo publicado. Activar Pages = acción del mantenedor.
+- **Fase 3 — ✅ HECHA (26 ago 2026): deploy a GitHub Pages.** `.github/workflows/pages.yml`:
+  en cada push a main construye el playground (wasm release + wasm-opt -Oz + bundle CodeMirror),
+  genera el sitio con `site/site.ray`, ASEVERA el sitio completo (wasm y bundle presentes — un
+  deploy degradado no pasa en silencio) y publica con upload-pages-artifact/deploy-pages.
+  El usuario activó Settings → Pages → Source: GitHub Actions. URL:
+  https://ray-language.github.io/raylang/. Se eligió push-a-main (sitio = documentación viva);
+  las releases conservan su workflow propio.
 
 ## Cómo usar este archivo
 

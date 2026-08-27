@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El sitio, publicado** (IDEAS §74 fase 3): deploy automático a GitHub Pages en cada push a
+  main (`pages.yml`: wasm + bundle del editor + generación con `site/site.ray` + verificación
+  del sitio completo) → https://ray-language.github.io/raylang/.
 - **Benchmarks en el sitio** (IDEAS §74): sección "Medido, no prometido" en la landing y
   página `bench.html` — la gráfica de barras se **genera de la tabla real** de
   `benchmarks/poly/README.md` vía `std/markdown` (una sola fuente de verdad: re-medir el

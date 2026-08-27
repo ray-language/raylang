@@ -12,9 +12,11 @@ cp target/wasm32-unknown-unknown/release/raylang.wasm playground/raylang.wasm
 
 if command -v wasm-opt >/dev/null 2>&1; then
   echo "→ wasm-opt -Oz…"
-  # --all-features: el rustc moderno emite bulk-memory/sign-ext por defecto y un binaryen
-  # con features base rechaza el módulo; habilitar solo permite validar lo que ya trae.
-  wasm-opt -Oz --all-features playground/raylang.wasm -o playground/raylang.wasm
+  # SOLO las features que emite rustc (--all-features dejó a un binaryen viejo escribir un
+  # value type que el navegador rechaza); si tu wasm-opt falla, borra este paso — el wasm
+  # sin optimizar funciona igual.
+  wasm-opt -Oz --enable-bulk-memory --enable-sign-ext --enable-mutable-globals \
+    --enable-nontrapping-float-to-int playground/raylang.wasm -o playground/raylang.wasm
 else
   echo "  (wasm-opt no encontrado; instala 'binaryen' para reducir el tamaño)"
 fi

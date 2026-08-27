@@ -10477,3 +10477,13 @@ la latencia guardado→reinicio (de hasta ~200 ms de escaneo + debounce escalona
 ms) y el coste en reposo (cero escaneos; un `try_wait` cada 200 ms), que crecía con el tamaño
 del proyecto. Quedan clasificadas en IDEAS §76 las adyacentes: `ray test --watch` (con la
 variante selectiva por grafo de imports) y la recarga de templates sin reinicio.
+
+Adenda del mismo arco, del primer dogfood (raygame): (1) una TUI cerrada con su propia tecla
+dejaba al usuario "atrapado" — el supervisor espera cambios por contrato del modo watch (igual
+que nodemon), pero no había salida limpia salvo Ctrl-C; ahora, **con el programa terminado**
+(nunca antes: jamás se compite por el stdin de un hijo vivo) y **solo con stdin en un TTY** (en
+un pipe/CI el EOF inmediato mataría el modo watch al primer programa terminado), una `q` o
+Ctrl-D salen de `ray dev`. (2) La línea del hub de live-reload confundía en una app de consola;
+se reformula («web live-reload …, only used when the app serves HTML») conservando el marcador
+que parsean los tests — el hub sigue arrancando siempre porque detectar «es una app web» no es
+asunto del supervisor (M92.4) y ocioso cuesta un hilo.

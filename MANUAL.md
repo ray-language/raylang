@@ -2016,7 +2016,10 @@ reposo, y con fallback a sondeo de mtimes en builds `--without watch`) y ante un
 el programa — un template editado se regenera al relanzar, y un servidor con `serve_graceful`
 **drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la compilación en
 milisegundos, el ciclo editar→ver es de decenas de ms desde el guardado. Un programa que termina
-solo queda a la espera del siguiente cambio.
+solo queda a la espera del siguiente cambio (es el contrato del modo watch); con el programa ya
+terminado, **`q`** (o Ctrl-D) sale de `ray dev` — útil tras cerrar una TUI con su propia tecla de
+salir. El hub de live-reload arranca siempre pero es **inerte para una app de consola**: solo el
+webserver inyecta el snippet, y solo al servir HTML.
 
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
 compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**

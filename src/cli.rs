@@ -462,7 +462,9 @@ fn cmd_dev(args: &[String]) {
     let reload = start_reload_hub();
     let reload_port = reload.as_ref().map(|(_, p)| *p);
     if let Some(p) = reload_port {
-        eprintln!("[dev] live-reload on http://127.0.0.1:{p} (browser refresh on restart)");
+        // La coletilla importa: para una app de consola el hub es INERTE (solo el webserver
+        // inyecta el snippet, y solo al servir HTML) — sin ella la línea confunde en una TUI.
+        eprintln!("[dev] web live-reload on http://127.0.0.1:{p} (only used when the app serves HTML)");
     }
 
     // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
@@ -484,7 +486,13 @@ fn cmd_dev(args: &[String]) {
             }
             if running && let Ok(Some(status)) = child.try_wait() {
                 running = false;
-                eprintln!("[dev] the program finished ({status}); waiting for changes…");
+                eprintln!("[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
+            }
+            // Con el programa terminado (una TUI cerrada con su propia tecla de salir), el
+            // terminal vuelve a ser del supervisor: `q` (o Ctrl-D) sale de `ray dev` limpio.
+            if !running && dev_stdin_quit() {
+                eprintln!("[dev] bye");
+                std::process::exit(0);
             }
         };
         // Debounce: coalesce una ráfaga (un guardado + el formateador del editor = varios eventos)
@@ -800,6 +808,29 @@ impl DevWatcher {
             }
             DevWatcher::Polling => dev_debounce(root, snapshot),
         }
+    }
+}
+
+/// ¿El usuario pidió salir de `ray dev` por teclado? Solo aplica SIN hijo en marcha (jamás se
+/// compite por el stdin de un programa vivo) y SOLO con stdin en un terminal: en un pipe o CI,
+/// stdin cerrado daría EOF inmediato y `ray dev` moriría al primer programa terminado — el modo
+/// watch debe seguir esperando cambios ahí. Sondea sin bloquear y consume la línea disponible:
+/// `q` o EOF (Ctrl-D) terminan; cualquier otra línea se ignora (un resto de la sesión anterior).
+fn dev_stdin_quit() -> bool {
+    use std::io::{BufRead, IsTerminal};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    match crate::poll::wait(&[0], &[], 0) {
+        crate::poll::PollResult::Ready(fds) if fds.contains(&0) => {
+            let mut line = String::new();
+            match std::io::stdin().lock().read_line(&mut line) {
+                Ok(0) => true,
+                Ok(_) => line.trim().eq_ignore_ascii_case("q"),
+                Err(_) => false,
+            }
+        }
+        _ => false,
     }
 }
 

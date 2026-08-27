@@ -38,15 +38,41 @@ jobs:
             ~/.cargo/git
             target
           key: cargo-pages-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      # `--all-features`: el rustc moderno emite bulk-memory/sign-ext/etc. por defecto y el
-      # wasm-opt de Ubuntu valida con las features BASE si no se le dice lo contrario
-      # ("Bulk memory operation (bulk memory is disabled)"). Habilitar solo PERMITE validar
-      # lo que el módulo ya trae; no añade nada.
-      - name: "Playground: wasm de la VM + LSP (release, wasm-opt -Oz)"
+      # wasm-opt es MEJOR-ESFUERZO: optimiza a un temporal con SOLO las features que emite
+      # rustc (--all-features dejó al binaryen de Ubuntu escribir un value type que el
+      # navegador rechaza — "invalid value type 0x3", deploy roto) y el optimizado se adopta
+      # únicamente si INSTANCIA en V8 (node); si no, se publica el wasm sin optimizar.
+      - name: "Playground: wasm de la VM + LSP (release, wasm-opt validado)"
         run: |
           cargo build --target wasm32-unknown-unknown --lib --release
           cp target/wasm32-unknown-unknown/release/raylang.wasm playground/raylang.wasm
-          wasm-opt -Oz --all-features playground/raylang.wasm -o playground/raylang.wasm
+          wasm-opt -Oz --enable-bulk-memory --enable-sign-ext --enable-mutable-globals \
+            --enable-nontrapping-float-to-int playground/raylang.wasm -o /tmp/opt.wasm || true
+          if [ -f /tmp/opt.wasm ] && node -e "WebAssembly.instantiate(require('fs').readFileSync('/tmp/opt.wasm'),{}).then(()=>process.exit(0),()=>process.exit(1))"; then
+            mv /tmp/opt.wasm playground/raylang.wasm
+            echo "wasm-opt adoptado ($(du -h playground/raylang.wasm | cut -f1))"
+          else
+            echo "wasm-opt DESCARTADO (el módulo optimizado no instancia); va el wasm sin optimizar"
+          fi
+      # El playground se PRUEBA antes de publicar: instancia en V8 y corre un programa real
+      # (la clase de rotura que ya pasó — módulo inválido para el navegador — muere aquí).
+      - name: Verificar el playground (instancia y corre en V8)
+        run: |
+          node -e "
+          const fs = require('fs');
+          WebAssembly.instantiate(fs.readFileSync('playground/raylang.wasm'), {}).then(({ instance }) => {
+            const { memory, alloc, run, dealloc, lsp } = instance.exports;
+            if (!lsp) { console.error('sin export lsp'); process.exit(1); }
+            const enc = new TextEncoder().encode('fn main() { print(1 + 2); }');
+            const p = alloc(enc.length);
+            new Uint8Array(memory.buffer, p, enc.length).set(enc);
+            const packed = run(p, enc.length);
+            const ptr = Number(packed >> 32n), len = Number(packed & 0xffffffffn);
+            const out = new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len));
+            if (out.trim() !== '3') { console.error('salida inesperada:', out); process.exit(1); }
+            console.log('playground OK: 1 + 2 =', out.trim());
+          }).catch((e) => { console.error(e); process.exit(1); });
+          "
       - name: "Playground: editor real (CodeMirror 6, esbuild)"
         run: |
           cd playground/editor

@@ -478,6 +478,8 @@ fn cmd_dev(args: &[String]) {
     let mut watcher = DevWatcher::new(&root);
     let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
     let mut running = true;
+    // ¿El supervisor tiene stdin en modo crudo, escuchando la tecla de salir? Solo sin hijo vivo.
+    let mut keys_armed = false;
     loop {
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
         let change = loop {
@@ -486,15 +488,35 @@ fn cmd_dev(args: &[String]) {
             }
             if running && let Ok(Some(status)) = child.try_wait() {
                 running = false;
-                eprintln!("[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
+                // Tecla-única: con el programa terminado (una TUI cerrada con su propia tecla),
+                // el terminal vuelve a ser del supervisor y entra a modo CRUDO — una sola `q`
+                // sale, sin Enter (el juego entrena tecla-única; exigir `q⏎` confunde). El hint
+                // se imprime ANTES de entrar (en crudo, `\n` no retorna carro).
+                let single_key = std::io::IsTerminal::is_terminal(&std::io::stdin())
+                    && crate::builtins::term_raw_on().is_ok();
+                if single_key {
+                    eprintln!("[dev] the program finished ({status}); waiting for changes… (press q to exit)");
+                } else {
+                    eprintln!("[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
+                }
+                keys_armed = single_key;
             }
-            // Con el programa terminado (una TUI cerrada con su propia tecla de salir), el
-            // terminal vuelve a ser del supervisor: `q` (o Ctrl-D) sale de `ray dev` limpio.
-            if !running && dev_stdin_quit() {
+            if keys_armed && dev_raw_key_quit() {
+                let _ = crate::builtins::term_raw_off();
+                eprintln!("[dev] bye");
+                std::process::exit(0);
+            }
+            if !running && !keys_armed && dev_stdin_quit() {
                 eprintln!("[dev] bye");
                 std::process::exit(0);
             }
         };
+        // Hubo cambio: el terminal vuelve a modo normal ANTES de imprimir nada más o relanzar
+        // (el hijo debe heredar un terminal sano; en crudo los mensajes se escalonan).
+        if keys_armed {
+            let _ = crate::builtins::term_raw_off();
+            keys_armed = false;
+        }
         // Debounce: coalesce una ráfaga (un guardado + el formateador del editor = varios eventos)
         // esperando a que los fuentes se estabilicen antes de actuar → un solo reinicio.
         watcher.debounce(&root, &mut snapshot);
@@ -811,11 +833,28 @@ impl DevWatcher {
     }
 }
 
-/// ¿El usuario pidió salir de `ray dev` por teclado? Solo aplica SIN hijo en marcha (jamás se
-/// compite por el stdin de un programa vivo) y SOLO con stdin en un terminal: en un pipe o CI,
-/// stdin cerrado daría EOF inmediato y `ray dev` moriría al primer programa terminado — el modo
-/// watch debe seguir esperando cambios ahí. Sondea sin bloquear y consume la línea disponible:
-/// `q` o EOF (Ctrl-D) terminan; cualquier otra línea se ignora (un resto de la sesión anterior).
+/// ¿Llegó la tecla de salir con el stdin del supervisor en modo CRUDO? Un byte por pulsación:
+/// `q`/`Q` salen; en crudo ISIG está apagado, así que Ctrl-C (0x03) y Ctrl-D (0x04) llegan como
+/// bytes y se honran igual (el hint promete Ctrl-C). Cualquier otra tecla se ignora.
+fn dev_raw_key_quit() -> bool {
+    match crate::poll::wait(&[0], &[], 0) {
+        crate::poll::PollResult::Ready(fds) if fds.contains(&0) => {
+            let mut b = [0u8; 1];
+            match std::io::Read::read(&mut std::io::stdin().lock(), &mut b) {
+                Ok(0) => true, // EOF
+                Ok(_) => matches!(b[0], b'q' | b'Q' | 0x03 | 0x04),
+                Err(_) => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Respaldo en modo COOKED (stdin no es terminal o el modo crudo falló): solo aplica SIN hijo en
+/// marcha (jamás se compite por el stdin de un programa vivo) y SOLO con stdin en un terminal —
+/// en un pipe o CI, stdin cerrado daría EOF inmediato y `ray dev` moriría al primer programa
+/// terminado; el modo watch debe seguir esperando cambios ahí. Sondea sin bloquear y consume la
+/// línea disponible: `q` o EOF (Ctrl-D) terminan; cualquier otra línea se ignora.
 fn dev_stdin_quit() -> bool {
     use std::io::{BufRead, IsTerminal};
     if !std::io::stdin().is_terminal() {
@@ -852,6 +891,12 @@ fn is_watched_source(canon_root: &Path, path: &Path) -> bool {
     }
     let Some(name) = path.file_name() else { return false };
     let name = name.to_string_lossy();
+    // Un archivo OCULTO no es fuente aunque termine en .ray: es el temporal de un guardado
+    // atómico (`.!NNN!x.ray` de sed -i, los puntos de vim/emacs) — con eventos se ve siempre
+    // (el polling no lo alcanzaba: muere entre escaneos).
+    if name.starts_with('.') {
+        return false;
+    }
     if !(name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml") {
         return false;
     }
@@ -2750,6 +2795,7 @@ mod tests {
         // Fuera: otras extensiones (incluye temporales de guardado atómico), artefactos, ocultos
         // y rutas ajenas a la raíz.
         assert!(!is_watched_source(&root, &root.join("src/main.ray.tmp")));
+        assert!(!is_watched_source(&root, &root.join("src/.!92067!main.ray")));
         assert!(!is_watched_source(&root, &root.join("notes.md")));
         assert!(!is_watched_source(&root, &root.join("target/debug/x.ray")));
         assert!(!is_watched_source(&root, &root.join(".git/x.ray")));

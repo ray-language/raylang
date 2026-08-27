@@ -10487,3 +10487,14 @@ Ctrl-D salen de `ray dev`. (2) La línea del hub de live-reload confundía en un
 se reformula («web live-reload …, only used when the app serves HTML») conservando el marcador
 que parsean los tests — el hub sigue arrancando siempre porque detectar «es una app web» no es
 asunto del supervisor (M92.4) y ocioso cuesta un hilo.
+
+Segunda iteración del mismo dogfood: `q⏎` no bastaba — el juego entrena TECLA ÚNICA y en modo
+cooked el kernel no entrega nada hasta el Enter. Ahora, al terminar el programa (y solo con
+stdin en un TTY), el supervisor entra a modo CRUDO reutilizando `builtins::term_raw_on/off`
+(M107.3, con su restauración por atexit) y una sola `q` sale; en crudo ISIG está apagado, así
+que Ctrl-C/Ctrl-D llegan como bytes 0x03/0x04 y se honran igual. El crudo se restaura ANTES de
+relanzar un hijo o imprimir el ciclo de reinicio (en crudo los `\n` no retornan carro). De
+regalo, los eventos destaparon otra diferencia con el polling: los TEMPORALES de guardado
+atómico con sufijo `.ray` (`.!NNN!x.ray` de sed -i) ahora se VEN (el polling no los alcanzaba —
+mueren entre escaneos) y disparaban el reinicio con una ruta fea; un archivo oculto ya no cuenta
+como fuente.

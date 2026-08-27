@@ -38,11 +38,15 @@ jobs:
             ~/.cargo/git
             target
           key: cargo-pages-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      # `--all-features`: el rustc moderno emite bulk-memory/sign-ext/etc. por defecto y el
+      # wasm-opt de Ubuntu valida con las features BASE si no se le dice lo contrario
+      # ("Bulk memory operation (bulk memory is disabled)"). Habilitar solo PERMITE validar
+      # lo que el módulo ya trae; no añade nada.
       - name: "Playground: wasm de la VM + LSP (release, wasm-opt -Oz)"
         run: |
           cargo build --target wasm32-unknown-unknown --lib --release
           cp target/wasm32-unknown-unknown/release/raylang.wasm playground/raylang.wasm
-          wasm-opt -Oz playground/raylang.wasm -o playground/raylang.wasm
+          wasm-opt -Oz --all-features playground/raylang.wasm -o playground/raylang.wasm
       - name: "Playground: editor real (CodeMirror 6, esbuild)"
         run: |
           cd playground/editor

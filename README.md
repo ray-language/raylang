@@ -12,7 +12,7 @@
 [![Licencia: MIT OR Apache-2.0](https://img.shields.io/badge/licencia-MIT%20OR%20Apache--2.0-blue.svg)](#licencia)
 [![Versión](https://img.shields.io/badge/versión-1.3.1-brightgreen.svg)](CHANGELOG.md)
 
-[Instalación](#instalación) · [Un vistazo](#un-vistazo-al-lenguaje) · [Playground](#playground-web) · [Documentación](#documentación) · [Lo notable](#lo-notable)
+**[raylang.dev](https://raylang.dev)** · [Instalación](#instalación) · [Un vistazo](#un-vistazo-al-lenguaje) · [Playground](https://raylang.dev/playground/) · [Documentación](#documentación) · [Lo notable](#lo-notable)
 
 </div>
 
@@ -213,7 +213,11 @@ concurrency, un servidor web, WebSockets, y el propio compilador auto-alojado en
 
 ## Playground web
 
-raylang corre en el navegador (la VM compilada a `wasm32`, **cero `wasm-bindgen`**):
+**Pruébalo ya, sin instalar nada: [raylang.dev/playground](https://raylang.dev/playground/)** —
+editor real (CodeMirror) con el LSP de raylang corriendo dentro del wasm: diagnósticos,
+autocompletado, hover y formateo en el navegador.
+
+Para correrlo en local, raylang corre en el navegador (la VM compilada a `wasm32`, **cero `wasm-bindgen`**):
 
 ```sh
 ./playground/build.sh

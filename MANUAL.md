@@ -2120,8 +2120,10 @@ expresión, **ir-a-definición** (un param lleva a su `{% params %}`), **signatu
 escribir los argumentos de una llamada, y **formateo** (también `ray fmt archivo.ray.html`):
 cada `{% %}` en su línea con indentación por bloques, `{{ }}` inline.
 
-**Editores**: extensión de VSCode (`editors/vscode`) y paquete de Sublime Text (`editors/sublime`), ambos
-sobre `ray lsp`; Neovim/Helix lo usan directo. **Playground web**: la VM compilada a WASM corre el lenguaje
+**Editores**: extensión de VSCode (`editors/vscode`), paquete de Sublime Text (`editors/sublime`) y
+extensión de Zed ([ray-language/zed-raylang](https://github.com/ray-language/zed-raylang), gramática
+tree-sitter en [ray-language/tree-sitter-raylang](https://github.com/ray-language/tree-sitter-raylang)),
+todos sobre `ray lsp`; Neovim/Helix lo usan directo. **Playground web**: la VM compilada a WASM corre el lenguaje
 núcleo en el navegador (sin red/FFI/cripto).
 
 Documenta con `///` (en la línea anterior a `fn`/`struct`/`enum` públicos): lo leen `ray doc` y el hover

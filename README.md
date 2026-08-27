@@ -282,6 +282,7 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 | [`RELEASE-1.0.md`](RELEASE-1.0.md) | Checklist histórica del lanzamiento 1.0 (las releases se publican desde la v1.1.0). |
 
 Editores: extensión de [VSCode](editors/vscode/) (con cliente LSP), paquete de [Sublime Text](editors/sublime/),
+extensión de [Zed](https://github.com/ray-language/zed-raylang) (tree-sitter + `ray lsp`)
 y config para Neovim/Helix (usan `ray lsp` directo).
 
 ## Estado

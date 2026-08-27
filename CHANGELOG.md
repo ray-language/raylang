@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Extensión para Zed**: gramática tree-sitter oficial
+  ([ray-language/tree-sitter-raylang](https://github.com/ray-language/tree-sitter-raylang),
+  validada en CI contra los 284 `.ray` del repo) + extensión
+  ([ray-language/zed-raylang](https://github.com/ray-language/zed-raylang)): highlighting,
+  outline, indentación y el servidor `ray lsp` cableado; enviada a la galería oficial
+  (zed-industries/extensions#7361).
 - **El sitio, publicado** (IDEAS §74 fase 3): deploy automático a GitHub Pages en cada push a
   main (`pages.yml`: wasm + bundle del editor + generación con `site/site.ray` + verificación
   del sitio completo) → https://ray-language.github.io/raylang/.

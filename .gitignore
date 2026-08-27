@@ -37,3 +37,4 @@ tools/__pycache__/
 # (playground/build.sh → npm/esbuild); el bundle no se versiona, como el .wasm.
 playground/editor.bundle.js
 playground/editor/node_modules/
+site-out/

@@ -3696,6 +3696,18 @@ mod term_host {
         Ok(())
     }
 
+    /// La huella del termios ACTUAL de stdin (los 128 bytes opacos), o None si no es tty. Sirve
+    /// para detectar que OTRO proceso cambió el terminal (`ray dev` la usa para reconocer una
+    /// app interactiva): se compara por bytes contra una huella previa, sin mirar campos.
+    pub fn attrs_fingerprint() -> Option<[u8; 128]> {
+        let mut cur = [0u8; 128];
+        // SAFETY: buffer de 128 bytes, mayor que cualquier termios de las plataformas soportadas.
+        if unsafe { tcgetattr(0, cur.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        Some(cur)
+    }
+
     pub fn raw_off() -> Result<(), String> {
         if !SAVED.load(Ordering::Acquire) {
             return Ok(()); // nunca se entró al modo crudo: no-op
@@ -3742,6 +3754,18 @@ pub fn term_raw_on() -> Result<(), String> {
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
         Err("raw mode is not supported on this platform".to_string())
+    }
+}
+
+/// La huella (bytes opacos del termios) del stdin actual; None si no es tty o no hay soporte.
+pub fn term_attrs_fingerprint() -> Option<[u8; 128]> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        term_host::attrs_fingerprint()
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        None
     }
 }
 

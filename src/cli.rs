@@ -476,8 +476,15 @@ fn cmd_dev(args: &[String]) {
     let mut snapshot = scan_sources(&root);
     let mut hashes = content_hashes(&snapshot);
     let mut watcher = DevWatcher::new(&root);
+    // Huella del termios de stdin ANTES del primer hijo. Una app INTERACTIVA (una TUI) entra a
+    // modo crudo y la huella cambia; muestrearla mientras el hijo corre distingue "el usuario
+    // cerró la app con su propia tecla" (→ `ray dev` sale con ella, cero teclas extra) de "un
+    // script terminó" (→ esperar cambios y re-correr, el contrato del modo watch).
+    let baseline_tty = crate::builtins::term_attrs_fingerprint();
     let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
     let mut running = true;
+    // ¿El hijo en curso cambió el terminal alguna vez? (reset en cada relanzamiento)
+    let mut interactive_child = false;
     // ¿El supervisor tiene stdin en modo crudo, escuchando la tecla de salir? Solo sin hijo vivo.
     let mut keys_armed = false;
     loop {
@@ -486,20 +493,38 @@ fn cmd_dev(args: &[String]) {
             if let Some(c) = watcher.wait_change(&root, &mut snapshot) {
                 break c;
             }
-            if running && let Ok(Some(status)) = child.try_wait() {
-                running = false;
-                // Tecla-única: con el programa terminado (una TUI cerrada con su propia tecla),
-                // el terminal vuelve a ser del supervisor y entra a modo CRUDO — una sola `q`
-                // sale, sin Enter (el juego entrena tecla-única; exigir `q⏎` confunde). El hint
-                // se imprime ANTES de entrar (en crudo, `\n` no retorna carro).
-                let single_key = std::io::IsTerminal::is_terminal(&std::io::stdin())
-                    && crate::builtins::term_raw_on().is_ok();
-                if single_key {
-                    eprintln!("[dev] the program finished ({status}); waiting for changes… (press q to exit)");
-                } else {
-                    eprintln!("[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
+            if running {
+                // Mientras el hijo corre: ¿tocó el terminal? (una TUI entra a crudo). El
+                // muestreo cada ~200 ms es un tcgetattr — gratis.
+                if !interactive_child
+                    && let (Some(base), Some(now)) =
+                        (baseline_tty.as_ref(), crate::builtins::term_attrs_fingerprint())
+                    && now != *base
+                {
+                    interactive_child = true;
                 }
-                keys_armed = single_key;
+                if let Ok(Some(status)) = child.try_wait() {
+                    running = false;
+                    // Una app INTERACTIVA que salió limpia la cerró el usuario con su propia
+                    // tecla: `ray dev` sale con ella — pedir OTRA tecla para salir del
+                    // supervisor es fricción sin sentido. Si crasheó (status != 0), sí se
+                    // espera: el usuario va a editar el fix y quiere el relanzamiento.
+                    if interactive_child && status.success() {
+                        eprintln!("[dev] the program exited; bye");
+                        std::process::exit(0);
+                    }
+                    // Tecla-única para el resto (un script en bucle de edición): el terminal es
+                    // del supervisor y entra a CRUDO — una sola `q` sale, sin Enter. El hint se
+                    // imprime ANTES de entrar (en crudo, `\n` no retorna carro).
+                    let single_key = std::io::IsTerminal::is_terminal(&std::io::stdin())
+                        && crate::builtins::term_raw_on().is_ok();
+                    if single_key {
+                        eprintln!("[dev] the program finished ({status}); waiting for changes… (press q to exit)");
+                    } else {
+                        eprintln!("[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
+                    }
+                    keys_armed = single_key;
+                }
             }
             if keys_armed && dev_raw_key_quit() {
                 let _ = crate::builtins::term_raw_off();
@@ -548,6 +573,7 @@ fn cmd_dev(args: &[String]) {
         }
         child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
         running = true;
+        interactive_child = false;
     }
 }
 

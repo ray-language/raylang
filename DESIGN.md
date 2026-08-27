@@ -10498,3 +10498,13 @@ regalo, los eventos destaparon otra diferencia con el polling: los TEMPORALES de
 atómico con sufijo `.ray` (`.!NNN!x.ray` de sed -i) ahora se VEN (el polling no los alcanzaba —
 mueren entre escaneos) y disparaban el reinicio con una ruta fea; un archivo oculto ya no cuenta
 como fuente.
+
+Tercera iteración, y la definitiva en lo conceptual: pedir CUALQUIER tecla extra tras cerrar una
+TUI era fricción — si el usuario salió de la app, `ray dev` debe salir con ella. La distinción
+script-vs-interactiva es OBSERVABLE sin cooperación del hijo: una TUI entra a modo crudo, o sea
+CAMBIA el termios de stdin; el supervisor guarda la huella del termios al arrancar (los 128
+bytes opacos de M107.3, comparados por bytes — cero constantes de plataforma) y la muestrea
+cada ~200 ms mientras el hijo corre (un tcgetattr, gratis). Al terminar: interactiva + salida
+limpia → `ray dev` sale con ella («the program exited; bye»); interactiva + crash → espera (el
+usuario edita el fix y quiere el relanzamiento); script → espera con la `q` de tecla única. El
+muestreo se reinicia en cada relanzamiento.

@@ -2883,6 +2883,36 @@ del registro de M84):
   https://ray-language.github.io/raylang/. Se eligió push-a-main (sitio = documentación viva);
   las releases conservan su workflow propio.
 
+## 75. Linguist: highlighting de `.ray` en GitHub — bloqueado por base de usuarios (ago 2026)
+
+**Qué es.** PR a [github-linguist/linguist](https://github.com/github-linguist/linguist) para que
+GitHub coloree los `.ray` y los cuente en las estadísticas de lenguaje. El prerequisito técnico ya
+está: la gramática TextMate canónica vive en `ray-language/raylang-grammar` (pública), y los
+`examples/` del monorepo sirven como samples de código real (tutoriales/"hello world" no los
+aceptan). El PR en sí es ~1 día: entrada en `languages.yml`, `script/add-grammar`, samples,
+`script/update-ids`, y la búsqueda de evidencia en el template.
+
+**Por qué está bloqueado (política verificada el 27 ago 2026, sin cambios).** Linguist rechaza
+lenguajes nuevos sin uso real: *"we do not accept PRs for very new or hobby languages, and will
+close any such PRs"*. El umbral vigente:
+
+- **≥ 2.000 archivos `.ray` indexados en el último año** en GitHub público, **excluyendo forks**
+  (el umbral de 200 es solo para filenames únicos por repo, tipo `Makefile` — no es nuestro caso).
+- **Distribución entre usuarios distintos**, revisada a mano: filtran al dueño del lenguaje con
+  `-user:ray-language`, así que **nuestros repos (monorepo, espejos, apps) no cuentan**.
+
+**Estado medido (27 ago 2026):** ~418 archivos con `extension:ray` y contenido raylang en la
+búsqueda de código — lejos del umbral. El camino es la base de usuarios (sitio, releases,
+extensiones de editor, paquetes), no hay atajo legítimo (`.gitattributes` solo reasigna entre
+lenguajes ya existentes).
+
+**Disparador.** Re-medir cada pocos meses: `extension:ray -user:ray-language` (excluyendo forks)
+en la búsqueda de GitHub; al acercarse a 2.000 con distribución sana, ejecutar el PR con el repo
+ya preparado.
+
+**Impacto:** ninguno sobre el lenguaje (todo externo). **Valor:** visibilidad — cada repo `.ray`
+de terceros se vería como raylang en GitHub, y de paso el propio linguist referencia la gramática.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

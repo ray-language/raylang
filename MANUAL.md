@@ -2011,10 +2011,12 @@ without = ["tls", "sqlite"]   # este servicio nunca enlaza TLS ni SQLite en el b
 ```
 
 **Modo desarrollo** (`ray dev`): vigila los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`)
-y ante un cambio reinicia el programa — un template editado se regenera al relanzar, y un servidor
-con `serve_graceful` **drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la
-compilación en milisegundos, el ciclo editar→ver es de decenas de ms. Un programa que termina solo
-queda a la espera del siguiente cambio.
+por **eventos de kernel** (FSEvents/inotify — la misma maquinaria de `fs.watch`; cero coste en
+reposo, y con fallback a sondeo de mtimes en builds `--without watch`) y ante un cambio reinicia
+el programa — un template editado se regenera al relanzar, y un servidor con `serve_graceful`
+**drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la compilación en
+milisegundos, el ciclo editar→ver es de decenas de ms desde el guardado. Un programa que termina
+solo queda a la espera del siguiente cambio.
 
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
 compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**

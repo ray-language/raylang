@@ -2933,6 +2933,63 @@ clasificadas las dos mejoras vecinas que se evaluaron y NO entraron en ese arco:
   socket-activation no lo justifica hoy; se anota para que ninguna decisión lo bloquee por
   accidente (la tabla de funciones de la VM ya es indirecta — buen augurio).
 
+## 77. `ray build --native -o` sobrescribe in-place → SIGKILL en macOS (ago 2026)
+
+Hallado en `ray-apps/rallyx` (27 ago 2026): recompilar con `ray build --native src/main.ray
+-o rallyx --release` sobre un binario `rallyx` YA existente produce un binario que macOS mata
+al instante con SIGKILL (exit 137) — incluso `./rallyx --help`. Causa conocida de la
+plataforma: sobrescribir el archivo de un binario firmado (mismo inode) invalida la caché de
+firma ad-hoc del kernel (`CODESIGNING`), que mata el proceso al exec. El workaround es
+`rm -f rallyx` antes de recompilar (o compilar a nombre temporal + `mv`, que reemplaza el
+inode). Propuesta: que `ray build` haga **unlink del output antes de escribir** (o escriba a
+`<out>.tmp` y renombre — `fs.rename` ya es atomic replace, §63); coste trivial, elimina un
+fallo silencioso y desconcertante del ciclo edit-build-run en macOS. Repro: compilar dos
+veces seguidas al mismo `-o` y ejecutar.
+
+## 77. `std/image` — decodificar PNG sobre el inflate existente (ago 2026)
+
+Reporte desde un juego de demostración: "cargo un sprite.png" no se puede hoy. El diagnóstico
+del reporte ("falta DEFLATE") era FALSO — `std/inflate` ya trae DEFLATE completo + envoltorios
+zlib/gzip endurecidos (M64: input corrupto = `Err`, tope anti-bomba), así que el IDAT de un PNG
+se descomprime hoy con `zlib_inflate`. La lección de discoverabilidad (buscó "zlib" y no lo
+encontró) quedó saldada en REFERENCE §std/inflate.
+
+**Lo que falta de verdad**: el parser PNG encima — `std/image` con `decode_png(bytes) ->
+Result<Image, string>` (`Image { width, height, pixels: bytes /* RGBA8 */ }`):
+
+- Chunks: IHDR/PLTE/IDAT (concatenados)/IEND/tRNS; CRC con el `crc32` ya existente.
+- Des-filtrado por scanline: None/Sub/Up/Average/Paeth.
+- Tipos de color 0/2/3/4/6 y profundidades 1/2/4/8 (16 → convertir a 8); interlace Adam7
+  puede diferirse a v2 (raro en assets de juego) devolviendo `Err` claro.
+- Raylang puro, cero runtime nuevo (mismo espíritu que inflate/markdown): 3 motores gratis.
+- Vectores de prueba: la PngSuite de Willem van Schaik (el estándar de facto).
+
+**Impacto**: MEDIO-ALTO en valor (sprites para juegos/TUIs gráficas — con §78 —, thumbnails,
+raysite), BAJO en riesgo (módulo hoja). Encode PNG (con `std/deflate`) es la continuación
+natural pero va después: decode desbloquea el caso real.
+
+## 78. Terminal gráfico: capacidades y píxeles de celda en `std/term` (ago 2026)
+
+Del mismo reporte, las dos piezas para elegir "peldaño" gráfico (¿truecolor? ¿sixel? ¿kitty?)
+y escalar imágenes al layout:
+
+- **`term.cell_pixels()` (aperitivo, casi gratis)**: `TIOCGWINSZ` ya se lee en
+  `builtins::term_host::size()` y su `WinSize` **ya trae `ws_xpixel`/`ws_ypixel` — hoy se
+  descartan**. Exponer el tamaño en píxeles (superficie a decidir: `term.size_px() ->
+  Option<(int, int)>` del área total, y el de celda = área/filas·columnas) es plomería mínima.
+  Gotcha conocido: muchos terminales reportan 0 (no soportan) → `Option`/`None`, jamás un 0
+  que divida.
+- **`term.capabilities()` (el equivalente de `term.width` de M117)**: emitir queries (DA1
+  `ESC [ c`, XTGETTCAP de kitty, `COLORTERM`/`TERM` como pista barata) y leer la respuesta con
+  plazo — hoy se puede a mano con `term.raw` + `io.read_timeout`, y esa es justo la señal de
+  que le toca a la stdlib (cada TUI lo reimplementará peor). Con su miga: terminales que no
+  contestan (plazo corto y degradar), respuestas variopintas, y NO emitir queries si stdout no
+  es tty. Forma sugerida: struct con lo decidible (`truecolor`, `sixel`, `kitty_graphics`,
+  `colors_256`) y todo `false` como degradación segura.
+
+**Impacto**: BAJO en riesgo (aditivo en `std/term`); el orden natural es píxeles → capacidades
+→ (con §77) imágenes en terminal.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

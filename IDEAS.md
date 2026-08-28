@@ -3037,6 +3037,53 @@ decodifica cualquier formato mientras tanto.
 **Impacto**: MEDIO en valor (juegos/TUIs con sonido, alertas, el arcade del reporte), MEDIO en
 esfuerzo (runtime con-crate en 3 motores), BAJO en riesgo de diseño (superficie push pequeña).
 
+## 80. Apps de escritorio nativas — el "Tauri de raylang" (ago 2026)
+
+**Qué es.** Apps de escritorio multiplataforma: webview NATIVO del SO (no Chromium embebido) +
+el backend en raylang + bundling. El 70% ya existe — Tauri es esencialmente *webview + backend
+Rust + bundling*, y raylang ya tiene el backend entero: webserver (streaming/WS/SSE), templates
+`.ray.html` tipados, sesiones, sqlite/fs/crypto, canales/fibras (actores = eventos de UI), y el
+binario único de `ray build --native`.
+
+**Fase 0 — funciona HOY, cero código nuevo**: binario que levanta el webserver en
+`127.0.0.1:puerto-aleatorio` y abre el navegador del sistema (`process.cmd("open", url)`). Una
+app de escritorio sin ventana propia. Documentarlo como patrón (MANUAL/ejemplo) es gratis.
+
+**Los cinco huecos reales, en orden de dureza:**
+
+1. **`std/ui`: ventana + webview nativo** — el arco duro (~std/audio ×3). NO es FFI-able por el
+   usuario (exige callbacks C→raylang, la limitación conocida): subsistema del runtime como
+   audio/watch. La lección de cpal (M145) aplica: `wry` exige headers GTK/WebKit en BUILD en
+   Linux → la vía coherente es A MANO — WKWebView por mensajes objc en macOS (frameworks
+   siempre presentes, enlace limpio), WebKitGTK por `dlopen` en Linux, Windows DIFERIDO honesto
+   (COM a mano es brutal; ahí se re-evaluaría un crate).
+2. **Contrato del hilo principal**: AppKit/GTK exigen poseer el main thread y su loop. Diseño
+   que encaja: `ui.run()` captura el hilo principal y los eventos llegan por un **`Channel`**
+   (precedente exacto de `signals()`: self-pipe → canal → la fibra aparca). La app vive en
+   fibras; la UI es un actor más — cero conceptos nuevos.
+3. **IPC JS↔raylang — el atajo grande: NO inventar nada.** El webview carga del webserver
+   embebido y habla fetch/WS con los handlers de `packages/web`: el framework ES el puente
+   (127.0.0.1 + puerto aleatorio + token, el hardening estándar). Scheme custom (`app://`)
+   después, si hace falta offline/sin-puerto.
+4. **Assets embebidos**: los templates ya compilan al binario; JS/CSS/imágenes no → `ray build
+   --native --embed assets/` (útil mucho más allá de UI).
+5. **`ray bundle`**: `.app` con icono/Info.plist (barato: es una estructura de carpetas),
+   `.desktop`/AppImage; firmado/notarización después. Tooling puro.
+
+**Faseo**: F0 patrón navegador (documentar) → F1 `std/ui` macOS (ventana + webview + `eval_js`
++ canal de eventos) → F2 Linux por dlopen + embed + `ray bundle` → F3 menús/diálogos/tray/
+updater.
+
+**Bifurcaciones de diseño anotadas** (no decidir en solitario al ejecutar): (a) a-mano vs
+wry/tao — la inclinación es a-mano por la lección cpal, pero Windows puede forzar el crate;
+(b) el contrato exacto del main thread en el runtime de fibras (¿`ui.run` no retorna? ¿main
+migra a fibra?); (c) IPC por webserver propio vs scheme custom (v1: webserver).
+
+**Impacto**: ALTO en valor (el pitch "apps de escritorio en un binario con el framework web del
+propio lenguaje como UI" es diferenciador real), ALTO en esfuerzo (F1 es el mayor subsistema de
+runtime desde las fibras). Ninguna decisión pendiente lo bloquea; F4 (assets/bundle) son
+independientes y pueden adelantarse.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

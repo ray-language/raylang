@@ -509,26 +509,28 @@ fn cmd_dev(args: &[String]) {
                     // tecla: `ray dev` sale con ella — pedir OTRA tecla para salir del
                     // supervisor es fricción sin sentido. Si crasheó (status != 0), sí se
                     // espera: el usuario va a editar el fix y quiere el relanzamiento.
+                    // El `\r` inicial de estos mensajes importa: una TUI deja el cursor en
+                    // cualquier columna al salir — sin él, la línea aparece "tabulada".
                     if interactive_child && status.success() {
-                        eprintln!("[dev] the program exited; bye");
+                        eprintln!("\r[dev] the program exited; bye");
                         std::process::exit(0);
                     }
                     // Tecla-única para el resto (un script en bucle de edición): el terminal es
-                    // del supervisor y entra a CRUDO — una sola `q` sale, sin Enter. El hint se
-                    // imprime ANTES de entrar (en crudo, `\n` no retorna carro).
-                    let single_key = std::io::IsTerminal::is_terminal(&std::io::stdin())
-                        && crate::builtins::term_raw_on().is_ok();
-                    if single_key {
-                        eprintln!("[dev] the program finished ({status}); waiting for changes… (press q to exit)");
+                    // del supervisor y entra a CRUDO — una sola `q` sale, sin Enter. El hint va
+                    // ANTES del raw_on (en crudo, `\n` baja sin retornar carro y la línea
+                    // siguiente hereda la columna).
+                    let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+                    if tty {
+                        eprintln!("\r[dev] the program finished ({status}); waiting for changes… (press q to exit)");
                     } else {
-                        eprintln!("[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
+                        eprintln!("\r[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
                     }
-                    keys_armed = single_key;
+                    keys_armed = tty && crate::builtins::term_raw_on().is_ok();
                 }
             }
             if keys_armed && dev_raw_key_quit() {
                 let _ = crate::builtins::term_raw_off();
-                eprintln!("[dev] bye");
+                eprintln!("\r[dev] bye");
                 std::process::exit(0);
             }
             if !running && !keys_armed && dev_stdin_quit() {

@@ -9,8 +9,11 @@
 //! por **subproceso del propio binario** (`current_exe`): aislamiento por proceso (la única
 //! parada fiable del proyecto), stdout del invitado separado del canal MCP, y los límites de
 //! embebido de M42 (`--fuel`, `--heap`) + un plazo de pared con kill. `ray_doc` es en-proceso
-//! (consulta el registro de builtins). El recurso `raylang://llms.txt` sirve el contexto
-//! destilado de la pieza A (embebido con `include_str!`, como la stdlib).
+//! (consulta el registro de builtins). Los recursos `raylang://llms.txt` (contexto destilado,
+//! pieza A) y `raylang://reference.md` (catálogo completo de firmas) van embebidos con
+//! `include_str!`, como la stdlib; las **instructions** del `initialize` dirigen al cliente a
+//! leerlos ANTES de asumir que una feature falta (el antídoto del patrón "propuse lo que ya
+//! existía").
 
 use crate::lsp::json::{self, Json};
 use std::io::{BufRead, Read, Write};
@@ -37,6 +40,9 @@ const MAX_OUT: usize = 64 * 1024;
 
 /// El contexto destilado de la pieza A, embebido: el *resource* que sirve este servidor.
 const LLMS_TXT: &str = include_str!("../llms.txt");
+// El catálogo completo de firmas por módulo (pieza B): el mapa que evita "proponer" superficies
+// que ya existen. Embebido como llms.txt — la stdlib no vive en disco del lado del cliente.
+const REFERENCE_MD: &str = include_str!("../REFERENCE.md");
 
 /// Arranca el servidor sobre stdin/stdout reales (lo llama `ray mcp`).
 pub fn run() {
@@ -73,14 +79,20 @@ pub fn serve<R: BufRead, W: Write>(reader: R, mut writer: W) {
             "resources/list" => result(id, Json::Obj(vec![("resources".into(), resources_list())])),
             "resources/read" => {
                 let uri = msg.get("params").and_then(|p| p.get("uri")).and_then(|u| u.as_str()).unwrap_or("");
-                if uri == "raylang://llms.txt" {
-                    result(id, Json::Obj(vec![("contents".into(), Json::Arr(vec![Json::Obj(vec![
-                        ("uri".into(), Json::Str(uri.into())),
-                        ("mimeType".into(), Json::Str("text/plain".into())),
-                        ("text".into(), Json::Str(LLMS_TXT.into())),
-                    ])]))]))
-                } else {
-                    error(id, -32602, &format!("unknown resource: {uri}"))
+                let body = match uri {
+                    "raylang://llms.txt" => Some(("text/plain", LLMS_TXT)),
+                    "raylang://reference.md" => Some(("text/markdown", REFERENCE_MD)),
+                    _ => None,
+                };
+                match body {
+                    Some((mime, text)) => {
+                        result(id, Json::Obj(vec![("contents".into(), Json::Arr(vec![Json::Obj(vec![
+                            ("uri".into(), Json::Str(uri.into())),
+                            ("mimeType".into(), Json::Str(mime.into())),
+                            ("text".into(), Json::Str(text.into())),
+                        ])]))]))
+                    }
+                    None => error(id, -32602, &format!("unknown resource: {uri}")),
                 }
             }
             _ => error(id, -32601, &format!("method not found: {method}")),
@@ -90,7 +102,11 @@ pub fn serve<R: BufRead, W: Write>(reader: R, mut writer: W) {
     }
 }
 
-/// La respuesta a `initialize`: versión de protocolo, capacidades (tools + resources) e info.
+/// La respuesta a `initialize`: versión de protocolo, capacidades (tools + resources), info e
+/// **instructions** — el "system prompt" del servidor que los clientes incorporan. Nació de un
+/// patrón real: tres reportes seguidos de un proyecto proponían features QUE YA EXISTÍAN
+/// (inflate/M64, stdin_pipe/M100v3, FFI/M41) porque el modelo exploraba a ciegas; esto le dice
+/// desde el primer mensaje dónde está el mapa.
 fn initialize_result() -> Json {
     Json::Obj(vec![
         ("protocolVersion".into(), Json::Str("2024-11-05".into())),
@@ -102,6 +118,17 @@ fn initialize_result() -> Json {
             ("name".into(), Json::Str("raylang".into())),
             ("version".into(), Json::Str(env!("CARGO_PKG_VERSION").into())),
         ])),
+        ("instructions".into(), Json::Str(
+            "Before writing raylang or concluding that a feature is missing, read the \
+             raylang://llms.txt resource (the distilled language context and stdlib map). \
+             For exact signatures of any builtin, prelude or std/* function use the ray_doc \
+             tool, and for the full per-module catalog read the raylang://reference.md \
+             resource. The stdlib is embedded in the toolchain (no std/ directory on disk), \
+             so file searches will NOT find it — e.g. DEFLATE/zlib/gzip live in std/inflate \
+             and std/deflate, live child stdin streaming in std/process (stdin_pipe), and \
+             C FFI is the extern \"lib\" block. Validate code with ray_check and run it \
+             with ray_run.".into(),
+        )),
     ])
 }
 
@@ -218,14 +245,23 @@ fn tools_list() -> Json {
     ])
 }
 
-/// El recurso publicado: el contexto destilado "raylang for LLMs" (pieza A).
+/// Los recursos publicados: el contexto destilado "raylang for LLMs" (pieza A) y el catálogo
+/// completo de firmas REFERENCE.md (pieza B).
 fn resources_list() -> Json {
-    Json::Arr(vec![Json::Obj(vec![
-        ("uri".into(), Json::Str("raylang://llms.txt".into())),
-        ("name".into(), Json::Str("raylang for LLMs".into())),
-        ("description".into(), Json::Str("Distilled context for writing correct raylang: the delta vs Rust, canonical forms, exact error messages.".into())),
-        ("mimeType".into(), Json::Str("text/plain".into())),
-    ])])
+    Json::Arr(vec![
+        Json::Obj(vec![
+            ("uri".into(), Json::Str("raylang://llms.txt".into())),
+            ("name".into(), Json::Str("raylang for LLMs".into())),
+            ("description".into(), Json::Str("Distilled context for writing correct raylang: the delta vs Rust, canonical forms, exact error messages. Read this FIRST.".into())),
+            ("mimeType".into(), Json::Str("text/plain".into())),
+        ]),
+        Json::Obj(vec![
+            ("uri".into(), Json::Str("raylang://reference.md".into())),
+            ("name".into(), Json::Str("raylang reference".into())),
+            ("description".into(), Json::Str("The full signature catalog, module by module (stdlib, builtins, prelude). Check here before assuming a feature is missing — the stdlib is embedded, file searches will not find it.".into())),
+            ("mimeType".into(), Json::Str("text/markdown".into())),
+        ]),
+    ])
 }
 
 /// Despacha una tool. `Ok(texto)` es un resultado (incluidos diagnósticos del compilador);
@@ -266,7 +302,8 @@ fn doc_text(symbol: &str) -> String {
             .unwrap_or_else(|| format!(
                 "'{symbol}' is not a builtin, a prelude function, nor a public std/* function. \
                  For module functions use 'module.function' (e.g. 'json.parse', 'regex.find_all'); \
-                 see the stdlib map in the raylang://llms.txt resource."
+                 see the stdlib map in the raylang://llms.txt resource and the full \
+                 catalog in raylang://reference.md."
             )),
     }
 }
@@ -507,6 +544,39 @@ mod tests {
             .expect("lista de tools");
         let names: Vec<_> = tools.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str())).collect();
         assert_eq!(names, vec!["ray_check", "ray_run", "ray_test", "ray_fmt", "ray_doc"]);
+    }
+
+    #[test]
+    fn initialize_carries_the_reading_instructions() {
+        // El antídoto del patrón "propuse lo que ya existía": las instructions del initialize
+        // dirigen al cliente a llms.txt/reference.md ANTES de explorar a ciegas.
+        let replies = roundtrip(&[r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#]);
+        let text = replies[0]
+            .get("result").and_then(|r| r.get("instructions")).and_then(|i| i.as_str())
+            .expect("instructions presentes");
+        assert!(text.contains("raylang://llms.txt"), "apunta al contexto destilado");
+        assert!(text.contains("raylang://reference.md"), "apunta al catálogo");
+        assert!(text.contains("embedded"), "advierte que la stdlib no está en disco");
+    }
+
+    #[test]
+    fn resource_reference_md() {
+        let replies = roundtrip(&[
+            r#"{"jsonrpc":"2.0","id":1,"method":"resources/list"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"raylang://reference.md"}}"#,
+        ]);
+        let uris: Vec<_> = replies[0]
+            .get("result").and_then(|r| r.get("resources")).and_then(|a| a.as_array())
+            .expect("lista de resources")
+            .iter()
+            .filter_map(|r| r.get("uri").and_then(|u| u.as_str()))
+            .collect();
+        assert_eq!(uris, vec!["raylang://llms.txt", "raylang://reference.md"]);
+        let text = replies[1]
+            .get("result").and_then(|r| r.get("contents")).and_then(|a| a.as_array())
+            .and_then(|a| a.first()).and_then(|c| c.get("text")).and_then(|t| t.as_str())
+            .expect("contenido del recurso");
+        assert!(text.contains("std/inflate"), "sirve el REFERENCE.md embebido");
     }
 
     #[test]

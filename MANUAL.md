@@ -1964,7 +1964,10 @@ el proyecto trae de serie. Primero el contexto: **`llms.txt`** (raíz del repo) 
 para LLMs — el delta contra Rust, las formas canónicas y los mensajes de error exactos; pégalo
 en tu prompt o `CLAUDE.md`. Después el bucle de verificación: **`ray mcp`** expone al agente las
 tools `ray_check`/`ray_run`/`ray_test`/`ray_fmt`/`ray_doc` con el código confinado (fuel + heap +
-plazo, en subproceso), y sirve el propio `llms.txt` como resource `raylang://llms.txt`. Con
+plazo, en subproceso), sirve `llms.txt` y el catálogo REFERENCE.md como resources
+(`raylang://llms.txt`, `raylang://reference.md`) y, vía las *instructions* del `initialize`,
+le dice al modelo desde el primer mensaje que los lea antes de asumir que algo falta (la stdlib
+va embebida: una búsqueda de archivos no la encuentra). Con
 Claude Code basta `claude mcp add raylang -- ray mcp`; para cualquier otro cliente MCP y el
 detalle del confinamiento, `docs/mcp.md`.
 

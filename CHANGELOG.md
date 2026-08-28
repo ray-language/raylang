@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **MCP orientado desde el primer mensaje**: el `initialize` lleva *instructions* (el "system
+  prompt" del servidor) que dirigen al modelo a leer `raylang://llms.txt` y el nuevo resource
+  `raylang://reference.md` (el catálogo completo de firmas) antes de asumir que una feature
+  falta — la stdlib va embebida y una búsqueda de archivos no la encuentra.
+
 - **`ray test --watch`** (M140+M141): el bucle de desarrollo aplicado al runner — re-corre
   **solo las suites cuyo grafo de imports alcanza el archivo cambiado** (ray.toml/borrados/
   desconocidos re-corren todo), con eventos de kernel, debounce y guardados idénticos ignorados;

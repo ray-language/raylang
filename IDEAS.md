@@ -3065,8 +3065,12 @@ app de escritorio sin ventana propia. Documentarlo como patrón (MANUAL/ejemplo)
    embebido y habla fetch/WS con los handlers de `packages/web`: el framework ES el puente
    (127.0.0.1 + puerto aleatorio + token, el hardening estándar). Scheme custom (`app://`)
    después, si hace falta offline/sin-puerto.
-4. **Assets embebidos**: los templates ya compilan al binario; JS/CSS/imágenes no → `ray build
-   --native --embed assets/` (útil mucho más allá de UI).
+4. **Assets embebidos**: los templates ya compilan al binario, y el patrón autocontenido
+   existe (verificado en store: imágenes SVG GENERADAS en código + templates); pero los
+   estáticos de archivo (el `dist` de Astro de store, css, fuentes) se sirven DESDE DISCO vía
+   `static_files_cached` — deliberado allí ("editable sin recompilar"), insuficiente para el
+   binario-único de una app de escritorio → `ray build --native --embed assets/` (útil mucho
+   más allá de UI). El webserver ganaría un `static_embedded` que sirva de ese espacio.
 5. **`ray bundle`**: `.app` con icono/Info.plist (barato: es una estructura de carpetas),
    `.desktop`/AppImage; firmado/notarización después. Tooling puro.
 

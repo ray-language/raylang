@@ -10627,3 +10627,13 @@ Gotcha del nativo re-aprendido (M115.4 lo documentó): el proyecto Cargo generad
 ray-runtime archivo a archivo — `audio.rs` tuvo que entrar a la lista `RT_*_RS` de cli.rs o el
 build nativo no encontraba el módulo. Formato v1: s16le entrelazado, el mínimo común de los
 tres backends; f32/resampling, si algún dogfood los pide.
+
+Adenda de M145, primer dogfood (rallyx): el callback de AudioQueue rellenaba TODO buffer con
+silencio (`byte_size = cap`) y el cebado encolaba 3 buffers llenos — como la cola reproduce a 1×
+todo lo encolado, ese silencio era LATENCIA PERMANENTE: ~150 ms de arranque más hasta 50 ms por
+underrun, sin recuperación. La regla que quedó: **jamás rellenar un buffer parcial** —
+`byte_size` = exactamente lo tomado del anillo, alineado a frame; con el anillo seco se encola
+solo el mínimo de silencio que mantiene viva la cola (~8 ms; un buffer sin encolar sale de la
+rotación y la cola muere) → cebado ~24 ms, underrun cuesta 8. En ALSA, el `latency` de
+`set_params` bajó de 500 ms a 100 (el original insertaba medio segundo write→altavoz).
+Diferidos a IDEAS si el dogfood los pide: hint de latencia en `open`, `audio.played_ms(h)`.

@@ -2990,6 +2990,14 @@ y escalar imágenes al layout:
 **Impacto**: BAJO en riesgo (aditivo en `std/term`); el orden natural es píxeles → capacidades
 → (con §77) imágenes en terminal.
 
+## 79b. `std/audio` v2 — afinado de latencia (ago 2026, tras el dogfood de rallyx)
+
+Diferidos de M145 (la adenda de DESIGN §142 tiene el contexto): **hint de latencia en `open`**
+(elegir el tamaño del anillo/buffers: un juego rítmico quiere <30 ms, una radio tolera 200) y
+**`audio.played_ms(h)`** (la posición real de reproducción — AudioQueueGetCurrentTime /
+snd_pcm_delay — para sincronizar visuales con el audio). Impacto BAJO (aditivos); ejecutar
+cuando un dogfood los pida con caso concreto.
+
 ## 79. `std/audio` — salida PCM al dispositivo (ago 2026) — ✅ HECHA (M145, DESIGN §142; la decisión cpal-vs-externs se volteó a EXTERNS al implementar: cpal exigía headers de ALSA en build)
 
 Segundo reporte del juego de demostración (tras §77/§78). De las cuatro piezas pedidas, DOS

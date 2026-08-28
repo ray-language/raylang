@@ -258,6 +258,12 @@ mod coreaudio {
         ring: Mutex<VecDeque<u8>>,
         space: Condvar,
         cap: usize,
+        /// Octetos por frame (canales × 2): los buffers se entregan SIEMPRE alineados a frame.
+        frame_bytes: usize,
+        /// El silencio de mantener-viva-la-cola con el anillo seco: ~8 ms, alineado a frame.
+        /// Todo lo encolado se INSERTA en la línea de tiempo — el silencio es latencia
+        /// permanente, así que se encola el mínimo que evita que la cola muera (rallyx).
+        keepalive_bytes: usize,
     }
 
     pub struct CoreAudioSink {
@@ -277,14 +283,26 @@ mod coreaudio {
             let cap = (*buf).audio_data_bytes_capacity as usize;
             let out = std::slice::from_raw_parts_mut((*buf).audio_data, cap);
             let mut ring = shared.ring.lock().unwrap();
-            let take = ring.len().min(cap);
-            for slot in out.iter_mut().take(take) {
-                *slot = ring.pop_front().unwrap_or(0);
+            // byte_size = EXACTAMENTE lo tomado, alineado a frame — jamás rellenar un buffer
+            // parcial con silencio: todo octeto encolado se inserta en la línea de tiempo y un
+            // relleno es LATENCIA PERMANENTE (hallazgo de rallyx: 150 ms de cebado + 50 ms por
+            // underrun con el diseño anterior).
+            let fb = shared.frame_bytes;
+            let take = (ring.len().min(cap) / fb) * fb;
+            if take > 0 {
+                for slot in out.iter_mut().take(take) {
+                    *slot = ring.pop_front().unwrap_or(0);
+                }
+                (*buf).audio_data_byte_size = take as u32;
+            } else {
+                // Anillo seco: el MÍNIMO de silencio que mantiene viva la cola (~8 ms) — un
+                // buffer sin encolar sale de la rotación y la cola muere.
+                let silence = shared.keepalive_bytes.min(cap).max(fb);
+                for slot in out.iter_mut().take(silence) {
+                    *slot = 0;
+                }
+                (*buf).audio_data_byte_size = silence as u32;
             }
-            for slot in out.iter_mut().skip(take) {
-                *slot = 0; // silencio: la cola sigue viva esperando más PCM
-            }
-            (*buf).audio_data_byte_size = cap as u32;
             drop(ring);
             shared.space.notify_all();
             AudioQueueEnqueueBuffer(q, buf, 0, std::ptr::null());
@@ -305,9 +323,19 @@ mod coreaudio {
             reserved: 0,
         };
         // El anillo guarda ~200 ms; cada buffer de la cola, ~50 ms (3 buffers, el clásico).
-        let cap = ((rate * channels * 2 / 5).max(4096) as usize) & !1;
-        let buf_size = ((cap / 4).max(1024) as u32) & !1;
-        let shared = Arc::new(Shared { ring: Mutex::new(VecDeque::new()), space: Condvar::new(), cap });
+        let frame_bytes = bytes_per_frame as usize;
+        let bytes_per_sec = (rate * channels * 2) as usize;
+        let cap = (bytes_per_sec / 5).max(4096) / frame_bytes * frame_bytes;
+        let buf_size = ((cap / 4).max(1024) / frame_bytes * frame_bytes) as u32;
+        // ~8 ms de silencio de keepalive (el cebado son 3 → ~24 ms de retraso inicial, no 150).
+        let keepalive_bytes = (bytes_per_sec / 125).max(frame_bytes) / frame_bytes * frame_bytes;
+        let shared = Arc::new(Shared {
+            ring: Mutex::new(VecDeque::new()),
+            space: Condvar::new(),
+            cap,
+            frame_bytes,
+            keepalive_bytes,
+        });
         let user = Arc::into_raw(shared.clone()) as *mut std::ffi::c_void;
         let mut q: AudioQueueRef = std::ptr::null_mut();
         // SAFETY: desc/out válidos; el callback y `user` viven hasta Dispose.
@@ -428,7 +456,9 @@ mod alsa {
             if st != 0 {
                 return Err(format!("audio: snd_pcm_open failed ({st})"));
             }
-            // 500 ms de latencia del dispositivo: generoso y robusto (la latencia fina no es de v1).
+            // 100 ms de latencia del dispositivo: reactivo sin ser frágil (500 ms, lo primero
+            // que se probó, insertaba medio segundo entre write y altavoz — hallazgo de rallyx;
+            // los underruns los cubre recover).
             let st = f_params(
                 pcm,
                 SND_PCM_FORMAT_S16_LE,
@@ -436,7 +466,7 @@ mod alsa {
                 channels as u32,
                 rate as u32,
                 1,
-                500000,
+                100000,
             );
             if st != 0 {
                 close(pcm);

@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray test --watch`** (M140): el bucle de desarrollo aplicado al runner — re-corre la suite
+  ante cada cambio (eventos de kernel, debounce, guardados idénticos ignorados), un cambio a
+  mitad de corrida la corta y re-corre, pantalla limpia entre corridas en un terminal, `q` sale.
+
 - **`ray dev` por eventos de kernel** (M139): el watcher del modo desarrollo deja el sondeo de
   mtimes (~200 ms de escaneo continuo) y reutiliza la maquinaria de `fs.watch`
   (FSEvents/inotify): reinicio a decenas de ms del guardado y cero coste en reposo, con

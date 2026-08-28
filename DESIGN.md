@@ -10508,3 +10508,23 @@ cada ~200 ms mientras el hijo corre (un tcgetattr, gratis). Al terminar: interac
 limpia → `ray dev` sale con ella («the program exited; bye»); interactiva + crash → espera (el
 usuario edita el fix y quiere el relanzamiento); script → espera con la `q` de tecla única. El
 muestreo se reinicia en cada relanzamiento.
+
+## 138. M140 — `ray test --watch`: el bucle de dev aplicado al runner (ago 2026)
+
+La primera adyacente de IDEAS §76, en su versión simple deliberada: re-correr la suite entera
+ante cada cambio (la selectiva por grafo de imports queda anotada). Reusa TODAS las piezas de
+M139 — `DevWatcher` (eventos de kernel + fallback), debounce por silencio relevante,
+confirmación por hash, la `q` de tecla única en crudo — con tres diferencias razonadas frente a
+`ray dev`: (1) SIN check-before-restart: no hay servidor que proteger y la propia corrida
+muestra el diagnóstico de compilación, que es justo lo que el usuario quiere ver; (2) SIN hub de
+live-reload ni socket-activation (nada que recargar ni retener); (3) un cambio A MITAD de
+corrida la corta (SIGTERM→SIGKILL) y re-corre ya — la corrida vieja responde a una pregunta que
+ya nadie hace. Entre corridas limpia la pantalla (convención de los watch de tests), solo en un
+terminal: bajo pipe/CI el scroll es el registro.
+
+El bug que cazó el E2E: el bucle interno comprobaba `wait_change` ANTES que `try_wait`, así que
+un cambio que llegaba justo cuando la corrida acababa de terminar caía en la rama de corte — que
+re-corre SIN el gate de hash (una corrida trunca debe repetirse siempre) — y un guardado con los
+mismos bytes re-corría. El reap va primero: hijo terminado → vía de espera, con su gate.
+E2E nuevo en tests/test_watch_cli.rs (ciclo verde→rojo→verde→touch-ignorado, robusto a cortes
+a mitad: espera el estado de reposo antes del touch y compara conteos de corridas relativos).

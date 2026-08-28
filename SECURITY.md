@@ -179,6 +179,16 @@ documentada:
   runtime (`transmute` de cada símbolo a la firma del header de ALSA, API estable; sin la
   librería → `Err`, jamás un crash). La decisión sin-crates es deliberada: `cpal` habría exigido
   los headers de ALSA en *build* en todo Linux.
+- **`crates/ray-runtime/src/ui.rs`** — la ventana + webview de `std/ui` (M146), **sin crates**
+  (la misma decisión que audio: `wry` exigiría toolchains GTK/WebKit en *build*): el self-pipe de
+  la cola de eventos (`pipe`/`read`/`write`/`fcntl` variádico) y, en macOS, **Objective-C a
+  mano** — `objc_msgSend` casteado a la firma EXACTA de cada mensaje (arm64: jamás una llamada
+  variádica), la clase delegate registrada una vez (`objc_allocateClassPair` tras `OnceLock`) y
+  cuyo callback solo toca estado propio sincronizado, y `dispatch_async_f` (libdispatch C plano,
+  sin blocks). Los punteros objc viajan como `usize` y SOLO se dereferencian en el hilo
+  principal; las ventanas llevan `setReleasedWhenClosed:NO` + retención propia (el use-after-free
+  clásico del NSWindow programático) y su liberación es explícita y en main. Frameworks
+  AppKit/WebKit/Foundation enlazados con `#[link(kind = "framework")]` — siempre presentes.
 - **`src/transpile/`** — el mismo tipo de código, pero **emitido** dentro del binario nativo
   generado (FFI, poller, fibras, procesos). Se audita en la plantilla, que es única.
 

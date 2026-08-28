@@ -1,0 +1,141 @@
+// La evolución de examples/web/desktop (F1 de IDEAS §80): la MISMA app, ahora con VENTANA
+// PROPIA — std/ui abre un webview nativo del SO apuntado al webserver embebido, en vez de
+// abrir el navegador. El IPC JS↔raylang sigue siendo el framework web (fetch → handlers), y
+// cerrar la ventana (botón rojo o botón "Salir" de la página) termina el programa.
+// **VM y nativo** (con `ray build --native` queda un binario único que abre su propia ventana).
+//
+//   cd examples/web/desktop_window
+//   ray run
+from web/framework import new_app, GET, POST, listen, html, json, text, App, Ctx, Res;
+import std/net;
+import std/time;
+import std/ui;
+
+// Un puerto libre asignado por el SO (bindear al 0, leer, soltar) — dos instancias no chocan.
+fn free_port() -> Result<int, string> {
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(h) => {
+            let port: int = net.local_port(h);
+            let _ = close(h);
+            Result.Ok(port)
+        },
+    }
+}
+
+// Abre la ventana SOLO cuando el servidor ya acepta (sondear el puerto, sin sleeps a ciegas),
+// y desde ahí atiende los eventos de UI: la ventana cerrada = el programa termina.
+fn open_window_when_ready(port: int) {
+    var tries: int = 0;
+    while (tries < 100) {
+        match (net.tcp_connect_timeout("127.0.0.1", port, 200)) {
+            Result.Ok(c) => {
+                let _ = close(c);
+                match (ui.open(
+                    "raylang desktop",
+                    "http://127.0.0.1:" + to_string(port) + "/",
+                    900,
+                    640
+                )) {
+                    Result.Err(e) => {
+                        eprint("ui: " + e);
+                        exit(1);
+                    },
+                    Result.Ok(w) => {
+                        watch_window(w);
+                    },
+                }
+                return;
+            },
+            Result.Err(_) => {
+                time.sleep(20);
+                tries = tries + 1;
+            },
+        }
+    }
+    eprint("the server never came up");
+    exit(1);
+}
+
+// La fibra dueña de la ventana: espera sus eventos (aparca — sin sondeo) y sale al cerrarse.
+fn watch_window(w: int) {
+    var open_window = true;
+    while (open_window) {
+        match (ui.next_event()) {
+            Result.Ok(e) => {
+                if (e.kind == "closed" && e.window == w) {
+                    open_window = false;
+                }
+            },
+            Result.Err(_) => {
+                open_window = false;
+            },
+        }
+    }
+    exit(0);
+}
+
+fn build_app() -> App {
+    var app = new_app();
+
+    app.GET("/", fn(c: Ctx, r: Res) {
+        r.html(`<!doctype html>
+<meta charset="utf-8">
+<title>raylang desktop</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; }
+  button { font-size: 1rem; padding: .4rem 1rem; margin-right: .5rem; }
+  #now { font-variant-numeric: tabular-nums; }
+</style>
+<h1>Una ventana propia en raylang</h1>
+<p>Esta página vive en un webview nativo; los datos llegan por fetch al backend.</p>
+<p>Hora del backend (UTC): <strong id="now">…</strong></p>
+<button onclick="tick()">Actualizar</button>
+<button onclick="quit()">Salir</button>
+<script>
+  function tick() {
+    fetch("/api/now").then(function (r) { return r.json(); }).then(function (d) {
+      document.getElementById("now").textContent = d.now;
+    });
+  }
+  function quit() { fetch("/quit", { method: "POST" }); }
+  tick();
+  setInterval(tick, 1000);
+</script>`);
+    });
+
+    app.GET("/api/now", fn(c: Ctx, r: Res) {
+        r.json(`{"now": "${time.to_iso8601(time.now_utc())}"}`);
+    });
+
+    // Salir desde la página: responder y terminar desde una fibra aparte (la respuesta llega).
+    app.POST("/quit", fn(c: Ctx, r: Res) {
+        spawn(fn() {
+            time.sleep(200);
+            exit(0);
+        });
+        r.text("bye");
+    });
+
+    app
+}
+
+fn main() -> int {
+    let port: int = match (free_port()) {
+        Result.Ok(p) => p,
+        Result.Err(e) => {
+            eprint(e);
+            return 1;
+        },
+    };
+    spawn(fn() {
+        open_window_when_ready(port);
+    });
+    match (listen(build_app, "127.0.0.1", port)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}

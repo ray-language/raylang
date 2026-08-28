@@ -1088,6 +1088,39 @@ en silencio — para tests y CI sin tarjeta de sonido. En el binario nativo, `--
 excluye. La música reactiva de un juego es el caso de diseño: cada iteración del bucle sintetiza
 lo que toca según el estado, y el dispositivo marca el compás.
 
+### Ventanas (`std/ui`)
+
+La **primitiva de apps de escritorio**: una ventana nativa del SO con el **webview del sistema**
+cargando una URL. El patrón es apuntarla al webserver embebido del programa — la UI es HTML/CSS/
+JS servido por ti, y el IPC JS↔raylang **es el framework web** (`fetch`/WS contra tus handlers),
+sin mensajería nueva que aprender:
+
+```rust
+import std/ui;
+
+let h = ui.open("Mi app", "http://127.0.0.1:" + to_string(port) + "/", 900, 640)?;
+ui.eval_js(h, "console.log('hola desde raylang')")?;   // fire-and-forget
+
+// Los eventos son una cola por proceso; la fibra APARCA (sin sondeo).
+match (ui.next_event()) {
+    Result.Ok(e) => {
+        // v1: e.kind == "closed" (botón rojo o close(h) — exactamente uno por ventana)
+        if (e.kind == "closed" && e.window == h) { exit(0); }
+    },
+    Result.Err(e) => eprint(e),
+}
+```
+
+No hay `ui.run()`: el runtime **captura el hilo principal por su cuenta** en la primera ventana
+(AppKit exige poseerlo; el programa sigue corriendo en sus fibras, ajeno al detalle). `close(h)`
+cierra la ventana; `ui.events()` da la misma cola como `Channel<UiEvent>` (para hacer `select`
+con tus otros canales); `next_event_timeout(ms)` acota la espera. Backend real: macOS
+(WKWebView); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria (tests/CI en
+cualquier OS — `ray test` lo usa por defecto), y `--without ui` lo excluye del binario nativo.
+Nota: sin `Info.plist` (binario suelto), el webview bloquea `http://` remoto (ATS) —
+`http://127.0.0.1` está exento, que es justo el patrón. El ejemplo completo (webserver + ventana
++ salir al cerrarla) está en [`examples/web/desktop_window/`](examples/web/desktop_window/).
+
 ### Markdown (`std/markdown`)
 
 Markdown → HTML (o el AST, si quieres renderizar tú — una TUI, un índice):
@@ -1650,8 +1683,10 @@ fn free_port() -> Result<int, string> {
 
 Con `ray build --native` queda un **binario único** que al ejecutarse abre su propia UI — una
 app de escritorio sin instalación ni runtime aparte. El ejemplo completo y ejecutable está en
-[`examples/web/desktop/`](examples/web/desktop/); la evolución del patrón (ventana propia con
-webview nativo, assets embebidos, bundling) está clasificada en `IDEAS.md` §80.
+[`examples/web/desktop/`](examples/web/desktop/). La **ventana propia** es la evolución directa:
+`std/ui` abre el mismo webserver en un webview nativo (§13, "Ventanas") — ejemplo en
+[`examples/web/desktop_window/`](examples/web/desktop_window/); lo que queda del arco (assets
+embebidos, bundling) está clasificado en `IDEAS.md` §80.
 
 ### RPC entre servicios (`packages/rpc`, dependencia)
 

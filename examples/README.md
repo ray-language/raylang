@@ -63,6 +63,9 @@ Librerías en raylang (importables) + sus demos. **El servidor corre en la VM y 
 - **`desktop/`**: una **app de escritorio sin ventana propia** (fase 0 de IDEAS §80): puerto libre
   del SO + abrir el navegador por defecto cuando el servidor ya acepta + salir desde la UI con
   `POST /quit` → `exit(0)`. El framework es el IPC. Ver `desktop/README.md`.
+- **`desktop_window/`**: la evolución con **ventana propia** (`std/ui`, M146): el mismo webserver
+  en un webview nativo; cerrar la ventana termina el programa (el evento `closed`). Ver
+  `desktop_window/README.md`.
 - **`ssr/`**: **server-side rendering** con **templates compilados** (M55) — un mini-proyecto donde
   `ray build --templates-only` compila `vistas/*.ray.html` (firma tipada) a funciones raylang que el servidor de
   `net` sirve por petición. Ver `ssr/README.md`.

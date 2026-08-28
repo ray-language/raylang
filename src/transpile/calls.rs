@@ -2178,6 +2178,35 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // M146: std/ui — ventana + webview (ray_runtime::ui tras la feature `ui`). El flag
+            // además cambia la FORMA del main emitido: el programa corre en un hilo del SO y el
+            // hilo 1 queda para el loop de AppKit (ver la emisión de `fn main`).
+            "ui_open" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_open(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[3])?;
+                out.push(')');
+            }
+            "ui_eval_js" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_eval_js(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "ui_next_event" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_next_event(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "watch" if name.starts_with("__") && !self.exclude.contains("watch") => {
                 self.needs_rt_watch = true;
                 out.push_str("__ray_watch(&*");

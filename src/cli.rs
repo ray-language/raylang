@@ -89,7 +89,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui]] [--templates-only [path...]]
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -1179,7 +1179,9 @@ fn cmd_build(args: &[String]) {
         }
     }
     // Valida los nombres (CLI + ray.toml) fail-fast, como `ray add`. El mensaje nombra el origen del typo.
-    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch", "unicode"];
+    // M146: `audio` faltaba desde M145 (el help/docs lo anunciaban y la validación lo rechazaba
+    // con exit 64) — entra junto a `ui`.
+    const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "mimalloc", "ahash", "regex", "fibers", "process", "watch", "unicode", "audio", "ui"];
     for (dep, origin) in &exclude {
         if !RT_SUBSYSTEMS.contains(&dep.as_str()) {
             eprintln!(

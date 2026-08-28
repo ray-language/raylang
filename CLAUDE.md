@@ -54,7 +54,7 @@ expresiones, sintaxis de llaves.
 - **Guía de builds** (features slim, PGO, flags de adelgazamiento): `docs/build.md`.
   Release PGO: `sh tools/pgo.sh [--slim | --features "a,b,c"]`.
 - **Binario nativo del PROGRAMA**: `ray build --native prog.ray [-o out] [--release]
-  [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio]` transpila el programa a
+  [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui]` transpila el programa a
   Rust (`src/transpile/`) y lo compila con `rustc`/`cargo` → binario de código
   máquina, byte-idéntico a la VM. Los subsistemas con-crate (TLS/cripto/SQLite)
   viven en `crates/ray-runtime` (workspace) y se enlazan **bajo demanda** (proyecto

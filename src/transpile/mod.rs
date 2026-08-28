@@ -101,6 +101,10 @@ struct Transpiler {
     pub(super) needs_rt_watch: bool,
     /// M145: salida de audio (ray_runtime::audio; detectado por USO de __audio_*).
     pub(super) needs_rt_audio: bool,
+    /// M146: ventana + webview (ray_runtime::ui; detectado por USO de __ui_*). Además de la
+    /// feature, cambia la FORMA del main emitido: el programa corre en un hilo del SO con pila
+    /// grande y el hilo 1 del proceso queda esperando el loop de AppKit (contrato de std/ui).
+    pub(super) needs_rt_ui: bool,
     /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
     /// de socket (`std::net::TcpStream`/`TcpListener`).
     needs_net: bool,
@@ -264,6 +268,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_fs_meta: false,
         needs_rt_watch: false,
         needs_rt_audio: false,
+        needs_rt_ui: false,
         needs_net: false,
         needs_rt_crypto: false,
         needs_rt_tls: false,
@@ -431,18 +436,37 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     // M97.2: el hook también calla dentro de un `try_call` — el fallo se va a convertir en valor,
     // así que imprimir "thread panicked at …" sería ruido que la VM no emite.
     out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() && !__ray_in_try() { __rt_hook(i); } }));\n");
-    out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
+    let mut run_body = String::new();
+    run_body.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
     if main_ret_int {
-        out.push_str("        Ok(code) => { __ray_flush_prints(); std::process::exit(code as i32) },\n");
+        run_body.push_str("        Ok(code) => { __ray_flush_prints(); std::process::exit(code as i32) },\n");
     } else {
-        out.push_str("        Ok(_) => { __ray_flush_prints(); std::process::exit(0) },\n");
+        run_body.push_str("        Ok(_) => { __ray_flush_prints(); std::process::exit(0) },\n");
     }
-    out.push_str("        Err(e) => {\n");
-    out.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
-    out.push_str("            __ray_flush_prints();\n");
-    out.push_str("            std::process::exit(70)\n");
-    out.push_str("        }\n");
-    out.push_str("    }\n");
+    run_body.push_str("        Err(e) => {\n");
+    run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+    run_body.push_str("            __ray_flush_prints();\n");
+    run_body.push_str("            std::process::exit(70)\n");
+    run_body.push_str("        }\n");
+    run_body.push_str("    }\n");
+    if t.needs_rt_ui {
+        // M146 (std/ui): AppKit exige poseer el hilo 1 del proceso. El programa (el cuerpo de
+        // arriba, VERBATIM — jamás una fibra: se perdería el payload de pánico y cambiaría
+        // `in_fiber()` para todo main) corre en un hilo del SO con pila explícita, y el hilo 1
+        // espera el aviso de la primera operación de UI para entrar en `[NSApp run]` (para el
+        // resto del proceso; todo camino del programa termina en `process::exit`).
+        out.push_str("    let (__ui_tx, __ui_rx) = std::sync::mpsc::channel::<()>();\n");
+        out.push_str("    ray_runtime::ui::set_main_thread_waker(std::boxed::Box::new(move || { let _ = __ui_tx.send(()); }));\n");
+        out.push_str("    std::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(move || {\n");
+        out.push_str(&run_body);
+        out.push_str("    }).expect(\"could not create the program thread\");\n");
+        out.push_str("    while __ui_rx.recv().is_ok() {\n");
+        out.push_str("        #[cfg(target_os = \"macos\")]\n");
+        out.push_str("        let _ = ray_runtime::ui::run_main_loop();\n");
+        out.push_str("    }\n");
+    } else {
+        out.push_str(&run_body);
+    }
     out.push_str("}\n");
     // M96f: `print` deja de tomar el lock GLOBAL de `Stdout` en cada llamada — bajo impresión
     // concurrente intensiva (p. ej. `log_requests()`) era el mayor cuello de contención medido
@@ -549,6 +573,10 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     // M145: salida de audio (detectada por USO; `--without audio` evita marcar el flag).
     if t.needs_rt_audio {
         rt_features.push("audio");
+    }
+    // M146: ventana + webview (detectada por USO; `--without ui` evita marcar el flag).
+    if t.needs_rt_ui {
+        rt_features.push("ui");
     }
     // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
     // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,

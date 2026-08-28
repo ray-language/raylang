@@ -67,10 +67,10 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que
-/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Estuvo vacío desde
-/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1); los `__ui_*` de
-/// M146 están aquí TEMPORALMENTE mientras el backend nativo de std/ui llega en su propio PR.
-const NATIVE_STUBBED_BUILTINS: &[&str] = &["__ui_open", "__ui_eval_js", "__ui_next_event"];
+/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Vacío desde
+/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1; los `__ui_*`
+/// de M146 pasaron por aquí un PR y ya tienen backend).
+const NATIVE_STUBBED_BUILTINS: &[&str] = &[];
 
 use super::transpile;
 

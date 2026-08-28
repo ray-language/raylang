@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Fix** (nativo, hallazgo de raycode): `term.raw` drena el hilo escritor de `print` (M96f)
+  antes de tocar el termios — la salida encolada en modo cocido ya no se escribe dentro de la
+  siguiente sesión cruda (`\n` sin `\r`: la "escalera" intermitente). Cubre también
+  `capabilities` y `read_hidden` (mismo punto único).
+
 - **Fix** (`std/term`/nativo, hallazgo de rallyx): `raw()` es ahora **reentrante** —
   `capabilities()` (o cualquier helper que use raw) dentro de una sesión `term.raw` ya no deja
   el terminal cocinado a mitad (teclas muertas). De paso destapó y arregló una inversión en el

@@ -284,3 +284,38 @@ fn pty_wrap(cmdline: &str) -> String {
         format!("script -qec \"{cmdline}\" /dev/null")
     }
 }
+
+/// M143d (hallazgo de raycode): en el binario NATIVO, print encola en el hilo escritor (M96f) y
+/// `term.raw` cambiaba el termios sin drenar — la salida encolada en modo cocido se escribía ya
+/// dentro de la SIGUIENTE sesión raw (`\n` sin `\r`: escalera intermitente, el primer /help de
+/// raycode). El repro que la caza es la ALTERNANCIA raw→prints→raw en varias rondas (medido sin
+/// el fix: 6 de 18 líneas con `\r`); con el drenado en `__ray_term_raw`, 18 de 18.
+#[cfg(unix)]
+#[test]
+fn native_prints_between_raw_sessions_carry_the_carriage_return() {
+    if Command::new("script").arg("--version").output().is_err()
+        && !std::path::Path::new("/usr/bin/script").exists()
+    {
+        eprintln!("skipping: script(1) not available");
+        return;
+    }
+    if !Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        eprintln!("skipping: rustc not available");
+        return;
+    }
+    let base = tmp("raw_flush");
+    let prog = "import std/term;\nimport std/io;\n\nfn round(i: int) {\n    let r = term.raw(fn() -> string {\n        match (io.read_timeout(1, 30)) {\n            io.ReadResult.Data(_) => \"d\",\n            io.ReadResult.Eof => \"e\",\n            io.ReadResult.TimedOut => \"t\",\n        }\n    });\n    let _ = r;\n    print(\"r\" + to_string(i) + \"a\");\n    print(\"r\" + to_string(i) + \"b\");\n    print(\"r\" + to_string(i) + \"c\");\n}\n\nfn main() {\n    var i = 0;\n    while (i < 6) {\n        round(i);\n        i = i + 1;\n    }\n}\n";
+    std::fs::write(base.join("prog.ray"), prog).unwrap();
+    let bin = base.join("prog_bin");
+    let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+    assert_eq!(bcode, 0, "build --native ok\n{berr}");
+    let feeder = format!("(sleep 2) | {}", pty_wrap(bin.to_str().unwrap()));
+    let out = Command::new("sh").args(["-c", &feeder]).current_dir(&base).output().expect("pty");
+    let bytes = out.stdout;
+    // TODAS las líneas impresas en modo cocido deben llevar el \r de ONLCR: cada una sin él es
+    // salida que el escritor soltó ya dentro del raw de la ronda siguiente.
+    let crlf = bytes.windows(2).filter(|w| w == b"\r\n").count();
+    let lf = bytes.iter().filter(|&&b| b == b'\n').count();
+    assert_eq!(crlf, lf, "lineas en escalera: {crlf} de {lf} con retorno de carro\n{:?}", String::from_utf8_lossy(&bytes));
+    assert_eq!(lf, 18, "las 18 lineas del programa\n{:?}", String::from_utf8_lossy(&bytes));
+}

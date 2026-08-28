@@ -9,7 +9,7 @@
 //!                             rustc → binario nativo (P2.b, requiere `rustc`). `--release` = opt3+lto+
 //!                             codegen-units=1+target-cpu=native (más lento de compilar, no portable).
 //!                             con `--templates-only [ruta...]` solo compila los `.ray.html` (M99).
-//!   `ray test [archivo]`    — corre las funciones `@test` (M10.1).
+//!   `ray test [archivo]`    — corre las funciones `@test` (M10.1); `--watch` re-corre ante cambios (M140).
 //!   `ray fmt <archivo>`     — imprime la versión canónica por stdout (M29.2).
 //!   `ray doc <archivo>`     — genera la documentación Markdown (raydoc).
 //!   `ray add|remove|update|search|fetch` — gestión de dependencias, uso diario (M39b/M51).
@@ -90,7 +90,7 @@ Project:
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch]] [--templates-only [path...]]
-  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter]
+  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
 
@@ -1512,6 +1512,10 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
 /// integración: importan los módulos del proyecto porque la raíz de la entrada va como raíz
 /// extra del loader). Un primer argumento que no termina en `.ray` se toma como filtro.
 fn cmd_test_sub(args: &[String]) {
+    let (watch, args) = take_flag_bool(args, "--watch");
+    if watch {
+        cmd_test_watch(&args);
+    }
     let (explicit, filter) = match args.first().map(String::as_str) {
         Some(a) if a.ends_with(".ray") => (Some(a), args.get(1).map(String::as_str)),
         first => (None, first),
@@ -1529,6 +1533,113 @@ fn cmd_test_sub(args: &[String]) {
         roots.push(parent.to_path_buf());
     }
     process::exit(test_runner::run(&suites, &roots, filter));
+}
+
+/// `ray test --watch [args…]` (M140): el bucle de dev aplicado al runner — re-corre la suite ante
+/// cada cambio en los fuentes del proyecto (misma detección por eventos de kernel, debounce y
+/// confirmación por hash que `ray dev`). Diferencias deliberadas con dev: SIN check-before-restart
+/// (no hay servidor que proteger — la propia corrida muestra el diagnóstico de compilación) y SIN
+/// hub de live-reload ni socket-activation. Un cambio a MITAD de corrida la corta y re-corre.
+/// Entre corridas, `q` sale (tecla única, como en dev).
+fn cmd_test_watch(args: &[String]) -> ! {
+    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = Manifest::find(&cwd)
+        .and_then(|toml| toml.parent().map(Path::to_path_buf))
+        .or_else(|| {
+            args.iter()
+                .find(|a| a.ends_with(".ray"))
+                .and_then(|a| Path::new(a).parent().map(Path::to_path_buf))
+                .filter(|p| !p.as_os_str().is_empty())
+        })
+        .unwrap_or(cwd);
+    eprintln!("[watch] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
+    install_cleanup_on_death();
+
+    let mut snapshot = scan_sources(&root);
+    let mut hashes = content_hashes(&snapshot);
+    let mut watcher = DevWatcher::new(&root);
+    let mut first = true;
+    loop {
+        // Entre corridas, la pantalla se limpia (convención de los watch de tests) — solo en un
+        // terminal: bajo un pipe/CI el scroll completo es el registro.
+        if !first && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            print!("\x1b[H\x1b[2J");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+        first = false;
+        let mut child = match process::Command::new(&exe).arg("test").args(args).spawn() {
+            Ok(c) => {
+                DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
+                c
+            }
+            Err(e) => {
+                eprintln!("[watch] could not launch the tests: {e}");
+                process::exit(70);
+            }
+        };
+        // La corrida en marcha: termina sola, o un cambio la corta para re-correr ya. El reap
+        // (`try_wait`) va PRIMERO: un cambio que llega justo cuando la corrida acaba de terminar
+        // debe tratarse por la vía de espera (con su gate de hash), no como corte a mitad —
+        // cortar re-corre sin gate (la corrida quedó trunca) y un guardado idéntico re-correría.
+        let interrupted = loop {
+            if let Ok(Some(_)) = child.try_wait() {
+                DEV_CHILD.store(0, std::sync::atomic::Ordering::SeqCst);
+                break None;
+            }
+            if let Some(c) = watcher.wait_change(&root, &mut snapshot) {
+                break Some(c);
+            }
+        };
+        if let Some(change) = interrupted {
+            eprintln!("\r[watch] change in {change}: re-running…");
+            terminate_gracefully(&mut child);
+            DEV_CHILD.store(0, std::sync::atomic::Ordering::SeqCst);
+            watcher.debounce(&root, &mut snapshot);
+            hashes = content_hashes(&snapshot);
+            continue;
+        }
+        // Corrida terminada (el runner ya imprimió su resumen): esperar el próximo cambio o `q`.
+        let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if tty {
+            eprintln!("\r[watch] waiting for changes… (press q to exit)");
+        } else {
+            eprintln!("\r[watch] waiting for changes… (q⏎ or Ctrl-C exits)");
+        }
+        let mut keys_armed = tty && crate::builtins::term_raw_on().is_ok();
+        loop {
+            let change = loop {
+                if let Some(c) = watcher.wait_change(&root, &mut snapshot) {
+                    break c;
+                }
+                if keys_armed && dev_raw_key_quit() {
+                    let _ = crate::builtins::term_raw_off();
+                    eprintln!("\r[watch] bye");
+                    process::exit(0);
+                }
+                if !keys_armed && dev_stdin_quit() {
+                    eprintln!("\r[watch] bye");
+                    process::exit(0);
+                }
+            };
+            if keys_armed {
+                let _ = crate::builtins::term_raw_off();
+                keys_armed = false;
+            }
+            watcher.debounce(&root, &mut snapshot);
+            let current = content_hashes(&snapshot);
+            if current == hashes {
+                // Un mtime tocado con los mismos bytes (guardado sin editar, formateador
+                // idempotente): ni re-corre ni sale del estado de espera.
+                eprintln!("\r[watch] change in {change}: contents unchanged — ignoring");
+                keys_armed = tty && crate::builtins::term_raw_on().is_ok();
+                continue;
+            }
+            hashes = current;
+            eprintln!("\r[watch] change in {change}: re-running…");
+            break;
+        }
+    }
 }
 
 /// Los archivos `.ray` bajo `dir` (recursivo, orden estable por ruta): las suites de integración

@@ -2918,11 +2918,10 @@ de terceros se vería como raylang en GitHub, y de paso el propio linguist refer
 Con el watcher de `ray dev` migrado a eventos de kernel (M139, DESIGN §137), quedan
 clasificadas las dos mejoras vecinas que se evaluaron y NO entraron en ese arco:
 
-- **`ray test --watch`** (impacto BAJO en el diseño, valor DX alto): el bucle de dev aplicado al
-  runner — re-correr la suite al guardar, con el mismo debounce/hash/check. La versión simple
-  re-corre todo; la **selectiva** (solo las suites cuyo grafo de imports alcanza el archivo
-  cambiado — el loader ya conoce el grafo) es mejor DX pero añade estado y casos borde
-  (ray.toml/prelude tocado = todo). Empezar por la simple si se ejecuta.
+- **`ray test --watch`** — ✅ HECHA en su versión simple (M140, DESIGN §138): re-corre la suite
+  entera al guardar con las piezas de M139. Queda la **selectiva** (solo las suites cuyo grafo
+  de imports alcanza el archivo cambiado — el loader ya conoce el grafo): mejor DX en proyectos
+  grandes, pero añade estado y casos borde (ray.toml/prelude tocado = todo).
 - **Recarga de templates sin reinicio** (impacto MEDIO): hoy editar un `.ray.html` reinicia el
   proceso; los templates ya se compilan en memoria al cargar, así que un modo dev del webserver
   podría recompilar solo el template tocado y conservar el estado del proceso. Toca el borde

@@ -1949,7 +1949,7 @@ manda — la variable siempre gana al default.
 ```sh
 ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
-ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
+ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios
 ray doc archivo.ray      # documentación Markdown desde ///
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
 ray repl                 # REPL interactivo
@@ -2022,6 +2022,11 @@ termina queda a la espera del siguiente cambio para re-correr (el contrato del m
 sola **`q`** sale), y un programa que **crashea** también espera — editas el fix y se relanza
 solo. El hub de live-reload arranca siempre pero es **inerte para una app de consola**: solo el
 webserver inyecta el snippet, y solo al servir HTML.
+
+**`ray test --watch`** es el mismo bucle aplicado al runner: re-corre la suite ante cada cambio
+(limpia la pantalla entre corridas en un terminal), un cambio a mitad de corrida la corta y
+re-corre, un guardado sin cambios reales se ignora, y `q` sale. No hay check-before-restart: la
+propia corrida muestra el diagnóstico si algo no compila.
 
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
 compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**

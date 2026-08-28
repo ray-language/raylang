@@ -399,9 +399,11 @@ fn cmd_run(args: &[String]) {
 // ── `ray dev` (M92.1): modo desarrollo — watcher + reinicio con drenado ─────────────────────
 
 /// `ray dev [archivo] [flags de run] [args...]`: corre el programa como `ray run` y lo REINICIA
-/// ante cambios en los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`). El watcher es
-/// POLLING de mtimes (~200 ms): portable y cero deps. Un `.ray.html` editado dispara reinicio; el
-/// hijo lo compila en memoria al arrancar (M102: sin `.ray` generado en disco).
+/// ante cambios en los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`). El watcher usa
+/// EVENTOS DE KERNEL (la misma pieza de `fs.watch`, M115.4 — la justificación "polling: cero
+/// deps" caducó cuando `notify` entró al árbol) con fallback a polling de mtimes (~200 ms) en
+/// builds `--without watch` o no-unix; ver `DevWatcher`. Un `.ray.html` editado dispara
+/// reinicio; el hijo lo compila en memoria al arrancar (M102: sin `.ray` generado en disco).
 /// El reinicio manda **SIGTERM** — un servidor con `serve_graceful` (M88.1b) drena sus conexiones
 /// antes de morir — y escala a SIGKILL a los 3 s. Un programa que termina solo (un CLI, un crash)
 /// queda a la espera y se relanza al siguiente cambio.
@@ -460,7 +462,9 @@ fn cmd_dev(args: &[String]) {
     let reload = start_reload_hub();
     let reload_port = reload.as_ref().map(|(_, p)| *p);
     if let Some(p) = reload_port {
-        eprintln!("[dev] live-reload on http://127.0.0.1:{p} (browser refresh on restart)");
+        // La coletilla importa: para una app de consola el hub es INERTE (solo el webserver
+        // inyecta el snippet, y solo al servir HTML) — sin ella la línea confunde en una TUI.
+        eprintln!("[dev] web live-reload on http://127.0.0.1:{p} (only used when the app serves HTML)");
     }
 
     // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
@@ -471,25 +475,78 @@ fn cmd_dev(args: &[String]) {
 
     let mut snapshot = scan_sources(&root);
     let mut hashes = content_hashes(&snapshot);
+    let mut watcher = DevWatcher::new(&root);
+    // Huella del termios de stdin ANTES del primer hijo. Una app INTERACTIVA (una TUI) entra a
+    // modo crudo y la huella cambia; muestrearla mientras el hijo corre distingue "el usuario
+    // cerró la app con su propia tecla" (→ `ray dev` sale con ella, cero teclas extra) de "un
+    // script terminó" (→ esperar cambios y re-correr, el contrato del modo watch).
+    let baseline_tty = crate::builtins::term_attrs_fingerprint();
     let mut child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
     let mut running = true;
+    // ¿El hijo en curso cambió el terminal alguna vez? (reset en cada relanzamiento)
+    let mut interactive_child = false;
+    // ¿El supervisor tiene stdin en modo crudo, escuchando la tecla de salir? Solo sin hijo vivo.
+    let mut keys_armed = false;
     loop {
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
         let change = loop {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            let current = scan_sources(&root);
-            if let Some(c) = first_change(&snapshot, &current) {
-                snapshot = current;
+            if let Some(c) = watcher.wait_change(&root, &mut snapshot) {
                 break c;
             }
-            if running && let Ok(Some(status)) = child.try_wait() {
-                running = false;
-                eprintln!("[dev] the program finished ({status}); waiting for changes…");
+            if running {
+                // Mientras el hijo corre: ¿tocó el terminal? (una TUI entra a crudo). El
+                // muestreo cada ~200 ms es un tcgetattr — gratis.
+                if !interactive_child
+                    && let (Some(base), Some(now)) =
+                        (baseline_tty.as_ref(), crate::builtins::term_attrs_fingerprint())
+                    && now != *base
+                {
+                    interactive_child = true;
+                }
+                if let Ok(Some(status)) = child.try_wait() {
+                    running = false;
+                    // Una app INTERACTIVA que salió limpia la cerró el usuario con su propia
+                    // tecla: `ray dev` sale con ella — pedir OTRA tecla para salir del
+                    // supervisor es fricción sin sentido. Si crasheó (status != 0), sí se
+                    // espera: el usuario va a editar el fix y quiere el relanzamiento.
+                    // El `\r` inicial de estos mensajes importa: una TUI deja el cursor en
+                    // cualquier columna al salir — sin él, la línea aparece "tabulada".
+                    if interactive_child && status.success() {
+                        eprintln!("\r[dev] the program exited; bye");
+                        std::process::exit(0);
+                    }
+                    // Tecla-única para el resto (un script en bucle de edición): el terminal es
+                    // del supervisor y entra a CRUDO — una sola `q` sale, sin Enter. El hint va
+                    // ANTES del raw_on (en crudo, `\n` baja sin retornar carro y la línea
+                    // siguiente hereda la columna).
+                    let tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+                    if tty {
+                        eprintln!("\r[dev] the program finished ({status}); waiting for changes… (press q to exit)");
+                    } else {
+                        eprintln!("\r[dev] the program finished ({status}); waiting for changes… (q⏎ or Ctrl-C exits)");
+                    }
+                    keys_armed = tty && crate::builtins::term_raw_on().is_ok();
+                }
+            }
+            if keys_armed && dev_raw_key_quit() {
+                let _ = crate::builtins::term_raw_off();
+                eprintln!("\r[dev] bye");
+                std::process::exit(0);
+            }
+            if !running && !keys_armed && dev_stdin_quit() {
+                eprintln!("[dev] bye");
+                std::process::exit(0);
             }
         };
+        // Hubo cambio: el terminal vuelve a modo normal ANTES de imprimir nada más o relanzar
+        // (el hijo debe heredar un terminal sano; en crudo los mensajes se escalonan).
+        if keys_armed {
+            let _ = crate::builtins::term_raw_off();
+            keys_armed = false;
+        }
         // Debounce: coalesce una ráfaga (un guardado + el formateador del editor = varios eventos)
         // esperando a que los fuentes se estabilicen antes de actuar → un solo reinicio.
-        dev_debounce(&root, &mut snapshot);
+        watcher.debounce(&root, &mut snapshot);
         // Confirmación por contenido: un mtime tocado con los MISMOS bytes (guardado sin editar,
         // formateador idempotente, `touch`) no reinicia ni recarga nada.
         let current_hashes = content_hashes(&snapshot);
@@ -518,6 +575,7 @@ fn cmd_dev(args: &[String]) {
         }
         child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
         running = true;
+        interactive_child = false;
     }
 }
 
@@ -694,6 +752,191 @@ fn dev_check_compiles(exe: &Path, entry: &Option<String>) -> Result<(), String> 
 
 /// Debounce: espera a que los fuentes se estabilicen (~120 ms sin cambios) antes de continuar, para
 /// coalescer una ráfaga de eventos (guardado + formateador) en una sola acción. Actualiza `snapshot`.
+/// La fuente de "hubo un cambio" de `ray dev`. La vía preferida son los EVENTOS DE KERNEL —
+/// la misma pieza que `fs.watch` (M115.4: `notify`, FSEvents/inotify): latencia de decenas de
+/// ms tras el guardado y cero coste en reposo (el polling re-stat-eaba el árbol entero 5 veces
+/// por segundo). El polling de mtimes queda como respaldo: builds `--without watch`, no-unix,
+/// o un árbol donde el watcher no consiga abrirse. Ambas vías alimentan el MISMO bucle: el
+/// debounce y la confirmación por hash de contenido siguen aguas abajo, idénticos.
+enum DevWatcher {
+    #[cfg(all(feature = "watch", unix))]
+    Events {
+        watcher: ray_runtime::watch::FsWatcher,
+        /// Raíz canonicalizada: los eventos llegan con la ruta real del filesystem (p. ej.
+        /// `/private/tmp/...` en macOS) y hay que compararlos contra lo mismo.
+        canon_root: PathBuf,
+    },
+    Polling,
+}
+
+impl DevWatcher {
+    fn new(root: &Path) -> Self {
+        #[cfg(all(feature = "watch", unix))]
+        {
+            match ray_runtime::watch::watch(&root.display().to_string()) {
+                Ok(watcher) => {
+                    let canon_root =
+                        fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+                    return DevWatcher::Events { watcher, canon_root };
+                }
+                Err(e) => {
+                    eprintln!("[dev] kernel events unavailable ({e}); falling back to mtime polling");
+                }
+            }
+        }
+        let _ = root;
+        DevWatcher::Polling
+    }
+
+    /// Un paso de espera (~200 ms de cota): `Some(descripción)` si hubo un cambio relevante, con
+    /// `snapshot` ya actualizado. La cota corta permite al llamador vigilar también al hijo
+    /// (`try_wait`) sin hilo aparte.
+    fn wait_change(
+        &mut self,
+        root: &Path,
+        snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>,
+    ) -> Option<String> {
+        match self {
+            #[cfg(all(feature = "watch", unix))]
+            DevWatcher::Events { watcher, canon_root } => {
+                match watcher.next_timeout(200) {
+                    Ok(Some((_kind, path))) => {
+                        let path = PathBuf::from(path);
+                        if !is_watched_source(canon_root, &path) {
+                            return None;
+                        }
+                        *snapshot = scan_sources(root);
+                        let deleted = if path.exists() { "" } else { " (deleted)" };
+                        Some(format!("{}{deleted}", path.display()))
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        // El watcher murió (p. ej. la raíz desapareció): degradar a polling y
+                        // seguir — perder el modo dev entero sería peor que perder la latencia.
+                        eprintln!("[dev] kernel events stopped ({e}); falling back to mtime polling");
+                        *self = DevWatcher::Polling;
+                        None
+                    }
+                }
+            }
+            DevWatcher::Polling => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                let current = scan_sources(root);
+                let change = first_change(snapshot, &current);
+                if change.is_some() {
+                    *snapshot = current;
+                }
+                change
+            }
+        }
+    }
+
+    /// Coalesce la ráfaga de un guardado: espera a que pasen ~120 ms sin eventos RELEVANTES
+    /// (los irrelevantes — artefactos, ocultos — no alargan la espera) y deja el snapshot al día.
+    fn debounce(&mut self, root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>) {
+        match self {
+            #[cfg(all(feature = "watch", unix))]
+            DevWatcher::Events { watcher, canon_root } => {
+                let mut deadline = std::time::Instant::now() + std::time::Duration::from_millis(120);
+                loop {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    match watcher.next_timeout(left.as_millis().max(1) as i64) {
+                        Ok(Some((_kind, path))) => {
+                            if is_watched_source(canon_root, Path::new(&path)) {
+                                deadline = std::time::Instant::now()
+                                    + std::time::Duration::from_millis(120);
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
+                }
+                *snapshot = scan_sources(root);
+            }
+            DevWatcher::Polling => dev_debounce(root, snapshot),
+        }
+    }
+}
+
+/// ¿Llegó la tecla de salir con el stdin del supervisor en modo CRUDO? Un byte por pulsación:
+/// `q`/`Q` salen; en crudo ISIG está apagado, así que Ctrl-C (0x03) y Ctrl-D (0x04) llegan como
+/// bytes y se honran igual (el hint promete Ctrl-C). Cualquier otra tecla se ignora.
+fn dev_raw_key_quit() -> bool {
+    match crate::poll::wait(&[0], &[], 0) {
+        crate::poll::PollResult::Ready(fds) if fds.contains(&0) => {
+            let mut b = [0u8; 1];
+            match std::io::Read::read(&mut std::io::stdin().lock(), &mut b) {
+                Ok(0) => true, // EOF
+                Ok(_) => matches!(b[0], b'q' | b'Q' | 0x03 | 0x04),
+                Err(_) => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Respaldo en modo COOKED (stdin no es terminal o el modo crudo falló): solo aplica SIN hijo en
+/// marcha (jamás se compite por el stdin de un programa vivo) y SOLO con stdin en un terminal —
+/// en un pipe o CI, stdin cerrado daría EOF inmediato y `ray dev` moriría al primer programa
+/// terminado; el modo watch debe seguir esperando cambios ahí. Sondea sin bloquear y consume la
+/// línea disponible: `q` o EOF (Ctrl-D) terminan; cualquier otra línea se ignora.
+fn dev_stdin_quit() -> bool {
+    use std::io::{BufRead, IsTerminal};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    match crate::poll::wait(&[0], &[], 0) {
+        crate::poll::PollResult::Ready(fds) if fds.contains(&0) => {
+            let mut line = String::new();
+            match std::io::stdin().lock().read_line(&mut line) {
+                Ok(0) => true,
+                Ok(_) => line.trim().eq_ignore_ascii_case("q"),
+                Err(_) => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// ¿Es `path` (ruta de un evento de kernel, absoluta) un fuente que `ray dev` vigila? El mismo
+/// criterio de `scan_sources`, aplicado a una ruta suelta: bajo la raíz, fuera de carpetas de
+/// artefactos/ocultas, extensión de fuente, y la regla del `.ray` generado con `.ray.html`
+/// hermano (se vigila el fuente, no el artefacto). Los temporales de guardado atómico de los
+/// editores (`.tmp`, `~`, el `4913` de vim) caen solos por la extensión.
+#[cfg(all(feature = "watch", unix))]
+fn is_watched_source(canon_root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(canon_root) else { return false };
+    if let Some(parent) = rel.parent() {
+        for comp in parent.components() {
+            let name = comp.as_os_str().to_string_lossy();
+            if name.starts_with('.') || name == "target" || name == "node_modules" {
+                return false;
+            }
+        }
+    }
+    let Some(name) = path.file_name() else { return false };
+    let name = name.to_string_lossy();
+    // Un archivo OCULTO no es fuente aunque termine en .ray: es el temporal de un guardado
+    // atómico (`.!NNN!x.ray` de sed -i, los puntos de vim/emacs) — con eventos se ve siempre
+    // (el polling no lo alcanzaba: muere entre escaneos).
+    if name.starts_with('.') {
+        return false;
+    }
+    if !(name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml") {
+        return false;
+    }
+    if name.ends_with(".ray") && !name.ends_with(".ray.html") {
+        let html = path.with_extension("ray.html");
+        if html.exists() {
+            return false;
+        }
+    }
+    true
+}
+
 fn dev_debounce(root: &Path, snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>) {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(120));
@@ -780,7 +1023,7 @@ fn first_change(
     before
         .iter()
         .find(|(p, _)| !new.contains_key(p))
-        .map(|(p, _)| format!("{} (borrado)", p.display()))
+        .map(|(p, _)| format!("{} (deleted)", p.display()))
 }
 
 /// El pid del hijo en curso de `ray dev` (0 = ninguno), para que el handler de señales del PADRE
@@ -2565,6 +2808,48 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "watch", unix))]
+    #[test]
+    fn dev_event_relevance_matches_the_scan_criteria() {
+        let dir = std::env::temp_dir().join(format!("ray-dev-pred-{}", std::process::id()));
+        let src = dir.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let root = fs::canonicalize(&dir).unwrap();
+        // Fuentes vigilados: .ray, .ray.html y el manifiesto.
+        assert!(is_watched_source(&root, &root.join("src/main.ray")));
+        assert!(is_watched_source(&root, &root.join("pages/index.ray.html")));
+        assert!(is_watched_source(&root, &root.join("ray.toml")));
+        // Fuera: otras extensiones (incluye temporales de guardado atómico), artefactos, ocultos
+        // y rutas ajenas a la raíz.
+        assert!(!is_watched_source(&root, &root.join("src/main.ray.tmp")));
+        assert!(!is_watched_source(&root, &root.join("src/.!92067!main.ray")));
+        assert!(!is_watched_source(&root, &root.join("notes.md")));
+        assert!(!is_watched_source(&root, &root.join("target/debug/x.ray")));
+        assert!(!is_watched_source(&root, &root.join(".git/x.ray")));
+        assert!(!is_watched_source(&root, Path::new("/elsewhere/main.ray")));
+        // La regla del generado: un .ray con .ray.html hermano es artefacto, no fuente.
+        fs::write(src.join("page.ray.html"), "<b>x</b>").unwrap();
+        fs::write(src.join("page.ray"), "// generado").unwrap();
+        assert!(!is_watched_source(&root, &root.join("src/page.ray")));
+        assert!(is_watched_source(&root, &root.join("src/page.ray.html")));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dev_polling_fallback_still_detects_changes() {
+        // La variante de respaldo (builds --without watch / no-unix) se prueba directo.
+        let dir = std::env::temp_dir().join(format!("ray-dev-poll-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.ray"), "fn main() {}\n").unwrap();
+        let mut w = DevWatcher::Polling;
+        let mut snapshot = scan_sources(&dir);
+        assert_eq!(w.wait_change(&dir, &mut snapshot), None, "sin cambios no hay cambio");
+        fs::write(dir.join("main.ray"), "fn main() { print(1); }\n").unwrap();
+        let change = w.wait_change(&dir, &mut snapshot);
+        assert!(change.is_some_and(|c| c.contains("main.ray")), "el cambio debe detectarse");
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn upgrade_asset_matches_release_scheme() {

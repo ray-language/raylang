@@ -10446,3 +10446,65 @@ El arreglo, dos piezas en `dependency_roots_for`:
 El test de LSP de punta a punta (didOpen de un fuente en `.ray-deps/web/` que importa
 `net/…`) FALLA sin el fix y queda en verde con él; el unitario fija las dos piezas. La
 verificación real: el `framework.ray` espejado diagnostica limpio en el proyecto del repro.
+
+## 137. M139 — `ray dev` por eventos de kernel: la justificación del polling caducó (ago 2026)
+
+`ray dev` nació (M92.1) con un watcher de **polling de mtimes** cada ~200 ms, y su comentario
+declaraba el porqué: «portable y cero deps». Ese porqué murió en M115.4, cuando `fs.watch` trajo
+el crate `notify` (FSEvents/inotify) al árbol **por defecto** — desde entonces el lenguaje
+ofrecía watch por eventos de kernel mientras su propia herramienta de DX re-stat-eaba el árbol
+completo cinco veces por segundo. Este arco alinea la casa: el watcher de `ray dev` pasa a
+**reutilizar `ray_runtime::watch::FsWatcher`** — exactamente la pieza de `fs.watch` — y el
+polling queda como **respaldo** (builds `--without watch`, no-unix, o un árbol donde el watcher
+no consiga abrirse; si los eventos mueren en caliente, se degrada a polling y se sigue).
+
+La forma: un enum `DevWatcher { Events, Polling }` con dos operaciones — «espera el próximo
+cambio relevante» (cota de 200 ms para conservar la vigilancia del hijo con `try_wait`, sin hilo
+aparte) y el debounce (drenar eventos hasta ~120 ms de silencio **relevante**: los eventos de
+artefactos u ocultos no alargan la espera). El criterio de relevancia es el mismo de
+`scan_sources`, extraído a un predicado sobre la ruta del evento (extensiones de fuente,
+exclusión de `target`/`node_modules`/ocultas, y la regla del `.ray` generado con `.ray.html`
+hermano); los temporales del guardado atómico de los editores caen solos por extensión. Detalle
+de plataforma: los eventos llegan con la ruta **real** del filesystem (`/private/tmp/…` en
+macOS), así que la raíz se canonicaliza una vez y se compara contra eso.
+
+Lo importante es lo que NO cambió: el debounce, la **confirmación por hash de contenido** (los
+eventos también disparan en guardados sin cambios — un `touch` sigue sin reiniciar), el
+check-before-restart, el drenado graceful, la socket-activation y el live-reload quedan
+idénticos, porque los eventos solo sustituyen la *detección*. La prueba de paridad: los seis
+tests E2E de `tests/dev_cli.rs` pasan **sin tocarlos** con el backend nuevo. La ganancia real es
+la latencia guardado→reinicio (de hasta ~200 ms de escaneo + debounce escalonado a decenas de
+ms) y el coste en reposo (cero escaneos; un `try_wait` cada 200 ms), que crecía con el tamaño
+del proyecto. Quedan clasificadas en IDEAS §76 las adyacentes: `ray test --watch` (con la
+variante selectiva por grafo de imports) y la recarga de templates sin reinicio.
+
+Adenda del mismo arco, del primer dogfood (raygame): (1) una TUI cerrada con su propia tecla
+dejaba al usuario "atrapado" — el supervisor espera cambios por contrato del modo watch (igual
+que nodemon), pero no había salida limpia salvo Ctrl-C; ahora, **con el programa terminado**
+(nunca antes: jamás se compite por el stdin de un hijo vivo) y **solo con stdin en un TTY** (en
+un pipe/CI el EOF inmediato mataría el modo watch al primer programa terminado), una `q` o
+Ctrl-D salen de `ray dev`. (2) La línea del hub de live-reload confundía en una app de consola;
+se reformula («web live-reload …, only used when the app serves HTML») conservando el marcador
+que parsean los tests — el hub sigue arrancando siempre porque detectar «es una app web» no es
+asunto del supervisor (M92.4) y ocioso cuesta un hilo.
+
+Segunda iteración del mismo dogfood: `q⏎` no bastaba — el juego entrena TECLA ÚNICA y en modo
+cooked el kernel no entrega nada hasta el Enter. Ahora, al terminar el programa (y solo con
+stdin en un TTY), el supervisor entra a modo CRUDO reutilizando `builtins::term_raw_on/off`
+(M107.3, con su restauración por atexit) y una sola `q` sale; en crudo ISIG está apagado, así
+que Ctrl-C/Ctrl-D llegan como bytes 0x03/0x04 y se honran igual. El crudo se restaura ANTES de
+relanzar un hijo o imprimir el ciclo de reinicio (en crudo los `\n` no retornan carro). De
+regalo, los eventos destaparon otra diferencia con el polling: los TEMPORALES de guardado
+atómico con sufijo `.ray` (`.!NNN!x.ray` de sed -i) ahora se VEN (el polling no los alcanzaba —
+mueren entre escaneos) y disparaban el reinicio con una ruta fea; un archivo oculto ya no cuenta
+como fuente.
+
+Tercera iteración, y la definitiva en lo conceptual: pedir CUALQUIER tecla extra tras cerrar una
+TUI era fricción — si el usuario salió de la app, `ray dev` debe salir con ella. La distinción
+script-vs-interactiva es OBSERVABLE sin cooperación del hijo: una TUI entra a modo crudo, o sea
+CAMBIA el termios de stdin; el supervisor guarda la huella del termios al arrancar (los 128
+bytes opacos de M107.3, comparados por bytes — cero constantes de plataforma) y la muestrea
+cada ~200 ms mientras el hijo corre (un tcgetattr, gratis). Al terminar: interactiva + salida
+limpia → `ray dev` sale con ella («the program exited; bye»); interactiva + crash → espera (el
+usuario edita el fix y quiere el relanzamiento); script → espera con la `q` de tecla única. El
+muestreo se reinicia en cada relanzamiento.

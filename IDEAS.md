@@ -2913,6 +2913,27 @@ ya preparado.
 **Impacto:** ninguno sobre el lenguaje (todo externo). **Valor:** visibilidad — cada repo `.ray`
 de terceros se vería como raylang en GitHub, y de paso el propio linguist referencia la gramática.
 
+## 76. DX de `ray dev` — adyacentes tras el watcher por eventos (ago 2026)
+
+Con el watcher de `ray dev` migrado a eventos de kernel (M139, DESIGN §137), quedan
+clasificadas las dos mejoras vecinas que se evaluaron y NO entraron en ese arco:
+
+- **`ray test --watch`** (impacto BAJO en el diseño, valor DX alto): el bucle de dev aplicado al
+  runner — re-correr la suite al guardar, con el mismo debounce/hash/check. La versión simple
+  re-corre todo; la **selectiva** (solo las suites cuyo grafo de imports alcanza el archivo
+  cambiado — el loader ya conoce el grafo) es mejor DX pero añade estado y casos borde
+  (ray.toml/prelude tocado = todo). Empezar por la simple si se ejecuta.
+- **Recarga de templates sin reinicio** (impacto MEDIO): hoy editar un `.ray.html` reinicia el
+  proceso; los templates ya se compilan en memoria al cargar, así que un modo dev del webserver
+  podría recompilar solo el template tocado y conservar el estado del proceso. Toca el borde
+  loader/webserver (invalidación por archivo) y solo vale en dev — cuidar que el modo
+  producción quede intacto y byte-idéntico.
+- **Hot swap en la VM viva** (impacto ALTO, futuro lejano): reemplazar funciones en caliente
+  exige soporte del checker y la VM (tabla de funciones, closures capturados, fibras vivas) y
+  difumina la byte-identidad de los tres motores. El beneficio marginal sobre restart+drenado+
+  socket-activation no lo justifica hoy; se anota para que ninguna decisión lo bloquee por
+  accidente (la tabla de funciones de la VM ya es indirecta — buen augurio).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

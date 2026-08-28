@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray dev` por eventos de kernel** (M139): el watcher del modo desarrollo deja el sondeo de
+  mtimes (~200 ms de escaneo continuo) y reutiliza la maquinaria de `fs.watch`
+  (FSEvents/inotify): reinicio a decenas de ms del guardado y cero coste en reposo, con
+  fallback a sondeo en builds `--without watch`. Debounce, confirmación por contenido,
+  check-before-restart, socket-activation y live-reload quedan idénticos. Además: con el
+  programa terminado, `q` (o Ctrl-D) sale de `ray dev` limpio — útil tras cerrar una TUI con su
+  propia tecla — y la línea del live-reload aclara que solo aplica a apps que sirven HTML.
 - **Extensión para Zed**: gramática tree-sitter oficial
   ([ray-language/tree-sitter-raylang](https://github.com/ray-language/tree-sitter-raylang),
   validada en CI contra los 284 `.ray` del repo) + extensión

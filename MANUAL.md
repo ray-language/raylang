@@ -2011,10 +2011,17 @@ without = ["tls", "sqlite"]   # este servicio nunca enlaza TLS ni SQLite en el b
 ```
 
 **Modo desarrollo** (`ray dev`): vigila los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`)
-y ante un cambio reinicia el programa — un template editado se regenera al relanzar, y un servidor
-con `serve_graceful` **drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la
-compilación en milisegundos, el ciclo editar→ver es de decenas de ms. Un programa que termina solo
-queda a la espera del siguiente cambio.
+por **eventos de kernel** (FSEvents/inotify — la misma maquinaria de `fs.watch`; cero coste en
+reposo, y con fallback a sondeo de mtimes en builds `--without watch`) y ante un cambio reinicia
+el programa — un template editado se regenera al relanzar, y un servidor con `serve_graceful`
+**drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la compilación en
+milisegundos, el ciclo editar→ver es de decenas de ms desde el guardado. Al terminar el programa,
+`ray dev` distingue: una app **interactiva** (una TUI que entró a modo crudo) que salió limpia la
+cerraste tú con su propia tecla → `ray dev` **sale con ella**, sin teclas extra; un **script** que
+termina queda a la espera del siguiente cambio para re-correr (el contrato del modo watch; una
+sola **`q`** sale), y un programa que **crashea** también espera — editas el fix y se relanza
+solo. El hub de live-reload arranca siempre pero es **inerte para una app de consola**: solo el
+webserver inyecta el snippet, y solo al servir HTML.
 
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
 compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**

@@ -10649,3 +10649,15 @@ bug ENMASCARADO de M107.2: la emisión de `__ray_stdin_read_timeout` negaba al r
 camino del timeout daba la respuesta correcta por el re-chequeo de `ready`, y por eso nunca se
 vio: TODO read_timeout nativo tras un primer vencimiento estaba roto. El repro pty (script(1),
 una tecla sin Enter tras capabilities) quedó como E2E en term_cli para los tres motores.
+
+Tercera adenda de M143 (rallyx de nuevo, y de nuevo con razón): `TERM=xterm-ghostty` dejaba
+`kitty_graphics=false` — la heurística de entorno solo conocía a kitty, y el whack-a-mole estaba
+garantizado (Ghostty, WezTerm, Konsole hablan el protocolo). La detección REAL dejó de estar
+diferida: `capabilities()` envía en UN round-trip la query APC de gráficos (`ESC _ G …
+a=q;AAAA ESC \`) seguida del DA1 como terminador — el truco canónico de kitty: un terminal sin
+APC la ignora y contesta el DA1, así que la misma lectura-hasta-la-'c' sirve para ambas
+respuestas. `parse_graphics_reply` (puro, público) busca el `ESC _ G … OK`. El entorno queda
+como respaldo del caso sin tty (con `ghostty` añadido a la pista de TERM). Nota de carambola:
+esta query dentro de `raw()` es EXACTAMENTE el patrón que necesitaba las dos correcciones de
+esta rama — sin raw reentrante dejaba el terminal cocinado, y sin el fix del read_timeout
+nativo la respuesta jamás llegaba.

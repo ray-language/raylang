@@ -209,8 +209,8 @@ fn size_px_and_cell_px_are_none_without_a_terminal() {
 fn capabilities_from_env_match_on_all_three_engines() {
     // M143b (IDEAS §78): con el env CONTROLADO y sin tty (stdout canalizado → sin query DA1),
     // capabilities() es determinista; parse_device_attributes es pura. Byte-idéntico en los 3.
-    let src = "import std/term;\n\nfn main() {\n    print(term.parse_device_attributes(b\"\\x1b[?64;1;4c\"));\n    print(term.parse_device_attributes(b\"\\x1b[?1;2c\"));\n    print(term.parse_device_attributes(b\"garbage\"));\n    print(term.parse_device_attributes(b\"\\x1b[?64;1;4\"));\n    let c = term.capabilities();\n    print(\"tc=\" + to_string(c.truecolor) + \" c256=\" + to_string(c.colors_256) + \" sixel=\" + to_string(c.sixel) + \" kitty=\" + to_string(c.kitty_graphics));\n}\n";
-    let want = "[64, 1, 4]\n[1, 2]\n[]\n[]\ntc=true c256=true sixel=false kitty=false\n";
+    let src = "import std/term;\n\nfn main() {\n    print(term.parse_device_attributes(b\"\\x1b[?64;1;4c\"));\n    print(term.parse_device_attributes(b\"\\x1b[?1;2c\"));\n    print(term.parse_device_attributes(b\"garbage\"));\n    print(term.parse_device_attributes(b\"\\x1b[?64;1;4\"));\n    print(term.parse_graphics_reply(b\"\\x1b_Gi=31;OK\\x1b\\\\\\x1b[?64c\"));\n    print(term.parse_graphics_reply(b\"\\x1b_Gi=31;EINVAL\\x1b\\\\\"));\n    print(term.parse_graphics_reply(b\"\\x1b[?64;4c\"));\n    let c = term.capabilities();\n    print(\"tc=\" + to_string(c.truecolor) + \" c256=\" + to_string(c.colors_256) + \" sixel=\" + to_string(c.sixel) + \" kitty=\" + to_string(c.kitty_graphics));\n}\n";
+    let want = "[64, 1, 4]\n[1, 2]\n[]\n[]\ntrue\nfalse\nfalse\ntc=true c256=true sixel=false kitty=false\n";
     let env = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor"), ("KITTY_WINDOW_ID", "")];
     let base = tmp("caps_env");
     std::fs::write(base.join("prog.ray"), src).unwrap();

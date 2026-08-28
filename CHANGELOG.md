@@ -10,7 +10,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `capabilities()` (o cualquier helper que use raw) dentro de una sesión `term.raw` ya no deja
   el terminal cocinado a mitad (teclas muertas). De paso destapó y arregló una inversión en el
   `io.read_timeout` del binario nativo (M107.2): tras un primer vencimiento, los siguientes
-  jamás entregaban el dato.
+  jamás entregaban el dato. Y `kitty_graphics` dejó de ser heurística de entorno: ahora lo
+  responde el **propio terminal** vía la query APC del protocolo (cubre Ghostty/WezTerm; el
+  entorno queda como respaldo sin tty).
 
 - **`std/audio`** (M145): salida PCM al dispositivo — `open`/`write`/`drain` + `close(h)`,
   s16le entrelazado; `write` **aparca la fibra** cuando el dispositivo va lleno (la

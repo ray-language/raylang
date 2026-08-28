@@ -93,25 +93,55 @@ pub struct Capabilities {
     kitty_graphics: bool,
 }
 
-/// Detects the terminal's capabilities. The DA1 query (for sixel) only runs when both stdin
-/// and stdout are a terminal, inside raw mode, waiting at most ~150 ms for the reply; the rest
-/// comes from the environment (truecolor via `COLORTERM`, 256 colors via `TERM`, kitty graphics
-/// via `TERM`/`KITTY_WINDOW_ID` — a heuristic: kitty answers its own APC query, deferred).
+/// Detects the terminal's capabilities. The queries only run when both stdin and stdout are a
+/// terminal, inside raw mode, waiting at most ~150 ms: ONE round trip carrying the kitty
+/// graphics APC query followed by DA1 as the terminator (a terminal that does not speak APC
+/// ignores it and answers DA1) — so `kitty_graphics` is answered by the TERMINAL itself (kitty,
+/// Ghostty, WezTerm…), with `TERM`/`KITTY_WINDOW_ID` kept as the no-tty fallback. `truecolor`
+/// and `colors_256` come from the environment (`COLORTERM`/`TERM`); sixel from DA1 attribute 4.
 pub fn capabilities() -> Capabilities {
     let colorterm = env_text("COLORTERM");
     let name = env_text("TERM");
     let truecolor = colorterm.contains("truecolor") || colorterm.contains("24bit");
     let has_256 = truecolor || name.contains("256color") || name == "xterm-kitty";
-    let kitty = name == "xterm-kitty" || env_text("KITTY_WINDOW_ID") != "";
     var sixel = false;
+    var kitty_reply = false;
     if (is_tty(0) && is_tty(1)) {
-        for a in query_device_attributes() {
+        // La query de graficos kitty (a=q sobre un pixel RGB directo) + DA1 de terminador.
+        let resp = query_terminal("\u{1B}_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\u{1B}\\\u{1B}[c");
+        for a in parse_device_attributes(resp) {
             if (a == 4) {
                 sixel = true;
             }
         }
+        kitty_reply = parse_graphics_reply(resp);
     }
+    // El entorno queda como respaldo (sin tty no hay query): kitty, Ghostty y la variable de kitty.
+    let kitty = kitty_reply || name == "xterm-kitty" || name.contains(
+        "ghostty"
+    ) || env_text("KITTY_WINDOW_ID") != "";
     Capabilities { truecolor: truecolor, colors_256: has_256, sixel: sixel, kitty_graphics: kitty }
+}
+
+/// Whether a kitty-graphics APC reply (`ESC _ G … OK … ESC \`) is present in `resp` — the
+/// affirmative answer of a terminal that speaks the kitty graphics protocol (kitty, Ghostty,
+/// WezTerm…). Pure and tolerant: anything else is `false`.
+pub fn parse_graphics_reply(resp: bytes) -> bool {
+    var i = 0;
+    while (i + 2 < resp.len()) {
+        if (resp[i] == 27 && resp[i + 1] == 95 && resp[i + 2] == 71) {
+            // ESC _ G: busca "OK" antes del ESC de cierre.
+            var j = i + 3;
+            while (j + 1 < resp.len() && resp[j] != 27) {
+                if (resp[j] == 79 && resp[j + 1] == 75) {
+                    return true;
+                }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    false
 }
 
 /// Parses a DA1 (primary device attributes) reply such as `ESC [ ? 64 ; 1 ; 4 c` into its
@@ -162,11 +192,11 @@ pub fn parse_device_attributes(resp: bytes) -> [int] {
     return [];
 }
 
-// Emite DA1 y acumula la respuesta cruda hasta la 'c' final (o plazo sin datos). En raw: la
-// respuesta llega por stdin como bytes, no como teclas.
-fn query_device_attributes() -> [int] {
+// Emite `payload` y acumula la respuesta cruda hasta la 'c' final del DA1 (o plazo sin datos).
+// En raw: la respuesta llega por stdin como bytes, no como teclas.
+fn query_terminal(payload: string) -> bytes {
     let got = raw(fn() -> bytes {
-        io.write("\u{1B}[c");
+        io.write(payload);
         io.flush();
         var acc = b"";
         var done = false;
@@ -193,8 +223,8 @@ fn query_device_attributes() -> [int] {
         acc
     });
     match (got) {
-        Result.Ok(resp) => parse_device_attributes(resp),
-        Result.Err(_) => [],
+        Result.Ok(resp) => resp,
+        Result.Err(_) => b"",
     }
 }
 

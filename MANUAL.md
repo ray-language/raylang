@@ -1038,9 +1038,11 @@ un tty (es cálculo puro), así que sirve también para medir texto que no vas a
 **Terminal gráfico** (M143): para dibujar imágenes (sixel/kitty) hace falta saber cuánto mide una
 celda y qué soporta el terminal. `term.size_px()` da el área en píxeles (`None` si el terminal no
 la reporta — muchos dejan los campos en 0) y `term.cell_px()` el tamaño de una celda (área ÷
-rejilla). `term.capabilities()` devuelve `{ truecolor, colors_256, sixel, kitty_graphics }`
-combinando el entorno (`COLORTERM`, `TERM`, `KITTY_WINDOW_ID`) con una query DA1 que responde el
-propio terminal (solo con stdin y stdout en tty; plazo ~150 ms). Todo lo indetectable es `false`:
+rejilla). `term.capabilities()` devuelve `{ truecolor, colors_256, sixel, kitty_graphics }`:
+`kitty_graphics` y `sixel` los responde el **propio terminal** en un round-trip (la query APC de
+gráficos kitty + DA1 de terminador — cubre kitty, Ghostty, WezTerm y quien hable el protocolo;
+solo con stdin y stdout en tty, plazo ~150 ms), y el entorno (`COLORTERM`, `TERM`,
+`KITTY_WINDOW_ID`) cubre el resto y el caso sin tty. Todo lo indetectable es `false`:
 elige el peldaño más alto disponible y degrada sin adivinar. El parser de la respuesta
 (`parse_device_attributes`) es puro, por si hablas con el terminal por tu cuenta.
 

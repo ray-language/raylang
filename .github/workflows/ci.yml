@@ -6,11 +6,18 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: [main]
   pull_request:
   schedule:
     # Fuzzing nocturno prolongado (03:17 UTC; minuto no-redondo para no coincidir con el pico de cron).
     - cron: "17 3 * * *"
+
+# Un push nuevo a un PR CANCELA la corrida obsoleta del commit anterior (gasto de runner puro:
+# su resultado ya no le importa a nadie). En main y en el cron nocturno jamás se cancela — ahí
+# cada corrida importa. (El patrón "feature/**" del push era letra muerta: las ramas van en feat/.)
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always

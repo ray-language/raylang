@@ -3045,9 +3045,11 @@ Rust + bundling*, y raylang ya tiene el backend entero: webserver (streaming/WS/
 `.ray.html` tipados, sesiones, sqlite/fs/crypto, canales/fibras (actores = eventos de UI), y el
 binario único de `ray build --native`.
 
-**Fase 0 — funciona HOY, cero código nuevo**: binario que levanta el webserver en
-`127.0.0.1:puerto-aleatorio` y abre el navegador del sistema (`process.cmd("open", url)`). Una
-app de escritorio sin ventana propia. Documentarlo como patrón (MANUAL/ejemplo) es gratis.
+**Fase 0 — funciona HOY, cero código nuevo** ✅ (28 ago 2026): binario que levanta el webserver
+en `127.0.0.1` con puerto libre del SO (`tcp_listen(_, 0)` + `local_port`) y abre el navegador
+del sistema cuando el servidor ya acepta (sondeo con `tcp_connect_timeout`); salir desde la UI
+con `POST /quit` → `exit(0)` en fibra aparte. Documentado como patrón en MANUAL §14 + ejemplo
+ejecutable `examples/web/desktop/` (verificado VM y nativo).
 
 **Los cinco huecos reales, en orden de dureza:**
 

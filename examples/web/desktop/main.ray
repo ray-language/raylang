@@ -1,0 +1,129 @@
+// Fase 0 del "Tauri de raylang" (IDEAS §80): una app de escritorio SIN ventana propia.
+// El binario levanta el framework web en 127.0.0.1 con un puerto libre asignado por el SO y
+// abre el navegador por defecto. La UI es una página servida por el propio programa, y el
+// IPC JS↔raylang NO se inventa: es `fetch` contra los handlers del framework — el framework
+// ES el puente. **VM y nativo** (con `ray build --native` queda un binario único).
+//
+//   cd examples/web/desktop
+//   ray run
+// (se abre el navegador solo; el botón "Salir" de la página termina el proceso)
+from web/framework import new_app, GET, POST, listen, html, json, text, App, Ctx, Res;
+import std/net;
+import std/process;
+import std/time;
+
+// Un puerto libre: el SO lo asigna (puerto 0), lo leemos con `local_port` y lo soltamos para
+// que el webserver lo tome. (Hay una ventana mínima de carrera; en localhost es suficiente.)
+fn free_port() -> Result<int, string> {
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(h) => {
+            let port: int = net.local_port(h);
+            let _ = close(h);
+            Result.Ok(port)
+        },
+    }
+}
+
+// Abre `url` en el navegador por defecto: `open` en macOS; si no existe, `xdg-open` (Linux).
+fn open_browser(url: string) {
+    match (process.run("open", [url])) {
+        Result.Ok(_) => { },
+        Result.Err(_) => {
+            let _ = process.run("xdg-open", [url]);
+        },
+    }
+}
+
+// Espera a que el servidor ACEPTE conexiones antes de abrir el navegador: sondea el puerto
+// (conectar y cerrar) en vez de dormir un tiempo fijo — sin carreras al arrancar.
+fn open_when_ready(port: int) {
+    var tries: int = 0;
+    while (tries < 100) {
+        match (net.tcp_connect_timeout("127.0.0.1", port, 200)) {
+            Result.Ok(c) => {
+                let _ = close(c);
+                open_browser("http://127.0.0.1:" + to_string(port) + "/");
+                return;
+            },
+            Result.Err(_) => {
+                time.sleep(20);
+                tries = tries + 1;
+            },
+        }
+    }
+    eprint("the server never came up");
+}
+
+fn build_app() -> App {
+    var app = new_app();
+
+    // La "ventana": una página normal del framework. El JS habla con el backend por fetch.
+    app.GET("/", fn(c: Ctx, r: Res) {
+        r.html(`<!doctype html>
+<meta charset="utf-8">
+<title>raylang desktop</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; }
+  button { font-size: 1rem; padding: .4rem 1rem; margin-right: .5rem; }
+  #uptime { font-variant-numeric: tabular-nums; }
+</style>
+<h1>Una app de escritorio en raylang</h1>
+<p>Esta página la sirve el binario; los datos salen del backend por fetch.</p>
+<p>Hora del backend (UTC): <strong id="uptime">…</strong></p>
+<button onclick="tick()">Actualizar</button>
+<button onclick="quit()">Salir</button>
+<script>
+  function tick() {
+    fetch("/api/now").then(function (r) { return r.json(); }).then(function (d) {
+      document.getElementById("uptime").textContent = d.now;
+    });
+  }
+  function quit() {
+    fetch("/quit", { method: "POST" }).then(function () {
+      document.body.innerHTML = "<p>Hasta luego. Ya puedes cerrar esta pestaña.</p>";
+    });
+  }
+  tick();
+  setInterval(tick, 1000);
+</script>`);
+    });
+
+    // El "IPC": un endpoint corriente. Cualquier dato del programa se expone igual (el estado
+    // compartido de una app real va por canales a una fibra dueña, como en cualquier servidor).
+    app.GET("/api/now", fn(c: Ctx, r: Res) {
+        r.json(`{"now": "${time.to_iso8601(time.now_utc())}"}`);
+    });
+
+    // Salir desde la UI: responder primero, terminar el proceso después (una fibra aparte
+    // deja que la respuesta llegue al navegador antes del `exit`).
+    app.POST("/quit", fn(c: Ctx, r: Res) {
+        spawn(fn() {
+            time.sleep(200);
+            exit(0);
+        });
+        r.text("bye");
+    });
+
+    app
+}
+
+fn main() -> int {
+    let port: int = match (free_port()) {
+        Result.Ok(p) => p,
+        Result.Err(e) => {
+            eprint(e);
+            return 1;
+        },
+    };
+    spawn(fn() {
+        open_when_ready(port);
+    });
+    match (listen(build_app, "127.0.0.1", port)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}

@@ -1,0 +1,9 @@
+[package]
+name = "desktop-demo"
+version = "0.1.0"
+entry = "main.ray"
+
+# El framework vive en el paquete `web` (que a su vez usa `net`) → dependencias por ruta.
+[dependencies]
+web = "path:../../../packages/web"
+net = "path:../../../packages/net"

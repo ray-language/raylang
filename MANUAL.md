@@ -1622,6 +1622,37 @@ El mismo fuente corre en la VM (`ray run`/`ray dev`) y compila a binario nativo 
 SSR con templates, estado compartido, deploy) está en [`docs/web-framework.md`](docs/web-framework.md);
 el demo en [`examples/web/framework/`](examples/web/framework/).
 
+### Una app de escritorio sin ventana propia (patrón)
+
+El camino más corto hacia una app de escritorio, con la superficie que ya existe: el binario
+levanta el framework web en `127.0.0.1` con un **puerto libre asignado por el SO** y abre el
+**navegador por defecto**. La "ventana" es una pestaña; el IPC JS↔raylang no se inventa: es
+`fetch` contra los handlers — el framework ES el puente. Las tres piezas:
+
+```rust
+// 1. Puerto libre, sin choques entre instancias: bindear al 0, leer, soltar.
+fn free_port() -> Result<int, string> {
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(h) => {
+            let port: int = net.local_port(h);
+            let _ = close(h);
+            Result.Ok(port)
+        },
+    }
+}
+
+// 2. Abrir el navegador SOLO cuando el servidor ya acepta: una fibra sondea el puerto
+//    (tcp_connect_timeout + close) y entonces lanza `open` (macOS) / `xdg-open` (Linux).
+// 3. Salir desde la UI: un POST /quit responde y termina con exit(0) desde otra fibra
+//    (la respuesta llega al navegador antes de morir).
+```
+
+Con `ray build --native` queda un **binario único** que al ejecutarse abre su propia UI — una
+app de escritorio sin instalación ni runtime aparte. El ejemplo completo y ejecutable está en
+[`examples/web/desktop/`](examples/web/desktop/); la evolución del patrón (ventana propia con
+webview nativo, assets embebidos, bundling) está clasificada en `IDEAS.md` §80.
+
 ### RPC entre servicios (`packages/rpc`, dependencia)
 
 La comunicación **nativa** servicio-a-servicio (M88.4), sin el peso de HTTP: framing con prefijo

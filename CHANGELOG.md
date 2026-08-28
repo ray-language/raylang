@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Docs**: patrón "app de escritorio sin ventana propia" (fase 0 de IDEAS §80) — puerto libre
+  del SO + abrir el navegador cuando el servidor ya acepta + salir desde la UI; el framework web
+  es el IPC. Sección nueva en el MANUAL (§14) y ejemplo ejecutable `examples/web/desktop/`
+  (VM y nativo, verificado end-to-end).
+
 - **Fix** (nativo, hallazgo de raycode): `term.raw` drena el hilo escritor de `print` (M96f)
   antes de tocar el termios — la salida encolada en modo cocido ya no se escribe dentro de la
   siguiente sesión cruda (`\n` sin `\r`: la "escalera" intermitente). Cubre también

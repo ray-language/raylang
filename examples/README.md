@@ -60,6 +60,9 @@ Librerías en raylang (importables) + sus demos. **El servidor corre en la VM y 
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,
   respuestas) sobre `webserver`, como **librería reutilizable**. `framework_demo` lo importa y usa la
   API por punto (`app.GET(...)`, `r.text(...)`) — UFCS resuelve las funciones importadas.
+- **`desktop/`**: una **app de escritorio sin ventana propia** (fase 0 de IDEAS §80): puerto libre
+  del SO + abrir el navegador por defecto cuando el servidor ya acepta + salir desde la UI con
+  `POST /quit` → `exit(0)`. El framework es el IPC. Ver `desktop/README.md`.
 - **`ssr/`**: **server-side rendering** con **templates compilados** (M55) — un mini-proyecto donde
   `ray build --templates-only` compila `vistas/*.ray.html` (firma tipada) a funciones raylang que el servidor de
   `net` sirve por petición. Ver `ssr/README.md`.

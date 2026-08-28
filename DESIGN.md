@@ -10637,3 +10637,15 @@ solo el mínimo de silencio que mantiene viva la cola (~8 ms; un buffer sin enco
 rotación y la cola muere) → cebado ~24 ms, underrun cuesta 8. En ALSA, el `latency` de
 `set_params` bajó de 500 ms a 100 (el original insertaba medio segundo write→altavoz).
 Diferidos a IDEAS si el dogfood los pide: hint de latencia en `open`, `audio.played_ms(h)`.
+
+Segunda adenda de M143, dogfood de rallyx (dos bugs con un solo síntoma — "teclas muertas tras
+capabilities() dentro de raw"): (1) `raw()` NO ERA REENTRANTE — el `raw_on` anidado no pisaba el
+termios guardado (eso estaba bien), pero el `raw_off` interno de la query DA1 restauraba
+INCONDICIONALMENTE → cooked a mitad de la sesión exterior. Arreglo: contador de profundidad en
+`raw_on`/`raw_off` (solo la salida exterior restaura; el atexit restaura igual, es fin de
+proceso), espejado en el `__ray_term` emitido del nativo. (2) Al reproducirlo en nativo salió un
+bug ENMASCARADO de M107.2: la emisión de `__ray_stdin_read_timeout` negaba al revés
+`wait_readable_timeout` (cuyo contrato es `true` = VENCIÓ) — con dato listo devolvía None; el
+camino del timeout daba la respuesta correcta por el re-chequeo de `ready`, y por eso nunca se
+vio: TODO read_timeout nativo tras un primer vencimiento estaba roto. El repro pty (script(1),
+una tecla sin Enter tras capabilities) quedó como E2E en term_cli para los tres motores.

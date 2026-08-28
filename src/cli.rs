@@ -490,8 +490,8 @@ fn cmd_dev(args: &[String]) {
     loop {
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
         let change = loop {
-            if let Some(c) = watcher.wait_change(&root, &mut snapshot) {
-                break c;
+            if let Some((_, label)) = watcher.wait_change(&root, &mut snapshot) {
+                break label;
             }
             if running {
                 // Mientras el hijo corre: ¿tocó el terminal? (una TUI entra a crudo). El
@@ -788,14 +788,15 @@ impl DevWatcher {
         DevWatcher::Polling
     }
 
-    /// Un paso de espera (~200 ms de cota): `Some(descripción)` si hubo un cambio relevante, con
-    /// `snapshot` ya actualizado. La cota corta permite al llamador vigilar también al hijo
-    /// (`try_wait`) sin hilo aparte.
+    /// Un paso de espera (~200 ms de cota): `Some((ruta, descripción))` si hubo un cambio
+    /// relevante, con `snapshot` ya actualizado. La ruta alimenta la selección de suites del
+    /// watch de tests (M141); la descripción es para el usuario. La cota corta permite al
+    /// llamador vigilar también al hijo (`try_wait`) sin hilo aparte.
     fn wait_change(
         &mut self,
         root: &Path,
         snapshot: &mut Vec<(PathBuf, std::time::SystemTime)>,
-    ) -> Option<String> {
+    ) -> Option<(PathBuf, String)> {
         match self {
             #[cfg(all(feature = "watch", unix))]
             DevWatcher::Events { watcher, canon_root } => {
@@ -807,7 +808,8 @@ impl DevWatcher {
                         }
                         *snapshot = scan_sources(root);
                         let deleted = if path.exists() { "" } else { " (deleted)" };
-                        Some(format!("{}{deleted}", path.display()))
+                        let label = format!("{}{deleted}", path.display());
+                        Some((path, label))
                     }
                     Ok(None) => None,
                     Err(e) => {
@@ -826,7 +828,11 @@ impl DevWatcher {
                 if change.is_some() {
                     *snapshot = current;
                 }
-                change
+                change.map(|(path, deleted)| {
+                    let suffix = if deleted { " (deleted)" } else { "" };
+                    let label = format!("{}{suffix}", path.display());
+                    (path, label)
+                })
             }
         }
     }
@@ -1008,14 +1014,14 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
 fn first_change(
     before: &[(PathBuf, std::time::SystemTime)],
     after: &[(PathBuf, std::time::SystemTime)],
-) -> Option<String> {
+) -> Option<(PathBuf, bool)> {
     if before == after {
         return None;
     }
     let old: std::collections::HashMap<_, _> = before.iter().cloned().collect();
     for (p, m) in after {
         if old.get(p) != Some(m) {
-            return Some(p.display().to_string());
+            return Some((p.clone(), false));
         }
     }
     // Nada nuevo ni tocado pero difieren → algo se borró.
@@ -1023,7 +1029,7 @@ fn first_change(
     before
         .iter()
         .find(|(p, _)| !new.contains_key(p))
-        .map(|(p, _)| format!("{} (deleted)", p.display()))
+        .map(|(p, _)| (p.clone(), true))
 }
 
 /// El pid del hijo en curso de `ray dev` (0 = ninguno), para que el handler de señales del PADRE
@@ -1516,23 +1522,55 @@ fn cmd_test_sub(args: &[String]) {
     if watch {
         cmd_test_watch(&args);
     }
-    let (explicit, filter) = match args.first().map(String::as_str) {
-        Some(a) if a.ends_with(".ray") => (Some(a), args.get(1).map(String::as_str)),
-        first => (None, first),
-    };
-    let entry = resolve_entry(explicit, false);
+    let (explicit, filter) = split_test_args(&args);
+    let (suites, roots) = test_suites_and_roots(&explicit);
+    process::exit(test_runner::run(&suites, &roots, filter.as_deref()));
+}
 
-    let mut suites = vec![PathBuf::from(&entry)];
-    if explicit.is_none() {
+/// Separa los argumentos de `ray test`: los `.ray` iniciales son suites explícitas (una o
+/// VARIAS, M141 — la vía del watch selectivo) y el primer argumento que no termina en `.ray`
+/// es el filtro por nombre.
+fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
+    let mut explicit = Vec::new();
+    let mut idx = 0;
+    while let Some(a) = args.get(idx) {
+        if !a.ends_with(".ray") {
+            break;
+        }
+        explicit.push(a.clone());
+        idx += 1;
+    }
+    (explicit, args.get(idx).cloned())
+}
+
+/// Las suites y raíces de una invocación de `ray test`: las explícitas tal cual o, sin
+/// explícitas, la entrada del proyecto más cada `tests/*.ray`. La raíz de cada entrada
+/// implicada va como raíz extra del loader (un `tests/*.ray` resuelve `import m;` contra
+/// `src/`).
+fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut suites: Vec<PathBuf> = Vec::new();
+    if explicit.is_empty() {
+        let entry = resolve_entry(None, false);
+        suites.push(PathBuf::from(&entry));
         let root = load_manifest().map(|m| m.root).unwrap_or_else(|| PathBuf::from("."));
         suites.extend(discover_test_files(&root.join("tests")));
+    } else {
+        for f in explicit {
+            suites.push(PathBuf::from(resolve_entry(Some(f), false)));
+        }
     }
-    // La raíz de la entrada como raíz extra: un `tests/*.ray` resuelve `import m;` contra `src/`.
     let mut roots = dependency_roots();
-    if let Some(parent) = Path::new(&entry).parent() {
-        roots.push(parent.to_path_buf());
+    // Solo las entradas-ANCLA aportan raíz: la del proyecto (modo implícito) o cada explícita —
+    // los `tests/*.ray` descubiertos no (su raíz útil es la de la entrada, no `tests/`).
+    let anchors = if explicit.is_empty() { 1 } else { suites.len() };
+    for s in suites.iter().take(anchors) {
+        if let Some(parent) = s.parent().map(Path::to_path_buf)
+            && !roots.contains(&parent)
+        {
+            roots.push(parent);
+        }
     }
-    process::exit(test_runner::run(&suites, &roots, filter));
+    (suites, roots)
 }
 
 /// `ray test --watch [args…]` (M140): el bucle de dev aplicado al runner — re-corre la suite ante
@@ -1556,10 +1594,14 @@ fn cmd_test_watch(args: &[String]) -> ! {
     eprintln!("[watch] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
     install_cleanup_on_death();
 
+    let (explicit, filter) = split_test_args(args);
     let mut snapshot = scan_sources(&root);
     let mut hashes = content_hashes(&snapshot);
     let mut watcher = DevWatcher::new(&root);
     let mut first = true;
+    // Qué correr en la PRÓXIMA corrida (M141): `None` = todo (los args originales); `Some(sel)`
+    // = solo las suites afectadas por el último cambio. La primera corrida siempre es completa.
+    let mut selection: Option<Vec<PathBuf>> = None;
     loop {
         // Entre corridas, la pantalla se limpia (convención de los watch de tests) — solo en un
         // terminal: bajo un pipe/CI el scroll completo es el registro.
@@ -1568,7 +1610,13 @@ fn cmd_test_watch(args: &[String]) -> ! {
             let _ = std::io::Write::flush(&mut std::io::stdout());
         }
         first = false;
-        let mut child = match process::Command::new(&exe).arg("test").args(args).spawn() {
+        let run_args: Vec<String> = match &selection {
+            Some(subset) => {
+                subset.iter().map(|p| p.display().to_string()).chain(filter.clone()).collect()
+            }
+            None => args.to_vec(),
+        };
+        let mut child = match process::Command::new(&exe).arg("test").args(&run_args).spawn() {
             Ok(c) => {
                 DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
                 c
@@ -1591,12 +1639,13 @@ fn cmd_test_watch(args: &[String]) -> ! {
                 break Some(c);
             }
         };
-        if let Some(change) = interrupted {
-            eprintln!("\r[watch] change in {change}: re-running…");
+        if let Some((path, label)) = interrupted {
             terminate_gracefully(&mut child);
             DEV_CHILD.store(0, std::sync::atomic::Ordering::SeqCst);
             watcher.debounce(&root, &mut snapshot);
             hashes = content_hashes(&snapshot);
+            selection = affected_test_suites(&explicit, &path);
+            announce_rerun(&label, &selection, &explicit);
             continue;
         }
         // Corrida terminada (el runner ya imprimió su resumen): esperar el próximo cambio o `q`.
@@ -1608,7 +1657,7 @@ fn cmd_test_watch(args: &[String]) -> ! {
         }
         let mut keys_armed = tty && crate::builtins::term_raw_on().is_ok();
         loop {
-            let change = loop {
+            let (path, change) = loop {
                 if let Some(c) = watcher.wait_change(&root, &mut snapshot) {
                     break c;
                 }
@@ -1636,10 +1685,66 @@ fn cmd_test_watch(args: &[String]) -> ! {
                 continue;
             }
             hashes = current;
-            eprintln!("\r[watch] change in {change}: re-running…");
+            selection = affected_test_suites(&explicit, &path);
+            announce_rerun(&change, &selection, &explicit);
             break;
         }
     }
+}
+
+/// Anuncia la re-corrida: completa, o selectiva con su conteo (M141).
+fn announce_rerun(label: &str, selection: &Option<Vec<PathBuf>>, explicit: &[String]) {
+    match selection {
+        Some(subset) => {
+            let total = test_suites_and_roots(explicit).0.len();
+            eprintln!("\r[watch] change in {label}: re-running {} of {total} suite(s)…", subset.len());
+        }
+        None => eprintln!("\r[watch] change in {label}: re-running…"),
+    }
+}
+
+/// Las suites afectadas por un cambio en `changed` (M141, la selección del watch): las que lo
+/// contienen en su grafo de imports — calculado FRESCO con el loader, así un import recién
+/// añadido ya cuenta — más las que NO cargan (import roto a medio editar: siguen corriendo y
+/// mostrando su diagnóstico hasta sanar). `None` = correr todo, la vía segura: `ray.toml` (o un
+/// manifiesto roto a medio editar), un archivo borrado, uno que ningún grafo conoce (módulo
+/// nuevo a medio cablear), una sola suite (la selección no aporta), o todas afectadas.
+fn affected_test_suites(explicit: &[String], changed: &Path) -> Option<Vec<PathBuf>> {
+    if changed.file_name().is_some_and(|n| n == "ray.toml") {
+        return None;
+    }
+    // Un manifiesto ilegible mataría al supervisor dentro de `test_suites_and_roots`
+    // (`load_manifest` aborta): mejor correr todo y que la corrida muestre el error.
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if Manifest::load(&cwd).is_err() {
+        return None;
+    }
+    let canon = fs::canonicalize(changed).ok()?; // borrado → todo
+    let (suites, roots) = test_suites_and_roots(explicit);
+    if suites.len() <= 1 {
+        return None;
+    }
+    let mut affected = Vec::new();
+    let mut known_hit = false;
+    for suite in &suites {
+        match crate::loader::load_with_deps(suite, &roots) {
+            Ok(loaded) => {
+                let hit = loaded
+                    .modules
+                    .iter()
+                    .any(|m| fs::canonicalize(&m.path).is_ok_and(|p| p == canon));
+                if hit {
+                    known_hit = true;
+                    affected.push(suite.clone());
+                }
+            }
+            Err(_) => affected.push(suite.clone()),
+        }
+    }
+    if !known_hit || affected.len() == suites.len() {
+        return None;
+    }
+    Some(affected)
 }
 
 /// Los archivos `.ray` bajo `dir` (recursivo, orden estable por ruta): las suites de integración
@@ -2955,10 +3060,13 @@ mod tests {
         fs::write(dir.join("main.ray"), "fn main() {}\n").unwrap();
         let mut w = DevWatcher::Polling;
         let mut snapshot = scan_sources(&dir);
-        assert_eq!(w.wait_change(&dir, &mut snapshot), None, "sin cambios no hay cambio");
+        assert!(w.wait_change(&dir, &mut snapshot).is_none(), "sin cambios no hay cambio");
         fs::write(dir.join("main.ray"), "fn main() { print(1); }\n").unwrap();
         let change = w.wait_change(&dir, &mut snapshot);
-        assert!(change.is_some_and(|c| c.contains("main.ray")), "el cambio debe detectarse");
+        assert!(
+            change.is_some_and(|(p, _)| p.ends_with("main.ray")),
+            "el cambio debe detectarse"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

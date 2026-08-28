@@ -10528,3 +10528,22 @@ re-corre SIN el gate de hash (una corrida trunca debe repetirse siempre) — y u
 mismos bytes re-corría. El reap va primero: hijo terminado → vía de espera, con su gate.
 E2E nuevo en tests/test_watch_cli.rs (ciclo verde→rojo→verde→touch-ignorado, robusto a cortes
 a mitad: espera el estado de reposo antes del touch y compara conteos de corridas relativos).
+
+## 139. M141 — watch selectivo: re-correr solo las suites alcanzadas por el cambio (ago 2026)
+
+La segunda mitad de IDEAS §76: `ray test --watch` re-corre ahora SOLO las suites cuyo grafo de
+imports alcanza el archivo cambiado. La pieza clave ya existía: `loader::load_with_deps` devuelve
+los módulos (con sus rutas) de una entrada — el grafo se calcula FRESCO en cada cambio (parse
+puro, milisegundos), así que un import recién añadido ya cuenta y no hay estado que invalidar:
+el "estado" temido en la clasificación original resultó innecesario. Para ejecutar un subconjunto
+en UN proceso (un solo resumen), `ray test` acepta ahora VARIAS suites explícitas (`ray test
+a.ray b.ray [filtro]`) — generalización natural de la superficie que el watch usa como vía.
+
+La política de selección, con sus vías de escape hacia "correr todo" (siempre lo seguro):
+`ray.toml` tocado o ilegible a medio editar (el load del manifiesto en el supervisor ABORTARÍA
+— se corre todo y la corrida muestra el error), archivo borrado, archivo que ningún grafo conoce
+(módulo nuevo a medio cablear), una sola suite, o todas afectadas. Una suite que NO carga
+(import roto) cuenta como afectada por todo: sigue corriendo y mostrando su diagnóstico hasta
+sanar. El anuncio lleva el conteo («re-running 1 of 3 suite(s)…»). Plomería: `wait_change`
+devuelve ahora `(ruta, descripción)` — la selección necesita la ruta, no el texto. E2E nuevo en
+test_watch_cli (módulo compartido → solo su suite; ray.toml → todo).

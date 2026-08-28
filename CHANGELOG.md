@@ -6,9 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-- **`ray test --watch`** (M140): el bucle de desarrollo aplicado al runner — re-corre la suite
-  ante cada cambio (eventos de kernel, debounce, guardados idénticos ignorados), un cambio a
-  mitad de corrida la corta y re-corre, pantalla limpia entre corridas en un terminal, `q` sale.
+- **`ray test --watch`** (M140+M141): el bucle de desarrollo aplicado al runner — re-corre
+  **solo las suites cuyo grafo de imports alcanza el archivo cambiado** (ray.toml/borrados/
+  desconocidos re-corren todo), con eventos de kernel, debounce y guardados idénticos ignorados;
+  un cambio a mitad de corrida la corta y re-corre, pantalla limpia entre corridas en un
+  terminal, `q` sale. `ray test` acepta varias suites explícitas (`ray test a.ray b.ray`).
 
 - **`ray dev` por eventos de kernel** (M139): el watcher del modo desarrollo deja el sondeo de
   mtimes (~200 ms de escaneo continuo) y reutiliza la maquinaria de `fs.watch`

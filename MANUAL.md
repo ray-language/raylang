@@ -2023,10 +2023,13 @@ sola **`q`** sale), y un programa que **crashea** también espera — editas el 
 solo. El hub de live-reload arranca siempre pero es **inerte para una app de consola**: solo el
 webserver inyecta el snippet, y solo al servir HTML.
 
-**`ray test --watch`** es el mismo bucle aplicado al runner: re-corre la suite ante cada cambio
-(limpia la pantalla entre corridas en un terminal), un cambio a mitad de corrida la corta y
-re-corre, un guardado sin cambios reales se ignora, y `q` sale. No hay check-before-restart: la
-propia corrida muestra el diagnóstico si algo no compila.
+**`ray test --watch`** es el mismo bucle aplicado al runner: re-corre **solo las suites cuyo
+grafo de imports alcanza el archivo cambiado** (el anuncio lleva el conteo; `ray.toml`, un
+archivo borrado o desconocido, o una suite rota re-corren todo — la vía segura), limpia la
+pantalla entre corridas en un terminal, un cambio a mitad de corrida la corta y re-corre, un
+guardado sin cambios reales se ignora, y `q` sale. No hay check-before-restart: la propia
+corrida muestra el diagnóstico si algo no compila. `ray test` acepta además varias suites
+explícitas (`ray test a.ray b.ray [filtro]`).
 
 Antes de reiniciar, `ray dev` **compila primero** (chequeo en ms) y **solo reinicia si el cambio
 compila**: un error a medio escribir imprime su diagnóstico y **deja el programa anterior en marcha**

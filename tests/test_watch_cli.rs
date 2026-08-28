@@ -111,3 +111,83 @@ fn test_watch_reruns_on_changes_and_ignores_identical_saves() {
 
     stop_watch(&mut watch);
 }
+
+#[test]
+fn test_watch_selects_only_the_affected_suites() {
+    // M141: un cambio en un módulo re-corre SOLO las suites cuyo grafo de imports lo alcanza;
+    // ray.toml re-corre todo. El proyecto: entrada sin imports + una suite que importa `util` +
+    // una suite suelta.
+    let base = std::env::temp_dir().join("ray_test_watch_selective");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::create_dir_all(base.join("tests")).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"src/main.ray\"\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("src/main.ray"), "fn main() {}\n").unwrap();
+    std::fs::write(base.join("src/util.ray"), "pub fn one() -> int {\n    1\n}\n").unwrap();
+    std::fs::write(
+        base.join("tests/a_util.ray"),
+        "import util;\n\n@test\nfn util_ok() -> bool {\n    util.one() == 1\n}\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("tests/b_plain.ray"), "@test\nfn plain_ok() -> bool {\n    true\n}\n")
+        .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut watch = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["test", "--watch"])
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray test --watch");
+
+    // 1) La corrida inicial es COMPLETA (las dos suites) y queda en espera.
+    wait_for_content(&out_path, "all passed", 10);
+    wait_for_content(&out_path, "waiting for changes", 10);
+    let initial = std::fs::read_to_string(&out_path).unwrap();
+    assert!(initial.contains("util_ok") && initial.contains("plain_ok"), "corrida inicial completa:\n{initial}");
+
+    // 2) Cambiar `util.ray` → SOLO la suite que lo importa re-corre.
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/util.ray"), "pub fn one() -> int {\n    2 - 1\n}\n").unwrap();
+    wait_for_content(&out_path, "re-running 1 of 3 suite(s)", 10);
+    // La corrida selectiva (lo que sigue al anuncio) trae util_ok y NO plain_ok.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let s = std::fs::read_to_string(&out_path).unwrap_or_default();
+        let after = &s[s.find("re-running 1 of 3").unwrap()..];
+        if after.contains("result:") {
+            assert!(after.contains("util_ok"), "la suite afectada corre:\n{after}");
+            assert!(!after.contains("plain_ok"), "la suite ajena NO corre:\n{after}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "la corrida selectiva no terminó en 10s:\n{s}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // 3) Cambiar `ray.toml` → re-corre TODO.
+    std::thread::sleep(Duration::from_millis(50));
+    let mut toml = std::fs::read_to_string(base.join("ray.toml")).unwrap();
+    toml.push_str("# touch\n");
+    std::fs::write(base.join("ray.toml"), toml).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let s = std::fs::read_to_string(&out_path).unwrap_or_default();
+        if let Some(i) = s.rfind("re-running…")
+            && s[i..].contains("plain_ok")
+            && s[i..].contains("util_ok")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "ray.toml no re-corrió todo en 10s:\n{s}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    stop_watch(&mut watch);
+}

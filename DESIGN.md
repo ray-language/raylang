@@ -10649,3 +10649,17 @@ bug ENMASCARADO de M107.2: la emisión de `__ray_stdin_read_timeout` negaba al r
 camino del timeout daba la respuesta correcta por el re-chequeo de `ready`, y por eso nunca se
 vio: TODO read_timeout nativo tras un primer vencimiento estaba roto. El repro pty (script(1),
 una tecla sin Enter tras capabilities) quedó como E2E en term_cli para los tres motores.
+
+Cuarta adenda de M143, hallazgo de raycode (diagnóstico impecable, con bytes capturados bajo
+pty): en el binario NATIVO, `print`/`io.write` encolan en el hilo escritor asíncrono (M96f) y
+`__ray_term_raw` cambiaba el termios SIN drenar el canal — la salida encolada en modo cocido se
+escribía ya dentro de la siguiente sesión raw (OPOST/ONLCR apagados): `\n` sin `\r`, la
+escalera intermitente del primer /help. El arreglo es una línea en el único punto que toca
+tcsetattr en el emitido: `__ray_flush_prints()` al principio de `__ray_term_raw` — cubre entrar
+Y salir, y con ello `raw`, `capabilities` y `read_hidden` (todos pasan por ahí; el "repaso a
+otros sitios que alternen modos" pedido termina en ese choke point único). `__ray_flush_prints`
+es no-op si el escritor nunca arrancó → seguro en toda config, `--without fibers` incluido. El
+repro E2E es la ALTERNANCIA raw→prints→raw (6 rondas): la forma prints-luego-raw no perdía la
+carrera en esta máquina; la alternancia la pierde determinista (medido: 6/18 líneas con \r sin
+el fix; 18/18 con él) — y el test se validó en AMBAS direcciones (falla sin fix, pasa con él).
+La VM y el intérprete escriben síncrono: nunca tuvieron el bug.

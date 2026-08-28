@@ -62,12 +62,15 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__run",
     // M100 v2: los primitivos del streaming (IDEAS §53.9) → helpers __ray_proc_* (fase 2c).
     "__proc_spawn", "__proc_read", "__proc_write", "__proc_try_wait", "__proc_kill",
+    // M146: std/ui (ventana + webview) → helpers __ray_ui_* (PR del backend nativo).
+    "__ui_open", "__ui_eval_js", "__ui_next_event",
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que
-/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Vacío desde
-/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1).
-const NATIVE_STUBBED_BUILTINS: &[&str] = &[];
+/// panica o en un error de transpilación (documenta la cobertura sin sobre-afirmar). Estuvo vacío desde
+/// H21-N2 (`__task_failed`/`try_join` se portaron sobre la contención de fallos de N1); los `__ui_*` de
+/// M146 están aquí TEMPORALMENTE mientras el backend nativo de std/ui llega en su propio PR.
+const NATIVE_STUBBED_BUILTINS: &[&str] = &["__ui_open", "__ui_eval_js", "__ui_next_event"];
 
 use super::transpile;
 

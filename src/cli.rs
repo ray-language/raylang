@@ -1378,6 +1378,7 @@ const RT_FIBERS_RS: &str = include_str!("../crates/ray-runtime/src/fibers.rs");
 const RT_PROCESS_RS: &str = include_str!("../crates/ray-runtime/src/process.rs");
 const RT_WATCH_RS: &str = include_str!("../crates/ray-runtime/src/watch.rs");
 const RT_AUDIO_RS: &str = include_str!("../crates/ray-runtime/src/audio.rs");
+const RT_UI_RS: &str = include_str!("../crates/ray-runtime/src/ui.rs");
 const RT_X509_RS: &str = include_str!("../crates/ray-runtime/src/x509.rs");
 const RT_UNICODE_RS: &str = include_str!("../crates/ray-runtime/src/unicode.rs");
 
@@ -1435,6 +1436,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/process.rs", RT_PROCESS_RS), // ídem: solo con la feature `process` (M100)
         ("ray-runtime/src/watch.rs", RT_WATCH_RS), // ídem: solo con la feature `watch` (M115.4)
         ("ray-runtime/src/audio.rs", RT_AUDIO_RS), // ídem: solo con la feature `audio` (M145)
+        ("ray-runtime/src/ui.rs", RT_UI_RS), // ídem: solo con la feature `ui` (M146)
         ("ray-runtime/src/x509.rs", RT_X509_RS), // ídem: la arrastra `tls` (M124, tls_peer_cert)
     ];
     for (rel, content) in files {

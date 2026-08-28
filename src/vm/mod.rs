@@ -3060,6 +3060,93 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M146: abre una ventana con webview. BLOQUEA el hilo del worker mientras el
+                // hilo principal la crea (~ms; el precedente de bloquear el worker es sqlite).
+                OpCode::UiOpen => {
+                    let height = self.pop();
+                    let width = self.pop();
+                    let url = self.pop();
+                    let title = self.pop();
+                    let (HeapValue::Int(width), HeapValue::Int(height)) = (width, height) else {
+                        unreachable!("the checker guarantees two ints");
+                    };
+                    let (HeapValue::Str(title), HeapValue::Str(url)) = (title, url) else {
+                        unreachable!("the checker guarantees two strings");
+                    };
+                    let elems = match crate::builtins::ui_open(&title, &url, width, height) {
+                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M146: JS a la página, fire-and-forget (el despacho al hilo principal es async).
+                OpCode::UiEvalJs => {
+                    let HeapValue::Str(js) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::ui_eval_js(handle, &js) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M146: siguiente evento de UI — sondea la cola global; vacía → APARCA la fibra
+                // en el fd del self-pipe y rebobina (patrón WatchNext; la cola es del proceso,
+                // así que el pseudo-handle del timeout es una constante reservada).
+                OpCode::UiNext => {
+                    let HeapValue::Int(ms) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    if crate::builtins::take_read_timeout(crate::builtins::UI_EVENTS_PSEUDO_HANDLE) {
+                        let elems = vec![HeapValue::Str("timeout".to_string())];
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else if let Some((kind, window)) = crate::builtins::ui_try_next() {
+                        let elems = vec![
+                            HeapValue::Str("ok".to_string()),
+                            HeapValue::Str(kind),
+                            HeapValue::Str(window.to_string()),
+                        ];
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else {
+                        match crate::builtins::ui_event_fd() {
+                            Err(e) => {
+                                let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            Ok(fd) => {
+                                self.push(HeapValue::Int(ms));
+                                self.cur.frames.last_mut().unwrap().ip -= 1;
+                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let deadline = if ms > 0 {
+                                    Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
+                                } else {
+                                    None
+                                };
+                                {
+                                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                                    sh.io_parked.push(IoParked {
+                                        fd,
+                                        fiber,
+                                        pending_write: None,
+                                        handle: crate::builtins::UI_EVENTS_PSEUDO_HANDLE,
+                                        deadline,
+                                    });
+                                    sh.running -= 1;
+                                }
+                                let (l, c2) = pos!();
+                                if !self.poll_next(l, c2)? { self.stop = true; }
+                            }
+                        }
+                    }
+                }
                 OpCode::TermRawOn | OpCode::TermRawOff => {
                     let r = if matches!(instr, OpCode::TermRawOn) {
                         crate::builtins::term_raw_on()

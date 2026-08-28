@@ -65,6 +65,10 @@ struct Suite {
 /// selecciona las pruebas cuyo nombre de cara al usuario lo **contiene** (subcadena). Imprime el
 /// informe y los errores.
 pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>) -> i32 {
+    // M146: una suite no abre ventanas reales por defecto — std/ui corre headless bajo el
+    // runner (RAY_UI_BACKEND en el entorno sigue mandando si el usuario lo puso).
+    #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+    ray_runtime::ui::default_headless();
     let mut frontend_failed = false;
     let mut suites: Vec<Suite> = Vec::new();
     for (i, path) in suite_paths.iter().enumerate() {

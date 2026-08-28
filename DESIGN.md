@@ -10576,3 +10576,23 @@ Tests: parser DA1 + capabilities con env controlado y sin tty (sin query → det
 byte-idéntico en los tres motores; `size_px` por su camino None (el Some depende del terminal
 real). El E2E de capabilities fija el env explícitamente al spawn — el heredado del runner de CI
 variaría la salida.
+
+## 141. M144 — `std/image`: PNG a RGBA8 sobre el inflate existente (ago 2026)
+
+La segunda mitad del terreno gráfico del juego de demostración (IDEAS §77). La premisa del
+reporte original ("falta DEFLATE") era falsa — `std/inflate` ya lo traía endurecido — así que el
+módulo es exactamente el parser PNG encima: chunks con CRC verificado (el `crc32` existente),
+`zlib_inflate_limit` con el tope anti-bomba EXACTO (alto × (1 + stride): el tamaño crudo se
+conoce por adelantado), des-filtrado None/Sub/Up/Average/Paeth, y expansión a **RGBA8 siempre**
+— un solo formato de consumo, decidido en el módulo y no en cada llamador. Tipos de color
+0/2/3/4/6 con profundidades 1/2/4/8/16 (16 → octeto alto, la convención de assets), paleta +
+`tRNS` (alfa por índice; color-key de 0/2 en 8/16). Adam7 → `Err` claro (diferido: raro en
+assets y es un módulo entero). Espíritu M64 de punta a punta: cada lectura verifica límites,
+todo input corrupto es `Err` con mensaje.
+
+Raylang puro (`import std/inflate` — primer módulo std que importa a otro no-fs): tres motores
+gratis. El oráculo de los tests es EXTERNO al módulo: los 10 PNG de la batería se generan con
+el zlib de Python (filtros aplicados a mano hacia adelante, el decode debe invertirlos) y van
+embebidos como literales `b"\xNN…"` en el fixture — sin binarios en el repo, byte-idéntico en
+los tres motores, incluidos los tres caminos de error (Adam7/CRC/truncado). Gotcha de escritura:
+la lista de PARÁMETROS de una fn no admite coma final (los literales de arreglo sí).

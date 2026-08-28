@@ -32,9 +32,13 @@ por línea), sin dependencias ni estado.
 | `ray_fmt` | `code` | el fuente canónico (`ray fmt`) |
 | `ray_doc` | `symbol` | firma + doc de un builtin o `std/*` (`len`, `json.parse`, `crypto.x25519_public_key`…) |
 
-Y un *resource*: **`raylang://llms.txt`** — el contexto destilado de la pieza A (delta contra
-Rust, formas canónicas, mensajes de error exactos). Un cliente puede inyectarlo al contexto del
-modelo antes de escribir la primera línea.
+Y dos *resources*: **`raylang://llms.txt`** — el contexto destilado de la pieza A (delta contra
+Rust, formas canónicas, mensajes de error exactos) — y **`raylang://reference.md`** — el catálogo
+completo de firmas módulo a módulo. Además, las **instructions** del `initialize` (el "system
+prompt" del servidor, que los clientes incorporan) dirigen al modelo a leerlos ANTES de asumir
+que una feature falta: la stdlib va embebida en el toolchain y una búsqueda de archivos no la
+encuentra — el antídoto del patrón "propuse lo que ya existía" (visto tres veces seguidas desde
+un proyecto real: inflate/M64, stdin_pipe/M100 v3, FFI/M41).
 
 ## Confinamiento
 

@@ -2037,6 +2037,45 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M146 (std/ui): ventana + webview. En el intérprete la espera de eventos BLOQUEA
+            // el hilo (oráculo secuencial), como __watch_next.
+            "__ui_open" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Str(title), Value::Str(url), Value::Int(w), Value::Int(h)) => {
+                        match crate::builtins::ui_open(title, url, *w, *h) {
+                            Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees (string, string, int, int)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__ui_eval_js" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Str(js)) => match crate::builtins::ui_eval_js(*h, js) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees (int, string)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__ui_next_event" => {
+                let arr = match &values[0] {
+                    Value::Int(ms) => match crate::builtins::ui_next_blocking(*ms) {
+                        Ok(Some((kind, window))) => vec![
+                            Value::Str("ok".to_string()),
+                            Value::Str(kind),
+                            Value::Str(window.to_string()),
+                        ],
+                        Ok(None) => vec![Value::Str("timeout".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__term_raw_on" | "__term_raw_off" => {
                 let r = if name == "__term_raw_on" {
                     crate::builtins::term_raw_on()

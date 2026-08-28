@@ -210,8 +210,29 @@ where
             previous(info);
         }
     }));
-    match spawn_big_stack(f) {
-        Ok(v) => v,
+    // M146 (std/ui): el hilo 1 del proceso —el ÚNICO que AppKit acepta— ya no se queda dentro
+    // del `join()`: espera en un canal (worker terminó | una operación de UI pidió el hilo
+    // principal). El join y su match de payload (141 broken-pipe / 101 ICE) se conservan
+    // VERBATIM, en un hilo monitor — el comportamiento sin UI es idéntico al de siempre.
+    enum GateMsg<T> {
+        // En builds sin `ui` (o no-macOS) la variante no se construye — el brazo queda por
+        // simetría y el canal solo lleva `Done`.
+        #[allow(dead_code)]
+        UiRequested,
+        Done(T),
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<GateMsg<T>>();
+    #[cfg(all(feature = "ui", target_os = "macos", not(target_arch = "wasm32")))]
+    {
+        let tx_ui = tx.clone();
+        ray_runtime::ui::set_main_thread_waker(Box::new(move || {
+            let _ = tx_ui.send(GateMsg::UiRequested);
+        }));
+    }
+    std::thread::spawn(move || match spawn_big_stack(f) {
+        Ok(v) => {
+            let _ = tx.send(GateMsg::Done(v));
+        }
         Err(payload) => {
             let detail = panic_payload_text(payload.as_ref());
             if is_broken_pipe_panic_message(&detail) {
@@ -219,6 +240,22 @@ where
             }
             eprintln!("{}", diagnostic::ice_banner(&detail));
             std::process::exit(101);
+        }
+    });
+    loop {
+        match rx.recv() {
+            Ok(GateMsg::Done(v)) => return v,
+            Ok(GateMsg::UiRequested) => {
+                // Entra al loop de AppKit y NO retorna (la app vive lo que el proceso; el
+                // worker sale por `process::exit`). Solo un fallo de inicialización (sin
+                // sesión gráfica) vuelve: la operación que esperaba ya recibió su Err, y el
+                // hilo 1 sigue esperando el final del worker.
+                #[cfg(all(feature = "ui", target_os = "macos", not(target_arch = "wasm32")))]
+                let _ = ray_runtime::ui::run_main_loop();
+            }
+            // Sin remitentes y sin `Done`: el monitor murió sin poder reportar (no ocurre — su
+            // camino de pánico termina en `process::exit`). Nunca colgar el proceso por esto.
+            Err(_) => std::process::exit(101),
         }
     }
 }

@@ -1,0 +1,87 @@
+// std/ui (M146) — la PRIMITIVA ventana + webview (IDEAS §80 F1): una ventana nativa del SO con
+// el webview del sistema cargando una URL — el patrón es apuntarla al webserver embebido del
+// programa, y el IPC JS↔raylang es el propio framework web (fetch/WS contra tus handlers).
+//
+// No hay `ui.run()`: el runtime captura el hilo principal por su cuenta en la primera ventana.
+// Los eventos (una cola por proceso) se leen con `next_event`/`next_event_timeout` (la fibra
+// aparca — sin sondeo) o como canal con `events()`. `close(h)` cierra la ventana.
+//
+// Backends: AppKit/WKWebView en macOS; `RAY_UI_BACKEND=headless` (tests/CI) en cualquier OS.
+
+/// One UI event: `kind` is "closed" (the window left the screen — the red button and `close(h)`
+/// both report here, exactly once per window), and `window` is the window's handle.
+pub struct UiEvent {
+    kind: string,
+    window: int,
+}
+
+/// Opens a native window with the system webview loading `url` (point it at your embedded
+/// webserver: `http://127.0.0.1:<port>/`). Returns the window handle; `close(h)` closes it.
+/// With `RAY_UI_BACKEND=headless` in the environment, windows are in-memory rows (tests, CI).
+pub fn open(title: string, url: string, width: int, height: int) -> Result<int, string> {
+    let r = __ui_open(title, url, width, height);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Runs JavaScript in the window's page, fire-and-forget: it does NOT wait for the result (and
+/// before the page finishes loading it may be a no-op). `Err` if the handle is not a window.
+pub fn eval_js(h: int, js: string) -> Result<int, string> {
+    let r = __ui_eval_js(h, js);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// The next UI event, waiting as long as it takes (the fiber parks — the process sleeps, it
+/// does not poll). The queue is process-wide: events from every window arrive here.
+pub fn next_event() -> Result<UiEvent, string> {
+    let r = __ui_next_event(0);
+    if (r[0] == "ok") {
+        match (parse_int(r[2])) {
+            Option.Some(w) => Result.Ok(UiEvent { kind: r[1], window: w }),
+            Option.None => Result.Err("invalid window id"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// The next UI event with a deadline: `Ok(Some(event))`, or `Ok(None)` if `timeout_ms` elapsed
+/// with no event.
+pub fn next_event_timeout(timeout_ms: int) -> Result<Option<UiEvent>, string> {
+    let r = __ui_next_event(timeout_ms);
+    if (r[0] == "ok") {
+        match (parse_int(r[2])) {
+            Option.Some(w) => Result.Ok(Option.Some(UiEvent { kind: r[1], window: w })),
+            Option.None => Result.Err("invalid window id"),
+        }
+    } else if (r[0] == "timeout") {
+        Result.Ok(Option.None)
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// The UI events as a channel: spawns a pump fiber that forwards `next_event()` into it — use
+/// it to `select` UI events alongside your other channels. Needs the VM or a native build
+/// (`spawn`); on an error from the queue the pump ends and the channel goes quiet.
+pub fn events() -> Channel<UiEvent> {
+    let ch: Channel<UiEvent> = Channel.new();
+    spawn(fn() {
+        var running = true;
+        while (running) {
+            match (next_event()) {
+                Result.Ok(e) => send(ch, e),
+                Result.Err(_) => {
+                    running = false;
+                },
+            }
+        }
+    });
+    ch
+}

@@ -622,6 +622,13 @@ pub enum OpCode {
     AudioOpen,
     /// M145: `__audio_drain(h)` — espera a que todo lo escrito suene.
     AudioDrain,
+    /// M146: `__ui_open(title, url, w, h)` — abre una ventana con webview (['ok', h] / ['err', msg]).
+    UiOpen,
+    /// M146: `__ui_eval_js(h, js)` — ejecuta JS en la página, fire-and-forget (['ok'] / ['err', msg]).
+    UiEvalJs,
+    /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el
+    /// self-pipe de la cola global (patrón WatchNext).
+    UiNext,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

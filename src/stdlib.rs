@@ -42,6 +42,8 @@ const MODULES: &[(&str, &str)] = &[
     ("std/kv", include_str!("../std/kv.ray")),
     // M145: salida de audio PCM (pipe + hilo alimentador; contrapresión por aparcado).
     ("std/audio", include_str!("../std/audio.ray")),
+    // M146: ventana + webview (IDEAS §80 F1; AppKit/WKWebView a mano, headless para tests).
+    ("std/ui", include_str!("../std/ui.ray")),
     // M144: decodificación de imágenes (PNG sobre std/inflate).
     ("std/image", include_str!("../std/image.ray")),
     // Revisión FFI jul 2026: helpers de la frontera C (errno).

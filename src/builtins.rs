@@ -711,6 +711,22 @@ enum OpenHandle {
     /// aparca por el fd de su self-pipe (`FsWatcher::fd`), como un socket.
     #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
     Watch(ray_runtime::watch::FsWatcher),
+    /// M146: una ventana de `std/ui` (el id del registro de ray-runtime). `close(h)` la quita del
+    /// mapa y el `Drop` del newtype cierra la ventana — SIEMPRE con despacho asíncrono al hilo
+    /// principal (el Drop puede correr en cualquier hilo, p. ej. `close_all_handles` del runner).
+    #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+    Window(UiWindow),
+}
+
+/// El id de una ventana viva de `ray_runtime::ui`, con cierre en el `Drop` (ver la variante).
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub struct UiWindow(i64);
+
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+impl Drop for UiWindow {
+    fn drop(&mut self) {
+        ray_runtime::ui::close_window(self.0);
+    }
 }
 
 /// Una conexión TLS: la sesión rustls (cliente **o** servidor, vía el enum unificado `Connection`) +
@@ -891,6 +907,8 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::Child(_)) => Err("the handle is a child process; it is not writable".to_string()),
         #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
         Some(OpenHandle::Watch(_)) => Err("the handle is a filesystem watch; it is not writable".to_string()),
+        #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+        Some(OpenHandle::Window(_)) => Err("the handle is a ui window; it is not writable".to_string()),
         None => Err(format!("invalid file handle: {}", h)),
     }
 }
@@ -1013,6 +1031,80 @@ pub fn audio_drain(h: i64) -> Result<(), String> {
 #[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
 pub fn audio_drain(_h: i64) -> Result<(), String> {
     Err(AUDIO_UNAVAILABLE.to_string())
+}
+
+// --- M146: std/ui — ventana + webview (feature `ui`; slim/wasm → stub). ---
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+const UI_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
+    "ui is not available in the web playground (wasm)"
+} else {
+    "this binary was built without ui support (rebuild with the 'ui' feature)"
+};
+
+/// M146: abre una ventana con webview cargando `url` y la registra; `Ok(handle)`. El handle se
+/// reserva ANTES de abrir y se pasa al runtime: los eventos nombran a la ventana con el mismo
+/// handle que el programa tiene en la mano — sin tabla de traducción.
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_open(title: &str, url: &str, width: i64, height: i64) -> Result<i64, String> {
+    let id = {
+        let mut reg = registry().lock().unwrap();
+        let id = reg.next;
+        reg.next += 1;
+        id
+    };
+    ray_runtime::ui::open_window(id, title, url, width, height)?;
+    registry().lock().unwrap().open.insert(id, OpenHandle::Window(UiWindow(id)));
+    Ok(id)
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_open(_title: &str, _url: &str, _width: i64, _height: i64) -> Result<i64, String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M146: ejecuta JS en la página de la ventana `h`, fire-and-forget.
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_eval_js(h: i64, js: &str) -> Result<(), String> {
+    let win = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::Window(w)) => w.0,
+        _ => return Err("ui: not an open window".to_string()),
+    };
+    ray_runtime::ui::eval_js(win, js)
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_eval_js(_h: i64, _js: &str) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M146: el fd de la cola global de eventos de UI (para el aparcado de la fibra en la VM).
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_event_fd() -> Result<i32, String> {
+    let fd = ray_runtime::ui::event_fd();
+    if fd >= 0 { Ok(fd) } else { Err("ui: no event pipe".to_string()) }
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_event_fd() -> Result<i32, String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M146: el siguiente evento de UI si ya hay uno, sin bloquear: `(kind, handle_de_ventana)`.
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_try_next() -> Option<(String, i64)> {
+    ray_runtime::ui::try_next_event()
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_try_next() -> Option<(String, i64)> {
+    None
+}
+
+/// M146: el siguiente evento BLOQUEANDO el hilo (el intérprete). `ms <= 0` = sin plazo;
+/// `Ok(None)` = plazo vencido.
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_next_blocking(ms: i64) -> Result<Option<(String, i64)>, String> {
+    Ok(ray_runtime::ui::next_event_blocking(ms))
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_next_blocking(_ms: i64) -> Result<Option<(String, i64)>, String> {
+    Err(UI_UNAVAILABLE.to_string())
 }
 
 /// Abre un watch sobre la ruta (directorio → recursivo) y lo registra; `Ok(handle)`.
@@ -3318,6 +3410,32 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__audio_drain expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // __ui_open(title, url, w, h) -> [string] (M146): ["ok", handle] o ["err", msg]. Abre una
+    // ventana nativa con el webview del sistema cargando `url`; `close(h)` la cierra.
+    Builtin { name: "__ui_open", opcode: OpCode::UiOpen, check: |a| {
+        arity(a, 4, "__ui_open", " (title, url, width, height)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_open expects a string (the title), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_open expects a string (the url), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__ui_open expects an int (the width), not {}", a[2]))); }
+        if a[3] != Type::Int { return Err((Some(3), format!("__ui_open expects an int (the height), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_eval_js(h, js) -> [string] (M146): ["ok"] o ["err", msg]. Fire-and-forget: no espera
+    // el resultado del JS (el eval con retorno exige el ABI de blocks objc; v2).
+    Builtin { name: "__ui_eval_js", opcode: OpCode::UiEvalJs, check: |a| {
+        arity(a, 2, "__ui_eval_js", " (handle, js)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_eval_js expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_eval_js expects a string (the JavaScript), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_next_event(ms) -> [string] (M146): ["ok", kind, window] / ["timeout"] / ["err", msg].
+    // ms <= 0 = sin plazo. En la VM APARCA la fibra (self-pipe de la cola global, patrón
+    // WatchNext); la cola es DEL PROCESO (los eventos de todas las ventanas llegan aquí).
+    Builtin { name: "__ui_next_event", opcode: OpCode::UiNext, check: |a| {
+        arity(a, 1, "__ui_next_event", " (timeout ms)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ui_next_event expects an int (the timeout in ms), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __term_raw_on() -> [string]: ["ok"] o ["err", msg]. Guarda el termios y activa el modo crudo.
     Builtin { name: "__term_raw_on", opcode: OpCode::TermRawOn, check: |a| {
         nullary(a, "__term_raw_on")?;
@@ -3582,6 +3700,10 @@ static BUILTINS: &[Builtin] = &[
 /// El pseudo-handle de stdin para `mark_read_timeout`/`take_read_expired` (los handles reales
 /// del registro empiezan en 1).
 pub const STDIN_PSEUDO_HANDLE: i64 = 0;
+
+/// M146: el pseudo-handle de la cola global de eventos de UI (mismo mecanismo de timeout que
+/// stdin; el barrido de deadlines solo marca handles >= 0 y el registro jamás llega a MAX).
+pub const UI_EVENTS_PSEUDO_HANDLE: i64 = i64::MAX;
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod stdin_host {

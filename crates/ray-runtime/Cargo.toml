@@ -42,6 +42,10 @@ watch = ["dep:notify"]
 # M145 — salida de audio PCM (std/audio): backends A MANO (AudioToolbox enlazado en macOS, ALSA
 # por dlopen en Linux) — cero crates y cero headers de build; ver src/audio.rs.
 audio = []
+# M146 — ventana + webview (std/ui, IDEAS §80 F1): AppKit/WKWebView por mensajes objc A MANO en
+# macOS (frameworks enlazados al build, sin build.rs); RAY_UI_BACKEND=headless en cualquier OS
+# (tests/CI). Cero crates (la lección cpal: wry exige toolchains GTK/WebKit en build).
+ui = []
 # N1 (bench políglota, jul 2026): mimalloc como allocador del binario TRANSPILADO. El binario `ray` ya lo
 # usa (P0.4); el transpilado caía al malloc del sistema (lento en churn de strings pequeños en macOS).
 # Medido: wordcount/logparse −40%, jsonserialize −18%. Activada POR DEFECTO por `ray build --native`;

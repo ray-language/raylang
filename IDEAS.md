@@ -3088,6 +3088,21 @@ propio lenguaje como UI" es diferenciador real), ALTO en esfuerzo (F1 es el mayo
 runtime desde las fibras). Ninguna decisión pendiente lo bloquea; F4 (assets/bundle) son
 independientes y pueden adelantarse.
 
+**§80b — Móvil (iOS/Android), la extensión sobre los MISMOS cimientos** (el camino que Tauri
+2.0 validó: mismo core, móvil encima). A favor desde ya: el nativo compila en principio a
+`aarch64-apple-ios`/`aarch64-linux-android` (AOT puro — sin choque con la prohibición de JIT de
+Apple; kqueue ES Darwin, epoll en Android; rustls/rusqlite/corosensei compilan); el webview de
+iOS es WKWebView — la MISMA API que macOS, la F1 de escritorio paga el 80% del peaje de iOS; el
+IPC por webserver embebido está permitido en ambas plataformas; `--embed` pasa de conveniencia
+a REQUISITO (las stores prohíben descargar código/UI). Lo genuinamente nuevo: (1) el
+transpilador debe poder emitir LIBRERÍA (`staticlib`/`cdylib` con entrada invocable), no un
+`main` — una app móvil es un shell UIKit/Activity que llama a tu código; (2) shells por
+plataforma generados por `ray bundle --ios/--android` (plantilla Xcode / Gradle+JNI); (3) el
+puente de ciclo de vida (background/foreground/memoria) por el mismo canal de eventos; (4) la
+muralla operativa (firmas, provisioning, emuladores, review). Android WebView vía JNI es la
+única pieza de UI sin precedente en el arco. ORDEN: escritorio primero (feedback en segundos,
+sin firmas) → iOS (reusa objc/WKWebView de F1) → Android.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

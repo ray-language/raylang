@@ -3028,6 +3028,14 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::TermSizePx => {
+                    let elems = match crate::builtins::term_size_px() {
+                        Some((w, hp)) => vec![HeapValue::Int(w), HeapValue::Int(hp)],
+                        None => vec![],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::TermRawOn | OpCode::TermRawOff => {
                     let r = if matches!(instr, OpCode::TermRawOn) {
                         crate::builtins::term_raw_on()

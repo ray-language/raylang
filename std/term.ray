@@ -46,6 +46,166 @@ pub fn size() -> Option<(int, int)> {
     if (r.len() == 2) { Option.Some((r[0], r[1])) } else { Option.None }
 }
 
+// Área en píxeles (M143, IDEAS §78): ws_xpixel/ws_ypixel del MISMO ioctl que size(); muchos
+// terminales los dejan en 0 → None, jamás un 0 que divida.
+/// The terminal area in PIXELS as `(width, height)`, or `None` when there is no terminal or it
+/// does not report pixel sizes (many terminals leave them at 0).
+pub fn size_px() -> Option<(int, int)> {
+    let r = __term_size_px();
+    if (r.len() == 2) { Option.Some((r[0], r[1])) } else { Option.None }
+}
+
+/// The size of one terminal cell in PIXELS as `(width, height)`: the pixel area divided by the
+/// column/row grid. `None` when either is unavailable. This is what scales sixel/kitty graphics
+/// to the text layout.
+pub fn cell_px() -> Option<(int, int)> {
+    match (size_px()) {
+        Option.Some(px) => {
+            match (size()) {
+                Option.Some(cr) => {
+                    let (w, h) = px;
+                    let (cols, rows) = cr;
+                    if (cols > 0 && rows > 0) {
+                        Option.Some((w / cols, h / rows))
+                    } else {
+                        Option.None
+                    }
+                },
+                Option.None => Option.None,
+            }
+        },
+        Option.None => Option.None,
+    }
+}
+
+// --- Capacidades (M143b, IDEAS §78) ---
+// Deteccion en dos capas: pistas de entorno (baratas, sin I/O) y una query DA1 que responde el
+// PROPIO terminal (solo con stdin Y stdout en tty, dentro de raw, con plazo corto). Todo lo
+// indetectable queda en false: degradar, nunca adivinar hacia arriba.
+
+/// What the terminal supports, from environment hints (`COLORTERM`, `TERM`, `KITTY_WINDOW_ID`)
+/// and a DA1 device-attributes query answered by the terminal itself. Every field defaults to
+/// `false` when undetectable — degrade rendering, never guess up.
+pub struct Capabilities {
+    truecolor: bool,
+    colors_256: bool,
+    sixel: bool,
+    kitty_graphics: bool,
+}
+
+/// Detects the terminal's capabilities. The DA1 query (for sixel) only runs when both stdin
+/// and stdout are a terminal, inside raw mode, waiting at most ~150 ms for the reply; the rest
+/// comes from the environment (truecolor via `COLORTERM`, 256 colors via `TERM`, kitty graphics
+/// via `TERM`/`KITTY_WINDOW_ID` — a heuristic: kitty answers its own APC query, deferred).
+pub fn capabilities() -> Capabilities {
+    let colorterm = env_text("COLORTERM");
+    let name = env_text("TERM");
+    let truecolor = colorterm.contains("truecolor") || colorterm.contains("24bit");
+    let has_256 = truecolor || name.contains("256color") || name == "xterm-kitty";
+    let kitty = name == "xterm-kitty" || env_text("KITTY_WINDOW_ID") != "";
+    var sixel = false;
+    if (is_tty(0) && is_tty(1)) {
+        for a in query_device_attributes() {
+            if (a == 4) {
+                sixel = true;
+            }
+        }
+    }
+    Capabilities { truecolor: truecolor, colors_256: has_256, sixel: sixel, kitty_graphics: kitty }
+}
+
+/// Parses a DA1 (primary device attributes) reply such as `ESC [ ? 64 ; 1 ; 4 c` into its
+/// numeric attributes (`[64, 1, 4]`). Pure and tolerant: anything malformed yields `[]`.
+pub fn parse_device_attributes(resp: bytes) -> [int] {
+    // Primer "ESC [": los atributos van tras el '?' opcional, separados por ';', hasta la 'c'.
+    var i = 0;
+    var found = false;
+    while (!found && i + 1 < resp.len()) {
+        if (resp[i] == 27 && resp[i + 1] == 91) {
+            found = true;
+        } else {
+            i = i + 1;
+        }
+    }
+    if (!found) {
+        return [];
+    }
+    i = i + 2;
+    if (i < resp.len() && resp[i] == 63) {
+        i = i + 1;
+    }
+    var attrs: [int] = [];
+    var cur = 0;
+    var has_digit = false;
+    while (i < resp.len()) {
+        let b = resp[i];
+        if (b >= 48 && b <= 57) {
+            cur = cur * 10 + (b - 48);
+            has_digit = true;
+        } else if (b == 59) {
+            if (has_digit) {
+                attrs.push(cur);
+            }
+            cur = 0;
+            has_digit = false;
+        } else if (b == 99) {
+            if (has_digit) {
+                attrs.push(cur);
+            }
+            return attrs;
+        } else {
+            return [];
+        }
+        i = i + 1;
+    }
+    // `return` a proposito: un tail `[]` tras un while parsea como indexacion del bloque.
+    return [];
+}
+
+// Emite DA1 y acumula la respuesta cruda hasta la 'c' final (o plazo sin datos). En raw: la
+// respuesta llega por stdin como bytes, no como teclas.
+fn query_device_attributes() -> [int] {
+    let got = raw(fn() -> bytes {
+        io.write("\u{1B}[c");
+        io.flush();
+        var acc = b"";
+        var done = false;
+        while (!done) {
+            match (io.read_timeout(64, 150)) {
+                io.ReadResult.Data(more) => {
+                    acc = acc + more;
+                    var j = 0;
+                    while (j < more.len()) {
+                        if (more[j] == 99) {
+                            done = true;
+                        }
+                        j = j + 1;
+                    }
+                },
+                io.ReadResult.Eof => {
+                    done = true;
+                },
+                io.ReadResult.TimedOut => {
+                    done = true;
+                },
+            }
+        }
+        acc
+    });
+    match (got) {
+        Result.Ok(resp) => parse_device_attributes(resp),
+        Result.Err(_) => [],
+    }
+}
+
+// El env como texto plano ("" si no esta): las pistas se comparan por contains.
+fn env_text(name: string) -> string {
+    match (env(name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
 // Corre f en modo crudo y restaura SIEMPRE (también si f falla: try_call).
 /// Runs `f` with the terminal in raw mode (no echo, byte-at-a-time input) and ALWAYS restores
 /// the previous state, even if `f` panics. Returns `f`'s value, or `Err` if raw mode could not

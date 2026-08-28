@@ -6,6 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/image`** (M144): `decode_png` — PNG a **RGBA8** en raylang puro sobre `std/inflate`:
+  tipos de color 0/2/3/4/6, profundidades 1/2/4/8/16, paleta + `tRNS`, los cinco filtros, CRC
+  por chunk y tope anti-bomba; corrupto/truncado = `Err`. "Cargo un sprite.png" funciona.
+
+- **Terminal gráfico** (`std/term`, M143): `size_px()`/`cell_px()` — el área del terminal y el
+  tamaño de una celda en píxeles (`ws_xpixel`/`ws_ypixel`, que ya se leían y se descartaban;
+  un terminal que reporta 0 es `None`) — y `capabilities()` (`truecolor`/`colors_256`/`sixel`/
+  `kitty_graphics`: entorno + query DA1 respondida por el propio terminal, con parser puro
+  `parse_device_attributes`). La base para gráficos sixel/kitty escalados al layout.
+
 - **MCP orientado desde el primer mensaje**: el `initialize` lleva *instructions* (el "system
   prompt" del servidor) que dirigen al modelo a leer `raylang://llms.txt` y el nuevo resource
   `raylang://reference.md` (el catálogo completo de firmas) antes de asumir que una feature

@@ -1441,6 +1441,10 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            "term_size_px" if name.starts_with("__") => {
+                self.needs_term = true;
+                out.push_str("Rc::new(std::cell::RefCell::new(match __ray_term_size_px() { Some((w, h)) => vec![w, h], None => Vec::new() }))");
+            }
             "term_size" if name.starts_with("__") => {
                 self.needs_term = true;
                 out.push_str("Rc::new(std::cell::RefCell::new(match __ray_term_size() { Some((c, r)) => vec![c, r], None => Vec::new() }))");

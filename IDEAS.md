@@ -2946,7 +2946,7 @@ inode). Propuesta: que `ray build` haga **unlink del output antes de escribir** 
 fallo silencioso y desconcertante del ciclo edit-build-run en macOS. Repro: compilar dos
 veces seguidas al mismo `-o` y ejecutar.
 
-## 77. `std/image` — decodificar PNG sobre el inflate existente (ago 2026)
+## 77. `std/image` — decodificar PNG sobre el inflate existente (ago 2026) — ✅ HECHA (M144, DESIGN §141)
 
 Reporte desde un juego de demostración: "cargo un sprite.png" no se puede hoy. El diagnóstico
 del reporte ("falta DEFLATE") era FALSO — `std/inflate` ya trae DEFLATE completo + envoltorios
@@ -2968,7 +2968,7 @@ Result<Image, string>` (`Image { width, height, pixels: bytes /* RGBA8 */ }`):
 raysite), BAJO en riesgo (módulo hoja). Encode PNG (con `std/deflate`) es la continuación
 natural pero va después: decode desbloquea el caso real.
 
-## 78. Terminal gráfico: capacidades y píxeles de celda en `std/term` (ago 2026)
+## 78. Terminal gráfico: capacidades y píxeles de celda en `std/term` (ago 2026) — ✅ HECHA (M143, DESIGN §140)
 
 Del mismo reporte, las dos piezas para elegir "peldaño" gráfico (¿truecolor? ¿sixel? ¿kitty?)
 y escalar imágenes al layout:

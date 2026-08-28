@@ -1035,6 +1035,35 @@ Es un wcwidth pragmático (control/combinantes → 0, ancho-Este-Asiático y emo
 intenta resolver secuencias emoji ZWJ/VS16, cuyo ancho depende del terminal. Portable: no necesita
 un tty (es cálculo puro), así que sirve también para medir texto que no vas a imprimir.
 
+**Terminal gráfico** (M143): para dibujar imágenes (sixel/kitty) hace falta saber cuánto mide una
+celda y qué soporta el terminal. `term.size_px()` da el área en píxeles (`None` si el terminal no
+la reporta — muchos dejan los campos en 0) y `term.cell_px()` el tamaño de una celda (área ÷
+rejilla). `term.capabilities()` devuelve `{ truecolor, colors_256, sixel, kitty_graphics }`
+combinando el entorno (`COLORTERM`, `TERM`, `KITTY_WINDOW_ID`) con una query DA1 que responde el
+propio terminal (solo con stdin y stdout en tty; plazo ~150 ms). Todo lo indetectable es `false`:
+elige el peldaño más alto disponible y degrada sin adivinar. El parser de la respuesta
+(`parse_device_attributes`) es puro, por si hablas con el terminal por tu cuenta.
+
+### Imágenes (`std/image`)
+
+"Cargo un sprite.png" en tres líneas — la salida siempre es RGBA8 (4 octetos por píxel), venga
+lo que venga en el archivo:
+
+```rust
+import std/image;
+import std/fs;
+
+let data = fs.read_file_bytes("sprite.png")?;
+let img = image.decode_png(data)?;          // Image { width, height, pixels: bytes RGBA8 }
+let alpha = img.pixels[(y * img.width + x) * 4 + 3];
+```
+
+Soporta los tipos de color y profundidades del formato (paleta con transparencia incluida; los
+canales de 16 bits se reducen a 8), verifica el CRC de cada chunk y acota la descompresión
+(anti-bomba). Un PNG corrupto o truncado es un `Err` con mensaje, nunca un crash; el entrelazado
+Adam7 (raro en assets) se rechaza con error claro. Combinado con `term.cell_px()` y
+`term.capabilities()` tienes las tres piezas para dibujar sprites en un terminal sixel/kitty.
+
 ### Markdown (`std/markdown`)
 
 Markdown → HTML (o el AST, si quieres renderizar tú — una TUI, un índice):

@@ -10547,3 +10547,52 @@ La política de selección, con sus vías de escape hacia "correr todo" (siempre
 sanar. El anuncio lleva el conteo («re-running 1 of 3 suite(s)…»). Plomería: `wait_change`
 devuelve ahora `(ruta, descripción)` — la selección necesita la ruta, no el texto. E2E nuevo en
 test_watch_cli (módulo compartido → solo su suite; ray.toml → todo).
+
+## 140. M143 — terminal gráfico: píxeles de celda y capacidades (ago 2026)
+
+La primera mitad de IDEAS §78, nacida del juego de demostración. Dos piezas, cada una con su
+naturaleza:
+
+**`size_px`/`cell_px` (M143a)** era plomería enterrada: el `WinSize` del `TIOCGWINSZ` que
+`term.size()` ya leía trae `ws_xpixel`/`ws_ypixel` — se descartaban. El primitivo nuevo
+`__term_size_px` los expone ([w, h] o []), con la regla defensiva de que un terminal que reporta
+0 (muchos) es `None`, jamás un 0 que divida; `cell_px()` deriva el tamaño de UNA celda
+(área/rejilla), que es lo que escala un gráfico sixel/kitty al layout de texto. Cableado en los
+siete sitios del patrón M107.3 (tabla BUILTINS + opcode + interp + VM + transpile con
+`__ray_term::size_px` + lista H11 + superficie std/term).
+
+**`capabilities()` (M143b)** es raylang PURO sobre primitivas existentes — el patrón M117: pistas
+de entorno (`COLORTERM`→truecolor, `TERM`→256/kitty, `KITTY_WINDOW_ID`) más una query DA1
+(`ESC [ c`) que responde el propio terminal, SOLO con stdin y stdout en tty, dentro de `raw`,
+acumulando por `io.read_timeout` (~150 ms) hasta la `c` final. El atributo 4 de la respuesta =
+sixel. El parser (`parse_device_attributes`) es puro y público: bytes → atributos, malformado →
+`[]`. Principio fijado en la superficie: todo lo indetectable es `false` — degradar, nunca
+adivinar hacia arriba. La detección kitty por env queda documentada como heurística (su query
+APC propia, diferida).
+
+Gotcha de escritura re-confirmado: un tail `[]` tras un `while` parsea como INDEXACIÓN del
+bloque (la misma clase que el `(a, b)`-tras-while que caza a los generadores) → `return [];`.
+Tests: parser DA1 + capabilities con env controlado y sin tty (sin query → determinista),
+byte-idéntico en los tres motores; `size_px` por su camino None (el Some depende del terminal
+real). El E2E de capabilities fija el env explícitamente al spawn — el heredado del runner de CI
+variaría la salida.
+
+## 141. M144 — `std/image`: PNG a RGBA8 sobre el inflate existente (ago 2026)
+
+La segunda mitad del terreno gráfico del juego de demostración (IDEAS §77). La premisa del
+reporte original ("falta DEFLATE") era falsa — `std/inflate` ya lo traía endurecido — así que el
+módulo es exactamente el parser PNG encima: chunks con CRC verificado (el `crc32` existente),
+`zlib_inflate_limit` con el tope anti-bomba EXACTO (alto × (1 + stride): el tamaño crudo se
+conoce por adelantado), des-filtrado None/Sub/Up/Average/Paeth, y expansión a **RGBA8 siempre**
+— un solo formato de consumo, decidido en el módulo y no en cada llamador. Tipos de color
+0/2/3/4/6 con profundidades 1/2/4/8/16 (16 → octeto alto, la convención de assets), paleta +
+`tRNS` (alfa por índice; color-key de 0/2 en 8/16). Adam7 → `Err` claro (diferido: raro en
+assets y es un módulo entero). Espíritu M64 de punta a punta: cada lectura verifica límites,
+todo input corrupto es `Err` con mensaje.
+
+Raylang puro (`import std/inflate` — primer módulo std que importa a otro no-fs): tres motores
+gratis. El oráculo de los tests es EXTERNO al módulo: los 10 PNG de la batería se generan con
+el zlib de Python (filtros aplicados a mano hacia adelante, el decode debe invertirlos) y van
+embebidos como literales `b"\xNN…"` en el fixture — sin binarios en el repo, byte-idéntico en
+los tres motores, incluidos los tres caminos de error (Adam7/CRC/truncado). Gotcha de escritura:
+la lista de PARÁMETROS de una fn no admite coma final (los literales de arreglo sí).

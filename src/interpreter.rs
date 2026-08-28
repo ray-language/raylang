@@ -2010,6 +2010,13 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__term_size_px" => {
+                let arr = match crate::builtins::term_size_px() {
+                    Some((w, h)) => vec![Value::Int(w), Value::Int(h)],
+                    None => vec![],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__term_raw_on" | "__term_raw_off" => {
                 let r = if name == "__term_raw_on" {
                     crate::builtins::term_raw_on()

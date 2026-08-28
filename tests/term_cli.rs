@@ -193,3 +193,14 @@ fn main() {
     assert!(all.contains("got=sécreto"), "el resultado editado debe llegar: {all:?}");
     assert!(!all.contains("sécrX"), "lo tecleado no debe tener eco: {all:?}");
 }
+
+#[test]
+fn size_px_and_cell_px_are_none_without_a_terminal() {
+    // M143 (IDEAS §78): sin tty (stdout canalizado) el área en píxeles es None en los TRES
+    // motores — el camino determinista de CI; el camino Some depende del terminal real.
+    assert_on_all_engines(
+        "size_px",
+        "import std/term;\n\nfn main() {\n    match (term.size_px()) {\n        Option.Some(p) => print(\"px \" + to_string(p.0) + \"x\" + to_string(p.1)),\n        Option.None => print(\"no px\"),\n    }\n    match (term.cell_px()) {\n        Option.Some(c) => print(\"cell \" + to_string(c.0) + \"x\" + to_string(c.1)),\n        Option.None => print(\"no cell\"),\n    }\n}\n",
+        "no px\nno cell\n",
+    );
+}

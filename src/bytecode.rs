@@ -616,6 +616,8 @@ pub enum OpCode {
     TermRawOn,
     /// M107.3 (std/term): restaura el terminal → `["ok"]`/`["err", msg]`. Primitivo `__term_raw_off`.
     TermRawOff,
+    /// M143: `__term_size_px()` — el área del terminal en píxeles ([w, h] o []).
+    TermSizePx,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

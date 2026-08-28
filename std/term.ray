@@ -46,6 +46,38 @@ pub fn size() -> Option<(int, int)> {
     if (r.len() == 2) { Option.Some((r[0], r[1])) } else { Option.None }
 }
 
+// Área en píxeles (M143, IDEAS §78): ws_xpixel/ws_ypixel del MISMO ioctl que size(); muchos
+// terminales los dejan en 0 → None, jamás un 0 que divida.
+/// The terminal area in PIXELS as `(width, height)`, or `None` when there is no terminal or it
+/// does not report pixel sizes (many terminals leave them at 0).
+pub fn size_px() -> Option<(int, int)> {
+    let r = __term_size_px();
+    if (r.len() == 2) { Option.Some((r[0], r[1])) } else { Option.None }
+}
+
+/// The size of one terminal cell in PIXELS as `(width, height)`: the pixel area divided by the
+/// column/row grid. `None` when either is unavailable. This is what scales sixel/kitty graphics
+/// to the text layout.
+pub fn cell_px() -> Option<(int, int)> {
+    match (size_px()) {
+        Option.Some(px) => {
+            match (size()) {
+                Option.Some(cr) => {
+                    let (w, h) = px;
+                    let (cols, rows) = cr;
+                    if (cols > 0 && rows > 0) {
+                        Option.Some((w / cols, h / rows))
+                    } else {
+                        Option.None
+                    }
+                },
+                Option.None => Option.None,
+            }
+        },
+        Option.None => Option.None,
+    }
+}
+
 // Corre f en modo crudo y restaura SIEMPRE (también si f falla: try_call).
 /// Runs `f` with the terminal in raw mode (no echo, byte-at-a-time input) and ALWAYS restores
 /// the previous state, even if `f` panics. Returns `f`'s value, or `Err` if raw mode could not

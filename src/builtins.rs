@@ -3250,6 +3250,12 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "__term_size")?;
         Ok(Type::Array(Box::new(Type::Int)))
     } },
+    // __term_size_px() -> [int]: [ancho_px, alto_px], o [] si no hay terminal o no reporta
+    // píxeles (muchos terminales dejan ws_xpixel/ws_ypixel en 0 — jamás un 0 que divida).
+    Builtin { name: "__term_size_px", opcode: OpCode::TermSizePx, check: |a| {
+        nullary(a, "__term_size_px")?;
+        Ok(Type::Array(Box::new(Type::Int)))
+    } },
     // __term_raw_on() -> [string]: ["ok"] o ["err", msg]. Guarda el termios y activa el modo crudo.
     Builtin { name: "__term_raw_on", opcode: OpCode::TermRawOn, check: |a| {
         nullary(a, "__term_raw_on")?;
@@ -3664,6 +3670,23 @@ mod term_host {
         None
     }
 
+    /// El área del terminal en PÍXELES (`ws_xpixel`/`ws_ypixel` del mismo `TIOCGWINSZ`), o
+    /// `None` si no hay tty o el terminal no los reporta (muchos dejan 0 — IDEAS §78: para
+    /// escalar gráficos sixel/kitty al layout; jamás devolver un 0 que divida).
+    pub fn size_pixels() -> Option<(i64, i64)> {
+        for fd in [1, 0, 2] {
+            let mut ws = WinSize { rows: 0, cols: 0, xpixel: 0, ypixel: 0 };
+            // SAFETY: como en `size`.
+            if unsafe { ioctl(fd, TIOCGWINSZ, &mut ws as *mut WinSize) } == 0
+                && ws.xpixel > 0
+                && ws.ypixel > 0
+            {
+                return Some((ws.xpixel as i64, ws.ypixel as i64));
+            }
+        }
+        None
+    }
+
     /// Restaura el termios guardado (la registra `atexit`; también la llama `raw_off`).
     extern "C" fn restore() {
         if SAVED.load(Ordering::Acquire) {
@@ -3754,6 +3777,18 @@ pub fn term_raw_on() -> Result<(), String> {
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
         Err("raw mode is not supported on this platform".to_string())
+    }
+}
+
+/// El área del terminal en píxeles; `None` sin tty, sin soporte o con el terminal reportando 0.
+pub fn term_size_px() -> Option<(i64, i64)> {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        term_host::size_pixels()
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        None
     }
 }
 

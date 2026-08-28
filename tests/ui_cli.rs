@@ -53,7 +53,7 @@ const WANT: &str = "size rejected: true\neval ok: true\nquiet queue: true\n\
 event: closed, same window: true\neval after close: true\n";
 
 #[test]
-fn headless_battery_matches_on_vm_and_interpreter() {
+fn headless_battery_matches_on_all_three_engines() {
     let base = tmp("battery");
     std::fs::write(base.join("prog.ray"), PROG).unwrap();
     for engine in ["--vm", "--interp"] {
@@ -61,6 +61,18 @@ fn headless_battery_matches_on_vm_and_interpreter() {
             run_headless(Command::new(env!("CARGO_BIN_EXE_ray")).args([engine, "prog.ray"]).current_dir(&base));
         assert_eq!(code, 0, "{engine}: exit 0");
         assert_eq!(out, WANT, "{engine}: salida exacta");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code) = run_headless(&mut Command::new(&bin));
+        assert_eq!(code, 0, "nativo: exit 0");
+        assert_eq!(out, WANT, "nativo ≡ VM");
     }
 }
 
@@ -114,14 +126,24 @@ fn main() {
 
 #[test]
 fn the_fiber_parks_and_the_events_channel_pumps() {
+    const WANT_PARK: &str = "parked event: closed, waited: true\nchannel event: closed, same window: true\n";
     let base = tmp("park");
     std::fs::write(base.join("prog.ray"), PARK_PROG).unwrap();
     let (out, code) =
         run_headless(Command::new(env!("CARGO_BIN_EXE_ray")).args(["--vm", "prog.ray"]).current_dir(&base));
     assert_eq!(code, 0, "exit 0");
-    assert_eq!(
-        out,
-        "parked event: closed, waited: true\nchannel event: closed, same window: true\n",
-        "salida exacta"
-    );
+    assert_eq!(out, WANT_PARK, "salida exacta");
+    // El nativo con el mismo programa: el aparcado por el fd (fibras) y la fibra-bomba.
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code) = run_headless(&mut Command::new(&bin));
+        assert_eq!(code, 0, "nativo: exit 0");
+        assert_eq!(out, WANT_PARK, "nativo ≡ VM");
+    }
 }

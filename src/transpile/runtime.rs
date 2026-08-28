@@ -294,7 +294,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // top-level en cualquier orden, así que va al final. Espejo del `FileRegistry` de la VM: un contador +
     // mapa handle→archivo tras un Mutex/OnceLock; los mensajes de error son byte-idénticos a la VM.
     // Registro de handles (M11.8): compartido por archivos y sockets. Se emite si el programa usa cualquiera.
-    if t.needs_handles || t.needs_net || t.needs_rt_sqlite || t.needs_rt_process || t.needs_rt_watch {
+    if t.needs_handles
+        || t.needs_net
+        || t.needs_rt_sqlite
+        || t.needs_rt_process
+        || t.needs_rt_watch
+        || t.needs_rt_ui
+    {
         // Variantes con-crate del registro, añadidas solo si el programa usa el subsistema: `Tls` (conexión
         // TLS bloqueante tras `Arc<Mutex>` propio → el I/O no retiene el lock global) y `Sqlite` (conexión
         // rusqlite; I/O local → se opera reteniendo el lock global, como la VM).
@@ -314,9 +320,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         };
         // M115.4: watch de fs vivo (su Drop detiene los hilos de notify; close(h) basta).
         let watch_variant = if t.needs_rt_watch { ", Watch(ray_runtime::watch::FsWatcher)" } else { "" };
+        // M146: una ventana de std/ui — el id ES el del registro (ray_runtime la mapea por él);
+        // el cierre real lo hace __ray_close (despacho asíncrono al hilo principal).
+        let ui_variant = if t.needs_rt_ui { ", Window(i64)" } else { "" };
         writeln!(
             out,
-            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant}{process_variant}{watch_variant} }}"
+            "enum __RayHandle {{ Reader(std::io::BufReader<std::fs::File>), Writer(std::fs::File), Tcp(std::sync::Arc<std::net::TcpStream>), Listener(std::net::TcpListener), Udp(std::net::UdpSocket){tls_variant}{sqlite_variant}{process_variant}{watch_variant}{ui_variant} }}"
         )
         .unwrap();
         out.push_str(concat!(
@@ -352,7 +361,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // despertar del lector. Con él, el fd queda legible (EOF) → el reactor despierta al lector,
         // que re-verifica el registro y devuelve Err("invalid handle: h"), como la VM. Las entradas
         // viejas en cachés de OTRAS fibras quedan inertes (los ids nunca se reasignan).
-        write!(out, "fn __ray_close(h: i64) -> i64 {{ let __e = __ray_reg().lock().unwrap().open.remove(&h); if let Some(__RayHandle::Tcp(s)) = __e {{ let _ = s.shutdown(std::net::Shutdown::Both); }} {sock_evict}{tls_evict}0 }}\n").unwrap();
+        // M146: cerrar el handle de una ventana cierra la VENTANA (despacho asíncrono al hilo
+        // principal dentro de close_window — este close puede correr en cualquier hilo).
+        let ui_close = if t.needs_rt_ui {
+            "if let Some(__RayHandle::Window(w)) = &__e { ray_runtime::ui::close_window(*w); } "
+        } else {
+            ""
+        };
+        write!(out, "fn __ray_close(h: i64) -> i64 {{ let __e = __ray_reg().lock().unwrap().open.remove(&h); if let Some(__RayHandle::Tcp(s)) = &__e {{ let _ = s.shutdown(std::net::Shutdown::Both); }} {ui_close}{sock_evict}{tls_evict}0 }}\n").unwrap();
     }
     // Ops de archivo (open/read_line/write) — solo si se usan handles de archivo.
     if t.needs_handles {
@@ -481,6 +497,48 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(\"\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
         ));
+    }
+    // M146: ventana + webview (ray_runtime::ui). El id del registro se reserva ANTES de abrir y
+    // se pasa al runtime: los eventos nombran a la ventana con el handle del programa. La espera
+    // de eventos: con fibras, aparcar por el fd del self-pipe de la cola global (dual-mode: el
+    // hilo del programa no es fibra y bloquea en poll); sin fibras, la espera condvar del runtime.
+    if t.needs_rt_ui {
+        out.push_str(concat!(
+            "fn __ray_ui_open(title: &str, url: &str, w: i64, h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let id = { let mut reg = __ray_reg().lock().unwrap(); let id = reg.next; reg.next += 1; id };\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::open_window(id, title, url, w, h) {\n",
+            "        Ok(()) => { __ray_reg().lock().unwrap().open.insert(id, __RayHandle::Window(id)); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
+            "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "    }))\n}\n",
+            "fn __ray_ui_eval_js(h: i64, js: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let r = if known { ray_runtime::ui::eval_js(h, js) } else { Err(\"ui: not an open window\".to_string()) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            "fn __ray_ui_next_event(ms: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let tag = |parts: Vec<String>| Rc::new(std::cell::RefCell::new(parts.into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()));\n",
+        ));
+        if t.fibers {
+            out.push_str(concat!(
+                "    let dl = if ms > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)) } else { None };\n",
+                "    loop {\n",
+                "        if let Some((kind, win)) = ray_runtime::ui::try_next_event() { return tag(vec![\"ok\".to_string(), kind, win.to_string()]); }\n",
+                "        let fd = ray_runtime::ui::event_fd();\n",
+                "        if fd < 0 { return tag(vec![\"err\".to_string(), \"ui: no event pipe\".to_string()]); }\n",
+                "        let rem = match dl {\n",
+                "            None => 0,\n",
+                "            Some(d) => { let r = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if r <= 0 { return tag(vec![\"timeout\".to_string()]); } r }\n",
+                "        };\n",
+                "        if ray_runtime::fibers::wait_readable_timeout(fd, rem) && rem > 0 { return tag(vec![\"timeout\".to_string()]); }\n",
+                "    }\n}\n",
+            ));
+        } else {
+            out.push_str(concat!(
+                "    match ray_runtime::ui::next_event_blocking(ms) {\n",
+                "        Some((kind, win)) => tag(vec![\"ok\".to_string(), kind, win.to_string()]),\n",
+                "        None => tag(vec![\"timeout\".to_string()]),\n",
+                "    }\n}\n",
+            ));
+        }
     }
     if t.needs_rt_watch {
         out.push_str(concat!(

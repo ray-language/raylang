@@ -2990,6 +2990,45 @@ y escalar imágenes al layout:
 **Impacto**: BAJO en riesgo (aditivo en `std/term`); el orden natural es píxeles → capacidades
 → (con §77) imágenes en terminal.
 
+## 79. `std/audio` — salida PCM al dispositivo (ago 2026)
+
+Segundo reporte del juego de demostración (tras §77/§78). De las cuatro piezas pedidas, DOS
+partían de premisas falsas — verificado contra el código y corregido aquí para el registro:
+
+- **"No hay forma de mantener un hijo vivo empujándole samples" — FALSO desde M100 v3**:
+  `process.cmd(...).stdin_pipe().stream()` + `Proc.write(bytes)` (+ `close_stdin()` = EOF)
+  alimentan un `ffplay -f s16le -i -` vivo, y `write` APARCA LA FIBRA si el pipe se llena →
+  contrapresión = *pacing* gratis contra el consumo real. La música reactiva/síntesis en vivo
+  funciona HOY por esta vía (REFERENCE §std/process, "Sesión persistente").
+- **"Sin FFI no puedes bindear CoreAudio" — raylang tiene FFI desde M41.** Lo cierto de fondo:
+  el FFI no soporta **callbacks C→raylang**, y CoreAudio es *pull* (render callbacks) → en
+  macOS no es bindeable por el usuario; en Linux ALSA es *push* (`snd_pcm_writei`) y SÍ lo es.
+  Esa asimetría es el mejor argumento del módulo dedicado. (Callbacks en FFI = arco de
+  LENGUAJE aparte, impacto ALTO, no un prerequisito de esto.)
+
+**Lo que falta de verdad**: `std/audio`, el análogo de `term.*` para sonido — primera clase,
+sin proceso externo ni latencia de spawn:
+
+- Superficie push mínima: `open(sample_rate, channels) -> Result<int, string>` ·
+  `write(h, samples: bytes) -> Result<int, string>` (PCM entrelazado; formato a decidir:
+  s16le como mínimo común) · `drain(h)` · `close(h)`.
+- **Contrapresión por aparcado de fibra** (el patrón de todo el I/O de la VM): `write` con el
+  buffer del dispositivo lleno aparca — el pacing del juego sale del propio dispositivo, sin
+  relojes.
+- **Decisión de diseño abierta — la dependencia**: `cpal` (el estándar Rust: CoreAudio/ALSA/
+  WASAPI de una, precedente de foco-producción como ring/rusqlite/notify) tras feature
+  excluible `--without audio`, vs. externs a mano por plataforma (cero deps, doble
+  mantenimiento, Windows cuesta arriba). Inclinación: cpal. En nativo, vía `ray-runtime`
+  enlazado bajo demanda, como TLS/sqlite.
+- Interp = oráculo: misma superficie, puede ser bloqueante simple.
+
+**Decoders MP3/OGG**: mismo cajón que PNG (§77) — ports puros grandes (minimp3/vorbis),
+clasificados LEJOS; WAV no necesita nada (cabecera + PCM a mano) y `stdin_pipe`→ffplay ya
+decodifica cualquier formato mientras tanto.
+
+**Impacto**: MEDIO en valor (juegos/TUIs con sonido, alertas, el arcade del reporte), MEDIO en
+esfuerzo (runtime con-crate en 3 motores), BAJO en riesgo de diseño (superficie push pequeña).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

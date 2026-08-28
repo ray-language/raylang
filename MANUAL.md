@@ -1035,6 +1035,15 @@ Es un wcwidth pragmático (control/combinantes → 0, ancho-Este-Asiático y emo
 intenta resolver secuencias emoji ZWJ/VS16, cuyo ancho depende del terminal. Portable: no necesita
 un tty (es cálculo puro), así que sirve también para medir texto que no vas a imprimir.
 
+**Terminal gráfico** (M143): para dibujar imágenes (sixel/kitty) hace falta saber cuánto mide una
+celda y qué soporta el terminal. `term.size_px()` da el área en píxeles (`None` si el terminal no
+la reporta — muchos dejan los campos en 0) y `term.cell_px()` el tamaño de una celda (área ÷
+rejilla). `term.capabilities()` devuelve `{ truecolor, colors_256, sixel, kitty_graphics }`
+combinando el entorno (`COLORTERM`, `TERM`, `KITTY_WINDOW_ID`) con una query DA1 que responde el
+propio terminal (solo con stdin y stdout en tty; plazo ~150 ms). Todo lo indetectable es `false`:
+elige el peldaño más alto disponible y degrada sin adivinar. El parser de la respuesta
+(`parse_device_attributes`) es puro, por si hablas con el terminal por tu cuenta.
+
 ### Markdown (`std/markdown`)
 
 Markdown → HTML (o el AST, si quieres renderizar tú — una TUI, un índice):

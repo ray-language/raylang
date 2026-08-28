@@ -2968,7 +2968,7 @@ Result<Image, string>` (`Image { width, height, pixels: bytes /* RGBA8 */ }`):
 raysite), BAJO en riesgo (módulo hoja). Encode PNG (con `std/deflate`) es la continuación
 natural pero va después: decode desbloquea el caso real.
 
-## 78. Terminal gráfico: capacidades y píxeles de celda en `std/term` (ago 2026)
+## 78. Terminal gráfico: capacidades y píxeles de celda en `std/term` (ago 2026) — ✅ HECHA (M143, DESIGN §140)
 
 Del mismo reporte, las dos piezas para elegir "peldaño" gráfico (¿truecolor? ¿sixel? ¿kitty?)
 y escalar imágenes al layout:

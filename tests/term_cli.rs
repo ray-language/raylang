@@ -204,3 +204,34 @@ fn size_px_and_cell_px_are_none_without_a_terminal() {
         "no px\nno cell\n",
     );
 }
+
+#[test]
+fn capabilities_from_env_match_on_all_three_engines() {
+    // M143b (IDEAS §78): con el env CONTROLADO y sin tty (stdout canalizado → sin query DA1),
+    // capabilities() es determinista; parse_device_attributes es pura. Byte-idéntico en los 3.
+    let src = "import std/term;\n\nfn main() {\n    print(term.parse_device_attributes(b\"\\x1b[?64;1;4c\"));\n    print(term.parse_device_attributes(b\"\\x1b[?1;2c\"));\n    print(term.parse_device_attributes(b\"garbage\"));\n    print(term.parse_device_attributes(b\"\\x1b[?64;1;4\"));\n    let c = term.capabilities();\n    print(\"tc=\" + to_string(c.truecolor) + \" c256=\" + to_string(c.colors_256) + \" sixel=\" + to_string(c.sixel) + \" kitty=\" + to_string(c.kitty_graphics));\n}\n";
+    let want = "[64, 1, 4]\n[1, 2]\n[]\n[]\ntc=true c256=true sixel=false kitty=false\n";
+    let env = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor"), ("KITTY_WINDOW_ID", "")];
+    let base = tmp("caps_env");
+    std::fs::write(base.join("prog.ray"), src).unwrap();
+    let run = |cmd: &mut Command| {
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.current_dir(&base).stdin(std::process::Stdio::null()).output().expect("corre");
+        (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
+    };
+    for engine in ["--vm", "--interp"] {
+        let (out, code) = run(Command::new(env!("CARGO_BIN_EXE_ray")).args([engine, "prog.ray"]));
+        assert_eq!(code, 0, "{engine}: exit 0");
+        assert_eq!(out, want, "{engine}: salida exacta");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let (_o, _e, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(bcode, 0, "build --native ok");
+        let (out, code) = run(&mut Command::new(&bin));
+        assert_eq!(code, 0, "nativo: exit 0");
+        assert_eq!(out, want, "nativo ≡ VM");
+    }
+}

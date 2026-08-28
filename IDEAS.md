@@ -3078,6 +3078,14 @@ app de escritorio sin ventana propia. Documentarlo como patrón (MANUAL/ejemplo)
 + canal de eventos) → F2 Linux por dlopen + embed + `ray bundle` → F3 menús/diálogos/tray/
 updater.
 
+**DECISIÓN FIJADA (28 ago 2026, con el usuario): el camino es WEBVIEW, sin ambigüedad.** Bindear
+toolkits nativos completos (AppKit/UIKit/GTK/WinUI) o construir renderer propio eclipsaría al
+lenguaje y quedaría a medio hacer — no es opción para el tamaño del proyecto. Lo "nativo" se
+invierte donde de verdad se SIENTE: menús, atajos del SO, diálogos de archivo, tray,
+notificaciones, dock (superficies chicas, bindeables a mano — el patrón objc/dlopen de audio).
+`std/ui` es una PRIMITIVA ventana+webview, no un framework: si un dogfood exige un widget
+nativo concreto, se añade quirúrgicamente, no por doctrina.
+
 **Bifurcaciones de diseño anotadas** (no decidir en solitario al ejecutar): (a) a-mano vs
 wry/tao — la inclinación es a-mano por la lección cpal, pero Windows puede forzar el crate;
 (b) el contrato exacto del main thread en el runtime de fibras (¿`ui.run` no retorna? ¿main

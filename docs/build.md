@@ -158,7 +158,7 @@ modelo antiguo levantaba un hilo por conexión (docs/diseno-concurrencia-nativa.
 `--without fibers` recupera el hilo-por-tarea (y es necesario para la vía `rustc` pelada). En
 targets Windows se apaga solo (el reactor es kqueue/epoll).
 
-**Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch` — para los subsistemas de uso
+**Exclusión.** `--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio` — para los subsistemas de uso
 (crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc`/`ahash` vuelven al malloc del
 sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native] without =
 [...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para

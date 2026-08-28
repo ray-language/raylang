@@ -2990,7 +2990,7 @@ y escalar imágenes al layout:
 **Impacto**: BAJO en riesgo (aditivo en `std/term`); el orden natural es píxeles → capacidades
 → (con §77) imágenes en terminal.
 
-## 79. `std/audio` — salida PCM al dispositivo (ago 2026)
+## 79. `std/audio` — salida PCM al dispositivo (ago 2026) — ✅ HECHA (M145, DESIGN §142; la decisión cpal-vs-externs se volteó a EXTERNS al implementar: cpal exigía headers de ALSA en build)
 
 Segundo reporte del juego de demostración (tras §77/§78). De las cuatro piezas pedidas, DOS
 partían de premisas falsas — verificado contra el código y corregido aquí para el registro:

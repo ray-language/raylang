@@ -1,0 +1,46 @@
+// std/audio (M145) — salida de audio PCM: el análogo de term.* para sonido (IDEAS §79).
+//
+// Sobre los primitivos __audio_* del runtime: un pipe del SO + hilo alimentador hacia el
+// dispositivo (AudioQueue en macOS, ALSA por dlopen en Linux; RAY_AUDIO_SINK=null = sumidero de
+// tiempo real para tests/CI). La CONTRAPRESIÓN es el diseño: `write` aparca la fibra cuando el
+// dispositivo va lleno — el pacing del programa sale del consumo real, sin relojes. Formato
+// único de v1: PCM s16le entrelazado (little-endian, 2 octetos por muestra por canal).
+
+/// Opens a PCM output on the default device: `sample_rate` Hz (8000–192000), `channels`
+/// channels (1–8), s16le interleaved samples. Returns the output handle. With
+/// `RAY_AUDIO_SINK=null` in the environment, a real-time null sink plays silently (tests, CI).
+pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
+    let r = __audio_open(sample_rate, channels);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Writes interleaved s16le samples to the output. Writes ALL of `samples`, parking the fiber
+/// while the device buffer is full — backpressure IS the pacing: write your audio as fast as
+/// you produce it and the device sets the tempo. `Err` if the output was closed.
+pub fn write(h: int, samples: bytes) -> Result<int, string> {
+    let r = __audio_write(h, samples);
+    if (r[0] == "ok") {
+        Result.Ok(samples.len())
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Waits until everything written has been played (queue empty plus the device buffer margin).
+/// Call it before `close(h)` at the end of a session for a gapless ending — `close(h)` (the
+/// ordinary handle close) ends the output; a program that exits right away may cut the tail.
+pub fn drain(h: int) -> Result<int, string> {
+    let r = __audio_drain(h);
+    if (r[0] == "ok") {
+        Result.Ok(0)
+    } else {
+        Result.Err(r[1])
+    }
+}

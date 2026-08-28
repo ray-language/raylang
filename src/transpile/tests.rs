@@ -34,6 +34,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
     "__stdin_read", "__stdin_read_timeout",
     "__term_is_tty", "__term_size", "__term_size_px", "__term_raw_on", "__term_raw_off",
+    "__audio_open", "__audio_write", "__audio_drain",
     // Reloj + PRNG (interceptados vía `std::time::*` / `std::random::*`).
     "__monotonic", "__monotonic_nanos", "__now", "__random", "__random_int", "__random_seed", "__sleep",
     // FFI (interceptado vía `std::ffi::errno` → helper `__ray_ffi_errno`).

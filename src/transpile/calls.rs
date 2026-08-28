@@ -2150,6 +2150,34 @@ impl Transpiler {
             }
             // M115.4: watch de fs por eventos de kernel (ray_runtime::watch tras la feature
             // `watch`; los wrappers EMITIDOS fs.watch/next_event/next_event_timeout llaman aquí).
+            // M145: salida de audio PCM. El write comparte la plomería PipeW de proc_write
+            // (mismo despacho, misma espera de escribible) — por eso audio enciende también
+            // needs_rt_process: la variante PipeW y __ray_proc_write viven tras ese flag.
+            "audio_open" if name.starts_with("__") && !self.exclude.contains("audio") => {
+                self.needs_rt_audio = true;
+                self.needs_rt_process = true;
+                out.push_str("__ray_audio_open(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "audio_write" if name.starts_with("__") && !self.exclude.contains("audio") => {
+                self.needs_rt_audio = true;
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_write(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "audio_drain" if name.starts_with("__") && !self.exclude.contains("audio") => {
+                self.needs_rt_audio = true;
+                self.needs_rt_process = true;
+                out.push_str("__ray_audio_drain(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "watch" if name.starts_with("__") && !self.exclude.contains("watch") => {
                 self.needs_rt_watch = true;
                 out.push_str("__ray_watch(&*");

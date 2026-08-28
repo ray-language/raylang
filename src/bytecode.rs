@@ -618,6 +618,10 @@ pub enum OpCode {
     TermRawOff,
     /// M143: `__term_size_px()` — el área del terminal en píxeles ([w, h] o []).
     TermSizePx,
+    /// M145: `__audio_open(rate, channels)` — abre una salida PCM (['ok', h] / ['err', msg]).
+    AudioOpen,
+    /// M145: `__audio_drain(h)` — espera a que todo lo escrito suene.
+    AudioDrain,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

@@ -978,6 +978,43 @@ const WATCH_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
     "this binary was built without filesystem watch support (rebuild with the 'watch' feature)"
 };
 
+#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+const AUDIO_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
+    "audio is not available in the web playground (wasm)"
+} else {
+    "this binary was built without audio support (rebuild with the 'audio' feature)"
+};
+
+/// M145: abre una salida PCM y registra su extremo de escritura como PipeW; `Ok(handle)`.
+#[cfg(all(feature = "audio", unix, not(target_arch = "wasm32")))]
+pub fn audio_open(sample_rate: i64, channels: i64) -> Result<i64, String> {
+    let f = ray_runtime::audio::open(sample_rate, channels)?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::PipeW(f));
+    Ok(id)
+}
+#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+pub fn audio_open(_sample_rate: i64, _channels: i64) -> Result<i64, String> {
+    Err(AUDIO_UNAVAILABLE.to_string())
+}
+
+/// M145: espera a que todo lo escrito en la salida `h` haya sonado.
+#[cfg(all(feature = "audio", unix, not(target_arch = "wasm32")))]
+pub fn audio_drain(h: i64) -> Result<(), String> {
+    use std::os::unix::io::AsRawFd;
+    let fd = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::PipeW(f)) => f.as_raw_fd(),
+        _ => return Err("audio: not an open audio output".to_string()),
+    };
+    ray_runtime::audio::drain(fd)
+}
+#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+pub fn audio_drain(_h: i64) -> Result<(), String> {
+    Err(AUDIO_UNAVAILABLE.to_string())
+}
+
 /// Abre un watch sobre la ruta (directorio → recursivo) y lo registra; `Ok(handle)`.
 #[cfg(all(feature = "watch", unix, not(target_arch = "wasm32")))]
 pub fn watch_open(path: &str) -> Result<i64, String> {
@@ -3255,6 +3292,31 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__term_size_px", opcode: OpCode::TermSizePx, check: |a| {
         nullary(a, "__term_size_px")?;
         Ok(Type::Array(Box::new(Type::Int)))
+    } },
+    // __audio_open(rate, channels) -> [string] (M145): ["ok", handle] o ["err", msg]. Abre una
+    // salida PCM s16le; el handle es un PipeW del registro — `__audio_write` comparte el opcode
+    // de escritura con contrapresión y `close(h)` es el EOF que drena y termina.
+    Builtin { name: "__audio_open", opcode: OpCode::AudioOpen, check: |a| {
+        arity(a, 2, "__audio_open", " (sample_rate, channels)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__audio_open expects an int (the sample rate), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__audio_open expects an int (the channel count), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __audio_write(h, samples) -> [string] (M145): alias con opcode COMPARTIDO con
+    // `__socket_write_bytes` (el precedente de `__proc_write`): el camino de escritura despacha
+    // por tipo de handle y el pipe lleno APARCA la fibra — el pacing sale del dispositivo.
+    Builtin { name: "__audio_write", opcode: OpCode::SocketWriteBytes, check: |a| {
+        arity(a, 2, "__audio_write", " (handle, samples)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__audio_write expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__audio_write expects bytes (the s16le samples), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __audio_drain(h) -> [string] (M145): ["ok", ""] o ["err", msg]. Bloquea hasta que lo
+    // escrito haya sonado (pipe vacío + margen del buffer del dispositivo).
+    Builtin { name: "__audio_drain", opcode: OpCode::AudioDrain, check: |a| {
+        arity(a, 1, "__audio_drain", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__audio_drain expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
     } },
     // __term_raw_on() -> [string]: ["ok"] o ["err", msg]. Guarda el termios y activa el modo crudo.
     Builtin { name: "__term_raw_on", opcode: OpCode::TermRawOn, check: |a| {

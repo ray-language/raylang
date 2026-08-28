@@ -3028,6 +3028,30 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::AudioOpen => {
+                    let channels = self.pop();
+                    let rate = self.pop();
+                    let (HeapValue::Int(rate), HeapValue::Int(channels)) = (rate, channels) else {
+                        unreachable!("the checker guarantees two ints");
+                    };
+                    let elems = match crate::builtins::audio_open(rate, channels) {
+                        Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::AudioDrain => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::audio_drain(handle) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::TermSizePx => {
                     let elems = match crate::builtins::term_size_px() {
                         Some((w, hp)) => vec![HeapValue::Int(w), HeapValue::Int(hp)],

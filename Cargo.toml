@@ -27,7 +27,7 @@ crate-type = ["cdylib", "rlib"]
 # producto es la VM (M35a); el intérprete existe como **oráculo de desarrollo** (validación
 # cruzada) y como `--interp`. Una *release* mínima puede excluirlo con `--no-default-features`,
 # quedándose solo con la VM. El modelo de valores (`runtime`) se compila siempre.
-default = ["interp", "sqlite", "net-tls", "ffi", "regex", "watch", "unicode"]
+default = ["interp", "sqlite", "net-tls", "ffi", "regex", "watch", "unicode", "audio"]
 interp = []
 # M89 (IDEAS §47): SQLite embebido tras una feature (activa por defecto → el binario normal es
 # idéntico). Un build "slim" para contenedores/embedding la excluye (--no-default-features
@@ -39,6 +39,8 @@ sqlite = ["dep:rusqlite"]
 # macOS, inotify en Linux). Activa por defecto; el build slim la excluye y `fs.watch` devuelve un
 # Err claro (errores como valores, como sqlite).
 watch = ["ray-runtime/watch"]
+# M145: salida de audio PCM (std/audio) — backends a mano en ray-runtime (cero crates).
+audio = ["ray-runtime/audio"]
 # M89.2: TLS + cripto de producción (rustls/ring) tras una feature (activa por defecto). El build
 # slim la excluye: sin https/wss ni sha/hmac/ed25519/chacha de ring (los builtins responden con un
 # error claro), y `ray publish --sign`/verificación de firmas del registro no disponibles (el CLI

@@ -1592,7 +1592,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
                 "        if !__ray_stdin::ready(0) {
 ",
-                "            if ms <= 0 || !ray_runtime::fibers::wait_readable_timeout(0, ms) { return None; }
+                // wait_readable_timeout devuelve `true` si VENCIÓ (contrato de fibers.rs): la
+                // negación de M107.2 lo tenía al revés — con dato listo devolvía None (lo
+                // enmascaraba el re-chequeo de ready en el camino del timeout; lo destapó la
+                // query DA1 de capabilities() dentro de raw, hallazgo de rallyx).
+                "            if ms <= 0 || ray_runtime::fibers::wait_readable_timeout(0, ms) { return None; }
 ",
                 "            if !__ray_stdin::ready(0) { return None; }
 ",
@@ -1665,6 +1669,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    static mut ORIGINAL: [u8; 128] = [0; 128];\n",
             "    static SAVED: AtomicBool = AtomicBool::new(false);\n",
             "    static ARMED: AtomicBool = AtomicBool::new(false);\n",
+            "    static RAW_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n",
             "    pub fn is_tty(fd: i32) -> bool { unsafe { isatty(fd) == 1 } }\n",
             "    pub fn size() -> Option<(i64, i64)> {\n",
             "        for fd in [1, 0, 2] {\n",
@@ -1682,6 +1687,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        if SAVED.load(Ordering::Acquire) { unsafe { tcsetattr(0, 2, std::ptr::addr_of!(ORIGINAL) as *const u8) }; }\n",
             "    }\n",
             "    pub fn raw_on() -> Result<(), String> {\n",
+            "        if RAW_DEPTH.load(Ordering::Acquire) > 0 { RAW_DEPTH.fetch_add(1, Ordering::AcqRel); return Ok(()); }\n",
             "        let mut cur = [0u8; 128];\n",
             "        unsafe {\n",
             "            if tcgetattr(0, cur.as_mut_ptr()) != 0 { return Err(format!(\"stdin is not a terminal: {}\", std::io::Error::last_os_error())); }\n",
@@ -1690,10 +1696,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            cfmakeraw(cur.as_mut_ptr());\n",
             "            if tcsetattr(0, 2, cur.as_ptr()) != 0 { return Err(format!(\"could not enter raw mode: {}\", std::io::Error::last_os_error())); }\n",
             "        }\n",
+            "        RAW_DEPTH.fetch_add(1, Ordering::AcqRel);\n",
             "        Ok(())\n    }\n",
             "    pub fn raw_off() -> Result<(), String> {\n",
             "        if !SAVED.load(Ordering::Acquire) { return Ok(()); }\n",
+            "        if RAW_DEPTH.load(Ordering::Acquire) > 1 { RAW_DEPTH.fetch_sub(1, Ordering::AcqRel); return Ok(()); }\n",
             "        if unsafe { tcsetattr(0, 2, std::ptr::addr_of!(ORIGINAL) as *const u8) } != 0 { return Err(format!(\"could not restore the terminal: {}\", std::io::Error::last_os_error())); }\n",
+            "        RAW_DEPTH.store(0, Ordering::Release);\n",
             "        Ok(())\n    }\n",
             "}\n",
             "fn __ray_term_is_tty(fd: i64) -> bool {\n",

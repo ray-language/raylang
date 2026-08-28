@@ -235,3 +235,52 @@ fn capabilities_from_env_match_on_all_three_engines() {
         assert_eq!(out, want, "nativo ≡ VM");
     }
 }
+
+/// M143c (hallazgo de rallyx): `capabilities()` DENTRO de `term.raw` dejaba el terminal cocinado
+/// — `raw()` no era reentrante y el `raw_off` interno de la query DA1 restauraba a mitad de la
+/// sesión exterior (teclas muertas). El repro: dentro de raw, capabilities() y luego leer UNA
+/// tecla sin Enter — en cooked el byte se queda en el buffer canónico y el read_timeout vence.
+#[cfg(unix)]
+#[test]
+fn capabilities_inside_raw_keeps_the_terminal_raw() {
+    // Necesita un pty: script(1). Si no está, el test se salta con aviso (no hay pty portable).
+    if Command::new("script").arg("--version").output().is_err()
+        && !std::path::Path::new("/usr/bin/script").exists()
+    {
+        eprintln!("skipping: script(1) not available");
+        return;
+    }
+    let base = tmp("raw_reentrant");
+    let prog = "import std/term;\nimport std/io;\n\nfn main() {\n    let r = term.raw(fn() -> string {\n        let c = term.capabilities();\n        let _ = c;\n        match (io.read_timeout(1, 3000)) {\n            io.ReadResult.Data(b) => \"alive \" + to_string(b[0]),\n            io.ReadResult.Eof => \"eof\",\n            io.ReadResult.TimedOut => \"dead keys\",\n        }\n    });\n    match (r) {\n        Result.Ok(s) => print(s),\n        Result.Err(e) => print(\"err \" + e),\n    }\n}\n";
+    std::fs::write(base.join("prog.ray"), prog).unwrap();
+    let run_in_pty = |cmdline: &str| -> String {
+        // La 'x' va SIN Enter tras un respiro (raw entra y la query DA1 vence su plazo).
+        let feeder = format!("(sleep 1; printf x; sleep 2) | {}", pty_wrap(cmdline));
+        let out = Command::new("sh").args(["-c", &feeder]).current_dir(&base).output().expect("pty");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for engine in ["--vm", "--interp"] {
+        let out = run_in_pty(&format!("{} {engine} prog.ray", env!("CARGO_BIN_EXE_ray")));
+        assert!(
+            out.contains("alive 120"),
+            "{engine}: la tecla debe llegar cruda tras capabilities() (salida:\n{out})"
+        );
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let (_o, berr, bcode) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(bcode, 0, "build --native ok\n{berr}");
+        let out = run_in_pty(bin.to_str().unwrap());
+        assert!(out.contains("alive 120"), "nativo: tecla cruda tras capabilities():\n{out}");
+    }
+}
+
+/// Envuelve un comando en script(1) — la sintaxis difiere entre macOS/BSD y util-linux.
+#[cfg(unix)]
+fn pty_wrap(cmdline: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("script -q /dev/null {cmdline}")
+    } else {
+        format!("script -qec \"{cmdline}\" /dev/null")
+    }
+}

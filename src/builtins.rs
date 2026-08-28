@@ -3714,6 +3714,10 @@ mod term_host {
     static mut ORIGINAL: [u8; 128] = [0; 128];
     static SAVED: AtomicBool = AtomicBool::new(false);
     static ATEXIT_ARMED: AtomicBool = AtomicBool::new(false);
+    /// Profundidad de anidamiento de `raw_on` (hallazgo de rallyx): `capabilities()` llama a
+    /// `raw()` por dentro y un `raw_off` interno restauraba el terminal a cooked DENTRO de la
+    /// sesión raw exterior (teclas muertas). Solo el `raw_off` que vuelve a 0 restaura.
+    static RAW_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     pub fn is_tty(fd: i32) -> bool {
         // SAFETY: isatty solo consulta el fd.
@@ -3758,6 +3762,11 @@ mod term_host {
     }
 
     pub fn raw_on() -> Result<(), String> {
+        // Reentrante: dentro de una sesión raw, solo sube la profundidad (el termios ya es crudo).
+        if RAW_DEPTH.load(Ordering::Acquire) > 0 {
+            RAW_DEPTH.fetch_add(1, Ordering::AcqRel);
+            return Ok(());
+        }
         let mut cur = [0u8; 128];
         // SAFETY: buffers de 128 bytes, mayores que cualquier termios de las plataformas soportadas.
         unsafe {
@@ -3778,6 +3787,7 @@ mod term_host {
                 return Err(format!("could not enter raw mode: {}", std::io::Error::last_os_error()));
             }
         }
+        RAW_DEPTH.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
@@ -3797,10 +3807,18 @@ mod term_host {
         if !SAVED.load(Ordering::Acquire) {
             return Ok(()); // nunca se entró al modo crudo: no-op
         }
+        // Reentrante: solo la salida de la sesión EXTERIOR restaura (rallyx: un raw_off anidado
+        // dejaba cooked el resto de la sesión de fuera).
+        let depth = RAW_DEPTH.load(Ordering::Acquire);
+        if depth > 1 {
+            RAW_DEPTH.fetch_sub(1, Ordering::AcqRel);
+            return Ok(());
+        }
         // SAFETY: ORIGINAL completo (ver restore).
         if unsafe { tcsetattr(0, TCSAFLUSH, std::ptr::addr_of!(ORIGINAL) as *const u8) } != 0 {
             return Err(format!("could not restore the terminal: {}", std::io::Error::last_os_error()));
         }
+        RAW_DEPTH.store(0, Ordering::Release);
         Ok(())
     }
 }

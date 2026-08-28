@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Fix** (`std/term`/nativo, hallazgo de rallyx): `raw()` es ahora **reentrante** —
+  `capabilities()` (o cualquier helper que use raw) dentro de una sesión `term.raw` ya no deja
+  el terminal cocinado a mitad (teclas muertas). De paso destapó y arregló una inversión en el
+  `io.read_timeout` del binario nativo (M107.2): tras un primer vencimiento, los siguientes
+  jamás entregaban el dato.
+
 - **`std/audio`** (M145): salida PCM al dispositivo — `open`/`write`/`drain` + `close(h)`,
   s16le entrelazado; `write` **aparca la fibra** cuando el dispositivo va lleno (la
   contrapresión es el pacing). Backends sin crates: AudioQueue (macOS) y ALSA por dlopen

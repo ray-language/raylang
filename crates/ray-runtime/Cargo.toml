@@ -39,6 +39,9 @@ sqlite = ["dep:rusqlite"]
 # eventos llegan en hilos del propio notify y se puentean a las fibras con un SELF-PIPE (el truco de
 # signals M88.1): la fibra aparca por readiness del extremo de lectura.
 watch = ["dep:notify"]
+# M145 — salida de audio PCM (std/audio): backends A MANO (AudioToolbox enlazado en macOS, ALSA
+# por dlopen en Linux) — cero crates y cero headers de build; ver src/audio.rs.
+audio = []
 # N1 (bench políglota, jul 2026): mimalloc como allocador del binario TRANSPILADO. El binario `ray` ya lo
 # usa (P0.4); el transpilado caía al malloc del sistema (lento en churn de strings pequeños en macOS).
 # Medido: wordcount/logparse −40%, jsonserialize −18%. Activada POR DEFECTO por `ray build --native`;

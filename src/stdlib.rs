@@ -40,6 +40,8 @@ const MODULES: &[(&str, &str)] = &[
     ("std/sort", include_str!("../std/sort.ray")),
     // G-rev (IDEAS §48): estado clave/valor persistido en raylang puro (sesiones/config de dev).
     ("std/kv", include_str!("../std/kv.ray")),
+    // M145: salida de audio PCM (pipe + hilo alimentador; contrapresión por aparcado).
+    ("std/audio", include_str!("../std/audio.ray")),
     // M144: decodificación de imágenes (PNG sobre std/inflate).
     ("std/image", include_str!("../std/image.ray")),
     // Revisión FFI jul 2026: helpers de la frontera C (errno).

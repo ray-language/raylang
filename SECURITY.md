@@ -172,6 +172,13 @@ documentada:
   página de guarda y reactor `kqueue`/`epoll`. El cambio de contexto lo hace `corosensei`.
 - **`crates/ray-runtime/src/process.rs`** — `fcntl` variádico, `poll(2)` y `kill` al **grupo** del
   hijo (siempre un grupo creado por nosotros con `process_group(0)`).
+- **`crates/ray-runtime/src/audio.rs`** — la salida PCM de `std/audio` (M145), **sin crates**: el
+  pipe + `read`/`close`/`fcntl` variádico del hilo alimentador e `ioctl(FIONREAD)` del drain; en
+  macOS las llamadas a **AudioQueue** (AudioToolbox.framework, enlazado — structs replicadas del
+  header, el callback solo toca estado propio sincronizado); en Linux **ALSA por `dlopen`** en
+  runtime (`transmute` de cada símbolo a la firma del header de ALSA, API estable; sin la
+  librería → `Err`, jamás un crash). La decisión sin-crates es deliberada: `cpal` habría exigido
+  los headers de ALSA en *build* en todo Linux.
 - **`src/transpile/`** — el mismo tipo de código, pero **emitido** dentro del binario nativo
   generado (FFI, poller, fibras, procesos). Se audita en la plantilla, que es única.
 

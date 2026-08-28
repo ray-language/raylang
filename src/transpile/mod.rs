@@ -99,6 +99,8 @@ struct Transpiler {
     pub(super) needs_fs_meta: bool,
     /// M115.4: el programa usa fs.watch → feature `watch` de ray-runtime (crate notify).
     pub(super) needs_rt_watch: bool,
+    /// M145: salida de audio (ray_runtime::audio; detectado por USO de __audio_*).
+    pub(super) needs_rt_audio: bool,
     /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
     /// de socket (`std::net::TcpStream`/`TcpListener`).
     needs_net: bool,
@@ -261,6 +263,7 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_ffi_errno: false,
         needs_fs_meta: false,
         needs_rt_watch: false,
+        needs_rt_audio: false,
         needs_net: false,
         needs_rt_crypto: false,
         needs_rt_tls: false,
@@ -542,6 +545,10 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
     // marcar el flag y el primitivo cae al camino no-soportado).
     if t.needs_rt_watch {
         rt_features.push("watch");
+    }
+    // M145: salida de audio (detectada por USO; `--without audio` evita marcar el flag).
+    if t.needs_rt_audio {
+        rt_features.push("audio");
     }
     // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
     // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,

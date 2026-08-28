@@ -10596,3 +10596,44 @@ el zlib de Python (filtros aplicados a mano hacia adelante, el decode debe inver
 embebidos como literales `b"\xNN…"` en el fixture — sin binarios en el repo, byte-idéntico en
 los tres motores, incluidos los tres caminos de error (Adam7/CRC/truncado). Gotcha de escritura:
 la lista de PARÁMETROS de una fn no admite coma final (los literales de arreglo sí).
+
+## 142. M145 — `std/audio`: salida PCM con la contrapresión como pacing (ago 2026)
+
+El tercer reporte del juego de demostración (IDEAS §79). Dos decisiones definieron el arco:
+
+**La forma: un pipe + hilo alimentador, y CERO maquinaria nueva de VM.** `open` crea un pipe del
+SO, registra el extremo de escritura como `PipeW` — la variante que ya existía para el stdin de
+un hijo (M100 v3) — y un hilo lee el otro extremo y empuja al dispositivo. Con eso
+`__audio_write` es un ALIAS de opcode de `__socket_write_bytes` (el precedente exacto de
+`__proc_write`): pipe lleno → la fibra aparca por interés de escritura → **el pacing del
+programa sale del consumo real del dispositivo, sin relojes**. Medido en el E2E: escribir
+300 ms de audio tarda ≥300 ms de pared con ~1–7% de CPU (la fibra aparca de verdad). En nativo,
+`__audio_write` emite directamente `__ray_proc_write` (misma plomería PipeW; por eso los brazos
+de audio encienden también `needs_rt_process`).
+
+**Los backends: a mano, sin crates — la decisión de IDEAS §79 se VOLTEÓ al implementar.** La
+inclinación era `cpal`, pero arrastra `alsa-sys`, que exige los headers de ALSA EN BUILD:
+`cargo build` moriría en cualquier Linux pelado y en CI — un costo que ninguna dependencia del
+proyecto impone (rusqlite vendorea; rustls/notify son puros). En su lugar, el patrón
+term/poll/signals: **AudioQueue** por framework en macOS (siempre presente; callback que rellena
+de un anillo con condvar — la contrapresión — y silencio si está vacío para no parar la cola) y
+**ALSA por `dlopen`** en runtime en Linux (`snd_pcm_open/set_params/writei/recover/drain`; sin
+`libasound.so.2` → `Err` claro al abrir, jamás en medio). `RAY_AUDIO_SINK=null` es el tercer
+backend: consume a ritmo de tiempo real — la vía de los tests (CI sin tarjeta) y la razón de que
+la batería E2E pueda ASEVERAR el pacing por tiempo en los tres motores. `drain` espera pipe
+vacío + nada en vuelo + un margen fijo del buffer del dispositivo (aproximado por diseño, v1).
+
+Gotcha del nativo re-aprendido (M115.4 lo documentó): el proyecto Cargo generado EMBEBE
+ray-runtime archivo a archivo — `audio.rs` tuvo que entrar a la lista `RT_*_RS` de cli.rs o el
+build nativo no encontraba el módulo. Formato v1: s16le entrelazado, el mínimo común de los
+tres backends; f32/resampling, si algún dogfood los pide.
+
+Adenda de M145, primer dogfood (rallyx): el callback de AudioQueue rellenaba TODO buffer con
+silencio (`byte_size = cap`) y el cebado encolaba 3 buffers llenos — como la cola reproduce a 1×
+todo lo encolado, ese silencio era LATENCIA PERMANENTE: ~150 ms de arranque más hasta 50 ms por
+underrun, sin recuperación. La regla que quedó: **jamás rellenar un buffer parcial** —
+`byte_size` = exactamente lo tomado del anillo, alineado a frame; con el anillo seco se encola
+solo el mínimo de silencio que mantiene viva la cola (~8 ms; un buffer sin encolar sale de la
+rotación y la cola muere) → cebado ~24 ms, underrun cuesta 8. En ALSA, el `latency` de
+`set_params` bajó de 500 ms a 100 (el original insertaba medio segundo write→altavoz).
+Diferidos a IDEAS si el dogfood los pide: hint de latencia en `open`, `audio.played_ms(h)`.

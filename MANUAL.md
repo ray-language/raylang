@@ -1064,6 +1064,30 @@ canales de 16 bits se reducen a 8), verifica el CRC de cada chunk y acota la des
 Adam7 (raro en assets) se rechaza con error claro. Combinado con `term.cell_px()` y
 `term.capabilities()` tienes las tres piezas para dibujar sprites en un terminal sixel/kitty.
 
+### Sonido (`std/audio`)
+
+Salida PCM al dispositivo, con la **contrapresión como pacing**: `write` aparca la fibra cuando
+el dispositivo va lleno, así que sintetizas tan rápido como puedas y el tempo lo pone el
+hardware — sin relojes, sin `sleep`:
+
+```rust
+import std/audio;
+
+let h = audio.open(44100, 2)?;        // s16le entrelazado, dispositivo por defecto
+while (playing) {
+    let chunk = synthesize_next();    // bytes s16le — p. ej. 50 ms por iteración
+    audio.write(h, chunk)?;           // aparca si el dispositivo va lleno: el pacing es este
+}
+audio.drain(h)?;                      // espera a que suene lo escrito (final sin corte)
+let _ = close(h);
+```
+
+Backends: AudioQueue en macOS y ALSA en Linux (cargada en runtime: sin `libasound` el `open` da
+un `Err` claro). Con `RAY_AUDIO_SINK=null` en el entorno, un sumidero de tiempo real "reproduce"
+en silencio — para tests y CI sin tarjeta de sonido. En el binario nativo, `--without audio` lo
+excluye. La música reactiva de un juego es el caso de diseño: cada iteración del bucle sintetiza
+lo que toca según el estado, y el dispositivo marca el compás.
+
 ### Markdown (`std/markdown`)
 
 Markdown → HTML (o el AST, si quieres renderizar tú — una TUI, un índice):

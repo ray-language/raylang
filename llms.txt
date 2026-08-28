@@ -187,7 +187,7 @@ UFCS never reaches qualified names.
 Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
 std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex
 std/base64 std/url std/regex std/csv std/toml std/template std/protobuf std/uuid
-std/markdown std/inflate std/deflate std/huffman std/image
+std/markdown std/inflate std/deflate std/huffman std/image std/audio
 std/collections/{set,deque,stringbuilder,dict} std/ffi std/resilience`.
 
 Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in

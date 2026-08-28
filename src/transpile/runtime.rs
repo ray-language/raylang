@@ -465,6 +465,23 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // sondeo de la cola + poll(2) por tramos (nunca reteniendo el lock del registro). Al
     // despertar SIEMPRE se re-verifica el registro: un close concurrente → Err, no cuelgue
     // (la lección de M115-close).
+    // M145: salida de audio PCM (ray_runtime::audio). El handle es PipeW: `__audio_write`
+    // reusa __ray_proc_write (despacho + espera de escribible) y `close(h)` es el EOF.
+    if t.needs_rt_audio {
+        out.push_str(concat!(
+            "fn __ray_audio_open(rate: i64, ch: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::audio::open(rate, ch) {\n",
+            "        Ok(f) => { let id = __ray_reg_insert(__RayHandle::PipeW(std::sync::Arc::new(f))); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
+            "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "    }))\n}\n",
+            "fn __ray_audio_drain(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let r = match __ray_stdin_clone(h) {\n",
+            "        Some(f) => ray_runtime::audio::drain(std::os::fd::AsRawFd::as_raw_fd(&*f)),\n",
+            "        None => Err(\"audio: not an open audio output\".to_string()),\n",
+            "    };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(\"\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+        ));
+    }
     if t.needs_rt_watch {
         out.push_str(concat!(
             "fn __ray_watch(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",

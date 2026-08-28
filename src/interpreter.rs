@@ -1416,7 +1416,7 @@ impl<'a> Interpreter<'a> {
             // M100 v3: `__proc_write` es un alias con opcode compartido — el mismo camino escribe
             // en el stdin de un hijo vivo (el despacho por tipo de handle vive en el host).
             // M16.1c: escribe bytes en el socket → ["ok", ""] o ["err", msg].
-            "__socket_write_bytes" | "__proc_write" => {
+            "__socket_write_bytes" | "__proc_write" | "__audio_write" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Int(h), Value::Bytes(data)) => match crate::builtins::socket_write_raw(*h, data) {
                         Ok(_) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],
@@ -2007,6 +2007,26 @@ impl<'a> Interpreter<'a> {
                 let arr = match crate::builtins::term_size() {
                     Some((c, r)) => vec![Value::Int(c), Value::Int(r)],
                     None => vec![],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__audio_open" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(rate), Value::Int(ch)) => match crate::builtins::audio_open(*rate, *ch) {
+                        Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees two ints"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__audio_drain" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::audio_drain(*h) {
+                        Ok(()) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }

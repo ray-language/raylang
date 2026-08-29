@@ -306,12 +306,40 @@ fn headless() -> bool {
     }
 }
 
+/// Avisa a `ray dev` (una vez por proceso) de que este programa es una APP CON VENTANA: el hub
+/// del supervisor vive en el puerto de `RAY_DEV_RELOAD` (el mismo canal del live-reload,
+/// precedente `dev_notify_ready` del webserver). Con eso, "la ventana se cerró y el programa
+/// salió limpio" = el usuario cerró la app → `ray dev` sale con ella (el contrato de las TUI
+/// de M139, sin tecla extra). Best-effort: sin la variable o sin hub, silencio y se sigue.
+fn notify_dev_windowed() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(port) = std::env::var("RAY_DEV_RELOAD") else {
+            return;
+        };
+        let Ok(port) = port.parse::<u16>() else {
+            return;
+        };
+        // Aparte del hilo llamador: un connect que se cuelgue no debe retrasar la ventana.
+        std::thread::spawn(move || {
+            use std::io::Write;
+            if let Ok(mut s) = std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                std::time::Duration::from_millis(500),
+            ) {
+                let _ = s.write_all(b"GET /ui HTTP/1.0\r\n\r\n");
+            }
+        });
+    });
+}
+
 /// Abre una ventana con el webview del sistema cargando `url`, registrada con el `id` DEL
 /// LLAMADOR (su handle): los eventos la nombran con ese id. `close(h)` → [`close_window`].
 pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> Result<(), String> {
     if !(1..=16384).contains(&width) || !(1..=16384).contains(&height) {
         return Err(format!("ui: unsupported window size {width}x{height}"));
     }
+    notify_dev_windowed();
     if headless() {
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
         return Ok(());

@@ -13,7 +13,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   autocontenido que corre desde cualquier cwd. El framework web gana
   `app.static_embedded(prefix, dir)` (ETag de contenido + 304 + Range, byte-idéntico entre
   motores). `ray dev` vigila también los dirs de embed: un cambio en un asset recarga el
-  navegador SIN reiniciar el programa (la lectura en dev es en vivo).
+  navegador SIN reiniciar el programa (la lectura en dev es en vivo). Y cerrar la VENTANA de
+  una app `std/ui` bajo `ray dev` cierra también el modo dev (el contrato de las TUI: salida
+  limpia = el usuario cerró la app).
 
 - **`std/ui`** (M146): **ventana + webview** — la primitiva de apps de escritorio (IDEAS §80
   F1): `open(title, url, w, h)` abre una ventana nativa con el webview del SISTEMA cargando la

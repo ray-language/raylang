@@ -1140,7 +1140,9 @@ match (ui.next_event()) {
 ```
 
 No hay `ui.run()`: el runtime **captura el hilo principal por su cuenta** en la primera ventana
-(AppKit exige poseerlo; el programa sigue corriendo en sus fibras, ajeno al detalle). `close(h)`
+(AppKit exige poseerlo; el programa sigue corriendo en sus fibras, ajeno al detalle). Bajo
+`ray dev`, cerrar la ventana (salida limpia) **cierra también el modo dev** — el mismo contrato
+que las TUI: la app la cerró el usuario, no hay nada que re-lanzar. `close(h)`
 cierra la ventana; `ui.events()` da la misma cola como `Channel<UiEvent>` (para hacer `select`
 con tus otros canales); `next_event_timeout(ms)` acota la espera. Backend real: macOS
 (WKWebView); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria (tests/CI en

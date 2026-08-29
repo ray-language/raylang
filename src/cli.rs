@@ -527,8 +527,15 @@ fn cmd_dev(args: &[String]) {
                     // espera: el usuario va a editar el fix y quiere el relanzamiento.
                     // El `\r` inicial de estos mensajes importa: una TUI deja el cursor en
                     // cualquier columna al salir — sin él, la línea aparece "tabulada".
-                    if interactive_child && status.success() {
-                        eprintln!("\r[dev] the program exited; bye");
+                    let windowed = reload
+                        .as_ref()
+                        .is_some_and(|(h, _)| h.ui_child.load(std::sync::atomic::Ordering::SeqCst));
+                    if (interactive_child || windowed) && status.success() {
+                        if windowed {
+                            eprintln!("\r[dev] the window closed; bye");
+                        } else {
+                            eprintln!("\r[dev] the program exited; bye");
+                        }
                         std::process::exit(0);
                     }
                     // Tecla-única para el resto (un script en bucle de edición): el terminal es
@@ -616,6 +623,9 @@ fn cmd_dev(args: &[String]) {
         // sin un fetch de sondeo que falle mientras re-binde.
         if let Some((hub, _)) = &reload {
             hub.arm();
+        }
+        if let Some((hub, _)) = &reload {
+            hub.ui_child.store(false, std::sync::atomic::Ordering::SeqCst);
         }
         child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
         running = true;
@@ -714,6 +724,10 @@ struct ReloadHub {
     /// armar competiría con el re-bind del hijo → el navegador vería "connection refused"; retenerla
     /// hasta el aviso hace que la recarga llegue justo cuando el servidor ya escucha.
     pending: std::sync::atomic::AtomicBool,
+    /// M147b: el hijo en curso abrió una VENTANA (`GET /ui` de ray_runtime::ui) — al salir
+    /// limpio, el usuario cerró la app y `ray dev` sale con ella (el contrato TUI de M139).
+    /// Se resetea en cada relanzamiento.
+    ui_child: std::sync::atomic::AtomicBool,
 }
 
 impl ReloadHub {
@@ -749,6 +763,7 @@ fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
     let hub = std::sync::Arc::new(ReloadHub {
         clients: std::sync::Mutex::new(Vec::new()),
         pending: std::sync::atomic::AtomicBool::new(false),
+        ui_child: std::sync::atomic::AtomicBool::new(false),
     });
     let hub_bg = hub.clone();
     std::thread::spawn(move || {
@@ -766,6 +781,12 @@ fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
                 if hub_bg.pending.swap(false, Ordering::SeqCst) {
                     hub_bg.broadcast();
                 }
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
+                continue;
+            }
+            // M147b: el aviso "soy una app con ventana" de ray_runtime::ui (una vez por hijo).
+            if buf[..n].starts_with(b"GET /ui") {
+                hub_bg.ui_child.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
                 continue;
             }

@@ -321,6 +321,52 @@ fn dev_reloads_the_browser_without_restart_on_an_embedded_asset_change() {
 
 #[cfg(unix)]
 #[test]
+fn dev_exits_when_a_windowed_app_closes_cleanly() {
+    // M147b (el contrato TUI de M139, para ventanas): una app de std/ui que sale LIMPIA la
+    // cerró el usuario (botón rojo o su propio flujo) → `ray dev` sale con ella, sin teclas.
+    // El aviso viaja por el hub (`GET /ui` de ray_runtime::ui al abrir la primera ventana).
+    let base = std::env::temp_dir().join("ray_dev_ui_exit");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n").unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        "import std/ui;\nimport std/time;\n\nfn main() {\n    match (ui.open(\"Dev\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Err(e) => print(\"open failed: \" + e),\n        Result.Ok(h) => {\n            time.sleep(500);\n            let _ = close(h);\n        },\n    }\n}\n",
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .arg("main.ray")
+        .env("RAY_UI_BACKEND", "headless")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev");
+
+    // El supervisor debe SALIR SOLO al cerrarse la ventana (plazo holgado para CI).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Ok(Some(st)) = dev.try_wait() {
+            break st;
+        }
+        if Instant::now() >= deadline {
+            stop_dev(&mut dev);
+            panic!("ray dev no salió solo al cerrarse la ventana");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(status.success(), "salida limpia del supervisor");
+    let log = std::fs::read_to_string(&out_path).unwrap_or_default();
+    assert!(log.contains("the window closed; bye"), "el mensaje de cierre:\n{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn dev_live_reload_without_port_also_injects() {
     // El hub arranca SIEMPRE (no solo con `--port`): "es una app web" lo decide el webserver al servir
     // HTML, no el supervisor. Sin socket-activation el snippet reintenta el fetch hasta que el hijo

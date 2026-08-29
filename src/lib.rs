@@ -222,7 +222,7 @@ where
         Done(T),
     }
     let (tx, rx) = std::sync::mpsc::channel::<GateMsg<T>>();
-    #[cfg(all(feature = "ui", target_os = "macos", not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
     {
         let tx_ui = tx.clone();
         ray_runtime::ui::set_main_thread_waker(Box::new(move || {
@@ -250,7 +250,7 @@ where
                 // worker sale por `process::exit`). Solo un fallo de inicialización (sin
                 // sesión gráfica) vuelve: la operación que esperaba ya recibió su Err, y el
                 // hilo 1 sigue esperando el final del worker.
-                #[cfg(all(feature = "ui", target_os = "macos", not(target_arch = "wasm32")))]
+                #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
                 let _ = ray_runtime::ui::run_main_loop();
             }
             // Sin remitentes y sin `Done`: el monitor murió sin poder reportar (no ocurre — su

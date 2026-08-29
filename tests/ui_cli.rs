@@ -147,3 +147,31 @@ fn the_fiber_parks_and_the_events_channel_pumps() {
         assert_eq!(out, WANT_PARK, "nativo ≡ VM");
     }
 }
+
+// M147d — el negativo de Linux (corre en CI-ubuntu, sin display ni WebKitGTK): `ui.open` SIN
+// headless debe fallar LIMPIO y rápido (lib ausente o sin sesión gráfica — el plazo del gate es
+// 5 s), jamás colgarse. Es la única aserción barata del backend GTK sin un desktop real.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_without_a_display_open_fails_clean_and_fast() {
+    use std::time::Instant;
+    let base = tmp("gtk_negative");
+    std::fs::write(
+        base.join("prog.ray"),
+        "import std/ui;\n\nfn main() {\n    match (ui.open(\"X\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Ok(_) => print(\"bad: opened\"),\n        Result.Err(e) => print(\"clean err: \" + to_string(e.starts_with(\"ui:\"))),\n    }\n}\n",
+    )
+    .unwrap();
+    let t0 = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["--vm", "prog.ray"])
+        .env_remove("RAY_UI_BACKEND")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .current_dir(&base)
+        .output()
+        .expect("corre");
+    let secs = t0.elapsed().as_secs();
+    assert_eq!(out.status.code(), Some(0), "exit 0 (error como valor)");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "clean err: true\n", "Err limpio");
+    assert!(secs < 15, "sin cuelgue (tardó {secs}s)");
+}

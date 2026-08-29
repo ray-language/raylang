@@ -477,7 +477,7 @@ pub fn transpile_embed(prog: &Program, exclude: &[String], fast: bool, fibers: b
         out.push_str(&run_body);
         out.push_str("    }).expect(\"could not create the program thread\");\n");
         out.push_str("    while __ui_rx.recv().is_ok() {\n");
-        out.push_str("        #[cfg(target_os = \"macos\")]\n");
+        out.push_str("        #[cfg(unix)]\n");
         out.push_str("        let _ = ray_runtime::ui::run_main_loop();\n");
         out.push_str("    }\n");
     } else {

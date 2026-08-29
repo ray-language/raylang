@@ -189,6 +189,12 @@ documentada:
   principal; las ventanas llevan `setReleasedWhenClosed:NO` + retención propia (el use-after-free
   clásico del NSWindow programático) y su liberación es explícita y en main. Frameworks
   AppKit/WebKit/Foundation enlazados con `#[link(kind = "framework")]` — siempre presentes.
+  En Linux (M147d), **GTK3 + WebKitGTK por `dlopen`** en runtime (sonames `libgtk-3.so.0` y
+  `libwebkit2gtk-4.1.so.0`/`-4.0.so.37`; sin las libs → `Err`, jamás un crash): `transmute` de
+  cada símbolo a la firma del header (API C estable, anotado por sitio), `gtk_init_check` (no
+  `gtk_init`, que ABORTA sin display), despacho al hilo del loop con `g_idle_add` y un flag
+  `alive` por ventana que TODA closure re-chequea antes de tocar punteros (el WM puede destruir
+  la ventana por debajo; el contexto del handler `destroy` se libera vía GClosureNotify).
 - **`src/transpile/`** — el mismo tipo de código, pero **emitido** dentro del binario nativo
   generado (FFI, poller, fibras, procesos). Se audita en la plantilla, que es única.
 

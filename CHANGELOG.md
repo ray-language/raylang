@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray bundle`** (M147c): empaqueta la app de escritorio — build nativo `--release` con los
+  assets embebidos → `.app` en macOS (Info.plist mínimo + icns generado con sips/iconutil +
+  codesign ad-hoc best-effort) o directorio + `.desktop` en Linux (Exec absoluto). Avisa si el
+  proyecto no embebe assets (un .app lanza con cwd=/). Sin firma/notarización en v1.
+
 - **`std/embed`** (M147): **assets del proyecto** — `[native] embed = ["assets"]` en ray.toml
   define un espacio de nombres idéntico en los tres motores (`read`/`list`; claves con `/`
   relativas a la raíz, orden lexicográfico, sin `..` ni ocultos). En `ray run` se leen en vivo

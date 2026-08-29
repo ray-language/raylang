@@ -56,6 +56,7 @@ fn run() {
         Some("run") => cmd_run(&rest[1..]),
         Some("dev") => cmd_dev(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
+        Some("bundle") => cmd_bundle(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
         Some("remove") => cmd_remove(&rest[1..]),
@@ -90,6 +91,7 @@ Project:
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs]] [--templates-only [path...]]
+  bundle [file]     package a desktop app (M147c): --release native build + .app (macOS) or dir + .desktop (Linux) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -1210,6 +1212,231 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 
 /// `ray build [archivo]`: chequea y **compila** el programa sin ejecutarlo (útil para CI y
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
+/// M147c — `ray bundle`: empaqueta una app de escritorio distribuible. Compone `ray build
+/// --native --release` (con el embed del ray.toml — OBLIGADO moralmente: el .app lanza con
+/// cwd=/) y produce el formato del SO: `.app` en macOS (Info.plist + icns por sips/iconutil +
+/// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. Sin firma/notarización
+/// en v1 (documentado en el help). Tooling puro: no toca los motores.
+fn cmd_bundle(args: &[String]) {
+    let flag_value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let name_arg = flag_value("--name");
+    let icon = flag_value("--icon");
+    let id_arg = flag_value("--id");
+    let out_arg = flag_value("-o");
+    let without_arg = flag_value("--without");
+    let values: Vec<&String> = [&name_arg, &icon, &id_arg, &out_arg, &without_arg].iter().filter_map(|o| o.as_ref()).collect();
+    let file = args
+        .iter()
+        .find(|a| !a.starts_with('-') && !values.iter().any(|v| v.as_str() == a.as_str()))
+        .map(String::as_str);
+    let path = resolve_entry(file, true);
+
+    // El manifiesto del ENTRY da nombre/versión/exclusiones por defecto (como build_native).
+    let entry_dir = match Path::new(&path).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let entry_dir = entry_dir.canonicalize().unwrap_or(entry_dir);
+    let manifest = Manifest::load(&entry_dir).ok().flatten();
+    let name = name_arg
+        .or_else(|| manifest.as_ref().map(|m| m.name.clone()))
+        .unwrap_or_else(|| {
+            Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
+        });
+    let version = manifest.as_ref().map(|m| m.version.clone()).unwrap_or_else(|| "0.1.0".to_string());
+    // El identifier por defecto sale del nombre (minúsculas, [a-z0-9-]): estable y único-ish.
+    let bundle_id = id_arg.unwrap_or_else(|| {
+        let slug: String = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        format!("org.raylang.{}", slug.trim_matches('-'))
+    });
+    let mut exclude: Vec<String> = without_arg
+        .as_deref()
+        .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+    if let Some(m) = &manifest {
+        for d in &m.native_without {
+            if !exclude.contains(d) {
+                exclude.push(d.clone());
+            }
+        }
+    }
+    let fibers = !exclude.iter().any(|d| d == "fibers");
+    let embed = collect_embed(&path, None);
+    if embed.is_empty() {
+        eprintln!(
+            "note: no embedded assets ([native] embed) — a bundled app launches with cwd=/ and \
+             cannot read project files by relative path"
+        );
+    }
+
+    // Compila el binario release a un temporal; build_native sale del proceso si algo falla.
+    let (mut program, locate, multi) = load_and_locate(&path);
+    check_or_exit(&mut program, &locate, multi);
+    let work = std::env::temp_dir().join(format!("ray_bundle_{}", process::id()));
+    let _ = fs::remove_dir_all(&work);
+    if let Err(e) = fs::create_dir_all(&work) {
+        eprintln!("bundle: could not create the work directory: {e}");
+        process::exit(74);
+    }
+    let tmp_bin = work.join("bin");
+    build_native(&path, tmp_bin.to_str(), true, &exclude, None, false, fibers, &embed);
+
+    let out_dir = out_arg.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+    if cfg!(target_os = "macos") {
+        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), &tmp_bin);
+    } else if cfg!(unix) {
+        bundle_linux(&out_dir, &name, icon.as_deref(), &tmp_bin);
+    } else {
+        eprintln!("bundle: no bundle format for this platform (macOS .app / Linux .desktop)");
+        process::exit(64);
+    }
+    let _ = fs::remove_dir_all(&work);
+}
+
+/// El `.app` de macOS: la estructura es un árbol de carpetas + un Info.plist mínimo. El icns es
+/// best-effort (sips + iconutil, herramientas del sistema); el codesign ad-hoc también (mantiene
+/// válida la firma que el linker de arm64 aplicó, tras mover el binario).
+fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, bin: &Path) {
+    let app = out_dir.join(format!("{name}.app"));
+    let _ = fs::remove_dir_all(&app);
+    let macos_dir = app.join("Contents/MacOS");
+    let resources = app.join("Contents/Resources");
+    if let Err(e) = fs::create_dir_all(&macos_dir).and_then(|_| fs::create_dir_all(&resources)) {
+        eprintln!("bundle: could not create '{}': {e}", app.display());
+        process::exit(74);
+    }
+    let exe = macos_dir.join(name);
+    if let Err(e) = fs::copy(bin, &exe) {
+        eprintln!("bundle: could not place the binary: {e}");
+        process::exit(74);
+    }
+    let mut icon_key = String::new();
+    if let Some(icon) = icon {
+        match make_icns(Path::new(icon), &resources.join("icon.icns")) {
+            Ok(()) => icon_key = "  <key>CFBundleIconFile</key><string>icon</string>\n".to_string(),
+            Err(e) => eprintln!("bundle: warning: could not build the icon ({e}); continuing without it"),
+        }
+    }
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n<dict>\n\
+         \x20 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>\n\
+         \x20 <key>CFBundlePackageType</key><string>APPL</string>\n\
+         \x20 <key>CFBundleName</key><string>{name}</string>\n\
+         \x20 <key>CFBundleExecutable</key><string>{name}</string>\n\
+         \x20 <key>CFBundleIdentifier</key><string>{bundle_id}</string>\n\
+         \x20 <key>CFBundleVersion</key><string>{version}</string>\n\
+         \x20 <key>CFBundleShortVersionString</key><string>{version}</string>\n\
+         \x20 <key>NSHighResolutionCapable</key><true/>\n\
+         {icon_key}\
+         \x20 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>\n\
+         </dict>\n</plist>\n"
+    );
+    if let Err(e) = fs::write(app.join("Contents/Info.plist"), plist) {
+        eprintln!("bundle: could not write Info.plist: {e}");
+        process::exit(74);
+    }
+    // Firma ad-hoc best-effort: sin identidad (no distribuible firmado), pero deja el .app
+    // internamente consistente en arm64 tras mover el binario.
+    let _ = process::Command::new("codesign")
+        .args(["--force", "--deep", "-s", "-"])
+        .arg(&app)
+        .output();
+    println!("ok: bundle '{}'", app.display());
+}
+
+/// El "bundle" de Linux: un directorio con el binario + el lanzador `.desktop` (el `Exec=` va
+/// ABSOLUTO — un .desktop con ruta relativa no funciona desde un lanzador; para instalarlo,
+/// copiarlo a ~/.local/share/applications ajustando la ruta si se mueve el directorio).
+fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, bin: &Path) {
+    let dir = out_dir.join(name);
+    let _ = fs::remove_dir_all(&dir);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("bundle: could not create '{}': {e}", dir.display());
+        process::exit(74);
+    }
+    let exe = dir.join(name);
+    if let Err(e) = fs::copy(bin, &exe) {
+        eprintln!("bundle: could not place the binary: {e}");
+        process::exit(74);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&exe, fs::Permissions::from_mode(0o755));
+    }
+    let abs = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    let mut icon_line = String::new();
+    if let Some(icon) = icon {
+        let dest = dir.join("icon.png");
+        match fs::copy(icon, &dest) {
+            Ok(_) => icon_line = format!("Icon={}/icon.png\n", abs.display()),
+            Err(e) => eprintln!("bundle: warning: could not copy the icon ({e}); continuing without it"),
+        }
+    }
+    let desktop = format!(
+        "[Desktop Entry]\nType=Application\nName={name}\nExec={}/{name}\n{icon_line}Terminal=false\nCategories=Utility;\n",
+        abs.display()
+    );
+    if let Err(e) = fs::write(dir.join(format!("{name}.desktop")), desktop) {
+        eprintln!("bundle: could not write the .desktop launcher: {e}");
+        process::exit(74);
+    }
+    println!("ok: bundle '{}'", dir.display());
+}
+
+/// Un `.icns` desde un PNG, vía las herramientas del sistema: `sips -z` genera el iconset (los
+/// NOMBRES son exactos — iconutil los exige) e `iconutil` lo compila.
+fn make_icns(icon: &Path, out_icns: &Path) -> Result<(), String> {
+    if !icon.is_file() {
+        return Err(format!("icon not found: {}", icon.display()));
+    }
+    let set = std::env::temp_dir().join(format!("ray_iconset_{}.iconset", process::id()));
+    let _ = fs::remove_dir_all(&set);
+    fs::create_dir_all(&set).map_err(|e| e.to_string())?;
+    const SIZES: &[(u32, &str)] = &[
+        (16, "icon_16x16.png"),
+        (32, "icon_16x16@2x.png"),
+        (32, "icon_32x32.png"),
+        (64, "icon_32x32@2x.png"),
+        (128, "icon_128x128.png"),
+        (256, "icon_128x128@2x.png"),
+        (256, "icon_256x256.png"),
+        (512, "icon_256x256@2x.png"),
+        (512, "icon_512x512.png"),
+        (1024, "icon_512x512@2x.png"),
+    ];
+    for (px, file) in SIZES {
+        let st = process::Command::new("sips")
+            .args(["-z", &px.to_string(), &px.to_string()])
+            .arg(icon)
+            .arg("--out")
+            .arg(set.join(file))
+            .output()
+            .map_err(|e| format!("sips: {e}"))?;
+        if !st.status.success() {
+            return Err(format!("sips failed on {file}"));
+        }
+    }
+    let st = process::Command::new("iconutil")
+        .args(["-c", "icns"])
+        .arg(&set)
+        .arg("-o")
+        .arg(out_icns)
+        .output()
+        .map_err(|e| format!("iconutil: {e}"))?;
+    let _ = fs::remove_dir_all(&set);
+    if !st.status.success() {
+        return Err(format!("iconutil failed: {}", String::from_utf8_lossy(&st.stderr).trim()));
+    }
+    Ok(())
+}
+
 fn cmd_build(args: &[String]) {
     // `--templates-only [ruta...]` (M99): compila los `.ray.html` y termina, SIN chequear ni compilar
     // el programa. Es el reemplazo del subcomando `ray build --templates-only`: la compilación de templates es un paso

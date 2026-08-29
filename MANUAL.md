@@ -1116,6 +1116,23 @@ motores), 304 y Range que `static_files`. Bajo `ray dev`, un cambio en un asset 
 reinicia** el programa (la lectura ya es en vivo): el supervisor recarga el navegador directo
 por el hub de live-reload.
 
+### Empaquetar la app (`ray bundle`)
+
+El cierre del círculo de escritorio: `ray bundle` compila el binario nativo `--release` (con
+los assets de `[native] embed` dentro) y lo deja en el formato del SO:
+
+```sh
+ray bundle --icon icon.png            # macOS: MiApp.app (Info.plist + icns + codesign ad-hoc)
+                                      # Linux: MiApp/ con el binario + MiApp.desktop
+```
+
+El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
+Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets
+van embebidos, no en rutas relativas —, y en v1 no hay firma/notarización: tu propio .app corre
+sin fricción, pero uno DESCARGADO sin firma exige aprobación en Ajustes → Privacidad y
+seguridad (macOS 15+). El `.desktop` de Linux lleva `Exec=` absoluto: para instalarlo, cópialo
+a `~/.local/share/applications`.
+
 ### Ventanas (`std/ui`)
 
 La **primitiva de apps de escritorio**: una ventana nativa del SO con el **webview del sistema**

@@ -10,11 +10,11 @@ cd examples/web/desktop_window
 ray run                # se abre la ventana; cerrarla termina el programa
 ```
 
-Y como binario único de código máquina:
+Y como binario único de código máquina, o directamente como `.app`:
 
 ```sh
-ray build --native main.ray -o desktop-window-demo
-./desktop-window-demo
+ray build --native main.ray -o desktop-window-demo && ./desktop-window-demo
+ray bundle main.ray --icon icon.png     # → desktop-window-demo.app (doble clic y listo)
 ```
 
 Las piezas nuevas sobre el patrón de la fase 0:

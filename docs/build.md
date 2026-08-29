@@ -164,6 +164,9 @@ sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native
 [...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para
 builds herméticos/cross-compile/policy.
 
+**Empaquetado (M147c).** `ray bundle` compone este build (`--native --release` + embed) y lo
+deja en el formato del SO: `.app` en macOS, directorio + `.desktop` en Linux. Ver REFERENCE §14.
+
 **Assets embebidos (M147).** `[native] embed = ["assets"]` en el `ray.toml` (o `--embed dirs`
 ad-hoc) hornea los directorios dados DENTRO del binario (`include_bytes!`): `std/embed` los lee
 por clave ("assets/app.css") con el mismo espacio de nombres que en `ray run` (donde se leen en

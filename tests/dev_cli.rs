@@ -258,6 +258,115 @@ fn dev_live_reload_injects_snippet_and_emits_reload() {
 
 #[cfg(unix)]
 #[test]
+fn dev_reloads_the_browser_without_restart_on_an_embedded_asset_change() {
+    // M147: un cambio bajo un dir de `[native] embed` NO reinicia (std/embed lee en vivo) —
+    // el supervisor emite `data: reload` directo al hub y el programa sigue corriendo.
+    let base = std::env::temp_dir().join("ray_dev_embed_reload");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("assets")).unwrap();
+    std::fs::write(base.join("assets/app.css"), "body { color: red }\n").unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n\n[native]\nembed = [\"assets\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        "import std/time;\n\nfn main() {\n    print(\"up\");\n    while (true) {\n        time.sleep(200);\n    }\n}\n",
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .arg("main.ray")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev");
+
+    let hub = read_hub_port(&out_path, 10);
+    wait_for_content(&out_path, "up", 15);
+    let mut sse = TcpStream::connect(("127.0.0.1", hub)).expect("conecta al hub SSE");
+    sse.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+    sse.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    let mut got = String::new();
+    let mut probe = [0u8; 256];
+    loop {
+        let n = sse.read(&mut probe).expect("lee del hub");
+        got.push_str(&String::from_utf8_lossy(&probe[..n]));
+        if got.contains(": connected") {
+            break;
+        }
+    }
+    std::thread::sleep(Duration::from_millis(150));
+    std::fs::write(base.join("assets/app.css"), "body { color: blue }\n").unwrap();
+    loop {
+        if got.contains("data: reload") {
+            break;
+        }
+        let n = sse.read(&mut probe).expect("lee el evento reload del hub");
+        assert!(n > 0, "el hub cerró antes del reload; recibido:\n{got}");
+        got.push_str(&String::from_utf8_lossy(&probe[..n]));
+    }
+    // El programa NO se reinició: el log lo dice explícito y jamás imprime "restarting".
+    let log = wait_for_content(&out_path, "no restart", 5);
+    assert!(!log.contains("restarting"), "un asset no debe reiniciar:\n{log}");
+
+    stop_dev(&mut dev);
+}
+
+#[cfg(unix)]
+#[test]
+fn dev_exits_when_a_windowed_app_closes_cleanly() {
+    // M147b (el contrato TUI de M139, para ventanas): una app de std/ui que sale LIMPIA la
+    // cerró el usuario (botón rojo o su propio flujo) → `ray dev` sale con ella, sin teclas.
+    // El aviso viaja por el hub (`GET /ui` de ray_runtime::ui al abrir la primera ventana).
+    let base = std::env::temp_dir().join("ray_dev_ui_exit");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n").unwrap();
+    std::fs::write(
+        base.join("main.ray"),
+        "import std/ui;\nimport std/time;\n\nfn main() {\n    match (ui.open(\"Dev\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Err(e) => print(\"open failed: \" + e),\n        Result.Ok(h) => {\n            time.sleep(500);\n            let _ = close(h);\n        },\n    }\n}\n",
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .arg("main.ray")
+        .env("RAY_UI_BACKEND", "headless")
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .spawn()
+        .expect("lanza ray dev");
+
+    // El supervisor debe SALIR SOLO al cerrarse la ventana (plazo holgado para CI).
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Ok(Some(st)) = dev.try_wait() {
+            break st;
+        }
+        if Instant::now() >= deadline {
+            stop_dev(&mut dev);
+            panic!("ray dev no salió solo al cerrarse la ventana");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(status.success(), "salida limpia del supervisor");
+    let log = std::fs::read_to_string(&out_path).unwrap_or_default();
+    assert!(log.contains("the window closed; bye"), "el mensaje de cierre:\n{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn dev_live_reload_without_port_also_injects() {
     // El hub arranca SIEMPRE (no solo con `--port`): "es una app web" lo decide el webserver al servir
     // HTML, no el supervisor. Sin socket-activation el snippet reintenta el fetch hasta que el hijo

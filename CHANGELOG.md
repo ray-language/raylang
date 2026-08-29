@@ -6,6 +6,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/embed`** (M147): **assets del proyecto** — `[native] embed = ["assets"]` en ray.toml
+  define un espacio de nombres idéntico en los tres motores (`read`/`list`; claves con `/`
+  relativas a la raíz, orden lexicográfico, sin `..` ni ocultos). En `ray run` se leen en vivo
+  del disco; `ray build --native` los hornea en el binario (`--embed dirs` ad-hoc) → binario
+  autocontenido que corre desde cualquier cwd. El framework web gana
+  `app.static_embedded(prefix, dir)` (ETag de contenido + 304 + Range, byte-idéntico entre
+  motores). `ray dev` vigila también los dirs de embed: un cambio en un asset recarga el
+  navegador SIN reiniciar el programa (la lectura en dev es en vivo). Y cerrar la VENTANA de
+  una app `std/ui` bajo `ray dev` cierra también el modo dev (el contrato de las TUI: salida
+  limpia = el usuario cerró la app).
+
 - **`std/ui`** (M146): **ventana + webview** — la primitiva de apps de escritorio (IDEAS §80
   F1): `open(title, url, w, h)` abre una ventana nativa con el webview del SISTEMA cargando la
   URL (el patrón: tu webserver embebido; el IPC JS↔raylang es el framework web), `eval_js`

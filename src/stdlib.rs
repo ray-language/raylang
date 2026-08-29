@@ -44,6 +44,8 @@ const MODULES: &[(&str, &str)] = &[
     ("std/audio", include_str!("../std/audio.ray")),
     // M146: ventana + webview (IDEAS §80 F1; AppKit/WKWebView a mano, headless para tests).
     ("std/ui", include_str!("../std/ui.ray")),
+    // M147: assets del proyecto ([native] embed): en vivo en VM/interp, horneados en nativo.
+    ("std/embed", include_str!("../std/embed.ray")),
     // M144: decodificación de imágenes (PNG sobre std/inflate).
     ("std/image", include_str!("../std/image.ray")),
     // Revisión FFI jul 2026: helpers de la frontera C (errno).

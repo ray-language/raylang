@@ -89,7 +89,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs]] [--templates-only [path...]]
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -470,7 +470,23 @@ fn cmd_dev(args: &[String]) {
     // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
     // (mismos que `cmd_run`), y el primer resto es el archivo explícito (o `None` → default del proyecto).
     let entry = dev_entry(&fwd_args);
-    eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
+    // M147: los dirs de `[native] embed` también se vigilan — un cambio ahí no reinicia (la
+    // lectura de std/embed es en vivo): solo se recarga el navegador vía el hub.
+    let embed_dirs: Vec<PathBuf> = Manifest::load(&root)
+        .ok()
+        .flatten()
+        .map(|m| m.native_embed.iter().map(PathBuf::from).collect())
+        .unwrap_or_default();
+    let watching_embed = !embed_dirs.is_empty();
+    let _ = DEV_EMBED_DIRS.set(embed_dirs);
+    if watching_embed {
+        eprintln!(
+            "[dev] watching {} (.ray, .ray.html, ray.toml + embedded assets); Ctrl-C to exit",
+            root.display()
+        );
+    } else {
+        eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
+    }
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
@@ -511,8 +527,15 @@ fn cmd_dev(args: &[String]) {
                     // espera: el usuario va a editar el fix y quiere el relanzamiento.
                     // El `\r` inicial de estos mensajes importa: una TUI deja el cursor en
                     // cualquier columna al salir — sin él, la línea aparece "tabulada".
-                    if interactive_child && status.success() {
-                        eprintln!("\r[dev] the program exited; bye");
+                    let windowed = reload
+                        .as_ref()
+                        .is_some_and(|(h, _)| h.ui_child.load(std::sync::atomic::Ordering::SeqCst));
+                    if (interactive_child || windowed) && status.success() {
+                        if windowed {
+                            eprintln!("\r[dev] the window closed; bye");
+                        } else {
+                            eprintln!("\r[dev] the program exited; bye");
+                        }
                         std::process::exit(0);
                     }
                     // Tecla-única para el resto (un script en bucle de edición): el terminal es
@@ -554,7 +577,35 @@ fn cmd_dev(args: &[String]) {
             eprintln!("[dev] change in {change}: contents unchanged — ignoring");
             continue;
         }
+        // M147: ¿el cambio es SOLO de assets embebidos? Reiniciar sería inútil (std/embed lee
+        // en vivo) — basta recargar el navegador. Se decide sobre el DIFF real de hashes (una
+        // ráfaga que mezcle un .ray y un asset debe reiniciar, y el reinicio ya recarga).
+        let assets_only = {
+            let touched = current_hashes
+                .iter()
+                .filter(|(p, h)| hashes.get(*p) != Some(h))
+                .map(|(p, _)| p)
+                .chain(hashes.keys().filter(|p| !current_hashes.contains_key(*p)));
+            let mut any = false;
+            let mut all_assets = true;
+            for p in touched {
+                any = true;
+                if !is_embed_asset(&root, p) {
+                    all_assets = false;
+                }
+            }
+            any && all_assets
+        };
         hashes = current_hashes;
+        if assets_only {
+            eprintln!("[dev] change in {change}: embedded asset — reloading the browser (no restart)");
+            if running
+                && let Some((hub, _)) = &reload
+            {
+                hub.broadcast();
+            }
+            continue;
+        }
         // Check-before-restart: compila primero (ms). Si NO compila, mantén el programa en marcha e
         // imprime el diagnóstico — no mates un servidor que funciona por un error a medio escribir.
         if let Err(diag) = dev_check_compiles(&exe, &entry) {
@@ -572,6 +623,9 @@ fn cmd_dev(args: &[String]) {
         // sin un fetch de sondeo que falle mientras re-binde.
         if let Some((hub, _)) = &reload {
             hub.arm();
+        }
+        if let Some((hub, _)) = &reload {
+            hub.ui_child.store(false, std::sync::atomic::Ordering::SeqCst);
         }
         child = spawn_dev_child(&exe, &fwd_args, listen_pair, reload_port);
         running = true;
@@ -670,6 +724,10 @@ struct ReloadHub {
     /// armar competiría con el re-bind del hijo → el navegador vería "connection refused"; retenerla
     /// hasta el aviso hace que la recarga llegue justo cuando el servidor ya escucha.
     pending: std::sync::atomic::AtomicBool,
+    /// M147b: el hijo en curso abrió una VENTANA (`GET /ui` de ray_runtime::ui) — al salir
+    /// limpio, el usuario cerró la app y `ray dev` sale con ella (el contrato TUI de M139).
+    /// Se resetea en cada relanzamiento.
+    ui_child: std::sync::atomic::AtomicBool,
 }
 
 impl ReloadHub {
@@ -705,6 +763,7 @@ fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
     let hub = std::sync::Arc::new(ReloadHub {
         clients: std::sync::Mutex::new(Vec::new()),
         pending: std::sync::atomic::AtomicBool::new(false),
+        ui_child: std::sync::atomic::AtomicBool::new(false),
     });
     let hub_bg = hub.clone();
     std::thread::spawn(move || {
@@ -722,6 +781,12 @@ fn start_reload_hub() -> Option<(std::sync::Arc<ReloadHub>, u16)> {
                 if hub_bg.pending.swap(false, Ordering::SeqCst) {
                     hub_bg.broadcast();
                 }
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
+                continue;
+            }
+            // M147b: el aviso "soy una app con ventana" de ray_runtime::ui (una vez por hijo).
+            if buf[..n].starts_with(b"GET /ui") {
+                hub_bg.ui_child.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
                 continue;
             }
@@ -907,13 +972,37 @@ fn dev_stdin_quit() -> bool {
     }
 }
 
+/// M147: los dirs de `[native] embed` que `ray dev` vigila ADEMÁS de los fuentes (rutas
+/// relativas a la raíz). Un cambio ahí NO reinicia — la lectura de std/embed ya es en vivo —
+/// solo recarga el navegador vía el hub. Lo fija `cmd_dev`; test-watch y demás no lo tocan.
+static DEV_EMBED_DIRS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+
+/// ¿Es `path` un asset del espacio embed vigilado por `ray dev`? (Bajo un dir configurado,
+/// sin componentes ocultos — el mismo criterio del walker de std/embed.)
+fn is_embed_asset(root: &Path, path: &Path) -> bool {
+    let Some(dirs) = DEV_EMBED_DIRS.get() else {
+        return false;
+    };
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    if rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+        return false;
+    }
+    dirs.iter().any(|d| rel.starts_with(d))
+}
+
 /// ¿Es `path` (ruta de un evento de kernel, absoluta) un fuente que `ray dev` vigila? El mismo
 /// criterio de `scan_sources`, aplicado a una ruta suelta: bajo la raíz, fuera de carpetas de
 /// artefactos/ocultas, extensión de fuente, y la regla del `.ray` generado con `.ray.html`
 /// hermano (se vigila el fuente, no el artefacto). Los temporales de guardado atómico de los
-/// editores (`.tmp`, `~`, el `4913` de vim) caen solos por la extensión.
+/// editores (`.tmp`, `~`, el `4913` de vim) caen solos por la extensión. M147: los assets de
+/// `[native] embed` también se vigilan (para la recarga del navegador, no para reiniciar).
 #[cfg(all(feature = "watch", unix))]
 fn is_watched_source(canon_root: &Path, path: &Path) -> bool {
+    if is_embed_asset(canon_root, path) {
+        return true;
+    }
     let Ok(rel) = path.strip_prefix(canon_root) else { return false };
     if let Some(parent) = rel.parent() {
         for comp in parent.components() {
@@ -987,7 +1076,11 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
                     continue;
                 }
                 pending.push(path);
-            } else if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
+            } else if name.ends_with(".ray")
+                || name.ends_with(".ray.html")
+                || name == "ray.toml"
+                || is_embed_asset(root, &path)
+            {
                 // Un `.ray` con un `.ray.html` hermano es un generado de `ray build
                 // --templates-only` (derivado, además IGNORADO por el loader desde M102): se
                 // vigila el fuente (el .html), no el artefacto.
@@ -1163,6 +1256,10 @@ fn cmd_build(args: &[String]) {
     // Cada exclusión rastrea su ORIGEN (`--without` de CLI vs `ray.toml`) para que un typo apunte al sitio
     // que hay que corregir: un error en un ray.toml versionado afecta a todo el equipo.
     let without_arg = args.iter().position(|a| a == "--without").and_then(|i| args.get(i + 1)).cloned();
+    // `--embed <dirs>` (M147): directorios de assets a HORNEAR en el binario nativo (lista
+    // separada por comas, relativa a la raíz del proyecto). Se UNE a `[native] embed` del
+    // ray.toml (la política versionada); mismo rastreo de origen que `--without`.
+    let embed_arg = args.iter().position(|a| a == "--embed").and_then(|i| args.get(i + 1)).cloned();
     let mut exclude: Vec<(String, &'static str)> = without_arg
         .as_deref()
         .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(|p| (p.to_string(), "--without")).collect())
@@ -1215,13 +1312,15 @@ fn cmd_build(args: &[String]) {
                 && Some(a.as_str()) != output.as_deref()
                 && Some(a.as_str()) != without_arg.as_deref()
                 && Some(a.as_str()) != target.as_deref()
+                && Some(a.as_str()) != embed_arg.as_deref()
         })
         .map(String::as_str);
     let path = resolve_entry(file, true);
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
-        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers);
+        let embed = collect_embed(&path, embed_arg.as_deref());
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers, &embed);
         return;
     }
     match compiler::compile_program(&program) {
@@ -1248,10 +1347,11 @@ fn cmd_build(args: &[String]) {
 ///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool) {
+#[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)]) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_full(&program, exclude, fast, fibers) {
+    let transpiled = match crate::transpile::transpile_embed(&program, exclude, fast, fibers, embed) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");
@@ -1298,6 +1398,49 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
         build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target);
     }
 }
+
+/// M147: reúne la tabla de assets a hornear: el `[native] embed` del ray.toml del ENTRY (no
+/// del cwd; es el mismo ancla que usa la resolución en runtime) unido al `--embed` de la CLI.
+/// Cada dir configurado debe EXISTIR (fail-fast nombrando el origen, como los typos de
+/// `--without`); las claves salen del walker compartido con la VM (mismo espacio y orden).
+fn collect_embed(entry: &str, embed_arg: Option<&str>) -> Vec<(String, String)> {
+    // Canonicalizar ANTES de buscar el manifiesto: los ancestros de una ruta RELATIVA terminan
+    // en "" (una raíz vacía que produce include_bytes! relativos — irresolubles desde el
+    // proyecto Cargo generado en /tmp).
+    let entry_dir = match Path::new(entry).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let entry_dir = entry_dir.canonicalize().unwrap_or(entry_dir);
+    let manifest = Manifest::load(&entry_dir).ok().flatten();
+    let mut dirs: Vec<(String, &'static str)> = embed_arg
+        .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(|p| (p.to_string(), "--embed")).collect())
+        .unwrap_or_default();
+    if let Some(m) = &manifest {
+        for d in &m.native_embed {
+            if !dirs.iter().any(|(x, _)| x == d) {
+                dirs.push((d.clone(), "ray.toml"));
+            }
+        }
+    }
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let root = manifest.map(|m| m.root).unwrap_or(entry_dir);
+    let root = root.canonicalize().unwrap_or(root);
+    for (d, origin) in &dirs {
+        if !root.join(d).is_dir() {
+            eprintln!("embed directory in {origin} does not exist: '{d}' (relative to '{}')", root.display());
+            process::exit(64);
+        }
+    }
+    let dir_names: Vec<String> = dirs.into_iter().map(|(d, _)| d).collect();
+    crate::builtins::embed_walk(&root, &dir_names)
+        .into_iter()
+        .map(|(key, p)| (key, p.to_string_lossy().into_owned()))
+        .collect()
+}
+
 
 /// Directorio de caché de builds nativos, PERSISTENTE entre sesiones (`~/.ray/native-cache/`, decidido en
 /// docs/transpilador-nativo.md §3.3). Sobrevive a la purga de `/tmp` (macOS: 3 días sin uso; Linux: reboot)
@@ -2912,12 +3055,31 @@ fn check_or_exit(program: &mut crate::ast::Program, locate: &Locate, multi: bool
 }
 
 /// Carga, chequea y ejecuta un archivo (VM por defecto, `--interp` para el intérprete).
+/// M147: fija la config de `std/embed` (raíz + dirs de `[native] embed`) desde el proyecto del
+/// ENTRY — no del cwd: `ray run otra/app/src/main.ray` resuelve contra SU raíz. Sin manifiesto
+/// o sin `[native] embed`, no se fija nada (std/embed responde Err de sin-config).
+pub(crate) fn configure_embed(entry: &str) {
+    // Canonicalizar primero: los ancestros de una ruta relativa terminan en "" (raíz vacía).
+    let dir = match Path::new(entry).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let dir = dir.canonicalize().unwrap_or(dir);
+    if let Ok(Some(m)) = Manifest::load(&dir)
+        && !m.native_embed.is_empty()
+    {
+        let root = m.root.canonicalize().unwrap_or_else(|_| m.root.clone());
+        crate::builtins::set_embed_config(root, m.native_embed);
+    }
+}
+
 fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u64>, heap: Option<usize>) {
     if (fuel.is_some() || heap.is_some()) && use_interp {
         eprintln!("--fuel/--heap are VM limits (product engine); they do not apply with --interp");
         process::exit(64);
     }
     runtime::set_program_args(prog_args);
+    configure_embed(path);
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
     if std::env::var("RAYLANG_TIME").is_ok() {

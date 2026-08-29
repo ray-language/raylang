@@ -69,6 +69,11 @@ pub fn run(suite_paths: &[PathBuf], dep_roots: &[PathBuf], filter: Option<&str>)
     // runner (RAY_UI_BACKEND en el entorno sigue mandando si el usuario lo puso).
     #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
     ray_runtime::ui::default_headless();
+    // M147: la config de std/embed se ancla al proyecto de la PRIMERA suite (todas comparten
+    // proyecto: el runner es por-proyecto).
+    if let Some(first) = suite_paths.first() {
+        crate::cli::configure_embed(&first.to_string_lossy());
+    }
     let mut frontend_failed = false;
     let mut suites: Vec<Suite> = Vec::new();
     for (i, path) in suite_paths.iter().enumerate() {

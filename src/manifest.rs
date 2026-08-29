@@ -49,6 +49,9 @@ pub struct Manifest {
     /// con el repo (builds herméticos/policy). El flag `--without` de CLI se UNE a esta lista. Vacío = sin
     /// exclusión. Ver docs/transpilador-nativo.md §3.3.
     pub native_without: Vec<String>,
+    /// M147: `[native] embed` — directorios de assets embebidos en el binario nativo (y el
+    /// espacio de nombres de `std/embed` en todos los motores). Vacío si no hay `[native]`.
+    pub native_embed: Vec<String>,
     /// `[dev] listen` — dirección `host:port` que `ray dev` **pre-abre y retiene** entre reinicios
     /// (socket-activation, M92.3): el hijo la ADOPTA en vez de re-bind → cero conexiones rechazadas. El
     /// flag `--port`/`--listen` de la CLI la sobrescribe. `None` = sin socket retenido (bind por reinicio).
@@ -100,6 +103,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut registry_index = None;
     let mut registry_mirror = None;
     let mut native_without = Vec::new();
+    let mut native_embed = Vec::new();
     let mut dev_listen = None;
 
     for (i, raw_line) in src.lines().enumerate() {
@@ -158,6 +162,12 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                     native_without = parse_string_array(value_raw)
                         .ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"tls\", \"sqlite\"]"))?;
                 }
+                // M147: `embed = ["assets"]` — directorios (relativos a la raíz) cuyo contenido
+                // viaja DENTRO del binario nativo y define el espacio de nombres de std/embed.
+                "embed" => {
+                    native_embed = parse_string_array(value_raw)
+                        .ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"assets\"]"))?;
+                }
                 _ => {} // otras claves de [native] se ignoran por ahora (extensibilidad)
             },
             "dev" => match key {
@@ -181,6 +191,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         registry_index,
         registry_mirror,
         native_without,
+        native_embed,
         dev_listen,
     })
 }

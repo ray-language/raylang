@@ -1096,6 +1096,82 @@ pub fn ui_try_next() -> Option<(String, i64)> {
     None
 }
 
+// --- M147: std/embed — assets del proyecto ([native] embed en ray.toml). En la VM/intérprete
+// se leen EN VIVO del disco (dev-friendly), resueltos contra la raíz del proyecto capturada por
+// la CLI al arrancar; el binario nativo con `--embed` los lleva horneados (include_bytes!). El
+// espacio de nombres es el MISMO en todos los motores: las claves que produce `embed_walk`. ---
+
+/// La config de embed del proceso: (raíz del proyecto, dirs de `[native] embed`). La fija la
+/// CLI al arrancar (run/test, desde el manifiesto del ENTRY); sin config, std/embed da Err.
+fn embed_config() -> &'static std::sync::OnceLock<(std::path::PathBuf, Vec<String>)> {
+    static CONFIG: std::sync::OnceLock<(std::path::PathBuf, Vec<String>)> =
+        std::sync::OnceLock::new();
+    &CONFIG
+}
+
+pub fn set_embed_config(root: std::path::PathBuf, dirs: Vec<String>) {
+    let _ = embed_config().set((root, dirs));
+}
+
+const EMBED_NO_CONFIG: &str =
+    "embed: no embedded assets configured (add [native] embed = [\"assets\"] to ray.toml)";
+
+/// Recorre los dirs configurados y devuelve `(clave, ruta absoluta)` ORDENADO lexicográficamente
+/// por clave (separador `/`, ocultos excluidos). Lo comparten la VM (membership + listado) y
+/// `ray build --native` (la tabla de include_bytes!): un solo walker = un solo espacio de
+/// nombres — el orden del listado queda DEFINIDO y la resolución es por string exacto (nunca
+/// por el filesystem: un APFS case-insensitive no puede hacer divergir los motores).
+pub fn embed_walk(root: &std::path::Path, dirs: &[String]) -> Vec<(String, std::path::PathBuf)> {
+    fn visit(base_key: &str, dir: &std::path::Path, out: &mut Vec<(String, std::path::PathBuf)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue; // ocultos fuera (temporales de guardado, .DS_Store), como el watcher
+            }
+            let path = e.path();
+            let key = format!("{base_key}/{name}");
+            if path.is_dir() {
+                visit(&key, &path, out);
+            } else {
+                out.push((key, path));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for d in dirs {
+        let key = d.trim_matches('/');
+        if key.is_empty() {
+            continue;
+        }
+        visit(key, &root.join(key), &mut out);
+    }
+    out.sort();
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
+/// M147: las claves del espacio embed (orden lexicográfico).
+pub fn embed_list() -> Result<Vec<String>, String> {
+    let (root, dirs) = embed_config().get().ok_or_else(|| EMBED_NO_CONFIG.to_string())?;
+    Ok(embed_walk(root, dirs).into_iter().map(|(k, _)| k).collect())
+}
+
+/// M147: el contenido de un asset del espacio embed. La ruta se resuelve por membership EXACTO
+/// contra el walk (nunca contra el filesystem directo: eso define `..` fuera y mata la deriva
+/// de mayúsculas de un filesystem case-insensitive).
+pub fn embed_read(path: &str) -> Result<Vec<u8>, String> {
+    let (root, dirs) = embed_config().get().ok_or_else(|| EMBED_NO_CONFIG.to_string())?;
+    match embed_walk(root, dirs).iter().find(|(k, _)| k == path) {
+        Some((_, p)) => {
+            std::fs::read(p).map_err(|e| format!("embed: could not read '{path}': {e}"))
+        }
+        None => Err(format!("embed: no embedded file '{path}'")),
+    }
+}
+
 /// M146: el siguiente evento BLOQUEANDO el hilo (el intérprete). `ms <= 0` = sin plazo;
 /// `Ok(None)` = plazo vencido.
 #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
@@ -3434,6 +3510,19 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__ui_next_event", opcode: OpCode::UiNext, check: |a| {
         arity(a, 1, "__ui_next_event", " (timeout ms)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__ui_next_event expects an int (the timeout in ms), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __embed_read(path) -> [bytes] (M147): [b"ok", datos] o [b"err", msg]. Un asset del espacio
+    // `[native] embed`: en VM/interp del disco EN VIVO (raíz del proyecto); en el binario nativo
+    // con --embed, de la tabla horneada. std/embed → Result<bytes, string>.
+    Builtin { name: "__embed_read", opcode: OpCode::EmbedRead, check: |a| {
+        arity(a, 1, "__embed_read", " (path)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__embed_read expects a string (the path), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __embed_list() -> [string] (M147): ["ok", clave…] (orden lexicográfico) o ["err", msg].
+    Builtin { name: "__embed_list", opcode: OpCode::EmbedList, check: |a| {
+        nullary(a, "__embed_list")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __term_raw_on() -> [string]: ["ok"] o ["err", msg]. Guarda el termios y activa el modo crudo.

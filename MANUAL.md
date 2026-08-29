@@ -1088,6 +1088,34 @@ en silencio — para tests y CI sin tarjeta de sonido. En el binario nativo, `--
 excluye. La música reactiva de un juego es el caso de diseño: cada iteración del bucle sintetiza
 lo que toca según el estado, y el dispositivo marca el compás.
 
+### Assets del proyecto (`std/embed`)
+
+Los archivos que tu programa necesita llevar consigo (css, imágenes, fuentes, el `dist` de un
+frontend): declara los directorios en el `ray.toml` y léelos por clave — **el mismo espacio de
+nombres en todos los motores**:
+
+```toml
+[native]
+embed = ["assets"]
+```
+
+```rust
+import std/embed;
+
+let css = embed.read("assets/app.css")?;   // bytes; clave = ruta desde la raíz, con "/"
+let keys = embed.list()?;                  // orden lexicográfico (parte del contrato)
+```
+
+En `ray run` los archivos se leen **en vivo del disco** (editas y recargas — dev); `ray build
+--native` los **hornea dentro del binario** (`--embed dirs` añade directorios ad-hoc): el
+binario es autocontenido y corre desde cualquier directorio — lo que una app de escritorio
+empaquetada necesita (Finder lanza con `cwd=/`). Las claves son strings exactos: sin `..`, sin
+plegado de mayúsculas, ocultos excluidos. Para servirlos por HTTP, el framework web trae
+`app.static_embedded("/static/", "assets")` — mismo saneo, ETag (de contenido: idéntico entre
+motores), 304 y Range que `static_files`. Bajo `ray dev`, un cambio en un asset **no
+reinicia** el programa (la lectura ya es en vivo): el supervisor recarga el navegador directo
+por el hub de live-reload.
+
 ### Ventanas (`std/ui`)
 
 La **primitiva de apps de escritorio**: una ventana nativa del SO con el **webview del sistema**
@@ -1112,7 +1140,9 @@ match (ui.next_event()) {
 ```
 
 No hay `ui.run()`: el runtime **captura el hilo principal por su cuenta** en la primera ventana
-(AppKit exige poseerlo; el programa sigue corriendo en sus fibras, ajeno al detalle). `close(h)`
+(AppKit exige poseerlo; el programa sigue corriendo en sus fibras, ajeno al detalle). Bajo
+`ray dev`, cerrar la ventana (salida limpia) **cierra también el modo dev** — el mismo contrato
+que las TUI: la app la cerró el usuario, no hay nada que re-lanzar. `close(h)`
 cierra la ventana; `ui.events()` da la misma cola como `Channel<UiEvent>` (para hacer `select`
 con tus otros canales); `next_event_timeout(ms)` acota la espera. Backend real: macOS
 (WKWebView); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria (tests/CI en

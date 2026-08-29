@@ -38,3 +38,4 @@ tools/__pycache__/
 playground/editor.bundle.js
 playground/editor/node_modules/
 site-out/
+*.app/

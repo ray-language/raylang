@@ -8,11 +8,14 @@
 //
 // Backends: AppKit/WKWebView en macOS; `RAY_UI_BACKEND=headless` (tests/CI) en cualquier OS.
 
-/// One UI event: `kind` is "closed" (the window left the screen — the red button and `close(h)`
-/// both report here, exactly once per window), and `window` is the window's handle.
+/// One UI event. `kind` is "closed" (the window left the screen — the red button and
+/// `close(h)` both report here, exactly once per window; `tag` is empty) or "menu" (a custom
+/// menu item was clicked: `tag` carries the item's tag and `window` is 0 — menus belong to the
+/// app, not to one window). `window` is the window's handle for per-window events.
 pub struct UiEvent {
     kind: string,
     window: int,
+    tag: string,
 }
 
 /// Opens a native window with the system webview loading `url` (point it at your embedded
@@ -43,7 +46,7 @@ pub fn next_event() -> Result<UiEvent, string> {
     let r = __ui_next_event(0);
     if (r[0] == "ok") {
         match (parse_int(r[2])) {
-            Option.Some(w) => Result.Ok(UiEvent { kind: r[1], window: w }),
+            Option.Some(w) => Result.Ok(UiEvent { kind: r[1], window: w, tag: r[3] }),
             Option.None => Result.Err("invalid window id"),
         }
     } else {
@@ -57,7 +60,7 @@ pub fn next_event_timeout(timeout_ms: int) -> Result<Option<UiEvent>, string> {
     let r = __ui_next_event(timeout_ms);
     if (r[0] == "ok") {
         match (parse_int(r[2])) {
-            Option.Some(w) => Result.Ok(Option.Some(UiEvent { kind: r[1], window: w })),
+            Option.Some(w) => Result.Ok(Option.Some(UiEvent { kind: r[1], window: w, tag: r[3] })),
             Option.None => Result.Err("invalid window id"),
         }
     } else if (r[0] == "timeout") {
@@ -65,6 +68,62 @@ pub fn next_event_timeout(timeout_ms: int) -> Result<Option<UiEvent>, string> {
     } else {
         Result.Err(r[1])
     }
+}
+
+/// One item of a custom menu: `tag` travels in the click event (`kind == "menu"`), `title` is
+/// what the menu shows, and `shortcut` is a single character for Cmd+key on macOS (uppercase
+/// adds Shift; empty = no shortcut; Linux v1 is click-only).
+pub struct MenuItem {
+    tag: string,
+    title: string,
+    shortcut: string,
+}
+
+/// Adds one top-level menu with custom items. Clicking an item emits a `"menu"` event whose
+/// `tag` is the item's tag (window 0 — menus belong to the app). On macOS the menu bar is
+/// global and gains the menu immediately; on Linux the bar is per-window and the menu applies
+/// to windows opened AFTER this call. The standard App/Edit menus (quit, clipboard, undo)
+/// install themselves — you only declare your own. Headless: a no-op `Ok`.
+pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
+    var encoded: [string] = [];
+    var i = 0;
+    while (i < items.len()) {
+        let it = items[i];
+        encoded.push(it.tag + "\t" + it.title + "\t" + it.shortcut);
+        i = i + 1;
+    }
+    let r = __ui_menu(title, encoded);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+// El desempaquetado común de __ui_dialog: ["ok", path] / ["none"] / ["err", msg].
+fn dialog_result(r: [string]) -> Result<Option<string>, string> {
+    if (r[0] == "ok") {
+        Result.Ok(Option.Some(r[1]))
+    } else if (r[0] == "none") {
+        Result.Ok(Option.None)
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Opens the native "choose a file" dialog, MODAL: the call parks until the user decides.
+/// `Ok(Some(path))`, or `Ok(None)` if they cancelled. One modal at a time (on macOS other UI
+/// operations wait while the panel is open). Headless: the result is injected via the
+/// `RAY_UI_PICK` environment variable (unset/empty = None) — how the test battery drives it.
+pub fn pick_file() -> Result<Option<string>, string> {
+    dialog_result(__ui_dialog("open_file", ""))
+}
+
+/// Like `pick_file`, for choosing a FOLDER.
+pub fn pick_folder() -> Result<Option<string>, string> {
+    dialog_result(__ui_dialog("open_folder", ""))
+}
+
+/// The native "save as" dialog with `suggested` as the pre-filled file name. `Ok(Some(path))`
+/// is where the user wants the file written (writing it is your job), `Ok(None)` = cancelled.
+pub fn save_file(suggested: string) -> Result<Option<string>, string> {
+    dialog_result(__ui_dialog("save_file", suggested))
 }
 
 /// The UI events as a channel: spawns a pump fiber that forwards `next_event()` into it — use

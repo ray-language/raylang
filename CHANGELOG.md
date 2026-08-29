@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/ui`: menús y diálogos de archivo** (M148, F3 de IDEAS §80): el menú ESTÁNDAR
+  (App/Edit) se instala solo — arregla que ⌘C/⌘V/⌘X no funcionaran en los campos de texto del
+  webview en macOS (los atajos viajan por el menú) y añade ⌘Q/⌘W. `ui.menu(title, items)`
+  declara menús custom cuyos clicks llegan como eventos `"menu"` con su `tag` (`UiEvent` gana
+  el campo `tag`); `ui.pick_file()`/`pick_folder()`/`save_file(sugerido)` abren los diálogos
+  nativos modales (`Ok(None)` = canceló; en headless los conduce `RAY_UI_PICK`). Linux por el
+  mismo dlopen (menubar por-ventana, click-only en v1; chooser nativo exige GTK ≥ 3.20).
+
 - **`std/ui` en Linux** (M147d): backend **GTK3 + WebKitGTK por `dlopen`** en runtime (cero
   headers de build, cero crates — patrón ALSA): mismo contrato que macOS (hilo principal
   capturado, eventos, `closed` exactamente una vez, cierre por el WM incluido). Sin las libs o

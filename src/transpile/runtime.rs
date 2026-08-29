@@ -546,14 +546,26 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    let known = matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
             "    let r = if known { ray_runtime::ui::eval_js(h, js) } else { Err(\"ui: not an open window\".to_string()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
-            "fn __ray_ui_next_event(ms: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "fn __ray_ui_menu(title: &str, items: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let its: Vec<String> = items.borrow().iter().map(|s| s.to_string()).collect();\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::menu(title, &its) {\n",
+            "        Ok(()) => vec![Rc::<str>::from(\"ok\")],\n",
+            "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "    }))\n}\n",
+            "fn __ray_ui_dialog(kind: &str, arg: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::ui::dialog(kind, arg) {\n",
+            "        Ok(Some(path)) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(path.as_str())],\n",
+            "        Ok(None) => vec![Rc::<str>::from(\"none\")],\n",
+            "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "    }))\n}\n",
+                        "fn __ray_ui_next_event(ms: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let tag = |parts: Vec<String>| Rc::new(std::cell::RefCell::new(parts.into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()));\n",
         ));
         if t.fibers {
             out.push_str(concat!(
                 "    let dl = if ms > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)) } else { None };\n",
                 "    loop {\n",
-                "        if let Some((kind, win)) = ray_runtime::ui::try_next_event() { return tag(vec![\"ok\".to_string(), kind, win.to_string()]); }\n",
+                "        if let Some((kind, win, mtag)) = ray_runtime::ui::try_next_event() { return tag(vec![\"ok\".to_string(), kind, win.to_string(), mtag]); }\n",
                 "        let fd = ray_runtime::ui::event_fd();\n",
                 "        if fd < 0 { return tag(vec![\"err\".to_string(), \"ui: no event pipe\".to_string()]); }\n",
                 "        let rem = match dl {\n",
@@ -566,7 +578,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         } else {
             out.push_str(concat!(
                 "    match ray_runtime::ui::next_event_blocking(ms) {\n",
-                "        Some((kind, win)) => tag(vec![\"ok\".to_string(), kind, win.to_string()]),\n",
+                "        Some((kind, win, mtag)) => tag(vec![\"ok\".to_string(), kind, win.to_string(), mtag]),\n",
                 "        None => tag(vec![\"timeout\".to_string()]),\n",
                 "    }\n}\n",
             ));

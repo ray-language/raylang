@@ -45,9 +45,10 @@ const O_NONBLOCK: i32 = 0x0004;
 
 // ── La cola global de eventos + self-pipe ────────────────────────────────────
 
-/// Un evento de UI: `(kind, ventana)`. v1 emite solo `"closed"` (la ventana se fue de la
-/// pantalla, sea por el botón rojo o por `close(h)` — exactamente una vez por ventana).
-type Event = (String, i64);
+/// Un evento de UI: `(kind, ventana, tag)`. `"closed"` (la ventana se fue de la pantalla, sea
+/// por el botón rojo o por `close(h)` — exactamente una vez por ventana; tag vacío) y `"menu"`
+/// (M148: un item de menú custom; ventana 0 — el menú es de la app — y tag del item).
+type Event = (String, i64, String);
 
 struct Events {
     queue: Mutex<VecDeque<Event>>,
@@ -86,9 +87,9 @@ fn events() -> &'static Events {
     })
 }
 
-fn push_event(kind: &str, window: i64) {
+fn push_event(kind: &str, window: i64, tag: &str) {
     let ev = events();
-    ev.queue.lock().unwrap().push_back((kind.to_string(), window));
+    ev.queue.lock().unwrap().push_back((kind.to_string(), window, tag.to_string()));
     ev.ready.notify_all();
     if ev.pipe_wr >= 0 {
         // SAFETY: un octeto a un fd nuestro; con el pipe lleno se omite (ver arriba).
@@ -103,7 +104,7 @@ pub fn event_fd() -> i32 {
 
 /// El siguiente evento si ya hay uno, SIN bloquear. Consume un octeto del pipe por evento
 /// entregado; con la cola vacía drena los huérfanos (para no despertar en falso).
-pub fn try_next_event() -> Option<(String, i64)> {
+pub fn try_next_event() -> Option<(String, i64, String)> {
     let ev = events();
     let mut q = ev.queue.lock().unwrap();
     match q.pop_front() {
@@ -120,7 +121,7 @@ pub fn try_next_event() -> Option<(String, i64)> {
 
 /// El siguiente evento BLOQUEANDO el hilo (el intérprete, oráculo secuencial): espera en la
 /// condvar de la cola — sin sondeo. `ms <= 0` = sin plazo; `Ok(None)` = plazo vencido.
-pub fn next_event_blocking(ms: i64) -> Option<(String, i64)> {
+pub fn next_event_blocking(ms: i64) -> Option<(String, i64, String)> {
     let ev = events();
     let deadline = if ms > 0 {
         Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
@@ -210,7 +211,7 @@ fn mark_closed(id: i64) {
     {
         w.closed = true;
         drop(map);
-        push_event("closed", id);
+        push_event("closed", id, "");
     }
 }
 
@@ -441,6 +442,81 @@ pub fn close_window(id: i64) {
     }
 }
 
+
+/// M148: añade UN menú de nivel superior con items custom. `items` llegan CODIFICADOS
+/// "tag\ttitle\tshortcut" (el borde de los builtins es [string]); la decodificación vive AQUÍ
+/// — compartida por los tres motores (el binario transpilado llama directo a este crate). Un
+/// click emite el evento ("menu", 0, tag). Headless: no-op Ok (los tests no montan menús).
+/// macOS: el menú es GLOBAL (la barra de la app); Linux/GTK: el menubar es POR VENTANA — los
+/// menús aplican a las ventanas abiertas DESPUÉS de esta llamada (documentado).
+pub fn menu(title: &str, items: &[String]) -> Result<(), String> {
+    let decoded: Vec<(String, String, String)> = items
+        .iter()
+        .map(|it| {
+            let mut parts = it.splitn(3, '\t');
+            (
+                parts.next().unwrap_or("").to_string(),
+                parts.next().unwrap_or("").to_string(),
+                parts.next().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    if decoded.iter().any(|(tag, _, _)| tag.is_empty()) {
+        return Err("ui: a menu item needs a non-empty tag".to_string());
+    }
+    if headless() {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::add_menu(title, &decoded)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        gtk::add_menu(title, &decoded)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = title;
+        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+            .to_string())
+    }
+}
+
+/// M148: un diálogo de archivo nativo, MODAL (bloquea al llamador lo que el usuario tarde —
+/// por eso va por la espera SIN plazo, alcanzable solo tras `ensure_app`). `kind`:
+/// "open_file" | "open_folder" | "save_file" (`arg` = nombre sugerido del save). `Ok(None)` =
+/// canceló. Headless: el resultado se inyecta con `RAY_UI_PICK` (ausente/vacío = None) — la
+/// vía de la batería de 3 motores. Contrato v1: UN modal a la vez (en macOS la main queue es
+/// serial: otra op de UI concurrente espera al panel; GTK no lo sufre — su loop recursivo
+/// sigue drenando idles).
+pub fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+    if !matches!(kind, "open_file" | "open_folder" | "save_file") {
+        return Err(format!("ui: unknown dialog kind '{kind}'"));
+    }
+    if headless() {
+        return Ok(std::env::var("RAY_UI_PICK").ok().filter(|s| !s.is_empty()));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::dialog(kind, arg)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        gtk::dialog(kind, arg)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = arg;
+        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+            .to_string())
+    }
+}
+
 // ── macOS: AppKit + WKWebView por mensajes objc a mano ───────────────────────
 #[cfg(target_os = "macos")]
 mod mac {
@@ -515,6 +591,11 @@ mod mac {
     type MsgInitWindow = unsafe extern "C" fn(Id, Sel, CGRect, u64, u64, u8) -> Id;
     type MsgInitFrame = unsafe extern "C" fn(Id, Sel, CGRect) -> Id;
     type MsgInitBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize, u64) -> Id;
+    // M148 (menús + diálogos):
+    type MsgMenuItemInit = unsafe extern "C" fn(Id, Sel, Id, Sel, Id) -> Id;
+    type MsgVoidI64 = unsafe extern "C" fn(Id, Sel, i64);
+    type MsgI64 = unsafe extern "C" fn(Id, Sel) -> i64;
+    type MsgCStr = unsafe extern "C" fn(Id, Sel) -> *const std::ffi::c_char;
 
     fn msg_send() -> *const c_void {
         objc_msgSend as unsafe extern "C" fn() as *const c_void
@@ -580,6 +661,27 @@ mod mac {
         }
     }
 
+    /// Como `on_main_sync` pero SIN plazo: para los diálogos MODALES (el usuario tarda lo que
+    /// tarda). Solo alcanzable tras `ensure_app` (que sí acota a 5 s) — con la app Ready el
+    /// loop jamás sale, así que la espera no puede quedar huérfana.
+    fn on_main_sync_wait<T: Send + 'static>(
+        f: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let slot = std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+        let slot2 = slot.clone();
+        on_main(move || {
+            *slot2.0.lock().unwrap() = Some(f());
+            slot2.1.notify_all();
+        });
+        let mut got = slot.0.lock().unwrap();
+        loop {
+            if let Some(r) = got.take() {
+                return r;
+            }
+            got = slot.1.wait(got).unwrap();
+        }
+    }
+
     /// Inicializa NSApplication en el hilo que llama (el 1). Falla limpio sin sesión gráfica.
     pub(super) fn init_app() -> Result<(), String> {
         const POLICY_REGULAR: i64 = 0;
@@ -591,8 +693,85 @@ mod mac {
             }
             let set_policy: MsgBoolInt = std::mem::transmute(msg_send());
             set_policy(app, sel(b"setActivationPolicy:\0"), POLICY_REGULAR);
+            // M148: el menú ESTÁNDAR, automático. Sin menú principal, los key equivalents no
+            // viajan (⌘C/⌘V/⌘X muertos en los campos de texto del webview — el bug real que
+            // esto arregla). Item 0 = menú de la app POR POSICIÓN (Hide ⌘H, Quit ⌘Q); Edit
+            // completo con targets NIL (responder chain → el webview los atiende) + ⌘W que
+            // desemboca en el windowWillClose: existente (evento closed).
+            let main_menu = build_standard_menu(app);
+            MAIN_MENU.store(main_menu as usize, std::sync::atomic::Ordering::SeqCst);
         }
         Ok(())
+    }
+
+    /// La barra de menús viva del proceso (para que `add_menu` appendee), como usize opaco.
+    static MAIN_MENU: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    // Un NSMenuItem `title` con action/keyEquivalent (target nil = responder chain), añadido a
+    // `menu`. `key` en minúscula = ⌘+tecla; en MAYÚSCULA AppKit añade ⇧ solo (no tocar el mask).
+    unsafe fn add_std_item(menu: Id, title: &str, action: &[u8], key: &str) {
+        unsafe {
+            let alloc: MsgId = std::mem::transmute(msg_send());
+            let init: MsgMenuItemInit = std::mem::transmute(msg_send());
+            let add: MsgVoidId = std::mem::transmute(msg_send());
+            let item = init(
+                alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                sel(b"initWithTitle:action:keyEquivalent:\0"),
+                nsstring(title),
+                sel(action),
+                nsstring(key),
+            );
+            add(menu, sel(b"addItem:\0"), item);
+        }
+    }
+
+    // Construye [NSApp setMainMenu:] con el menú de la app + Edit. Corre en el hilo 1, con la
+    // app viva, antes de [NSApp run].
+    unsafe fn build_standard_menu(app: Id) -> Id {
+        unsafe {
+            let alloc: MsgId = std::mem::transmute(msg_send());
+            let init: MsgId = std::mem::transmute(msg_send());
+            let init_title: MsgIdId = std::mem::transmute(msg_send());
+            let add: MsgVoidId = std::mem::transmute(msg_send());
+            let set_submenu: MsgVoidId = std::mem::transmute(msg_send());
+            let set_main: MsgVoidId = std::mem::transmute(msg_send());
+
+            let main_menu = init(alloc(cls(b"NSMenu\0"), sel(b"alloc\0")), sel(b"init\0"));
+            // Menú de la app (item 0; el título lo pone el sistema).
+            let app_item = init(alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")), sel(b"init\0"));
+            add(main_menu, sel(b"addItem:\0"), app_item);
+            let app_menu = init(alloc(cls(b"NSMenu\0"), sel(b"alloc\0")), sel(b"init\0"));
+            add_std_item(app_menu, "Hide", b"hide:\0", "h");
+            add_std_item(app_menu, "Quit", b"terminate:\0", "q");
+            set_submenu(app_item, sel(b"setSubmenu:\0"), app_menu);
+            // Edit: el portapapeles/undo del webview viven aquí. El item de la barra lleva su
+            // propio título (action nil: solo cuelga el submenú).
+            let item_init: MsgMenuItemInit = std::mem::transmute(msg_send());
+            let edit_item = item_init(
+                alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                sel(b"initWithTitle:action:keyEquivalent:\0"),
+                nsstring("Edit"),
+                std::ptr::null_mut(),
+                nsstring(""),
+            );
+            add(main_menu, sel(b"addItem:\0"), edit_item);
+            let edit_menu = init_title(
+                alloc(cls(b"NSMenu\0"), sel(b"alloc\0")),
+                sel(b"initWithTitle:\0"),
+                nsstring("Edit"),
+            );
+            add_std_item(edit_menu, "Undo", b"undo:\0", "z");
+            add_std_item(edit_menu, "Redo", b"redo:\0", "Z");
+            add_std_item(edit_menu, "Cut", b"cut:\0", "x");
+            add_std_item(edit_menu, "Copy", b"copy:\0", "c");
+            add_std_item(edit_menu, "Paste", b"paste:\0", "v");
+            add_std_item(edit_menu, "Select All", b"selectAll:\0", "a");
+            add_std_item(edit_menu, "Close Window", b"performClose:\0", "w");
+            set_submenu(edit_item, sel(b"setSubmenu:\0"), edit_menu);
+
+            set_main(app, sel(b"setMainMenu:\0"), main_menu);
+            main_menu
+        }
     }
 
     /// `[NSApp run]` — no retorna.
@@ -627,6 +806,18 @@ mod mac {
                     super::mark_closed(id);
                 }
             }
+            // M148: la acción de los menús custom — el sender es el NSMenuItem; su `tag`
+            // (i64) mapea al tag String del programa (objc no carga Strings de Rust).
+            extern "C" fn menu_action(_this: Id, _sel: Sel, sender: Id) {
+                // SAFETY: el run loop entrega un NSMenuItem válido.
+                let n = unsafe {
+                    let get_tag: MsgI64 = std::mem::transmute(msg_send());
+                    get_tag(sender, sel(b"tag\0"))
+                };
+                if let Some(tag) = menu_tags().lock().unwrap().get(&n) {
+                    super::push_event("menu", 0, tag);
+                }
+            }
             unsafe {
                 let cls_new =
                     objc_allocateClassPair(cls(b"NSObject\0"), c"RayWindowDelegate".as_ptr(), 0);
@@ -636,10 +827,139 @@ mod mac {
                     window_will_close,
                     c"v@:@".as_ptr(),
                 );
+                class_addMethod(cls_new, sel(b"rayMenuAction:\0"), menu_action, c"v@:@".as_ptr());
                 objc_registerClassPair(cls_new);
                 cls_new as usize
             }
         }) as Id
+    }
+
+    /// tag numérico del NSMenuItem → tag String del programa.
+    fn menu_tags() -> &'static std::sync::Mutex<std::collections::HashMap<i64, String>> {
+        static TAGS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i64, String>>> =
+            std::sync::OnceLock::new();
+        TAGS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    }
+
+    /// M148: appendea un menú de nivel superior con items custom (en el hilo principal). El
+    /// target es un singleton del delegate (autoenablesItems resuelve a favor: target que
+    /// responde al action sin validateMenuItem: = item HABILITADO — cero plomería extra).
+    pub(super) fn add_menu(title: &str, items: &[(String, String, String)]) -> Result<(), String> {
+        let title = title.to_string();
+        let items = items.to_vec();
+        on_main_sync(move || {
+            let main_menu = MAIN_MENU.load(std::sync::atomic::Ordering::SeqCst);
+            if main_menu == 0 {
+                return Err("ui: the menu bar is not ready".to_string());
+            }
+            unsafe {
+                let alloc: MsgId = std::mem::transmute(msg_send());
+                let init: MsgId = std::mem::transmute(msg_send());
+                let init_title: MsgIdId = std::mem::transmute(msg_send());
+                let item_init: MsgMenuItemInit = std::mem::transmute(msg_send());
+                let add: MsgVoidId = std::mem::transmute(msg_send());
+                let set_submenu: MsgVoidId = std::mem::transmute(msg_send());
+                let set_target: MsgVoidId = std::mem::transmute(msg_send());
+                let set_tag: MsgVoidI64 = std::mem::transmute(msg_send());
+
+                // El target singleton (una instancia del delegate), creado aquí en main.
+                static TARGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                let mut target = TARGET.load(std::sync::atomic::Ordering::SeqCst) as Id;
+                if target.is_null() {
+                    target = init(alloc(delegate_class(), sel(b"alloc\0")), sel(b"init\0"));
+                    TARGET.store(target as usize, std::sync::atomic::Ordering::SeqCst);
+                }
+
+                let bar_item = item_init(
+                    alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                    sel(b"initWithTitle:action:keyEquivalent:\0"),
+                    nsstring(&title),
+                    std::ptr::null_mut(),
+                    nsstring(""),
+                );
+                let menu = init_title(
+                    alloc(cls(b"NSMenu\0"), sel(b"alloc\0")),
+                    sel(b"initWithTitle:\0"),
+                    nsstring(&title),
+                );
+                for (tag, label, shortcut) in &items {
+                    let item = item_init(
+                        alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                        sel(b"initWithTitle:action:keyEquivalent:\0"),
+                        nsstring(label),
+                        sel(b"rayMenuAction:\0"),
+                        nsstring(shortcut),
+                    );
+                    set_target(item, sel(b"setTarget:\0"), target);
+                    let n = {
+                        let mut tags = menu_tags().lock().unwrap();
+                        let n = tags.len() as i64 + 1;
+                        tags.insert(n, tag.clone());
+                        n
+                    };
+                    set_tag(item, sel(b"setTag:\0"), n);
+                    add(menu, sel(b"addItem:\0"), item);
+                }
+                set_submenu(bar_item, sel(b"setSubmenu:\0"), menu);
+                add(main_menu as Id, sel(b"addItem:\0"), bar_item);
+            }
+            Ok(())
+        })
+    }
+
+    /// M148: diálogo de archivo modal (NSOpenPanel/NSSavePanel), por la espera SIN plazo. La
+    /// main queue es SERIAL: mientras el panel está abierto, otras ops de UI esperan (un modal
+    /// a la vez — contrato v1; GTK no lo sufre).
+    pub(super) fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+        let kind = kind.to_string();
+        let arg = arg.to_string();
+        on_main_sync_wait(move || {
+            const MODAL_OK: i64 = 1;
+            unsafe {
+                let shared: MsgId = std::mem::transmute(msg_send());
+                let plain_id: MsgId = std::mem::transmute(msg_send());
+                let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                let run_modal: MsgI64 = std::mem::transmute(msg_send());
+                let utf8: MsgCStr = std::mem::transmute(msg_send());
+
+                // El panel puede abrir DETRÁS de otras apps si la nuestra no está activa.
+                let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+                set_bool(app, sel(b"activateIgnoringOtherApps:\0"), 1);
+
+                let panel = match kind.as_str() {
+                    "save_file" => {
+                        let p = plain_id(cls(b"NSSavePanel\0"), sel(b"savePanel\0"));
+                        if !arg.is_empty() {
+                            set_id(p, sel(b"setNameFieldStringValue:\0"), nsstring(&arg));
+                        }
+                        p
+                    }
+                    other => {
+                        let p = plain_id(cls(b"NSOpenPanel\0"), sel(b"openPanel\0"));
+                        if other == "open_folder" {
+                            set_bool(p, sel(b"setCanChooseFiles:\0"), 0);
+                            set_bool(p, sel(b"setCanChooseDirectories:\0"), 1);
+                        }
+                        p
+                    }
+                };
+                if run_modal(panel, sel(b"runModal\0")) != MODAL_OK {
+                    return Ok(None);
+                }
+                let url = plain_id(panel, sel(b"URL\0"));
+                if url.is_null() {
+                    return Ok(None);
+                }
+                let path = plain_id(url, sel(b"path\0"));
+                let c = utf8(path, sel(b"UTF8String\0"));
+                if c.is_null() {
+                    return Ok(None);
+                }
+                // Copia DENTRO del bloque (la main queue drena con autorelease pool).
+                Ok(Some(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned()))
+            }
+        })
     }
 
     /// Crea la ventana + webview EN EL HILO PRINCIPAL y devuelve sus punteros retenidos.
@@ -800,6 +1120,23 @@ mod gtk {
     );
     type FnRunJs =
         unsafe extern "C" fn(Widget, *const std::ffi::c_char, *mut c_void, *mut c_void, *mut c_void);
+    // M148 (menús + diálogos):
+    type FnWidgetNew0 = unsafe extern "C" fn() -> Widget;
+    type FnItemNewLabel = unsafe extern "C" fn(*const std::ffi::c_char) -> Widget;
+    type FnWidgetPair = unsafe extern "C" fn(Widget, Widget);
+    type FnBoxNew = unsafe extern "C" fn(i32, i32) -> Widget;
+    type FnBoxPack = unsafe extern "C" fn(Widget, Widget, i32, i32, u32);
+    type FnChooserNew = unsafe extern "C" fn(
+        *const std::ffi::c_char,
+        Widget,
+        i32,
+        *const std::ffi::c_char,
+        *const std::ffi::c_char,
+    ) -> Widget;
+    type FnDialogRun = unsafe extern "C" fn(Widget) -> i32;
+    type FnGetFilename = unsafe extern "C" fn(Widget) -> *mut std::ffi::c_char;
+    type FnSetCurrentName = unsafe extern "C" fn(Widget, *const std::ffi::c_char);
+    type FnGFree = unsafe extern "C" fn(*mut c_void);
 
     const GTK_WINDOW_TOPLEVEL: i32 = 0;
     const G_SOURCE_REMOVE: i32 = 0;
@@ -821,6 +1158,21 @@ mod gtk {
         /// 2.40+ (aridad 8) o, si no está, el clásico (aridad 5): exactamente uno queda `Some`.
         evaluate_js: Option<FnEvalJs>,
         run_js: Option<FnRunJs>,
+        // M148 — menús (core GTK3, requeridos) + diálogos (chooser NATIVO, 3.20+: opcionales
+        // con Err limpio; jamás la variádica gtk_file_chooser_dialog_new).
+        menu_bar_new: FnWidgetNew0,
+        menu_new: FnWidgetNew0,
+        menu_item_new_with_label: FnItemNewLabel,
+        menu_item_set_submenu: FnWidgetPair,
+        menu_shell_append: FnWidgetPair,
+        box_new: FnBoxNew,
+        box_pack_start: FnBoxPack,
+        g_free: FnGFree,
+        g_object_unref: FnGFree,
+        chooser_new: Option<FnChooserNew>,
+        dialog_run: Option<FnDialogRun>,
+        get_filename: Option<FnGetFilename>,
+        set_current_name: Option<FnSetCurrentName>,
     }
     // SAFETY: los punteros de función son inmutables tras la resolución; toda llamada que toca
     // objetos GTK viaja al hilo del loop (idle_add) — aquí solo se COMPARTEN los fn pointers.
@@ -890,6 +1242,31 @@ mod gtk {
                     .then(|| std::mem::transmute::<*mut c_void, FnEvalJs>(evaluate_js)),
                 run_js: (evaluate_js.is_null() && !run_js.is_null())
                     .then(|| std::mem::transmute::<*mut c_void, FnRunJs>(run_js)),
+                menu_bar_new: std::mem::transmute::<*mut c_void, FnWidgetNew0>(sym(gtk, c"gtk_menu_bar_new")?),
+                menu_new: std::mem::transmute::<*mut c_void, FnWidgetNew0>(sym(gtk, c"gtk_menu_new")?),
+                menu_item_new_with_label: std::mem::transmute::<*mut c_void, FnItemNewLabel>(sym(gtk, c"gtk_menu_item_new_with_label")?),
+                menu_item_set_submenu: std::mem::transmute::<*mut c_void, FnWidgetPair>(sym(gtk, c"gtk_menu_item_set_submenu")?),
+                menu_shell_append: std::mem::transmute::<*mut c_void, FnWidgetPair>(sym(gtk, c"gtk_menu_shell_append")?),
+                box_new: std::mem::transmute::<*mut c_void, FnBoxNew>(sym(gtk, c"gtk_box_new")?),
+                box_pack_start: std::mem::transmute::<*mut c_void, FnBoxPack>(sym(gtk, c"gtk_box_pack_start")?),
+                g_free: std::mem::transmute::<*mut c_void, FnGFree>(sym(gtk, c"g_free")?),
+                g_object_unref: std::mem::transmute::<*mut c_void, FnGFree>(sym(gtk, c"g_object_unref")?),
+                chooser_new: {
+                    let p = dlsym(gtk, c"gtk_file_chooser_native_new".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnChooserNew>(p))
+                },
+                dialog_run: {
+                    let p = dlsym(gtk, c"gtk_native_dialog_run".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnDialogRun>(p))
+                },
+                get_filename: {
+                    let p = dlsym(gtk, c"gtk_file_chooser_get_filename".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnGetFilename>(p))
+                },
+                set_current_name: {
+                    let p = dlsym(gtk, c"gtk_file_chooser_set_current_name".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSetCurrentName>(p))
+                },
             })
         }
     }
@@ -952,6 +1329,157 @@ mod gtk {
         }
     }
 
+    /// Como `on_main_sync` pero SIN plazo — los diálogos modales esperan al usuario. Solo
+    /// alcanzable tras `ensure_app` (el loop de gtk jamás sale una vez Ready). A diferencia de
+    /// macOS, el loop recursivo del diálogo SIGUE drenando idles: otras ops de UI no se atascan.
+    fn on_main_sync_wait<T: Send + 'static>(
+        f: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let slot = Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+        let slot2 = slot.clone();
+        on_main(move || {
+            *slot2.0.lock().unwrap() = Some(f());
+            slot2.1.notify_all();
+        });
+        let mut got = slot.0.lock().unwrap();
+        loop {
+            if let Some(r) = got.take() {
+                return r;
+            }
+            got = slot.1.wait(got).unwrap();
+        }
+    }
+
+    /// M148: los menús declarados hasta ahora — el menubar de GTK es POR VENTANA (a diferencia
+    /// del global de macOS): cada `open_window` construye el suyo de estos specs; los menús
+    /// aplican a las ventanas abiertas DESPUÉS de `ui.menu()` (documentado). v1 sin
+    /// aceleradores de teclado en Linux (GtkAccelGroup diferido): click-only.
+    /// Un menú declarado: (título, items (tag, label)).
+    type MenuSpec = (String, Vec<(String, String)>);
+
+    fn menu_specs() -> &'static std::sync::Mutex<Vec<MenuSpec>> {
+        static SPECS: std::sync::OnceLock<std::sync::Mutex<Vec<MenuSpec>>> =
+            std::sync::OnceLock::new();
+        SPECS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+    }
+
+    pub(super) fn add_menu(title: &str, items: &[(String, String, String)]) -> Result<(), String> {
+        menu_specs().lock().unwrap().push((
+            title.to_string(),
+            items.iter().map(|(tag, label, _shortcut)| (tag.clone(), label.clone())).collect(),
+        ));
+        Ok(())
+    }
+
+    /// El contexto del handler `activate` de un item: su tag (liberado por el GClosureNotify).
+    struct MenuCtx {
+        tag: String,
+    }
+
+    extern "C" fn on_menu_activate(_w: Widget, data: *mut c_void) {
+        // SAFETY: `data` es el MenuCtx de build_menubar; vive hasta el GClosureNotify.
+        let ctx = unsafe { &*(data as *const MenuCtx) };
+        super::push_event("menu", 0, &ctx.tag);
+    }
+
+    extern "C" fn drop_menu_ctx(data: *mut c_void, _closure: *mut c_void) {
+        // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
+        drop(unsafe { Box::from_raw(data as *mut MenuCtx) });
+    }
+
+    // Construye el menubar de los specs vigentes (en el hilo del loop). None si no hay menús.
+    unsafe fn build_menubar(api: &Api) -> Option<Widget> {
+        let specs = menu_specs().lock().unwrap().clone();
+        if specs.is_empty() {
+            return None;
+        }
+        unsafe {
+            let bar = (api.menu_bar_new)();
+            for (title, items) in &specs {
+                let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
+                let top = (api.menu_item_new_with_label)(title_c.as_ptr());
+                let menu = (api.menu_new)();
+                for (tag, label) in items {
+                    let label_c = std::ffi::CString::new(label.replace('\0', "")).unwrap();
+                    let item = (api.menu_item_new_with_label)(label_c.as_ptr());
+                    let ctx = Box::into_raw(Box::new(MenuCtx { tag: tag.clone() }));
+                    (api.signal_connect)(
+                        item,
+                        c"activate".as_ptr(),
+                        on_menu_activate,
+                        ctx as *mut c_void,
+                        drop_menu_ctx,
+                        0,
+                    );
+                    (api.menu_shell_append)(menu, item);
+                }
+                (api.menu_item_set_submenu)(top, menu);
+                (api.menu_shell_append)(bar, top);
+            }
+            Some(bar)
+        }
+    }
+
+    /// M148: diálogo de archivo con el chooser NATIVO (3.20+; en libs más viejas, Err limpio).
+    pub(super) fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+        let kind = kind.to_string();
+        let arg = arg.to_string();
+        on_main_sync_wait(move || {
+            const ACTION_OPEN: i32 = 0;
+            const ACTION_SAVE: i32 = 1;
+            const ACTION_SELECT_FOLDER: i32 = 2;
+            const RESPONSE_ACCEPT: i32 = -3; // NEGATIVO (GTK_RESPONSE_ACCEPT)
+            let api = api().as_ref().map_err(|e| e.clone())?;
+            let (Some(chooser_new), Some(dialog_run), Some(get_filename)) =
+                (api.chooser_new, api.dialog_run, api.get_filename)
+            else {
+                return Err("ui: file dialogs need GTK >= 3.20 (gtk_file_chooser_native_new)"
+                    .to_string());
+            };
+            let (action, title, accept) = match kind.as_str() {
+                "open_folder" => (ACTION_SELECT_FOLDER, c"Select Folder", c"_Select"),
+                "save_file" => (ACTION_SAVE, c"Save File", c"_Save"),
+                _ => (ACTION_OPEN, c"Open File", c"_Open"),
+            };
+            // SAFETY: punteros válidos del loop; el chooser nativo pasa como GtkFileChooser*.
+            unsafe {
+                let chooser = chooser_new(
+                    title.as_ptr(),
+                    std::ptr::null_mut(),
+                    action,
+                    accept.as_ptr(),
+                    c"_Cancel".as_ptr(),
+                );
+                if chooser.is_null() {
+                    return Err("ui: could not create the file dialog".to_string());
+                }
+                if action == ACTION_SAVE
+                    && !arg.is_empty()
+                    && let Some(set_name) = api.set_current_name
+                {
+                    let c = std::ffi::CString::new(arg.replace('\0', "")).unwrap();
+                    set_name(chooser, c.as_ptr());
+                }
+                let resp = dialog_run(chooser);
+                let out = if resp == RESPONSE_ACCEPT {
+                    let raw = get_filename(chooser);
+                    if raw.is_null() {
+                        None
+                    } else {
+                        // g_malloc'd: copiar y g_free.
+                        let path = std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned();
+                        (api.g_free)(raw as *mut c_void);
+                        Some(path)
+                    }
+                } else {
+                    None
+                };
+                (api.g_object_unref)(chooser);
+                Ok(out)
+            }
+        })
+    }
+
     /// El contexto del handler de `destroy`: nuestro id + el flag de vida. Se libera con el
     /// GClosureNotify que g_signal_connect_data invoca al destruirse el objeto (sin fugas).
     struct DestroyCtx {
@@ -998,7 +1526,15 @@ mod gtk {
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
                 }
-                (api.container_add)(window, webview);
+                // M148: el hijo de la ventana es un GtkBox vertical — menubar (si hay menús
+                // declarados) arriba, webview expandido debajo. GTK posee todo el árbol.
+                const ORIENTATION_VERTICAL: i32 = 1;
+                let content = (api.box_new)(ORIENTATION_VERTICAL, 0);
+                if let Some(bar) = build_menubar(api) {
+                    (api.box_pack_start)(content, bar, 0, 0, 0);
+                }
+                (api.box_pack_start)(content, webview, 1, 1, 0);
+                (api.container_add)(window, content);
                 (api.load_uri)(webview, url.as_ptr());
                 let ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2 }));
                 (api.signal_connect)(

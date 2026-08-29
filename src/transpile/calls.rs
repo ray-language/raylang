@@ -2207,7 +2207,23 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
-            // M147: std/embed — la tabla horneada (sin feature: helpers inline, vía rustc intacta).
+            "ui_menu" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_menu(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+            "ui_dialog" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_dialog(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
+                        // M147: std/embed — la tabla horneada (sin feature: helpers inline, vía rustc intacta).
             "embed_read" if name.starts_with("__") => {
                 self.needs_embed = true;
                 out.push_str("__ray_embed_read(&*");

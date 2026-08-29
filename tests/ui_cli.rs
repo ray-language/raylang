@@ -175,3 +175,85 @@ fn on_linux_without_a_display_open_fails_clean_and_fast() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "clean err: true\n", "Err limpio");
     assert!(secs < 15, "sin cuelgue (tardó {secs}s)");
 }
+
+// M148 — menús + diálogos de archivo, headless en los tres motores: menu() valida y no-opa;
+// los diálogos se conducen con RAY_UI_PICK (set → Some, sin variable → None); el evento lleva
+// el campo tag nuevo (vacío en closed).
+const MENU_PROG: &str = r#"import std/ui;
+
+fn main() {
+    let items = [
+        ui.MenuItem { tag: "new", title: "New", shortcut: "n" },
+        ui.MenuItem { tag: "quit", title: "Quit Game", shortcut: "" },
+    ];
+    print("menu ok: " + to_string(ui.menu("Game", items).is_ok()));
+    match (ui.menu("Bad", [ui.MenuItem { tag: "", title: "x", shortcut: "" }])) {
+        Result.Ok(_) => print("bad: empty tag accepted"),
+        Result.Err(e) => print("empty tag rejected: " + to_string(e.contains("non-empty tag"))),
+    }
+    match (ui.pick_file()) {
+        Result.Ok(o) => match (o) {
+            Option.Some(p) => print("picked: " + p),
+            Option.None => print("pick cancelled"),
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+    match (ui.save_file("draft.txt")) {
+        Result.Ok(o) => match (o) {
+            Option.Some(p) => print("save to: " + p),
+            Option.None => print("save cancelled"),
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+    match (ui.open("T", "http://127.0.0.1:1/", 320, 200)) {
+        Result.Err(e) => print("open failed: " + e),
+        Result.Ok(h) => {
+            let _ = close(h);
+            match (ui.next_event()) {
+                Result.Ok(e) => print("event: " + e.kind + ", tag empty: " + to_string(e.tag == "")),
+                Result.Err(e) => print("err: " + e),
+            }
+        },
+    }
+}
+"#;
+
+#[test]
+fn menus_and_dialogs_match_on_all_three_engines() {
+    const WANT_NONE: &str = "menu ok: true\nempty tag rejected: true\npick cancelled\n\
+save cancelled\nevent: closed, tag empty: true\n";
+    const WANT_PICK: &str = "menu ok: true\nempty tag rejected: true\npicked: /tmp/x.txt\n\
+save to: /tmp/x.txt\nevent: closed, tag empty: true\n";
+    let base = tmp("menus");
+    std::fs::write(base.join("prog.ray"), MENU_PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code) = run_headless(
+            Command::new(env!("CARGO_BIN_EXE_ray"))
+                .args([engine, "prog.ray"])
+                .env_remove("RAY_UI_PICK")
+                .current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0");
+        assert_eq!(out, WANT_NONE, "{engine}: sin RAY_UI_PICK");
+        let (out, code) = run_headless(
+            Command::new(env!("CARGO_BIN_EXE_ray"))
+                .args([engine, "prog.ray"])
+                .env("RAY_UI_PICK", "/tmp/x.txt")
+                .current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0 (pick)");
+        assert_eq!(out, WANT_PICK, "{engine}: con RAY_UI_PICK");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code) = run_headless(Command::new(&bin).env("RAY_UI_PICK", "/tmp/x.txt"));
+        assert_eq!(code, 0, "nativo: exit 0");
+        assert_eq!(out, WANT_PICK, "nativo ≡ VM");
+    }
+}

@@ -1112,7 +1112,9 @@ binario es autocontenido y corre desde cualquier directorio — lo que una app d
 empaquetada necesita (Finder lanza con `cwd=/`). Las claves son strings exactos: sin `..`, sin
 plegado de mayúsculas, ocultos excluidos. Para servirlos por HTTP, el framework web trae
 `app.static_embedded("/static/", "assets")` — mismo saneo, ETag (de contenido: idéntico entre
-motores), 304 y Range que `static_files`.
+motores), 304 y Range que `static_files`. Bajo `ray dev`, un cambio en un asset **no
+reinicia** el programa (la lectura ya es en vivo): el supervisor recarga el navegador directo
+por el hub de live-reload.
 
 ### Ventanas (`std/ui`)
 

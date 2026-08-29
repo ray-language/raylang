@@ -470,7 +470,23 @@ fn cmd_dev(args: &[String]) {
     // La entrada que el hijo usará (para el check-before-restart): se despojan los flags de `run`
     // (mismos que `cmd_run`), y el primer resto es el archivo explícito (o `None` → default del proyecto).
     let entry = dev_entry(&fwd_args);
-    eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
+    // M147: los dirs de `[native] embed` también se vigilan — un cambio ahí no reinicia (la
+    // lectura de std/embed es en vivo): solo se recarga el navegador vía el hub.
+    let embed_dirs: Vec<PathBuf> = Manifest::load(&root)
+        .ok()
+        .flatten()
+        .map(|m| m.native_embed.iter().map(PathBuf::from).collect())
+        .unwrap_or_default();
+    let watching_embed = !embed_dirs.is_empty();
+    let _ = DEV_EMBED_DIRS.set(embed_dirs);
+    if watching_embed {
+        eprintln!(
+            "[dev] watching {} (.ray, .ray.html, ray.toml + embedded assets); Ctrl-C to exit",
+            root.display()
+        );
+    } else {
+        eprintln!("[dev] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
+    }
     install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
@@ -554,7 +570,35 @@ fn cmd_dev(args: &[String]) {
             eprintln!("[dev] change in {change}: contents unchanged — ignoring");
             continue;
         }
+        // M147: ¿el cambio es SOLO de assets embebidos? Reiniciar sería inútil (std/embed lee
+        // en vivo) — basta recargar el navegador. Se decide sobre el DIFF real de hashes (una
+        // ráfaga que mezcle un .ray y un asset debe reiniciar, y el reinicio ya recarga).
+        let assets_only = {
+            let touched = current_hashes
+                .iter()
+                .filter(|(p, h)| hashes.get(*p) != Some(h))
+                .map(|(p, _)| p)
+                .chain(hashes.keys().filter(|p| !current_hashes.contains_key(*p)));
+            let mut any = false;
+            let mut all_assets = true;
+            for p in touched {
+                any = true;
+                if !is_embed_asset(&root, p) {
+                    all_assets = false;
+                }
+            }
+            any && all_assets
+        };
         hashes = current_hashes;
+        if assets_only {
+            eprintln!("[dev] change in {change}: embedded asset — reloading the browser (no restart)");
+            if running
+                && let Some((hub, _)) = &reload
+            {
+                hub.broadcast();
+            }
+            continue;
+        }
         // Check-before-restart: compila primero (ms). Si NO compila, mantén el programa en marcha e
         // imprime el diagnóstico — no mates un servidor que funciona por un error a medio escribir.
         if let Err(diag) = dev_check_compiles(&exe, &entry) {
@@ -907,13 +951,37 @@ fn dev_stdin_quit() -> bool {
     }
 }
 
+/// M147: los dirs de `[native] embed` que `ray dev` vigila ADEMÁS de los fuentes (rutas
+/// relativas a la raíz). Un cambio ahí NO reinicia — la lectura de std/embed ya es en vivo —
+/// solo recarga el navegador vía el hub. Lo fija `cmd_dev`; test-watch y demás no lo tocan.
+static DEV_EMBED_DIRS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+
+/// ¿Es `path` un asset del espacio embed vigilado por `ray dev`? (Bajo un dir configurado,
+/// sin componentes ocultos — el mismo criterio del walker de std/embed.)
+fn is_embed_asset(root: &Path, path: &Path) -> bool {
+    let Some(dirs) = DEV_EMBED_DIRS.get() else {
+        return false;
+    };
+    let Ok(rel) = path.strip_prefix(root) else {
+        return false;
+    };
+    if rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+        return false;
+    }
+    dirs.iter().any(|d| rel.starts_with(d))
+}
+
 /// ¿Es `path` (ruta de un evento de kernel, absoluta) un fuente que `ray dev` vigila? El mismo
 /// criterio de `scan_sources`, aplicado a una ruta suelta: bajo la raíz, fuera de carpetas de
 /// artefactos/ocultas, extensión de fuente, y la regla del `.ray` generado con `.ray.html`
 /// hermano (se vigila el fuente, no el artefacto). Los temporales de guardado atómico de los
-/// editores (`.tmp`, `~`, el `4913` de vim) caen solos por la extensión.
+/// editores (`.tmp`, `~`, el `4913` de vim) caen solos por la extensión. M147: los assets de
+/// `[native] embed` también se vigilan (para la recarga del navegador, no para reiniciar).
 #[cfg(all(feature = "watch", unix))]
 fn is_watched_source(canon_root: &Path, path: &Path) -> bool {
+    if is_embed_asset(canon_root, path) {
+        return true;
+    }
     let Ok(rel) = path.strip_prefix(canon_root) else { return false };
     if let Some(parent) = rel.parent() {
         for comp in parent.components() {
@@ -987,7 +1055,11 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
                     continue;
                 }
                 pending.push(path);
-            } else if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
+            } else if name.ends_with(".ray")
+                || name.ends_with(".ray.html")
+                || name == "ray.toml"
+                || is_embed_asset(root, &path)
+            {
                 // Un `.ray` con un `.ray.html` hermano es un generado de `ray build
                 // --templates-only` (derivado, además IGNORADO por el loader desde M102): se
                 // vigila el fuente (el .html), no el artefacto.

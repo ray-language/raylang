@@ -10663,3 +10663,61 @@ repro E2E es la ALTERNANCIA raw→prints→raw (6 rondas): la forma prints-luego
 carrera en esta máquina; la alternancia la pierde determinista (medido: 6/18 líneas con \r sin
 el fix; 18/18 con él) — y el test se validó en AMBAS direcciones (falla sin fix, pasa con él).
 La VM y el intérprete escriben síncrono: nunca tuvieron el bug.
+
+## 143. M146 — `std/ui`: la primitiva ventana + webview, y el contrato del hilo principal (ago 2026)
+
+La F1 del arco de apps de escritorio (IDEAS §80, decisión fijada: webview, sin ambigüedad).
+`std/ui` es deliberadamente una PRIMITIVA — `open(title, url, w, h)`, `eval_js`, eventos,
+`close(h)` — y no un framework: el webview del sistema carga el webserver embebido del programa
+y el IPC JS↔raylang ES el framework web (fetch/WS contra los handlers; nada nuevo que aprender).
+Tres decisiones definieron el arco:
+
+**El contrato del hilo principal: capturarlo TRANSPARENTE — no hay `ui.run()`.** AppKit exige
+poseer el hilo 1 del proceso y su run loop; la bifurcación (b) de §80 ("¿ui.run no retorna?
+¿main migra a fibra?") se resolvió con un tercero: el hilo 1 se captura por dentro y el usuario
+no ve nada. La exploración lo hizo natural: en la VM el hilo 1 estaba OCIOSO (todo corre en el
+hilo big-stack; el 1 esperaba en `join()`) → ahora espera "worker terminó | UI pedida" con el
+join y su match de payload (141 broken-pipe / 101 ICE) VERBATIM en un hilo monitor — sin UI, el
+comportamiento es idéntico al de siempre. En el nativo, donde `ray_main` corría directo en el
+hilo 1, el main emitido (solo si el programa usa ui) mueve el cuerpo del `catch_unwind` a un
+hilo del SO con pila explícita. La alternativa "ray_main como fibra" se DESCARTÓ con tres
+razones medibles: el worker de fibras aplana el payload de pánico a String (adiós `runtime
+error:` + exit 70), la pila caería de 8 MiB a 128 KiB, y `in_fiber()` se voltearía para todo
+main (los primitivos duales bloquean-hilo vs aparcan-fibra por ese predicado). El gate vive UNA
+vez en `ray_runtime::ui` (waker + `run_main_loop`), compartido por ambos hosts; la primera
+operación espera "app ready" CON PLAZO (sin sesión gráfica → `Err` claro, jamás un cuelgue) y
+sin waker registrado (tests de cargo, embedding) falla inmediato.
+
+**Objective-C a mano, cero crates** — la lección cpal de M145 aplicada a webviews (`wry` exige
+toolchains GTK/WebKit en build): `objc_msgSend` declarado sin tipo y CASTEADO a la firma exacta
+de cada mensaje (arm64), la clase delegate (`windowWillClose:`) registrada en runtime con
+`objc_allocateClassPair` tras un `OnceLock`, y el despacho al hilo principal con
+`dispatch_async_f` — libdispatch en C plano, sin implementar el ABI de blocks (que también
+decidió el `eval_js` v1: fire-and-forget con completionHandler nil; el eval con retorno queda
+para cuando un dogfood lo pida). Las trampas que la revisión adversarial del plan cazó ANTES de
+escribir código: `setReleasedWhenClosed:NO` + retención propia (el NSWindow programático se
+autolibera al cerrarse → use-after-free en el registro), el delegate desenganchado antes del
+close programático, el `Drop` del handle SIEMPRE asíncrono (corre en cualquier hilo —
+`close_all_handles` del runner — y con la app sin arrancar un despacho síncrono no volvería), y
+`activateIgnoringOtherApps` (un binario sin bundle abre detrás de todo).
+
+**Los eventos: el patrón watch, no el patrón signals.** Cola POR PROCESO + self-pipe; el opcode
+`UiNext` clona la forma de `WatchNext` (drena-o-aparca en `io_parked` con rebobinado de ip) —
+cero cambios de scheduler, contra el gancho a medida `(fd, chan)` que signals() necesitó. El
+pseudo-handle del timeout es `i64::MAX` (el barrido de deadlines solo marca handles ≥ 0; stdin
+ya había tomado el 0). `ui.events() -> Channel<UiEvent>` es una fibra-bomba en std/ui.ray (el
+patrón de std/process) — el canal de cara al usuario sin que ningún hilo ajeno toque un canal
+de la VM. El id que viaja en el evento ES el handle del programa: el registro reserva el id
+ANTES de abrir y se lo pasa al runtime como clave — sin tabla de traducción en el borde (la
+primera versión tenía ids independientes y el evento tras `close(h)` llegaba con un id que el
+programa no conocía). `closed` se emite EXACTAMENTE una vez por ventana: botón rojo y `close(h)`
+convergen en `mark_closed`.
+
+El backend `RAY_UI_BACKEND=headless` (ventanas como filas en memoria, `close` sintetiza el
+evento) comparte cola/self-pipe/registro con AppKit — solo difieren las ops de ventana — y es la
+vía de la batería E2E de tres motores en CI sin sesión gráfica; `ray test` lo fuerza por defecto
+(el env del usuario manda). El intérprete no rechaza: espera BLOQUEANDO (condvar), como
+fs.watch. De paso quedó arreglado el hueco de M145: `audio` faltaba en `RT_SUBSYSTEMS` y
+`--without audio` salía con exit 64 pese a estar documentado. Diferido consciente de v1, además
+del eval con retorno: más kinds de evento (resize/focus/navigate) y el scheme custom `app://`
+(offline/sin puerto) — cuando un dogfood los pida.

@@ -6,6 +6,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/ui`** (M146): **ventana + webview** — la primitiva de apps de escritorio (IDEAS §80
+  F1): `open(title, url, w, h)` abre una ventana nativa con el webview del SISTEMA cargando la
+  URL (el patrón: tu webserver embebido; el IPC JS↔raylang es el framework web), `eval_js`
+  (fire-and-forget), eventos con la fibra aparcada (`next_event`/`next_event_timeout`/
+  `events() -> Channel<UiEvent>`; v1: `closed`, exactamente uno por ventana), `close(h)` cierra.
+  Sin `ui.run()`: el runtime captura el hilo principal solo. macOS (AppKit/WKWebView por objc a
+  mano, cero crates); `RAY_UI_BACKEND=headless` para tests/CI en cualquier OS (`ray test` lo usa
+  por defecto); `--without ui` lo excluye del nativo. Ejemplo: `examples/web/desktop_window/`.
+
+- **Fix** (`ray build --native`): `--without audio` era rechazado con exit 64 — `audio` faltaba
+  en la lista de subsistemas válidos desde M145 aunque el help y los docs lo anunciaban.
+
 - **Docs**: patrón "app de escritorio sin ventana propia" (fase 0 de IDEAS §80) — puerto libre
   del SO + abrir el navegador cuando el servidor ya acepta + salir desde la UI; el framework web
   es el IPC. Sección nueva en el MANUAL (§14) y ejemplo ejecutable `examples/web/desktop/`

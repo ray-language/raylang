@@ -3080,6 +3080,14 @@ ejecutable `examples/web/desktop/` (verificado VM y nativo).
 + canal de eventos) → F2 Linux por dlopen + embed + `ray bundle` → F3 menús/diálogos/tray/
 updater.
 
+**F1 ✅ (29 ago 2026, M146, DESIGN §143)**: `std/ui` entregada — open/eval_js/eventos/close,
+tres motores byte-idénticos, headless para CI, ejemplo `examples/web/desktop_window/`. La
+bifurcación (b) se resolvió con un tercero: NO hay `ui.run()` — el runtime captura el hilo 1
+transparente (VM: estaba ocioso en el `join()`; nativo: el main emitido mueve el programa a un
+hilo del SO — jamás a una fibra: payload de pánico, pila e `in_fiber()`). Diferidos de v1 a
+dogfood: eval con retorno (ABI de blocks), más kinds de evento (resize/focus), scheme `app://`.
+Siguiente: F2 (WebKitGTK por dlopen + `--embed` + `ray bundle`).
+
 **DECISIÓN FIJADA (28 ago 2026, con el usuario): el camino es WEBVIEW, sin ambigüedad.** Bindear
 toolkits nativos completos (AppKit/UIKit/GTK/WinUI) o construir renderer propio eclipsaría al
 lenguaje y quedaría a medio hacer — no es opción para el tamaño del proyecto. Lo "nativo" se

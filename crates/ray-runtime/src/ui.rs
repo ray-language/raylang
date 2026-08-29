@@ -16,10 +16,12 @@
 //! extremo de lectura y drena al despertar. Ni la VM ni el scheduler saben de AppKit.
 //!
 //! **Backends**: AppKit/WKWebView en macOS (frameworks siempre presentes, se enlazan al build —
-//! `#[link(kind = "framework")]`, sin build.rs); `RAY_UI_BACKEND=headless` = ventanas de mesa
-//! (tabla en memoria, `close` sintetiza el evento `closed`) en cualquier OS — la vía de los
-//! tests/CI, como `RAY_AUDIO_SINK=null` en audio. Objective-C A MANO (sin crates objc/wry: la
-//! lección cpal de M145 — los crates de webview exigen toolchains GTK/WebKit en build).
+//! `#[link(kind = "framework")]`, sin build.rs); GTK3 + WebKitGTK en Linux (M147d, por `dlopen`
+//! EN RUNTIME — sin headers de build; sin las libs → `Err` claro, patrón ALSA de audio);
+//! `RAY_UI_BACKEND=headless` = ventanas de mesa (tabla en memoria, `close` sintetiza el evento
+//! `closed`) en cualquier OS — la vía de los tests/CI, como `RAY_AUDIO_SINK=null` en audio.
+//! Objective-C A MANO y GTK A MANO (sin crates objc/wry: la lección cpal de M145 — los crates
+//! de webview exigen toolchains GTK/WebKit en build).
 
 #![cfg(all(feature = "ui", unix))]
 
@@ -175,6 +177,15 @@ enum Win {
         webview: usize,
         delegate: usize,
     },
+    /// M147d: GTK3 + WebKitGTK (Linux, por dlopen). `alive` lo apaga el handler de `destroy` —
+    /// TODA closure despachada al hilo gtk lo re-chequea antes de tocar los punteros (el botón
+    /// de cerrar del WM destruye la ventana por debajo nuestro: anti use-after-destroy).
+    #[cfg(target_os = "linux")]
+    Gtk {
+        window: usize,
+        webview: usize,
+        alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
 }
 
 struct WinState {
@@ -233,18 +244,31 @@ pub fn set_main_thread_waker(waker: Box<dyn Fn() + Send + Sync>) {
     *gate().waker.lock().unwrap() = Some(waker);
 }
 
-/// Corre el loop de AppKit EN EL HILO QUE LLAMA — que debe ser el hilo 1 del proceso. Marca la
-/// app como lista (despierta a la operación que la pidió) y no retorna salvo fallo de
-/// inicialización (`Err`: sin sesión gráfica), en cuyo caso los que esperan reciben el error.
-#[cfg(target_os = "macos")]
+/// Corre el loop de UI del backend EN EL HILO QUE LLAMA — que debe ser el hilo 1 del proceso
+/// (AppKit en macOS; GTK en Linux, M147d). Marca la app como lista (despierta a la operación
+/// que la pidió) y no retorna salvo fallo de inicialización (`Err`: sin sesión gráfica o sin
+/// backend), en cuyo caso los que esperan reciben el error. Existe en TODO unix: el host la
+/// llama sin cfg por plataforma (los 6 gates deben moverse juntos — la lección del plan).
 pub fn run_main_loop() -> Result<(), String> {
     let g = gate();
-    match mac::init_app() {
+    #[cfg(target_os = "macos")]
+    let init = mac::init_app();
+    #[cfg(target_os = "linux")]
+    let init = gtk::init_app();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let init: Result<(), String> =
+        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+            .to_string());
+    match init {
         Ok(()) => {
             *g.state.lock().unwrap() = AppState::Ready;
             g.changed.notify_all();
-            mac::run_app(); // no retorna: [NSApp run] para el resto del proceso
-            unreachable!("NSApp run returned");
+            // No retorna: [NSApp run] / gtk_main() para el resto del proceso.
+            #[cfg(target_os = "macos")]
+            mac::run_app();
+            #[cfg(target_os = "linux")]
+            gtk::run_app();
+            unreachable!("the UI main loop returned");
         }
         Err(e) => {
             *g.state.lock().unwrap() = AppState::Failed(e.clone());
@@ -254,9 +278,14 @@ pub fn run_main_loop() -> Result<(), String> {
     }
 }
 
-/// Pide el hilo principal (una vez) y espera a que la app esté lista, con plazo — sin sesión
-/// gráfica o sin host el error es limpio, nunca un cuelgue.
+/// El mensaje del plazo vencido de `ensure_app`, por backend.
 #[cfg(target_os = "macos")]
+const APP_TIMEOUT_MSG: &str = "ui: could not initialize AppKit (no GUI session?)";
+#[cfg(not(target_os = "macos"))]
+const APP_TIMEOUT_MSG: &str = "ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)";
+
+/// Pide el hilo principal (una vez) y espera a que la app esté lista, con plazo — sin sesión
+/// gráfica o sin host el error es limpio, nunca un cuelgue. Compartida por todos los backends.
 fn ensure_app() -> Result<(), String> {
     let g = gate();
     let mut st = g.state.lock().unwrap();
@@ -280,7 +309,7 @@ fn ensure_app() -> Result<(), String> {
             AppState::NotStarted => {
                 let rem = deadline.saturating_duration_since(std::time::Instant::now());
                 if rem.is_zero() {
-                    return Err("ui: could not initialize AppKit (no GUI session?)".to_string());
+                    return Err(APP_TIMEOUT_MSG.to_string());
                 }
                 st = g.changed.wait_timeout(st, rem).unwrap().0;
             }
@@ -351,10 +380,17 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
         windows().lock().unwrap().insert(id, WinState { win: mw, closed: false });
         Ok(())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        let gw = gtk::open_window(id, title, url, width, height)?;
+        windows().lock().unwrap().insert(id, WinState { win: gw, closed: false });
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (title, url);
-        Err("ui: no backend for this platform (macOS; RAY_UI_BACKEND=headless works anywhere)"
+        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
             .to_string())
     }
 }
@@ -374,6 +410,14 @@ pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
                 mac::eval_js(wv, js);
                 Ok(())
             }
+            #[cfg(target_os = "linux")]
+            Win::Gtk { webview, alive, .. } => {
+                let wv = *webview;
+                let alive = alive.clone();
+                drop(map);
+                gtk::eval_js(wv, alive, js);
+                Ok(())
+            }
         },
     }
 }
@@ -389,6 +433,10 @@ pub fn close_window(id: i64) {
         #[cfg(target_os = "macos")]
         Some(WinState { win: Win::Mac { window, webview, delegate }, .. }) => {
             mac::close_window_async(window, webview, delegate);
+        }
+        #[cfg(target_os = "linux")]
+        Some(WinState { win: Win::Gtk { window, alive, .. }, .. }) => {
+            gtk::close_window_async(window, alive);
         }
     }
 }
@@ -697,6 +745,323 @@ mod mac {
             plain(webview as Id, sel(b"release\0"));
             plain(delegate as Id, sel(b"release\0"));
             plain(window as Id, sel(b"release\0"));
+        });
+    }
+}
+
+// ── Linux: GTK3 + WebKitGTK por dlopen (sin headers de build; sin las libs → Err claro) ──────
+#[cfg(target_os = "linux")]
+mod gtk {
+    use super::Win;
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    unsafe extern "C" {
+        fn dlopen(path: *const std::ffi::c_char, flags: i32) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
+    }
+    const RTLD_NOW: i32 = 2;
+    // GLOBAL: los símbolos de webkit resuelven contra los de gtk/glib ya cargados (una sola
+    // instancia de cada biblioteca en el proceso).
+    const RTLD_GLOBAL: i32 = 0x100;
+
+    type Widget = *mut c_void;
+    type FnInitCheck = unsafe extern "C" fn(*mut i32, *mut c_void) -> i32;
+    type FnMain = unsafe extern "C" fn();
+    type FnWindowNew = unsafe extern "C" fn(i32) -> Widget;
+    type FnSetTitle = unsafe extern "C" fn(Widget, *const std::ffi::c_char);
+    type FnSetDefaultSize = unsafe extern "C" fn(Widget, i32, i32);
+    type FnContainerAdd = unsafe extern "C" fn(Widget, Widget);
+    type FnWidgetOp = unsafe extern "C" fn(Widget);
+    type FnIdleAdd = unsafe extern "C" fn(extern "C" fn(*mut c_void) -> i32, *mut c_void) -> u32;
+    type FnSignalConnect = unsafe extern "C" fn(
+        Widget,
+        *const std::ffi::c_char,
+        extern "C" fn(Widget, *mut c_void),
+        *mut c_void,
+        extern "C" fn(*mut c_void, *mut c_void),
+        i32,
+    ) -> u64;
+    type FnWebViewNew = unsafe extern "C" fn() -> Widget;
+    type FnLoadUri = unsafe extern "C" fn(Widget, *const std::ffi::c_char);
+    // Las DOS generaciones del eval (aridades distintas — dos aliases, jamás uno "flexible"):
+    // 2.40+ `evaluate_javascript(view, script, len, world, source_uri, cancellable, cb, data)`;
+    // el clásico `run_javascript(view, script, cancellable, cb, data)`. Fire-and-forget: cb nulo.
+    type FnEvalJs = unsafe extern "C" fn(
+        Widget,
+        *const std::ffi::c_char,
+        i64,
+        *const c_void,
+        *const c_void,
+        *mut c_void,
+        *mut c_void,
+        *mut c_void,
+    );
+    type FnRunJs =
+        unsafe extern "C" fn(Widget, *const std::ffi::c_char, *mut c_void, *mut c_void, *mut c_void);
+
+    const GTK_WINDOW_TOPLEVEL: i32 = 0;
+    const G_SOURCE_REMOVE: i32 = 0;
+
+    /// Los punteros de función resueltos una vez (dlopen + dlsym al primer uso, en el hilo 1).
+    struct Api {
+        init_check: FnInitCheck,
+        main: FnMain,
+        window_new: FnWindowNew,
+        set_title: FnSetTitle,
+        set_default_size: FnSetDefaultSize,
+        container_add: FnContainerAdd,
+        show_all: FnWidgetOp,
+        destroy: FnWidgetOp,
+        idle_add: FnIdleAdd,
+        signal_connect: FnSignalConnect,
+        webview_new: FnWebViewNew,
+        load_uri: FnLoadUri,
+        /// 2.40+ (aridad 8) o, si no está, el clásico (aridad 5): exactamente uno queda `Some`.
+        evaluate_js: Option<FnEvalJs>,
+        run_js: Option<FnRunJs>,
+    }
+    // SAFETY: los punteros de función son inmutables tras la resolución; toda llamada que toca
+    // objetos GTK viaja al hilo del loop (idle_add) — aquí solo se COMPARTEN los fn pointers.
+    unsafe impl Send for Api {}
+    unsafe impl Sync for Api {}
+
+    fn api() -> &'static Result<Api, String> {
+        static API: std::sync::OnceLock<Result<Api, String>> = std::sync::OnceLock::new();
+        API.get_or_init(load_api)
+    }
+
+    fn sym(lib: *mut c_void, name: &std::ffi::CStr) -> Result<*mut c_void, String> {
+        // SAFETY: name es un CStr (NUL garantizado); dlsym no retiene el puntero.
+        let p = unsafe { dlsym(lib, name.as_ptr()) };
+        if p.is_null() {
+            Err(format!("ui: libgtk without {}", name.to_string_lossy()))
+        } else {
+            Ok(p)
+        }
+    }
+
+    fn load_api() -> Result<Api, String> {
+        // SAFETY: literales NUL-terminados; dlopen es seguro de llamar.
+        let gtk = unsafe { dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL) };
+        if gtk.is_null() {
+            return Err("ui: libgtk-3.so.0 not found (install GTK 3, e.g. libgtk-3-0)".to_string());
+        }
+        // El soname de WebKitGTK cambió con la transición de libsoup: 4.1 (Ubuntu 22.04+,
+        // Debian 12+, Fedora) y el 4.0 clásico (OJO: su soname es .37). Jamás el 6.0 (GTK4).
+        let webkit = unsafe {
+            let w = dlopen(c"libwebkit2gtk-4.1.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+            if w.is_null() {
+                dlopen(c"libwebkit2gtk-4.0.so.37".as_ptr(), RTLD_NOW | RTLD_GLOBAL)
+            } else {
+                w
+            }
+        };
+        if webkit.is_null() {
+            return Err(
+                "ui: WebKitGTK not found (install libwebkit2gtk-4.1-0 or libwebkit2gtk-4.0-37)"
+                    .to_string(),
+            );
+        }
+        // SAFETY de los transmutes: las firmas replican los headers de GTK3/GLib/WebKitGTK
+        // (API C estable). `g_idle_add`/`g_signal_connect_data` viven en glib/gobject, que el
+        // dlsym de glibc resuelve por la clausura de dependencias del handle de gtk.
+        unsafe {
+            let evaluate_js = dlsym(webkit, c"webkit_web_view_evaluate_javascript".as_ptr());
+            let run_js = dlsym(webkit, c"webkit_web_view_run_javascript".as_ptr());
+            if evaluate_js.is_null() && run_js.is_null() {
+                return Err("ui: WebKitGTK without a JavaScript entry point".to_string());
+            }
+            Ok(Api {
+                init_check: std::mem::transmute::<*mut c_void, FnInitCheck>(sym(gtk, c"gtk_init_check")?),
+                main: std::mem::transmute::<*mut c_void, FnMain>(sym(gtk, c"gtk_main")?),
+                window_new: std::mem::transmute::<*mut c_void, FnWindowNew>(sym(gtk, c"gtk_window_new")?),
+                set_title: std::mem::transmute::<*mut c_void, FnSetTitle>(sym(gtk, c"gtk_window_set_title")?),
+                set_default_size: std::mem::transmute::<*mut c_void, FnSetDefaultSize>(sym(gtk, c"gtk_window_set_default_size")?),
+                container_add: std::mem::transmute::<*mut c_void, FnContainerAdd>(sym(gtk, c"gtk_container_add")?),
+                show_all: std::mem::transmute::<*mut c_void, FnWidgetOp>(sym(gtk, c"gtk_widget_show_all")?),
+                destroy: std::mem::transmute::<*mut c_void, FnWidgetOp>(sym(gtk, c"gtk_widget_destroy")?),
+                idle_add: std::mem::transmute::<*mut c_void, FnIdleAdd>(sym(gtk, c"g_idle_add")?),
+                signal_connect: std::mem::transmute::<*mut c_void, FnSignalConnect>(sym(gtk, c"g_signal_connect_data")?),
+                webview_new: std::mem::transmute::<*mut c_void, FnWebViewNew>(sym(webkit, c"webkit_web_view_new")?),
+                load_uri: std::mem::transmute::<*mut c_void, FnLoadUri>(sym(webkit, c"webkit_web_view_load_uri")?),
+                evaluate_js: (!evaluate_js.is_null())
+                    .then(|| std::mem::transmute::<*mut c_void, FnEvalJs>(evaluate_js)),
+                run_js: (evaluate_js.is_null() && !run_js.is_null())
+                    .then(|| std::mem::transmute::<*mut c_void, FnRunJs>(run_js)),
+            })
+        }
+    }
+
+    /// Inicializa GTK en el hilo que llama (el 1). `gtk_init_check` — NO `gtk_init`, que ABORTA
+    /// el proceso sin display; aquí un headless (CI, ssh) debe dar `Err`, jamás morir.
+    pub(super) fn init_app() -> Result<(), String> {
+        let api = api().as_ref().map_err(|e| e.clone())?;
+        // SAFETY: init_check acepta (NULL, NULL); corre en el hilo 1 antes de cualquier widget.
+        let ok = unsafe { (api.init_check)(std::ptr::null_mut(), std::ptr::null_mut()) };
+        if ok == 0 {
+            return Err("ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)".to_string());
+        }
+        Ok(())
+    }
+
+    /// `gtk_main()` — no retorna.
+    pub(super) fn run_app() {
+        if let Ok(api) = api().as_ref() {
+            // SAFETY: init_app ya corrió en este mismo hilo.
+            unsafe { (api.main)() };
+        }
+    }
+
+    /// Despacha `f` al hilo del loop de GTK (g_idle_add por closure; la fuente se auto-remueve).
+    fn on_main(f: impl FnOnce() + Send + 'static) {
+        extern "C" fn trampoline(ctx: *mut c_void) -> i32 {
+            // SAFETY: `ctx` es el Box de abajo, entregado una sola vez por la fuente idle.
+            let f = unsafe { Box::from_raw(ctx as *mut Box<dyn FnOnce() + Send>) };
+            f();
+            G_SOURCE_REMOVE
+        }
+        let Ok(api) = api().as_ref() else { return };
+        let boxed: Box<Box<dyn FnOnce() + Send>> = Box::new(Box::new(f));
+        // SAFETY: el Box viaja al trampoline; idle_add es thread-safe (glib).
+        unsafe { (api.idle_add)(trampoline, Box::into_raw(boxed) as *mut c_void) };
+    }
+
+    /// Despacha al hilo del loop y ESPERA el resultado, con plazo (espejo del on_main_sync de mac).
+    fn on_main_sync<T: Send + 'static>(
+        f: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let slot = Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+        let slot2 = slot.clone();
+        on_main(move || {
+            *slot2.0.lock().unwrap() = Some(f());
+            slot2.1.notify_all();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut got = slot.0.lock().unwrap();
+        loop {
+            if let Some(r) = got.take() {
+                return r;
+            }
+            let rem = deadline.saturating_duration_since(std::time::Instant::now());
+            if rem.is_zero() {
+                return Err("ui: the main thread did not respond".to_string());
+            }
+            got = slot.1.wait_timeout(got, rem).unwrap().0;
+        }
+    }
+
+    /// El contexto del handler de `destroy`: nuestro id + el flag de vida. Se libera con el
+    /// GClosureNotify que g_signal_connect_data invoca al destruirse el objeto (sin fugas).
+    struct DestroyCtx {
+        id: i64,
+        alive: Arc<AtomicBool>,
+    }
+
+    extern "C" fn on_destroy(_w: Widget, data: *mut c_void) {
+        // SAFETY: `data` es el DestroyCtx de open_window; vive hasta el GClosureNotify.
+        let ctx = unsafe { &*(data as *const DestroyCtx) };
+        ctx.alive.store(false, Ordering::SeqCst);
+        super::mark_closed(ctx.id);
+    }
+
+    extern "C" fn drop_destroy_ctx(data: *mut c_void, _closure: *mut c_void) {
+        // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
+        drop(unsafe { Box::from_raw(data as *mut DestroyCtx) });
+    }
+
+    /// Crea la ventana + webview EN EL HILO DEL LOOP. GTK posee los widgets (container_add
+    /// sinkea el floating ref del webview; la toplevel es de GTK hasta gtk_widget_destroy):
+    /// NO tomamos refs — el flag `alive` protege todo acceso posterior.
+    pub(super) fn open_window(
+        id: i64,
+        title: &str,
+        url: &str,
+        width: i64,
+        height: i64,
+    ) -> Result<Win, String> {
+        let title = std::ffi::CString::new(title.replace('\0', "")).unwrap();
+        let url = std::ffi::CString::new(url.replace('\0', "")).unwrap();
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive2 = alive.clone();
+        let (window, webview) = on_main_sync(move || {
+            let api = api().as_ref().map_err(|e| e.clone())?;
+            unsafe {
+                let window = (api.window_new)(GTK_WINDOW_TOPLEVEL);
+                if window.is_null() {
+                    return Err("ui: could not create the window".to_string());
+                }
+                (api.set_title)(window, title.as_ptr());
+                (api.set_default_size)(window, width as i32, height as i32);
+                let webview = (api.webview_new)();
+                if webview.is_null() {
+                    return Err("ui: could not create the webview".to_string());
+                }
+                (api.container_add)(window, webview);
+                (api.load_uri)(webview, url.as_ptr());
+                let ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2 }));
+                (api.signal_connect)(
+                    window,
+                    c"destroy".as_ptr(),
+                    on_destroy,
+                    ctx as *mut c_void,
+                    drop_destroy_ctx,
+                    0,
+                );
+                (api.show_all)(window);
+                Ok((window as usize, webview as usize))
+            }
+        })?;
+        Ok(Win::Gtk { window, webview, alive })
+    }
+
+    /// JS a la página, fire-and-forget (callback nulo), en el hilo del loop. `alive` se
+    /// re-chequea DENTRO de la closure: el WM puede destruir la ventana antes de que corra.
+    pub(super) fn eval_js(webview: usize, alive: Arc<AtomicBool>, js: &str) {
+        let js = std::ffi::CString::new(js.replace('\0', "")).unwrap();
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok(api) = api().as_ref() else { return };
+            // SAFETY: webview vivo (alive, y estamos en el hilo del loop); ambas variantes
+            // COPIAN el script antes de volver — el CString temporal alcanza.
+            unsafe {
+                if let Some(eval) = api.evaluate_js {
+                    eval(
+                        webview as Widget,
+                        js.as_ptr(),
+                        -1,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    );
+                } else if let Some(run) = api.run_js {
+                    run(
+                        webview as Widget,
+                        js.as_ptr(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    );
+                }
+            }
+        });
+    }
+
+    /// Destruye la ventana en el hilo del loop, asíncrono (llamable desde un Drop). El handler
+    /// de `destroy` apaga `alive`; si el WM ya la destruyó, la closure no toca nada.
+    pub(super) fn close_window_async(window: usize, alive: Arc<AtomicBool>) {
+        on_main(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return;
+            }
+            let Ok(api) = api().as_ref() else { return };
+            // SAFETY: ventana viva y estamos en el hilo del loop; destroy dispara el handler.
+            unsafe { (api.destroy)(window as Widget) };
         });
     }
 }

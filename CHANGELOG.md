@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/ui` en Linux** (M147d): backend **GTK3 + WebKitGTK por `dlopen`** en runtime (cero
+  headers de build, cero crates — patrón ALSA): mismo contrato que macOS (hilo principal
+  capturado, eventos, `closed` exactamente una vez, cierre por el WM incluido). Sin las libs o
+  sin display, `ui.open` da `Err` claro en ≤5 s. Nota honesta: validado por compilación y
+  headless en CI; la ventana GTK real queda pendiente de un desktop Linux.
+
 - **`ray bundle`** (M147c): empaqueta la app de escritorio — build nativo `--release` con los
   assets embebidos → `.app` en macOS (Info.plist mínimo + icns generado con sips/iconutil +
   codesign ad-hoc best-effort) o directorio + `.desktop` en Linux (Exec absoluto). Avisa si el

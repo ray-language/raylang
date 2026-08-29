@@ -10721,3 +10721,49 @@ fs.watch. De paso quedó arreglado el hueco de M145: `audio` faltaba en `RT_SUBS
 `--without audio` salía con exit 64 pese a estar documentado. Diferido consciente de v1, además
 del eval con retorno: más kinds de evento (resize/focus/navigate) y el scheme custom `app://`
 (offline/sin puerto) — cuando un dogfood los pida.
+
+## 144. M147 — F2 de escritorio: embed + bundle + WebKitGTK (ago 2026)
+
+El arco que convierte "una app que corre" en "un binario único distribuible" (IDEAS §80 F2),
+en tres PRs con una decisión transversal: **la byte-identidad manda sobre la conveniencia**.
+
+**`std/embed` (M147): un solo walker define el espacio de nombres.** Los templates NO eran el
+precedente (compilan a fuente en el load; no existía canal de blobs), y un literal `bytes`
+transpila por-octeto — un asset de 1 MB ahogaría rustc → `include_bytes!` con RUTA ABSOLUTA del
+asset original (sin copia: un mecanismo para el tier cargo Y el rustc pelado; el dep-info de
+rustc re-huella los assets, así que la caché compartida no da rancidez). La clave del diseño:
+la VM resuelve por el MISMO walk ordenado que produce `list()` — membership por string exacto,
+nunca contra el filesystem — lo que mata a la vez el orden indefinido, la deriva del APFS
+case-insensitive y el `..`. La raíz se ancla al manifiesto del ENTRY, canonicalizado (los
+ancestros de una ruta relativa terminan en "" — el bug que produjo include_bytes! relativos
+irresolubles). El webserver ganó `static_mount_embedded` con ETag DE CONTENIDO (size-crc32):
+el 304 de la VM (disco vivo) y el del binario horneado coinciden byte a byte. Dos hallazgos de
+dogfood EN el PR: `ray dev` no vigilaba los assets (la lectura era en vivo pero el live-reload
+no disparaba → ahora un cambio solo-assets emite `data: reload` SIN reiniciar, decidido sobre
+el diff real de hashes), y cerrar la VENTANA dejaba el dev esperando (el contrato TUI de M139
+extendido: `ray_runtime::ui` avisa `GET /ui` por el hub de `RAY_DEV_RELOAD` al abrir la primera
+ventana; salida limpia = el usuario cerró la app → dev sale con ella).
+
+**`ray bundle` (M147c): tooling puro.** Compone `build --native --release` + embed y produce el
+formato del SO: `.app` (Info.plist mínimo con `NSAllowsLocalNetworking`, icns por sips/iconutil
+— los nombres del iconset son exactos —, `codesign -s -` ad-hoc que mantiene consistente la
+firma arm64 tras mover el binario) o directorio + `.desktop` (Exec ABSOLUTO: un lanzador no
+resuelve rutas relativas). El aviso clave del UX: un .app lanza con **cwd=/** — el embed pasa
+de conveniencia a requisito, y `bundle` lo dice si falta. Sin firma/notarización en v1
+(documentado con la nota de Gatekeeper de macOS 15+).
+
+**WebKitGTK por dlopen (M147d): el tercer sistema del MISMO contrato.** `mod gtk` clona el
+patrón ALSA (dlopen en runtime, cero headers, sonames `libwebkit2gtk-4.1.so.0` → `-4.0.so.37`
+— jamás el 6.0/GTK4) sobre el gate/cola/registro que M146 dejó compartidos: `gtk_init_check`
+(no `gtk_init`: ABORTA sin display; aquí un headless debe dar Err), `gtk_main()` como espejo
+estructural de `[NSApp run]`, despacho con `g_idle_add` por closure, y el anti-use-after-destroy
+que AppKit no necesitó: GTK posee los widgets (container_add sinkea el floating ref; NO se
+toman refs) y el WM puede destruir la ventana por debajo → un flag `alive` por ventana, apagado
+por el handler de `destroy` (cuyo contexto libera el GClosureNotify), que TODA closure del hilo
+del loop re-chequea antes de tocar punteros. El eval tiene DOS aliases extern (evaluate_
+javascript 2.40+/aridad 8, run_javascript clásico/aridad 5 — jamás una firma "flexible"). Los
+6 cfg del contrato (run_main_loop/ensure_app/open/eval/close + los 2 del host + el string del
+main emitido) se ensancharon EN UN COMMIT a `unix` — la lección del plan: uno rezagado deja a
+toda una clase de OS colgada 5 s por open. VALIDACIÓN HONESTA: compilación y clippy limpios
+contra x86_64-unknown-linux-gnu + batería headless + el negativo de CI (sin display → Err ≤5 s);
+la ventana GTK real queda pendiente de un desktop Linux, anotado en IDEAS.

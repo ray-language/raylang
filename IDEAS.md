@@ -3086,7 +3086,13 @@ bifurcación (b) se resolvió con un tercero: NO hay `ui.run()` — el runtime c
 transparente (VM: estaba ocioso en el `join()`; nativo: el main emitido mueve el programa a un
 hilo del SO — jamás a una fibra: payload de pánico, pila e `in_fiber()`). Diferidos de v1 a
 dogfood: eval con retorno (ABI de blocks), más kinds de evento (resize/focus), scheme `app://`.
-Siguiente: F2 (WebKitGTK por dlopen + `--embed` + `ray bundle`).
+
+**F2 ✅ (29 ago 2026, M147/M147c/M147d, DESIGN §144)**: `std/embed` (+ `static_embedded` +
+`ray dev` recarga assets sin reiniciar), `ray bundle` (.app/.desktop) y el backend GTK3+WebKitGTK
+por dlopen — el contrato de std/ui en los DOS sistemas. ⚠️ PENDIENTE honesto: la ventana GTK
+real no se ha visto en pantalla (validada por compilación cruzada + headless + negativo de CI);
+primer usuario con desktop Linux = el dogfood. Siguiente: F3 (menús/diálogos/tray/updater) —
+o §80b (móvil) cuando toque.
 
 **DECISIÓN FIJADA (28 ago 2026, con el usuario): el camino es WEBVIEW, sin ambigüedad.** Bindear
 toolkits nativos completos (AppKit/UIKit/GTK/WinUI) o construir renderer propio eclipsaría al

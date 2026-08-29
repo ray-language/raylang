@@ -1161,9 +1161,11 @@ No hay `ui.run()`: el runtime **captura el hilo principal por su cuenta** en la 
 `ray dev`, cerrar la ventana (salida limpia) **cierra también el modo dev** — el mismo contrato
 que las TUI: la app la cerró el usuario, no hay nada que re-lanzar. `close(h)`
 cierra la ventana; `ui.events()` da la misma cola como `Channel<UiEvent>` (para hacer `select`
-con tus otros canales); `next_event_timeout(ms)` acota la espera. Backend real: macOS
-(WKWebView); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria (tests/CI en
-cualquier OS — `ray test` lo usa por defecto), y `--without ui` lo excluye del binario nativo.
+con tus otros canales); `next_event_timeout(ms)` acota la espera. Backends reales: macOS
+(WKWebView) y Linux (GTK3 + WebKitGTK, cargados en runtime: sin `libwebkit2gtk` o sin display
+el `open` da un `Err` claro); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria
+(tests/CI en cualquier OS — `ray test` lo usa por defecto), y `--without ui` lo excluye del
+binario nativo.
 Nota: sin `Info.plist` (binario suelto), el webview bloquea `http://` remoto (ATS) —
 `http://127.0.0.1` está exento, que es justo el patrón. El ejemplo completo (webserver + ventana
 + salir al cerrarla) está en [`examples/web/desktop_window/`](examples/web/desktop_window/).

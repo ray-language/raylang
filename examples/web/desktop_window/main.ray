@@ -6,7 +6,18 @@
 //
 //   cd examples/web/desktop_window
 //   ray run
-from web/framework import new_app, GET, POST, listen, html, json, text, App, Ctx, Res;
+from web/framework import
+    new_app,
+    GET,
+    POST,
+    listen,
+    html,
+    json,
+    text,
+    static_embedded,
+    App,
+    Ctx,
+    Res;
 import std/net;
 import std/time;
 import std/ui;
@@ -78,15 +89,15 @@ fn watch_window(w: int) {
 fn build_app() -> App {
     var app = new_app();
 
+    // M147: los estáticos salen del espacio embed — en dev del disco (edita y recarga), en el
+    // binario nativo horneados: el .app corre desde cualquier cwd sin llevarse assets/ al lado.
+    app.static_embedded("/static/", "assets");
+
     app.GET("/", fn(c: Ctx, r: Res) {
         r.html(`<!doctype html>
 <meta charset="utf-8">
 <title>raylang desktop</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; }
-  button { font-size: 1rem; padding: .4rem 1rem; margin-right: .5rem; }
-  #now { font-variant-numeric: tabular-nums; }
-</style>
+<link rel="stylesheet" href="/static/css/app.css">
 <h1>Una ventana propia en raylang</h1>
 <p>Esta página vive en un webview nativo; los datos llegan por fetch al backend.</p>
 <p>Hora del backend (UTC): <strong id="now">…</strong></p>

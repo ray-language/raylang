@@ -1389,6 +1389,29 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M147: un asset del espacio embed → [b"ok", datos] o [b"err", msg].
+            "__embed_read" => {
+                let arr = match &values[0] {
+                    Value::Str(path) => match crate::builtins::embed_read(path) {
+                        Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
+                        Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
+                    },
+                    _ => unreachable!("the checker guarantees a string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M147: las claves del espacio embed → ["ok", clave…] o ["err", msg].
+            "__embed_list" => {
+                let arr = match crate::builtins::embed_list() {
+                    Ok(keys) => {
+                        let mut v = vec![Value::Str("ok".to_string())];
+                        v.extend(keys.into_iter().map(Value::Str));
+                        v
+                    }
+                    Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M16.1c: escribe bytes a un archivo → ["ok"] o ["err", msg].
             "__write_file_bytes" => {
                 let arr = match (&values[0], &values[1]) {

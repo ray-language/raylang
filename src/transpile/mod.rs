@@ -105,6 +105,12 @@ struct Transpiler {
     /// feature, cambia la FORMA del main emitido: el programa corre en un hilo del SO con pila
     /// grande y el hilo 1 del proceso queda esperando el loop de AppKit (contrato de std/ui).
     pub(super) needs_rt_ui: bool,
+    /// M147: el programa usa std/embed (__embed_*) → se emiten la tabla `__RAY_EMBED` (con los
+    /// pares de `embed`, vía include_bytes!) y sus helpers. Sin feature de ray-runtime: la
+    /// tabla es inline — un programa solo-embed conserva la vía rustc pelada.
+    pub(super) needs_embed: bool,
+    /// M147: los pares (clave, ruta absoluta) a hornear (vacío = built sin --embed).
+    pub(super) embed: Vec<(String, String)>,
     /// ¿Usa sockets TCP (`std::net::*`)? Comparte el registro de handles con los archivos y añade los ops
     /// de socket (`std::net::TcpStream`/`TcpListener`).
     needs_net: bool,
@@ -195,6 +201,14 @@ pub fn transpile_with_opts(prog: &Program, exclude: &[String], fast: bool) -> Re
 /// crea fibras, y el contexto por-tarea (cancelación/scopes/try) viaja con la fibra. Ver
 /// docs/diseno-concurrencia-nativa.md §5.
 pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bool) -> Result<Transpiled, String> {
+    transpile_embed(prog, exclude, fast, fibers, &[])
+}
+
+/// Como [`transpile_full`], con la tabla de **assets embebidos** (M147, `ray build --native
+/// --embed` / `[native] embed`): pares `(clave, ruta absoluta)` que el binario hornea con
+/// `include_bytes!` — la clave es la misma que resuelve `std/embed` en la VM (un solo walker,
+/// `builtins::embed_walk`). Vacía = el programa puede usar `std/embed` pero cada llamada da Err.
+pub fn transpile_embed(prog: &Program, exclude: &[String], fast: bool, fibers: bool, embed: &[(String, String)]) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
@@ -269,6 +283,8 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
         needs_rt_watch: false,
         needs_rt_audio: false,
         needs_rt_ui: false,
+        needs_embed: false,
+        embed: embed.to_vec(),
         needs_net: false,
         needs_rt_crypto: false,
         needs_rt_tls: false,

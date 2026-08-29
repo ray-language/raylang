@@ -84,6 +84,8 @@ struct Mount {
     prefix: string,
     dir: string,
     max_age: int,
+    // M147: true = los bytes salen del espacio embed (std/embed), no del disco.
+    embedded: bool,
 }
 
 /// The application: routes, middlewares (run before routing; `Step.Done` stops the chain),
@@ -227,7 +229,14 @@ pub fn mount(app: App, prefix: string, sub: App) {
     var m: int = 0;
     while (m < sub.mounts.len()) {
         let mt: Mount = sub.mounts[m];
-        app.mounts.push(Mount { prefix: base + mt.prefix, dir: mt.dir, max_age: mt.max_age });
+        app.mounts.push(
+            Mount {
+                prefix: base + mt.prefix,
+                dir: mt.dir,
+                max_age: mt.max_age,
+                embedded: mt.embedded
+            }
+        );
         m = m + 1;
     }
 }
@@ -278,14 +287,23 @@ pub fn with_mw(mws: [fn(Ctx, Res) -> Step], handler: fn(Ctx, Res)) -> fn(Ctx, Re
 /// with `Content-Type` by extension, path-traversal sanitizing, strong `ETag` and `304 Not
 /// Modified` revalidation. Mounts are checked before routes, for GET/HEAD only.
 pub fn static_files(app: App, prefix: string, dir: string) {
-    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: 0 });
+    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: 0, embedded: false });
 }
 
 /// Like `static_files`, adding `Cache-Control: public, max-age=<max_age_s>` to every 200/304 —
 /// with the strong ETag + 304 revalidation of M56.9 this is the complete caching story for
 /// production static assets (M93.2d).
 pub fn static_files_cached(app: App, prefix: string, dir: string, max_age_s: int) {
-    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: max_age_s });
+    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: max_age_s, embedded: false });
+}
+
+/// Mounts EMBEDDED assets (M147, `std/embed` — `[native] embed` in ray.toml):
+/// `app.static_embedded("/assets/", "assets")` serves `/assets/app.css` from the embed key
+/// `assets/app.css` — live from disk under `ray run`, baked into the binary with
+/// `ray build --native` (self-contained: what a bundled app needs). Content-based ETag + 304
+/// and Range support, like `static_files`.
+pub fn static_embedded(app: App, prefix: string, dir: string) {
+    app.mounts.push(Mount { prefix: prefix, dir: dir, max_age: 0, embedded: true });
 }
 
 /// Replaces the default `404 Not Found` with a custom handler (runs when no route matches).
@@ -650,7 +668,11 @@ fn dispatch(app: App, req: webserver.Request) -> webserver.Response {
         while (s < app.mounts.len()) {
             let mt: Mount = app.mounts[s];
             if (req.path.starts_with(mt.prefix)) {
-                let sr: webserver.Response = webserver.static_mount(mt.prefix, mt.dir, req);
+                let sr: webserver.Response = if (mt.embedded) {
+                    webserver.static_mount_embedded(mt.prefix, mt.dir, req)
+                } else {
+                    webserver.static_mount(mt.prefix, mt.dir, req)
+                };
                 // M93.2d: Cache-Control del mount cacheado, solo en 200/304 (no en 404/405).
                 if (mt.max_age > 0 && (sr.status == 200 || sr.status == 304)) {
                     sr.headers.insert("Cache-Control", "public, max-age=" + to_string(mt.max_age));

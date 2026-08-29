@@ -1088,6 +1088,32 @@ en silencio — para tests y CI sin tarjeta de sonido. En el binario nativo, `--
 excluye. La música reactiva de un juego es el caso de diseño: cada iteración del bucle sintetiza
 lo que toca según el estado, y el dispositivo marca el compás.
 
+### Assets del proyecto (`std/embed`)
+
+Los archivos que tu programa necesita llevar consigo (css, imágenes, fuentes, el `dist` de un
+frontend): declara los directorios en el `ray.toml` y léelos por clave — **el mismo espacio de
+nombres en todos los motores**:
+
+```toml
+[native]
+embed = ["assets"]
+```
+
+```rust
+import std/embed;
+
+let css = embed.read("assets/app.css")?;   // bytes; clave = ruta desde la raíz, con "/"
+let keys = embed.list()?;                  // orden lexicográfico (parte del contrato)
+```
+
+En `ray run` los archivos se leen **en vivo del disco** (editas y recargas — dev); `ray build
+--native` los **hornea dentro del binario** (`--embed dirs` añade directorios ad-hoc): el
+binario es autocontenido y corre desde cualquier directorio — lo que una app de escritorio
+empaquetada necesita (Finder lanza con `cwd=/`). Las claves son strings exactos: sin `..`, sin
+plegado de mayúsculas, ocultos excluidos. Para servirlos por HTTP, el framework web trae
+`app.static_embedded("/static/", "assets")` — mismo saneo, ETag (de contenido: idéntico entre
+motores), 304 y Range que `static_files`.
+
 ### Ventanas (`std/ui`)
 
 La **primitiva de apps de escritorio**: una ventana nativa del SO con el **webview del sistema**

@@ -629,6 +629,10 @@ pub enum OpCode {
     /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el
     /// self-pipe de la cola global (patrón WatchNext).
     UiNext,
+    /// M147: `__embed_read(path)` — un asset del espacio `[native] embed` ([b'ok', datos] / [b'err', msg]).
+    EmbedRead,
+    /// M147: `__embed_list()` — las claves del espacio embed, orden lexicográfico (['ok', …] / ['err', msg]).
+    EmbedList,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
 

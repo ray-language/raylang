@@ -2207,6 +2207,17 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            // M147: std/embed — la tabla horneada (sin feature: helpers inline, vía rustc intacta).
+            "embed_read" if name.starts_with("__") => {
+                self.needs_embed = true;
+                out.push_str("__ray_embed_read(&*");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "embed_list" if name.starts_with("__") => {
+                self.needs_embed = true;
+                out.push_str("__ray_embed_list()");
+            }
             "watch" if name.starts_with("__") && !self.exclude.contains("watch") => {
                 self.needs_rt_watch = true;
                 out.push_str("__ray_watch(&*");

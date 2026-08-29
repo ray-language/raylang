@@ -64,6 +64,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__proc_spawn", "__proc_read", "__proc_write", "__proc_try_wait", "__proc_kill",
     // M146: std/ui (ventana + webview) → helpers __ray_ui_* (PR del backend nativo).
     "__ui_open", "__ui_eval_js", "__ui_next_event",
+    // M147: std/embed (assets del proyecto) → tabla __RAY_EMBED horneada + helpers __ray_embed_*.
+    "__embed_read", "__embed_list",
 ];
 
 /// Subconjunto de `NATIVE_TRACKED_BUILTINS` que el backend nativo NO soporta: su uso cae en un stub que

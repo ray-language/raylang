@@ -7,3 +7,7 @@ entry = "main.ray"
 [dependencies]
 web = "path:../../../packages/web"
 net = "path:../../../packages/net"
+
+# M147: los assets viajan DENTRO del binario nativo (y en dev se leen en vivo del disco).
+[native]
+embed = ["assets"]

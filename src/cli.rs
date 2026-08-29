@@ -89,7 +89,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs]] [--templates-only [path...]]
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -1163,6 +1163,10 @@ fn cmd_build(args: &[String]) {
     // Cada exclusión rastrea su ORIGEN (`--without` de CLI vs `ray.toml`) para que un typo apunte al sitio
     // que hay que corregir: un error en un ray.toml versionado afecta a todo el equipo.
     let without_arg = args.iter().position(|a| a == "--without").and_then(|i| args.get(i + 1)).cloned();
+    // `--embed <dirs>` (M147): directorios de assets a HORNEAR en el binario nativo (lista
+    // separada por comas, relativa a la raíz del proyecto). Se UNE a `[native] embed` del
+    // ray.toml (la política versionada); mismo rastreo de origen que `--without`.
+    let embed_arg = args.iter().position(|a| a == "--embed").and_then(|i| args.get(i + 1)).cloned();
     let mut exclude: Vec<(String, &'static str)> = without_arg
         .as_deref()
         .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(|p| (p.to_string(), "--without")).collect())
@@ -1215,13 +1219,15 @@ fn cmd_build(args: &[String]) {
                 && Some(a.as_str()) != output.as_deref()
                 && Some(a.as_str()) != without_arg.as_deref()
                 && Some(a.as_str()) != target.as_deref()
+                && Some(a.as_str()) != embed_arg.as_deref()
         })
         .map(String::as_str);
     let path = resolve_entry(file, true);
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     if native {
-        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers);
+        let embed = collect_embed(&path, embed_arg.as_deref());
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers, &embed);
         return;
     }
     match compiler::compile_program(&program) {
@@ -1248,10 +1254,11 @@ fn cmd_build(args: &[String]) {
 ///   cargas de asignación/Map (nada en cómputo puro, ya óptimo), a cambio de ~9× de tiempo de compilación
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool) {
+#[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)]) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_full(&program, exclude, fast, fibers) {
+    let transpiled = match crate::transpile::transpile_embed(&program, exclude, fast, fibers, embed) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");
@@ -1298,6 +1305,49 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
         build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target);
     }
 }
+
+/// M147: reúne la tabla de assets a hornear: el `[native] embed` del ray.toml del ENTRY (no
+/// del cwd; es el mismo ancla que usa la resolución en runtime) unido al `--embed` de la CLI.
+/// Cada dir configurado debe EXISTIR (fail-fast nombrando el origen, como los typos de
+/// `--without`); las claves salen del walker compartido con la VM (mismo espacio y orden).
+fn collect_embed(entry: &str, embed_arg: Option<&str>) -> Vec<(String, String)> {
+    // Canonicalizar ANTES de buscar el manifiesto: los ancestros de una ruta RELATIVA terminan
+    // en "" (una raíz vacía que produce include_bytes! relativos — irresolubles desde el
+    // proyecto Cargo generado en /tmp).
+    let entry_dir = match Path::new(entry).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let entry_dir = entry_dir.canonicalize().unwrap_or(entry_dir);
+    let manifest = Manifest::load(&entry_dir).ok().flatten();
+    let mut dirs: Vec<(String, &'static str)> = embed_arg
+        .map(|s| s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(|p| (p.to_string(), "--embed")).collect())
+        .unwrap_or_default();
+    if let Some(m) = &manifest {
+        for d in &m.native_embed {
+            if !dirs.iter().any(|(x, _)| x == d) {
+                dirs.push((d.clone(), "ray.toml"));
+            }
+        }
+    }
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let root = manifest.map(|m| m.root).unwrap_or(entry_dir);
+    let root = root.canonicalize().unwrap_or(root);
+    for (d, origin) in &dirs {
+        if !root.join(d).is_dir() {
+            eprintln!("embed directory in {origin} does not exist: '{d}' (relative to '{}')", root.display());
+            process::exit(64);
+        }
+    }
+    let dir_names: Vec<String> = dirs.into_iter().map(|(d, _)| d).collect();
+    crate::builtins::embed_walk(&root, &dir_names)
+        .into_iter()
+        .map(|(key, p)| (key, p.to_string_lossy().into_owned()))
+        .collect()
+}
+
 
 /// Directorio de caché de builds nativos, PERSISTENTE entre sesiones (`~/.ray/native-cache/`, decidido en
 /// docs/transpilador-nativo.md §3.3). Sobrevive a la purga de `/tmp` (macOS: 3 días sin uso; Linux: reboot)
@@ -2912,12 +2962,31 @@ fn check_or_exit(program: &mut crate::ast::Program, locate: &Locate, multi: bool
 }
 
 /// Carga, chequea y ejecuta un archivo (VM por defecto, `--interp` para el intérprete).
+/// M147: fija la config de `std/embed` (raíz + dirs de `[native] embed`) desde el proyecto del
+/// ENTRY — no del cwd: `ray run otra/app/src/main.ray` resuelve contra SU raíz. Sin manifiesto
+/// o sin `[native] embed`, no se fija nada (std/embed responde Err de sin-config).
+pub(crate) fn configure_embed(entry: &str) {
+    // Canonicalizar primero: los ancestros de una ruta relativa terminan en "" (raíz vacía).
+    let dir = match Path::new(entry).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let dir = dir.canonicalize().unwrap_or(dir);
+    if let Ok(Some(m)) = Manifest::load(&dir)
+        && !m.native_embed.is_empty()
+    {
+        let root = m.root.canonicalize().unwrap_or_else(|_| m.root.clone());
+        crate::builtins::set_embed_config(root, m.native_embed);
+    }
+}
+
 fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u64>, heap: Option<usize>) {
     if (fuel.is_some() || heap.is_some()) && use_interp {
         eprintln!("--fuel/--heap are VM limits (product engine); they do not apply with --interp");
         process::exit(64);
     }
     runtime::set_program_args(prog_args);
+    configure_embed(path);
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
     if std::env::var("RAYLANG_TIME").is_ok() {

@@ -164,6 +164,13 @@ sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native
 [...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para
 builds herméticos/cross-compile/policy.
 
+**Assets embebidos (M147).** `[native] embed = ["assets"]` en el `ray.toml` (o `--embed dirs`
+ad-hoc) hornea los directorios dados DENTRO del binario (`include_bytes!`): `std/embed` los lee
+por clave ("assets/app.css") con el mismo espacio de nombres que en `ray run` (donde se leen en
+vivo del disco). Un dir configurado que no existe aborta el build (exit 64, nombrando el
+origen). No es un subsistema de ray-runtime: un programa solo-embed conserva la vía `rustc`
+pelada.
+
 > El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
 > `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`
 > (feature `crypto`); su `tls`/`sqlite` solo se enlazan en el proyecto GENERADO del

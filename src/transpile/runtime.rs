@@ -498,6 +498,38 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(\"\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
         ));
     }
+    // M147: std/embed — la tabla de assets HORNEADA con include_bytes! (rutas absolutas del
+    // build; sin copia, un solo mecanismo para el tier cargo y el rustc pelado) + helpers. Las
+    // claves llegan ya ORDENADAS del walker compartido (builtins::embed_walk) → el listado es
+    // byte-idéntico al de la VM. Tabla vacía (built sin --embed ni [native] embed) → el MISMO
+    // mensaje de sin-config que la VM.
+    if t.needs_embed {
+        out.push_str("static __RAY_EMBED: &[(&str, &[u8])] = &[\n");
+        for (key, path) in &t.embed {
+            writeln!(out, "    ({key:?}, include_bytes!({path:?})),").unwrap();
+        }
+        out.push_str("];\n");
+        out.push_str(concat!(
+            "const __RAY_EMBED_NO_CONFIG: &str = \"embed: no embedded assets configured (add [native] embed = [\\\"assets\\\"] to ray.toml)\";\n",
+            "fn __ray_embed_read(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    let arr: Vec<Rc<[u8]>> = if __RAY_EMBED.is_empty() {\n",
+            "        vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(__RAY_EMBED_NO_CONFIG.as_bytes())]\n",
+            "    } else { match __RAY_EMBED.iter().find(|(k, _)| *k == path) {\n",
+            "        Some((_, d)) => vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(*d)],\n",
+            "        None => vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(format!(\"embed: no embedded file '{path}'\").into_bytes().as_slice())],\n",
+            "    } };\n",
+            "    Rc::new(std::cell::RefCell::new(arr))\n}\n",
+            "fn __ray_embed_list() -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let arr: Vec<Rc<str>> = if __RAY_EMBED.is_empty() {\n",
+            "        vec![Rc::<str>::from(\"err\"), Rc::<str>::from(__RAY_EMBED_NO_CONFIG)]\n",
+            "    } else {\n",
+            "        let mut v = vec![Rc::<str>::from(\"ok\")];\n",
+            "        v.extend(__RAY_EMBED.iter().map(|(k, _)| Rc::<str>::from(*k)));\n",
+            "        v\n",
+            "    };\n",
+            "    Rc::new(std::cell::RefCell::new(arr))\n}\n",
+        ));
+    }
     // M146: ventana + webview (ray_runtime::ui). El id del registro se reserva ANTES de abrir y
     // se pasa al runtime: los eventos nombran a la ventana con el handle del programa. La espera
     // de eventos: con fibras, aparcar por el fd del self-pipe de la cola global (dual-mode: el

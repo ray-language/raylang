@@ -2052,6 +2052,31 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M147: un asset del espacio embed → [b"ok", datos] o [b"err", msg].
+                OpCode::EmbedRead => {
+                    let HeapValue::Str(path) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let elems = match crate::builtins::embed_read(&path) {
+                        Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
+                        Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M147: las claves del espacio embed → ["ok", clave…] o ["err", msg].
+                OpCode::EmbedList => {
+                    let elems = match crate::builtins::embed_list() {
+                        Ok(keys) => {
+                            let mut v = vec![HeapValue::Str("ok".to_string())];
+                            v.extend(keys.into_iter().map(HeapValue::Str));
+                            v
+                        }
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::WriteFileBytes => {
                     let data = self.pop();
                     let path = self.pop();

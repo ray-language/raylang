@@ -13,6 +13,8 @@ import std/net;
 import std/url;
 import std/time;
 import std/fs;
+import std/embed;
+import std/inflate;
 import std/deflate;
 import net/trace;
 
@@ -505,6 +507,67 @@ fn parse_range(v: string, size: int) -> [int] {
     }
 }
 
+// M147: el chequeo If-None-Match sobre un ETag ya calculado (la lista puede traer varios ETags
+// → basta que contenga el nuestro). Separado para que el camino de disco pueda responder 304
+// con SOLO los stats (sin leer el cuerpo) y el embebido lo comparta.
+fn if_none_match_hits(req: Request, etag: string) -> bool {
+    match (get(req.headers, "if-none-match")) {
+        Option.Some(inm) => inm.contains(etag),
+        Option.None => false,
+    }
+}
+
+// M147: la cola común de servir un estático YA LEÍDO (disco o embebido): Range/If-Range/416/
+// 206/200 con Content-Type + ETag + Accept-Ranges. `file` solo aporta la extensión (MIME).
+fn serve_static_bytes(file: string, etag: string, data: bytes, req: Request) -> Response {
+    // M110: Range/206 (solo GET; en HEAD el Range se ignora, permitido por RFC). `If-Range`
+    // con validador distinto al nuestro → respuesta completa (el recurso cambió bajo una
+    // descarga reanudada; servir el trozo corrompería).
+    var range_v: string = "";
+    if (req.method == "GET") {
+        match (get(req.headers, "range")) {
+            Option.Some(rv) => {
+                range_v = rv;
+            },
+            Option.None => { },
+        }
+        match (get(req.headers, "if-range")) {
+            Option.Some(ir) => {
+                if (ir.trim() != etag) {
+                    range_v = "";
+                }
+            },
+            Option.None => { },
+        }
+    }
+    if (range_v != "") {
+        let rng: [int] = parse_range(range_v, data.len());
+        if (rng.len() == 1) {
+            let r416: Response = text(416, "range not satisfiable\n");
+            r416.headers.insert("Content-Range", "bytes */" + to_string(data.len()));
+            r416.headers.insert("ETag", etag);
+            return r416;
+        }
+        if (rng.len() == 2) {
+            let piece: bytes = data.sub_bytes(rng[0], rng[1] + 1);
+            let r206: Response = bytes_response(206, piece);
+            r206.headers.insert("Content-Type", mime_of(file));
+            r206.headers.insert("ETag", etag);
+            r206.headers.insert("Accept-Ranges", "bytes");
+            r206.headers.insert(
+                "Content-Range",
+                "bytes " + to_string(rng[0]) + "-" + to_string(rng[1]) + "/" + to_string(data.len())
+            );
+            return r206;
+        }
+    }
+    let r: Response = bytes_response(200, data);
+    r.headers.insert("Content-Type", mime_of(file));
+    r.headers.insert("ETag", etag);
+    r.headers.insert("Accept-Ranges", "bytes");
+    r
+}
+
 /// Serves a static-files MOUNT: strips `prefix` from `req.path` and serves the rest from `dir`
 /// (via `static_response`: traversal-safe, MIME by extension, 404 on miss). Non-GET/HEAD → 405.
 pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
@@ -517,10 +580,7 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
         return not_found();
     }
     let rest: string = req.path.substring(prefix.len(), req.path.len());
-    match (static_file_of(
-    dir,
-    rest
-)) {
+    match (static_file_of(dir, rest)) {
         Option.Some(file) => {
             // El ETag sale de los metadatos (2 stats, sin leer el cuerpo): si no hay archivo, 404.
             let size: int = match (fs.file_size(file)) {
@@ -536,70 +596,52 @@ pub fn static_mount(prefix: string, dir: string, req: Request) -> Response {
                 },
             };
             let etag: string = "\"" + to_string(size) + "-" + to_string(mtime) + "\"";
-            // If-None-Match puede traer una lista de ETags → basta que contenga el nuestro.
-            match (get(req.headers, "if-none-match")) {
-                Option.Some(inm) => {
-                    if (inm.contains(etag)) {
-                        let r: Response = bytes_response(304, b"");
-                        r.headers.insert("ETag", etag);
-                        return r;
-                    }
-                },
-                Option.None => { },
+            if (if_none_match_hits(req, etag)) {
+                let r304: Response = bytes_response(304, b"");
+                r304.headers.insert("ETag", etag);
+                return r304;
             }
-            match (fs.read_file_bytes(
-            file
-        )) {
+            match (fs.read_file_bytes(file)) {
+                Result.Ok(data) => serve_static_bytes(file, etag, data, req),
+                Result.Err(_) => not_found(),
+            }
+        },
+        Option.None => not_found(),
+    }
+}
+
+// M147: el mount de assets EMBEBIDOS (std/embed): mismo saneo, mismo caching y mismo Range que
+// static_mount, con los bytes del espacio embed — en dev (VM) del disco en vivo; en el binario
+// `--embed`, horneados. El ETag es de CONTENIDO ("<tamaño>-<crc32>"): idéntico entre motores
+// cuando los bytes lo son (el mtime no existe en una tabla horneada).
+/// Serves EMBEDDED assets (`std/embed`, `[native] embed` in ray.toml) mounted under `prefix`:
+/// `static_mount_embedded("/static/", "assets", req)` serves `/static/app.css` from the embed
+/// key `assets/app.css`. Same traversal safety, ETag/304, Range/206 and MIME handling as
+/// `static_mount`; the ETag is content-based (size + crc32), so it is identical on the VM
+/// (live files) and in a `--embed` native binary (baked table) when the bytes match.
+pub fn static_mount_embedded(prefix: string, dir: string, req: Request) -> Response {
+    if (req.method != "GET" && req.method != "HEAD") {
+        let r: Response = text(405, "method not allowed\n");
+        r.headers.insert("Allow", "GET, HEAD");
+        return r;
+    }
+    if (!req.path.starts_with(prefix)) {
+        return not_found();
+    }
+    let rest: string = req.path.substring(prefix.len(), req.path.len());
+    match (static_file_of(dir, rest)) {
+        Option.Some(file) => {
+            match (embed.read(file)) {
                 Result.Ok(data) => {
-                    // M110: Range/206 (solo GET; en HEAD el Range se ignora, permitido por RFC).
-                    // `If-Range` con validador distinto al nuestro → respuesta completa (el
-                    // archivo cambió bajo una descarga reanudada; servir el trozo corrompería).
-                    var range_v: string = "";
-                    if (req.method == "GET") {
-                        match (get(req.headers, "range")) {
-                            Option.Some(rv) => {
-                                range_v = rv;
-                            },
-                            Option.None => { },
-                        }
-                        match (get(req.headers, "if-range")) {
-                            Option.Some(ir) => {
-                                if (ir.trim() != etag) {
-                                    range_v = "";
-                                }
-                            },
-                            Option.None => { },
-                        }
+                    let etag: string = "\"" + to_string(
+                        data.len()
+                    ) + "-" + to_string(inflate.crc32(data)) + "\"";
+                    if (if_none_match_hits(req, etag)) {
+                        let r304: Response = bytes_response(304, b"");
+                        r304.headers.insert("ETag", etag);
+                        return r304;
                     }
-                    if (range_v != "") {
-                        let rng: [int] = parse_range(range_v, data.len());
-                        if (rng.len() == 1) {
-                            let r416: Response = text(416, "range not satisfiable\n");
-                            r416.headers.insert(
-                                "Content-Range",
-                                "bytes */" + to_string(data.len())
-                            );
-                            r416.headers.insert("ETag", etag);
-                            return r416;
-                        }
-                        if (rng.len() == 2) {
-                            let piece: bytes = data.sub_bytes(rng[0], rng[1] + 1);
-                            let r206: Response = bytes_response(206, piece);
-                            r206.headers.insert("Content-Type", mime_of(file));
-                            r206.headers.insert("ETag", etag);
-                            r206.headers.insert("Accept-Ranges", "bytes");
-                            r206.headers.insert(
-                                "Content-Range",
-                                "bytes " + to_string(rng[0]) + "-" + to_string(rng[1]) + "/" + to_string(data.len())
-                            );
-                            return r206;
-                        }
-                    }
-                    let r: Response = bytes_response(200, data);
-                    r.headers.insert("Content-Type", mime_of(file));
-                    r.headers.insert("ETag", etag);
-                    r.headers.insert("Accept-Ranges", "bytes");
-                    r
+                    serve_static_bytes(file, etag, data, req)
                 },
                 Result.Err(_) => not_found(),
             }

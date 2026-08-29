@@ -24,7 +24,10 @@ Las piezas nuevas sobre el patrón de la fase 0:
 2. **El ciclo de vida es un evento**: una fibra espera `ui.next_event()` (aparca, sin sondeo) y
    con `closed` de la ventana hace `exit(0)` — el botón rojo Y el botón "Salir" de la página
    convergen ahí.
-3. El resto (puerto libre, handlers, `/quit`) es idéntico a la fase 0.
+3. **Assets embebidos** (`std/embed`, M147): el css se sirve con `app.static_embedded` desde
+   `[native] embed = ["assets"]` — en dev se lee del disco en vivo; en el binario nativo va
+   HORNEADO: el ejecutable corre desde cualquier directorio sin llevarse `assets/` al lado.
+4. El resto (puerto libre, handlers, `/quit`) es idéntico a la fase 0.
 
 `std/ui` corre real en macOS; con `RAY_UI_BACKEND=headless` (tests/CI) las ventanas son filas en
 memoria. El arco completo está clasificado en `IDEAS.md` §80.

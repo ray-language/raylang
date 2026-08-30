@@ -10767,3 +10767,45 @@ main emitido) se ensancharon EN UN COMMIT a `unix` — la lección del plan: uno
 toda una clase de OS colgada 5 s por open. VALIDACIÓN HONESTA: compilación y clippy limpios
 contra x86_64-unknown-linux-gnu + batería headless + el negativo de CI (sin display → Err ≤5 s);
 la ventana GTK real queda pendiente de un desktop Linux, anotado en IDEAS.
+
+## 145. M148 — F3 de escritorio: menús y diálogos, quirúrgico (ago 2026)
+
+La doctrina de §80 aplicada: de la lista "menús/diálogos/tray/updater", el v1 entrega SOLO las
+dos superficies con caso de uso hoy, y clasifica el resto a dogfood (tray, notificaciones —
+que además exigen bundle+autorización —, updater, aceleradores GTK).
+
+**El menú estándar es un FIX, no una feature.** En macOS los key equivalents viajan por el menú
+principal (`performKeyEquivalent:`): una NSApplication programática sin menú no tiene ⌘C/⌘V/⌘X
+NI EN LOS CAMPOS DE TEXTO DEL WEBVIEW — el bug de usabilidad que cualquier dogfood habría
+reportado primero. `init_app` instala App (Hide/Quit) + Edit completo con targets NIL
+(responder chain → el webview los atiende) + ⌘W → `performClose:` (que desemboca gratis en el
+`windowWillClose:` existente → evento `closed`). La trampa clásica de los menús custom resolvió
+A FAVOR: con `autoenablesItems` (default), un item cuyo target responde al action sin
+`validateMenuItem:` queda HABILITADO — cero plomería. El action es un segundo `class_addMethod`
+sobre el delegate de M146 (el IMP `v@:@` ya tipado sirve: el sender es el NSMenuItem) y el tag
+viaja como i64 (`setTag:`) mapeado a String en Rust — objc no carga Strings ajenos.
+
+**El evento creció a `(kind, window, tag)`** — el cambio mecánico tocó los tres motores Y LOS
+DOS cuerpos emitidos del transpilador (fibras/no-fibras): la clase de sitio donde la
+byte-identidad se pierde en silencio. `"menu"` lleva window=0 (los menús son de la app; los
+handles reales empiezan en 1).
+
+**Los diálogos exigieron una espera NUEVA.** El `on_main_sync` de 5 s (correcto para crear una
+ventana) es fatal para un modal — el usuario tarda lo que tarda; la revisión adversarial cazó
+que el diseño original solo lo arreglaba en macOS y dejaba el de GTK devolviendo Err con el
+diálogo aún en pantalla (BLOCKER). `on_main_sync_wait` (sin plazo) existe en AMBOS backends y
+solo es alcanzable tras `ensure_app` (que sí acota: con la app Ready, el loop jamás sale → la
+espera no puede quedar huérfana). Asimetría documentada: la main queue de macOS es SERIAL
+(mientras `runModal` está abierto, otras ops de UI esperan — contrato v1: un modal a la vez);
+el loop recursivo de GTK sigue drenando idles y no lo sufre. En GTK, el chooser NATIVO
+(`gtk_file_chooser_native_new`, 3.20+, aridad fija — jamás la variádica `_dialog_new`) va en
+símbolos `Option<>` con Err limpio; `GTK_RESPONSE_ACCEPT` es -3 (negativo);
+`get_filename` es g_malloc'd → copiar y `g_free`. El menubar de GTK es POR VENTANA (no global
+como macOS): los menús declarados aplican a las ventanas abiertas después — documentado, con la
+opción de reconstruir menubars vivos anotada para cuando un dogfood la pida.
+
+La lógica compartida (decodificación "tag\ttitle\tshortcut", validación, headless con
+`RAY_UI_PICK`) vive en `ray_runtime::ui` — el binario transpilado llama a este crate DIRECTO,
+así que ponerla en builtins habría partido la byte-identidad. La batería de 3 motores conduce
+los diálogos por `RAY_UI_PICK` (Some/None) y verifica el tag vacío del `closed`; el click real
+del menú y el panel real son dogfood manual en macOS (validados: menú visible y app estable).

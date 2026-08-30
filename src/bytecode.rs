@@ -629,6 +629,10 @@ pub enum OpCode {
     /// M146: `__ui_next_event(ms)` — el siguiente evento de UI; en la VM APARCA la fibra en el
     /// self-pipe de la cola global (patrón WatchNext).
     UiNext,
+    /// M148: `__ui_menu(title, items)` — añade un menú custom (['ok'] / ['err', msg]).
+    UiMenu,
+    /// M148: `__ui_dialog(kind, arg)` — diálogo de archivo MODAL (['ok', path] / ['none'] / ['err', msg]).
+    UiDialog,
     /// M147: `__embed_read(path)` — un asset del espacio `[native] embed` ([b'ok', datos] / [b'err', msg]).
     EmbedRead,
     /// M147: `__embed_list()` — las claves del espacio embed, orden lexicográfico (['ok', …] / ['err', msg]).

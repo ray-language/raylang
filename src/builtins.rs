@@ -1088,11 +1088,11 @@ pub fn ui_event_fd() -> Result<i32, String> {
 
 /// M146: el siguiente evento de UI si ya hay uno, sin bloquear: `(kind, handle_de_ventana)`.
 #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
-pub fn ui_try_next() -> Option<(String, i64)> {
+pub fn ui_try_next() -> Option<(String, i64, String)> {
     ray_runtime::ui::try_next_event()
 }
 #[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
-pub fn ui_try_next() -> Option<(String, i64)> {
+pub fn ui_try_next() -> Option<(String, i64, String)> {
     None
 }
 
@@ -1172,14 +1172,36 @@ pub fn embed_read(path: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+/// M148: añade un menú de nivel superior (items codificados "tag\ttitle\tshortcut" — la
+/// decodificación y la rama headless viven en ray_runtime::ui, compartidas con el nativo).
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_menu(title: &str, items: &[String]) -> Result<(), String> {
+    ray_runtime::ui::menu(title, items)
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_menu(_title: &str, _items: &[String]) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
+/// M148: diálogo de archivo MODAL (bloquea el hilo del worker lo que el usuario tarde — la
+/// clase sqlite/run, documentada). `Ok(None)` = canceló.
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
+    ray_runtime::ui::dialog(kind, arg)
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_dialog(_kind: &str, _arg: &str) -> Result<Option<String>, String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M146: el siguiente evento BLOQUEANDO el hilo (el intérprete). `ms <= 0` = sin plazo;
 /// `Ok(None)` = plazo vencido.
 #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
-pub fn ui_next_blocking(ms: i64) -> Result<Option<(String, i64)>, String> {
+pub fn ui_next_blocking(ms: i64) -> Result<Option<(String, i64, String)>, String> {
     Ok(ray_runtime::ui::next_event_blocking(ms))
 }
 #[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
-pub fn ui_next_blocking(_ms: i64) -> Result<Option<(String, i64)>, String> {
+pub fn ui_next_blocking(_ms: i64) -> Result<Option<(String, i64, String)>, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
@@ -3504,7 +3526,23 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__ui_eval_js expects a string (the JavaScript), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // __ui_next_event(ms) -> [string] (M146): ["ok", kind, window] / ["timeout"] / ["err", msg].
+    // __ui_menu(title, items) -> [string] (M148): ["ok"] o ["err", msg]. items codificados
+    // "tag\ttitle\tshortcut"; un click emite el evento ("menu", 0, tag).
+    Builtin { name: "__ui_menu", opcode: OpCode::UiMenu, check: |a| {
+        arity(a, 2, "__ui_menu", " (title, items)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_menu expects a string (the title), not {}", a[0]))); }
+        if a[1] != Type::Array(Box::new(Type::String)) { return Err((Some(1), format!("__ui_menu expects a [string] (the encoded items), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_dialog(kind, arg) -> [string] (M148): ["ok", path] / ["none"] / ["err", msg]. MODAL:
+    // bloquea al llamador lo que el usuario tarde (un modal a la vez).
+    Builtin { name: "__ui_dialog", opcode: OpCode::UiDialog, check: |a| {
+        arity(a, 2, "__ui_dialog", " (kind, arg)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_dialog expects a string (the kind), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ui_dialog expects a string (the argument), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_next_event(ms) -> [string] (M146/M148): ["ok", kind, window, tag] / ["timeout"] / ["err", msg].
     // ms <= 0 = sin plazo. En la VM APARCA la fibra (self-pipe de la cola global, patrón
     // WatchNext); la cola es DEL PROCESO (los eventos de todas las ventanas llegan aquí).
     Builtin { name: "__ui_next_event", opcode: OpCode::UiNext, check: |a| {

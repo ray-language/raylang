@@ -3120,6 +3120,49 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M148: menú custom (la decodificación vive en ray_runtime::ui, compartida).
+                OpCode::UiMenu => {
+                    let items = self.pop();
+                    let HeapValue::Str(title) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Obj(ih) = items else {
+                        unreachable!("the checker guarantees a [string]");
+                    };
+                    let items: Vec<String> = self
+                        .as_array(ih)
+                        .iter()
+                        .map(|v| match v {
+                            HeapValue::Str(s) => s.clone(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        })
+                        .collect();
+                    let elems = match crate::builtins::ui_menu(&title, &items) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M148: diálogo de archivo — MODAL: bloquea el hilo del worker lo que el
+                // usuario tarde (clase sqlite/run, documentado).
+                OpCode::UiDialog => {
+                    let HeapValue::Str(arg) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Str(kind) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let elems = match crate::builtins::ui_dialog(&kind, &arg) {
+                        Ok(Some(path)) => {
+                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(path)]
+                        }
+                        Ok(None) => vec![HeapValue::Str("none".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M146: siguiente evento de UI — sondea la cola global; vacía → APARCA la fibra
                 // en el fd del self-pipe y rebobina (patrón WatchNext; la cola es del proceso,
                 // así que el pseudo-handle del timeout es una constante reservada).
@@ -3131,11 +3174,12 @@ impl<'a> Vm<'a> {
                         let elems = vec![HeapValue::Str("timeout".to_string())];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
-                    } else if let Some((kind, window)) = crate::builtins::ui_try_next() {
+                    } else if let Some((kind, window, tag)) = crate::builtins::ui_try_next() {
                         let elems = vec![
                             HeapValue::Str("ok".to_string()),
                             HeapValue::Str(kind),
                             HeapValue::Str(window.to_string()),
+                            HeapValue::Str(tag),
                         ];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));

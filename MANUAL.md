@@ -1161,7 +1161,26 @@ No hay `ui.run()`: el runtime **captura el hilo principal por su cuenta** en la 
 `ray dev`, cerrar la ventana (salida limpia) **cierra también el modo dev** — el mismo contrato
 que las TUI: la app la cerró el usuario, no hay nada que re-lanzar. `close(h)`
 cierra la ventana; `ui.events()` da la misma cola como `Channel<UiEvent>` (para hacer `select`
-con tus otros canales); `next_event_timeout(ms)` acota la espera. Backends reales: macOS
+con tus otros canales); `next_event_timeout(ms)` acota la espera.
+
+**Menús y diálogos (M148).** El menú estándar se instala solo al abrir la primera ventana —
+App (⌘Q, ⌘H) y Edit completo: sin él, en macOS **⌘C/⌘V/⌘X no funcionan ni en los campos de
+texto del webview** (los atajos viajan por el menú). Los tuyos se declaran por datos y llegan
+como eventos:
+
+```rust
+ui.menu("Partida", [
+    ui.MenuItem { tag: "new", title: "Nueva", shortcut: "n" },     // ⌘N
+    ui.MenuItem { tag: "scores", title: "Récords", shortcut: "" },
+])?;
+// … en tu bucle de eventos:
+//   e.kind == "menu" && e.tag == "new"  → nueva partida
+```
+
+Y los diálogos de archivo nativos, modales (la llamada aparca hasta que el usuario decide;
+`None` = canceló): `ui.pick_file()`, `ui.pick_folder()`, `ui.save_file("borrador.txt")`. En
+headless (tests/CI) el resultado se inyecta con `RAY_UI_PICK`. Nota Linux v1: el menubar es
+por-ventana (aplica a ventanas abiertas después de `ui.menu`) y sin atajos de teclado. Backends reales: macOS
 (WKWebView) y Linux (GTK3 + WebKitGTK, cargados en runtime: sin `libwebkit2gtk` o sin display
 el `open` da un `Err` claro); con `RAY_UI_BACKEND=headless` las ventanas son filas en memoria
 (tests/CI en cualquier OS — `ray test` lo usa por defecto), y `--without ui` lo excluye del

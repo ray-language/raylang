@@ -2084,13 +2084,45 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
-            "__ui_next_event" => {
+            "__ui_menu" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(title), Value::Array(items)) => {
+                        let items: Vec<String> = items
+                            .borrow()
+                            .iter()
+                            .map(|v| match v {
+                                Value::Str(s) => s.clone(),
+                                _ => unreachable!("the checker guarantees [string]"),
+                            })
+                            .collect();
+                        match crate::builtins::ui_menu(title, &items) {
+                            Ok(()) => vec![Value::Str("ok".to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees (string, [string])"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__ui_dialog" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(kind), Value::Str(arg)) => match crate::builtins::ui_dialog(kind, arg) {
+                        Ok(Some(path)) => vec![Value::Str("ok".to_string()), Value::Str(path)],
+                        Ok(None) => vec![Value::Str("none".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees (string, string)"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+                        "__ui_next_event" => {
                 let arr = match &values[0] {
                     Value::Int(ms) => match crate::builtins::ui_next_blocking(*ms) {
-                        Ok(Some((kind, window))) => vec![
+                        Ok(Some((kind, window, tag))) => vec![
                             Value::Str("ok".to_string()),
                             Value::Str(kind),
                             Value::Str(window.to_string()),
+                            Value::Str(tag),
                         ],
                         Ok(None) => vec![Value::Str("timeout".to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],

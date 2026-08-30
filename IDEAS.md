@@ -3091,8 +3091,16 @@ dogfood: eval con retorno (ABI de blocks), más kinds de evento (resize/focus), 
 `ray dev` recarga assets sin reiniciar), `ray bundle` (.app/.desktop) y el backend GTK3+WebKitGTK
 por dlopen — el contrato de std/ui en los DOS sistemas. ⚠️ PENDIENTE honesto: la ventana GTK
 real no se ha visto en pantalla (validada por compilación cruzada + headless + negativo de CI);
-primer usuario con desktop Linux = el dogfood. Siguiente: F3 (menús/diálogos/tray/updater) —
-o §80b (móvil) cuando toque.
+primer usuario con desktop Linux = el dogfood.
+
+**F3 v1 ✅ (29 ago 2026, M148, DESIGN §145)**: menús (estándar automático — el fix del
+portapapeles del webview — + custom por datos con eventos `"menu"`+tag) y diálogos de archivo
+(open/folder/save, modales, `RAY_UI_PICK` en headless). QUIRÚRGICO por doctrina — DIFERIDOS a
+dogfood: **tray** (NSStatusItem barato, sin caso de uso aún), **notificaciones**
+(UNUserNotificationCenter exige bundle+autorización → encaja tras `ray bundle` cuando un
+dogfood lo pida), **updater de apps** (arco propio), **aceleradores de teclado GTK**
+(GtkAccelGroup), **⌘Q como evento** (hoy `terminate:` sale directo, estándar de macOS; un
+app-delegate lo convertiría en evento interceptable). Siguiente: §80b (móvil) cuando toque.
 
 **DECISIÓN FIJADA (28 ago 2026, con el usuario): el camino es WEBVIEW, sin ambigüedad.** Bindear
 toolkits nativos completos (AppKit/UIKit/GTK/WinUI) o construir renderer propio eclipsaría al

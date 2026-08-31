@@ -1126,6 +1126,14 @@ ray bundle --icon icon.png            # macOS: MiApp.app (Info.plist + icns + co
                                       # Linux: MiApp/ con el binario + MiApp.desktop
 ```
 
+Y la MISMA app, en el iPhone: `ray bundle --ios` genera un **proyecto Xcode** — un shell
+WKWebView en ObjC que linkea el programa como **librería estática** (`ray build --native
+--lib`: la entrada C `ray_start()`) para dispositivo y simulador. `ui.open(title, url)` entrega
+la URL al webview del shell: el fuente de escritorio corre sin tocar. El ciclo de vida llega
+como eventos (`kind="lifecycle"`, `tag="background"/"foreground"`). Simulador: compilar sin
+firma y `simctl install/launch`; dispositivo: abrir el proyecto en Xcode y elegir tu team.
+`--ios` excluye `process` (fork/exec denegado en iOS) y `audio` (backend sin validar ahí).
+
 El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
 Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets
 van embebidos, no en rutas relativas —, y en v1 no hay firma/notarización: tu propio .app corre

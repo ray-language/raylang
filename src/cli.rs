@@ -91,7 +91,7 @@ Project:
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib]] [--templates-only [path...]]
-  bundle [file]     package a desktop app (M147c): --release native build + .app (macOS) or dir + .desktop (Linux) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
+  bundle [file]     package an app (M147c): --release native build + .app (macOS) / dir + .desktop (Linux); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -1224,6 +1224,9 @@ fn cmd_bundle(args: &[String]) {
     let id_arg = flag_value("--id");
     let out_arg = flag_value("-o");
     let without_arg = flag_value("--without");
+    // `--ios` (§80b): en vez del .app/.desktop del HOST, genera el proyecto Xcode de una app
+    // iOS (shell WKWebView + staticlibs de dispositivo y simulador). Solo host macOS.
+    let ios = args.iter().any(|a| a == "--ios");
     let values: Vec<&String> = [&name_arg, &icon, &id_arg, &out_arg, &without_arg].iter().filter_map(|o| o.as_ref()).collect();
     let file = args
         .iter()
@@ -1264,6 +1267,15 @@ fn cmd_bundle(args: &[String]) {
             }
         }
     }
+    // §80b: en iOS, `process` (fork/exec denegado en dispositivo y prohibido en la store) y
+    // `audio` (backend CoreAudio dirigido a macOS, sin validar en iOS) van excluidos SIEMPRE.
+    if ios {
+        for sub in ["process", "audio"] {
+            if !exclude.iter().any(|d| d == sub) {
+                exclude.push(sub.to_string());
+            }
+        }
+    }
     let fibers = !exclude.iter().any(|d| d == "fibers");
     let embed = collect_embed(&path, None);
     if embed.is_empty() {
@@ -1282,10 +1294,48 @@ fn cmd_bundle(args: &[String]) {
         eprintln!("bundle: could not create the work directory: {e}");
         process::exit(74);
     }
+    let out_dir = out_arg.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+    if ios {
+        if !cfg!(target_os = "macos") {
+            eprintln!("bundle --ios: an iOS app can only be built on macOS (Xcode)");
+            process::exit(64);
+        }
+        // Los DOS staticlibs (dispositivo y simulador; ambos arm64 — el xcconfig elige por
+        // SDK, jamás un lipo). Con el rustup target ausente, cargo lo dice y la pista es esta:
+        eprintln!("[bundle] building the device and simulator static libraries (first build compiles ring/mimalloc for each target; needs `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`)…");
+        let dev_a = work.join("dev.a");
+        let sim_a = work.join("sim.a");
+        build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, fibers, &embed, true);
+        build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, fibers, &embed, true);
+        let proj = out_dir.join(format!("{name}-ios"));
+        let _ = fs::remove_dir_all(&proj);
+        if let Err(e) = fs::create_dir_all(proj.join("libs")).and_then(|_| fs::create_dir_all(proj.join("libs-sim"))) {
+            eprintln!("bundle: could not create '{}': {e}", proj.display());
+            process::exit(74);
+        }
+        // Nombre FIJO del archive en ambos dirs (el `-lray_app` del xcconfig): la ruta decide.
+        if let Err(e) = fs::copy(&dev_a, proj.join("libs/libray_app.a"))
+            .and_then(|_| fs::copy(&sim_a, proj.join("libs-sim/libray_app.a")))
+        {
+            eprintln!("bundle: could not place the static libraries: {e}");
+            process::exit(74);
+        }
+        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version) {
+            eprintln!("bundle: could not write the Xcode project: {e}");
+            process::exit(74);
+        }
+        if let Some(icon) = icon.as_deref() {
+            write_ios_appicon(&proj, Path::new(icon));
+        }
+        let _ = fs::remove_dir_all(&work);
+        println!("ok: iOS project '{}'", proj.display());
+        println!("  simulator: xcodebuild -project {name}.xcodeproj -target {name} -sdk iphonesimulator -configuration Debug build CODE_SIGNING_ALLOWED=NO");
+        println!("  device:    open the project in Xcode and pick your signing team");
+        return;
+    }
     let tmp_bin = work.join("bin");
     build_native(&path, tmp_bin.to_str(), true, &exclude, None, false, fibers, &embed, false);
 
-    let out_dir = out_arg.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
     if cfg!(target_os = "macos") {
         bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), &tmp_bin);
     } else if cfg!(unix) {
@@ -1388,6 +1438,36 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, bin: &Path) {
         process::exit(74);
     }
     println!("ok: bundle '{}'", dir.display());
+}
+
+/// §80b: el AppIcon del proyecto iOS — un appiconset de TAMAÑO ÚNICO (1024, "single size":
+/// Xcode 14+ genera el resto), vía sips. Best-effort: sin icono válido, la app compila igual.
+fn write_ios_appicon(proj: &Path, icon: &Path) {
+    let set = proj.join("Shell/Assets.xcassets/AppIcon.appiconset");
+    let ok = fs::create_dir_all(&set).is_ok()
+        && process::Command::new("sips")
+            .args(["-z", "1024", "1024"])
+            .arg(icon)
+            .arg("--out")
+            .arg(set.join("icon_1024.png"))
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        && fs::write(
+            set.join("Contents.json"),
+            "{\n  \"images\": [{ \"filename\": \"icon_1024.png\", \"idiom\": \"universal\", \"platform\": \"ios\", \"size\": \"1024x1024\" }],\n  \"info\": { \"author\": \"xcode\", \"version\": 1 }\n}\n",
+        )
+        .is_ok()
+        && fs::write(
+            proj.join("Shell/Assets.xcassets/Contents.json"),
+            "{\n  \"info\": { \"author\": \"xcode\", \"version\": 1 }\n}\n",
+        )
+        .is_ok();
+    if !ok {
+        eprintln!("bundle: warning: could not build the app icon; continuing without it");
+    }
+    // Nota: sin cablear el asset catalog en el pbxproj v1 (exigiría fase Resources +
+    // ASSETCATALOG_COMPILER_APPICON_NAME); el catálogo queda listo para arrastrar en Xcode.
 }
 
 /// Un `.icns` desde un PNG, vía las herramientas del sistema: `sips -z` genera el iconset (los

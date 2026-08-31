@@ -10809,3 +10809,47 @@ La lógica compartida (decodificación "tag\ttitle\tshortcut", validación, head
 así que ponerla en builtins habría partido la byte-identidad. La batería de 3 motores conduce
 los diálogos por `RAY_UI_PICK` (Some/None) y verifica el tag vacío del `closed`; el click real
 del menú y el panel real son dogfood manual en macOS (validados: menú visible y app estable).
+
+## 146. M149 — §80b fase iOS: el mismo fuente, en el iPhone (ago 2026)
+
+El arco móvil arrancó donde IDEAS §80b lo dejó apuntado: iOS primero (WKWebView es la misma
+API que pagó F1; el reactor kqueue ya estaba gateado para ios; `--embed` era el requisito de
+store ya entregado). Tres piezas, dos PRs, y una foto que resume el arco: el ejemplo
+`desktop_window` SIN TOCAR corriendo en el simulador — su webserver de fibras sirviendo la
+página, el fetch con la hora viva, el css embebido aplicado.
+
+**`--lib`: el transpilador aprende a ser librería.** En vez de `fn main()`,
+`#[unsafe(no_mangle)] pub extern "C" fn ray_start() -> i32` — el PRIMER símbolo exportado del
+proyecto. Las diferencias con el main son exactamente las que el contrato móvil exige: sin
+`process::exit` (el shell posee el proceso: el fin del programa no lo mata; el `exit()`
+explícito sí, documentado), el programa en su hilo de 8 MiB (jamás fibra — las mismas tres
+razones de M146) y ray_start RETORNANDO de inmediato (el hilo 1 es de UIApplicationMain).
+Del lado Cargo: `[lib] crate-type=staticlib`, artefacto `lib<pkg>.a` CALCULADO (pkg lleva
+hash — jamás un glob), y la duda clásica verificada con nm: fat-LTO conserva los no_mangle.
+
+**El backend shell de std/ui: el shell ES la ventana.** `mod shell` (cfg ios, o la feature
+`ui-shell` que lo compila en host para el test): el shell registra `ray_ui_set_handlers(open,
+eval)` ANTES de ray_start y empuja eventos con `ray_ui_push_event`; `ui.open(title, url)`
+entrega la URL — así el fuente de escritorio corre idéntico. La revisión adversarial cazó dos
+BLOCKERs de diseño antes de codificar: el brazo fallback de cfg que iOS ya matcheaba (los 4
+sitios se estrecharon a `not(any(macos, linux, ios))` en el mismo commit) y el evento `closed`
+del cierre programático (resuelto gratis: el `mark_closed` genérico ya lo emite para toda
+variante). El gate del hilo principal se ESQUIVA entero en ios (el shell no es nuestro).
+
+**`ray bundle --ios`: el proyecto Xcode como plantilla.** Shell ObjC mínimo (UIWindow +
+WKWebView; los handlers COPIAN los strings y despachan a main — WebKit lo exige), xcconfig con
+la decisión clave del empaquetado: dispositivo y simulador son AMBOS arm64 → un lipo es
+imposible; `LIBRARY_SEARCH_PATHS[sdk=...]` elige el `.a` por SDK (xcframework anotado v2), y
+`ARCHS = arm64` fijado (el primer xcodebuild falló intentando el x86_64 legacy del simulador).
+pbxproj sintético mínimo (UUIDs de 24 hex fijos, objectVersion 56, todo lo afinable en el
+xcconfig). `--ios` excluye `process` (fork/exec denegado en dispositivo, prohibido en review)
+y `audio` (backend sin validar en iOS). Ciclo de vida: didEnterBackground/willEnterForeground
+→ `ray_ui_push_event("lifecycle", …)` → `ui.next_event()`.
+
+**Validación por niveles, todos ejecutados**: T1 cross-compile con features completas (ring/
+mimalloc/corosensei limpios a ambos targets); T4 el driver C de 25 líneas que hace lo que hará
+la app (handlers → ray_start → open/eval → evento; en cada cargo test); T2 xcodebuild del
+proyecto generado contra el SDK del simulador (test #[ignore], manual); T3 el simulador REAL:
+boot + install + launch — "listening on port 50533" en la consola del iPhone y el screenshot
+de la app viva. Android queda diferido con su lista en IDEAS §80b: el shell Gradle + WebView
+por JNI es la única pieza sin precedente.

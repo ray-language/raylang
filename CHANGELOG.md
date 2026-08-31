@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **La firma iOS sobrevive a `ray bundle --ios`** (M151, raydesk #9): declara tu team una vez
+  con `[ios] development_team = "…"` en el ray.toml y cada regeneración lo escribe en el
+  `App.xcconfig`; sin declararlo, el bundle **preserva** el `DEVELOPMENT_TEAM`/`CODE_SIGN_STYLE`
+  que Xcode dejó en el xcconfig anterior (antes cada bundle los borraba y había que reponerlos
+  a mano). Además `ray_doc` con un **nombre de módulo a secas** (`"std/kv"` o `"kv"`) lista la
+  superficie pública completa — tipos, funciones y métodos de trait con firma — en vez de
+  responder "usa module.function".
+
 - **El terminal ya no queda "en escalera"** cuando una app en modo crudo muere por señal:
   `term.raw` arma un handler de `SIGHUP`/`SIGINT`/`SIGTERM` (solo si tenían la disposición por
   defecto — `signals()` manda si tu programa las maneja) que restaura el termios y re-lanza la

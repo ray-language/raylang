@@ -56,6 +56,11 @@ pub struct Manifest {
     /// (socket-activation, M92.3): el hijo la ADOPTA en vez de re-bind → cero conexiones rechazadas. El
     /// flag `--port`/`--listen` de la CLI la sobrescribe. `None` = sin socket retenido (bind por reinicio).
     pub dev_listen: Option<String>,
+    /// M151 (raydesk #9): `[ios] development_team` — el team de firma de Apple que `ray bundle
+    /// --ios` escribe en el `App.xcconfig` generado (con `CODE_SIGN_STYLE = Automatic`). Sin él,
+    /// cada regeneración borraba el team elegido en Xcode. `None` = sin firma declarada (el
+    /// bundle además PRESERVA la firma de un xcconfig existente).
+    pub ios_development_team: Option<String>,
 }
 
 impl Manifest {
@@ -105,6 +110,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut native_without = Vec::new();
     let mut native_embed = Vec::new();
     let mut dev_listen = None;
+    let mut ios_development_team = None;
 
     for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
@@ -175,6 +181,13 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "listen" => dev_listen = Some(as_string()?),
                 _ => {} // otras claves de [dev] se ignoran por ahora (extensibilidad)
             },
+            "ios" => {
+                // M151: `development_team = "ABCDE12345"` — el team de firma para `ray bundle
+                // --ios`; otras claves de [ios] se ignoran por ahora (extensibilidad).
+                if key == "development_team" {
+                    ios_development_team = Some(as_string()?);
+                }
+            }
             "" => return Err(err(num, "key outside any section (missing '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
@@ -193,6 +206,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         native_without,
         native_embed,
         dev_listen,
+        ios_development_team,
     })
 }
 
@@ -301,6 +315,18 @@ mod tests {
         assert!(m.dependencies.is_empty());
         assert!(m.native_without.is_empty()); // sin [native] → sin exclusión
         assert_eq!(m.entry_path(), PathBuf::from("/proj/src/main.ray"));
+    }
+
+    #[test]
+    fn ios_development_team_is_parsed() {
+        // M151 (raydesk #9): [ios] development_team — la firma que `ray bundle --ios` persiste.
+        let m = parse_src(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\ndevelopment_team = \"ABCDE12345\"\n",
+        )
+        .unwrap();
+        assert_eq!(m.ios_development_team.as_deref(), Some("ABCDE12345"));
+        let without = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+        assert!(without.ios_development_team.is_none());
     }
 
     #[test]

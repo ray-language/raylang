@@ -161,9 +161,48 @@ const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 "#;
 
+/// M151 (raydesk #9): la firma que el xcconfig generado debe llevar. `team` viene de
+/// `[ios] development_team` en ray.toml o, en su defecto, PRESERVADA del `App.xcconfig`
+/// anterior (Xcode la escribe ahí al elegir el equipo; regenerar la borraba en cada bundle).
+#[derive(Default, Clone)]
+pub struct Signing {
+    pub team: Option<String>,
+    pub style: Option<String>,
+}
+
+impl Signing {
+    /// Resuelve la firma final: el manifest manda; lo preservado rellena; con team y sin
+    /// estilo, `Automatic` (lo que Xcode escribe al elegir equipo en Signing & Teams).
+    pub fn resolve(manifest_team: Option<&str>, previous: &Signing) -> Signing {
+        let team = manifest_team.map(str::to_string).or_else(|| previous.team.clone());
+        let style = previous.style.clone().or_else(|| team.as_ref().map(|_| "Automatic".to_string()));
+        Signing { team, style }
+    }
+
+    /// Extrae `DEVELOPMENT_TEAM`/`CODE_SIGN_STYLE` de un `App.xcconfig` existente (primer match
+    /// de cada clave; formato `CLAVE = valor` del propio generador y de Xcode).
+    pub fn from_xcconfig(text: &str) -> Signing {
+        let grab = |key: &str| {
+            text.lines()
+                .filter_map(|l| l.split_once('='))
+                .find(|(k, _)| k.trim() == key)
+                .map(|(_, v)| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        Signing { team: grab("DEVELOPMENT_TEAM"), style: grab("CODE_SIGN_STYLE") }
+    }
+}
+
 /// El xcconfig: TODO lo afinable vive aquí (el pbxproj solo lo referencia). La elección del
 /// `.a` por SDK es la pieza clave: dispositivo y simulador son ambos arm64.
-fn xcconfig(name: &str, bundle_id: &str, version: &str) -> String {
+fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing) -> String {
+    let mut sign = String::new();
+    if let Some(style) = &signing.style {
+        sign.push_str(&format!("CODE_SIGN_STYLE = {style}\n"));
+    }
+    if let Some(team) = &signing.team {
+        sign.push_str(&format!("DEVELOPMENT_TEAM = {team}\n"));
+    }
     format!(
         "// Generado por `ray bundle --ios` — ajusta aquí, no en el pbxproj.\n\
          PRODUCT_NAME = {name}\n\
@@ -182,7 +221,8 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str) -> String {
          // (dispositivo y simulador son ambos arm64 — jamás un lipo).\n\
          LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PROJECT_DIR)/libs\n\
          LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PROJECT_DIR)/libs-sim\n\
-         OTHER_LDFLAGS = -lray_app -framework WebKit -lobjc\n"
+         OTHER_LDFLAGS = -lray_app -framework WebKit -lobjc\n\
+         {sign}"
     )
 }
 
@@ -243,8 +283,15 @@ const README: &str = r#"# App iOS generada por `ray bundle --ios`
   `ui.next_event()` como kind="lifecycle", tag="background"/"foreground".
 "#;
 
-/// Genera el árbol del proyecto en `dir` (ya creado). Los `.a` los copia el llamador.
-pub fn write_project(dir: &Path, name: &str, bundle_id: &str, version: &str) -> Result<(), String> {
+/// Genera el árbol del proyecto en `dir` (ya creado). Los `.a` los copia el llamador; la
+/// `signing` resuelta (manifest > preservada) va al xcconfig.
+pub fn write_project(
+    dir: &Path,
+    name: &str,
+    bundle_id: &str,
+    version: &str,
+    signing: &Signing,
+) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
         if let Some(parent) = p.parent() {
@@ -258,8 +305,45 @@ pub fn write_project(dir: &Path, name: &str, bundle_id: &str, version: &str) -> 
     write("Shell/SceneDelegate.h", SCENE_DELEGATE_H)?;
     write("Shell/SceneDelegate.m", SCENE_DELEGATE_M)?;
     write("Shell/Info.plist", INFO_PLIST)?;
-    write("App.xcconfig", &xcconfig(name, bundle_id, version))?;
+    write("App.xcconfig", &xcconfig(name, bundle_id, version, signing))?;
     write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name))?;
     write("README.md", README)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signing_resolution_prefers_the_manifest_and_preserves_the_previous() {
+        // M151 (raydesk #9): manifest manda; sin manifest, lo preservado; con team y sin
+        // estilo, Automatic (lo que Xcode escribe al elegir equipo).
+        let previous = Signing::from_xcconfig(
+            "PRODUCT_NAME = X\nCODE_SIGN_STYLE = Automatic\nDEVELOPMENT_TEAM = OLDTEAM123\n",
+        );
+        assert_eq!(previous.team.as_deref(), Some("OLDTEAM123"));
+        let from_manifest = Signing::resolve(Some("NEWTEAM456"), &previous);
+        assert_eq!(from_manifest.team.as_deref(), Some("NEWTEAM456"));
+        let preserved = Signing::resolve(None, &previous);
+        assert_eq!(preserved.team.as_deref(), Some("OLDTEAM123"));
+        assert_eq!(preserved.style.as_deref(), Some("Automatic"));
+        let no_previous = Signing::resolve(Some("T1"), &Signing::default());
+        assert_eq!(no_previous.style.as_deref(), Some("Automatic"));
+        let empty = Signing::resolve(None, &Signing::default());
+        assert!(empty.team.is_none() && empty.style.is_none());
+    }
+
+    #[test]
+    fn the_xcconfig_carries_the_resolved_signing() {
+        let s = Signing { team: Some("ABC123".into()), style: Some("Automatic".into()) };
+        let text = xcconfig("Demo", "org.raylang.demo", "1.0.0", &s);
+        assert!(text.contains("DEVELOPMENT_TEAM = ABC123"), "{text}");
+        assert!(text.contains("CODE_SIGN_STYLE = Automatic"), "{text}");
+        // Y el round-trip: lo que el bundle escribe, la siguiente regeneración lo preserva.
+        let back = Signing::from_xcconfig(&text);
+        assert_eq!(back.team.as_deref(), Some("ABC123"));
+        let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default());
+        assert!(!bare.contains("DEVELOPMENT_TEAM"), "{bare}");
+    }
 }

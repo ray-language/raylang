@@ -1317,6 +1317,17 @@ fn cmd_bundle(args: &[String]) {
         build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, fibers, &embed, true);
         build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, fibers, &embed, true);
         let proj = out_dir.join(format!("{name}-ios"));
+        // M151 (raydesk #9): la firma del xcconfig ANTERIOR se lee ANTES del borrado — cada
+        // regeneración la pisaba (Xcode la escribe al elegir equipo) y había que reponerla a
+        // mano tras cada bundle. `[ios] development_team` del ray.toml manda; lo preservado
+        // rellena.
+        let previous = fs::read_to_string(proj.join("App.xcconfig"))
+            .map(|t| crate::bundle_ios::Signing::from_xcconfig(&t))
+            .unwrap_or_default();
+        let signing = crate::bundle_ios::Signing::resolve(
+            manifest.as_ref().and_then(|m| m.ios_development_team.as_deref()),
+            &previous,
+        );
         let _ = fs::remove_dir_all(&proj);
         if let Err(e) = fs::create_dir_all(proj.join("libs")).and_then(|_| fs::create_dir_all(proj.join("libs-sim"))) {
             eprintln!("bundle: could not create '{}': {e}", proj.display());
@@ -1329,7 +1340,7 @@ fn cmd_bundle(args: &[String]) {
             eprintln!("bundle: could not place the static libraries: {e}");
             process::exit(74);
         }
-        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version) {
+        if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
         }
@@ -1339,7 +1350,10 @@ fn cmd_bundle(args: &[String]) {
         let _ = fs::remove_dir_all(&work);
         println!("ok: iOS project '{}'", proj.display());
         println!("  simulator: xcodebuild -project {name}.xcodeproj -target {name} -sdk iphonesimulator -configuration Debug build CODE_SIGNING_ALLOWED=NO");
-        println!("  device:    open the project in Xcode and pick your signing team");
+        match &signing.team {
+            Some(team) => println!("  device:    signing team {team} already in App.xcconfig; open the project in Xcode and run"),
+            None => println!("  device:    open the project in Xcode and pick your signing team (persist it with [ios] development_team in ray.toml)"),
+        }
         return;
     }
     let tmp_bin = work.join("bin");

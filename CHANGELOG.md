@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.4.0 — 2026-08-30
 
 - **`std/ui`: menús y diálogos de archivo** (M148, F3 de IDEAS §80): el menú ESTÁNDAR
   (App/Edit) se instala solo — arregla que ⌘C/⌘V/⌘X no funcionaran en los campos de texto del

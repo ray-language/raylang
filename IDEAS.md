@@ -3199,16 +3199,21 @@ llms.txt) quedó hecha; estas cuatro son las estructurales.
 ## 82. CI por niveles + preparación para contribuidores (ago 2026)
 
 Decisión del usuario (31 ago): seguir en **main única** (trunk-based, sin rama `dev`
-intermedia — el doble merge y la pérdida de bisección no compensan), aplicando estas
-optimizaciones cuando se ejecute el arco:
+intermedia — el doble merge y la pérdida de bisección no compensan).
 
-1. **CI por niveles**: PR = rápido (clippy + tests dirigidos + guardas naming/fmt + build
-   wasm32, que es barato y el que más se rompía en silencio); main post-merge = suite
-   completa; nightly (cron) = lo pesado (corpus ambos sabores, campaña diferencial, fuzz —
-   este ya está); release (tag) = todo + binarios 5 plataformas (ya funciona así). Objetivo:
-   PR de ~17 min → ~5 min sin perder la red. Mantener SIEMPRE ≥1 job Linux en PRs: el dev
-   local es macOS y el CI es la única cobertura Linux.
-2. **Path filters**: cambios solo-docs (`*.md`, `book/`, `site/`) no disparan el job Rust.
+1. **CI por niveles** — ✅ HECHO (31 ago 2026): en PRs, `ci.yml` salta corpus nativo, campaña
+   diferencial y los dos builds de release (gate `if: github.event_name != 'pull_request'`);
+   main post-merge corre todo; nightly (cron) lo prolongado (ya existía). DESVIACIÓN razonada
+   del boceto: el PR conserva la batería completa de `cargo test` (los E2E son la red real —
+   el bug del terminal crudo de #207 lo cazó un E2E; "tests dirigidos" en CI sería una
+   selección sin el grafo del loader = huecos), así que el PR queda en ~la mitad, no en ~5
+   min. Sigue habiendo job Linux completo en cada PR (el dev local es macOS).
+2. **Path filters** — ✅ HECHO (mismo PR): `paths-ignore` de `**.md`, `book/`, `docs/`,
+   `site/` y `LICENSE*` en push y PR (`examples/` y `packages/` NO se ignoran: son código que
+   el corpus y las suites ejercitan). OJO futuro: si algún día se exigen checks obligatorios
+   (branch protection), un PR solo-docs no tendrá corridas — GitHub lo trata como "pendiente";
+   habrá que pasar a la pareja paths-ignore + workflow gemelo no-op, el patrón documentado de
+   GitHub.
 3. **Preparación para contribuidores** (cuando lleguen): branch protection en main (PR
    obligatorio + CI verde + 1 aprobación), CODEOWNERS, plantillas de PR/issue, CONTRIBUTING
    con tests dirigidos y flujo SPEC-primero; merge queue de GitHub si el volumen de PRs crece

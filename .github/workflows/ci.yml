@@ -1,13 +1,37 @@
-# CI de raylang (M42.3). Verifica cada push/PR: lints (clippy), la batería completa de tests (que incluye
-# el fuzzer determinista del front-end, `tests/fuzz_frontend.rs`), el build de release y que la release
-# mínima solo-VM (`--no-default-features`, sin intérprete) compile. Aparte, `audit` revisa las dependencias
-# (la única excepción a la invariante cero-deps: rustls/ring/webpki) contra los avisos de RustSec.
+# CI de raylang (M42.3; NIVELES en IDEAS §82). Tres niveles por evento:
+#
+# - PR: clippy + la batería completa de `cargo test` (incluye las guardas naming/fmt/docs_root,
+#   el humo del fuzzer y del harness diferencial) + el job wasm32. Los pasos PESADOS (corpus
+#   nativo, campaña diferencial, builds de release/solo-VM) NO corren aquí: un rojo de esos se
+#   detecta como mucho un merge tarde, en main, donde se bisecta fácil. La batería de tests SÍ
+#   corre entera a propósito — los E2E son la red real (el bug del terminal crudo de #207 lo
+#   cazó un E2E); "tests dirigidos" en CI sería una selección sin el grafo del loader = huecos.
+# - push a main: todo (la suite + corpus + diferencial + builds), como siempre.
+# - cron nocturno: lo prolongado (fuzz con presupuesto alto, campaña diferencial larga, deps en
+#   vivo contra GitHub real).
+#
+# Cambios SOLO-DOCS (md/book/docs/site) no disparan este workflow — nada de lo que compila
+# depende de ellos (site/ lo construye pages.yml; las guardas de .ray no leen markdown).
+# Aparte, `audit` revisa las dependencias (la única excepción a la invariante cero-deps:
+# rustls/ring/webpki) contra los avisos de RustSec.
 name: CI
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "book/**"
+      - "docs/**"
+      - "site/**"
+      - "LICENSE*"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "book/**"
+      - "docs/**"
+      - "site/**"
+      - "LICENSE*"
   schedule:
     # Fuzzing nocturno prolongado (03:17 UTC; minuto no-redondo para no coincidir con el pico de cron).
     - cron: "17 3 * * *"
@@ -58,21 +82,26 @@ jobs:
       # de ~9 min por eslabón, porque cada fallo abortaba la suite y escondía el resto.
       - name: Tests (incluye el fuzzer del front-end)
         run: cargo test --no-fail-fast
-      # El corpus nativo corre en CADA push (antes: solo nocturno → una regresión se veía hasta 24 h
-      # después, post-merge, sin bloquear ningún PR). Con la caché de `~/.ray/native-cache` y el target
-      # compartido tarda ~2-3 min — menos que el build de release de abajo. `#[ignore]` en local sigue.
+      # ---- Pasos del nivel MAIN/NIGHTLY (IDEAS §82): en PRs se saltan — su rojo se detecta como
+      # ---- mucho un merge tarde, en main, y el PR baja de ~17 a ~la mitad. El humo del harness
+      # ---- diferencial (1 batch) sigue corriendo en PRs dentro de `cargo test`.
+      # El corpus nativo corre en cada push a main (histórico: solo-nocturno tardaba 24 h en
+      # avisar). Con la caché de `~/.ray/native-cache` y el target compartido tarda ~2-3 min.
       - name: Corpus nativo ≡ VM (ejemplos deterministas)
+        if: github.event_name != 'pull_request'
         run: cargo test --test native_corpus -- --ignored --nocapture
       # M120: el harness DIFERENCIAL — programas GENERADOS (interacciones de features que los
       # ejemplos idiomáticos no ejercitan), 3 motores byte a byte, bisección automática al divergir.
-      # El humo (1 batch) ya corre dentro de `cargo test`; aquí la campaña con concurrencia.
       - name: Harness diferencial de motores (generativo)
+        if: github.event_name != 'pull_request'
         run: cargo test --test native_differential -- --ignored --nocapture
       - name: Build de release
+        if: github.event_name != 'pull_request'
         run: cargo build --release
       # La release mínima excluye el intérprete (solo-VM). No se corren tests aquí: los oráculos
       # comparan intérprete↔VM y necesitan la feature `interp`; basta con verificar que compila.
       - name: Build solo-VM (sin intérprete)
+        if: github.event_name != 'pull_request'
         run: cargo build --release --no-default-features
   # Guarda del playground web (IDEAS §57 + §74): el target wasm no compila en ningún otro paso y
   # ya se rompió en silencio TRES veces (P0.1 metió aHash→getrandom incondicional; M98/M100

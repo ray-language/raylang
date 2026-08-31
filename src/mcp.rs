@@ -350,10 +350,12 @@ fn doc_text_at(symbol: &str, path: Option<&str>) -> String {
         (None, Some(d)) => format!("{symbol}: {d}"),
         (None, None) => prelude_doc_text(symbol)
             .or_else(|| std_doc_text(symbol))
+            .or_else(|| std_module_listing(symbol))
             .or_else(|| path.and_then(|p| project_doc_text(symbol, p)))
             .unwrap_or_else(|| format!(
                 "'{symbol}' is not a builtin, a prelude function, nor a public std/* function. \
                  For module functions use 'module.function' (e.g. 'json.parse', 'regex.find_all'); \
+                 a bare module name (e.g. 'std/kv') lists its whole public surface; \
                  see the stdlib map in the raylang://llms.txt resource and the full \
                  catalog in raylang://reference.md."
             )),
@@ -406,25 +408,7 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
                 let (t, m) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
                     t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
                 })?;
-                let params: Vec<String> = m
-                    .params
-                    .iter()
-                    .map(|p| match &p.ty {
-                        crate::ast::Type::SelfType => p.name.clone(),
-                        ty => format!("{}: {ty}", p.name),
-                    })
-                    .collect();
-                let ret = match &m.return_type {
-                    crate::ast::Type::Unit => String::new(),
-                    ty => format!(" -> {ty}"),
-                };
-                format!(
-                    "{}({}){ret}  [trait {} — method-call style: receiver.{}(…)]",
-                    m.name,
-                    params.join(", "),
-                    t.name,
-                    m.name
-                )
+                trait_method_signature(&t.name, m)
             }
         };
         // Las `///` contiguas encima del `pub fn <func>(` en el fuente del módulo.
@@ -448,6 +432,69 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
     }
 }
 
+
+/// La firma legible de un método de trait (`nombre(recv, args) -> ret  [trait T — …]`). La
+/// comparten la búsqueda por símbolo y el listado de módulo entero.
+fn trait_method_signature(trait_name: &str, m: &crate::ast::MethodSig) -> String {
+    let params: Vec<String> = m
+        .params
+        .iter()
+        .map(|p| match &p.ty {
+            crate::ast::Type::SelfType => p.name.clone(),
+            ty => format!("{}: {ty}", p.name),
+        })
+        .collect();
+    let ret = match &m.return_type {
+        crate::ast::Type::Unit => String::new(),
+        ty => format!(" -> {ty}"),
+    };
+    format!(
+        "{}({}){ret}  [trait {trait_name} — method-call style: receiver.{}(…)]",
+        m.name,
+        params.join(", "),
+        m.name
+    )
+}
+
+/// M151 (raydesk ROADMAP #5, deseo menor): la superficie PÚBLICA de un módulo `std/*` entero —
+/// `ray_doc "std/kv"` (o `"kv"` a secas) lista tipos, funciones y métodos de trait con firma,
+/// en vez de responder "usa module.function".
+fn std_module_listing(symbol: &str) -> Option<String> {
+    let bare = symbol.strip_prefix("std/").unwrap_or(symbol);
+    if bare.contains('.') || bare.contains('/') {
+        return None;
+    }
+    let (name, src) = ["std/", "std/collections/"].iter().find_map(|p| {
+        let n = format!("{p}{bare}");
+        crate::stdlib::embedded(&n).map(|s| (n, s))
+    })?;
+    let tokens = crate::lexer::lex(src).ok()?;
+    let prog = crate::parser::parse(tokens).ok()?;
+    let mut lines: Vec<String> = Vec::new();
+    for s in prog.structs.iter().filter(|s| s.is_pub) {
+        lines.push(format!("struct {}", s.name));
+    }
+    for e in prog.enums.iter().filter(|e| e.is_pub) {
+        lines.push(format!("enum {}", e.name));
+    }
+    for f in prog.functions.iter().filter(|f| f.is_pub) {
+        lines.push(fn_signature(f));
+    }
+    for t in prog.traits.iter().filter(|t| t.is_pub) {
+        for m in &t.methods {
+            lines.push(trait_method_signature(&t.name, m));
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{name} — public surface ({} exports):\n{}\nUse ray_doc \"{}.<name>\" for the full doc of one export.",
+        lines.len(),
+        lines.join("\n"),
+        bare
+    ))
+}
 
 /// La firma legible de una función del AST (`nombre<T: A + B>(params) -> ret`). La comparten el
 /// fallback del prelude y el de los módulos `std/*`.
@@ -715,6 +762,23 @@ mod tests {
             .lines()
             .map(|l| json::parse(l).expect("respuesta JSON válida"))
             .collect()
+    }
+
+    #[test]
+    fn a_bare_module_name_lists_its_whole_public_surface() {
+        // M151 (raydesk ROADMAP #5): ray_doc "std/kv" (o "kv") responde el listado completo,
+        // no "usa module.function". Cubre fns, métodos de trait y tipos.
+        for q in ["std/kv", "kv"] {
+            let text = doc_text(q);
+            assert!(text.contains("public surface"), "{q}: {text}");
+            assert!(text.contains("open(path: string)"), "{q}: constructor con firma\n{text}");
+            assert!(text.contains("get_string"), "{q}: método de trait\n{text}");
+            assert!(text.contains("struct Store"), "{q}: tipos exportados\n{text}");
+        }
+        // Un símbolo con punto NO es un módulo: sigue resolviendo la función concreta.
+        assert!(doc_text("kv.get_string").contains("StoreOps"));
+        // Un nombre que no es módulo cae al mensaje de no-encontrado (que ahora enseña la forma).
+        assert!(doc_text("no_such_module").contains("lists its whole public surface"));
     }
 
     #[test]

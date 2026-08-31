@@ -264,7 +264,8 @@ the recommended base for servers and for desktop/mobile app backends with `std/u
 `rpc` and `db`. Signatures live in REFERENCE.md/reference.md.
 
 If your client supports MCP, `ray mcp` exposes this loop as tools — `ray_check` (exact
-diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` — sandboxed (instruction fuel +
+diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` (a bare module name like "std/kv"
+lists its whole public surface) — sandboxed (instruction fuel +
 heap cap + wall deadline), plus this file as the resource `raylang://llms.txt`. Connect it
 with `claude mcp add raylang -- ray mcp` (details in docs/mcp.md).
 

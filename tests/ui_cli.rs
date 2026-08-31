@@ -187,6 +187,15 @@ fn main() {
         ui.MenuItem { tag: "quit", title: "Quit Game", shortcut: "" },
     ];
     print("menu ok: " + to_string(ui.menu("Game", items).is_ok()));
+    let app_items = [
+        ui.MenuItem { tag: "role:about", title: "About Demo", shortcut: "" },
+        ui.MenuItem { tag: "settings", title: "Settings...", shortcut: "," },
+    ];
+    print("app_menu ok: " + to_string(ui.app_menu("Demo", app_items).is_ok()));
+    match (ui.app_menu("Demo", [ui.MenuItem { tag: "", title: "x", shortcut: "" }])) {
+        Result.Ok(_) => print("bad: app_menu empty tag accepted"),
+        Result.Err(e) => print("app_menu empty tag rejected: " + to_string(e.contains("non-empty tag"))),
+    }
     match (ui.menu("Bad", [ui.MenuItem { tag: "", title: "x", shortcut: "" }])) {
         Result.Ok(_) => print("bad: empty tag accepted"),
         Result.Err(e) => print("empty tag rejected: " + to_string(e.contains("non-empty tag"))),
@@ -220,9 +229,11 @@ fn main() {
 
 #[test]
 fn menus_and_dialogs_match_on_all_three_engines() {
-    const WANT_NONE: &str = "menu ok: true\nempty tag rejected: true\npick cancelled\n\
+    const WANT_NONE: &str = "menu ok: true\napp_menu ok: true\n\
+app_menu empty tag rejected: true\nempty tag rejected: true\npick cancelled\n\
 save cancelled\nevent: closed, tag empty: true\n";
-    const WANT_PICK: &str = "menu ok: true\nempty tag rejected: true\npicked: /tmp/x.txt\n\
+    const WANT_PICK: &str = "menu ok: true\napp_menu ok: true\n\
+app_menu empty tag rejected: true\nempty tag rejected: true\npicked: /tmp/x.txt\n\
 save to: /tmp/x.txt\nevent: closed, tag empty: true\n";
     let base = tmp("menus");
     std::fs::write(base.join("prog.ray"), MENU_PROG).unwrap();

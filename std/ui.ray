@@ -85,6 +85,13 @@ pub struct MenuItem {
 /// to windows opened AFTER this call. The standard App/Edit menus (quit, clipboard, undo)
 /// install themselves — you only declare your own. Headless: a no-op `Ok`.
 pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
+    let r = __ui_menu(title, encode_items(items));
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+// La codificación del borde de builtins ([string], "tag\ttitle\tshortcut"), compartida por
+// menu y app_menu.
+fn encode_items(items: [MenuItem]) -> [string] {
     var encoded: [string] = [];
     var i = 0;
     while (i < items.len()) {
@@ -92,7 +99,20 @@ pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
         encoded.push(it.tag + "\t" + it.title + "\t" + it.shortcut);
         i = i + 1;
     }
-    let r = __ui_menu(title, encoded);
+    encoded
+}
+
+/// Adds items to the APPLICATION menu — on macOS, the bold first menu of the global bar —
+/// inserted ABOVE Hide/Quit (a separator is added after yours). A non-empty `name` also
+/// retitles that menu: useful under `ray run`, where it defaults to the process name ("ray");
+/// a bundled .app already shows its own name. An item whose tag is `"role:about"` becomes the
+/// NATIVE "About" item on macOS (standard about panel; it does NOT emit an event; empty title
+/// = "About"). On Linux there is no global application menu: the items are added as a regular
+/// per-window menu titled `name` and EVERY item — `"role:about"` included — emits the usual
+/// `"menu"` event with its tag, so the program shows its own about. Headless: a no-op `Ok`.
+/// Call it once, before opening windows.
+pub fn app_menu(name: string, items: [MenuItem]) -> Result<int, string> {
+    let r = __ui_app_menu(name, encode_items(items));
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 

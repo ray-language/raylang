@@ -65,7 +65,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // M146: std/ui (ventana + webview) → helpers __ray_ui_* (PR del backend nativo).
     "__ui_open", "__ui_eval_js", "__ui_next_event",
     // M148: menús + diálogos de archivo.
-    "__ui_menu", "__ui_dialog",
+    "__ui_menu", "__ui_app_menu", "__ui_dialog",
     // M147: std/embed (assets del proyecto) → tabla __RAY_EMBED horneada + helpers __ray_embed_*.
     "__embed_read", "__embed_list",
 ];

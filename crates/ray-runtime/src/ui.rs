@@ -528,6 +528,54 @@ pub fn menu(title: &str, items: &[String]) -> Result<(), String> {
     }
 }
 
+/// M151 (raydesk #10): items en el menú de APLICACIÓN + su título opcional. macOS: item 0 de
+/// la barra global (encima de Hide/Quit; tag "role:about" = About nativo sin evento; `name`
+/// re-titula el menú — bajo `ray run` salía el nombre del proceso). Linux: no existe menú de
+/// app global — los items van como un menú normal titulado `name` (o "App") y TODOS emiten el
+/// evento ("menu", 0, tag), "role:about" incluido (el programa muestra su propio about).
+/// Headless: no-op Ok. iOS: sin barra de menús.
+pub fn app_menu(name: &str, items: &[String]) -> Result<(), String> {
+    let decoded: Vec<(String, String, String)> = items
+        .iter()
+        .map(|it| {
+            let mut parts = it.splitn(3, '\t');
+            (
+                parts.next().unwrap_or("").to_string(),
+                parts.next().unwrap_or("").to_string(),
+                parts.next().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    if decoded.iter().any(|(tag, _, _)| tag.is_empty()) {
+        return Err("ui: a menu item needs a non-empty tag".to_string());
+    }
+    if headless() {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        mac::set_app_menu(name, &decoded)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ensure_app()?;
+        let title = if name.is_empty() { "App" } else { name };
+        gtk::add_menu(title, &decoded)
+    }
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (name, decoded);
+        Err("ui: menus are not available on iOS (v1)".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
+    {
+        let _ = name;
+        Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
+            .to_string())
+    }
+}
+
 /// M148: un diálogo de archivo nativo, MODAL (bloquea al llamador lo que el usuario tarde —
 /// por eso va por la espera SIN plazo, alcanzable solo tras `ensure_app`). `kind`:
 /// "open_file" | "open_folder" | "save_file" (`arg` = nombre sugerido del save). `Ok(None)` =
@@ -643,6 +691,9 @@ mod mac {
     type MsgMenuItemInit = unsafe extern "C" fn(Id, Sel, Id, Sel, Id) -> Id;
     type MsgVoidI64 = unsafe extern "C" fn(Id, Sel, i64);
     type MsgI64 = unsafe extern "C" fn(Id, Sel) -> i64;
+    // M151: itemAtIndex: / insertItem:atIndex: (menú de aplicación).
+    type MsgIdI64 = unsafe extern "C" fn(Id, Sel, i64) -> Id;
+    type MsgVoidIdI64 = unsafe extern "C" fn(Id, Sel, Id, i64);
     type MsgCStr = unsafe extern "C" fn(Id, Sel) -> *const std::ffi::c_char;
 
     fn msg_send() -> *const c_void {
@@ -950,6 +1001,89 @@ mod mac {
                 }
                 set_submenu(bar_item, sel(b"setSubmenu:\0"), menu);
                 add(main_menu as Id, sel(b"addItem:\0"), bar_item);
+            }
+            Ok(())
+        })
+    }
+
+    /// M151 (raydesk #10): items en el MENÚ DE APLICACIÓN (item 0 de la barra, el que el
+    /// sistema pone en negrita), insertados ENCIMA de Hide/Quit + separador; `name` no vacío
+    /// re-titula ese menú (bajo `ray run` sale el nombre del proceso — "ray"; ponerle título
+    /// al submenu ANTES de que la barra se realice funciona en procesos sin bundle, el truco
+    /// de glfw/SDL). Un item con tag "role:about" instala el "About" NATIVO
+    /// (orderFrontStandardAboutPanel: por la responder chain — target nil = NSApp lo valida y
+    /// habilita; NO emite evento); el resto emite ("menu", 0, tag) como los menús custom.
+    pub(super) fn set_app_menu(name: &str, items: &[(String, String, String)]) -> Result<(), String> {
+        let name = name.to_string();
+        let items = items.to_vec();
+        on_main_sync(move || {
+            let main_menu = MAIN_MENU.load(std::sync::atomic::Ordering::SeqCst);
+            if main_menu == 0 {
+                return Err("ui: the menu bar is not ready".to_string());
+            }
+            unsafe {
+                let alloc: MsgId = std::mem::transmute(msg_send());
+                let init: MsgId = std::mem::transmute(msg_send());
+                let item_init: MsgMenuItemInit = std::mem::transmute(msg_send());
+                let item_at: MsgIdI64 = std::mem::transmute(msg_send());
+                let submenu_of: MsgId = std::mem::transmute(msg_send());
+                let insert_at: MsgVoidIdI64 = std::mem::transmute(msg_send());
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                let set_tag: MsgVoidI64 = std::mem::transmute(msg_send());
+                let class_item: MsgId = std::mem::transmute(msg_send());
+
+                let app_item = item_at(main_menu as Id, sel(b"itemAtIndex:\0"), 0);
+                let app_menu = submenu_of(app_item, sel(b"submenu\0"));
+                if app_menu.is_null() {
+                    return Err("ui: the application menu is not ready".to_string());
+                }
+                if !name.is_empty() {
+                    set_id(app_menu, sel(b"setTitle:\0"), nsstring(&name));
+                }
+                // El target singleton del delegate (mismo patrón que add_menu).
+                static TARGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                let mut target = TARGET.load(std::sync::atomic::Ordering::SeqCst) as Id;
+                if target.is_null() {
+                    target = init(alloc(delegate_class(), sel(b"alloc\0")), sel(b"init\0"));
+                    TARGET.store(target as usize, std::sync::atomic::Ordering::SeqCst);
+                }
+                let mut idx: i64 = 0;
+                for (tag, label, shortcut) in &items {
+                    let item = if tag == "role:about" {
+                        let title = if label.is_empty() { "About".to_string() } else { label.clone() };
+                        // target nil: la action viaja por la responder chain hasta NSApp.
+                        item_init(
+                            alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                            sel(b"initWithTitle:action:keyEquivalent:\0"),
+                            nsstring(&title),
+                            sel(b"orderFrontStandardAboutPanel:\0"),
+                            nsstring(""),
+                        )
+                    } else {
+                        let item = item_init(
+                            alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                            sel(b"initWithTitle:action:keyEquivalent:\0"),
+                            nsstring(label),
+                            sel(b"rayMenuAction:\0"),
+                            nsstring(shortcut),
+                        );
+                        set_id(item, sel(b"setTarget:\0"), target);
+                        let n = {
+                            let mut tags = menu_tags().lock().unwrap();
+                            let n = tags.len() as i64 + 1;
+                            tags.insert(n, tag.clone());
+                            n
+                        };
+                        set_tag(item, sel(b"setTag:\0"), n);
+                        item
+                    };
+                    insert_at(app_menu, sel(b"insertItem:atIndex:\0"), item, idx);
+                    idx += 1;
+                }
+                if idx > 0 {
+                    let separator = class_item(cls(b"NSMenuItem\0"), sel(b"separatorItem\0"));
+                    insert_at(app_menu, sel(b"insertItem:atIndex:\0"), separator, idx);
+                }
             }
             Ok(())
         })

@@ -1190,6 +1190,22 @@ ui.menu("Partida", [
 //   e.kind == "menu" && e.tag == "new"  → nueva partida
 ```
 
+El **menú de aplicación** de macOS (el primero, en negrita) también es tuyo: `ui.app_menu`
+mete items encima de Hide/Quit y lo re-titula (bajo `ray run` salía "ray"; el `.app` ya
+muestra su nombre). El tag especial `"role:about"` instala el "About" **nativo** — el panel
+estándar, sin evento:
+
+```rust
+ui.app_menu("MiApp", [
+    ui.MenuItem { tag: "role:about", title: "About MiApp", shortcut: "" },
+    ui.MenuItem { tag: "settings", title: "Settings...", shortcut: "," },   // ⌘,
+])?;
+```
+
+En Linux no existe ese menú global: los items van como un menú normal titulado `name` y todos
+— `"role:about"` incluido — emiten el evento `"menu"` (muestra tu propio about). Llámalo una
+vez, antes de abrir ventanas.
+
 Y los diálogos de archivo nativos, modales (la llamada aparca hasta que el usuario decide;
 `None` = canceló): `ui.pick_file()`, `ui.pick_folder()`, `ui.save_file("borrador.txt")`. En
 headless (tests/CI) el resultado se inyecta con `RAY_UI_PICK`. Nota Linux v1: el menubar es

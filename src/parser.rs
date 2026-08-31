@@ -682,6 +682,10 @@ impl Parser {
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
+            // Coma final permitida (como en args): mismo motivo, misma regla.
+            if self.check(&TokenKind::RParen) {
+                break;
+            }
         }
         Ok(params)
     }
@@ -1372,6 +1376,11 @@ impl Parser {
         loop {
             args.push(self.expression()?);
             if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+            // Coma FINAL permitida (dogfood raydesk): consistencia con arrays/structs/imports —
+            // es justo la forma multi-línea a la que `ray fmt` reparte las listas largas.
+            if self.check(&TokenKind::RParen) {
                 break;
             }
         }
@@ -2262,6 +2271,19 @@ mod tests {
         assert_eq!(sx(&parse_expr("-x + 1")), "(+ (- x) 1)");
         assert_eq!(sx(&parse_expr("!a && b")), "(&& (! a) b)");
         assert_eq!(sx(&parse_expr("--5")), "(- (- 5))");
+    }
+
+    #[test]
+    fn trailing_comma_in_calls_and_params() {
+        // Dogfood raydesk: la coma final ya valía en arrays/structs/imports pero no en
+        // llamadas ni parámetros — justo la forma multi-línea a la que `ray fmt` reparte.
+        assert_eq!(sx(&parse_expr("f(1, 2,)")), "(call f [1 2])");
+        let tokens = crate::lexer::lex("fn f(\n    a: int,\n    b: int,\n) -> int { a + b }").unwrap();
+        let prog = parse(tokens).expect("params with trailing comma");
+        assert_eq!(prog.functions[0].params.len(), 2);
+        // Una coma SIN elemento detrás en la primera posición sigue siendo error.
+        let bad = crate::lexer::lex("fn main() { f(,) }").unwrap();
+        assert!(parse(bad).is_err(), "una lista que ARRANCA en coma no es válida");
     }
 
     #[test]

@@ -121,13 +121,20 @@ fn initialize_result() -> Json {
         ("instructions".into(), Json::Str(
             "Before writing raylang or concluding that a feature is missing, read the \
              raylang://llms.txt resource (the distilled language context and stdlib map). \
-             For exact signatures of any builtin, prelude or std/* function use the ray_doc \
-             tool, and for the full per-module catalog read the raylang://reference.md \
-             resource. The stdlib is embedded in the toolchain (no std/ directory on disk), \
-             so file searches will NOT find it — e.g. DEFLATE/zlib/gzip live in std/inflate \
-             and std/deflate, live child stdin streaming in std/process (stdin_pipe), and \
-             C FFI is the extern \"lib\" block. Validate code with ray_check and run it \
-             with ray_run.".into(),
+             For exact signatures use the ray_doc tool; for the full per-module catalog read \
+             raylang://reference.md. The stdlib is embedded in the toolchain (no std/ \
+             directory on disk) — file searches will NOT find it. WORK LIKE A DEVELOPER, not \
+             a snippet machine: for anything beyond a one-file experiment, create a real \
+             project (ray.toml + src/), split modules, add Tier-2 packages with \
+             [dependencies] (net = production webserver, web = the Express-style framework — \
+             the recommended base for servers and desktop/mobile backends; rpc, db; discover \
+             more in the public index, github.com/ray-language/ray-index, or with \
+             'ray search'), and validate by passing 'path' to ray_check/ray_run/ray_test — \
+             they run with the project as context, so multi-file imports and dependencies \
+             resolve exactly like 'ray run'. The 'code' form of those tools is only for \
+             quick self-contained experiments (isolated temp dir: project files and packages \
+             do not resolve there). If you also have shell access, the ray binary itself \
+             (ray run / ray test / ray build) is the same loop.".into(),
         )),
     ])
 }
@@ -175,8 +182,19 @@ fn code_schema(desc: &str) -> Json {
                 ("type".into(), Json::Str("string".into())),
                 ("description".into(), Json::Str(desc.into())),
             ]),
+        ), (
+            "path".into(),
+            Json::Obj(vec![
+                ("type".into(), Json::Str("string".into())),
+                ("description".into(), Json::Str(
+                    "Instead of 'code': a .ray file (or project directory) ON DISK. Runs with \
+                     the file's project as context (nearest ray.toml upward): multi-file \
+                     imports and [dependencies] packages resolve — use this for real projects."
+                        .into(),
+                )),
+            ]),
         )])),
-        ("required".into(), Json::Arr(vec![Json::Str("code".into())])),
+        ("required".into(), Json::Arr(vec![])),
     ])
 }
 
@@ -202,8 +220,16 @@ fn tools_list() -> Json {
                 ("type".into(), Json::Str("string".into())),
                 ("description".into(), Json::Str("Text piped to the program's stdin (optional).".into())),
             ])),
+            ("path".into(), Json::Obj(vec![
+                ("type".into(), Json::Str("string".into())),
+                ("description".into(), Json::Str(
+                    "Instead of 'code': a .ray file (or project directory) ON DISK, run with \
+                     its project as context (multi-file imports and [dependencies] resolve)."
+                        .into(),
+                )),
+            ])),
         ])),
-        ("required".into(), Json::Arr(vec![Json::Str("code".into())])),
+        ("required".into(), Json::Arr(vec![])),
     ]);
     let doc_schema = Json::Obj(vec![
         ("type".into(), Json::Str("object".into())),
@@ -219,17 +245,17 @@ fn tools_list() -> Json {
     Json::Arr(vec![
         tool(
             "ray_check",
-            "Type-check a raylang program without running it. Returns 'ok' or the exact compiler diagnostics (up to 20, with positions). Use this after writing code and fix what it reports.",
+            "Type-check raylang without running it: pass 'code' (a self-contained snippet) or 'path' (a real file/project on disk — imports and [dependencies] resolve). Returns 'ok' or the exact compiler diagnostics (up to 20, with positions). Fix what it reports.",
             code_schema("A complete raylang source file."),
         ),
         tool(
             "ray_run",
-            "Run a raylang program on the VM (sandboxed: instruction fuel, heap cap and a 10 s wall clock). Returns exit code, stdout and stderr. The exit code is main's int return.",
+            "Run raylang on the VM (sandboxed: instruction fuel, heap cap and a 10 s wall clock): pass 'code' (snippet) or 'path' (a real file/project — the way to validate multi-file work). Returns exit code, stdout and stderr; the exit code is main's int return.",
             run_schema,
         ),
         tool(
             "ray_test",
-            "Run the @test functions of a raylang program. Reports each test and a summary; the exit code is the number of failures.",
+            "Run @test functions: pass 'code' (snippet) or 'path' (a project — runs its whole suite like 'ray test'). Reports each test and a summary; the exit code is the number of failures.",
             code_schema("A raylang source file with @test functions."),
         ),
         tool(
@@ -267,16 +293,30 @@ fn resources_list() -> Json {
 /// Despacha una tool. `Ok(texto)` es un resultado (incluidos diagnósticos del compilador);
 /// `Err(texto)` es un fallo del envoltorio (argumento ausente, timeout, E/S).
 fn call_tool(name: &str, args: &Json) -> Result<String, String> {
-    let code = || args.get("code").and_then(|c| c.as_str()).ok_or("missing required argument 'code'".to_string());
+    // check/run/test aceptan `code` (snippet autocontenido en un tmp) O `path` (dogfood
+    // raydesk: un archivo/proyecto REAL en disco — imports multi-archivo y paquetes de
+    // [dependencies] resuelven contra su ray.toml, como haría `ray run`).
+    let code = || args.get("code").and_then(|c| c.as_str()).ok_or("missing argument: pass 'code' (a self-contained program) or 'path' (a .ray file or project dir on disk)".to_string());
+    let path = args.get("path").and_then(|c| c.as_str());
     match name {
-        "ray_check" => run_self(&["build"], code()?, None),
+        "ray_check" => match path {
+            Some(p) => run_self_at(&["build"], p, None),
+            None => run_self(&["build"], code()?, None),
+        },
         "ray_run" => {
             let stdin = args.get("stdin").and_then(|s| s.as_str()).map(str::to_string);
             let fuel = fuel_limit().to_string();
             let heap = HEAP.to_string();
-            run_self(&["run", "--deterministic", "--fuel", &fuel, "--heap", &heap], code()?, stdin)
+            let run_args = ["run", "--deterministic", "--fuel", &fuel, "--heap", &heap];
+            match path {
+                Some(p) => run_self_at(&run_args, p, stdin),
+                None => run_self(&run_args, code()?, stdin),
+            }
         }
-        "ray_test" => run_self(&["test"], code()?, None),
+        "ray_test" => match path {
+            Some(p) => run_self_at(&["test"], p, None),
+            None => run_self(&["test"], code()?, None),
+        },
         "ray_fmt" => run_self(&["fmt"], code()?, None),
         "ray_doc" => {
             let symbol = args.get("symbol").and_then(|s| s.as_str()).ok_or("missing required argument 'symbol'")?;
@@ -334,8 +374,38 @@ fn std_doc_text(symbol: &str) -> Option<String> {
     for (mod_name, src) in candidates {
         let Ok(tokens) = crate::lexer::lex(src) else { continue };
         let Ok(prog) = crate::parser::parse(tokens) else { continue };
-        let Some(f) = prog.functions.iter().find(|f| f.is_pub && f.name == func) else { continue };
-        let sig = fn_signature(f);
+        // Función pública top-level o, si no, un MÉTODO DE TRAIT público (dogfood raydesk:
+        // la superficie de std/kv son los métodos de StoreOps — `s.get(k)`, `s.set(k, v)` —
+        // y ray_doc los negaba; la firma sale del MethodSig, la doc del mismo escaneo de ///).
+        let sig = match prog.functions.iter().find(|f| f.is_pub && f.name == func) {
+            Some(f) => fn_signature(f),
+            None => {
+                let Some((t, m)) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
+                    t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
+                }) else {
+                    continue;
+                };
+                let params: Vec<String> = m
+                    .params
+                    .iter()
+                    .map(|p| match &p.ty {
+                        crate::ast::Type::SelfType => p.name.clone(),
+                        ty => format!("{}: {ty}", p.name),
+                    })
+                    .collect();
+                let ret = match &m.return_type {
+                    crate::ast::Type::Unit => String::new(),
+                    ty => format!(" -> {ty}"),
+                };
+                format!(
+                    "{}({}){ret}  [trait {} — method-call style: receiver.{}(…)]",
+                    m.name,
+                    params.join(", "),
+                    t.name,
+                    m.name
+                )
+            }
+        };
         // Las `///` contiguas encima del `pub fn <func>(` en el fuente del módulo.
         let lines: Vec<&str> = src.lines().collect();
         let mut doc_lines: Vec<&str> = Vec::new();
@@ -405,6 +475,27 @@ fn prelude_doc_text(symbol: &str) -> Option<String> {
     }
 }
 
+/// Modo PROYECTO (dogfood raydesk): corre `current_exe() <args> <ruta>` con el cwd en la RAÍZ
+/// del proyecto de `path` (el ray.toml más cercano hacia arriba; sin él, el directorio del
+/// archivo) — imports multi-archivo y paquetes de [dependencies] resuelven como en un
+/// `ray run` real. Mismo plazo de pared y mismos límites que el modo snippet.
+fn run_self_at(args: &[&str], path: &str, stdin: Option<String>) -> Result<String, String> {
+    let target = std::path::Path::new(path);
+    if !target.exists() {
+        return Err(format!("path not found: {path}"));
+    }
+    let target = target.canonicalize().map_err(|e| format!("could not resolve '{path}': {e}"))?;
+    let anchor = if target.is_dir() { target.clone() } else { target.parent().unwrap_or(&target).to_path_buf() };
+    let cwd = match crate::manifest::Manifest::find(&anchor) {
+        Some(toml) => toml.parent().unwrap_or(&anchor).to_path_buf(),
+        None => anchor,
+    };
+    // Un DIRECTORIO no viaja como argumento (en `ray test` sería un filtro; en run/build, un
+    // error): el subcomando resuelve la entrada por defecto desde el cwd del proyecto.
+    let arg_target = if target.is_dir() { None } else { Some(target.as_path()) };
+    run_child(args, arg_target, &cwd, stdin, false)
+}
+
 /// Escribe `code` a un temporal, corre `current_exe() <args> <archivo>` con plazo de pared,
 /// y reporta `exit` + stdout + stderr (truncados). El invitado jamás toca el stdout del MCP.
 fn run_self(args: &[&str], code: &str, stdin: Option<String>) -> Result<String, String> {
@@ -419,15 +510,32 @@ fn run_self(args: &[&str], code: &str, stdin: Option<String>) -> Result<String, 
     std::fs::create_dir_all(&dir).map_err(|e| format!("could not create temp dir: {e}"))?;
     let path = dir.join(format!("snippet_{n}.ray"));
     std::fs::write(&path, code).map_err(|e| format!("could not write temp file: {e}"))?;
+    run_child(args, Some(&path), &dir, stdin, true)
+}
 
+/// El corredor común de ambos modos: lanza `current_exe() <args> <target>` con `cwd`, plazo de
+/// pared, drenado de pipes en hilos y truncado de salida. `cleanup` borra el target (snippet).
+fn run_child(
+    args: &[&str],
+    path: Option<&std::path::Path>,
+    cwd: &std::path::Path,
+    stdin: Option<String>,
+    cleanup: bool,
+) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let mut cmd = Command::new(exe);
-    cmd.args(args).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args);
+    if let Some(p) = path {
+        cmd.arg(p);
+    }
+    cmd.current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = cmd.spawn().map_err(|e| format!("could not spawn: {e}"));
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
-            let _ = std::fs::remove_file(&path);
+            if cleanup && let Some(p) = path {
+                let _ = std::fs::remove_file(p);
+            }
             return Err(e);
         }
     };
@@ -470,7 +578,9 @@ fn run_self(args: &[&str], code: &str, stdin: Option<String>) -> Result<String, 
     };
     let stdout = out_h.join().unwrap_or_default();
     let stderr = err_h.join().unwrap_or_default();
-    let _ = std::fs::remove_file(&path);
+    if cleanup && let Some(p) = path {
+        let _ = std::fs::remove_file(p);
+    }
     if timed_out {
         return Err(format!(
             "timeout: the program did not finish within {} s (killed). stdout so far:\n{}",
@@ -594,6 +704,17 @@ mod tests {
             .and_then(|a| a.first()).and_then(|c| c.get("text")).and_then(|t| t.as_str())
             .expect("contenido del recurso");
         assert!(text.contains("# raylang for LLMs"), "sirve el llms.txt embebido");
+    }
+
+    /// Métodos de TRAIT de un módulo std (dogfood raydesk: la superficie de std/kv son los
+    /// métodos de StoreOps y ray_doc los negaba con el mensaje genérico).
+    #[test]
+    fn ray_doc_covers_std_trait_methods() {
+        let d = doc_text("kv.set");
+        assert!(d.contains("std/kv") && d.contains("trait StoreOps"), "{d}");
+        assert!(d.contains("method-call style"), "{d}");
+        let d = doc_text("kv.get");
+        assert!(d.contains("Option<bytes>"), "{d}");
     }
 
     /// El fallback del prelude (cazado con Claude Code real: `parse_int` no es fila de la

@@ -3137,10 +3137,10 @@ sin firmas) → iOS (reusa objc/WKWebView de F1) → Android.
 
 **iOS ✅ (31 ago 2026, M149, DESIGN §146)**: `--lib` (staticlib + `ray_start()`) + backend
 shell de std/ui (`ray_ui_set_handlers`/`ray_ui_push_event`) + `ray bundle --ios` (proyecto
-Xcode generado: shell ObjC + xcconfig por SDK + pbxproj sintético). VERIFICADO EN SIMULADOR:
-desktop_window sin tocar, webserver + embed + webview vivos en el iPhone. Diferidos: firma/
-dispositivo (abrir en Xcode, team del usuario), asset catalog cableado al pbxproj, x86_64-sim
-(Macs Intel), notificaciones/tray móviles. **PENDIENTE Android**: staticlib a
+Xcode generado: shell ObjC + xcconfig por SDK + pbxproj sintético). VERIFICADO EN SIMULADOR
+Y EN DISPOSITIVO FÍSICO (dogfood del usuario, 31 ago: la app corriendo en su iPhone — el
+camino Xcode+team de firma funciona tal como se documentó). Diferidos: asset catalog cableado
+al pbxproj, x86_64-sim (Macs Intel), notificaciones/tray móviles. **PENDIENTE Android**: staticlib a
 aarch64-linux-android (el reactor epoll ya lo cubre), shell Gradle + WebView por JNI (la única
 pieza sin precedente), `cargo-ndk` o toolchain a mano — su propio plan cuando toque.
 

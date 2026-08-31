@@ -3196,6 +3196,28 @@ lenguaje — lo que no se ve desde ahí (paquetes, proyectos, superficie por mé
 agente NO EXISTE. La contramedida barata (declarar límites y el Tier 2 en instructions/
 llms.txt) quedó hecha; estas cuatro son las estructurales.
 
+## 82. CI por niveles + preparación para contribuidores (ago 2026)
+
+Decisión del usuario (31 ago): seguir en **main única** (trunk-based, sin rama `dev`
+intermedia — el doble merge y la pérdida de bisección no compensan), aplicando estas
+optimizaciones cuando se ejecute el arco:
+
+1. **CI por niveles**: PR = rápido (clippy + tests dirigidos + guardas naming/fmt + build
+   wasm32, que es barato y el que más se rompía en silencio); main post-merge = suite
+   completa; nightly (cron) = lo pesado (corpus ambos sabores, campaña diferencial, fuzz —
+   este ya está); release (tag) = todo + binarios 5 plataformas (ya funciona así). Objetivo:
+   PR de ~17 min → ~5 min sin perder la red. Mantener SIEMPRE ≥1 job Linux en PRs: el dev
+   local es macOS y el CI es la única cobertura Linux.
+2. **Path filters**: cambios solo-docs (`*.md`, `book/`, `site/`) no disparan el job Rust.
+3. **Preparación para contribuidores** (cuando lleguen): branch protection en main (PR
+   obligatorio + CI verde + 1 aprobación), CODEOWNERS, plantillas de PR/issue, CONTRIBUTING
+   con tests dirigidos y flujo SPEC-primero; merge queue de GitHub si el volumen de PRs crece
+   (cubre el hueco de dos PRs verdes que chocan al juntarse). Rama larga solo como release
+   branch de mantenimiento (`v1.4.x`) cuando haga falta backportear, jamás por adelantado.
+
+Impacto: BAJO (infra, reversible). Complemento local: `make ci`/hook pre-push como primera
+línea, nunca como sustituto del CI.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

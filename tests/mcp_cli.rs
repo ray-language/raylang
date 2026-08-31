@@ -185,3 +185,37 @@ fn path_mode_resolves_a_real_project_with_deps() {
     let missing = mcp.call(5, "ray_check", r#"{"path":"/nope/definitely/missing.ray"}"#);
     assert!(missing.contains("path not found"), "{missing}");
 }
+
+/// M150 — `ray_doc` con `path`: los símbolos del PROYECTO y de sus paquetes descargados
+/// (el agente aprendía la API del framework leyendo el fuente a mano).
+#[test]
+fn ray_doc_resolves_project_and_package_symbols() {
+    let base = std::env::temp_dir().join("ray_mcp_doc_project");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::create_dir_all(base.join(".ray-deps/toolkit")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(
+        base.join("src/helpers.ray"),
+        "/// Doubles a number.\npub fn double(n: int) -> int {\n    n * 2\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join(".ray-deps/toolkit/kit.ray"),
+        "/// Greets loudly.\npub fn greet(name: string) -> string {\n    name.to_upper()\n}\n",
+    )
+    .unwrap();
+
+    let mut mcp = Mcp::start();
+    let _ = mcp.ask(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+    let dir = base.to_str().unwrap();
+    // Módulo propio por stem.
+    let d = mcp.call(2, "ray_doc", &format!(r#"{{"symbol":"helpers.double","path":"{dir}"}}"#));
+    assert!(d.contains("double(n: int) -> int") && d.contains("Doubles"), "{d}");
+    // Paquete por NOMBRE DE PAQUETE (el dir bajo .ray-deps), no por stem.
+    let d = mcp.call(3, "ray_doc", &format!(r#"{{"symbol":"toolkit.greet","path":"{dir}"}}"#));
+    assert!(d.contains("greet(name: string) -> string") && d.contains("Greets"), "{d}");
+    // Sin path, el mismo símbolo cae al mensaje de no-encontrado (no resuelve proyectos).
+    let d = mcp.call(4, "ray_doc", r#"{"symbol":"toolkit.greet"}"#);
+    assert!(d.contains("is not a builtin"), "{d}");
+}

@@ -1418,12 +1418,24 @@ fn loop_iter_server(
     prepare: fn(int) -> Result<int, string>,
     handle_conn: fn(int)
 ) -> Result<int, string> {
-    match (net.tcp_listen(
-    host,
-    port
-)) {
+    match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
-        Result.Ok(srv) => {
+        Result.Ok(srv) => accept_loop(srv, limits, prepare, handle_conn),
+    }
+}
+
+// M150 (dogfood raydesk): el bucle de accept sobre un LISTENER YA ABIERTO — la mitad "serve"
+// del split bind/serve. Quien bindea primero (net.tcp_listen(host, 0) → local_port) conoce su
+// puerto SIN la carrera close/re-bind, y el backlog del kernel acepta conexiones desde el bind:
+// una app de escritorio puede abrir su ventana antes de que este bucle arranque.
+fn accept_loop(
+    srv: int,
+    limits: Limits,
+    prepare: fn(int) -> Result<int, string>,
+    handle_conn: fn(int)
+) -> Result<int, string> {
+    {
+        {
             print("listening on port " + to_string(net.local_port(srv)));
             dev_notify_ready();
             let bounded: bool = limits.max_conns > 0;
@@ -1472,7 +1484,7 @@ fn loop_iter_server(
             }
             close(srv);
             Result.Ok(0)
-        },
+        }
     }
 }
 
@@ -1735,6 +1747,37 @@ pub fn serve_with_limits(
     make_handler: fn() -> fn(Request) -> Response
 ) -> Result<int, string> {
     serve_limits(host, port, limits, fn(req: Request) -> Response {
+        let h: fn(Request) -> Response = make_handler();
+        h(req)
+    })
+}
+
+/// M150 — the bind/serve SPLIT: serves on a LISTENER you already opened with
+/// `net.tcp_listen(host, port)` — bind with port 0 first, read `net.local_port`, and there is
+/// no close/re-bind race: the kernel backlog accepts connections from the bind on, so a
+/// desktop app can open its window (or print its URL) before this loop starts. Keep-alive,
+/// limits and panic→500 as `serve`. Blocks forever; `Err` only on a broken listener.
+pub fn serve_on(listener: int, handler: fn(Request) -> Response) -> Result<int, string> {
+    serve_on_limits(listener, default_limits(), handler)
+}
+
+/// Like `serve_on`, with explicit safety limits (see `Limits`).
+pub fn serve_on_limits(
+    listener: int,
+    limits: Limits,
+    handler: fn(Request) -> Response
+) -> Result<int, string> {
+    accept_loop(listener, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        handle_http(c, handler, limits);
+    })
+}
+
+/// Like `serve_with`, on an already-open listener (see `serve_on` for the bind/serve split).
+pub fn serve_with_on(
+    listener: int,
+    make_handler: fn() -> fn(Request) -> Response
+) -> Result<int, string> {
+    serve_on_limits(listener, default_limits(), fn(req: Request) -> Response {
         let h: fn(Request) -> Response = make_handler();
         h(req)
     })

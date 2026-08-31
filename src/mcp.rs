@@ -237,7 +237,13 @@ fn tools_list() -> Json {
             "symbol".into(),
             Json::Obj(vec![
                 ("type".into(), Json::Str("string".into())),
-                ("description".into(), Json::Str("A builtin name, e.g. 'len', 'parse_int', 'sha256'.".into())),
+                ("description".into(), Json::Str("A builtin, prelude or module function: 'len', 'parse_int', 'json.parse', 'kv.set' — and with 'path', a project/package symbol like 'framework.listen' or 'web.listen'.".into())),
+            ]),
+        ), (
+            "path".into(),
+            Json::Obj(vec![
+                ("type".into(), Json::Str("string".into())),
+                ("description".into(), Json::Str("Optional: a project file/directory — also resolves symbols from that project's own modules and its .ray-deps packages.".into())),
             ]),
         )])),
         ("required".into(), Json::Arr(vec![Json::Str("symbol".into())])),
@@ -265,7 +271,7 @@ fn tools_list() -> Json {
         ),
         tool(
             "ray_doc",
-            "Signature and documentation of a raylang builtin (e.g. 'len', 'split', 'parse_int'). Kills API hallucination: check before calling anything you are not sure exists.",
+            "Signature and documentation of a raylang symbol: builtins, prelude, std/* module functions and trait methods — and, given 'path', the project's own modules and its .ray-deps packages (e.g. 'web.listen'). Kills API hallucination: check before calling anything you are not sure exists.",
             doc_schema,
         ),
     ])
@@ -320,7 +326,7 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
         "ray_fmt" => run_self(&["fmt"], code()?, None),
         "ray_doc" => {
             let symbol = args.get("symbol").and_then(|s| s.as_str()).ok_or("missing required argument 'symbol'")?;
-            Ok(doc_text(symbol))
+            Ok(doc_text_at(symbol, args.get("path").and_then(|p| p.as_str())))
         }
         other => Err(format!("unknown tool: {other}")),
     }
@@ -329,7 +335,12 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
 /// Firma + doc de un builtin (registro único, `src/builtins.rs`) o — *fallback* — de un
 /// envoltorio del **prelude** (`parse_int`, `read_int`, `assert_eq`, `sort`…: funciones
 /// raylang ordinarias, no filas de la tabla; cazado probando el MCP con Claude Code real).
+#[cfg(test)] // producción entra por doc_text_at (call_tool); los tests usan la forma corta
 fn doc_text(symbol: &str) -> String {
+    doc_text_at(symbol, None)
+}
+
+fn doc_text_at(symbol: &str, path: Option<&str>) -> String {
     let sig = crate::builtins::signature(symbol)
         .map(|(params, ret)| format!("{}({}) -> {}", symbol, params.join(", "), ret));
     let doc = crate::builtins::doc(symbol);
@@ -339,6 +350,7 @@ fn doc_text(symbol: &str) -> String {
         (None, Some(d)) => format!("{symbol}: {d}"),
         (None, None) => prelude_doc_text(symbol)
             .or_else(|| std_doc_text(symbol))
+            .or_else(|| path.and_then(|p| project_doc_text(symbol, p)))
             .unwrap_or_else(|| format!(
                 "'{symbol}' is not a builtin, a prelude function, nor a public std/* function. \
                  For module functions use 'module.function' (e.g. 'json.parse', 'regex.find_all'); \
@@ -372,19 +384,28 @@ fn std_doc_text(symbol: &str) -> Option<String> {
         }).collect(),
     };
     for (mod_name, src) in candidates {
-        let Ok(tokens) = crate::lexer::lex(src) else { continue };
-        let Ok(prog) = crate::parser::parse(tokens) else { continue };
+        if let Some(text) = source_symbol_doc(&mod_name, src, &func) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// El núcleo del doc por-fuente: firma (fn pública o método de trait público) + las `///`
+/// contiguas. Lo comparten la stdlib embebida y los fuentes de un PROYECTO (modo `path`).
+fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
+    {
+        let Ok(tokens) = crate::lexer::lex(src) else { return None };
+        let Ok(prog) = crate::parser::parse(tokens) else { return None };
         // Función pública top-level o, si no, un MÉTODO DE TRAIT público (dogfood raydesk:
         // la superficie de std/kv son los métodos de StoreOps — `s.get(k)`, `s.set(k, v)` —
         // y ray_doc los negaba; la firma sale del MethodSig, la doc del mismo escaneo de ///).
         let sig = match prog.functions.iter().find(|f| f.is_pub && f.name == func) {
             Some(f) => fn_signature(f),
             None => {
-                let Some((t, m)) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
+                let (t, m) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
                     t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
-                }) else {
-                    continue;
-                };
+                })?;
                 let params: Vec<String> = m
                     .params
                     .iter()
@@ -423,9 +444,8 @@ fn std_doc_text(symbol: &str) -> Option<String> {
             }
         }
         let head = format!("{mod_name}: {sig}");
-        return Some(if doc_lines.is_empty() { head } else { format!("{head}\n{}", doc_lines.join(" ")) });
+        Some(if doc_lines.is_empty() { head } else { format!("{head}\n{}", doc_lines.join(" ")) })
     }
-    None
 }
 
 
@@ -448,6 +468,67 @@ fn fn_signature(f: &crate::ast::Function) -> String {
         t => format!(" -> {t}"),
     };
     format!("{}{tparams}({}){ret}", f.name, params.join(", "))
+}
+
+/// M150 (dogfood raydesk): doc de símbolos de un PROYECTO — sus módulos y los paquetes de
+/// `.ray-deps` (p. ej. `framework.listen` o `web.listen` con `path` apuntando al proyecto):
+/// el agente aprendía la API del framework leyendo el fuente a mano. Busca archivos cuyo STEM
+/// sea el módulo pedido, o cualquier `.ray` dentro de un directorio con ese nombre (el nombre
+/// de PAQUETE: `web.listen` encuentra `.ray-deps/web/framework.ray`). Cap de archivos para no
+/// escanear un monorepo entero.
+fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
+    let (module, func) = match symbol.split_once('.') {
+        Some((m, f)) => (Some(m.to_string()), f.to_string()),
+        None => (None, symbol.to_string()),
+    };
+    let anchor = std::path::Path::new(path);
+    let anchor = anchor.canonicalize().ok()?;
+    let dir = if anchor.is_dir() { anchor.clone() } else { anchor.parent()?.to_path_buf() };
+    let root = match crate::manifest::Manifest::find(&dir) {
+        Some(toml) => toml.parent()?.to_path_buf(),
+        None => dir,
+    };
+    // Los fuentes del proyecto + los de sus dependencias descargadas.
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut pending = vec![root.clone()];
+    while let Some(d) = pending.pop() {
+        if files.len() > 400 {
+            break; // cap: esto es doc, no un indexador
+        }
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if p.is_dir() {
+                if !name.starts_with('.') || name == ".ray-deps" {
+                    pending.push(p);
+                }
+            } else if name.ends_with(".ray") && !name.starts_with('.') {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    for f in &files {
+        let stem = f.file_stem()?.to_string_lossy().into_owned();
+        let matches_module = match &module {
+            None => true,
+            Some(m) => {
+                // stem del archivo == módulo, o el archivo vive bajo un directorio llamado
+                // como el módulo (nombre de paquete).
+                stem == *m || f.parent().is_some_and(|d| d.file_name().is_some_and(|n| n.to_string_lossy() == **m))
+            }
+        };
+        if !matches_module {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(f) else { continue };
+        let label = f.strip_prefix(&root).unwrap_or(f).to_string_lossy().into_owned();
+        if let Some(text) = source_symbol_doc(&label, &src, &func) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 /// Firma (del AST del prelude) + doc (las `///` del fuente) de una función del prelude.

@@ -292,3 +292,79 @@ fn framework_catchall_all_regex_y_mount() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+/// M150 (dogfood raydesk) — el split bind/serve: `listen_on(build, listener)` sobre un
+/// listener ya abierto (bind 0 → el programa CONOCE su puerto sin carrera close/re-bind), y
+/// el backlog del kernel acepta conexiones desde el bind — un cliente puede conectar ANTES
+/// de que el accept arranque (el orden exacto de una app de escritorio: bind → ventana → serve).
+#[test]
+fn listen_on_serves_a_prebound_listener_without_a_race() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let dir = std::env::temp_dir().join(format!("ray_listen_on_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    std::fs::write(
+        dir.join("main.ray"),
+        "from web/framework import new_app, GET, listen_on, text, App, Ctx, Res;\n\
+         import std/net;\n\
+         import std/time;\n\n\
+         fn build_app() -> App {\n\
+             var app = new_app();\n\
+             app.GET(\"/ping\", fn(c: Ctx, r: Res) {\n\
+                 r.text(\"pong\");\n\
+             });\n\
+             app\n\
+         }\n\n\
+         fn main() -> int {\n\
+             let listener = match (net.tcp_listen(\"127.0.0.1\", 0)) {\n\
+                 Result.Ok(l) => l,\n\
+                 Result.Err(e) => {\n\
+                     eprint(e);\n\
+                     return 1;\n\
+                 },\n\
+             };\n\
+             print(\"PORT \" + to_string(net.local_port(listener)));\n\
+             // La espera ANTES de servir: si el backlog no retuviera la conexión del test,\n\
+             // este sleep haría fallar el connect — la prueba de que no hay carrera.\n\
+             time.sleep(300);\n\
+             match (listen_on(build_app, listener)) {\n\
+                 Result.Ok(_) => 0,\n\
+                 Result.Err(e) => {\n\
+                     eprint(e);\n\
+                     1\n\
+                 },\n\
+             }\n\
+         }\n",
+    )
+    .expect("escribe main");
+    std::fs::write(
+        dir.join("ray.toml"),
+        format!(
+            "[package]\nname = \"listen-on-test\"\nversion = \"0.1.0\"\nentry = \"main.ray\"\n\n\
+             [dependencies]\nweb = \"path:{root}/packages/web\"\nnet = \"path:{root}/packages/net\"\n"
+        ),
+    )
+    .expect("escribe ray.toml");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["run", "main.ray"])
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("lanza");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("lee PORT");
+    let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no se pudo leer el puerto de: {line:?}"));
+    std::thread::spawn(move || {
+        let mut sink = Vec::new();
+        let _ = reader.read_to_end(&mut sink);
+    });
+    // Conectar YA — durante el sleep del programa, antes del accept: el backlog debe retenerla.
+    let resp = ask(port, "GET /ping HTTP/1.0\r\nHost: x\r\n\r\n");
+    assert!(resp.contains("200") && resp.contains("pong"), "respuesta: {resp}");
+    let _ = child.kill();
+    let _ = child.wait();
+}

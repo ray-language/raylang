@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Ronda 2 del dogfood raydesk** (M150): `web.listen_on(build, listener)` +
+  `webserver.serve_on[_limits]/serve_with_on` — el **split bind/serve**: bindear al puerto 0
+  primero (`net.local_port` da el puerto SIN carrera close/re-bind; el backlog acepta desde el
+  bind) y servir después — el patrón de apps de escritorio, aplicado a los ejemplos. `ray_doc`
+  acepta **`path`** y resuelve símbolos del PROYECTO y de sus paquetes de `.ray-deps`
+  (`web.listen` con firma y doc — el agente leía el fuente a mano). REFERENCE: sección del
+  paquete `web` en §11 (faltaba entera) y `std/kv` completado (`get_string`/`set_string`).
+
 - **iOS** (§80b fase 1, M149): `ray build --native --lib` emite una **librería estática** con
   la entrada C `ray_start()` (el programa corre en su hilo; el shell posee el proceso), y
   `ray bundle --ios` genera el **proyecto Xcode** completo — shell WKWebView en ObjC,

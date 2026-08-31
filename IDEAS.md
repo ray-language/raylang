@@ -3144,6 +3144,45 @@ al pbxproj, x86_64-sim (Macs Intel), notificaciones/tray móviles. **PENDIENTE A
 aarch64-linux-android (el reactor epoll ya lo cubre), shell Gradle + WebView por JNI (la única
 pieza sin precedente), `cargo-ndk` o toolchain a mano — su propio plan cuando toque.
 
+## 81. Hallazgos del dogfood raydesk — un LLM construyendo una app solo con el MCP (ago 2026)
+
+**El experimento**: pedir a un LLM que construya una app de escritorio real (raydesk: ventana +
+servidor local + persistencia) usando SOLO el MCP de raylang. Salieron 2 bugs (arreglados en el
+PR de quick-wins: coma final en llamadas/params; docs de kv/mkdir + ray_doc con métodos de
+trait + diagnóstico de colisión con builtins + límites del sandbox declarados en las
+instructions/llms.txt) y estos huecos REALES, clasificados:
+
+1. **`std/http` mínimo (lado servidor)** — el hallazgo gordo. El patrón de escritorio dice "tu
+   webserver embebido", pero el único webserver vive en `packages/net` (Tier 2) y el sandbox
+   del MCP no resuelve paquetes → el LLM reescribió a mano el parseo de request/Content-Length/
+   respuestas… y cayó en la trampa clásica (leer por `socket_read` string-lossy y partir un
+   UTF-8 multibyte entre trozos — bug latente en raydesk). Ese boilerplate lo va a reescribir
+   (mal) toda app local. BIFURCACIÓN a decidir con el usuario: (a) `std/http` mínimo nuevo
+   (request parse + helpers de respuesta + router chico), (b) embeber un SUBCONJUNTO de
+   `net/webserver` como `std/http` (fuente única, superficie recortada), o (c) solo mejorar el
+   descubrimiento (hecho en quick-wins) y dejar el Tier 2 como está. Impacto: ALTO en DX de
+   agentes y apps chicas; MEDIO en esfuerzo (b parece el mejor costo/beneficio).
+2. **MCP modo proyecto** — `ray_check`/`ray_run` compilan UN archivo autocontenido en un tmp
+   aislado: un proyecto multi-módulo no se puede validar por agente (raydesk mantuvo todo en un
+   main.ray a propósito). Deseable: una tool (o un parámetro `project_root`) que compile en el
+   contexto del ray.toml — con el confinamiento actual (fuel/heap/plazo) intacto. Impacto:
+   ALTO para agentes; MEDIO en esfuerzo (el loader ya hace todo; es plomería del MCP + decidir
+   la política de acceso al filesystem del proyecto).
+3. **Puente IPC JS→raylang de primera clase en `std/ui`** — hoy el camino de vuelta exige el
+   servidor HTTP local. Un `ui.on_message()` + `window.ray.send(...)` inyectado en el webview
+   eliminaría el servidor para apps chicas. Se SOLAPA con los diferidos de §80 (scheme
+   `app://`, eval con retorno): decidirlos JUNTOS cuando toque — son la misma capa. Impacto:
+   MEDIO-ALTO; esfuerzo MEDIO (script message handlers de WKWebView + su espejo GTK/iOS).
+4. **`ray fmt` y la tupla-tras-bloque** — el gotcha documentado (`(a, b)` tras un `if` parsea
+   como llamada) sigue mordiendo; la sugerencia nueva: que `fmt` inserte el separador (o que el
+   parser resuelva a favor de la tupla tras `if`/`while` SIN else). Tocarlo es tocar la
+   gramática — clasificar como decisión de diseño, no quick-win. Impacto: BAJO-MEDIO.
+
+Contexto compartido de los 4: el MCP es ya la puerta de entrada real de los agentes al
+lenguaje — lo que no se ve desde ahí (paquetes, proyectos, superficie por métodos) para un
+agente NO EXISTE. La contramedida barata (declarar límites y el Tier 2 en instructions/
+llms.txt) quedó hecha; estas cuatro son las estructurales.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

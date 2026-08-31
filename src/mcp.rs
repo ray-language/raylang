@@ -127,7 +127,13 @@ fn initialize_result() -> Json {
              so file searches will NOT find it — e.g. DEFLATE/zlib/gzip live in std/inflate \
              and std/deflate, live child stdin streaming in std/process (stdin_pipe), and \
              C FFI is the extern \"lib\" block. Validate code with ray_check and run it \
-             with ray_run.".into(),
+             with ray_run. IMPORTANT sandbox limits: ray_check/ray_run/ray_test compile ONE \
+             self-contained file in an isolated temp dir — imports of your own project files \
+             or of Tier-2 packages (net/webserver, web/framework, rpc, db) do NOT resolve \
+             there; keep MCP-validated code single-file with std/* imports only. Those \
+             packages DO exist for real projects (add them in ray.toml [dependencies]; the \
+             web framework is the recommended base for servers and desktop/mobile app \
+             backends) — see reference.md.".into(),
         )),
     ])
 }
@@ -334,8 +340,38 @@ fn std_doc_text(symbol: &str) -> Option<String> {
     for (mod_name, src) in candidates {
         let Ok(tokens) = crate::lexer::lex(src) else { continue };
         let Ok(prog) = crate::parser::parse(tokens) else { continue };
-        let Some(f) = prog.functions.iter().find(|f| f.is_pub && f.name == func) else { continue };
-        let sig = fn_signature(f);
+        // Función pública top-level o, si no, un MÉTODO DE TRAIT público (dogfood raydesk:
+        // la superficie de std/kv son los métodos de StoreOps — `s.get(k)`, `s.set(k, v)` —
+        // y ray_doc los negaba; la firma sale del MethodSig, la doc del mismo escaneo de ///).
+        let sig = match prog.functions.iter().find(|f| f.is_pub && f.name == func) {
+            Some(f) => fn_signature(f),
+            None => {
+                let Some((t, m)) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
+                    t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
+                }) else {
+                    continue;
+                };
+                let params: Vec<String> = m
+                    .params
+                    .iter()
+                    .map(|p| match &p.ty {
+                        crate::ast::Type::SelfType => p.name.clone(),
+                        ty => format!("{}: {ty}", p.name),
+                    })
+                    .collect();
+                let ret = match &m.return_type {
+                    crate::ast::Type::Unit => String::new(),
+                    ty => format!(" -> {ty}"),
+                };
+                format!(
+                    "{}({}){ret}  [trait {} — method-call style: receiver.{}(…)]",
+                    m.name,
+                    params.join(", "),
+                    t.name,
+                    m.name
+                )
+            }
+        };
         // Las `///` contiguas encima del `pub fn <func>(` en el fuente del módulo.
         let lines: Vec<&str> = src.lines().collect();
         let mut doc_lines: Vec<&str> = Vec::new();
@@ -594,6 +630,17 @@ mod tests {
             .and_then(|a| a.first()).and_then(|c| c.get("text")).and_then(|t| t.as_str())
             .expect("contenido del recurso");
         assert!(text.contains("# raylang for LLMs"), "sirve el llms.txt embebido");
+    }
+
+    /// Métodos de TRAIT de un módulo std (dogfood raydesk: la superficie de std/kv son los
+    /// métodos de StoreOps y ray_doc los negaba con el mensaje genérico).
+    #[test]
+    fn ray_doc_covers_std_trait_methods() {
+        let d = doc_text("kv.set");
+        assert!(d.contains("std/kv") && d.contains("trait StoreOps"), "{d}");
+        assert!(d.contains("method-call style"), "{d}");
+        let d = doc_text("kv.get");
+        assert!(d.contains("Option<bytes>"), "{d}");
     }
 
     /// El fallback del prelude (cazado con Claude Code real: `parse_int` no es fila de la

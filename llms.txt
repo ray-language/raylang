@@ -187,7 +187,7 @@ UFCS never reaches qualified names.
 Import-on-demand modules: `std/fs std/net std/io std/term std/process std/math
 std/random std/time std/units std/crypto std/text std/sort std/kv std/json std/hex
 std/base64 std/url std/regex std/csv std/toml std/template std/protobuf std/uuid
-std/markdown std/inflate std/deflate std/huffman std/image std/audio
+std/markdown std/inflate std/deflate std/huffman std/image std/audio std/ui std/embed
 std/collections/{set,deque,stringbuilder,dict} std/ffi std/resilience`.
 
 Unit constructors (ordinary functions; UFCS needs the UNQUALIFIED import): durations in
@@ -256,8 +256,17 @@ ray doc file.ray            # API docs (raydoc)
 Always run what you write: the checker's messages are positioned and specific — treat
 them as the feedback loop, not as failure.
 
+Beyond the embedded stdlib there is a Tier-2 package layer, used via `ray.toml`
+`[dependencies]` (path or registry): `net` (production webserver: keep-alive, TLS, SSE,
+WebSocket, streaming, static files with ETag/Range), `web` (an Express-style app framework
+over it — routing, middleware, sessions, `static_embedded` for `[native] embed` assets;
+the recommended base for servers and for desktop/mobile app backends with `std/ui`),
+`rpc` and `db`. Signatures live in REFERENCE.md/reference.md.
+
 If your client supports MCP, `ray mcp` exposes this loop as tools — `ray_check` (exact
 diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` — with the code sandboxed
 (instruction fuel + heap cap + wall deadline), plus this file as the resource
 `raylang://llms.txt`. Connect it with `claude mcp add raylang -- ray mcp` (details in
-docs/mcp.md).
+docs/mcp.md). Sandbox limits: the MCP tools compile ONE self-contained file in an isolated
+temp dir — imports of project files or Tier-2 packages do not resolve there; validate
+single-file std/*-only code via MCP, and use `ray run`/`ray test` in the project for the rest.

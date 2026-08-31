@@ -1053,6 +1053,14 @@ impl Checker {
             }
             Type::Struct(name, args) if name == "Map" => {
                 if args.len() != 2 {
+                    // Dogfood raydesk: si el usuario definió un struct con este nombre, el
+                    // mensaje debe decir que el builtin GANA (la regla existente) y sugerir
+                    // renombrar — "expects N type arguments" a secas no orienta.
+                    if self.structs.contains_key("Map") {
+                        return Err(self.err(line, col,
+                            "'Map' is a builtin type (Map<K, V>) and shadows your struct of the same name; rename your type".to_string()
+                        ));
+                    }
                     return Err(self.err(line, col, format!(
                         "Map expects 2 type arguments (key and value), not {}", args.len()
                     )));
@@ -1064,6 +1072,14 @@ impl Checker {
             Type::Channel(t) => self.ensure_type(t, line, col),
             Type::Struct(name, args) if name == "Channel" => {
                 if args.len() != 1 {
+                    // Dogfood raydesk: si el usuario definió un struct con este nombre, el
+                    // mensaje debe decir que el builtin GANA (la regla existente) y sugerir
+                    // renombrar — "expects N type arguments" a secas no orienta.
+                    if self.structs.contains_key("Channel") {
+                        return Err(self.err(line, col,
+                            "'Channel' is a builtin type (Channel<T>) and shadows your struct of the same name; rename your type".to_string()
+                        ));
+                    }
                     return Err(self.err(line, col, format!(
                         "Channel expects 1 type argument, not {}", args.len()
                     )));
@@ -1074,6 +1090,14 @@ impl Checker {
             Type::Task(t) => self.ensure_type(t, line, col),
             Type::Struct(name, args) if name == "Task" => {
                 if args.len() != 1 {
+                    // Dogfood raydesk: si el usuario definió un struct con este nombre, el
+                    // mensaje debe decir que el builtin GANA (la regla existente) y sugerir
+                    // renombrar — "expects N type arguments" a secas no orienta.
+                    if self.structs.contains_key("Task") {
+                        return Err(self.err(line, col,
+                            "'Task' is a builtin type (Task<T>) and shadows your struct of the same name; rename your type".to_string()
+                        ));
+                    }
                     return Err(self.err(line, col, format!(
                         "Task expects 1 type argument, not {}", args.len()
                     )));

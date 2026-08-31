@@ -259,6 +259,11 @@ iterable  = expresion [ '..' expresion ] ;
 
 `&&` y `||` **cortocircuitan**. Los operandos se evalúan de **izquierda a derecha**.
 
+- **Coma final**: toda lista delimitada la admite — argumentos de llamada `f(a, b,)`,
+  parámetros de `fn`, literales de arreglo/tupla/struct/Map y la lista de un `from … import`
+  (§2). `ray fmt` la elimina (la forma canónica no la lleva). Cerrada la inconsistencia del
+  dogfood raydesk: llamadas y parámetros la rechazaban mientras arrays/structs la aceptaban.
+
 ### 6.2 Primarios
 
 Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, arreglos

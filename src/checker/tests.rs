@@ -951,6 +951,20 @@ fn generic_type_args_arity() {
 }
 
 #[test]
+fn builtin_type_collision_names_the_shadowing() {
+    // Dogfood raydesk: `struct Task` compila, pero usar `Task` como TIPO resuelve al builtin
+    // genérico y el error de aridad no orientaba — ahora nombra la colisión y sugiere renombrar.
+    err_contains(
+        "struct Task { id: int } fn take(t: Task) -> int { t.id } fn main() { print(take(Task { id: 1 })); }",
+        "'Task' is a builtin type (Task<T>) and shadows your struct",
+    );
+    err_contains(
+        "struct Map { id: int } fn take(m: Map) -> int { m.id } fn main() { print(take(Map { id: 1 })); }",
+        "'Map' is a builtin type (Map<K, V>) and shadows your struct",
+    );
+}
+
+#[test]
 fn generic_empty_not_inferable_without_context() {
     // Sin tipo esperado ni argumentos, T queda sin determinar.
     err_contains(

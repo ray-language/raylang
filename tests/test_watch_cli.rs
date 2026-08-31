@@ -64,6 +64,7 @@ fn test_watch_reruns_on_changes_and_ignores_identical_saves() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray test --watch");
 
@@ -144,6 +145,7 @@ fn test_watch_selects_only_the_affected_suites() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray test --watch");
 

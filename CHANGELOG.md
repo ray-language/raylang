@@ -6,6 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El terminal ya no queda "en escalera"** cuando una app en modo crudo muere por señal:
+  `term.raw` arma un handler de `SIGHUP`/`SIGINT`/`SIGTERM` (solo si tenían la disposición por
+  defecto — `signals()` manda si tu programa las maneja) que restaura el termios y re-lanza la
+  señal, en los tres motores. Era la causa del terminal envenenado tras `ray dev` con una TUI:
+  el relanzamiento mata con SIGTERM, `atexit` no corre, y el hijo siguiente guardaba el termios
+  crudo como su "original". `ray dev` y `ray test --watch` además reponen su baseline del
+  terminal si un hijo murió dejándolo cambiado (cinturón para SIGKILL/crash), y las suites de
+  dev/watch corren con stdin nulo (no tocan el terminal del desarrollador y sus asserts de
+  mensajes son deterministas con o sin tty).
+
 - El shell iOS de `ray bundle --ios` adopta el ciclo de vida **`UIScene`** (manifest en el
   Info.plist + `SceneDelegate` con el webview y `ray_start`): desaparece el aviso de
   deprecación "`UIScene` lifecycle will soon be required" y la app queda a prueba del assert

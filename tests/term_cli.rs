@@ -319,3 +319,45 @@ fn native_prints_between_raw_sessions_carry_the_carriage_return() {
     assert_eq!(crlf, lf, "lineas en escalera: {crlf} de {lf} con retorno de carro\n{:?}", String::from_utf8_lossy(&bytes));
     assert_eq!(lf, 18, "las 18 lineas del programa\n{:?}", String::from_utf8_lossy(&bytes));
 }
+
+/// Regresión (dogfood raydesk, 31 ago 2026): `atexit` no corre ante una señal fatal — un
+/// SIGTERM (p. ej. `ray dev` relanzando la app al guardar) mataba una TUI en crudo y el
+/// terminal quedaba envenenado (escalera); el hijo siguiente guardaba ese termios crudo como
+/// "original" y lo perpetuaba. Ahora `raw_on` arma un handler que restaura y re-lanza: tras
+/// matar con SIGTERM a un programa en raw, el termios del pty debe volver a cooked (icanon).
+#[cfg(unix)]
+#[test]
+fn sigterm_during_raw_restores_the_terminal() {
+    if Command::new("script").arg("--version").output().is_err()
+        && !std::path::Path::new("/usr/bin/script").exists()
+    {
+        eprintln!("skipping: script(1) not available");
+        return;
+    }
+    let base = tmp("raw_sigterm");
+    let prog = "import std/term;\nimport std/time;\n\nfn main() {\n    let _ = term.raw(fn() -> int {\n        print(\"in-raw\");\n        time.sleep(10000);\n        0\n    });\n}\n";
+    std::fs::write(base.join("prog.ray"), prog).unwrap();
+    // El runner corre DENTRO del pty: lanza el programa, lo mata en pleno raw y vuelca el
+    // termios resultante del pty a un archivo (la salida del pty en sí no es fiable). OJO:
+    // un job `&` de sh hereda stdin de /dev/null — sin el `< /dev/tty` el programa no vería
+    // terminal y el test no probaría nada (el print "in-raw" asevera que SÍ entró).
+    let runner = format!(
+        "'{ray}' --vm prog.ray < /dev/tty &\npid=$!\nsleep 1\nkill -TERM $pid\nwait $pid 2>/dev/null\nstty -a > result.txt 2>&1\n",
+        ray = env!("CARGO_BIN_EXE_ray"),
+    );
+    std::fs::write(base.join("runner.sh"), runner).unwrap();
+    let cmd = pty_wrap("sh runner.sh");
+    let out = Command::new("sh").args(["-c", &cmd]).current_dir(&base).output().expect("pty");
+    assert!(out.status.success(), "pty run ok: {:?}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("in-raw"),
+        "el programa debió entrar en raw dentro del pty:\n{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stty = std::fs::read_to_string(base.join("result.txt")).unwrap_or_default();
+    assert!(stty.contains("icanon"), "stty reporta el termios del pty:\n{stty}");
+    assert!(
+        !stty.contains("-icanon"),
+        "el terminal quedó en crudo tras el SIGTERM (icanon apagado):\n{stty}"
+    );
+}

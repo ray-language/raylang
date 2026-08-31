@@ -3924,8 +3924,9 @@ pub fn stdin_read(max: i64) -> Result<Vec<u8>, String> {
 //   `cfmakeraw(3)` (libc en macOS y glibc) rellena los flags del modo crudo por nosotros —
 //   sin reproducir la tabla de constantes ICANON/ECHO/… que difiere por plataforma.
 // - `atexit(3)` registra la restauración: cubre la salida normal Y `std::process::exit` (los
-//   tres caminos del CLI). Lo que NO cubre: una señal fatal o kill -9 — como cualquier
-//   programa de terminal; `reset` lo arregla (documentado en MANUAL).
+//   tres caminos del CLI). HUP/INT/TERM con disposición default los cubre `restore_and_die`
+//   (raydesk, 31 ago 2026: `ray dev` relanza con SIGTERM y el terminal quedaba envenenado).
+//   Lo que NO cubre: kill -9 — como cualquier programa de terminal; `reset` lo arregla.
 //
 // `ioctl` es VARIÁDICA (el mismo gotcha de `fcntl` en arm64): se declara `...`.
 // ---------------------------------------------------------------------------
@@ -3941,10 +3942,17 @@ mod term_host {
         fn cfmakeraw(t: *mut u8);
         fn ioctl(fd: i32, req: u64, ...) -> i32;
         fn atexit(f: extern "C" fn()) -> i32;
+        fn signal(sig: i32, handler: usize) -> usize;
+        fn raise(sig: i32) -> i32;
     }
 
     /// TCSAFLUSH: aplica tras drenar la salida y descarta la entrada pendiente (2 en macOS y Linux).
     const TCSAFLUSH: i32 = 2;
+    const SIG_DFL: usize = 0;
+    const SIG_ERR: usize = usize::MAX;
+    const SIGHUP: i32 = 1;
+    const SIGINT: i32 = 2;
+    const SIGTERM: i32 = 15;
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
     const TIOCGWINSZ: u64 = 0x4008_7468;
     #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
@@ -4010,6 +4018,47 @@ mod term_host {
         }
     }
 
+    /// `atexit` NO corre ante una señal fatal: un `SIGTERM` (p. ej. `ray dev` relanzando la
+    /// app al guardar) mataba la TUI en crudo y el terminal quedaba envenenado — y el hijo
+    /// siguiente guardaba ese termios crudo como "original", perpetuándolo. Este handler
+    /// (async-signal-safe: tcsetattr + signal + raise) restaura y re-lanza la señal con la
+    /// disposición por defecto. Solo se arma sobre disposiciones DEFAULT: si el programa
+    /// maneja la señal (signals() de M88.1, SIG_IGN), no se interfiere.
+    extern "C" fn restore_and_die(sig: i32) {
+        if SAVED.load(Ordering::Acquire) {
+            // SAFETY: como en `restore`.
+            unsafe { tcsetattr(0, TCSAFLUSH, std::ptr::addr_of!(ORIGINAL) as *const u8) };
+        }
+        // SAFETY: signal/raise son async-signal-safe; re-lanza para conservar el exit status.
+        unsafe {
+            signal(sig, SIG_DFL);
+            raise(sig);
+        }
+    }
+
+    /// Arma `restore_and_die` en HUP/INT/TERM, respetando cualquier disposición no-default.
+    fn arm_signal_restore() {
+        for sig in [SIGHUP, SIGINT, SIGTERM] {
+            // SAFETY: signal instala y devuelve la disposición previa.
+            let old = unsafe { signal(sig, restore_and_die as *const () as usize) };
+            if old != SIG_DFL && old != SIG_ERR {
+                unsafe { signal(sig, old) };
+            }
+        }
+    }
+
+    /// Desarma el handler al salir del modo crudo (solo si sigue siendo el nuestro).
+    fn disarm_signal_restore() {
+        let ours = restore_and_die as *const () as usize;
+        for sig in [SIGHUP, SIGINT, SIGTERM] {
+            // SAFETY: como en `arm_signal_restore`.
+            let old = unsafe { signal(sig, SIG_DFL) };
+            if old != ours && old != SIG_ERR {
+                unsafe { signal(sig, old) };
+            }
+        }
+    }
+
     pub fn raw_on() -> Result<(), String> {
         // Reentrante: dentro de una sesión raw, solo sube la profundidad (el termios ya es crudo).
         if RAW_DEPTH.load(Ordering::Acquire) > 0 {
@@ -4036,6 +4085,7 @@ mod term_host {
                 return Err(format!("could not enter raw mode: {}", std::io::Error::last_os_error()));
             }
         }
+        arm_signal_restore();
         RAW_DEPTH.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
@@ -4067,8 +4117,17 @@ mod term_host {
         if unsafe { tcsetattr(0, TCSAFLUSH, std::ptr::addr_of!(ORIGINAL) as *const u8) } != 0 {
             return Err(format!("could not restore the terminal: {}", std::io::Error::last_os_error()));
         }
+        disarm_signal_restore();
         RAW_DEPTH.store(0, Ordering::Release);
         Ok(())
+    }
+
+    /// Aplica una huella de termios capturada con `attrs_fingerprint` (los bytes opacos van
+    /// directo a `tcsetattr`). La usa `ray dev` como cinturón: si el hijo murió dejando el
+    /// terminal cambiado (SIGKILL, crash en crudo), el supervisor repone su baseline.
+    pub fn attrs_restore(attrs: &[u8; 128]) -> bool {
+        // SAFETY: attrs proviene de un tcgetattr previo del mismo proceso/plataforma.
+        unsafe { tcsetattr(0, TCSAFLUSH, attrs.as_ptr()) == 0 }
     }
 }
 
@@ -4130,6 +4189,20 @@ pub fn term_attrs_fingerprint() -> Option<[u8; 128]> {
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
         None
+    }
+}
+
+/// Aplica una huella capturada con `term_attrs_fingerprint` (cinturón de `ray dev`: reponer
+/// la baseline si un hijo murió dejando el terminal cambiado). `false` si no hay tty/soporte.
+pub fn term_attrs_restore(attrs: &[u8; 128]) -> bool {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        term_host::attrs_restore(attrs)
+    }
+    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+    {
+        let _ = attrs;
+        false
     }
 }
 

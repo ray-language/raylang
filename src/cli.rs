@@ -619,6 +619,15 @@ fn cmd_dev(args: &[String]) {
         eprintln!("[dev] change in {change}: restarting…");
         if running {
             terminate_gracefully(&mut child);
+            // Cinturón: si el hijo murió dejando el terminal cambiado (TUI en crudo matada
+            // por SIGKILL, crash), reponer la baseline ANTES de relanzar — el hijo nuevo
+            // guardaría el termios envenenado como su "original" y lo perpetuaría.
+            if let (Some(base), Some(now)) =
+                (baseline_tty.as_ref(), crate::builtins::term_attrs_fingerprint())
+                && now != *base
+            {
+                let _ = crate::builtins::term_attrs_restore(base);
+            }
         }
         // Arma la recarga ANTES de relanzar: el hub la emitirá cuando el hijo avise `/ready` (el
         // webserver, al bindear) → el navegador recarga justo cuando el servidor nuevo ya escucha,
@@ -2076,6 +2085,9 @@ fn cmd_test_watch(args: &[String]) -> ! {
     install_cleanup_on_death();
 
     let (explicit, filter) = split_test_args(args);
+    // Baseline del termios (como en dev): si una corrida cortada dejó el terminal cambiado
+    // (un test en crudo matado a mitad), se repone antes de re-correr.
+    let baseline_tty = crate::builtins::term_attrs_fingerprint();
     let mut snapshot = scan_sources(&root);
     let mut hashes = content_hashes(&snapshot);
     let mut watcher = DevWatcher::new(&root);
@@ -2122,6 +2134,12 @@ fn cmd_test_watch(args: &[String]) -> ! {
         };
         if let Some((path, label)) = interrupted {
             terminate_gracefully(&mut child);
+            if let (Some(base), Some(now)) =
+                (baseline_tty.as_ref(), crate::builtins::term_attrs_fingerprint())
+                && now != *base
+            {
+                let _ = crate::builtins::term_attrs_restore(base);
+            }
             DEV_CHILD.store(0, std::sync::atomic::Ordering::SeqCst);
             watcher.debounce(&root, &mut snapshot);
             hashes = content_hashes(&snapshot);

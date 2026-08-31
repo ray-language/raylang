@@ -178,6 +178,10 @@ enum Win {
         webview: usize,
         delegate: usize,
     },
+    /// §80b: una "ventana" del SHELL móvil (iOS; o el modo de prueba `ui-shell`): el shell
+    /// posee el webview — aquí solo queda la fila (los handlers C hacen el trabajo).
+    #[cfg(any(target_os = "ios", feature = "ui-shell"))]
+    Shell,
     /// M147d: GTK3 + WebKitGTK (Linux, por dlopen). `alive` lo apaga el handler de `destroy` —
     /// TODA closure despachada al hilo gtk lo re-chequea antes de tocar los punteros (el botón
     /// de cerrar del WM destruye la ventana por debajo nuestro: anti use-after-destroy).
@@ -217,6 +221,9 @@ fn mark_closed(id: i64) {
 
 // ── El gate del hilo principal ───────────────────────────────────────────────
 
+// En iOS el gate entero es letra muerta (el shell posee el hilo 1 y los brazos ios lo
+// esquivan) — se conserva compilando por coherencia de los 6 sitios.
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 enum AppState {
     NotStarted,
     Ready,
@@ -256,7 +263,11 @@ pub fn run_main_loop() -> Result<(), String> {
     let init = mac::init_app();
     #[cfg(target_os = "linux")]
     let init = gtk::init_app();
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    // iOS: el hilo 1 es de UIApplicationMain (el shell) — este loop jamás corre allí.
+    #[cfg(target_os = "ios")]
+    let init: Result<(), String> =
+        Err("ui: the shell owns the main loop on iOS (run inside the generated app shell)".to_string());
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
     let init: Result<(), String> =
         Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
             .to_string());
@@ -282,11 +293,15 @@ pub fn run_main_loop() -> Result<(), String> {
 /// El mensaje del plazo vencido de `ensure_app`, por backend.
 #[cfg(target_os = "macos")]
 const APP_TIMEOUT_MSG: &str = "ui: could not initialize AppKit (no GUI session?)";
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const APP_TIMEOUT_MSG: &str = "ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)";
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg_attr(target_os = "ios", allow(dead_code))]
+const APP_TIMEOUT_MSG: &str = "ui: could not initialize the display backend (no GUI session?)";
 
 /// Pide el hilo principal (una vez) y espera a que la app esté lista, con plazo — sin sesión
 /// gráfica o sin host el error es limpio, nunca un cuelgue. Compartida por todos los backends.
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 fn ensure_app() -> Result<(), String> {
     let g = gate();
     let mut st = g.state.lock().unwrap();
@@ -374,6 +389,19 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
         return Ok(());
     }
+    // §80b: modo SHELL (iOS; o `ui-shell` en pruebas) — el shell registró sus handlers ANTES
+    // de ray_start: la "ventana" es su webview; aquí solo viaja (title, url). Sin gate: el
+    // hilo principal es del shell (UIApplicationMain), no nuestro.
+    #[cfg(any(target_os = "ios", feature = "ui-shell"))]
+    if shell::active() {
+        shell::open(title, url);
+        windows().lock().unwrap().insert(id, WinState { win: Win::Shell, closed: false });
+        return Ok(());
+    }
+    #[cfg(target_os = "ios")]
+    {
+        Err("ui: no shell handler (run inside the generated app shell)".to_string())
+    }
     #[cfg(target_os = "macos")]
     {
         ensure_app()?;
@@ -388,7 +416,7 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
         windows().lock().unwrap().insert(id, WinState { win: gw, closed: false });
         Ok(())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
     {
         let _ = (title, url);
         Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
@@ -404,6 +432,12 @@ pub fn eval_js(id: i64, js: &str) -> Result<(), String> {
         None => Err("ui: not an open window".to_string()),
         Some(w) => match &w.win {
             Win::Headless => Ok(()),
+            #[cfg(any(target_os = "ios", feature = "ui-shell"))]
+            Win::Shell => {
+                drop(map);
+                shell::eval(js);
+                Ok(())
+            }
             #[cfg(target_os = "macos")]
             Win::Mac { webview, .. } => {
                 let wv = *webview;
@@ -431,6 +465,10 @@ pub fn close_window(id: i64) {
     let removed = windows().lock().unwrap().remove(&id);
     match removed {
         None | Some(WinState { win: Win::Headless, .. }) => {}
+        // §80b: la fila del shell — el evento `closed` ya lo emitió el mark_closed genérico;
+        // avisar al shell (esconder su webview) queda para cuando un dogfood lo pida.
+        #[cfg(any(target_os = "ios", feature = "ui-shell"))]
+        Some(WinState { win: Win::Shell, .. }) => {}
         #[cfg(target_os = "macos")]
         Some(WinState { win: Win::Mac { window, webview, delegate }, .. }) => {
             mac::close_window_async(window, webview, delegate);
@@ -477,7 +515,12 @@ pub fn menu(title: &str, items: &[String]) -> Result<(), String> {
         ensure_app()?;
         gtk::add_menu(title, &decoded)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (title, decoded);
+        Err("ui: menus are not available on iOS (v1)".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
     {
         let _ = title;
         Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
@@ -509,7 +552,12 @@ pub fn dialog(kind: &str, arg: &str) -> Result<Option<String>, String> {
         ensure_app()?;
         gtk::dialog(kind, arg)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (kind, arg);
+        Err("ui: file dialogs are not available on iOS (v1)".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
     {
         let _ = arg;
         Err("ui: no backend for this platform (macOS/Linux; RAY_UI_BACKEND=headless works anywhere)"
@@ -1599,5 +1647,66 @@ mod gtk {
             // SAFETY: ventana viva y estamos en el hilo del loop; destroy dispara el handler.
             unsafe { (api.destroy)(window as Widget) };
         });
+    }
+}
+
+// ── §80b: el puente al SHELL móvil (iOS; `ui-shell` lo compila también en host para el test
+// del driver C). El shell (la app UIKit generada por `ray bundle --ios`) registra sus handlers
+// ANTES de llamar a ray_start; std/ui les entrega el trabajo — el shell posee el webview y el
+// hilo principal, este módulo no despacha nada. ──
+#[cfg(any(target_os = "ios", feature = "ui-shell"))]
+mod shell {
+    use std::ffi::{c_char, CString};
+    use std::sync::OnceLock;
+
+    type OpenHandler = extern "C" fn(*const c_char, *const c_char);
+    type EvalHandler = extern "C" fn(*const c_char);
+
+    static HANDLERS: OnceLock<(OpenHandler, EvalHandler)> = OnceLock::new();
+
+    /// El shell registra sus handlers (UNA vez, antes de `ray_start`). Contrato de strings en
+    /// ambos handlers: NUL-terminated, VÁLIDOS SOLO DURANTE LA LLAMADA — el shell debe copiar
+    /// antes de volver (y despachar a su hilo principal antes de tocar el webview: WebKit lo
+    /// exige; la llamada llega desde el hilo del programa raylang).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_set_handlers(open: OpenHandler, eval: EvalHandler) {
+        let _ = HANDLERS.set((open, eval));
+    }
+
+    /// El shell empuja un evento a la cola de std/ui (ciclo de vida, botones del sistema…):
+    /// llega al programa por `ui.next_event()` como (kind, window, tag). Strings como arriba.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_push_event(kind: *const c_char, window: i64, tag: *const c_char) {
+        if kind.is_null() {
+            return;
+        }
+        // SAFETY: el contrato del export — NUL-terminated, vivos durante la llamada; se copia.
+        let kind = unsafe { std::ffi::CStr::from_ptr(kind) }.to_string_lossy().into_owned();
+        let tag = if tag.is_null() {
+            String::new()
+        } else {
+            // SAFETY: ídem.
+            unsafe { std::ffi::CStr::from_ptr(tag) }.to_string_lossy().into_owned()
+        };
+        super::push_event(&kind, window, &tag);
+    }
+
+    pub(super) fn active() -> bool {
+        HANDLERS.get().is_some()
+    }
+
+    pub(super) fn open(title: &str, url: &str) {
+        if let Some((open, _)) = HANDLERS.get() {
+            let t = CString::new(title.replace('\0', "")).unwrap();
+            let u = CString::new(url.replace('\0', "")).unwrap();
+            open(t.as_ptr(), u.as_ptr());
+        }
+    }
+
+    pub(super) fn eval(js: &str) {
+        if let Some((_, eval)) = HANDLERS.get() {
+            let j = CString::new(js.replace('\0', "")).unwrap();
+            eval(j.as_ptr());
+        }
     }
 }

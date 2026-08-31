@@ -820,6 +820,16 @@ pub fn listen(build: fn() -> App, host: string, port: int) -> Result<int, string
     })
 }
 
+/// M150 — `listen` on a LISTENER you already opened (`net.tcp_listen(host, 0)` +
+/// `net.local_port` for a free port with NO close/re-bind race): the desktop-app pattern —
+/// bind, learn the port, open the window, then serve. Blocks forever.
+pub fn listen_on(build: fn() -> App, listener: int) -> Result<int, string> {
+    webserver.serve_with_on(listener, fn() -> fn(webserver.Request) -> webserver.Response {
+        let app: App = build();
+        fn(req: webserver.Request) -> webserver.Response { handle(app, req) }
+    })
+}
+
 /// Like `listen`, over HTTPS: `cert`/`key` are the PEM certificate chain and private key (M56.3).
 pub fn listen_tls(
     build: fn() -> App,

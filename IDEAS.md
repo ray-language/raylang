@@ -3179,6 +3179,17 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    parser resuelva a favor de la tupla tras `if`/`while` SIN else). Tocarlo es tocar la
    gramática — clasificar como decisión de diseño, no quick-win. Impacto: BAJO-MEDIO.
 
+5. **Helper de estado-de-app en `web`** (ronda 2, ROADMAP #8 de raydesk): cada conexión corre
+   en su fibra con heap aislado → un `var` capturado no se comparte entre handlers; raydesk lo
+   esquivó siendo stateless (carga/guarda por request). El patrón correcto existe (actor:
+   fibra dueña + canales; o `kv.open_shared`) pero se reimplementa en cada proyecto. Deseable:
+   un `web.state`/actor de aplicación de serie + la receta en el MANUAL. Impacto: MEDIO.
+6. **Ronda 2 — resueltos en M150**: split bind/serve (`listen_on` — mata la micro-carrera del
+   puerto efímero), `ray_doc` con `path` (símbolos de proyecto y paquetes), REFERENCE §11 con
+   el paquete `web` y kv completo. PENDIENTE OPERATIVO: **republicar `net`+`web` al registro**
+   (el índice sirve snapshots viejos CON EL MISMO 0.1.0 — `ray add web` no trae
+   static_embedded/listen_on; bump a 0.2.0 + tags en los repos espejo + índice).
+
 Contexto compartido de los 4: el MCP es ya la puerta de entrada real de los agentes al
 lenguaje — lo que no se ve desde ahí (paquetes, proyectos, superficie por métodos) para un
 agente NO EXISTE. La contramedida barata (declarar límites y el Tier 2 en instructions/

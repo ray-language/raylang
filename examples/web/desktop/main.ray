@@ -7,23 +7,10 @@
 //   cd examples/web/desktop
 //   ray run
 // (se abre el navegador solo; el botón "Salir" de la página termina el proceso)
-from web/framework import new_app, GET, POST, listen, html, json, text, App, Ctx, Res;
+from web/framework import new_app, GET, POST, listen_on, html, json, text, App, Ctx, Res;
 import std/net;
 import std/process;
 import std/time;
-
-// Un puerto libre: el SO lo asigna (puerto 0), lo leemos con `local_port` y lo soltamos para
-// que el webserver lo tome. (Hay una ventana mínima de carrera; en localhost es suficiente.)
-fn free_port() -> Result<int, string> {
-    match (net.tcp_listen("127.0.0.1", 0)) {
-        Result.Err(e) => Result.Err(e),
-        Result.Ok(h) => {
-            let port: int = net.local_port(h);
-            let _ = close(h);
-            Result.Ok(port)
-        },
-    }
-}
 
 // Abre `url` en el navegador por defecto: `open` en macOS; si no existe, `xdg-open` (Linux).
 fn open_browser(url: string) {
@@ -33,26 +20,6 @@ fn open_browser(url: string) {
             let _ = process.run("xdg-open", [url]);
         },
     }
-}
-
-// Espera a que el servidor ACEPTE conexiones antes de abrir el navegador: sondea el puerto
-// (conectar y cerrar) en vez de dormir un tiempo fijo — sin carreras al arrancar.
-fn open_when_ready(port: int) {
-    var tries: int = 0;
-    while (tries < 100) {
-        match (net.tcp_connect_timeout("127.0.0.1", port, 200)) {
-            Result.Ok(c) => {
-                let _ = close(c);
-                open_browser("http://127.0.0.1:" + to_string(port) + "/");
-                return;
-            },
-            Result.Err(_) => {
-                time.sleep(20);
-                tries = tries + 1;
-            },
-        }
-    }
-    eprint("the server never came up");
 }
 
 fn build_app() -> App {
@@ -109,17 +76,21 @@ fn build_app() -> App {
 }
 
 fn main() -> int {
-    let port: int = match (free_port()) {
-        Result.Ok(p) => p,
+    // M150 — bind/serve split: bindear al 0 primero (sin carrera close/re-bind; el backlog
+    // acepta desde el bind) y servir después sobre el mismo listener.
+    let listener = match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(l) => l,
         Result.Err(e) => {
             eprint(e);
             return 1;
         },
     };
+    let port = net.local_port(listener);
     spawn(fn() {
-        open_when_ready(port);
+        // El navegador puede abrir ya: el kernel encola la conexión hasta que el accept corra.
+        open_browser("http://127.0.0.1:" + to_string(port) + "/");
     });
-    match (listen(build_app, "127.0.0.1", port)) {
+    match (listen_on(build_app, listener)) {
         Result.Ok(_) => 0,
         Result.Err(e) => {
             eprint(e);

@@ -375,7 +375,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/collections/deque` | `Deque<T>`: `new len is_empty push_back push_front pop_front pop_back peek_front` |
 | `std/collections/stringbuilder` | `StringBuilder`: `new push build count` (une una vez; evita el O(n²) de `+` en bucle) |
 | `std/collections/dict` | `Dict<K, V>` — mapa hash GENÉRICO (M82): claves de USUARIO vía los traits `Hash` + `Eq` (el `Map<K,V>` builtin exige claves primitivas). `new insert get has remove size keys values` (funciones de módulo: `dict.insert(d, k, v)`) |
-| `std/kv` | `Store` — estado clave/valor persistido (M83): `open(path) -> Result<Store, _>`/`empty(path)`, y las operaciones son MÉTODOS del trait `StoreOps` — `s.get(k) -> Option<bytes>` · `s.set(k, v)` · `s.delete(k)` · `s.keys()` · `s.save()` (guardado atómico: temp + rename) — NO funciones libres (`kv.get(s, k)` no existe). `share`/`open_shared`/`stop` = la forma ACTOR para acceso entre fibras (mismos métodos sobre el handle). Motivado por `ray dev` (sesiones/config que sobreviven reloads) |
+| `std/kv` | `Store` — estado clave/valor persistido (M83): `open(path) -> Result<Store, _>`/`empty(path)`, y las operaciones son MÉTODOS del trait `StoreOps` — `s.get(k) -> Option<bytes>` · `s.set(k, v: bytes)` · `s.get_string(k) -> Option<string>` · `s.set_string(k, v)` · `s.delete(k) -> bool` · `s.keys() -> [string]` · `s.save() -> Result<int, _>` (guardado atómico: temp + rename) — NO funciones libres (`kv.get(s, k)` no existe). `share`/`open_shared`/`stop` = la forma ACTOR para acceso entre fibras (mismos métodos sobre el handle). Motivado por `ray dev` (sesiones/config que sobreviven reloads) |
 | `std/json` | `enum Json` (`JNull JBool JNum JStr JArray JObject`) · `parse -> Result<Json, string>` · `stringify` (canónico, claves ordenadas). Escapes `\uXXXX` con pares surrogate |
 | `std/hex` | `hex_encode(bytes) -> string` · `hex_decode(string) -> Result<bytes, string>` |
 | `std/base64` | `base64 base64url` (`bytes -> string`) · `base64_decode base64url_decode` (`string -> Result<bytes, string>`) |
@@ -396,10 +396,24 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
 | `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 |
 
-## 11. Paquetes adicionales (`net`, `rpc`, `db`)
+## 11. Paquetes adicionales (`net`, `web`, `rpc`, `db`)
 
 Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y se importan igual
 (`import net/http;` → `http.fetch(…)`). Viven en `packages/` del repo.
+
+### `packages/web` — el framework de aplicación (estilo Express, sobre `net/webserver`)
+
+| Superficie | Qué hace |
+|---|---|
+| App y rutas | `new_app()` · `GET/POST/PUT/PATCH/DELETE/ALL(app, patrón, handler)` con params `/users/:id` (`c.param`), catch-all final `/*resto`, regex `GET_re` · `mount(app, prefix, sub)` (sub-apps) · `not_found(app, h)` |
+| Arranque | `listen(build_app, host, port)` (bloquea; el builder es una fn TOP-LEVEL — la forma que también compila en nativo) · **`listen_on(build_app, listener)`** (M150: el split bind/serve — `net.tcp_listen(host, 0)` + `net.local_port` primero → el programa CONOCE su puerto sin carrera close/re-bind, y el backlog acepta desde el bind: el patrón de apps de escritorio) · `listen_tls` · `listen_graceful` · `listen_limits` |
+| Middleware | `use_mw` (global) · `use_on(prefix, mw)` · `with_mw([mw], handler)` (por ruta) · `after(app, hook)` · `Step.Next/Done` · `cors(app, origen)` · `log_requests(app)` (JSON por petición con trace-id) |
+| Petición | `c.param/query/body/json_body/form/form_field/header_of/cookie_of/local/put_local` |
+| Respuesta | `r.text/json/json_of (ToJson)/html/status/header/cookie/redirect` |
+| Estáticos | `static_files(app, prefix, dir)` · `static_files_cached(+max_age)` (ETag fuerte + 304 + Range) · **`static_embedded(app, prefix, dir)`** (M147: sirve del espacio `[native] embed` — disco en vivo en dev, horneado en el binario nativo; ETag de contenido) |
+| Sesiones | cookie `ray_session` HttpOnly + `std/kv` |
+
+Detalle completo en [`docs/web-framework.md`](docs/web-framework.md); demo en `examples/web/framework/`. Estado compartido entre handlers: cada conexión corre en su fibra con heap aislado — el estado va por el patrón ACTOR (una fibra dueña + canales, o `kv.open_shared`); receta en el MANUAL §15.
 
 ### `packages/net` — la pila de red (24 módulos, raylang puro)
 

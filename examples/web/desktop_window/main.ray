@@ -10,7 +10,7 @@ from web/framework import
     new_app,
     GET,
     POST,
-    listen,
+    listen_on,
     html,
     json,
     text,
@@ -21,52 +21,6 @@ from web/framework import
 import std/net;
 import std/time;
 import std/ui;
-
-// Un puerto libre asignado por el SO (bindear al 0, leer, soltar) — dos instancias no chocan.
-fn free_port() -> Result<int, string> {
-    match (net.tcp_listen("127.0.0.1", 0)) {
-        Result.Err(e) => Result.Err(e),
-        Result.Ok(h) => {
-            let port: int = net.local_port(h);
-            let _ = close(h);
-            Result.Ok(port)
-        },
-    }
-}
-
-// Abre la ventana SOLO cuando el servidor ya acepta (sondear el puerto, sin sleeps a ciegas),
-// y desde ahí atiende los eventos de UI: la ventana cerrada = el programa termina.
-fn open_window_when_ready(port: int) {
-    var tries: int = 0;
-    while (tries < 100) {
-        match (net.tcp_connect_timeout("127.0.0.1", port, 200)) {
-            Result.Ok(c) => {
-                let _ = close(c);
-                match (ui.open(
-                    "raylang desktop",
-                    "http://127.0.0.1:" + to_string(port) + "/",
-                    900,
-                    640
-                )) {
-                    Result.Err(e) => {
-                        eprint("ui: " + e);
-                        exit(1);
-                    },
-                    Result.Ok(w) => {
-                        watch_window(w);
-                    },
-                }
-                return;
-            },
-            Result.Err(_) => {
-                time.sleep(20);
-                tries = tries + 1;
-            },
-        }
-    }
-    eprint("the server never came up");
-    exit(1);
-}
 
 // La fibra dueña de la ventana: espera sus eventos (aparca — sin sondeo) y sale al cerrarse.
 fn watch_window(w: int) {
@@ -132,21 +86,28 @@ fn build_app() -> App {
 }
 
 fn main() -> int {
-    let port: int = match (free_port()) {
-        Result.Ok(p) => p,
+    // M150 — el split bind/serve: bindear al puerto 0 PRIMERO (el SO elige; local_port lo
+    // lee) y servir DESPUÉS sobre ese mismo listener — sin la carrera close/re-bind, y el
+    // backlog del kernel acepta desde ya: la ventana puede abrir antes de que el accept corra.
+    let listener = match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(l) => l,
         Result.Err(e) => {
             eprint(e);
             return 1;
         },
     };
+    let port = net.local_port(listener);
     spawn(fn() {
-        open_window_when_ready(port);
+        let _ = listen_on(build_app, listener);
     });
-    match (listen(build_app, "127.0.0.1", port)) {
-        Result.Ok(_) => 0,
+    match (ui.open("raylang desktop", "http://127.0.0.1:" + to_string(port) + "/", 900, 640)) {
         Result.Err(e) => {
-            eprint(e);
+            eprint("ui: " + e);
             1
+        },
+        Result.Ok(w) => {
+            watch_window(w);
+            0
         },
     }
 }

@@ -3156,18 +3156,19 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    webserver embebido", pero el único webserver vive en `packages/net` (Tier 2) y el sandbox
    del MCP no resuelve paquetes → el LLM reescribió a mano el parseo de request/Content-Length/
    respuestas… y cayó en la trampa clásica (leer por `socket_read` string-lossy y partir un
-   UTF-8 multibyte entre trozos — bug latente en raydesk). Ese boilerplate lo va a reescribir
-   (mal) toda app local. BIFURCACIÓN a decidir con el usuario: (a) `std/http` mínimo nuevo
-   (request parse + helpers de respuesta + router chico), (b) embeber un SUBCONJUNTO de
-   `net/webserver` como `std/http` (fuente única, superficie recortada), o (c) solo mejorar el
-   descubrimiento (hecho en quick-wins) y dejar el Tier 2 como está. Impacto: ALTO en DX de
-   agentes y apps chicas; MEDIO en esfuerzo (b parece el mejor costo/beneficio).
-2. **MCP modo proyecto** — `ray_check`/`ray_run` compilan UN archivo autocontenido en un tmp
-   aislado: un proyecto multi-módulo no se puede validar por agente (raydesk mantuvo todo en un
-   main.ray a propósito). Deseable: una tool (o un parámetro `project_root`) que compile en el
-   contexto del ray.toml — con el confinamiento actual (fuel/heap/plazo) intacto. Impacto:
-   ALTO para agentes; MEDIO en esfuerzo (el loader ya hace todo; es plomería del MCP + decidir
-   la política de acceso al filesystem del proyecto).
+   UTF-8 multibyte entre trozos — bug latente en raydesk). DECISIÓN DEL USUARIO (31 ago): NI
+   `std/http` nuevo NI embeber el Tier 2 — el camino es el FLUJO REAL: el agente descubre los
+   paquetes en el índice público (github.com/ray-language/ray-index, `ray search`), los añade
+   con [dependencies] y valida con el modo proyecto del MCP (punto 2) o el binario. Las
+   instructions/llms.txt enseñan ese flujo ("work like a developer, not a snippet machine").
+   `std/http` queda APARCADO: re-evaluar solo si el dogfood muestra que aún se reescribe
+   boilerplate con el flujo nuevo.
+2. **MCP modo proyecto — ✅ HECHO en el mismo PR** (decisión del usuario: "esa limitación
+   debe desaparecer"): `ray_check`/`ray_run`/`ray_test` aceptan `path` (archivo o directorio)
+   y corren con el cwd en la raíz del ray.toml más cercano — módulos propios y paquetes de
+   [dependencies] resuelven como en `ray run`; un directorio corre la entrada por defecto o
+   la suite entera. El modo `code` queda para experimentos autocontenidos. Confinamiento
+   (fuel/heap/plazo) intacto.
 3. **Puente IPC JS→raylang de primera clase en `std/ui`** — hoy el camino de vuelta exige el
    servidor HTTP local. Un `ui.on_message()` + `window.ray.send(...)` inyectado en el webview
    eliminaría el servidor para apps chicas. Se SOLAPA con los diferidos de §80 (scheme

@@ -264,9 +264,15 @@ the recommended base for servers and for desktop/mobile app backends with `std/u
 `rpc` and `db`. Signatures live in REFERENCE.md/reference.md.
 
 If your client supports MCP, `ray mcp` exposes this loop as tools — `ray_check` (exact
-diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` — with the code sandboxed
-(instruction fuel + heap cap + wall deadline), plus this file as the resource
-`raylang://llms.txt`. Connect it with `claude mcp add raylang -- ray mcp` (details in
-docs/mcp.md). Sandbox limits: the MCP tools compile ONE self-contained file in an isolated
-temp dir — imports of project files or Tier-2 packages do not resolve there; validate
-single-file std/*-only code via MCP, and use `ray run`/`ray test` in the project for the rest.
+diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` — sandboxed (instruction fuel +
+heap cap + wall deadline), plus this file as the resource `raylang://llms.txt`. Connect it
+with `claude mcp add raylang -- ray mcp` (details in docs/mcp.md).
+
+Work like a developer, not a snippet machine: for anything beyond a one-file experiment,
+create a real project (`ray.toml` + `src/`), split modules, `ray add` your dependencies
+(discover packages in the public index — github.com/ray-language/ray-index — or with
+`ray search`), and validate by passing `path` to `ray_check`/`ray_run`/`ray_test`: they run
+with the project as context, so multi-file imports and `[dependencies]` resolve exactly like
+`ray run`. The `code` form is only for quick self-contained experiments (isolated temp dir —
+project files and packages do not resolve there). With shell access, the `ray` binary itself
+is the same loop.

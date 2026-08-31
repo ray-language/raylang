@@ -134,3 +134,54 @@ fn handshake_y_las_cinco_tools() {
     let res = mcp.ask(r#"{"jsonrpc":"2.0","id":11,"method":"resources/read","params":{"uri":"raylang://llms.txt"}}"#);
     assert!(res.contains("raylang for LLMs"), "recurso llms.txt: {res}");
 }
+
+/// Dogfood raydesk — el modo PROYECTO (`path`): check/run/test contra un proyecto REAL en
+/// disco, con módulos propios y un paquete por `path:` — todo lo que el modo snippet no
+/// resuelve. Un directorio como path corre la entrada por defecto (o la suite entera).
+#[test]
+fn path_mode_resolves_a_real_project_with_deps() {
+    let base = std::env::temp_dir().join("ray_mcp_project");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::create_dir_all(base.join("pkgs/greeter")).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngreeter = \"path:pkgs/greeter\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("pkgs/greeter/ray.toml"),
+        "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\nentry = \"greeter.ray\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("pkgs/greeter/greeter.ray"),
+        "pub fn hello(name: string) -> string {\n    \"hola, \" + name\n}\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("src/util.ray"), "pub fn shout(s: string) -> string {\n    s.to_upper()\n}\n").unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import util;\nimport greeter/greeter;\n\nfn main() {\n    print(util.shout(greeter.hello(\"mcp\")));\n}\n\n@test\nfn shout_works() {\n    assert_eq(util.shout(\"ab\"), \"AB\");\n}\n",
+    )
+    .unwrap();
+
+    let mut mcp = Mcp::start();
+    let _ = mcp.ask(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#);
+    let main_path = base.join("src/main.ray");
+    let main_path = main_path.to_str().unwrap();
+    let dir_path = base.to_str().unwrap();
+
+    // check por archivo: los imports del proyecto y el paquete resuelven.
+    let check = mcp.call(2, "ray_check", &format!(r#"{{"path":"{main_path}"}}"#));
+    assert!(check.contains("compiles"), "check en proyecto: {check}");
+    // run por DIRECTORIO: resuelve la entrada por defecto.
+    let run = mcp.call(3, "ray_run", &format!(r#"{{"path":"{dir_path}"}}"#));
+    assert!(run.contains("HOLA, MCP"), "run del proyecto: {run}");
+    // test por directorio: la suite entera, como `ray test`.
+    let test = mcp.call(4, "ray_test", &format!(r#"{{"path":"{dir_path}"}}"#));
+    assert!(test.contains("all passed"), "suite del proyecto: {test}");
+    // Una ruta inexistente falla claro, no en silencio.
+    let missing = mcp.call(5, "ray_check", r#"{"path":"/nope/definitely/missing.ray"}"#);
+    assert!(missing.contains("path not found"), "{missing}");
+}

@@ -4,6 +4,31 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **iOS** (§80b fase 1, M149): `ray build --native --lib` emite una **librería estática** con
+  la entrada C `ray_start()` (el programa corre en su hilo; el shell posee el proceso), y
+  `ray bundle --ios` genera el **proyecto Xcode** completo — shell WKWebView en ObjC,
+  staticlibs de dispositivo y simulador elegidos por SDK, Info.plist con local networking.
+  El MISMO fuente de escritorio corre en el iPhone (`ui.open` entrega la URL al webview del
+  shell; ciclo de vida por eventos `lifecycle`). Verificado en el simulador Y en un iPhone
+  físico. Android queda diferido (IDEAS §80b).
+
+- **Quick-wins del dogfood raydesk** (un LLM construyendo una app solo con el MCP): la **coma
+  final** vale ahora también en llamadas y parámetros de `fn` (consistencia con arrays/structs;
+  SPEC §6); `ray_doc` cubre **métodos de trait** de la stdlib (la superficie de `std/kv` era
+  invisible); el choque de un tipo de usuario con un builtin genérico lo dice claro (`'Task' is
+  a builtin type (Task<T>) and shadows your struct…`); REFERENCE corrige `std/kv` (estilo
+  método) y añade `fs.mkdir`.
+
+- **MCP: modo PROYECTO** (la limitación de un-solo-archivo desaparece): `ray_check`/`ray_run`/
+  `ray_test` aceptan **`path`** (archivo o directorio) y corren con el proyecto real como
+  contexto — módulos propios y `[dependencies]` resuelven como en `ray run`; un directorio
+  corre la entrada por defecto / la suite entera. Las instructions y llms.txt enseñan el flujo
+  de DESARROLLADOR (proyecto + índice público github.com/ray-language/ray-index + `ray add`),
+  no el de snippets; el modo `code` queda para experimentos autocontenidos. Lo estructural
+  restante, clasificado en IDEAS §81.
+
 ## 1.4.0 — 2026-08-30
 
 - **`std/ui`: menús y diálogos de archivo** (M148, F3 de IDEAS §80): el menú ESTÁNDAR

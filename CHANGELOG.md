@@ -13,6 +13,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   acepta **`path`** y resuelve símbolos del PROYECTO y de sus paquetes de `.ray-deps`
   (`web.listen` con firma y doc — el agente leía el fuente a mano). REFERENCE: sección del
   paquete `web` en §11 (faltaba entera) y `std/kv` completado (`get_string`/`set_string`).
+  **Republicados `net@0.2.0` y `web@0.2.0`** en el registro público (repos espejo + índice):
+  `ray add web` entrega por fin `static_embedded`, sesiones, gzip y `listen_on`.
 
 - **iOS** (§80b fase 1, M149): `ray build --native --lib` emite una **librería estática** con
   la entrada C `ray_start()` (el programa corre en su hilo; el shell posee el proceso), y

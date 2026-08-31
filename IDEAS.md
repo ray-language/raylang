@@ -3186,9 +3186,10 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    un `web.state`/actor de aplicación de serie + la receta en el MANUAL. Impacto: MEDIO.
 6. **Ronda 2 — resueltos en M150**: split bind/serve (`listen_on` — mata la micro-carrera del
    puerto efímero), `ray_doc` con `path` (símbolos de proyecto y paquetes), REFERENCE §11 con
-   el paquete `web` y kv completo. PENDIENTE OPERATIVO: **republicar `net`+`web` al registro**
-   (el índice sirve snapshots viejos CON EL MISMO 0.1.0 — `ray add web` no trae
-   static_embedded/listen_on; bump a 0.2.0 + tags en los repos espejo + índice).
+   el paquete `web` y kv completo. La republicación ✅ HECHA (31 ago 2026): `net@0.2.0` y
+   `web@0.2.0` en los repos espejo (tags `v0.2.0`) e índice actualizado vía
+   `tools/publish-packages.sh`; verificado E2E — `ray add web` en un proyecto fresco trae
+   `static_embedded`/`listen_on` y el programa compila y sirve.
 
 Contexto compartido de los 4: el MCP es ya la puerta de entrada real de los agentes al
 lenguaje — lo que no se ve desde ahí (paquetes, proyectos, superficie por métodos) para un

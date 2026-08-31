@@ -65,6 +65,7 @@ fn dev_restarts_on_changes() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev");
 
@@ -139,6 +140,7 @@ fn dev_socket_activation_retains_listener_across_restarts() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev --port");
 
@@ -218,6 +220,7 @@ fn dev_live_reload_injects_snippet_and_emits_reload() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev --port");
 
@@ -285,6 +288,7 @@ fn dev_reloads_the_browser_without_restart_on_an_embedded_asset_change() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev");
 
@@ -345,6 +349,7 @@ fn dev_exits_when_a_windowed_app_closes_cleanly() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev");
 
@@ -397,6 +402,7 @@ fn dev_live_reload_without_port_also_injects() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev sin --port");
 
@@ -426,6 +432,7 @@ fn dev_does_not_restart_if_change_fails_to_compile() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev");
 
@@ -469,6 +476,7 @@ fn dev_ignores_a_save_with_no_changes() {
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
         .spawn()
         .expect("lanza ray dev");
 

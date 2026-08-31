@@ -1005,8 +1005,10 @@ fn main() -> int {
 
 Tres cosas que saber del modo crudo: no hay eco ni Ctrl-C (decide tu programa: `read_key` los
 entrega como `Key.Char`/`Key.Ctrl`); no hay OPOST, así que las líneas terminan con `\r\n`
-explícito; y la restauración está garantizada al salir del proceso — salvo señal fatal o
-`kill -9`, como en cualquier programa de terminal (`reset` lo arregla). Para redimensionamiento,
+explícito; y la restauración está garantizada al salir del proceso — también ante `SIGHUP`/
+`SIGINT`/`SIGTERM` con disposición por defecto (se restaura y la señal sigue su curso; si tu
+programa las maneja con `signals()`, la restauración vuelve a ser cosa de su salida normal) —
+salvo `kill -9`, como en cualquier programa de terminal (`reset` lo arregla). Para redimensionamiento,
 `select` sobre `signals()` + `term.size()`: SIGWINCH (28) llega por el canal de señales al
 redimensionar la ventana.
 

@@ -631,6 +631,9 @@ pub enum OpCode {
     UiNext,
     /// M148: `__ui_menu(title, items)` — añade un menú custom (['ok'] / ['err', msg]).
     UiMenu,
+    /// M151: `__ui_app_menu(name, items)` — items en el menú de APLICACIÓN (macOS) y su
+    /// título opcional (['ok'] / ['err', msg]).
+    UiAppMenu,
     /// M148: `__ui_dialog(kind, arg)` — diálogo de archivo MODAL (['ok', path] / ['none'] / ['err', msg]).
     UiDialog,
     /// M147: `__embed_read(path)` — un asset del espacio `[native] embed` ([b'ok', datos] / [b'err', msg]).

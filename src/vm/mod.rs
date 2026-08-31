@@ -3144,6 +3144,30 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M151: menú de APLICACIÓN — mismo cableado que UiMenu.
+                OpCode::UiAppMenu => {
+                    let items = self.pop();
+                    let HeapValue::Str(name) = self.pop() else {
+                        unreachable!("the checker guarantees a string");
+                    };
+                    let HeapValue::Obj(ih) = items else {
+                        unreachable!("the checker guarantees a [string]");
+                    };
+                    let items: Vec<String> = self
+                        .as_array(ih)
+                        .iter()
+                        .map(|v| match v {
+                            HeapValue::Str(s) => s.clone(),
+                            _ => unreachable!("the checker guarantees [string]"),
+                        })
+                        .collect();
+                    let elems = match crate::builtins::ui_app_menu(&name, &items) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M148: diálogo de archivo — MODAL: bloquea el hilo del worker lo que el
                 // usuario tarde (clase sqlite/run, documentado).
                 OpCode::UiDialog => {

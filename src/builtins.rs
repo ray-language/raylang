@@ -1183,6 +1183,17 @@ pub fn ui_menu(_title: &str, _items: &[String]) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M151: items en el menú de APLICACIÓN (macOS) + título opcional; misma codificación que
+/// `ui_menu` (la decodificación y las ramas por backend viven en ray_runtime::ui).
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_app_menu(name: &str, items: &[String]) -> Result<(), String> {
+    ray_runtime::ui::app_menu(name, items)
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_app_menu(_name: &str, _items: &[String]) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M148: diálogo de archivo MODAL (bloquea el hilo del worker lo que el usuario tarde — la
 /// clase sqlite/run, documentada). `Ok(None)` = canceló.
 #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
@@ -3532,6 +3543,14 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__ui_menu", " (title, items)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__ui_menu expects a string (the title), not {}", a[0]))); }
         if a[1] != Type::Array(Box::new(Type::String)) { return Err((Some(1), format!("__ui_menu expects a [string] (the encoded items), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_app_menu(name, items) -> [string] (M151): ["ok"] o ["err", msg]. Items para el menú
+    // de APLICACIÓN (macOS; encima de Hide/Quit) + título opcional; "role:about" = About nativo.
+    Builtin { name: "__ui_app_menu", opcode: OpCode::UiAppMenu, check: |a| {
+        arity(a, 2, "__ui_app_menu", " (name, items)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ui_app_menu expects a string (the app name), not {}", a[0]))); }
+        if a[1] != Type::Array(Box::new(Type::String)) { return Err((Some(1), format!("__ui_app_menu expects a [string] (the encoded items), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_dialog(kind, arg) -> [string] (M148): ["ok", path] / ["none"] / ["err", msg]. MODAL:

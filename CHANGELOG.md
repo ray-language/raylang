@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ui.app_menu(name, items)`** (M151, raydesk #10): el menú de **aplicación** de macOS deja
+  de ser intocable — tus items van encima de Hide/Quit (con separador), el tag `"role:about"`
+  instala el **About nativo** (panel estándar), y un `name` no vacío re-titula el menú (bajo
+  `ray run` salía "ray"; el `.app` ya mostraba su nombre). En Linux — sin menú de app global —
+  los items van como menú normal y todos emiten el evento `"menu"` con su tag. Headless: no-op
+  `Ok` (paridad de 3 motores en la batería).
+
 - **La firma iOS sobrevive a `ray bundle --ios`** (M151, raydesk #9): declara tu team una vez
   con `[ios] development_team = "…"` en el ray.toml y cada regeneración lo escribe en el
   `App.xcconfig`; sin declararlo, el bundle **preserva** el `DEVELOPMENT_TEAM`/`CODE_SIGN_STYLE`

@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- El shell iOS de `ray bundle --ios` adopta el ciclo de vida **`UIScene`** (manifest en el
+  Info.plist + `SceneDelegate` con el webview y `ray_start`): desaparece el aviso de
+  deprecación "`UIScene` lifecycle will soon be required" y la app queda a prueba del assert
+  futuro de Apple. Los eventos `lifecycle` (`background`/`foreground`) llegan igual; si iOS
+  reconecta la escena, el webview nuevo recarga la última URL de `ui.open` sin re-arrancar el
+  programa.
+
 - **Ronda 2 del dogfood raydesk** (M150): `web.listen_on(build, listener)` +
   `webserver.serve_on[_limits]/serve_with_on` — el **split bind/serve**: bindear al puerto 0
   primero (`net.local_port` da el puerto SIN carrera close/re-bind; el backlog acepta desde el

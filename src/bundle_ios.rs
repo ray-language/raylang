@@ -7,9 +7,12 @@
 //! Decisiones de plantilla (revisadas en el plan): xcconfig POR SDK para elegir el `.a`
 //! (dispositivo y simulador son AMBOS arm64 — un lipo es imposible; el xcframework queda para
 //! v2), pbxproj MÍNIMO con UUIDs sintéticos (24 hex, únicos en el archivo) y objectVersion 56,
-//! todo lo afinable en el xcconfig; sin escenas (UIWindow clásico: sin UIApplicationSceneManifest
-//! el camino AppDelegate sigue vigente); firma: el simulador no la necesita (el smoke compila
-//! con CODE_SIGNING_ALLOWED=NO); dispositivo = abrir en Xcode y elegir team (documentado).
+//! todo lo afinable en el xcconfig; ciclo de vida `UIScene` (manifest en el Info.plist +
+//! SceneDelegate: el camino clásico solo-AppDelegate ya avisa deprecación en consola y Apple
+//! anuncia assert futuro) — el webview y `ray_start` viven en la escena porque el orden real
+//! es didFinishLaunching → willConnectToSession; firma: el simulador no la necesita (el smoke
+//! compila con CODE_SIGNING_ALLOWED=NO); dispositivo = abrir en Xcode y elegir team
+//! (documentado).
 
 use std::path::Path;
 
@@ -31,10 +34,34 @@ const APP_DELEGATE_H: &str = r#"#import <UIKit/UIKit.h>
 @end
 "#;
 
+/// Con `UIScene`, el AppDelegate queda en el arranque del proceso; la ventana, el webview y
+/// `ray_start` viven en el SceneDelegate (el ciclo real es didFinishLaunching → connect).
+const APP_DELEGATE_M: &str = r#"#import "AppDelegate.h"
+
+@implementation AppDelegate
+
+- (BOOL)application:(UIApplication *)application
+    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    return YES;
+}
+
+@end
+"#;
+
+const SCENE_DELEGATE_H: &str = r#"#import <UIKit/UIKit.h>
+
+@interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property (strong, nonatomic) UIWindow *window;
+@end
+"#;
+
 /// El corazón del shell: registra los handlers ANTES de ray_start (contrato del staticlib:
 /// strings NUL-terminated válidos solo durante la llamada → se COPIAN antes de despachar al
-/// hilo principal, que es donde WebKit exige vivir).
-const APP_DELEGATE_M: &str = r#"#import "AppDelegate.h"
+/// hilo principal, que es donde WebKit exige vivir). ray_start corre UNA vez (dispatch_once):
+/// si iOS desconecta y reconecta la escena, el programa sigue vivo — el webview nuevo recarga
+/// la última URL entregada por ui.open (rayLastURL), no re-arranca el programa. ray_open
+/// también la guarda por si llega ANTES de que la escena conecte (programa madrugador).
+const SCENE_DELEGATE_M: &str = r#"#import "SceneDelegate.h"
 #import <WebKit/WebKit.h>
 
 extern void ray_ui_set_handlers(void (*open)(const char *, const char *),
@@ -43,10 +70,12 @@ extern void ray_ui_push_event(const char *kind, long long window, const char *ta
 extern int ray_start(void);
 
 static WKWebView *rayWebView = nil;
+static NSString *rayLastURL = nil;
 
 static void ray_open(const char *title, const char *url) {
     NSString *u = [NSString stringWithUTF8String:url]; // copiar ANTES de despachar
     dispatch_async(dispatch_get_main_queue(), ^{
+      rayLastURL = u;
       [rayWebView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:u]]];
     });
 }
@@ -58,11 +87,13 @@ static void ray_eval(const char *js) {
     });
 }
 
-@implementation AppDelegate
+@implementation SceneDelegate
 
-- (BOOL)application:(UIApplication *)application
-    didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+- (void)scene:(UIScene *)scene
+    willConnectToSession:(UISceneSession *)session
+                 options:(UISceneConnectionOptions *)connectionOptions {
+    UIWindowScene *windowScene = (UIWindowScene *)scene;
+    self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     UIViewController *vc = [UIViewController new];
     rayWebView = [[WKWebView alloc] initWithFrame:vc.view.bounds];
     rayWebView.autoresizingMask =
@@ -70,16 +101,25 @@ static void ray_eval(const char *js) {
     [vc.view addSubview:rayWebView];
     self.window.rootViewController = vc;
     [self.window makeKeyAndVisible];
-    ray_ui_set_handlers(ray_open, ray_eval);
-    ray_start();
-    return YES;
+    if (rayLastURL != nil) { // reconexión: el programa ya entregó su URL
+        [rayWebView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:rayLastURL]]];
+    }
+    static dispatch_once_t rayOnce;
+    dispatch_once(&rayOnce, ^{
+      ray_ui_set_handlers(ray_open, ray_eval);
+      ray_start();
+    });
 }
 
-- (void)applicationDidEnterBackground:(UIApplication *)application {
+- (void)sceneDidDisconnect:(UIScene *)scene {
+    rayWebView = nil; // la vista muere con la escena; el programa sigue
+}
+
+- (void)sceneDidEnterBackground:(UIScene *)scene {
     ray_ui_push_event("lifecycle", 0, "background");
 }
 
-- (void)applicationWillEnterForeground:(UIApplication *)application {
+- (void)sceneWillEnterForeground:(UIScene *)scene {
     ray_ui_push_event("lifecycle", 0, "foreground");
 }
 
@@ -101,6 +141,20 @@ const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>UILaunchScreen</key><dict/>
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key><false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+          <key>UISceneConfigurationName</key><string>Default</string>
+          <key>UISceneDelegateClassName</key><string>SceneDelegate</string>
+        </dict>
+      </array>
+    </dict>
+  </dict>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
@@ -146,15 +200,18 @@ fn pbxproj(name: &str) -> String {
 	objects = {{
 		0000000000000000000000B1 /* main.m in Sources */ = {{isa = PBXBuildFile; fileRef = 0000000000000000000000F1 /* main.m */; }};
 		0000000000000000000000B2 /* AppDelegate.m in Sources */ = {{isa = PBXBuildFile; fileRef = 0000000000000000000000F3 /* AppDelegate.m */; }};
+		0000000000000000000000B3 /* SceneDelegate.m in Sources */ = {{isa = PBXBuildFile; fileRef = 0000000000000000000000F8 /* SceneDelegate.m */; }};
 		0000000000000000000000F1 /* main.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; }};
 		0000000000000000000000F2 /* AppDelegate.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; }};
 		0000000000000000000000F3 /* AppDelegate.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; }};
 		0000000000000000000000F4 /* Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; }};
+		0000000000000000000000F7 /* SceneDelegate.h */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SceneDelegate.h; sourceTree = "<group>"; }};
+		0000000000000000000000F8 /* SceneDelegate.m */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; }};
 		0000000000000000000000F5 /* App.xcconfig */ = {{isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; }};
 		0000000000000000000000F6 /* {name}.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "{name}.app"; sourceTree = BUILT_PRODUCTS_DIR; }};
 		0000000000000000000000E1 /* Frameworks */ = {{isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; }};
-		0000000000000000000000E2 /* Sources */ = {{isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000000B1, 0000000000000000000000B2); runOnlyForDeploymentPostprocessing = 0; }};
-		0000000000000000000000A1 /* Shell */ = {{isa = PBXGroup; children = (0000000000000000000000F1, 0000000000000000000000F2, 0000000000000000000000F3, 0000000000000000000000F4); path = Shell; sourceTree = "<group>"; }};
+		0000000000000000000000E2 /* Sources */ = {{isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000000B1, 0000000000000000000000B2, 0000000000000000000000B3); runOnlyForDeploymentPostprocessing = 0; }};
+		0000000000000000000000A1 /* Shell */ = {{isa = PBXGroup; children = (0000000000000000000000F1, 0000000000000000000000F2, 0000000000000000000000F3, 0000000000000000000000F7, 0000000000000000000000F8, 0000000000000000000000F4); path = Shell; sourceTree = "<group>"; }};
 		0000000000000000000000A2 /* Products */ = {{isa = PBXGroup; children = (0000000000000000000000F6); name = Products; sourceTree = "<group>"; }};
 		0000000000000000000000A3 = {{isa = PBXGroup; children = (0000000000000000000000A1, 0000000000000000000000F5, 0000000000000000000000A2); sourceTree = "<group>"; }};
 		0000000000000000000000D1 /* {name} */ = {{isa = PBXNativeTarget; buildConfigurationList = 0000000000000000000000C3; buildPhases = (0000000000000000000000E2, 0000000000000000000000E1); buildRules = (); dependencies = (); name = "{name}"; productName = "{name}"; productReference = 0000000000000000000000F6; productType = "com.apple.product-type.application"; }};
@@ -198,6 +255,8 @@ pub fn write_project(dir: &Path, name: &str, bundle_id: &str, version: &str) -> 
     write("Shell/main.m", MAIN_M)?;
     write("Shell/AppDelegate.h", APP_DELEGATE_H)?;
     write("Shell/AppDelegate.m", APP_DELEGATE_M)?;
+    write("Shell/SceneDelegate.h", SCENE_DELEGATE_H)?;
+    write("Shell/SceneDelegate.m", SCENE_DELEGATE_M)?;
     write("Shell/Info.plist", INFO_PLIST)?;
     write("App.xcconfig", &xcconfig(name, bundle_id, version))?;
     write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name))?;

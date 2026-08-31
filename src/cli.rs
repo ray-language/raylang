@@ -90,7 +90,7 @@ Project:
   new <name>        create a new project (ray.toml + src/main.ray)
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs]] [--templates-only [path...]]
+  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib]] [--templates-only [path...]]
   bundle [file]     package a desktop app (M147c): --release native build + .app (macOS) or dir + .desktop (Linux) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
@@ -1283,7 +1283,7 @@ fn cmd_bundle(args: &[String]) {
         process::exit(74);
     }
     let tmp_bin = work.join("bin");
-    build_native(&path, tmp_bin.to_str(), true, &exclude, None, false, fibers, &embed);
+    build_native(&path, tmp_bin.to_str(), true, &exclude, None, false, fibers, &embed, false);
 
     let out_dir = out_arg.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
     if cfg!(target_os = "macos") {
@@ -1469,6 +1469,9 @@ fn cmd_build(args: &[String]) {
     // flag `--fibers` se acepta por compatibilidad (hoy es el default); combinarlo con el escape es
     // contradictorio → error. Ver docs/diseno-concurrencia-nativa.md.
     let fibers_flag = args.iter().any(|a| a == "--fibers");
+    // `--lib` (§80b): emite una LIBRERÍA estática con la entrada C `ray_start()` en vez de un
+    // binario — lo que un shell móvil (o cualquier host C) linkea. Exige --native.
+    let lib_mode = args.iter().any(|a| a == "--lib");
     let output = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)).cloned();
     // `--target <triple>` (P2.b, H20): cross-compilation. Se pasa tal cual a rustc/cargo (el usuario debe
     // tener el target instalado: `rustup target add <triple>`). Con `--target`, `--release` NO usa
@@ -1547,8 +1550,12 @@ fn cmd_build(args: &[String]) {
     check_or_exit(&mut program, &locate, multi);
     if native {
         let embed = collect_embed(&path, embed_arg.as_deref());
-        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers, &embed);
+        build_native(&path, output.as_deref(), release, &exclude, target.as_deref(), fast, fibers, &embed, lib_mode);
         return;
+    }
+    if lib_mode {
+        eprintln!("--lib requires --native (a static library is a native artifact)");
+        process::exit(64);
     }
     match compiler::compile_program(&program) {
         Ok(_) => println!("ok: '{path}' compiles"),
@@ -1575,10 +1582,10 @@ fn cmd_build(args: &[String]) {
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
 #[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
-fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)]) {
+fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
-    let transpiled = match crate::transpile::transpile_embed(&program, exclude, fast, fibers, embed) {
+    let transpiled = match crate::transpile::transpile_entry(&program, exclude, fast, fibers, embed, lib_mode) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("native build: {e}");
@@ -1619,10 +1626,12 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
     // (mismo código que la VM). N1/N2: como `mimalloc` y `ahash` van POR DEFECTO, el camino común hoy es el
     // Cargo (con la caché compartida ~/.ray/native-cache, se compilan una vez por máquina); `--without
     // mimalloc,ahash` (sin otros subsistemas) recupera el rustc pelado.
-    if transpiled.rt_features.is_empty() {
+    // §80b: el modo lib va SIEMPRE por Cargo (el [lib] crate-type vive en el manifiesto
+    // generado; un staticlib por rustc pelado no amortiza otra rama).
+    if transpiled.rt_features.is_empty() && !lib_mode {
         build_native_rustc(&transpiled.source, stem, &out_bin, release, target);
     } else {
-        build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target);
+        build_native_cargo(&transpiled.source, &transpiled.rt_features, path, stem, &out_bin, release, target, lib_mode);
     }
 }
 
@@ -1758,7 +1767,8 @@ const RT_UNICODE_RS: &str = include_str!("../crates/ray-runtime/src/unicode.rs")
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
 /// `cargo build`, activando SOLO las features detectadas. Un `CARGO_TARGET_DIR` compartido compila los
 /// crates (ring…) una vez por máquina; builds siguientes solo recompilan `main.rs`.
-fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>) {
+#[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
+fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>, lib_mode: bool) {
     // Nombre de paquete Cargo válido (letras/dígitos/`_`/`-`, no empieza por dígito): el stem saneado.
     let mut pkg: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     if pkg.is_empty() || pkg.chars().next().map_or(true, |c| c.is_ascii_digit()) {
@@ -1789,14 +1799,23 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     let feats: String = rt_features.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
     // `[workspace]` vacío: el proyecto es su PROPIA raíz de workspace (no hereda una ancestra por azar). Los
     // perfiles espejan los tiers de rustc: dev=opt2 (rápido), release=opt3+lto+cu1 (target-cpu vía RUSTFLAGS).
+    // §80b (modo lib): [lib] staticlib con la fuente en src/lib.rs — el artefacto pasa a ser
+    // `lib<pkg con -→_>.a` (un archive que un shell C/ObjC linkea).
+    let lib_section = if lib_mode {
+        format!("[lib]\nname = \"{pkg}\"\ncrate-type = [\"staticlib\"]\npath = \"src/lib.rs\"\n\n")
+    } else {
+        String::new()
+    };
     let cargo_toml = format!(
         "[package]\nname = \"{pkg}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[workspace]\n\n\
+         {lib_section}\
          [dependencies]\nray-runtime = {{ path = \"ray-runtime\", default-features = false, features = [{feats}] }}\n\n\
          [profile.dev]\nopt-level = 2\n\n[profile.release]\nopt-level = 3\nlto = \"fat\"\ncodegen-units = 1\n"
     );
+    let src_rel = if lib_mode { "src/lib.rs" } else { "src/main.rs" };
     let files = [
         ("Cargo.toml", cargo_toml.as_str()),
-        ("src/main.rs", rust),
+        (src_rel, rust),
         ("ray-runtime/Cargo.toml", RT_CARGO_TOML),
         ("ray-runtime/src/lib.rs", RT_LIB_RS),
         ("ray-runtime/src/unicode.rs", RT_UNICODE_RS),
@@ -1844,10 +1863,16 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     match cmd.status() {
         Ok(s) if s.success() => {
             let sub = if release { "release" } else { "debug" };
-            // Con `--target`, cargo pone el binario en `target/<triple>/<profile>/<pkg>`.
+            // Con `--target`, cargo pone el artefacto en `target/<triple>/<profile>/…`. El
+            // staticlib se llama `lib<pkg con -→_>.a` (calculado, jamás un glob: pkg lleva hash).
+            let artifact = if lib_mode {
+                format!("lib{}.a", pkg.replace('-', "_"))
+            } else {
+                pkg.clone()
+            };
             let produced = match target {
-                Some(t) => target_dir.join(t).join(sub).join(&pkg),
-                None => target_dir.join(sub).join(&pkg),
+                Some(t) => target_dir.join(t).join(sub).join(&artifact),
+                None => target_dir.join(sub).join(&artifact),
             };
             let copied = std::fs::copy(&produced, out_bin);
             let _ = std::fs::copy(proj.join("Cargo.lock"), &cached_lock); // persiste el lock resuelto (H20)

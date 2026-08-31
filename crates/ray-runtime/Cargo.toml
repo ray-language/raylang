@@ -46,6 +46,9 @@ audio = []
 # macOS (frameworks enlazados al build, sin build.rs); RAY_UI_BACKEND=headless en cualquier OS
 # (tests/CI). Cero crates (la lección cpal: wry exige toolchains GTK/WebKit en build).
 ui = []
+# §80b — compila el puente al shell móvil TAMBIÉN en host: la vía del test del driver C
+# (tests/native_lib_cli.rs linkea el staticlib y registra handlers como haría la app iOS).
+ui-shell = ["ui"]
 # N1 (bench políglota, jul 2026): mimalloc como allocador del binario TRANSPILADO. El binario `ray` ya lo
 # usa (P0.4); el transpilado caía al malloc del sistema (lento en churn de strings pequeños en macOS).
 # Medido: wordcount/logparse −40%, jsonserialize −18%. Activada POR DEFECTO por `ray build --native`;

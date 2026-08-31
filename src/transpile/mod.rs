@@ -209,6 +209,16 @@ pub fn transpile_full(prog: &Program, exclude: &[String], fast: bool, fibers: bo
 /// `include_bytes!` — la clave es la misma que resuelve `std/embed` en la VM (un solo walker,
 /// `builtins::embed_walk`). Vacía = el programa puede usar `std/embed` pero cada llamada da Err.
 pub fn transpile_embed(prog: &Program, exclude: &[String], fast: bool, fibers: bool, embed: &[(String, String)]) -> Result<Transpiled, String> {
+    transpile_entry(prog, exclude, fast, fibers, embed, false)
+}
+
+/// Como [`transpile_embed`], con el modo **LIBRERÍA** (§80b, `ray build --native --lib`): en
+/// vez de `fn main()` se emite `#[unsafe(no_mangle)] pub extern "C" fn ray_start() -> i32` —
+/// el punto de entrada C-llamable de un SHELL (la app iOS generada por `ray bundle --ios`, o
+/// el driver del test). ray_start spawna el hilo del programa y RETORNA (no bloquea: el hilo 1
+/// es del shell — UIApplicationMain); el fin del programa NO mata al proceso (en móvil el
+/// shell vive), y el `exit()` explícito sí (documentado). Sin gate-loop de ui.
+pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> Result<Transpiled, String> {
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     for f in &prog.functions {
@@ -429,7 +439,16 @@ pub fn transpile_embed(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // al observarlos) y captura todo unwind → los errores de ejecución propios dan `runtime error:
     // <msg>` + exit 70; los panics RESTANTES de Rust (índice fuera de rango, expects de FFI…) dan
     // exit 70 con el texto de Rust (paridad de código, no de texto, para esa cola).
-    out.push_str("fn main() {\n");
+    if lib_mode {
+        out.push_str("/// §80b: la entrada C-llamable del shell. Contrato: llamar UNA vez (tras\n");
+        out.push_str("/// registrar los handlers de ui, si aplica); retorna 0 con el programa ya\n");
+        out.push_str("/// corriendo en su hilo (1 = no se pudo crear el hilo). El fin del programa\n");
+        out.push_str("/// no termina el proceso; un `exit()` del programa sí.\n");
+        out.push_str("#[unsafe(no_mangle)]\n");
+        out.push_str("pub extern \"C\" fn ray_start() -> i32 {\n");
+    } else {
+        out.push_str("fn main() {\n");
+    }
     // Sube el límite blando de fds al duro (acotado) — espejo de `lib::raise_fd_limit` del host:
     // el default de macOS (256) tumbaba un webserver nativo bajo `wrk -c500` sin culpa del programa.
     out.push_str("    #[cfg(unix)] unsafe {\n");
@@ -454,18 +473,42 @@ pub fn transpile_embed(prog: &Program, exclude: &[String], fast: bool, fibers: b
     out.push_str("    std::panic::set_hook(std::boxed::Box::new(move |i| { if i.payload().downcast_ref::<__RayErr>().is_none() && !__ray_in_try() { __rt_hook(i); } }));\n");
     let mut run_body = String::new();
     run_body.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(ray_main)) {\n");
-    if main_ret_int {
-        run_body.push_str("        Ok(code) => { __ray_flush_prints(); std::process::exit(code as i32) },\n");
+    if lib_mode {
+        // Modo lib: el fin del programa NO mata al proceso del shell — se vacía el escritor y
+        // el hilo termina. El código de retorno se pierde a propósito (una app no "sale").
+        if main_ret_int {
+            run_body.push_str("        Ok(code) => { __ray_flush_prints(); let _ = code; },\n");
+        } else {
+            run_body.push_str("        Ok(_) => { __ray_flush_prints(); },\n");
+        }
+        run_body.push_str("        Err(e) => {\n");
+        run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+        run_body.push_str("            __ray_flush_prints();\n");
+        run_body.push_str("        }\n");
+        run_body.push_str("    }\n");
     } else {
-        run_body.push_str("        Ok(_) => { __ray_flush_prints(); std::process::exit(0) },\n");
+        if main_ret_int {
+            run_body.push_str("        Ok(code) => { __ray_flush_prints(); std::process::exit(code as i32) },\n");
+        } else {
+            run_body.push_str("        Ok(_) => { __ray_flush_prints(); std::process::exit(0) },\n");
+        }
+        run_body.push_str("        Err(e) => {\n");
+        run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
+        run_body.push_str("            __ray_flush_prints();\n");
+        run_body.push_str("            std::process::exit(70)\n");
+        run_body.push_str("        }\n");
+        run_body.push_str("    }\n");
     }
-    run_body.push_str("        Err(e) => {\n");
-    run_body.push_str("            if let Some(r) = e.downcast_ref::<__RayErr>() { eprintln!(\"runtime error: {}\", r.0); }\n");
-    run_body.push_str("            __ray_flush_prints();\n");
-    run_body.push_str("            std::process::exit(70)\n");
-    run_body.push_str("        }\n");
-    run_body.push_str("    }\n");
-    if t.needs_rt_ui {
+    if lib_mode {
+        // El programa corre en SU hilo (pila explícita, jamás una fibra — mismas razones que el
+        // main de ui); ray_start retorna con él ya lanzado. Jamás panic en un extern "C".
+        out.push_str("    match std::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(move || {\n");
+        out.push_str(&run_body);
+        out.push_str("    }) {\n");
+        out.push_str("        Ok(_) => 0,\n");
+        out.push_str("        Err(_) => 1,\n");
+        out.push_str("    }\n");
+    } else if t.needs_rt_ui {
         // M146 (std/ui): AppKit exige poseer el hilo 1 del proceso. El programa (el cuerpo de
         // arriba, VERBATIM — jamás una fibra: se perdería el payload de pánico y cambiaría
         // `in_fiber()` para todo main) corre en un hilo del SO con pila explícita, y el hilo 1
@@ -592,7 +635,9 @@ pub fn transpile_embed(prog: &Program, exclude: &[String], fast: bool, fibers: b
     }
     // M146: ventana + webview (detectada por USO; `--without ui` evita marcar el flag).
     if t.needs_rt_ui {
-        rt_features.push("ui");
+        // §80b: en modo lib el puente al shell compila en TODO target (`ui-shell` implica
+        // `ui`): la app iOS lo usa por cfg, y el driver del test T4 lo linkea en host.
+        rt_features.push(if lib_mode { "ui-shell" } else { "ui" });
     }
     // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
     // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,

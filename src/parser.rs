@@ -1498,7 +1498,7 @@ impl Parser {
                 let b = self.block()?;
                 Ok(Expr { line: b.line, col: b.col, kind: ExprKind::Block(b) })
             }
-            _ => unreachable!("block_form_expr is only called with a block-form first token"),
+            _ => crate::ice!("block_form_expr called without a block-form first token"),
         }
     }
 

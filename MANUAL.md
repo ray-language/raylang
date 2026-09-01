@@ -1213,7 +1213,9 @@ los mensajes viajan por el **mismo stream** que `closed`/`menu` (un solo consumi
 `next_event` o `events()`, no ambos); y la página es **código tuyo** — mismo modelo de
 confianza que el resto del programa (la vía de bajo nivel es
 `window.webkit.messageHandlers.ray.postMessage`). En headless (tests), `RAY_UI_MSG` inyecta
-un `"message"` por ventana abierta.
+un `"message"` por ventana abierta. El puente vive en las tres plataformas: macOS, Linux
+(WebKitGTK ≥ 2.22; con una lib más vieja la ventana abre sin puente) y el shell iOS de
+`ray bundle --ios` (allí `window` llega como 0).
 
 El **menú de aplicación** de macOS (el primero, en negrita) también es tuyo: `ui.app_menu`
 mete items encima de Hide/Quit y lo re-titula (bajo `ray run` salía "ray"; el `.app` ya

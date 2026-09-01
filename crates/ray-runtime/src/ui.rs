@@ -1409,8 +1409,35 @@ mod gtk {
         extern "C" fn(*mut c_void, *mut c_void),
         i32,
     ) -> u64;
+    // M152 — puente IPC: la señal "script-message-received::ray" lleva handler de TRES args
+    // (manager, WebKitJavascriptResult*, user_data) — MISMO símbolo g_signal_connect_data,
+    // otro alias (el precedente "dos aliases, jamás uno flexible" de FnEvalJs/FnRunJs).
+    type FnSignalConnect3 = unsafe extern "C" fn(
+        Widget,
+        *const std::ffi::c_char,
+        extern "C" fn(Widget, *mut c_void, *mut c_void),
+        *mut c_void,
+        extern "C" fn(*mut c_void, *mut c_void),
+        i32,
+    ) -> u64;
     type FnWebViewNew = unsafe extern "C" fn() -> Widget;
     type FnLoadUri = unsafe extern "C" fn(Widget, *const std::ffi::c_char);
+    // M152 — user content manager + lectura del payload (JSC). user_script_new:
+    // (source, injected_frames, injection_time, allow_list, block_list).
+    type FnUcmNew = unsafe extern "C" fn() -> Widget;
+    type FnWebViewNewWithUcm = unsafe extern "C" fn(Widget) -> Widget;
+    type FnUcmRegister = unsafe extern "C" fn(Widget, *const std::ffi::c_char) -> i32;
+    type FnUserScriptNew = unsafe extern "C" fn(
+        *const std::ffi::c_char,
+        i32,
+        i32,
+        *const *const std::ffi::c_char,
+        *const *const std::ffi::c_char,
+    ) -> *mut c_void;
+    type FnUcmAddScript = unsafe extern "C" fn(Widget, *mut c_void);
+    type FnJsResultGetValue = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+    type FnJscIsString = unsafe extern "C" fn(*mut c_void) -> i32;
+    type FnJscToString = unsafe extern "C" fn(*mut c_void) -> *mut std::ffi::c_char;
     // Las DOS generaciones del eval (aridades distintas — dos aliases, jamás uno "flexible"):
     // 2.40+ `evaluate_javascript(view, script, len, world, source_uri, cancellable, cb, data)`;
     // el clásico `run_javascript(view, script, cancellable, cb, data)`. Fire-and-forget: cb nulo.
@@ -1479,6 +1506,17 @@ mod gtk {
         dialog_run: Option<FnDialogRun>,
         get_filename: Option<FnGetFilename>,
         set_current_name: Option<FnSetCurrentName>,
+        // M152 — puente IPC (todos opcionales: si alguno falta, la ventana nace SIN puente —
+        // no romper ui.open en distros viejas por una feature nueva; webkit2gtk ≥2.22 los trae).
+        signal_connect3: FnSignalConnect3,
+        ucm_new: Option<FnUcmNew>,
+        webview_new_with_ucm: Option<FnWebViewNewWithUcm>,
+        ucm_register: Option<FnUcmRegister>,
+        user_script_new: Option<FnUserScriptNew>,
+        ucm_add_script: Option<FnUcmAddScript>,
+        js_result_get_value: Option<FnJsResultGetValue>,
+        jsc_is_string: Option<FnJscIsString>,
+        jsc_to_string: Option<FnJscToString>,
     }
     // SAFETY: los punteros de función son inmutables tras la resolución; toda llamada que toca
     // objetos GTK viaja al hilo del loop (idle_add) — aquí solo se COMPARTEN los fn pointers.
@@ -1488,6 +1526,29 @@ mod gtk {
     fn api() -> &'static Result<Api, String> {
         static API: std::sync::OnceLock<Result<Api, String>> = std::sync::OnceLock::new();
         API.get_or_init(load_api)
+    }
+
+    /// M152: resuelve un símbolo del puente — por la clausura del handle webkit y, si el
+    /// linker no lo expone así, por dlopen explícito de libjavascriptcoregtk (una vez).
+    fn bridge_sym(webkit: *mut c_void, name: &std::ffi::CStr) -> *mut c_void {
+        // SAFETY: name es un CStr; dlsym/dlopen no retienen los punteros.
+        unsafe {
+            let p = dlsym(webkit, name.as_ptr());
+            if !p.is_null() {
+                return p;
+            }
+            static JSC: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+            let jsc = *JSC.get_or_init(|| {
+                let l = dlopen(c"libjavascriptcoregtk-4.1.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+                let l = if l.is_null() {
+                    dlopen(c"libjavascriptcoregtk-4.0.so.18".as_ptr(), RTLD_NOW | RTLD_GLOBAL)
+                } else {
+                    l
+                };
+                l as usize
+            }) as *mut c_void;
+            if jsc.is_null() { std::ptr::null_mut() } else { dlsym(jsc, name.as_ptr()) }
+        }
     }
 
     fn sym(lib: *mut c_void, name: &std::ffi::CStr) -> Result<*mut c_void, String> {
@@ -1572,6 +1633,42 @@ mod gtk {
                 set_current_name: {
                     let p = dlsym(gtk, c"gtk_file_chooser_set_current_name".as_ptr());
                     (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnSetCurrentName>(p))
+                },
+                signal_connect3: std::mem::transmute::<*mut c_void, FnSignalConnect3>(sym(gtk, c"g_signal_connect_data")?),
+                ucm_new: {
+                    let p = dlsym(webkit, c"webkit_user_content_manager_new".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnUcmNew>(p))
+                },
+                webview_new_with_ucm: {
+                    let p = dlsym(webkit, c"webkit_web_view_new_with_user_content_manager".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnWebViewNewWithUcm>(p))
+                },
+                ucm_register: {
+                    let p = dlsym(webkit, c"webkit_user_content_manager_register_script_message_handler".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnUcmRegister>(p))
+                },
+                user_script_new: {
+                    let p = dlsym(webkit, c"webkit_user_script_new".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnUserScriptNew>(p))
+                },
+                ucm_add_script: {
+                    let p = dlsym(webkit, c"webkit_user_content_manager_add_script".as_ptr());
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnUcmAddScript>(p))
+                },
+                // M152: los jsc_* viven en libjavascriptcoregtk — normalmente resolubles por
+                // la clausura del handle webkit (como g_idle_add por gtk); si no, dlopen
+                // explícito de la lib (soname .18 en la serie 4.0).
+                js_result_get_value: {
+                    let p = bridge_sym(webkit, c"webkit_javascript_result_get_js_value");
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnJsResultGetValue>(p))
+                },
+                jsc_is_string: {
+                    let p = bridge_sym(webkit, c"jsc_value_is_string");
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnJscIsString>(p))
+                },
+                jsc_to_string: {
+                    let p = bridge_sym(webkit, c"jsc_value_to_string");
+                    (!p.is_null()).then(|| std::mem::transmute::<*mut c_void, FnJscToString>(p))
                 },
             })
         }
@@ -1805,6 +1902,50 @@ mod gtk {
         drop(unsafe { Box::from_raw(data as *mut DestroyCtx) });
     }
 
+    /// M152 — el ctx del puente IPC: el id viaja aquí (sin scan, a diferencia de mac) y
+    /// `alive` se re-chequea como en toda closure del hilo gtk.
+    struct MsgCtx {
+        id: i64,
+        alive: Arc<AtomicBool>,
+    }
+
+    extern "C" fn on_script_message(_mgr: Widget, jsres: *mut c_void, data: *mut c_void) {
+        // SAFETY: `data` es el MsgCtx de open_window; vive hasta el GClosureNotify.
+        let ctx = unsafe { &*(data as *const MsgCtx) };
+        if !ctx.alive.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(api) = api().as_ref() else { return };
+        let (Some(get_value), Some(is_string), Some(to_string)) =
+            (api.js_result_get_value, api.jsc_is_string, api.jsc_to_string)
+        else {
+            return; // sin JSC el puente no se registró: inalcanzable, pero jamás panic
+        };
+        // SAFETY: el loop entrega un WebKitJavascriptResult válido; el string de
+        // jsc_value_to_string es g_malloc'd → copiar y g_free (patrón get_filename).
+        let owned = unsafe {
+            let value = get_value(jsres);
+            // Solo strings v1 — SIN la coerción de jsc_value_to_string (divergiría de mac,
+            // que descarta con isKindOfClass:NSString).
+            if value.is_null() || is_string(value) == 0 {
+                return;
+            }
+            let c = to_string(value);
+            if c.is_null() {
+                return;
+            }
+            let s = std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned();
+            (api.g_free)(c as *mut c_void);
+            s
+        };
+        super::push_event("message", ctx.id, &owned);
+    }
+
+    extern "C" fn drop_msg_ctx(data: *mut c_void, _closure: *mut c_void) {
+        // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
+        drop(unsafe { Box::from_raw(data as *mut MsgCtx) });
+    }
+
     /// Crea la ventana + webview EN EL HILO DEL LOOP. GTK posee los widgets (container_add
     /// sinkea el floating ref del webview; la toplevel es de GTK hasta gtk_widget_destroy):
     /// NO tomamos refs — el flag `alive` protege todo acceso posterior.
@@ -1828,7 +1969,54 @@ mod gtk {
                 }
                 (api.set_title)(window, title.as_ptr());
                 (api.set_default_size)(window, width as i32, height as i32);
-                let webview = (api.webview_new)();
+                // M152 — puente IPC: webview con user content manager (handler "ray" + el
+                // shim window.ray.send inyectado en el MAIN frame al arrancar el documento).
+                // Con CUALQUIER símbolo del puente ausente (webkit2gtk < 2.22): webview
+                // clásico SIN puente — una feature nueva jamás rompe ui.open en distros
+                // viejas (los mensajes simplemente no llegan; documentado).
+                let webview = if let (
+                    Some(ucm_new),
+                    Some(webview_with_ucm),
+                    Some(register),
+                    Some(script_new),
+                    Some(add_script),
+                    Some(_),
+                    Some(_),
+                    Some(_),
+                ) = (
+                    api.ucm_new,
+                    api.webview_new_with_ucm,
+                    api.ucm_register,
+                    api.user_script_new,
+                    api.ucm_add_script,
+                    api.js_result_get_value,
+                    api.jsc_is_string,
+                    api.jsc_to_string,
+                ) {
+                    let ucm = ucm_new();
+                    if ucm.is_null() {
+                        return Err("ui: could not create the content manager".to_string());
+                    }
+                    // WEBKIT_USER_CONTENT_INJECT_TOP_FRAME = 1; INJECTION_TIME_START = 0.
+                    let shim = std::ffi::CString::new(super::RAY_JS_SHIM).unwrap();
+                    let script = script_new(shim.as_ptr(), 1, 0, std::ptr::null(), std::ptr::null());
+                    if !script.is_null() {
+                        add_script(ucm, script);
+                    }
+                    let _ = register(ucm, c"ray".as_ptr());
+                    let ctx = Box::into_raw(Box::new(MsgCtx { id, alive: alive2.clone() }));
+                    (api.signal_connect3)(
+                        ucm,
+                        c"script-message-received::ray".as_ptr(),
+                        on_script_message,
+                        ctx as *mut c_void,
+                        drop_msg_ctx,
+                        0,
+                    );
+                    webview_with_ucm(ucm)
+                } else {
+                    (api.webview_new)()
+                };
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
                 }

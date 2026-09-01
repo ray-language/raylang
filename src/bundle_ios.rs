@@ -69,6 +69,28 @@ extern void ray_ui_set_handlers(void (*open)(const char *, const char *),
 extern void ray_ui_push_event(const char *kind, long long window, const char *tag);
 extern int ray_start(void);
 
+// M152 — el puente IPC: window.ray.send(text) llega aquí y se empuja como evento "message"
+// (window 0: el shell no conoce el handle del programa; documentado). Clase DEDICADA — el
+// SceneDelegate como handler crearía un ciclo de retención
+// window -> ... -> userContentController -> (strong) delegate -> window.
+@interface RayMsgHandler : NSObject <WKScriptMessageHandler>
+@end
+
+@implementation RayMsgHandler
+- (void)userContentController:(WKUserContentController *)controller
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.body isKindOfClass:[NSString class]]) {
+        return; // solo strings v1 (paridad con escritorio)
+    }
+    ray_ui_push_event("message", 0, [(NSString *)message.body UTF8String]);
+}
+@end
+
+// El MISMO shim literal que inyecta el escritorio (ray_runtime::ui::RAY_JS_SHIM).
+static NSString *const rayJsShim =
+    @"(function(){window.ray={send:function(t){window.webkit.messageHandlers.ray.postMessage("
+    @"String(t).replace(/\\u0000/g,\"\"))}}})();";
+
 static WKWebView *rayWebView = nil;
 static NSString *rayLastURL = nil;
 
@@ -95,7 +117,15 @@ static void ray_eval(const char *js) {
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     UIViewController *vc = [UIViewController new];
-    rayWebView = [[WKWebView alloc] initWithFrame:vc.view.bounds];
+    // M152: el puente se (re)instala EN CADA conexión de escena — el webview muere y renace
+    // con ella (sceneDidDisconnect lo anula), así que esto va fuera del dispatch_once.
+    WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
+    [cfg.userContentController addScriptMessageHandler:[RayMsgHandler new] name:@"ray"];
+    [cfg.userContentController
+        addUserScript:[[WKUserScript alloc] initWithSource:rayJsShim
+                                             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                          forMainFrameOnly:YES]];
+    rayWebView = [[WKWebView alloc] initWithFrame:vc.view.bounds configuration:cfg];
     rayWebView.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [vc.view addSubview:rayWebView];

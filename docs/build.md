@@ -178,3 +178,14 @@ pelada.
 > `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`
 > (feature `crypto`); su `tls`/`sqlite` solo se enlazan en el proyecto GENERADO del
 > binario transpilado, no en la VM (que compila rustls/rusqlite directo tras sus features).
+
+### 6.b Android (M156): el programa como `.so` (modo lib)
+
+`ray build --native --lib --target aarch64-linux-android prog.ray -o libray_app.so` compila el
+programa como **cdylib** cargable con `System.loadLibrary` (los símbolos JNI `JNI_OnLoad` /
+`Java_org_raylang_shell_RayBridge_*` van en el propio `.so`). Requisitos: el target rustup
+(`rustup target add aarch64-linux-android`) y el **NDK** — se localiza por `ANDROID_NDK_HOME`,
+`$ANDROID_HOME/ndk/<versión>` o `~/Library/Android/sdk/ndk/<versión>` (instalable con
+`sdkmanager "ndk;27.2.12479018"`). El build inyecta solo el toolchain del NDK como
+linker/CC/AR (sin `cargo-ndk`) y alinea el `.so` a 16KB (requisito de Android 15+). minSdk de
+referencia: 24 (el clang `aarch64-linux-android24-clang`).

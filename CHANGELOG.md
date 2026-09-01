@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El programa raylang compila a `.so` de Android** (M156 fase 2): `ray build --native --lib
+  --target aarch64-linux-android` emite un **cdylib** con los símbolos JNI dentro
+  (`JNI_OnLoad`, `Java_org_raylang_shell_RayBridge_*`) — el puente vive en el runtime (vtable
+  JNI a mano, cero deps; MUTF-8 para los strings; stdout/stderr → logcat con tag `ray`). El
+  build localiza el NDK solo (sin `cargo-ndk`) y alinea a 16KB (Android 15+). Verificado:
+  `.so` arm64 de ~700KB con todos los símbolos en la tabla dinámica.
+
 - **El runtime es Android-ready** (M156 fase 1): Android es unix pero no "linux" — nueve
   sitios con `cfg(target_os = "linux")` cuyo brazo contrario asumía Darwin quedaron en
   `any(linux, android)`; tres eran bugs latentes reales (el símbolo `__error` inexistente en

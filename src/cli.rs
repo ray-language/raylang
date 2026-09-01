@@ -1904,6 +1904,34 @@ const RT_UNICODE_RS: &str = include_str!("../crates/ray-runtime/src/unicode.rs")
 /// temporal (`src/main.rs` + una copia de `ray-runtime` con las fuentes incrustadas) y se compila con
 /// `cargo build`, activando SOLO las features detectadas. Un `CARGO_TARGET_DIR` compartido compila los
 /// crates (ring…) una vez por máquina; builds siguientes solo recompilan `main.rs`.
+/// M156: el directorio bin del toolchain LLVM del NDK. Orden: ANDROID_NDK_HOME →
+/// $ANDROID_HOME/ndk/<mayor versión> → ~/Library/Android/sdk/ndk/<mayor>. El dir prebuilt es
+/// `darwin-x86_64` también en Apple Silicon (binarios universales desde r25) y
+/// `linux-x86_64` en Linux.
+fn android_ndk_bin() -> Option<std::path::PathBuf> {
+    let host = if cfg!(target_os = "macos") { "darwin-x86_64" } else { "linux-x86_64" };
+    let from_root = |root: &Path| -> Option<std::path::PathBuf> {
+        let bin = root.join("toolchains/llvm/prebuilt").join(host).join("bin");
+        bin.is_dir().then_some(bin)
+    };
+    if let Ok(home) = env::var("ANDROID_NDK_HOME")
+        && let Some(b) = from_root(Path::new(&home))
+    {
+        return Some(b);
+    }
+    let sdk = env::var("ANDROID_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = env::var("HOME").unwrap_or_default();
+            Path::new(&home).join("Library/Android/sdk")
+        });
+    let ndk_dir = sdk.join("ndk");
+    let mut versions: Vec<std::path::PathBuf> =
+        std::fs::read_dir(&ndk_dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    versions.sort();
+    versions.into_iter().rev().find_map(|v| from_root(&v))
+}
+
 #[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
 fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>, lib_mode: bool) {
     // Nombre de paquete Cargo válido (letras/dígitos/`_`/`-`, no empieza por dígito): el stem saneado.
@@ -1938,8 +1966,12 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     // perfiles espejan los tiers de rustc: dev=opt2 (rápido), release=opt3+lto+cu1 (target-cpu vía RUSTFLAGS).
     // §80b (modo lib): [lib] staticlib con la fuente en src/lib.rs — el artefacto pasa a ser
     // `lib<pkg con -→_>.a` (un archive que un shell C/ObjC linkea).
+    // M156: Android carga la lib con System.loadLibrary → cdylib (.so); el resto (iOS/host)
+    // sigue en staticlib (.a que el shell linkea).
+    let android = target.is_some_and(|t| t.contains("android"));
     let lib_section = if lib_mode {
-        format!("[lib]\nname = \"{pkg}\"\ncrate-type = [\"staticlib\"]\npath = \"src/lib.rs\"\n\n")
+        let crate_type = if android { "cdylib" } else { "staticlib" };
+        format!("[lib]\nname = \"{pkg}\"\ncrate-type = [\"{crate_type}\"]\npath = \"src/lib.rs\"\n\n")
     } else {
         String::new()
     };
@@ -1988,14 +2020,38 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
     }
+    // M156: toolchain del NDK inyectado por env — SIN cargo-ndk: el linker del target y el
+    // CC/AR que usan los build scripts (ring/rusqlite/mimalloc) apuntan al clang/llvm-ar del
+    // NDK. Android 15+ exige .so alineados a 16KB → flag de linker explícito.
+    let mut extra_rustflags = String::new();
+    if android {
+        let Some(ndk_bin) = android_ndk_bin() else {
+            eprintln!(
+                "native build: Android NDK not found — set ANDROID_NDK_HOME (or install it \
+                 under $ANDROID_HOME/ndk/, e.g. `sdkmanager \"ndk;27.2.12479018\"`)"
+            );
+            process::exit(64);
+        };
+        let t = target.unwrap_or_default();
+        let arch = if t.starts_with("x86_64") { "x86_64" } else { "aarch64" };
+        let clang = ndk_bin.join(format!("{arch}-linux-android24-clang"));
+        let env_arch = format!("{arch}_linux_android");
+        cmd.env(
+            format!("CARGO_TARGET_{}_LINUX_ANDROID_LINKER", arch.to_uppercase()),
+            &clang,
+        );
+        cmd.env(format!("CC_{env_arch}"), &clang);
+        cmd.env(format!("AR_{env_arch}"), ndk_bin.join("llvm-ar"));
+        extra_rustflags.push_str(" -C link-arg=-Wl,-z,max-page-size=16384");
+    }
     // `target-cpu=native` solo en release SIN cross-compile (con `--target` sería la CPU del host → no
     // portable al target).
     if release && target.is_none() {
-        cmd.arg("--release").env("RUSTFLAGS", "-C target-cpu=native -A warnings");
+        cmd.arg("--release").env("RUSTFLAGS", format!("-C target-cpu=native -A warnings{extra_rustflags}"));
     } else if release {
-        cmd.arg("--release").env("RUSTFLAGS", "-A warnings");
+        cmd.arg("--release").env("RUSTFLAGS", format!("-A warnings{extra_rustflags}"));
     } else {
-        cmd.env("RUSTFLAGS", "-A warnings");
+        cmd.env("RUSTFLAGS", format!("-A warnings{extra_rustflags}"));
     }
     match cmd.status() {
         Ok(s) if s.success() => {
@@ -2003,7 +2059,8 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
             // Con `--target`, cargo pone el artefacto en `target/<triple>/<profile>/…`. El
             // staticlib se llama `lib<pkg con -→_>.a` (calculado, jamás un glob: pkg lleva hash).
             let artifact = if lib_mode {
-                format!("lib{}.a", pkg.replace('-', "_"))
+                let ext = if android { "so" } else { "a" };
+                format!("lib{}.{ext}", pkg.replace('-', "_"))
             } else {
                 pkg.clone()
             };

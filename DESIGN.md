@@ -11022,3 +11022,23 @@ respondiendo por adb forward + curl, y el ciclo IPC entero en pantalla (botón �
 window.ray.send → evento "message" → eval_js → DOM actualizado). §80b QUEDA COMPLETO: el
 mismo fuente raylang corre en macOS, Linux, .app, iPhone y Android. Diferidos: AAudio, icono
 adaptive, keystore de release, wrapper de Gradle, x86_64 probado.
+
+## 151. M157 — los diferidos del puente IPC: JSON y request/reply sin tocar nada nativo (sep 2026)
+
+El diferido de M152 decía "reply exige el eval con retorno (ABI de blocks)" — falso, y el
+hallazgo abarató el arco entero: la respuesta NO necesita que eval_js devuelva nada, porque
+quien espera es LA PÁGINA. Forma: `window.ray.request(v)` devuelve una Promise; el shim
+guarda el resolver en un mapa con un id y manda el sobre `\u0001q\u0001<id>\u0001<payload>`
+por el MISMO canal de mensajes; el programa lo decodifica con `ui.as_request(e)` (azúcar puro
+en std/ui.ray — el sobre es un prefijo del tag del evento "message" de siempre) y responde
+con `ui.reply(window, id, valor)` = un eval_js fire-and-forget de `window.ray._deliver(id,
+"valor")` que resuelve la Promise. El payload JSON igual de barato: `e(t)` en el shim —
+no-string → JSON.stringify (el programa parsea con std/json). CERO cambios en VM, intérprete,
+transpilador o backends nativos: solo los 3 shims (const de mac/gtk + plantillas iOS/Android),
+~60 líneas de std/ui.ray (as_request, reply, y el escapador js_string con U+2028/29) y docs.
+No se añadió `ui.on_message()` ni un canal de requests: la cola sigue siendo de consumidor
+único (la decisión D1 de M152 intacta) — request es un SABOR del evento message. Verificado:
+batería 3 motores byte-idéntica (el sobre entra por RAY_UI_MSG) y el ciclo REAL en una
+ventana de macOS: request('ping') → as_request → reply("pong-ping") → la Promise resuelve →
+la página confirma con send. Quedan de §81.1: fan-out de eventos, aislamiento de frames, cap
+de cola.

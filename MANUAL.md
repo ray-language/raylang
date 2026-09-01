@@ -1215,7 +1215,26 @@ match (ui.next_event()) {
 }
 ```
 
-Tres cosas del contrato: solo **strings** (otros tipos se ignoran; los NUL se eliminan);
+Y el puente tiene **petición con respuesta** (M157): `window.ray.request(v)` devuelve una
+**Promise** que tu programa resuelve — sin webserver y sin maquinaria nueva (viaja por el
+mismo canal y la respuesta va en el `eval_js` de siempre):
+
+```rust
+// En la página:  window.ray.request({op:'sum', a:2, b:3}).then(r => …)
+match (ui.next_event()) {
+    Result.Ok(e) => match (ui.as_request(e)) {
+        Option.Some(pair) => {
+            let (id, body) = pair;             // body: string, o el JSON de un no-string
+            let _ = ui.reply(e.window, id, "5");
+        },
+        Option.None => { /* un send plano */ },
+    },
+    Result.Err(_) => {},
+}
+```
+
+`window.ray.send(v)` también acepta no-strings (M157): viajan como su **JSON** (parséalo con
+`std/json`). Tres cosas del contrato: los payloads son strings al llegar (los NUL se eliminan);
 los mensajes viajan por el **mismo stream** que `closed`/`menu` (un solo consumidor —
 `next_event` o `events()`, no ambos); y la página es **código tuyo** — mismo modelo de
 confianza que el resto del programa (la vía de bajo nivel es

@@ -3177,10 +3177,10 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    §147; macOS + headless en el PR1, GTK + shell iOS en el PR2): `window.ray.send(text)` →
    evento `"message"` por el MISMO stream de `next_event()`/`events()` (el `ui.on_message()`
    del sketch se descartó razonado: consumidor único, un canal filtrado robaría eventos).
-   Diferidos del arco: payload estructurado/JSON (hoy string), reply request/response (exige
-   el eval con retorno = ABI de blocks), fan-out de eventos (habilitaría on_message),
-   aislamiento de frames (el handler es visible a todos los frames), cap de cola, scheme
-   `app://` (sigue en §80).
+   Diferidos del arco: payload JSON ✅ y request/reply ✅ EJECUTADOS como M157 (DESIGN §151 —
+   el reply NO exigía el ABI de blocks: Promise en el shim + eval_js de vuelta, cero nativo);
+   quedan: fan-out de eventos (habilitaría on_message), aislamiento de frames, cap de cola,
+   scheme `app://` (sigue en §80).
 4. **`ray fmt` y la tupla-tras-bloque** — ✅ EJECUTADA como M153 (DESIGN §148, SPEC §5): se
    resolvió en la GRAMÁTICA (la regla de Rust — la forma-con-bloque en posición de sentencia
    termina en su `}`), no en fmt. Cero código real dependía del comportamiento viejo; el

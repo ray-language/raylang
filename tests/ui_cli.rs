@@ -187,6 +187,7 @@ fn main() {
         ui.MenuItem { tag: "quit", title: "Quit Game", shortcut: "" },
     ];
     print("menu ok: " + to_string(ui.menu("Game", items).is_ok()));
+    print("about ok: " + to_string(ui.set_about("Demo", "Version 1.0", "A demo app", "(c) 2026 Demo").is_ok()));
     let app_items = [
         ui.MenuItem { tag: "role:about", title: "About Demo", shortcut: "" },
         ui.MenuItem { tag: "settings", title: "Settings...", shortcut: "," },
@@ -229,10 +230,10 @@ fn main() {
 
 #[test]
 fn menus_and_dialogs_match_on_all_three_engines() {
-    const WANT_NONE: &str = "menu ok: true\napp_menu ok: true\n\
+    const WANT_NONE: &str = "menu ok: true\nabout ok: true\napp_menu ok: true\n\
 app_menu empty tag rejected: true\nempty tag rejected: true\npick cancelled\n\
 save cancelled\nevent: closed, tag empty: true\n";
-    const WANT_PICK: &str = "menu ok: true\napp_menu ok: true\n\
+    const WANT_PICK: &str = "menu ok: true\nabout ok: true\napp_menu ok: true\n\
 app_menu empty tag rejected: true\nempty tag rejected: true\npicked: /tmp/x.txt\n\
 save to: /tmp/x.txt\nevent: closed, tag empty: true\n";
     let base = tmp("menus");

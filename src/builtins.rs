@@ -1183,6 +1183,16 @@ pub fn ui_menu(_title: &str, _items: &[String]) -> Result<(), String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 
+/// M155: el contenido del panel About nativo (macOS); "" = omitir el campo.
+#[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
+pub fn ui_set_about(name: &str, version: &str, description: &str, copyright: &str) -> Result<(), String> {
+    ray_runtime::ui::set_about(name, version, description, copyright)
+}
+#[cfg(any(not(all(feature = "ui", unix)), target_arch = "wasm32"))]
+pub fn ui_set_about(_name: &str, _version: &str, _description: &str, _copyright: &str) -> Result<(), String> {
+    Err(UI_UNAVAILABLE.to_string())
+}
+
 /// M151: items en el menú de APLICACIÓN (macOS) + título opcional; misma codificación que
 /// `ui_menu` (la decodificación y las ramas por backend viven en ray_runtime::ui).
 #[cfg(all(feature = "ui", unix, not(target_arch = "wasm32")))]
@@ -3551,6 +3561,15 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__ui_app_menu", " (name, items)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__ui_app_menu expects a string (the app name), not {}", a[0]))); }
         if a[1] != Type::Array(Box::new(Type::String)) { return Err((Some(1), format!("__ui_app_menu expects a [string] (the encoded items), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __ui_set_about(name, version, description, copyright) -> [string] (M155): ["ok"] o
+    // ["err", msg]. Declara el contenido del panel About nativo ("" = omitir campo).
+    Builtin { name: "__ui_set_about", opcode: OpCode::UiSetAbout, check: |a| {
+        arity(a, 4, "__ui_set_about", " (name, version, description, copyright)")?;
+        for (i, what) in ["name", "version", "description", "copyright"].iter().enumerate() {
+            if a[i] != Type::String { return Err((Some(i), format!("__ui_set_about expects a string (the {what}), not {}", a[i]))); }
+        }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_dialog(kind, arg) -> [string] (M148): ["ok", path] / ["none"] / ["err", msg]. MODAL:

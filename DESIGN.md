@@ -10947,3 +10947,23 @@ De paso se cerró la promesa rota de REFERENCE §11 ("receta en el MANUAL §15" 
 el MANUAL gana la subsección del patrón actor — enum de mensajes con canal de reply, la regla
 "datos, jamás funciones" (§61) y las formas empaquetadas (kv.share, web.sessions, web.state).
 `packages/web` sube a 0.3.0 (superficie nueva; republicación por el flujo habitual).
+
+## 149. M155 — el panel About es tuyo: `ui.set_about` + `[app] copyright` (sep 2026)
+
+El pedido del usuario tras M151: el About nativo del estilo Finder (icono, nombre, subtítulo,
+versión, copyright). El `role:about` de M151 abría el panel estándar con contenido del
+Info.plist — personalizable solo a medias (nombre/versión en el `.app`; pelado bajo
+`ray run`; sin copyright ni descripción en ningún caso). AppKit lo permite entero con
+`orderFrontStandardAboutPanelWithOptions:` — el MISMO panel nativo con un diccionario. Dos
+piezas: (1) `ui.set_about(name, version, description, copyright)` guarda los valores (mutex
+del módulo) y el item `role:about` pasa de la action estándar por responder chain a una
+action propia del delegate (`rayAboutAction:`) que construye el diccionario AL CLICK
+(NSMutableDictionary + setObject:forKey:; la descripción viaja como Credits en
+NSAttributedString — la zona bajo la versión, como el subtítulo del Finder; "" omite el
+campo) — así set_about vale antes o después de app_menu; sin declarar nada, el panel estándar
+de siempre. (2) `[app] copyright` en ray.toml → `NSHumanReadableCopyright` en el Info.plist
+del `.app` (la vía declarativa, cero código; `[app] description` reservada). El builtin
+`__ui_set_about` espeja la plomería de M148/M151 en los 7 sitios; Linux/iOS guardan y Ok (en
+Linux el about es del programa — evento; documentado). La lección §81 aplicada: la superficie
+se declaró donde el MCP la ve (/// de std/ui.ray para ray_doc, REFERENCE, MANUAL) — antes de
+esto un LLM habría concluido "no se puede" o inventado la API.

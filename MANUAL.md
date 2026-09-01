@@ -1233,6 +1233,17 @@ En Linux no existe ese menú global: los items van como un menú normal titulado
 — `"role:about"` incluido — emiten el evento `"menu"` (muestra tu propio about). Llámalo una
 vez, antes de abrir ventanas.
 
+Y el **contenido** del panel About es tuyo (M155): `ui.set_about(name, version, description,
+copyright)` — el mismo panel nativo, con tu nombre en negrita, la línea "Version …", la
+descripción (como créditos, al estilo del Finder) y el copyright; `""` omite un campo y queda
+lo del bundle. En un `.app` de `ray bundle`, además, `[app] copyright = "…"` en el `ray.toml`
+se escribe en el Info.plist — el panel lo muestra sin llamar a nada:
+
+```rust
+ui.set_about("MiApp", "Version 1.2", "La experiencia de escritorio de raylang",
+    "(TM) y (c) 2026 MiOrg")?;
+```
+
 Y los diálogos de archivo nativos, modales (la llamada aparca hasta que el usuario decide;
 `None` = canceló): `ui.pick_file()`, `ui.pick_folder()`, `ui.save_file("borrador.txt")`. En
 headless (tests/CI) el resultado se inyecta con `RAY_UI_PICK`. Nota Linux v1: el menubar es

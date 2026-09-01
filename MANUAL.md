@@ -1139,6 +1139,13 @@ firma y `simctl install/launch`; dispositivo: declara tu team una vez en el ray.
 la primera vez toca elegir team en Xcode). `--ios` excluye `process` (fork/exec denegado en
 iOS) y `audio` (backend sin validar ahí).
 
+Y en Android (M156): `ray bundle --android` genera el **proyecto Gradle** — shell Java con
+WebView que carga el programa como `.so` (los símbolos JNI viajan dentro del cdylib; el puente
+`ray_start`/handlers es el mismo de iOS). `gradle assembleDebug` produce el APK; `adb install`
++ lanzar; el stdout del programa va a **logcat** con tag `ray`. El puente IPC (`window.ray.send`)
+y los eventos `lifecycle` funcionan igual que en las otras plataformas; `--android-abi
+arm64|x86_64|all` elige los `.so` (el emulador de Apple Silicon es arm64).
+
 El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
 Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets
 van embebidos, no en rutas relativas —, y en v1 no hay firma/notarización: tu propio .app corre

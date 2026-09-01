@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **raylang corre en Android** (M156 fase 3 — §80b COMPLETO): `ray bundle --android` genera el
+  proyecto Gradle (shell Java + WebView + el programa como `libray_app.so` con los símbolos
+  JNI dentro). Validado en el emulador: webserver embebido sirviendo la UI, `window.ray.send`
+  → evento `"message"` → `eval_js` de vuelta (el puente IPC completo), stdout en logcat (tag
+  `ray`). `--android-abi arm64|x86_64|all` con preservación; `[android] application_id`;
+  mismas exclusiones que iOS (process/audio). El MISMO fuente que escritorio/iOS.
+
 - **El programa raylang compila a `.so` de Android** (M156 fase 2): `ray build --native --lib
   --target aarch64-linux-android` emite un **cdylib** con los símbolos JNI dentro
   (`JNI_OnLoad`, `Java_org_raylang_shell_RayBridge_*`) — el puente vive en el runtime (vtable

@@ -3140,9 +3140,13 @@ shell de std/ui (`ray_ui_set_handlers`/`ray_ui_push_event`) + `ray bundle --ios`
 Xcode generado: shell ObjC + xcconfig por SDK + pbxproj sintético). VERIFICADO EN SIMULADOR
 Y EN DISPOSITIVO FÍSICO (dogfood del usuario, 31 ago: la app corriendo en su iPhone — el
 camino Xcode+team de firma funciona tal como se documentó). Diferidos: asset catalog cableado
-al pbxproj, x86_64-sim (Macs Intel), notificaciones/tray móviles. **PENDIENTE Android**: staticlib a
-aarch64-linux-android (el reactor epoll ya lo cubre), shell Gradle + WebView por JNI (la única
-pieza sin precedente), `cargo-ndk` o toolchain a mano — su propio plan cuando toque.
+al pbxproj, x86_64-sim (Macs Intel), notificaciones/tray móviles. **Android ✅ EJECUTADA como M156**
+(sep 2026, DESIGN §150): cdylib con los símbolos JNI dentro (vtable a mano, cero deps — ni
+cargo-ndk: el NDK se inyecta por env), shell Gradle/Java + WebView, `ray bundle --android` con
+`--android-abi`. Validado T3 en emulador (webserver embebido + el ciclo IPC completo en
+pantalla). Hallazgo: bionic usa `__errno` (el brazo android-aware de M38 llevaba el símbolo de
+glibc — jamás ejercitado). Diferidos: AAudio, icono adaptive, keystore de release, gradle
+wrapper, x86_64 probado en emulador Intel.
 
 ## 81. Hallazgos del dogfood raydesk — un LLM construyendo una app solo con el MCP (ago 2026)
 

@@ -56,6 +56,9 @@ pub struct Manifest {
     /// (socket-activation, M92.3): el hijo la ADOPTA en vez de re-bind → cero conexiones rechazadas. El
     /// flag `--port`/`--listen` de la CLI la sobrescribe. `None` = sin socket retenido (bind por reinicio).
     pub dev_listen: Option<String>,
+    /// M156: `[android] application_id` — el identificador de la app Android que `ray bundle
+    /// --android` escribe en el build.gradle generado. `None` = `org.raylang.<name>`.
+    pub android_application_id: Option<String>,
     /// M155: `[app] copyright` — la línea de copyright del panel About (el bundle la escribe
     /// como `NSHumanReadableCopyright` en el Info.plist del .app). `None` = sin copyright.
     pub app_copyright: Option<String>,
@@ -118,6 +121,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut dev_listen = None;
     let mut ios_development_team = None;
     let mut app_copyright = None;
+    let mut android_application_id = None;
     let mut app_description = None;
 
     for (i, raw_line) in src.lines().enumerate() {
@@ -195,6 +199,13 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "description" => app_description = Some(as_string()?),
                 _ => {} // otras claves de [app] se ignoran por ahora (extensibilidad)
             },
+            "android" => {
+                // M156: `application_id = "com.tuorg.app"` — el id del APK generado; otras
+                // claves de [android] se ignoran por ahora (extensibilidad).
+                if key == "application_id" {
+                    android_application_id = Some(as_string()?);
+                }
+            }
             "ios" => {
                 // M151: `development_team = "ABCDE12345"` — el team de firma para `ray bundle
                 // --ios`; otras claves de [ios] se ignoran por ahora (extensibilidad).
@@ -221,6 +232,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         native_embed,
         dev_listen,
         ios_development_team,
+        android_application_id,
         app_copyright,
         app_description,
     })

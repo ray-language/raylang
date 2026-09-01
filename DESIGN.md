@@ -10853,3 +10853,39 @@ proyecto generado contra el SDK del simulador (test #[ignore], manual); T3 el si
 boot + install + launch — "listening on port 50533" en la consola del iPhone y el screenshot
 de la app viva. Android queda diferido con su lista en IDEAS §80b: el shell Gradle + WebView
 por JNI es la única pieza sin precedente.
+
+## 147. M152 — el puente IPC JS→raylang: `window.ray.send` como evento (ago 2026)
+
+El hallazgo que raydesk repitió dos rondas seguidas (IDEAS §81.1): el único camino JS→raylang
+era un webserver HTTP local — para una app chica, un peaje entero (puerto efímero, framework,
+rutas) solo para que un botón hable con el programa. La exploración despejó el camino: el
+mecanismo de WebKit para esta dirección (`addScriptMessageHandler:`) toma un **objeto**, no un
+block — así que el puente esquiva el ABI de blocks que dejó `eval_js` sin retorno. Y la pieza
+central ya existía: la cola de eventos de M146. El arco NO toca VM, intérprete ni
+transpilador — cero opcodes; los mensajes son un kind más (`"message"`, `tag` = payload,
+`window` = handle) por `push_event` → `UiNext`.
+
+Decisiones: (1) **mismo stream, sin API nueva** — `events()` es una fibra-bomba sobre
+`next_event()` (consumidor único): el `ui.on_message()` que pedía el ROADMAP de raydesk
+robaría eventos del stream; un canal filtrado exigiría fan-out que no existe (diferido). (2)
+**`window.ray.send(text)` uniforme** vía user script inyectado (WKUserScript en mac/iOS;
+`add_script` en GTK) sobre `webkit.messageHandlers.ray.postMessage` (documentada como vía de
+bajo nivel); el shim coerce a String y elimina NULs — simétrico con `eval_js`. (3) **solo
+strings v1**, no-strings ignorados en ambos backends (en GTK con `jsc_value_is_string`, sin la
+coerción de jsc que divergiría de mac). (4) **cola sin límite**: la página es código propio de
+la app — mismo modelo de confianza que el resto del programa; un cap sería pérdida silenciosa
+o backpressure al hilo de UI. (5) **sin aislamiento de frames v1** (el handler es visible a
+todos los frames en ambos WebKits — documentado, no prometido). (6) headless gana el inyector
+`RAY_UI_MSG` (precedente `RAY_UI_PICK`): batería de 3 motores byte-idéntica sin ventana.
+
+Los gotchas de implementación que la revisión adversarial cazó antes de codificar:
+`class_addMethod` estaba tipado a imp de 3 args y el método del puente es de 4 — se relajó a
+`*const c_void` con cast por sitio (una segunda declaración del símbolo dispararía
+`clashing_extern_declarations`); el delegate debía nacer ANTES del webview (el handler viaja
+en la configuration del init); WKWebView **copia** su configuration — el desregistro del
+handler en el close se pide vía `[webview configuration]`, jamás el puntero pre-init; el
+controller retiene FUERTE al delegate (asimetría con el delegate de ventana, weak) →
+`removeScriptMessageHandlerForName:` antes de los release; y `push_event` va con el lock del
+registro ya soltado (disciplina de `mark_closed`). Verificado con ventana real en macOS: el
+E2E `#[ignore]` (la batería y `ray test` fuerzan headless) dispara `window.ray.send('ping')`
+por `eval_js` con retry — y el mensaje llega con el handle correcto en ~1 s.

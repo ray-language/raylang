@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Puente IPC JS→raylang en `std/ui`** (M152, raydesk §81.1 — macOS en este arco; GTK/iOS en
+  el siguiente): cada webview trae `window.ray.send(text)` — el texto llega como evento
+  `kind == "message"` (`tag` = texto, `window` = handle de la ventana) por el mismo stream de
+  `next_event()`/`events()`; con `eval_js` de vuelta, una app chica ya no necesita webserver.
+  Solo strings (otros tipos se ignoran; NULs eliminados); la vía de bajo nivel es
+  `window.webkit.messageHandlers.ray.postMessage`. En headless, `RAY_UI_MSG` inyecta un
+  mensaje por ventana (batería de 3 motores byte-idéntica). Sin opcodes nuevos: cero cambios
+  en VM/intérprete/transpilador.
+
 - **`ui.app_menu(name, items)`** (M151, raydesk #10): el menú de **aplicación** de macOS deja
   de ser intocable — tus items van encima de Hide/Quit (con separador), el tag `"role:about"`
   instala el **About nativo** (panel estándar), y un `name` no vacío re-titula el menú (bajo

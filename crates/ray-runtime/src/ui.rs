@@ -87,6 +87,14 @@ fn events() -> &'static Events {
     })
 }
 
+/// M152: el shim del puente IPC, inyectado como user script en el webview (mac/iOS/GTK — la
+/// MISMA fuente literal, copiada en la plantilla del shell iOS). Define la vía documentada
+/// `window.ray.send(text)` sobre el mecanismo nativo de WebKit
+/// (`window.webkit.messageHandlers.ray.postMessage`, que también funciona directo y queda
+/// como vía de bajo nivel). Coerce a String y ELIMINA NULs — simétrico con eval_js, que ya
+/// los elimina en la otra dirección; el lado nativo siempre ve un C-string completo.
+pub(crate) const RAY_JS_SHIM: &str = r#"(function(){window.ray={send:function(t){window.webkit.messageHandlers.ray.postMessage(String(t).replace(/\u0000/g,""))}}})();"#;
+
 fn push_event(kind: &str, window: i64, tag: &str) {
     let ev = events();
     ev.queue.lock().unwrap().push_back((kind.to_string(), window, tag.to_string()));
@@ -387,6 +395,14 @@ pub fn open_window(id: i64, title: &str, url: &str, width: i64, height: i64) -> 
     notify_dev_windowed();
     if headless() {
         windows().lock().unwrap().insert(id, WinState { win: Win::Headless, closed: false });
+        // M152: el inyector de MENSAJES para pruebas (precedente RAY_UI_PICK): con la
+        // variable seteada y no vacía, cada ventana headless "recibe" ese window.ray.send
+        // al abrir — la batería de 3 motores asevera el kind "message" byte-idéntico.
+        if let Ok(msg) = std::env::var("RAY_UI_MSG")
+            && !msg.is_empty()
+        {
+            push_event("message", id, &msg);
+        }
         return Ok(());
     }
     // §80b: modo SHELL (iOS; o `ui-shell` en pruebas) — el shell registró sus handlers ANTES
@@ -660,10 +676,13 @@ mod mac {
             extra: usize,
         ) -> Id;
         fn objc_registerClassPair(cls: Id);
+        // M152: `imp` va SIN tipo (como objc_msgSend) y se castea por sitio — el método del
+        // puente (userContentController:didReceiveScriptMessage:) es de 4 args y una segunda
+        // declaración del mismo símbolo con otra firma dispararía clashing_extern_declarations.
         fn class_addMethod(
             cls: Id,
             sel: Sel,
-            imp: extern "C" fn(Id, Sel, Id),
+            imp: *const c_void,
             types: *const std::ffi::c_char,
         ) -> u8;
     }
@@ -685,7 +704,6 @@ mod mac {
     type MsgIdId = unsafe extern "C" fn(Id, Sel, Id) -> Id;
     type MsgIdIdId = unsafe extern "C" fn(Id, Sel, Id, Id);
     type MsgInitWindow = unsafe extern "C" fn(Id, Sel, CGRect, u64, u64, u8) -> Id;
-    type MsgInitFrame = unsafe extern "C" fn(Id, Sel, CGRect) -> Id;
     type MsgInitBytes = unsafe extern "C" fn(Id, Sel, *const u8, usize, u64) -> Id;
     // M148 (menús + diálogos):
     type MsgMenuItemInit = unsafe extern "C" fn(Id, Sel, Id, Sel, Id) -> Id;
@@ -695,6 +713,12 @@ mod mac {
     type MsgIdI64 = unsafe extern "C" fn(Id, Sel, i64) -> Id;
     type MsgVoidIdI64 = unsafe extern "C" fn(Id, Sel, Id, i64);
     type MsgCStr = unsafe extern "C" fn(Id, Sel) -> *const std::ffi::c_char;
+    // M152 (puente IPC): initWithFrame:configuration: / addScriptMessageHandler:name: /
+    // isKindOfClass: / initWithSource:injectionTime:forMainFrameOnly:.
+    type MsgInitFrameCfg = unsafe extern "C" fn(Id, Sel, CGRect, Id) -> Id;
+    type MsgVoidIdId = unsafe extern "C" fn(Id, Sel, Id, Id);
+    type MsgBoolId = unsafe extern "C" fn(Id, Sel, Id) -> u8;
+    type MsgInitUserScript = unsafe extern "C" fn(Id, Sel, Id, i64, u8) -> Id;
 
     fn msg_send() -> *const c_void {
         objc_msgSend as unsafe extern "C" fn() as *const c_void
@@ -917,16 +941,63 @@ mod mac {
                     super::push_event("menu", 0, tag);
                 }
             }
+            // M152: el puente IPC — userContentController:didReceiveScriptMessage: (4 args).
+            // Corre en el hilo principal; el body se COPIA dentro del bloque (autorelease
+            // pool, patrón dialog) y el id de ventana sale del scan por puntero del webview
+            // (precedente window_will_close). push_event va con el lock ya SOLTADO
+            // (disciplina de mark_closed).
+            extern "C" fn script_message(_this: Id, _sel: Sel, _controller: Id, message: Id) {
+                // SAFETY: el run loop entrega un WKScriptMessage válido.
+                let (body, wv) = unsafe {
+                    let get_id: MsgId = std::mem::transmute(msg_send());
+                    let is_kind: MsgBoolId = std::mem::transmute(msg_send());
+                    let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    let body = get_id(message, sel(b"body\0"));
+                    // Solo strings v1 (paridad con GTK, que guarda con jsc_value_is_string).
+                    if body.is_null()
+                        || is_kind(body, sel(b"isKindOfClass:\0"), cls(b"NSString\0")) == 0
+                    {
+                        return;
+                    }
+                    let c = utf8(body, sel(b"UTF8String\0"));
+                    if c.is_null() {
+                        return;
+                    }
+                    let owned = std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned();
+                    (owned, get_id(message, sel(b"webView\0")))
+                };
+                let map = super::windows().lock().unwrap();
+                let found = map.iter().find_map(|(id, w)| match &w.win {
+                    Win::Mac { webview, .. } if *webview == wv as usize => Some(*id),
+                    _ => None,
+                });
+                drop(map);
+                if let Some(id) = found {
+                    super::push_event("message", id, &body);
+                }
+            }
             unsafe {
                 let cls_new =
                     objc_allocateClassPair(cls(b"NSObject\0"), c"RayWindowDelegate".as_ptr(), 0);
+                // Los imp van SIN tipo en la extern (ver arriba): castear por sitio.
                 class_addMethod(
                     cls_new,
                     sel(b"windowWillClose:\0"),
-                    window_will_close,
+                    window_will_close as extern "C" fn(Id, Sel, Id) as *const c_void,
                     c"v@:@".as_ptr(),
                 );
-                class_addMethod(cls_new, sel(b"rayMenuAction:\0"), menu_action, c"v@:@".as_ptr());
+                class_addMethod(
+                    cls_new,
+                    sel(b"rayMenuAction:\0"),
+                    menu_action as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    c"v@:@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"userContentController:didReceiveScriptMessage:\0"),
+                    script_message as extern "C" fn(Id, Sel, Id, Id) as *const c_void,
+                    c"v@:@@".as_ptr(),
+                );
                 objc_registerClassPair(cls_new);
                 cls_new as usize
             }
@@ -1155,7 +1226,6 @@ mod mac {
             unsafe {
                 let alloc: MsgId = std::mem::transmute(msg_send());
                 let init_window: MsgInitWindow = std::mem::transmute(msg_send());
-                let init_frame: MsgInitFrame = std::mem::transmute(msg_send());
                 let set_id: MsgVoidId = std::mem::transmute(msg_send());
                 let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
                 let plain: MsgVoid = std::mem::transmute(msg_send());
@@ -1179,11 +1249,55 @@ mod mac {
                 set_bool(window, sel(b"setReleasedWhenClosed:\0"), 0);
                 set_id(window, sel(b"setTitle:\0"), nsstring(&title));
 
-                let webview = init_frame(
-                    alloc(cls(b"WKWebView\0"), sel(b"alloc\0")),
-                    sel(b"initWithFrame:\0"),
-                    rect,
+                // M152: el delegate nace ANTES del webview — el puente IPC lo registra como
+                // script message handler en la configuration con la que el webview se crea.
+                // (Antes nacía después; el reorden es deliberado.)
+                let delegate = alloc(delegate_class(), sel(b"alloc\0"));
+                let delegate = {
+                    let init: MsgId = std::mem::transmute(msg_send());
+                    init(delegate, sel(b"init\0"))
+                };
+
+                // M152 — puente IPC JS→raylang: WKWebViewConfiguration con nuestro user
+                // content controller. El handler "ray" recibe los postMessage (el delegate
+                // implementa userContentController:didReceiveScriptMessage:) y el user
+                // script inyecta window.ray.send en el MAIN frame al arrancar el documento.
+                // OJO ciclo de vida: el controller retiene FUERTE al delegate — se
+                // desregistra en close_window_async antes de los release.
+                let init_plain: MsgId = std::mem::transmute(msg_send());
+                let cfg = init_plain(
+                    alloc(cls(b"WKWebViewConfiguration\0"), sel(b"alloc\0")),
+                    sel(b"init\0"),
                 );
+                let get_ucc: MsgId = std::mem::transmute(msg_send());
+                let ucc = get_ucc(cfg, sel(b"userContentController\0"));
+                let add_handler: MsgVoidIdId = std::mem::transmute(msg_send());
+                add_handler(
+                    ucc,
+                    sel(b"addScriptMessageHandler:name:\0"),
+                    delegate,
+                    nsstring("ray"),
+                );
+                let init_script: MsgInitUserScript = std::mem::transmute(msg_send());
+                // injectionTime 0 = WKUserScriptInjectionTimeAtDocumentStart; 1 = solo main frame.
+                let script = init_script(
+                    alloc(cls(b"WKUserScript\0"), sel(b"alloc\0")),
+                    sel(b"initWithSource:injectionTime:forMainFrameOnly:\0"),
+                    nsstring(super::RAY_JS_SHIM),
+                    0,
+                    1,
+                );
+                set_id(ucc, sel(b"addUserScript:\0"), script);
+                plain(script, sel(b"release\0")); // el controller lo retiene
+
+                let init_frame_cfg: MsgInitFrameCfg = std::mem::transmute(msg_send());
+                let webview = init_frame_cfg(
+                    alloc(cls(b"WKWebView\0"), sel(b"alloc\0")),
+                    sel(b"initWithFrame:configuration:\0"),
+                    rect,
+                    cfg,
+                );
+                plain(cfg, sel(b"release\0")); // el webview posee su copia
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
                 }
@@ -1197,12 +1311,8 @@ mod mac {
                 let _navigation = id_id(webview, sel(b"loadRequest:\0"), request);
 
                 // El delegate NO es retenido por la ventana (referencia débil de AppKit): se
-                // retiene en el registro y se libera junto a la ventana.
-                let delegate = alloc(delegate_class(), sel(b"alloc\0"));
-                let delegate = {
-                    let init: MsgId = std::mem::transmute(msg_send());
-                    init(delegate, sel(b"init\0"))
-                };
+                // retiene en el registro y se libera junto a la ventana (el controller, en
+                // cambio, sí lo retiene fuerte hasta el desregistro del close).
                 set_id(window, sel(b"setDelegate:\0"), delegate);
 
                 plain(window, sel(b"center\0"));
@@ -1242,8 +1352,22 @@ mod mac {
             // El delegate se desengancha ANTES del close: el registro ya no tiene la entrada y
             // el evento `closed` ya se emitió — el callback no debe correr sobre un mapa vacío.
             set_id(window as Id, sel(b"setDelegate:\0"), std::ptr::null_mut());
+            // M152: el user content controller retiene FUERTE al delegate (asimetría con el
+            // delegate de ventana, que es weak) — desregistrar el handler ANTES de los
+            // release o el delegate sobrevive con la ventana muerta. El controller se pide
+            // VÍA el webview: WKWebView COPIA su configuration en el init (el puntero
+            // pre-init sería otro objeto).
+            let get_id: MsgId = std::mem::transmute(msg_send());
+            let cfg = get_id(webview as Id, sel(b"configuration\0"));
+            if !cfg.is_null() {
+                let ucc = get_id(cfg, sel(b"userContentController\0"));
+                if !ucc.is_null() {
+                    set_id(ucc, sel(b"removeScriptMessageHandlerForName:\0"), nsstring("ray"));
+                }
+            }
             plain(window as Id, sel(b"close\0"));
-            // Nuestras retenciones (alloc/init): la ventana, el webview y el delegate.
+            // Nuestras retenciones (alloc/init): la ventana, el webview y el delegate (la
+            // configuration/controller mueren con el webview: el init la copió y la posee).
             plain(webview as Id, sel(b"release\0"));
             plain(delegate as Id, sel(b"release\0"));
             plain(window as Id, sel(b"release\0"));

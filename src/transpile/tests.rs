@@ -1076,6 +1076,17 @@ fn transpiles_term_builtins() {
 }
 
 #[test]
+fn the_emitted_preamble_is_android_aware() {
+    // M156: en bionic RLIMIT 8 = NPROC (no NOFILE) y __error no existe — el preámbulo (y el
+    // __ray_ffi_errno emitido, cuando se usa) deben llevar any(linux, android).
+    let rust = transpile_src("fn main() -> int { 0 }");
+    assert!(
+        rust.contains("#[cfg(any(target_os = \"linux\", target_os = \"android\"))] const NOFILE: i32 = 7;"),
+        "the emitted NOFILE carries any(linux, android):\n{rust}"
+    );
+}
+
+#[test]
 fn transpiles_signals() {
     // signals() -> Channel<int> (M88.1): canal de señales del SO (self-pipe + FFI a libc).
     let rust = transpile_src(

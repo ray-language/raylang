@@ -528,13 +528,15 @@ fn blocking_worker_loop() {
 }
 
 // El puntero al `errno` del hilo actual (para transportarlo a través del pool bloqueante). Mismo
-// trío de plataformas que process.rs; viven en la libc, siempre enlazada.
-#[cfg(target_os = "linux")]
+// trío de plataformas que process.rs; viven en la libc, siempre enlazada. M156: Android es
+// unix pero NO "linux" — bionic usa __errno_location; el brazo not(linux) con __error (Darwin)
+// era un error de link latente.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 unsafe extern "C" {
     #[link_name = "__errno_location"]
     fn blocking_errno_ptr() -> *mut i32;
 }
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 unsafe extern "C" {
     #[link_name = "__error"]
     fn blocking_errno_ptr() -> *mut i32;

@@ -34,9 +34,9 @@ unsafe extern "C" {
 }
 const F_GETFL: i32 = 3;
 const F_SETFL: i32 = 4;
-#[cfg(target_os = "linux")]
-const O_NONBLOCK: i32 = 0o4000;
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const O_NONBLOCK: i32 = 0o4000; // M156: bionic también es 0o4000 (android es unix, no "linux")
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 const O_NONBLOCK: i32 = 0x0004;
 
 /// El control de una salida viva, para `drain`: cuántos octetos ha aceptado el alimentador que

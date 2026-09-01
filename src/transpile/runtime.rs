@@ -1904,7 +1904,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         out.push_str(concat!(
             "fn __ray_ffi_errno() -> i64 {\n",
             "    #[cfg(target_os = \"linux\")] unsafe extern \"C\" { #[link_name = \"__errno_location\"] fn __ray_errno_ptr() -> *mut i32; }\n",
-            "    #[cfg(all(unix, not(target_os = \"linux\")))] unsafe extern \"C\" { #[link_name = \"__error\"] fn __ray_errno_ptr() -> *mut i32; }\n",
+            "    #[cfg(target_os = \"android\")] unsafe extern \"C\" { #[link_name = \"__errno\"] fn __ray_errno_ptr() -> *mut i32; }\n",
+            "    #[cfg(all(unix, not(any(target_os = \"linux\", target_os = \"android\"))))] unsafe extern \"C\" { #[link_name = \"__error\"] fn __ray_errno_ptr() -> *mut i32; }\n",
             "    #[cfg(windows)] unsafe extern \"C\" { #[link_name = \"_errno\"] fn __ray_errno_ptr() -> *mut i32; }\n",
             "    unsafe { *__ray_errno_ptr() as i64 }\n",
             "}\n",

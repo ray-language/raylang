@@ -453,8 +453,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // el default de macOS (256) tumbaba un webserver nativo bajo `wrk -c500` sin culpa del programa.
     out.push_str("    #[cfg(unix)] unsafe {\n");
     out.push_str("        #[repr(C)] struct RL { cur: u64, max: u64 }\n");
-    out.push_str("        #[cfg(target_os = \"linux\")] const NOFILE: i32 = 7;\n");
-    out.push_str("        #[cfg(not(target_os = \"linux\"))] const NOFILE: i32 = 8;\n");
+    // M156: en bionic (Android) 8 es RLIMIT_NPROC, no NOFILE — el brazo not(linux) subía el
+    // límite de PROCESOS en vez del de fds. any(linux, android) → 7.
+    out.push_str("        #[cfg(any(target_os = \"linux\", target_os = \"android\"))] const NOFILE: i32 = 7;\n");
+    out.push_str("        #[cfg(not(any(target_os = \"linux\", target_os = \"android\")))] const NOFILE: i32 = 8;\n");
     out.push_str("        unsafe extern \"C\" { fn getrlimit(r: i32, l: *mut RL) -> i32; fn setrlimit(r: i32, l: *const RL) -> i32; }\n");
     out.push_str("        let cap: u64 = if cfg!(target_os = \"macos\") { 10240 } else { 65536 };\n");
     out.push_str("        let mut r = RL { cur: 0, max: 0 };\n");

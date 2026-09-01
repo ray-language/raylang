@@ -383,14 +383,17 @@ const SIGKILL: i32 = 9;
 const F_GETFL: i32 = 3;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 const F_SETFL_P: i32 = 4;
-#[cfg(all(target_os = "macos", not(target_arch = "wasm32")))]
-const O_NONBLOCK_P: i32 = 0x0004;
-#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+// M156: el patrón unificado — linux/android (bionic) = 0o4000; el resto de unix (Darwin,
+// macOS E iOS, BSD) = 0x0004. La forma anterior (macos/not(macos)) daba 0o4000 en iOS.
+#[cfg(all(any(target_os = "linux", target_os = "android"), not(target_arch = "wasm32")))]
 const O_NONBLOCK_P: i32 = 0o4000;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android")), not(target_arch = "wasm32")))]
+const O_NONBLOCK_P: i32 = 0x0004;
 
-#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+// Nfds alineado con fibers.rs (any(linux, android) → u64; bionic LP64 usa unsigned long).
+#[cfg(all(any(target_os = "linux", target_os = "android"), not(target_arch = "wasm32")))]
 type Nfds = u64;
-#[cfg(all(unix, not(target_os = "linux"), not(target_arch = "wasm32")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android")), not(target_arch = "wasm32")))]
 type Nfds = u32;
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -407,7 +410,13 @@ unsafe extern "C" {
     #[link_name = "__errno_location"]
     fn errno_ptr() -> *mut i32;
 }
-#[cfg(all(unix, not(target_os = "linux"), not(target_arch = "wasm32")))]
+// M156: bionic usa __errno (ni el de glibc ni el de Darwin).
+#[cfg(all(target_os = "android", not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "__errno"]
+    fn errno_ptr() -> *mut i32;
+}
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android")), not(target_arch = "wasm32")))]
 unsafe extern "C" {
     #[link_name = "__error"]
     fn errno_ptr() -> *mut i32;

@@ -10967,3 +10967,22 @@ del `.app` (la vía declarativa, cero código; `[app] description` reservada). E
 Linux el about es del programa — evento; documentado). La lección §81 aplicada: la superficie
 se declaró donde el MCP la ve (/// de std/ui.ray para ray_doc, REFERENCE, MANUAL) — antes de
 esto un LLM habría concluido "no se puede" o inventado la API.
+
+## 150. M156 — la fase Android de §80b (sep 2026)
+
+**Apertura: el patrón-trampa simétrico al de iOS.** En iOS el peligro fue el fallback
+`not(any(macos, linux))` que iOS matcheaba; en Android es el brazo `not(target_os = "linux")`
+que asume Darwin — porque **Android es unix pero NO es "linux"** (target_os = "android",
+bionic como libc). El barrido pre-arco encontró el patrón en nueve sitios y tres de ellos eran
+bugs REALES latentes aunque Android no llegara jamás: `__error` (símbolo Darwin, inexistente
+en bionic → error de link) en fibers/process y en el `__ray_ffi_errno` EMITIDO; y el RLIMIT
+del preámbulo emitido, donde el brazo not(linux) da 8 = **RLIMIT_NPROC en bionic** — el
+binario habría subido el límite de procesos creyendo subir el de fds. La normalización:
+`any(target_os = "linux", target_os = "android")` en errno/NOFILE/O_NONBLOCK/Nfds (el patrón
+invertido de process.rs —macos/not(macos)— se retiró también: acertaba en Android por
+accidente y fallaría en iOS), brazos android con el mensaje del shell ("run inside the
+generated app shell") y los cinco fallbacks de ui.rs estrechados a 4 sistemas EN EL MISMO
+COMMIT (la lección F2c, tercera aplicación). La puerta de validación ya no es teórica: con el
+NDK instalado, `cargo check -p ray-runtime --target aarch64-linux-android` con TODAS las
+features (ring/rustls/rusqlite-bundled/corosensei/mimalloc/epoll/shell incluidos) compila
+limpio — el runtime entero es Android-ready antes de escribir una línea del shell.

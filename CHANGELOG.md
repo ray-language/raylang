@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El runtime es Android-ready** (M156 fase 1): Android es unix pero no "linux" — nueve
+  sitios con `cfg(target_os = "linux")` cuyo brazo contrario asumía Darwin quedaron en
+  `any(linux, android)`; tres eran bugs latentes reales (el símbolo `__error` inexistente en
+  bionic = error de link, y el RLIMIT emitido que en bionic habría subido el límite de
+  PROCESOS en vez del de fds). Verificado: `ray-runtime` entero compila a
+  `aarch64-linux-android` con todas las features (fibras epoll, tls, sqlite, shell).
+
 - `ray bundle --ios` gana **`--ios-target device|sim|both`** (both por defecto): iterando
   contra un solo destino, el otro build (~15-20 s) sobra — y el `.a` del lado no construido
   se **preserva** del proyecto anterior (como la firma). El log además nombra cada build

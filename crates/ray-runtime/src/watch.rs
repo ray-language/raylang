@@ -28,9 +28,9 @@ unsafe extern "C" {
 }
 const F_GETFL: i32 = 3;
 const F_SETFL: i32 = 4;
-#[cfg(target_os = "linux")]
-const O_NONBLOCK: i32 = 0o4000;
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const O_NONBLOCK: i32 = 0o4000; // M156: bionic también es 0o4000 (android es unix, no "linux")
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 const O_NONBLOCK: i32 = 0x0004;
 
 /// Un watch vivo: el watcher de notify (su `Drop` detiene los hilos), la cola de eventos ya
@@ -167,11 +167,11 @@ pub fn fd_ready(fd: i32, timeout_ms: i32) -> bool {
         events: i16,
         revents: i16,
     }
-    // nfds_t es u64 en Linux y u32 en los demás unix (mismo cfg que process.rs — y mismo tipo,
-    // para no chocar con su declaración extern de `poll` en el mismo crate).
-    #[cfg(target_os = "linux")]
+    // nfds_t es u64 en Linux/Android (bionic LP64) y u32 en los demás unix (mismo cfg que
+    // process.rs/fibers.rs — y mismo tipo, para no chocar con su extern de `poll`).
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     type Nfds = u64;
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     type Nfds = u32;
     unsafe extern "C" {
         fn poll(fds: *mut PollFd, nfds: Nfds, timeout_ms: i32) -> i32;

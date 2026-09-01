@@ -3169,11 +3169,14 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    [dependencies] resuelven como en `ray run`; un directorio corre la entrada por defecto o
    la suite entera. El modo `code` queda para experimentos autocontenidos. Confinamiento
    (fuel/heap/plazo) intacto.
-3. **Puente IPC JS→raylang de primera clase en `std/ui`** — hoy el camino de vuelta exige el
-   servidor HTTP local. Un `ui.on_message()` + `window.ray.send(...)` inyectado en el webview
-   eliminaría el servidor para apps chicas. Se SOLAPA con los diferidos de §80 (scheme
-   `app://`, eval con retorno): decidirlos JUNTOS cuando toque — son la misma capa. Impacto:
-   MEDIO-ALTO; esfuerzo MEDIO (script message handlers de WKWebView + su espejo GTK/iOS).
+3. **Puente IPC JS→raylang de primera clase en `std/ui`** — ✅ EJECUTADA como M152 (DESIGN
+   §147; macOS + headless en el PR1, GTK + shell iOS en el PR2): `window.ray.send(text)` →
+   evento `"message"` por el MISMO stream de `next_event()`/`events()` (el `ui.on_message()`
+   del sketch se descartó razonado: consumidor único, un canal filtrado robaría eventos).
+   Diferidos del arco: payload estructurado/JSON (hoy string), reply request/response (exige
+   el eval con retorno = ABI de blocks), fan-out de eventos (habilitaría on_message),
+   aislamiento de frames (el handler es visible a todos los frames), cap de cola, scheme
+   `app://` (sigue en §80).
 4. **`ray fmt` y la tupla-tras-bloque** — el gotcha documentado (`(a, b)` tras un `if` parsea
    como llamada) sigue mordiendo; la sugerencia nueva: que `fmt` inserte el separador (o que el
    parser resuelva a favor de la tupla tras `if`/`while` SIN else). Tocarlo es tocar la

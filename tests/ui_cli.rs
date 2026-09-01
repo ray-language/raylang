@@ -268,3 +268,158 @@ save to: /tmp/x.txt\nevent: closed, tag empty: true\n";
         assert_eq!(out, WANT_PICK, "nativo ≡ VM");
     }
 }
+
+/// M152 (puente IPC): el kind "message" viaja por el MISMO stream que closed/menu. En
+/// headless lo inyecta RAY_UI_MSG (uno por ventana abierta) — batería de salida exacta.
+const MSG_PROG: &str = r#"import std/ui;
+
+fn main() {
+    match (ui.open("A", "http://127.0.0.1:1/", 320, 200)) {
+        Result.Err(e) => print("open failed: " + e),
+        Result.Ok(h) => {
+            match (ui.next_event()) {
+                Result.Ok(e) => print("message: kind=" + e.kind + " same window=" + to_string(e.window == h) + " tag=" + e.tag),
+                Result.Err(e) => print("err: " + e),
+            }
+            let _ = close(h);
+            match (ui.next_event()) {
+                Result.Ok(e) => print("then: " + e.kind),
+                Result.Err(e) => print("err: " + e),
+            }
+        },
+    }
+}
+"#;
+
+#[test]
+fn injected_messages_match_on_all_three_engines() {
+    const WANT: &str = "message: kind=message same window=true tag=hello ipc\nthen: closed\n";
+    let base = tmp("msg");
+    std::fs::write(base.join("prog.ray"), MSG_PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code) = run_headless(
+            Command::new(env!("CARGO_BIN_EXE_ray"))
+                .args([engine, "prog.ray"])
+                .env("RAY_UI_MSG", "hello ipc")
+                .current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0");
+        assert_eq!(out, WANT, "{engine}: exact output");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("native build");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code) = run_headless(Command::new(&bin).env("RAY_UI_MSG", "hello ipc"));
+        assert_eq!(code, 0, "native: exit 0");
+        assert_eq!(out, WANT, "native ≡ VM");
+    }
+}
+
+/// El argumento central de D1 (DESIGN §M152): los mensajes llegan TAMBIÉN por `events()` —
+/// es el mismo stream, no un canal aparte que robaría eventos. VM (+ nativo), como el test
+/// del park: `events()` usa spawn y el intérprete no tiene fibras.
+const MSG_CHANNEL_PROG: &str = r#"import std/ui;
+
+fn main() {
+    let ch = ui.events();
+    match (ui.open("B", "http://127.0.0.1:1/", 320, 200)) {
+        Result.Err(e) => print("open failed: " + e),
+        Result.Ok(h) => {
+            if let Option.Some(e) = recv(ch) {
+                print("via events: " + e.kind + " tag=" + e.tag + " same window=" + to_string(e.window == h));
+            }
+            let _ = close(h);
+            if let Option.Some(e2) = recv(ch) {
+                print("then: " + e2.kind);
+            }
+        },
+    }
+}
+"#;
+
+#[test]
+fn messages_flow_through_the_events_channel_too() {
+    const WANT: &str = "via events: message tag=ping same window=true\nthen: closed\n";
+    let base = tmp("msg_chan");
+    std::fs::write(base.join("prog.ray"), MSG_CHANNEL_PROG).unwrap();
+    let (out, code) = run_headless(
+        Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["--vm", "prog.ray"])
+            .env("RAY_UI_MSG", "ping")
+            .current_dir(&base),
+    );
+    assert_eq!(code, 0, "vm: exit 0");
+    assert_eq!(out, WANT, "vm: exact output");
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("native build");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code) = run_headless(Command::new(&bin).env("RAY_UI_MSG", "ping"));
+        assert_eq!(code, 0, "native: exit 0");
+        assert_eq!(out, WANT, "native ≡ VM");
+    }
+}
+
+/// M152 — el E2E REAL del puente (macOS, ventana de verdad): la página llama
+/// `window.ray.send("ping")` (disparado con eval_js — el retry absorbe la carrera
+/// eval-antes-de-load) y el programa lo ve por `next_event_timeout`. `#[ignore]` porque
+/// `ray test`/la batería fuerzan headless y CI no tiene sesión gráfica:
+/// `cargo test --test ui_cli -- --ignored` en un mac local.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "opens a real window; run by hand on macOS: cargo test --test ui_cli -- --ignored"]
+fn a_real_webview_message_reaches_the_program() {
+    let base = tmp("msg_real");
+    let prog = r#"import std/ui;
+import std/time;
+
+fn main() {
+    match (ui.open("ipc", "about:blank", 320, 200)) {
+        Result.Err(e) => print("open failed: " + e),
+        Result.Ok(h) => {
+            var got = "";
+            var tries = 0;
+            while (got == "" && tries < 50) {
+                let _ = ui.eval_js(h, "window.ray && window.ray.send('ping')");
+                match (ui.next_event_timeout(100)) {
+                    Result.Ok(o) => match (o) {
+                        Option.Some(e) => {
+                            if (e.kind == "message") {
+                                got = e.tag + " same window=" + to_string(e.window == h);
+                            }
+                        },
+                        Option.None => {},
+                    },
+                    Result.Err(_) => {},
+                }
+                tries = tries + 1;
+            }
+            print("got: " + got);
+            let _ = close(h);
+        },
+    }
+}
+"#;
+    std::fs::write(base.join("prog.ray"), prog).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["--vm", "prog.ray"])
+        .env_remove("RAY_UI_BACKEND")
+        .current_dir(&base)
+        .output()
+        .expect("run with a real window");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("got: ping same window=true"),
+        "the real bridge delivers the message:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

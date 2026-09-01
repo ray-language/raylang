@@ -1,6 +1,7 @@
 // std/ui (M146) — la PRIMITIVA ventana + webview (IDEAS §80 F1): una ventana nativa del SO con
-// el webview del sistema cargando una URL — el patrón es apuntarla al webserver embebido del
-// programa, y el IPC JS↔raylang es el propio framework web (fetch/WS contra tus handlers).
+// el webview del sistema cargando una URL. Para apps chicas, el puente IPC integrado basta:
+// `window.ray.send(text)` en la página → evento `"message"` (M152), y `eval_js` de vuelta; el
+// patrón con backend sigue siendo el webserver embebido + framework web (fetch/WS).
 //
 // No hay `ui.run()`: el runtime captura el hilo principal por su cuenta en la primera ventana.
 // Los eventos (una cola por proceso) se leen con `next_event`/`next_event_timeout` (la fibra
@@ -9,9 +10,12 @@
 // Backends: AppKit/WKWebView en macOS; `RAY_UI_BACKEND=headless` (tests/CI) en cualquier OS.
 
 /// One UI event. `kind` is "closed" (the window left the screen — the red button and
-/// `close(h)` both report here, exactly once per window; `tag` is empty) or "menu" (a custom
+/// `close(h)` both report here, exactly once per window; `tag` is empty), "menu" (a custom
 /// menu item was clicked: `tag` carries the item's tag and `window` is 0 — menus belong to the
-/// app, not to one window). `window` is the window's handle for per-window events.
+/// app, not to one window), or "message" (the page called `window.ray.send(text)`: `tag`
+/// carries the text — strings only, NULs removed by the bridge; `window` is the window's
+/// handle on desktop and 0 on iOS). `window` is the window's handle for per-window events.
+/// In headless mode the env var RAY_UI_MSG injects one "message" per opened window (tests).
 pub struct UiEvent {
     kind: string,
     window: int,

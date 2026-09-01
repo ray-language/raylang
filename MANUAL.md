@@ -1149,8 +1149,10 @@ a `~/.local/share/applications`.
 ### Ventanas (`std/ui`)
 
 La **primitiva de apps de escritorio**: una ventana nativa del SO con el **webview del sistema**
-cargando una URL. El patrón es apuntarla al webserver embebido del programa — la UI es HTML/CSS/
-JS servido por ti, y el IPC JS↔raylang **es el framework web** (`fetch`/WS contra tus handlers),
+cargando una URL. Para una app chica basta el **puente IPC integrado** (`window.ray.send` →
+evento `"message"`, y `eval_js` de vuelta — sin servidor); el patrón con backend sigue siendo
+apuntarla al webserver embebido del programa — la UI es HTML/CSS/JS servido por ti, y el IPC
+JS↔raylang **es el framework web** (`fetch`/WS contra tus handlers),
 sin mensajería nueva que aprender:
 
 ```rust
@@ -1189,6 +1191,29 @@ ui.menu("Partida", [
 // … en tu bucle de eventos:
 //   e.kind == "menu" && e.tag == "new"  → nueva partida
 ```
+
+**JS→raylang sin servidor** (M152): en cada webview vive `window.ray.send(text)` — el texto
+llega como evento `kind == "message"` con `tag` = el texto y `window` = el handle de la
+ventana (0 en iOS). Con `eval_js` de vuelta, una app chica no necesita webserver:
+
+```rust
+// En la página:  <button onclick="window.ray.send('hola')">saluda</button>
+match (ui.next_event()) {
+    Result.Ok(e) => {
+        if (e.kind == "message") {
+            let _ = ui.eval_js(e.window, "document.body.append(' raylang dice: recibido')");
+        }
+    },
+    Result.Err(_) => {},
+}
+```
+
+Tres cosas del contrato: solo **strings** (otros tipos se ignoran; los NUL se eliminan);
+los mensajes viajan por el **mismo stream** que `closed`/`menu` (un solo consumidor —
+`next_event` o `events()`, no ambos); y la página es **código tuyo** — mismo modelo de
+confianza que el resto del programa (la vía de bajo nivel es
+`window.webkit.messageHandlers.ray.postMessage`). En headless (tests), `RAY_UI_MSG` inyecta
+un `"message"` por ventana abierta.
 
 El **menú de aplicación** de macOS (el primero, en negrita) también es tuyo: `ui.app_menu`
 mete items encima de Hide/Quit y lo re-titula (bajo `ray run` salía "ray"; el `.app` ya

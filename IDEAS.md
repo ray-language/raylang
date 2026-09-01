@@ -3177,8 +3177,13 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    el eval con retorno = ABI de blocks), fan-out de eventos (habilitaría on_message),
    aislamiento de frames (el handler es visible a todos los frames), cap de cola, scheme
    `app://` (sigue en §80).
-4. **`ray fmt` y la tupla-tras-bloque** — el gotcha documentado (`(a, b)` tras un `if` parsea
-   como llamada) sigue mordiendo; la sugerencia nueva: que `fmt` inserte el separador (o que el
+4. **`ray fmt` y la tupla-tras-bloque** — ✅ EJECUTADA como M153 (DESIGN §148, SPEC §5): se
+   resolvió en la GRAMÁTICA (la regla de Rust — la forma-con-bloque en posición de sentencia
+   termina en su `}`), no en fmt. Cero código real dependía del comportamiento viejo; el
+   selfhost congelado conserva la regla vieja (divergencia latente registrada; portar al
+   descongelar y no meter la forma nueva en examples/ hasta entonces). Seguimiento aparte:
+   verificar la gramática tree-sitter (conflicto GLR declarado). Texto original: que `fmt`
+   inserte el separador (o que el
    parser resuelva a favor de la tupla tras `if`/`while` SIN else). Tocarlo es tocar la
    gramática — clasificar como decisión de diseño, no quick-win. Impacto: BAJO-MEDIO.
 

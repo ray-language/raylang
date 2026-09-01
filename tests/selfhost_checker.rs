@@ -444,20 +444,24 @@ fn real_examples_valid_values() {
     }
 }
 
-/// M87 — el diagnóstico del gotcha §55, byte-idéntico entre checkers: una cola que
-/// empieza con `(`/`[` tras un if/while/match-sentencia se parsea como llamada/indexación
-/// de su valor; el error lo dice, con la pista de separarla con 'return' o 'let'.
+/// M87 — el diagnóstico del gotcha §55, byte-idéntico entre checkers. OJO M153: la forma
+/// original del gotcha (la cola `(`/`[` tras un if/while-SENTENCIA) ya NO existe en la
+/// gramática de Rust — ahora parsea como sentencia + cola del bloque (SPEC §5) —, pero el
+/// selfhost congelado conserva la gramática vieja, así que esos programas divergen
+/// legítimamente y salieron de este diferencial (DESIGN §148). La pista M87 sigue viva en
+/// POSICIÓN DE EXPRESIÓN (idéntica en ambos), que es lo que se compara aquí.
 #[test]
 fn gotcha_55_has_a_hint() { // es-ok: "gotcha" es jerga técnica inglesa aceptada, no español
-    // Llamada: el "callee" es un while-expresión (unit).
+    // Llamada con un if-expresión (int) como callee, en posición de expresión (tras let).
     compare(
-        "fn main() { var i = 0; while (i < 3) { i = i + 1; } (2); }",
+        "fn main() { let x = if (true) { 1 } else { 2 }(3); print(x); }",
         "sc_g55_call.ray",
     );
-    // Llamada con un if-sentencia como callee.
-    compare("fn main() { if (true) { print(1); } (2); }", "sc_g55_if.ray");
-    // Indexación: la cola `[0]` tras el if.
-    compare("fn main() { if (true) { print(1); } [0]; }", "sc_g55_index.ray");
+    // Indexación de un if-expresión en posición de expresión.
+    compare(
+        "fn main() { let x = if (true) { 1 } else { 2 }[0]; print(x); }",
+        "sc_g55_index.ray",
+    );
     // Control: llamar un valor no-función SIN forma de bloque NO lleva la pista.
     compare("fn main() { let x = 3; x(1); }", "sc_g55_plain.ray");
 }

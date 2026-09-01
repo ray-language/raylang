@@ -11042,3 +11042,21 @@ batería 3 motores byte-idéntica (el sobre entra por RAY_UI_MSG) y el ciclo REA
 ventana de macOS: request('ping') → as_request → reply("pong-ping") → la Promise resuelve →
 la página confirma con send. Quedan de §81.1: fan-out de eventos, aislamiento de frames, cap
 de cola.
+## 152. M158 — std/audio v2: el hint de latencia, la posición real y AAudio (sep 2026)
+
+Los dos diferidos de §79b más el backend Android que el arco M156 dejó a tiro. (1) El HINT:
+`__audio_open` pasa a 3 args (0 = default 200 ms — el comportamiento M145 intacto; explícito
+20–1000) y el número dimensiona TODO el camino: el chunk del alimentador (~latencia/4), el
+anillo de CoreAudio (~latencia), la latencia del dispositivo ALSA (mitad del hint acotada; el
+default conserva los 100 ms validados de rallyx) y el performance mode de AAudio (≤50 ms →
+LOW_LATENCY). (2) La POSICIÓN REAL (`played_ms`): la clave de thread-safety es que la refresca
+EL ALIMENTADOR tras cada `play()` con la API del backend desde el hilo que posee el
+dispositivo — AudioQueueGetCurrentTime (gotcha cazado en dispositivo real: `SMPTETime` son 24
+octetos, no 16 — el layout desalineaba `mFlags` y la posición salía siempre inválida;
+verificado 94 ms reales tras escribir 200), snd_pcm_delay (escritos − delay, mismo hilo que
+writei), AAudioStream_getFramesRead (directamente los frames que el dispositivo consumió), y
+el sumidero nulo cuenta exacto. Granularidad ~latencia/4, documentada. (3) AAUDIO: el patrón
+ALSA calcado — dlopen de libaaudio.so (API 26+), builder + write bloqueante con timeout (la
+contrapresión del diseño M145 encaja sin tocar nada), y `ray bundle --android` deja de excluir
+`audio` (iOS lo mantiene: CoreAudio de iOS sin validar). Diferido: sonido audible en Android
+físico.

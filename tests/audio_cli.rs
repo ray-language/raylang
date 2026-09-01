@@ -79,3 +79,71 @@ fn null_sink_battery_and_pacing_match_on_all_three_engines() {
         assert!(ms >= 280, "nativo: la contrapresión debe marcar el paso (tardó {ms} ms)");
     }
 }
+
+/// M158 (§79b): open_latency valida el hint (20–1000, 0 = default) y played_ms avanza de
+/// verdad sobre el sumidero de tiempo real. 3 motores, salida exacta (los booleanos absorben
+/// la variación de reloj).
+const V2_PROG: &str = r#"import std/audio;
+
+fn main() {
+    match (audio.open_latency(44100, 2, 5)) {
+        Result.Ok(_) => print("bad: 5ms accepted"),
+        Result.Err(e) => print("latency rejected: " + to_string(e.contains("20"))),
+    }
+    let h = match (audio.open_latency(8000, 1, 50)) {
+        Result.Ok(h) => h,
+        Result.Err(e) => {
+            print("open failed: " + e);
+            return;
+        },
+    };
+    print("early played: " + to_string(match (audio.played_ms(h)) {
+        Result.Ok(ms) => ms == 0,
+        Result.Err(_) => false,
+    }));
+    var chunk = b"";
+    var i = 0;
+    while (i < 3200) {
+        chunk = chunk + b"\x00\x00";
+        i = i + 1;
+    }
+    let _ = audio.write(h, chunk);
+    let _ = audio.drain(h);
+    match (audio.played_ms(h)) {
+        Result.Ok(ms) => print("played advanced: " + to_string(ms > 100 && ms <= 500)),
+        Result.Err(e) => print("played err: " + e),
+    }
+    let _ = close(h);
+    match (audio.played_ms(h)) {
+        Result.Ok(_) => print("bad: closed handle answered"),
+        Result.Err(e) => print("closed rejected: " + to_string(e.contains("not an open audio output"))),
+    }
+}
+"#;
+
+#[test]
+fn latency_hint_and_played_position_match_on_all_three_engines() {
+    const WANT: &str =
+        "latency rejected: true\nearly played: true\nplayed advanced: true\nclosed rejected: true\n";
+    let base = tmp("v2");
+    std::fs::write(base.join("prog.ray"), V2_PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code, _) = run_timed(
+            Command::new(env!("CARGO_BIN_EXE_ray")).args([engine, "prog.ray"]).current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0\n{out}");
+        assert_eq!(out, WANT, "{engine}: exact output");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("native build");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code, _) = run_timed(&mut Command::new(&bin));
+        assert_eq!(code, 0, "native: exit 0\n{out}");
+        assert_eq!(out, WANT, "native ≡ VM");
+    }
+}

@@ -3054,12 +3054,15 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::AudioOpen => {
+                    let latency = self.pop();
                     let channels = self.pop();
                     let rate = self.pop();
-                    let (HeapValue::Int(rate), HeapValue::Int(channels)) = (rate, channels) else {
-                        unreachable!("the checker guarantees two ints");
+                    let (HeapValue::Int(rate), HeapValue::Int(channels), HeapValue::Int(latency)) =
+                        (rate, channels, latency)
+                    else {
+                        unreachable!("the checker guarantees three ints");
                     };
-                    let elems = match crate::builtins::audio_open(rate, channels) {
+                    let elems = match crate::builtins::audio_open(rate, channels, latency) {
                         Ok(id) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(id.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
@@ -3072,6 +3075,18 @@ impl<'a> Vm<'a> {
                     };
                     let elems = match crate::builtins::audio_drain(handle) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M158: la posición real de reproducción en ms.
+                OpCode::AudioPlayed => {
+                    let HeapValue::Int(handle) = self.pop() else {
+                        unreachable!("the checker guarantees an int");
+                    };
+                    let elems = match crate::builtins::audio_played(handle) {
+                        Ok(ms) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(ms.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));

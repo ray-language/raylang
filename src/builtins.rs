@@ -1005,8 +1005,8 @@ const AUDIO_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 
 /// M145: abre una salida PCM y registra su extremo de escritura como PipeW; `Ok(handle)`.
 #[cfg(all(feature = "audio", unix, not(target_arch = "wasm32")))]
-pub fn audio_open(sample_rate: i64, channels: i64) -> Result<i64, String> {
-    let f = ray_runtime::audio::open(sample_rate, channels)?;
+pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<i64, String> {
+    let f = ray_runtime::audio::open(sample_rate, channels, latency_ms)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
@@ -1014,7 +1014,22 @@ pub fn audio_open(sample_rate: i64, channels: i64) -> Result<i64, String> {
     Ok(id)
 }
 #[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
-pub fn audio_open(_sample_rate: i64, _channels: i64) -> Result<i64, String> {
+pub fn audio_open(_sample_rate: i64, _channels: i64, _latency_ms: i64) -> Result<i64, String> {
+    Err(AUDIO_UNAVAILABLE.to_string())
+}
+
+/// M158 (§79b): la posición REAL de reproducción de la salida `h`, en ms.
+#[cfg(all(feature = "audio", unix, not(target_arch = "wasm32")))]
+pub fn audio_played(h: i64) -> Result<i64, String> {
+    use std::os::unix::io::AsRawFd;
+    let fd = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::PipeW(f)) => f.as_raw_fd(),
+        _ => return Err("audio: not an open audio output".to_string()),
+    };
+    ray_runtime::audio::played_ms(fd)
+}
+#[cfg(any(not(all(feature = "audio", unix)), target_arch = "wasm32"))]
+pub fn audio_played(_h: i64) -> Result<i64, String> {
     Err(AUDIO_UNAVAILABLE.to_string())
 }
 
@@ -3508,9 +3523,18 @@ static BUILTINS: &[Builtin] = &[
     // salida PCM s16le; el handle es un PipeW del registro — `__audio_write` comparte el opcode
     // de escritura con contrapresión y `close(h)` es el EOF que drena y termina.
     Builtin { name: "__audio_open", opcode: OpCode::AudioOpen, check: |a| {
-        arity(a, 2, "__audio_open", " (sample_rate, channels)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__audio_open expects an int (the sample rate), not {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__audio_open expects an int (the channel count), not {}", a[1]))); }
+        // M158: tercer arg latency_ms (0 = default) — el hint dimensiona anillo/buffers/chunk.
+        arity(a, 3, "__audio_open", " (sample_rate, channels, latency_ms)")?;
+        for (i, what) in ["sample rate", "channel count", "latency in ms"].iter().enumerate() {
+            if a[i] != Type::Int { return Err((Some(i), format!("__audio_open expects an int (the {what}), not {}", a[i]))); }
+        }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __audio_played(h) -> [string] (M158): ["ok", ms] o ["err", msg] — la posición REAL de
+    // reproducción según el backend (GetCurrentTime / snd_pcm_delay / getFramesRead).
+    Builtin { name: "__audio_played", opcode: OpCode::AudioPlayed, check: |a| {
+        arity(a, 1, "__audio_played", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__audio_played expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __audio_write(h, samples) -> [string] (M145): alias con opcode COMPARTIDO con

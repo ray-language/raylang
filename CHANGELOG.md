@@ -6,8 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-- **Puente IPC JS→raylang en `std/ui`** (M152, raydesk §81.1 — macOS en este arco; GTK/iOS en
-  el siguiente): cada webview trae `window.ray.send(text)` — el texto llega como evento
+- **El puente IPC llega a Linux y al iPhone** (M152 parte 2): el webview GTK se crea con un
+  user content manager (shim + handler `"ray"`; con WebKitGTK sin los símbolos — <2.22 — la
+  ventana nace sin puente, jamás falla `ui.open`), y el shell iOS instala el mismo puente en
+  cada conexión de escena (`window` = 0 ahí: el shell no conoce el handle). Mismo contrato en
+  las tres plataformas.
+
+- **Puente IPC JS→raylang en `std/ui`** (M152, raydesk §81.1): cada webview trae
+  `window.ray.send(text)` — el texto llega como evento
   `kind == "message"` (`tag` = texto, `window` = handle de la ventana) por el mismo stream de
   `next_event()`/`events()`; con `eval_js` de vuelta, una app chica ya no necesita webserver.
   Solo strings (otros tipos se ignoran; NULs eliminados); la vía de bajo nivel es

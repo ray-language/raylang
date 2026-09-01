@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **La tupla (o cualquier literal) en cola tras un `if`/`while`/`match` de sentencia ya
+  funciona** (M153, SPEC §5): en posición de sentencia una forma-con-bloque termina en su
+  `}` — `if (c) { … }` seguido de `(a, b)` es el `if` como sentencia y la tupla como valor
+  del bloque, no una llamada. Muere el `return` defensivo del gotcha §55. En posición de
+  expresión nada cambia (`let x = if (c) { f } else { g }(1);` sigue siendo llamada), y un
+  `?`/`.` colgando de una forma-de-sentencia da un error dirigido ("wrap the expression in
+  parentheses or bind it with 'let'").
+
 - **El puente IPC llega a Linux y al iPhone** (M152 parte 2): el webview GTK se crea con un
   user content manager (shim + handler `"ray"`; con WebKitGTK sin los símbolos — <2.22 — la
   ventana nace sin puente, jamás falla `ui.open`), y el shell iOS instala el mismo puente en

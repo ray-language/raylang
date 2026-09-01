@@ -216,6 +216,7 @@ sentencia = 'let' ( IDENT | '(' IDENT ',' IDENT { ',' IDENT } ')' ) [ ':' tipo ]
           | 'for' patron_for 'in' iterable bloque
           | expresion ';'
           | expresion_con_bloque ;                   (* if/match/bloque como sentencia, sin ';' *)
+expresion_con_bloque = expresion_if | expresion_while | expresion_match | bloque ;
 destino   = IDENT | expresion_postfija '.' IDENT | expresion_postfija '[' expresion ']' ;
 patron_for= IDENT | '(' IDENT ',' IDENT ')' ;
 iterable  = expresion [ '..' expresion ] ;
@@ -234,6 +235,15 @@ iterable  = expresion [ '..' expresion ] ;
   bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento.
 - **`return`** sale de la función envolvente; `return;` devuelve unit. El valor de una función
   también puede *caer* del bloque (retorno implícito: la expresión final sin `;`).
+- **Expresión-con-bloque en posición de sentencia** (M153): dentro de un bloque, una expresión
+  que COMIENZA con `if`/`while`/`match`/`{` se parsea exactamente como esa forma-con-bloque —
+  ningún operador postfijo (`(`, `[`, `.`, `?`) ni binario la extiende; el token siguiente
+  inicia una sentencia nueva o la cola del bloque. Así `if (c) { … }` seguido de `(a, b)` en
+  la línea siguiente es el `if` como sentencia y la tupla como cola — no una llamada del valor
+  del bloque. Para aplicar postfijos o binarios al VALOR de una forma-con-bloque, ponla en
+  posición de expresión: paréntesis o un `let` (`let x = if (c) { f } else { g }(1);` sigue
+  siendo una llamada). La resolución es la misma familia que la del struct-literal (§6.2):
+  ante la ambigüedad, en posición de sentencia gana la lectura de sentencia.
 
 ## 6. Expresiones
 

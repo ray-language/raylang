@@ -827,9 +827,32 @@ impl Parser {
                 statements.push(self.for_stmt()?);
                 continue;
             }
-            // Parseamos una expresión. Puede ser el lado izquierdo de una
-            // asignación, una sentencia-de-expresión, o el valor final del bloque.
-            let expr = self.expression()?;
+            // M153 (SPEC §5): una expresión que COMIENZA con if/while/match/'{' en posición
+            // de sentencia se parsea SOLO como esa forma-con-bloque — sin bucle postfijo ni
+            // binarios. Así `if (c) { … }` + `(a, b)` en la línea siguiente es el if como
+            // sentencia y la tupla como cola (antes: llamada del valor del bloque — el
+            // gotcha §55 que todo el repo esquivaba con `return`). En posición de EXPRESIÓN
+            // (let, args, parens, return) nada cambia: ahí sigue entrando expression().
+            let in_statement_position = matches!(
+                self.peek_kind(),
+                TokenKind::If | TokenKind::While | TokenKind::Match | TokenKind::LBrace
+            );
+            let expr = if in_statement_position {
+                let e = self.block_form_expr()?;
+                // Error dirigido: los únicos postfijos plausibles que la regla mata. El
+                // resto de tokens no-iniciadores caen en el error genérico de la sentencia
+                // siguiente.
+                if matches!(self.peek_kind(), TokenKind::Question | TokenKind::Dot) {
+                    let op = if matches!(self.peek_kind(), TokenKind::Question) { "?" } else { "." };
+                    return Err(self.error_here(format!(
+                        "'{op}' does not apply to an if/while/match/block used as a \
+                         statement; wrap the expression in parentheses or bind it with 'let'"
+                    )));
+                }
+                e
+            } else {
+                self.expression()?
+            };
             let (line, col) = (expr.line, expr.col);
 
             // Asignación: `lvalue '=' value ';'`. Como `==` es otro token (EqEq),
@@ -1463,6 +1486,22 @@ impl Parser {
     }
 
     /// ifExpr = 'if' '(' expression ')' block [ 'else' ( block | ifExpr ) ]
+    /// M153: la forma-con-bloque SOLA, para la posición de sentencia (SPEC §5) — despacha a
+    /// las mismas funciones que primary() pero SIN pasar después por el bucle postfijo de
+    /// call() ni por la jerarquía binaria: el `}` de cierre termina la expresión.
+    fn block_form_expr(&mut self) -> Result<Expr, ParseError> {
+        match self.peek_kind() {
+            TokenKind::If => self.if_expr(),
+            TokenKind::While => self.while_expr(),
+            TokenKind::Match => self.match_expr(),
+            TokenKind::LBrace => {
+                let b = self.block()?;
+                Ok(Expr { line: b.line, col: b.col, kind: ExprKind::Block(b) })
+            }
+            _ => unreachable!("block_form_expr is only called with a block-form first token"),
+        }
+    }
+
     fn if_expr(&mut self) -> Result<Expr, ParseError> {
         let kw = self.expect(&TokenKind::If, "'if'")?;
         // M40.1b: `if let <patrón> = <expr> { … } [else …]`. Azúcar puro → un `match` de dos brazos
@@ -2409,6 +2448,78 @@ mod tests {
         // 'x = 1;' es sentencia; 'x + 1' (sin ';') es el valor del bloque.
         let s = sx(&parse_expr("{ var x: int = 0; x = 1; x + 1 }"));
         assert_eq!(s, "{var x = 0; x = 1; (+ x 1)}");
+    }
+
+    #[test]
+    fn a_block_form_statement_does_not_absorb_postfixes_or_binaries() {
+        // M153 (SPEC §5): if/while/match/'{' en posición de sentencia terminan en su '}' —
+        // el token siguiente es sentencia nueva o cola. Los 3 sabores del gotcha §55.
+        let cases = [
+            ("{ if (c) { let _x = 1; }\n(1, 2) }", "tuple tail after if"),
+            ("{ while (c) { f(); }\n[xs][0] }", "index tail after while"),
+            ("{ while (c) { f(); }\n-1 }", "negative tail after while"),
+            ("{ { f(); }\n(2, 3) }", "tuple tail after a bare block"),
+        ];
+        for (src, what) in cases {
+            let e = parse_expr(src);
+            let ExprKind::Block(b) = &e.kind else { panic!("{what}: a block") };
+            assert_eq!(b.statements.len(), 1, "{what}: the block form is ONE statement");
+            assert!(
+                matches!(&b.statements[0].kind, StmtKind::Expr(inner) if expr_has_block(inner)),
+                "{what}: the statement is the block form"
+            );
+            let tail = b.tail.as_ref().expect(what);
+            assert!(
+                !matches!(&tail.kind, ExprKind::Call { .. }),
+                "{what}: the tail must NOT be a call of the block's value"
+            );
+        }
+        // Sentencia INTERMEDIA: la forma-con-bloque no absorbe la expresión-sentencia siguiente.
+        let e = parse_expr("{ if (c) { f(); }\ng(1);\n0 }");
+        let ExprKind::Block(b) = &e.kind else { panic!("a block") };
+        assert_eq!(b.statements.len(), 2, "if statement + g(1) statement");
+    }
+
+    #[test]
+    fn expression_position_still_applies_postfixes_to_block_forms() {
+        // La regla es SOLO de posición de sentencia: tras 'let' (o parens, o return) un
+        // if-else sigue aceptando la llamada/índice sobre su valor.
+        let s = sx(&parse_expr("{ let y = if (c) { f } else { g }(10); y }"));
+        assert!(s.contains("(call"), "let-position keeps the call: {s}");
+    }
+
+    #[test]
+    fn a_dangling_postfix_on_a_block_statement_is_a_directed_error() {
+        for (src, op) in [("{ match (e) { _ => 1, }? }", "'?'"), ("{ if (c) { f(); }.g() }", "'.'")] {
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut p = Parser::new(tokens);
+            let err = p.expression().expect_err("must not parse");
+            assert!(
+                err.msg.contains(op) && err.msg.contains("wrap the expression"),
+                "directed message for {op}: {}",
+                err.msg
+            );
+        }
+    }
+
+    #[test]
+    fn block_form_statement_then_tail_roundtrips_through_fmt() {
+        // Guarda del layout nuevo: fmt → reparse → mismo AST (fmt no cambió; la regla nueva
+        // es la que hace re-parseable este layout).
+        for src in [
+            "fn f(c: bool) -> (int, int) {\n    if (c) {\n        let _x = 1;\n    }\n    (1, 2)\n}\n",
+            "fn f(n: int) -> int {\n    var i = 0;\n    while (i < n) {\n        i = i + 1;\n    }\n    -1\n}\n",
+        ] {
+            let prog = parse_prog(src);
+            let formatted = crate::fmt::format_source(src).expect("fmt ok");
+            let reparsed = parse_prog(&formatted);
+            assert_eq!(
+                format!("{:?}", prog.functions[0].body.tail),
+                format!("{:?}", reparsed.functions[0].body.tail),
+                "same tail after fmt:\n{formatted}"
+            );
+            assert_eq!(prog.functions[0].body.statements.len(), reparsed.functions[0].body.statements.len());
+        }
     }
 
     #[test]

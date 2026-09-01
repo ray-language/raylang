@@ -2436,11 +2436,12 @@ Cosas que sorprenden viniendo de otros lenguajes:
   `=> { x = y; },`.
 - **Precedencia estilo C en los bit a bit**: `(flags & 32) != 0`, con paréntesis — `&`/`|`/`^` ligan más
   flojo que `==`/`!=`.
-- **Un literal en cola tras un `if`/`while` de sentencia se pega al postfijo.** `if (c) { return a; }`
-  seguido de `[1, 2]` en posición de retorno se parsea como *indexación* del if (y una tupla, como
-  *llamada*). Solución: `return [1, 2];` explícito. Desde M87 **el checker te lo dice**: el error
-  ("no se puede llamar/indexar…") lleva la pista "…se parsea como llamada a su valor — sepárala
-  con 'return' o 'let'".
+- **Un literal en cola tras un `if`/`while` de sentencia YA FUNCIONA** (M153): `if (c) { … }`
+  seguido de `(a, b)` o `[1, 2]` en la línea siguiente es el `if` como sentencia y el literal
+  como valor del bloque — antes se parseaba como llamada/indexación del valor del `if` y había
+  que esquivarlo con `return`. La regla (SPEC §5): en posición de sentencia, una forma-con-
+  bloque termina en su `}`; para aplicar postfijos a su VALOR, ponla tras un `let` o entre
+  paréntesis (`let x = if (c) { f } else { g }(1);` sigue siendo una llamada).
 - **Firmas explícitas siempre.** Los parámetros y el retorno de una función se anotan; no se infieren.
 - **Lo indeterminado pide contexto.** `[]`, `Option.None`, `Map.new()`, `Arbol.Hoja` (variante sin payload
   de un enum genérico) no pueden inferir su tipo solos → anótalo (`let t: Arbol<int> = …`) o dáselo el

@@ -10889,3 +10889,32 @@ controller retiene FUERTE al delegate (asimetría con el delegate de ventana, we
 registro ya soltado (disciplina de `mark_closed`). Verificado con ventana real en macOS: el
 E2E `#[ignore]` (la batería y `ray test` fuerzan headless) dispara `window.ray.send('ping')`
 por `eval_js` con retry — y el mensaje llega con el handle correcto en ~1 s.
+
+## 148. M153 — la expresión-con-bloque en posición de sentencia (sep 2026)
+
+El gotcha §55, el papercut más citado del repo: `if (c) { … }` seguido de `(1, 2)`, `[i]` o
+`-1` se parseaba como llamada/indexación/resta del VALOR del bloque, porque `block_inner`
+pedía una `expression()` completa y el bucle postfijo de `call()` + la jerarquía binaria
+tragaban lo que viniera. Seis sitios del propio repo (tz, registry_site, mysql, term, el
+lexer selfhost, el ejemplo de tuplas) llevaban `return` explícito con comentario de disculpa,
+y raydesk lo señaló como ergonomía (§81.4). La decisión: **la regla de Rust** — en posición
+de sentencia, una expresión que comienza con `if`/`while`/`match`/`{` se parsea SOLO como esa
+forma-con-bloque; ningún postfijo ni binario la extiende; el token siguiente es sentencia
+nueva o la cola del bloque. En posición de expresión (tras `let`, en args, entre paréntesis)
+nada cambia: `let x = if (c) { f } else { g }(1);` sigue siendo una llamada. Es la misma
+familia de resolución que la ambigüedad struct-literal (§6.2 de la SPEC): ante la duda, en
+posición de sentencia gana la lectura de sentencia.
+
+Lo que hizo la decisión BARATA (medido antes de decidir): cero código real en todos los
+`.ray` versionados usa `}` seguido de `(`/`[`/`.`/`?`/operador — la regla nueva produce el
+mismo AST para todo el corpus, así que el oráculo diferencial del selfhost sigue verde SIN
+tocar `selfhost/parser.ray` (congelado; la divergencia latente queda registrada aquí: al
+descongelar, portar la regla — y NO meter la forma nueva en `examples/`, que es el corpus del
+oráculo, hasta entonces). `fmt` tampoco cambia: la lógica del `;` preservado (última
+sentencia block-form sin cola) sigue válida, y el layout nuevo re-parsea idéntico (asertado
+con round-trip). La nota M87 del checker sigue viva y correcta donde aún dispara (posición de
+expresión); su retiro queda diferido con el selfhost (espejo byte-idéntico). Se añadió un
+error DIRIGIDO del parser para los dos postfijos plausibles que la regla mata
+(`match (e) { … }?` y `}.method()` en posición de sentencia): "wrap the expression in
+parentheses or bind it with 'let'". Seguimiento aparte: la gramática tree-sitter declara el
+conflicto GLR equivalente — verificar su comportamiento efectivo (repo aparte, best-effort).

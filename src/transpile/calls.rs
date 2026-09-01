@@ -2223,6 +2223,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            "ui_set_about" if name.starts_with("__") && !self.exclude.contains("ui") => {
+                self.needs_rt_ui = true;
+                out.push_str("__ray_ui_set_about(&*");
+                self.emit_expr(out, eff[0])?;
+                for arg in eff.iter().take(4).skip(1) {
+                    out.push_str(", &*");
+                    self.emit_expr(out, arg)?;
+                }
+                out.push(')');
+            }
             "ui_dialog" if name.starts_with("__") && !self.exclude.contains("ui") => {
                 self.needs_rt_ui = true;
                 out.push_str("__ray_ui_dialog(&*");

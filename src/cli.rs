@@ -1360,7 +1360,7 @@ fn cmd_bundle(args: &[String]) {
     build_native(&path, tmp_bin.to_str(), true, &exclude, None, false, fibers, &embed, false);
 
     if cfg!(target_os = "macos") {
-        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), &tmp_bin);
+        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &tmp_bin);
     } else if cfg!(unix) {
         bundle_linux(&out_dir, &name, icon.as_deref(), &tmp_bin);
     } else {
@@ -1373,7 +1373,7 @@ fn cmd_bundle(args: &[String]) {
 /// El `.app` de macOS: la estructura es un árbol de carpetas + un Info.plist mínimo. El icns es
 /// best-effort (sips + iconutil, herramientas del sistema); el codesign ad-hoc también (mantiene
 /// válida la firma que el linker de arm64 aplicó, tras mover el binario).
-fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, bin: &Path) {
+fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, bin: &Path) {
     let app = out_dir.join(format!("{name}.app"));
     let _ = fs::remove_dir_all(&app);
     let macos_dir = app.join("Contents/MacOS");
@@ -1394,6 +1394,10 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
             Err(e) => eprintln!("bundle: warning: could not build the icon ({e}); continuing without it"),
         }
     }
+    // M155: el copyright del panel About sale de `[app] copyright` del ray.toml.
+    let copyright_key = copyright
+        .map(|c| format!("\x20 <key>NSHumanReadableCopyright</key><string>{c}</string>\n"))
+        .unwrap_or_default();
     let plist = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -1407,6 +1411,7 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
          \x20 <key>CFBundleShortVersionString</key><string>{version}</string>\n\
          \x20 <key>NSHighResolutionCapable</key><true/>\n\
          {icon_key}\
+         {copyright_key}\
          \x20 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>\n\
          </dict>\n</plist>\n"
     );

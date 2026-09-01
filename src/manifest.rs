@@ -56,6 +56,12 @@ pub struct Manifest {
     /// (socket-activation, M92.3): el hijo la ADOPTA en vez de re-bind → cero conexiones rechazadas. El
     /// flag `--port`/`--listen` de la CLI la sobrescribe. `None` = sin socket retenido (bind por reinicio).
     pub dev_listen: Option<String>,
+    /// M155: `[app] copyright` — la línea de copyright del panel About (el bundle la escribe
+    /// como `NSHumanReadableCopyright` en el Info.plist del .app). `None` = sin copyright.
+    pub app_copyright: Option<String>,
+    /// M155: `[app] description` — la descripción corta de la app (hoy la usa `ui.set_about`
+    /// como referencia documental; el panel la recibe por código). `None` = sin descripción.
+    pub app_description: Option<String>,
     /// M151 (raydesk #9): `[ios] development_team` — el team de firma de Apple que `ray bundle
     /// --ios` escribe en el `App.xcconfig` generado (con `CODE_SIGN_STYLE = Automatic`). Sin él,
     /// cada regeneración borraba el team elegido en Xcode. `None` = sin firma declarada (el
@@ -111,6 +117,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut native_embed = Vec::new();
     let mut dev_listen = None;
     let mut ios_development_team = None;
+    let mut app_copyright = None;
+    let mut app_description = None;
 
     for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
@@ -181,6 +189,12 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "listen" => dev_listen = Some(as_string()?),
                 _ => {} // otras claves de [dev] se ignoran por ahora (extensibilidad)
             },
+            "app" => match key {
+                // M155: metadatos de la app para el panel About / el bundle.
+                "copyright" => app_copyright = Some(as_string()?),
+                "description" => app_description = Some(as_string()?),
+                _ => {} // otras claves de [app] se ignoran por ahora (extensibilidad)
+            },
             "ios" => {
                 // M151: `development_team = "ABCDE12345"` — el team de firma para `ray bundle
                 // --ios`; otras claves de [ios] se ignoran por ahora (extensibilidad).
@@ -207,6 +221,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         native_embed,
         dev_listen,
         ios_development_team,
+        app_copyright,
+        app_description,
     })
 }
 
@@ -315,6 +331,19 @@ mod tests {
         assert!(m.dependencies.is_empty());
         assert!(m.native_without.is_empty()); // sin [native] → sin exclusión
         assert_eq!(m.entry_path(), PathBuf::from("/proj/src/main.ray"));
+    }
+
+    #[test]
+    fn app_metadata_is_parsed() {
+        // M155: [app] copyright/description — el panel About y el Info.plist del bundle.
+        let m = parse_src(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\ncopyright = \"(c) 2026 Demo\"\ndescription = \"A demo\"\n",
+        )
+        .unwrap();
+        assert_eq!(m.app_copyright.as_deref(), Some("(c) 2026 Demo"));
+        assert_eq!(m.app_description.as_deref(), Some("A demo"));
+        let bare = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+        assert!(bare.app_copyright.is_none() && bare.app_description.is_none());
     }
 
     #[test]

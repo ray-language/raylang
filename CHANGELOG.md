@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El panel About nativo es personalizable** (M155): `ui.set_about(name, version,
+  description, copyright)` llena el panel estándar de macOS que abre el item
+  `"role:about"` — nombre en negrita, línea "Version …", descripción (como créditos, al
+  estilo del Finder) y copyright; `""` omite un campo. Y en el `.app` de `ray bundle`,
+  `[app] copyright = "…"` del ray.toml se escribe en el Info.plist (el panel lo muestra
+  sin código). Declarado en ray_doc/REFERENCE/MANUAL — visible desde el MCP.
+
 - **`web.state` — estado de aplicación compartido entre handlers** (M154, raydesk #8): el
   gemelo de `sessions` sin cookies — `state(path)` (persiste bajo `ray dev`, memoria pura en
   producción) o `state_memory()`, con `state_get/put/delete` y **`state_incr` atómico**. La

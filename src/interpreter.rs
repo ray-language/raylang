@@ -2124,6 +2124,18 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__ui_set_about" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Str(n), Value::Str(v), Value::Str(d), Value::Str(c)) => {
+                        match crate::builtins::ui_set_about(n, v, d, c) {
+                            Ok(()) => vec![Value::Str("ok".to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees 4 strings"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__ui_dialog" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Str(kind), Value::Str(arg)) => match crate::builtins::ui_dialog(kind, arg) {

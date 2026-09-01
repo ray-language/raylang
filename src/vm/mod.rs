@@ -3168,6 +3168,23 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M155: contenido del panel About — 4 strings de la pila (orden inverso).
+                OpCode::UiSetAbout => {
+                    let mut args = Vec::with_capacity(4);
+                    for _ in 0..4 {
+                        let HeapValue::Str(s) = self.pop() else {
+                            unreachable!("the checker guarantees strings");
+                        };
+                        args.push(s);
+                    }
+                    args.reverse();
+                    let elems = match crate::builtins::ui_set_about(&args[0], &args[1], &args[2], &args[3]) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M148: diálogo de archivo — MODAL: bloquea el hilo del worker lo que el
                 // usuario tarde (clase sqlite/run, documentado).
                 OpCode::UiDialog => {

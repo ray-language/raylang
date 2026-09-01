@@ -544,6 +544,30 @@ pub fn menu(title: &str, items: &[String]) -> Result<(), String> {
     }
 }
 
+/// M155: los valores del panel About declarados por el programa (name, version, description,
+/// copyright; "" = omitir el campo). Los lee el action del item "role:about" en macOS AL
+/// CLICK (así set_about vale antes o después de app_menu); en Linux/iOS se guardan pero el
+/// panel nativo no existe ahí (Linux entrega "role:about" como evento — about propio).
+type AboutInfo = (String, String, String, String);
+
+fn about_info() -> &'static std::sync::Mutex<Option<AboutInfo>> {
+    static ABOUT: std::sync::OnceLock<std::sync::Mutex<Option<AboutInfo>>> =
+        std::sync::OnceLock::new();
+    ABOUT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// M155: declara el contenido del panel About nativo (macOS). Cada campo con "" se omite y
+/// el panel usa lo del bundle. Headless y plataformas sin panel: se guarda y Ok.
+pub fn set_about(name: &str, version: &str, description: &str, copyright: &str) -> Result<(), String> {
+    *about_info().lock().unwrap() = Some((
+        name.to_string(),
+        version.to_string(),
+        description.to_string(),
+        copyright.to_string(),
+    ));
+    Ok(())
+}
+
 /// M151 (raydesk #10): items en el menú de APLICACIÓN + su título opcional. macOS: item 0 de
 /// la barra global (encima de Hide/Quit; tag "role:about" = About nativo sin evento; `name`
 /// re-titula el menú — bajo `ray run` salía el nombre del proceso). Linux: no existe menú de
@@ -976,6 +1000,56 @@ mod mac {
                     super::push_event("message", id, &body);
                 }
             }
+            fn about_info_snapshot() -> Option<super::AboutInfo> {
+                super::about_info().lock().unwrap().clone()
+            }
+            // M155: la action del item "role:about" — abre el panel estándar CON el
+            // diccionario de opciones si el programa declaró contenido (ui.set_about), o el
+            // panel a secas si no. Corre en el hilo principal (el run loop la entrega).
+            extern "C" fn about_action(_this: Id, _sel: Sel, _sender: Id) {
+                let declared = about_info_snapshot();
+                // SAFETY: objc en el hilo principal; los NSString/dict son autoreleased.
+                unsafe {
+                    let shared: MsgId = std::mem::transmute(msg_send());
+                    let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                    let set_bool: MsgVoidBool = std::mem::transmute(msg_send());
+                    let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+                    // El panel puede abrir DETRÁS si la app no está activa (patrón dialog).
+                    set_bool(app, sel(b"activateIgnoringOtherApps:\0"), 1);
+                    match declared {
+                        None => {
+                            set_id(app, sel(b"orderFrontStandardAboutPanel:\0"), std::ptr::null_mut());
+                        }
+                        Some((name, version, description, copyright)) => {
+                            let plain_id: MsgId = std::mem::transmute(msg_send());
+                            let set_kv: MsgVoidIdId = std::mem::transmute(msg_send());
+                            let id_id: MsgIdId = std::mem::transmute(msg_send());
+                            let alloc: MsgId = std::mem::transmute(msg_send());
+                            let dict =
+                                plain_id(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
+                            if !name.is_empty() {
+                                set_kv(dict, sel(b"setObject:forKey:\0"), nsstring(&name), nsstring("ApplicationName"));
+                            }
+                            if !version.is_empty() {
+                                set_kv(dict, sel(b"setObject:forKey:\0"), nsstring(&version), nsstring("ApplicationVersion"));
+                            }
+                            if !copyright.is_empty() {
+                                set_kv(dict, sel(b"setObject:forKey:\0"), nsstring(&copyright), nsstring("Copyright"));
+                            }
+                            if !description.is_empty() {
+                                // La descripción viaja como Credits (NSAttributedString):
+                                // es la zona de texto bajo la versión, como en el Finder.
+                                let attr = {
+                                    let a = alloc(cls(b"NSAttributedString\0"), sel(b"alloc\0"));
+                                    id_id(a, sel(b"initWithString:\0"), nsstring(&description))
+                                };
+                                set_kv(dict, sel(b"setObject:forKey:\0"), attr, nsstring("Credits"));
+                            }
+                            set_id(app, sel(b"orderFrontStandardAboutPanelWithOptions:\0"), dict);
+                        }
+                    }
+                }
+            }
             unsafe {
                 let cls_new =
                     objc_allocateClassPair(cls(b"NSObject\0"), c"RayWindowDelegate".as_ptr(), 0);
@@ -990,6 +1064,12 @@ mod mac {
                     cls_new,
                     sel(b"rayMenuAction:\0"),
                     menu_action as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    c"v@:@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"rayAboutAction:\0"),
+                    about_action as extern "C" fn(Id, Sel, Id) as *const c_void,
                     c"v@:@".as_ptr(),
                 );
                 class_addMethod(
@@ -1122,14 +1202,17 @@ mod mac {
                 for (tag, label, shortcut) in &items {
                     let item = if tag == "role:about" {
                         let title = if label.is_empty() { "About".to_string() } else { label.clone() };
-                        // target nil: la action viaja por la responder chain hasta NSApp.
-                        item_init(
+                        // M155: action propia con target (el singleton del delegate) — al
+                        // click decide: panel con opciones (ui.set_about) o el estándar.
+                        let item = item_init(
                             alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
                             sel(b"initWithTitle:action:keyEquivalent:\0"),
                             nsstring(&title),
-                            sel(b"orderFrontStandardAboutPanel:\0"),
+                            sel(b"rayAboutAction:\0"),
                             nsstring(""),
-                        )
+                        );
+                        set_id(item, sel(b"setTarget:\0"), target);
+                        item
                     } else {
                         let item = item_init(
                             alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),

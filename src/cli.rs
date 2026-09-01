@@ -91,7 +91,7 @@ Project:
   run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode)
   build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--target triple] [--without crypto,tls,sqlite,mimalloc,ahash,regex,fibers,process,watch,audio,ui] [--embed dirs] [--lib]] [--templates-only [path...]]
-  bundle [file]     package an app (M147c): --release native build + .app (macOS) / dir + .desktop (Linux); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
+  bundle [file]     package an app (M147c): --release native build + .app (macOS) / dir + .desktop (Linux); --ios (§80b) generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process,audio; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved) [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed); unsigned apps downloaded on macOS 15+ need approval in System Settings > Privacy & Security (no signing/notarization in v1)
   test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch]
   fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
   doc <file>        generate the Markdown documentation of its public surface
@@ -1233,10 +1233,13 @@ fn cmd_bundle(args: &[String]) {
     let id_arg = flag_value("--id");
     let out_arg = flag_value("-o");
     let without_arg = flag_value("--without");
+    // M155b: `--ios-target device|sim|both` — qué staticlib(s) construye `--ios` (both por
+    // defecto; iterando contra un solo destino, el otro build son ~15-20 s tirados).
+    let ios_target_arg = flag_value("--ios-target");
     // `--ios` (§80b): en vez del .app/.desktop del HOST, genera el proyecto Xcode de una app
     // iOS (shell WKWebView + staticlibs de dispositivo y simulador). Solo host macOS.
     let ios = args.iter().any(|a| a == "--ios");
-    let values: Vec<&String> = [&name_arg, &icon, &id_arg, &out_arg, &without_arg].iter().filter_map(|o| o.as_ref()).collect();
+    let values: Vec<&String> = [&name_arg, &icon, &id_arg, &out_arg, &without_arg, &ios_target_arg].iter().filter_map(|o| o.as_ref()).collect();
     let file = args
         .iter()
         .find(|a| !a.starts_with('-') && !values.iter().any(|v| v.as_str() == a.as_str()))
@@ -1311,12 +1314,29 @@ fn cmd_bundle(args: &[String]) {
         }
         // Los DOS staticlibs (dispositivo y simulador; ambos arm64 — el xcconfig elige por
         // SDK, jamás un lipo). Con el rustup target ausente, cargo lo dice y la pista es esta:
-        eprintln!("[bundle] building the device and simulator static libraries (first build compiles ring/mimalloc for each target; needs `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`)…");
+        let ios_target = ios_target_arg.as_deref().unwrap_or("both");
+        if !matches!(ios_target, "device" | "sim" | "both") {
+            eprintln!("--ios-target must be 'device', 'sim' or 'both', not '{ios_target}'");
+            process::exit(64);
+        }
+        let build_dev = ios_target != "sim";
+        let build_sim = ios_target != "device";
+        eprintln!("[bundle] iOS static libraries — target: {ios_target} (a cold build compiles ring/mimalloc per target; needs `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`)");
         let dev_a = work.join("dev.a");
         let sim_a = work.join("sim.a");
-        build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, fibers, &embed, true);
-        build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, fibers, &embed, true);
+        if build_dev {
+            eprintln!("[bundle] device (aarch64-apple-ios)…");
+            build_native(&path, dev_a.to_str(), true, &exclude, Some("aarch64-apple-ios"), false, fibers, &embed, true);
+        }
+        if build_sim {
+            eprintln!("[bundle] simulator (aarch64-apple-ios-sim)…");
+            build_native(&path, sim_a.to_str(), true, &exclude, Some("aarch64-apple-ios-sim"), false, fibers, &embed, true);
+        }
         let proj = out_dir.join(format!("{name}-ios"));
+        // Con un solo lado construido, el `.a` del OTRO lado del proyecto anterior se
+        // conserva (como la firma): regenerar no debe dejar cojo lo que ya funcionaba.
+        let kept_dev = (!build_dev).then(|| fs::read(proj.join("libs/libray_app.a")).ok()).flatten();
+        let kept_sim = (!build_sim).then(|| fs::read(proj.join("libs-sim/libray_app.a")).ok()).flatten();
         // M151 (raydesk #9): la firma del xcconfig ANTERIOR se lee ANTES del borrado — cada
         // regeneración la pisaba (Xcode la escribe al elegir equipo) y había que reponerla a
         // mano tras cada bundle. `[ios] development_team` del ray.toml manda; lo preservado
@@ -1334,12 +1354,21 @@ fn cmd_bundle(args: &[String]) {
             process::exit(74);
         }
         // Nombre FIJO del archive en ambos dirs (el `-lray_app` del xcconfig): la ruta decide.
-        if let Err(e) = fs::copy(&dev_a, proj.join("libs/libray_app.a"))
-            .and_then(|_| fs::copy(&sim_a, proj.join("libs-sim/libray_app.a")))
-        {
-            eprintln!("bundle: could not place the static libraries: {e}");
-            process::exit(74);
-        }
+        let place = |built: bool, src_a: &Path, kept: &Option<Vec<u8>>, dst: std::path::PathBuf| {
+            let r = if built {
+                fs::copy(src_a, &dst).map(|_| ())
+            } else if let Some(bytes) = kept {
+                fs::write(&dst, bytes)
+            } else {
+                Ok(()) // lado no construido y sin proyecto previo: el dir queda vacío
+            };
+            if let Err(e) = r {
+                eprintln!("bundle: could not place the static libraries: {e}");
+                process::exit(74);
+            }
+        };
+        place(build_dev, &dev_a, &kept_dev, proj.join("libs/libray_app.a"));
+        place(build_sim, &sim_a, &kept_sim, proj.join("libs-sim/libray_app.a"));
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);

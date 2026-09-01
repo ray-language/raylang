@@ -2243,3 +2243,312 @@ mod shell {
         }
     }
 }
+
+// ── M156: el puente JNI del shell ANDROID. La app Gradle generada (`ray bundle --android`)
+// carga el programa como cdylib; el crate EMITIDO define los símbolos con nombre JNI
+// (JNI_OnLoad / Java_org_raylang_shell_RayBridge_*) y delega aquí. Vtable de JNIEnv/JavaVM
+// A MANO (precedente objc_msgSend: puntero sin tipo + cast por sitio a la firma exacta);
+// los ÍNDICES están transcritos del jni.h del NDK r27 (ABI congelada desde JNI 1.6). ──
+#[cfg(target_os = "android")]
+mod android {
+    use std::ffi::{c_char, c_void};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// `JNIEnv*` de C: puntero a puntero a la tabla de funciones.
+    pub type JniEnv = *mut *const c_void;
+    /// `JavaVM*` de C: misma forma.
+    pub type JavaVm = *mut *const c_void;
+    type JObject = *mut c_void;
+
+    const JNI_VERSION_1_6: i32 = 0x0001_0006;
+    const JNI_OK: i32 = 0;
+
+    // Slots del vtable (jni.h del NDK r27; comentario = declaración C).
+    const ENV_FIND_CLASS: usize = 6; // jclass FindClass(JNIEnv*, const char*)
+    const ENV_EXCEPTION_CLEAR: usize = 17; // void ExceptionClear(JNIEnv*)
+    const ENV_NEW_GLOBAL_REF: usize = 21; // jobject NewGlobalRef(JNIEnv*, jobject)
+    const ENV_DELETE_LOCAL_REF: usize = 23; // void DeleteLocalRef(JNIEnv*, jobject)
+    const ENV_GET_STATIC_METHOD_ID: usize = 113; // jmethodID GetStaticMethodID(JNIEnv*, jclass, name, sig)
+    const ENV_CALL_STATIC_VOID_A: usize = 143; // void CallStaticVoidMethodA(JNIEnv*, jclass, jmethodID, const jvalue*)
+    const ENV_NEW_STRING_UTF: usize = 167; // jstring NewStringUTF(JNIEnv*, const char*)
+    const ENV_GET_STRING_UTF_CHARS: usize = 169; // const char* GetStringUTFChars(JNIEnv*, jstring, jboolean*)
+    const ENV_RELEASE_STRING_UTF_CHARS: usize = 170; // void ReleaseStringUTFChars(JNIEnv*, jstring, const char*)
+    const ENV_EXCEPTION_CHECK: usize = 228; // jboolean ExceptionCheck(JNIEnv*)
+    const VM_GET_ENV: usize = 6; // jint GetEnv(JavaVM*, void**, jint)
+    const VM_ATTACH_DAEMON: usize = 7; // jint AttachCurrentThreadAsDaemon(JavaVM*, JNIEnv**, void*)
+
+    /// El puntero de función del slot `i` del vtable de `env` (se castea POR SITIO).
+    unsafe fn env_slot(env: JniEnv, i: usize) -> *const c_void {
+        // SAFETY: env es un JNIEnv* válido entregado por ART; el vtable es un array de fns.
+        unsafe { *((*env) as *const *const c_void).add(i) }
+    }
+    unsafe fn vm_slot(vm: JavaVm, i: usize) -> *const c_void {
+        // SAFETY: como env_slot.
+        unsafe { *((*vm) as *const *const c_void).add(i) }
+    }
+
+    // El estado del puente: el VM del proceso, la clase RayBridge (GlobalRef) y los dos
+    // methodIDs, cacheados en `init` con el env del hilo Java — el classloader correcto
+    // (FindClass desde un hilo nativo attachado vería el classloader del sistema, el pitfall
+    // JNI clásico; por eso aquí JAMÁS se llama FindClass fuera de init).
+    static VM: AtomicUsize = AtomicUsize::new(0);
+    static BRIDGE: AtomicUsize = AtomicUsize::new(0);
+    static MID_OPEN: AtomicUsize = AtomicUsize::new(0);
+    static MID_EVAL: AtomicUsize = AtomicUsize::new(0);
+
+    /// JNI_OnLoad del cdylib emitido delega aquí: retiene el JavaVM y arma el relay
+    /// stdout/stderr→logcat (en una app ambos van a /dev/null — sin esto, debugging a ciegas).
+    pub fn on_load(vm: JavaVm) -> i32 {
+        VM.store(vm as usize, Ordering::SeqCst);
+        arm_logcat_relay();
+        JNI_VERSION_1_6
+    }
+
+    /// `RayBridge.start()` delega aquí ANTES de ray_start: cachea la clase (GlobalRef) y los
+    /// methodIDs con el env del hilo Java, y registra los handlers del shell.
+    pub fn init(env: JniEnv, class: JObject) {
+        // SAFETY: env/class válidos durante la llamada JNI; los casts replican jni.h.
+        unsafe {
+            let new_global: unsafe extern "C" fn(JniEnv, JObject) -> JObject =
+                std::mem::transmute(env_slot(env, ENV_NEW_GLOBAL_REF));
+            let get_static: unsafe extern "C" fn(JniEnv, JObject, *const c_char, *const c_char) -> *mut c_void =
+                std::mem::transmute(env_slot(env, ENV_GET_STATIC_METHOD_ID));
+            let bridge = new_global(env, class);
+            BRIDGE.store(bridge as usize, Ordering::SeqCst);
+            let open = get_static(
+                env,
+                bridge,
+                c"onOpen".as_ptr(),
+                c"(Ljava/lang/String;Ljava/lang/String;)V".as_ptr(),
+            );
+            let eval = get_static(env, bridge, c"onEval".as_ptr(), c"(Ljava/lang/String;)V".as_ptr());
+            MID_OPEN.store(open as usize, Ordering::SeqCst);
+            MID_EVAL.store(eval as usize, Ordering::SeqCst);
+        }
+        super::shell::ray_ui_set_handlers(open_handler, eval_handler);
+    }
+
+    /// `RayBridge.pushEvent(kind, window, tag)` delega aquí (jstrings → push_event).
+    pub fn push_event(env: JniEnv, kind: JObject, window: i64, tag: JObject) {
+        let kind = jstring_to_string(env, kind);
+        let tag = jstring_to_string(env, tag);
+        super::push_event(&kind, window, &tag);
+    }
+
+    // Los handlers del shell: llegan DESDE el hilo del programa raylang → attach como daemon
+    // (no bloquea la salida del proceso) y llamada estática a RayBridge, que ya postea al
+    // main thread de Android por su Handler.
+    extern "C" fn open_handler(title: *const c_char, url: *const c_char) {
+        // Copiar YA (contrato del shell: válidos solo durante la llamada).
+        let title = cstr_owned(title);
+        let url = cstr_owned(url);
+        call_bridge(MID_OPEN.load(Ordering::SeqCst), &[&title, &url]);
+    }
+
+    extern "C" fn eval_handler(js: *const c_char) {
+        let js = cstr_owned(js);
+        call_bridge(MID_EVAL.load(Ordering::SeqCst), &[&js]);
+    }
+
+    fn cstr_owned(p: *const c_char) -> String {
+        if p.is_null() {
+            return String::new();
+        }
+        // SAFETY: NUL-terminated según el contrato del shell.
+        unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+
+    /// El env del hilo ACTUAL: GetEnv y, si el hilo no está attachado, AttachAsDaemon.
+    fn current_env() -> Option<JniEnv> {
+        let vm = VM.load(Ordering::SeqCst) as JavaVm;
+        if vm.is_null() {
+            return None;
+        }
+        let mut env: JniEnv = std::ptr::null_mut();
+        // SAFETY: vtable de JavaVM según jni.h.
+        unsafe {
+            let get_env: unsafe extern "C" fn(JavaVm, *mut JniEnv, i32) -> i32 =
+                std::mem::transmute(vm_slot(vm, VM_GET_ENV));
+            if get_env(vm, &mut env, JNI_VERSION_1_6) == JNI_OK {
+                return Some(env);
+            }
+            let attach: unsafe extern "C" fn(JavaVm, *mut JniEnv, *mut c_void) -> i32 =
+                std::mem::transmute(vm_slot(vm, VM_ATTACH_DAEMON));
+            if attach(vm, &mut env, std::ptr::null_mut()) == JNI_OK { Some(env) } else { None }
+        }
+    }
+
+    /// Llama un método estático void de RayBridge con args String (MUTF-8, ver abajo).
+    fn call_bridge(mid: usize, args: &[&str]) {
+        let (Some(env), bridge) = (current_env(), BRIDGE.load(Ordering::SeqCst)) else { return };
+        if mid == 0 || bridge == 0 {
+            return;
+        }
+        // SAFETY: vtable según jni.h; los jstrings locales se liberan tras la llamada.
+        unsafe {
+            let new_string: unsafe extern "C" fn(JniEnv, *const c_char) -> JObject =
+                std::mem::transmute(env_slot(env, ENV_NEW_STRING_UTF));
+            let call: unsafe extern "C" fn(JniEnv, JObject, *mut c_void, *const u64) =
+                std::mem::transmute(env_slot(env, ENV_CALL_STATIC_VOID_A));
+            let check: unsafe extern "C" fn(JniEnv) -> u8 =
+                std::mem::transmute(env_slot(env, ENV_EXCEPTION_CHECK));
+            let clear: unsafe extern "C" fn(JniEnv) =
+                std::mem::transmute(env_slot(env, ENV_EXCEPTION_CLEAR));
+            let drop_ref: unsafe extern "C" fn(JniEnv, JObject) =
+                std::mem::transmute(env_slot(env, ENV_DELETE_LOCAL_REF));
+            let mut jvals: Vec<u64> = Vec::with_capacity(args.len());
+            let mut locals: Vec<JObject> = Vec::with_capacity(args.len());
+            for a in args {
+                let bytes = super::utf8_to_mutf8(a);
+                let js = new_string(env, bytes.as_ptr() as *const c_char);
+                locals.push(js);
+                jvals.push(js as u64); // jvalue = unión de 8 bytes; el miembro objeto es el puntero
+            }
+            call(env, bridge as JObject, mid as *mut c_void, jvals.as_ptr());
+            if check(env) != 0 {
+                clear(env); // una excepción Java pendiente NO puede cruzar de vuelta a Rust
+            }
+            for l in locals {
+                drop_ref(env, l);
+            }
+        }
+    }
+
+    fn jstring_to_string(env: JniEnv, s: JObject) -> String {
+        if s.is_null() {
+            return String::new();
+        }
+        // SAFETY: vtable según jni.h; el buffer se copia antes del release.
+        unsafe {
+            let get: unsafe extern "C" fn(JniEnv, JObject, *mut u8) -> *const c_char =
+                std::mem::transmute(env_slot(env, ENV_GET_STRING_UTF_CHARS));
+            let release: unsafe extern "C" fn(JniEnv, JObject, *const c_char) =
+                std::mem::transmute(env_slot(env, ENV_RELEASE_STRING_UTF_CHARS));
+            let p = get(env, s, std::ptr::null_mut());
+            if p.is_null() {
+                return String::new();
+            }
+            let out = std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
+            release(env, s, p);
+            out
+        }
+    }
+
+    /// stdout/stderr → logcat (tag "ray"): pipe + dup2 + hilo lector por líneas. En una app
+    /// Android ambos flujos van a /dev/null — el "listening on port" del programa se vería
+    /// solo aquí. liblog está siempre presente en el proceso de una app.
+    fn arm_logcat_relay() {
+        #[link(name = "log")]
+        unsafe extern "C" {
+            fn __android_log_write(prio: i32, tag: *const c_char, text: *const c_char) -> i32;
+        }
+        unsafe extern "C" {
+            fn pipe(fds: *mut i32) -> i32;
+            fn dup2(old: i32, new: i32) -> i32;
+            fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+        }
+        const ANDROID_LOG_INFO: i32 = 4;
+        let mut fds = [0i32; 2];
+        // SAFETY: syscalls sobre fds propios; el hilo lector posee el extremo de lectura.
+        unsafe {
+            if pipe(fds.as_mut_ptr()) != 0 {
+                return;
+            }
+            dup2(fds[1], 1);
+            dup2(fds[1], 2);
+        }
+        let rd = fds[0];
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            let mut line: Vec<u8> = Vec::new();
+            loop {
+                // SAFETY: read bloqueante sobre nuestro fd.
+                let n = unsafe { read(rd, buf.as_mut_ptr(), buf.len()) };
+                if n <= 0 {
+                    break;
+                }
+                for &b in &buf[..n as usize] {
+                    if b == b'\n' {
+                        line.push(0);
+                        // SAFETY: line es NUL-terminated; el tag es un literal.
+                        unsafe {
+                            __android_log_write(ANDROID_LOG_INFO, c"ray".as_ptr(), line.as_ptr() as *const c_char);
+                        }
+                        line.clear();
+                    } else {
+                        line.push(b);
+                    }
+                }
+            }
+        });
+    }
+}
+
+// M156: la cara pública del puente Android (la llaman los símbolos JNI del crate EMITIDO —
+// JNI_OnLoad / Java_org_raylang_shell_RayBridge_*; punteros opacos para no exportar tipos).
+#[cfg(target_os = "android")]
+pub fn android_on_load(vm: *mut std::ffi::c_void) -> i32 {
+    android::on_load(vm as android::JavaVm)
+}
+#[cfg(target_os = "android")]
+pub fn android_init(env: *mut std::ffi::c_void, class: *mut std::ffi::c_void) {
+    android::init(env as android::JniEnv, class);
+}
+#[cfg(target_os = "android")]
+pub fn android_push_event(env: *mut std::ffi::c_void, kind: *mut std::ffi::c_void, window: i64, tag: *mut std::ffi::c_void) {
+    android::push_event(env as android::JniEnv, kind, window, tag);
+}
+
+/// M156 (C1): UTF-8 → Modified UTF-8 de la JVM, NUL-terminado — `NewStringUTF` exige MUTF-8
+/// (un emoji en UTF-8 real aborta bajo CheckJNI): NUL → C0 80, y los suplementarios
+/// (U+10000+) van como par de surrogates CESU-8 (dos secuencias de 3 octetos).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn utf8_to_mutf8(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() + 1);
+    for ch in s.chars() {
+        let cp = ch as u32;
+        if cp == 0 {
+            out.extend_from_slice(&[0xC0, 0x80]);
+        } else if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push(0xC0 | (cp >> 6) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else if cp < 0x10000 {
+            out.push(0xE0 | (cp >> 12) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else {
+            let v = cp - 0x10000;
+            let hi = 0xD800 + (v >> 10);
+            let lo = 0xDC00 + (v & 0x3FF);
+            for surr in [hi, lo] {
+                out.push(0xE0 | (surr >> 12) as u8);
+                out.push(0x80 | ((surr >> 6) & 0x3F) as u8);
+                out.push(0x80 | (surr & 0x3F) as u8);
+            }
+        }
+    }
+    out.push(0);
+    out
+}
+
+#[cfg(test)]
+mod mutf8_tests {
+    use super::utf8_to_mutf8;
+
+    #[test]
+    fn mutf8_covers_ascii_nul_bmp_and_supplementary() {
+        assert_eq!(utf8_to_mutf8("hi"), vec![b'h', b'i', 0]);
+        // NUL interior → C0 80 (jamás un 0 crudo antes del terminador).
+        assert_eq!(utf8_to_mutf8("a\0b"), vec![b'a', 0xC0, 0x80, b'b', 0]);
+        // BMP (é = U+00E9) igual que UTF-8.
+        assert_eq!(utf8_to_mutf8("é"), vec![0xC3, 0xA9, 0]);
+        // Suplementario (U+1F600 😀) → par de surrogates CESU-8 (6 octetos), NO UTF-8 de 4.
+        let grin = utf8_to_mutf8("😀");
+        assert_eq!(grin.len(), 7);
+        assert_eq!(&grin[..3], &[0xED, 0xA0, 0xBD]); // surrogate alto U+D83D
+        assert_eq!(&grin[3..6], &[0xED, 0xB8, 0x80]); // surrogate bajo U+DE00
+        assert_eq!(grin[6], 0);
+    }
+}

@@ -446,6 +446,13 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         out.push_str("/// no termina el proceso; un `exit()` del programa sí.\n");
         out.push_str("#[unsafe(no_mangle)]\n");
         out.push_str("pub extern \"C\" fn ray_start() -> i32 {\n");
+        // M156 (C6): un cdylib/staticlib NO pasa por el shim de main de Rust, que es quien
+        // ignora SIGPIPE — sin esto, un write a un socket cerrado mata el proceso del shell.
+        out.push_str("    #[cfg(unix)]\n");
+        out.push_str("    unsafe {\n");
+        out.push_str("        unsafe extern \"C\" { fn signal(s: i32, h: usize) -> usize; }\n");
+        out.push_str("        signal(13, 1); // SIGPIPE, SIG_IGN\n");
+        out.push_str("    }\n");
     } else {
         out.push_str("fn main() {\n");
     }
@@ -501,6 +508,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         run_body.push_str("        }\n");
         run_body.push_str("    }\n");
     }
+    let mut lib_closed = false;
     if lib_mode {
         // El programa corre en SU hilo (pila explícita, jamás una fibra — mismas razones que el
         // main de ui); ray_start retorna con él ya lanzado. Jamás panic en un extern "C".
@@ -510,6 +518,30 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         out.push_str("        Ok(_) => 0,\n");
         out.push_str("        Err(_) => 1,\n");
         out.push_str("    }\n");
+        out.push_str("}\n");
+        // M156 (C3): los símbolos con nombre JNI se definen EN ESTE crate (el cdylib mismo) —
+        // presencia en la tabla dinámica garantizada sin depender del re-export de no_mangle
+        // de rlibs; delegan en ray_runtime::ui (el vtable JNI vive allí). El paquete Java del
+        // shell es SIEMPRE org.raylang.shell (nombres estables, independientes del app id).
+        out.push_str(concat!(
+            "#[cfg(target_os = \"android\")]\n",
+            "#[unsafe(no_mangle)]\n",
+            "pub extern \"C\" fn JNI_OnLoad(vm: *mut std::ffi::c_void, _reserved: *mut std::ffi::c_void) -> i32 {\n",
+            "    ray_runtime::ui::android_on_load(vm)\n",
+            "}\n",
+            "#[cfg(target_os = \"android\")]\n",
+            "#[unsafe(no_mangle)]\n",
+            "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_start(env: *mut std::ffi::c_void, class: *mut std::ffi::c_void) -> i32 {\n",
+            "    ray_runtime::ui::android_init(env, class);\n",
+            "    ray_start()\n",
+            "}\n",
+            "#[cfg(target_os = \"android\")]\n",
+            "#[unsafe(no_mangle)]\n",
+            "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_pushEvent(env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, kind: *mut std::ffi::c_void, window: i64, tag: *mut std::ffi::c_void) {\n",
+            "    ray_runtime::ui::android_push_event(env, kind, window, tag);\n",
+            "}\n",
+        ));
+        lib_closed = true; // el '}' de ray_start ya se cerró arriba (los wrappers JNI van fuera)
     } else if t.needs_rt_ui {
         // M146 (std/ui): AppKit exige poseer el hilo 1 del proceso. El programa (el cuerpo de
         // arriba, VERBATIM — jamás una fibra: se perdería el payload de pánico y cambiaría
@@ -528,7 +560,9 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     } else {
         out.push_str(&run_body);
     }
-    out.push_str("}\n");
+    if !lib_closed {
+        out.push_str("}\n");
+    }
     // M96f: `print` deja de tomar el lock GLOBAL de `Stdout` en cada llamada — bajo impresión
     // concurrente intensiva (p. ej. `log_requests()`) era el mayor cuello de contención medido
     // (docs/investigacion-p99-framework-web.md §12). Diseño: un ÚNICO hilo escritor consume un
@@ -636,10 +670,13 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         rt_features.push("audio");
     }
     // M146: ventana + webview (detectada por USO; `--without ui` evita marcar el flag).
-    if t.needs_rt_ui {
-        // §80b: en modo lib el puente al shell compila en TODO target (`ui-shell` implica
-        // `ui`): la app iOS lo usa por cfg, y el driver del test T4 lo linkea en host.
-        rt_features.push(if lib_mode { "ui-shell" } else { "ui" });
+    // M156 (D3): en modo lib, `ui-shell` va SIEMPRE — los wrappers JNI emitidos para Android
+    // referencian ray_runtime::ui aunque el programa no abra ventanas, y el módulo es diminuto
+    // y agnóstico de OS (lo usan iOS/Android por cfg y el driver del test T4 en host).
+    if lib_mode {
+        rt_features.push("ui-shell");
+    } else if t.needs_rt_ui {
+        rt_features.push("ui");
     }
     // N1 (bench políglota, jul 2026): mimalloc como allocador del binario transpilado, POR DEFECTO. El
     // malloc del sistema (macOS) es lento en churn de strings pequeños: medido wordcount/logparse −40%,

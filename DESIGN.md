@@ -10986,3 +10986,21 @@ COMMIT (la lección F2c, tercera aplicación). La puerta de validación ya no es
 NDK instalado, `cargo check -p ray-runtime --target aarch64-linux-android` con TODAS las
 features (ring/rustls/rusqlite-bundled/corosensei/mimalloc/epoll/shell incluidos) compila
 limpio — el runtime entero es Android-ready antes de escribir una línea del shell.
+
+**M156 fase 2 — el `.so` con el puente JNI dentro.** La decisión de forma: nada de C extra ni
+`externalNativeBuild` — el vehículo JNI entero vive en Rust. La maquinaria (vtable de
+`JNIEnv`/`JavaVM` leída a mano con transmute por sitio — el precedente objc_msgSend — e
+índices transcritos del jni.h del NDK r27) está en `ray_runtime::ui::android`; los símbolos
+CON NOMBRE JNI (`JNI_OnLoad`, `Java_org_raylang_shell_RayBridge_start/pushEvent`) se emiten
+en el crate GENERADO (el cdylib mismo: presencia en la tabla dinámica garantizada, sin
+depender del re-export de no_mangle de rlibs — verificado con llvm-nm -D bajo fat-LTO). Los
+gotchas JNI cazados en la revisión: MUTF-8 (NewStringUTF aborta con suplementarios UTF-8
+reales → conversión CESU-8 con test host), el classloader (FindClass desde un hilo attachado
+ve el del sistema → GlobalRef + methodIDs cacheados en init con el env del hilo Java),
+AttachCurrentThreadAsDaemon para los handlers (llegan del hilo raylang), SIGPIPE (un cdylib
+no pasa por el shim de main de Rust que lo ignora → signal(13, SIG_IGN) en ray_start, iOS
+incluido), y stdout/stderr→logcat (en una app van a /dev/null: relay pipe+dup2+hilo con tag
+"ray"). El toolchain se inyecta por env (linker/CC/AR del NDK — sin cargo-ndk) y el .so va
+alineado a 16KB (Android 15+). `ui-shell` pasa a ser incondicional en modo lib (los wrappers
+JNI emitidos lo referencian aunque el programa no abra ventanas). T1 validado el mismo día:
+.so arm64 de 707KB con todos los símbolos dinámicos y LOADs a 0x4000.

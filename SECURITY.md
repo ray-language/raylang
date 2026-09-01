@@ -153,6 +153,12 @@ documentada:
 - **`src/poll.rs`** — las llamadas al sistema del *poller* de E/S (`kqueue`/`epoll`), declaradas a
   mano para no traer `libc`; y (M119) `poll(2)` con lista **nula** y `nfds = 0` para dormir el hilo
   con precisión (`sleep_ms`): puntero nulo, ningún buffer que la llamada retenga.
+- **`crates/ray-runtime/src/ui.rs` (mod `android`, M156)** — el puente JNI del shell Android:
+  el vtable de `JNIEnv`/`JavaVM` se lee A MANO (puntero sin tipo + `transmute` por sitio a la
+  firma exacta, el precedente de `objc_msgSend`), con los índices transcritos del `jni.h` del
+  NDK r27 (ABI congelada desde JNI 1.6); `CStr::from_ptr` sobre los C-strings del contrato del
+  shell (NUL-terminated, copiados durante la llamada); y el relay stdout/stderr→logcat
+  (`pipe`/`dup2` sobre fds propios). Cero dependencias nuevas.
 - **`src/builtins.rs`** — el canal de señales del proceso (`signals()`, un *self-pipe* con
   `pipe`/`sigaction`); la adopción del socket de escucha heredado del supervisor de `ray dev`
   (`from_raw_fd` sobre un fd que el padre garantiza, con toma de propiedad única); la lectura de

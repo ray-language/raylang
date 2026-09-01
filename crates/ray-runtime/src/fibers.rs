@@ -893,9 +893,16 @@ mod sys_common {
         fn poll(fds: *mut PollFd, n: Nfds, timeout: i32) -> i32;
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     unsafe extern "C" {
         #[link_name = "__errno_location"]
+        fn errno_ptr() -> *mut i32;
+    }
+    // M156: bionic usa __errno — este brazo llevaba __errno_location desde M38 (jamás
+    // ejercitado en Android hasta ahora; el dlopen del emulador lo cazó).
+    #[cfg(target_os = "android")]
+    unsafe extern "C" {
+        #[link_name = "__errno"]
         fn errno_ptr() -> *mut i32;
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]

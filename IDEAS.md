@@ -3191,7 +3191,7 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    (gemelo de sessions sin cookies, mismo interruptor RAY_DEV_RELOAD + `state_memory()`) con
    `state_incr` ATÓMICO sobre el `incr`/`set_if` nuevos de `StoreOps` en std/kv (mensajes de
    datos al actor — `update(fn)` descartado por §61); receta actor en MANUAL §15 (cierra la
-   promesa rota de REFERENCE §11); `web` a 0.3.0 (republicar con el flujo habitual).
+   promesa rota de REFERENCE §11); `web` a 0.3.0, REPUBLICADO al registro (1 sep 2026, verificado E2E con ray add).
 6. **Ronda 2 — resueltos en M150**: split bind/serve (`listen_on` — mata la micro-carrera del
    puerto efímero), `ray_doc` con `path` (símbolos de proyecto y paquetes), REFERENCE §11 con
    el paquete `web` y kv completo. La republicación ✅ HECHA (31 ago 2026): `net@0.2.0` y

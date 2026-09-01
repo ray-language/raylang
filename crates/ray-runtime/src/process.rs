@@ -405,9 +405,15 @@ unsafe extern "C" {
     fn fcntl_raw(fd: i32, cmd: i32, ...) -> i32;
 }
 
-#[cfg(all(any(target_os = "linux", target_os = "android"), not(target_arch = "wasm32")))]
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
 unsafe extern "C" {
     #[link_name = "__errno_location"]
+    fn errno_ptr() -> *mut i32;
+}
+// M156: bionic usa __errno (ni el de glibc ni el de Darwin).
+#[cfg(all(target_os = "android", not(target_arch = "wasm32")))]
+unsafe extern "C" {
+    #[link_name = "__errno"]
     fn errno_ptr() -> *mut i32;
 }
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android")), not(target_arch = "wasm32")))]

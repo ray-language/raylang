@@ -531,9 +531,15 @@ fn blocking_worker_loop() {
 // trío de plataformas que process.rs; viven en la libc, siempre enlazada. M156: Android es
 // unix pero NO "linux" — bionic usa __errno_location; el brazo not(linux) con __error (Darwin)
 // era un error de link latente.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 unsafe extern "C" {
     #[link_name = "__errno_location"]
+    fn blocking_errno_ptr() -> *mut i32;
+}
+// M156: bionic usa __errno — cazado en el emulador (dlopen no resolvía __errno_location).
+#[cfg(target_os = "android")]
+unsafe extern "C" {
+    #[link_name = "__errno"]
     fn blocking_errno_ptr() -> *mut i32;
 }
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]

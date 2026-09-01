@@ -10918,3 +10918,32 @@ error DIRIGIDO del parser para los dos postfijos plausibles que la regla mata
 (`match (e) { … }?` y `}.method()` en posición de sentencia): "wrap the expression in
 parentheses or bind it with 'let'". Seguimiento aparte: la gramática tree-sitter declara el
 conflicto GLR equivalente — verificar su comportamiento efectivo (repo aparte, best-effort).
+## 148b. M154 — `web.state`: el estado de aplicación de serie, y el RMW atómico de kv (sep 2026)
+
+El último estructural de raydesk (§81.5, ROADMAP #8): con heaps de fibra aislados, el estado
+compartido entre handlers del framework exige el patrón actor — correcto, pero recableado a
+mano en cada proyecto. raydesk pidió literalmente "envolver ese actor" (el de std/kv). Dos
+piezas:
+
+**(1) std/kv gana el read-modify-write atómico.** `StoreOps` crece con `incr(key, delta) ->
+Result<int, string>` (ausente = 0; el valor se guarda como decimal UTF-8 — interoperable con
+get_string; no-entero = Err, jamás un reset silencioso: errores como valores) y `set_if(key,
+expected: Option<bytes>, new) -> bool` (CAS; None = solo-si-ausente — el escape RMW general).
+En el `SharedStore` ambos viajan como MENSAJES DE DATOS al actor (`KvMsg.Incr`/`SetIf` con su
+canal de reply) y el ciclo entero corre en la fibra dueña → atómico por FIFO. La alternativa
+expresiva (`update(fn(T)->T)`) se descartó por la restricción §61: una closure dentro de un
+compuesto que cruza fibras panica en el binario nativo — el vocabulario que cruza con
+seguridad son datos.
+
+**(2) `web.state` = el gemelo de `sessions` sin cookies.** `AppState { store: kv.SharedStore,
+persist }` con el MISMO interruptor (RAY_DEV_RELOAD: persiste en dev, memoria pura en
+producción; `state_memory()` = memoria siempre) y wrappers `state_get/put/delete/incr`. El
+handle cruza al builder-closure de cada conexión porque solo lleva un canal (id primitivo,
+compartido al transferir) — exactamente por lo que `Sessions` ya funcionaba. La propiedad que
+lo justifica está asertada en `tests/web_state_cli.rs`: N requests concurrentes a `/incr`
+suman EXACTO N (con `get`+`put` separados se perderían actualizaciones).
+
+De paso se cerró la promesa rota de REFERENCE §11 ("receta en el MANUAL §15" que no existía):
+el MANUAL gana la subsección del patrón actor — enum de mensajes con canal de reply, la regla
+"datos, jamás funciones" (§61) y las formas empaquetadas (kv.share, web.sessions, web.state).
+`packages/web` sube a 0.3.0 (superficie nueva; republicación por el flujo habitual).

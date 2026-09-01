@@ -556,6 +556,83 @@ fn persist_now(s: Sessions) {
     }
 }
 
+// M154 (raydesk ROADMAP #8, IDEAS §81.5): el estado DE APLICACIÓN — mismo actor kv que las
+// sesiones (la única forma de estado compartido entre fibras-conexión), sin la parte de
+// cookies: claves globales de la app, no por-sesión. La atomicidad del contador la da el
+// incr del actor (M154 en std/kv: el RMW entero corre en la fibra dueña).
+/// Application-wide shared state: a `kv` store owned by an actor fiber, shared by every
+/// handler. Create it ONCE in `main` with `state(path)` (or `state_memory()`) and let the
+/// handlers capture it. Same persistence switch as `sessions`: under `ray dev`
+/// (`RAY_DEV_RELOAD` set) the state is loaded from `path` at boot and persisted on every
+/// write — edit a handler without losing your data; in production it starts empty and
+/// never touches disk. For typed state beyond strings/counters, see the actor recipe in
+/// the MANUAL (§15).
+pub struct AppState {
+    store: kv.SharedStore,
+    persist: bool,
+}
+
+/// Opens the application state (see `AppState`). The file at `path` is only ever read or
+/// written in dev mode; a corrupt state file is an error (delete it to start over).
+pub fn state(path: string) -> Result<AppState, string> {
+    match (env("RAY_DEV_RELOAD")) {
+        Option.Some(hub) => {
+            let sh = kv.open_shared(path)?;
+            Result.Ok(AppState { store: sh, persist: true })
+        },
+        Option.None => Result.Ok(AppState { store: kv.share(kv.empty(path)), persist: false }),
+    }
+}
+
+/// Application state that lives purely in memory, in every mode (no persistence switch).
+pub fn state_memory() -> AppState {
+    AppState { store: kv.share(kv.empty("")), persist: false }
+}
+
+/// Reads a value of the application state; `""` if absent (framework convention).
+pub fn state_get(st: AppState, key: string) -> string {
+    match (st.store.get_string(key)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
+/// Writes a value in the application state. Under `ray dev` the state is persisted
+/// immediately (best-effort: a disk error is logged to stderr, never breaks the request).
+pub fn state_put(st: AppState, key: string, value: string) {
+    st.store.set_string(key, value);
+    persist_state(st);
+}
+
+/// Deletes one value of the application state; returns whether it was present.
+pub fn state_delete(st: AppState, key: string) -> bool {
+    let present = st.store.delete(key);
+    persist_state(st);
+    present
+}
+
+/// Atomically adds `delta` to the integer under `key` and returns the new value (absent =
+/// 0; a non-integer value is an `Err`). The whole read-modify-write runs inside the owner
+/// fiber — safe under concurrent requests (the visit counter that `get`+`put` cannot do).
+pub fn state_incr(st: AppState, key: string, delta: int) -> Result<int, string> {
+    let n = st.store.incr(key, delta)?;
+    persist_state(st);
+    Result.Ok(n)
+}
+
+// Persiste tras una escritura si toca (solo dev) — el gemelo de persist_now para AppState.
+fn persist_state(st: AppState) {
+    if (st.persist) {
+        match (st.store.save()) {
+            Result.Ok(n) => 0,
+            Result.Err(e) => {
+                eprint("state: save failed: " + e);
+                0
+            },
+        };
+    }
+}
+
 /// Responds with the JSON of any `ToJson` value: `r.json_of(user)` (static dispatch via
 /// bounds, M9.2 — no reflection, no magic). The `ToJson` trait lives in `std/json` (M93.4,
 /// with impls for the primitives) and is re-exported here for convenience.

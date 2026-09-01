@@ -47,6 +47,9 @@ from web/framework import
     cookie,
     header,
     redirect,
+    state_memory,
+    state_incr,
+    AppState,
     App,
     Ctx,
     Res,
@@ -77,7 +80,7 @@ fn auth(c: Ctx, r: Res) -> Step {
 // La app se construye en una función TOP-LEVEL (patrón builder, M93.3): la fibra de cada
 // conexión la llama UNA vez y NINGÚN valor-función cruza hilos — el mismo fuente corre en la
 // VM (`ray run`/`ray dev`) y compila con `ray build --native`.
-fn build_app() -> App {
+fn build_app(st: AppState) -> App {
     var app = new_app();
 
     // Logging JSON por petición (net/log): método, ruta, status y duración en ms, a stdout.
@@ -137,6 +140,16 @@ fn build_app() -> App {
     // Eco del cuerpo de la petición.
     app.POST("/echo", fn(c: Ctx, r: Res) {
         r.text(c.body());
+    });
+
+    // M154 — estado DE APLICACIÓN compartido entre handlers (web.state): el contador es
+    // atómico (el read-modify-write corre en la fibra dueña del actor kv), lo que un
+    // get+put por separado no puede garantizar bajo requests concurrentes.
+    app.GET("/hits", fn(c: Ctx, r: Res) {
+        match (state_incr(st, "hits", 1)) {
+            Result.Ok(n) => r.text("hits: " + to_string(n)),
+            Result.Err(e) => r.text("state error: " + e),
+        }
     });
 
     // Parámetro de la query string: /saluda?nombre=Ada → c.query("nombre").
@@ -240,7 +253,10 @@ fn build_app() -> App {
 }
 
 fn main() -> int {
-    match (listen(build_app, "127.0.0.1", 8080)) {
+    // El estado se crea UNA vez y lo capturan los handlers (el builder-closure cruza a la
+    // fibra de cada conexión; el handle solo lleva un canal, que se comparte por id).
+    let st = state_memory();
+    match (listen(fn() -> App { build_app(st) }, "127.0.0.1", 8080)) {
         Result.Ok(_) => 0,
         Result.Err(e) => {
             eprint(e);

@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- `ray bundle --ios` gana **`--ios-target device|sim|both`** (both por defecto): iterando
+  contra un solo destino, el otro build (~15-20 s) sobra — y el `.a` del lado no construido
+  se **preserva** del proyecto anterior (como la firma). El log además nombra cada build
+  (`[bundle] device (aarch64-apple-ios)…`) — parecían un doble accidental.
+
 - **El panel About nativo es personalizable** (M155): `ui.set_about(name, version,
   description, copyright)` llena el panel estándar de macOS que abre el item
   `"role:about"` — nombre en negrita, línea "Version …", descripción (como créditos, al

@@ -3191,6 +3191,15 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    `tools/publish-packages.sh`; verificado E2E — `ray add web` en un proyecto fresco trae
    `static_embedded`/`listen_on` y el programa compila y sirve.
 
+7. **Ronda 3 — resueltos en M151** (PRs #209/#210, 31 ago 2026): la firma iOS sobrevive a
+   `ray bundle --ios` (`[ios] development_team` en ray.toml + preservación del xcconfig
+   anterior — muere el `rebuild.sh` de raydesk); `ui.app_menu(name, items)` puebla el menú de
+   aplicación de macOS (tag `"role:about"` = About nativo; `name` re-titula el menú bajo
+   `ray run`); `ray_doc` con nombre de módulo a secas lista la superficie pública entera.
+   También cayeron de esta ronda, en PRs previos: el terminal envenenado por SIGTERM en crudo
+   (#207) y el shell iOS con UIScene (#206). Sigue pendiente de §81: el puente IPC (1) y el
+   helper de estado (5); la tupla-tras-if (4) sigue clasificada como decisión de gramática.
+
 Contexto compartido de los 4: el MCP es ya la puerta de entrada real de los agentes al
 lenguaje — lo que no se ve desde ahí (paquetes, proyectos, superficie por métodos) para un
 agente NO EXISTE. La contramedida barata (declarar límites y el Tier 2 en instructions/

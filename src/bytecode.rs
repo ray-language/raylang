@@ -622,6 +622,8 @@ pub enum OpCode {
     AudioOpen,
     /// M145: `__audio_drain(h)` — espera a que todo lo escrito suene.
     AudioDrain,
+    /// M158: `__audio_played(h)` — la posición real de reproducción en ms (['ok', ms] / ['err', msg]).
+    AudioPlayed,
     /// M146: `__ui_open(title, url, w, h)` — abre una ventana con webview (['ok', h] / ['err', msg]).
     UiOpen,
     /// M146: `__ui_eval_js(h, js)` — ejecuta JS en la página, fire-and-forget (['ok'] / ['err', msg]).

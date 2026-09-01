@@ -485,11 +485,17 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // reusa __ray_proc_write (despacho + espera de escribible) y `close(h)` es el EOF.
     if t.needs_rt_audio {
         out.push_str(concat!(
-            "fn __ray_audio_open(rate: i64, ch: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    Rc::new(std::cell::RefCell::new(match ray_runtime::audio::open(rate, ch) {\n",
+            "fn __ray_audio_open(rate: i64, ch: i64, latency_ms: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    Rc::new(std::cell::RefCell::new(match ray_runtime::audio::open(rate, ch, latency_ms) {\n",
             "        Ok(f) => { let id = __ray_reg_insert(__RayHandle::PipeW(std::sync::Arc::new(f))); vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string().as_str())] }\n",
             "        Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "    }))\n}\n",
+            "fn __ray_audio_played(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    let r = match __ray_stdin_clone(h) {\n",
+            "        Some(f) => ray_runtime::audio::played_ms(std::os::fd::AsRawFd::as_raw_fd(&*f)),\n",
+            "        None => Err(\"audio: not an open audio output\".to_string()),\n",
+            "    };\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(ms) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ms.to_string().as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_audio_drain(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let r = match __ray_stdin_clone(h) {\n",
             "        Some(f) => ray_runtime::audio::drain(std::os::fd::AsRawFd::as_raw_fd(&*f)),\n",

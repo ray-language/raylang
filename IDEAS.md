@@ -2990,13 +2990,14 @@ y escalar imágenes al layout:
 **Impacto**: BAJO en riesgo (aditivo en `std/term`); el orden natural es píxeles → capacidades
 → (con §77) imágenes en terminal.
 
-## 79b. `std/audio` v2 — afinado de latencia (ago 2026, tras el dogfood de rallyx)
+## 79b. `std/audio` v2 — afinado de latencia (ago 2026) — ✅ EJECUTADA como M158 (DESIGN §152)
 
-Diferidos de M145 (la adenda de DESIGN §142 tiene el contexto): **hint de latencia en `open`**
-(elegir el tamaño del anillo/buffers: un juego rítmico quiere <30 ms, una radio tolera 200) y
-**`audio.played_ms(h)`** (la posición real de reproducción — AudioQueueGetCurrentTime /
-snd_pcm_delay — para sincronizar visuales con el audio). Impacto BAJO (aditivos); ejecutar
-cuando un dogfood los pida con caso concreto.
+`open_latency(rate, channels, latency_ms)` (20–1000; 0 = default 200 ms; dimensiona anillo/
+buffers/chunk) + `played_ms(h)` (posición real: GetCurrentTime — ¡SMPTETime son 24 bytes, no
+16: el layout desalineaba flags! — / snd_pcm_delay / getFramesRead, refrescados por el
+alimentador desde SU hilo — sin carreras) + backend **AAudio** para Android (dlopen patrón
+ALSA; ≤50 ms pide LOW_LATENCY; el bundle --android ya no excluye audio). Diferido: validar
+AAudio con sonido audible en dispositivo Android físico (el emulador tiene audio virtual).
 
 ## 79. `std/audio` — salida PCM al dispositivo (ago 2026) — ✅ HECHA (M145, DESIGN §142; la decisión cpal-vs-externs se volteó a EXTERNS al implementar: cpal exigía headers de ALSA en build)
 

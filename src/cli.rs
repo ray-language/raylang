@@ -1284,9 +1284,11 @@ fn cmd_bundle(args: &[String]) {
         }
     }
     // §80b: en móvil, `process` (fork/exec denegado en dispositivo y prohibido en las
-    // stores) y `audio` (backends de escritorio; AAudio = v2) van excluidos SIEMPRE.
+    // stores) va excluido SIEMPRE; `audio` solo en iOS (CoreAudio de iOS sin validar) —
+    // Android tiene backend AAudio desde M158.
     if ios || android {
-        for sub in ["process", "audio"] {
+        let forced: &[&str] = if ios { &["process", "audio"] } else { &["process"] };
+        for sub in forced {
             if !exclude.iter().any(|d| d == sub) {
                 exclude.push(sub.to_string());
             }

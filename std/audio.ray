@@ -10,11 +10,43 @@
 /// channels (1–8), s16le interleaved samples. Returns the output handle. With
 /// `RAY_AUDIO_SINK=null` in the environment, a real-time null sink plays silently (tests, CI).
 pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
-    let r = __audio_open(sample_rate, channels);
+    let r = __audio_open(sample_rate, channels, 0);
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
             Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Like `open`, with a LATENCY HINT (M158): `latency_ms` sizes the ring/device buffers and
+/// the feeder chunk — a rhythm game wants 20-50 ms, a radio tolerates 200-1000. Smaller =
+/// more reactive but more underrun-prone; 0 (or plain `open`) = the 200 ms default. On
+/// Android, a hint of 50 ms or less requests the LOW_LATENCY performance mode.
+pub fn open_latency(sample_rate: int, channels: int, latency_ms: int) -> Result<int, string> {
+    let r = __audio_open(sample_rate, channels, latency_ms);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// The REAL playback position in ms (M158): what the device confirms as played
+/// (AudioQueueGetCurrentTime / snd_pcm_delay / AAudioStream_getFramesRead), refreshed as
+/// audio is fed (about latency/4 granularity) — for syncing visuals to the audio. 0 until
+/// something has actually sounded.
+pub fn played_ms(h: int) -> Result<int, string> {
+    let r = __audio_played(h);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(ms) => Result.Ok(ms),
+            Option.None => Result.Err("invalid position"),
         }
     } else {
         Result.Err(r[1])

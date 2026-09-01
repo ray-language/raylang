@@ -48,6 +48,12 @@ pub struct Ctl {
     bytes_per_sec: i64,
     /// El extremo de LECTURA del pipe (para que `drain` consulte lo encolado con FIONREAD).
     fd_r: i32,
+    /// M158 (§79b): frames REALMENTE reproducidos según el backend (-1 = aún sin dato). Lo
+    /// refresca el hilo alimentador tras cada `play` con la API del backend (GetCurrentTime /
+    /// snd_pcm_delay / getFramesRead) — mismo hilo que posee el dispositivo: sin carreras.
+    played_frames: Arc<AtomicI64>,
+    /// Frames por segundo (el sample rate), para convertir a ms en `played_ms`.
+    sample_rate: i64,
 }
 
 /// El mapa fd-de-escritura → control, para que `drain(fd)` encuentre su salida.
@@ -59,15 +65,23 @@ fn ctls() -> &'static Mutex<HashMap<i32, Arc<Ctl>>> {
 /// Abre una salida PCM s16le (`sample_rate` Hz, `channels` canales) y devuelve el extremo de
 /// escritura del pipe (no-bloqueante, listo para el registro de handles) — el llamador escribe
 /// samples ahí y el hilo alimentador los toca. `RAY_AUDIO_SINK=null` → sumidero de tiempo real.
-pub fn open(sample_rate: i64, channels: i64) -> Result<std::fs::File, String> {
+pub fn open(sample_rate: i64, channels: i64, latency_ms: i64) -> Result<std::fs::File, String> {
     if !(8000..=192000).contains(&sample_rate) {
         return Err(format!("audio: unsupported sample rate {sample_rate} (8000–192000)"));
     }
     if !(1..=8).contains(&channels) {
         return Err(format!("audio: unsupported channel count {channels} (1–8)"));
     }
+    // M158 (§79b): el hint de latencia dimensiona anillo/buffers/chunk. 0 = default (200 ms,
+    // el comportamiento de M145); explícito se acota a [20, 1000] — por debajo de 20 ms el
+    // keepalive comería el margen, por encima de 1 s es un búfer, no una latencia.
+    if latency_ms != 0 && !(20..=1000).contains(&latency_ms) {
+        return Err(format!("audio: unsupported latency {latency_ms} ms (20–1000, or 0 = default)"));
+    }
+    let latency_ms = if latency_ms == 0 { 200 } else { latency_ms };
+    let played_frames = Arc::new(AtomicI64::new(-1));
     // El backend se abre ANTES del pipe: un dispositivo ausente falla en `open`, no a mitad.
-    let sink = make_sink(sample_rate, channels)?;
+    let sink = make_sink(sample_rate, channels, latency_ms, played_frames.clone())?;
 
     let mut fds = [0i32; 2];
     // SAFETY: pipe escribe dos fds válidos.
@@ -86,12 +100,14 @@ pub fn open(sample_rate: i64, channels: i64) -> Result<std::fs::File, String> {
         in_flight: AtomicI64::new(0),
         bytes_per_sec: sample_rate * channels * 2,
         fd_r,
+        played_frames,
+        sample_rate,
     });
     ctls().lock().unwrap().insert(fd_w, ctl.clone());
 
     // El alimentador: lee el pipe (bloqueante) y empuja al backend; EOF (close del handle) →
-    // drena el backend y termina. El chunk es ~50 ms de audio: latencia baja sin syscalls de más.
-    let chunk = ((ctl.bytes_per_sec / 20).max(256) as usize) & !1;
+    // drena el backend y termina. El chunk es ~latencia/4: reactivo sin syscalls de más.
+    let chunk = ((ctl.bytes_per_sec * latency_ms / 4000).max(256) as usize) & !1;
     let ctl_thread = ctl.clone();
     std::thread::spawn(move || {
         let mut sink = sink;
@@ -137,6 +153,23 @@ pub fn drain(fd_w: i32) -> Result<(), String> {
 }
 
 // Octetos pendientes de lectura en el pipe (FIONREAD), 0 si no se puede saber.
+/// M158 (§79b): la posición REAL de reproducción en ms — lo que el backend confirma sonado
+/// (AudioQueueGetCurrentTime / snd_pcm_delay / AAudioStream_getFramesRead), refrescado por el
+/// alimentador tras cada chunk (~latencia/4 de granularidad). 0 = aún no sonó nada.
+pub fn played_ms(fd_w: i32) -> Result<i64, String> {
+    let ctl = ctls()
+        .lock()
+        .unwrap()
+        .get(&fd_w)
+        .cloned()
+        .ok_or_else(|| "audio: not an open audio output".to_string())?;
+    let frames = ctl.played_frames.load(Ordering::SeqCst);
+    if frames <= 0 {
+        return Ok(0);
+    }
+    Ok(frames * 1000 / ctl.sample_rate)
+}
+
 fn pipe_pending(fd: i32) -> i64 {
     unsafe extern "C" {
         fn ioctl(fd: i32, req: u64, ...) -> i32;
@@ -159,22 +192,37 @@ trait Sink: Send {
     fn finish(&mut self);
 }
 
-fn make_sink(rate: i64, channels: i64) -> Result<Box<dyn Sink>, String> {
+fn make_sink(
+    rate: i64,
+    channels: i64,
+    latency_ms: i64,
+    played: Arc<AtomicI64>,
+) -> Result<Box<dyn Sink>, String> {
     if std::env::var("RAY_AUDIO_SINK").as_deref() == Ok("null") {
-        return Ok(Box::new(NullSink { bytes_per_sec: rate * channels * 2 }));
+        return Ok(Box::new(NullSink {
+            bytes_per_sec: rate * channels * 2,
+            frame_bytes: (channels * 2) as usize,
+            consumed_frames: 0,
+            played,
+        }));
     }
     #[cfg(target_os = "macos")]
     {
-        coreaudio::open(rate, channels)
+        coreaudio::open(rate, channels, latency_ms, played)
     }
     #[cfg(target_os = "linux")]
     {
-        alsa::open(rate, channels)
+        alsa::open(rate, channels, latency_ms, played)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    // M158: Android — AAudio por dlopen (API 26+; el patrón ALSA).
+    #[cfg(target_os = "android")]
     {
-        let _ = (rate, channels);
-        Err("audio: no backend for this platform (macOS/Linux; RAY_AUDIO_SINK=null works anywhere)".to_string())
+        aaudio::open(rate, channels, latency_ms, played)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+    {
+        let _ = (rate, channels, latency_ms, played);
+        Err("audio: no backend for this platform (macOS/Linux/Android; RAY_AUDIO_SINK=null works anywhere)".to_string())
     }
 }
 
@@ -182,12 +230,18 @@ fn make_sink(rate: i64, channels: i64) -> Result<Box<dyn Sink>, String> {
 /// misma contrapresión que un dispositivo — la vía de los tests en CI sin tarjeta de sonido.
 struct NullSink {
     bytes_per_sec: i64,
+    frame_bytes: usize,
+    consumed_frames: i64,
+    played: Arc<AtomicI64>,
 }
 
 impl Sink for NullSink {
     fn play(&mut self, data: &[u8]) {
         let ms = data.len() as i64 * 1000 / self.bytes_per_sec;
         std::thread::sleep(std::time::Duration::from_millis(ms.max(1) as u64));
+        // El sumidero de tiempo real ES el dispositivo: lo consumido ya "sonó" (exacto).
+        self.consumed_frames += (data.len() / self.frame_bytes) as i64;
+        self.played.store(self.consumed_frames, Ordering::SeqCst);
     }
     fn finish(&mut self) {}
 }
@@ -244,9 +298,29 @@ mod coreaudio {
             packets: *const std::ffi::c_void,
         ) -> i32;
         fn AudioQueueStart(q: AudioQueueRef, start_time: *const std::ffi::c_void) -> i32;
+        // M158: la posición real de reproducción (sample time de la cola).
+        fn AudioQueueGetCurrentTime(
+            q: AudioQueueRef,
+            timeline: *const std::ffi::c_void,
+            out_time: *mut AudioTimeStamp,
+            discontinuity: *mut u8,
+        ) -> i32;
         fn AudioQueueStop(q: AudioQueueRef, immediate: u8) -> i32;
         fn AudioQueueDispose(q: AudioQueueRef, immediate: u8) -> i32;
     }
+
+    /// El AudioTimeStamp de CoreAudio (solo se lee mSampleTime y mFlags).
+    #[repr(C)]
+    struct AudioTimeStamp {
+        sample_time: f64,
+        host_time: u64,
+        rate_scalar: f64,
+        word_clock_time: u64,
+        smpte_time: [u8; 24], // SMPTETime: 4×i16 + 3×u32 + 4×i16 = 24 octetos
+        flags: u32,
+        reserved: u32,
+    }
+    const TS_SAMPLE_TIME_VALID: u32 = 1;
 
     const FORMAT_LINEAR_PCM: u32 = 0x6C70_636D; // 'lpcm'
     const FLAG_IS_SIGNED_INTEGER: u32 = 1 << 2;
@@ -269,6 +343,7 @@ mod coreaudio {
     pub struct CoreAudioSink {
         q: AudioQueueRef,
         shared: Arc<Shared>,
+        played: Arc<super::AtomicI64>,
     }
     // SAFETY: AudioQueueRef se usa solo desde el hilo alimentador tras la creación; el callback
     // corre en el hilo interno de AudioToolbox y solo toca `shared` (sincronizado).
@@ -309,7 +384,12 @@ mod coreaudio {
         }
     }
 
-    pub fn open(rate: i64, channels: i64) -> Result<Box<dyn Sink>, String> {
+    pub fn open(
+        rate: i64,
+        channels: i64,
+        latency_ms: i64,
+        played: Arc<super::AtomicI64>,
+    ) -> Result<Box<dyn Sink>, String> {
         let bytes_per_frame = (channels * 2) as u32;
         let desc = AudioStreamBasicDescription {
             sample_rate: rate as f64,
@@ -322,10 +402,11 @@ mod coreaudio {
             bits_per_channel: 16,
             reserved: 0,
         };
-        // El anillo guarda ~200 ms; cada buffer de la cola, ~50 ms (3 buffers, el clásico).
+        // M158: el anillo guarda ~la latencia pedida (default 200 ms); cada buffer, ~1/4.
         let frame_bytes = bytes_per_frame as usize;
         let bytes_per_sec = (rate * channels * 2) as usize;
-        let cap = (bytes_per_sec / 5).max(4096) / frame_bytes * frame_bytes;
+        let cap =
+            (bytes_per_sec * latency_ms as usize / 1000).max(4096) / frame_bytes * frame_bytes;
         let buf_size = ((cap / 4).max(1024) / frame_bytes * frame_bytes) as u32;
         // ~8 ms de silencio de keepalive (el cebado son 3 → ~24 ms de retraso inicial, no 150).
         let keepalive_bytes = (bytes_per_sec / 125).max(frame_bytes) / frame_bytes * frame_bytes;
@@ -361,7 +442,7 @@ mod coreaudio {
                 return Err(format!("audio: AudioQueueStart failed (OSStatus {st})"));
             }
         }
-        Ok(Box::new(CoreAudioSink { q, shared }))
+        Ok(Box::new(CoreAudioSink { q, shared, played }))
     }
 
     impl Sink for CoreAudioSink {
@@ -373,6 +454,24 @@ mod coreaudio {
                     ring = self.shared.space.wait(ring).unwrap();
                 }
                 ring.push_back(b);
+            }
+            drop(ring);
+            // M158: refrescar la posición real (mismo hilo que posee la cola — sin carreras).
+            let mut ts = AudioTimeStamp {
+                sample_time: 0.0,
+                host_time: 0,
+                rate_scalar: 0.0,
+                word_clock_time: 0,
+                smpte_time: [0; 24],
+                flags: 0,
+                reserved: 0,
+            };
+            // SAFETY: q válido hasta Dispose; ts es nuestro buffer.
+            let st = unsafe {
+                AudioQueueGetCurrentTime(self.q, std::ptr::null(), &mut ts, std::ptr::null_mut())
+            };
+            if st == 0 && ts.flags & TS_SAMPLE_TIME_VALID != 0 && ts.sample_time >= 0.0 {
+                self.played.store(ts.sample_time as i64, super::Ordering::SeqCst);
             }
         }
 
@@ -397,6 +496,7 @@ mod coreaudio {
 #[cfg(target_os = "linux")]
 mod alsa {
     use super::Sink;
+    use std::sync::Arc;
 
     unsafe extern "C" {
         fn dlopen(path: *const u8, flags: i32) -> *mut std::ffi::c_void;
@@ -411,6 +511,7 @@ mod alsa {
     type FnRecover = unsafe extern "C" fn(Pcm, i32, i32) -> i32;
     type FnDrain = unsafe extern "C" fn(Pcm) -> i32;
     type FnClose = unsafe extern "C" fn(Pcm) -> i32;
+    type FnDelay = unsafe extern "C" fn(Pcm, *mut i64) -> i32;
 
     const SND_PCM_STREAM_PLAYBACK: i32 = 0;
     const SND_PCM_FORMAT_S16_LE: i32 = 2;
@@ -422,7 +523,10 @@ mod alsa {
         recover: FnRecover,
         drain: FnDrain,
         close: FnClose,
+        delay: FnDelay,
         frame_bytes: usize,
+        written_frames: i64,
+        played: Arc<super::AtomicI64>,
     }
     // SAFETY: el pcm se usa solo desde el hilo alimentador.
     unsafe impl Send for AlsaSink {}
@@ -437,7 +541,12 @@ mod alsa {
         }
     }
 
-    pub fn open(rate: i64, channels: i64) -> Result<Box<dyn Sink>, String> {
+    pub fn open(
+        rate: i64,
+        channels: i64,
+        latency_ms: i64,
+        played: Arc<super::AtomicI64>,
+    ) -> Result<Box<dyn Sink>, String> {
         // SAFETY: literal NUL-terminado; dlopen es seguro de llamar.
         let lib = unsafe { dlopen(b"libasound.so.2\0".as_ptr(), RTLD_NOW) };
         if lib.is_null() {
@@ -450,15 +559,21 @@ mod alsa {
             let writei: FnWritei = std::mem::transmute(sym(lib, b"snd_pcm_writei\0")?);
             let recover: FnRecover = std::mem::transmute(sym(lib, b"snd_pcm_recover\0")?);
             let drain: FnDrain = std::mem::transmute(sym(lib, b"snd_pcm_drain\0")?);
+            // M158: la posición real = escritos − delay (frames aún en el búfer del dispositivo).
+            let delay: FnDelay = std::mem::transmute(sym(lib, b"snd_pcm_delay\0")?);
             let close: FnClose = std::mem::transmute(sym(lib, b"snd_pcm_close\0")?);
             let mut pcm: Pcm = std::ptr::null_mut();
             let st = f_open(&mut pcm, b"default\0".as_ptr(), SND_PCM_STREAM_PLAYBACK, 0);
             if st != 0 {
                 return Err(format!("audio: snd_pcm_open failed ({st})"));
             }
-            // 100 ms de latencia del dispositivo: reactivo sin ser frágil (500 ms, lo primero
-            // que se probó, insertaba medio segundo entre write y altavoz — hallazgo de rallyx;
-            // los underruns los cubre recover).
+            // M158: la latencia del dispositivo sigue el hint (default 200 ms → 100 ms aquí,
+            // el valor validado de rallyx; con hint explícito, la mitad del hint acotada).
+            let dev_latency_us = if latency_ms == 200 {
+                100_000
+            } else {
+                ((latency_ms * 1000 / 2).clamp(10_000, 500_000)) as u32
+            };
             let st = f_params(
                 pcm,
                 SND_PCM_FORMAT_S16_LE,
@@ -466,13 +581,23 @@ mod alsa {
                 channels as u32,
                 rate as u32,
                 1,
-                100000,
+                dev_latency_us,
             );
             if st != 0 {
                 close(pcm);
                 return Err(format!("audio: snd_pcm_set_params failed ({st})"));
             }
-            Ok(Box::new(AlsaSink { pcm, writei, recover, drain, close, frame_bytes: channels as usize * 2 }))
+            Ok(Box::new(AlsaSink {
+                pcm,
+                writei,
+                recover,
+                drain,
+                close,
+                delay,
+                frame_bytes: channels as usize * 2,
+                written_frames: 0,
+                played,
+            }))
         }
     }
 
@@ -491,7 +616,15 @@ mod alsa {
                     }
                 } else {
                     off += n as usize * self.frame_bytes;
+                    self.written_frames += n;
                 }
+            }
+            // M158: posición real = escritos − delay, desde el MISMO hilo que posee el pcm.
+            let mut in_device: i64 = 0;
+            // SAFETY: pcm válido; delay escribe un i64 (snd_pcm_sframes_t).
+            if unsafe { (self.delay)(self.pcm, &mut in_device) } == 0 {
+                let played_now = (self.written_frames - in_device).max(0);
+                self.played.store(played_now, super::Ordering::SeqCst);
             }
         }
 
@@ -500,6 +633,154 @@ mod alsa {
             unsafe {
                 (self.drain)(self.pcm);
                 (self.close)(self.pcm);
+            }
+        }
+    }
+}
+
+// ── Android: AAudio por dlopen (API 26+; el patrón ALSA — sin headers de build) ─────────────
+#[cfg(target_os = "android")]
+mod aaudio {
+    use super::Sink;
+    use std::sync::Arc;
+
+    unsafe extern "C" {
+        fn dlopen(path: *const u8, flags: i32) -> *mut std::ffi::c_void;
+        fn dlsym(lib: *mut std::ffi::c_void, name: *const u8) -> *mut std::ffi::c_void;
+    }
+    const RTLD_NOW: i32 = 2;
+
+    type Builder = *mut std::ffi::c_void;
+    type Stream = *mut std::ffi::c_void;
+    type FnCreateBuilder = unsafe extern "C" fn(*mut Builder) -> i32;
+    type FnSetI32 = unsafe extern "C" fn(Builder, i32);
+    type FnOpenStream = unsafe extern "C" fn(Builder, *mut Stream) -> i32;
+    type FnBuilderDelete = unsafe extern "C" fn(Builder) -> i32;
+    type FnRequest = unsafe extern "C" fn(Stream) -> i32;
+    type FnWrite = unsafe extern "C" fn(Stream, *const std::ffi::c_void, i32, i64) -> i32;
+    type FnFramesRead = unsafe extern "C" fn(Stream) -> i64;
+    type FnClose = unsafe extern "C" fn(Stream) -> i32;
+
+    const AAUDIO_FORMAT_PCM_I16: i32 = 1;
+    const AAUDIO_PERFORMANCE_MODE_NONE: i32 = 10;
+    const AAUDIO_PERFORMANCE_MODE_LOW_LATENCY: i32 = 12;
+
+    pub struct AAudioSink {
+        stream: Stream,
+        write: FnWrite,
+        frames_read: FnFramesRead,
+        request_stop: FnRequest,
+        close: FnClose,
+        frame_bytes: usize,
+        played: Arc<super::AtomicI64>,
+    }
+    // SAFETY: el stream se usa solo desde el hilo alimentador (write bloqueante).
+    unsafe impl Send for AAudioSink {}
+
+    fn sym(lib: *mut std::ffi::c_void, name: &[u8]) -> Result<*mut std::ffi::c_void, String> {
+        // SAFETY: name termina en NUL (literales b"...\0").
+        let p = unsafe { dlsym(lib, name.as_ptr()) };
+        if p.is_null() {
+            Err(format!("audio: libaaudio without {}", String::from_utf8_lossy(&name[..name.len() - 1])))
+        } else {
+            Ok(p)
+        }
+    }
+
+    pub fn open(
+        rate: i64,
+        channels: i64,
+        latency_ms: i64,
+        played: Arc<super::AtomicI64>,
+    ) -> Result<Box<dyn Sink>, String> {
+        // SAFETY: dlopen/dlsym con literales; las firmas replican aaudio/AAudio.h (NDK).
+        unsafe {
+            let lib = dlopen(b"libaaudio.so\0".as_ptr(), RTLD_NOW);
+            if lib.is_null() {
+                return Err("audio: libaaudio.so not found (AAudio needs Android 8.0+)".to_string());
+            }
+            let create: FnCreateBuilder = std::mem::transmute(sym(lib, b"AAudio_createStreamBuilder\0")?);
+            let set_rate: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setSampleRate\0")?);
+            let set_channels: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setChannelCount\0")?);
+            let set_format: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setFormat\0")?);
+            let set_perf: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setPerformanceMode\0")?);
+            let open_stream: FnOpenStream = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_openStream\0")?);
+            let builder_delete: FnBuilderDelete = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_delete\0")?);
+            let request_start: FnRequest = std::mem::transmute(sym(lib, b"AAudioStream_requestStart\0")?);
+            let request_stop: FnRequest = std::mem::transmute(sym(lib, b"AAudioStream_requestStop\0")?);
+            let write: FnWrite = std::mem::transmute(sym(lib, b"AAudioStream_write\0")?);
+            let frames_read: FnFramesRead = std::mem::transmute(sym(lib, b"AAudioStream_getFramesRead\0")?);
+            let close: FnClose = std::mem::transmute(sym(lib, b"AAudioStream_close\0")?);
+
+            let mut builder: Builder = std::ptr::null_mut();
+            let st = create(&mut builder);
+            if st != 0 {
+                return Err(format!("audio: AAudio_createStreamBuilder failed ({st})"));
+            }
+            set_rate(builder, rate as i32);
+            set_channels(builder, channels as i32);
+            set_format(builder, AAUDIO_FORMAT_PCM_I16);
+            // M158: el hint decide el modo — por debajo de 50 ms se pide LOW_LATENCY.
+            set_perf(
+                builder,
+                if latency_ms <= 50 { AAUDIO_PERFORMANCE_MODE_LOW_LATENCY } else { AAUDIO_PERFORMANCE_MODE_NONE },
+            );
+            let mut stream: Stream = std::ptr::null_mut();
+            let st = open_stream(builder, &mut stream);
+            builder_delete(builder);
+            if st != 0 {
+                return Err(format!("audio: AAudioStreamBuilder_openStream failed ({st})"));
+            }
+            let st = request_start(stream);
+            if st != 0 {
+                close(stream);
+                return Err(format!("audio: AAudioStream_requestStart failed ({st})"));
+            }
+            Ok(Box::new(AAudioSink {
+                stream,
+                write,
+                frames_read,
+                request_stop,
+                close,
+                frame_bytes: (channels * 2) as usize,
+                played,
+            }))
+        }
+    }
+
+    impl Sink for AAudioSink {
+        fn play(&mut self, data: &[u8]) {
+            let mut off = 0;
+            while off + self.frame_bytes <= data.len() {
+                let frames = ((data.len() - off) / self.frame_bytes) as i32;
+                // SAFETY: buffer válido; write con timeout "infinito" práctico (10 s) BLOQUEA
+                // hasta aceptar — la contrapresión, como writei de ALSA.
+                let n = unsafe {
+                    (self.write)(
+                        self.stream,
+                        data[off..].as_ptr() as *const std::ffi::c_void,
+                        frames,
+                        10_000_000_000,
+                    )
+                };
+                if n <= 0 {
+                    return; // error del stream: la sesión sigue sin audio (audio de app, no HA)
+                }
+                off += n as usize * self.frame_bytes;
+            }
+            // M158: la posición real — frames que el DISPOSITIVO ya consumió.
+            // SAFETY: stream válido hasta close.
+            let played_now = unsafe { (self.frames_read)(self.stream) };
+            if played_now >= 0 {
+                self.played.store(played_now, super::Ordering::SeqCst);
+            }
+        }
+
+        fn finish(&mut self) {
+            // SAFETY: stream válido; stop drena lo pendiente y close libera.
+            unsafe {
+                (self.request_stop)(self.stream);
+                (self.close)(self.stream);
             }
         }
     }

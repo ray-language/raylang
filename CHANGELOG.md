@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **std/audio v2** (M158, §79b): `open_latency(rate, channels, latency_ms)` — el hint de
+  latencia dimensiona anillo, buffers del dispositivo y chunk del alimentador (un juego
+  rítmico pide 20-50 ms; una radio tolera 200-1000) — y **`played_ms(h)`**: la posición REAL
+  de reproducción según el backend (AudioQueueGetCurrentTime / snd_pcm_delay /
+  AAudioStream_getFramesRead), para sincronizar visuales con el audio. Y **Android gana
+  audio**: backend **AAudio** por dlopen (≤50 ms pide el modo LOW_LATENCY) — `ray bundle
+  --android` ya no excluye `audio`. Validado en dispositivo real de macOS (posición real por
+  detrás de lo escrito) y batería de 3 motores sobre el sumidero de tiempo real.
+
 - **El puente IPC gana payload JSON y petición-con-respuesta** (M157): `window.ray.send(v)`
   acepta no-strings (viajan como su JSON — parsear con `std/json`), y
   `window.ray.request(v)` devuelve una **Promise** que el programa resuelve con

@@ -2034,12 +2034,24 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "__audio_open" => {
-                let arr = match (&values[0], &values[1]) {
-                    (Value::Int(rate), Value::Int(ch)) => match crate::builtins::audio_open(*rate, *ch) {
-                        Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
+                let arr = match (&values[0], &values[1], &values[2]) {
+                    (Value::Int(rate), Value::Int(ch), Value::Int(lat)) => {
+                        match crate::builtins::audio_open(*rate, *ch, *lat) {
+                            Ok(id) => vec![Value::Str("ok".to_string()), Value::Str(id.to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees three ints"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__audio_played" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::audio_played(*h) {
+                        Ok(ms) => vec![Value::Str("ok".to_string()), Value::Str(ms.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("the checker guarantees two ints"),
+                    _ => unreachable!("the checker guarantees an int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }

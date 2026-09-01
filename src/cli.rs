@@ -1239,7 +1239,11 @@ fn cmd_bundle(args: &[String]) {
     // `--ios` (§80b): en vez del .app/.desktop del HOST, genera el proyecto Xcode de una app
     // iOS (shell WKWebView + staticlibs de dispositivo y simulador). Solo host macOS.
     let ios = args.iter().any(|a| a == "--ios");
-    let values: Vec<&String> = [&name_arg, &icon, &id_arg, &out_arg, &without_arg, &ios_target_arg].iter().filter_map(|o| o.as_ref()).collect();
+    // M156: `--android` genera el proyecto GRADLE (shell Java + WebView + el programa como
+    // cdylib en jniLibs); `--android-abi arm64|x86_64|all` elige los .so (espejo --ios-target).
+    let android = args.iter().any(|a| a == "--android");
+    let android_abi_arg = flag_value("--android-abi");
+    let values: Vec<&String> = [&name_arg, &icon, &id_arg, &out_arg, &without_arg, &ios_target_arg, &android_abi_arg].iter().filter_map(|o| o.as_ref()).collect();
     let file = args
         .iter()
         .find(|a| !a.starts_with('-') && !values.iter().any(|v| v.as_str() == a.as_str()))
@@ -1260,7 +1264,7 @@ fn cmd_bundle(args: &[String]) {
         });
     let version = manifest.as_ref().map(|m| m.version.clone()).unwrap_or_else(|| "0.1.0".to_string());
     // El identifier por defecto sale del nombre (minúsculas, [a-z0-9-]): estable y único-ish.
-    let bundle_id = id_arg.unwrap_or_else(|| {
+    let bundle_id = id_arg.clone().unwrap_or_else(|| {
         let slug: String = name
             .to_lowercase()
             .chars()
@@ -1279,9 +1283,9 @@ fn cmd_bundle(args: &[String]) {
             }
         }
     }
-    // §80b: en iOS, `process` (fork/exec denegado en dispositivo y prohibido en la store) y
-    // `audio` (backend CoreAudio dirigido a macOS, sin validar en iOS) van excluidos SIEMPRE.
-    if ios {
+    // §80b: en móvil, `process` (fork/exec denegado en dispositivo y prohibido en las
+    // stores) y `audio` (backends de escritorio; AAudio = v2) van excluidos SIEMPRE.
+    if ios || android {
         for sub in ["process", "audio"] {
             if !exclude.iter().any(|d| d == sub) {
                 exclude.push(sub.to_string());
@@ -1307,6 +1311,98 @@ fn cmd_bundle(args: &[String]) {
         process::exit(74);
     }
     let out_dir = out_arg.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
+    if android {
+        let abi = android_abi_arg.as_deref().unwrap_or("arm64");
+        if !matches!(abi, "arm64" | "x86_64" | "all") {
+            eprintln!("--android-abi must be 'arm64', 'x86_64' or 'all', not '{abi}'");
+            process::exit(64);
+        }
+        let build_arm = abi != "x86_64";
+        let build_x86 = abi != "arm64";
+        let app_id = id_arg.clone().unwrap_or_else(|| {
+            manifest
+                .as_ref()
+                .and_then(|m| m.android_application_id.clone())
+                .unwrap_or_else(|| {
+                    let slug: String = name
+                        .to_lowercase()
+                        .chars()
+                        .map(|c| if c.is_ascii_alphanumeric() { c } else { '.' })
+                        .collect();
+                    format!("org.raylang.{}", slug.trim_matches('.'))
+                })
+        });
+        eprintln!("[bundle] Android shared libraries — abi: {abi} (a cold build compiles ring/mimalloc per target; needs the NDK and `rustup target add aarch64-linux-android`)");
+        let arm_so = work.join("arm64.so");
+        let x86_so = work.join("x86_64.so");
+        if build_arm {
+            eprintln!("[bundle] arm64-v8a (aarch64-linux-android)…");
+            build_native(&path, arm_so.to_str(), true, &exclude, Some("aarch64-linux-android"), false, fibers, &embed, true);
+        }
+        if build_x86 {
+            eprintln!("[bundle] x86_64 (x86_64-linux-android)…");
+            build_native(&path, x86_so.to_str(), true, &exclude, Some("x86_64-linux-android"), false, fibers, &embed, true);
+        }
+        let proj = out_dir.join(format!("{name}-android"));
+        // Preservaciones (patrón M151/M155b): el .so del ABI NO construido y local.properties.
+        let jni = proj.join("app/src/main/jniLibs");
+        let kept_arm = (!build_arm).then(|| fs::read(jni.join("arm64-v8a/libray_app.so")).ok()).flatten();
+        let kept_x86 = (!build_x86).then(|| fs::read(jni.join("x86_64/libray_app.so")).ok()).flatten();
+        let kept_local = fs::read_to_string(proj.join("local.properties")).ok();
+        let _ = fs::remove_dir_all(&proj);
+        let place = |built: bool, src_so: &Path, kept: &Option<Vec<u8>>, dir: std::path::PathBuf| {
+            let dst = dir.join("libray_app.so");
+            let r = fs::create_dir_all(&dir).and_then(|_| {
+                if built {
+                    fs::copy(src_so, &dst).map(|_| ())
+                } else if let Some(bytes) = kept {
+                    fs::write(&dst, bytes)
+                } else {
+                    Ok(())
+                }
+            });
+            if let Err(e) = r {
+                eprintln!("bundle: could not place the shared libraries: {e}");
+                process::exit(74);
+            }
+        };
+        place(build_arm, &arm_so, &kept_arm, jni.join("arm64-v8a"));
+        place(build_x86, &x86_so, &kept_x86, jni.join("x86_64"));
+        // abiFilters según lo PRESENTE (construido o preservado): un filtro de un ABI sin .so
+        // daría un APK que no instala en ese ABI.
+        let mut abis: Vec<&str> = Vec::new();
+        if build_arm || kept_arm.is_some() {
+            abis.push("'arm64-v8a'");
+        }
+        if build_x86 || kept_x86.is_some() {
+            abis.push("'x86_64'");
+        }
+        let abis = abis.join(", ");
+        if let Err(e) = crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis) {
+            eprintln!("bundle: could not write the Gradle project: {e}");
+            process::exit(74);
+        }
+        // local.properties: preservado si existía; si no, sdk.dir detectado — Gradle lo exige.
+        let local = match kept_local {
+            Some(l) => Some(l),
+            None => {
+                let sdk = env::var("ANDROID_HOME").ok().or_else(|| {
+                    env::var("HOME").ok().map(|h| format!("{h}/Library/Android/sdk"))
+                });
+                sdk.filter(|s| Path::new(s).is_dir()).map(|s| format!("sdk.dir={s}\n"))
+            }
+        };
+        if let Some(l) = local {
+            let _ = fs::write(proj.join("local.properties"), l);
+        }
+        let _ = fs::remove_dir_all(&work);
+        println!("ok: Android project '{}'", proj.display());
+        println!("  build:   cd {} && gradle assembleDebug", proj.display());
+        println!("  install: adb install -r app/build/outputs/apk/debug/app-debug.apk");
+        println!("  launch:  adb shell am start -n {app_id}/org.raylang.shell.MainActivity");
+        println!("  logs:    adb logcat -s ray");
+        return;
+    }
     if ios {
         if !cfg!(target_os = "macos") {
             eprintln!("bundle --ios: an iOS app can only be built on macOS (Xcode)");

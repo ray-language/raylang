@@ -11004,3 +11004,21 @@ incluido), y stdout/stderr→logcat (en una app van a /dev/null: relay pipe+dup2
 alineado a 16KB (Android 15+). `ui-shell` pasa a ser incondicional en modo lib (los wrappers
 JNI emitidos lo referencian aunque el programa no abra ventanas). T1 validado el mismo día:
 .so arm64 de 707KB con todos los símbolos dinámicos y LOADs a 0x4000.
+
+**M156 fase 3 — el proyecto Gradle y el cierre del arco.** `bundle_android.rs` (el molde de
+bundle_ios): shell Java de dos clases (MainActivity con WebView + el shim `window.ray.send`
+por addJavascriptInterface — paridad M152 —, RayBridge con `System.loadLibrary("ray_app")` y
+los natives que casan con los símbolos del .so; onOpen/onEval postean al main thread por
+Handler), manifest con cleartext ACOTADO al loopback (network security config, jamás el flag
+global), sin externalNativeBuild (cero cmake: todo lo nativo va dentro del .so) y sin wrapper
+de Gradle en v1. Los dos peajes que el T2 cazó en vivo: `pluginManagement` debe ser LO
+PRIMERO del settings.gradle, y AGP 8.x no funciona con Gradle 9.6 (API interna retirada) →
+AGP 9.0.0 pinneado. Y el T3 cazó el hallazgo gordo del arco: **bionic usa `__errno`** — ni el
+`__errno_location` de glibc (que llevaba hasta el brazo "android-aware" de fibras desde M38,
+jamás ejercitado) ni el `__error` de Darwin; el check cruzado compila igual con el símbolo
+equivocado porque se resuelve al CARGAR — la validación de verdad es el dlopen del emulador.
+Validación T3 completa: APK instalado, "listening on port" en logcat, el webserver embebido
+respondiendo por adb forward + curl, y el ciclo IPC entero en pantalla (botón →
+window.ray.send → evento "message" → eval_js → DOM actualizado). §80b QUEDA COMPLETO: el
+mismo fuente raylang corre en macOS, Linux, .app, iPhone y Android. Diferidos: AAudio, icono
+adaptive, keystore de release, wrapper de Gradle, x86_64 probado.

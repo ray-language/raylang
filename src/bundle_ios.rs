@@ -86,10 +86,14 @@ extern int ray_start(void);
 }
 @end
 
-// El MISMO shim literal que inyecta el escritorio (ray_runtime::ui::RAY_JS_SHIM).
+// El MISMO shim que inyecta el escritorio (ray_runtime::ui::RAY_JS_SHIM, M152/M157:
+// send + request/Promise + _deliver).
 static NSString *const rayJsShim =
-    @"(function(){window.ray={send:function(t){window.webkit.messageHandlers.ray.postMessage("
-    @"String(t).replace(/\\u0000/g,\"\"))}}})();";
+    @"(function(){var p={},n=0;function e(t){return typeof t===\"string\"?t:JSON.stringify(t)}"
+    @"function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\\u0000/g,\"\"))}"
+    @"window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;"
+    @"return new Promise(function(r){p[i]=r;q(\"\\u0001q\\u0001\"+i+\"\\u0001\"+e(t))})},"
+    @"_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})();";
 
 static WKWebView *rayWebView = nil;
 static NSString *rayLastURL = nil;

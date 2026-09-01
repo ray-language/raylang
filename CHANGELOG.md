@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El puente IPC gana payload JSON y petición-con-respuesta** (M157): `window.ray.send(v)`
+  acepta no-strings (viajan como su JSON — parsear con `std/json`), y
+  `window.ray.request(v)` devuelve una **Promise** que el programa resuelve con
+  `ui.as_request(e)` + `ui.reply(window, id, valor)`. Cero maquinaria nativa nueva: el sobre
+  viaja por el canal de mensajes existente y la respuesta por el `eval_js` fire-and-forget —
+  el mismo contrato en macOS, Linux, iOS y Android (los 3 shims actualizados). Verificado el
+  ciclo real en una ventana de macOS.
+
 - **raylang corre en Android** (M156 fase 3 — §80b COMPLETO): `ray bundle --android` genera el
   proyecto Gradle (shell Java + WebView + el programa como `libray_app.so` con los símbolos
   JNI dentro). Validado en el emulador: webserver embebido sirviendo la UI, `window.ray.send`

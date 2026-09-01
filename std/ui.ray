@@ -74,6 +74,71 @@ pub fn next_event_timeout(timeout_ms: int) -> Result<Option<UiEvent>, string> {
     }
 }
 
+/// Decodes a request sent with `window.ray.request(value)` (M157): `Some((id, body))` when
+/// this `"message"` event carries the request envelope, `None` for a plain
+/// `window.ray.send`. `body` is the payload — a string, or the JSON text of a non-string
+/// value (parse it with `std/json`). Answer with `reply(e.window, id, value)`; an
+/// unanswered request leaves the page's Promise pending forever (your protocol decides).
+pub fn as_request(e: UiEvent) -> Option<(int, string)> {
+    if (e.kind != "message") {
+        return Option.None;
+    }
+    let tag = e.tag;
+    if (tag.len() < 3 || tag[0] != '\u{1}' || tag[1] != 'q' || tag[2] != '\u{1}') {
+        return Option.None;
+    }
+    var i = 3;
+    var id_text = "";
+    while (i < tag.len() && tag[i] != '\u{1}') {
+        id_text = id_text + to_string(tag[i]);
+        i = i + 1;
+    }
+    if (i >= tag.len()) {
+        return Option.None;
+    }
+    var body = "";
+    var j = i + 1;
+    while (j < tag.len()) {
+        body = body + to_string(tag[j]);
+        j = j + 1;
+    }
+    match (parse_int(id_text)) {
+        Option.Some(id) => Option.Some((id, body)),
+        Option.None => Option.None,
+    }
+}
+
+/// Resolves the page's Promise for the request `id` with `value` (M157): the page's
+/// `window.ray.request(...).then(v => …)` receives it as a string. Delivered over the same
+/// fire-and-forget `eval_js` — no new native machinery on any platform.
+pub fn reply(window: int, id: int, value: string) -> Result<int, string> {
+    eval_js(window, "window.ray._deliver(" + to_string(id) + "," + js_string(value) + ")")
+}
+
+// Un literal de string de JS a partir de un valor arbitrario (escapes mínimos suficientes:
+// \\, ", saltos de línea y los separadores U+2028/U+2029 que JS trata como newline).
+fn js_string(value: string) -> string {
+    var out = "\"";
+    for ch in value {
+        if (ch == '\\') {
+            out = out + "\\\\";
+        } else if (ch == '"') {
+            out = out + "\\\"";
+        } else if (ch == '\n') {
+            out = out + "\\n";
+        } else if (ch == '\r') {
+            out = out + "\\r";
+        } else if (ch == ' ') {
+            out = out + "\\u2028";
+        } else if (ch == ' ') {
+            out = out + "\\u2029";
+        } else {
+            out = out + to_string(ch);
+        }
+    }
+    out + "\""
+}
+
 /// One item of a custom menu: `tag` travels in the click event (`kind == "menu"`), `title` is
 /// what the menu shows, and `shortcut` is a single character for Cmd+key on macOS (uppercase
 /// adds Shift; empty = no shortcut; Linux v1 is click-only).

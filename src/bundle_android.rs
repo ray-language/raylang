@@ -95,7 +95,11 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView v, String url, Bitmap favicon) {
                 // M152: el MISMO contrato que el user script de WKWebView — window.ray.send.
                 v.evaluateJavascript(
-                    "window.ray={send:function(t){RayAndroid.send(String(t).replace(/\\u0000/g,''))}}",
+                    "(function(){var p={},n=0;function e(t){return typeof t==='string'?t:JSON.stringify(t)}"
+                        + "function q(s){RayAndroid.send(String(s).replace(/\\u0000/g,''))}"
+                        + "window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;"
+                        + "return new Promise(function(r){p[i]=r;q('\\u0001q\\u0001'+i+'\\u0001'+e(t))})},"
+                        + "_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})()",
                     null);
             }
         });
@@ -277,7 +281,8 @@ mod tests {
         assert!(RAY_BRIDGE_JAVA.contains("public static native int start()"));
         assert!(RAY_BRIDGE_JAVA
             .contains("public static native void pushEvent(String kind, long window, String tag)"));
-        assert!(MAIN_ACTIVITY_JAVA.contains("window.ray={send:function(t){RayAndroid.send("));
+        assert!(MAIN_ACTIVITY_JAVA.contains("window.ray={send:function(t){q(e(t))}"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("request:function(t)"), "M157: request in the shim");
         assert!(ANDROID_MANIFEST
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));

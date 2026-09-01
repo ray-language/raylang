@@ -87,14 +87,15 @@ fn events() -> &'static Events {
     })
 }
 
-/// M152: el shim del puente IPC, inyectado como user script en el webview (mac/iOS/GTK — la
-/// MISMA fuente literal, copiada en la plantilla del shell iOS). Define la vía documentada
-/// `window.ray.send(text)` sobre el mecanismo nativo de WebKit
-/// (`window.webkit.messageHandlers.ray.postMessage`, que también funciona directo y queda
-/// como vía de bajo nivel). Coerce a String y ELIMINA NULs — simétrico con eval_js, que ya
-/// los elimina en la otra dirección; el lado nativo siempre ve un C-string completo.
+/// M152/M157: el shim del puente IPC, inyectado como user script en el webview (mac/GTK; las
+/// plantillas de los shells iOS/Android llevan la MISMA lógica adaptada a su transporte).
+/// Superficie: `window.ray.send(v)` (v no-string viaja como JSON — M157) y
+/// `window.ray.request(v) -> Promise` (M157: sobre con id `\u0001q\u0001<id>\u0001<payload>`;
+/// el programa responde con `ui.reply(w, id, valor)`, que resuelve la Promise vía
+/// `window.ray._deliver` — TODO sobre el eval_js fire-and-forget existente: cero cambios
+/// nativos). Los NULs se eliminan; el lado nativo siempre ve un C-string completo.
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla
-pub(crate) const RAY_JS_SHIM: &str = r#"(function(){window.ray={send:function(t){window.webkit.messageHandlers.ray.postMessage(String(t).replace(/\u0000/g,""))}}})();"#;
+pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})();"#;
 
 fn push_event(kind: &str, window: i64, tag: &str) {
     let ev = events();

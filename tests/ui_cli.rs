@@ -424,3 +424,62 @@ fn main() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// M157 — request/reply del puente IPC: el sobre `\u{1}q\u{1}id\u{1}payload` se decodifica
+/// con as_request, un send plano no, y reply (eval_js) es Ok. 3 motores, headless (el sobre
+/// entra por RAY_UI_MSG).
+const REQUEST_PROG: &str = "import std/ui;\n\nfn main() {\n    match (ui.open(\"A\", \"http://127.0.0.1:1/\", 320, 200)) {\n        Result.Err(e) => print(\"open failed: \" + e),\n        Result.Ok(h) => {\n            match (ui.next_event()) {\n                Result.Ok(e) => {\n                    match (ui.as_request(e)) {\n                        Option.Some(pair) => {\n                            let (id, body) = pair;\n                            print(\"request \" + to_string(id) + \": \" + body);\n                            print(\"reply ok: \" + to_string(ui.reply(h, id, \"pong\").is_ok()));\n                        },\n                        Option.None => print(\"plain: \" + e.tag),\n                    }\n                },\n                Result.Err(e) => print(\"err: \" + e),\n            }\n            let _ = close(h);\n        },\n    }\n}\n";
+
+#[test]
+fn requests_decode_and_reply_on_all_three_engines() {
+    const WANT: &str = "request 7: {\"op\":\"sum\"}\nreply ok: true\n";
+    let envelope = "\u{1}q\u{1}7\u{1}{\"op\":\"sum\"}";
+    let base = tmp("req");
+    std::fs::write(base.join("prog.ray"), REQUEST_PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code) = run_headless(
+            Command::new(env!("CARGO_BIN_EXE_ray"))
+                .args([engine, "prog.ray"])
+                .env("RAY_UI_MSG", envelope)
+                .current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0");
+        assert_eq!(out, WANT, "{engine}: exact output");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("native build");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code) = run_headless(Command::new(&bin).env("RAY_UI_MSG", envelope));
+        assert_eq!(code, 0, "native: exit 0");
+        assert_eq!(out, WANT, "native ≡ VM");
+    }
+}
+
+/// M157 — el CICLO REAL request→reply en una ventana de verdad (macOS): la página lanza
+/// window.ray.request('ping') y manda el resultado de vuelta con send — el programa
+/// responde 'pong' y debe ver 'got:pong'. `#[ignore]`: cargo test -- --ignored en un mac.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "opens a real window; run by hand on macOS: cargo test --test ui_cli -- --ignored"]
+fn a_real_request_reply_roundtrip_completes() {
+    let base = tmp("req_real");
+    let prog = "import std/time;\nimport std/ui;\n\nfn main() {\n    match (ui.open(\"rr\", \"about:blank\", 320, 200)) {\n        Result.Err(e) => print(\"open failed: \" + e),\n        Result.Ok(h) => {\n            var got = \"\";\n            var tries = 0;\n            while (got == \"\" && tries < 50) {\n                let _ = ui.eval_js(h, \"window.__armed||(window.__armed=1,window.ray.request('ping').then(function(r){window.ray.send('got:'+r)}))\");\n                match (ui.next_event_timeout(100)) {\n                    Result.Ok(o) => {\n                        if let Option.Some(e) = o {\n                            match (ui.as_request(e)) {\n                                Option.Some(pair) => {\n                                    let (id, body) = pair;\n                                    let _ = ui.reply(h, id, \"pong-\" + body);\n                                },\n                                Option.None => {\n                                    if (e.kind == \"message\") {\n                                        got = e.tag;\n                                    }\n                                },\n                            }\n                        }\n                    },\n                    Result.Err(_) => {},\n                }\n                tries = tries + 1;\n            }\n            print(\"got: \" + got);\n            let _ = close(h);\n        },\n    }\n}\n";
+    std::fs::write(base.join("prog.ray"), prog).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["--vm", "prog.ray"])
+        .env_remove("RAY_UI_BACKEND")
+        .current_dir(&base)
+        .output()
+        .expect("run with a real window");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("got: got:pong-ping"),
+        "the real request/reply roundtrip completes:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

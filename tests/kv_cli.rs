@@ -224,3 +224,78 @@ fn main() -> int {{
     );
     ambos_engines("atomico", &store, &src, "final true\ntmp false\n");
 }
+
+/// M154: read-modify-write atómico — incr (ausente=0, acumulado, no-entero=Err) y set_if
+/// (CAS; None = solo-si-ausente), sobre el Store LOCAL (ambos motores).
+#[test]
+fn incr_and_set_if_on_the_local_store() {
+    let store = std::env::temp_dir().join("kv_cli_rmw.rkv");
+    let src = format!(
+        r#"import std/kv;
+
+fn main() {{
+    let s = kv.empty("{p}");
+    let _ = s.incr("hits", 1);
+    match (s.incr("hits", 4)) {{
+        Result.Ok(n) => print("hits: " + to_string(n)),
+        Result.Err(e) => print("err: " + e),
+    }}
+    s.set_string("name", "ray");
+    match (s.incr("name", 1)) {{
+        Result.Ok(_) => print("bad"),
+        Result.Err(e) => print("rejected: " + to_string(e.contains("not an integer"))),
+    }}
+    print(to_string(s.set_if("flag", Option.None, "on".to_bytes())));
+    print(to_string(s.set_if("flag", Option.Some("off".to_bytes()), "x".to_bytes())));
+    print(to_string(s.set_if("flag", Option.Some("on".to_bytes()), "off".to_bytes())));
+    match (s.get_string("hits")) {{
+        Option.Some(v) => print("as string: " + v),
+        Option.None => print("missing"),
+    }}
+}}
+"#,
+        p = store.display()
+    );
+    ambos_engines(
+        "rmw",
+        &store,
+        &src,
+        "hits: 5\nrejected: true\ntrue\nfalse\ntrue\nas string: 5\n",
+    );
+    let _ = std::fs::remove_file(&store);
+}
+
+/// M154: los mismos RMW por el ACTOR (SharedStore) — el ciclo entero corre en la fibra
+/// dueña. Solo VM (spawn), --deterministic para salida estable (patrón shared_store_actor).
+#[test]
+fn incr_and_set_if_on_the_shared_store() {
+    let store = std::env::temp_dir().join("kv_cli_rmw_shared.rkv");
+    let _ = std::fs::remove_file(&store);
+    let src = format!(
+        r#"import std/kv;
+
+fn main() {{
+    let sh = kv.share(kv.empty("{p}"));
+    let _ = sh.incr("n", 2);
+    match (sh.incr("n", 3)) {{
+        Result.Ok(n) => print("n: " + to_string(n)),
+        Result.Err(e) => print("err: " + e),
+    }}
+    print(to_string(sh.set_if("k", Option.None, "v".to_bytes())));
+    print(to_string(sh.set_if("k", Option.None, "w".to_bytes())));
+    kv.stop(sh);
+}}
+"#,
+        p = store.display()
+    );
+    let path = std::env::temp_dir().join("kv_cli_rmw_shared.ray");
+    std::fs::write(&path, &src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(["--deterministic", "--vm"])
+        .arg(&path)
+        .output()
+        .expect("runs the vm");
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "n: 5\ntrue\nfalse\n");
+    let _ = std::fs::remove_file(&store);
+}

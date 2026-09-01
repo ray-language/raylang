@@ -310,6 +310,32 @@ Nota de diseño: raylang usa actores de heap aislado — cada conexión ve su pr
 Lo idiomático es el **handler puro** (la respuesta como función de la petición); el estado
 compartido va por canales a una fibra que lo posee (ver `examples/web/ssr/README.md`).
 
+### Estado de aplicación: `web.state` (M154)
+
+La forma de serie de ese patrón: un store `kv` compartido por actor, con el mismo interruptor
+de persistencia que `sessions` (bajo `ray dev` persiste en `path`; en producción memoria pura;
+`state_memory()` = memoria siempre). Se crea UNA vez en `main` y los handlers lo capturan (el
+builder-closure cruza a la fibra de cada conexión; el handle solo lleva un canal):
+
+```rust
+let st = state("app-state.rkv")?;   // o state_memory()
+let r = listen(fn() -> App {
+    var app = new_app();
+    app.GET("/hits", fn(c: Ctx, r: Res) {
+        match (state_incr(st, "hits", 1)) {
+            Result.Ok(n) => r.text("hits: " + to_string(n)),
+            Result.Err(e) => r.text("state error: " + e),
+        }
+    });
+    app
+}, "127.0.0.1", 8080);
+```
+
+`state_get`/`state_put`/`state_delete` para valores string; **`state_incr` es atómico** (el
+read-modify-write corre entero en la fibra dueña — lo que un `get`+`put` no puede garantizar
+bajo requests concurrentes; asertado en `tests/web_state_cli.rs` con N incrementos paralelos
+exactos). Para estado tipado a medida, la receta actor del MANUAL §15.
+
 ## Referencia rápida
 
 | Función | Qué hace |

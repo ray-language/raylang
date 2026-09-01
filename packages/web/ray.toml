@@ -2,7 +2,7 @@
 # hermanas (`net/…`) se resuelven contra el directorio padre — deps::dependency_roots_for).
 [package]
 name = "web"
-version = "0.2.0"
+version = "0.3.0"
 entry = "framework.ray"
 
 [dependencies]

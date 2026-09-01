@@ -68,6 +68,16 @@ pub trait StoreOps {
     /// Persists the store atomically: writes `<path>.tmp` and renames it over `path`
     /// (a crash mid-write never corrupts the previous state). Returns the bytes written.
     fn save(self) -> Result<int, string>;
+    /// Atomically adds `delta` to the integer under `key` and returns the new value;
+    /// an absent key counts as 0. The value is stored as decimal UTF-8 (readable with
+    /// `get_string`). `Err` when the existing value is not a decimal integer. On a
+    /// `SharedStore` the whole read-modify-write runs inside the owner fiber — safe
+    /// under concurrent callers (M154).
+    fn incr(self, key: string, delta: int) -> Result<int, string>;
+    /// Compare-and-set: stores `new` under `key` only when the current value equals
+    /// `expected` (`Option.None` = only when the key is absent). Returns whether it
+    /// stored. The general escape for read-modify-write beyond counters (M154).
+    fn set_if(self, key: string, expected: Option<bytes>, new: bytes) -> bool;
 }
 
 impl StoreOps for Store {
@@ -117,6 +127,53 @@ impl StoreOps for Store {
         fs.rename(tmp, self.path)?;
         Result.Ok(b.len())
     }
+
+    // M154: sobre el Store local (una sola fibra dueña) el read-modify-write es
+    // trivialmente atómico. Ausente = 0; presente-pero-no-entero = Err (errores como
+    // valores — jamás un reset silencioso).
+    fn incr(self, key: string, delta: int) -> Result<int, string> {
+        let current = match (self.data.get(key)) {
+            Option.None => 0,
+            Option.Some(b) => {
+                let txt = match (from_utf8(b)) {
+                    Result.Ok(t) => t,
+                    Result.Err(_) => {
+                        return Result.Err("kv: the value at key '" + key + "' is not an integer");
+                    },
+                };
+                match (parse_int(txt)) {
+                    Option.Some(n) => n,
+                    Option.None => {
+                        return Result.Err("kv: the value at key '" + key + "' is not an integer");
+                    },
+                }
+            },
+        };
+        let next = current + delta;
+        self.data.insert(key, to_string(next).to_bytes());
+        Result.Ok(next)
+    }
+
+    fn set_if(self, key: string, expected: Option<bytes>, new: bytes) -> bool {
+        let hit = match (self.data.get(key)) {
+            Option.None => {
+                match (expected) {
+                    Option.None => true,
+                    Option.Some(_) => false,
+                }
+            },
+            Option.Some(current) => {
+                match (expected) {
+                    Option.Some(want) => current == want,
+                    Option.None => false,
+                }
+            },
+        };
+        if (hit) {
+            self.data.insert(key, new);
+        }
+        hit
+    }
 }
 
 // --- G.2: el store COMPARTIDO entre fibras (actor CSP) ---
@@ -136,6 +193,8 @@ enum KvMsg {
     Keys(Channel<[string]>),
     Count(Channel<int>),
     Save(Channel<Result<int, string>>),
+    Incr(string, int, Channel<Result<int, string>>),
+    SetIf(string, Option<bytes>, bytes, Channel<bool>),
 }
 
 /// A `Store` owned by a dedicated fiber, shared between fibers through a request
@@ -182,6 +241,9 @@ fn store_actor(s: Store, ch: Channel<KvMsg>) {
                     KvMsg.Keys(reply) => send(reply, s.keys()),
                     KvMsg.Count(reply) => send(reply, s.count()),
                     KvMsg.Save(reply) => send(reply, s.save()),
+                    // M154: el RMW entero corre DENTRO del actor — atómico por FIFO.
+                    KvMsg.Incr(k, d, reply) => send(reply, s.incr(k, d)),
+                    KvMsg.SetIf(k, e, v, reply) => send(reply, s.set_if(k, e, v)),
                 }
             },
             Option.None => {
@@ -257,6 +319,24 @@ impl StoreOps for SharedStore {
         match (recv(reply)) {
             Option.Some(r) => r,
             Option.None => Result.Err("kv: shared store is stopped"),
+        }
+    }
+
+    fn incr(self, key: string, delta: int) -> Result<int, string> {
+        let reply: Channel<Result<int, string>> = Channel.new();
+        send(self.ch, KvMsg.Incr(key, delta, reply));
+        match (recv(reply)) {
+            Option.Some(r) => r,
+            Option.None => Result.Err("kv: shared store is stopped"),
+        }
+    }
+
+    fn set_if(self, key: string, expected: Option<bytes>, new: bytes) -> bool {
+        let reply: Channel<bool> = Channel.new();
+        send(self.ch, KvMsg.SetIf(key, expected, new, reply));
+        match (recv(reply)) {
+            Option.Some(b) => b,
+            Option.None => false,
         }
     }
 }

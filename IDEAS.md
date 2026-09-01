@@ -3187,11 +3187,11 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    parser resuelva a favor de la tupla tras `if`/`while` SIN else). Tocarlo es tocar la
    gramática — clasificar como decisión de diseño, no quick-win. Impacto: BAJO-MEDIO.
 
-5. **Helper de estado-de-app en `web`** (ronda 2, ROADMAP #8 de raydesk): cada conexión corre
-   en su fibra con heap aislado → un `var` capturado no se comparte entre handlers; raydesk lo
-   esquivó siendo stateless (carga/guarda por request). El patrón correcto existe (actor:
-   fibra dueña + canales; o `kv.open_shared`) pero se reimplementa en cada proyecto. Deseable:
-   un `web.state`/actor de aplicación de serie + la receta en el MANUAL. Impacto: MEDIO.
+5. **Helper de estado-de-app en `web`** — ✅ EJECUTADA como M154 (DESIGN §148b): `web.state`
+   (gemelo de sessions sin cookies, mismo interruptor RAY_DEV_RELOAD + `state_memory()`) con
+   `state_incr` ATÓMICO sobre el `incr`/`set_if` nuevos de `StoreOps` en std/kv (mensajes de
+   datos al actor — `update(fn)` descartado por §61); receta actor en MANUAL §15 (cierra la
+   promesa rota de REFERENCE §11); `web` a 0.3.0 (republicar con el flujo habitual).
 6. **Ronda 2 — resueltos en M150**: split bind/serve (`listen_on` — mata la micro-carrera del
    puerto efímero), `ray_doc` con `path` (símbolos de proyecto y paquetes), REFERENCE §11 con
    el paquete `web` y kv completo. La republicación ✅ HECHA (31 ago 2026): `net@0.2.0` y

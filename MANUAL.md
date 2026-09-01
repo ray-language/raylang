@@ -2101,6 +2101,52 @@ Reglas:
 - La tarea aísla el fallo también en memoria: su heap es propio (modelo de actores) y se descarta
   entero al fallar — no hay estado compartido a medio mutar que quede visible.
 
+### El patrón actor (estado compartido entre fibras)
+
+Los heaps de fibra están aislados: un `var` capturado **no** se comparte — cada fibra recibe su
+copia profunda. El estado compartido de verdad tiene UNA forma: una **fibra dueña** del dato y un
+**canal de peticiones** (el id de canal sí se comparte al transferir). Las peticiones con
+respuesta llevan su canal de reply *dentro* del mensaje:
+
+```rust
+enum CounterMsg {
+    Add(int),
+    Read(Channel<int>),        // el reply viaja dentro del mensaje
+}
+
+fn counter_actor(ch: Channel<CounterMsg>) {
+    var total = 0;
+    var running = true;
+    while (running) {
+        match (recv(ch)) {
+            Option.Some(m) => match (m) {
+                CounterMsg.Add(n) => total = total + n,
+                CounterMsg.Read(reply) => send(reply, total),
+            },
+            Option.None => running = false,   // canal cerrado → el actor termina
+        }
+    }
+}
+
+// Uso: crear el canal, spawn del actor, y cualquier fibra habla con él.
+let ch: Channel<CounterMsg> = Channel.new();
+spawn(fn() { counter_actor(ch); });
+send(ch, CounterMsg.Add(5));
+let reply: Channel<int> = Channel.new();
+send(ch, CounterMsg.Read(reply));
+```
+
+El orden FIFO del canal da la coherencia (un `Read` ve todos los `Add` enviados antes por el
+mismo emisor), y una operación servida entera por el actor es **atómica** — así se hace un
+read-modify-write sin carreras. Dos reglas: los mensajes llevan **datos, jamás funciones**
+(una closure dentro de un mensaje que cruza fibras no es transportable en el binario nativo),
+y el actor muere cuando su canal se cierra (`close(ch)`).
+
+Las formas empaquetadas de este patrón, para no recablearlo: `kv.share`/`kv.open_shared` (un
+`Store` clave/valor compartido, con `incr`/`set_if` atómicos servidos por el actor), y en el
+framework `web`: `web.sessions` (estado por-sesión con cookie) y `web.state` (estado de
+aplicación — ver la guía del framework).
+
 ### Determinismo y límites
 
 - `ray run --deterministic` (o `RAYLANG_THREADS=1`): un solo hilo, orden FIFO — salida reproducible

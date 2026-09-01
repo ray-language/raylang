@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`web.state` — estado de aplicación compartido entre handlers** (M154, raydesk #8): el
+  gemelo de `sessions` sin cookies — `state(path)` (persiste bajo `ray dev`, memoria pura en
+  producción) o `state_memory()`, con `state_get/put/delete` y **`state_incr` atómico**. La
+  base: `std/kv` gana `incr(key, delta)` y `set_if(key, expected, new)` (CAS) en `StoreOps` —
+  sobre el `SharedStore` el read-modify-write corre ENTERO en la fibra dueña del actor
+  (asertado: N incrementos concurrentes suman exacto N). El MANUAL §15 gana la receta del
+  patrón actor que la referencia prometía. `web` sube a 0.3.0.
+
 - **La tupla (o cualquier literal) en cola tras un `if`/`while`/`match` de sentencia ya
   funciona** (M153, SPEC §5): en posición de sentencia una forma-con-bloque termina en su
   `}` — `if (c) { … }` seguido de `(a, b)` es el `if` como sentencia y la tupla como valor

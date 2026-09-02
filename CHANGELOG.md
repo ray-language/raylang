@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Sprites en el terminal** (M161, §83 — pedido del juego 1942): `std/term` habla el
+  **protocolo kitty graphics** (kitty, Ghostty, WezTerm): `draw_image`/`draw_png` dibujan una
+  imagen en una celda, `transmit_image` + `place_image` es el patrón de juego (subir el
+  sprite una vez, colocarlo por frame en ~30 octetos, con escalado a celdas), y
+  `clear_image`/`clear_images` limpian. Todo raylang puro — cero builtins. Y
+  `capabilities().kitty_graphics` pasa de heurística de entorno a **sonda APC real** al
+  propio terminal (bajo tmux responde `false`, que es la verdad: ahí no se puede dibujar).
+  Demo: `ray run examples/term/sprite.ray`.
+
 - **Android afina** (M160): `ray bundle --android --icon icon.png` genera el icono del
   launcher multi-densidad (`mipmap-*/ic_launcher.png`, vía sips; el manifest solo lo declara
   con los PNG logrados — nunca un proyecto que no compila), y la **firma de release** va por

@@ -361,3 +361,110 @@ fn sigterm_during_raw_restores_the_terminal() {
         "el terminal quedó en crudo tras el SIGTERM (icanon apagado):\n{stty}"
     );
 }
+
+// M161 — gráficos kitty: el núcleo puro (chunking + parser de la respuesta APC) es
+// determinista y corre byte-idéntico en los 3 motores, sin terminal.
+#[test]
+fn kitty_graphics_pure_core_matches_on_all_three_engines() {
+    let src = r#"import std/term;
+
+// Ocurrencias de "ESC _ G" (los APC emitidos): split cuenta separadores.
+fn apcs(s: string) -> int {
+    s.split("\u{1B}_G").len() - 1
+}
+
+fn main() {
+    // Sin payload: un solo APC de control, sin ';' ni 'm='.
+    let d = term.kitty_chunks("a=d,d=a,q=2", b"");
+    print("delete: " + to_string(d == "\u{1B}_Ga=d,d=a,q=2\u{1B}\\"));
+    // Payload corto: un APC con ';' y el base64 completo.
+    let one = term.kitty_chunks("a=t,i=1,q=2", b"\x00\x00\x00");
+    print("one: " + to_string(one == "\u{1B}_Ga=t,i=1,q=2;AAAA\u{1B}\\"));
+    // 3073 octetos -> 2 chunks: el 1º con el control entero + m=1, el 2º SOLO m=0.
+    var big: [int] = [];
+    var i = 0;
+    while (i < 3073) {
+        big.push(65);
+        i = i + 1;
+    }
+    let two = term.kitty_chunks("a=t,i=2,q=2", bytes_of(big));
+    print("apcs: " + to_string(apcs(two)));
+    print("head: " + to_string(two.contains("\u{1B}_Ga=t,i=2,q=2,m=1;")));
+    print("tail: " + to_string(two.contains("\u{1B}_Gm=0;")));
+    // 6145 octetos -> 3 chunks; el intermedio SOLO m=1.
+    var bigger: [int] = [];
+    var j = 0;
+    while (j < 6145) {
+        bigger.push(0);
+        j = j + 1;
+    }
+    let three = term.kitty_chunks("a=t,i=3,q=2", bytes_of(bigger));
+    print("apcs3: " + to_string(apcs(three)));
+    print("mid: " + to_string(three.contains("\u{1B}_Gm=1;")));
+    // El parser de la respuesta de la sonda: OK / error / basura / DA1 sola.
+    print("ok: " + to_string(term.parse_graphics_reply(b"\x1b_Gi=31;OK\x1b\\\x1b[?64;4c")));
+    print("err: " + to_string(term.parse_graphics_reply(b"\x1b_Gi=31;EBADF:oops\x1b\\\x1b[?64c")));
+    print("empty: " + to_string(term.parse_graphics_reply(b"")));
+    print("da1: " + to_string(term.parse_graphics_reply(b"\x1b[?64;1;4c")));
+}
+"#;
+    let want = "delete: true\none: true\napcs: 2\nhead: true\ntail: true\napcs3: 3\nmid: true\nok: true\nerr: false\nempty: false\nda1: false\n";
+    assert_on_all_engines("kitty_pure", src, want);
+}
+
+// M161 — los BYTES exactos que draw_image/clear_* ponen en el cable (patrón io_cli.rs:
+// comparar out.stdout crudo). Sin tty se emite igual — es el contrato (captura/replay) y lo
+// que hace posible este test. Congela el ORDEN de claves del control a propósito.
+#[test]
+fn draw_commands_emit_the_exact_escape_bytes() {
+    let base = tmp("kitty_bytes");
+    let src = r#"import std/term;
+import std/image;
+
+fn main() {
+    let img = image.Image { width: 1, height: 1, pixels: bytes_of([255, 0, 0, 255]) };
+    let _ = term.draw_image(7, 5, 3, img);
+    let _ = term.clear_image(7);
+    let _ = term.clear_images();
+}
+"#;
+    std::fs::write(base.join("prog.ray"), src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["--vm", "prog.ray"])
+        .current_dir(&base)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("corre");
+    assert_eq!(out.status.code(), Some(0), "exit 0");
+    let want: &[u8] = b"\x1b7\x1b[3;5H\x1b_Ga=T,i=7,t=d,f=32,s=1,v=1,C=1,q=2;/wAA/w==\x1b\\\x1b8\
+\x1b_Ga=d,d=i,i=7,q=2\x1b\\\
+\x1b_Ga=d,d=a,q=2\x1b\\";
+    assert_eq!(out.stdout, want, "la secuencia exacta en el cable");
+}
+
+// M161 — las validaciones fallan como VALOR (Err con mensaje exacto), en los 3 motores.
+#[test]
+fn kitty_graphics_validation_errors_match_on_all_three_engines() {
+    let src = r#"import std/term;
+import std/image;
+
+fn show(r: Result<int, string>) {
+    match (r) {
+        Result.Ok(_) => print("bad: ok"),
+        Result.Err(e) => print("err: " + e),
+    }
+}
+
+fn main() {
+    let img = image.Image { width: 1, height: 1, pixels: bytes_of([255, 0, 0, 255]) };
+    show(term.draw_image(0, 1, 1, img));
+    let broken = image.Image { width: 2, height: 2, pixels: bytes_of([0]) };
+    show(term.transmit_image(1, broken));
+    show(term.place_image(-3, 1, 1, 0, 0));
+    show(term.draw_png(1, 1, 1, b"not a png at all"));
+    show(term.clear_image(0));
+}
+"#;
+    let want = "err: image id must be positive\nerr: pixel buffer does not match width*height*4\nerr: image id must be positive\nerr: not a PNG (bad signature)\nerr: image id must be positive\n";
+    assert_on_all_engines("kitty_validation", src, want);
+}

@@ -3258,17 +3258,18 @@ línea, nunca como sustituto del CI.
 ## 83. Protocolo gráfico de terminal en `std/term` (sep 2026, pedido del juego 1942)
 
 Emergió del dogfood del juego 1942 (TUI): dibujar SPRITES/imágenes reales en el terminal, no
-solo celdas de texto. El terreno ya está preparado: M143 dejó `term.size_px`/`cell_px` (los
-píxeles por celda, justo para esto) y `capabilities()` ya detecta `kitty_graphics` por query
-APC real (confirmado en Ghostty). Candidatos, por orden de valor: (1) **protocolo kitty
-graphics** (el moderno: PNG/RGBA por escapes APC, con `placement` y borrado por id — Ghostty/
-kitty/WezTerm lo hablan; casa con `std/image.decode_png` de M144); (2) **sixel** (el clásico,
-DEC — xterm/mlterm/foot; paleta 256, más tosco pero universal en su nicho); (3) iTerm2
-inline images (OSC 1337, nicho mac). Forma probable: `term.draw_image(x_cell, y_cell, rgba,
-w, h)` + `term.clear_image(id)` sobre el protocolo detectado por capabilities, con Err claro
-sin soporte. Impacto: MEDIO (habilita juegos/dashboards gráficos en TUI); esfuerzo MEDIO
-(la codificación kitty es directa; sixel exige cuantización). Clasificar el diseño fino
-cuando toque (¿un solo protocolo v1 = kitty, con sixel diferido?).
+solo celdas de texto. ✅ **EJECUTADA como M161** (sep 2026, DESIGN §154), decidida por el
+usuario a **kitty-solo** (el moderno y flexible; lo hablan kitty/Ghostty/WezTerm):
+`transmit_image`/`place_image` (el patrón de juego: subir una vez, colocar por frame) +
+`draw_image`/`draw_png` + `clear_image(s)` + los ladrillos puros `kitty_chunks`/
+`parse_graphics_reply` — todo raylang puro sobre M143 (cell_px) + M144 (Image RGBA8 = f=32) +
+std/base64, cero builtins. Corrección de esta ficha: la afirmación original "capabilities()
+ya detecta kitty_graphics por query APC real" era FALSA (M143b la dejó como heurística de
+env, doc: "deferred") — M161 ejecutó esa sonda APC de verdad (con tty; bajo tmux da false,
+correcto). Diferidos: **sixel** (el clásico DEC — xterm/mlterm/foot; exige cuantización a
+paleta 256), iTerm2 inline images (OSC 1337, nicho mac), animación/z-index de kitty por
+superficie propia (hoy: vía `kitty_chunks` a mano), passthrough tmux. Impacto restante: BAJO
+(el nicho sixel).
 
 ## Cómo usar este archivo
 

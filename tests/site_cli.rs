@@ -60,6 +60,16 @@ fn generates_the_site_and_both_engines_match() {
         assert!(landing.contains(example), "ejemplo {example} en la galería");
     }
     assert!(landing.contains("href=\"spec.html\""), "enlace a la SPEC\n{landing}");
+    // Desktop y móvil de fábrica: sección propia, con las cuatro plataformas y su entrada en la nav.
+    assert!(landing.contains("id=\"plataformas\""), "sección de plataformas\n{landing}");
+    for platform in ["<b>macOS</b>", "<b>Linux</b>", "<b>iOS</b>", "<b>Android</b>"] {
+        assert!(landing.contains(platform), "plataforma {platform} en la sección");
+    }
+    assert!(landing.contains("data-spy=\"plataformas\""), "enlace de nav a plataformas");
+    // Extensiones en revisión: el estado visible en la tarjeta y el enlace al PR de cada galería.
+    assert!(landing.contains("en revisión en Package Control"), "estado de Sublime");
+    assert!(landing.contains("package_control_channel/pull/9534"), "PR de Package Control");
+    assert!(landing.contains("zed-industries/extensions/pull/7361"), "PR de la galería de Zed");
     // Los templates quedaron completamente resueltos (ni una directiva cruda en la salida).
     assert!(!landing.contains("{%"), "directivas sin resolver");
 

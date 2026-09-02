@@ -39,3 +39,4 @@ playground/editor.bundle.js
 playground/editor/node_modules/
 site-out/
 *.app/
+_site/

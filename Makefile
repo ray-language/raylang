@@ -113,6 +113,12 @@ book: ## Compila el libro (mdbook) → book/book/
 book-serve: ## Sirve el libro con recarga en vivo
 	mdbook serve book
 
+site: ## Genera el sitio (landing + SPEC + bench + playground) → _site/ (mismo paso que pages.yml)
+	cargo run --quiet --bin ray -- run site/site.ray . _site
+
+site-serve: site ## Genera y sirve el sitio en http://localhost:8000
+	python3 -m http.server 8000 -d _site
+
 vscode: ## Compila la extensión de VSCode (npm install + tsc)
 	cd editors/vscode && npm install --no-fund --no-audit && npm run compile
 

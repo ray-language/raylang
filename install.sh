@@ -23,8 +23,17 @@ case "$os" in
   Linux)  suffix="unknown-linux-gnu"; ext="tar.gz" ;;
   Darwin) suffix="apple-darwin";      ext="tar.gz" ;;
   MINGW*|MSYS*|CYGWIN*)
-    err "en Windows, descarga el .zip de las Releases manualmente:
-       https://github.com/$REPO/releases (asset raylang-x86_64-pc-windows-msvc.zip)" ;;
+    # Windows (Git Bash / MSYS): el instalador real es install.ps1 (M165). Si hay PowerShell a mano
+    # se delega en él (hereda las variables RAYLANG_*); si no, se indica el comando.
+    ps_url="https://raw.githubusercontent.com/$REPO/main/install.ps1"
+    for ps in pwsh powershell powershell.exe; do
+      if command -v "$ps" >/dev/null 2>&1; then
+        info "Windows detectado: delegando en install.ps1 vía $ps"
+        exec "$ps" -NoProfile -ExecutionPolicy Bypass -Command "irm $ps_url | iex"
+      fi
+    done
+    err "en Windows, instala desde PowerShell:
+       irm $ps_url | iex" ;;
   *) err "sistema operativo no soportado: $os" ;;
 esac
 case "$arch" in

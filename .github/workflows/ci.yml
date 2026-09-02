@@ -111,6 +111,57 @@ jobs:
   # enmascarado. Por eso ahora es un JOB propio: corre siempre, en paralelo, y reporta solo. El
   # artefacto no va al repo (se construye con `sh playground/build.sh`); basta con que el lib
   # compile al target.
+  # Windows (M165): el zip que publica release.yml no tenía quien lo probara. Build + humo de la VM
+  # + el instalador REAL (install.ps1 contra la última release publicada) + `ray upgrade --check`.
+  # Los tests unix-only (process/term/signals) no corren aquí; PRODUCTION.md lista los huecos.
+  windows:
+    name: build · smoke (windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Caché de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-win-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build (bin ray)
+        run: cargo build --release --bin ray
+      - name: Humo de la VM (fib + fmt + tests de un ejemplo)
+        shell: pwsh
+        run: |
+          $ray = "target/release/ray.exe"
+          & $ray version
+          $out = & $ray run examples/basics/fib.ray
+          if ($LASTEXITCODE -ne 0) { throw "ray run fib.ray salió $LASTEXITCODE" }
+          Write-Host $out
+          & $ray fmt examples/basics/fib.ray | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "ray fmt salió $LASTEXITCODE" }
+      - name: Tests del front-end y la VM (los que no dependen de unix)
+        run: cargo test --release --lib -- lexer parser checker compiler vm::tests fmt
+      - name: Instalador real (install.ps1 contra la última release) + ray upgrade --check
+        shell: pwsh
+        env:
+          RAYLANG_BIN_DIR: ${{ runner.temp }}\raylang-bin
+        run: |
+          $env:RAYLANG_DRY_RUN = "1"
+          ./install.ps1
+          Remove-Item Env:RAYLANG_DRY_RUN
+          ./install.ps1
+          $installed = Join-Path $env:RAYLANG_BIN_DIR "ray.exe"
+          & $installed version
+          if ($LASTEXITCODE -ne 0) { throw "el ray.exe instalado no arranca" }
+          & $installed run examples/basics/fib.ray | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "el ray.exe instalado no ejecuta" }
+          # --check: 0 = al día, 1 = hay versión nueva; ambos válidos, lo que no vale es 69 (plataforma).
+          & $installed upgrade --check
+          if ($LASTEXITCODE -gt 1) { throw "ray upgrade --check salió $LASTEXITCODE" }
+
   wasm:
     name: build wasm32 (playground)
     runs-on: ubuntu-latest

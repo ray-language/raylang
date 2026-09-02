@@ -198,19 +198,23 @@ fn upgrade_repo() -> String {
 }
 
 /// El nombre del asset de release para una plataforma (el mismo esquema que publica
-/// `release.yml` y consume `install.sh`). `None` = plataforma sin asset tar.gz (Windows va
-/// por zip manual). Pura para poder testearla; el llamador pasa los `cfg!` reales.
+/// `release.yml` y consumen `install.sh`/`install.ps1`): tar.gz en unix, zip en Windows (M165;
+/// solo x86_64 — no hay build arm64-msvc). `None` = plataforma sin asset. Pura para poder
+/// testearla; el llamador pasa los `cfg!` reales.
 fn upgrade_asset(os: &str, arch: &str) -> Option<String> {
-    let suffix = match os {
-        "macos" => "apple-darwin",
-        "linux" => "unknown-linux-gnu",
+    let (suffix, ext) = match os {
+        "macos" => ("apple-darwin", "tar.gz"),
+        "linux" => ("unknown-linux-gnu", "tar.gz"),
+        "windows" => ("pc-windows-msvc", "zip"),
         _ => return None,
     };
-    let arch = match arch {
-        "x86_64" | "aarch64" => arch,
+    let arch = match (os, arch) {
+        (_, "x86_64") => "x86_64",
+        ("windows", _) => return None,
+        (_, "aarch64") => "aarch64",
         _ => return None,
     };
-    Some(format!("raylang-{arch}-{suffix}.tar.gz"))
+    Some(format!("raylang-{arch}-{suffix}.{ext}"))
 }
 
 /// Extrae el tag de la URL final de `releases/latest` (GitHub redirige a
@@ -244,7 +248,9 @@ fn sh_capture(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String
 /// 1 = hay versión nueva; para scripts/CI). La descarga delega en `curl` y `tar` del sistema.
 /// El binario descargado se VERIFICA (`ray version` desde un dir temporal) antes de tocar
 /// nada, y el reemplazo es un rename dentro del directorio de instalación (atómico en POSIX,
-/// válido con el binario en ejecución).
+/// válido con el binario en ejecución). En Windows (M165) el zip lo abre el `tar` del sistema
+/// (bsdtar, Windows 10+) y el `.exe` en ejecución se APARTA a `.old` antes de colocar el nuevo:
+/// no se puede sobrescribir, pero sí renombrar.
 fn cmd_upgrade(args: &[String]) {
     let (check, rest) = take_flag_bool(args, "--check");
     if rest.len() > 1 {
@@ -254,8 +260,8 @@ fn cmd_upgrade(args: &[String]) {
     let repo = upgrade_repo();
     let Some(asset) = upgrade_asset(std::env::consts::OS, std::env::consts::ARCH) else {
         eprintln!(
-            "ray upgrade does not support this platform ({}-{}); on Windows download the \
-             .zip from https://github.com/{repo}/releases",
+            "ray upgrade does not support this platform ({}-{}); see the assets in \
+             https://github.com/{repo}/releases",
             std::env::consts::OS,
             std::env::consts::ARCH
         );
@@ -267,9 +273,10 @@ fn cmd_upgrade(args: &[String]) {
         Some(t) => format!("v{t}"),
         None => {
             let latest_url = format!("https://github.com/{repo}/releases/latest");
+            let null_dev = if cfg!(windows) { "NUL" } else { "/dev/null" };
             let effective = sh_capture(
                 "curl",
-                &["-sSfL", "-o", "/dev/null", "-w", "%{url_effective}", &latest_url],
+                &["-sSfL", "-o", null_dev, "-w", "%{url_effective}", &latest_url],
                 None,
             )
             .unwrap_or_else(|e| {
@@ -325,13 +332,17 @@ fn cmd_upgrade(args: &[String]) {
         eprintln!("(does the tag '{tag}' exist? see https://github.com/{repo}/releases)");
         cleanup(69);
     }
-    if let Err(e) = sh_capture("tar", &["-xzf", &archive.to_string_lossy()], Some(&tmp)) {
+    // `-xzf` para el tar.gz; el zip de Windows lo abre `tar -xf` (bsdtar detecta el formato).
+    let untar = if asset.ends_with(".zip") { "-xf" } else { "-xzf" };
+    if let Err(e) = sh_capture("tar", &[untar, &archive.to_string_lossy()], Some(&tmp)) {
         eprintln!("could not unpack '{asset}': {e}");
         cleanup(69);
     }
+    let exe = std::env::consts::EXE_SUFFIX;
+    let bins = [format!("ray{exe}"), format!("raylang{exe}")];
 
     // Verificar el binario ANTES de reemplazar nada: debe correr y reportar la versión pedida.
-    match sh_capture(&tmp.join("ray").to_string_lossy(), &["version"], None) {
+    match sh_capture(&tmp.join(&bins[0]).to_string_lossy(), &["version"], None) {
         Ok(v) if v.contains(target) => {}
         Ok(v) => {
             eprintln!(
@@ -348,7 +359,7 @@ fn cmd_upgrade(args: &[String]) {
 
     // Instalar por rename: copiar al directorio destino como `.<bin>.new` y renombrar encima
     // (mismo filesystem → atómico; reemplazar un binario en ejecución es válido en POSIX).
-    for bin in ["ray", "raylang"] {
+    for bin in &bins {
         let src = tmp.join(bin);
         if !src.is_file() {
             eprintln!("the release package does not contain '{bin}': not installing");
@@ -362,6 +373,16 @@ fn cmd_upgrade(args: &[String]) {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = fs::set_permissions(&staged, fs::Permissions::from_mode(0o755));
             }
+            #[cfg(windows)]
+            {
+                // El .exe que está corriendo (este mismo) no admite sobrescritura, pero sí
+                // renombrado: se aparta a `.old` y se limpia después (o en el próximo upgrade).
+                let old = install_dir.join(format!("{bin}.old"));
+                let _ = fs::remove_file(&old);
+                if dest.exists() {
+                    fs::rename(&dest, &old).map_err(|e| e.to_string())?;
+                }
+            }
             fs::rename(&staged, &dest).map_err(|e| e.to_string())
         });
         if let Err(e) = result {
@@ -374,8 +395,12 @@ fn cmd_upgrade(args: &[String]) {
             cleanup(73);
         }
     }
+    #[cfg(windows)]
+    for bin in &bins {
+        let _ = fs::remove_file(install_dir.join(format!("{bin}.old")));
+    }
     let _ = fs::remove_dir_all(&tmp);
-    println!("installed: raylang {current} → {target} ({})", install_dir.join("ray").display());
+    println!("installed: raylang {current} → {target} ({})", install_dir.join(&bins[0]).display());
 }
 
 /// `ray run [--interp] [archivo] [args...]`: ejecuta el programa. Sin archivo usa
@@ -3894,7 +3919,11 @@ mod tests {
             Some("raylang-x86_64-unknown-linux-gnu.tar.gz")
         );
         // Windows va por zip manual; una arquitectura desconocida tampoco tiene asset.
-        assert_eq!(upgrade_asset("windows", "x86_64"), None);
+        assert_eq!(
+            upgrade_asset("windows", "x86_64").as_deref(),
+            Some("raylang-x86_64-pc-windows-msvc.zip")
+        );
+        assert_eq!(upgrade_asset("windows", "aarch64"), None, "sin build arm64-msvc");
         assert_eq!(upgrade_asset("linux", "riscv64"), None);
     }
 

@@ -11188,3 +11188,31 @@ reinicios de `ray dev`. Arreglo: `fcntl(fd, F_SETFD, FD_CLOEXEC)` inmediatamente
 (el runtime nativo no adopta listeners, así que solo toca `src/builtins.rs`). Test: bajo `ray dev
 --port`, el programa lanza `sh` y este comprueba si `/dev/fd/$RAY_LISTEN_FD` sigue abierto en su
 propio proceso — sin el fix imprime `leaked`, con él `clean`.
+
+## 157. M164 — `image.encode_png`: el camino inverso (sep 2026)
+
+La queja llegó del juego 1942, el primer usuario real de los sprites kitty (M161): los aviones
+se ven, pero los PNG hubo que generarlos con Python porque raylang solo sabía leerlos. Una
+stdlib que decodifica y no codifica deja el ciclo a medias: un sprite procedural, una captura
+del framebuffer o un asset transformado tenían que salir del lenguaje para volver a entrar.
+
+**Coste real: casi nulo.** Las dos piezas duras ya existían — `deflate.zlib_compress` (M40.7c)
+y `inflate.crc32` (M64) — así que el codificador es el envoltorio PNG: firma, IHDR, un IDAT
+con las scanlines (octeto de filtro + fila) y IEND, cada chunk con su CRC sobre tipo+datos.
+Decisiones de v1, las mismas que fijó el decodificador:
+
+- **Un solo formato de salida**: tipo de color 6 (RGBA) a 8 bits, sin entrelazado. Es
+  exactamente lo que `decode_png` produce, así que `decode_png(encode_png(img))` devuelve los
+  píxeles idénticos; el llamador no elige paleta ni profundidad — quien quiera un PNG más
+  pequeño lo pasa por una herramienta de optimización, como se hace con cualquier exportador.
+- **Filtro None** en todas las scanlines. Los filtros adaptativos (Sub/Up/Paeth) reducen el
+  tamaño en fotos; en sprites pequeños con áreas planas el zlib ya los aplana, y elegir filtro
+  por fila es heurística y tiempo que no compra nada aquí. Diferido a demanda.
+- **`Result`, no panic**: `pixels.len() != width * height * 4`, dimensiones no positivas o más
+  de 64 megapíxeles (la misma cota que el decodificador) son `Err` con mensaje.
+
+**Verificación.** El fixture corre byte-idéntico en los tres motores (VM, intérprete, nativo)
+y, además del round-trip interno, el PNG emitido lo valida un decodificador EXTERNO: el test
+lo parsea con el `zlib` de Python (firma, CRC de cada chunk, IHDR, scanlines tras inflar). Un
+codificador que solo se prueba contra su propio decodificador puede compartir un error con
+él; el oráculo ajeno cierra esa puerta.

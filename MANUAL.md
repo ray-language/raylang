@@ -1069,6 +1069,21 @@ canales de 16 bits se reducen a 8), verifica el CRC de cada chunk y acota la des
 Adam7 (raro en assets) se rechaza con error claro. Combinado con `term.cell_px()` y
 `term.capabilities()` tienes las tres piezas para dibujar sprites en un terminal sixel/kitty.
 
+El camino inverso también existe: `encode_png(img)` escribe un `Image` RGBA8 como PNG, así
+que un sprite generado por código (o una captura del framebuffer de tu juego) se guarda sin
+salir de raylang:
+
+```rust
+var px: [int] = [];
+// … 4 octetos por píxel (R, G, B, A), filas de arriba a abajo …
+let sprite = image.Image { width: 16, height: 16, pixels: bytes_of(px) };
+fs.write_file_bytes("sprite.png", image.encode_png(sprite)?)?;
+```
+
+Lo que sale es el mismo formato que `decode_png` produce (RGBA de 8 bits, sin entrelazado),
+de modo que decodificar lo codificado devuelve los píxeles exactos; el tamaño de `pixels`
+tiene que ser `width * height * 4` o la llamada devuelve `Err`.
+
 ### Sprites en el terminal (kitty graphics, `std/term`)
 
 Con las tres piezas juntas, dibujar es una llamada (M161 — protocolo kitty graphics: kitty,

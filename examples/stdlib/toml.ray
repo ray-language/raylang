@@ -5,7 +5,7 @@
 // Soporta: comentarios `#`, tablas `[a.b]`, claves desnudas, y valores string (`"..."` con los escapes
 // completos de la spec — \b \f \n \r \t \" \\ \uXXXX \UXXXXXXXX; escape desconocido = Err, M63.1),
 // string LITERAL `'...'` (sin escapes), entero, flotante, booleano (`true`/`false`) y arreglo
-// `[v, v, …]` (posiblemente multilínea). Diferido: tablas en línea `{…}`, arreglos de tablas `[[…]]`,
+// `[v, v, …]` (posiblemente multilínea) y arreglos de tablas `[[…]]` (M128). Diferido: tablas en línea `{…}`,
 // fechas, strings multilínea. (El manifiesto `ray.toml` NO usa este parser: el CLI trae su lector
 // mínimo propio en Rust, `src/manifest.rs`.)
 // Un valor TOML. Recursivo (los arreglos contienen valores).

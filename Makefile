@@ -17,7 +17,7 @@ LABEL ?= medición
         release slim pgo pgo-slim playground playground-serve \
         bench bench-gate bench-record bench-vs-interp bench-poly bench-poly-build \
         bench-web bench-web-build \
-        book book-serve vscode install clean clean-cache
+        book book-serve site site-serve vscode install clean clean-cache
 
 help: ## Lista los targets disponibles
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUso: make <target> [VAR=valor]\n\n"} \

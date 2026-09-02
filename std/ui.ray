@@ -252,3 +252,29 @@ pub fn events() -> Channel<UiEvent> {
     });
     ch
 }
+
+/// The UI events split in two channels: `(messages, other)` — the first receives the
+/// `"message"` events (the page's `window.ray.send`/`request`; `as_request`/`reply` work on
+/// them unchanged), the second everything else ("closed", "menu"). One pump fiber routes
+/// `next_event()` — so, like `events()`, this is the SINGLE consumer of the process-wide
+/// queue: call it once, and don't mix it with `next_event`/`events()`. Both channels are
+/// unbounded: drain both (an ignored side grows). On a queue error the pump ends and both
+/// channels go quiet. Needs the VM or a native build (`spawn`).
+pub fn split_events() -> (Channel<UiEvent>, Channel<UiEvent>) {
+    let msgs: Channel<UiEvent> = Channel.new();
+    let other: Channel<UiEvent> = Channel.new();
+    spawn(fn() {
+        var running = true;
+        while (running) {
+            match (next_event()) {
+                Result.Ok(e) => {
+                    if (e.kind == "message") { send(msgs, e) } else { send(other, e) }
+                },
+                Result.Err(_) => {
+                    running = false;
+                },
+            }
+        }
+    });
+    (msgs, other)
+}

@@ -97,9 +97,43 @@ fn events() -> &'static Events {
 #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))] // el shell móvil lleva el shim copiado en su plantilla
 pub(crate) const RAY_JS_SHIM: &str = r#"(function(){var p={},n=0;function e(t){return typeof t==="string"?t:JSON.stringify(t)}function q(s){window.webkit.messageHandlers.ray.postMessage(String(s).replace(/\u0000/g,""))}window.ray={send:function(t){q(e(t))},request:function(t){n=n+1;var i=n;return new Promise(function(r){p[i]=r;q("\u0001q\u0001"+i+"\u0001"+e(t))})},_deliver:function(i,v){var r=p[i];if(r){delete p[i];r(v)}}}})();"#;
 
+/// M159: cota dura de la cola de eventos. Red de seguridad contra una página hostil o rota
+/// que inunda `window.ray.send` con el consumidor parado: la cola jamás crece sin límite y el
+/// hilo de UI jamás bloquea. Con la cola llena se descarta el `"message"` MÁS VIEJO (en el
+/// flood real el frente es un message — O(1) en la práctica); los `"closed"`/`"menu"` no se
+/// descartan salvo el caso patológico de una cola entera sin messages (consumidor muerto):
+/// ahí cae el más viejo igualmente — la cota nunca se excede. El descarte no es silencioso:
+/// contador + aviso a stderr (throttled). El evento sintético "dropped" queda diferido
+/// (IDEAS §81.1): sería superficie pública nueva.
+const UI_EVENT_QUEUE_CAP: usize = 65536;
+
+/// Total de eventos descartados por el cap (proceso entero); alimenta el throttle del aviso.
+static DROPPED_EVENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+// Aplica la cota sobre la cola YA bloqueada (llamado con el lock tomado, antes del push).
+fn enforce_queue_cap(q: &mut VecDeque<Event>) {
+    if q.len() < UI_EVENT_QUEUE_CAP {
+        return;
+    }
+    let victim = q
+        .iter()
+        .position(|(kind, _, _)| kind == "message")
+        .unwrap_or(0); // caso patológico: sin messages, cae el más viejo (la cota manda)
+    q.remove(victim);
+    let n = DROPPED_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    // Primer descarte y luego cada 4096: señal sin inundar stderr.
+    if n == 1 || n.is_multiple_of(4096) {
+        eprintln!("ui: event queue full ({UI_EVENT_QUEUE_CAP}); dropped {n} events (oldest first)");
+    }
+}
+
 fn push_event(kind: &str, window: i64, tag: &str) {
     let ev = events();
-    ev.queue.lock().unwrap().push_back((kind.to_string(), window, tag.to_string()));
+    {
+        let mut q = ev.queue.lock().unwrap();
+        enforce_queue_cap(&mut q);
+        q.push_back((kind.to_string(), window, tag.to_string()));
+    }
     ev.ready.notify_all();
     if ev.pipe_wr >= 0 {
         // SAFETY: un octeto a un fd nuestro; con el pipe lleno se omite (ver arriba).
@@ -748,6 +782,8 @@ mod mac {
     type MsgVoidIdId = unsafe extern "C" fn(Id, Sel, Id, Id);
     type MsgBoolId = unsafe extern "C" fn(Id, Sel, Id) -> u8;
     type MsgInitUserScript = unsafe extern "C" fn(Id, Sel, Id, i64, u8) -> Id;
+    // M159: isMainFrame (BOOL sin argumentos).
+    type MsgBool = unsafe extern "C" fn(Id, Sel) -> u8;
 
     fn msg_send() -> *const c_void {
         objc_msgSend as unsafe extern "C" fn() as *const c_void
@@ -981,6 +1017,17 @@ mod mac {
                     let get_id: MsgId = std::mem::transmute(msg_send());
                     let is_kind: MsgBoolId = std::mem::transmute(msg_send());
                     let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    // M159: solo el MAIN frame habla con el programa — un iframe de terceros
+                    // no debe alcanzar el puente (el shim ya se inyecta forMainFrameOnly,
+                    // pero postMessage a mano seguiría llegando sin esta guarda).
+                    let frame = get_id(message, sel(b"frameInfo\0"));
+                    if frame.is_null() {
+                        return;
+                    }
+                    let is_main: MsgBool = std::mem::transmute(msg_send());
+                    if is_main(frame, sel(b"isMainFrame\0")) == 0 {
+                        return;
+                    }
                     let body = get_id(message, sel(b"body\0"));
                     // Solo strings v1 (paridad con GTK, que guarda con jsc_value_is_string).
                     if body.is_null()
@@ -2532,6 +2579,63 @@ pub(crate) fn utf8_to_mutf8(s: &str) -> Vec<u8> {
     }
     out.push(0);
     out
+}
+
+// M159: la política del cap se prueba sobre una VecDeque LOCAL (enforce_queue_cap es pura
+// sobre la cola que recibe): la cola real es global de proceso — un test que la tocara
+// obligaría a serializar todos los tests futuros del crate que la usen.
+#[cfg(test)]
+mod queue_cap_tests {
+    use super::{enforce_queue_cap, Event, UI_EVENT_QUEUE_CAP};
+    use std::collections::VecDeque;
+
+    fn msg(i: usize) -> Event {
+        ("message".to_string(), 1, format!("m{i}"))
+    }
+
+    #[test]
+    fn cap_drops_oldest_message_and_keeps_closed() {
+        let mut q: VecDeque<Event> = VecDeque::new();
+        // Un "closed" temprano entre messages: el cap debe saltárselo.
+        q.push_back(msg(0));
+        q.push_back(("closed".to_string(), 7, String::new()));
+        for i in 1..UI_EVENT_QUEUE_CAP - 1 {
+            q.push_back(msg(i));
+        }
+        assert_eq!(q.len(), UI_EVENT_QUEUE_CAP);
+        // Dos pushes más allá del cap: caen m0 y m1 (los messages más viejos), no el closed.
+        for extra in 0..2 {
+            enforce_queue_cap(&mut q);
+            q.push_back(msg(UI_EVENT_QUEUE_CAP + extra));
+            assert_eq!(q.len(), UI_EVENT_QUEUE_CAP);
+        }
+        assert_eq!(q[0].0, "closed");
+        assert_eq!(q[0].1, 7);
+        // FIFO del resto intacto: m2 es ahora el message más viejo.
+        assert_eq!(q[1].2, "m2");
+        assert_eq!(q[q.len() - 1].2, format!("m{}", UI_EVENT_QUEUE_CAP + 1));
+    }
+
+    #[test]
+    fn cap_pathological_all_closed_still_bounded() {
+        let mut q: VecDeque<Event> = VecDeque::new();
+        for i in 0..UI_EVENT_QUEUE_CAP {
+            q.push_back(("closed".to_string(), i as i64, String::new()));
+        }
+        enforce_queue_cap(&mut q);
+        q.push_back(("closed".to_string(), -1, String::new()));
+        // Sin messages que sacrificar cae el más viejo: la cota nunca se excede.
+        assert_eq!(q.len(), UI_EVENT_QUEUE_CAP);
+        assert_eq!(q[0].1, 1);
+    }
+
+    #[test]
+    fn under_cap_is_untouched() {
+        let mut q: VecDeque<Event> = VecDeque::new();
+        q.push_back(msg(0));
+        enforce_queue_cap(&mut q);
+        assert_eq!(q.len(), 1);
+    }
 }
 
 #[cfg(test)]

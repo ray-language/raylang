@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El puente IPC se endurece** (M159): la cola de eventos gana una **cota dura** (65536; al
+  llenarse cae el `"message"` más viejo — nunca un `"closed"` — con aviso en stderr), solo el
+  **main frame** puede hablar con el programa en macOS/iOS (un iframe de terceros ya no
+  alcanza el puente ni con `postMessage` a mano; en Linux/Android el shim sigue siendo
+  main-frame-only pero el handler no discrimina — nota de seguridad en el manual), y
+  **`ui.split_events() -> (messages, other)`** parte el stream en dos canales — los
+  `"message"` por uno, el resto por el otro — para consumirlos con `recv`/`select` sin
+  filtrar a mano.
+
 - **std/audio v2** (M158, §79b): `open_latency(rate, channels, latency_ms)` — el hint de
   latencia dimensiona anillo, buffers del dispositivo y chunk del alimentador (un juego
   rítmico pide 20-50 ms; una radio tolera 200-1000) — y **`played_ms(h)`**: la posición REAL

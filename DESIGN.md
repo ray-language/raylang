@@ -11060,3 +11060,28 @@ ALSA calcado — dlopen de libaaudio.so (API 26+), builder + write bloqueante co
 contrapresión del diseño M145 encaja sin tocar nada), y `ray bundle --android` deja de excluir
 `audio` (iOS lo mantiene: CoreAudio de iOS sin validar). Diferido: sonido audible en Android
 físico.
+
+## 153. M159 — los diferidos finos del puente IPC: cap, frames y fan-out (sep 2026)
+
+Los tres flecos de §81.3 que M157 dejó anotados, cada uno por su vía mínima. (1) El CAP de la
+cola de eventos (65536): red de seguridad contra una página hostil/rota que inunda
+`window.ray.send` con el consumidor parado — la cola jamás crece sin cota y el hilo de UI
+jamás bloquea. Política: se descarta el `"message"` MÁS VIEJO (en el flood real el frente es
+un message); un `"closed"` nunca cae — su contrato es "exactamente una vez por ventana" y
+perderlo cuelga a quien lo espera — salvo el caso patológico de una cola entera sin messages
+(consumidor muerto), donde cae el más viejo igualmente porque la cota manda. El descarte no
+es silencioso: contador + aviso a stderr throttled (primer descarte, luego cada 4096). El
+evento sintético "dropped" se difirió a §81: sería superficie pública nueva (UiEvent) para
+una condición que ya es un bug del programa. (2) AISLAMIENTO DE FRAMES: solo el main frame
+habla con el programa. El shim ya se inyectaba main-frame-only en macOS/iOS, pero el handler
+nativo seguía alcanzable con un `postMessage` a mano desde un iframe — la guarda
+`frameInfo.isMainFrame` (un msgSend en macOS, una línea en la plantilla iOS) lo cierra.
+GTK y Android quedan SIN aislamiento del handler, documentado como nota de seguridad en el
+MANUAL: WebKitGTK no expone el frame del mensaje barato y `addJavascriptInterface` se inyecta
+en todos los frames por diseño de la plataforma. (3) FAN-OUT: `ui.split_events() ->
+(messages, other)` — puro raylang, cero nativo: UNA fibra-bomba (gemela de `events()`) que
+enruta por `kind`. Habilita el patrón on_message sin romper D1 (§147): sigue habiendo un solo
+consumidor de la cola — la bomba — y los dos canales son la vista partida del mismo stream.
+La tupla de canales viaja como cualquier valor (precedente KvMsg de std/kv). Verificado: unit
+del cap sobre cola local (la global obligaría a serializar tests), batería VM≡nativo del
+split, y la guarda iOS aseverada en la plantilla.

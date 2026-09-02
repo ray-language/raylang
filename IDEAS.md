@@ -3180,8 +3180,13 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    del sketch se descartó razonado: consumidor único, un canal filtrado robaría eventos).
    Diferidos del arco: payload JSON ✅ y request/reply ✅ EJECUTADOS como M157 (DESIGN §151 —
    el reply NO exigía el ABI de blocks: Promise en el shim + eval_js de vuelta, cero nativo);
-   quedan: fan-out de eventos (habilitaría on_message), aislamiento de frames, cap de cola,
-   scheme `app://` (sigue en §80).
+   fan-out ✅, aislamiento de frames ✅ y cap de cola ✅ EJECUTADOS como M159 (DESIGN §153):
+   `ui.split_events() -> (messages, other)` (fibra-bomba única, puro raylang), guarda
+   `isMainFrame` en macOS/iOS (GTK/Android quedan sin aislamiento del handler — límite de
+   plataforma, documentado en MANUAL; el shim sí es main-frame-only en todas) y cota dura de
+   la cola (65536; descarta el "message" más viejo, jamás un "closed"; aviso stderr
+   throttled). Quedan: scheme `app://` (sigue en §80), evento sintético "dropped" (hoy solo
+   stderr), aislamiento de frames en GTK/Android si sus APIs lo permiten algún día.
 4. **`ray fmt` y la tupla-tras-bloque** — ✅ EJECUTADA como M153 (DESIGN §148, SPEC §5): se
    resolvió en la GRAMÁTICA (la regla de Rust — la forma-con-bloque en posición de sentencia
    termina en su `}`), no en fmt. Cero código real dependía del comportamiento viejo; el

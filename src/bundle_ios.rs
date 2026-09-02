@@ -79,6 +79,9 @@ extern int ray_start(void);
 @implementation RayMsgHandler
 - (void)userContentController:(WKUserContentController *)controller
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (!message.frameInfo.isMainFrame) {
+        return; // M159: solo el main frame habla con el programa (paridad con macOS)
+    }
     if (![message.body isKindOfClass:[NSString class]]) {
         return; // solo strings v1 (paridad con escritorio)
     }
@@ -367,6 +370,16 @@ mod tests {
         assert_eq!(no_previous.style.as_deref(), Some("Automatic"));
         let empty = Signing::resolve(None, &Signing::default());
         assert!(empty.team.is_none() && empty.style.is_none());
+    }
+
+    #[test]
+    fn the_message_handler_only_listens_to_the_main_frame() {
+        // M159: la guarda de frames — un iframe no alcanza el puente ni a mano.
+        assert!(SCENE_DELEGATE_M.contains("if (!message.frameInfo.isMainFrame)"), "isMainFrame guard");
+        // Y la guarda va ANTES de leer el body.
+        let guard = SCENE_DELEGATE_M.find("isMainFrame").unwrap();
+        let body = SCENE_DELEGATE_M.find("message.body").unwrap();
+        assert!(guard < body, "the frame guard precedes the body read");
     }
 
     #[test]

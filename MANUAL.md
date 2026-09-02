@@ -1243,6 +1243,33 @@ un `"message"` por ventana abierta. El puente vive en las tres plataformas: macO
 (WebKitGTK ≥ 2.22; con una lib más vieja la ventana abre sin puente) y el shell iOS de
 `ray bundle --ios` (allí `window` llega como 0).
 
+Para no filtrar por `kind` a mano, **`ui.split_events()`** (M159) parte el stream en dos
+canales — `(messages, other)`: los `"message"` por el primero, `closed`/`menu` por el
+segundo — con una sola fibra-bomba (es TAMBIÉN el consumidor único: llámalo una vez y no lo
+mezcles con `next_event`/`events()`; drena ambos canales — el lado ignorado crece):
+
+```rust
+let (msgs, other) = ui.split_events();
+// una fibra atiende la página, otra el resto de la app:
+spawn(fn() {
+    while (true) {
+        match (recv(msgs)) {
+            Option.Some(e) => { let _ = ui.eval_js(e.window, "…"); },
+            Option.None => { break; },
+        }
+    }
+});
+```
+
+Dos guardas del puente (M159): la cola de eventos tiene **cota dura** (65536) — si la página
+inunda `send` con el consumidor parado, cae el `"message"` más viejo (nunca un `"closed"`)
+con un aviso en stderr —, y en macOS/iOS **solo el main frame** alcanza el puente: un iframe
+de terceros no puede hablar con tu programa ni llamando `postMessage` a mano. **Nota de seguridad**: en Linux
+(WebKitGTK) y Android el handler nativo NO discrimina frames — el shim `window.ray` solo se
+instala en el main frame, pero un iframe de terceros aún podría alcanzar el canal de bajo
+nivel a mano; si incrustas iframes no confiables ahí, trata los mensajes entrantes en
+consecuencia.
+
 El **menú de aplicación** de macOS (el primero, en negrita) también es tuyo: `ui.app_menu`
 mete items encima de Hide/Quit y lo re-titula (bajo `ray run` salía "ray"; el `.app` ya
 muestra su nombre). El tag especial `"role:about"` instala el "About" **nativo** — el panel

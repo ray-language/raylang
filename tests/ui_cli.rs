@@ -370,6 +370,55 @@ fn messages_flow_through_the_events_channel_too() {
     }
 }
 
+/// M159 — `split_events()`: el fan-out puro raylang — los "message" por un canal, el resto
+/// ("closed") por el otro. VM (+ nativo): usa spawn, como events().
+const SPLIT_PROG: &str = r#"import std/ui;
+
+fn main() {
+    let pair = ui.split_events();
+    let (msgs, other) = pair;
+    match (ui.open("C", "http://127.0.0.1:1/", 320, 200)) {
+        Result.Err(e) => print("open failed: " + e),
+        Result.Ok(h) => {
+            if let Option.Some(e) = recv(msgs) {
+                print("msgs: " + e.kind + " tag=" + e.tag + " same window=" + to_string(e.window == h));
+            }
+            let _ = close(h);
+            if let Option.Some(e2) = recv(other) {
+                print("other: " + e2.kind);
+            }
+        },
+    }
+}
+"#;
+
+#[test]
+fn split_events_routes_messages_and_the_rest() {
+    const WANT: &str = "msgs: message tag=ping same window=true\nother: closed\n";
+    let base = tmp("split");
+    std::fs::write(base.join("prog.ray"), SPLIT_PROG).unwrap();
+    let (out, code) = run_headless(
+        Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["--vm", "prog.ray"])
+            .env("RAY_UI_MSG", "ping")
+            .current_dir(&base),
+    );
+    assert_eq!(code, 0, "vm: exit 0");
+    assert_eq!(out, WANT, "vm: exact output");
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join("prog_bin");
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("native build");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code) = run_headless(Command::new(&bin).env("RAY_UI_MSG", "ping"));
+        assert_eq!(code, 0, "native: exit 0");
+        assert_eq!(out, WANT, "native ≡ VM");
+    }
+}
+
 /// M152 — el E2E REAL del puente (macOS, ventana de verdad): la página llama
 /// `window.ray.send("ping")` (disparado con eval_js — el retry absorbe la carrera
 /// eval-antes-de-load) y el programa lo ve por `next_event_timeout`. `#[ignore]` porque

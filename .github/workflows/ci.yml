@@ -158,8 +158,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "el ray.exe instalado no arranca" }
           & $installed run examples/basics/fib.ray | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "el ray.exe instalado no ejecuta" }
-          # --check: 0 = al día, 1 = hay versión nueva; ambos válidos, lo que no vale es 69 (plataforma).
-          & $installed upgrade --check
+          # `ray upgrade --check` se prueba con el binario RECIÉN CONSTRUIDO (el instalado es la
+          # última release, que puede no traer todavía el soporte de Windows). 0 = al día,
+          # 1 = hay versión nueva; ambos válidos — lo que no vale es 69 (plataforma no soportada).
+          & target/release/ray.exe upgrade --check
           if ($LASTEXITCODE -gt 1) { throw "ray upgrade --check salió $LASTEXITCODE" }
 
   wasm:

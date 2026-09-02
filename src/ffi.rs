@@ -291,6 +291,12 @@ fn lib_filenames(short: &str) -> Vec<String> {
     if cfg!(target_os = "macos") {
         vec![format!("lib{short}.dylib"), format!("{short}.dylib"), short.to_string()]
     } else if cfg!(target_os = "windows") {
+        // No hay libc/libm como archivos: los símbolos de la CRT (strlen, sqrt, abs…) viven en
+        // ucrtbase.dll (Windows 10+) o msvcrt.dll. El handle del propio proceso NO los expone —
+        // la CRT va enlazada estáticamente en el binario de release (M165: el oráculo FFI en CI).
+        if short == "c" || short == "m" {
+            return vec!["ucrtbase.dll".to_string(), "msvcrt.dll".to_string()];
+        }
         vec![format!("{short}.dll"), format!("lib{short}.dll"), short.to_string()]
     } else {
         vec![format!("lib{short}.so"), format!("lib{short}.so.6"), short.to_string()]

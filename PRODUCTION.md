@@ -106,6 +106,7 @@ plataforma en vez de fallo silencioso:
 | `std/term` modo crudo / `read_key` / `read_hidden` | no soportado (termios); ancho de celdas y colores sí |
 | `signals()` | no soportado (self-pipe + sigaction) |
 | `fs.chmod` | no soportado (permisos POSIX) |
+| FFI a `"c"`/`"m"` | resuelve a `ucrtbase.dll`/`msvcrt.dll` (M165); librerías propias por nombre `.dll` |
 | Poller de red | fallback sin kqueue/epoll (funciona; peor p99 bajo carga) |
 | Fibras en el binario nativo | `--without fibers` automático (hilo por tarea; el reactor es kqueue/epoll) |
 | `std/ui`, `std/audio`, `ray bundle` | no soportados (arco de escritorio = macOS/Linux; móvil = iOS/Android) |

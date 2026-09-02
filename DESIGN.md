@@ -11246,6 +11246,10 @@ un solo job en Windows: el binario que se publicaba no lo probaba nadie. IDEAS �
   `ray upgrade --check` con el binario instalado. `release.yml`, tras subir el zip, lo instala con
   el tag recién creado y comprueba que `ray version` reporte ese tag: una release no puede
   publicar un instalador roto — la garantía que el `.sh` de unix tenía desde M44c y el `.ps1` no.
+  El primer run del job pagó su precio: el oráculo FFI (`extern "c" strlen`, `extern "m" sqrt`)
+  fallaba en Windows con "symbol not found" — el fallback al handle del PROPIO proceso, que en
+  unix expone libc/libm, en Windows no expone la CRT (va enlazada estáticamente). Arreglo en el
+  runtime, no en el test: `"c"`/`"m"` se mapean a `ucrtbase.dll`/`msvcrt.dll`.
 - **Honestidad sobre el runtime**: instalar bien hace visible lo que falta. PRODUCTION.md gana
   una sección Windows con la tabla de lo que funciona (toolchain, VM, nativo, red, fs, web) y los
   huecos con `Err` de plataforma (`process`, `term` crudo, `signals`, `chmod`, poller en fallback,

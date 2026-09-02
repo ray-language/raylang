@@ -3633,3 +3633,34 @@ fn exit_terminates_with_the_code_in_all_engines() {
     assert_eq!(code, 9, "el código de la fibra auxiliar\n{out}");
     assert_eq!(out, "bye\n");
 }
+
+#[test]
+fn build_native_rebuild_to_the_same_output_replaces_the_inode() {
+    // IDEAS §77: sobrescribir IN-PLACE un binario ya existente (mismo inode) invalida en macOS la
+    // caché de firma del kernel y el binario nuevo muere con SIGKILL al exec. `ray build --native`
+    // escribe a `<out>.tmp` y renombra: el segundo build produce OTRO inode, no deja `.tmp` y corre.
+    if Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        eprintln!("saltando build_native: rustc no disponible");
+        return;
+    }
+    let base = tmp("build_native_rebuild");
+    std::fs::write(base.join("prog.ray"), "fn main() -> int { print(7 * 8); 0 }\n").unwrap();
+    let bin = base.join("prog_bin");
+    let bin_s = bin.to_str().unwrap();
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin_s]);
+    assert_eq!(code, 0, "primer build --native sale 0\nstdout={out}\nstderr={err}");
+    let first = std::fs::metadata(&bin).unwrap();
+    let (out, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin_s]);
+    assert_eq!(code, 0, "segundo build --native al MISMO -o sale 0\nstdout={out}\nstderr={err}");
+    let second = std::fs::metadata(&bin).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_ne!(first.ino(), second.ino(), "el rebuild reemplaza el inode (no sobrescribe in-place)");
+    }
+    let _ = (first, second);
+    assert!(!base.join("prog_bin.tmp").exists(), "no queda el `.tmp` intermedio");
+    let native = Command::new(&bin).output().expect("corre el binario reconstruido");
+    assert!(native.status.success(), "el binario reconstruido no muere al exec: {:?}", native.status);
+    assert_eq!(String::from_utf8_lossy(&native.stdout).trim(), "56");
+}

@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Dos arreglos del ciclo edit-build-run** (M163): `ray build --native -o out` ya no
+  sobrescribe el binario in-place (en macOS eso invalidaba la firma ad-hoc y el binario nuevo
+  moría con SIGKILL al arrancar): compila a `out.tmp` y renombra, así que un build fallido deja
+  el binario anterior intacto. Y bajo `ray dev --port`, el listener que el programa adopta del
+  supervisor vuelve a llevar `FD_CLOEXEC`: los procesos que lance con `std/process` ya no heredan
+  el socket de escucha (un nieto vivo habría retenido el puerto tras un reinicio).
+
 - **El repo queda listo para contribuidores** (M162, §82.3): `CONTRIBUTING.md` (quick start,
   tests dirigidos, flujo SPEC-first, la política bilingüe y la byte-identidad de los 3
   motores, todo en inglés), `CODE_OF_CONDUCT.md` (Covenant 2.1), `CODEOWNERS`, plantillas de

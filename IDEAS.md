@@ -31,11 +31,11 @@
 | Visibilidad (`pub` vs mayúscula) | Sistema de módulos | **M11** | 📌 recomendación fijada (`pub` explícito) |
 | **Módulos por directorios** (`import geo/formas/circulo;`) | Loader + parser de `import` | **M11.5** | ✅ separador `/` fijado; **solo leaf-binding** + `as`; prohibido el acceso por ruta en expresiones (ambiguo con `/` y mala práctica); rutas absolutas desde la raíz. Diferido: imports relativos, `pub` granular |
 | **Aislamiento de módulos** (`mod.ray` = cápsula) | Loader (resolución + aristas) | **M11.6** | ✅ estrategia "cápsula": `mod.ray` vuelve un directorio direccionable (`import geo;`) y **encapsula** su subárbol; reexport `pub from … import …` (-a) + enforcement del borde (-b); descartados `internal/`-Go y `mod x;`/`pub(crate)`-Rust |
-| **Redes + base moderna** (sockets / HTTP / JSON · reloj/RNG/math) | Builtins (transporte/base) + librería raylang (protocolos) | **M15** | 🚧 DESIGN §24. Dirección fijada: **transporte = builtins** (sockets TCP/UDP sobre `std::net`, cero deps, molde de handles de M11.8); **protocolos (HTTP/URL/JSON) = librería en raylang** con `import`; **carga útil = `string`** por ahora (bytes diferido); **bloqueante primero** (async sobre el scheduler de M12 = capstone M15.5). ✅ **M15.1a** matemáticas (`sqrt`/`pow`/`floor`/`ceil`/`round`/`abs`/`min`/`max`/trig/`ln`/`log10`/`exp`/`pi`/`e`; opcode parametrizado `MathF(MathFn)`; determinista → oráculo). ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG **SplitMix64** propio sembrado del reloj, cero deps; no determinista → pruebas de propiedades por subproceso). ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net::TcpStream`; carga útil `string`; lectura por trozos; el handle reusa el registro de archivos de M11.8 → `close` extendido a sockets; helpers clonan el stream para no retener el lock en I/O bloqueante; subproceso vs. servidor de juguete en Rust). ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port` sobre `std::net::TcpListener`; `OpenHandle::Listener` en el mismo registro; `accept` clona el listener para no retener el lock; servidor **secuencial bloqueante** —una conexión a la vez en M:1, el concurrente real es M15.5—; subproceso con el `.ray` como servidor). **Transporte TCP completo.** ✅ **M15.4a** JSON **como librería en raylang** (`examples/web/json.ray`: `parse`/`stringify` de descenso recursivo; objetos = `Map<string,Json>` → salida canónica con claves ordenadas; errores como `Result`; **cero runtime**, puro front-end + stdlib). Materializa "protocolos/libs en el propio lenguaje". Limitación: escapes `\uXXXX` no soportados (pediría un builtin code-point→char). Probado por subproceso (golden) en ambos motores. ✅ **M15.4b** HTTP **como librería en raylang** (`examples/web/http.ray`: `fetch`/`request`/`header` + parseo de URL y de respuesta, sobre los builtins TCP de M15.2; solo `http://`, `Connection: close` + leer-hasta-EOF; cabeceras en `Map` con clave en minúsculas; **cero runtime**). Atajo `fetch` (no `get`: chocaría con el `get` de Map, raylang no tiene sobrecarga). **Compone con `json`** (un GET cuyo cuerpo se parsea con la librería JSON) → showcase de librerías de raylang componiéndose. Probado vs. servidor HTTP de juguete en Rust, ambos motores. **M15.4 (protocolos en raylang) COMPLETO.** ✅ **M15.5** (capstone) sockets no bloqueantes integrados con el scheduler de M12: `tcp_accept`/`socket_read` **ceden la fibra** (la VM voltea sus sockets a no bloqueantes; en `WouldBlock` aparca en `io_parked` y el scheduler hace **busy-poll cooperativo** —duerme ~1 ms y re-encola— cuando nadie está listo; cero deps, sin `epoll`). Reusa los opcodes `SocketRead`/`TcpAccept` (solo cambia su ejecución en la VM); GC rootea `io_parked`; `cancel_task` también. El intérprete sigue con sockets bloqueantes (un hilo). Con `spawn` → **servidor concurrente** sobre un hilo (test de ordenación: el 2.º cliente recibe su eco antes de que el 1.º envíe). **Solo VM.** Diferidos de M15.5 ya resueltos: `epoll`/`kqueue` (M17), `bytes` (M16), TLS (M19.4), y la **cesión en `socket_write`** (post-M19: escritura parcial no bloqueante + aparcado por interés de **escritura** en el poller; ya no gira). **M15 COMPLETO.** Sin gestor de paquetes (las "libs externas" son archivos/cápsulas del proyecto) |
-| **Tipo `bytes`** (datos binarios) | Nuevo tipo en todo el pipeline (como `char`) + I/O binaria | **M16** | 🚧 DESIGN §25. Secuencia **inmutable** de octetos, hermano de `string` (inline en la VM, `Rc<Vec<u8>>` en el intérprete; no toca el GC). Cierra la deuda de M15 (carga útil binaria correcta) y cimenta TLS (M17) y el backend nativo (M18). ✅ **M16.1a** el tipo: `Type::Bytes` + keyword `bytes`; literal **`b"..."`** con escapes de string + **`\xNN`** (octeto arbitrario); `len(bytes)`, indexar `b[i] -> int`, `==` estructural; oráculo (incl. UTF-8 multibyte y bytes nulos). `print(bytes)`/`to_string(bytes)` → hex (post-M19, `bytes_to_hex`; oráculo). ✅ **M16.1b** string-interop: `to_bytes(s) -> bytes` (codifica UTF-8, builtin), `from_utf8(b) -> Result<string,string>` (decodifica; primitivo `__from_utf8` etiquetado + envoltorio en el prelude) y concatenación `b1 + b2` (se extiende `Add` en checker + ambos motores); oráculo (round-trip, UTF-8 inválido → Err). ✅ **M16.1c** I/O binaria: `read_file_bytes`/`write_file_bytes` (disco) y `socket_read_bytes`/`socket_write_bytes` (red); cierra la deuda binaria de M15 (octetos crudos intactos, incl. `\x00`/`\xff`). Gotcha: el arreglo `[T]` es homogéneo → las **lecturas** devuelven `[bytes]` con el tag también en bytes (`[b"ok", datos]`/`[b"err", msg_utf8]`); las escrituras siguen con `[string]`. `socket_read_bytes` cede al scheduler como `socket_read` (M15.5). Probado por subproceso, ambos motores; ejemplo `binario.ray`. **M16 COMPLETO.** ✅ **`bytes` como clave de Map** (post-M19: `MapKey::Bytes`, hashable/Ord como un string; oráculo). Diferido: mutabilidad |
+| **Redes + base moderna** (sockets / HTTP / JSON · reloj/RNG/math) | Builtins (transporte/base) + librería raylang (protocolos) | **M15** | ✅ **COMPLETO** — DESIGN §24. Dirección fijada: **transporte = builtins** (sockets TCP/UDP sobre `std::net`, cero deps, molde de handles de M11.8); **protocolos (HTTP/URL/JSON) = librería en raylang** con `import`; **carga útil = `string`** por ahora (bytes diferido); **bloqueante primero** (async sobre el scheduler de M12 = capstone M15.5). ✅ **M15.1a** matemáticas (`sqrt`/`pow`/`floor`/`ceil`/`round`/`abs`/`min`/`max`/trig/`ln`/`log10`/`exp`/`pi`/`e`; opcode parametrizado `MathF(MathFn)`; determinista → oráculo). ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG **SplitMix64** propio sembrado del reloj, cero deps; no determinista → pruebas de propiedades por subproceso). ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net::TcpStream`; carga útil `string`; lectura por trozos; el handle reusa el registro de archivos de M11.8 → `close` extendido a sockets; helpers clonan el stream para no retener el lock en I/O bloqueante; subproceso vs. servidor de juguete en Rust). ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port` sobre `std::net::TcpListener`; `OpenHandle::Listener` en el mismo registro; `accept` clona el listener para no retener el lock; servidor **secuencial bloqueante** —una conexión a la vez en M:1, el concurrente real es M15.5—; subproceso con el `.ray` como servidor). **Transporte TCP completo.** ✅ **M15.4a** JSON **como librería en raylang** (`examples/web/json.ray`: `parse`/`stringify` de descenso recursivo; objetos = `Map<string,Json>` → salida canónica con claves ordenadas; errores como `Result`; **cero runtime**, puro front-end + stdlib). Materializa "protocolos/libs en el propio lenguaje". Limitación: escapes `\uXXXX` no soportados (pediría un builtin code-point→char). Probado por subproceso (golden) en ambos motores. ✅ **M15.4b** HTTP **como librería en raylang** (`examples/web/http.ray`: `fetch`/`request`/`header` + parseo de URL y de respuesta, sobre los builtins TCP de M15.2; solo `http://`, `Connection: close` + leer-hasta-EOF; cabeceras en `Map` con clave en minúsculas; **cero runtime**). Atajo `fetch` (no `get`: chocaría con el `get` de Map, raylang no tiene sobrecarga). **Compone con `json`** (un GET cuyo cuerpo se parsea con la librería JSON) → showcase de librerías de raylang componiéndose. Probado vs. servidor HTTP de juguete en Rust, ambos motores. **M15.4 (protocolos en raylang) COMPLETO.** ✅ **M15.5** (capstone) sockets no bloqueantes integrados con el scheduler de M12: `tcp_accept`/`socket_read` **ceden la fibra** (la VM voltea sus sockets a no bloqueantes; en `WouldBlock` aparca en `io_parked` y el scheduler hace **busy-poll cooperativo** —duerme ~1 ms y re-encola— cuando nadie está listo; cero deps, sin `epoll`). Reusa los opcodes `SocketRead`/`TcpAccept` (solo cambia su ejecución en la VM); GC rootea `io_parked`; `cancel_task` también. El intérprete sigue con sockets bloqueantes (un hilo). Con `spawn` → **servidor concurrente** sobre un hilo (test de ordenación: el 2.º cliente recibe su eco antes de que el 1.º envíe). **Solo VM.** Diferidos de M15.5 ya resueltos: `epoll`/`kqueue` (M17), `bytes` (M16), TLS (M19.4), y la **cesión en `socket_write`** (post-M19: escritura parcial no bloqueante + aparcado por interés de **escritura** en el poller; ya no gira). **M15 COMPLETO.** Sin gestor de paquetes (las "libs externas" son archivos/cápsulas del proyecto) |
+| **Tipo `bytes`** (datos binarios) | Nuevo tipo en todo el pipeline (como `char`) + I/O binaria | **M16** | ✅ **COMPLETO** — DESIGN §25. Secuencia **inmutable** de octetos, hermano de `string` (inline en la VM, `Rc<Vec<u8>>` en el intérprete; no toca el GC). Cierra la deuda de M15 (carga útil binaria correcta) y cimenta TLS (M17) y el backend nativo (M18). ✅ **M16.1a** el tipo: `Type::Bytes` + keyword `bytes`; literal **`b"..."`** con escapes de string + **`\xNN`** (octeto arbitrario); `len(bytes)`, indexar `b[i] -> int`, `==` estructural; oráculo (incl. UTF-8 multibyte y bytes nulos). `print(bytes)`/`to_string(bytes)` → hex (post-M19, `bytes_to_hex`; oráculo). ✅ **M16.1b** string-interop: `to_bytes(s) -> bytes` (codifica UTF-8, builtin), `from_utf8(b) -> Result<string,string>` (decodifica; primitivo `__from_utf8` etiquetado + envoltorio en el prelude) y concatenación `b1 + b2` (se extiende `Add` en checker + ambos motores); oráculo (round-trip, UTF-8 inválido → Err). ✅ **M16.1c** I/O binaria: `read_file_bytes`/`write_file_bytes` (disco) y `socket_read_bytes`/`socket_write_bytes` (red); cierra la deuda binaria de M15 (octetos crudos intactos, incl. `\x00`/`\xff`). Gotcha: el arreglo `[T]` es homogéneo → las **lecturas** devuelven `[bytes]` con el tag también en bytes (`[b"ok", datos]`/`[b"err", msg_utf8]`); las escrituras siguen con `[string]`. `socket_read_bytes` cede al scheduler como `socket_read` (M15.5). Probado por subproceso, ambos motores; ejemplo `binario.ray`. **M16 COMPLETO.** ✅ **`bytes` como clave de Map** (post-M19: `MapKey::Bytes`, hashable/Ord como un string; oráculo). Diferido: mutabilidad |
 | **`epoll`/`kqueue`** (readiness real de E/S) | Poller del SO en `src/poll.rs` (FFI propio) + scheduler de la VM | **M17** | ✅ DESIGN §26. Sustituye el **busy-poll de M15.5** (dormir 1 ms + re-encolar todas) por **notificación de readiness del SO**: el scheduler se **bloquea** hasta que algún socket esté listo y despierta **solo** las fibras de esos fds. **Invariante cero-deps mantenida**: en vez del crate `libc`, se declaran los `extern "C"` (`kqueue`/`kevent` macOS/BSD, `epoll_*` Linux, `close`) — viven en libSystem/libc, siempre enlazados; `unsafe` **acotado** a `src/poll.rs`. Los fds salen de `std` (`AsRawFd`). `io_parked` pasa a llevar el `fd` por fibra. **Fallback honesto** al busy-poll en plataformas sin poller (Windows) o EINTR → siempre hay progreso. Bloqueo infinito (sin timeout): esperar a la red es correcto y no quema CPU. **Cero cambios observables** → la garantía es la **regresión** (tests de red concurrente verdes, ahora vía `kqueue` real). Solo VM. ✅ cesión en `socket_write` (post-M19: escritura parcial + aparcado por interés de escritura en el poller —`wait(read_fds, write_fds)`—). Diferido: registro persistente del poller, edge-triggered, `bytes`/bitops en el toolchain auto-alojado |
-| **La capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | Librerías raylang sobre sockets/scheduler (cero runtime) · cómputo cripto vs. cero-deps | **M19** | 🚧 DESIGN §28. Construye la capa de aplicación sobre el transporte (M15) + concurrencia (M15.5/M17) + `bytes` (M16). Filosofía de M15: protocolos = librería en raylang. ✅ **M19.1** servidor web async + SSE (`webserver.ray`: `Request`/`Response`, `read_request`/`send_response`, `serve`/`serve_raw` concurrentes, SSE vía `text/event-stream` — cero runtime nuevo) · ✅ **M19.2** HTTP en `bytes` (builtin **`sub_bytes`** —único toque de runtime— + cliente/servidor con cuerpo `bytes`, cabeceras texto; `bytes_response`/`body_text`/`request_text`; round-trip binario `\x00`/`\xff` intacto) · ✅ **M19.3** WebSockets `ws://` **COMPLETO**: M19.3a operadores **bit a bit** `& | ^ ~ << >>` (único toque de lenguaje; precedencia C; `>>` partido en el parser para genéricos anidados; oráculo) + M19.3b **SHA-1+base64 en raylang** (cero runtime; vectores RFC 3174/4648/6455) + M19.3c handshake/framing/echo server (`websocket.ray`/`websocket_echo.ray`; builtin `bytes_of`; e2e en el test) · 🚧 **M19.4** TLS/SSL — **DECIDIDO con el usuario: excepción de cero-deps con `rustls`** (1.ª dependencia de Cargo; excepción consciente y acotada al dominio TLS, donde "hazlo a mano" es irresponsable). Sub-fases: ✅ **M19.4a** cliente TLS bloqueante + `https://` (`tls_connect` + `OpenHandle::Tls` en el registro de sockets → `socket_read_bytes`/`socket_write_bytes`/`close` desvían a TLS, `http.ray` habla https transparente; `webpki-roots` + `SSL_CERT_FILE`; test determinista con servidor TLS local en `tests/tls_cli.rs`); ✅ **M19.4b** servidor TLS + `wss://` (`tls_accept`; rustls conducido a mano sobre el enum `Connection`, **integrado con el scheduler no bloqueante** —aparca la fibra al bloquear leyendo, mismo `io_parked`/poller de M15.5/M17—; la misma bomba sirve a ambos motores —sobre socket bloqueante `read_tls` bloquea—; `wss_echo.ray`; e2e en `tests/tls_cli.rs`). **M19.4 + M19 COMPLETOS.** Único punto donde se rompe cero-deps: TLS (excepción consciente) |
-| **Cripto, identidad y clientes cloud** (SHA-256/HMAC · JWT/UUID · URL/cookies · tiempo · Redis · HTTP robusto · UDP) | Librerías raylang sobre M19 (cero runtime) salvo UDP (3 builtins) | **M20** | 🚧 DESIGN §29. La capa que un servicio cloud/distribuido necesita; filosofía M15/M19 (protocolos = librería raylang). Librerías cripto = cómputo puro determinista → verificadas contra vectores estándar (NIST/RFC/openssl/Python) por ambos motores. ✅ **M20.1** SHA-256 (`sha256.ray`, gemelo de SHA-1) · ✅ **M20.2** HMAC-SHA256 + base64url + hex (`hmac.ray`/`hex.ray`; RFC 2104/4648) · ✅ **M20.3** JWT HS256 + UUID v4 (`jwt.ray`/`uuid.ray`; verify en tiempo casi constante; JWT idéntico byte a byte a la referencia) · ✅ **M20.4** URL percent-encoding + query + cookies (`url.ray`/`cookie.ray`; setters `with_*` por UFCS cross-module) · ✅ **M20.5** fechas/horas UTC (`time.ray`; algoritmo de Hinnant, ISO 8601/RFC 1123/duraciones; cero runtime, lo cubre el oráculo de self-hosting) · ✅ **M20.6** cliente Redis RESP2 (`redis.ray`; e2e vs. servidor de juguete) · ✅ **M20.7** HTTP robusto (`request_with`/`fetch_follow`/chunked en `http.ray`) · ✅ **M20.8** UDP (único toque de runtime: `OpenHandle::Udp` + 3 builtins/opcodes en ambos motores; `udp.ray` con `Packet{host,port,data}`) · ✅ **M20.9** AWS Signature V4 (`sigv4.ray`; vector oficial get-vanilla) · ✅ **M20.10** gzip/deflate: descompresor DEFLATE/INFLATE en raylang puro (`inflate.ray`, port de puff.c; 3 tipos de bloque + CRC-32) + integración `Content-Encoding: gzip` en `http.ray` · ✅ **M20.11** cesión cooperativa de `udp_recv_from` en la VM (aparca la fibra en el fd, como TCP) · ✅ **M20.12** encoder DEFLATE (`deflate.ray`; LZ77 con cadenas de hash + Huffman fijo; gzip/zlib; verificado por round-trip con inflate.ray + compatibilidad con Python). **M20 COMPLETO** |
+| **La capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | Librerías raylang sobre sockets/scheduler (cero runtime) · cómputo cripto vs. cero-deps | **M19** | ✅ **COMPLETO** — DESIGN §28. Construye la capa de aplicación sobre el transporte (M15) + concurrencia (M15.5/M17) + `bytes` (M16). Filosofía de M15: protocolos = librería en raylang. ✅ **M19.1** servidor web async + SSE (`webserver.ray`: `Request`/`Response`, `read_request`/`send_response`, `serve`/`serve_raw` concurrentes, SSE vía `text/event-stream` — cero runtime nuevo) · ✅ **M19.2** HTTP en `bytes` (builtin **`sub_bytes`** —único toque de runtime— + cliente/servidor con cuerpo `bytes`, cabeceras texto; `bytes_response`/`body_text`/`request_text`; round-trip binario `\x00`/`\xff` intacto) · ✅ **M19.3** WebSockets `ws://` **COMPLETO**: M19.3a operadores **bit a bit** `& | ^ ~ << >>` (único toque de lenguaje; precedencia C; `>>` partido en el parser para genéricos anidados; oráculo) + M19.3b **SHA-1+base64 en raylang** (cero runtime; vectores RFC 3174/4648/6455) + M19.3c handshake/framing/echo server (`websocket.ray`/`websocket_echo.ray`; builtin `bytes_of`; e2e en el test) · 🚧 **M19.4** TLS/SSL — **DECIDIDO con el usuario: excepción de cero-deps con `rustls`** (1.ª dependencia de Cargo; excepción consciente y acotada al dominio TLS, donde "hazlo a mano" es irresponsable). Sub-fases: ✅ **M19.4a** cliente TLS bloqueante + `https://` (`tls_connect` + `OpenHandle::Tls` en el registro de sockets → `socket_read_bytes`/`socket_write_bytes`/`close` desvían a TLS, `http.ray` habla https transparente; `webpki-roots` + `SSL_CERT_FILE`; test determinista con servidor TLS local en `tests/tls_cli.rs`); ✅ **M19.4b** servidor TLS + `wss://` (`tls_accept`; rustls conducido a mano sobre el enum `Connection`, **integrado con el scheduler no bloqueante** —aparca la fibra al bloquear leyendo, mismo `io_parked`/poller de M15.5/M17—; la misma bomba sirve a ambos motores —sobre socket bloqueante `read_tls` bloquea—; `wss_echo.ray`; e2e en `tests/tls_cli.rs`). **M19.4 + M19 COMPLETOS.** Único punto donde se rompe cero-deps: TLS (excepción consciente) |
+| **Cripto, identidad y clientes cloud** (SHA-256/HMAC · JWT/UUID · URL/cookies · tiempo · Redis · HTTP robusto · UDP) | Librerías raylang sobre M19 (cero runtime) salvo UDP (3 builtins) | **M20** | ✅ **COMPLETO** — DESIGN §29. La capa que un servicio cloud/distribuido necesita; filosofía M15/M19 (protocolos = librería raylang). Librerías cripto = cómputo puro determinista → verificadas contra vectores estándar (NIST/RFC/openssl/Python) por ambos motores. ✅ **M20.1** SHA-256 (`sha256.ray`, gemelo de SHA-1) · ✅ **M20.2** HMAC-SHA256 + base64url + hex (`hmac.ray`/`hex.ray`; RFC 2104/4648) · ✅ **M20.3** JWT HS256 + UUID v4 (`jwt.ray`/`uuid.ray`; verify en tiempo casi constante; JWT idéntico byte a byte a la referencia) · ✅ **M20.4** URL percent-encoding + query + cookies (`url.ray`/`cookie.ray`; setters `with_*` por UFCS cross-module) · ✅ **M20.5** fechas/horas UTC (`time.ray`; algoritmo de Hinnant, ISO 8601/RFC 1123/duraciones; cero runtime, lo cubre el oráculo de self-hosting) · ✅ **M20.6** cliente Redis RESP2 (`redis.ray`; e2e vs. servidor de juguete) · ✅ **M20.7** HTTP robusto (`request_with`/`fetch_follow`/chunked en `http.ray`) · ✅ **M20.8** UDP (único toque de runtime: `OpenHandle::Udp` + 3 builtins/opcodes en ambos motores; `udp.ray` con `Packet{host,port,data}`) · ✅ **M20.9** AWS Signature V4 (`sigv4.ray`; vector oficial get-vanilla) · ✅ **M20.10** gzip/deflate: descompresor DEFLATE/INFLATE en raylang puro (`inflate.ray`, port de puff.c; 3 tipos de bloque + CRC-32) + integración `Content-Encoding: gzip` en `http.ray` · ✅ **M20.11** cesión cooperativa de `udp_recv_from` en la VM (aparca la fibra en el fd, como TCP) · ✅ **M20.12** encoder DEFLATE (`deflate.ray`; LZ77 con cadenas de hash + Huffman fijo; gzip/zlib; verificado por round-trip con inflate.ray + compatibilidad con Python). **M20 COMPLETO** |
 | **Cliente DNS** (resolución sobre UDP) | Librería raylang sobre los sockets UDP de M20 | **M22** | ✅ DESIGN §31. `dns.ray` (RFC 1035): resuelve **A/AAAA/MX/CNAME/TXT** por UDP; `query`/`query_a`/`query_aaaa`/`query_mx`/`query_cname`/`query_txt` → `enum Record`. La pieza difícil = **compresión de nombres** (punteros `0xC0`; `read_name` los sigue y devuelve la posición siguiente; también en el RDATA de MX/CNAME) + IPv6 canónica con `::` (RFC 5952) + character-strings de TXT. Verificado e2e contra un servidor DNS de juguete (los 5 tipos según QTYPE, con compresión) por ambos motores + comprobado contra DNS real (8.8.8.8). Diferido: SOA/PTR, TCP fallback, caché por TTL |
 | **Observabilidad** (logging estructurado + métricas Prometheus) | Librerías raylang puras (cero runtime) | **M21** | ✅ DESIGN §30. ✅ **M21.1** logging estructurado en JSON (`log.ray`; niveles, campos tipados, escapado, builder encadenable por UFCS; verificado con Python `json.loads`) · ✅ **M21.2** métricas Prometheus (`metrics.ray`; counters/gauges/histogramas con labels, formato de exposición de texto; verificado por validación estructural en Python) · ✅ **M21.3** endpoint `/metrics` real (`metrics_server_demo.ray`; monta metrics sobre webserver, Registry compartido capturado en el handler, escrapeable por Prometheus) · ✅ **M21.4** histogramas con labels (familia de series por conjunto de labels, `le` fusionado, creación canónica en la 1.ª observación; verificado por cumulatividad por grupo en Python). Las libs puras las cubre el oráculo de self-hosting. **M21 COMPLETO** |
 | **Habilitadores de self-hosting** (`Map<K,V>`, `assert`/test, recursión profunda) | Runtime + GC (Map) · runner (test) · hilo/límites (recursión) | **M13** | ✅ **completo** (DESIGN §22): **M13.1** `Map<K,V>` heap obj en ambos motores · **M13.2** `panic`/`assert`/`assert_eq` + runner aislado por prueba (`@test` unit/bool, filtro) · **M13.3** pila grande (hilo worker) + límite de marcos con error limpio + **TCO en ambos motores** (no quedó diferido). Genérica vía `Hash` sigue diferida |
@@ -50,25 +50,25 @@
 | **Backticks** (`` `…${expr}…` ``: string sin escapar `"`) | Lexer + fmt + gramáticas de editores | **M95** | ✅ **HECHO** (jul 2026): delimitador alterno donde `"` es literal, multilínea, misma interpolación `${}` (M27.3), mismo token `Str`/`InterpStr` (el resto del pipeline ni se entera); el fmt preserva el delimitador oliendo el fuente; demo `examples/basics/plantillas.ray` (byte-idéntico VM↔nativo). Diferido: el espejo del lexer auto-alojado (mismo estado que la interpolación M27.3 — el corpus los excluye) |
 | **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | ✅ `args`/`input`/`read_int`/`env`/`eprint` + I/O de archivos (`read_file`/`write_file`/`exists`/`append_file`/handles con buffering). `main` sin parámetros |
 | **stdlib** (orden superior / string / I/O / arreglos) | prelude + builtins | **M7/M11** | ✅ `map`/`filter`/`fold` (M7.3) + string completa (M11.1/4/7a) + arreglos (`+`/`reverse`/`pop`/`contains`/`position`, M11.7b) + `sort`+`Ord` (M11.7d). Registro único de builtins (L1) |
-| **stdlib importable** (math/tiempo/cripto → módulos `std/…`) | Contenido: builtins → `std/*.ray` (cero maquinaria) | **M49** | 📌 **PLAN FIJADO** ([docs/M49-stdlib-importable.md](docs/M49-stdlib-importable.md)). Continúa M48 (descongestionar el namespace de **valores**): saca las familias matemática/tiempo/cripto del global a módulos importables (`import std/math; math.sqrt(x)`), dejando globales solo lo universal (`print`/`panic`/`assert`) y **core la concurrencia** (atada al modelo de ejecución). **Cero maquinaria nueva**: reusa la std **embebida** (M40.5, `src/stdlib.rs`+`include_str!`) + el patrón `__x`+envoltorio (como la I/O). **Empieza por `std/math`** (mayor liberación de nombres —`min`/`max`/`abs`/`round`— + ya está a medias). Decisiones recomendadas (a confirmar): `min`/`max` genéricos sobre `Ord` y `abs` sobre un trait nuevo `Signed` → **puros en raylang, sin opcode** (poda `Abs`/`Min`/`Max`); `pi`/`e` → `const PI`/`const E` (poda `Pi`/`E`); `random`/`random_int` → `std/random` (no deterministas, aparte del `math` puro); corte en seco con el **reescritor AST** de M48.4e (+ auto-`import`). Sub-fases: 49.1 `std/math` (a: float; b: abs/min/max+consts) · 49.2 `std/time`+`std/random` · 49.3 `std/crypto`. Verificación: oráculo (deterministas) + subproceso (RNG/tiempo). **Restricción hoy**: no bloquea nada (el embedding + wrappers ya existen; la migración es mecánica) |
-| **stdlib importable II** (fs/collections/net → `std/…`) | Contenido: prelude/builtins → `std/*.ray` (molde M49) | **M50** | 📌 **PLAN FIJADO** ([docs/M50-stdlib-fs-collections-net.md](docs/M50-stdlib-fs-collections-net.md)). Cierra la descongestión del namespace de valores (tras M48/M49): saca del prelude global los 3 grupos grandes que quedan → **`std/fs`** (read_file/write_file/…/open/exists; disco = opt-in, *capability hint*), **`std/collections`** (Set/Deque/StringBuilder, puras), **`std/net`** (tcp/tls/socket/udp). Se quedan globales los esenciales (`Option`/`Result`/`?`, map/filter/fold, print/eprint/panic/assert) + `close` (ad-hoc); stdin/`env` a decisión aparte. Mecanismo M49 (`__x`+envoltorio, migración dirigida por errores). Alcance tratable: collections ~2 archivos, net ~15 (ninguno embebido usa red), fs moderado. Collections en **submódulos** `std/collections/set`·`deque`·`stringbuilder` (leaf-binding M11.5: `import std/collections/set; set.new()` — agrupa Y sin prefijo redundante; sin maquinaria nueva). Verificación: oráculo (collections) + subproceso (fs/net). Sub-fases 50.1 fs · 50.2 collections · 50.3 net |
+| **stdlib importable** (math/tiempo/cripto → módulos `std/…`) | Contenido: builtins → `std/*.ray` (cero maquinaria) | **M49** | ✅ **COMPLETO** (`std/math`, `std/time`, `std/random`, `std/crypto` embebidos en `src/stdlib.rs`) — plan original ([docs/M49-stdlib-importable.md](docs/M49-stdlib-importable.md)). Continúa M48 (descongestionar el namespace de **valores**): saca las familias matemática/tiempo/cripto del global a módulos importables (`import std/math; math.sqrt(x)`), dejando globales solo lo universal (`print`/`panic`/`assert`) y **core la concurrencia** (atada al modelo de ejecución). **Cero maquinaria nueva**: reusa la std **embebida** (M40.5, `src/stdlib.rs`+`include_str!`) + el patrón `__x`+envoltorio (como la I/O). **Empieza por `std/math`** (mayor liberación de nombres —`min`/`max`/`abs`/`round`— + ya está a medias). Decisiones recomendadas (a confirmar): `min`/`max` genéricos sobre `Ord` y `abs` sobre un trait nuevo `Signed` → **puros en raylang, sin opcode** (poda `Abs`/`Min`/`Max`); `pi`/`e` → `const PI`/`const E` (poda `Pi`/`E`); `random`/`random_int` → `std/random` (no deterministas, aparte del `math` puro); corte en seco con el **reescritor AST** de M48.4e (+ auto-`import`). Sub-fases: 49.1 `std/math` (a: float; b: abs/min/max+consts) · 49.2 `std/time`+`std/random` · 49.3 `std/crypto`. Verificación: oráculo (deterministas) + subproceso (RNG/tiempo). **Restricción hoy**: no bloquea nada (el embedding + wrappers ya existen; la migración es mecánica) |
+| **stdlib importable II** (fs/collections/net → `std/…`) | Contenido: prelude/builtins → `std/*.ray` (molde M49) | **M50** | ✅ **COMPLETO** (`std/fs`, `std/net`, `std/collections/*` embebidos en `src/stdlib.rs`) — plan original ([docs/M50-stdlib-fs-collections-net.md](docs/M50-stdlib-fs-collections-net.md)). Cierra la descongestión del namespace de valores (tras M48/M49): saca del prelude global los 3 grupos grandes que quedan → **`std/fs`** (read_file/write_file/…/open/exists; disco = opt-in, *capability hint*), **`std/collections`** (Set/Deque/StringBuilder, puras), **`std/net`** (tcp/tls/socket/udp). Se quedan globales los esenciales (`Option`/`Result`/`?`, map/filter/fold, print/eprint/panic/assert) + `close` (ad-hoc); stdin/`env` a decisión aparte. Mecanismo M49 (`__x`+envoltorio, migración dirigida por errores). Alcance tratable: collections ~2 archivos, net ~15 (ninguno embebido usa red), fs moderado. Collections en **submódulos** `std/collections/set`·`deque`·`stringbuilder` (leaf-binding M11.5: `import std/collections/set; set.new()` — agrupa Y sin prefijo redundante; sin maquinaria nueva). Verificación: oráculo (collections) + subproceso (fs/net). Sub-fases 50.1 fs · 50.2 collections · 50.3 net |
 | **Ecosistema de paquetes** (registro central + política de tiers) | CLI (`ray add`/`publish`) + índice git + gobernanza de `std/` vs paquetes | **M51** | 📌 **DISEÑO FIJADO** (DESIGN §53 política de tiers, §54 registro). Dos piezas: (a) **política de tiers** (gobernanza, ya explícita): `std/` embebida (universal/ligera/estable) vs paquetes `packages/*` (nicho/pesado/API propia) vs `examples/` (demos); criterios de colocación + pipeline de promoción `examples/→std|paquete`. (b) **Registro central** = cierra la brecha nº1 de PRODUCTION.md ("flexible en el lenguaje, ❌ en el ecosistema"): **índice respaldado por git** (repo `nombre → git URL + versiones + hash`, sin servidor propio, reusa toda la maquinaria de M39c: cápsula/lock/transitivas/MVS), `ray.toml` **por nombre** (`foo = "1.2.0"`), `ray add`/`ray publish`/`ray yank`. Prereq: **rangos semver de verdad** (diferido de M39c). Fases: ✅ **51a** leer índice+`ray add`+rangos semver (`src/index.rs`: `VersionReq` exacta/caret/tilde/`*`, lector `<index>/<name>.toml`, `resolve`/`latest`; `deps::ensure` resuelve por nombre vía índice y delega en git+lock; `ray add` con `manifest::upsert_dependency`; índice por `RAY_INDEX`/`[registry] index`; tests offline `tests/registry_cli.rs`) · ✅ **51b** `ray publish` (valida name+version+parseo · `deps::hash_package` · `index::append_version` inmutable · spec git de `--repo` o derivada de `origin`+tag `v<ver>`; tests offline con bare repo) · ✅ **51c** índice remoto por git (clonado/cacheado en `.ray-deps/.index`) + lock-pinning (reproducibilidad de caret) + `ray update` (re-resuelve + `git pull`) + `ray yank`/`--undo`. **M51 COMPLETO** (tests offline en `tests/registry_cli.rs`, 11 casos; cero runtime). Diferido: UI/búsqueda web, firmas de publicación, mirrors, namespaces con dueño |
-| **Identificadores en inglés** (deuda: nombres mezclados es/en) | Rename transversal (Rust `src/` + core raylang) | **diferida (tras M49)** | 📌 **REGLA FIJADA + PLAN** ([docs/limpieza-nombres-en-ingles.md](docs/limpieza-nombres-en-ingles.md), regla en CLAUDE.md § Convenciones). Los **identificadores** (funciones/métodos/variables/params/tipos/campos) deben ir en **inglés**; comentarios/`///` en español. El código antiguo mezcla ambos (`cargar`/`analizar`/`nombre_fachada`/`receptor`/`otro`…). Tres tiers por riesgo: **A** Rust `src/` interno (~66+ fns + vars, NO rompe) · **B** core raylang interno (selfhost/prelude/std vars privadas, NO rompe; `std/` ya casi todo inglés) · **C** ⚠️ **INCOMPATIBLE**: los métodos de trait user-facing `Eq.igual`/`Show.mostrar`/`Ord.menor` → inglés (toca cada `impl`+llamada del corpus + `@derive` + reescritor AST + self-hosted + docs; fase aparte, la última). Código **nuevo ya en inglés**. Se hace **tras cerrar los puntos pendientes** (M49.2/49.3). Verificación: suite completa (A/B) + oráculo/self-hosting byte-idéntico (C) |
+| **Identificadores en inglés** (deuda: nombres mezclados es/en) | Rename transversal (Rust `src/` + core raylang) | **diferida (tras M49)** | ✅ **COMPLETO** (M132 barrido final de spanglish, DESIGN §129; los métodos de trait son `eq`/`show`/`less`) — regla y plan ([docs/limpieza-nombres-en-ingles.md](docs/limpieza-nombres-en-ingles.md), regla en CLAUDE.md § Convenciones). Los **identificadores** (funciones/métodos/variables/params/tipos/campos) deben ir en **inglés**; comentarios/`///` en español. El código antiguo mezcla ambos (`cargar`/`analizar`/`nombre_fachada`/`receptor`/`otro`…). Tres tiers por riesgo: **A** Rust `src/` interno (~66+ fns + vars, NO rompe) · **B** core raylang interno (selfhost/prelude/std vars privadas, NO rompe; `std/` ya casi todo inglés) · **C** ⚠️ **INCOMPATIBLE**: los métodos de trait user-facing `Eq.igual`/`Show.mostrar`/`Ord.menor` → inglés (toca cada `impl`+llamada del corpus + `@derive` + reescritor AST + self-hosted + docs; fase aparte, la última). Código **nuevo ya en inglés**. Se hace **tras cerrar los puntos pendientes** (M49.2/49.3). Verificación: suite completa (A/B) + oráculo/self-hosting byte-idéntico (C) |
 | **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal **(activo)** | 🚧 DESIGN §27, registro medido en §11. Foco tras **aparcar M18** (backend nativo) por decisión del usuario. Principio: **incremental y midiendo** — banco `benchmarks/` (`bench.sh`+hyperfine o `measure.py` sin deps) y se conserva solo lo que supera el ruido (~3–5 %), oráculo VM↔intérprete intacto. Opt.1/Opt.2 ✅ (pase previo); Opt.3 `Rc<str>` ❌. ✅ **Opt.4** fast-path entero en ops binarias (fib −5 %, bucle −6 %); ✅ **Opt.7** posición `(línea,col)` perezosa con `pos!()` (quita la lectura de `lines[ip]` por instrucción del camino caliente → **fib −7 %, loop −9 %, arrays −8 %**, consistente; señal destapada con mejor-de-15); Opt.5 (`new_locals`)/Opt.6 (safepoint GC)/Opt.8 (`children()` con buffer reusado, dentro del ruido incluso con `gcnested.ray`)/LTO ❌ descartados. ✅ **Opt.9** dedup de constantes (M29.3, por memoria) · ❌ **Opt.10** OpCode 24 B / `HeapValue` 16 B (medido sin efecto: no limitan el fetch) · ✅ **Opt.11** arranque 3.9→3.0 ms · ✅ **Opt.12** plegado de constantes (jul 2026, neutro; por calidad) · ✅ **Opt.13** umbral del GC amortizado por trabajo trazado (jul 2026: `iter` 1M **6.8 s → 0.4 s, 17×**) |
-| **Backend nativo** (bootstrap sin Rust) | codegen a máquina/asm/C/Rust | **M18** | 💤 **aparcado** (decisión del usuario, 2026-06): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va a la optimización de la VM. Opciones barajadas: asm (as+ld), máquina directa, C, transpilar a Rust→rustc. Se retoma más adelante |
+| **Backend nativo** (bootstrap sin Rust) | codegen a máquina/asm/C/Rust | **M18** | ✅ **COMPLETO** como transpilador a Rust (`ray build --native`, `src/transpile/`, fibras M:N por defecto; ver fila «raylang de producción» y CHANGELOG) — histórico: 💤 aparcado (decisión del usuario, 2026-06): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va a la optimización de la VM. Opciones barajadas: asm (as+ld), máquina directa, C, transpilar a Rust→rustc. Se retoma más adelante |
 | **Asperezas de M3** | Parser + checker | hecho | ✅ `[]` en campo de struct (M6.2) y coma final en arreglos (limpieza) resueltos |
 | **Ergonomía del lenguaje I** (tuplas · `for`/iteradores · interpolación · casts · `const`) | Lexer + parser + checker + ambos motores + self-hosting | **M27** | 🚧 DESIGN §36. La deuda ergonómica que destaparon las librerías M15–M26. ✅ **M27.1** tuplas (`Type::Tuple`, `t.0`, `let (a,b)=…`; erasure a arreglos) · ✅ **M27.2** `for`/iteradores (rango `a..b`, arreglo, string→char, `Map`→tupla `(k,v)`; `StmtKind::For` ejecutado directamente en ambos motores); **M27.3** interpolación `"…{expr}…"` (desugar a `+ to_string`, puro léxico); **M27.4** casts `x as int`/`as float` (reusa `as`); **M27.5** `const` de nivel superior |
 | **Ergonomía del lenguaje II** (operadores · `?`+From/Into · enteros con tamaño) | Sistema de tipos / traits + modelo numérico | **M28** | ✅ **COMPLETO** (DESIGN §36: 28.1 traits `Add`/`Sub`/`Mul`/`Div`/`Neg` en el prelude, el checker baja `a + b` a `a.add(b)`; 28.2 `?` convierte el error vía `impl From<E1> for E2` —método `convert` (renombrado de `desde` en la limpieza ES→EN; `from` es keyword)—; 28.3 `u8`/`u32`/`u64` con wrapping, casts `as` y literal polimórfico, oráculo `uint_literal_oraculo`). Esta fila decía 🚧 por desactualización, detectada en la auditoría de diferidos de jul 2026. **M28.1** sobrecarga de operadores vía traits (`Add`/`Ord`/`PartialEq`…; hoy *special-cased*; puede unificar `@derive(Eq)`); **M28.2** `?` con conversión de error (`From`/`Into` → enums de error propios en vez de `string`); **M28.3** enteros con tamaño/unsigned (`u8`/`u32`/`u64`; el más invasivo; mata el `& 0xFFFFFFFF` de la cripto; puede quedar acotado sin promoción implícita) |
-| **Tooling** (regex · formateador · optimización VM) | Motor propio / cliente externo (reusa parser) / VM | **M29** | 🚧 DESIGN §36. **M29.1** regex (ausencia más llamativa de la stdlib; motor Thompson NFA, librería raylang o builtin-asistido); **M29.2** formateador `rayfmt` (pretty-printer canónico del AST, idempotente, sin config); **M29.3** retomar optimización VM (§27: dedup constantes, peephole, `HeapValue` 32→16 B) |
-| **Cripto avanzada** (cifrado + firma asimétrica) | Librería raylang (cómputo) | **M30** | 🚧 DESIGN §36. Hoy hay hashing/HMAC pero **no cifrado**. **M30.1** simétrica ChaCha20-Poly1305/AES-GCM (vectores RFC 8439); **M30.2** asimétrica Ed25519 (RFC 8032; ejercita bignum/`u64`); **M30.3** JWT RS256/ES256 sobre lo anterior |
-| **Cerrar gRPC** (transporte HTTP/2 vivo) | Librería raylang sobre TLS+ALPN | **M31** | 🚧 DESIGN §36. Los diferidos grandes de M26. **M31.1** HPACK-Huffman (tabla 257 del RFC 7541 Ap. B; vectores C.4/C.6); **M31.2** transporte vivo (preface + SETTINGS + streams sobre TLS con ALPN `h2` — requiere exponer ALPN en `tls_connect`); **M31.3** cliente gRPC e2e |
-| **Clientes y formatos** (PostgreSQL · TOML/CSV · plantillas) | Librería raylang | **M32** | 🚧 DESIGN §36. **M32.1** cliente PostgreSQL (protocolo wire + SCRAM-SHA-256, reusa M20); **M32.2** TOML/YAML/CSV; **M32.3** motor de plantillas HTML sobre M27 |
+| **Tooling** (regex · formateador · optimización VM) | Motor propio / cliente externo (reusa parser) / VM | **M29** | ✅ **COMPLETO** (regex Pike VM M81/M59.2 · `ray fmt` en `src/fmt.rs` · optimización de la VM continuada en PERFORMANCE.md) — DESIGN §36. **M29.1** regex (ausencia más llamativa de la stdlib; motor Thompson NFA, librería raylang o builtin-asistido); **M29.2** formateador `rayfmt` (pretty-printer canónico del AST, idempotente, sin config); **M29.3** retomar optimización VM (§27: dedup constantes, peephole, `HeapValue` 32→16 B) |
+| **Cripto avanzada** (cifrado + firma asimétrica) | Librería raylang (cómputo) | **M30** | 🟡 **M30.1 y M30.2 COMPLETOS** (ChaCha20-Poly1305 y Ed25519 en `examples/web`); **M30.3 RS256/ES256 PENDIENTE** (solo EdDSA en `packages/net/jwt_eddsa.ray`) — DESIGN §36. Hoy hay hashing/HMAC pero **no cifrado**. **M30.1** simétrica ChaCha20-Poly1305/AES-GCM (vectores RFC 8439); **M30.2** asimétrica Ed25519 (RFC 8032; ejercita bignum/`u64`); **M30.3** JWT RS256/ES256 sobre lo anterior |
+| **Cerrar gRPC** (transporte HTTP/2 vivo) | Librería raylang sobre TLS+ALPN | **M31** | ✅ **COMPLETO** (M133 dogfood contra grpc-go, DESIGN §130; HPACK-Huffman de decodificación incluido) — DESIGN §36. Los diferidos grandes de M26. **M31.1** HPACK-Huffman (tabla 257 del RFC 7541 Ap. B; vectores C.4/C.6); **M31.2** transporte vivo (preface + SETTINGS + streams sobre TLS con ALPN `h2` — requiere exponer ALPN en `tls_connect`); **M31.3** cliente gRPC e2e |
+| **Clientes y formatos** (PostgreSQL · TOML/CSV · plantillas) | Librería raylang | **M32** | 🟡 **COMPLETO salvo YAML** (PostgreSQL M53 · TOML y CSV en `examples/stdlib` · templates M55; YAML sin demanda) — DESIGN §36. **M32.1** cliente PostgreSQL (protocolo wire + SCRAM-SHA-256, reusa M20); **M32.2** TOML/YAML/CSV; **M32.3** motor de plantillas HTML sobre M27 |
 | **Webserver de producción** (límites/timeouts · query · TLS · keep-alive · cookies · estáticos) | Librería `packages/net/webserver.ray` (casi todo) + 2 toques de runtime aditivos (deadline de E/S en el scheduler, `try_join`) | **M56** | ✅ **COMPLETO** (DESIGN §60, detalle en §17 abajo): 56.1 frontera de seguridad (Limits: cabeceras/cuerpo/conexiones vía semáforo `Channel.bounded`) · 56.2 query string separada + percent-decoding (`std/url.percent_decode`) · 56.3 `serve_tls` · 56.4 timeouts de lectura (`net.set_read_timeout`, deadline en `io_parked`) · 56.5 `try_join` + panic del handler→500 sin fugas · 56.6 keep-alive HTTP/1.1 (el framework se sube gratis) · 56.7 `set_cookie: [string]`+`with_cookie` (decisión con el usuario) · 56.8 chunked entrante + `static_response` con saneo + HEAD sin cuerpo · 56.9 estáticos de producción (`static_mount(prefix, dir, req)`: prefijo de URL + 405 + **ETag/304** por tamaño+mtime —builtin `fs.mtime` nuevo—; `mime_of` pub con ~26 tipos). Diferidos menores en DESIGN §60 (de estáticos: `Range`/206, streaming por trozos, precomprimidos `.gz`) |
 | **Framework web `packages/web`** (estilo Express, promoción de examples) | Librería raylang pura sobre `net/webserver` + `net/log` | **M93** | ✅ **COMPLETO** (DESIGN §85, rama `feature/packages-web`): promovido de `examples/web/framework.ray` y re-basado en el webserver de producción; API express-parity — `static_files` (M56.9, ETag/304), `not_found` custom, `PATCH`+`route` genérico, `header`/`html`/`redirect`, `log_requests` (JSON por petición), `listen_tls`/`listen_graceful`/`listen_limits`. Consumidores: `examples/web/framework/` (proyecto con ray.toml) + `tests/framework_cli.rs` sobre el paquete; guía en `docs/web-framework.md`. Diferido: middleware por-ruta/grupos, body parsers tipados, sesiones/CSRF |
 | **Memoria** (fuga del almacén de tareas VM + trampa de paridad del pool nativo + coste 32 B/elem) | VM (`vm.rs`/`gc.rs`: free-list de tasks/channels) + runtime nativo (`transpile.rs`: pool) + banco | **M98** | 📌 **PLAN FIJADO** ([docs/investigacion-uso-de-memoria.md](docs/investigacion-uso-de-memoria.md) §8, investigación 20 jul 2026). Huella de arranque = la mejor de la mesa (nativo 1.5 MB, VM 6.8 vs node 49/php 26/python 15); **dos bugs de producción**: (1) la VM **fuga ~1 KB/request** (tasks/channels nunca liberan; `Done(v)` retenido → webserver 924 MB en 30 s) · (2) el nativo **crashea** con churn secuencial de tareas (trampa de paridad del round-robin M96e → hilo nuevo por spawn → EAGAIN). Fases: ✅ **98.1** join consume + free-list con generación + `SpawnDiscard` (VM; task_churn 123.8→6.9 MB, webserver 924 MB→31 MB plano; espec DESIGN §21.7) · ✅ **98.2** sondear shards antes de crear hilo (nativo; churn 20k de crash→2.1 MB) · ✅ **98.3** canales ídem (liberados al cerrar+drenar; stale ≡ cerrado+vacío, cero semántica nueva; chan_churn 45.4→7.0 MB) · ✅ **98.4** RSS en el banco (gate de memoria en regress.py: ru_maxrss vía os.wait4, umbral 15%, micros task_churn/chan_churn/arr_while commiteados; ruido medido ±0.0%) · ✅ **98.5** `Obj::IntArray` (storage strategy con degradación a genérico; arr_1M 69→22.1 MB −68%, iter −73%, CPU neutra-o-mejor en A/B de misma sesión; HeapValue-16B descartado sin re-medir). **ARCO M98 COMPLETO** |
-| **Concurrencia del webserver NATIVO: un hilo de SO por conexión** | Runtime nativo (`transpile/`): llevarle el `poll.rs` de la VM (kqueue/epoll) o equivalente | **sin hito** | 📌 **MEDIDO, decisión de diseño PENDIENTE** ([docs/investigacion-p999-webserver-nativo.md](docs/investigacion-p999-webserver-nativo.md) §6.1-6.2, 27 jul 2026). El mismo fuente raylang corre sobre DOS modelos: la VM usa fibras M:N con readiness (`src/poll.rs`), el nativo **un hilo de SO bloqueante por conexión**. Barrido de concurrencia con generador remoto: raylang **166.7k→159.2k→154.3k→145.2k rps** de `-c 100` a `-c 1000` (**−13 %**, el único que DEGRADA; Go pasa de 119.6k a ~137k y se mantiene, hyper plano ≥197k). Sigue ganando a Go en throughput y p50 en TODAS las concurrencias, así que **el problema no es velocidad**. Lo que decide es la MEMORIA: a `-c 1000`, **1002 hilos y 268 MB** contra los **17 hilos y 49 MB** de Go (5.5×), creciendo lineal a ~265 KB/conexión (29 MB a `-c 100`). Eso es un **muro, no una pendiente**: 10 000 conexiones pedirían 10 000 hilos y ~2.6 GB solo en pilas, y el SO se niega antes — Go y Rust lo cruzan sin enterarse. Duele además en el activo que el proyecto presume (arco M98, huella de arranque la mejor de la mesa). Opciones por coherencia: (1) **llevar `src/poll.rs` al runtime nativo** — reusa código probado, cero deps nuevas; (2) event loop a mano con sockets no bloqueantes — (1) sin reusar lo que existe; (3) tokio — mete un segundo scheduler junto a `__RAY_POOL` y los actores de heap aislado (mismo argumento que descartó hyper). **Composición de la memoria MEDIDA (28 jul, §6.1b)**: la pila por hilo NO es (2 MiB/512 KiB/128 KiB dan los mismos 268 MB — se reserva virtual y solo cuentan páginas tocadas; hipótesis FALSADA, sin dejar código); **mimalloc explica ~128 KB de los 265** (una arena por hilo: sin él, 172 MB en vez de 268 a `-c 1000`), y los otros ~137 KB son estado raylang por conexión (heap por fibra + búferes). Matiz nuevo: **mimalloc es mejor en huella base y peor al escalar** (ahorra 20 MB a `-c 100`, cuesta 96 MB a `-c 1000`; cruce ~250 conexiones) → `--without mimalloc` es palanca real para el perfil servidor, el default sigue bien para el caso común. Refuerza el arco: pasar a fibras se lleva el hilo Y su arena, o sea los 265 KB completos. **No arrancado**: es un arco con impacto en el modelo de ejecución del backend nativo, no un fix; el caso medido ya está, falta la decisión |
-| **Recuperación de errores fatales** (panic → valor, estilo `recover` de Go) | Builtin nuevo (`try_call`) + doc; la base ya existe (`try_join` M56.5, tres motores) | **M97** | 📌 **PLAN FIJADO** (§49 abajo): 97.1 documentar `try_join` como el "recover" del proyecto (hoy 0 menciones en el MANUAL) + fijar semántica con la cancelación de hermanas · 97.2 `try_call` (misma fibra; intérprete trivial → oráculo completo; VM desenrolla marcos al marcador; nativo `catch_unwind`) · 97.3 supervisión de actores (librería pura sobre spawn+try_join) · 97.4 💤 limpieza en unwind (defer/with_file), solo si 97.2 lo destapa. Aditivo, no bloquea nada |
-| **Ejecución de comandos del SO** (`run("git", ["status"])`) | Builtin + `std/process` + feature de Cargo; toca los TRES motores | 💤 **sin hito** | 💤 **APARCADA con diseño hecho** (§53 abajo, jul 2026). Decisión: **no antes de la 1.0**. No hay demanda —cero entradas previas en este archivo, ningún paquete bloqueado— y el FFI (M41) ya es válvula de escape para quien lo necesite hoy. M34 congeló la API con semver: meterla ahora sería congelar superficie sin uso real, y la API de procesos es de las que nadie acierta a la primera (Python tardó 15 años en `subprocess.run`; Node arrastra `spawn`/`exec`/`execFile`/`fork` + `Sync`). El diseño queda escrito para no rehacerlo. **Desacoplado y sí urgente**: la auditoría CLOEXEC (§53.4) |
+| **Concurrencia del webserver NATIVO: un hilo de SO por conexión** | Runtime nativo (`transpile/`): llevarle el `poll.rs` de la VM (kqueue/epoll) o equivalente | **sin hito** | ✅ **RESUELTO — arco F: fibras M:N en el nativo POR DEFECTO** (`ray_runtime::fibers`, corosensei + reactor kqueue/epoll; ~21 KB por conexión, CHANGELOG) — histórico: 📌 medido, decisión de diseño ([docs/investigacion-p999-webserver-nativo.md](docs/investigacion-p999-webserver-nativo.md) §6.1-6.2, 27 jul 2026). El mismo fuente raylang corre sobre DOS modelos: la VM usa fibras M:N con readiness (`src/poll.rs`), el nativo **un hilo de SO bloqueante por conexión**. Barrido de concurrencia con generador remoto: raylang **166.7k→159.2k→154.3k→145.2k rps** de `-c 100` a `-c 1000` (**−13 %**, el único que DEGRADA; Go pasa de 119.6k a ~137k y se mantiene, hyper plano ≥197k). Sigue ganando a Go en throughput y p50 en TODAS las concurrencias, así que **el problema no es velocidad**. Lo que decide es la MEMORIA: a `-c 1000`, **1002 hilos y 268 MB** contra los **17 hilos y 49 MB** de Go (5.5×), creciendo lineal a ~265 KB/conexión (29 MB a `-c 100`). Eso es un **muro, no una pendiente**: 10 000 conexiones pedirían 10 000 hilos y ~2.6 GB solo en pilas, y el SO se niega antes — Go y Rust lo cruzan sin enterarse. Duele además en el activo que el proyecto presume (arco M98, huella de arranque la mejor de la mesa). Opciones por coherencia: (1) **llevar `src/poll.rs` al runtime nativo** — reusa código probado, cero deps nuevas; (2) event loop a mano con sockets no bloqueantes — (1) sin reusar lo que existe; (3) tokio — mete un segundo scheduler junto a `__RAY_POOL` y los actores de heap aislado (mismo argumento que descartó hyper). **Composición de la memoria MEDIDA (28 jul, §6.1b)**: la pila por hilo NO es (2 MiB/512 KiB/128 KiB dan los mismos 268 MB — se reserva virtual y solo cuentan páginas tocadas; hipótesis FALSADA, sin dejar código); **mimalloc explica ~128 KB de los 265** (una arena por hilo: sin él, 172 MB en vez de 268 a `-c 1000`), y los otros ~137 KB son estado raylang por conexión (heap por fibra + búferes). Matiz nuevo: **mimalloc es mejor en huella base y peor al escalar** (ahorra 20 MB a `-c 100`, cuesta 96 MB a `-c 1000`; cruce ~250 conexiones) → `--without mimalloc` es palanca real para el perfil servidor, el default sigue bien para el caso común. Refuerza el arco: pasar a fibras se lleva el hilo Y su arena, o sea los 265 KB completos. **No arrancado**: es un arco con impacto en el modelo de ejecución del backend nativo, no un fix; el caso medido ya está, falta la decisión |
+| **Recuperación de errores fatales** (panic → valor, estilo `recover` de Go) | Builtin nuevo (`try_call`) + doc; la base ya existe (`try_join` M56.5, tres motores) | **M97** | ✅ **COMPLETO** (`try_call` / `OpCode::TryCall` en los tres motores; pendientes menores 97.3 `supervise` y 97.4 cleanup) — plan original (§49 abajo): 97.1 documentar `try_join` como el "recover" del proyecto (hoy 0 menciones en el MANUAL) + fijar semántica con la cancelación de hermanas · 97.2 `try_call` (misma fibra; intérprete trivial → oráculo completo; VM desenrolla marcos al marcador; nativo `catch_unwind`) · 97.3 supervisión de actores (librería pura sobre spawn+try_join) · 97.4 💤 limpieza en unwind (defer/with_file), solo si 97.2 lo destapa. Aditivo, no bloquea nada |
+| **Ejecución de comandos del SO** (`run("git", ["status"])`) | Builtin + `std/process` + feature de Cargo; toca los TRES motores | **M100** | ✅ **EJECUTADA como M100** (v1 `run`/`cmd` + v2 streaming + v3 stdin escribible sobre hijo vivo; `std/process`) — histórico: 💤 aparcada con diseño hecho (§53 abajo, jul 2026). Decisión: **no antes de la 1.0**. No hay demanda —cero entradas previas en este archivo, ningún paquete bloqueado— y el FFI (M41) ya es válvula de escape para quien lo necesite hoy. M34 congeló la API con semver: meterla ahora sería congelar superficie sin uso real, y la API de procesos es de las que nadie acierta a la primera (Python tardó 15 años en `subprocess.run`; Node arrastra `spawn`/`exec`/`execFile`/`fork` + `Sync`). El diseño queda escrito para no rehacerlo. **Desacoplado y sí urgente**: la auditoría CLOEXEC (§53.4) |
 
 ---
 
@@ -548,7 +548,7 @@ firmas de publicación (sobre el hash existente), mirrors/proxy, namespaces con 
 
 ---
 
-## 14. Clientes de bases de datos (MySQL · PostgreSQL · SQLite) — M53, PLAN
+## 14. Clientes de bases de datos (MySQL · PostgreSQL · SQLite) — M53 ✅ COMPLETO (DESIGN §55)
 
 Análisis de factibilidad (jul 2026). Punto de partida: `packages/net` ya tiene **PostgreSQL** (SCRAM +
 protocolo simple, `pg_query`) y redis; el patrón de verificación (servidor de juguete en Rust + oráculo
@@ -648,7 +648,7 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   `Vec<char>` completo que se asignaba POR ACCESO; ASCII indexa el byte en O(1) —también `len`—,
   no-ASCII escanea hasta `i` sin asignar; bucle `s[i]` sobre 64k chars: 37,9 s → 1,16 s, ~33×).
 
-## 15. Cliente MongoDB — M54, PLAN
+## 15. Cliente MongoDB — M54 ✅ COMPLETO (DESIGN §56)
 
 Análisis de factibilidad (jul 2026): **raylang puro, tier 2** (`packages/db/mongo.ray`), cero cambios
 de compilador salvo el habilitador de bits de float (M54.1a, ya hecho). Punto fuerte de partida: la
@@ -725,7 +725,7 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
 
 ---
 
-## 17. Webserver de producción — M56, PLAN (revisión jul 2026)
+## 17. Webserver de producción — M56 ✅ COMPLETO (DESIGN §60; revisión jul 2026)
 
 Revisión completa de la implementación (detalle y sub-fases en DESIGN §60). El **núcleo es
 sólido**: la parte difícil (fibras aparcadas por fd, poller kqueue/epoll real con fallback,
@@ -754,7 +754,7 @@ aditivos.
 
 ---
 
-## 18. Tiempo y fechas — M57, PLAN (revisión jul 2026)
+## 18. Tiempo y fechas — M57 ✅ COMPLETO (DESIGN §61; revisión jul 2026)
 
 Revisión completa del manejo de tiempo (tras cerrar M56). **El modelo de fondo es sano y no se
 toca**: la moneda universal es `int` = **epoch-ms UTC** (`time.now()`), `monotonic()` para
@@ -774,7 +774,7 @@ seconds (= tiempo Unix); pre-1970 no soportado (documentado).
 | Hora local (`__local_offset_millis` del SO, sin base IANA) | `std/time` (primitivo pequeño) | Aditivo | diferido a demanda |
 | Webserver sin cabecera `Date:` (SHOULD de la RFC) | `net/webserver` | Ninguno | diferido (extra menor) |
 
-**Candidatos a PACKAGE (tier 2, cuando haya demanda):** `tz` (zonas IANA — pesado, API propia;
+**Candidatos a PACKAGE (tier 2, cuando haya demanda)** — `tz` y `cron` ya existen en `packages/` (M85/M86, cron en hora local sobre tz incluido): `tz` (zonas IANA — pesado, API propia;
 viable en raylang puro leyendo los TZif de `/usr/share/zoneinfo` vía std/fs, cero deps; embeber
 tzdata sería una decisión estilo ring) · `net/ntp` (cliente SNTP sobre net/udp: mide la deriva del
 reloj sin tocar el del SO) · `cron` (expresiones + timers recurrentes, sobre el sleep de fibra de
@@ -785,7 +785,7 @@ deadlines de M56.4). La promoción de 57.1 usa reexports → cero rotura.
 
 ---
 
-## 19. Clientes web de producción (WebSocket · HTTP/1.1 · HTTP/2) — M58, PLAN (revisión jul 2026)
+## 19. Clientes web de producción (WebSocket · HTTP/1.1 · HTTP/2) — M58 ✅ COMPLETO (DESIGN §62; revisión jul 2026)
 
 Revisión de `net/websocket[_client]`, `net/http` y `net/http2[_client]`+`net/hpack`+`net/grpc_client`
 (detalle en DESIGN §62). Patrón común: **la criptografía y el framing (lo difícil) están bien y
@@ -809,7 +809,7 @@ recepción entra en 58.1), y un pool multi-conexión sobre `Conn` si aparece un 
 
 ---
 
-## 20. Librerías de datos de la std (json · regex · base64 · protobuf · csv · hex · url · StringBuilder) — M59, PLAN (revisión jul 2026)
+## 20. Librerías de datos de la std (json · regex · base64 · protobuf · csv · hex · url · StringBuilder) — M59 ✅ COMPLETO (DESIGN §63; revisión jul 2026)
 
 Revisión de las 8 librerías de datos (detalle en DESIGN §63). Patrón común: la lógica dura
 (NFA de Thompson, surrogates, RFC 4180) está bien y con tests golden; los huecos son de
@@ -833,7 +833,7 @@ es error de sintaxis) → ✅ **RESUELTO en M80** (§40).
 
 ---
 
-## 21. El prelude (revisión jul 2026) — M61, PLAN
+## 21. El prelude (revisión jul 2026) — M61 ✅ COMPLETO (DESIGN §65)
 
 Revisión de `src/prelude.rs` (detalle en DESIGN §65). La arquitectura está bien (todo librería
 raylang, erasure, envoltorios [T]→Option uniformes, iteradores correctos, parse cacheado); los
@@ -854,7 +854,7 @@ arranque con parse cacheado (`OnceLock`).
 
 ---
 
-## 22. Iteradores (revisión jul 2026) — M62, PLAN
+## 22. Iteradores (revisión jul 2026) — M62 ✅ COMPLETO (DESIGN §66)
 
 Revisión del trait `Iterator`/`Iter` del prelude + la bajada del `for` (detalle en DESIGN §66).
 Correctitud IMPECABLE (pereza, bordes, zip, iteradores de usuario con adaptadores heredados,
@@ -875,7 +875,7 @@ literal-vs-bloque (consistente con if/while; error claro).
 
 ---
 
-## 23. std/toml (revisión jul 2026) — M63, PLAN
+## 23. std/toml (revisión jul 2026) — M63 ✅ COMPLETO (DESIGN §67)
 
 Revisión de `std/toml` (detalle en DESIGN §67). Contexto: **`ray.toml` NO usa este parser** (el
 CLI tiene su lector TOML mínimo en Rust, `src/manifest.rs` — circular si no) → librería de
@@ -895,7 +895,7 @@ manifiesto usa otro parser.
 
 ---
 
-## 24. Compresión (inflate/deflate/huffman) — M64, PLAN (revisión jul 2026)
+## 24. Compresión (inflate/deflate/huffman) — M64 ✅ COMPLETO (DESIGN §68; 64.3 diferido; revisión jul 2026)
 
 Revisión del trío (detalle en DESIGN §68). `deflate` (encoder, datos propios) sólido; `huffman`
 HPACK excelente (trie + errores como valores + relleno EOS validado). El problema es `inflate`,
@@ -909,7 +909,7 @@ que decodifica datos EXTERNOS (el gzip transparente del cliente HTTP, activado e
 
 ---
 
-## 25. std/math (revisión jul 2026) — M65, PLAN
+## 25. std/math (revisión jul 2026) — M65 ✅ COMPLETO (DESIGN §69)
 
 Revisión en frío (detalle en DESIGN §69). Lo verificado sano: dominios float totales IEEE
 (sqrt(-1)→NaN, ln(0)→-inf, sin traps), `round` ties-away-from-zero como documenta, `gcd`/`lcm`
@@ -927,7 +927,7 @@ std/math, no al llamador — diferido general de posición-del-llamador → **M7
 
 ---
 
-## 26. std/text (revisión jul 2026) — M66, PLAN
+## 26. std/text (revisión jul 2026) — M66 ✅ COMPLETO (DESIGN §70)
 
 Revisión en frío (detalle en DESIGN §70). Corrección SANA (reverse por carácter con UTF-8
 astral, capitalize no-ASCII, count no-solapado, pads por carácter). Módulo casi sin
@@ -941,7 +941,7 @@ consumidores reales (solo el smoke de cli_cli) → cambiar es barato.
 
 ---
 
-## 27. std/fs (revisión jul 2026) — M67, PLAN
+## 27. std/fs (revisión jul 2026) — M67 ✅ COMPLETO (DESIGN §71)
 
 Revisión en frío (detalle en DESIGN §71). Sano: errores como valores en todo (mensajes del
 sistema propagados), list_dir determinista, exists total, handles con buffering, I/O binaria.
@@ -962,7 +962,7 @@ vacío (el recursivo es peligroso → a demanda). `write_file` sigue devolviendo
 
 ---
 
-## 28. std/random y aleatoriedad criptográfica (revisión jul 2026) — M68, PLAN
+## 28. std/random y aleatoriedad criptográfica (revisión jul 2026) — M68 ✅ COMPLETO (DESIGN §72)
 
 Revisión en frío (detalle en DESIGN §72). Sano: SplitMix64 canónico (53 bits limpios para el
 float), Mutex de proceso (seguro bajo M:N), `below(n<=0)`→0 total, honestidad "no criptográfico"
@@ -976,7 +976,7 @@ en host/módulo/uuid. El sesgo de módulo de `below` (~n/2^64) es inmedible → 
 
 ---
 
-## 29. Cliente Redis (revisión jul 2026) — M69, PLAN
+## 29. Cliente Redis (revisión jul 2026) — M69 ✅ COMPLETO (DESIGN §73)
 
 Revisión en frío de `net/redis` (detalle en DESIGN §73). Estructura sana (errores como
 valores, framing sobre buffer, recursión para arrays, toy server determinista en el test).
@@ -992,7 +992,7 @@ API pública conservada: `command(c, args: [string])` codifica a bytes por dentr
 
 ---
 
-## 30. Observabilidad: log + metrics (revisión jul 2026) — M70, PLAN
+## 30. Observabilidad: log + metrics (revisión jul 2026) — M70 ✅ COMPLETO (DESIGN §74)
 
 Revisión en frío de `net/log` y `net/metrics` (detalle en DESIGN §74). Sano: log con orden
 de claves fijo y `render(e, ts)` determinista/testeable; metrics con labels ordenados,
@@ -1006,7 +1006,7 @@ salida determinista, histograma cumulativo correcto y modelo lineal honestamente
 
 ---
 
-## 31. Cookies seguras + sigv4 (revisión jul 2026) — M71, PLAN
+## 31. Cookies seguras + sigv4 (revisión jul 2026) — M71 ✅ COMPLETO (DESIGN §75; sigv4 espacios diferido)
 
 Revisión en frío de `net/cookie`, `net/sigv4`, `net/oauth2` (detalle en DESIGN §75). oauth2
 sano (errores como valores, state como responsabilidad del llamador, maneja el JSON de error
@@ -1021,7 +1021,7 @@ de OAuth). sigv4 sólido en lo estructural.
 
 ---
 
-## 32. Cliente DNS (revisión jul 2026) — M72, PLAN
+## 32. Cliente DNS (revisión jul 2026) — M72 ✅ COMPLETO (DESIGN §76)
 
 Revisión en frío de `net/dns`, `net/dns_cache`, `net/udp` (detalle en DESIGN §76). udp sano
 (solo traduce el arreglo etiquetado a Result/Packet). dns_cache sano (TTL respetado, búsqueda
@@ -1036,7 +1036,7 @@ clase de problemas que inflate pre-M64, más un vector de spoofing clásico.
 
 ---
 
-## 33. Cliente gRPC / HTTP/2 (revisión jul 2026) — M73, PLAN
+## 33. Cliente gRPC / HTTP/2 (revisión jul 2026) — M73 ✅ COMPLETO (DESIGN §77)
 
 Revisión en frío de `net/grpc_client` (detalle en DESIGN §77). Sano: framing HTTP/2 (procesa
 solo frames completos), flow control, ACK de PING, RST/GOAWAY=Err con causa (M58.3), errores
@@ -1052,7 +1052,7 @@ body=body+payload sin cota) → se arregla en paralelo.
 
 ---
 
-## 34. JWT — HS256 y EdDSA (revisión jul 2026) — M74, PLAN
+## 34. JWT — HS256 y EdDSA (revisión jul 2026) — M74 ✅ COMPLETO (DESIGN §78)
 
 Revisión en frío de `net/jwt` (HS256) y `net/jwt_eddsa` (EdDSA). Sano y bien pensado: el orden
 correcto (verificar la firma ANTES de decodificar/usar el payload), comparación de firmas en
@@ -1075,7 +1075,7 @@ firma vacía (degradación honesta, no puede fallar limpio sin cambiar el tipo d
 
 ---
 
-## 35. SCRAM-SHA-256 (revisión jul 2026) — M75, PLAN
+## 35. SCRAM-SHA-256 (revisión jul 2026) — M75 ✅ COMPLETO (DESIGN §79)
 
 Revisión en frío de `net/scram` (el mecanismo de auth que reusan `db/postgres`, `net/postgres` y
 `db/mongo`). Bien pensado el núcleo: `bytes` de punta a punta, PBKDF2 correcto (INT(1) BE, U1 y
@@ -1097,7 +1097,7 @@ RFC 7677 (`#[ignore]`) sigue byte-idéntico. Espejos `packages/net` ↔ `example
 
 ---
 
-## 36. Clientes de BD — MongoDB + PostgreSQL (revisión jul 2026) — M76, PLAN
+## 36. Clientes de BD — MongoDB + PostgreSQL (revisión jul 2026) — M76 ✅ COMPLETO (DESIGN §80)
 
 Revisión en frío de los parsers de wire de `db/bson`, `db/mongo`, `db/postgres` y `net/postgres`
 (legacy). La misma clase de defectos que Redis (M69)/DNS (M72): datos del servidor sin validar →
@@ -1123,7 +1123,7 @@ de amenaza).
 
 ---
 
-## 37. Clientes de BD — MySQL + SQLite (revisión jul 2026) — M77, CIERRA el cluster db
+## 37. Clientes de BD — MySQL + SQLite (revisión jul 2026) — M77 ✅ COMPLETO (DESIGN §81; cierra el cluster db)
 
 Cierra la revisión en frío de `packages/db` (tras M76). **`sqlite` es SANO**: no parsea binario no
 confiable (rusqlite lo hace en C, memory-safe y probado en batalla), parámetros enlazados aparte
@@ -1146,7 +1146,7 @@ mysql/sqlite). Sin espejos (los paquetes `db` no son embebidos).
 
 ---
 
-## 38. HPACK — decodificación robusta (revisión jul 2026) — M78
+## 38. HPACK — decodificación robusta (revisión jul 2026) — M78 ✅ COMPLETO (DESIGN §82)
 
 Revisión en frío de `net/hpack` (compresión de cabeceras HTTP/2, RFC 7541). El `decode` procesa
 bloques del PEER (no confiables), lo consumen `http2_client`/`grpc_client`. Sano: la tabla estática
@@ -1165,8 +1165,8 @@ Fix: `dec_int` pasa a `Result`, chequea `p < len` en cada continuación y corta 
 llamadores de `dec_int` en `decode` propagan con `?`. Regresión: entero truncado, string
 sobredimensionado, size-update > 4096 y bomba de varint = `Err`, no crash (`cli_cli`,
 `paquete_net_hpack_decode_malformado`); el round-trip legítimo y el e2e HTTP/2 siguen verdes.
-Espejos `packages/net` ↔ `examples/web` juntos. El Huffman de decodificación sigue diferido
-(rechazado con error claro, como antes).
+Espejos `packages/net` ↔ `examples/web` juntos. El Huffman de decodificación quedó diferido aquí
+(rechazado con error claro) y se ejecutó después en M133 (DESIGN §130: grpc-go fuerza literales Huffman).
 
 ---
 
@@ -1215,7 +1215,7 @@ Análisis de los candidatos diferidos de M57 (§18). Base: `std/time` UTC (Hinna
 |---|---|---|---|
 | **`Date:` del webserver** (SHOULD RFC 7231) | `time.to_rfc1123(time.now_utc())` en `send_response_keep`, ambos espejos; los tests usan `contains` → solo se añade la aserción de presencia+formato | ya | ✅ **M85a** |
 | **`packages/tz`** — hora local IANA | Parser **TZif v2** en raylang puro leyendo `/usr/share/zoneinfo` vía std/fs (cero deps; formato binario tamaño-DNS). Decisiones: (1) **la ambigüedad DST es API**: `to_utc(civil)` devuelve `enum LocalResult { Single(int), Ambiguous(int,int), Gap }` (estilo chrono; errores como valores); (2) zona del sistema sin primitivo: `env("TZ")` y fallback leer `/etc/localtime` POR CONTENIDO (es un TZif válido); (3) Windows honesto: `load` → Err claro, UTC sigue. Fixtures TZif commiteados + goldens de transiciones DST (determinista, ambos motores). Tier 2 (política §53). Embeber tzdata = decisión estilo ring, solo a demanda | siguiente | ✅ **M85** (`packages/tz/tz.ray`, ~370 líneas; `tests/tz_cli.rs` golden con fixtures Madrid/NY/UTC: invierno/verano, gap, solape con abreviaturas, round-trip, errores; ✅ **M85b**: footer TZ-string —parser POSIX `STD off DST[off],Mm.w.d[/t],Mm.w.d[/t]` + resolución por reglas perpetuas tras la última transición; golden 2100 incl. gap/solape en territorio del footer) |
-| **`cron`** | dos mitades: `next_after(expr, civil) -> civil` PURO (goldens) + runner sobre spawn+sleep cooperativo. v1 **solo UTC** (la trampa: cron local correcto necesita tz — gap → siguiente hora válida, solape → solo la primera); tz-aware tras M85 | tras tz (o antes, UTC-only) | ✅ **M86** (`packages/cron/cron.ray`; next_after salta por campos —mes→día→hora→minuto—, quirk vixie DOM/DOW=OR, alias `@…`, imposible=Err a ~5 años; golden `tests/cron_cli.rs` ambos motores. Diferido M86b: cron en hora local sobre tz) |
+| **`cron`** | dos mitades: `next_after(expr, civil) -> civil` PURO (goldens) + runner sobre spawn+sleep cooperativo. v1 **solo UTC** (la trampa: cron local correcto necesita tz — gap → siguiente hora válida, solape → solo la primera); tz-aware tras M85 | ✅ hecho: `packages/cron/local.ray` (`next_after_in(Schedule, tz.Zone, ms)`, política gap/solape) | tras tz (o antes, UTC-only) | ✅ **M86** (`packages/cron/cron.ray`; next_after salta por campos —mes→día→hora→minuto—, quirk vixie DOM/DOW=OR, alias `@…`, imposible=Err a ~5 años; golden `tests/cron_cli.rs` ambos motores. Diferido M86b: cron en hora local sobre tz) |
 | **`ntp`** (SNTP v4 sobre net/udp, ~150 líneas, toy-server como DNS) | especificado | a demanda | ✅ **M90.7** (`packages/net/ntp.ray`: `query(host, port) -> Result<NtpResult, string>` con hora del servidor + offset + delay en ms Unix y stratum; cálculo clásico de 4 marcas t1–t4; rechaza kiss-of-death, modo foráneo, transmit a cero, respuesta corta; bloqueante como `udp.recv_from`. Toy-server determinista en `tests/ntp_cli.rs`, ambos motores) |
 | **`dist`** (HLC ~40 líneas sobre now()) | especificado | multi-nodo real | 💤 |
 
@@ -1331,7 +1331,7 @@ socket de escucha. Tres caminos analizados:
 
 | Opción | Qué preserva | Complejidad | Veredicto |
 |---|---|---|---|
-| **A+. Endurecer el watch+restart** | — | **baja** | ✅ **M92.2** (check-before-restart + debounce): (1) ✅ **chequear ANTES de reiniciar** — `ray build <entry>` primero (ms), solo reiniciar en verde; en rojo imprimir el diagnóstico y dejar el programa viejo corriendo (ya no mata un servidor que funciona por un cambio roto). (2) ✅ **debounce** ~120 ms (coalesce guardado+formateador). (3) 💤 drenado graceful en Windows (hoy kill duro; unix-only por diseño, como todo el manejo de señales del proyecto). (4) 💤 latencia vía `kqueue EVFILT_VNODE` — Linux pediría inotify → el polling de ~200 ms se conserva (portable, cero deps) |
+| **A+. Endurecer el watch+restart** | — | **baja** | ✅ **M92.2** (check-before-restart + debounce): (1) ✅ **chequear ANTES de reiniciar** — `ray build <entry>` primero (ms), solo reiniciar en verde; en rojo imprimir el diagnóstico y dejar el programa viejo corriendo (ya no mata un servidor que funciona por un cambio roto). (2) ✅ **debounce** ~120 ms (coalesce guardado+formateador). (3) 💤 drenado graceful en Windows (hoy kill duro; unix-only por diseño, como todo el manejo de señales del proyecto). (4) ✅ (M139: `ray dev` vigila por eventos del kernel vía `ray_runtime::watch::FsWatcher`, polling solo como fallback / `--without watch`) latencia vía `kqueue EVFILT_VNODE` — Linux pediría inotify → el polling de ~200 ms se conserva (portable, cero deps) |
 | **D. Herencia de fd** (socket-activation estilo systemd) | el listener | **media** | ✅ **M92.3**: el SUPERVISOR pre-abre y RETIENE el socket (`--port N`/`--listen host:port`/`[dev] listen` en ray.toml) y lo pasa a cada hijo (`pre_exec` dup2 al fd 3 + `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR`); `tcp_listen` (builtins) ADOPTA con `from_raw_fd` si el env matchea (una vez, guardado por `AtomicBool`) → el mismo programa corre idéntico en dev y prod. Durante el reinicio el socket nunca se cierra: el kernel encola en el backlog → **cero conexiones rechazadas, cero re-bind**, conservando el aislamiento por proceso (SIGTERM+drenado como antes). Gotcha cazado: si el fd del listener ya era 3 (primer libre tras stdio), `dup2(3,3)` es no-op que NO limpia CLOEXEC → fix con `fcntl(F_SETFD,0)` explícito. Unix; no-unix cae al re-bind por reinicio. Test rigoroso: si el 2.º hijo no re-adoptara, su bind chocaría (EADDRINUSE) con el socket retenido |
 | **E. `SO_REUSEPORT`** (blue/green local) | el puerto (solape de procesos) | media | descartada para dev: `std` no lo expone (setsockopt por FFI, factible), semántica de reparto difiere macOS/Linux, y durante el solape DOS versiones sirven a la vez (confuso en dev). Es la herramienta de *deploy* sin downtime, no de dev; D es más simple y suficiente |
 | **F. Live-reload del navegador (SSE)** | — (UX) | baja-media | ✅ **M92.4**: hub SSE en el SUPERVISOR (puerto lateral, solo en sesión web con `--port`), un servidor SSE mínimo en Rust que emite `data: reload` a los navegadores en cada reinicio VÁLIDO (compone con check-before-restart). Vive en el supervisor porque es lo único vivo entre reinicios. El webserver, viendo `RAY_DEV_RELOAD`, inyecta el `<script>EventSource(...).onmessage=location.reload()</script>` antes de `</body>` en las respuestas text/html (Content-Length recalculado; no-op en producción). NO reemplaza el SSE del paquete (ese es de la app; este es solo-dev, lateral). Diferido: inyección para CUALQUIER programa (necesitaría un proxy, en tensión con la herencia de fd de D) — hoy solo el paquete webserver |
@@ -1528,8 +1528,8 @@ limitado.
 | **A3** PGO | profile-generate → banco → profile-use; reordena el match gigante | 5-15% | ✅ **HECHA** (`tools/pgo.sh`: instrumentado → entrenamiento con banco+strings+iter+parse-selfhost+concurrencia → merge → build final en `target/release`). Medido intercalado best-of-15: **fib −5,2% · loop −5,4% · arrays −8,7% · gcnested −6,0%** — consistente, sobre el ruido; encaja con la atribución de Opt.17 (reordena las ramas fijas del lazo). Para cortar releases; el ciclo de dev sigue con cargo a secas (RUSTFLAGS invalida la caché). **Nota (13 jul 2026)**: el delta vs el plano depende del LAYOUT que le tocó al plano ese día — tras el renombrado ES→EN el plano cayó casi óptimo por azar y el delta bajó a ~0-4%, con el tiempo ABSOLUTO del PGO idéntico (fib ~1,59 s); la métrica estable es el absoluto, PGO es la *garantía* del layout bueno. `pgo.sh` acepta `--slim`/`--features` (compone con el arco M89); guía completa de builds en `docs/build.md` |
 | **A4** superinstrucciones ronda 2 | elegidas por HISTOGRAMA dinámico de pares (instrumentación temporal, revertida): la guarda de todo if/while era `[GetLocalConst, Cmp, JumpIfFalse, Pop]` (30M en fib) y la asignación-sentencia emitía `[Unit, Pop]` (10M en loop) | 5-15% en bucles | ✅ **HECHA — el win grande de la ronda** (pase `fuse_round2`): `[Unit,Pop]` eliminado · `[Cmp,JumpIfFalse(t),Pop]` con `code[t]==Pop` → `CmpJump(op,t+1)` · `[GetLocalConst,Add\|Sub]` → `Add/SubLocalConst` (posición del error = la del Add/Sub → byte-idéntico). A/B: **fib −18,9% · loop −24,8% · arrays −27,5% · gcnested −26,7%**. Batería + selfhost + metacircular verdes |
 | **B1** locales en pila (clox) | híbrido: solo fn sin capturas (`captured` ya existe); marco = base en la pila de la fibra | 10-20% call-heavy | clasificada |
-| **B2** structs por índice | `GetField(String)` → `GetFieldIdx` (el checker anota pre-erasure); instancia `(struct_id, Vec<HeapValue>)` sin nombres repetidos | el estructural con mejor ROI para servicios | clasificada |
-| **B3** strings compartidos | revivir Opt.3 como `Arc<str>` o string-como-Obj (traba 4); re-medir con strings.ray, no fib | data-dependent | clasificada |
+| **B2** structs por índice | `GetField(String)` → `GetFieldIdx` (el checker anota pre-erasure); instancia `(struct_id, Vec<HeapValue>)` sin nombres repetidos | el estructural con mejor ROI para servicios | 🟡 medio hecha: la instancia ya va sin nombres (TA1, `VmStruct { struct_idx, fields }`); `GetFieldIdx` re-rastreado como P1.3 en PERFORMANCE.md |
+| **B3** strings compartidos | revivir Opt.3 como `Arc<str>` o string-como-Obj (traba 4); re-medir con strings.ray, no fib | data-dependent | ❌ evaluada y descartada dos veces (Opt.3 `Rc<str>` y P1.4 SSO `compact_str`, revertidas por medición; PERFORMANCE.md) |
 | **B4** throughput de canales | locks por canal / Condvar vs busy-poll 50µs; solo con contención real (send_heavy) | actor-heavy | a demanda |
 | **C1** bytecode de registros | elimina el tráfico de pila (~20%); reescritura compiler+peepholes+revalidación total | 20-40% | 💤 solo si compite en CPU |
 | **C2** JIT (cranelift; deps permitidas) | method-JIT numérico con deopt | 5-20× aritmética | 💤 NO recomendado: root-maps, fibras en código JIT, 2 backends × trazas/fuel/deterministic; el nicho es I/O-bound |
@@ -1816,7 +1816,7 @@ de señales **sin** self-pipe (reenvía SIGTERM al hijo directamente). Se corrig
 que exista `exec` habrían sido fugas silenciosas, y un hijo con el extremo de ESCRITURA del
 self-pipe abierto impide para siempre el EOF de ese pipe.
 
-**Pendiente para cuando llegue `exec`**: el hijo de `ray dev` adopta el listener en el fd 3 con
+**✅ HECHO (M163, DESIGN §156)** — la condición «cuando llegue `exec`» se cumplió con M100 y `adopt_or_bind` re-pone `FD_CLOEXEC` tras `from_raw_fd`. Texto original: el hijo de `ray dev` adopta el listener en el fd 3 con
 `from_raw_fd`, y ese fd tiene `FD_CLOEXEC` a 0 **dentro del hijo** (necesario para que sobreviva al
 exec). Si ese programa llegara a lanzar procesos, heredarían el socket de escucha → hay que
 re-poner CLOEXEC tras la adopción en `tcp_listen`.
@@ -1922,7 +1922,7 @@ hyper/axum), y los servicios reales lanzan procesos (git, ffmpeg, migraciones, b
 > `__run` en los tres motores, `std/process` con la superficie exacta de abajo, golden triple
 > automatizado. Interinato consciente: VM y nativo bloquean el hilo del worker durante `run()`
 > (como SQLite) — el aparcado de la fibra necesita un park multi-fd que aún no existe; es la
-> siguiente fase de M100. El punto (2) (streaming v2) sigue sin ejecutar.
+> siguiente fase de M100. El punto (2) (streaming v2) se ejecutó después (§53.9) y la v3 (§53.10) también.
 
 Superficie EXACTA. Dos entradas y nada más; `stream()` llega en v2. Cada línea esquiva un error
 documentado de otro lenguaje (tabla al final).
@@ -2062,7 +2062,7 @@ raylang; ejemplo determinista · **(2c)** gemelo nativo (registro emitido + help
 · **(2d)** golden VM≡nativo + docs (MANUAL/REFERENCIA/llms.txt/DESIGN) · **(2e)** cancelación
 estructural con kill al grupo, si el gancho no es invasivo.
 
-### 53.10 DISEÑO de la v3 (stdin escribible sobre un hijo VIVO), fijado 21 ago 2026 — impacto: MEDIO
+### 53.10 DISEÑO de la v3 (stdin escribible sobre un hijo VIVO), fijado 21 ago 2026 — impacto: MEDIO — ✅ EJECUTADA como M100 v3 (DESIGN §106: `Proc.write`/`close_stdin`, `stdin_pipe`)
 
 **El caso real que lo desbloquea** (el criterio de promoción de este archivo): un **cliente MCP**
 escrito en raylang. Un servidor MCP por stdio es un hijo JSON-RPC **vivo**: se le escriben
@@ -2149,7 +2149,7 @@ con receptor recortado).
 
 ---
 
-## 57. Playground web: autocompletado e imports de la stdlib (jul 2026, impacto: BAJO — DX)
+## 57. Playground web: autocompletado e imports de la stdlib (jul 2026, impacto: BAJO — DX) — ✅ HECHA (imports de la stdlib vía el loader en `src/wasm.rs`; editor CodeMirror 6 + LSP real en wasm, `playground/editor/`)
 
 Detectado al "probar el autocompletado en el playground": no existe — el editor es un `<textarea>`
 plano (sin Monaco/CodeMirror ni puente con el LSP). Dos features separables, por orden de valor:
@@ -2209,7 +2209,7 @@ columna del generado no existe en el template). Detalle en DESIGN §93.
 
 ---
 
-## 60. std/term + std/io — terminal real (ago 2026, impacto: MEDIO — runtime en ambos motores) — arco M107, PLAN
+## 60. std/term + std/io — terminal real (ago 2026, impacto: MEDIO — runtime en ambos motores) — arco M107 ✅ COMPLETO (M107.0–.4; M107.5 sigue clasificado)
 
 **El caso.** Construir una TUI real en raylang (raycode) hoy exige FFI a `getchar`, abrir
 `/dev/stdout` en append para escribir sin salto, y `tput cols < /dev/tty` para el tamaño. Todo eso
@@ -2226,18 +2226,18 @@ rancia; añadir SIGWINCH (28 en macOS y Linux) es pequeño. (d) `IoParked` ya ti
 
 **Fases (un PR cada una, en este orden):**
 
-- **M107.0 — bug: `unit` escrito en posición de tipo.** No hay token de tipo `unit`
+- ✅ **M107.0 — bug: `unit` escrito en posición de tipo.** No hay token de tipo `unit`
   (`parse_type_inner`): `-> unit` llega como `Struct("unit")` y `resolve_type`
   (`checker/core.rs:1164`) no lo mapea → `extern fn free(p: ptr) -> unit` se rechaza con un mensaje
   que lo da por válido, y `fn f() -> unit` tampoco compila. SPEC lista `unit` entre los tipos → bug
   de implementación. Fix: `Struct("unit", [])` → `Type::Unit` en `resolve_type`, **en tándem con el
   espejo `selfhost/checker.ray`** y tests en ambos.
-- **M107.1 — `std/io`: escribir sin salto + flush.** Builtins `__stdout_write(s)`,
+- ✅ **M107.1 — `std/io`: escribir sin salto + flush.** Builtins `__stdout_write(s)`,
   `__stderr_write(s)`, `__stdout_write_bytes(b)`, `__stdout_flush()` (convención `[string]`
   ok/err, como `__write_handle`); módulo `std/io` con `write/ewrite/write_bytes/flush ->
   Result`. Los cuatro consumidores del registro (checker/VM/interp/nativo) + entrada en
   `NATIVE_TRACKED_BUILTINS` con test que los EJECUTA (lección de los seis huecos).
-- **M107.2 — lectura de stdin por bytes, que aparca.** `__stdin_read(max) -> bytes` (`b""` = EOF) y
+- ✅ **M107.2 — lectura de stdin por bytes, que aparca.** `__stdin_read(max) -> bytes` (`b""` = EOF) y
   `__stdin_read_timeout(max, ms) -> [bytes]`. VM: patrón `SocketRead` sobre fd 0 — aparcar hasta
   readiness y LEER DESPUÉS (sin `O_NONBLOCK`: stdin comparte la open file description con el shell
   padre; volteársela sería grosero). Un solo lector a la vez (documentado). Interp: read bloqueante
@@ -2245,7 +2245,7 @@ rancia; añadir SIGWINCH (28 en macOS y Linux) es pequeño. (d) `IoParked` ya ti
   limpio. **El test que importa**: hijo con stdin=pipe alimentado con retardo; una fibra ticker
   imprime mientras main espera el byte → los ticks salen ANTES del byte (prueba el aparcamiento
   real), y paridad nativa del mismo programa.
-- **M107.3 — `std/term`.** Builtins `__term_is_tty(fd)`, `__term_size() -> [int]` ([] si no tty;
+- ✅ **M107.3 — `std/term`.** Builtins `__term_is_tty(fd)`, `__term_size() -> [int]` ([] si no tty;
   `ioctl(TIOCGWINSZ)` sobre `/dev/tty` con fallback a fd 1) y `__term_raw_on()/__term_raw_off()`
   (termios guardado en static; equivalente de `cfmakeraw` a mano). **Cero deps**: `extern "C"`
   declarados a mano (patrón `src/poll.rs`), structs termios `repr(C)` por SO (macOS ≠ Linux) →
@@ -2257,7 +2257,7 @@ rancia; añadir SIGWINCH (28 en macOS y Linux) es pequeño. (d) `IoParked` ya ti
   PageDown, Delete, Ctrl(char), F(int) }` — decodificador de secuencias ESC + UTF-8 multibyte en
   **raylang puro** → testeable por `@test` alimentando bytes, sin tty. Ejemplo `examples/term/`
   (visor con repintado). CI sin tty: paths no-tty + decoder puro; termios = smoke manual.
-- **M107.4 — SIGWINCH en `signals()`.** Añadir 28 al self-pipe de la VM y del nativo; corregir la
+- ✅ **M107.4 — SIGWINCH en `signals()`.** Añadir 28 al self-pipe de la VM y del nativo; corregir la
   doc rancia ("VM only"). Con esto: `select` sobre `signals()` + `term.size()` = re-maquetado al
   redimensionar.
 - **M107.5 — Buffer mutable en la frontera FFI (CLASIFICAR, no ejecutar en este arco).** El
@@ -2419,17 +2419,17 @@ concreto, en orden de impacto:
    `RayOrd` que f64 implemente). raylogs lo esquiva con un mergesort de floats propio
    (`src/agg.ray`), que además costó cero en el benchmark (200k floats dentro de 0.62 s totales).
 
-2. **`tail -f` / watch de fs** (impacto: MEDIO — ya anotado en §2 transversal de IDEAS-APPS):
+2. ✅ (M115.4 `fs.watch`) **`tail -f` / watch de fs** (impacto: MEDIO — ya anotado en §2 transversal de IDEAS-APPS):
    `--follow` se compone con `fs.read_bytes` a EOF + `time.sleep(200)` y funciona, pero es la
    cuarta app que sondea (ray dev, raycode-dev, y lo que raysync/raysite necesitarán). La pieza
    mínima útil no es inotify completo: un `fs.poll_append(h)` o watch de mtime bastaría.
 
-3. **`std/regex` sin grupos con nombre** `(?P<name>...)` (impacto: MEDIO — ergonomía): para
+3. ✅ (M128: `(?P<name>)`, `group_names`, `captures_map`) **`std/regex` sin grupos con nombre** `(?P<name>...)` (impacto: MEDIO — ergonomía): para
    extraer campos de logs los índices g1..gN obligan a un side-channel (raylogs: flag
    `--fields ip,method,status`). `captures_str` ya devuelve las ranuras; falta solo el parseo del
    nombre y un mapa nombre→índice en `Regex`.
 
-4. **`std/csv` no es incremental** (impacto: BAJO): `parse_csv` traga el documento entero; un
+4. ✅ (M128: `csv.parser()`/`feed`/`finish`) **`std/csv` no es incremental** (impacto: BAJO): `parse_csv` traga el documento entero; un
    lector por líneas pierde los campos entrecomillados con `\n` dentro (raylogs lo documenta como
    fuera de v1). La forma streaming sería un parser push (chunk de bytes → filas completas).
 
@@ -2466,7 +2466,7 @@ motores más varios huecos de expresividad. Repros mínimos en `ray-apps/rayrela
    llamada a función libre y struct-literal NO reproduce — es específico del constructor de
    variante. Workaround: izar los argumentos a locales. Emparenta con §61 (thread-safety del
    nativo), pero este es determinista, no una carrera.
-3. **Half-close: no hay `shutdown(SHUT_WR)`** (impacto: MEDIO). Sin él no se puede expresar el
+3. ✅ (M130: `net.shutdown_write`, DESIGN §127) **Half-close: no hay `shutdown(SHUT_WR)`** (impacto: MEDIO). Sin él no se puede expresar el
    idiom netcat "aviso EOF de escritura y dreno hasta el FIN del peer"; el cliente de rayrelay usa
    un periodo de gracia de 2 s tras EOF de stdin como aproximación. Cualquier protocolo que
    termina por half-close (HTTP/1.0, pipes estilo nc) lo necesita.
@@ -2487,7 +2487,7 @@ motores más varios huecos de expresividad. Repros mínimos en `ray-apps/rayrela
    datagrama perdido cuelga al cliente `probe` sin remedio; `timeout_err.ray` muestra que TCP sí
    lo tiene y su error es el string estable `"read timeout"` — un enum de error tipado sería
    mejor contrato).
-6. Menores: no hay `exit(code)` (terminar el proceso desde una fibra auxiliar obliga a
+6. Menores: ✅ (M130) no hay `exit(code)` (terminar el proceso desde una fibra auxiliar obliga a
    reestructurar para que main decida); el error de read-timeout solo se distingue por string.
 
 **Lo que funcionó bien de verdad** (vale la pena decirlo): el patrón actor + canales-en-mensajes
@@ -2506,23 +2506,23 @@ VEZ y `std/resilience` completo. Cinco necesidades y una corrección de document
    cualquier servidor real la necesita). Sin ella no hay rate limit por IP, ni `X-Forwarded-For`,
    ni logs de acceso con origen. Superficie natural: un campo `remote: string` (o `peer_addr(req)`)
    rellenado por el bucle de servicio.
-2. **`ray test` deja listeners zombis entre tests** (impacto: MEDIO — DX de tests con servidores).
+2. ✅ (M129: drenado de handles del SO entre tests) **`ray test` deja listeners zombis entre tests** (impacto: MEDIO — DX de tests con servidores).
    El runner descarta las fibras del `@test` anterior pero los sockets de ESCUCHA del SO
    sobreviven: el siguiente test los ve aceptar conexiones que nadie atiende (read timeout en vez
    de connection refused). Un boot de servidores compartido entre tests se envenena; tampoco hay
    `var` top-level para un "boot once". Workaround: todo el E2E en UN `@test`. Arreglo natural:
    cerrar los handles vivos del test anterior al aislarlo (los listeners incluidos), o un hook de
    setup/teardown por archivo.
-3. **`std/toml` sin arrays de tablas `[[route]]`** (ya documentado como diferido; aquí confirmado
+3. ✅ (M128) **`std/toml` sin arrays de tablas `[[route]]`** (ya documentado como diferido; aquí confirmado
    con el caso concreto: la config de un gateway/proxy es EL uso canónico de `[[...]]`). raygate
    usa tablas con nombre `[route.api]` como rodeo aceptable.
-4. **La forma de `resilience.guard` no compone con el patrón actor** (impacto: BAJO-MEDIO —
+4. ✅ (M129: `admit`/`report`, campo `open_until`) **La forma de `resilience.guard` no compone con el patrón actor** (impacto: BAJO-MEDIO —
    API-shape). `guard(b, err, f)` exige que `f` corra en la fibra dueña del breaker; en cuanto el
    estado vive en un actor (lo obligado con fibras de heap aislado) hay que reimplementar las
    transiciones a mano sobre los campos del struct. Un par explícito `admit(b) -> bool` /
    `report(b, ok)` sería la primitiva componible (guard puede quedarse como azúcar). De regalo:
    el campo `abierto_hasta` del `Breaker` es spanglish en superficie pública.
-5. `jwt_verify` deja `exp`/`nbf` como política del llamador (decisión documentada y razonable),
+5. ✅ (M128: `jwt_verify_claims`) `jwt_verify` deja `exp`/`nbf` como política del llamador (decisión documentada y razonable),
    pero todo gateway la reescribe igual: candidato a `jwt_verify_claims(secret, token, now_ms)`.
 6. **Docs desactualizadas (positivo)**: `webserver.serve` dice "VM only", pero el gateway completo
    — accept concurrente, streaming chunked (`stream_response`), señales, fibras — funciona
@@ -2546,7 +2546,7 @@ archivos" en "ser una base de datos" — exactamente el territorio que IDEAS-APP
 2. **[EJECUTADA — M115.2, DESIGN §109: `fs.try_lock(h)`/`fs.unlock(h)`] No hay file locks** (impacto: MEDIO-ALTO). Dos brokers sobre el mismo directorio
    intercalan appends y doble-entregan sin ningún aviso; el patrón estándar (flock sobre un
    `LOCK` file al arrancar) no se puede expresar. Candidato: `fs.lock_exclusive(h) -> Result`.
-3. **`fs.rename` existe y es el reemplazo atómico que promete** (positivo): la compactación
+3. ✅ (la trampa del handle viejo está documentada en `std/fs.ray`) **`fs.rename` existe y es el reemplazo atómico que promete** (positivo): la compactación
    entera de rayq (reescribir a `.tmp` + rename encima + reabrir handle) funciona a la primera;
    verificado en caliente con 2000 acks → log de 0 bytes sin perder el handle. Matiz aprendido:
    tras el rename, el handle de append viejo apunta al inode ANTIGUO — hay que cerrar y reabrir
@@ -2683,12 +2683,12 @@ Tres apps del eje "texto y cripto" en una tanda: `raymail` (SMTP real + MIME + s
 2. **[EJECUTADA — M115.3, DESIGN §110: `fs.chmod(path, mode)`] Sin `fs.chmod`/permisos** (raypass): una bóveda de secretos queda con el umask del proceso
    y no puede restringirse a 600. Misma familia que el `fs.stat` de §69 — la superficie de
    metadatos de fs es EL hueco transversal de esta tanda (watch §69, stat §69, chmod aquí).
-3. **Zeroización inexpresable** (raypass): secretos en strings del GC sin borrado garantizado.
+3. ✅ (documentada como limitación consciente en SECURITY.md) **Zeroización inexpresable** (raypass): secretos en strings del GC sin borrado garantizado.
    Decisión de diseño consciente, pero conviene dejarla escrita en SECURITY.md del lenguaje.
-4. **Codificaciones de correo a mano** (raymail; predicho por §1.7): RFC 2047 encoded-words,
+4. ✅ (M131: `encoded_word` en `packages/net/mail.ray`) **Codificaciones de correo a mano** (raymail; predicho por §1.7): RFC 2047 encoded-words,
    plegado a 78, base64 a 76 columnas, dot-stuffing — ninguna difícil, todas fáciles de hacer
    sutilmente mal → candidatas a un `std/mail` o al menos ejemplos canónicos.
-5. **Sin normalización Unicode** (raysite): el slugify translitera a mano las vocales del
+5. ✅ (M131: `text.nfc`/`nfkd`; los mtimes los cubre `fs.watch`) **Sin normalización Unicode** (raysite): el slugify translitera a mano las vocales del
    castellano; NFD/NFKD no existen. Y **quinta app sondeando mtimes** (raysite serve).
 6. **[EJECUTADA — M118, DESIGN §115: `'\0'` y `"\0"` ya lexean]** Menor (raymail): `'\0'` no es expresable como literal de char — el NUL de AUTH PLAIN se
    construye con `char_from_code(0)` (la misma familia que \x/\u de §67).
@@ -2725,7 +2725,7 @@ La última tanda del catálogo de IDEAS-APPS (14 de 14 construidas). Tres apps d
 2. **[EJECUTADA — M127, DESIGN §124: `rpc.pool(host, port, size)` + `pool_call*` — el canal acotado como cola, marcado perezoso, reconexión automática]** **El cliente `packages/rpc` es secuencial por conexión** (raycall): handlers concurrentes no
    pueden compartir uno → conexión por llamada. El hueco de producción de rpc es un pool o
    multiplexación por id (el streaming diferido de su README apunta ahí).
-3. Sin `try_recv`/select-timeout, matar una fibra dormida sigue sin poderse (raybot): el patrón
+3. 🟡 `try_recv`/`select_timeout` ya existen (M116/M116.1); lo que sigue faltando es una primitiva de usuario para cancelar una fibra dormida (`cancel_task` es interno a Task/scope) (raybot): el patrón
    generación-en-el-canal deja una fibra de heartbeat huérfana latiendo por cada reconexión —
    inofensivo pero acumulativo en procesos de semanas. Refuerza §64.
 4. **[EJECUTADA — M133, DESIGN §130]** `grpc_client` queda como la ÚNICA superficie de red del
@@ -2933,7 +2933,7 @@ clasificadas las dos mejoras vecinas que se evaluaron y NO entraron en ese arco:
   socket-activation no lo justifica hoy; se anota para que ninguna decisión lo bloquee por
   accidente (la tabla de funciones de la VM ya es indirecta — buen augurio).
 
-## 77. `ray build --native -o` sobrescribe in-place → SIGKILL en macOS (ago 2026)
+## 77. `ray build --native -o` sobrescribe in-place → SIGKILL en macOS (ago 2026) — ✅ HECHA (M163: `<out>.tmp` + rename en ambas vías, rustc y Cargo; DESIGN §156)
 
 Hallado en `ray-apps/rallyx` (27 ago 2026): recompilar con `ray build --native src/main.ray
 -o rallyx --release` sobre un binario `rallyx` YA existente produce un binario que macOS mata
@@ -2946,7 +2946,7 @@ inode). Propuesta: que `ray build` haga **unlink del output antes de escribir** 
 fallo silencioso y desconcertante del ciclo edit-build-run en macOS. Repro: compilar dos
 veces seguidas al mismo `-o` y ejecutar.
 
-## 77. `std/image` — decodificar PNG sobre el inflate existente (ago 2026) — ✅ HECHA (M144, DESIGN §141)
+## 77b. `std/image` — decodificar PNG sobre el inflate existente (ago 2026) — ✅ HECHA (M144, DESIGN §141)
 
 Reporte desde un juego de demostración: "cargo un sprite.png" no se puede hoy. El diagnóstico
 del reporte ("falta DEFLATE") era FALSO — `std/inflate` ya trae DEFLATE completo + envoltorios
@@ -2988,7 +2988,7 @@ y escalar imágenes al layout:
   `colors_256`) y todo `false` como degradación segura.
 
 **Impacto**: BAJO en riesgo (aditivo en `std/term`); el orden natural es píxeles → capacidades
-→ (con §77) imágenes en terminal.
+→ (con §77b) imágenes en terminal.
 
 ## 79b. `std/audio` v2 — afinado de latencia (ago 2026) — ✅ EJECUTADA como M158 (DESIGN §152)
 
@@ -3001,7 +3001,7 @@ AAudio con sonido audible en dispositivo Android físico (el emulador tiene audi
 
 ## 79. `std/audio` — salida PCM al dispositivo (ago 2026) — ✅ HECHA (M145, DESIGN §142; la decisión cpal-vs-externs se volteó a EXTERNS al implementar: cpal exigía headers de ALSA en build)
 
-Segundo reporte del juego de demostración (tras §77/§78). De las cuatro piezas pedidas, DOS
+Segundo reporte del juego de demostración (tras §77b/§78). De las cuatro piezas pedidas, DOS
 partían de premisas falsas — verificado contra el código y corregido aquí para el registro:
 
 - **"No hay forma de mantener un hijo vivo empujándole samples" — FALSO desde M100 v3**:
@@ -3031,7 +3031,7 @@ sin proceso externo ni latencia de spawn:
   enlazado bajo demanda, como TLS/sqlite.
 - Interp = oráculo: misma superficie, puede ser bloqueante simple.
 
-**Decoders MP3/OGG**: mismo cajón que PNG (§77) — ports puros grandes (minimp3/vorbis),
+**Decoders MP3/OGG**: mismo cajón que PNG (§77b) — ports puros grandes (minimp3/vorbis),
 clasificados LEJOS; WAV no necesita nada (cabecera + PCM a mano) y `stdin_pipe`→ffplay ya
 decodifica cualquier formato mientras tanto.
 
@@ -3220,8 +3220,8 @@ instructions/llms.txt) y estos huecos REALES, clasificados:
    aplicación de macOS (tag `"role:about"` = About nativo; `name` re-titula el menú bajo
    `ray run`); `ray_doc` con nombre de módulo a secas lista la superficie pública entera.
    También cayeron de esta ronda, en PRs previos: el terminal envenenado por SIGTERM en crudo
-   (#207) y el shell iOS con UIScene (#206). Sigue pendiente de §81: el puente IPC (1) y el
-   helper de estado (5); la tupla-tras-if (4) sigue clasificada como decisión de gramática.
+   (#207) y el shell iOS con UIScene (#206). Cerrados después: el puente IPC (3, M152) y el
+   helper de estado (5, M154 `web.state`); la tupla-tras-if (4) sigue clasificada como decisión de gramática.
 
 Contexto compartido de los 4: el MCP es ya la puerta de entrada real de los agentes al
 lenguaje — lo que no se ve desde ahí (paquetes, proyectos, superficie por métodos) para un

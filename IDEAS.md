@@ -2946,7 +2946,7 @@ inode). Propuesta: que `ray build` haga **unlink del output antes de escribir** 
 fallo silencioso y desconcertante del ciclo edit-build-run en macOS. Repro: compilar dos
 veces seguidas al mismo `-o` y ejecutar.
 
-## 77b. `std/image` — decodificar PNG sobre el inflate existente (ago 2026) — ✅ HECHA (M144, DESIGN §141)
+## 77b. `std/image` — decodificar PNG sobre el inflate existente (ago 2026) — ✅ HECHA (M144, DESIGN §141); codificar `encode_png` ✅ HECHA (M164, DESIGN §157 — queja del juego 1942: los sprites se generaban con Python)
 
 Reporte desde un juego de demostración: "cargo un sprite.png" no se puede hoy. El diagnóstico
 del reporte ("falta DEFLATE") era FALSO — `std/inflate` ya trae DEFLATE completo + envoltorios

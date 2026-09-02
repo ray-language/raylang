@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`image.encode_png`** (M164, pedido del juego 1942): el camino inverso de `decode_png` —
+  un `Image` RGBA8 se escribe como PNG (8 bits, sin entrelazado) en raylang puro sobre
+  `std/deflate`; generar sprites o guardar capturas ya no necesita Python. Round-trip exacto
+  con `decode_png` y validado contra el zlib de Python como oráculo externo.
+
 - **Dos arreglos del ciclo edit-build-run** (M163): `ray build --native -o out` ya no
   sobrescribe el binario in-place (en macOS eso invalidaba la firma ad-hoc y el binario nuevo
   moría con SIGKILL al arrancar): compila a `out.tmp` y renombra, así que un build fallido deja

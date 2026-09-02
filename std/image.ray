@@ -14,6 +14,7 @@
 // nunca un error de índice — cada lectura verifica límites antes.
 
 import std/inflate;
+import std/deflate;
 
 /// A decoded raster image: RGBA8, row-major, top-to-bottom, 4 bytes per pixel
 /// (`pixels.len() == width * height * 4`). Whatever the source PNG stored (grayscale,
@@ -404,4 +405,89 @@ fn to_rgba(
         y = y + 1;
     }
     Result.Ok(Image { width: width, height: height, pixels: bytes_of(out) })
+}
+
+/// Encodes an RGBA8 `Image` as a PNG file (color type 6, 8-bit channels, no interlace),
+/// the exact format `decode_png` produces — so `decode_png(encode_png(img))` round-trips
+/// byte for byte. Scanlines use filter None; the zlib stream comes from `std/deflate`.
+/// Returns `Err` if the dimensions are not positive or `pixels.len() != width * height * 4`.
+pub fn encode_png(img: Image) -> Result<bytes, string> {
+    if (img.width <= 0 || img.height <= 0) {
+        return Result.Err("png: invalid dimensions");
+    }
+    if (img.width * img.height > 67108864) {
+        return Result.Err("png: image too large (over 64 megapixels)");
+    }
+    if (img.pixels.len() != img.width * img.height * 4) {
+        return Result.Err("png: pixels must hold width * height * 4 bytes (RGBA8)");
+    }
+    // Scanlines crudas: un octeto de filtro (0 = None) + la fila RGBA tal cual.
+    let stride = img.width * 4;
+    var raw: [int] = [];
+    var y = 0;
+    while (y < img.height) {
+        raw.push(0);
+        var x = 0;
+        while (x < stride) {
+            raw.push(img.pixels[y * stride + x]);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var ihdr: [int] = [];
+    push_be32(ihdr, img.width);
+    push_be32(ihdr, img.height);
+    ihdr.push(8);  // profundidad: 8 bits por canal
+    ihdr.push(6);  // tipo de color: RGBA
+    ihdr.push(0);  // compresión: deflate
+    ihdr.push(0);  // filtro: adaptativo (por scanline)
+    ihdr.push(0);  // sin entrelazado
+    let idat = deflate.zlib_compress(bytes_of(raw));
+    var out: [int] = [137, 80, 78, 71, 13, 10, 26, 10];
+    push_chunk(out, [73, 72, 68, 82], ihdr);
+    push_chunk(out, [73, 68, 65, 84], to_ints(idat));
+    push_chunk(out, [73, 69, 78, 68], []);
+    Result.Ok(bytes_of(out))
+}
+
+// Entero big-endian de 32 bits al final de `out`.
+fn push_be32(out: [int], v: int) {
+    out.push(v >> 24 & 255);
+    out.push(v >> 16 & 255);
+    out.push(v >> 8 & 255);
+    out.push(v & 255);
+}
+
+// Un chunk PNG al final de `out`: longitud BE32, tipo (4 octetos), datos y CRC-32 sobre
+// tipo + datos (spec §5.3).
+fn push_chunk(out: [int], kind: [int], data: [int]) {
+    push_be32(out, data.len());
+    var crc_input: [int] = [];
+    var i = 0;
+    while (i < 4) {
+        crc_input.push(kind[i]);
+        i = i + 1;
+    }
+    var j = 0;
+    while (j < data.len()) {
+        crc_input.push(data[j]);
+        j = j + 1;
+    }
+    var k = 0;
+    while (k < crc_input.len()) {
+        out.push(crc_input[k]);
+        k = k + 1;
+    }
+    push_be32(out, inflate.crc32(bytes_of(crc_input)));
+}
+
+// `bytes` → `[int]` (octeto a octeto).
+fn to_ints(b: bytes) -> [int] {
+    var out: [int] = [];
+    var i = 0;
+    while (i < b.len()) {
+        out.push(b[i]);
+        i = i + 1;
+    }
+    out
 }

@@ -105,6 +105,8 @@ section.install { padding: 2rem 0 2.5rem; }
 }
 .step h3 { margin: 0 0 .45rem; font-size: 1.02rem; letter-spacing: -.01em; }
 .step p.hint { margin: .45rem 0 0; color: var(--muted); font-size: .88rem; }
+/* Etiqueta de plataforma ENCIMA de su comando: respira también por debajo. */
+.step p.hint.label { margin: .6rem 0 .4rem; }
 .cmd {
     display: flex;
     align-items: center;
@@ -325,10 +327,11 @@ section.engines { padding: 2.5rem 0 4rem; }
                 <span class="stepn">1</span>
                 <div>
                     <h3>Instala la toolchain</h3>
+                    <p class="hint label">macOS y Linux:</p>
                     <div class="cmd"><span class="pr">$</span><code>curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
                     </button></div>
-                    <p class="hint">macOS y Linux. En Windows, desde PowerShell:</p>
+                    <p class="hint label">Windows, desde PowerShell:</p>
                     <div class="cmd"><span class="pr">&gt;</span><code>irm https://raw.githubusercontent.com/ray-language/raylang/main/install.ps1 | iex</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
                     </button></div>

@@ -279,6 +279,7 @@ raylang trae de serie las dos piezas para que un agente de código escriba rayla
 | [`SECURITY.md`](SECURITY.md) | Política de seguridad, política de dependencias y modelo de amenazas. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Qué cambió en cada versión. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | La **guía de contribución**: flujo de PRs, principios no negociables y batería de admisión de módulos. |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | Código de conducta (Contributor Covenant 2.1) que rige la participación en el proyecto. |
 | [`RELEASE-1.0.md`](RELEASE-1.0.md) | Checklist histórica del lanzamiento 1.0 (las releases se publican desde la v1.1.0). |
 
 Editores: extensión de [VSCode](editors/vscode/) (con cliente LSP), paquete de [Sublime Text](editors/sublime/),

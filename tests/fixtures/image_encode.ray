@@ -12,7 +12,32 @@ fn dump(b: bytes) -> [int] {
 
 fn main() {
     // 3x2 RGBA: rojo opaco, verde medio, azul transparente / gris, blanco, negro.
-    let px = [255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 10, 20, 30, 40, 255, 255, 255, 255, 0, 0, 0, 255];
+    let px = [
+        255,
+        0,
+        0,
+        255,
+        0,
+        255,
+        0,
+        128,
+        0,
+        0,
+        255,
+        0,
+        10,
+        20,
+        30,
+        40,
+        255,
+        255,
+        255,
+        255,
+        0,
+        0,
+        0,
+        255
+    ];
     let img = image.Image { width: 3, height: 2, pixels: bytes_of(px) };
     match (image.encode_png(img)) {
         Result.Ok(png) => {

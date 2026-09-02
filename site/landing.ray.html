@@ -213,7 +213,7 @@ section.eco { padding: 2.5rem 0; }
     gap: .9rem;
     margin-bottom: 1.4rem;
 }
-a.app {
+a.app, div.app {
     display: block;
     background: var(--card);
     border: 1px solid var(--line);
@@ -223,8 +223,25 @@ a.app {
     transition: border-color .15s ease, transform .15s ease;
 }
 a.app:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
-a.app b { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .95rem; color: var(--accent); }
-a.app span { display: block; color: var(--muted); font-size: .87rem; margin-top: .2rem; }
+a.app b, div.app b { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: .95rem; color: var(--accent); }
+a.app span, div.app span { display: block; color: var(--muted); font-size: .87rem; margin-top: .2rem; }
+/* Estado de una extensión aún no aceptada en su galería: píldora discreta junto al nombre. */
+.app em.status {
+    font-style: normal;
+    font-size: .7rem;
+    font-weight: 600;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: .1rem .55rem;
+    margin-left: .5rem;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.eco p.note { color: var(--muted); font-size: .9rem; max-width: 64rem; }
+.eco p.note a { color: var(--accent); }
+/* Desktop y móvil: las cuatro plataformas + los comandos que las producen. */
+.platforms .chips { margin-top: 1.2rem; }
 .eco p.libs { color: var(--muted); max-width: 64rem; }
 
 section.engines { padding: 2.5rem 0 4rem; }
@@ -390,6 +407,31 @@ section.engines { padding: 2.5rem 0 4rem; }
     </div>
 </section>
 
+<section class="eco platforms" id="plataformas">
+    <div class="wrap">
+        <h2 class="sec">Desktop y móvil, <span class="grad">de fábrica</span></h2>
+        <p class="lead">El mismo fuente raylang corre como app de escritorio en macOS y Linux y
+        como app móvil en iPhone y Android — sin framework externo ni segundo lenguaje. La
+        interfaz es HTML en el webview del sistema (<code>std/ui</code>), el backend es tu
+        servidor web en raylang, y el puente JS ↔ raylang, los menús nativos, los diálogos de
+        archivo, el audio y los assets horneados en el binario vienen en la toolchain.</p>
+        <div class="apps">
+            <div class="app"><b>macOS</b><span><code>ray bundle</code> produce la <code>.app</code> con icono, menú de aplicación, panel About y firma ad-hoc (la de distribución la pones tú).</span></div>
+            <div class="app"><b>Linux</b><span>el mismo comando deja el binario con su lanzador <code>.desktop</code>; ventana y webview sobre GTK/WebKitGTK.</span></div>
+            <div class="app"><b>iOS</b><span><code>ray bundle --ios</code> genera el proyecto Xcode con el programa compilado a librería estática; firma persistente para dispositivo y simulador.</span></div>
+            <div class="app"><b>Android</b><span><code>ray bundle --android</code> genera el proyecto Gradle con el <code>.so</code> nativo, icono launcher y firma de release; audio por AAudio.</span></div>
+        </div>
+        <div class="chips">
+            <span class="chip"><b>ray bundle</b> · .app / .desktop</span>
+            <span class="chip"><b>ray bundle --ios</b> · proyecto Xcode</span>
+            <span class="chip"><b>ray bundle --android</b> · proyecto Gradle</span>
+        </div>
+        <p class="note">Una app de escritorio hecha solo con el MCP y un agente LLM sirvió de
+        dogfood del arco completo; lo que faltaba se convirtió en superficie de la stdlib. Guía en
+        el <a href="https://github.com/ray-language/raylang/blob/main/MANUAL.md">manual</a>.</p>
+    </div>
+</section>
+
 <section class="eco" id="benchmarks">
     <div class="wrap">
         <h2 class="sec">Medido, <span class="grad">no prometido</span></h2>
@@ -408,10 +450,14 @@ section.engines { padding: 2.5rem 0 4rem; }
         autocompletado, hover, ir a definición, renombrar y formateo.</p>
         <div class="apps">
             <a class="app" href="https://marketplace.visualstudio.com/items?itemName=ray-language.raylang"><b>VS Code</b><span>extensión en el marketplace, con cliente LSP integrado</span></a>
-            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><span>sintaxis + LSP vía el paquete oficial</span></a>
-            <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><span>gramática tree-sitter + LSP; extensión oficial</span></a>
+            <a class="app" href="https://github.com/ray-language/sublime-raylang"><b>Sublime Text</b><em class="status">en revisión en Package Control</em><span>sintaxis + LSP; mientras se aprueba, se instala desde el repositorio</span></a>
+            <a class="app" href="https://github.com/ray-language/zed-raylang"><b>Zed</b><em class="status">en revisión en la galería de Zed</em><span>gramática tree-sitter + LSP; mientras se aprueba, se instala como extensión de desarrollo</span></a>
             <a class="app" href="https://github.com/ray-language/raylang/tree/main/editors"><b>Neovim · Helix</b><span>apuntan a <code>ray lsp</code> directo; config en editors/</span></a>
         </div>
+        <p class="note">Las extensiones de Sublime Text y Zed están enviadas a sus galerías
+        oficiales y en proceso de aprobación:
+        <a href="https://github.com/sublimehq/package_control_channel/pull/9534">Package Control #9534</a> ·
+        <a href="https://github.com/zed-industries/extensions/pull/7361">zed-industries/extensions #7361</a>.</p>
     </div>
 </section>
 

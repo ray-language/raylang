@@ -1,0 +1,33 @@
+# M162 (IDEAS §82.3) — el GEMELO NO-OP de ci.yml para PRs solo-docs: el patrón documentado de
+# GitHub para convivir checks REQUERIDOS con paths-ignore. ci.yml ignora estos paths (nada de
+# lo que compila depende de ellos), pero con branch protection un PR solo-docs quedaría
+# "pendiente" para siempre sin corridas — este workflow dispara SOLO en esos paths y produce
+# checks con LOS MISMOS NOMBRES que los requeridos, verdes al instante.
+#
+# ⚠️ Los `paths` de aquí y los `paths-ignore` de ci.yml deben ser LA MISMA lista, y los
+# nombres de los jobs deben calcar los de ci.yml (los checks requeridos casan por nombre).
+# Un PR mixto código+docs dispara ambos workflows: ambos verdes, sin conflicto.
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - "**.md"
+      - "book/**"
+      - "docs/**"
+      - "site/**"
+      - "LICENSE*"
+
+jobs:
+  test:
+    name: clippy · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - name: No-op (PR solo-docs — nada que compilar)
+        run: echo "docs-only change; nothing to build"
+  wasm:
+    name: build wasm32 (playground)
+    runs-on: ubuntu-latest
+    steps:
+      - name: No-op (PR solo-docs — nada que compilar)
+        run: echo "docs-only change; nothing to build"

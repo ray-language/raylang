@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El repo queda listo para contribuidores** (M162, §82.3): `CONTRIBUTING.md` (quick start,
+  tests dirigidos, flujo SPEC-first, la política bilingüe y la byte-identidad de los 3
+  motores, todo en inglés), `CODE_OF_CONDUCT.md` (Covenant 2.1), `CODEOWNERS`, plantillas de
+  issues (el bug report pide el programa mínimo y los 3 motores) y de PR en inglés;
+  protección de `main` (PR + CI verde requeridos, con bypass de admin) y el workflow gemelo
+  no-op para que los PRs solo-docs no queden colgados por los checks requeridos.
+
 - **Sprites en el terminal** (M161, §83 — pedido del juego 1942): `std/term` habla el
   **protocolo kitty graphics** (kitty, Ghostty, WezTerm): `draw_image`/`draw_png` dibujan una
   imagen en una celda, `transmit_image` + `place_image` es el patrón de juego (subir el

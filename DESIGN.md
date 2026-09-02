@@ -11135,3 +11135,29 @@ para animación/z-index y el patrón parse_device_attributes. Verificado: bater�
 validaciones en 3 motores, bytes exactos del cable por pipe (congela el orden de claves), el
 pty de M143c ejercita la sonda contra un pty mudo (no cuelga), y examples/term/sprite.ray
 como smoke manual (gradiente procedural, sin assets binarios).
+
+## 155. M162 — el paquete de contribuidores (sep 2026)
+
+El §82.3 ejecutado: el repo es público y main estaba desprotegida — cuando llegue el primer
+PR externo, las reglas deben estar escritas y aplicadas, no en la cabeza del mantenedor.
+Piezas: CONTRIBUTING.md MIGRADO a inglés y ampliado (existía en español; decisión del
+usuario — repo público, contribuidores potenciales internacionales; se conserva todo su
+contenido contractual — flujo, principios, admisión de módulos, publicación de paquetes — y
+el documento EXPLICA la política bilingüe en vez de asumirla:
+identificadores/mensajes EN, comentarios y commits ES, y que naming/fmt/module_policy la
+vigilan por CI), con el quick start real (make ci, tests dirigidos como inner loop), el flujo
+SPEC-first, el mapa de docs-contrato y la byte-identidad de los 3 motores como invariante;
+CODE_OF_CONDUCT (Contributor Covenant 2.1, contacto dev@rayala.org); CODEOWNERS
+(@roberto-ayala); plantillas de issues nuevas (el bug report pregunta por los 3 motores — la
+divergencia es siempre bug y del tipo más prioritario) y las de PR migradas a inglés.
+PROTECCIÓN DE MAIN con bypass de admin: PR obligatorio + checks requeridos (los dos jobs de
+ci.yml por nombre), 0 aprobaciones y enforce_admins=off — la disciplina de PR ya es el flujo
+real del proyecto, pero exigir 1 aprobación bloquearía al mantenedor solo (no puede
+aprobarse a sí mismo) y el atajo docs-directo-a-main (memoria del flujo: solo-docs sin PR)
+debe sobrevivir; se endurece (1 aprobación + enforce_admins) cuando exista un segundo par de
+ojos. Y la deuda anotada en §82.2 pagada: checks requeridos + paths-ignore dejarían un PR
+solo-docs "pendiente" para siempre → workflow GEMELO NO-OP (ci-docs.yml, mismos nombres de
+jobs, dispara exactamente en los paths que ci.yml ignora — el patrón documentado de GitHub).
+Verificación en dos tiempos: el propio PR del arco (toca .md y .github/**) demuestra los
+checks del gemelo con los nombres correctos ANTES de activar la protección; la protección se
+aplica tras el merge y se confirma con la API.

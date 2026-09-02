@@ -88,3 +88,18 @@ jobs:
           echo "subiendo $asset"
           gh release upload "${{ github.ref_name }}" "$asset" \
             --repo "${{ github.repository }}" --clobber
+      # M165: el instalador de Windows se prueba contra el zip RECIÉN subido — una release no puede
+      # publicar un instalador roto (el bug que el `install.sh` de unix nunca tuvo: sí se probaba).
+      - name: Humo del instalador (install.ps1 contra este tag)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          RAYLANG_VERSION: ${{ github.ref_name }}
+          RAYLANG_BIN_DIR: ${{ runner.temp }}\raylang-bin
+        run: |
+          ./install.ps1
+          $installed = Join-Path $env:RAYLANG_BIN_DIR "ray.exe"
+          $v = & $installed version
+          if ($LASTEXITCODE -ne 0) { throw "el ray.exe instalado no arranca" }
+          $want = $env:RAYLANG_VERSION.TrimStart("v")
+          if ("$v" -notmatch [regex]::Escape($want)) { throw "instaló '$v', se esperaba $want" }

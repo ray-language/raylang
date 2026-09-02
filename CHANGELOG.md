@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **raylang se instala en Windows** (M165): `install.ps1` (`irm …/install.ps1 | iex`) descarga el
+  zip de la release, deja `ray.exe` en `%LOCALAPPDATA%\Programs\raylang\bin` y lo añade al PATH de
+  usuario sin administrador; `install.sh` bajo Git Bash delega en él. `ray upgrade` funciona en
+  Windows (zip vía el `tar` del sistema; el `.exe` en ejecución se aparta a `.old`). CI gana un job
+  `windows-latest` que construye, corre la VM y ejecuta el instalador real contra la última release,
+  y `release.yml` prueba el instalador contra el zip recién subido. `PRODUCTION.md` documenta qué
+  funciona y qué no en Windows.
+
 ## 1.5.0 — 2026-09-02
 
 - **`image.encode_png`** (M164, pedido del juego 1942): el camino inverso de `decode_png` —

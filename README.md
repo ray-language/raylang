@@ -93,8 +93,18 @@ fn main() -> int {
 curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
 ```
 
-Instala los binarios `ray` (y su alias `raylang`) en `~/.local/bin`. En **Windows**, descarga el `.zip` de
-la [última release](https://github.com/ray-language/raylang/releases).
+Instala los binarios `ray` (y su alias `raylang`) en `~/.local/bin`.
+
+### PowerShell (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/ray-language/raylang/main/install.ps1 | iex
+```
+
+Deja `ray.exe` (y `raylang.exe`) en `%LOCALAPPDATA%\Programs\raylang\bin` y lo añade al PATH de
+usuario (sin administrador; abre una terminal nueva). Mismas variables que el `.sh`
+(`RAYLANG_VERSION`, `RAYLANG_BIN_DIR`, …). Solo x86_64: Windows ARM lo ejecuta por emulación.
+Qué funciona y qué no en Windows: [`PRODUCTION.md`](PRODUCTION.md#windows).
 
 Para actualizar a la última versión (o consultar si hay una nueva):
 

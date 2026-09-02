@@ -317,15 +317,19 @@ section.engines { padding: 2.5rem 0 4rem; }
         <div class="panel">
         <h2 class="sec">Instálalo <span class="grad">en un minuto</span></h2>
         <p class="lead">Un solo binario, sin dependencias: el instalador detecta tu plataforma
-        (macOS y Linux, arm64 y x86_64), descarga la release firmada y deja <code>ray</code> en
-        <code>~/.local/bin</code>. En Windows, descarga el binario de la
-        <a href="https://github.com/ray-language/raylang/releases/latest">última release</a>.</p>
+        (macOS y Linux, arm64 y x86_64; Windows x86_64), descarga la release y deja
+        <code>ray</code> en <code>~/.local/bin</code> — o en
+        <code>%LOCALAPPDATA%\Programs\raylang\bin</code> desde PowerShell, ya en tu PATH.</p>
         <div class="steps">
             <div class="step">
                 <span class="stepn">1</span>
                 <div>
                     <h3>Instala la toolchain</h3>
                     <div class="cmd"><span class="pr">$</span><code>curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+                    </button></div>
+                    <p class="hint">macOS y Linux. En Windows, desde PowerShell:</p>
+                    <div class="cmd"><span class="pr">&gt;</span><code>irm https://raw.githubusercontent.com/ray-language/raylang/main/install.ps1 | iex</code><button class="copy" type="button" aria-label="Copiar el comando" title="Copiar">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
                     </button></div>
                     <p class="hint">Verifícalo con <code>ray version</code> — un binario, todo incluido: compilador, VM, LSP, formateador y gestor de paquetes.</p>

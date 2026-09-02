@@ -3280,6 +3280,26 @@ paleta 256), iTerm2 inline images (OSC 1337, nicho mac), animación/z-index de k
 superficie propia (hoy: vía `kitty_chunks` a mano), passthrough tmux. Impacto restante: BAJO
 (el nicho sixel).
 
+## 84. raylang en Windows de verdad (sep 2026) — instalación ✅ HECHA (M165, DESIGN §158); runtime PENDIENTE
+
+Antes de anunciar el lenguaje: la release publicaba `raylang-x86_64-pc-windows-msvc.zip`, pero
+`install.sh` abortaba en Git Bash, `ray upgrade` decía "not supported", el sitio decía "descarga
+el zip" y ningún job de CI probaba el binario de Windows. **Hecho en M165**: `install.ps1`,
+`install.sh` delegando, `ray upgrade` con zip + apartado del `.exe`, job `windows-latest` en CI y
+humo del instalador en `release.yml`; tabla de estado en PRODUCTION.md §Windows.
+
+**Pendiente, por orden de valor** (impacto: MEDIO — plataforma, no lenguaje):
+
+1. Distribución nativa: bucket propio de Scoop (`ray-language/scoop-bucket`, cero aprobaciones,
+   actualizable desde `release.yml`); winget cuando lo pidan usuarios (PR a `microsoft/winget-pkgs`
+   por versión).
+2. Build `aarch64-pc-windows-msvc` en la matriz de release (cruzada desde el runner x86_64; probar
+   mimalloc/ring en arm64-msvc). Hoy Windows ARM ejecuta la x86_64 por emulación.
+3. Los huecos del runtime: `std/process` (CreateProcess + pipes; el diseño de §53 asume fork/exec),
+   `std/term` crudo (Console API / VT), `signals()` (SetConsoleCtrlHandler), `fs.chmod` (sin
+   equivalente: documentar). Cada uno es un arco propio; ninguno bloquea a un usuario de servidor.
+4. El poller: IOCP o `wepoll` para el p99 bajo carga; hoy fallback honesto.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

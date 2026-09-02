@@ -43,6 +43,7 @@ fn generates_the_site_and_both_engines_match() {
     let landing = std::fs::read_to_string(vm.join("index.html")).unwrap();
     assert!(landing.contains("producción real"), "hero\n{landing}");
     assert!(landing.contains("install.sh | sh"), "snippet de instalación\n{landing}");
+    assert!(landing.contains("install.ps1 | iex"), "snippet de instalación en Windows (M165)\n{landing}");
     // Instalación explícita: pasos numerados con botón de copiar (el $ queda fuera del <code>).
     assert!(landing.contains("Instala la toolchain"), "paso 1\n{landing}");
     assert!(landing.contains("ray new hola"), "paso 2\n{landing}");

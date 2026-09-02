@@ -45,6 +45,13 @@ Instala el binario (`ray`, con su alias `raylang`):
 curl -sSfL https://raw.githubusercontent.com/ray-language/raylang/main/install.sh | sh
 ```
 
+En Windows, desde PowerShell (deja `ray.exe` en `%LOCALAPPDATA%\Programs\raylang\bin` y lo añade
+a tu PATH de usuario; `ray upgrade` funciona igual que en unix):
+
+```powershell
+irm https://raw.githubusercontent.com/ray-language/raylang/main/install.ps1 | iex
+```
+
 Para actualizarlo después basta `ray upgrade` (descarga la última release y reemplaza los
 binarios instalados; `--check` solo informa, `ray upgrade v1.2.0` fija un tag concreto).
 

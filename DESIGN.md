@@ -11216,3 +11216,43 @@ y, además del round-trip interno, el PNG emitido lo valida un decodificador EXT
 lo parsea con el `zlib` de Python (firma, CRC de cada chunk, IHDR, scanlines tras inflar). Un
 codificador que solo se prueba contra su propio decodificador puede compartir un error con
 él; el oráculo ajeno cierra esa puerta.
+
+## 158. M165 — raylang se instala en Windows (sep 2026)
+
+Salió al preparar el anuncio del lenguaje: la release llevaba meses publicando el zip de Windows
+(`raylang-x86_64-pc-windows-msvc.zip`, `ray.exe` + `raylang.exe`), pero nadie podía llegar a él
+por el camino de un minuto — `install.sh` abortaba bajo Git Bash con "descarga el zip a mano",
+`ray upgrade` respondía "not supported", el sitio y el README decían lo mismo, y `ci.yml` no tenía
+un solo job en Windows: el binario que se publicaba no lo probaba nadie. IDEAS §84.
+
+**Decisiones.**
+
+- **`install.ps1`, gemelo de `install.sh`**, PowerShell 5.1+ sin dependencias: mismas variables
+  (`RAYLANG_VERSION/BIN_DIR/REPO/DRY_RUN`), destino `%LOCALAPPDATA%\Programs\raylang\bin` (el
+  convenio de instaladores por-usuario, sin administrador), PATH de usuario vía HKCU. Dos detalles
+  de plataforma que un port ingenuo se salta: `Unblock-File` sobre el zip descargado (si no, los
+  `.exe` extraídos heredan la marca de origen web y SmartScreen avisa en el primer arranque) y el
+  reemplazo de un `.exe` en ejecución **por renombrado a `.old`** (Windows no deja sobrescribirlo,
+  pero sí moverlo). Y `throw` en vez de `exit`: bajo `irm | iex` un `exit` cerraría la sesión del
+  usuario. `install.sh` bajo MSYS/Git Bash **delega** en el `.ps1` si encuentra PowerShell
+  (hereda las variables) en vez de duplicar la lógica en shell.
+- **`ray upgrade` en Windows** reutiliza las mismas dependencias de entorno que en unix: `curl` y
+  `tar` vienen en Windows 10+ (bsdtar abre zip con `-xf`). Nombres con `EXE_SUFFIX`, `NUL` como
+  dispositivo nulo, y el mismo apartado a `.old` para el binario vivo; los `.old` se limpian al
+  final y, si siguen en uso, en el siguiente upgrade.
+- **La prueba es el instalador real, no un mock**: el job `windows-latest` de `ci.yml` construye
+  `ray.exe`, corre la VM (fib + fmt) y los tests del front-end/VM que no dependen de unix, y
+  después ejecuta `install.ps1` contra la ÚLTIMA release publicada (v1.5.0 ya tiene el zip) y
+  `ray upgrade --check` con el binario instalado. `release.yml`, tras subir el zip, lo instala con
+  el tag recién creado y comprueba que `ray version` reporte ese tag: una release no puede
+  publicar un instalador roto — la garantía que el `.sh` de unix tenía desde M44c y el `.ps1` no.
+  El primer run del job pagó su precio: el oráculo FFI (`extern "c" strlen`, `extern "m" sqrt`)
+  fallaba en Windows con "symbol not found" — el fallback al handle del PROPIO proceso, que en
+  unix expone libc/libm, en Windows no expone la CRT (va enlazada estáticamente). Arreglo en el
+  runtime, no en el test: `"c"`/`"m"` se mapean a `ucrtbase.dll`/`msvcrt.dll`.
+- **Honestidad sobre el runtime**: instalar bien hace visible lo que falta. PRODUCTION.md gana
+  una sección Windows con la tabla de lo que funciona (toolchain, VM, nativo, red, fs, web) y los
+  huecos con `Err` de plataforma (`process`, `term` crudo, `signals`, `chmod`, poller en fallback,
+  sin `ui`/`audio`/`bundle`, sin build arm64). Lo pendiente queda clasificado en IDEAS §84: Scoop
+  primero (bucket propio, cero aprobaciones), winget a demanda, arm64-msvc, y los huecos del
+  runtime como arcos propios.

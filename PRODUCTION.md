@@ -87,8 +87,30 @@ Ser honesto sobre el borde es parte del contrato:
 - **El FFI es la frontera insegura**, por definición y por diseño.
 - **Los paquetes (`net`, `db`, `web`, `rpc`…) versionan aparte** de la SPEC: su superficie puede
   moverse más rápido que la del lenguaje.
-- **Windows va por detrás de macOS/Linux**: el poller cae a un fallback honesto y `std/process` es
-  unix.
+- **Windows va por detrás de macOS/Linux** (ver [Windows](#windows) abajo).
+
+### Windows
+
+Desde M165 el camino de instalación es de primera: `install.ps1` (`irm … | iex`), `ray upgrade`
+con el zip de la release, y un job de CI en `windows-latest` que construye el binario, corre la
+VM y ejecuta el instalador REAL contra la última release; `release.yml` prueba el instalador
+contra el zip recién subido. Lo que funciona: la toolchain entera (`ray new/run/build/test/fmt/doc/
+lsp/repl/mcp`), la VM y el binario nativo, la red (sockets, TLS, HTTP/1.1 y 2, WebSocket, DNS,
+clientes de BD), `std/fs`, `std/json`/`toml`/`regex`/`crypto`, el framework web y `ray dev`
+(reinicio sin drenado SIGTERM: en Windows mata y relanza). Los huecos, todos con `Err` honesto de
+plataforma en vez de fallo silencioso:
+
+| Superficie | Estado en Windows |
+|---|---|
+| `std/process` | no soportado (`fork`/`exec` unix); `Err` al lanzar |
+| `std/term` modo crudo / `read_key` / `read_hidden` | no soportado (termios); ancho de celdas y colores sí |
+| `signals()` | no soportado (self-pipe + sigaction) |
+| `fs.chmod` | no soportado (permisos POSIX) |
+| FFI a `"c"`/`"m"` | resuelve a `ucrtbase.dll`/`msvcrt.dll` (M165); librerías propias por nombre `.dll` |
+| Poller de red | fallback sin kqueue/epoll (funciona; peor p99 bajo carga) |
+| Fibras en el binario nativo | `--without fibers` automático (hilo por tarea; el reactor es kqueue/epoll) |
+| `std/ui`, `std/audio`, `ray bundle` | no soportados (arco de escritorio = macOS/Linux; móvil = iOS/Android) |
+| Build arm64 | no publicada (Windows ARM ejecuta la x86_64 por emulación) |
 
 ---
 

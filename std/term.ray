@@ -10,6 +10,9 @@
 // de una secuencia (`ESC [ A` llega junta; un humano no teclea el `[` en 25 ms).
 
 import std/io;
+import std/image;
+import std/base64;
+import std/collections/stringbuilder as sb;
 
 // Una tecla decodificada. `Ctrl('a')` es Ctrl+A (bytes 1..=26); `F(5)` es la tecla F5.
 /// A decoded key. `Ctrl('a')` is Ctrl+A (bytes 1..=26); `F(5)` is the F5 function key.
@@ -93,23 +96,28 @@ pub struct Capabilities {
     kitty_graphics: bool,
 }
 
-/// Detects the terminal's capabilities. The DA1 query (for sixel) only runs when both stdin
-/// and stdout are a terminal, inside raw mode, waiting at most ~150 ms for the reply; the rest
-/// comes from the environment (truecolor via `COLORTERM`, 256 colors via `TERM`, kitty graphics
-/// via `TERM`/`KITTY_WINDOW_ID` — a heuristic: kitty answers its own APC query, deferred).
+/// Detects the terminal's capabilities. With both stdin and stdout on a terminal it asks the
+/// terminal itself, inside raw mode with a ~150 ms budget: a DA1 query (for sixel) and a kitty
+/// graphics APC query (M161 — a real probe, so a terminal behind tmux correctly reports
+/// `false`: the multiplexer swallows APC and you could not draw there anyway). Without a
+/// terminal the graphics answer falls back to the environment heuristic
+/// (`TERM`/`KITTY_WINDOW_ID`); truecolor/256 always come from `COLORTERM`/`TERM`. Every field
+/// defaults to `false` when undetectable — degrade rendering, never guess up.
 pub fn capabilities() -> Capabilities {
     let colorterm = env_text("COLORTERM");
     let name = env_text("TERM");
     let truecolor = colorterm.contains("truecolor") || colorterm.contains("24bit");
     let has_256 = truecolor || name.contains("256color") || name == "xterm-kitty";
-    let kitty = name == "xterm-kitty" || env_text("KITTY_WINDOW_ID") != "";
+    var kitty = name == "xterm-kitty" || env_text("KITTY_WINDOW_ID") != "";
     var sixel = false;
     if (is_tty(0) && is_tty(1)) {
-        for a in query_device_attributes() {
+        let resp = query_terminal();
+        for a in parse_device_attributes(resp) {
             if (a == 4) {
                 sixel = true;
             }
         }
+        kitty = parse_graphics_reply(resp);
     }
     Capabilities { truecolor: truecolor, colors_256: has_256, sixel: sixel, kitty_graphics: kitty }
 }
@@ -162,11 +170,37 @@ pub fn parse_device_attributes(resp: bytes) -> [int] {
     return [];
 }
 
-// Emite DA1 y acumula la respuesta cruda hasta la 'c' final (o plazo sin datos). En raw: la
-// respuesta llega por stdin como bytes, no como teclas.
-fn query_device_attributes() -> [int] {
+/// Parses a terminal reply to the kitty graphics probe: `true` when it contains an APC
+/// graphics response whose payload starts with `OK` (`ESC _ G … ; O K`). Pure and tolerant —
+/// an error reply, a lone DA1 answer or garbage yields `false`.
+pub fn parse_graphics_reply(resp: bytes) -> bool {
+    // Busca "ESC _ G"; desde ahi, el ';' que abre el payload y comprueba que empieza por "OK".
+    var i = 0;
+    while (i + 2 < resp.len()) {
+        if (resp[i] == 27 && resp[i + 1] == 95 && resp[i + 2] == 71) {
+            var j = i + 3;
+            while (j < resp.len() && resp[j] != 59 && resp[j] != 27) {
+                j = j + 1;
+            }
+            if (j + 2 < resp.len() && resp[j] == 59 && resp[j + 1] == 79 && resp[j + 2] == 75) {
+                return true;
+            }
+        }
+        i = i + 1;
+    }
+    // `return` a proposito: un tail tras un while parsea como indexacion del bloque.
+    return false;
+}
+
+// Emite la query de graficos kitty (APC a=q — M161) seguida de DA1, y acumula la respuesta
+// cruda hasta la 'c' final de la DA1 (o plazo sin datos): UNA sola sesion raw y un solo
+// roundtrip de ~150 ms para ambas capacidades. DA1 va DESPUES como centinela: todo terminal
+// la responde, hable o no kitty. En raw: la respuesta llega por stdin como bytes, no teclas.
+fn query_terminal() -> bytes {
     let got = raw(fn() -> bytes {
-        io.write("\u{1B}[c");
+        // i=31: un id de sonda cualquiera; f=24 RGB 1x1 = 3 octetos = "AAAA". SIN q=: la
+        // respuesta ";OK" es justo lo que se espera.
+        io.write("\u{1B}_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\u{1B}\\\u{1B}[c");
         io.flush();
         var acc = b"";
         var done = false;
@@ -174,12 +208,8 @@ fn query_device_attributes() -> [int] {
             match (io.read_timeout(64, 150)) {
                 io.ReadResult.Data(more) => {
                     acc = acc + more;
-                    var j = 0;
-                    while (j < more.len()) {
-                        if (more[j] == 99) {
-                            done = true;
-                        }
-                        j = j + 1;
+                    if (has_da1_terminator(acc)) {
+                        done = true;
                     }
                 },
                 io.ReadResult.Eof => {
@@ -193,9 +223,27 @@ fn query_device_attributes() -> [int] {
         acc
     });
     match (got) {
-        Result.Ok(resp) => parse_device_attributes(resp),
-        Result.Err(_) => [],
+        Result.Ok(resp) => resp,
+        Result.Err(_) => b"",
     }
+}
+
+// El corte del acumulador: una 'c' vista DESPUES de un "ESC [" (la respuesta APC de kitty
+// puede llevar una 'c' en texto libre — p. ej. un mensaje de error — y cortaria antes).
+fn has_da1_terminator(resp: bytes) -> bool {
+    var in_csi = false;
+    var i = 0;
+    while (i < resp.len()) {
+        if (in_csi && resp[i] == 99) {
+            return true;
+        }
+        if (i + 1 < resp.len() && resp[i] == 27 && resp[i + 1] == 91) {
+            in_csi = true;
+        }
+        i = i + 1;
+    }
+    // `return` a proposito: un tail tras un while parsea como indexacion del bloque.
+    return false;
 }
 
 // El env como texto plano ("" si no esta): las pistas se comparan por contains.
@@ -218,6 +266,156 @@ pub fn raw<T>(f: fn() -> T) -> Result<T, string> {
     let r = try_call(f);
     let _ = __term_raw_off();
     r
+}
+
+// ---------------------------------------------------------------------------------------------
+// Gráficos kitty (M161, IDEAS §83)
+// ---------------------------------------------------------------------------------------------
+// El protocolo moderno de imagenes en terminal (kitty/Ghostty/WezTerm): comandos APC
+// `ESC _ G control;payload ESC \` con el payload en base64. Todo raylang puro sobre io.write —
+// cero builtins. El patron de juego: `transmit_image` UNA vez por sprite, `place_image` por
+// frame (~30 octetos). q=2 en todo comando de dibujo (el terminal no responde: stdin limpio
+// dentro de raw) y C=1 (el cursor no se mueve al colocar). Contrato del llamador: consultar
+// `capabilities().kitty_graphics` antes de dibujar — se emite igual sin tty (captura/replay).
+
+/// Encodes ONE kitty graphics command as APC escapes: `ESC _ G control;base64 ESC \`. A
+/// payload over 3072 bytes (4096 base64 chars, the protocol's chunk limit) is split: the
+/// first chunk carries the full control data plus `m=1`, continuation chunks carry only `m=`,
+/// and the last one `m=0`. An empty payload emits a single control-only APC. Pure — the
+/// building block under `transmit_image`/`draw_image`; use it directly for kitty features the
+/// surface does not cover (animation, z-index).
+pub fn kitty_chunks(control: string, payload: bytes) -> string {
+    if (payload.len() == 0) {
+        return "\u{1B}_G" + control + "\u{1B}\\";
+    }
+    if (payload.len() <= 3072) {
+        return "\u{1B}_G" + control + ";" + base64.base64(payload) + "\u{1B}\\";
+    }
+    // Troceo por OCTETOS a 3072 (multiplo de 3): cada trozo codifica sin relleno y la
+    // concatenacion es el base64 exacto del total — y O(n), sin recortar un string gigante.
+    let out = sb.new();
+    var i = 0;
+    var first = true;
+    while (i < payload.len()) {
+        let j = if (i + 3072 < payload.len()) { i + 3072 } else { payload.len() };
+        let m = if (j < payload.len()) { "1" } else { "0" };
+        let head = if (first) { control + ",m=" + m } else { "m=" + m };
+        sb.push(out, "\u{1B}_G" + head + ";" + base64.base64(payload.sub_bytes(i, j)) + "\u{1B}\\");
+        first = false;
+        i = j;
+    }
+    sb.build(out)
+}
+
+// CUP 1-based (fila;columna) — con DECSC/DECRC en los llamadores (CSI s/u colisiona con
+// DECSLRM cuando hay margenes activos).
+fn cursor_to(col: int, row: int) -> string {
+    "\u{1B}[" + to_string(row) + ";" + to_string(col) + "H"
+}
+
+// UN write + UN flush por comando (sin interleaving posible; el flush drena el hilo escritor
+// del binario nativo, M96f).
+fn emit(s: string) -> Result<int, string> {
+    match (io.write(s)) {
+        Result.Ok(n) => {
+            match (io.flush()) {
+                Result.Ok(_) => Result.Ok(n),
+                Result.Err(e) => Result.Err(e),
+            }
+        },
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// Validacion comun de las funciones con imagen: id positivo (i=0 es "autoasigna" en kitty y
+// no podrias borrarla) y pixeles RGBA8 completos.
+fn check_image(id: int, img: image.Image) -> Option<string> {
+    if (id <= 0) {
+        return Option.Some("image id must be positive");
+    }
+    if (img.pixels.len() != img.width * img.height * 4) {
+        return Option.Some("pixel buffer does not match width*height*4");
+    }
+    Option.None
+}
+
+/// Transmits `img` (RGBA8, from `image.decode_png` or built by hand) to the terminal as kitty
+/// image `id` WITHOUT showing it — pair with `place_image` (transmit once, place per frame).
+/// The terminal keeps the pixels under `id` until deleted. `Ok(characters written)`; `Err` on
+/// `id <= 0` or a pixel buffer that does not match `width*height*4`. Emits even without a
+/// terminal (capture/replay pipes) — check `capabilities().kitty_graphics` first.
+pub fn transmit_image(id: int, img: image.Image) -> Result<int, string> {
+    match (check_image(id, img)) {
+        Option.Some(e) => Result.Err(e),
+        Option.None => {
+            let control = "a=t,i=" + to_string(
+                id
+            ) + ",t=d,f=32,s=" + to_string(img.width) + ",v=" + to_string(img.height) + ",q=2";
+            emit(kitty_chunks(control, img.pixels))
+        },
+    }
+}
+
+/// Shows the already-transmitted image `id` at cell `(col, row)` (both 1-based, like the
+/// cursor). `cols`/`rows` scale the image to that many cells (`0` = natural size, no
+/// scaling). ~30 bytes on the wire — this is the per-frame half of the transmit/place pair.
+/// The cursor does not move. `Err` on `id <= 0`.
+pub fn place_image(id: int, col: int, row: int, cols: int, rows: int) -> Result<int, string> {
+    if (id <= 0) {
+        return Result.Err("image id must be positive");
+    }
+    var control = "a=p,i=" + to_string(id);
+    if (cols > 0) {
+        control = control + ",c=" + to_string(cols);
+    }
+    if (rows > 0) {
+        control = control + ",r=" + to_string(rows);
+    }
+    control = control + ",C=1,q=2";
+    emit("\u{1B}7" + cursor_to(col, row) + kitty_chunks(control, b"") + "\u{1B}8")
+}
+
+/// Transmits AND shows `img` at cell `(col, row)` (1-based) at natural size, as kitty image
+/// `id` — the one-shot convenience. For animation prefer `transmit_image` once +
+/// `place_image` per frame; for scaling, that same pair. The cursor does not move.
+pub fn draw_image(id: int, col: int, row: int, img: image.Image) -> Result<int, string> {
+    match (check_image(id, img)) {
+        Option.Some(e) => Result.Err(e),
+        Option.None => {
+            let control = "a=T,i=" + to_string(
+                id
+            ) + ",t=d,f=32,s=" + to_string(img.width) + ",v=" + to_string(img.height) + ",C=1,q=2";
+            emit("\u{1B}7" + cursor_to(col, row) + kitty_chunks(control, img.pixels) + "\u{1B}8")
+        },
+    }
+}
+
+/// Transmits AND shows a PNG at cell `(col, row)` (1-based) as kitty image `id` — the
+/// terminal decodes it (`f=100`), so the bytes travel compressed: the right call for static
+/// assets read from disk or `std/embed`. Validates only the 8-byte PNG signature.
+pub fn draw_png(id: int, col: int, row: int, data: bytes) -> Result<int, string> {
+    if (id <= 0) {
+        return Result.Err("image id must be positive");
+    }
+    if (data.len() < 8 || data.sub_bytes(0, 8) != b"\x89PNG\r\n\x1a\n") {
+        return Result.Err("not a PNG (bad signature)");
+    }
+    let control = "a=T,i=" + to_string(id) + ",t=d,f=100,C=1,q=2";
+    emit("\u{1B}7" + cursor_to(col, row) + kitty_chunks(control, data) + "\u{1B}8")
+}
+
+/// Removes every placement of image `id` from the screen. The terminal KEEPS the transmitted
+/// pixels: `place_image(id, …)` shows it again without retransmitting. `Err` on `id <= 0`.
+pub fn clear_image(id: int) -> Result<int, string> {
+    if (id <= 0) {
+        return Result.Err("image id must be positive");
+    }
+    emit(kitty_chunks("a=d,d=i,i=" + to_string(id) + ",q=2", b""))
+}
+
+/// Removes every image placement from the screen (transmitted pixel data is kept).
+pub fn clear_images() -> Result<int, string> {
+    emit(kitty_chunks("a=d,d=a,q=2", b""))
 }
 
 // ---------------------------------------------------------------------------------------------

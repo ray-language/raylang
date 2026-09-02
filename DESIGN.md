@@ -11105,3 +11105,33 @@ proyecto entero en cada regeneración, así que el bundle PRESERVA `keystore.pro
 jamás destruye el keystore del usuario. Verificado T2 entero: bundle con icono (mipmaps +
 manifest), assembleDebug, keytool + properties, assembleRelease firmado (apksigner
 `CN=test`), regeneración con md5 idénticos.
+
+## 154. M161 — gráficos kitty en std/term: sprites reales en el terminal (sep 2026)
+
+El §83 de IDEAS (pedido del juego 1942), decidido por el usuario a kitty-solo (sixel/iTerm2
+diferidos: el protocolo kitty es el moderno — PNG/RGBA, ids, borrado — y lo hablan
+kitty/Ghostty/WezTerm). La sorpresa de la exploración: CERO builtins — todo raylang puro en
+std/term.ray sobre piezas que ya existían (io.write/flush, std/base64, bytes, cell_px de
+M143, Image RGBA8 de M144 que es exactamente el f=32 de kitty). Decisiones: (1) los IDS los
+pasa el llamador (id > 0; i=0 es "autoasigna" y no podrías borrarla) — raylang no tiene
+estado mutable de módulo (solo const literal) y un juego necesita ids estables de todos
+modos; (2) TRANSMITIR y COLOCAR separados (transmit_image/place_image) — el patrón de juego
+es subir el sprite una vez y colocarlo por frame (~30 octetos), y el sentinela cols/rows=0
+(tamaño natural) elimina la variante _scaled (sin parámetros opcionales en el lenguaje);
+draw_image/draw_png son las conveniencias a=T (el PNG con f=100: el terminal decodifica, los
+bytes viajan comprimidos); (3) q=2 en todo comando (el terminal calla: stdin limpio dentro de
+raw) y C=1 + DECSC/DECRC (CSI s/u colisiona con DECSLRM); (4) EMITIR sin tty — el llamador ya
+consultó capabilities, un pipe puede ser captura/replay, y es lo que permite el test de bytes
+exactos; (5) el troceo va por OCTETOS a 3072 (múltiplo de 3): cada chunk codifica base64 sin
+relleno y la concatenación es el base64 exacto del total — O(n), sin recortar un string
+gigante (substring es O(i)). Y el arco salda una deuda: la detección kitty_graphics de M143b
+era heurística de env (el doc decía "APC query deferred", e IDEAS §83 afirmaba lo contrario)
+— ahora capabilities() lanza la SONDA APC real (a=q + DA1 centinela, misma sesión raw, un
+roundtrip de 150 ms) cuando hay tty, con corte endurecido ('c' solo tras ESC[ — la respuesta
+APC puede llevar una 'c' en texto libre); bajo tmux la sonda da false, que es lo correcto (el
+multiplexor se traga los APC y no podrías dibujar). Sin tty la heurística se queda (pipes,
+tests deterministas). kitty_chunks y parse_graphics_reply son públicos y puros — la escotilla
+para animación/z-index y el patrón parse_device_attributes. Verificado: batería pura +
+validaciones en 3 motores, bytes exactos del cable por pipe (congela el orden de claves), el
+pty de M143c ejercita la sonda contra un pty mudo (no cuelga), y examples/term/sprite.ray
+como smoke manual (gradiente procedural, sin assets binarios).

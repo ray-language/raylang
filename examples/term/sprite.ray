@@ -1,0 +1,70 @@
+// Demo de gráficos kitty (M161): un sprite RGBA dibujado EN el terminal. Corre en una
+// terminal que hable el protocolo (kitty, Ghostty, WezTerm):
+//
+//   ray run examples/term/sprite.ray      (una tecla avanza; 'q' sale)
+//
+// Enseña el patrón completo: capabilities() primero (degradar, no adivinar), draw_image de un
+// gradiente procedural, transmit una vez + place escalado (la mitad por-frame de un juego), y
+// clear_images() al salir. En CI/pipes no hay tty: el programa lo detecta y sale limpio.
+
+import std/io;
+import std/term;
+import std/image;
+
+// Un gradiente 32x32 RGBA generado a mano (sin assets binarios): rojo por columna, verde por
+// fila, la esquina un rombo azul.
+fn gradient() -> image.Image {
+    var px: [int] = [];
+    var y = 0;
+    while (y < 32) {
+        var x = 0;
+        while (x < 32) {
+            let dx = if (x < 16) { 16 - x } else { x - 16 };
+            let dy = if (y < 16) { 16 - y } else { y - 16 };
+            let blue = if (dx + dy < 10) { 255 } else { 40 };
+            px.push(x * 8);
+            px.push(y * 8);
+            px.push(blue);
+            px.push(255);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    image.Image { width: 32, height: 32, pixels: bytes_of(px) }
+}
+
+fn wait_key() {
+    let _ = term.raw(fn() -> int {
+        let _ = term.read_key();
+        0
+    });
+}
+
+fn main() -> int {
+    if (!term.is_tty(0) || !term.is_tty(1)) {
+        print("needs a real terminal (stdin/stdout are not a tty)");
+        return 0;
+    }
+    let caps = term.capabilities();
+    if (!caps.kitty_graphics) {
+        print(
+            "this terminal does not speak the kitty graphics protocol (try kitty/Ghostty/WezTerm)"
+        );
+        return 0;
+    }
+    let img = gradient();
+    print("kitty graphics detected — drawing a 32x32 sprite (any key to continue)...");
+    let _ = term.draw_image(1, 4, 3, img);
+    wait_key();
+    // Transmitir una vez + colocar escalado: la mitad barata (~30 octetos) de cada frame.
+    let _ = term.transmit_image(2, img);
+    let _ = term.place_image(2, 20, 3, 16, 8);
+    print("");
+    print(
+        "the same sprite, transmitted once and placed scaled to 16x8 cells (any key to clear)..."
+    );
+    wait_key();
+    let _ = term.clear_images();
+    print("cleared. bye!");
+    0
+}

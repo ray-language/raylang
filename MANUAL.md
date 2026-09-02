@@ -1040,11 +1040,14 @@ un tty (es cálculo puro), así que sirve también para medir texto que no vas a
 **Terminal gráfico** (M143): para dibujar imágenes (sixel/kitty) hace falta saber cuánto mide una
 celda y qué soporta el terminal. `term.size_px()` da el área en píxeles (`None` si el terminal no
 la reporta — muchos dejan los campos en 0) y `term.cell_px()` el tamaño de una celda (área ÷
-rejilla). `term.capabilities()` devuelve `{ truecolor, colors_256, sixel, kitty_graphics }`
-combinando el entorno (`COLORTERM`, `TERM`, `KITTY_WINDOW_ID`) con una query DA1 que responde el
-propio terminal (solo con stdin y stdout en tty; plazo ~150 ms). Todo lo indetectable es `false`:
-elige el peldaño más alto disponible y degrada sin adivinar. El parser de la respuesta
-(`parse_device_attributes`) es puro, por si hablas con el terminal por tu cuenta.
+rejilla). `term.capabilities()` devuelve `{ truecolor, colors_256, sixel, kitty_graphics }`:
+con stdin y stdout en tty pregunta al PROPIO terminal (una query DA1 para sixel y la sonda APC
+de gráficos kitty — M161 — en la misma sesión raw, plazo ~150 ms; bajo tmux la sonda responde
+`false`, que es lo correcto: el multiplexor se traga los APC y no podrías dibujar); sin tty,
+`kitty_graphics` cae a la pista de entorno (`TERM`/`KITTY_WINDOW_ID`) y truecolor/256 siempre
+salen de `COLORTERM`/`TERM`. Todo lo indetectable es `false`: elige el peldaño más alto
+disponible y degrada sin adivinar. Los parsers de las respuestas (`parse_device_attributes`,
+`parse_graphics_reply`) son puros, por si hablas con el terminal por tu cuenta.
 
 ### Imágenes (`std/image`)
 
@@ -1065,6 +1068,40 @@ canales de 16 bits se reducen a 8), verifica el CRC de cada chunk y acota la des
 (anti-bomba). Un PNG corrupto o truncado es un `Err` con mensaje, nunca un crash; el entrelazado
 Adam7 (raro en assets) se rechaza con error claro. Combinado con `term.cell_px()` y
 `term.capabilities()` tienes las tres piezas para dibujar sprites en un terminal sixel/kitty.
+
+### Sprites en el terminal (kitty graphics, `std/term`)
+
+Con las tres piezas juntas, dibujar es una llamada (M161 — protocolo kitty graphics: kitty,
+Ghostty, WezTerm):
+
+```rust
+import std/term;
+import std/image;
+import std/fs;
+
+let caps = term.capabilities();
+if (caps.kitty_graphics) {
+    let img = image.decode_png(fs.read_file_bytes("sprite.png")?)?;
+    let _ = term.draw_image(1, 10, 5, img);      // id 1, celda (col 10, fila 5), 1-based
+}
+```
+
+El patrón de juego es **transmitir una vez, colocar por frame**: `transmit_image(id, img)`
+sube los píxeles al terminal (una vez, al cargar el nivel) y `place_image(id, col, row,
+cols, rows)` los muestra — son ~30 octetos por frame, y `cols`/`rows` escalan a celdas (`0` =
+tamaño natural). `draw_image` es la conveniencia que hace ambas; `draw_png(id, col, row,
+data)` manda el PNG tal cual (el terminal lo decodifica — los bytes viajan comprimidos: lo
+suyo para assets de `std/embed` o disco). `clear_image(id)` quita la imagen de pantalla (el
+terminal CONSERVA los píxeles: re-colócala sin retransmitir) y `clear_images()` limpia todas.
+Los ids los eliges tú (`> 0`) — estables entre frames, como los assets de tu juego.
+
+Tres cosas del contrato: las funciones **emiten aunque no haya tty** (un pipe puede ser una
+captura o un replay) — consulta `capabilities().kitty_graphics` antes de dibujar; todos los
+comandos van en silencio (`q=2`) y sin mover el cursor, así que conviven con una TUI en modo
+crudo; y bajo tmux/screen no hay dibujo (los multiplexores se tragan los APC — la sonda de
+capabilities ya lo detecta). Para lo que la superficie no cubre (animación, z-index),
+`kitty_chunks(control, payload)` es el ladrillo puro: monta cualquier comando del protocolo
+con el troceo reglamentario. Demo: `ray run examples/term/sprite.ray`.
 
 ### Sonido (`std/audio`)
 

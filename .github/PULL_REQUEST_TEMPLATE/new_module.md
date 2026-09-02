@@ -1,27 +1,27 @@
-## Módulo nuevo: `<std/nombre | paquete/modulo>`
+## New module: `<std/name | package/module>`
 
-<!-- Qué problema resuelve y por qué merece vivir en el lenguaje (mejor un hallazgo de uso real
-     que una idea especulativa; enlaza el §de IDEAS.md si existe). -->
+<!-- What problem it solves and why it deserves to live in the language (a finding from real
+     use beats a speculative idea; link the IDEAS.md § if there is one). -->
 
-## Decisiones de diseño
+## Design decisions
 
-<!-- Forma de la API (errores como valores, módulos vs métodos, genéricos), qué queda FUERA a
-     propósito, y alternativas consideradas. Si añade una dependencia de Cargo: justificación
-     estilo SECURITY.md (qué clase de código evita escribir a mano). -->
+<!-- Shape of the API (errors as values, modules vs methods, generics), what is deliberately
+     OUT, and alternatives considered. If it adds a Cargo dependency: a SECURITY.md-style
+     justification (what class of hand-written code it avoids). -->
 
-## Batería de admisión (module_policy + guardas — todo debe estar en verde)
+## Admission battery (module_policy + guards — everything must be green)
 
-- [ ] **Raylang puro salvo justificación** (cero runtime nuevo; si necesita primitivo/crate, el porqué arriba)
-- [ ] **Superficie pública documentada**: todo `pub` con `///` en inglés (regla 1)
-- [ ] **Fila en REFERENCE.md** con firmas (regla 2) — y sección en MANUAL.md si tiene receta de uso
-- [ ] **Tests dedicados en `tests/`** que lo ejercitan por AMBOS motores (regla 3/4); golden determinista
-- [ ] **Identificadores en inglés, comentarios `//` en español** (`naming_policy`)
-- [ ] **Forma canónica** (`ray fmt --write` + `fmt_policy`)
-- [ ] Errores **como valores** (`Result`/`Option`), mensajes de error en INGLÉS
-- [ ] Si es un paquete (`packages/<p>`): `README.md` + `ray.toml` con name/version; si es de `std/`: alta en `src/stdlib.rs`
-- [ ] **Byte-identidad**: misma salida en intérprete, VM y (si aplica su superficie) binario nativo
-- [ ] DESIGN.md gana su sección de crónica; CHANGELOG.md "Sin publicar"; IDEAS.md marcada EJECUTADA si cierra una
+- [ ] **Pure raylang unless justified** (no new runtime; if it needs a primitive/crate, the why above)
+- [ ] **Public surface documented**: every `pub` with `///` docs in English (rule 1)
+- [ ] **Row in REFERENCE.md** with signatures (rule 2) — and a MANUAL.md section if it has a usage recipe
+- [ ] **Dedicated tests in `tests/`** exercising it on BOTH engines (rule 3/4); deterministic golden output
+- [ ] **English identifiers, Spanish `//` comments** (`naming_policy`)
+- [ ] **Canonical form** (`ray fmt --write` + `fmt_policy`)
+- [ ] Errors **as values** (`Result`/`Option`), error messages in ENGLISH
+- [ ] If it is a package (`packages/<p>`): `README.md` + `ray.toml` with name/version; if `std/`: registered in `src/stdlib.rs`
+- [ ] **Byte-identity**: same output on interpreter, VM and (when its surface applies) the native binary
+- [ ] DESIGN.md gains its chronicle section; CHANGELOG.md "Sin publicar"; IDEAS.md marked EXECUTED if it closes one
 
 ## Dogfood
 
-<!-- Cómo se validó con uso real: app, ejemplo o test e2e. "Compila" no es dogfood. -->
+<!-- How it was validated with real use: an app, an example, or an e2e test. "It compiles" is not dogfood. -->

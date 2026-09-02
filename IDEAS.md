@@ -3246,11 +3246,20 @@ intermedia — el doble merge y la pérdida de bisección no compensan).
    (branch protection), un PR solo-docs no tendrá corridas — GitHub lo trata como "pendiente";
    habrá que pasar a la pareja paths-ignore + workflow gemelo no-op, el patrón documentado de
    GitHub.
-3. **Preparación para contribuidores** (cuando lleguen): branch protection en main (PR
-   obligatorio + CI verde + 1 aprobación), CODEOWNERS, plantillas de PR/issue, CONTRIBUTING
-   con tests dirigidos y flujo SPEC-primero; merge queue de GitHub si el volumen de PRs crece
-   (cubre el hueco de dos PRs verdes que chocan al juntarse). Rama larga solo como release
-   branch de mantenimiento (`v1.4.x`) cuando haga falta backportear, jamás por adelantado.
+3. **Preparación para contribuidores** — ✅ EJECUTADA como M162 (2 sep 2026, DESIGN §155):
+   CONTRIBUTING.md (inglés: quick start, tests dirigidos, SPEC-first, mapa de docs-contrato,
+   la política bilingüe explicada, byte-identidad, Conventional Commits en español),
+   CODE_OF_CONDUCT (Covenant 2.1, dev@rayala.org), CODEOWNERS (@roberto-ayala), plantillas
+   de issues (bug con los 3 motores; feature apuntando al flujo de IDEAS) y las de PR
+   migradas a inglés; branch protection en main CON BYPASS DE ADMIN (PR + checks requeridos
+   `clippy · test · build` y `build wasm32 (playground)`, 0 aprobaciones,
+   enforce_admins=off → el flujo docs-directo-a-main del mantenedor sigue) y el "OJO futuro"
+   del punto 2 ejecutado: workflow gemelo no-op `ci-docs.yml` (mismos nombres de jobs,
+   dispara solo en los paths ignorados) para que un PR solo-docs no quede colgado. DIFERIDO
+   (cuando llegue el primer contribuidor real): subir a 1 aprobación + CODEOWNERS review,
+   valorar merge queue (cubre el hueco de dos PRs verdes que chocan al juntarse),
+   enforce_admins=on. Rama larga solo como release branch de mantenimiento (`v1.4.x`) cuando
+   haga falta backportear, jamás por adelantado.
 
 Impacto: BAJO (infra, reversible). Complemento local: `make ci`/hook pre-push como primera
 línea, nunca como sustituto del CI.

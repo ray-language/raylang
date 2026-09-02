@@ -11085,3 +11085,23 @@ consumidor de la cola — la bomba — y los dos canales son la vista partida de
 La tupla de canales viaja como cualquier valor (precedente KvMsg de std/kv). Verificado: unit
 del cap sobre cola local (la global obligaría a serializar tests), batería VM≡nativo del
 split, y la guarda iOS aseverada en la plantilla.
+## 153b. M160 — Android afina: icono launcher y firma de release (sep 2026)
+
+Los dos diferidos "ejecutables hoy" de §80b tras M156. (1) ICONO: `--icon` ya era efectivo en
+macOS/Linux/iOS; en Android genera los 5 `ic_launcher.png` multi-densidad (48–192 px,
+mdpi–xxxhdpi) vía sips — el precedente make_icns. La decisión estructural es
+generar-primero-decidir-después: el manifest solo declara `android:icon` con los 5 PNG
+logrados, porque el atributo con el mipmap ausente rompe el build en aapt (no en el bundle) —
+sin sips (host no-mac) o con un resize fallido, warning y proyecto sin icono, nunca un
+proyecto roto. Es el icono LEGACY (Android 8+ lo enmascara a círculo); el adaptive de capas
+exigiría foreground/background que un solo `--icon` no da — diferido. (2) FIRMA DE RELEASE:
+el build.gradle generado gana un bloque `signingConfigs` CONDICIONAL a la existencia de
+`keystore.properties` en la raíz del proyecto — cero secretos en ray.toml ni en la plantilla;
+sin el properties, el bloque no aplica y el debug keystore de Gradle sigue mandando (el
+condicional dentro del contenedor Groovy validado con AGP 9.0 real: assembleRelease + firma
+verificada con apksigner). Y la pieza que lo hace habitable: `remove_dir_all` borra el
+proyecto entero en cada regeneración, así que el bundle PRESERVA `keystore.properties` y los
+`*.jks`/`*.keystore` de la raíz byte-idénticos (patrón local.properties/M155b) — regenerar
+jamás destruye el keystore del usuario. Verificado T2 entero: bundle con icono (mipmaps +
+manifest), assembleDebug, keytool + properties, assembleRelease firmado (apksigner
+`CN=test`), regeneración con md5 idénticos.

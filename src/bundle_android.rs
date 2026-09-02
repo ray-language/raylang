@@ -40,11 +40,16 @@ android.useAndroidX=true
 
 /// El manifest del shell: INTERNET (el webserver embebido escucha en 127.0.0.1) + cleartext
 /// acotado por la network security config. `configChanges`: la rotación no recrea la Activity.
-const ANDROID_MANIFEST: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+/// M160: `android:icon` SOLO cuando los PNG multi-densidad se generaron de verdad — el
+/// atributo con los mipmaps ausentes rompe el build en aapt (generar-primero-decidir-después).
+fn android_manifest(icon: bool) -> String {
+    let icon_attr = if icon { "\n      android:icon=\"@mipmap/ic_launcher\"" } else { "" };
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET" />
   <application
-      android:label="@string/app_name"
+      android:label="@string/app_name"{icon_attr}
       android:networkSecurityConfig="@xml/network_security_config"
       android:theme="@android:style/Theme.Material.Light.NoActionBar">
     <activity
@@ -58,7 +63,9 @@ const ANDROID_MANIFEST: &str = r#"<?xml version="1.0" encoding="utf-8"?>
     </activity>
   </application>
 </manifest>
-"#;
+"#
+    )
+}
 
 /// Cleartext SOLO para el loopback (el patrón del proyecto: el webserver embebido en
 /// 127.0.0.1) — jamás `usesCleartextTraffic` global.
@@ -186,10 +193,20 @@ public final class RayBridge {
 "#;
 
 /// build.gradle de la app: AGP pinneado, SIN externalNativeBuild (el .so viene hecho).
+/// M160: firma de release CONDICIONAL a `keystore.properties` en la raíz del proyecto — cero
+/// secretos en ray.toml ni en este archivo; sin el properties, el bloque no aplica y el debug
+/// keystore de Gradle sigue mandando. `rootProject.file(...)` resuelve `storeFile` relativo a
+/// la raíz (donde el README manda crear ambos; el bundle los preserva al regenerar).
 fn app_build_gradle(app_id: &str, version: &str, abis: &str) -> String {
     format!(
         r#"plugins {{
     id 'com.android.application' version '9.0.0' // compatible con Gradle 9.x (AGP 8.x usa una API interna retirada en 9.6)
+}}
+
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {{
+    keystorePropsFile.withInputStream {{ keystoreProps.load(it) }}
 }}
 
 android {{
@@ -204,6 +221,25 @@ android {{
         versionName "{version}"
         ndk {{
             abiFilters {abis}
+        }}
+    }}
+
+    signingConfigs {{
+        if (keystorePropsFile.exists()) {{
+            release {{
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }}
+        }}
+    }}
+
+    buildTypes {{
+        release {{
+            if (keystorePropsFile.exists()) {{
+                signingConfig signingConfigs.release
+            }}
         }}
     }}
 
@@ -243,13 +279,37 @@ const README: &str = r#"# App Android generada por `ray bundle --android`
   como evento `"message"` (window 0). Los eventos `lifecycle` llegan en onPause/onResume.
 - `std/fs`/`std/kv`: escribe en el directorio privado de la app (el cwd no es tuyo); las
   rutas externas están restringidas (scoped storage) — también para `fs.watch`.
-- Firma: el debug keystore de Gradle basta para instalar; firma de release = v2 (keystore
-  propio, fuera del v1).
+- Firma: el debug keystore de Gradle basta para instalar. **Release** (M160): crea un
+  keystore y un `keystore.properties` en ESTA raíz del proyecto —
+  `keytool -genkeypair -v -keystore release.jks -alias app -keyalg RSA -keysize 2048 -validity 10000`
+  y luego:
+
+  ```
+  storeFile=release.jks
+  storePassword=...
+  keyAlias=app
+  keyPassword=...
+  ```
+
+  Con eso, `gradle assembleRelease` → `app/build/outputs/apk/release/app-release.apk`
+  firmado. Ambos archivos se PRESERVAN al regenerar con `ray bundle --android`
+  (`keystore.properties` y los `*.jks`/`*.keystore` de la raíz); no los subas al VCS.
+- Icono (M160): `ray bundle --android --icon icon.png` genera los `mipmap-*/ic_launcher.png`
+  multi-densidad (necesita `sips`, macOS). Es el icono legacy: en Android 8+ el sistema lo
+  enmascara a círculo (el adaptive icon con capas queda para v2).
 "#;
 
 /// Genera el árbol del proyecto en `dir` (ya creado). Los `.so` los copia el llamador a
 /// `app/src/main/jniLibs/<abi>/`; `local.properties` lo escribe el llamador SOLO si no existe.
-pub fn write_project(dir: &Path, name: &str, app_id: &str, version: &str, abis: &str) -> Result<(), String> {
+/// M160: `icon` = true SOLO si el llamador ya generó los PNG (los copia él a `mipmap-*/`).
+pub fn write_project(
+    dir: &Path,
+    name: &str,
+    app_id: &str,
+    version: &str,
+    abis: &str,
+    icon: bool,
+) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
         if let Some(parent) = p.parent() {
@@ -260,7 +320,7 @@ pub fn write_project(dir: &Path, name: &str, app_id: &str, version: &str, abis: 
     write("settings.gradle", &settings_gradle(name))?;
     write("gradle.properties", GRADLE_PROPERTIES)?;
     write("app/build.gradle", &app_build_gradle(app_id, version, abis))?;
-    write("app/src/main/AndroidManifest.xml", ANDROID_MANIFEST)?;
+    write("app/src/main/AndroidManifest.xml", &android_manifest(icon))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
     write("app/src/main/java/org/raylang/shell/MainActivity.java", MAIN_ACTIVITY_JAVA)?;
@@ -283,14 +343,37 @@ mod tests {
             .contains("public static native void pushEvent(String kind, long window, String tag)"));
         assert!(MAIN_ACTIVITY_JAVA.contains("window.ray={send:function(t){q(e(t))}"));
         assert!(MAIN_ACTIVITY_JAVA.contains("request:function(t)"), "M157: request in the shim");
-        assert!(ANDROID_MANIFEST
+        assert!(android_manifest(false)
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));
-        assert!(!ANDROID_MANIFEST.contains("usesCleartextTraffic"));
+        assert!(!android_manifest(false).contains("usesCleartextTraffic"));
         let gradle = app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'");
         assert!(gradle.contains("namespace 'org.raylang.shell'"), "{gradle}");
         assert!(gradle.contains("applicationId \"org.raylang.demo\""), "{gradle}");
         assert!(gradle.contains("abiFilters 'arm64-v8a'"), "{gradle}");
         assert!(!gradle.contains("externalNativeBuild"), "todo lo nativo va dentro del .so");
+    }
+
+    #[test]
+    fn the_manifest_only_declares_the_icon_when_the_mipmaps_exist() {
+        // M160: el atributo sin los PNG rompe aapt — solo con icon=true.
+        assert!(android_manifest(true).contains("android:icon=\"@mipmap/ic_launcher\""));
+        assert!(!android_manifest(false).contains("android:icon"));
+    }
+
+    #[test]
+    fn the_release_signing_is_conditional_and_holds_no_secrets() {
+        // M160: el bloque de firma existe pero SOLO aplica con keystore.properties presente;
+        // ni una contraseña literal en la plantilla.
+        let gradle = app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'");
+        assert!(gradle.contains("rootProject.file('keystore.properties')"), "{gradle}");
+        assert!(gradle.contains("signingConfigs"), "{gradle}");
+        assert!(gradle.contains("signingConfig signingConfigs.release"), "{gradle}");
+        assert!(gradle.contains("if (keystorePropsFile.exists())"), "{gradle}");
+        assert!(gradle.contains("keystoreProps['storePassword']"), "{gradle}");
+        assert!(!gradle.to_lowercase().contains("password '"), "sin secretos literales");
+        // Y el README enseña el flujo completo.
+        assert!(README.contains("keytool -genkeypair"), "release flow in README");
+        assert!(README.contains("assembleRelease"));
     }
 }

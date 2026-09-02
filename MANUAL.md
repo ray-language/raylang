@@ -1144,7 +1144,12 @@ WebView que carga el programa como `.so` (los símbolos JNI viajan dentro del cd
 `ray_start`/handlers es el mismo de iOS). `gradle assembleDebug` produce el APK; `adb install`
 + lanzar; el stdout del programa va a **logcat** con tag `ray`. El puente IPC (`window.ray.send`)
 y los eventos `lifecycle` funcionan igual que en las otras plataformas; `--android-abi
-arm64|x86_64|all` elige los `.so` (el emulador de Apple Silicon es arm64).
+arm64|x86_64|all` elige los `.so` (el emulador de Apple Silicon es arm64). Con `--icon
+icon.png` (M160) la app gana su icono de launcher (los `mipmap-*` multi-densidad, vía sips;
+Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (keytool) y un
+`keystore.properties` en la raíz del proyecto generado — `gradle assembleRelease` produce el
+APK firmado; ambos archivos sobreviven a regenerar el bundle y las contraseñas jamás pasan
+por ray.toml (el README generado trae el paso a paso).
 
 El nombre sale del `ray.toml` (`--name` lo cambia; `--id com.tuorg.app` fija el identifier).
 Dos cosas que saber: una app lanzada desde Finder arranca con **cwd=/** — por eso los assets

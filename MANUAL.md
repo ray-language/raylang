@@ -1136,8 +1136,14 @@ audio.drain(h)?;                      // espera a que suene lo escrito (final si
 let _ = close(h);
 ```
 
-Backends: AudioQueue en macOS y ALSA en Linux (cargada en runtime: sin `libasound` el `open` da
-un `Err` claro). Con `RAY_AUDIO_SINK=null` en el entorno, un sumidero de tiempo real "reproduce"
+Si el juego es rítmico, pide la latencia que necesitas: `audio.open_latency(44100, 2, 30)` (en
+ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo y
+el chunk del alimentador. Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
+devuelve la posición real de reproducción según el backend — siempre algo por detrás de lo
+escrito, que es lo que hace falta para pintar el compás exacto.
+
+Backends: AudioQueue en macOS, ALSA en Linux (cargada en runtime: sin `libasound` el `open` da
+un `Err` claro) y AAudio en Android (≤50 ms de latencia pide el modo LOW_LATENCY). Con `RAY_AUDIO_SINK=null` en el entorno, un sumidero de tiempo real "reproduce"
 en silencio — para tests y CI sin tarjeta de sonido. En el binario nativo, `--without audio` lo
 excluye. La música reactiva de un juego es el caso de diseño: cada iteración del bucle sintetiza
 lo que toca según el estado, y el dispositivo marca el compás.
@@ -1195,7 +1201,8 @@ Y en Android (M156): `ray bundle --android` genera el **proyecto Gradle** — sh
 WebView que carga el programa como `.so` (los símbolos JNI viajan dentro del cdylib; el puente
 `ray_start`/handlers es el mismo de iOS). `gradle assembleDebug` produce el APK; `adb install`
 + lanzar; el stdout del programa va a **logcat** con tag `ray`. El puente IPC (`window.ray.send`)
-y los eventos `lifecycle` funcionan igual que en las otras plataformas; `--android-abi
+y los eventos `lifecycle` funcionan igual que en las otras plataformas, y `std/audio` suena
+por AAudio (a diferencia de iOS, `--android` no lo excluye); `--android-abi
 arm64|x86_64|all` elige los `.so` (el emulador de Apple Silicon es arm64). Con `--icon
 icon.png` (M160) la app gana su icono de launcher (los `mipmap-*` multi-densidad, vía sips;
 Android 8+ lo enmascara a círculo). Y para **publicar**: crea `release.jks` (keytool) y un
@@ -1896,8 +1903,15 @@ fn main() -> int {
 
 El mismo fuente corre en la VM (`ray run`/`ray dev`) y compila a binario nativo (`ray build
 --native`). Variantes: `listen_tls` (HTTPS), `listen_graceful` (drena al recibir SIGTERM),
-`listen_limits`. La **guía completa** (composición de middleware, formularios, `json_body`,
-SSR con templates, estado compartido, deploy) está en [`docs/web-framework.md`](docs/web-framework.md);
+`listen_limits` y `listen_on(build_app, listener)` — el split bind/serve: bindea tú al puerto 0
+con `net.tcp_listen`, lee el puerto con `net.local_port` y sirve sobre ese listener, así el
+programa conoce su puerto sin carrera y el backlog acepta desde el bind (el patrón de una app de
+escritorio que abre su propia ventana). Para **estado compartido entre handlers** (cada conexión
+corre en su fibra con heap aislado) está `web.state`: `state(path)` (persiste bajo `ray dev`,
+memoria pura en producción) o `state_memory()`, con `state_get`/`state_put`/`state_delete` y el
+contador atómico `state_incr`; la receta del actor para estado tipado está en §15. La **guía
+completa** (composición de middleware, formularios, `json_body`, SSR con templates, estado
+compartido, deploy) está en [`docs/web-framework.md`](docs/web-framework.md);
 el demo en [`examples/web/framework/`](examples/web/framework/).
 
 ### Una app de escritorio sin ventana propia (patrón)
@@ -1930,8 +1944,9 @@ Con `ray build --native` queda un **binario único** que al ejecutarse abre su p
 app de escritorio sin instalación ni runtime aparte. El ejemplo completo y ejecutable está en
 [`examples/web/desktop/`](examples/web/desktop/). La **ventana propia** es la evolución directa:
 `std/ui` abre el mismo webserver en un webview nativo (§13, "Ventanas") — ejemplo en
-[`examples/web/desktop_window/`](examples/web/desktop_window/); lo que queda del arco (assets
-embebidos, bundling) está clasificado en `IDEAS.md` §80.
+[`examples/web/desktop_window/`](examples/web/desktop_window/); los assets van dentro del
+binario con `std/embed` y `ray bundle` produce la app instalable (§13, "Assets del proyecto" y
+"Empaquetar la app").
 
 ### RPC entre servicios (`packages/rpc`, dependencia)
 
@@ -2377,7 +2392,10 @@ tools `ray_check`/`ray_run`/`ray_test`/`ray_fmt`/`ray_doc` con el código confin
 plazo, en subproceso), sirve `llms.txt` y el catálogo REFERENCE.md como resources
 (`raylang://llms.txt`, `raylang://reference.md`) y, vía las *instructions* del `initialize`,
 le dice al modelo desde el primer mensaje que los lea antes de asumir que algo falta (la stdlib
-va embebida: una búsqueda de archivos no la encuentra). Con
+va embebida: una búsqueda de archivos no la encuentra). Las tools trabajan en **modo proyecto**:
+`ray_check`/`ray_run`/`ray_test`/`ray_doc` aceptan `path` (archivo o directorio) y corren con el
+proyecto real como contexto — tus módulos y las `[dependencies]` resuelven como en `ray run`;
+el modo `code` (un snippet suelto) queda para experimentos autocontenidos. Con
 Claude Code basta `claude mcp add raylang -- ray mcp`; para cualquier otro cliente MCP y el
 detalle del confinamiento, `docs/mcp.md`.
 

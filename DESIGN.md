@@ -11161,3 +11161,30 @@ jobs, dispara exactamente en los paths que ci.yml ignora — el patrón document
 Verificación en dos tiempos: el propio PR del arco (toca .md y .github/**) demuestra los
 checks del gemelo con los nombres correctos ANTES de activar la protección; la protección se
 aplica tras el merge y se confirma con la API.
+
+## 156. M163 — dos deudas de una línea del ciclo edit-build-run (sep 2026)
+
+Salieron de la auditoría de pendientes de IDEAS (2 sep 2026): dos notas que decían "para
+cuando…" cuyo "cuando" ya había llegado.
+
+**`ray build --native -o out` sobre un binario existente (IDEAS §77).** La vía `rustc` pasaba
+`-o out` directo y la vía Cargo hacía `fs::copy` sobre el destino: las dos escribían **in-place,
+sobre el mismo inode**. En macOS el kernel cachea la firma ad-hoc por inode; reescribir el archivo
+la invalida y el binario nuevo muere con SIGKILL (exit 137) al primer exec — incluso `--help`. El
+workaround documentado era `rm -f` antes de compilar. Decisión: **compilar/copiar a `<out>.tmp` y
+`rename`**, en las dos vías (`replace_output_binary` en `src/cli.rs`). El rename reemplaza el
+inode (la firma se calcula de nuevo) y, de regalo, un build fallido deja el binario anterior
+intacto, que el unlink-previo propuesto en IDEAS no daba. Si el rename falla, el `.tmp` se limpia
+(sin fugas de artefactos). Test: dos builds seguidos al mismo `-o` producen inodes distintos, sin
+`.tmp`, y el segundo binario corre.
+
+**El listener adoptado bajo `ray dev --port` (IDEAS §53.4).** El supervisor pasa el socket al hijo
+con `FD_CLOEXEC` a 0 (tiene que sobrevivir al exec del hijo), y `adopt_or_bind` lo tomaba con
+`from_raw_fd` sin volver a ponerlo. La auditoría CLOEXEC de jul 2026 lo dejó anotado como
+"pendiente para cuando llegue `exec`": con M100 (`std/process`) llegó, y la nota se quedó sin
+cerrar. Consecuencia real: cualquier proceso lanzado por el programa heredaba el socket de escucha;
+un nieto de vida larga retendría el puerto (y aceptaría conexiones huérfanas) a través de los
+reinicios de `ray dev`. Arreglo: `fcntl(fd, F_SETFD, FD_CLOEXEC)` inmediatamente tras la adopción
+(el runtime nativo no adopta listeners, así que solo toca `src/builtins.rs`). Test: bajo `ray dev
+--port`, el programa lanza `sh` y este comprueba si `/dev/fd/$RAY_LISTEN_FD` sigue abierto en su
+propio proceso — sin el fix imprime `leaked`, con él `clean`.

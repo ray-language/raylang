@@ -1816,7 +1816,7 @@ de señales **sin** self-pipe (reenvía SIGTERM al hijo directamente). Se corrig
 que exista `exec` habrían sido fugas silenciosas, y un hijo con el extremo de ESCRITURA del
 self-pipe abierto impide para siempre el EOF de ese pipe.
 
-**Pendiente para cuando llegue `exec` — ⚠️ la condición YA SE CUMPLE (M100, `__proc_spawn`) y `adopt_or_bind` sigue sin `fcntl(F_SETFD, FD_CLOEXEC)` tras `from_raw_fd`: bug latente, arreglo de una línea**: el hijo de `ray dev` adopta el listener en el fd 3 con
+**✅ HECHO (M163, DESIGN §156)** — la condición «cuando llegue `exec`» se cumplió con M100 y `adopt_or_bind` re-pone `FD_CLOEXEC` tras `from_raw_fd`. Texto original: el hijo de `ray dev` adopta el listener en el fd 3 con
 `from_raw_fd`, y ese fd tiene `FD_CLOEXEC` a 0 **dentro del hijo** (necesario para que sobreviva al
 exec). Si ese programa llegara a lanzar procesos, heredarían el socket de escucha → hay que
 re-poner CLOEXEC tras la adopción en `tcp_listen`.
@@ -2933,7 +2933,7 @@ clasificadas las dos mejoras vecinas que se evaluaron y NO entraron en ese arco:
   socket-activation no lo justifica hoy; se anota para que ninguna decisión lo bloquee por
   accidente (la tabla de funciones de la VM ya es indirecta — buen augurio).
 
-## 77. `ray build --native -o` sobrescribe in-place → SIGKILL en macOS (ago 2026)
+## 77. `ray build --native -o` sobrescribe in-place → SIGKILL en macOS (ago 2026) — ✅ HECHA (M163: `<out>.tmp` + rename en ambas vías, rustc y Cargo; DESIGN §156)
 
 Hallado en `ray-apps/rallyx` (27 ago 2026): recompilar con `ray build --native src/main.ray
 -o rallyx --release` sobre un binario `rallyx` YA existente produce un binario que macOS mata

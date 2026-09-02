@@ -497,3 +497,53 @@ fn dev_ignores_a_save_with_no_changes() {
 
     stop_dev(&mut dev);
 }
+
+#[test]
+fn dev_adopted_listener_is_not_inherited_by_child_processes() {
+    // IDEAS §53.4: el supervisor pasa el listener al hijo SIN FD_CLOEXEC (tiene que sobrevivir a su
+    // exec). Tras adoptarlo, el hijo debe re-ponerlo: si el programa lanza procesos (std/process), los
+    // nietos NO heredan el socket de escucha (un nieto vivo retendría el puerto tras un reinicio). El
+    // nieto (sh) comprueba si el fd `RAY_LISTEN_FD` sigue abierto en su propio proceso.
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let base = std::env::temp_dir().join("ray_dev_cloexec");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"srv\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        format!(
+            "import std/net;\n\
+             import std/process;\n\
+             fn main() -> int {{\n\
+               match (net.tcp_listen(\"127.0.0.1\", {port})) {{\n\
+                 Result.Ok(srv) => {{\n\
+                   match (process.run(\"sh\", [\"-c\", \"ls /dev/fd/$RAY_LISTEN_FD >/dev/null 2>&1 && echo leaked || echo clean\"])) {{\n\
+                     Result.Ok(o) => {{ match (from_utf8(o.stdout)) {{ Result.Ok(s) => print(\"fd-check=\" + s), Result.Err(_) => print(\"fd-check=binary\"), }} }},\n\
+                     Result.Err(e) => print(\"fd-check=spawn-failed \" + e),\n\
+                   }}\n\
+                   close(srv); 0 }},\n\
+                 Result.Err(e) => {{ eprint(\"listen: \" + e); 1 }},\n\
+               }}\n\
+             }}\n"
+        ),
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("dev")
+        .arg("--port")
+        .arg(port.to_string())
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
+        .spawn()
+        .expect("lanza ray dev --port");
+
+    let log = wait_for_content(&out_path, "fd-check=", 15);
+    stop_dev(&mut dev);
+    assert!(log.contains("fd-check=clean"), "el nieto NO hereda el listener adoptado:\n{log}");
+}

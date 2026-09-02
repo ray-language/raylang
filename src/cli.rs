@@ -1998,6 +1998,14 @@ fn native_cache_dir() -> std::path::PathBuf {
 
 /// Camino rápido: transpila a un `.rs` autocontenido y lo compila con `rustc` directo (sin Cargo). Para
 /// programas que no usan ningún crate externo — el 90 % de los casos. `-O` (dev) / opt3+lto+native (release).
+/// Coloca el binario recién construido en `out_bin` reemplazando el inode (`rename`) en vez de
+/// sobrescribirlo in-place. Si el rename falla, el `.tmp` se limpia para no dejar artefactos.
+fn replace_output_binary(tmp_bin: &str, out_bin: &str) -> std::io::Result<()> {
+    std::fs::rename(tmp_bin, out_bin).inspect_err(|_| {
+        let _ = std::fs::remove_file(tmp_bin);
+    })
+}
+
 fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>) {
     // El `.rs` temporal incluye el PID para que dos `ray build --native` CONCURRENTES (o con el mismo stem)
     // no colisionen sobre el mismo temporal.
@@ -2025,10 +2033,18 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
     }
-    let status = cmd.arg(&rs_path).arg("-o").arg(out_bin).status();
+    // Se compila a `<out>.tmp` y se renombra (IDEAS §77): sobrescribir IN-PLACE un binario existente
+    // (mismo inode) invalida en macOS la caché de firma del kernel y el nuevo binario muere con SIGKILL
+    // al exec. `rename` reemplaza el inode; y si el build falla, el binario anterior sigue intacto.
+    let tmp_bin = format!("{out_bin}.tmp");
+    let status = cmd.arg(&rs_path).arg("-o").arg(&tmp_bin).status();
     match status {
         Ok(s) if s.success() => {
             let _ = std::fs::remove_file(&rs_path); // build ok → no dejar el `.rs` temporal (sin fugas)
+            if let Err(e) = replace_output_binary(&tmp_bin, out_bin) {
+                eprintln!("native build: could not place the binary at '{out_bin}': {e}");
+                process::exit(65);
+            }
             let tier = match (release, target) {
                 (true, Some(t)) => format!(" (release: opt3+lto, target: {t})"),
                 (true, None) => " (release: opt3+lto+native)".to_string(),
@@ -2238,7 +2254,10 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
                 Some(t) => target_dir.join(t).join(sub).join(&artifact),
                 None => target_dir.join(sub).join(&artifact),
             };
-            let copied = std::fs::copy(&produced, out_bin);
+            // Copia a `<out>.tmp` + rename, nunca in-place (IDEAS §77: SIGKILL en macOS al sobrescribir
+            // el inode de un binario firmado).
+            let tmp_bin = format!("{out_bin}.tmp");
+            let copied = std::fs::copy(&produced, &tmp_bin).and_then(|_| replace_output_binary(&tmp_bin, out_bin));
             let _ = std::fs::copy(proj.join("Cargo.lock"), &cached_lock); // persiste el lock resuelto (H20)
             let _ = std::fs::remove_dir_all(&proj); // build ok → borrar el proyecto Cargo temporal (el binario
                                                     // ya vive en la caché compartida, no en `proj/target`)

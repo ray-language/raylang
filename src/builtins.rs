@@ -2370,9 +2370,20 @@ fn adopt_or_bind(host: &str, port: i64) -> Result<std::net::TcpListener, String>
                 .is_ok()
         {
             use std::os::unix::io::FromRawFd;
+            unsafe extern "C" {
+                fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+            }
+            const F_SETFD: i32 = 2;
+            const FD_CLOEXEC: i32 = 1;
             // SAFETY: el fd lo dup2-eó el supervisor a este número (RAY_LISTEN_FD) antes del exec, es un
             // socket de escucha válido, y `ADOPTED` garantiza que solo un `TcpListener` toma su propiedad.
-            return Ok(unsafe { std::net::TcpListener::from_raw_fd(fd) });
+            let listener = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+            // El supervisor lo pasó SIN FD_CLOEXEC (tenía que sobrevivir a nuestro exec). Ya adoptado, se
+            // re-pone: si este programa lanza procesos (std/process, M100), los hijos NO deben heredar el
+            // socket de escucha (IDEAS §53.4: un nieto vivo retendría el puerto tras el reinicio).
+            // SAFETY: fcntl sobre un fd válido que acabamos de adoptar; F_SETFD solo toca las flags del fd.
+            let _ = unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) };
+            return Ok(listener);
         }
     }
     std::net::TcpListener::bind((host, port as u16)).map_err(|e| e.to_string())

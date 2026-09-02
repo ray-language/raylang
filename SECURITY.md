@@ -161,7 +161,8 @@ documentada:
   (`pipe`/`dup2` sobre fds propios). Cero dependencias nuevas.
 - **`src/builtins.rs`** — el canal de señales del proceso (`signals()`, un *self-pipe* con
   `pipe`/`sigaction`); la adopción del socket de escucha heredado del supervisor de `ray dev`
-  (`from_raw_fd` sobre un fd que el padre garantiza, con toma de propiedad única); la lectura de
+  (`from_raw_fd` sobre un fd que el padre garantiza, con toma de propiedad única, y `fcntl(F_SETFD,
+  FD_CLOEXEC)` inmediato para que los procesos hijos del programa no hereden el listener); la lectura de
   stdin por bytes de `std/io` (M107.2: `poll(2)` + `read(2)` crudos sobre el fd 0, buffers propios
   bien formados que la llamada no retiene); y el terminal de `std/term` (M107.3:
   `isatty`/`tcgetattr`/`tcsetattr`/`cfmakeraw`/`ioctl(TIOCGWINSZ)`/`atexit` — el `termios` se

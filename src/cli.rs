@@ -1346,11 +1346,28 @@ fn cmd_bundle(args: &[String]) {
             build_native(&path, x86_so.to_str(), true, &exclude, Some("x86_64-linux-android"), false, fibers, &embed, true);
         }
         let proj = out_dir.join(format!("{name}-android"));
-        // Preservaciones (patrón M151/M155b): el .so del ABI NO construido y local.properties.
+        // M160: los mipmaps del icono se generan ANTES de escribir el proyecto — el manifest
+        // solo declara android:icon con los 5 PNG logrados (con el atributo y sin los PNG,
+        // aapt rompe el build de Gradle).
+        let mipmaps = icon.as_deref().and_then(|i| make_android_mipmaps(Path::new(i), &work));
+        // Preservaciones (patrón M151/M155b): el .so del ABI NO construido, local.properties
+        // y (M160) el material de firma de la raíz — keystore.properties y *.jks/*.keystore;
+        // remove_dir_all borra el proyecto entero y regenerar NO debe destruir el keystore.
         let jni = proj.join("app/src/main/jniLibs");
         let kept_arm = (!build_arm).then(|| fs::read(jni.join("arm64-v8a/libray_app.so")).ok()).flatten();
         let kept_x86 = (!build_x86).then(|| fs::read(jni.join("x86_64/libray_app.so")).ok()).flatten();
         let kept_local = fs::read_to_string(proj.join("local.properties")).ok();
+        let mut kept_signing: Vec<(String, Vec<u8>)> = Vec::new();
+        if let Ok(rd) = fs::read_dir(&proj) {
+            for entry in rd.flatten() {
+                let file = entry.file_name().to_string_lossy().into_owned();
+                if (file == "keystore.properties" || file.ends_with(".jks") || file.ends_with(".keystore"))
+                    && let Ok(bytes) = fs::read(entry.path())
+                {
+                    kept_signing.push((file, bytes));
+                }
+            }
+        }
         let _ = fs::remove_dir_all(&proj);
         let place = |built: bool, src_so: &Path, kept: &Option<Vec<u8>>, dir: std::path::PathBuf| {
             let dst = dir.join("libray_app.so");
@@ -1380,9 +1397,31 @@ fn cmd_bundle(args: &[String]) {
             abis.push("'x86_64'");
         }
         let abis = abis.join(", ");
-        if let Err(e) = crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis) {
+        if let Err(e) =
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some())
+        {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
+        }
+        // M160: los PNG multi-densidad a res/mipmap-<d>/ic_launcher.png (el manifest ya los
+        // declara — write_project recibió icon=true solo con los 5 logrados).
+        if let Some(pngs) = &mipmaps {
+            for (density, src) in pngs {
+                let dir = proj.join(format!("app/src/main/res/mipmap-{density}"));
+                let r = fs::create_dir_all(&dir)
+                    .and_then(|_| fs::copy(src, dir.join("ic_launcher.png")).map(|_| ()));
+                if let Err(e) = r {
+                    eprintln!("bundle: could not place the launcher icon: {e}");
+                    process::exit(74);
+                }
+            }
+        }
+        // M160: el material de firma preservado vuelve byte-idéntico a la raíz.
+        for (file, bytes) in &kept_signing {
+            if let Err(e) = fs::write(proj.join(file), bytes) {
+                eprintln!("bundle: could not restore {file}: {e}");
+                process::exit(74);
+            }
         }
         // local.properties: preservado si existía; si no, sdk.dir detectado — Gradle lo exige.
         let local = match kept_local {
@@ -1623,6 +1662,39 @@ fn write_ios_appicon(proj: &Path, icon: &Path) {
     }
     // Nota: sin cablear el asset catalog en el pbxproj v1 (exigiría fase Resources +
     // ASSETCATALOG_COMPILER_APPICON_NAME); el catálogo queda listo para arrastrar en Xcode.
+}
+
+/// M160: los `ic_launcher.png` multi-densidad del proyecto Android, vía sips (precedente
+/// make_icns). Best-effort con gate honesto: sin sips (host no-mac) o con cualquier resize
+/// fallido devuelve None — el llamador NO declara `android:icon` (aapt rompería el build con
+/// el mipmap ausente) y avisa. Icono legacy v1 (Android 8+ lo enmascara a círculo); el
+/// adaptive de capas queda diferido (IDEAS §80b).
+const ANDROID_DENSITIES: &[(u32, &str)] =
+    &[(48, "mdpi"), (72, "hdpi"), (96, "xhdpi"), (144, "xxhdpi"), (192, "xxxhdpi")];
+
+fn make_android_mipmaps(icon: &Path, work: &Path) -> Option<Vec<(&'static str, PathBuf)>> {
+    if !icon.is_file() {
+        eprintln!("bundle: warning: icon not found: {}; continuing without it", icon.display());
+        return None;
+    }
+    let mut out = Vec::new();
+    for (px, density) in ANDROID_DENSITIES {
+        let dst = work.join(format!("ic_launcher_{density}.png"));
+        let ok = process::Command::new("sips")
+            .args(["-z", &px.to_string(), &px.to_string()])
+            .arg(icon)
+            .arg("--out")
+            .arg(&dst)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("bundle: warning: could not build the launcher icon (needs sips, macOS); continuing without it");
+            return None;
+        }
+        out.push((*density, dst));
+    }
+    Some(out)
 }
 
 /// Un `.icns` desde un PNG, vía las herramientas del sistema: `sips -z` genera el iconset (los

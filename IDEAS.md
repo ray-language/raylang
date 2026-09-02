@@ -3146,8 +3146,13 @@ al pbxproj, x86_64-sim (Macs Intel), notificaciones/tray móviles. **Android ✅
 cargo-ndk: el NDK se inyecta por env), shell Gradle/Java + WebView, `ray bundle --android` con
 `--android-abi`. Validado T3 en emulador (webserver embebido + el ciclo IPC completo en
 pantalla). Hallazgo: bionic usa `__errno` (el brazo android-aware de M38 llevaba el símbolo de
-glibc — jamás ejercitado). Diferidos: AAudio, icono adaptive, keystore de release, gradle
-wrapper, x86_64 probado en emulador Intel.
+glibc — jamás ejercitado). Diferidos: AAudio ✅ (M158), icono ✅ y keystore de
+release ✅ (M160, DESIGN §153b: `--icon` genera los `mipmap-*/ic_launcher.png` multi-densidad
+vía sips — legacy v1, el ADAPTIVE de capas sigue diferido — y la firma va por
+`keystore.properties` condicional en el build.gradle generado, cero secretos en ray.toml,
+con keystore+properties PRESERVADOS al regenerar). Siguen diferidos: adaptive icon, gradle
+wrapper, x86_64 probado en emulador Intel, `versionCode` incremental (hoy fijo en 1 — Play
+exige incrementos), sonido audible en dispositivo físico.
 
 ## 81. Hallazgos del dogfood raydesk — un LLM construyendo una app solo con el MCP (ago 2026)
 

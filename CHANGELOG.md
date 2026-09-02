@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Android afina** (M160): `ray bundle --android --icon icon.png` genera el icono del
+  launcher multi-densidad (`mipmap-*/ic_launcher.png`, vía sips; el manifest solo lo declara
+  con los PNG logrados — nunca un proyecto que no compila), y la **firma de release** va por
+  `keystore.properties` en la raíz del proyecto generado (condicional — sin él, el debug
+  keystore sigue mandando; cero secretos en ray.toml): `keytool` + el properties +
+  `gradle assembleRelease` → APK firmado. El keystore y el properties se **preservan** al
+  regenerar el proyecto.
 - **El puente IPC se endurece** (M159): la cola de eventos gana una **cota dura** (65536; al
   llenarse cae el `"message"` más viejo — nunca un `"closed"` — con aviso en stderr), solo el
   **main frame** puede hablar con el programa en macOS/iOS (un iframe de terceros ya no

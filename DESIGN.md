@@ -11322,3 +11322,18 @@ el host: un build nativo en Windows sin `--target` ya no intenta compilar el rea
 VM y en el nativo; y en Windows, como no hay forma portable de generar un Ctrl-C real contra el
 propio proceso en CI, el handler se invoca con los eventos simulados (0/1 → 2, 2/5/6 → 15, 99 →
 ignorado) y se comprueba la bandera y el drenado. La batería unix de `signals_cli` sigue intacta.
+
+## 161. M169 — W2: el build nativo dice la verdad en Windows (sep 2026)
+
+La asimetría que destapó la auditoría de `docs/windows.md` §4: la VM devuelve un `Err` honesto en
+cada hueco de plataforma, pero el transpilador emitía llamadas a `ray_runtime::process/watch/
+audio/ui`, cuyos módulos son `cfg(unix)`, y en Windows el usuario veía un backtrace de `rustc`
+en vez del mensaje del lenguaje. Arreglo mínimo, independiente de cualquier port: **comprobar
+antes de generar**. `build_native` mira el target efectivo (el host si no hay `--target`) y, si
+el transpilador pidió alguna de esas features, aborta con el mismo texto que la VM da en runtime
+y exit 69 (`EX_UNAVAILABLE`), sin escribir nada. La lista vive en una función pura
+(`native_unsupported_on_windows`) con su test; `signals` ya no está en ella desde M168. El job de
+Windows de CI lo prueba de verdad: un programa con `std/process` no llega a `rustc`.
+
+De paso, `key_path` (`ray publish --sign`) cae a `USERPROFILE` cuando no hay `HOME`, como ya hacía
+`native_cache_dir`: en Windows la clave iba a `./.ray/publish.key` del cwd.

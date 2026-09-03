@@ -1917,6 +1917,23 @@ fn cmd_build(args: &[String]) {
 ///   y un binario **no portable** (usa las features de la CPU del host). PGO se **descartó** (sin ganancia
 ///   medible + alta complejidad).
 #[allow(clippy::too_many_arguments)] // la firma refleja los flags de `ray build --native`
+/// M169: los subsistemas del runtime nativo que no existen en Windows (sus módulos en
+/// `ray-runtime` son `cfg(unix)`), con el mismo mensaje que la VM devuelve en runtime. Recibe las
+/// features que el transpilador pidió y devuelve las que no compilarían. Pura para testearla.
+fn native_unsupported_on_windows(rt_features: &[&str]) -> Vec<&'static str> {
+    const GAPS: &[(&str, &str)] = &[
+        ("process", "std/process: running OS processes is not supported on this platform"),
+        ("watch", "fs.watch: filesystem watching is not supported on this platform"),
+        ("audio", "std/audio: audio output is not supported on this platform"),
+        ("ui", "std/ui: windows and webviews are not supported on this platform"),
+        ("ui-shell", "std/ui: windows and webviews are not supported on this platform"),
+    ];
+    GAPS.iter()
+        .filter(|(feature, _)| rt_features.contains(feature))
+        .map(|(_, message)| *message)
+        .collect()
+}
+
 fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[String], target: Option<&str>, fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) {
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
@@ -1938,6 +1955,25 @@ fn build_native(path: &str, output: Option<&str>, release: bool, exclude: &[Stri
         );
         for (name, reason) in &transpiled.stubbed {
             eprintln!("  · {name}: {reason}");
+        }
+    }
+    // M169 (docs/windows.md W2): en Windows, los subsistemas cuyo módulo de ray-runtime es
+    // `cfg(unix)` no COMPILAN — antes el usuario veía un backtrace de rustc en vez del mensaje que la
+    // VM da en runtime. Se comprueba aquí, antes de generar nada, con el target EFECTIVO (host si no
+    // hay `--target`).
+    let for_windows = target.map_or(cfg!(windows), |t| t.contains("windows"));
+    if for_windows {
+        let gaps = native_unsupported_on_windows(&transpiled.rt_features);
+        if !gaps.is_empty() {
+            eprintln!(
+                "native build: this program uses subsystems that are not available on Windows yet \
+                 (the VM reports the same error at runtime):"
+            );
+            for gap in gaps {
+                eprintln!("  · {gap}");
+            }
+            eprintln!("(see docs/windows.md for the status of each subsystem)");
+            process::exit(69); // EX_UNAVAILABLE
         }
     }
     // Nombre de salida: `-o` > el `name` del ray.toml del proyecto (si la entrada ES la del
@@ -2801,7 +2837,10 @@ fn key_path() -> PathBuf {
     {
         return PathBuf::from(p);
     }
-    let home = env::var("HOME").unwrap_or_else(|_| ".".into());
+    // M169: en Windows el directorio del usuario es USERPROFILE (HOME no suele existir).
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".ray").join("publish.key")
 }
 
@@ -3918,6 +3957,19 @@ mod tests {
             "el cambio debe detectarse"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn native_windows_gaps_are_named_from_the_runtime_features() {
+        // M169: solo los subsistemas `cfg(unix)` de ray-runtime; el resto (tls, crypto, sqlite,
+        // regex, mimalloc, señales desde M168) compila en Windows.
+        assert!(native_unsupported_on_windows(&["tls", "crypto", "sqlite", "regex", "mimalloc"]).is_empty());
+        let gaps = native_unsupported_on_windows(&["crypto", "process", "ui"]);
+        assert_eq!(gaps.len(), 2);
+        assert!(gaps[0].contains("std/process"));
+        assert!(gaps[1].contains("std/ui"));
+        assert_eq!(native_unsupported_on_windows(&["ui-shell"]).len(), 1);
+        assert_eq!(native_unsupported_on_windows(&["watch", "audio"]).len(), 2);
     }
 
     #[test]

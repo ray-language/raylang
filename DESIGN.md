@@ -11380,3 +11380,64 @@ bloqueantes: nadie los registró.
 falla con mensaje y conserva la salida parcial, no cuelga la suite). En el job de Windows de CI es
 el primer servidor raylang que acepta una conexión en esa plataforma. Queda W5: el mismo respaldo
 con readiness real (wepoll) para el p99 bajo carga.
+## 163. M171 — toolchain autocontenida: `ray build --native` en un equipo sin Rust (sep 2026)
+
+La pregunta que lo abrió (IDEAS §85): en una máquina recién instalada, `ray build --native`
+fallaba con «could not run cargo (is it on PATH?)», y la pista que daba —`--without
+mimalloc,ahash`— llevaba a `rustc`, que tampoco estaba. El usuario tenía que instalar rustup por
+su cuenta; y aunque lo hiciera, el primer build descargaba ring/rustls de crates.io, así que sin
+red también fallaba. Contra la prioridad DX del proyecto: el tooling es parte de la feature.
+
+**Decisión: rustup privado bajo demanda + vendor por release, sin tocar el lenguaje ni el
+transpilador.** De las cuatro opciones clasificadas en IDEAS §85 se ejecutan la 1 y la 2a. Se
+descartan aquí embeber rustc (sin API de librería, cientos de MB) y un backend Cranelift (sería
+reescribir el nativo, que es un transpilador apoyado en `ray-runtime`); el binario único VM +
+payload (opción 3) es útil pero ortogonal y queda como hito propio.
+
+**Resolución, no descubrimiento.** `src/toolchain.rs` resuelve `cargo`/`rustc` en un orden fijo:
+`RAY_CARGO`/`RAY_RUSTC` → `PATH` → toolchain privada (`~/.ray/toolchain`, `RAY_TOOLCHAIN_HOME`).
+El Rust del usuario, si existe, siempre gana: la privada es el respaldo, no un reemplazo. La
+función es pura sobre sus entradas (variable, PATH, home) y se testea con directorios falsos; los
+dos caminos del build (`build_native_rustc` y `build_native_cargo`) la usan y, si nada resuelve,
+nombran las tres fuentes y sugieren `ray toolchain install`. La pista `--without …` se conserva
+(ahora con `fibers`, que también fuerza la vía Cargo) porque sigue siendo verdad.
+
+**La toolchain privada es un rustup normal en un directorio nuestro.** `ray toolchain install`
+descarga `rustup-init` del canal oficial (`sh.rustup.rs` / `win.rustup.rs`, con `curl`, como
+`ray upgrade`) y lo corre con `-y -q --no-modify-path --profile minimal --default-toolchain
+stable` bajo `RUSTUP_HOME=<home>/rustup` y `CARGO_HOME=<home>/cargo`. No se reinventa nada de
+rustup —actualizaciones, targets, componentes siguen siendo los suyos— y no se toca `~/.cargo`,
+`~/.rustup` ni el perfil del shell. El detalle que importa: los proxies de rustup buscan la
+toolchain en `RUSTUP_HOME`, así que **toda invocación de una herramienta privada lleva las dos
+variables**; `toolchain::command()` es el único constructor y lo garantiza. Con `cargo` ya en el
+PATH, `install` no instala nada (salvo `--force`) pero sí baja el vendor. Verifica `cargo
+--version` antes de declarar éxito. Medido en macOS arm64: ~450 MB.
+
+**El vendor hace el primer build hermético.** Cada release publica `ray-runtime-vendor.tar.gz`
+(`tools/vendor-runtime.sh`: un proyecto sonda con la MISMA forma que el proyecto generado —
+`ray-runtime` como dep `path` en un subdirectorio, `[workspace]` vacío— con TODAS las features,
+`cargo generate-lockfile` + `cargo vendor`; 122 crates, 39 MB). `install` lo deja en
+`<home>/vendor/<versión de ray>/` (por versión: el runtime incrustado es exactamente el de esta
+versión, y sus deps también). Si está, `build_native_cargo` escribe en el proyecto generado un
+`.cargo/config.toml` con `[source.crates-io] replace-with` hacia el vendor y copia **su**
+`Cargo.lock`, no el cacheado en `native-cache`: el lock cacheado podría fijar versiones que el
+vendor no contiene, y el del vendor es por construcción el de las versiones que hay en el
+directorio. Un `ray` de desarrollo sin release no tiene vendor; `install` lo dice (nota, no error)
+y el build sigue tirando de crates.io. El job `vendor` de `release.yml` hace humo del tarball
+antes de subirlo: lo instala como lo haría `install` y compila un programa con
+`CARGO_NET_OFFLINE=true`.
+
+**Lo que no se resuelve, y se dice.** `rustc` necesita el enlazador del sistema (Xcode Command
+Line Tools / `build-essential` / MSVC Build Tools) y ninguna toolchain de Rust lo trae. `status`
+lo comprueba (`xcode-select -p` / `cc` en PATH / `link.exe`) e `install` lo avisa al final con
+el comando de instalación de cada plataforma. En Windows la privada es `-msvc`: la `-gnu`
+autocontenida de rustup no trae `gcc`, y ring/mimalloc/rusqlite compilan C, así que las Build
+Tools siguen siendo necesarias. Sin verificar en Windows (docs/windows.md).
+
+**Prueba.** Unitarias del resolvedor (orden, variable vacía = ausente, privada sin `rustc`) y
+del TOML del vendor; `tests/toolchain_cli.rs` simula la máquina sin Rust (PATH pelado + home
+vacío: `status` sale 1, los dos caminos del build salen 65 con la pista) y el vendor instalado
+(un `cargo` falso vía `RAY_CARGO` vuelca el `.cargo/config.toml` y el lock del proyecto
+generado). La instalación real se validó a mano (3 sep 2026): toolchain privada + vendor + PATH
+pelado + `CARGO_NET_OFFLINE=true` → `hello` en 4,6 s y un programa con `std/crypto` +
+`std/net` (ring + rustls desde el vendor) en 11,6 s, ambos ejecutan.

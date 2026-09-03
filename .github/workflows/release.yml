@@ -34,6 +34,40 @@ jobs:
                  --title "raylang ${{ github.ref_name }}" \
                  --generate-notes
 
+  # M171 (IDEAS §85): el vendor de las dependencias de `ray-runtime` (todas las features + su
+  # Cargo.lock), para que `ray toolchain install` deje al equipo listo para `ray build --native`
+  # SIN red. Independiente de la plataforma (cargo vendor incluye las deps de todos los targets).
+  vendor:
+    name: vendor de ray-runtime
+    needs: crear-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Vendorizar ray-runtime
+        run: sh tools/vendor-runtime.sh ray-runtime-vendor.tar.gz
+      # Humo: el tarball debe servir OFFLINE al proyecto que genera `ray build --native`. Se
+      # instala como lo haría `ray toolchain install` y se compila un programa sin red.
+      - name: Humo del vendor (build nativo offline)
+        run: |
+          cargo build --release --quiet
+          export RAY_TOOLCHAIN_HOME="$RUNNER_TEMP/ray-toolchain"
+          ver="$(./target/release/ray version | awk '{print $2}')"
+          mkdir -p "$RAY_TOOLCHAIN_HOME/vendor/$ver"
+          tar xzf ray-runtime-vendor.tar.gz -C "$RAY_TOOLCHAIN_HOME/vendor/$ver"
+          printf 'fn main() { print("vendor ok") }\n' > "$RUNNER_TEMP/hello.ray"
+          CARGO_NET_OFFLINE=true HOME="$RUNNER_TEMP/home" ./target/release/ray build --native "$RUNNER_TEMP/hello.ray" -o "$RUNNER_TEMP/hello"
+          test "$("$RUNNER_TEMP/hello")" = "vendor ok"
+      - name: Subir el asset a la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" ray-runtime-vendor.tar.gz \
+            --repo "${{ github.repository }}" --clobber
+
   # Construye y sube un asset por plataforma.
   build:
     name: build ${{ matrix.target }}

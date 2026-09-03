@@ -3303,6 +3303,60 @@ verificaba por CRLF → ✅ M166 (DESIGN §159).
    docs/windows.md), `fs.chmod` (sin equivalente: documentar). Cada uno es un arco propio; ninguno bloquea a un usuario de servidor.
 4. El poller: IOCP o `wepoll` para el p99 bajo carga; hoy fallback honesto.
 
+## 85. Toolchain autocontenida para `ray build --native` — sin instalar Rust a mano (sep 2026) — 1 + 2a ✅ HECHAS (M171, DESIGN §163)
+
+Pregunta de origen (3 sep 2026): en un equipo recién instalado, `ray build --native` falla porque
+no hay `cargo`. Hoy `build_native_cargo` lanza el `cargo` del PATH; si no está, sale con 65 y
+sugiere `--without mimalloc,ahash` para caer al `rustc` pelado — que tampoco está. Y aunque
+estuviera, la primera compilación descarga crates (ring, rustls, corosensei): sin red también
+falla. El usuario tiene que instalar rustup por su cuenta, contra la prioridad DX del proyecto
+(la toolchain es parte del alcance de cada feature). Lo que NO desaparece en ninguna opción salvo
+la 4: el **enlazador del sistema** (Xcode CLT / `build-essential` / MSVC Build Tools), que
+`rustc` necesita igualmente.
+
+**Opciones clasificadas** (impacto: MEDIO — tooling/CLI, cero cambios en el lenguaje ni en el
+transpilador; todo vive en `src/cli.rs` y en `release.yml`):
+
+1. ✅ M171 — **`ray toolchain install|status` — rustup privado bajo demanda** (recomendada, núcleo).
+   Descarga `rustup-init` como ya hace `ray upgrade` con los assets de release y lo instala con
+   perfil `minimal` en `~/.ray/toolchain` (`RUSTUP_HOME`/`CARGO_HOME` propios): no toca el Rust
+   del usuario ni su PATH. `build_native_cargo`/`build_native_rustc` resuelven la herramienta en
+   orden `RAY_CARGO`/`RAY_RUSTC` → PATH → `~/.ray/toolchain/bin`; si falta, `ray build --native`
+   lo propone (o lo ejecuta con confirmación) en vez del error actual. Coste: ~200 MB la primera
+   vez; el mensaje debe ser honesto sobre el enlazador del sistema (en macOS `xcode-select
+   --install`; en Windows Build Tools o el target `-gnu`). Fija además la versión de rustc que
+   raylang prueba en CI → habilita la 2b.
+2. **Builds sin red tras la instalación** (complemento de la 1). ✅ M171 **2a** vendoring: un asset por
+   release `ray-runtime-vendor-<versión>.tar` (`cargo vendor` de `crates/ray-runtime`) que
+   `ray toolchain install` deja en caché y el proyecto Cargo generado usa vía `.cargo/config.toml`
+   (`[source.crates-io] replace-with`). **2b** `libray_runtime.rlib` precompilado por triple en CI
+   y enlace con `rustc --extern`: elimina Cargo del todo, pero el formato del rlib se acopla a la
+   versión exacta de rustc → solo viable con la toolchain fijada de la 1. Preferir 2a (robusto);
+   2b solo si el tiempo del primer build frío (ring+mimalloc) resulta inaceptable.
+3. **Binario único VM + payload, sin toolchain** (entrega rápida, ortogonal a las anteriores).
+   `ray build --bundle-vm` (o modo de `ray bundle`) copia el propio ejecutable `ray` y le anexa el
+   programa (bytecode o fuente + módulos + `[native] embed`) al final con un marcador; al arrancar,
+   `ray` detecta el payload y lo ejecuta en la VM. Un archivo, arranque inmediato, cero Rust,
+   funciona en Windows hoy (evita la asimetría de docs/windows.md §4). Es lo que hacen `deno
+   compile` y los self-extracting de Go. No es código máquina ni rendimiento nativo: se documenta
+   como "distribuir sin compilar", no como sustituto de `--native`. Impacto: BAJO (loader de
+   payload en `main`, ~1 día).
+4. **Backend AOT sin rustc** (Cranelift enlazado en `ray`: `cranelift-object` emite `.o`, enlaza
+   `ld`/`lld`). El único camino "mismo binario y nada más", pero significa reescribir el backend
+   nativo (hoy transpilador a Rust apoyado en `ray-runtime`: fibras, TLS, SQLite — que seguiría
+   necesitando precompilarse por triple). Mismos argumentos que descartaron C2 (JIT cranelift).
+   💤 NO recomendado; solo como arco largo si el nativo deja de ser transpilador.
+
+**Descartadas**: embeber rustc en `ray` (sin API estable de librería, cientos de MB); servicio de
+compilación remota (rompe offline y el modelo de proyecto sin telemetría).
+
+**Plan sugerido**: arco «toolchain autocontenida» = 1 + 2a (subcomando, resolvedor de
+`cargo`/`rustc`, asset vendor en `release.yml`, tabla en docs/build.md y PRODUCTION.md) y la 3
+como hito independiente previo o paralelo. **Ejecutado en M171** (DESIGN §163): 1 + 2a completas;
+`install` no ejecuta `ray build` solo (propone), y la 3 (binario VM+payload) queda PENDIENTE como
+hito propio. Encaja con Windows (§84): en la 1 el instalador puede
+elegir `-gnu` para no exigir Build Tools.
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md) con su hito, y lo

@@ -530,6 +530,8 @@ inerte. `blocking` es contextual: sigue valiendo como identificador.
 | `ray registry verify [dir]` | audita las firmas de un índice contra sus dueños (CI del repo del índice) |
 | `ray registry yank <nom>@<ver> [--undo]` | retira/restaura una versión publicada |
 | `ray upgrade [tag] [--check]` | actualiza `ray`/`raylang` a la última release (o al tag); `--check` solo informa (0 = al día, 1 = hay nueva) |
+| `ray toolchain install [--rust <canal>] [--force] [--no-vendor]` | instala una toolchain de Rust PRIVADA para `build --native` bajo `~/.ray/toolchain` (rustup perfil `minimal`, sin tocar el Rust del usuario ni su PATH) y el vendor de `ray-runtime` de la release (primer build sin red). Con `cargo` ya en el PATH no instala nada (salvo `--force`) |
+| `ray toolchain status` | qué `cargo`/`rustc` usaría `build --native` y de dónde (`RAY_CARGO`/`RAY_RUSTC` → PATH → privada), su versión, el linker del sistema y el vendor instalado; exit 1 si falta alguno |
 | `ray version` | versión |
 | `ray help` | la ayuda: todos los subcomandos con sus flags (también sin argumentos) |
 

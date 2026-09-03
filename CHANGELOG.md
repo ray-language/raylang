@@ -15,6 +15,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   BLOQUEANTE (`WSADuplicateSocket` no hereda el modo; en unix el fd duplicado sí) — el `accept`
   de un listener no bloqueante bloqueaba al único worker. Los clones re-aplican el modo. Test en
   las tres plataformas, con un hilo y en multicore.
+- **`ray build --native` en un equipo sin Rust** (M171, IDEAS §85): `ray toolchain install`
+  instala una toolchain de Rust privada bajo `~/.ray/toolchain` (rustup perfil `minimal`, sin
+  tocar el Rust del usuario ni su PATH) y el vendor de dependencias de `ray-runtime` que cada
+  release publica (`ray-runtime-vendor.tar.gz`), de modo que el primer build nativo no necesita
+  red. El build resuelve `cargo`/`rustc` en orden `RAY_CARGO`/`RAY_RUSTC` → PATH → privada, y
+  cuando faltan lo dice con la pista de instalación en vez de "is it on PATH?". `ray toolchain
+  status` muestra qué usaría el build, el linker del sistema y el vendor. El enlazador del
+  sistema (Xcode CLT / build-essential / MSVC Build Tools) sigue siendo del usuario, y el mensaje
+  lo dice.
 
 - **`ray build --native` es honesto en Windows** (M169, docs/windows.md W2): un programa que usa
   `std/process`, `fs.watch`, `std/audio` o `std/ui` ya no llega a `rustc` (sus módulos del runtime

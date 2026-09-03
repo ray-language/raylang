@@ -1,6 +1,0 @@
-[package]
-name = "p3_http_local"
-version = "0.1.0"
-
-[dependencies]
-net = "path:../../../packages/net"

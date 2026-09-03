@@ -37,23 +37,3 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         run: ./target/release/ray.exe run tools/windows_probe/p1_connect.ray
-      - name: P2 par local servidor/cliente (multicore)
-        shell: pwsh
-        continue-on-error: true
-        timeout-minutes: 2
-        run: ./target/release/ray.exe run tools/windows_probe/p2_local_pair.ray
-      - name: P2 par local (RAYLANG_THREADS=1)
-        shell: pwsh
-        continue-on-error: true
-        timeout-minutes: 2
-        env:
-          RAYLANG_THREADS: "1"
-        run: ./target/release/ray.exe run tools/windows_probe/p2_local_pair.ray
-      - name: P3 webserver + http.fetch locales
-        shell: pwsh
-        continue-on-error: true
-        timeout-minutes: 3
-        run: |
-          $ray = Join-Path (Get-Location) "target/release/ray.exe"
-          Set-Location tools/windows_probe/p3_http_local
-          & $ray run

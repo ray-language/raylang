@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Los servidores funcionan en Windows** (M170, docs/windows.md 3.6): toda espera de red sin
+  poller (accept, read, write parcial) colgaba para siempre — el scheduler tomaba por "durmiente"
+  a la fibra aparcada sin fd y nunca la reintentaba. Un servidor TCP se quedaba mudo en el primer
+  `accept`; `webserver`, `http.fetch` contra localhost y el par cliente/servidor del censo,
+  igual. Ahora esas esperas caen al busy-poll cooperativo de 1 ms. Test en las tres plataformas.
+
 - **`ray build --native` es honesto en Windows** (M169, docs/windows.md W2): un programa que usa
   `std/process`, `fs.watch`, `std/audio` o `std/ui` ya no llega a `rustc` (sus módulos del runtime
   son unix y el usuario veía un backtrace de compilación): el build se rechaza antes de generar

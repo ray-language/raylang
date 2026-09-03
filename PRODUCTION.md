@@ -91,6 +91,9 @@ Ser honesto sobre el borde es parte del contrato:
 
 ### Windows
 
+El inventario completo de deudas, con la API de Windows que cierra cada hueco, su tamaño y el
+orden de ataque, vive en [`docs/windows.md`](docs/windows.md) (M167).
+
 Desde M165 el camino de instalación es de primera: `install.ps1` (`irm … | iex`), `ray upgrade`
 con el zip de la release, y un job de CI en `windows-latest` que construye el binario, corre la
 VM y ejecuta el instalador REAL contra la última release; `release.yml` prueba el instalador

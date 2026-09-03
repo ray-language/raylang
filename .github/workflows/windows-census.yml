@@ -1,0 +1,65 @@
+# Censo de portabilidad a Windows (M167, docs/windows.md): corre TODOS los ejemplos con `main` en
+# Linux (referencia) y en Windows, y publica la tabla de diferencias en el resumen del job. Es
+# informativo (nunca falla): su salida alimenta el documento de deudas de Windows. Se lanza a mano
+# o al empujar a ramas `census/**`.
+name: Censo Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["census/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  expected:
+    name: referencia (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build --release --bin ray
+      - run: python3 tools/windows_census.py record --ray target/release/ray --out census-linux.json --timeout 45
+      - uses: actions/upload-artifact@v4
+        with:
+          name: census-linux
+          path: census-linux.json
+
+  census:
+    name: censo (windows)
+    runs-on: windows-latest
+    needs: expected
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-win-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build --release --bin ray
+      - uses: actions/download-artifact@v4
+        with:
+          name: census-linux
+      - run: python tools/windows_census.py record --ray target/release/ray.exe --out census-windows.json --timeout 45
+      - shell: pwsh
+        run: |
+          python tools/windows_census.py compare --expected census-linux.json --actual census-windows.json --summary census.md
+          Get-Content census.md | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: census-windows
+          path: |
+            census-windows.json
+            census.md

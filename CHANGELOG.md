@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`signals()` funciona en Windows** (M168, docs/windows.md W1): Ctrl-C y Ctrl-Break llegan
+  como `2`, y el cierre de la ventana, el logoff y el apagado como `15`, vía el handler de
+  control de la consola; el handler retiene su hilo unos segundos ante el cierre para que el
+  programa drene. Con ello `webserver.serve_graceful` y `web.listen_graceful` arrancan en
+  Windows (el fallo de la app `store`). Igual en la VM y en el binario nativo, cuyo runtime de
+  señales ya compila en Windows; y `ray build --native` en un host Windows apaga las fibras
+  solo (antes solo lo hacía con `--target`). SIGWINCH (28) queda para el arco de terminal.
+
 ## 1.5.1 — 2026-09-02
 
 - **Las dependencias resuelven en Windows** (M166): `ray run` fallaba con "the dependency 'net'

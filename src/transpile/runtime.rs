@@ -1874,16 +1874,26 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // 28 coincide en macOS/BSD y Linux). El truco del self-pipe (como
     // la VM, `src/builtins.rs`): el handler (async-signal-safe: solo `write`) escribe el nº de señal a un
     // pipe; un hilo lector lo lee (bloqueante) y lo envía al canal. FFI a libc sin crates (siempre
-    // enlazada). Unix; en otras plataformas signals() no se soporta (el checker lo permite, pero aquí
-    // no compilaría → se documenta como diferido no-unix).
+    // enlazada). M168: en Windows el equivalente es `SetConsoleCtrlHandler` (Ctrl-C/Break → 2;
+    // cierre/logoff/apagado → 15): el handler corre en un hilo del SO y envía al canal directo (sin
+    // fibras en Windows, el canal es el de hilos). Otras plataformas: no compila (diferido).
     if t.needs_signals {
         out.push_str(concat!(
-            "static __RAY_SIG_PIPE_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);\n",
-            "unsafe extern \"C\" { fn pipe(fds: *mut i32) -> i32; fn read(fd: i32, buf: *mut u8, n: usize) -> isize; fn write(fd: i32, buf: *const u8, n: usize) -> isize; fn signal(sig: i32, handler: usize) -> usize; }\n",
-            "extern \"C\" fn __ray_on_signal(sig: i32) {\n",
+            "#[cfg(unix)] static __RAY_SIG_PIPE_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);\n",
+            "#[cfg(unix)] unsafe extern \"C\" { fn pipe(fds: *mut i32) -> i32; fn read(fd: i32, buf: *mut u8, n: usize) -> isize; fn write(fd: i32, buf: *const u8, n: usize) -> isize; fn signal(sig: i32, handler: usize) -> usize; }\n",
+            "#[cfg(unix)] extern \"C\" fn __ray_on_signal(sig: i32) {\n",
             "    let b = sig as u8; let w = __RAY_SIG_PIPE_W.load(std::sync::atomic::Ordering::Relaxed);\n",
             "    if w >= 0 { unsafe { let _ = write(w, &b as *const u8, 1); } }\n}\n",
-            "fn __ray_signals() -> __RayChan<i64> {\n",
+            "#[cfg(windows)] #[link(name = \"kernel32\")] unsafe extern \"system\" { fn SetConsoleCtrlHandler(handler: Option<unsafe extern \"system\" fn(u32) -> i32>, add: i32) -> i32; }\n",
+            "#[cfg(windows)] static __RAY_SIG_CHAN: std::sync::OnceLock<__RayChan<i64>> = std::sync::OnceLock::new();\n",
+            "#[cfg(windows)] unsafe extern \"system\" fn __ray_on_ctrl(event: u32) -> i32 {\n",
+            "    let sig: i64 = match event { 0 | 1 => 2, 2 | 5 | 6 => 15, _ => return 0 };\n",
+            "    if let Some(ch) = __RAY_SIG_CHAN.get() { ch.send(sig); }\n",
+            "    if sig == 15 { std::thread::sleep(std::time::Duration::from_millis(4000)); }\n",
+            "    1\n}\n",
+            "#[cfg(windows)] fn __ray_signals() -> __RayChan<i64> {\n",
+            "    __RAY_SIG_CHAN.get_or_init(|| { let ch: __RayChan<i64> = __RayChan::make(None); unsafe { SetConsoleCtrlHandler(Some(__ray_on_ctrl), 1); } ch }).clone()\n}\n",
+            "#[cfg(unix)] fn __ray_signals() -> __RayChan<i64> {\n",
             "    static CHAN: std::sync::OnceLock<__RayChan<i64>> = std::sync::OnceLock::new();\n",
             "    CHAN.get_or_init(|| {\n",
             "        let ch: __RayChan<i64> = __RayChan::make(None);\n",

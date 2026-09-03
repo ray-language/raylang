@@ -144,6 +144,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ray fmt salió $LASTEXITCODE" }
       - name: Tests del front-end y la VM (los que no dependen de unix)
         run: cargo test --release --lib -- lexer parser checker compiler vm::tests fmt
+      # M168: signals() en Windows (SetConsoleCtrlHandler) — VM, binario NATIVO (primer build
+      # --native en un host Windows bajo CI: fibras apagadas por host) y el handler simulado.
+      - name: signals() en Windows (VM + nativo + handler de consola)
+        run: cargo test --release --test signals_portable_cli -- --nocapture
       # M166: un proyecto CON dependencias — el runner tiene el `core.autocrlf=true` de Git for
       # Windows, exactamente el escenario que rompía el hash del lock ("possible tampering").
       - name: Proyecto con dependencias del índice (resolución + lock bajo autocrlf)

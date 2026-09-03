@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.5.1 — 2026-09-02
 
 - **Las dependencias resuelven en Windows** (M166): `ray run` fallaba con "the dependency 'net'
   does not match 'ray.lock' … (possible tampering)" porque git, con `core.autocrlf=true`,

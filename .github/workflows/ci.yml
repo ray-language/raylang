@@ -181,6 +181,8 @@ jobs:
           # 1 = hay versión nueva; ambos válidos — lo que no vale es 69 (plataforma no soportada).
           & target/release/ray.exe upgrade --check
           if ($LASTEXITCODE -gt 1) { throw "ray upgrade --check salió $LASTEXITCODE" }
+          # El paso termina con el código del ÚLTIMO comando nativo: un 1 legítimo lo pondría en rojo.
+          exit 0
 
   wasm:
     name: build wasm32 (playground)

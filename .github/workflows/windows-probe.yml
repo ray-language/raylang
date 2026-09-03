@@ -37,3 +37,22 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         run: ./target/release/ray.exe run tools/windows_probe/p1_connect.ray
+      - name: P2b par local con traza (RAYLANG_THREADS=1, plazo 40 s, salida a archivo)
+        shell: pwsh
+        continue-on-error: true
+        env:
+          RAYLANG_THREADS: "1"
+        run: |
+          $ray = Join-Path (Get-Location) "target/release/ray.exe"
+          $p = Start-Process -FilePath $ray -ArgumentList "run","tools/windows_probe/p2_steps.ray" -NoNewWindow -PassThru -RedirectStandardError p2_steps.err -RedirectStandardOutput p2_steps.out
+          if (-not $p.WaitForExit(40000)) { Write-Host "PLAZO: matando"; $p.Kill() }
+          Write-Host "--- stderr (traza)"; Get-Content p2_steps.err
+          Write-Host "--- stdout"; Get-Content p2_steps.out
+      - name: P2b par local con traza (multicore)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ray = Join-Path (Get-Location) "target/release/ray.exe"
+          $p = Start-Process -FilePath $ray -ArgumentList "run","tools/windows_probe/p2_steps.ray" -NoNewWindow -PassThru -RedirectStandardError p2m.err -RedirectStandardOutput p2m.out
+          if (-not $p.WaitForExit(40000)) { Write-Host "PLAZO: matando"; $p.Kill() }
+          Write-Host "--- stderr (traza)"; Get-Content p2m.err

@@ -1,0 +1,64 @@
+// Sonda W-TCP-2b: el par local con TRAZA por paso, para ver exactamente dónde se detiene en Windows
+// con un solo worker (RAYLANG_THREADS=1). Cada línea sale por stderr (sin buffer).
+import std/net;
+
+fn main() -> int {
+    let ports: Channel<int> = Channel.new();
+    let server = spawn(fn() -> int {
+        eprint("S1 listen");
+        match (net.tcp_listen("127.0.0.1", 0)) {
+            Result.Ok(srv) => {
+                eprint("S2 listening " + to_string(net.local_port(srv)));
+                send(ports, net.local_port(srv));
+                eprint("S3 port sent; accept");
+                match (net.tcp_accept(srv)) {
+                    Result.Ok(conn) => {
+                        eprint("S4 accepted; read");
+                        match (net.socket_read(conn)) {
+                            Result.Ok(msg) => {
+                                eprint("S5 read [" + msg + "]; write");
+                                let _ = net.socket_write(conn, "eco: " + msg);
+                                eprint("S6 written");
+                            },
+                            Result.Err(e) => eprint("S5 read err: " + e),
+                        }
+                        close(conn);
+                    },
+                    Result.Err(e) => eprint("S4 accept err: " + e),
+                }
+                close(srv);
+                eprint("S7 done");
+                0
+            },
+            Result.Err(e) => {
+                eprint("S2 listen err: " + e);
+                1
+            },
+        }
+    });
+    eprint("C1 recv port");
+    let port = match (recv(ports)) {
+        Option.Some(p) => p,
+        Option.None => 0,
+    };
+    eprint("C2 got port " + to_string(port) + "; connect");
+    match (net.tcp_connect("127.0.0.1", port)) {
+        Result.Ok(c) => {
+            eprint("C3 connected; write");
+            match (net.socket_write(c, "hola")) {
+                Result.Ok(n) => eprint("C4 written " + to_string(n) + "; read"),
+                Result.Err(e) => eprint("C4 write err: " + e),
+            }
+            match (net.socket_read(c)) {
+                Result.Ok(r) => eprint("C5 read [" + r + "]"),
+                Result.Err(e) => eprint("C5 read err: " + e),
+            }
+            close(c);
+        },
+        Result.Err(e) => eprint("C3 connect err: " + e),
+    }
+    eprint("C6 join");
+    let code = join(server);
+    eprint("C7 fin " + to_string(code));
+    0
+}

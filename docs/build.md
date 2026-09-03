@@ -174,6 +174,40 @@ vivo del disco). Un dir configurado que no existe aborta el build (exit 64, nomb
 origen). No es un subsistema de ray-runtime: un programa solo-embed conserva la vía `rustc`
 pelada.
 
+### 6.c Toolchain autocontenida (M171): un equipo sin Rust
+
+`ray build --native` necesita `cargo` (vía Cargo, la común) o `rustc` (vía pelada). En un equipo
+recién instalado no hay ninguno. Tres piezas lo resuelven sin que el usuario instale Rust a mano:
+
+- **Resolución** (`src/toolchain.rs`): `cargo`/`rustc` se buscan en orden `RAY_CARGO`/`RAY_RUSTC`
+  → `PATH` → toolchain privada `~/.ray/toolchain` (`RAY_TOOLCHAIN_HOME` la mueve). El Rust del
+  usuario, si existe, siempre gana. Si falta, el error nombra las tres fuentes y sugiere `ray
+  toolchain install` (y, cuando solo faltan las features siempre-on, la vía `--without`).
+- **`ray toolchain install [--rust <canal>] [--force] [--no-vendor]`**: descarga `rustup-init`
+  del canal oficial (`sh.rustup.rs` / `win.rustup.rs`) y lo instala con perfil `minimal`
+  (`stable` por defecto) bajo `RUSTUP_HOME=~/.ray/toolchain/rustup` y
+  `CARGO_HOME=~/.ray/toolchain/cargo`: no toca `~/.cargo`, `~/.rustup` ni el PATH. Las
+  herramientas privadas se lanzan siempre con esas dos variables (los proxies de rustup buscan
+  la toolchain en `RUSTUP_HOME`). Con `cargo` ya en el PATH no instala nada salvo `--force`
+  (pero sí baja el vendor). Verifica `cargo --version` antes de declarar éxito. Medido (macOS
+  arm64, 3 sep 2026): ~450 MB en disco.
+- **Vendor de `ray-runtime`** (asset `ray-runtime-vendor.tar.gz` de cada release, producido por
+  `tools/vendor-runtime.sh`: `cargo vendor` con TODAS las features + su `Cargo.lock`): `install`
+  lo deja en `~/.ray/toolchain/vendor/<versión de ray>/`; si está, el proyecto Cargo generado
+  lleva un `.cargo/config.toml` con `[source.crates-io] replace-with` hacia él y usa SU lock
+  (no el cacheado en `native-cache`, que podría fijar versiones que el vendor no tiene). Medido:
+  build frío de `hello` con `CARGO_NET_OFFLINE=true`, PATH pelado y toolchain privada → 4,6 s;
+  con TLS (ring+rustls desde el vendor) también offline. Una versión de desarrollo sin release no
+  tiene vendor: `install` lo dice y el build tira de crates.io como antes.
+- **`ray toolchain status`**: qué usaría el build y de dónde, versiones, el linker del sistema
+  (`xcode-select -p` / `cc` / `link.exe`) y el vendor; exit 1 si falta `cargo` o `rustc`.
+
+Lo que NO resuelve, a propósito y con mensaje: el **enlazador del sistema** (Xcode Command Line
+Tools / `build-essential` / MSVC Build Tools). `rustc` lo necesita siempre; `install` lo avisa al
+final y `status` lo lista. En Windows la toolchain privada es `-msvc` (la `-gnu` autocontenida de
+rustup no trae `gcc`, y ring/mimalloc/rusqlite compilan C): las Build Tools siguen haciendo falta.
+Sin verificar en Windows (docs/windows.md).
+
 > El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
 > `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`
 > (feature `crypto`); su `tls`/`sqlite` solo se enlazan en el proyecto GENERADO del

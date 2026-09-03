@@ -52,6 +52,7 @@ pub mod stdlib;
 pub mod templ;
 pub mod test_runner;
 pub mod token;
+pub mod toolchain;
 pub mod vm;
 /// M44a-3: el punto de entrada WebAssembly del playground (solo en `wasm32`).
 #[cfg(target_arch = "wasm32")]

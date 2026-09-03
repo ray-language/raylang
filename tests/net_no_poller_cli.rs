@@ -17,30 +17,40 @@ fn tmp(name: &str) -> std::path::PathBuf {
 /// Corre `ray run` con un plazo: un cuelgue (el bug) mata al hijo y falla con mensaje, en vez de
 /// colgar la suite.
 fn run_with_deadline(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)], secs: u64) -> (String, String, Option<i32>) {
+    // stdout/stderr a ARCHIVOS: si hay que matar al hijo por cuelgue, lo que imprimió antes sigue
+    // ahí y el mensaje de fallo dice hasta dónde llegó (con pipes se perdía).
+    let out_path = dir.join(format!("out_{}.txt", std::process::id()));
+    let err_path = dir.join(format!("err_{}.txt", std::process::id()));
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = std::fs::File::create(&err_path).unwrap();
     let mut cmd = Command::new(BIN);
-    cmd.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::from(out_file)).stderr(Stdio::from(err_file));
     for (k, v) in env {
         cmd.env(k, v);
     }
     let mut child = cmd.spawn().expect("lanza ray");
     let start = std::time::Instant::now();
+    let mut code = None;
+    let mut hung = false;
     loop {
-        if let Ok(Some(_)) = child.try_wait() {
+        if let Ok(Some(st)) = child.try_wait() {
+            code = st.code();
             break;
         }
         if start.elapsed().as_secs() > secs {
             let _ = child.kill();
             let _ = child.wait();
-            return (String::new(), format!("PLAZO de {secs}s excedido (cuelgue)"), None);
+            hung = true;
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    let out = child.wait_with_output().unwrap();
-    (
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-        out.status.code(),
-    )
+    let stdout = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let mut stderr = std::fs::read_to_string(&err_path).unwrap_or_default();
+    if hung {
+        stderr.push_str(&format!("\nPLAZO de {secs}s excedido (cuelgue)"));
+    }
+    (stdout, stderr, code)
 }
 
 const PAIR: &str = r#"import std/net;

@@ -120,7 +120,7 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 
 | Dónde | Hoy | Arreglo |
 |---|---|---|
-| `key_path` (`ray publish --sign`) | solo `HOME` → sin `USERPROFILE` la clave va a `./.ray/publish.key` | `HOME` → `USERPROFILE`, como ya hace `native_cache_dir` |
+| `key_path` (`ray publish --sign`) | ✅ M169: `HOME` → `USERPROFILE` | — |
 | `raise_fd_limit` | no-op (`cfg(unix)`) | N/A en Windows: documentar |
 | `packages/tz` | `load()` → `Err` (no hay `/usr/share/zoneinfo`); UTC funciona | tzdata embebida o registro + `windowsZones` de CLDR (**M**) |
 | Ejemplos que asumen `/tmp` | `examples/io/binario.ray` escribe en `/tmp/…` → "The system cannot find the path specified" (censo) | usar el directorio temporal del sistema (`time`/`fs` no lo exponen: candidato a `fs.temp_dir()`) |
@@ -136,10 +136,11 @@ cinco superficies: `signals()`, `std/process`, `fs.watch`, `std/audio`, `std/ui`
 un backtrace de `rustc`, no el mensaje del lenguaje.
 
 El arreglo barato e independiente de cualquier port: una **comprobación pre-transpilación** —
-si el target efectivo es `*-pc-windows-*` y el programa activa alguno de los cinco flags
-(`needs_signals`, `needs_rt_process`, `needs_rt_watch`, `needs_rt_audio`, `needs_rt_ui`),
-`ray build --native` falla con el mismo mensaje que daría la VM en runtime. **S**, y
-prerrequisito para que este documento sea veraz también para el binario nativo.
+si el target efectivo es `*-pc-windows-*` y el programa activa alguno de los flags
+(`needs_rt_process`, `needs_rt_watch`, `needs_rt_audio`, `needs_rt_ui`; `signals` ya compila
+desde M168), `ray build --native` falla con el mismo mensaje que daría la VM en runtime.
+✅ **Hecho en M169**: `native_unsupported_on_windows` en `src/cli.rs`, exit 69 y sin binario;
+el job de Windows de CI lo prueba con un programa que usa `std/process`.
 
 ## 5. Probablemente funciona, sin verificar
 
@@ -165,7 +166,7 @@ Fuera de la red de CI actual:
 | Fase | Qué | Tamaño | Desbloquea |
 |---|---|---|---|
 | **W1** | `signals()` vía `SetConsoleCtrlHandler` + gate de la emisión nativa; mientras llega, `serve_graceful` degrada a `serve` con aviso cuando no hay señales | M + S | `serve_graceful`, `web.listen_graceful` (**la app `store`**), apagado limpio de cualquier servidor |
-| **W2** | Comprobación pre-transpilación (§4); fibras apagadas por host y no solo por `--target`; `key_path` con `USERPROFILE` | S | errores honestos en el nativo; `ray build --native` en Windows |
+| **W2** ✅ | Comprobación pre-transpilación (§4, M169); fibras apagadas por host (M168); `key_path` con `USERPROFILE` (M169) | S | errores honestos en el nativo; `ray build --native` en Windows |
 | **W3** | `ray dev`: `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK`, Job Objects para huérfanos | S–M | ciclo edit-run con drenado; sin puertos secuestrados |
 | **W4** | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
 | **W5** | `wepoll` en `src/poll.rs` + sueño fino | M + S | p99 de servidores bajo carga; pacing de juegos |
@@ -227,4 +228,5 @@ esta tabla se actualiza con el run que lo demuestre.
 - **Procesos**: tratar `process.run` como opcional (`Result`) y no como infraestructura del programa.
 - **Rutas**: separar siempre con `/` (Windows lo acepta en todas las APIs de archivo); nunca
   concatenar `\` a mano.
-- **Nativo**: hasta W2, compilar en Windows solo programas sin señales/procesos/watch/ui/audio.
+- **Nativo**: `ray build --native` en Windows compila todo lo que la VM soporta ahí, señales
+  incluidas; procesos, watch, ui y audio se rechazan con mensaje antes de generar nada (W2).

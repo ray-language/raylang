@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray build --native` es honesto en Windows** (M169, docs/windows.md W2): un programa que usa
+  `std/process`, `fs.watch`, `std/audio` o `std/ui` ya no llega a `rustc` (sus módulos del runtime
+  son unix y el usuario veía un backtrace de compilación): el build se rechaza antes de generar
+  nada, con el mismo mensaje que la VM da en runtime y exit 69. Y `ray publish --sign` encuentra
+  la clave en `%USERPROFILE%\.ray\publish.key` (antes solo miraba `HOME`).
+
 - **`signals()` funciona en Windows** (M168, docs/windows.md W1): Ctrl-C y Ctrl-Break llegan
   como `2`, y el cierre de la ventana, el logoff y el apagado como `15`, vía el handler de
   control de la consola; el handler retiene su hilo unos segundos ante el cierre para que el

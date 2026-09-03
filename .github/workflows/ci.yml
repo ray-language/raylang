@@ -148,6 +148,27 @@ jobs:
       # --native en un host Windows bajo CI: fibras apagadas por host) y el handler simulado.
       - name: signals() en Windows (VM + nativo + handler de consola)
         run: cargo test --release --test signals_portable_cli -- --nocapture
+      # M169 (W2): un programa que usa std/process no debe llegar a rustc en Windows — ray build
+      # --native lo rechaza con el mensaje de la VM y exit 69, en vez de un backtrace de compilación.
+      - name: ray build --native rechaza con mensaje honesto lo que no compila en Windows
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "w2"
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          @'
+          import std/process;
+          fn main() -> int {
+              match (process.run("cmd", ["/c", "echo hi"])) { Result.Ok(_) => 0, Result.Err(_) => 1 }
+          }
+          '@ | Set-Content -Path (Join-Path $dir "prog.ray")
+          $ray = Join-Path (Get-Location) "target/release/ray.exe"
+          Set-Location $dir
+          $out = & $ray build prog.ray --native -o prog_bin.exe 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 69) { throw "esperaba exit 69 (EX_UNAVAILABLE), salió $LASTEXITCODE" }
+          if ($out -notmatch "std/process") { throw "el mensaje no nombra std/process" }
+          if (Test-Path "prog_bin.exe") { throw "no debía producir binario" }
+          exit 0
       # M166: un proyecto CON dependencias — el runner tiene el `core.autocrlf=true` de Git for
       # Windows, exactamente el escenario que rompía el hash del lock ("possible tampering").
       - name: Proyecto con dependencias del índice (resolución + lock bajo autocrlf)

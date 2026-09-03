@@ -4,6 +4,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray dev` de verdad en Windows** (M172, docs/windows.md 3.2, W3): el reinicio pide un cierre
+  ordenado al programa (`CTRL_BREAK` al grupo del hijo; `serve_graceful` drena sus peticiones en
+  vuelo, como con SIGTERM en unix) y escala a la terminación forzada a los 3 s; un Job Object
+  mata al programa si el supervisor muere de cualquier forma (antes, matar `ray dev` dejaba al
+  servidor vivo reteniendo el puerto); y `--port`/`--listen` retienen el socket entre reinicios
+  (handle heredable) en vez de ignorarse. `ray test --watch` comparte la mejora. Nuevo
+  `src/dev_host.rs` con las dos variantes; `tests/dev_cli.rs` corre en las tres plataformas.
+
 ## 1.5.2 — 2026-09-03
 
 - **Los servidores funcionan en Windows** (M170, docs/windows.md 3.6): toda espera de red sin

@@ -1,6 +1,6 @@
 # raylang en Windows — el contrato y las deudas
 
-> Estado a 2 de septiembre de 2026 (v1.5.1). Este documento es el inventario **vivo** de lo que
+> Estado a 3 de septiembre de 2026 (v1.5.2 + M172). Este documento es el inventario **vivo** de lo que
 > raylang hace y no hace en Windows: qué funciona, qué degrada con un `Err` honesto, qué falla
 > de forma opaca, la API de Windows que cierra cada hueco, su tamaño y el orden de ataque.
 > Lo alimentan dos fuentes: la auditoría del código (todo `cfg(unix)` y su cadena de llamadas)
@@ -10,9 +10,9 @@
 
 ## 1. En una frase
 
-**La toolchain, el compilador, la VM, la red y los paquetes funcionan en Windows; lo que falta es
-la capa de sistema operativo** — procesos hijos, señales, terminal en modo crudo, el poller de
-red eficiente, y los arcos de escritorio y audio. La VM es uniformemente honesta (cada hueco es
+**La toolchain, el compilador, la VM, la red, los paquetes, las señales y `ray dev` funcionan en
+Windows; lo que falta es la capa de sistema operativo** — procesos hijos, terminal en modo crudo,
+el poller de red eficiente, y los arcos de escritorio y audio. La VM es uniformemente honesta (cada hueco es
 un `Err` con mensaje); el transpilador nativo no siempre: para cinco superficies emite Rust que
 no compila en Windows.
 
@@ -28,6 +28,8 @@ Desde M165/M166, cada PR corre en `windows-latest`:
   `ray build` dos veces (resolución + verificación del lock).
 - El instalador real: `install.ps1` contra la última release, `ray version`, `ray run` y
   `ray upgrade --check`.
+- `signals()` (M168), la red sin poller (M170) y `ray dev` (M172: drenado por `CTRL_BREAK`, Job
+  Object y socket-activation — `tests/dev_cli.rs` + los unitarios de `dev_host`).
 - `release.yml` instala el zip recién subido antes de dar la release por buena.
 
 Verificado además por un usuario real (2 sep 2026): instalación, `ray run` con `web`/`net`/`db`,
@@ -49,16 +51,17 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Tamaño | **M** en la VM (el self-pipe ya existe; cambia el productor) + **S** para gatear/portar la emisión nativa. |
 | **Hecho (M168)** | Exactamente eso: `SetConsoleCtrlHandler` encola y levanta la bandera `PENDING`; `install()` devuelve `-1` (sin fd) y `io_wait` duerme a cuantos de 10 ms cuando solo espera señales; el handler retiene su hilo 4 s ante el cierre. El nativo emite variante unix y Windows, y `ray build --native` apaga las fibras también por host. Sin SIGWINCH (W4). |
 
-### 3.2 `ray dev` y `ray test --watch` — degradados, documentados
+### 3.2 `ray dev` y `ray test --watch` · ✅ **cerrada en M172** salvo el watcher (DESIGN §164)
 
 | | |
 |---|---|
-| Reinicio | Sin SIGTERM: `terminate_gracefully` es `cfg(unix)`; en Windows es `TerminateProcess` directo → un servidor con `serve_graceful` no drena; las peticiones en vuelo se pierden en cada guardado. |
-| Huérfanos | `install_cleanup_on_death` es `cfg(unix)` → matar `ray dev` por pid deja al hijo vivo reteniendo el puerto. |
-| Socket-activation | `--port`/`--listen` se ignora con aviso (`dup2` + `pre_exec` + `RAY_LISTEN_FD` son unix) → cada reinicio re-bindea: ventana de "connection refused" y carreras `WSAEADDRINUSE`. |
-| Watcher | Cae a polling de mtimes (~200 ms): el crate `notify` sí soporta `ReadDirectoryChangesW`, pero el puente self-pipe de `ray_runtime::watch` es unix. |
-| Cierra con | `CREATE_NEW_PROCESS_GROUP` + `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)` para el reinicio con drenado; Job Objects (`AssignProcessToJobObject` + kill-on-close) para huérfanos; `WSADuplicateSocket` para pasar el listener; puente por evento/IOCP para el watcher. |
+| Reinicio | ~~Sin SIGTERM: `terminate_gracefully` es `cfg(unix)`; en Windows es `TerminateProcess` directo → un servidor con `serve_graceful` no drena; las peticiones en vuelo se pierden en cada guardado.~~ |
+| Huérfanos | ~~`install_cleanup_on_death` es `cfg(unix)` → matar `ray dev` por pid deja al hijo vivo reteniendo el puerto.~~ |
+| Socket-activation | ~~`--port`/`--listen` se ignora con aviso (`dup2` + `pre_exec` + `RAY_LISTEN_FD` son unix) → cada reinicio re-bindea: ventana de "connection refused" y carreras `WSAEADDRINUSE`.~~ |
+| Watcher | Cae a polling de mtimes (~200 ms): el crate `notify` sí soporta `ReadDirectoryChangesW`, pero el puente self-pipe de `ray_runtime::watch` es unix. **Sigue abierto** (W5: depende de 3.6). |
+| Cierra con | `CREATE_NEW_PROCESS_GROUP` + `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)` para el reinicio con drenado; Job Objects (`AssignProcessToJobObject` + kill-on-close) para huérfanos; handle heredable (o `WSADuplicateSocket`) para pasar el listener; puente por evento/IOCP para el watcher. |
 | Tamaño | reinicio **S–M** · huérfanos **S** · socket-activation **M** · watcher **M** (depende de 3.6). |
+| **Hecho (M172)** | La capa de SO del supervisor vive en `src/dev_host.rs` con las dos variantes. El hijo se lanza con `CREATE_NEW_PROCESS_GROUP` y el reinicio le manda `CTRL_BREAK` (el handler de M168 lo entrega como `2`; `serve_graceful` drena; 3 s y escala a `TerminateProcess`). Un Job Object con `KILL_ON_JOB_CLOSE` arrastra al hijo si el supervisor muere de cualquier forma (Ctrl-C, cierre de la ventana, kill por pid), y el handler de consola del supervisor reenvía `CTRL_BREAK` antes de salir para que además drene. `--port`/`--listen`: el listener se marca heredable (`SetHandleInformation`), su valor viaja en `RAY_LISTEN_FD` y el hijo lo adopta con `from_raw_socket` (validado con `local_addr`; si no sirve, `bind` normal), quitándole la herencia para sus propios hijos. `tests/dev_cli.rs` corre en las tres plataformas: drenado en el reinicio, socket retenido entre reinicios y (Windows) el hijo muere con el supervisor. |
 
 ### 3.3 Terminal — `std/term`
 
@@ -167,7 +170,7 @@ Fuera de la red de CI actual:
 |---|---|---|---|
 | **W1** | `signals()` vía `SetConsoleCtrlHandler` + gate de la emisión nativa; mientras llega, `serve_graceful` degrada a `serve` con aviso cuando no hay señales | M + S | `serve_graceful`, `web.listen_graceful` (**la app `store`**), apagado limpio de cualquier servidor |
 | **W2** ✅ | Comprobación pre-transpilación (§4, M169); fibras apagadas por host (M168); `key_path` con `USERPROFILE` (M169) | S | errores honestos en el nativo; `ray build --native` en Windows |
-| **W3** | `ray dev`: `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK`, Job Objects para huérfanos | S–M | ciclo edit-run con drenado; sin puertos secuestrados |
+| **W3** ✅ | `ray dev`: `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK`, Job Objects para huérfanos, socket-activation por handle heredable (M172) | S–M | ciclo edit-run con drenado; sin puertos secuestrados |
 | **W4** | `std/term` por Console API (isatty, size, raw) + `std/io` readiness (`PeekNamedPipe`/eventos de consola) | M + M | TUIs, `read_hidden`, color correcto, `read_key`, `ray mcp`/`lsp` sin bloquear la VM |
 | **W5** | `wepoll` en `src/poll.rs` + sueño fino | M + S | p99 de servidores bajo carga; pacing de juegos |
 | **W6** | `std/process` con `CreateProcess` + pipes + Job Objects | L | MCP/LSP hijos, pipelines |

@@ -152,6 +152,13 @@ jobs:
       # el scheduler los tomaba por durmientes y todo servidor colgaba en el primer accept).
       - name: Red sin poller (par local + webserver y fetch locales)
         run: cargo test --release --test net_no_poller_cli -- --nocapture
+      # M172 (W3): `ray dev` en Windows — reinicio con drenado (CTRL_BREAK al grupo del hijo),
+      # sin huérfanos (Job Object) y socket-activation (handle heredable). El supervisor bajo test
+      # recibe una consola propia oculta (CREATE_NO_WINDOW), así que no depende de la del runner.
+      - name: ray dev en Windows (drenado, Job Object, socket-activation)
+        run: |
+          cargo test --release --lib -- dev_host
+          cargo test --release --test dev_cli -- --nocapture
       # M169 (W2): un programa que usa std/process no debe llegar a rustc en Windows — ray build
       # --native lo rechaza con el mensaje de la VM y exit 69, en vez de un backtrace de compilación.
       - name: ray build --native rechaza con mensaje honesto lo que no compila en Windows

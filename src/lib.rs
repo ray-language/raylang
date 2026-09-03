@@ -26,6 +26,7 @@ pub mod checker;
 pub mod cli;
 pub mod compiler;
 pub mod deps;
+pub mod dev_host;
 pub mod diagnostic;
 pub mod editorconfig;
 pub mod ffi;

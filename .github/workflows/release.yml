@@ -59,6 +59,11 @@ jobs:
           mkdir -p "$RAY_TOOLCHAIN_HOME/vendor/$ver"
           tar xzf ray-runtime-vendor.tar.gz -C "$RAY_TOOLCHAIN_HOME/vendor/$ver"
           printf 'fn main() { print("vendor ok") }\n' > "$RUNNER_TEMP/hello.ray"
+          # HOME vacío simula un equipo limpio (sin ~/.cargo/registry), pero rustup guarda ahí su
+          # configuración: sin RUSTUP_HOME/CARGO_HOME explícitos, el proxy `cargo` no sabe qué
+          # toolchain usar ("could not choose a version of cargo"; el estreno de v1.5.2).
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          mkdir -p "$RUNNER_TEMP/home"
           CARGO_NET_OFFLINE=true HOME="$RUNNER_TEMP/home" ./target/release/ray build --native "$RUNNER_TEMP/hello.ray" -o "$RUNNER_TEMP/hello"
           test "$("$RUNNER_TEMP/hello")" = "vendor ok"
       - name: Subir el asset a la Release

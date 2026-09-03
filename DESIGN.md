@@ -11363,8 +11363,20 @@ aparcada sin fd pero con handle es E/S sin poller → dormir 1 ms y reintentarla
 respaldo de M15.5. El respaldo final (fds presentes pero poller `Unsupported`/EINTR) también
 despierta ahora las entradas con handle. Unix no cambia: allí los fds existen y manda el poller.
 
+**La segunda mitad.** Con el scheduler arreglado, el par local pasó en multicore y siguió
+colgando con un hilo. Una sonda con traza por paso (`tools/windows_probe/p2_steps.ray`) lo
+delimitó: el servidor imprime "port sent; accept" y el cliente, ya despierto, nunca corre. El
+`accept` no cedía: **bloqueaba al único worker**. La causa es de Windows puro: cada operación de
+socket CLONA el socket (`try_clone`) para no retener el lock del registro mientras espera; en
+unix el fd duplicado comparte la descripción abierta y con ella `O_NONBLOCK`, pero
+`WSADuplicateSocket` crea un socket nuevo **en modo bloqueante**. El listener era no bloqueante;
+su clon, no. En multicore "funcionaba" porque otro worker corría al cliente y su `connect`
+desbloqueaba el `accept`. Arreglo: `set_nonblocking` registra el handle, y cada clon (TCP,
+listener, UDP) re-aplica el modo si el original lo tenía. Los sockets del intérprete siguen
+bloqueantes: nadie los registró.
+
 **Prueba.** `tests/net_no_poller_cli.rs` corre en las tres plataformas: el par local
 (multicore y `RAYLANG_THREADS=1`) y el webserver + fetch locales, cada uno con plazo (un cuelgue
-falla con mensaje, no cuelga la suite). En el job de Windows de CI es el primer servidor raylang
-que acepta una conexión en esa plataforma. Queda W5: el mismo respaldo con readiness real (wepoll)
-para el p99 bajo carga.
+falla con mensaje y conserva la salida parcial, no cuelga la suite). En el job de Windows de CI es
+el primer servidor raylang que acepta una conexión en esa plataforma. Queda W5: el mismo respaldo
+con readiness real (wepoll) para el p99 bajo carga.

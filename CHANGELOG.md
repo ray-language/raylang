@@ -10,7 +10,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   poller (accept, read, write parcial) colgaba para siempre — el scheduler tomaba por "durmiente"
   a la fibra aparcada sin fd y nunca la reintentaba. Un servidor TCP se quedaba mudo en el primer
   `accept`; `webserver`, `http.fetch` contra localhost y el par cliente/servidor del censo,
-  igual. Ahora esas esperas caen al busy-poll cooperativo de 1 ms. Test en las tres plataformas.
+  igual. Ahora esas esperas caen al busy-poll cooperativo de 1 ms. Y la segunda mitad del mismo
+  bug: las operaciones de socket clonan el socket (`try_clone`) y en Windows el clon nace
+  BLOQUEANTE (`WSADuplicateSocket` no hereda el modo; en unix el fd duplicado sí) — el `accept`
+  de un listener no bloqueante bloqueaba al único worker. Los clones re-aplican el modo. Test en
+  las tres plataformas, con un hilo y en multicore.
 
 - **`ray build --native` es honesto en Windows** (M169, docs/windows.md W2): un programa que usa
   `std/process`, `fs.watch`, `std/audio` o `std/ui` ya no llega a `rustc` (sus módulos del runtime

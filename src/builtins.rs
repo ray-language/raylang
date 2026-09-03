@@ -1350,6 +1350,7 @@ mod watch_mod {
 /// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);
+    nonblocking_handles().lock().unwrap().remove(&h); // M170b: higiene (los ids no se reusan)
     // M56.4: limpia el estado de timeout del socket (los ids no se reusan; es solo higiene).
     read_timeouts().lock().unwrap().remove(&h);
     read_expired().lock().unwrap().remove(&h);
@@ -1614,11 +1615,16 @@ pub fn tcp_connect_timeout(host: &str, port: i64, ms: i64) -> Result<i64, String
 /// el handle no es un socket.
 fn socket_clone(h: i64) -> Result<std::net::TcpStream, String> {
     let reg = registry().lock().unwrap();
-    match reg.open.get(&h) {
-        Some(OpenHandle::Tcp(s)) => s.try_clone().map_err(|e| e.to_string()),
-        Some(_) => Err(format!("handle {} is not a socket", h)),
-        None => Err(format!("invalid handle: {}", h)),
+    let s = match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.try_clone().map_err(|e| e.to_string())?,
+        Some(_) => return Err(format!("handle {} is not a socket", h)),
+        None => return Err(format!("invalid handle: {}", h)),
+    };
+    // M170b: el clon hereda el modo no bloqueante también en Windows (ver `nonblocking_handles`).
+    if is_nonblocking(h) {
+        s.set_nonblocking(true).map_err(|e| e.to_string())?;
     }
+    Ok(s)
 }
 
 /// Hace **una** lectura del socket (hasta 64 KiB) y devuelve lo leído como `string` (UTF-8 *lossy*);
@@ -2258,16 +2264,35 @@ fn take_read_expired(h: i64) -> bool {
     read_expired().lock().unwrap().remove(&h)
 }
 
+/// M170b: los handles que la VM puso en modo no bloqueante. Las operaciones de socket CLONAN el
+/// socket (`try_clone`) para no retener el lock del registro mientras bloquean; en unix el fd
+/// duplicado comparte el modo (`O_NONBLOCK` vive en la descripción abierta), pero en Windows
+/// `WSADuplicateSocket` crea un socket NUEVO en modo bloqueante — el clon de un listener no
+/// bloqueante hacía un `accept` bloqueante y dejaba mudo al único worker (docs/windows.md 3.6).
+/// Los clones consultan aquí y re-aplican el modo.
+fn nonblocking_handles() -> &'static std::sync::Mutex<std::collections::HashSet<i64>> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<i64>>> = std::sync::OnceLock::new();
+    SET.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+fn is_nonblocking(h: i64) -> bool {
+    nonblocking_handles().lock().unwrap().contains(&h)
+}
+
 /// Pone el socket (conexión o escucha) del handle `h` en modo **no bloqueante** (M15.5). Lo llama la VM
 /// tras crear el socket; el intérprete nunca, así que sus sockets siguen bloqueantes.
 pub fn set_nonblocking(h: i64) -> Result<(), String> {
     let reg = registry().lock().unwrap();
-    match reg.open.get(&h) {
+    let r = match reg.open.get(&h) {
         Some(OpenHandle::Tcp(s)) => s.set_nonblocking(true).map_err(|e| e.to_string()),
         Some(OpenHandle::Listener(l)) => l.set_nonblocking(true).map_err(|e| e.to_string()),
         Some(OpenHandle::Udp(s)) => s.set_nonblocking(true).map_err(|e| e.to_string()),
         _ => Err(format!("handle {} is not a socket", h)),
+    };
+    if r.is_ok() {
+        nonblocking_handles().lock().unwrap().insert(h);
     }
+    r
 }
 
 /// M17: el descriptor de archivo crudo (`RawFd`, un `i32` en Unix) del socket detrás del handle, para
@@ -2324,6 +2349,9 @@ pub fn tcp_accept_nb(h: i64) -> Result<Option<i64>, String> {
             None => return Err(format!("invalid handle: {}", h)),
         }
     };
+    if is_nonblocking(h) {
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?; // M170b: Windows no lo hereda
+    }
     match listener.accept() {
         Ok((stream, _)) => {
             let _ = stream.set_nodelay(true); // Nagle+delayed-ACK (M96b)
@@ -2400,6 +2428,9 @@ pub fn tcp_accept(h: i64) -> Result<i64, String> {
             None => return Err(format!("invalid handle: {}", h)),
         }
     };
+    if is_nonblocking(h) {
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?; // M170b: Windows no lo hereda
+    }
     let (stream, _addr) = listener.accept().map_err(|e| e.to_string())?;
     let _ = stream.set_nodelay(true); // Nagle+delayed-ACK (M96b)
     let mut reg = registry().lock().unwrap();
@@ -2461,6 +2492,9 @@ pub fn udp_recv_from(h: i64) -> Result<(String, i64, Vec<u8>), String> {
             None => return Err(format!("invalid handle: {}", h)),
         }
     };
+    if is_nonblocking(h) {
+        sock.set_nonblocking(true).map_err(|e| e.to_string())?; // M170b: Windows no lo hereda
+    }
     let mut buf = vec![0u8; 65536]; // un datagrama UDP cabe de sobra en 64 KiB
     let (n, addr) = match sock.recv_from(&mut buf) {
         Ok(r) => r,
@@ -2494,6 +2528,9 @@ pub fn udp_recv_from_nb(h: i64) -> Result<Option<(String, i64, Vec<u8>)>, String
             None => return Err(format!("invalid handle: {}", h)),
         }
     };
+    if is_nonblocking(h) {
+        sock.set_nonblocking(true).map_err(|e| e.to_string())?; // M170b: Windows no lo hereda
+    }
     let mut buf = vec![0u8; 65536];
     match sock.recv_from(&mut buf) {
         Ok((n, addr)) => {

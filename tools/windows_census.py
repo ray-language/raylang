@@ -55,6 +55,8 @@ def run_one(ray, path, timeout):
 
 def record(args):
     dirs = set(args.dirs.split(",")) if args.dirs else None
+    # Ruta ABSOLUTA: los ejemplos con manifiesto corren con cwd propio (la relativa no resolvería).
+    args.ray = os.path.abspath(args.ray)
     results = {}
     for p in find_examples(dirs):
         rel = os.path.relpath(p, ROOT).replace(os.sep, "/")

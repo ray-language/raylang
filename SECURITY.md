@@ -173,8 +173,17 @@ documentada:
   `isatty`/`tcgetattr`/`tcsetattr`/`cfmakeraw`/`ioctl(TIOCGWINSZ)`/`atexit` — el `termios` se
   maneja como buffer opaco de 128 bytes, mayor que el de cualquier plataforma soportada, y el
   original solo se lee para restaurar tras publicarse completo).
-- **`src/cli.rs`** — ese supervisor: `dup2`/`pre_exec` para pasar el socket al hijo sin rechazar
-  conexiones entre reinicios, y la señal de muerte del padre.
+- **`src/dev_host.rs`** — la capa de SO de ese supervisor (M172): en unix `dup2`/`pre_exec` para
+  pasar el socket al hijo sin rechazar conexiones entre reinicios, `kill(pid, SIGTERM)` al hijo
+  propio y el handler de muerte del padre (`signal` + `kill` + `_exit`, async-signal-safe); en
+  Windows las llamadas a kernel32 declaradas a mano — Job Object (`CreateJobObjectW` +
+  `SetInformationJobObject` con una estructura `repr(C)` a cero salvo el flag, `AssignProcessToJobObject`
+  sobre el handle que posee `Child`), `GenerateConsoleCtrlEvent` al grupo del hijo (sin punteros),
+  `SetHandleInformation` sobre el listener propio, `OpenProcess(SYNCHRONIZE)`/`WaitForSingleObject`
+  con cierre inmediato del handle, y `ExitProcess` desde el hilo del handler de consola. En
+  `src/builtins.rs`, la adopción Windows del listener heredado (`from_raw_socket` sobre el valor
+  que el padre garantiza, validado con `local_addr` antes de usarlo; si no es un socket vivo se
+  `forget` en vez de cerrar un handle ajeno).
 - **`src/lib.rs`** — `setrlimit(RLIMIT_NOFILE)` para subir el límite de descriptores del proceso.
 - **`src/vm/mod.rs`** — la aserción `Send`/`Sync` sobre la referencia **inmutable** al programa
   compilado (`ProgRef`), compartida entre los hilos worker sin mutación.

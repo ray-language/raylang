@@ -2416,6 +2416,40 @@ fn adopt_or_bind(host: &str, port: i64) -> Result<std::net::TcpListener, String>
             return Ok(listener);
         }
     }
+    // M172 (Windows, W3): el supervisor marcó HEREDABLE el handle del socket y pasó su valor en
+    // `RAY_LISTEN_FD` (los handles heredados conservan el número). Se adopta con `from_raw_socket`
+    // tras validarlo (`local_addr`): si no es un socket vivo en este proceso —un LSP no-IFS, o el
+    // valor llegó de otro lado—, se cae al `bind` normal en vez de fallar en el primer `accept`.
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static ADOPTED: AtomicBool = AtomicBool::new(false);
+        if let (Ok(sock_s), Ok(addr)) = (std::env::var("RAY_LISTEN_FD"), std::env::var("RAY_LISTEN_ADDR"))
+            && addr == format!("{host}:{port}")
+            && let Ok(sock) = sock_s.parse::<u64>()
+            && ADOPTED
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            use std::os::windows::io::{AsRawSocket, FromRawSocket};
+            // Winsock se inicializa (WSAStartup) en el primer socket que crea std; un socket
+            // ADOPTADO no pasa por ahí, así que se fuerza con uno desechable antes de usarlo.
+            let _ = std::net::UdpSocket::bind("127.0.0.1:0");
+            // SAFETY: el handle lo heredamos del supervisor (marcado heredable antes del spawn) y
+            // `ADOPTED` garantiza que solo un `TcpListener` toma su propiedad. Si el valor no fuera
+            // un socket, `local_addr` falla y el listener se descarta (cerrar un handle inválido
+            // solo devuelve error).
+            let listener = unsafe { std::net::TcpListener::from_raw_socket(sock) };
+            if listener.local_addr().is_ok() {
+                // Ya adoptado, deja de ser heredable: los procesos que lance este programa no deben
+                // quedarse con el socket de escucha (IDEAS §53.4, como el FD_CLOEXEC de unix).
+                crate::dev_host::win::set_inheritable(listener.as_raw_socket() as usize, false);
+                return Ok(listener);
+            }
+            eprintln!("[dev] the inherited listener is not usable in this process; binding {host}:{port} instead");
+            std::mem::forget(listener); // no es nuestro: no cerrar un handle ajeno por error
+        }
+    }
     std::net::TcpListener::bind((host, port as u16)).map_err(|e| e.to_string())
 }
 

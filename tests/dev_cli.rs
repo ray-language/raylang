@@ -33,6 +33,22 @@ fn stop_dev(dev: &mut std::process::Child) {
     let _ = dev.wait();
 }
 
+/// El `Command` de un `ray dev` bajo test. En Windows (M172) el supervisor recibe una CONSOLA
+/// PROPIA y oculta (`CREATE_NO_WINDOW`): `GenerateConsoleCtrlEvent` exige que supervisor e hijo
+/// compartan consola, y el proceso de `cargo test` puede no tener ninguna (CI); con la suya, el
+/// reinicio con drenado se prueba igual en un runner sin ventana que en un terminal.
+fn ray_dev() -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+    cmd.arg("dev");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Sondea `path` hasta que su contenido contenga `needle` (plazo `secs`); devuelve el contenido.
 fn wait_for_content(path: &std::path::Path, needle: &str, secs: u64) -> String {
     let deadline = Instant::now() + Duration::from_secs(secs);
@@ -60,8 +76,7 @@ fn dev_restarts_on_changes() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
@@ -85,7 +100,6 @@ fn dev_restarts_on_changes() {
 /// Conecta a `127.0.0.1:port`, envía un ping y devuelve la respuesta (reintenta hasta `secs`). El
 /// socket lo retiene el supervisor, así que una conexión temprana se ENCOLA en el backlog (nunca
 /// rechazada) hasta que un hijo la acepta — justo la propiedad que probamos.
-#[cfg(unix)]
 fn connect_and_read(port: u16, secs: u64) -> String {
     let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
@@ -102,7 +116,6 @@ fn connect_and_read(port: u16, secs: u64) -> String {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn dev_socket_activation_retains_listener_across_restarts() {
     // M92.3: con `--port P`, el supervisor pre-abre y RETIENE `127.0.0.1:P`; cada hijo lo ADOPTA (fd
@@ -133,8 +146,7 @@ fn dev_socket_activation_retains_listener_across_restarts() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .arg("--port")
         .arg(port.to_string())
         .current_dir(&base)
@@ -212,8 +224,7 @@ fn dev_live_reload_injects_snippet_and_emits_reload() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .arg("--port")
         .arg(port.to_string())
         .arg("main.ray")
@@ -282,8 +293,7 @@ fn dev_reloads_the_browser_without_restart_on_an_embedded_asset_change() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .arg("main.ray")
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
@@ -342,8 +352,7 @@ fn dev_exits_when_a_windowed_app_closes_cleanly() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .arg("main.ray")
         .env("RAY_UI_BACKEND", "headless")
         .current_dir(&base)
@@ -396,8 +405,7 @@ fn dev_live_reload_without_port_also_injects() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .arg("main.ray")
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
@@ -427,8 +435,7 @@ fn dev_does_not_restart_if_change_fails_to_compile() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
@@ -471,8 +478,7 @@ fn dev_ignores_a_save_with_no_changes() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .current_dir(&base)
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file))
@@ -498,6 +504,7 @@ fn dev_ignores_a_save_with_no_changes() {
     stop_dev(&mut dev);
 }
 
+#[cfg(unix)]
 #[test]
 fn dev_adopted_listener_is_not_inherited_by_child_processes() {
     // IDEAS §53.4: el supervisor pasa el listener al hijo SIN FD_CLOEXEC (tiene que sobrevivir a su
@@ -532,8 +539,7 @@ fn dev_adopted_listener_is_not_inherited_by_child_processes() {
     let out_path = base.join("output.txt");
     let out_file = std::fs::File::create(&out_path).unwrap();
     let err_file = out_file.try_clone().unwrap();
-    let mut dev = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("dev")
+    let mut dev = ray_dev()
         .arg("--port")
         .arg(port.to_string())
         .current_dir(&base)
@@ -546,4 +552,110 @@ fn dev_adopted_listener_is_not_inherited_by_child_processes() {
     let log = wait_for_content(&out_path, "fd-check=", 15);
     stop_dev(&mut dev);
     assert!(log.contains("fd-check=clean"), "el nieto NO hereda el listener adoptado:\n{log}");
+}
+
+/// M172 (W3): el reinicio pide un cierre ORDENADO al hijo — SIGTERM en unix, CTRL_BREAK en
+/// Windows (grupo de procesos propio + `GenerateConsoleCtrlEvent`) — y un programa que espera en
+/// `signals()` lo recibe y drena antes de morir. Si el supervisor matara a secas
+/// (`TerminateProcess`), "drained" no aparecería nunca.
+#[test]
+fn dev_restart_lets_the_program_drain() {
+    let base = std::env::temp_dir().join("ray_dev_drain");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"srv\"\nversion = \"0.1.0\"\n").unwrap();
+    let src = |v: &str| {
+        format!(
+            "fn main() -> int {{\n\
+               let s = signals();\n\
+               print(\"ready {v}\");\n\
+               match (recv(s)) {{\n\
+                 Option.Some(n) => print(\"drained {v} on \" + to_string(n)),\n\
+                 Option.None => print(\"closed\"),\n\
+               }}\n\
+               0\n\
+             }}\n"
+        )
+    };
+    std::fs::write(base.join("src/main.ray"), src("v1")).unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = ray_dev()
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
+        .spawn()
+        .expect("lanza ray dev");
+
+    wait_for_content(&out_path, "ready v1", 15);
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(base.join("src/main.ray"), src("v2")).unwrap();
+    let output = wait_for_content(&out_path, "ready v2", 20);
+    stop_dev(&mut dev);
+    // unix: SIGTERM = 15; Windows: CTRL_BREAK llega como 2 (M168).
+    let expected = if cfg!(windows) { "drained v1 on 2" } else { "drained v1 on 15" };
+    assert!(output.contains(expected), "el hijo recibió la petición de cierre y drenó:\n{output}");
+    assert!(!output.contains("did not drain"), "no hizo falta la terminación forzada:\n{output}");
+}
+
+/// M172 (W3, Windows): si el supervisor muere a secas (`TerminateProcess`, donde ningún handler
+/// corre), el Job Object con kill-on-close arrastra al hijo — un servidor no se queda huérfano
+/// reteniendo su puerto. Se comprueba que el puerto vuelve a estar libre. (En unix el análogo es
+/// el handler de SIGTERM, cubierto por `stop_dev` en el resto de la suite; un SIGKILL al
+/// supervisor deja huérfano allí también — por eso el test es de Windows.)
+#[cfg(windows)]
+#[test]
+fn dev_child_dies_with_the_supervisor() {
+    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let base = std::env::temp_dir().join("ray_dev_orphan");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(base.join("ray.toml"), "[package]\nname = \"srv\"\nversion = \"0.1.0\"\n").unwrap();
+    // Un servidor que retiene el puerto para siempre (acepta y descarta conexiones). El marcador
+    // se CALCULA ("srv-" + "up"): un diagnóstico cita la línea fuente, y un literal aparecería en
+    // el log aunque el programa no hubiera llegado a correr.
+    std::fs::write(
+        base.join("src/main.ray"),
+        format!(
+            "import std/net;\n\
+             fn main() -> int {{\n\
+               match (net.tcp_listen(\"127.0.0.1\", {port})) {{\n\
+                 Result.Ok(srv) => {{\n\
+                   print(\"srv-\" + \"up\");\n\
+                   while (true) {{ match (net.tcp_accept(srv)) {{ Result.Ok(c) => {{ let _ = close(c); }}, Result.Err(_) => {{}}, }} }}\n\
+                   0 }},\n\
+                 Result.Err(e) => {{ eprint(\"listen: \" + e); 1 }},\n\
+               }}\n\
+             }}\n"
+        ),
+    )
+    .unwrap();
+
+    let out_path = base.join("output.txt");
+    let out_file = std::fs::File::create(&out_path).unwrap();
+    let err_file = out_file.try_clone().unwrap();
+    let mut dev = ray_dev()
+        .current_dir(&base)
+        .stdout(Stdio::from(out_file))
+        .stderr(Stdio::from(err_file))
+        .stdin(Stdio::null())
+        .spawn()
+        .expect("lanza ray dev");
+
+    wait_for_content(&out_path, "srv-up", 15);
+    assert!(TcpListener::bind(("127.0.0.1", port)).is_err(), "el hijo retiene el puerto mientras vive");
+    // Muerte a secas del supervisor: ningún handler corre; solo el job puede arrastrar al hijo.
+    dev.kill().unwrap();
+    let _ = dev.wait();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "el hijo sobrevivió al supervisor: el puerto {port} sigue ocupado");
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }

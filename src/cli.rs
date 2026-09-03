@@ -433,8 +433,8 @@ fn cmd_run(args: &[String]) {
 /// deps" caducó cuando `notify` entró al árbol) con fallback a polling de mtimes (~200 ms) en
 /// builds `--without watch` o no-unix; ver `DevWatcher`. Un `.ray.html` editado dispara
 /// reinicio; el hijo lo compila en memoria al arrancar (M102: sin `.ray` generado en disco).
-/// El reinicio manda **SIGTERM** — un servidor con `serve_graceful` (M88.1b) drena sus conexiones
-/// antes de morir — y escala a SIGKILL a los 3 s. Un programa que termina solo (un CLI, un crash)
+/// El reinicio manda **SIGTERM** (Windows: `CTRL_BREAK` al grupo del hijo, M172) — un servidor con
+/// `serve_graceful` (M88.1b) drena sus conexiones antes de morir — y escala al kill duro a los 3 s. Un programa que termina solo (un CLI, un crash)
 /// queda a la espera y se relanza al siguiente cambio.
 fn cmd_dev(args: &[String]) {
     let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
@@ -455,33 +455,26 @@ fn cmd_dev(args: &[String]) {
     // sobrevive a los reinicios (cero conexiones rechazadas). `--port`/`--listen` NO se reenvían al hijo.
     let (cli_listen, fwd_args) = take_listen(args);
     let listen_addr = cli_listen.or_else(|| load_manifest().and_then(|m| m.dev_listen));
-    // Retiene el socket durante toda la sesión (vive hasta que `ray dev` muere). Solo unix (fd passing).
-    #[cfg(unix)]
-    let dev_sock = listen_addr.as_ref().and_then(|addr| match std::net::TcpListener::bind(addr) {
-        Ok(l) => {
-            eprintln!("[dev] holding {addr} across restarts (socket-activation)");
-            Some(l)
+    // Retiene el socket durante toda la sesión (vive hasta que `ray dev` muere). Unix (fd
+    // heredado) y Windows (handle heredable, M172); ver `dev_host::pass_listener`.
+    let dev_sock = listen_addr.as_ref().and_then(|addr| {
+        if !crate::dev_host::supports_socket_activation() {
+            eprintln!("[dev] --port/--listen (socket-activation) is not supported on this platform; ignoring");
+            return None;
         }
-        Err(e) => {
-            eprintln!("[dev] could not pre-open {addr}: {e}; restarts will re-bind normally");
-            None
+        match std::net::TcpListener::bind(addr) {
+            Ok(l) => {
+                eprintln!("[dev] holding {addr} across restarts (socket-activation)");
+                Some(l)
+            }
+            Err(e) => {
+                eprintln!("[dev] could not pre-open {addr}: {e}; restarts will re-bind normally");
+                None
+            }
         }
     });
-    #[cfg(not(unix))]
-    let dev_sock: Option<std::net::TcpListener> = {
-        if listen_addr.is_some() {
-            eprintln!("[dev] --port/--listen (socket-activation) is unix-only; ignoring");
-        }
-        None
-    };
-    #[cfg(unix)]
-    let listen_pair = {
-        use std::os::unix::io::AsRawFd;
-        dev_sock.as_ref().zip(listen_addr.as_ref()).map(|(l, a)| (l.as_raw_fd(), a.as_str()))
-    };
-    #[cfg(not(unix))]
-    let listen_pair: Option<(i32, &str)> = None;
-    let _ = &dev_sock; // se retiene por su lado (el fd vive mientras `dev_sock` no se dropee)
+    // El socket vive mientras `dev_sock` no se dropee: toda la sesión.
+    let listen_pair = dev_sock.as_ref().zip(listen_addr.as_deref());
 
     // Live-reload del navegador (M92.4): el hub SSE emite `reload` en cada reinicio; el webserver,
     // viendo `RAY_DEV_RELOAD`, inyecta el snippet en las respuestas HTML. Arranca SIEMPRE: detectar
@@ -683,12 +676,13 @@ fn dev_entry(args: &[String]) -> Option<String> {
 
 /// Lanza el programa como `ray run <args...>` (mismo binario): hereda la resolución de entrada, la
 /// regeneración de templates y los flags. Registra el pid en `DEV_CHILD` para la limpieza por señal.
-/// Si `listen` está (unix, socket-activation M92.3): dup2-ea el socket retenido del supervisor al fd 3
-/// del hijo (antes del exec) y le pasa `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR` → el hijo lo ADOPTA en `tcp_listen`.
+/// Si `listen` está (socket-activation M92.3): el socket retenido del supervisor se pasa al hijo
+/// (`dev_host::pass_listener`: fd 3 en unix, handle heredable en Windows) con
+/// `RAY_LISTEN_FD`/`RAY_LISTEN_ADDR` → el hijo lo ADOPTA en `tcp_listen`.
 fn spawn_dev_child(
     exe: &Path,
     args: &[String],
-    listen: Option<(i32, &str)>,
+    listen: Option<(&std::net::TcpListener, &str)>,
     reload_port: Option<u16>,
 ) -> process::Child {
     let mut cmd = process::Command::new(exe);
@@ -697,43 +691,10 @@ fn spawn_dev_child(
     if let Some(p) = reload_port {
         cmd.env("RAY_DEV_RELOAD", p.to_string());
     }
-    #[cfg(unix)]
-    if let Some((fd, addr)) = listen {
-        use std::os::unix::process::CommandExt;
-        const TARGET_FD: i32 = 3; // convención systemd (SD_LISTEN_FDS_START)
-        cmd.env("RAY_LISTEN_FD", TARGET_FD.to_string()).env("RAY_LISTEN_ADDR", addr);
-        // SAFETY: `pre_exec` corre en el hijo tras `fork` y antes de `exec`; solo se llama a `dup2`/`fcntl`
-        // (async-signal-safe). `fd` (el listener del supervisor) es válido en el hijo por herencia del fork.
-        // Se limpia CLOEXEC en el fd destino EXPLÍCITAMENTE: si `fd` ya ERA 3 (típico: primer libre tras
-        // stdio), `dup2(3,3)` es un no-op que NO limpia CLOEXEC → sin esto, el fd 3 se cerraría en el exec.
-        unsafe {
-            cmd.pre_exec(move || {
-                unsafe extern "C" {
-                    fn dup2(oldfd: i32, newfd: i32) -> i32;
-                    // VARIÁDICA, como la declaración de builtins.rs (aridad fija = UB en arm64 y
-                    // `clashing_extern_declarations` entre ambas).
-                    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
-                }
-                const F_SETFD: i32 = 2; // limpiar los flags del descriptor (quita FD_CLOEXEC)
-                // (sin `unsafe` interior: el closure ya corre dentro del bloque unsafe de pre_exec)
-                if dup2(fd, TARGET_FD) < 0 || fcntl(TARGET_FD, F_SETFD, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+    if let Some((listener, addr)) = listen {
+        crate::dev_host::pass_listener(&mut cmd, listener, addr);
     }
-    let _ = &listen; // en no-unix el parámetro no se usa
-    match cmd.spawn() {
-        Ok(c) => {
-            DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
-            c
-        }
-        Err(e) => {
-            eprintln!("[dev] could not launch the program: {e}");
-            process::exit(70);
-        }
-    }
+    spawn_supervised(cmd, "[dev] could not launch the program")
 }
 
 /// Separa el socket a retener entre reinicios (M92.3) de los args a reenviar: `--listen host:port` o
@@ -1165,61 +1126,39 @@ fn first_change(
 
 /// El pid del hijo en curso de `ray dev` (0 = ninguno), para que el handler de señales del PADRE
 /// lo arrastre al morir: un `kill` al supervisor no debe dejar al programa huérfano reteniendo el
-/// puerto (Ctrl-C de terminal ya mata al grupo; esto cubre el kill por pid).
+/// puerto (Ctrl-C de terminal ya mata al grupo; esto cubre el kill por pid). En Windows lo lee el
+/// handler de consola de `dev_host` (y el Job Object cubre la muerte sin handler).
 static DEV_CHILD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-/// Instala el handler SIGTERM/SIGINT del supervisor: reenvía SIGTERM al hijo y sale. Solo unix
-/// (el mismo alcance que `signals()`, M88.1); async-signal-safe (kill + _exit, sin asignar).
+/// Instala la limpieza "si el supervisor muere, el hijo también" (M172: unix por señales,
+/// Windows por handler de consola + Job Object; ver `dev_host`). El hijo en curso se lee de
+/// `DEV_CHILD`.
 fn install_cleanup_on_death() {
-    #[cfg(unix)]
-    {
-        unsafe extern "C" {
-            fn signal(sig: i32, handler: usize) -> usize;
-        }
-        extern "C" fn on_death(_sig: i32) {
-            unsafe extern "C" {
-                fn kill(pid: i32, sig: i32) -> i32;
-                fn _exit(code: i32) -> !;
-            }
-            let pid = DEV_CHILD.load(std::sync::atomic::Ordering::SeqCst);
-            if pid > 0 {
-                unsafe {
-                    kill(pid, 15); // SIGTERM: el hijo drena (serve_graceful) o muere por defecto
-                }
-            }
-            unsafe { _exit(130) }
-        }
-        const SIGINT: i32 = 2;
-        const SIGTERM: i32 = 15;
-        unsafe {
-            signal(SIGINT, on_death as *const () as usize);
-            signal(SIGTERM, on_death as *const () as usize);
-        }
-    }
+    crate::dev_host::install_cleanup_on_death(&DEV_CHILD);
 }
 
-/// Termina el hijo con SIGTERM (drenado ordenado vía `serve_graceful`) y, si a los ~3 s sigue
-/// vivo, escala a SIGKILL. En no-unix va directo al kill duro de std.
+/// Termina el hijo con una petición de cierre ordenado (SIGTERM / CTRL_BREAK: drenado vía
+/// `serve_graceful`) y, si a los ~3 s sigue vivo, escala al kill duro (`dev_host`).
 fn terminate_gracefully(child: &mut process::Child) {
-    #[cfg(unix)]
-    {
-        unsafe extern "C" {
-            fn kill(pid: i32, sig: i32) -> i32;
+    crate::dev_host::terminate_gracefully(child);
+}
+
+/// Lanza un hijo SUPERVISADO (`ray dev`, `ray test --watch`): con la preparación de plataforma
+/// (grupo de procesos propio en Windows), registrado para la limpieza (Job Object en Windows)
+/// y con su pid en `DEV_CHILD`. `what` nombra al hijo en el mensaje de error.
+fn spawn_supervised(mut cmd: process::Command, what: &str) -> process::Child {
+    crate::dev_host::prepare(&mut cmd);
+    match cmd.spawn() {
+        Ok(c) => {
+            crate::dev_host::adopt(&c);
+            DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
+            c
         }
-        const SIGTERM: i32 = 15;
-        unsafe {
-            kill(child.id() as i32, SIGTERM);
+        Err(e) => {
+            eprintln!("{what}: {e}");
+            process::exit(70);
         }
-        for _ in 0..30 {
-            if let Ok(Some(_)) = child.try_wait() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        eprintln!("[dev] the program did not drain in time; forced termination");
     }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// Separa una opción `--flag <N>` inicial con valor entero. La usan `--fuel` (M42.1, límite de
@@ -2500,16 +2439,9 @@ fn cmd_test_watch(args: &[String]) -> ! {
             }
             None => args.to_vec(),
         };
-        let mut child = match process::Command::new(&exe).arg("test").args(&run_args).spawn() {
-            Ok(c) => {
-                DEV_CHILD.store(c.id() as i32, std::sync::atomic::Ordering::SeqCst);
-                c
-            }
-            Err(e) => {
-                eprintln!("[watch] could not launch the tests: {e}");
-                process::exit(70);
-            }
-        };
+        let mut cmd = process::Command::new(&exe);
+        cmd.arg("test").args(&run_args);
+        let mut child = spawn_supervised(cmd, "[watch] could not launch the tests");
         // La corrida en marcha: termina sola, o un cambio la corta para re-correr ya. El reap
         // (`try_wait`) va PRIMERO: un cambio que llega justo cuando la corrida acaba de terminar
         // debe tratarse por la vía de espera (con su gate de hash), no como corte a mitad —

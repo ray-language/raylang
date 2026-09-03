@@ -11441,3 +11441,55 @@ vacío: `status` sale 1, los dos caminos del build salen 65 con la pista) y el v
 generado). La instalación real se validó a mano (3 sep 2026): toolchain privada + vendor + PATH
 pelado + `CARGO_NET_OFFLINE=true` → `hello` en 4,6 s y un programa con `std/crypto` +
 `std/net` (ring + rustls desde el vendor) en 11,6 s, ambos ejecutan.
+
+## 164. M172 — W3: `ray dev` en Windows, con drenado, sin huérfanos y con socket retenido (sep 2026)
+
+La segunda deuda de `docs/windows.md` (§3.2). `ray dev` "funcionaba" en Windows en el sentido
+pobre: reiniciaba matando (`TerminateProcess`), un `serve_graceful` perdía las peticiones en
+vuelo en cada guardado, matar al supervisor dejaba al hijo vivo reteniendo el puerto, y
+`--port` se ignoraba con aviso. Todo lo que el supervisor hacía con el hijo era `cfg(unix)`:
+SIGTERM, el handler de señales, `dup2` al fd 3 en `pre_exec`.
+
+**Una capa de SO con dos variantes, no tres `cfg` sueltos.** `src/dev_host.rs` reúne los cinco
+primitivos que el supervisor necesita —preparar el lanzamiento, registrar al hijo, pedirle un
+cierre ordenado, limpiar si el supervisor muere, pasarle el listener— y `cli.rs` los llama sin
+saber de plataforma (`spawn_supervised`, compartido por `ray dev` y `ray test --watch`). La
+variante unix es la de siempre, movida. La Windows:
+
+- **Cierre ordenado = `CTRL_BREAK` al grupo del hijo.** Windows no puede mandar Ctrl-C a un
+  proceso concreto (`GenerateConsoleCtrlEvent(CTRL_C, pid)` no existe: Ctrl-C solo va a toda
+  la consola), pero sí `CTRL_BREAK` a un grupo de procesos. El hijo se lanza con
+  `CREATE_NEW_PROCESS_GROUP` (es líder de su grupo, con id = pid) y el reinicio le manda
+  `CTRL_BREAK`; el handler de consola de M168 lo entrega como `2` y `serve_graceful` drena.
+  Sin handler instalado (un CLI), la acción por defecto termina el proceso: el análogo exacto
+  de SIGTERM. El plazo es el mismo (3 s) y escala a `TerminateProcess`. Efecto lateral que
+  conviene conocer: un proceso en un grupo nuevo IGNORA el Ctrl-C de la consola por definición
+  del sistema, así que el hijo solo recibe lo que el supervisor le reenvía — que es
+  precisamente el diseño: el supervisor decide.
+- **Sin huérfanos = Job Object con `KILL_ON_JOB_CLOSE`.** No hay "grupo de procesos que muere
+  con el padre" en Windows; lo que hay es mejor: un job cuyo último handle vive en el
+  supervisor. Muera como muera (Ctrl-C, cierre de la ventana, `taskkill`, crash), el kernel
+  cierra el handle y mata a todo lo asignado. El handler de consola del supervisor, además,
+  reenvía `CTRL_BREAK` y espera hasta 3 s antes de salir, para que el hijo drene cuando el
+  cierre es voluntario. Los jobs anidan desde Windows 8, así que funciona dentro del job de un
+  runner de CI o un IDE.
+- **Socket-activation = handle heredable.** El listener del supervisor se marca heredable
+  (`SetHandleInformation`) y su VALOR viaja en `RAY_LISTEN_FD`: en Windows los handles heredados
+  conservan el número, así que no hace falta el `dup2` al fd 3 ni `WSADuplicateSocket` (que
+  exige conocer el pid del hijo ANTES de que exista el hijo, o un canal aparte para el blob).
+  El hijo lo adopta con `from_raw_socket` tras validarlo con `local_addr` (si el valor no es
+  un socket vivo en su proceso, cae al `bind` normal en vez de fallar en el primer `accept`) y
+  le quita la herencia, como el `FD_CLOEXEC` de unix (IDEAS §53.4). Un detalle de Winsock: std
+  inicializa WSA en el primer socket que CREA, y un socket adoptado no pasa por ahí, así que la
+  adopción crea un UDP desechable antes.
+
+**Prueba.** `tests/dev_cli.rs` deja de ser unix-only donde no tiene por qué serlo: el test de
+socket-activation corre en las tres plataformas; se añaden el reinicio con drenado (el programa
+espera en `signals()` e imprime el número recibido — 15 en unix, 2 en Windows — antes de salir)
+y, en Windows, la muerte del hijo con el supervisor (se mata al supervisor a secas y el puerto
+del hijo debe liberarse). El supervisor bajo test recibe una consola propia y oculta
+(`CREATE_NO_WINDOW`): `GenerateConsoleCtrlEvent` exige consola compartida entre supervisor e hijo
+y el proceso de `cargo test` en un runner puede no tener ninguna. El job de Windows de CI corre
+la suite y los tests unitarios de `dev_host` (el Job Object real: un `cmd` asignado muere al
+cerrar el handle). Queda del §3.2 solo el watcher por eventos (W5: comparte puente con el
+poller).

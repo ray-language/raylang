@@ -34,7 +34,7 @@ jobs:
                  --title "raylang ${{ github.ref_name }}" \
                  --generate-notes
 
-  # M170 (IDEAS §85): el vendor de las dependencias de `ray-runtime` (todas las features + su
+  # M171 (IDEAS §85): el vendor de las dependencias de `ray-runtime` (todas las features + su
   # Cargo.lock), para que `ray toolchain install` deje al equipo listo para `ray build --native`
   # SIN red. Independiente de la plataforma (cargo vendor incluye las deps de todos los targets).
   vendor:

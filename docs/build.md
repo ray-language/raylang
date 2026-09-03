@@ -174,7 +174,7 @@ vivo del disco). Un dir configurado que no existe aborta el build (exit 64, nomb
 origen). No es un subsistema de ray-runtime: un programa solo-embed conserva la vía `rustc`
 pelada.
 
-### 6.c Toolchain autocontenida (M170): un equipo sin Rust
+### 6.c Toolchain autocontenida (M171): un equipo sin Rust
 
 `ray build --native` necesita `cargo` (vía Cargo, la común) o `rustc` (vía pelada). En un equipo
 recién instalado no hay ninguno. Tres piezas lo resuelven sin que el usuario instale Rust a mano:

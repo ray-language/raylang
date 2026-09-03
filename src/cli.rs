@@ -115,7 +115,7 @@ Tooling:
   mcp               start the MCP server (tools for AI agents: check/run/test/fmt/doc)
   repl              interactive REPL
   upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
-  toolchain <cmd>   Rust toolchain for `build --native` (M170): `install [--rust ch] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker and the vendor
+  toolchain <cmd>   Rust toolchain for `build --native` (M171): `install [--rust ch] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker and the vendor
   version           the language version
   help              this help
 ",
@@ -2090,7 +2090,7 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
     } else {
         vec!["-O", "-A", "warnings"]
     };
-    // M170: `rustc` resuelto por el orden RAY_RUSTC → PATH → toolchain privada (`src/toolchain.rs`).
+    // M171: `rustc` resuelto por el orden RAY_RUSTC → PATH → toolchain privada (`src/toolchain.rs`).
     let Some(mut cmd) = crate::toolchain::command("rustc") else {
         eprintln!("native build: rustc not found (RAY_RUSTC, PATH, {})", crate::toolchain::home().display());
         eprintln!("{}", crate::toolchain::missing_hint("rustc"));
@@ -2269,7 +2269,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     // podrían resolver versiones distintas. Se PERSISTE el `Cargo.lock` resuelto en la caché y se reusa: los
     // builds siguientes en esta máquina fijan las MISMAS versiones (y se saltan la re-resolución).
     let cached_lock = target_dir.join("ray-native.Cargo.lock");
-    // M170: con el vendor de la release instalado (`ray toolchain install`), el proyecto toma sus
+    // M171: con el vendor de la release instalado (`ray toolchain install`), el proyecto toma sus
     // crates del vendor y usa SU `Cargo.lock` (el que se resolvió al vendorizar: las versiones que
     // hay en el directorio) → build sin red. El lock cacheado solo aplica sin vendor: podría fijar
     // versiones que el vendor no contiene.
@@ -2283,7 +2283,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     } else if cached_lock.is_file() {
         let _ = std::fs::copy(&cached_lock, proj.join("Cargo.lock")); // proj ya existe (files escritos arriba)
     }
-    // M170: `cargo` resuelto por el orden RAY_CARGO → PATH → toolchain privada (`src/toolchain.rs`).
+    // M171: `cargo` resuelto por el orden RAY_CARGO → PATH → toolchain privada (`src/toolchain.rs`).
     let Some(mut cmd) = crate::toolchain::command("cargo") else {
         eprintln!("native build: cargo not found (RAY_CARGO, PATH, {})", crate::toolchain::home().display());
         eprintln!("{}", crate::toolchain::missing_hint("cargo"));

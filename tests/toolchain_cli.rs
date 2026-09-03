@@ -1,8 +1,8 @@
 //! Pruebas de `ray toolchain` y de la resolución de `cargo`/`rustc` en `ray build --native`
-//! (M170, IDEAS §85). Todas **offline**: la máquina "sin Rust" se simula con un `PATH` pelado y
+//! (M171, IDEAS §85). Todas **offline**: la máquina "sin Rust" se simula con un `PATH` pelado y
 //! un `RAY_TOOLCHAIN_HOME` vacío; el vendor, con un directorio con la forma esperada y un `cargo`
 //! falso vía `RAY_CARGO` que vuelca el `.cargo/config.toml` del proyecto generado. La instalación
-//! real (descarga rustup) no se automatiza: se validó a mano (DESIGN §162).
+//! real (descarga rustup) no se automatiza: se validó a mano (DESIGN §163).
 
 use std::fs;
 use std::path::PathBuf;

@@ -6,7 +6,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-- **`ray build --native` en un equipo sin Rust** (M170, IDEAS §85): `ray toolchain install`
+- **`ray build --native` en un equipo sin Rust** (M171, IDEAS §85): `ray toolchain install`
   instala una toolchain de Rust privada bajo `~/.ray/toolchain` (rustup perfil `minimal`, sin
   tocar el Rust del usuario ni su PATH) y el vendor de dependencias de `ray-runtime` que cada
   release publica (`ray-runtime-vendor.tar.gz`), de modo que el primer build nativo no necesita

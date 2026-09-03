@@ -11338,7 +11338,7 @@ Windows de CI lo prueba de verdad: un programa con `std/process` no llega a `rus
 De paso, `key_path` (`ray publish --sign`) cae a `USERPROFILE` cuando no hay `HOME`, como ya hacía
 `native_cache_dir`: en Windows la clave iba a `./.ray/publish.key` del cwd.
 
-## 162. M170 — toolchain autocontenida: `ray build --native` en un equipo sin Rust (sep 2026)
+## 163. M171 — toolchain autocontenida: `ray build --native` en un equipo sin Rust (sep 2026)
 
 La pregunta que lo abrió (IDEAS §85): en una máquina recién instalada, `ray build --native`
 fallaba con «could not run cargo (is it on PATH?)», y la pista que daba —`--without

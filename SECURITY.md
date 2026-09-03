@@ -63,7 +63,7 @@ Lo que raylang **garantiza por construcción**:
     `github.com/ray-language/raylang/releases` — solo ante la orden explícita del usuario
     (mismo canal y confianza que `install.sh`), y el binario descargado se verifica
     ejecutándolo (`ray version` debe reportar el tag pedido) antes de reemplazar nada.
-  - **Toolchain privada** (M170): `ray toolchain install` descarga y ejecuta `rustup-init`
+  - **Toolchain privada** (M171): `ray toolchain install` descarga y ejecuta `rustup-init`
     del canal oficial de Rust (`sh.rustup.rs`/`win.rustup.rs`, TLS) y el vendor de `ray-runtime`
     desde la release de la misma versión — solo ante la orden explícita del usuario, nunca desde
     `run`/`build`. Instala bajo `~/.ray/toolchain` sin tocar el Rust ni el PATH del usuario. El

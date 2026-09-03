@@ -1,5 +1,5 @@
 #!/bin/sh
-# Produce `ray-runtime-vendor.tar.gz` (M170, IDEAS §85 2a): las dependencias de crates.io de
+# Produce `ray-runtime-vendor.tar.gz` (M171, IDEAS §85 2a): las dependencias de crates.io de
 # `crates/ray-runtime` con TODAS sus features, vendorizadas con `cargo vendor`, más el
 # `Cargo.lock` con el que se resolvieron. `release.yml` lo sube como asset de la release y
 # `ray toolchain install` lo deja en `~/.ray/toolchain/vendor/<versión>/`; el proyecto Cargo que

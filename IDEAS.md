@@ -3303,7 +3303,7 @@ verificaba por CRLF → ✅ M166 (DESIGN §159).
    docs/windows.md), `fs.chmod` (sin equivalente: documentar). Cada uno es un arco propio; ninguno bloquea a un usuario de servidor.
 4. El poller: IOCP o `wepoll` para el p99 bajo carga; hoy fallback honesto.
 
-## 85. Toolchain autocontenida para `ray build --native` — sin instalar Rust a mano (sep 2026) — 1 + 2a ✅ HECHAS (M170, DESIGN §162)
+## 85. Toolchain autocontenida para `ray build --native` — sin instalar Rust a mano (sep 2026) — 1 + 2a ✅ HECHAS (M171, DESIGN §163)
 
 Pregunta de origen (3 sep 2026): en un equipo recién instalado, `ray build --native` falla porque
 no hay `cargo`. Hoy `build_native_cargo` lanza el `cargo` del PATH; si no está, sale con 65 y
@@ -3317,7 +3317,7 @@ la 4: el **enlazador del sistema** (Xcode CLT / `build-essential` / MSVC Build T
 **Opciones clasificadas** (impacto: MEDIO — tooling/CLI, cero cambios en el lenguaje ni en el
 transpilador; todo vive en `src/cli.rs` y en `release.yml`):
 
-1. ✅ M170 — **`ray toolchain install|status` — rustup privado bajo demanda** (recomendada, núcleo).
+1. ✅ M171 — **`ray toolchain install|status` — rustup privado bajo demanda** (recomendada, núcleo).
    Descarga `rustup-init` como ya hace `ray upgrade` con los assets de release y lo instala con
    perfil `minimal` en `~/.ray/toolchain` (`RUSTUP_HOME`/`CARGO_HOME` propios): no toca el Rust
    del usuario ni su PATH. `build_native_cargo`/`build_native_rustc` resuelven la herramienta en
@@ -3326,7 +3326,7 @@ transpilador; todo vive en `src/cli.rs` y en `release.yml`):
    vez; el mensaje debe ser honesto sobre el enlazador del sistema (en macOS `xcode-select
    --install`; en Windows Build Tools o el target `-gnu`). Fija además la versión de rustc que
    raylang prueba en CI → habilita la 2b.
-2. **Builds sin red tras la instalación** (complemento de la 1). ✅ M170 **2a** vendoring: un asset por
+2. **Builds sin red tras la instalación** (complemento de la 1). ✅ M171 **2a** vendoring: un asset por
    release `ray-runtime-vendor-<versión>.tar` (`cargo vendor` de `crates/ray-runtime`) que
    `ray toolchain install` deja en caché y el proyecto Cargo generado usa vía `.cargo/config.toml`
    (`[source.crates-io] replace-with`). **2b** `libray_runtime.rlib` precompilado por triple en CI
@@ -3352,7 +3352,7 @@ compilación remota (rompe offline y el modelo de proyecto sin telemetría).
 
 **Plan sugerido**: arco «toolchain autocontenida» = 1 + 2a (subcomando, resolvedor de
 `cargo`/`rustc`, asset vendor en `release.yml`, tabla en docs/build.md y PRODUCTION.md) y la 3
-como hito independiente previo o paralelo. **Ejecutado en M170** (DESIGN §162): 1 + 2a completas;
+como hito independiente previo o paralelo. **Ejecutado en M171** (DESIGN §163): 1 + 2a completas;
 `install` no ejecuta `ray build` solo (propone), y la 3 (binario VM+payload) queda PENDIENTE como
 hito propio. Encaja con Windows (§84): en la 1 el instalador puede
 elegir `-gnu` para no exigir Build Tools.

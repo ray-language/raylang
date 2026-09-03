@@ -11283,3 +11283,42 @@ hash "actual" del error.
 
 La lección para IDEAS §84: el job de Windows de CI prueba la toolchain y el instalador, pero no
 un proyecto CON dependencias — la resolución de paquetes es el siguiente humo que conviene añadir.
+
+## 160. M168 — `signals()` en Windows: el handler de consola como self-pipe (sep 2026)
+
+La primera deuda de `docs/windows.md` (W1), elegida por el usuario porque era el fallo de su app
+real: `serve_graceful` —el punto de entrada recomendado para producción— llama a `signals()`, y
+en Windows eso era un error de runtime en la primera línea del servidor.
+
+**El modelo.** Windows no tiene señales POSIX; lo más parecido es `SetConsoleCtrlHandler`: un
+callback que el sistema invoca en un **hilo propio** ante Ctrl-C, Ctrl-Break, el cierre de la
+ventana de consola, el logoff y el apagado. El mapeo a los números que el lenguaje ya promete:
+Ctrl-C/Break → `2` (SIGINT), cierre/logoff/apagado → `15` (SIGTERM). SIGWINCH (28) no existe
+como evento de control (sería `WINDOW_BUFFER_SIZE_EVENT` de `ReadConsoleInput`, que pertenece al
+arco de terminal, W4) y queda fuera con honestidad.
+
+**Sin fd, misma bandera.** En unix el handler escribe en un self-pipe cuyo extremo de lectura
+entra al poller del scheduler. En Windows no hay poller ni fd: el handler encola el número en una
+cola con mutex y levanta la MISMA bandera atómica `PENDING` que el scheduler ya consultaba en cada
+conmutación. `install()` devuelve `-1` como "sin descriptor", y `io_wait` aprende dos cosas: no
+mete un fd negativo en el conjunto de lectura, y cuando el programa está aparcado SOLO esperando
+señales (sin sockets ni deadlines), en vez de dormir indefinidamente duerme a cuantos de 10 ms y
+entrega lo pendiente. Sin ese cuanto, un servidor bloqueado en `recv(signals())` habría girado al
+100 % de CPU (`sleep(0)`) o se habría dormido para siempre.
+
+**El plazo del cierre.** Al retornar el handler de un evento de cierre, Windows mata el proceso.
+El handler corre en un hilo del SO, no en el del programa: retenerlo cuatro segundos (el sistema
+concede unos cinco) da tiempo a que el programa lea el `15` y drene. Ctrl-C no tiene ese plazo, y
+no debe tenerlo: ahí decide el programa, como en unix.
+
+**El binario nativo, en tándem.** El runtime emitido por el transpilador declaraba `pipe`/`signal`
+sin `cfg(unix)` y no compilaba en Windows (la asimetría VM↔nativo de la auditoría). Ahora emite
+las dos variantes: la unix intacta, y la Windows con el mismo handler enviando al canal desde el
+hilo del SO (sin fibras en Windows, el canal es el de hilos: `send` es seguro desde fuera). Y el
+apagado de fibras que `ray build --native` hacía solo con `--target *windows*` ahora mira también
+el host: un build nativo en Windows sin `--target` ya no intenta compilar el reactor kqueue/epoll.
+
+**Prueba.** `tests/signals_portable_cli.rs` corre en las tres plataformas: el canal se crea en la
+VM y en el nativo; y en Windows, como no hay forma portable de generar un Ctrl-C real contra el
+propio proceso en CI, el handler se invoca con los eventos simulados (0/1 → 2, 2/5/6 → 15, 99 →
+ignorado) y se comprueba la bandera y el drenado. La batería unix de `signals_cli` sigue intacta.

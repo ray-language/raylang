@@ -104,7 +104,7 @@ plataforma en vez de fallo silencioso:
 |---|---|
 | `std/process` | no soportado (`fork`/`exec` unix); `Err` al lanzar |
 | `std/term` modo crudo / `read_key` / `read_hidden` | no soportado (termios); ancho de celdas y colores sí |
-| `signals()` | no soportado (self-pipe + sigaction) |
+| `signals()` | **funciona** (M168): Ctrl-C/Break → 2, cierre/logoff/apagado → 15 vía `SetConsoleCtrlHandler`; sin SIGWINCH (28) hasta el arco de terminal |
 | `fs.chmod` | no soportado (permisos POSIX) |
 | FFI a `"c"`/`"m"` | resuelve a `ucrtbase.dll`/`msvcrt.dll` (M165); librerías propias por nombre `.dll` |
 | Paquetes (`ray add`, `ray.lock`) | funcionan (M166): clones con LF forzado y hash insensible a CRLF |

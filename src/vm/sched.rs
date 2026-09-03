@@ -627,8 +627,9 @@ impl<'a> Vm<'a> {
             // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su
             // socket. Las durmientes (fd < 0) no entran al poller: solo cuenta su deadline.
             let mut read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_none()).map(|p| p.fd).collect();
-            // M88.1: el self-pipe de señales siempre en el conjunto de lectura.
-            if shared.signal_chan.is_some() {
+            // M88.1: el self-pipe de señales siempre en el conjunto de lectura (M168: en Windows no
+            // hay fd — `signal_fd < 0` — y la fuente se sondea por bandera, abajo).
+            if shared.signal_chan.is_some() && shared.signal_fd >= 0 {
                 read_fds.push(shared.signal_fd);
             }
             let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_some()).map(|p| p.fd).collect();
@@ -636,6 +637,19 @@ impl<'a> Vm<'a> {
             // el timeout) → duerme el hilo hasta el deadline más próximo y expira en la vuelta.
             // (Un solo worker llega aquí — `running == 0` — así que dormir el hilo es correcto.)
             if read_fds.is_empty() && write_fds.is_empty() {
+                // M168 (Windows): la fuente de señales no tiene fd (handler de consola + bandera):
+                // dormir a cuantos de 10 ms, entregar lo pendiente y salir si despertó a alguien.
+                if shared.signal_chan.is_some() && shared.signal_fd < 0 {
+                    let quantum = if timeout_ms < 0 { 10 } else { timeout_ms.clamp(0, 10) };
+                    crate::builtins::sleep_millis(quantum as i64);
+                    if crate::builtins::signals_pending() {
+                        Self::deliver_signals(shared);
+                        if !shared.ready.is_empty() {
+                            return;
+                        }
+                    }
+                    continue;
+                }
                 crate::builtins::sleep_millis(timeout_ms.max(0) as i64);
                 continue;
             }

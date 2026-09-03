@@ -3299,8 +3299,8 @@ verificaba por CRLF → ✅ M166 (DESIGN §159).
 2. Build `aarch64-pc-windows-msvc` en la matriz de release (cruzada desde el runner x86_64; probar
    mimalloc/ring en arm64-msvc). Hoy Windows ARM ejecuta la x86_64 por emulación.
 3. Los huecos del runtime: `std/process` (CreateProcess + pipes; el diseño de §53 asume fork/exec),
-   `std/term` crudo (Console API / VT), `signals()` (SetConsoleCtrlHandler), `fs.chmod` (sin
-   equivalente: documentar). Cada uno es un arco propio; ninguno bloquea a un usuario de servidor.
+   `std/term` crudo (Console API / VT), ~~`signals()` (SetConsoleCtrlHandler)~~ ✅ M168 (W1 de
+   docs/windows.md), `fs.chmod` (sin equivalente: documentar). Cada uno es un arco propio; ninguno bloquea a un usuario de servidor.
 4. El poller: IOCP o `wepoll` para el p99 bajo carga; hoy fallback honesto.
 
 ## Cómo usar este archivo

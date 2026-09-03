@@ -4383,30 +4383,111 @@ mod signals_host {
     }
 }
 
-/// M88.1: instala la fontanería de señales y devuelve el fd de lectura del self-pipe.
-#[cfg(all(unix, not(target_arch = "wasm32")))]
+// M168 (Windows, docs/windows.md W1): no hay señales POSIX; el equivalente es el handler de
+// control de la consola (`SetConsoleCtrlHandler`), que Windows invoca en un HILO propio ante
+// Ctrl-C/Ctrl-Break (→ 2, SIGINT) y ante el cierre de la ventana, el logoff y el apagado (→ 15,
+// SIGTERM). No hay fd que registrar en un poller: el handler encola el número de señal y levanta
+// la misma bandera `PENDING` que consulta el scheduler; `install()` devuelve `-1` como "sin fd"
+// y el scheduler duerme a cuantos cortos cuando solo espera señales (`io_wait`). SIGWINCH (28)
+// no se emite todavía (sería `WINDOW_BUFFER_SIZE_EVENT` de `ReadConsoleInput`; W4).
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+mod signals_host {
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(u32) -> i32>, add: i32) -> i32;
+    }
+
+    const CTRL_C_EVENT: u32 = 0;
+    const CTRL_BREAK_EVENT: u32 = 1;
+    const CTRL_CLOSE_EVENT: u32 = 2;
+    const CTRL_LOGOFF_EVENT: u32 = 5;
+    const CTRL_SHUTDOWN_EVENT: u32 = 6;
+
+    /// Bandera barata que el scheduler consulta en cada conmutación de fibra.
+    pub static PENDING: AtomicBool = AtomicBool::new(false);
+    /// La cola de señales (FIFO) — el sustituto del self-pipe.
+    static QUEUE: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
+
+    unsafe extern "system" fn on_ctrl(event: u32) -> i32 {
+        handle(event)
+    }
+
+    /// El cuerpo del handler, separado para poder probarlo sin generar un evento real. Devuelve
+    /// 1 (= "manejado": Windows no ejecuta la acción por defecto) o 0 (evento ajeno).
+    pub fn handle(event: u32) -> i32 {
+        let sig = match event {
+            CTRL_C_EVENT | CTRL_BREAK_EVENT => 2,
+            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => 15,
+            _ => return 0,
+        };
+        if let Ok(mut q) = QUEUE.lock() {
+            q.push_back(sig);
+        }
+        PENDING.store(true, Ordering::Release);
+        // Cierre/logoff/apagado: en cuanto el handler RETORNA, Windows termina el proceso. Retener
+        // este hilo (no el del programa) unos segundos deja que el programa drene — el SO concede
+        // ~5 s antes de matar de todas formas. Ctrl-C no tiene ese plazo: el programa decide.
+        if sig == 15 {
+            std::thread::sleep(std::time::Duration::from_millis(4000));
+        }
+        1
+    }
+
+    /// Instala el handler de consola. Devuelve `-1`: no hay descriptor que registrar.
+    pub fn install() -> Result<i32, String> {
+        if unsafe { SetConsoleCtrlHandler(Some(on_ctrl), 1) } == 0 {
+            return Err("could not install the console control handler".into());
+        }
+        Ok(-1)
+    }
+
+    /// Saca la siguiente señal de la cola, o None si está vacía.
+    pub fn read_one() -> Option<i32> {
+        QUEUE.lock().ok()?.pop_front()
+    }
+}
+
+/// M168: inyecta un evento de consola como si Windows hubiera invocado el handler (para tests:
+/// no hay forma portable de generar un Ctrl-C real contra el propio proceso en CI).
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn signals_simulate_console_event(event: u32) -> i32 {
+    signals_host::handle(event)
+}
+
+/// M88.1: instala la fontanería de señales y devuelve el fd de lectura del self-pipe (unix) o
+/// `-1` (Windows, M168: sin fd — el scheduler lo sabe y sondea la bandera a cuantos cortos).
+#[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
 pub fn signals_install() -> Result<i32, String> {
     signals_host::install()
 }
-#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
 pub fn signals_install() -> Result<i32, String> {
     Err("signals() is not supported on this platform".into())
 }
 
 /// M88.1: ¿hay señales pendientes de entregar? (bandera barata para el scheduler).
-#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[cfg(all(any(unix, windows), not(target_arch = "wasm32")))]
 pub fn signals_pending() -> bool {
     signals_host::PENDING.swap(false, std::sync::atomic::Ordering::AcqRel)
 }
-#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
 pub fn signals_pending() -> bool { false }
 
-/// M88.1: drena un número de señal del self-pipe, o None si está vacío.
+/// M88.1: drena un número de señal del self-pipe (unix) o de la cola del handler (Windows), o
+/// None si no hay más.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 pub fn signals_read_one(fd: i32) -> Option<i32> {
     signals_host::read_one(fd)
 }
-#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+#[cfg(all(windows, not(target_arch = "wasm32")))]
+pub fn signals_read_one(_fd: i32) -> Option<i32> {
+    signals_host::read_one()
+}
+#[cfg(not(all(any(unix, windows), not(target_arch = "wasm32"))))]
 pub fn signals_read_one(_fd: i32) -> Option<i32> { None }
 
 // --- Ejecución de procesos del SO (M100, IDEAS §53.8) ---

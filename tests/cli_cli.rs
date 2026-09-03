@@ -1646,8 +1646,9 @@ fn build_native_signals_graceful_shutdown() {
         "fn main() -> int {\n\
            let work: Channel<int> = Channel.new();\n\
            let sig = signals();\n\
-           print(\"ready\");\n\
            spawn(fn() { var i = 0; while (i < 3) { send(work, i); i = i + 1; } });\n\
+           match (recv(work)) { Option.Some(x) => print(\"work \" + to_string(x)), Option.None => { } }\n\
+           print(\"ready\");\n\
            let chs: [Channel<int>] = [work, sig];\n\
            var go = true;\n\
            while (go) {\n\
@@ -1663,9 +1664,11 @@ fn build_native_signals_graceful_shutdown() {
     let (_o, err, code) = ray(&base, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
     assert_eq!(code, 0, "build --native signals ok\n{err}");
 
-    // Corre el binario y ESPERA su "ready" (impreso tras instalar los handlers de señal) antes de
-    // mandar SIGTERM: un sleep fijo era flaky bajo la carga paralela de la suite (la señal llegaba
-    // antes del handler → acción por defecto → el proceso moría sin el apagado ordenado).
+    // Corre el binario y ESPERA su "ready" (impreso tras instalar los handlers de señal Y tras
+    // consumir el primer item de trabajo) antes de mandar SIGTERM: un sleep fijo era flaky bajo la
+    // carga paralela de la suite (la señal llegaba antes del handler → acción por defecto → el
+    // proceso moría sin el apagado ordenado); y con la señal justo tras "ready", el `select` podía
+    // salir por la señal antes de que la trabajadora enviara nada (M168: cazado en CI).
     let mut child = Command::new(&bin).stdout(std::process::Stdio::piped()).spawn().expect("lanza el nativo");
     use std::io::{BufRead, Read as _};
     let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());

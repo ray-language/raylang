@@ -1861,7 +1861,10 @@ fn cmd_build(args: &[String]) {
             eprintln!("--fibers and '--without fibers' contradict each other; pick one");
             process::exit(64);
         }
-        let windows = target.as_deref().is_some_and(|t| t.contains("windows"));
+        // M168: sin `--target`, el target efectivo es el HOST — un build nativo en Windows también
+        // apaga las fibras (antes solo miraba el flag y en un host Windows intentaba compilar el
+        // reactor kqueue/epoll).
+        let windows = target.as_deref().map_or(cfg!(windows), |t| t.contains("windows"));
         if windows && !without_fibers {
             eprintln!("note: fibers are not available on Windows targets yet; building with the thread-per-task model");
         }
@@ -2269,9 +2272,19 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
             let sub = if release { "release" } else { "debug" };
             // Con `--target`, cargo pone el artefacto en `target/<triple>/<profile>/…`. El
             // staticlib se llama `lib<pkg con -→_>.a` (calculado, jamás un glob: pkg lleva hash).
+            // M168: el target efectivo decide la extensión — en Windows (host o `--target`) el
+            // binario es `<pkg>.exe` y el staticlib `<pkg>.lib` (sin prefijo `lib`, convención msvc).
+            let for_windows = target.map_or(cfg!(windows), |t| t.contains("windows"));
             let artifact = if lib_mode {
-                let ext = if android { "so" } else { "a" };
-                format!("lib{}.{ext}", pkg.replace('-', "_"))
+                if android {
+                    format!("lib{}.so", pkg.replace('-', "_"))
+                } else if for_windows {
+                    format!("{}.lib", pkg.replace('-', "_"))
+                } else {
+                    format!("lib{}.a", pkg.replace('-', "_"))
+                }
+            } else if for_windows {
+                format!("{pkg}.exe")
             } else {
                 pkg.clone()
             };

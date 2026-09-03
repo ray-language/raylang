@@ -145,7 +145,10 @@ Fuera de la red de CI actual:
 2. **Colores ANSI en consola**: nada activa `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; Windows Terminal
    lo trae por defecto, conhost no. Sumado a `is_tty → false`, el color en `cmd.exe` es incógnita.
 3. **UTF-8 en consola**: sin `SetConsoleOutputCP(CP_UTF8)`; los mensajes con acentos pueden salir
-   mal en páginas de código heredadas.
+   mal en páginas de código heredadas. **Demostrado por el propio censo**: el primer run murió con
+   `UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` al imprimir una flecha
+   desde Python en el runner (cp1252). `ray` escribe bytes UTF-8 crudos; con `chcp 65001` o
+   Windows Terminal se ven bien, en `cmd.exe` heredado no.
 4. **Liberación del puerto** entre reinicios de `ray dev` (TIME_WAIT sin `SO_REUSEADDR` equivalente).
 5. **TLS** (ring/rustls con `webpki-roots`): compila, ningún handshake corre en Windows en CI.
 6. **SQLite** (`rusqlite` bundled): compila; sin test en Windows (WAL, unidades de red).

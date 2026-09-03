@@ -10,6 +10,11 @@ ejemplo. Es INFORMATIVO: nunca falla el job; su salida es la tabla del documento
 """
 import argparse, json, os, subprocess, sys, time
 
+# La consola de Windows puede no ser UTF-8 (cp1252): un `→` en un print tumbó el primer censo.
+# Es el hueco 5.3 de docs/windows.md, demostrado por el propio censo.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXAMPLES = os.path.join(ROOT, "examples")
 
@@ -66,7 +71,7 @@ def record(args):
         print(f"{rel}: {tag} ({r['secs']}s)", flush=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump({"platform": sys.platform, "results": results}, fh, indent=1, sort_keys=True)
-    print(f"{len(results)} ejemplos → {args.out}")
+    print(f"{len(results)} ejemplos -> {args.out}")
 
 
 def classify(exp, act):

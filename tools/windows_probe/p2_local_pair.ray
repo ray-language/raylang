@@ -1,0 +1,52 @@
+// Sonda W-TCP-2: servidor + cliente en el MISMO proceso, sobre 127.0.0.1. Ejercita accept/read
+// no bloqueantes (aparcado por WouldBlock) sin poller. Si en Windows una fibra aparcada sin fd no
+// despierta nunca, esta sonda cuelga.
+import std/net;
+
+fn main() -> int {
+    let ports: Channel<int> = Channel.new();
+    let server = spawn(fn() -> int {
+        match (net.tcp_listen("127.0.0.1", 0)) {
+            Result.Ok(srv) => {
+                send(ports, net.local_port(srv));
+                match (net.tcp_accept(srv)) {
+                    Result.Ok(conn) => {
+                        match (net.socket_read(conn)) {
+                            Result.Ok(msg) => {
+                                let _ = net.socket_write(conn, "eco: " + msg);
+                            },
+                            Result.Err(e) => eprint("server read err: " + e),
+                        }
+                        close(conn);
+                    },
+                    Result.Err(e) => eprint("accept err: " + e),
+                }
+                close(srv);
+                0
+            },
+            Result.Err(e) => {
+                eprint("listen err: " + e);
+                1
+            },
+        }
+    });
+    let port = match (recv(ports)) {
+        Option.Some(p) => p,
+        Option.None => 0,
+    };
+    print("puerto " + to_string(port));
+    match (net.tcp_connect("127.0.0.1", port)) {
+        Result.Ok(c) => {
+            let _ = net.socket_write(c, "hola");
+            match (net.socket_read(c)) {
+                Result.Ok(r) => print("cliente recibio: " + r),
+                Result.Err(e) => print("cliente read err: " + e),
+            }
+            close(c);
+        },
+        Result.Err(e) => print("connect local err: " + e),
+    }
+    let code = join(server);
+    print("fin " + to_string(code));
+    0
+}

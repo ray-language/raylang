@@ -1,0 +1,59 @@
+# Sondas de red en Windows (docs/windows.md 3.6): separan las hipótesis del cuelgue de los
+# clientes TCP hacia fuera que destapó el censo. Informativo; se lanza a mano o en ramas `probe/**`.
+name: Sondas Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["probe/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: sondas TCP (windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-win-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build --release --bin ray
+      - name: IPv6 del runner
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Get-NetIPAddress -AddressFamily IPv6 | Select-Object IPAddress, PrefixOrigin | Format-Table
+          Resolve-DnsName example.com | Select-Object Name, Type, IPAddress | Format-Table
+      - name: P1 connect hacia fuera (nombre vs literal IPv4)
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 5
+        run: ./target/release/ray.exe run tools/windows_probe/p1_connect.ray
+      - name: P2 par local servidor/cliente (multicore)
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 2
+        run: ./target/release/ray.exe run tools/windows_probe/p2_local_pair.ray
+      - name: P2 par local (RAYLANG_THREADS=1)
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          RAYLANG_THREADS: "1"
+        run: ./target/release/ray.exe run tools/windows_probe/p2_local_pair.ray
+      - name: P3 webserver + http.fetch locales
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          $ray = Join-Path (Get-Location) "target/release/ray.exe"
+          Set-Location tools/windows_probe/p3_http_local
+          & $ray run

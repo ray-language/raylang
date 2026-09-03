@@ -2360,6 +2360,8 @@ pub fn tcp_accept_nb(h: i64) -> Result<Option<i64>, String> {
             let id = reg.next;
             reg.next += 1;
             reg.open.insert(id, OpenHandle::Tcp(stream));
+            // M170b: la conexión aceptada nace no bloqueante → sus clones (lecturas) deben heredarlo.
+            nonblocking_handles().lock().unwrap().insert(id);
             Ok(Some(id))
         }
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),

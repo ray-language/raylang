@@ -63,6 +63,11 @@ Lo que raylang **garantiza por construcción**:
     `github.com/ray-language/raylang/releases` — solo ante la orden explícita del usuario
     (mismo canal y confianza que `install.sh`), y el binario descargado se verifica
     ejecutándolo (`ray version` debe reportar el tag pedido) antes de reemplazar nada.
+  - **Toolchain privada** (M170): `ray toolchain install` descarga y ejecuta `rustup-init`
+    del canal oficial de Rust (`sh.rustup.rs`/`win.rustup.rs`, TLS) y el vendor de `ray-runtime`
+    desde la release de la misma versión — solo ante la orden explícita del usuario, nunca desde
+    `run`/`build`. Instala bajo `~/.ray/toolchain` sin tocar el Rust ni el PATH del usuario. El
+    vendor lleva los `.cargo-checksum.json` de `cargo vendor`, que cargo verifica al compilar.
   - **Endpoint de red por defecto** (M136): el índice oficial
     (`github.com/ray-language/ray-index`) es el default cuando no hay `RAY_INDEX` ni
     `[registry] index`. Solo se contacta al resolver deps **por nombre** (nunca en

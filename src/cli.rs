@@ -70,6 +70,7 @@ fn run() {
         Some("mcp") => mcp::run(),
         Some("repl") | None => repl::run(),
         Some("upgrade") => cmd_upgrade(&rest[1..]),
+        Some("toolchain") => crate::toolchain::run(&rest[1..]),
         Some("version") | Some("--version") | Some("-V") => {
             println!("raylang {}", env!("CARGO_PKG_VERSION"));
         }
@@ -114,6 +115,7 @@ Tooling:
   mcp               start the MCP server (tools for AI agents: check/run/test/fmt/doc)
   repl              interactive REPL
   upgrade [tag]     update ray to the latest release (--check: only report; 0 = up to date)
+  toolchain <cmd>   Rust toolchain for `build --native` (M170): `install [--rust ch] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker and the vendor
   version           the language version
   help              this help
 ",
@@ -2088,7 +2090,12 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
     } else {
         vec!["-O", "-A", "warnings"]
     };
-    let mut cmd = process::Command::new("rustc");
+    // M170: `rustc` resuelto por el orden RAY_RUSTC → PATH → toolchain privada (`src/toolchain.rs`).
+    let Some(mut cmd) = crate::toolchain::command("rustc") else {
+        eprintln!("native build: rustc not found (RAY_RUSTC, PATH, {})", crate::toolchain::home().display());
+        eprintln!("{}", crate::toolchain::missing_hint("rustc"));
+        process::exit(65);
+    };
     cmd.args(&flags);
     // MISMA edition que el proyecto Cargo generado (edition 2024 en su Cargo.toml). Sin el flag, rustc
     // pelado caía a la 2015 → los dos caminos compilaban el MISMO Rust generado bajo reglas distintas
@@ -2127,7 +2134,7 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
             process::exit(65);
         }
         Err(e) => {
-            eprintln!("native build: could not run rustc (is it on PATH?): {e}");
+            eprintln!("native build: could not run rustc ({}): {e}", cmd.get_program().to_string_lossy());
             process::exit(65);
         }
     }
@@ -2262,10 +2269,33 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     // podrían resolver versiones distintas. Se PERSISTE el `Cargo.lock` resuelto en la caché y se reusa: los
     // builds siguientes en esta máquina fijan las MISMAS versiones (y se saltan la re-resolución).
     let cached_lock = target_dir.join("ray-native.Cargo.lock");
-    if cached_lock.is_file() {
+    // M170: con el vendor de la release instalado (`ray toolchain install`), el proyecto toma sus
+    // crates del vendor y usa SU `Cargo.lock` (el que se resolvió al vendorizar: las versiones que
+    // hay en el directorio) → build sin red. El lock cacheado solo aplica sin vendor: podría fijar
+    // versiones que el vendor no contiene.
+    let vendor = crate::toolchain::installed_vendor();
+    if let Some(v) = &vendor {
+        if let Err(e) = write(".cargo/config.toml", &crate::toolchain::vendor_cargo_config(v)) {
+            eprintln!("native build: could not write the Cargo project (.cargo/config.toml): {e}");
+            process::exit(65);
+        }
+        let _ = std::fs::copy(v.join("Cargo.lock"), proj.join("Cargo.lock"));
+    } else if cached_lock.is_file() {
         let _ = std::fs::copy(&cached_lock, proj.join("Cargo.lock")); // proj ya existe (files escritos arriba)
     }
-    let mut cmd = process::Command::new("cargo");
+    // M170: `cargo` resuelto por el orden RAY_CARGO → PATH → toolchain privada (`src/toolchain.rs`).
+    let Some(mut cmd) = crate::toolchain::command("cargo") else {
+        eprintln!("native build: cargo not found (RAY_CARGO, PATH, {})", crate::toolchain::home().display());
+        eprintln!("{}", crate::toolchain::missing_hint("cargo"));
+        // N1/N2: mimalloc+ahash-por-defecto traen el camino Cargo al caso común; sin cargo aún se
+        // puede compilar con rustc pelado excluyendo las features siempre-on (las de USO no: el
+        // programa las necesita de verdad).
+        if rt_features.iter().all(|f| *f == "mimalloc" || *f == "ahash" || *f == "fibers") {
+            let list = rt_features.join(",");
+            eprintln!("hint: or build without cargo (plain rustc) with: ray build --native --without {list}");
+        }
+        process::exit(65);
+    };
     cmd.arg("build").current_dir(&proj).env("CARGO_TARGET_DIR", &target_dir);
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
@@ -2357,14 +2387,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
             process::exit(65);
         }
         Err(e) => {
-            eprintln!("native build: could not run cargo (is it on PATH?): {e}");
-            // N1/N2: mimalloc+ahash-por-defecto traen el camino Cargo al caso común; sin cargo aún se
-            // puede compilar con rustc pelado excluyendo las features siempre-on (las de USO no: el
-            // programa las necesita de verdad).
-            if rt_features.iter().all(|f| *f == "mimalloc" || *f == "ahash") {
-                let list = rt_features.join(",");
-                eprintln!("hint: build without cargo (plain rustc) with: ray build --native --without {list}");
-            }
+            eprintln!("native build: could not run cargo ({}): {e}", cmd.get_program().to_string_lossy());
             process::exit(65);
         }
     }

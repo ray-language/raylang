@@ -111,6 +111,7 @@ Para actualizar a la última versión (o consultar si hay una nueva):
 ```sh
 ray upgrade            # descarga la última release y reemplaza los binarios instalados
 ray upgrade --check    # solo informa (0 = al día, 1 = hay versión nueva)
+ray toolchain install  # Rust privado para `ray build --native` en un equipo sin Rust (+ vendor: primer build sin red)
 ```
 
 ### Desde el código

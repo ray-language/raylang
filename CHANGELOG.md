@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.5.2 — 2026-09-03
 
 - **Los servidores funcionan en Windows** (M170, docs/windows.md 3.6): toda espera de red sin
   poller (accept, read, write parcial) colgaba para siempre — el scheduler tomaba por "durmiente"

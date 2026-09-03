@@ -144,6 +144,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ray fmt salió $LASTEXITCODE" }
       - name: Tests del front-end y la VM (los que no dependen de unix)
         run: cargo test --release --lib -- lexer parser checker compiler vm::tests fmt
+      # M166: un proyecto CON dependencias — el runner tiene el `core.autocrlf=true` de Git for
+      # Windows, exactamente el escenario que rompía el hash del lock ("possible tampering").
+      - name: Proyecto con dependencias del índice (resolución + lock bajo autocrlf)
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf true
+          $ray = Join-Path (Get-Location) "target/release/ray.exe"
+          Set-Location $env:RUNNER_TEMP
+          & $ray new depdemo
+          if ($LASTEXITCODE -ne 0) { throw "ray new salió $LASTEXITCODE" }
+          Set-Location depdemo
+          & $ray add net
+          if ($LASTEXITCODE -ne 0) { throw "ray add net salió $LASTEXITCODE" }
+          & $ray build
+          if ($LASTEXITCODE -ne 0) { throw "ray build con dependencias salió $LASTEXITCODE" }
+          # Segunda resolución sobre el mismo lock: es la que fallaba con CRLF.
+          & $ray build
+          if ($LASTEXITCODE -ne 0) { throw "la re-verificación del lock salió $LASTEXITCODE" }
       - name: Instalador real (install.ps1 contra la última release) + ray upgrade --check
         shell: pwsh
         env:

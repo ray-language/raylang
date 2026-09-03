@@ -77,8 +77,15 @@ pub fn fetch(name: &str, spec: &GitSpec, dest: &Path) -> Result<String, String> 
     if let Some(parent) = dest.parent() {
         let _ = std::fs::create_dir_all(parent); // asegura `.ray-deps/`
     }
-    git(&["clone", "--quiet", &spec.url, &dest.to_string_lossy()], None)
-        .map_err(|e| format!("could not clone dependency '{name}' ({}): {e}", spec.url))?;
+    // Fin de línea FORZADO a LF (M166): en Windows, `core.autocrlf=true` (el default del instalador
+    // de Git) reescribe los archivos a CRLF en el checkout y el hash del lock —calculado sobre LF
+    // por quien publicó— dejaba de coincidir ("possible tampering"). `core.eol=lf` cubre también
+    // los repos con `text=auto` en .gitattributes. El paquete es el que publicó su autor, byte a byte.
+    git(
+        &["-c", "core.autocrlf=false", "-c", "core.eol=lf", "clone", "--quiet", &spec.url, &dest.to_string_lossy()],
+        None,
+    )
+    .map_err(|e| format!("could not clone dependency '{name}' ({}): {e}", spec.url))?;
     // Checkout de la ref fijada. Sirve para tags, ramas y SHAs (a diferencia de `clone --branch`).
     if let Err(e) = git(&["checkout", "--quiet", &spec.git_ref], Some(dest)) {
         let _ = std::fs::remove_dir_all(dest); // deja la caché limpia si la ref no existe
@@ -231,7 +238,7 @@ fn ensure_index_clone(raw: &str, cache: &Path) -> Result<(), String> {
     if let Some(parent) = cache.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    git(&["clone", "--quiet", url, &cache.to_string_lossy()], None)
+    git(&["-c", "core.autocrlf=false", "-c", "core.eol=lf", "clone", "--quiet", url, &cache.to_string_lossy()], None)
         .map_err(|e| format!("could not clone the package index ({url}): {e}"))?;
     if let Some(r) = git_ref
         && let Err(e) = git(&["checkout", "--quiet", r], Some(cache))
@@ -551,6 +558,11 @@ fn package_deps(pkg_dir: &Path) -> Result<PackageMeta, String> {
 /// `ruta_relativa:sha256(contenido)` de cada archivo (ordenados por ruta) — un árbol de hashes tipo
 /// Merkle. Detecta cualquier cambio de contenido o de rutas; ignora `.git` (el historial no es parte
 /// del paquete). Devuelve `sha256:<hex>`. Memoria acotada (no concatena los contenidos).
+///
+/// **Insensible al fin de línea** (M166): cada `\r\n` cuenta como `\n` antes de hashear, así que
+/// un checkout convertido a CRLF por git en Windows —o un paquete publicado desde Windows— produce
+/// el MISMO hash que el árbol con LF. Un paquete sin `\r\n` (todos los oficiales) conserva su hash
+/// histórico. Un `\r` suelto NO se toca: solo se normaliza la secuencia CRLF.
 pub fn hash_package(dir: &Path) -> Result<String, String> {
     let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
     collect_files(dir, dir, &mut files)?;
@@ -561,10 +573,29 @@ pub fn hash_package(dir: &Path) -> Result<String, String> {
             .map_err(|e| format!("could not read '{}': {e}", abs.display()))?;
         summary.push_str(rel);
         summary.push(':');
-        summary.push_str(&crate::sha256::sha256_hex(&content));
+        summary.push_str(&crate::sha256::sha256_hex(&normalize_newlines(&content)));
         summary.push('\n');
     }
     Ok(format!("sha256:{}", crate::sha256::sha256_hex(summary.as_bytes())))
+}
+
+/// `\r\n` → `\n`, byte a byte (sin tocar `\r` sueltos ni exigir UTF-8). Devuelve el mismo buffer
+/// prestado si no hay nada que normalizar (el caso de todo paquete publicado desde unix).
+fn normalize_newlines(content: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if !content.contains(&b'\r') {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let mut out = Vec::with_capacity(content.len());
+    let mut i = 0;
+    while i < content.len() {
+        if content[i] == b'\r' && content.get(i + 1) == Some(&b'\n') {
+            i += 1; // salta el \r; el \n se copia en la vuelta siguiente
+            continue;
+        }
+        out.push(content[i]);
+        i += 1;
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// Recolecta recursivamente los archivos bajo `dir` como `(ruta_relativa_a_base, ruta_absoluta)`,
@@ -752,6 +783,30 @@ fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M166: el hash de contenido no cambia si git reescribió los saltos de línea a CRLF (Windows,
+    /// `core.autocrlf=true`); y un `\r` suelto (no seguido de `\n`) sí cuenta como contenido.
+    #[test]
+    fn hash_package_ignores_crlf_line_endings() {
+        let base = std::env::temp_dir().join(format!("ray_hash_crlf_{}", std::process::id()));
+        let lf = base.join("lf");
+        let crlf = base.join("crlf");
+        let cr_only = base.join("cr");
+        for d in [&lf, &crlf, &cr_only] {
+            let _ = std::fs::remove_dir_all(d);
+            std::fs::create_dir_all(d.join("src")).unwrap();
+        }
+        std::fs::write(lf.join("src/a.ray"), "fn main() {\n  print(1);\n}\n").unwrap();
+        std::fs::write(crlf.join("src/a.ray"), "fn main() {\r\n  print(1);\r\n}\r\n").unwrap();
+        std::fs::write(cr_only.join("src/a.ray"), "fn main() {\r  print(1);\r}\r").unwrap();
+        let h_lf = hash_package(&lf).unwrap();
+        let h_crlf = hash_package(&crlf).unwrap();
+        let h_cr = hash_package(&cr_only).unwrap();
+        assert_eq!(h_lf, h_crlf, "CRLF y LF hashean igual");
+        assert_ne!(h_lf, h_cr, "un \\r suelto es contenido distinto");
+        assert_eq!(normalize_newlines(b"a\r\nb\rc\n").as_ref(), b"a\nb\rc\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn downloaded_package_resolves_siblings_via_the_flat_cache() {

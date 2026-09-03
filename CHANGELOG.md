@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Las dependencias resuelven en Windows** (M166): `ray run` fallaba con "the dependency 'net'
+  does not match 'ray.lock' … (possible tampering)" porque git, con `core.autocrlf=true`,
+  reescribía los archivos a CRLF en el checkout y el hash del lock estaba calculado sobre LF.
+  Dos capas: los clones fuerzan `core.autocrlf=false`/`core.eol=lf`, y el hash de contenido
+  del paquete normaliza `\r\n` a `\n` antes de hashear (los paquetes sin CRLF, todos los
+  oficiales, conservan su hash; un `.ray-deps` ya convertido vuelve a verificar sin borrarlo).
+
 - **raylang se instala en Windows** (M165): `install.ps1` (`irm …/install.ps1 | iex`) descarga el
   zip de la release, deja `ray.exe` en `%LOCALAPPDATA%\Programs\raylang\bin` y lo añade al PATH de
   usuario sin administrador; `install.sh` bajo Git Bash delega en él. `ray upgrade` funciona en

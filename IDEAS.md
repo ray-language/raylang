@@ -3288,6 +3288,9 @@ el zip" y ningún job de CI probaba el binario de Windows. **Hecho en M165**: `i
 `install.sh` delegando, `ray upgrade` con zip + apartado del `.exe`, job `windows-latest` en CI y
 humo del instalador en `release.yml`; tabla de estado en PRODUCTION.md §Windows.
 
+Primer bug real de un usuario en Windows (2 sep 2026, app `store`): el lock de dependencias no
+verificaba por CRLF → ✅ M166 (DESIGN §159).
+
 **Pendiente, por orden de valor** (impacto: MEDIO — plataforma, no lenguaje):
 
 1. Distribución nativa: bucket propio de Scoop (`ray-language/scoop-bucket`, cero aprobaciones,

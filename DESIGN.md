@@ -11256,3 +11256,30 @@ un solo job en Windows: el binario que se publicaba no lo probaba nadie. IDEAS �
   sin `ui`/`audio`/`bundle`, sin build arm64). Lo pendiente queda clasificado en IDEAS §84: Scoop
   primero (bucket propio, cero aprobaciones), winget a demanda, arm64-msvc, y los huecos del
   runtime como arcos propios.
+
+## 159. M166 — el lock de dependencias frente a CRLF (sep 2026)
+
+El primer programa real de un usuario en Windows (`ray run` en la app `store`, minutos después
+de M165) murió en la resolución de dependencias: "the dependency 'net' does not match
+'ray.lock': its content changed from what was locked (possible tampering)". No había
+manipulación: git, con el `core.autocrlf=true` que el instalador de Git for Windows pone por
+defecto, reescribe los archivos de texto a CRLF en el checkout, y el hash de contenido del lock
+(un árbol Merkle sobre los bytes crudos, M39c) lo había calculado el publicador sobre LF. La
+prueba fue exacta: clonar `net@v0.1.0`, convertir a CRLF y recalcular reproduce byte a byte el
+hash "actual" del error.
+
+**Dos capas, porque cada una cubre un caso que la otra no.**
+
+- **Clonar con `-c core.autocrlf=false -c core.eol=lf`**: el paquete llega byte a byte como lo
+  publicó su autor, gane quien gane en la configuración global del usuario. `core.eol=lf` cubre
+  además los repos con `text=auto` en `.gitattributes`, donde `autocrlf=false` solo no basta.
+- **Hash insensible a CRLF**: `hash_package` normaliza `\r\n` → `\n` antes de hashear cada
+  archivo. Esto arregla lo que la primera capa no alcanza: un `.ray-deps` ya convertido (el del
+  usuario del bug) verifica sin borrarlo, y un paquete **publicado desde Windows** (cuyo autor
+  hashea su propio árbol con CRLF) da el mismo hash que verá un usuario de unix. Un `\r` suelto
+  sigue siendo contenido: solo se normaliza la secuencia. Coste: cero para los paquetes sin CRLF
+  (se hashea el buffer prestado), que son todos los oficiales — sus hashes en los locks e índice
+  existentes NO cambian, verificado con la batería `deps_cli`/`registry_cli`.
+
+La lección para IDEAS §84: el job de Windows de CI prueba la toolchain y el instalador, pero no
+un proyecto CON dependencias — la resolución de paquetes es el siguiente humo que conviene añadir.

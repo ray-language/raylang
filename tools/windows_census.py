@@ -75,6 +75,8 @@ def record(args):
 
 
 def classify(exp, act):
+    """Compara Windows (act) contra Linux (exp). Un `main` que devuelve un entero distinto de
+    cero NO es un fallo: lo que cuenta es que AMBAS plataformas coincidan en código y stdout."""
     if exp is None:
         return "SOLO-WINDOWS", ""
     if act is None:
@@ -82,24 +84,21 @@ def classify(exp, act):
     if exp["timeout"] and act["timeout"]:
         return "INTERACTIVO", "ambos exceden el plazo (servidor/TUI): validar a mano"
     if act["timeout"]:
-        return "CUELGA", "solo Windows excede el plazo"
+        return "CUELGA-WIN", "solo Windows excede el plazo"
     if exp["timeout"]:
-        return "SOLO-LINUX-CUELGA", ""
-    if exp["code"] == 0 and act["code"] != 0:
-        return "FALLA", act["stderr"].strip().splitlines()[0] if act["stderr"].strip() else f"exit {act['code']}"
-    if exp["code"] != 0 and act["code"] != 0:
-        return "FALLA-AMBOS", act["stderr"].strip().splitlines()[0] if act["stderr"].strip() else f"exit {act['code']}"
-    if exp["code"] != 0 and act["code"] == 0:
-        return "SOLO-LINUX-FALLA", exp["stderr"].strip().splitlines()[0] if exp["stderr"].strip() else ""
+        return "CUELGA-LINUX", "solo Linux excede el plazo (espera al exterior)"
+    if exp["code"] != act["code"]:
+        head = act["stderr"].strip().splitlines()
+        return "CODIGO-DISTINTO", f"linux exit {exp['code']}, windows exit {act['code']}" + (f": {head[0]}" if head else "")
     if exp["stdout"].replace("\r\n", "\n") != act["stdout"].replace("\r\n", "\n"):
-        return "DIFIERE", "stdout distinto"
+        return "DIFIERE", "mismo código de salida, stdout distinto"
     if exp["stdout"] != act["stdout"]:
         return "OK-CRLF", "igual salvo CRLF en stdout"
     return "OK", ""
 
 
-ORDER = ["FALLA", "CUELGA", "DIFIERE", "OK-CRLF", "FALLA-AMBOS", "INTERACTIVO", "SOLO-LINUX-FALLA",
-         "SOLO-LINUX-CUELGA", "SOLO-WINDOWS", "SIN-DATO", "OK"]
+ORDER = ["CODIGO-DISTINTO", "CUELGA-WIN", "DIFIERE", "OK-CRLF", "CUELGA-LINUX", "INTERACTIVO",
+         "SOLO-WINDOWS", "SIN-DATO", "OK"]
 
 
 def compare(args):

@@ -38,7 +38,7 @@ SQLite (`data/store.db` con 24 productos) y el arranque del servidor HTTP.
 Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degrada sin avisar;
 `no compila` = el binario nativo no se puede construir. **Tamaño**: S (horas), M (días), L (arco).
 
-### 3.1 Señales — `signals()` · **la primera en cerrar**
+### 3.1 Señales — `signals()` · ✅ **cerrada en M168** (DESIGN §160)
 
 | | |
 |---|---|
@@ -47,6 +47,7 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Superficie que arrastra | `webserver.serve_graceful` y `serve_with_graceful` (`packages/net`), `web.listen_graceful` (`packages/web`), `select` sobre `signals()` para SIGWINCH en TUIs. **Es el fallo de la app `store`**: el punto de entrada recomendado para producción no arranca en Windows. |
 | Cierra con | `SetConsoleCtrlHandler` (CTRL_C → 2, CTRL_CLOSE/CTRL_SHUTDOWN → 15) escribiendo en el mismo self-pipe que consume el scheduler; SIGWINCH ≈ `WINDOW_BUFFER_SIZE_EVENT` de `ReadConsoleInput`. |
 | Tamaño | **M** en la VM (el self-pipe ya existe; cambia el productor) + **S** para gatear/portar la emisión nativa. |
+| **Hecho (M168)** | Exactamente eso: `SetConsoleCtrlHandler` encola y levanta la bandera `PENDING`; `install()` devuelve `-1` (sin fd) y `io_wait` duerme a cuantos de 10 ms cuando solo espera señales; el handler retiene su hilo 4 s ante el cierre. El nativo emite variante unix y Windows, y `ray build --native` apaga las fibras también por host. Sin SIGWINCH (W4). |
 
 ### 3.2 `ray dev` y `ray test --watch` — degradados, documentados
 
@@ -95,6 +96,8 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Hoy (VM) | Sin kqueue/epoll: `raw_fd` → `None` y el scheduler cae al busy-poll de M15.5 (1 ms de sueño + re-encolar). Funciona; más CPU y peor p99 bajo carga. El handshake TLS espera con `sleep(20 ms)` en vez de `poll`. |
 | Hoy (nativo) | Sin reactor: `ray build --native --target *windows*` apaga las fibras con aviso (hilo-por-tarea). ⚠️ El apagado mira solo `--target`: un build nativo **en un host Windows sin `--target`** deja las fibras encendidas e intenta compilar corosensei + kqueue/epoll → fallo de compilación. **S** de arreglar (`cfg!(windows)` cuando no hay target). |
 | `sleep_ms` | `thread::sleep` en vez de `poll(NULL,0,ms)`: con el tick por defecto de 15,6 ms la precisión del pacing de juegos/audio y de `time.sleep_ms` cae. |
+| **Clientes TCP hacia fuera (censo)** | `tcp_cliente.ray` (connect a `example.com:80` + `socket_read`) **cuelga** y `http_demo.ray` (`http.fetch`) muere con `read timeout` en Windows; en Linux ambos van. El servidor local (la app `store`) sí sirve. Hipótesis por confirmar: (a) resolución IPv6-first con IPv6 inalcanzable en el runner → `connect` sin plazo; (b) la lectura no bloqueante bajo el busy-poll de respaldo (`WSAEWOULDBLOCK` ≠ `EAGAIN`). Reproducir con un par cliente/servidor local en el job de Windows antes de atacar W5. |
+| **UDP y el reset 10054 (censo)** | En Windows, un ICMP "port unreachable" previo hace que el siguiente `recv` UDP falle con `WSAECONNRESET` (10054): `udp_demo`, `dns_cache_demo` y `udp_timeout_demo` lo muestran (Linux simplemente espera). Es un comportamiento documentado de Winsock; se desactiva con `WSAIoctl(SIO_UDP_CONNRESET, FALSE)` al crear el socket. **S**. `dns_demo` además **cuelga** (el `recv` UDP bloqueante que ya anotó IDEAS §70). |
 | Cierra con | `wepoll` (ABI epoll sobre IOCP/AFD, encaja en la forma de `src/poll.rs`) para la VM; IOCP nativo a largo plazo, que además desbloquea las fibras; `CreateWaitableTimerEx(HIGH_RESOLUTION)` o `timeBeginPeriod(1)` para el sueño fino. |
 | Tamaño | wepoll **M** · IOCP para fibras **L** · sueño fino **S**. |
 
@@ -120,6 +123,8 @@ ejecutable"). Nativo en paridad. No hay equivalente limpio: documentar; opcional
 | `key_path` (`ray publish --sign`) | solo `HOME` → sin `USERPROFILE` la clave va a `./.ray/publish.key` | `HOME` → `USERPROFILE`, como ya hace `native_cache_dir` |
 | `raise_fd_limit` | no-op (`cfg(unix)`) | N/A en Windows: documentar |
 | `packages/tz` | `load()` → `Err` (no hay `/usr/share/zoneinfo`); UTC funciona | tzdata embebida o registro + `windowsZones` de CLDR (**M**) |
+| Ejemplos que asumen `/tmp` | `examples/io/binario.ray` escribe en `/tmp/…` → "The system cannot find the path specified" (censo) | usar el directorio temporal del sistema (`time`/`fs` no lo exponen: candidato a `fs.temp_dir()`) |
+| FFI `libm` | `pow`/`sqrt` de `ucrtbase` redondean distinto: `3` donde glibc da `3.0000000000000004` (censo, `examples/ffi/libm.ray`) | no es bug: precisión de la CRT; el oráculo FFI VM↔nativo sigue valiendo (misma CRT en ambos) |
 | `ray upgrade` en ARM64 | exit 69 (no hay asset) | publicar `aarch64-pc-windows-msvc` (IDEAS §84) |
 | FFI | **funciona**: `_errno`, `libloading::os::windows`, `"c"`/`"m"` → `ucrtbase.dll` | — |
 
@@ -171,9 +176,43 @@ Al margen: Scoop (bucket propio), winget a demanda y la build `aarch64-pc-window
 
 ## 7. Censo de los ejemplos en Windows
 
-_Se rellena con la salida de `windows-census.yml` (resumen del job). Categorías: FALLA (Linux ok,
-Windows no), CUELGA, DIFIERE (stdout distinto), OK-CRLF, FALLA-AMBOS, INTERACTIVO (servidores y
-TUIs que exceden el plazo en ambos: validar a mano), OK._
+Primer censo: 2 de septiembre de 2026, `windows-census.yml` run 33706948973, sobre `main` en
+`census/windows` (v1.5.1 + el fix de CRLF; **antes** de M168). 129 ejemplos con `main`, cada uno
+ejecutado en Linux (referencia) y en Windows con `ray run`, stdin cerrado y plazo de 45 s. La
+comparación es entre plataformas: un `main` que devuelve un entero distinto de cero a propósito
+cuenta como OK si Windows devuelve el mismo.
+
+| Estado | Ejemplos | Qué significa |
+|---|---|---|
+| OK | 104 | mismo código de salida y mismo stdout |
+| OK-CRLF | 1 | `plantillas.ray`: idéntico salvo CRLF — lee una plantilla del repo, que el checkout con `autocrlf` convirtió |
+| INTERACTIVO | 9 | servidores que exceden el plazo en AMBOS (`webserver_demo`, `framework`, `ssr`, `tcp_servidor`, `websocket_echo`…): validar a mano, no dicen nada de Windows |
+| CUELGA-LINUX | 3 | `senales.ray` (espera una señal: en Linux cuelga a propósito, en Windows fallaba antes de M168), `udp_demo` y `dns_cache_demo` (Linux espera un datagrama que no llega; Windows recibe el reset 10054 y sale) |
+| CODIGO-DISTINTO | 4 | ver abajo |
+| CUELGA-WIN | 2 | ver abajo |
+| DIFIERE | 6 | ver abajo |
+
+**Los 12 que importan**, con su causa:
+
+| Ejemplo | Resultado en Windows | Causa | Deuda |
+|---|---|---|---|
+| `stdlib/process_session.ray`, `process_stream.ray` | exit 1: "running OS processes is not supported" | `std/process` es unix | 3.5 (W6) |
+| `stdlib/process_run.ray` | stdout sin las líneas de los hijos | ídem | 3.5 (W6) |
+| `web/http_demo.ray` | `error reading: read timeout` | cliente TCP hacia fuera | 3.6 (W5, investigar primero) |
+| `net/tcp_cliente.ray` | cuelga (>45 s) | ídem | 3.6 (W5) |
+| `web/dns_demo.ray` | cuelga | `recv` UDP bloqueante + 10054 | 3.6 (S) |
+| `web/udp_timeout_demo.ray` | exit 0 vs 1: `recv err: 10054` donde Linux da `send err: EINVAL` | semántica UDP de Winsock | 3.6 (S) |
+| `io/binario.ray` | faltan "escritos 9 octetos" y "round-trip OK": `/tmp` no existe | el ejemplo asume `/tmp` | 3.9 |
+| `ffi/libm.ray` | `3` vs `3.0000000000000004` | precisión de `ucrtbase` vs glibc | no es bug |
+| `io/reloj_aleatorio.ray` | dados y `random` distintos | aleatorio por diseño | — |
+| `concurrency/select.ray` | `200` en otra línea | orden de llegada bajo multicore | — (`--deterministic` lo fija) |
+| `web/desktop_window/main.ray` | mismo error de `ui` sin el "listening on port N" | Linux imprime el puerto antes de fallar; Windows falla antes | 3.8 |
+
+Lectura: **descontando lo esperado (procesos, señales pre-M168, aleatoriedad, puertos), el único
+hueco que el censo descubrió y la auditoría de código no tenía es el de los clientes TCP/UDP hacia
+hosts externos** — y es el que hay que reproducir antes de tocar el poller. El censo se relanza
+con `gh workflow run windows-census.yml` o empujando a una rama `census/**`; al cerrar una deuda,
+esta tabla se actualiza con el run que lo demuestre.
 
 ## 8. Mientras tanto: escribir raylang portable hoy
 

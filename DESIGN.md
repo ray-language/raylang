@@ -11338,6 +11338,48 @@ Windows de CI lo prueba de verdad: un programa con `std/process` no llega a `rus
 De paso, `key_path` (`ray publish --sign`) cae a `USERPROFILE` cuando no hay `HOME`, como ya hacía
 `native_cache_dir`: en Windows la clave iba a `./.ray/publish.key` del cwd.
 
+## 162. M170 — la red sin poller: el bug que dejaba mudo a todo servidor en Windows (sep 2026)
+
+El censo de `docs/windows.md` dejó un cabo suelto: `tcp_cliente.ray` colgaba y `http.fetch` moría
+con `read timeout` en Windows. La hipótesis cómoda era IPv6-first (Windows probando dos AAAA sin
+ruta antes de la IPv4, 21 s por intento). Antes de tocar nada se escribieron **sondas** para el
+runner (`windows-probe.yml`): connect hacia fuera con tiempos, un par servidor/cliente local en el
+mismo proceso, y `webserver.serve_on` + `http.fetch` locales. La primera descartó IPv6 en 25 ms;
+las otras dos **colgaron tras imprimir el puerto**, en multicore y con un hilo. El fallo estaba en
+casa, y era peor de lo que el censo mostraba: ningún servidor podía aceptar una conexión.
+
+**La causa.** En no-unix `raw_fd` devuelve `None`, así que accept/read/write no bloqueantes
+aparcan la fibra con `fd = -1` (pero `handle >= 0`). `io_wait` distinguía "E/S" de "durmiente"
+solo por el fd: sin fds, tomaba la rama de "solo durmientes", que duerme hasta el deadline más
+próximo — y sin deadline, `sleep(0)` y `continue`: un giro infinito al 100 % de CPU que nunca
+reintentaba la lectura. El busy-poll cooperativo de M15.5, pensado justo para plataformas sin
+poller, no se alcanzaba nunca porque vivía detrás de un `read_fds` que en Windows siempre está
+vacío. El censo no lo vio de frente porque los servidores son INTERACTIVO (exceden el plazo en
+ambas plataformas); lo delató el cliente, y la app `store` no llegó a probarlo porque moría antes
+en `signals()` (M168).
+
+**El arreglo** distingue por lo que siempre distinguió a un sleep: `handle = -1`. Una fibra
+aparcada sin fd pero con handle es E/S sin poller → dormir 1 ms y reintentarla, exactamente el
+respaldo de M15.5. El respaldo final (fds presentes pero poller `Unsupported`/EINTR) también
+despierta ahora las entradas con handle. Unix no cambia: allí los fds existen y manda el poller.
+
+**La segunda mitad.** Con el scheduler arreglado, el par local pasó en multicore y siguió
+colgando con un hilo. Una sonda con traza por paso (`tools/windows_probe/p2_steps.ray`) lo
+delimitó: el servidor imprime "port sent; accept" y el cliente, ya despierto, nunca corre. El
+`accept` no cedía: **bloqueaba al único worker**. La causa es de Windows puro: cada operación de
+socket CLONA el socket (`try_clone`) para no retener el lock del registro mientras espera; en
+unix el fd duplicado comparte la descripción abierta y con ella `O_NONBLOCK`, pero
+`WSADuplicateSocket` crea un socket nuevo **en modo bloqueante**. El listener era no bloqueante;
+su clon, no. En multicore "funcionaba" porque otro worker corría al cliente y su `connect`
+desbloqueaba el `accept`. Arreglo: `set_nonblocking` registra el handle, y cada clon (TCP,
+listener, UDP) re-aplica el modo si el original lo tenía. Los sockets del intérprete siguen
+bloqueantes: nadie los registró.
+
+**Prueba.** `tests/net_no_poller_cli.rs` corre en las tres plataformas: el par local
+(multicore y `RAYLANG_THREADS=1`) y el webserver + fetch locales, cada uno con plazo (un cuelgue
+falla con mensaje y conserva la salida parcial, no cuelga la suite). En el job de Windows de CI es
+el primer servidor raylang que acepta una conexión en esa plataforma. Queda W5: el mismo respaldo
+con readiness real (wepoll) para el p99 bajo carga.
 ## 163. M171 — toolchain autocontenida: `ray build --native` en un equipo sin Rust (sep 2026)
 
 La pregunta que lo abrió (IDEAS §85): en una máquina recién instalada, `ray build --native`

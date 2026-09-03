@@ -1,0 +1,25 @@
+// Sonda W-TCP-1: ¿cuánto tarda `tcp_connect` hacia fuera, y cambia con un literal IPv4?
+// Hipótesis: en Windows la resolución devuelve AAAA primero y cada intento IPv6 sin ruta espera
+// el timeout del SYN (~21 s) antes de pasar a la IPv4; en Linux el ENETUNREACH es inmediato.
+import std/net;
+import std/time;
+
+fn timed(label: string, f: fn() -> Result<int, string>) {
+    let t0 = time.monotonic();
+    let r = f();
+    let dt = time.monotonic() - t0;
+    match (r) {
+        Result.Ok(h) => {
+            print(label + ": ok en " + to_string(dt) + " ms");
+            close(h);
+        },
+        Result.Err(e) => print(label + ": err en " + to_string(dt) + " ms: " + e),
+    }
+}
+
+fn main() -> int {
+    timed("connect example.com:80 (nombre)", fn() -> Result<int, string> { net.tcp_connect("example.com", 80) });
+    timed("connect 1.1.1.1:80 (literal IPv4)", fn() -> Result<int, string> { net.tcp_connect("1.1.1.1", 80) });
+    timed("connect_timeout example.com:80 3000ms", fn() -> Result<int, string> { net.tcp_connect_timeout("example.com", 80, 3000) });
+    0
+}

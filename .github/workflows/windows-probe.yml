@@ -1,0 +1,58 @@
+# Sondas de red en Windows (docs/windows.md 3.6): separan las hipótesis del cuelgue de los
+# clientes TCP hacia fuera que destapó el censo. Informativo; se lanza a mano o en ramas `probe/**`.
+name: Sondas Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["probe/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: sondas TCP (windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-win-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo build --release --bin ray
+      - name: IPv6 del runner
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Get-NetIPAddress -AddressFamily IPv6 | Select-Object IPAddress, PrefixOrigin | Format-Table
+          Resolve-DnsName example.com | Select-Object Name, Type, IPAddress | Format-Table
+      - name: P1 connect hacia fuera (nombre vs literal IPv4)
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 5
+        run: ./target/release/ray.exe run tools/windows_probe/p1_connect.ray
+      - name: P2b par local con traza (RAYLANG_THREADS=1, plazo 40 s, salida a archivo)
+        shell: pwsh
+        continue-on-error: true
+        env:
+          RAYLANG_THREADS: "1"
+        run: |
+          $ray = Join-Path (Get-Location) "target/release/ray.exe"
+          $p = Start-Process -FilePath $ray -ArgumentList "run","tools/windows_probe/p2_steps.ray" -NoNewWindow -PassThru -RedirectStandardError p2_steps.err -RedirectStandardOutput p2_steps.out
+          if (-not $p.WaitForExit(40000)) { Write-Host "PLAZO: matando"; $p.Kill() }
+          Write-Host "--- stderr (traza)"; Get-Content p2_steps.err
+          Write-Host "--- stdout"; Get-Content p2_steps.out
+      - name: P2b par local con traza (multicore)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ray = Join-Path (Get-Location) "target/release/ray.exe"
+          $p = Start-Process -FilePath $ray -ArgumentList "run","tools/windows_probe/p2_steps.ray" -NoNewWindow -PassThru -RedirectStandardError p2m.err -RedirectStandardOutput p2m.out
+          if (-not $p.WaitForExit(40000)) { Write-Host "PLAZO: matando"; $p.Kill() }
+          Write-Host "--- stderr (traza)"; Get-Content p2m.err

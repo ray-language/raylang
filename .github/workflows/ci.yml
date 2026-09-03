@@ -148,6 +148,10 @@ jobs:
       # --native en un host Windows bajo CI: fibras apagadas por host) y el handler simulado.
       - name: signals() en Windows (VM + nativo + handler de consola)
         run: cargo test --release --test signals_portable_cli -- --nocapture
+      # M170: la red sin poller — accept/read/write aparcados sin fd se reintentan por busy-poll (antes
+      # el scheduler los tomaba por durmientes y todo servidor colgaba en el primer accept).
+      - name: Red sin poller (par local + webserver y fetch locales)
+        run: cargo test --release --test net_no_poller_cli -- --nocapture
       # M169 (W2): un programa que usa std/process no debe llegar a rustc en Windows — ray build
       # --native lo rechaza con el mensaje de la VM y exit 69, en vez de un backtrace de compilación.
       - name: ray build --native rechaza con mensaje honesto lo que no compila en Windows

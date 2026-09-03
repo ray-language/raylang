@@ -637,6 +637,26 @@ impl<'a> Vm<'a> {
             // el timeout) → duerme el hilo hasta el deadline más próximo y expira en la vuelta.
             // (Un solo worker llega aquí — `running == 0` — así que dormir el hilo es correcto.)
             if read_fds.is_empty() && write_fds.is_empty() {
+                // M170 (Windows, docs/windows.md 3.6): E/S aparcada SIN fd — `raw_fd` es `None` en
+                // no-unix, así que accept/read/write llegan aquí con `fd = -1` pero `handle >= 0`, y
+                // este brazo las tomaba por DURMIENTES: sin deadline, `sleep(0)` y a girar para
+                // siempre (P2 del censo: el par local imprimía el puerto y no despertaba jamás). Sin
+                // poller, la única espera posible es el busy-poll cooperativo de M15.5: 1 ms y reintento.
+                let io_without_fd = shared.io_parked.iter().any(|p| p.fd < 0 && p.handle >= 0);
+                if io_without_fd {
+                    crate::builtins::sleep_millis(1);
+                    let mut woken: Vec<IoParked> = Vec::new();
+                    let mut i = 0;
+                    while i < shared.io_parked.len() {
+                        if shared.io_parked[i].fd < 0 && shared.io_parked[i].handle >= 0 {
+                            woken.push(shared.io_parked.remove(i));
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    Self::wake_parked(shared, woken);
+                    return;
+                }
                 // M168 (Windows): la fuente de señales no tiene fd (handler de consola + bandera):
                 // dormir a cuantos de 10 ms, entregar lo pendiente y salir si despertó a alguien.
                 if shared.signal_chan.is_some() && shared.signal_fd < 0 {
@@ -690,7 +710,8 @@ impl<'a> Vm<'a> {
             let mut woken: Vec<IoParked> = Vec::new();
             let mut i = 0;
             while i < shared.io_parked.len() {
-                if shared.io_parked[i].fd >= 0 {
+                // E/S con fd (unix sin poller / EINTR) o sin fd (M170, no-unix); los sleeps (handle -1) no.
+                if shared.io_parked[i].fd >= 0 || shared.io_parked[i].handle >= 0 {
                     woken.push(shared.io_parked.remove(i));
                 } else {
                     i += 1;

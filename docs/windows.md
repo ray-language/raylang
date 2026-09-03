@@ -96,7 +96,7 @@ Leyenda de **hoy**: `Err` = falla con mensaje de plataforma; `silencioso` = degr
 | Hoy (VM) | Sin kqueue/epoll: `raw_fd` → `None` y el scheduler cae al busy-poll de M15.5 (1 ms de sueño + re-encolar). Funciona; más CPU y peor p99 bajo carga. El handshake TLS espera con `sleep(20 ms)` en vez de `poll`. |
 | Hoy (nativo) | Sin reactor: `ray build --native --target *windows*` apaga las fibras con aviso (hilo-por-tarea). ⚠️ El apagado mira solo `--target`: un build nativo **en un host Windows sin `--target`** deja las fibras encendidas e intenta compilar corosensei + kqueue/epoll → fallo de compilación. **S** de arreglar (`cfg!(windows)` cuando no hay target). |
 | `sleep_ms` | `thread::sleep` en vez de `poll(NULL,0,ms)`: con el tick por defecto de 15,6 ms la precisión del pacing de juegos/audio y de `time.sleep_ms` cae. |
-| **Clientes TCP hacia fuera (censo)** | `tcp_cliente.ray` (connect a `example.com:80` + `socket_read`) **cuelga** y `http_demo.ray` (`http.fetch`) muere con `read timeout` en Windows; en Linux ambos van. El servidor local (la app `store`) sí sirve. Hipótesis por confirmar: (a) resolución IPv6-first con IPv6 inalcanzable en el runner → `connect` sin plazo; (b) la lectura no bloqueante bajo el busy-poll de respaldo (`WSAEWOULDBLOCK` ≠ `EAGAIN`). Reproducir con un par cliente/servidor local en el job de Windows antes de atacar W5. |
+| **Esperas de red sin fd** ✅ M170 | Las sondas (`windows-probe.yml`) descartaron IPv6 (`tcp_connect` hacia fuera: 25 ms) y cazaron la causa real: en no-unix `raw_fd` es `None`, y `io_wait` tomaba por DURMIENTE (fd −1) toda fibra aparcada por `WouldBlock` — sin deadline, `sleep(0)` y a girar sin despertarla jamás. **Todo servidor colgaba en el primer `accept`** (el par local del censo imprimía el puerto y moría ahí; `webserver` + `http.fetch` locales igual), y de rebote `tcp_cliente`/`http_demo`. Arreglo: E/S aparcada sin fd (`handle >= 0`) → busy-poll cooperativo de 1 ms y reintento. **Segunda mitad**: las operaciones clonan el socket (`try_clone`) y en Windows el clon nace bloqueante (`WSADuplicateSocket` no hereda `FIONBIO`; en unix el fd duplicado sí comparte `O_NONBLOCK`) → el `accept` clonado bloqueaba al único worker; los clones re-aplican el modo. Test `net_no_poller_cli` en las tres plataformas. Pendiente W5: el mismo busy-poll con readiness real (wepoll). |
 | **UDP y el reset 10054 (censo)** | En Windows, un ICMP "port unreachable" previo hace que el siguiente `recv` UDP falle con `WSAECONNRESET` (10054): `udp_demo`, `dns_cache_demo` y `udp_timeout_demo` lo muestran (Linux simplemente espera). Es un comportamiento documentado de Winsock; se desactiva con `WSAIoctl(SIO_UDP_CONNRESET, FALSE)` al crear el socket. **S**. `dns_demo` además **cuelga** (el `recv` UDP bloqueante que ya anotó IDEAS §70). |
 | Cierra con | `wepoll` (ABI epoll sobre IOCP/AFD, encaja en la forma de `src/poll.rs`) para la VM; IOCP nativo a largo plazo, que además desbloquea las fibras; `CreateWaitableTimerEx(HIGH_RESOLUTION)` o `timeBeginPeriod(1)` para el sueño fino. |
 | Tamaño | wepoll **M** · IOCP para fibras **L** · sueño fino **S**. |
@@ -199,8 +199,8 @@ cuenta como OK si Windows devuelve el mismo.
 |---|---|---|---|
 | `stdlib/process_session.ray`, `process_stream.ray` | exit 1: "running OS processes is not supported" | `std/process` es unix | 3.5 (W6) |
 | `stdlib/process_run.ray` | stdout sin las líneas de los hijos | ídem | 3.5 (W6) |
-| `web/http_demo.ray` | `error reading: read timeout` | cliente TCP hacia fuera | 3.6 (W5, investigar primero) |
-| `net/tcp_cliente.ray` | cuelga (>45 s) | ídem | 3.6 (W5) |
+| `web/http_demo.ray` | `error reading: read timeout` | esperas de red sin fd nunca despertaban | ✅ M170 (3.6) |
+| `net/tcp_cliente.ray` | cuelga (>45 s) | ídem | ✅ M170 (3.6) |
 | `web/dns_demo.ray` | cuelga | `recv` UDP bloqueante + 10054 | 3.6 (S) |
 | `web/udp_timeout_demo.ray` | exit 0 vs 1: `recv err: 10054` donde Linux da `send err: EINVAL` | semántica UDP de Winsock | 3.6 (S) |
 | `io/binario.ray` | faltan "escritos 9 octetos" y "round-trip OK": `/tmp` no existe | el ejemplo asume `/tmp` | 3.9 |
@@ -210,8 +210,10 @@ cuenta como OK si Windows devuelve el mismo.
 | `web/desktop_window/main.ray` | mismo error de `ui` sin el "listening on port N" | Linux imprime el puerto antes de fallar; Windows falla antes | 3.8 |
 
 Lectura: **descontando lo esperado (procesos, señales pre-M168, aleatoriedad, puertos), el único
-hueco que el censo descubrió y la auditoría de código no tenía es el de los clientes TCP/UDP hacia
-hosts externos** — y es el que hay que reproducir antes de tocar el poller. El censo se relanza
+hueco que el censo descubrió y la auditoría de código no tenía es el de las esperas de red** — las
+sondas lo redujeron a un bug del scheduler (M170), no del transporte: ningún servidor podía
+aceptar una conexión en Windows. El censo no lo vio directamente porque los servidores son
+INTERACTIVO (exceden el plazo en ambas plataformas); lo delató el cliente. El censo se relanza
 con `gh workflow run windows-census.yml` o empujando a una rama `census/**`; al cerrar una deuda,
 esta tabla se actualiza con el run que lo demuestre.
 
